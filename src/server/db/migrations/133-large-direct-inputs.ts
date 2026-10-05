@@ -207,63 +207,22 @@ SELECT tenant_id, owner_principal_id, application_thread_id, attempt_id, mutatio
 DROP TABLE conversation_creation_attempts;
 ALTER TABLE conversation_creation_attempts_v133 RENAME TO conversation_creation_attempts;
 
--- Preserve the prior creation order of admission guards.
+CREATE INDEX conversation_creation_attempts_codex_create_receipt ON conversation_creation_attempts(
+  tenant_id, owner_principal_id,
+  json_extract(codex_runtime_receipts_json, '$.create.operationId')
+);
+
+CREATE INDEX conversation_creation_attempts_codex_fork_receipt ON conversation_creation_attempts(
+  tenant_id, owner_principal_id,
+  json_extract(codex_runtime_receipts_json, '$.fork.operationId')
+);
+
 CREATE UNIQUE INDEX conversation_creation_attempts_one_active
   ON conversation_creation_attempts(
     tenant_id, owner_principal_id, application_thread_id
   )
   WHERE force_reset_at IS NULL
     AND phase NOT IN ('bound', 'aborted_unpersisted');
-
-CREATE TRIGGER conversation_creation_attempts_force_reset_immutable_update
-BEFORE UPDATE ON conversation_creation_attempts
-WHEN OLD.force_reset_at IS NOT NULL
-BEGIN
-  SELECT RAISE(ABORT, 'Force-reset creation attempt is immutable');
-END;
-
-CREATE TRIGGER conversation_creation_attempts_force_reset_immutable_delete
-BEFORE DELETE ON conversation_creation_attempts
-WHEN OLD.force_reset_at IS NOT NULL
-BEGIN
-  SELECT RAISE(ABORT, 'Force-reset creation attempt is immutable');
-END;
-
-CREATE TRIGGER conversation_creation_attempts_fork_contract_insert
-BEFORE INSERT ON conversation_creation_attempts
-WHEN (NEW.creation_kind = 'fork'
-    AND (NEW.fork_child_identity IS NULL OR NEW.fork_creation_recovery IS NULL))
-  OR (NEW.creation_kind = 'first_input'
-    AND (NEW.fork_child_identity IS NOT NULL
-      OR NEW.fork_creation_recovery IS NOT NULL
-      OR NEW.fork_uncertainty_kind IS NOT NULL))
-  OR (NEW.fork_uncertainty_kind = 'fork_unknown'
-    AND (NEW.creation_kind <> 'fork'
-      OR NEW.fork_creation_recovery <> 'potentially_unknown'
-      OR NEW.phase <> 'recovery_required'))
-BEGIN
-  SELECT RAISE(ABORT, 'conversation creation fork contract violated');
-END;
-
-CREATE TRIGGER conversation_creation_attempts_fork_contract_update
-BEFORE UPDATE OF creation_kind, fork_child_identity, fork_creation_recovery,
-  fork_uncertainty_kind, phase ON conversation_creation_attempts
-WHEN OLD.force_reset_at IS NULL AND ((OLD.creation_kind = 'fork'
-    AND (NEW.fork_child_identity IS NOT OLD.fork_child_identity
-      OR NEW.fork_creation_recovery IS NOT OLD.fork_creation_recovery))
-  OR (NEW.creation_kind = 'fork'
-    AND (NEW.fork_child_identity IS NULL OR NEW.fork_creation_recovery IS NULL))
-  OR (NEW.creation_kind = 'first_input'
-    AND (NEW.fork_child_identity IS NOT NULL
-      OR NEW.fork_creation_recovery IS NOT NULL
-      OR NEW.fork_uncertainty_kind IS NOT NULL))
-  OR (NEW.fork_uncertainty_kind = 'fork_unknown'
-    AND (NEW.creation_kind <> 'fork'
-      OR NEW.fork_creation_recovery <> 'potentially_unknown'
-      OR NEW.phase <> 'recovery_required')))
-BEGIN
-  SELECT RAISE(ABORT, 'conversation creation fork contract violated');
-END;
 
 CREATE TRIGGER conversation_creation_attempts_content_insert
 BEFORE INSERT ON conversation_creation_attempts
@@ -314,6 +273,64 @@ BEGIN
   SELECT RAISE(ABORT, 'Conversation creation input content is required');
 END;
 
+CREATE TRIGGER conversation_creation_attempts_force_reset_immutable_delete
+BEFORE DELETE ON conversation_creation_attempts
+WHEN OLD.force_reset_at IS NOT NULL
+BEGIN
+  SELECT RAISE(ABORT, 'Force-reset creation attempt is immutable');
+END;
+
+CREATE TRIGGER conversation_creation_attempts_force_reset_immutable_update
+BEFORE UPDATE ON conversation_creation_attempts
+WHEN OLD.force_reset_at IS NOT NULL
+BEGIN
+  SELECT RAISE(ABORT, 'Force-reset creation attempt is immutable');
+END;
+
+CREATE TRIGGER conversation_creation_attempts_fork_contract_insert
+BEFORE INSERT ON conversation_creation_attempts
+WHEN (NEW.creation_kind = 'fork'
+    AND (NEW.fork_child_identity IS NULL OR NEW.fork_creation_recovery IS NULL))
+  OR (NEW.creation_kind = 'first_input'
+    AND (NEW.fork_child_identity IS NOT NULL
+      OR NEW.fork_creation_recovery IS NOT NULL
+      OR NEW.fork_uncertainty_kind IS NOT NULL))
+  OR (NEW.fork_uncertainty_kind = 'fork_unknown'
+    AND (NEW.creation_kind <> 'fork'
+      OR NEW.fork_creation_recovery <> 'potentially_unknown'
+      OR NEW.phase <> 'recovery_required'))
+BEGIN
+  SELECT RAISE(ABORT, 'conversation creation fork contract violated');
+END;
+
+CREATE TRIGGER conversation_creation_attempts_fork_contract_update
+BEFORE UPDATE OF creation_kind, fork_child_identity, fork_creation_recovery,
+  fork_uncertainty_kind, phase ON conversation_creation_attempts
+WHEN OLD.force_reset_at IS NULL AND ((OLD.creation_kind = 'fork'
+    AND (NEW.fork_child_identity IS NOT OLD.fork_child_identity
+      OR NEW.fork_creation_recovery IS NOT OLD.fork_creation_recovery))
+  OR (NEW.creation_kind = 'fork'
+    AND (NEW.fork_child_identity IS NULL OR NEW.fork_creation_recovery IS NULL))
+  OR (NEW.creation_kind = 'first_input'
+    AND (NEW.fork_child_identity IS NOT NULL
+      OR NEW.fork_creation_recovery IS NOT NULL
+      OR NEW.fork_uncertainty_kind IS NOT NULL))
+  OR (NEW.fork_uncertainty_kind = 'fork_unknown'
+    AND (NEW.creation_kind <> 'fork'
+      OR NEW.fork_creation_recovery <> 'potentially_unknown'
+      OR NEW.phase <> 'recovery_required')))
+BEGIN
+  SELECT RAISE(ABORT, 'conversation creation fork contract violated');
+END;
+
+CREATE TRIGGER conversation_creation_attempts_project_admission BEFORE INSERT ON conversation_creation_attempts
+    WHEN EXISTS (SELECT 1 FROM application_threads AS thread JOIN workspaces AS workspace
+      ON workspace.tenant_id = thread.tenant_id AND workspace.owner_principal_id = thread.owner_principal_id
+      AND workspace.id = thread.workspace_id
+      WHERE thread.tenant_id = NEW.tenant_id AND thread.owner_principal_id = NEW.owner_principal_id
+        AND thread.id = NEW.application_thread_id AND workspace.removed_at IS NOT NULL)
+    BEGIN SELECT RAISE(ABORT, 'The project was removed. Restore it before starting new work.'); END;
+
 CREATE TRIGGER conversation_creation_force_reset_automation_insert
 BEFORE INSERT ON conversation_creation_attempts
 WHEN NEW.source_automation_run_id IS NOT NULL
@@ -328,24 +345,6 @@ WHEN NEW.source_automation_run_id IS NOT NULL
 BEGIN
   SELECT RAISE(ABORT, 'Force-reset automation cannot create a conversation');
 END;
-
-CREATE INDEX conversation_creation_attempts_codex_create_receipt ON conversation_creation_attempts(
-  tenant_id, owner_principal_id,
-  json_extract(codex_runtime_receipts_json, '$.create.operationId')
-);
-
-CREATE INDEX conversation_creation_attempts_codex_fork_receipt ON conversation_creation_attempts(
-  tenant_id, owner_principal_id,
-  json_extract(codex_runtime_receipts_json, '$.fork.operationId')
-);
-
-CREATE TRIGGER conversation_creation_attempts_project_admission BEFORE INSERT ON conversation_creation_attempts
-    WHEN EXISTS (SELECT 1 FROM application_threads AS thread JOIN workspaces AS workspace
-      ON workspace.tenant_id = thread.tenant_id AND workspace.owner_principal_id = thread.owner_principal_id
-      AND workspace.id = thread.workspace_id
-      WHERE thread.tenant_id = NEW.tenant_id AND thread.owner_principal_id = NEW.owner_principal_id
-        AND thread.id = NEW.application_thread_id AND workspace.removed_at IS NOT NULL)
-    BEGIN SELECT RAISE(ABORT, 'The project was removed. Restore it before starting new work.'); END;
 
 CREATE TRIGGER input_activity_creation_insert AFTER INSERT ON conversation_creation_attempts
 BEGIN
@@ -591,17 +590,13 @@ SELECT tenant_id, owner_principal_id, id, application_thread_id, sequence, mutat
 DROP TABLE queued_inputs;
 ALTER TABLE queued_inputs_v133 RENAME TO queued_inputs;
 
--- Preserve the prior creation order of admission guards.
-CREATE UNIQUE INDEX queued_inputs_one_explicit_retry
+CREATE INDEX queued_inputs_application_summary
   ON queued_inputs(
-    tenant_id, owner_principal_id, application_thread_id, retry_of_id
-  ) WHERE retry_of_id IS NOT NULL;
-
-CREATE INDEX queued_inputs_dispatch
-  ON queued_inputs(
-    state, next_attempt_at, tenant_id, owner_principal_id,
-    application_thread_id, sequence
-  ) WHERE state IN ('pending', 'retry_wait');
+    tenant_id, owner_principal_id, application_thread_id,
+    state, failure_acknowledged_at
+  )
+  WHERE state IN ('pending', 'retry_wait', 'dispatching', 'uncertain')
+    OR (state = 'failed' AND failure_acknowledged_at IS NULL);
 
 CREATE UNIQUE INDEX queued_inputs_cancellation_mutation
   ON queued_inputs(
@@ -612,6 +607,105 @@ CREATE UNIQUE INDEX queued_inputs_cancellation_mutation
 CREATE UNIQUE INDEX queued_inputs_completion_callback
   ON queued_inputs(tenant_id, owner_principal_id, completion_callback_id)
   WHERE completion_callback_id IS NOT NULL;
+
+CREATE INDEX queued_inputs_dispatch
+  ON queued_inputs(
+    state, next_attempt_at, tenant_id, owner_principal_id,
+    application_thread_id, sequence
+  ) WHERE state IN ('pending', 'retry_wait');
+
+CREATE UNIQUE INDEX queued_inputs_one_explicit_retry
+  ON queued_inputs(
+    tenant_id, owner_principal_id, application_thread_id, retry_of_id
+  ) WHERE retry_of_id IS NOT NULL;
+
+CREATE TRIGGER input_activity_queue_insert AFTER INSERT ON queued_inputs
+BEGIN
+  UPDATE application_threads SET input_activity_revision = input_activity_revision + 1
+  WHERE tenant_id = NEW.tenant_id AND owner_principal_id = NEW.owner_principal_id AND id = NEW.application_thread_id;
+END;
+
+CREATE TRIGGER input_activity_queue_update AFTER UPDATE OF state, resolved_delivery_mode, failure_acknowledged_at ON queued_inputs
+WHEN (OLD.state IS NOT NEW.state AND NEW.state IN ('uncertain', 'failed', 'cancelled'))
+  OR OLD.resolved_delivery_mode IS NOT NEW.resolved_delivery_mode
+  OR OLD.failure_acknowledged_at IS NOT NEW.failure_acknowledged_at
+BEGIN
+  UPDATE application_threads SET input_activity_revision = input_activity_revision + 1
+  WHERE tenant_id = NEW.tenant_id AND owner_principal_id = NEW.owner_principal_id AND id = NEW.application_thread_id;
+END;
+
+CREATE TRIGGER queued_inputs_agent_control_provenance_insert
+BEFORE INSERT ON queued_inputs
+WHEN NEW.initiating_agent_thread_id IS NOT NULL AND (
+  NEW.trigger_kind <> 'user'
+  OR NEW.source_automation_id IS NOT NULL
+  OR NEW.source_automation_run_id IS NOT NULL
+  OR NEW.initiating_tool_client_id IS NOT NULL
+  OR NEW.completion_callback_id IS NOT NULL
+  OR NOT EXISTS (
+    SELECT 1 FROM application_threads AS source
+    WHERE source.tenant_id = NEW.tenant_id
+      AND source.owner_principal_id = NEW.owner_principal_id
+      AND source.id = NEW.initiating_agent_thread_id
+  )
+)
+BEGIN
+  SELECT RAISE(ABORT, 'Agent-control queue source thread is invalid');
+END;
+
+CREATE TRIGGER queued_inputs_automation_source_insert
+BEFORE INSERT ON queued_inputs
+WHEN NEW.trigger_kind = 'automation' AND NOT EXISTS (
+  SELECT 1 FROM automation_runs AS run
+  WHERE run.tenant_id = NEW.tenant_id
+    AND run.owner_principal_id = NEW.owner_principal_id
+    AND run.automation_id = NEW.source_automation_id
+    AND run.id = NEW.source_automation_run_id
+    AND coalesce(run.child_thread_id, run.anchor_thread_id) =
+      NEW.application_thread_id
+    AND (NEW.retry_of_id IS NOT NULL
+      OR run.dispatch_mutation_id = NEW.mutation_id)
+)
+BEGIN
+  SELECT RAISE(ABORT, 'Queued input automation provenance is invalid');
+END;
+
+CREATE TRIGGER queued_inputs_caller_provenance_update
+BEFORE UPDATE OF initiating_agent_thread_id, initiating_tool_client_id,
+  completion_callback_id, trigger_kind, source_automation_id,
+  source_automation_run_id ON queued_inputs
+WHEN NEW.initiating_agent_thread_id IS NOT OLD.initiating_agent_thread_id
+  OR NEW.initiating_tool_client_id IS NOT OLD.initiating_tool_client_id
+  OR NEW.completion_callback_id IS NOT OLD.completion_callback_id
+  OR NEW.trigger_kind IS NOT OLD.trigger_kind
+  OR NEW.source_automation_id IS NOT OLD.source_automation_id
+  OR NEW.source_automation_run_id IS NOT OLD.source_automation_run_id
+BEGIN
+  SELECT RAISE(ABORT, 'Queued input caller provenance is immutable');
+END;
+
+CREATE TRIGGER queued_inputs_cancellation_marker_insert
+BEFORE INSERT ON queued_inputs
+WHEN NOT ((NEW.cancellation_mutation_id IS NULL
+    AND NEW.cancellation_request_fingerprint IS NULL)
+  OR (NEW.state = 'cancelled'
+    AND NEW.cancellation_mutation_id IS NOT NULL
+    AND NEW.cancellation_request_fingerprint IS NOT NULL))
+BEGIN
+  SELECT RAISE(ABORT, 'Queued input cancellation marker is invalid');
+END;
+
+CREATE TRIGGER queued_inputs_cancellation_marker_update
+BEFORE UPDATE OF state, cancellation_mutation_id,
+  cancellation_request_fingerprint ON queued_inputs
+WHEN NOT ((NEW.cancellation_mutation_id IS NULL
+    AND NEW.cancellation_request_fingerprint IS NULL)
+  OR (NEW.state = 'cancelled'
+    AND NEW.cancellation_mutation_id IS NOT NULL
+    AND NEW.cancellation_request_fingerprint IS NOT NULL))
+BEGIN
+  SELECT RAISE(ABORT, 'Queued input cancellation marker is invalid');
+END;
 
 CREATE TRIGGER queued_inputs_completion_callback_insert
 BEFORE INSERT ON queued_inputs
@@ -637,146 +731,29 @@ BEGIN
   SELECT RAISE(ABORT, 'Completion callback queue provenance is invalid');
 END;
 
-CREATE TRIGGER queued_inputs_agent_control_provenance_insert
-BEFORE INSERT ON queued_inputs
-WHEN NEW.initiating_agent_thread_id IS NOT NULL AND (
-  NEW.trigger_kind <> 'user'
-  OR NEW.source_automation_id IS NOT NULL
-  OR NEW.source_automation_run_id IS NOT NULL
-  OR NEW.initiating_tool_client_id IS NOT NULL
-  OR NEW.completion_callback_id IS NOT NULL
-  OR NOT EXISTS (
-    SELECT 1 FROM application_threads AS source
-    WHERE source.tenant_id = NEW.tenant_id
-      AND source.owner_principal_id = NEW.owner_principal_id
-      AND source.id = NEW.initiating_agent_thread_id
-  )
-)
-BEGIN
-  SELECT RAISE(ABORT, 'Agent-control queue source thread is invalid');
-END;
-
-CREATE TRIGGER queued_inputs_principal_client_provenance_insert
-BEFORE INSERT ON queued_inputs
-WHEN NEW.initiating_tool_client_id IS NOT NULL AND (
-  NEW.trigger_kind <> 'user'
-  OR NEW.source_automation_id IS NOT NULL
-  OR NEW.source_automation_run_id IS NOT NULL
-  OR NEW.initiating_agent_thread_id IS NOT NULL
-  OR NEW.completion_callback_id IS NOT NULL
-  OR NOT EXISTS (
-    SELECT 1 FROM principal_agent_tool_clients AS client
-    WHERE client.tenant_id = NEW.tenant_id
-      AND client.owner_principal_id = NEW.owner_principal_id
-      AND client.id = NEW.initiating_tool_client_id
-  )
-)
-BEGIN
-  SELECT RAISE(ABORT, 'Principal-client queue initiator is invalid');
-END;
-
-CREATE TRIGGER queued_inputs_caller_provenance_update
-BEFORE UPDATE OF initiating_agent_thread_id, initiating_tool_client_id,
-  completion_callback_id, trigger_kind, source_automation_id,
-  source_automation_run_id ON queued_inputs
-WHEN NEW.initiating_agent_thread_id IS NOT OLD.initiating_agent_thread_id
-  OR NEW.initiating_tool_client_id IS NOT OLD.initiating_tool_client_id
-  OR NEW.completion_callback_id IS NOT OLD.completion_callback_id
-  OR NEW.trigger_kind IS NOT OLD.trigger_kind
-  OR NEW.source_automation_id IS NOT OLD.source_automation_id
-  OR NEW.source_automation_run_id IS NOT OLD.source_automation_run_id
-BEGIN
-  SELECT RAISE(ABORT, 'Queued input caller provenance is immutable');
-END;
-
-CREATE TRIGGER queued_inputs_trigger_provenance_insert
-BEFORE INSERT ON queued_inputs
-WHEN NEW.retry_of_id IS NOT NULL AND NOT EXISTS (
-  SELECT 1 FROM queued_inputs AS parent
-  WHERE parent.tenant_id = NEW.tenant_id
-    AND parent.owner_principal_id = NEW.owner_principal_id
-    AND parent.application_thread_id = NEW.application_thread_id
-    AND parent.id = NEW.retry_of_id
-    AND parent.trigger_kind = NEW.trigger_kind
-    AND parent.source_automation_id IS NEW.source_automation_id
-    AND parent.source_automation_run_id IS NEW.source_automation_run_id
-    AND parent.initiating_agent_thread_id IS NEW.initiating_agent_thread_id
-    AND parent.initiating_tool_client_id IS NEW.initiating_tool_client_id
-    AND parent.completion_callback_id IS NEW.completion_callback_id
-)
-BEGIN
-  SELECT RAISE(ABORT, 'Queued input retry provenance is invalid');
-END;
-
-CREATE TRIGGER queued_inputs_trigger_provenance_update
-BEFORE UPDATE OF tenant_id, owner_principal_id, id, application_thread_id,
-  mutation_id, retry_of_id, trigger_kind, source_automation_id,
+CREATE TRIGGER queued_inputs_completion_callback_update
+BEFORE UPDATE OF completion_callback_id, tenant_id, owner_principal_id,
+  application_thread_id, trigger_kind, source_automation_id,
   source_automation_run_id, initiating_agent_thread_id,
-  initiating_tool_client_id, completion_callback_id ON queued_inputs
-WHEN (NEW.retry_of_id IS NOT NULL AND NOT EXISTS (
-  SELECT 1 FROM queued_inputs AS parent
-  WHERE parent.tenant_id = NEW.tenant_id
-    AND parent.owner_principal_id = NEW.owner_principal_id
-    AND parent.application_thread_id = NEW.application_thread_id
-    AND parent.id = NEW.retry_of_id
-    AND parent.trigger_kind = NEW.trigger_kind
-    AND parent.source_automation_id IS NEW.source_automation_id
-    AND parent.source_automation_run_id IS NEW.source_automation_run_id
-    AND parent.initiating_agent_thread_id IS NEW.initiating_agent_thread_id
-    AND parent.initiating_tool_client_id IS NEW.initiating_tool_client_id
-    AND parent.completion_callback_id IS NEW.completion_callback_id
-)) OR (NEW.trigger_kind = 'automation' AND NOT EXISTS (
-  SELECT 1 FROM automation_runs AS run
-  WHERE run.tenant_id = NEW.tenant_id
-    AND run.owner_principal_id = NEW.owner_principal_id
-    AND run.automation_id = NEW.source_automation_id
-    AND run.id = NEW.source_automation_run_id
-    AND coalesce(run.child_thread_id, run.anchor_thread_id) =
-      NEW.application_thread_id
-    AND (NEW.retry_of_id IS NOT NULL
-      OR run.dispatch_mutation_id = NEW.mutation_id)
-))
+  initiating_tool_client_id, retry_of_id, requested_thread_revision,
+  requested_draft_revision
+ON queued_inputs
+WHEN OLD.completion_callback_id IS NOT NEW.completion_callback_id
+  OR NEW.completion_callback_id IS NOT NULL
 BEGIN
-  SELECT RAISE(ABORT, 'Queued input trigger provenance is invalid');
-END;
-
-CREATE TRIGGER queued_inputs_retry_provenance_parent_update
-BEFORE UPDATE OF tenant_id, owner_principal_id, id, application_thread_id,
-  trigger_kind, source_automation_id, source_automation_run_id,
-  initiating_agent_thread_id, initiating_tool_client_id,
-  completion_callback_id ON queued_inputs
-WHEN EXISTS (
-  SELECT 1 FROM queued_inputs AS child
-  WHERE child.tenant_id = OLD.tenant_id
-    AND child.owner_principal_id = OLD.owner_principal_id
-    AND child.application_thread_id = OLD.application_thread_id
-    AND child.retry_of_id = OLD.id
-)
-BEGIN
-  SELECT RAISE(ABORT, 'Queued input retry provenance parent is referenced');
-END;
-
-CREATE TRIGGER queued_inputs_cancellation_marker_insert
-BEFORE INSERT ON queued_inputs
-WHEN NOT ((NEW.cancellation_mutation_id IS NULL
-    AND NEW.cancellation_request_fingerprint IS NULL)
-  OR (NEW.state = 'cancelled'
-    AND NEW.cancellation_mutation_id IS NOT NULL
-    AND NEW.cancellation_request_fingerprint IS NOT NULL))
-BEGIN
-  SELECT RAISE(ABORT, 'Queued input cancellation marker is invalid');
-END;
-
-CREATE TRIGGER queued_inputs_cancellation_marker_update
-BEFORE UPDATE OF state, cancellation_mutation_id,
-  cancellation_request_fingerprint ON queued_inputs
-WHEN NOT ((NEW.cancellation_mutation_id IS NULL
-    AND NEW.cancellation_request_fingerprint IS NULL)
-  OR (NEW.state = 'cancelled'
-    AND NEW.cancellation_mutation_id IS NOT NULL
-    AND NEW.cancellation_request_fingerprint IS NOT NULL))
-BEGIN
-  SELECT RAISE(ABORT, 'Queued input cancellation marker is invalid');
+  SELECT CASE WHEN OLD.completion_callback_id IS NOT NEW.completion_callback_id
+    THEN RAISE(ABORT, 'Completion callback queue provenance is immutable')
+  END;
+  SELECT CASE WHEN NEW.completion_callback_id IS NOT NULL AND (
+    NEW.trigger_kind <> 'user'
+    OR NEW.source_automation_id IS NOT NULL
+    OR NEW.source_automation_run_id IS NOT NULL
+    OR NEW.initiating_agent_thread_id IS NOT NULL
+    OR NEW.initiating_tool_client_id IS NOT NULL
+    OR NEW.retry_of_id IS NOT NULL
+    OR NEW.requested_thread_revision IS NOT NULL
+    OR NEW.requested_draft_revision IS NOT NULL
+  ) THEN RAISE(ABORT, 'Completion callback queue provenance is invalid') END;
 END;
 
 CREATE TRIGGER queued_inputs_content_insert
@@ -861,46 +838,23 @@ BEGIN
   SELECT RAISE(ABORT, 'Force-reset automation cannot enqueue input');
 END;
 
-CREATE TRIGGER queued_inputs_automation_source_insert
+CREATE TRIGGER queued_inputs_principal_client_provenance_insert
 BEFORE INSERT ON queued_inputs
-WHEN NEW.trigger_kind = 'automation' AND NOT EXISTS (
-  SELECT 1 FROM automation_runs AS run
-  WHERE run.tenant_id = NEW.tenant_id
-    AND run.owner_principal_id = NEW.owner_principal_id
-    AND run.automation_id = NEW.source_automation_id
-    AND run.id = NEW.source_automation_run_id
-    AND coalesce(run.child_thread_id, run.anchor_thread_id) =
-      NEW.application_thread_id
-    AND (NEW.retry_of_id IS NOT NULL
-      OR run.dispatch_mutation_id = NEW.mutation_id)
+WHEN NEW.initiating_tool_client_id IS NOT NULL AND (
+  NEW.trigger_kind <> 'user'
+  OR NEW.source_automation_id IS NOT NULL
+  OR NEW.source_automation_run_id IS NOT NULL
+  OR NEW.initiating_agent_thread_id IS NOT NULL
+  OR NEW.completion_callback_id IS NOT NULL
+  OR NOT EXISTS (
+    SELECT 1 FROM principal_agent_tool_clients AS client
+    WHERE client.tenant_id = NEW.tenant_id
+      AND client.owner_principal_id = NEW.owner_principal_id
+      AND client.id = NEW.initiating_tool_client_id
+  )
 )
 BEGIN
-  SELECT RAISE(ABORT, 'Queued input automation provenance is invalid');
-END;
-
-CREATE TRIGGER queued_inputs_completion_callback_update
-BEFORE UPDATE OF completion_callback_id, tenant_id, owner_principal_id,
-  application_thread_id, trigger_kind, source_automation_id,
-  source_automation_run_id, initiating_agent_thread_id,
-  initiating_tool_client_id, retry_of_id, requested_thread_revision,
-  requested_draft_revision
-ON queued_inputs
-WHEN OLD.completion_callback_id IS NOT NEW.completion_callback_id
-  OR NEW.completion_callback_id IS NOT NULL
-BEGIN
-  SELECT CASE WHEN OLD.completion_callback_id IS NOT NEW.completion_callback_id
-    THEN RAISE(ABORT, 'Completion callback queue provenance is immutable')
-  END;
-  SELECT CASE WHEN NEW.completion_callback_id IS NOT NULL AND (
-    NEW.trigger_kind <> 'user'
-    OR NEW.source_automation_id IS NOT NULL
-    OR NEW.source_automation_run_id IS NOT NULL
-    OR NEW.initiating_agent_thread_id IS NOT NULL
-    OR NEW.initiating_tool_client_id IS NOT NULL
-    OR NEW.retry_of_id IS NOT NULL
-    OR NEW.requested_thread_revision IS NOT NULL
-    OR NEW.requested_draft_revision IS NOT NULL
-  ) THEN RAISE(ABORT, 'Completion callback queue provenance is invalid') END;
+  SELECT RAISE(ABORT, 'Principal-client queue initiator is invalid');
 END;
 
 CREATE TRIGGER queued_inputs_project_admission BEFORE INSERT ON queued_inputs
@@ -918,27 +872,71 @@ BEGIN
   SELECT RAISE(ABORT, 'The project was removed. Restore it before starting new work.');
 END;
 
-CREATE INDEX queued_inputs_application_summary
-  ON queued_inputs(
-    tenant_id, owner_principal_id, application_thread_id,
-    state, failure_acknowledged_at
-  )
-  WHERE state IN ('pending', 'retry_wait', 'dispatching', 'uncertain')
-    OR (state = 'failed' AND failure_acknowledged_at IS NULL);
-
-CREATE TRIGGER input_activity_queue_insert AFTER INSERT ON queued_inputs
+CREATE TRIGGER queued_inputs_retry_provenance_parent_update
+BEFORE UPDATE OF tenant_id, owner_principal_id, id, application_thread_id,
+  trigger_kind, source_automation_id, source_automation_run_id,
+  initiating_agent_thread_id, initiating_tool_client_id,
+  completion_callback_id ON queued_inputs
+WHEN EXISTS (
+  SELECT 1 FROM queued_inputs AS child
+  WHERE child.tenant_id = OLD.tenant_id
+    AND child.owner_principal_id = OLD.owner_principal_id
+    AND child.application_thread_id = OLD.application_thread_id
+    AND child.retry_of_id = OLD.id
+)
 BEGIN
-  UPDATE application_threads SET input_activity_revision = input_activity_revision + 1
-  WHERE tenant_id = NEW.tenant_id AND owner_principal_id = NEW.owner_principal_id AND id = NEW.application_thread_id;
+  SELECT RAISE(ABORT, 'Queued input retry provenance parent is referenced');
 END;
 
-CREATE TRIGGER input_activity_queue_update AFTER UPDATE OF state, resolved_delivery_mode, failure_acknowledged_at ON queued_inputs
-WHEN (OLD.state IS NOT NEW.state AND NEW.state IN ('uncertain', 'failed', 'cancelled'))
-  OR OLD.resolved_delivery_mode IS NOT NEW.resolved_delivery_mode
-  OR OLD.failure_acknowledged_at IS NOT NEW.failure_acknowledged_at
+CREATE TRIGGER queued_inputs_trigger_provenance_insert
+BEFORE INSERT ON queued_inputs
+WHEN NEW.retry_of_id IS NOT NULL AND NOT EXISTS (
+  SELECT 1 FROM queued_inputs AS parent
+  WHERE parent.tenant_id = NEW.tenant_id
+    AND parent.owner_principal_id = NEW.owner_principal_id
+    AND parent.application_thread_id = NEW.application_thread_id
+    AND parent.id = NEW.retry_of_id
+    AND parent.trigger_kind = NEW.trigger_kind
+    AND parent.source_automation_id IS NEW.source_automation_id
+    AND parent.source_automation_run_id IS NEW.source_automation_run_id
+    AND parent.initiating_agent_thread_id IS NEW.initiating_agent_thread_id
+    AND parent.initiating_tool_client_id IS NEW.initiating_tool_client_id
+    AND parent.completion_callback_id IS NEW.completion_callback_id
+)
 BEGIN
-  UPDATE application_threads SET input_activity_revision = input_activity_revision + 1
-  WHERE tenant_id = NEW.tenant_id AND owner_principal_id = NEW.owner_principal_id AND id = NEW.application_thread_id;
+  SELECT RAISE(ABORT, 'Queued input retry provenance is invalid');
+END;
+
+CREATE TRIGGER queued_inputs_trigger_provenance_update
+BEFORE UPDATE OF tenant_id, owner_principal_id, id, application_thread_id,
+  mutation_id, retry_of_id, trigger_kind, source_automation_id,
+  source_automation_run_id, initiating_agent_thread_id,
+  initiating_tool_client_id, completion_callback_id ON queued_inputs
+WHEN (NEW.retry_of_id IS NOT NULL AND NOT EXISTS (
+  SELECT 1 FROM queued_inputs AS parent
+  WHERE parent.tenant_id = NEW.tenant_id
+    AND parent.owner_principal_id = NEW.owner_principal_id
+    AND parent.application_thread_id = NEW.application_thread_id
+    AND parent.id = NEW.retry_of_id
+    AND parent.trigger_kind = NEW.trigger_kind
+    AND parent.source_automation_id IS NEW.source_automation_id
+    AND parent.source_automation_run_id IS NEW.source_automation_run_id
+    AND parent.initiating_agent_thread_id IS NEW.initiating_agent_thread_id
+    AND parent.initiating_tool_client_id IS NEW.initiating_tool_client_id
+    AND parent.completion_callback_id IS NEW.completion_callback_id
+)) OR (NEW.trigger_kind = 'automation' AND NOT EXISTS (
+  SELECT 1 FROM automation_runs AS run
+  WHERE run.tenant_id = NEW.tenant_id
+    AND run.owner_principal_id = NEW.owner_principal_id
+    AND run.automation_id = NEW.source_automation_id
+    AND run.id = NEW.source_automation_run_id
+    AND coalesce(run.child_thread_id, run.anchor_thread_id) =
+      NEW.application_thread_id
+    AND (NEW.retry_of_id IS NOT NULL
+      OR run.dispatch_mutation_id = NEW.mutation_id)
+))
+BEGIN
+  SELECT RAISE(ABORT, 'Queued input trigger provenance is invalid');
 END;
 `,
 };

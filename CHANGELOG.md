@@ -795,6 +795,10 @@
 
 ### Fixed
 
+- Preserve the deployed migration 133 checksum. Migration 134 restores admission
+  trigger order without changing stored inputs, receipts, or conversation data,
+  supporting upgrades from both older schemas and the original schema 133.
+
 - Headset and notification Start use the saved default voice thread regardless
   of pinning, navigation, or a pending in-app target choice. Automatic replies
   keep their originating thread, and in-app target selections remain independent.

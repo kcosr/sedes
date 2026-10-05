@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { applyDatabaseMigrations, backendNormalizedMigrations } from "../../src/server/db/migrate.js";
 import { ConversationBindingRepository } from "../../src/server/db/repositories/conversation-binding-repository.js";
@@ -10,7 +10,13 @@ import { savedAgentDatabase } from "../support/saved-agent-fixture.js";
 import { largeDirectInputText } from "../support/large-direct-input.js";
 
 describe("large direct-input storage migration", () => {
-  it("preserves durable work, receipts, foreign keys, indexes, and admission guards while raising only required text storage", () => {
+  it("keeps the deployed migration 133 checksum immutable", () => {
+    const migration = backendNormalizedMigrations.find(migration => migration.version === 133)!;
+    expect(createHash("sha256").update(migration.sql).digest("hex"))
+      .toBe("43e5db02c7165ec0bf05db23d55c4e626c61d7950b9f16540345ff97a491c726");
+  });
+
+  it.each(["older database", "already deployed 133"])("preserves durable work and admission guards upgrading an %s", (path) => {
     const { database, scope } = savedAgentDatabase(132);
     try {
       const inventory = new InventoryRepository(database);
@@ -68,6 +74,21 @@ describe("large direct-input storage migration", () => {
       expect(objects()).toEqual(beforeObjects);
       expect(triggerOrder()).toEqual(beforeTriggerOrder);
       expect(database.pragma("foreign_keys", { simple: true })).toBe(1);
+      if (path === "already deployed 133") {
+        applyDatabaseMigrations(database, backendNormalizedMigrations.filter(migration => migration.version <= 133));
+        const applied = database.prepare("SELECT * FROM schema_migrations WHERE version = 133").get();
+        expect(applied).toMatchObject({ checksum: "43e5db02c7165ec0bf05db23d55c4e626c61d7950b9f16540345ff97a491c726" });
+        const originalOrder = triggerOrder();
+        expect(originalOrder).not.toEqual(beforeTriggerOrder);
+        expect(() => applyDatabaseMigrations(database, backendNormalizedMigrations, {
+          verifyBeforeCommit: (_database, migration) => { if (migration.version === 134) throw new Error("test_order_rollback"); },
+        })).toThrow("test_order_rollback");
+        expect(triggerOrder()).toEqual(originalOrder);
+        expect(rows()).toEqual(beforeRows);
+        expect(objects()).toEqual(beforeObjects);
+        expect(database.prepare("SELECT * FROM schema_migrations WHERE version = 133").get()).toEqual(applied);
+        expect(database.prepare("SELECT version FROM schema_migrations WHERE version = 134").get()).toBeUndefined();
+      }
       applyDatabaseMigrations(database, backendNormalizedMigrations);
       expect(objects()).toEqual(beforeObjects);
       expect(triggerOrder()).toEqual(beforeTriggerOrder);
