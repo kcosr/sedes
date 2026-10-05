@@ -447,7 +447,7 @@
   repeated Start, Keep listening, or Send taps from hitting Cancel. Only the
   narrowest layouts use the right gutter to fit the controls; 360 px phones
   retain normal spacing. Saved dictation keeps Discard in place through retry,
-  recognition, admission, and rejection.
+  recognition, admission, and rejection, with at least 4 px beside Discard.
 
 - Workpads has a new layout that matches Tasks and Files. Search and View
   options (nested scopes, archived, browsing another thread or project) sit in

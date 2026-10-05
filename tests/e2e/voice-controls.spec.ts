@@ -331,6 +331,8 @@ test("native dictation keeps its controls reachable on narrow screens and retain
     expect(target!.x + target!.width).toBeLessThanOrEqual(320);
     if (index) expect(target!.x).toBeGreaterThanOrEqual(savedTargets[index - 1]!.x + savedTargets[index - 1]!.width);
   }
+  expect(savedTargets[3]!.x - savedTargets[2]!.x - savedTargets[2]!.width).toBeGreaterThanOrEqual(4);
+  expect(savedTargets[4]!.x - savedTargets[3]!.x - savedTargets[3]!.width).toBeGreaterThanOrEqual(4);
   await expectNoPageOverflow(page);
   await measureRow("savedOff");
   await capture(page, testInfo, "voice-saved-dictation-off-narrow.png");
@@ -343,6 +345,12 @@ test("native dictation keeps its controls reachable on narrow screens and retain
     await page.setViewportSize({ width, height: 780 });
     const bounds = await savedLabel.evaluate(label => ({ right: label.getBoundingClientRect().right, parentRight: label.parentElement!.getBoundingClientRect().right }));
     expect(bounds.right, `Saved label fits beside Resume at ${width}px`).toBeLessThanOrEqual(bounds.parentRight);
+    const [resume, discard, slot] = await Promise.all([
+      toolbar.getByRole("button", { name: "Resume voice", exact: true }).boundingBox(),
+      toolbar.getByRole("button", { name: "Discard saved dictation" }).boundingBox(), toolbar.locator(".voice-card-send-slot").boundingBox(),
+    ]);
+    expect(discard!.x - resume!.x - resume!.width, `Resume/Discard gap at ${width}px`).toBeGreaterThanOrEqual(4);
+    expect(slot!.x - discard!.x - discard!.width, `Discard/Send gap at ${width}px`).toBeGreaterThanOrEqual(4);
     await measureRow(`savedResume${width}`);
     await expectNoPageOverflow(page);
   }
@@ -383,6 +391,7 @@ test("native dictation keeps its controls reachable on narrow screens and retain
   await capture(page, testInfo, "voice-ready-dictation-off-narrow.png");
   const savedSendBox = (await toolbar.getByRole("button", { name: "Send saved dictation" }).boundingBox())!;
   const savedDiscardBox = (await toolbar.getByRole("button", { name: "Discard saved dictation" }).boundingBox())!;
+  expect(savedSendBox.x - savedDiscardBox.x - savedDiscardBox.width).toBeGreaterThanOrEqual(4);
   await toolbar.getByRole("button", { name: "Send saved dictation" }).click();
   await expect(sheet).toBeVisible();
   const warning = sheet.getByText("The end of this dictation may be missing. Sending uses the saved portion.", { exact: true });

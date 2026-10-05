@@ -494,8 +494,9 @@ limited to docks at most 315 px wide; 360 px phones keep their normal inset and
 control gaps. Every saved-dictation stage reserves Retry and Send space so
 Discard never moves into their former hit regions, and an old Retry tap cannot
 navigate through the expanded title. At the narrowest width,
-Retry/Resume uses its icon and the action gaps yield to the full saved-state
-label and fixed, non-overlapping 44 px touch targets.
+Retry/Resume uses its icon and the saved-state label uses the standard control
+text size. Retry-to-Discard and Discard-to-Send gaps remain at least 4 px with
+distinct 44 px touch targets; 360 px phones keep their normal gaps.
 
 `NativeVoiceSegmenter` counts real 24 kHz samples and analyzes absolute 100 ms
 frames. RMS 0.012 identifies likely pauses, never disposable audio. A 1,200 ms

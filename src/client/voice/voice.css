@@ -569,7 +569,19 @@
   }
 
   .voice-card[data-saved] .voice-card-actions {
-    gap: 0;
+    gap: 4px;
+  }
+}
+
+@container voice-dock (max-width: 335px) {
+  .voice-card[data-saved] > .voice-card-retry {
+    margin-inline-start: -3px;
+  }
+
+  /* Keep the recovery status fully readable without taking space from the
+     gaps on either side of Discard. Thread titles still truncate first. */
+  .voice-card-saved-label {
+    font-size: var(--text-ui);
   }
 }
 
@@ -577,7 +589,6 @@
   /* Preserve the complete saved-state label beside Retry and the two fixed
      action slots without reducing any touch target. */
   .voice-card[data-saved] > .voice-card-retry {
-    margin-inline: -3px;
     width: 44px;
     padding-inline: 0;
   }
