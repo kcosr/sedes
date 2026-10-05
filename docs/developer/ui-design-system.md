@@ -64,9 +64,11 @@ close. A tenant puts its panel-level actions into the header by portaling
 ghost icon buttons into `context.chromeActionsTarget`, sized like the other
 bar controls (add its container to the `--bar-control` list in
 `styles.css`). Through its host it sets the subtitle, dirty and busy state,
-a back step drawn in place of the icon (`host.setBack`), and its own ⋯ items
+a back step drawn in place of the icon (`host.setBack`; behind it the
+subtitle, the open view's name, takes the title's place), and its own ⋯ items
 after the Dock group (`host.setMenuItems`, a memoized node that renders inside
-the layout's menu, so menu primitives work in it). Document actions belong in
+the layout's menu, so menu primitives work in it; a sheet under touch
+density). Document actions belong in
 one hairline toolbar under the header, as in the Files editor and Workpads,
 not in the header.
 
