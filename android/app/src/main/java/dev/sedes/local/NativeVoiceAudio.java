@@ -71,6 +71,7 @@ final class NativeVoiceAudio {
     private final Handler main = new Handler(Looper.getMainLooper());
     private AudioTrack track;
     private CountDownLatch nextPlaybackHoldForTest, playbackHoldForTest;
+    private PlaybackDrain lastPlaybackDrainForTest;
     private AudioRecord recorder;
     private Focus focus;
     private long generation, focusRelease, warmUntil;
@@ -138,7 +139,7 @@ final class NativeVoiceAudio {
     }
     void begin(String id) {
         stop(); final long current;
-        synchronized (lock) { request = id; capture = false; current = generation; focusRelease++; }
+        synchronized (lock) { request = id; capture = false; current = generation; focusRelease++; lastPlaybackDrainForTest = null; }
         playback.execute(() -> pump(current, id));
     }
     void pcm(String id, int sampleRate, byte[] pcm) {
@@ -220,7 +221,12 @@ final class NativeVoiceAudio {
                 if (SystemClock.elapsedRealtime() >= drainDeadline) throw new IllegalStateException("playback_drain_timeout");
                 Thread.sleep(10);
             }
-            synchronized (lock) { if (current != generation) return; releaseTrack(); releaseSpool(); request = null; releaseFocusLater(); }
+            synchronized (lock) {
+                if (current != generation) return;
+                // Preserve hardware evidence before release resets the playback head; no PCM is retained.
+                if (BuildConfig.DEBUG) lastPlaybackDrainForTest = new PlaybackDrain(id, rate, frames, track.getPlaybackHeadPosition() & 0xffffffffL);
+                releaseTrack(); releaseSpool(); request = null; releaseFocusLater();
+            }
             listener.drained(id);
         } catch (Exception error) {
             failCurrent(current, id, code(error, "playback_failed", "speech_timeout", "audio_focus_unavailable", "empty_pcm_stream", "playback_drain_timeout"));
@@ -229,6 +235,15 @@ final class NativeVoiceAudio {
     long pendingPcmBytes() { synchronized (lock) { return spoolWritten - spoolRead; } }
     File spoolForTest() { if (!BuildConfig.DEBUG) throw new IllegalStateException("test_audio_unavailable"); synchronized (lock) { return spool; } }
     AudioTrack trackForTest() { if (!BuildConfig.DEBUG) throw new IllegalStateException("test_audio_unavailable"); synchronized (lock) { return track; } }
+    static final class PlaybackDrain {
+        final String requestId;
+        final int sampleRate;
+        final long writtenFrames, playedFrames;
+        PlaybackDrain(String requestId, int sampleRate, long writtenFrames, long playedFrames) {
+            this.requestId = requestId; this.sampleRate = sampleRate; this.writtenFrames = writtenFrames; this.playedFrames = playedFrames;
+        }
+    }
+    PlaybackDrain playbackDrainForTest() { if (!BuildConfig.DEBUG) throw new IllegalStateException("test_audio_unavailable"); synchronized (lock) { return lastPlaybackDrainForTest; } }
     AudioRecord recorderForTest() { if (!BuildConfig.DEBUG) throw new IllegalStateException("test_audio_unavailable"); synchronized (lock) { return recorder; } }
     Object focusForTest() { if (!BuildConfig.DEBUG) throw new IllegalStateException("test_audio_unavailable"); synchronized (lock) { return focus; } }
     // Hold one real track before play(); signal only when its full buffer blocks drain priming.

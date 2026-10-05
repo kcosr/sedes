@@ -145,6 +145,8 @@ the fixture bearer token through the native credential dialog. Once authenticate
 discovery is ready, it chooses models and a voice through the Settings pickers.
 Capture receives deterministic 24 kHz PCM; speech uses real AudioTrack. The
 fixture token is never entered into a WebView form.
+Espresso targets the native dialog root explicitly while the asynchronous bridge
+opens it, so the covered activity cannot be selected for credential entry.
 Focus a scenario through the same coordinator, for example
 `npm run test:voice -- -t 'Android response/cycle'`.
 
@@ -165,6 +167,11 @@ scheduling and cancellation, notification/SSE lifecycle, recognition feedback
 cues, real AudioRecord, and AudioTrack streaming, focus, drain, underrun, and
 cancellation. JVM checks cannot execute these Android framework and Keystore
 paths.
+
+AudioTrack drain assertions use the actual written and playback-head frame
+counts captured before track release. A held, stopped track must not complete;
+after playback starts, completion requires every supplied frame to be consumed.
+Short buffered playback is not judged by a fraction of elapsed wall-clock time.
 
 Each packaged scenario reports observed `voiceResult` values to the host.
 `audioSink: "AudioTrack"` requires the runtime-owned playing track's playback

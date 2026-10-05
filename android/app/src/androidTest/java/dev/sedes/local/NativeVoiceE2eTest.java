@@ -136,9 +136,12 @@ public class NativeVoiceE2eTest {
                 clickText("Manage speech credential");
                 // The fixture token goes through the real native dialog. It never
                 // enters a WebView form or a Capacitor JavaScript argument.
+                // The bridge opens it asynchronously; do not bind Espresso to the activity it covers.
                 androidx.test.espresso.Espresso.onView(androidx.test.espresso.matcher.ViewMatchers.withContentDescription("Server bearer token"))
+                    .inRoot(androidx.test.espresso.matcher.RootMatchers.isDialog())
                     .perform(androidx.test.espresso.action.ViewActions.replaceText(speechToken));
                 androidx.test.espresso.Espresso.onView(androidx.test.espresso.matcher.ViewMatchers.withText("Save"))
+                    .inRoot(androidx.test.espresso.matcher.RootMatchers.isDialog())
                     .perform(androidx.test.espresso.action.ViewActions.click());
                 await(() -> runtime.snapshot().optJSONObject("speech").optBoolean("credentialConfigured"), 15000, "native speech credential saved");
                 chooseSpeechSetting("Recognition model", "sttModel", "parakeet-local");
