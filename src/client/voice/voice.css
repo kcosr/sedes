@@ -486,14 +486,14 @@
   }
 
   .voice-card[data-recording] {
-    gap: 2px;
+    gap: 4px;
     padding-inline-end: 3px;
   }
 
   /* Keep the tile and both text lines at their Ready-state positions. Only
      the gaps between the controls yield as recording adds more actions. */
   .voice-card[data-recording] .voice-card-tile {
-    margin-inline-end: 4px;
+    margin-inline-end: 2px;
   }
 
   .voice-card[data-recording] .voice-card-actions,
@@ -538,5 +538,11 @@
   .voice-card[data-recording]:has(.voice-card-target) {
     width: calc(100% + 6px);
     margin-inline: 0 -6px;
+  }
+
+  /* Reduce only the two 4px gaps beside the chooser to 1px. Keep listening
+     stays 4px from Cancel, including while the chooser is unavailable. */
+  .voice-card[data-recording] .voice-card-target {
+    margin-inline: -3px;
   }
 }
