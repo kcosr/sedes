@@ -962,7 +962,7 @@ function PanelLayoutReady({
   ) => {
     setStatuses((current) => {
       const next = new Map(current);
-      if (status.busy || status.dirty || status.subtitle)
+      if (status.busy || status.dirty || status.subtitle || status.back || status.menuItems)
         next.set(panelInstanceId, status);
       else next.delete(panelInstanceId);
       return next;
@@ -1233,15 +1233,18 @@ function PanelLayoutReady({
               onClose: (invoker) => closePanel(panel, invoker),
               onDock: (edge) => store.dockPanel(panel.panelInstanceId, edge),
               dockEdge: panelDockEdge(tree, panel.panelInstanceId),
-              renderMenuItems: renderTenantMenu(tenant, {
-                threadId,
-                workspaceId,
-                applicationStore,
-                threadRegistry,
-                visible: active && visible,
-                intent,
-                chromeActionsTarget: actionsTarget,
-              }),
+              renderMenuItems: tenantMenuItems(
+                renderTenantMenu(tenant, {
+                  threadId,
+                  workspaceId,
+                  applicationStore,
+                  threadRegistry,
+                  visible: active && visible,
+                  intent,
+                  chromeActionsTarget: actionsTarget,
+                }),
+                status?.menuItems,
+              ),
             }}
           />}
           <StablePaneSlot
@@ -2183,6 +2186,9 @@ function TenantContent({
       setDirty: (dirty) => setStatus((current) => ({ ...current, dirty })),
       setSubtitle: (subtitle) =>
         setStatus((current) => ({ ...current, subtitle })),
+      setBack: (back) => setStatus((current) => ({ ...current, back })),
+      setMenuItems: (menuItems) =>
+        setStatus((current) => ({ ...current, menuItems })),
     }),
     [],
   );
@@ -2243,6 +2249,8 @@ function renderTenantMenu(
     setBusy: () => undefined,
     setDirty: () => undefined,
     setSubtitle: () => undefined,
+    setBack: () => undefined,
+    setMenuItems: () => undefined,
   };
   return tenant.renderMenuItems({
     applicationStore: input.applicationStore,
@@ -2257,6 +2265,20 @@ function renderTenantMenu(
       : {}),
     ...(input.intent !== undefined ? { intent: input.intent } : {}),
   });
+}
+
+/** A tenant's static ⋯ items, then those its content publishes. */
+function tenantMenuItems(
+  declared: React.ReactNode,
+  published: React.ReactNode,
+): React.ReactNode {
+  if (!declared && !published) return undefined;
+  return (
+    <>
+      {declared}
+      {published}
+    </>
+  );
 }
 
 function activePanelIds(tree: PanelLayoutTree): ReadonlySet<PanelInstanceId> {

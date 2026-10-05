@@ -421,6 +421,14 @@
 
 ### Changed
 
+- Workpads has a new layout that matches Tasks and Files. Search and View
+  options (nested scopes, archived, browsing another thread or project) sit in
+  the panel header; the list has one scope control, a New workpad row, and
+  quiet rows with a ⋯ menu for Rename, Move to, and Archive. An open workpad
+  keeps the panel header's back arrow and ⋯ menu and gets one toolbar for
+  attribution, revision history, Edit, and Save (Ctrl/⌘S); Discard draft asks
+  first. It first opens at 40% of the stage, from 320 to 480px.
+
 - Workpads now follows the active thread in Thread view and its project in
   Project view, while Global view retains its selection. Switching scopes
   protects unsynced drafts and pending changes, and preserves the panel layout.

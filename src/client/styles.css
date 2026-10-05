@@ -2346,9 +2346,40 @@ textarea:disabled {
   white-space: nowrap;
 }
 
+/* The panel's name never gives way; a long subtitle (a document's title)
+   truncates on its one line instead. */
+.workspace-panel-name {
+  flex: 0 0 auto;
+}
+
 .workspace-panel-subtitle {
+  min-width: 0;
+  overflow: hidden;
   color: var(--muted-foreground-2);
   font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A tenant's back step stands where its icon would, glyph aligned with it.
+   Inside a view it leads back from, the view's own name (the subtitle)
+   takes the title's place and style, so a narrow header keeps it. */
+.workspace-panel-back {
+  flex: none;
+  width: var(--bar-control-width);
+  height: var(--bar-control);
+  margin-left: calc((var(--bar-icon) - 2px - var(--bar-control-width)) / 2);
+  margin-right: calc((var(--bar-icon) - 2px - var(--bar-control-width)) / 2 + var(--space-0-5));
+  color: var(--muted-foreground);
+}
+
+.workspace-panel-back ~ .workspace-panel-name:has(~ .workspace-panel-subtitle) {
+  display: none;
+}
+
+.workspace-panel-back ~ .workspace-panel-subtitle {
+  color: var(--foreground);
+  font-size: inherit;
 }
 
 .workspace-panel-dirty {
@@ -2404,6 +2435,7 @@ textarea:disabled {
 .thread-tools-shell > button,
 .workspace-panel-actions > button,
 .workspace-files-toolbar-actions > button,
+.workpads-chrome-actions > button,
 .terminal-tab-add,
 .terminal-panel-chrome-actions > button {
   width: var(--bar-control-width);
@@ -2424,6 +2456,7 @@ textarea:disabled {
 .thread-tools-shell > button svg,
 .workspace-panel-actions > button svg,
 .workspace-files-toolbar-actions > button svg,
+.workpads-chrome-actions > button svg,
 .terminal-tab-add svg,
 .terminal-panel-chrome-actions > button svg {
   width: var(--bar-icon);
@@ -4245,6 +4278,8 @@ textarea:disabled {
 .workspace-panel-chrome > .workspace-panel-actions > button svg,
 .workspace-panel-chrome .tasks-header-button svg,
 .workspace-panel-chrome .workspace-files-toolbar-actions > button svg,
+.workspace-panel-chrome .workpads-chrome-actions > button svg,
+.workspace-panel-chrome .workspace-panel-back svg,
 .workspace-panel-chrome .terminal-panel-chrome-actions > button svg,
 .workspace-panel-chrome .terminal-tab-add svg {
   width: calc(var(--bar-icon) - 2px);
