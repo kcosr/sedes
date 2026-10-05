@@ -12,24 +12,34 @@ export function useWorkpadDraft(api: ApiClient, onError: (message: string) => vo
   const [editor, setEditorState] = useState<DraftEditor>();
   const ref = useRef(editor);
   const [saving, setSaving] = useState(false);
-  const pending = useRef<Promise<WorkpadDraft> | undefined>(undefined);
+  const pending = useRef<{ session: number; operation: Promise<WorkpadDraft> } | undefined>(undefined);
   const autosaveTimer = useRef<number | undefined>(undefined);
-  const discarding = useRef(false);
-  const setEditor = useCallback((value: DraftEditor | undefined) => { ref.current = value; setEditorState(value); }, []);
+  const discarding = useRef<number | undefined>(undefined);
+  const session = useRef(0);
+  const setEditor = useCallback((value: DraftEditor | undefined) => {
+    if (ref.current?.draft.workpadId !== value?.draft.workpadId) {
+      ++session.current;
+      pending.current = undefined; discarding.current = undefined; setSaving(false);
+      window.clearTimeout(autosaveTimer.current);
+    }
+    ref.current = value; setEditorState(value);
+  }, []);
+  useEffect(() => () => { ++session.current; pending.current = undefined; window.clearTimeout(autosaveTimer.current); }, []);
   const errorRef = useRef(onError); errorRef.current = onError;
   const acceptRemote = useCallback(async (draft: WorkpadDraft): Promise<boolean> => {
     if (!ref.current || draft.workpadId !== ref.current.draft.workpadId || draft.revision <= ref.current.draft.revision) return false;
+    const token = session.current;
     let baseText: string;
     try {
       baseText = draft.baseRevision === ref.current.draft.baseRevision
         ? ref.current.baseText : (await api.getWorkpadRevision(draft.workpadId, draft.baseRevision)).content;
     } catch (error) {
       const current = ref.current;
-      if (current && current.draft.workpadId === draft.workpadId && current.draft.revision < draft.revision) setEditor({ ...current, remote: draft });
+      if (token === session.current && current && current.draft.workpadId === draft.workpadId && current.draft.revision < draft.revision) setEditor({ ...current, remote: draft });
       throw error;
     }
     const current = ref.current;
-    if (!current || draft.workpadId !== current.draft.workpadId || draft.revision <= current.draft.revision) return false;
+    if (token !== session.current || !current || draft.workpadId !== current.draft.workpadId || draft.revision <= current.draft.revision) return false;
     if (current.text !== current.draft.content) {
       // A clean server draft follows document commits. Keep unsynced typing
       // and its original base, but adopt the counter so reconciliation can save.
@@ -42,8 +52,10 @@ export function useWorkpadDraft(api: ApiClient, onError: (message: string) => vo
     return false;
   }, [api, setEditor]);
   const save = useCallback(async (): Promise<WorkpadDraft> => {
-    while (pending.current) await pending.current;
-    if (discarding.current) throw new Error("Draft discard is in progress.");
+    const token = session.current;
+    while (pending.current?.session === token) await pending.current.operation;
+    if (token !== session.current) throw new Error("The working draft changed.");
+    if (discarding.current === token) throw new Error("Draft discard is in progress.");
     const value = ref.current;
     if (!value) throw new Error("No working draft is open.");
     if (value.remote) throw new Error("Resolve the draft conflict before saving.");
@@ -54,7 +66,7 @@ export function useWorkpadDraft(api: ApiClient, onError: (message: string) => vo
     const operation = (async () => {
       try {
         const draft = await api.saveWorkpadDraft(value.draft.workpadId, { expectedRevision: value.draft.revision, baseRevision: value.draft.baseRevision, content: value.text });
-        if (ref.current?.draft.workpadId === draft.workpadId) setEditor({ ...ref.current, draft });
+        if (token === session.current && ref.current?.draft.workpadId === draft.workpadId) setEditor({ ...ref.current, draft });
         return draft;
       } catch (error) {
         let documentAdvanced = false;
@@ -63,40 +75,42 @@ export function useWorkpadDraft(api: ApiClient, onError: (message: string) => vo
           if (remote.revision > value.draft.revision && remote.content === value.text && remote.baseRevision === value.draft.baseRevision) {
             // The write landed but its response was lost. Adopt its counter
             // without replacing any typing that arrived while saving.
-            if (ref.current?.draft.workpadId === remote.workpadId && ref.current.draft.revision <= remote.revision) setEditor({ ...ref.current, draft: remote });
+            if (token === session.current && ref.current?.draft.workpadId === remote.workpadId && ref.current.draft.revision <= remote.revision) setEditor({ ...ref.current, draft: remote });
             return remote;
           }
-          documentAdvanced = await acceptRemote(remote);
+          if (token === session.current) documentAdvanced = await acceptRemote(remote);
         } catch { /* Keep the unsynced local draft on a network failure. */ }
         if (documentAdvanced) throw new Error("The document changed. Review the latest version before saving.");
         throw error;
       }
     })();
-    pending.current = operation;
+    pending.current = { session: token, operation };
     try { return await operation; }
-    finally { pending.current = undefined; setSaving(false); }
+    finally { if (pending.current?.operation === operation) { pending.current = undefined; setSaving(false); } }
   }, [api, setEditor, acceptRemote]);
   const discard = useCallback(async () => {
-    if (discarding.current) return;
+    const token = session.current;
+    if (discarding.current === token) return;
     const workpadId = ref.current?.draft.workpadId;
-    discarding.current = true;
+    discarding.current = token;
     window.clearTimeout(autosaveTimer.current);
     try {
-      if (pending.current) await pending.current.catch(() => undefined);
+      if (pending.current?.session === token) await pending.current.operation.catch(() => undefined);
       const current = ref.current;
-      if (!current) return;
+      if (token !== session.current || !current) return;
       await api.discardWorkpadDraft(current.draft.workpadId, current.draft.revision);
-      if (ref.current?.draft.workpadId === current.draft.workpadId) setEditor(undefined);
+      if (token === session.current && ref.current?.draft.workpadId === current.draft.workpadId) setEditor(undefined);
     } finally {
-      discarding.current = false;
+      if (discarding.current === token) discarding.current = undefined;
       // A failed discard keeps the editor open. Restart its cancelled debounce
       // even when the user has not typed again since clicking Discard.
-      if (ref.current?.draft.workpadId === workpadId && ref.current) setEditor({ ...ref.current });
+      if (token === session.current && ref.current?.draft.workpadId === workpadId && ref.current) setEditor({ ...ref.current });
     }
   }, [api, setEditor]);
   useEffect(() => {
-    if (!editor || editor.remote || editor.text === editor.draft.content || discarding.current) return;
-    const timer = window.setTimeout(() => { if (!discarding.current) void save().catch(error => errorRef.current(error instanceof Error ? error.message : "Could not sync draft.")); }, 2000);
+    if (!editor || editor.remote || editor.text === editor.draft.content || discarding.current === session.current) return;
+    const token = session.current;
+    const timer = window.setTimeout(() => { if (discarding.current !== token && token === session.current) void save().catch(error => { if (token === session.current) errorRef.current(error instanceof Error ? error.message : "Could not sync draft."); }); }, 2000);
     autosaveTimer.current = timer;
     return () => window.clearTimeout(timer);
   }, [editor, save]);
@@ -111,8 +125,9 @@ export function useWorkpadDraft(api: ApiClient, onError: (message: string) => vo
     // An event may arrive before this client's pending save response. Wait for
     // that response, then compare counters so the event is neither lost nor
     // allowed to roll the draft back to an older counter.
-    if (pending.current) await pending.current.catch(() => undefined);
-    await acceptRemote(draft);
+    const token = session.current;
+    if (pending.current?.session === token) await pending.current.operation.catch(() => undefined);
+    if (token === session.current) await acceptRemote(draft);
   }, [acceptRemote]);
   return { editor, ref, setEditor, save, saving, adoptRemote, discard };
 }

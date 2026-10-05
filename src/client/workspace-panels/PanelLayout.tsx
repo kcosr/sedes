@@ -2196,8 +2196,8 @@ function TenantContent({
     presentation,
     chromeActionsTarget,
     ...(contextExcerpts ? { contextExcerpts } : {}),
-    // Workpads uses route hints for its initial list, independently of its
-    // global panel lifetime and the authority of the selected document.
+    // Workpads follows route context for its list while retaining its shared
+    // panel placement and lifetime across thread navigation.
     ...(tenant.scope !== "global" || tenant.id === "workpads" ? { threadId } : {}),
     ...((tenant.scope !== "global" || tenant.id === "workpads") && workspaceId ? { workspaceId } : {}),
     ...((tenant.scope !== "global" || tenant.id === "workpads") && workspaceLabel ? { workspaceLabel } : {}),

@@ -83,11 +83,16 @@ test("Workpads retain attributed history, reconcile shared drafts, and move betw
   await panel.evaluate(node => { (window as typeof window & { __retainedWorkpad?: Element }).__retainedWorkpad = node; });
   const secondThreadPath = await createDraftThread(page);
   expect(secondThreadPath).not.toBe(threadPath);
-  await expect(panel.locator(".workpad-document")).toContainText("15-minute timeout");
+  await expect(panel.getByRole("combobox", { name: "Workpad thread", exact: true })).toHaveValue(secondThreadPath.split("/").at(-1)!);
+  await expect(panel.getByText("No workpads", { exact: true })).toBeVisible();
+  await expect(panel.locator(".workpad-document")).toHaveCount(0);
   expect(await panel.evaluate(node => (window as typeof window & { __retainedWorkpad?: Element }).__retainedWorkpad === node)).toBe(true);
   await expect(page.getByTestId("workspace-workbench-bar").getByRole("button", { name: "Close Workpads panel", exact: true })).toBeVisible();
+  await capture(page, testInfo, "workpads-follow-thread.png");
   await page.goBack();
   await expect(page).toHaveURL(threadPath);
+  await expect(panel.getByRole("combobox", { name: "Workpad thread", exact: true })).toHaveValue(threadId);
+  await panel.getByRole("button", { name: /^Authentication integration/ }).click();
   await expect(panel.locator(".workpad-document")).toContainText("15-minute timeout");
   await page.getByRole("button", { name: "Workpads panel actions", exact: true }).click();
   await page.getByRole("menuitemradio", { name: "Bottom", exact: true }).click();
@@ -127,7 +132,18 @@ test("Workpads retain attributed history, reconcile shared drafts, and move betw
   const synced = page.waitForResponse(response => response.request().method() === "PUT" && response.url().endsWith(`/workpads/${workpad.id}/draft`) && response.ok());
   await editor.fill(draftText);
   await synced;
+  await expect(panel.getByRole("status")).toHaveText("Draft synced");
   expect((await readWorkpad(page, workpad.id)).revision).toBe(saved.revision);
+  // A synced draft survives following another thread and reopening its document.
+  await page.goForward();
+  await expect(page).toHaveURL(secondThreadPath);
+  await expect(panel.getByText("No workpads", { exact: true })).toBeVisible();
+  await expect(editor).toHaveCount(0);
+  await page.goBack();
+  await expect(page).toHaveURL(threadPath);
+  await panel.getByRole("button", { name: /^Authentication integration/ }).click();
+  await panel.getByRole("button", { name: "Edit workpad", exact: true }).click();
+  await expect(editor).toHaveValue(draftText);
   const otherContext = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const other = await otherContext.newPage();
   try {
@@ -161,13 +177,16 @@ test("Workpads retain attributed history, reconcile shared drafts, and move betw
     });
     await editor.fill(`${draftText}Local device note.\n`);
     await draftHeld;
+    // Following a different thread would replace this editor. A pending save
+    // must therefore allow the user to cancel browser Forward navigation.
     await page.goForward();
-    await expect(page).toHaveURL(secondThreadPath);
-    await expect(editor).toHaveValue(`${draftText}Local device note.\n`);
-    expect(await panel.evaluate(node => (window as typeof window & { __retainedWorkpad?: Element }).__retainedWorkpad === node)).toBe(true);
-    await page.goBack();
+    const leaveWorkpad = page.getByRole("dialog", { name: "Leave unsynced workpad?", exact: true });
+    await expect(leaveWorkpad).toBeVisible();
+    await leaveWorkpad.getByRole("button", { name: "Keep editing", exact: true }).click();
+    await expect(leaveWorkpad).toBeHidden();
     await expect(page).toHaveURL(threadPath);
     await expect(editor).toHaveValue(`${draftText}Local device note.\n`);
+    expect(await panel.evaluate(node => (window as typeof window & { __retainedWorkpad?: Element }).__retainedWorkpad === node)).toBe(true);
     const otherSynced = other.waitForResponse(response => response.request().method() === "PUT" && response.url().endsWith(`/workpads/${workpad.id}/draft`) && response.ok());
     await otherPanel.getByRole("textbox", { name: "Workpad content", exact: true }).fill(`${draftText}Other device note.\n`);
     const otherDraftRevision = ((await (await otherSynced).json()) as { draft: { revision: number } }).draft.revision;
@@ -183,7 +202,6 @@ test("Workpads retain attributed history, reconcile shared drafts, and move betw
     // Browser/Android Back uses popstate rather than navigate(). A held draft
     // conflict must still block leaving the workbench when the user cancels.
     await page.goBack();
-    const leaveWorkpad = page.getByRole("dialog", { name: "Leave unsynced workpad?", exact: true });
     await expect(leaveWorkpad).toBeVisible();
     await expect(leaveWorkpad).toContainText("Your latest workpad draft changes have not synced. Leave anyway?");
     await leaveWorkpad.getByRole("button", { name: "Keep editing", exact: true }).click();
@@ -275,6 +293,51 @@ test("Workpads retain attributed history, reconcile shared drafts, and move betw
   await page.waitForTimeout(5_500);
   page.off("request", countIdleReads);
   expect(idleWorkpadReads).toBe(0);
+
+  // Project view keeps the same document between threads of one project.
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goForward();
+  await expect(page).toHaveURL(secondThreadPath);
+  await expect(panel.locator(".workpad-document")).toContainText("Agent verified the endpoint.");
+  expect(await panel.evaluate(node => (window as typeof window & { __retainedWorkpad?: Element }).__retainedWorkpad === node)).toBe(true);
+
+  // A thread in a different project changes the Project filter and clears the
+  // old document, without replacing the docked panel or its placement.
+  await page.getByTestId("desktop-sidebar").getByTestId("workspace-picker").click();
+  await page.getByLabel("Absolute directory path").fill(path.resolve(import.meta.dirname, "fixtures/task-workspace"));
+  const projectOpened = page.waitForResponse(response => response.request().method() === "POST" && response.url().endsWith("/api/workspaces/open") && response.status() === 201);
+  await page.getByRole("dialog", { name: "Add project" }).getByRole("button", { name: "Add project", exact: true }).click();
+  const otherWorkspace = (await (await projectOpened).json()) as { projectId: string };
+  const otherProjectThreadPath = await createDraftThread(page);
+  await expect(panel.getByRole("radio", { name: "Project", exact: true })).toBeChecked();
+  await expect(panel.getByRole("combobox", { name: "Workpad project", exact: true })).toHaveValue(otherWorkspace.projectId);
+  await expect(panel.getByRole("checkbox", { name: "Archived", exact: true })).toBeChecked();
+  await panel.getByRole("checkbox", { name: "Archived", exact: true }).uncheck();
+  await expect(panel.getByText("No workpads", { exact: true })).toBeVisible();
+  await expect(panel.locator(".workpad-document")).toHaveCount(0);
+  expect(await panel.evaluate(node => (window as typeof window & { __retainedWorkpad?: Element }).__retainedWorkpad === node)).toBe(true);
+  await expect.poll(async () => {
+    const [chat, workpads] = await Promise.all([chatPane.boundingBox(), pane.boundingBox()]);
+    return Boolean(chat && workpads && chat.x + chat.width <= workpads.x + 1);
+  }).toBe(true);
+  await capture(page, testInfo, "workpads-follow-project.png");
+  await page.goBack();
+  await expect(page).toHaveURL(secondThreadPath);
+  await expect(panel.getByRole("combobox", { name: "Workpad project", exact: true })).toHaveValue(projectId);
+  await expect(panel.getByRole("button", { name: /^Authentication integration/ })).toBeVisible();
+
+  // Global stays selected across projects, including an open document.
+  await panel.getByRole("radio", { name: "Global", exact: true }).click();
+  await panel.getByRole("button", { name: "New workpad", exact: true }).click();
+  await panel.getByRole("textbox", { name: "Title", exact: true }).fill("Shared global notes");
+  await panel.getByRole("button", { name: "Create workpad", exact: true }).click();
+  await expect(panel.getByRole("heading", { name: "Shared global notes", exact: true })).toBeVisible();
+  await page.goForward();
+  await expect(page).toHaveURL(otherProjectThreadPath);
+  await expect(panel.getByRole("heading", { name: "Shared global notes", exact: true })).toBeVisible();
+  await panel.getByRole("button", { name: "Back to workpads", exact: true }).click();
+  await expect(panel.getByRole("radio", { name: "Global", exact: true })).toBeChecked();
+  await expect(panel.getByRole("button", { name: /^Shared global notes/ })).toBeVisible();
   await pane.getByRole("button", { name: "Close Workpads panel", exact: true }).click();
   await expect(panel).toHaveCount(0);
 });
