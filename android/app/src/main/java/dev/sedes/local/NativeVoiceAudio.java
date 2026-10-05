@@ -161,6 +161,14 @@ final class NativeVoiceAudio {
         int index = NativeVoiceInput.resolve(preference, identities);
         return index < 0 ? null : devices.get(index);
     }
+    private static NativeVoiceBluetoothRoute.Device routeDevice(AudioDeviceInfo device) {
+        return device == null ? null : new NativeVoiceBluetoothRoute.Device(device.getId(), identity(device));
+    }
+    @RequiresApi(31) private List<NativeVoiceBluetoothRoute.Device> communicationDevices() {
+        List<NativeVoiceBluetoothRoute.Device> result = new ArrayList<>();
+        for (AudioDeviceInfo device : manager.getAvailableCommunicationDevices()) result.add(routeDevice(device));
+        return result;
+    }
     private static boolean bluetooth(int type) { return type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO || type == 26; }
     private static JSONObject deviceJson(AudioDeviceInfo device) {
         NativeVoiceInput identity = identity(device);
@@ -367,7 +375,7 @@ final class NativeVoiceAudio {
             if (!hasPermission()) throw new SecurityException("microphone_permission_required");
             TestSource fixture = BuildConfig.DEBUG ? testSource : null;
             if (fixture == null) {
-                AudioDeviceInfo preferred = null, route = null;
+                AudioDeviceInfo preferred = null;
                 boolean bluetooth;
                 synchronized (lock) {
                     if (!acceptingCapture(current)) { ended = finishingCapture(current); return; }
@@ -376,17 +384,18 @@ final class NativeVoiceAudio {
                     if (bluetooth) {
                         previousMode = manager.getMode(); manager.setMode(AudioManager.MODE_IN_COMMUNICATION); communication = true;
                         if (Build.VERSION.SDK_INT >= 31) {
-                            route = resolve(inputDevice, manager.getAvailableCommunicationDevices());
+                            AudioDeviceInfo route = resolve(inputDevice, manager.getAvailableCommunicationDevices());
                             if (route == null) throw new IllegalStateException("microphone_device_unavailable");
                             if (!manager.setCommunicationDevice(route)) throw new IllegalStateException("microphone_route_failed");
                         }
                     }
                 }
-                if (bluetooth && !awaitRoute(current, route)) { ended = finishingCapture(current); return; }
+                if (bluetooth && !awaitRoute(current, inputDevice)) { ended = finishingCapture(current); return; }
+                boolean systemPaired = bluetooth && Build.VERSION.SDK_INT >= 31;
                 synchronized (lock) {
                     if (!acceptingCapture(current)) { ended = finishingCapture(current); return; }
-                    if (inputDevice != null) {
-                        // Activating SCO can replace its input ID; resolve after the link is ready on every capture.
+                    if (inputDevice != null && !systemPaired) {
+                        // Legacy SCO can replace its input ID; resolve after the link is ready on every capture.
                         preferred = resolve(inputDevice, Arrays.asList(manager.getDevices(AudioManager.GET_DEVICES_INPUTS)));
                         if (preferred == null) throw new IllegalStateException("microphone_device_unavailable");
                     }
@@ -402,7 +411,9 @@ final class NativeVoiceAudio {
                         throw new IllegalStateException("microphone_format_unavailable");
                     if (preferred != null && !local.setPreferredDevice(preferred)) throw new IllegalStateException("microphone_route_failed");
                     recorder = local;
-                    health = new CaptureHealth(local, current, id, preferred == null ? null : Integer.toString(preferred.getId()));
+                    // On API 31+, setCommunicationDevice owns source pairing. Input/output names need not match.
+                    health = new CaptureHealth(local, current, id, preferred == null ? null : Integer.toString(preferred.getId()),
+                        systemPaired ? inputDevice : null);
                     health.register();
                     local.startRecording();
                     if (local.getRecordingState() != AudioRecord.RECORDSTATE_RECORDING) throw new IllegalStateException("microphone_start_failed");
@@ -453,16 +464,21 @@ final class NativeVoiceAudio {
         final AudioRecord input;
         final long token;
         final String id, preferredId;
+        final NativeVoiceInput communicationPreference;
+        NativeVoiceBluetoothRoute bluetoothRoute;
+        AutoCloseable communicationObserver;
         final AudioRouting.OnRoutingChangedListener routing = ignored -> check();
         AudioManager.AudioRecordingCallback recording;
         int routeId = -1;
         boolean armed;
-        CaptureHealth(AudioRecord input, long token, String id, String preferredId) {
+        CaptureHealth(AudioRecord input, long token, String id, String preferredId, NativeVoiceInput communicationPreference) {
             this.input = input; this.token = token; this.id = id; this.preferredId = preferredId;
+            this.communicationPreference = communicationPreference;
         }
         void register() {
             input.addOnRoutingChangedListener(routing, main);
             if (Build.VERSION.SDK_INT >= 29) registerRecording();
+            if (Build.VERSION.SDK_INT >= 31 && communicationPreference != null) communicationObserver = new CommunicationObserver(this);
         }
         @RequiresApi(29) private void registerRecording() {
             recording = new AudioManager.AudioRecordingCallback() {
@@ -477,7 +493,14 @@ final class NativeVoiceAudio {
                 if (routed != null) {
                     if (preferredId != null && !preferredId.equals(Integer.toString(routed.getId())))
                         throw new IllegalStateException("microphone_route_failed");
-                    synchronized (lock) { routeId = routed.getId(); armed = true; }
+                    synchronized (lock) {
+                        if (Build.VERSION.SDK_INT >= 31 && communicationPreference != null) {
+                            bluetoothRoute = NativeVoiceBluetoothRoute.begin(communicationPreference, communicationDevices(),
+                                routeDevice(manager.getCommunicationDevice()), routeDevice(routed));
+                            if (bluetoothRoute == null) throw new IllegalStateException("microphone_route_failed");
+                        }
+                        routeId = routed.getId(); armed = true;
+                    }
                     if (silenced()) throw new IllegalStateException("microphone_silenced");
                     return true;
                 }
@@ -491,12 +514,16 @@ final class NativeVoiceAudio {
             AudioRecordingConfiguration configuration = input.getActiveRecordingConfiguration();
             return configuration != null && configuration.isClientSilenced();
         }
-        void check() {
+        void check() { check(null, false); }
+        void check(AudioDeviceInfo communicationDevice, boolean fromCommunicationCallback) {
             String reason = null;
             synchronized (lock) {
                 if (!armed || !acceptingCapture(token) || recorder != input) return;
                 AudioDeviceInfo actual = input.getRoutedDevice();
                 if (actual == null || actual.getId() != routeId) reason = "microphone_device_unavailable";
+                else if (Build.VERSION.SDK_INT >= 31 && bluetoothRoute != null && !bluetoothRoute.accepts(communicationDevices(),
+                    routeDevice(fromCommunicationCallback ? communicationDevice : manager.getCommunicationDevice()), routeDevice(actual)))
+                    reason = "microphone_device_unavailable";
                 else if (silenced()) reason = "microphone_silenced";
             }
             if (reason != null) failCurrent(token, id, reason);
@@ -506,10 +533,23 @@ final class NativeVoiceAudio {
             try { input.removeOnRoutingChangedListener(routing); } catch (Exception ignored) {}
             if (Build.VERSION.SDK_INT >= 29 && recording != null)
                 try { input.unregisterAudioRecordingCallback(recording); } catch (Exception ignored) {}
+            if (communicationObserver != null) {
+                try { communicationObserver.close(); } catch (Exception ignored) {}
+                communicationObserver = null;
+            }
         }
     }
+    /** Isolated so the API 31 listener type is never loaded on older Android versions. */
+    @RequiresApi(31) private final class CommunicationObserver implements AutoCloseable {
+        final AudioManager.OnCommunicationDeviceChangedListener listener;
+        CommunicationObserver(CaptureHealth health) {
+            listener = device -> health.check(device, true);
+            manager.addOnCommunicationDeviceChangedListener(command -> main.post(command), listener);
+        }
+        @Override public void close() { manager.removeOnCommunicationDeviceChangedListener(listener); }
+    }
     /** Waits outside the lock for the Bluetooth voice route; false when the request was replaced meanwhile. */
-    private boolean awaitRoute(long current, AudioDeviceInfo route) throws InterruptedException {
+    private boolean awaitRoute(long current, NativeVoiceInput route) throws InterruptedException {
         CountDownLatch connected = new CountDownLatch(1);
         BroadcastReceiver receiver = null;
         if (Build.VERSION.SDK_INT < 31) {
@@ -533,9 +573,8 @@ final class NativeVoiceAudio {
         } finally { if (receiver != null) context.unregisterReceiver(receiver); }
     }
     // Android reports a Bluetooth SCO communication device only once its audio link is connected.
-    @RequiresApi(31) private boolean routed(AudioDeviceInfo route) {
-        AudioDeviceInfo active = manager.getCommunicationDevice();
-        return active != null && identity(route).matches(identity(active));
+    @RequiresApi(31) private boolean routed(NativeVoiceInput preference) {
+        return NativeVoiceBluetoothRoute.selectedSink(preference, communicationDevices(), routeDevice(manager.getCommunicationDevice())) != null;
     }
     private static String code(Exception error, String fallback, String... specific) {
         for (String code : specific) if (code.equals(error.getMessage())) return code;
