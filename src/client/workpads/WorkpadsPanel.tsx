@@ -77,6 +77,7 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
   const [reconciling, setReconciling] = useState(false);
   const draft = useWorkpadDraft(store.api, setError);
   const selectedRef = useRef(selected); selectedRef.current = selected;
+  const itemsRef = useRef(items); itemsRef.current = items;
   const revisionRef = useRef(revision); revisionRef.current = revision;
   const generation = useRef(0);
   const scopeGeneration = useRef(0);
@@ -132,6 +133,7 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
     setSelected(undefined); setRevision(undefined); setRevisions([]); setRevisionCursor(undefined);
     setItems([]); setCursor(undefined); listCount.current = 0;
     setNewTitle(""); setTitle(""); setRenameTarget(undefined); setMoveTarget(undefined); setDiscarding(false); setReconciling(false);
+    setHistoryOpen(false); setViewMenuOpen(false);
     setError(""); setRefreshError(""); setBusy(false); setLeaveRequest(undefined);
   }, [scopeKey, draft.setEditor, draft.saving, routeKey, contextKey, busy]);
   const run = async (action: (isCurrent: () => boolean) => Promise<void>, mutating = false) => {
@@ -181,7 +183,7 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
     if (token !== generation.current) return;
     selectedRef.current = workpad; revisionRef.current = latest; loadingId.current = undefined;
     setSelected(workpad); setRevisions(history.items); setRevisionCursor(history.nextCursor); setRevision(latest);
-    draft.setEditor(undefined); setReconciling(false); setRenameTarget(undefined); setMoveTarget(undefined);
+    draft.setEditor(undefined); setReconciling(false); setRenameTarget(undefined); setMoveTarget(undefined); setHistoryOpen(false);
   };
   const refreshDocument = async () => {
     const id = selectedRef.current?.id;
@@ -334,10 +336,13 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
     await load(result.workpad.id);
     if (isCurrent()) await refreshList();
   };
-  // Any listed or open workpad; an open one reloads with the result.
+  // Any listed or open workpad; an open one reloads with the result. The
+  // revision is the latest this panel knows, not the one a dialog opened
+  // with: live refresh keeps both the open document and the list current.
   const mutate = async (target: WorkpadTarget, change: Omit<UpdateWorkpadRequest, "expectedRevision">) => {
     const token = scopeGeneration.current;
-    const result = await store.api.updateWorkpad(target.id, { expectedRevision: target.revision, ...change });
+    const known = selectedRef.current?.id === target.id ? selectedRef.current : itemsRef.current.find(({ id }) => id === target.id) ?? target;
+    const result = await store.api.updateWorkpad(target.id, { expectedRevision: known.revision, ...change });
     if (token !== scopeGeneration.current) return;
     if (selectedRef.current?.id === result.id) await load(result.id);
     if (token === scopeGeneration.current) await refreshList();
@@ -378,7 +383,7 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
       if (draft.editor) await draft.save();
       if (!isCurrent()) return;
       draft.setEditor(undefined); selectedRef.current = undefined; revisionRef.current = undefined;
-      setSelected(undefined); setRevision(undefined); ++generation.current;
+      setSelected(undefined); setRevision(undefined); setHistoryOpen(false); ++generation.current;
     });
   };
   const openRename = (target: WorkpadTarget) => { setTitle(target.title); setRenameTarget(target); };
@@ -393,7 +398,8 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
     });
   };
   const stopBrowsing = () => setTargets({ ...currentTargets, projectId: contextProjectId ?? "", selectedThread: threadId ?? "" });
-  const closeSearch = () => { setSearchOpen(false); setQuery(""); };
+  const searchButtonRef = useRef<HTMLButtonElement>(null);
+  const closeSearch = () => { setSearchOpen(false); setQuery(""); requestAnimationFrame(() => searchButtonRef.current?.focus()); };
   const create = () => {
     const value = newTitle.trim();
     if (!value || !scopeValid) return;
@@ -457,7 +463,7 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
   </div>;
 
   const chromeActions = !selected && createPortal(<div className="workpads-chrome-actions">
-    <Button variant="ghost" size="icon-sm" aria-label="Search workpads" aria-pressed={searchOpen} title="Search workpads"
+    <Button ref={searchButtonRef} variant="ghost" size="icon-sm" aria-label="Search workpads" aria-pressed={searchOpen} title="Search workpads"
       onClick={() => (searchOpen ? closeSearch() : setSearchOpen(true))}>
       <Search aria-hidden="true" />
     </Button>
@@ -729,7 +735,12 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
       description="Your unsaved edits to this workpad will be lost. Saved revisions are kept."
       confirmLabel="Discard draft"
       onOpenChange={value => { if (!value) setDiscarding(false); }}
-      onConfirm={() => run(draft.discard, true)}
+      onConfirm={async () => {
+        // A failure keeps the confirmation open with its message inline.
+        let failure: unknown;
+        await run(async () => { try { await draft.discard(); } catch (caught) { failure = caught; } }, true);
+        if (failure !== undefined) throw failure instanceof Error ? failure : new Error(message(failure));
+      }}
     />
     <DiscardChangesDialog
       open={Boolean(leaveRequest)}

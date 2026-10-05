@@ -427,7 +427,7 @@
   quiet rows with a ⋯ menu for Rename, Move to, and Archive. An open workpad
   keeps the panel header's back arrow and ⋯ menu and gets one toolbar for
   attribution, revision history, Edit, and Save (Ctrl/⌘S); Discard draft asks
-  first. Its default width is 480px.
+  first. It first opens at 40% of the stage, from 320 to 480px.
 
 - Workpads now follows the active thread in Thread view and its project in
   Project view, while Global view retains its selection. Switching scopes

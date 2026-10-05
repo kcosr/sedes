@@ -1036,6 +1036,33 @@ describe("WorkpadsPanel", () => {
       expect(api.getWorkpad).not.toHaveBeenCalled();
     });
 
+    it("renames against the revision live refresh last listed, not the one the dialog opened with", async () => {
+      let listed = pad;
+      const { store, api, emit } = fixture({ listWorkpads: vi.fn(async () => ({ items: [listed] })) });
+      render(<Panel context={panelContext(store)} />);
+      await screen.findByRole("button", { name: "Integration" });
+      openMenu("Actions for “Integration”"); choose("Rename…");
+      // An agent saves while the dialog is open; the list refresh carries it.
+      listed = { ...pad, revision: 5 };
+      await act(async () => { emit({ workpadId: pad.id, revision: 5, change: "document" }); });
+      await waitFor(() => expect(api.listWorkpads.mock.calls.length).toBeGreaterThan(1));
+      fireEvent.change(screen.getByRole("textbox", { name: "Workpad title" }), { target: { value: "Renamed" } });
+      fireEvent.click(screen.getByRole("button", { name: "Rename" }));
+      await waitFor(() => expect(api.updateWorkpad).toHaveBeenCalledWith("pad", { expectedRevision: 5, title: "Renamed" }));
+    });
+
+    it("keeps the discard confirmation open with its error when discarding fails", async () => {
+      const { store } = fixture({ discardWorkpadDraft: vi.fn(async () => { throw new Error("Draft changed elsewhere."); }) });
+      render(<Panel context={panelContext(store)} />);
+      await openRow();
+      await startEditing();
+      await discardDraft();
+      const dialog = await screen.findByRole("dialog", { name: "Discard draft?" });
+      expect(await within(dialog).findByText("Draft changed elsewhere.")).toBeInTheDocument();
+      // The editor stays open behind the modal confirmation.
+      expect(screen.getByRole("textbox", { name: "Workpad content", hidden: true })).toBeInTheDocument();
+    });
+
     it("shows a removable chip while browsing another thread and returns to the current one", async () => {
       const { store: base, api } = fixture();
       const { store } = withSnapshot(base, projectCatalog);
