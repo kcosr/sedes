@@ -32,6 +32,45 @@ import org.junit.Test;
 
 /** Real encrypted settings, authentication bootstrap, lifecycle and main-thread launch scheduling. */
 public class NativeVoiceStartupTest {
+    @Test public void switchingBackendAndAccountKeepsDevicePreferencesButNeverTransfersThreadOrActiveState() throws Exception {
+        try (Fixture f = new Fixture("off", false, true)) {
+            f.connect();
+            String secondOrigin = "https://other.example", secondIdentity = "c".repeat(64);
+            long firstGeneration = f.runtime.snapshot().getLong("connectionGeneration");
+            Reply changed = new Reply();
+            f.runtime.command("updateSettings", NativeVoiceJson.object("expectedRevision", 1,
+                "patch", NativeVoiceJson.object("voiceThreadId", "private-thread-a", "voiceThreadTitle", "Thread A", "autoListen", false,
+                    "recognitionCues", false, "ttsVoice", "device-voice")), true, firstGeneration, changed); changed.await();
+            for (String[] next : new String[][] { { f.profile, secondOrigin, Fixture.IDENTITY },
+                { f.profile, f.origin, secondIdentity }, { f.otherProfile, f.origin, Fixture.IDENTITY } }) {
+                Reply connection = f.beginConnection(next[0], next[1], next[2]);
+                f.take(f.auth).done(200, NativeVoiceJson.object("required", true, "authenticated", true, "navigationNamespace", next[2]), null);
+                f.session(); connection.await(); f.flush();
+                JSONObject snapshot = f.runtime.snapshot(), settings = snapshot.getJSONObject("settings");
+                assertTrue("No active work crosses a connection", snapshot.isNull("active"));
+                assertEquals(0, snapshot.getJSONArray("recovery").length()); assertTrue(snapshot.isNull("recordingRecovery"));
+                assertTrue(settings.isNull("voiceThreadId")); assertTrue(settings.isNull("voiceThreadTitle"));
+                assertFalse(settings.getBoolean("autoListen")); assertFalse(settings.getBoolean("recognitionCues"));
+                assertEquals("device-voice", settings.getString("ttsVoice"));
+                assertTrue(snapshot.getJSONObject("speech").getBoolean("credentialConfigured"));
+                Reply stale = new Reply();
+                f.runtime.command("updateSettings", NativeVoiceJson.object("expectedRevision", snapshot.getLong("settingsRevision"),
+                    "patch", NativeVoiceJson.object("ttsVoice", "stale-voice")), true, firstGeneration, stale);
+                assertEquals("connection_changed", stale.failure());
+                Reply staleSecret = new Reply();
+                f.runtime.speechCredentialAction(firstGeneration, snapshot.getLong("settingsRevision"), "remove", null, staleSecret);
+                assertEquals("connection_changed", staleSecret.failure());
+            }
+            Reply loggedOut = new Reply(); f.runtime.command("disconnect", new JSONObject(), false, loggedOut); loggedOut.await();
+            assertTrue(f.runtime.snapshot().isNull("identity")); assertTrue(f.runtime.snapshot().getJSONObject("settings").isNull("voiceThreadId"));
+            f.connect();
+            JSONObject restored = f.runtime.snapshot().getJSONObject("settings");
+            assertEquals("private-thread-a", restored.getString("voiceThreadId"));
+            assertEquals("device-voice", restored.getString("ttsVoice")); assertFalse(restored.getBoolean("autoListen"));
+            assertTrue(f.runtime.snapshot().getJSONObject("speech").getBoolean("credentialConfigured"));
+        }
+    }
+
     @Test public void startupRestoresFreshCacheThenRevalidatesOnceWithoutStartingVoice() throws Exception {
         try (ServerSocket server = new ServerSocket(0, 8, InetAddress.getByName("127.0.0.1"));
              Fixture f = new Fixture("off", false, true, "http://127.0.0.1:" + server.getLocalPort() + "/v1")) {
@@ -161,7 +200,14 @@ public class NativeVoiceStartupTest {
                         f.authenticate(); f.session(); other.await();
                     }
                 }
-                f.flush(); assertTrue("An obsolete start reached Android: " + action, f.starts.isEmpty());
+                f.flush();
+                if (action.equals("profile")) {
+                    Intent current = f.start(); assertTrue(f.accepted(current));
+                    assertEquals(f.runtime.snapshot().getLong("connectionGeneration"), current.getLongExtra("voiceGeneration", -1));
+                    assertTrue("Only the new profile can launch voice", f.starts.isEmpty());
+                    continue;
+                }
+                assertTrue("An obsolete start reached Android: " + action, f.starts.isEmpty());
                 if (action.equals("pause")) {
                     assertEquals("needsResume", f.runtime.snapshot().getString("readiness"));
                     f.runtime.nativeVisibility(true); assertTrue(f.accepted(f.start()));
@@ -198,7 +244,8 @@ public class NativeVoiceStartupTest {
             oldAuth.done(200, f.authenticated(), null);
             assertEquals("connection_changed", old.failure()); f.flush();
             assertEquals(f.otherProfile, f.runtime.snapshot().getString("profileId"));
-            assertEquals("off", f.runtime.snapshot().getString("readiness"));
+            Intent start = f.start(); assertTrue(f.accepted(start));
+            assertEquals(f.runtime.snapshot().getLong("connectionGeneration"), start.getLongExtra("voiceGeneration", -1));
             assertTrue(f.starts.isEmpty()); assertTrue(f.sessions.isEmpty());
         }
     }
@@ -283,12 +330,12 @@ public class NativeVoiceStartupTest {
         try (Fixture f = new Fixture("response", true, true)) {
             String binding = NativeVoiceStore.binding(f.profile, f.origin, Fixture.IDENTITY);
             byte[] garbage = new byte[64]; garbage[0] = 1;
-            Files.write(new File(f.store.directory(binding), "settings.enc").toPath(), garbage);
+            Files.write(new File(f.store.directory(NativeVoiceStore.DEVICE_BINDING), NativeVoiceStore.PREFERENCES_RECORD + ".enc").toPath(), garbage);
             f.runtime.nativeVisibility(true); f.connect(); f.flush();
             JSONObject state = f.runtime.snapshot();
             assertEquals("off", state.getJSONObject("settings").getString("audioMode")); assertFalse(state.isNull("originClientId"));
             assertEquals("voice_settings_reset", state.getJSONArray("errors").getJSONObject(0).getString("code"));
-            assertTrue(new File(f.store.directory(binding), "settings.corrupt").exists()); assertTrue(f.starts.isEmpty());
+            assertTrue(new File(f.store.directory(NativeVoiceStore.DEVICE_BINDING), NativeVoiceStore.PREFERENCES_RECORD + ".corrupt").exists()); assertTrue(f.starts.isEmpty());
         }
     }
 
@@ -399,7 +446,8 @@ public class NativeVoiceStartupTest {
         final String profile = "voice-startup-" + UUID.randomUUID(), otherProfile = "voice-startup-" + UUID.randomUUID();
         final String origin = "http://127.0.0.1:65124";
         volatile boolean permissionGranted;
-        final Context context = new ContextWrapper(InstrumentationRegistry.getInstrumentation().getTargetContext()) {
+        final NativeVoiceTestContext installation = new NativeVoiceTestContext();
+        final Context context = new ContextWrapper(installation) {
             @Override public Context getApplicationContext() { return this; }
             @Override public int checkPermission(String permission, int pid, int uid) {
                 return Manifest.permission.RECORD_AUDIO.equals(permission) ? microphonePermission() : super.checkPermission(permission, pid, uid);
@@ -429,7 +477,7 @@ public class NativeVoiceStartupTest {
             store.settings(NativeVoiceStore.binding(profile, origin, IDENTITY), NativeVoiceSettings.defaults().patch(0,
                 NativeVoiceJson.object("audioMode", mode, "speechProvider", "server", "speechEndpoint", configured ? endpoint : "",
                     "sttModel", "parakeet-local", "ttsModel", "kokoro-local", "ttsVoice", "af_heart")));
-            if (configured) new SpeechCredentialStore(context).setCredential(profile, "server", endpoint, "fixture-startup-token");
+            if (configured) new SpeechCredentialStore(context).setCredential("server", endpoint, "fixture-startup-token");
             runtime.setTestSessionStarter(intent -> starts.add(intent));
             NativeVoiceHttp.setTestTransport(new NativeVoiceHttp.TestTransport() {
                 public boolean before(String method, String path, JSONObject body, NativeVoiceHttp.Result result) {
@@ -446,9 +494,10 @@ public class NativeVoiceStartupTest {
                 public boolean after(String method, String path, JSONObject body, int status, JSONObject response, NativeVoiceHttp.Result result) { return false; }
             });
         }
-        Reply beginConnection(String selectedProfile) {
+        Reply beginConnection(String selectedProfile) { return beginConnection(selectedProfile, origin, IDENTITY); }
+        Reply beginConnection(String selectedProfile, String selectedOrigin, String selectedIdentity) {
             Reply reply = new Reply(); runtime.command("setConnection", NativeVoiceJson.object("profileId", selectedProfile,
-                "serverOrigin", origin, "identity", IDENTITY), false, reply); return reply;
+                "serverOrigin", selectedOrigin, "identity", selectedIdentity), false, reply); return reply;
         }
         void connect() throws Exception { Reply reply = beginConnection(profile); authenticate(); session(); reply.await(); ownerBarrier(); }
         JSONObject clientCommand(JSONObject command) throws Exception {
@@ -477,10 +526,11 @@ public class NativeVoiceStartupTest {
                 NativeVoiceHttp.setTestTransport(null); runtime.setTestSessionStarter(null); owner.getLooper().quitSafely();
                 for (String selected : new String[] { profile, otherProfile }) {
                     new ClientCredentialStore(context).removeProfileCredentials(selected);
-                    new SpeechCredentialStore(context).removeProfileCredentials(selected);
+
                     store.removeProfile(selected);
                     assertFalse(store.directory(NativeVoiceStore.binding(selected, origin, IDENTITY)).exists());
                 }
+                installation.close();
             }
         }
     }

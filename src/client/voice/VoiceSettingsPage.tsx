@@ -46,7 +46,7 @@ export function VoiceSettingsPage({ store, applicationStore }: { store: NativeVo
   const state = useVoiceState(store);
   const application = useApplicationStore(applicationStore);
   const [picker, setPicker] = useState(false);
-  const [showBarWhenOff, setShowBarWhenOff] = useShowVoiceBarWhenOff(store);
+  const [showBarWhenOff, setShowBarWhenOff] = useShowVoiceBarWhenOff();
   const [devices, setDevices] = useState<Array<{ id: string; label: string; type: number }>>([]);
   useEffect(() => { void store.plugin.listInputDevices().then(result => setDevices(result.devices)).catch(() => undefined); }, [store]);
   const native = state.native;
@@ -63,7 +63,7 @@ export function VoiceSettingsPage({ store, applicationStore }: { store: NativeVo
   const deviceLabels = inputDeviceLabels(devices);
   const voiceThreadLabel = settings.voiceThreadTitle ?? (settings.voiceThreadId
     ? application.snapshot?.threads.find(thread => thread.id === settings.voiceThreadId)?.title.text.trim() || "Untitled thread" : "Choose thread");
-  return <SettingsPage title="Voice" description="Saved on this device for this server profile.">
+  return <SettingsPage title="Voice" description="Voice preferences are saved on this device. The default thread belongs to the connected account.">
     {errors.length ? <Callout tone="danger" role="alert" action={<Button variant="outline" size="sm" onClick={() => store.dismissErrors()}>Clear errors</Button>}>
       {errors.length === 1 ? errors[0] : <ul className="grid gap-1">{errors.map(error => <li key={error}>{error}</li>)}</ul>}
     </Callout> : null}

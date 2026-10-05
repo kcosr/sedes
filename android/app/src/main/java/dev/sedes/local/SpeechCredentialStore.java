@@ -19,7 +19,7 @@ import javax.crypto.KeyGenerator;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.GCMParameterSpec;
 
-/** Device-profile speech secrets never cross the WebView bridge; encryption keys require no interactive unlock. */
+/** Device-owned speech secrets never cross the WebView bridge; encryption keys require no interactive unlock. */
 final class SpeechCredentialStore {
     private static final Object LOCK = new Object();
     private static final String KEY_ALIAS = "sedes.speech-credentials.v1";
@@ -27,36 +27,18 @@ final class SpeechCredentialStore {
     SpeechCredentialStore(Context context) { this.context = context; }
 
     /** Separate purpose, provider and canonical API root prevent a Sedes token or another speech token being reused. */
-    static String binding(String profileId, String provider, String endpoint) {
-        if (profileId == null || !profileId.matches("[A-Za-z0-9._:-]{1,160}")) throw new IllegalArgumentException("credential_profile_invalid");
+    static String binding(String provider, String endpoint) {
         if (!("openai".equals(provider) || "server".equals(provider))) throw new IllegalArgumentException("speech_provider_invalid");
         String base = NativeVoiceSettings.speechBaseUrl(endpoint);
         if (provider.equals("openai") && !NativeVoiceSettings.OPENAI_ENDPOINT.equals(base)) throw new IllegalArgumentException("speech_endpoint_invalid");
-        return profileId + "\n" + "speech" + "\n" + provider + "\n" + base;
+        return "speech\n" + provider + "\n" + base;
     }
     private AtomicFile file(String binding) throws Exception {
         byte[] hash = MessageDigest.getInstance("SHA-256").digest(binding.getBytes(StandardCharsets.UTF_8));
         StringBuilder name = new StringBuilder();
         for (byte value : hash) name.append(String.format(java.util.Locale.ROOT, "%02x", value & 255));
-        File directory = profileDirectory(binding.substring(0, binding.indexOf("\n")));
+        File directory = new File(context.getNoBackupFilesDir(), "device-speech-credentials");
         return new AtomicFile(new File(directory, name + ".enc"));
-    }
-    private File profileDirectory(String profileId) throws Exception {
-        if (profileId == null || !profileId.matches("[A-Za-z0-9._:-]{1,160}")) throw new IllegalArgumentException("credential_profile_invalid");
-        byte[] hash = MessageDigest.getInstance("SHA-256").digest(profileId.getBytes(StandardCharsets.UTF_8));
-        StringBuilder name = new StringBuilder();
-        for (byte value : hash) name.append(String.format(java.util.Locale.ROOT, "%02x", value & 255));
-        return new File(new File(context.getNoBackupFilesDir(), "speech-credentials"), name.toString());
-    }
-    void removeProfileCredentials(String profileId) throws Exception {
-        synchronized (LOCK) {
-            File directory = profileDirectory(profileId);
-            if (missing(directory)) return;
-            File[] files = directory.listFiles();
-            if (files == null) throw new IllegalStateException("credential_storage_unavailable");
-            for (File file : files) if (!file.delete()) throw new IllegalStateException("credential_removal_failed");
-            if (!directory.delete()) throw new IllegalStateException("credential_removal_failed");
-        }
     }
     private static synchronized SecretKey key() throws Exception {
         KeyStore store = KeyStore.getInstance("AndroidKeyStore");
@@ -69,9 +51,9 @@ final class SpeechCredentialStore {
         }
         return (SecretKey) store.getKey(KEY_ALIAS, null);
     }
-    String getCredential(String profileId, String provider, String endpoint) throws Exception {
+    String getCredential(String provider, String endpoint) throws Exception {
         synchronized (LOCK) {
-        String binding = binding(profileId, provider, endpoint);
+        String binding = binding(provider, endpoint);
         byte[] encrypted;
         AtomicFile target = file(binding);
         // readFully restores an interrupted pre-R write from its backup; checking the base file first would discard it.
@@ -100,9 +82,9 @@ final class SpeechCredentialStore {
     static void validateCredential(String credential) {
         if (credential == null || !credential.matches("[\\x21-\\x7e]{1,4096}")) throw new IllegalArgumentException("credential_invalid");
     }
-    void setCredential(String profileId, String provider, String endpoint, String credential) throws Exception {
+    void setCredential(String provider, String endpoint, String credential) throws Exception {
         synchronized (LOCK) {
-        String binding = binding(profileId, provider, endpoint);
+        String binding = binding(provider, endpoint);
         validateCredential(credential);
         Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
         cipher.init(Cipher.ENCRYPT_MODE, key());
@@ -120,9 +102,9 @@ final class SpeechCredentialStore {
         } catch (Exception error) { if (output != null) file.failWrite(output); throw error; }
         }
     }
-    void removeCredential(String profileId, String provider, String endpoint) throws Exception {
+    void removeCredential(String provider, String endpoint) throws Exception {
         synchronized (LOCK) {
-            AtomicFile record = file(binding(profileId, provider, endpoint)); record.delete();
+            AtomicFile record = file(binding(provider, endpoint)); record.delete();
             if (!missing(record.getBaseFile()) || !missing(new File(record.getBaseFile().getPath() + ".bak")) ||
                 !missing(new File(record.getBaseFile().getPath() + ".new"))) throw new IllegalStateException("credential_removal_failed");
         }

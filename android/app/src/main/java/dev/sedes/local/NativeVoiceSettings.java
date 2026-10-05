@@ -65,13 +65,6 @@ final class NativeVoiceSettings {
             if (!value.opt(key).equals(other.value.opt(key))) return false;
         return Double.compare(decimal("ttsSpeed"), other.decimal("ttsSpeed")) == 0;
     }
-    JSONObject record() { return NativeVoiceJson.object("version", RECORD_VERSION, "revision", revision, "settings", value); }
-    static NativeVoiceSettings fromRecord(JSONObject record) {
-        NativeVoiceJson.keys(record, "version", "revision", "settings");
-        NativeVoiceJson.integer(record, "version", RECORD_VERSION, RECORD_VERSION);
-        return new NativeVoiceSettings(NativeVoiceJson.integer(record, "revision", 0, Long.MAX_VALUE),
-            NativeVoiceJson.requiredObject(record, "settings"));
-    }
     private static void validate(JSONObject value) {
         NativeVoiceJson.keys(value, FIELDS);
         for (String key : FIELDS) if (!value.has(key)) throw new IllegalArgumentException("missing_" + key);

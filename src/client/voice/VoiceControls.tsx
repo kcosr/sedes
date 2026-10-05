@@ -29,7 +29,7 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
   const state = useVoiceState(store);
   const route = useRoute();
   const composerMode = useComposerDeliveryMode();
-  const [showWhenOff] = useShowVoiceBarWhenOff(store);
+  const [showWhenOff] = useShowVoiceBarWhenOff();
   const [picker, setPicker] = useState<"start" | "retarget" | "next" | null>(null);
   const pickerAnchor = useRef<HTMLButtonElement>(null);
   const pickerRecording = useRef<NativeRecordingCommandContext | null>(null);

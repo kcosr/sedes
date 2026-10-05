@@ -280,7 +280,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
             try {
                 binding = NativeVoiceStore.binding(profileId, origin, identity);
                 final String owner = binding;
-                // Unreadable records are quarantined and reset rather than blocking voice for this binding.
+                // Device preferences combine with only this authenticated binding's saved thread selection.
                 settings = record(owner, () -> store.settings(owner));
                 audio.configure(settings); configureSpeech(true, true); publish();
             } catch (Exception error) { connectionFailed("voice_storage_unavailable", reply); return; }
@@ -582,7 +582,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         if (reloadCredential) {
             speechCredential = null; speechCredentialError = false;
             if (profileId != null && !settings.text("speechEndpoint").isEmpty()) {
-                try { speechCredential = new SpeechCredentialStore(context).getCredential(profileId,
+                try { speechCredential = new SpeechCredentialStore(context).getCredential(
                     settings.text("speechProvider"), settings.text("speechEndpoint")); }
                 catch (Exception error) { speechCredentialError = true; report("speech_credential_storage_unavailable"); }
             }
@@ -636,10 +636,10 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
                 switch (action) {
                     case "save":
                         discardStoredSpeechCatalog();
-                        credentials.setCredential(profileId, settings.text("speechProvider"), settings.text("speechEndpoint"), secret); break;
+                        credentials.setCredential(settings.text("speechProvider"), settings.text("speechEndpoint"), secret); break;
                     case "remove":
                         discardStoredSpeechCatalog();
-                        credentials.removeCredential(profileId, settings.text("speechProvider"), settings.text("speechEndpoint")); break;
+                        credentials.removeCredential(settings.text("speechProvider"), settings.text("speechEndpoint")); break;
                     case "test":
                         if (secret == null && speechCredentialError) throw new IllegalStateException("speech_credential_storage_unavailable");
                         testSpeechCredential(secret == null ? speechCredential : secret, reply); return;
@@ -1797,7 +1797,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         try { return action.run(); }
         catch (NativeVoiceStore.CorruptRecord error) {
             store.quarantine(ownerBinding, error.record);
-            if (ownerBinding.equals(binding)) report("voice_" + error.record + "_reset");
+            if (ownerBinding.equals(binding)) report(error.record.equals(NativeVoiceStore.PREFERENCES_RECORD) ? "voice_settings_reset" : "voice_" + error.record + "_reset");
             return action.run();
         }
     }
@@ -2171,7 +2171,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         });
         if (!done.await(10, TimeUnit.SECONDS)) throw new IllegalStateException("voice_disconnect_timeout");
     }
-    /** Profile removal disconnects that profile and deletes its settings and input journals on the owner thread. */
+    /** Profile removal disconnects that profile and deletes its thread selections and input journals on the owner thread. */
     void profileRemoved(String profile) throws Exception {
         if (profile == null || !profile.matches("[A-Za-z0-9._:-]{1,160}")) throw new IllegalArgumentException("credential_profile_invalid");
         CountDownLatch done = new CountDownLatch(1); AtomicReference<Exception> failure = new AtomicReference<>();
@@ -2181,8 +2181,6 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
                 try {
                     if (diskFailure != null) failure.set(diskFailure);
                     try { store.removeProfile(profile); }
-                    catch (Exception error) { if (failure.get() == null) failure.set(error); else failure.get().addSuppressed(error); }
-                    try { new SpeechCredentialStore(context).removeProfileCredentials(profile); }
                     catch (Exception error) { if (failure.get() == null) failure.set(error); else failure.get().addSuppressed(error); }
                 } finally { done.countDown(); }
             });

@@ -16,7 +16,7 @@ vi.mock("./native-voice-plugin.js", async (importOriginal) => ({
   nativeVoice: new Proxy({}, { get: (_target, key) => Reflect.get(voice.fake.plugin, key) }),
 }));
 
-import { useNativeVoice, VoiceProvider } from "./VoiceProvider.js";
+import { VoiceProvider } from "./VoiceProvider.js";
 import { VoiceControls } from "./VoiceControls.js";
 import { useShowVoiceBarWhenOff } from "./voice-bar-preference.js";
 import { installThreadPanelOpenRequestListener, type ThreadPanelOpenRequest } from "../workspace-panels/thread-panel-navigation.js";
@@ -37,7 +37,7 @@ const speaking = (active: Partial<Active>, patch: Partial<NativeVoiceState> = {}
   actions: voiceActions({ canStop: true, canSkip: true }), active: item({ automatic: true, ...active }), ...patch });
 /** Sets the device preference through its hook, as Settings → Voice does. */
 function ShowWhenOff({ value }: { value: boolean }) {
-  const [, setShow] = useShowVoiceBarWhenOff(useNativeVoice()!);
+  const [, setShow] = useShowVoiceBarWhenOff();
   useEffect(() => { setShow(value); }, [setShow, value]);
   return null;
 }

@@ -179,7 +179,7 @@ describe("voice settings page", () => {
     expect(toggle).toHaveAttribute("aria-checked", "false");
     fireEvent.click(toggle);
     expect(toggle).toHaveAttribute("aria-checked", "true");
-    expect(Object.entries(localStorage)).toEqual([[`sedes-voice-bar-when-off:${JSON.stringify(Object.values(VOICE_CONNECTION))}`, "true"]]);
+    expect(Object.entries(localStorage)).toEqual([["sedes-device-voice-bar-when-off", "true"]]);
     expect(fake.plugin.updateSettings).not.toHaveBeenCalled();
     store.dispose();
   });

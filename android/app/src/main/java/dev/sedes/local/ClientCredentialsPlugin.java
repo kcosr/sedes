@@ -47,10 +47,8 @@ public final class ClientCredentialsPlugin extends Plugin {
         // Disconnect fences queued actions; a failed or timed-out recording deletion must reach the caller.
         Exception failure = null;
         try { cleanup.remove(profileId); } catch (Exception error) { failure = new VoiceProfileCleanupFailure(error); }
-        // Both secret stores are mandatory and independent, even when recording cleanup failed.
+        // Sedes authentication is removed even when recording cleanup fails. Device-owned speech credentials survive.
         try { new ClientCredentialStore(context).removeProfileCredentials(profileId); }
-        catch (Exception error) { if (failure == null) failure = error; else failure.addSuppressed(error); }
-        try { new SpeechCredentialStore(context).removeProfileCredentials(profileId); }
         catch (Exception error) { if (failure == null) failure = error; else failure.addSuppressed(error); }
         if (failure != null) throw failure;
     }
