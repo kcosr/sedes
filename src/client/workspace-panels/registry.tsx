@@ -24,12 +24,26 @@ export interface ContextualAttachmentDeclaration {
   readonly sourceKinds: readonly ContextExcerptSource["kind"][];
 }
 
+/** A back step drawn in the panel header in place of the tenant icon. */
+export interface WorkspacePanelBack {
+  readonly label: string;
+  readonly onBack: () => void;
+}
+
 export interface WorkspacePanelHost {
   close(): void;
   consumeIntent(sequence: number): void;
   setBusy(busy: boolean): void;
   setDirty(dirty: boolean): void;
   setSubtitle(text?: string): void;
+  /** Shows a back button in the header, or removes it. */
+  setBack(back?: WorkspacePanelBack): void;
+  /**
+   * The tenant's own items for the header's ⋯ menu, after the Dock group.
+   * They render inside the layout's menu, so menu primitives work in them.
+   * Publish a memoized node: every change re-renders the header.
+   */
+  setMenuItems(items?: ReactNode): void;
 }
 
 export interface WorkspacePanelContext {

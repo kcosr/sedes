@@ -36,7 +36,7 @@ function panelContext(store: ApplicationClientStore): WorkspacePanelContext {
     applicationStore: store, visible: true, presentation: "dock",
     threadRegistry: {} as WorkspacePanelContext["threadRegistry"],
     chromeActionsTarget: document.createElement("div"),
-    host: { close: vi.fn(), setBusy: vi.fn(), setDirty: vi.fn(), setSubtitle: vi.fn(), consumeIntent: vi.fn() },
+    host: { close: vi.fn(), setBusy: vi.fn(), setDirty: vi.fn(), setSubtitle: vi.fn(), setBack: vi.fn(), setMenuItems: vi.fn(), consumeIntent: vi.fn() },
   };
 }
 beforeEach(() => { navigate("/", { replace: true });  });

@@ -1,31 +1,521 @@
-.workpads-panel { width: 100%; height: 100%; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; color: var(--foreground); background: var(--background); font-size: 13px; }
-.workpads-title,.workpads-toolbar,.workpads-history { display: flex; gap: 8px; align-items: center; }
-.workpads-filters { display: grid; gap: 10px; padding: 12px; border-bottom: 1px solid var(--border); }
-.workpads-panel select { background: var(--background); color: var(--foreground); border: 1px solid var(--border); border-radius: var(--radius-ctl); padding: 6px 8px; max-width: 100%; min-width: 0; }
-.workpads-toolbar > input { min-width: 0; flex: 1; }
-.workpads-options { display: flex; gap: 16px; color: var(--muted-foreground); font-size: 12px; }
-.workpads-options label { display: flex; align-items: center; gap: 6px; }
-.workpads-list { flex: 1; overflow-y: auto; padding: 4px; }
-.workpads-row { display: flex; flex-direction: column; gap: 5px; width: 100%; padding: 12px; text-align: left; border-radius: var(--radius-ctl); }
-.workpads-row:hover { background: var(--accent); }
-.workpads-row strong { overflow-wrap: anywhere; font-weight: 500; }
-.workpads-row span,.workpads-title > span,.workpads-history > span,.workpads-sync { font-size: 11px; color: var(--muted-foreground); }
-.workpads-empty { padding: 32px 12px; text-align: center; color: var(--muted-foreground); }
-.workpads-inline-form { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px; border-bottom: 1px solid var(--border); }
-.workpads-inline-form > input { flex: 1; min-width: 120px; }
-.workpads-title { padding: 8px 10px; }
-.workpads-title h3 { flex: 1; margin: 0; min-width: 0; overflow-wrap: anywhere; font-size: 15px; font-weight: 600; }
-.workpads-document-actions { flex-wrap: wrap; padding: 0 12px 10px; gap: 4px; border-bottom: 1px solid var(--border); }
-.workpads-history { flex-wrap: wrap; padding: 8px 12px; gap: 4px; border-bottom: 1px solid var(--border); }
-.workpads-history > span { margin-left: auto; }
-.workpads-reading { overflow: auto; flex: 1; padding: 20px; min-height: 0; }
-.workpads-revision-details { margin-top: 28px; padding-top: 12px; border-top: 1px solid var(--border); color: var(--muted-foreground); font-size: 12px; }
-.workpads-revision-details summary { cursor: pointer; }
-.workpads-revision-details blockquote { white-space: pre-wrap; overflow-wrap: anywhere; padding: 8px 12px; border-left: 2px solid var(--border); margin: 8px 0 16px; color: var(--foreground); }
-.workpads-editor { display: flex; flex: 1; flex-direction: column; min-height: 0; overflow: auto; padding: 12px; gap: 12px; }
-.workpads-textarea { flex: 1; min-height: 240px; resize: none; font-family: var(--font-mono,monospace); font-size: 13px; line-height: 1.7; }
-.workpads-conflict { border: 1px solid var(--border); background: var(--muted); border-radius: var(--radius-ctl); padding: 10px; }
-.workpads-conflict p { margin: 0 0 8px; }
-.workpads-conflict pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 180px; overflow-y: auto; font-size: 12px; margin: 8px 0; }
-.workpads-error { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 12px; color: var(--destructive); border-bottom: 1px solid var(--border); }
-@media(max-width:819px) { .workpads-reading { padding: 16px; } .workpads-history > span { flex-basis: 100%; margin: 4px 0 0; } }
+/* Workpads. The list follows the Tasks panel (one scope control, a dashed
+   add row, quiet one-line rows); an open document follows the Files
+   editor (one hairline toolbar over the document). Panel-level actions sit
+   in the shared panel header. */
+
+.workpads-panel {
+  --workpads-row-height: var(--control-lg);
+  --workpads-row-text: var(--text-ui);
+  --workpads-more-width: var(--control-sm);
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  container: workpads / inline-size;
+  background: var(--background);
+  color: var(--foreground);
+  font-size: var(--text-ui);
+}
+
+@media (max-width: 819px), (pointer: coarse) {
+  .workpads-panel {
+    --workpads-row-height: calc(var(--control-touch) + var(--space-1));
+    --workpads-row-text: var(--text-title);
+    --workpads-more-width: var(--control-touch);
+  }
+}
+
+/* ── Header actions (portaled into the panel header) ── */
+.workpads-chrome-actions {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  color: var(--muted-foreground);
+}
+
+.workpads-chrome-actions > button[aria-pressed="true"] {
+  background: var(--muted);
+  color: var(--foreground);
+}
+
+/* View options narrow the list: a dot says so while the menu is closed. */
+.workpads-view-options {
+  position: relative;
+}
+
+.workpads-view-options[data-filtering]::after {
+  content: "";
+  position: absolute;
+  top: var(--space-1);
+  right: var(--space-1);
+  width: var(--space-1-5);
+  height: var(--space-1-5);
+  border-radius: 50%;
+  background: var(--info);
+}
+
+/* ── Search row: filters the list; Escape clears and closes it ── */
+.workpads-search {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--control-default);
+  padding: 0 var(--space-2) 0 var(--space-4);
+  border-bottom: 1px solid var(--border-soft);
+  color: var(--muted-foreground-2);
+}
+
+.workpads-search-icon {
+  flex: none;
+  width: var(--icon-md);
+  height: var(--icon-md);
+}
+
+.workpads-search-input,
+.workpads-add-input {
+  flex: 1 1 auto;
+  align-self: stretch;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--foreground);
+  font: inherit;
+  font-size: var(--text-input);
+  outline: none;
+}
+
+.workpads-search-input::placeholder,
+.workpads-add-input::placeholder {
+  color: var(--muted-foreground-2);
+}
+
+/* ── Toolbar: the scope control, view chips, then the add row ── */
+.workpads-toolbar {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-3) var(--space-1-5);
+}
+
+.workpads-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.workpads-filter-chip {
+  max-width: 100%;
+  border-radius: 999px;
+  color: var(--muted-foreground);
+  font-weight: var(--weight-medium);
+}
+
+.workpads-filter-chip:hover {
+  color: var(--foreground);
+}
+
+.workpads-filter-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 819px), (pointer: coarse) {
+  .workpads-filter-chip {
+    height: var(--control-md);
+  }
+}
+
+.workpads-add {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--control-default);
+  margin: 0;
+  padding: 0 var(--space-2) 0 var(--space-2-5);
+  border: 1px dashed var(--input);
+  border-radius: var(--radius-ctl);
+  transition:
+    border-color var(--motion-fast),
+    box-shadow var(--motion-fast);
+}
+
+.workpads-add:focus-within {
+  border-style: solid;
+  border-color: var(--ring);
+  box-shadow: var(--focus-ring);
+}
+
+.workpads-add:has(.workpads-add-input:disabled) {
+  opacity: var(--disabled-opacity);
+}
+
+.workpads-add-icon {
+  flex: none;
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+  color: var(--muted-foreground-2);
+}
+
+.workpads-add-hint {
+  flex: none;
+  color: var(--muted-foreground-2);
+  font-size: var(--text-label);
+  white-space: nowrap;
+}
+
+@container workpads (max-width: 379px) {
+  .workpads-add-hint {
+    display: none;
+  }
+}
+
+/* An error under the toolbar; its dismiss sits in the corner so a short
+   message keeps one line. */
+.workpads-alert {
+  position: relative;
+  flex: none;
+  margin: var(--space-2) var(--space-3);
+}
+
+.workpads-toolbar + .workpads-alert {
+  margin-top: 0;
+}
+
+.workpads-alert > [data-slot="callout"] {
+  padding-right: var(--space-8);
+}
+
+.workpads-alert-dismiss {
+  position: absolute;
+  top: var(--space-1-5);
+  right: var(--space-1-5);
+  color: var(--muted-foreground);
+}
+
+/* ── List region: the one scroller ── */
+.workpads-scroll {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  padding: var(--space-0-5) var(--space-2) var(--space-3);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.workpads-list {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.workpads-empty {
+  padding-inline: var(--space-2);
+}
+
+.workpads-more {
+  align-self: flex-start;
+  margin: var(--space-1) 0 0 var(--space-1);
+  color: var(--muted-foreground);
+}
+
+/* Rows: the title, a quiet trailing time (and author when not you), ⋯. */
+.workpads-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  min-height: var(--workpads-row-height);
+  padding-right: var(--space-1);
+  border-radius: var(--radius-ctl);
+}
+
+@media (hover: hover) {
+  .workpads-row:hover {
+    background: var(--hover);
+  }
+}
+
+.workpads-row:has(> .workpads-row-title:focus-visible) {
+  box-shadow: var(--focus-ring);
+}
+
+.workpads-row-title {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  justify-content: center;
+  align-self: stretch;
+  gap: var(--space-0-5);
+  min-width: 0;
+  margin: 0;
+  padding: 0 var(--space-2);
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: var(--workpads-row-text);
+  line-height: var(--leading-snug);
+  text-align: left;
+  cursor: pointer;
+  outline: none;
+}
+
+.workpads-row-title[data-scope] {
+  padding-block: var(--space-1-5);
+}
+
+.workpads-row-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workpads-row-scope {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted-foreground-2);
+  font-size: var(--text-meta);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workpads-row-scope svg {
+  flex: none;
+  width: var(--icon-xs);
+  height: var(--icon-xs);
+}
+
+.workpads-row-meta {
+  flex: none;
+  max-width: 45%;
+  overflow: hidden;
+  color: var(--muted-foreground-2);
+  font-size: var(--text-meta);
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ⋯ takes no room until the row is hovered or focused (always on touch). */
+.workpads-row-more {
+  flex: none;
+  width: 0;
+  margin-left: calc(-1 * var(--space-1));
+  overflow: hidden;
+  color: var(--muted-foreground);
+  opacity: 0;
+}
+
+.workpads-row:hover > .workpads-row-more,
+.workpads-row:focus-within > .workpads-row-more,
+.workpads-row-more[data-state="open"],
+.workpads-panel[data-touch] .workpads-row-more {
+  width: var(--workpads-more-width);
+  margin-left: 0;
+  opacity: 1;
+}
+
+.workpads-panel[data-touch] .workpads-row-more {
+  height: var(--workpads-more-width);
+}
+
+/* ── Document: one hairline toolbar (the Files editor's), then the text ── */
+.workpads-doc-toolbar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-width: 0;
+  min-height: var(--control-lg);
+  padding: var(--space-0-5) var(--space-1-5) var(--space-0-5) var(--space-4);
+  border-bottom: 1px solid var(--border-soft);
+  color: var(--muted-foreground);
+  font-size: var(--text-meta);
+}
+
+.workpads-doc-meta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workpads-doc-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 1px;
+}
+
+.workpads-doc-actions > button[data-variant="ghost"] {
+  color: var(--muted-foreground);
+}
+
+.workpads-doc-actions > button[data-variant="ghost"]:hover {
+  color: var(--foreground);
+}
+
+.workpads-history-item {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.workpads-notice {
+  flex: none;
+  margin: var(--space-3) var(--space-4) 0;
+}
+
+.workpads-reading {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: var(--space-5);
+  overflow: auto;
+}
+
+.workpads-revision-details {
+  margin-top: var(--space-8);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border-soft);
+  color: var(--muted-foreground);
+  font-size: var(--text-meta);
+}
+
+.workpads-revision-details summary {
+  width: fit-content;
+  cursor: pointer;
+}
+
+.workpads-revision-details summary:hover {
+  color: var(--foreground);
+}
+
+.workpads-revision-byline {
+  margin: var(--space-2) 0;
+}
+
+.workpads-revision-changes {
+  margin-top: var(--space-3);
+}
+
+.workpads-revision-changes > strong {
+  font-weight: var(--weight-medium);
+}
+
+.workpads-revision-details blockquote {
+  margin: var(--space-1-5) 0 0;
+  padding: var(--space-1-5) var(--space-3);
+  border-left: 2px solid var(--border);
+  border-radius: 0 var(--radius-ctl) var(--radius-ctl) 0;
+  color: var(--foreground);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.workpads-revision-details blockquote[data-kind="added"] {
+  border-left-color: var(--success);
+  background: color-mix(in oklch, var(--success) 8%, transparent);
+}
+
+.workpads-revision-details blockquote[data-kind="removed"] {
+  border-left-color: var(--destructive);
+  background: color-mix(in oklch, var(--destructive) 8%, transparent);
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in oklch, var(--destructive) 45%, transparent);
+}
+
+/* ── Editing: the text fills the pane, padded like the reading view ── */
+.workpads-editor {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  overflow: auto;
+}
+
+.workpads-conflict {
+  flex: none;
+  margin: var(--space-3) var(--space-4) 0;
+}
+
+.workpads-conflict details {
+  margin-top: var(--space-2);
+}
+
+.workpads-conflict summary {
+  cursor: pointer;
+}
+
+.workpads-conflict pre {
+  max-height: 180px;
+  margin: var(--space-2) 0;
+  overflow-y: auto;
+  font-size: var(--text-meta);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.workpads-callout-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.workpads-editor > .workpads-textarea {
+  flex: 1 1 auto;
+  min-height: 240px;
+  padding: var(--space-5);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  font-family: var(--font-mono, monospace);
+  font-size: var(--text-input);
+  line-height: 1.7;
+  resize: none;
+}
+
+.workpads-editor > .workpads-textarea:focus-visible {
+  border: 0;
+  box-shadow: none;
+}
+
+.workpads-destination-dialog.searchable-select-sheet {
+  height: min(480px, calc(100dvh - var(--keyboard-inset) - var(--space-4)));
+}
+
+/* Under the density switch the document's controls take the bar's touch
+   targets, like the header above them. */
+@media (max-width: 819px), (pointer: coarse) {
+  .workpads-doc-actions > button {
+    width: var(--bar-control-width);
+    height: var(--bar-control);
+  }
+
+  .workpads-doc-actions > button svg {
+    width: var(--bar-icon);
+    height: var(--bar-icon);
+  }
+}
+
+@media (max-width: 819px) {
+  .workpads-reading,
+  .workpads-editor > .workpads-textarea {
+    padding: var(--space-4);
+  }
+}

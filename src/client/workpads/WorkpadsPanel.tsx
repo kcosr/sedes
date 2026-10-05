@@ -1,21 +1,35 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, ChevronLeft, ChevronRight, Plus, X } from "lucide-react";
-import type { Workpad, WorkpadScope, WorkpadSummary, WorkpadRevision, WorkpadRevisionSummary } from "../../shared/protocol/workpads.js";
+import { createPortal } from "react-dom";
+import { Archive, ArchiveRestore, Check, Ellipsis, FilePenLine, FolderInput, Highlighter, History, ListFilter, LoaderCircle, Pencil, Plus, Save, Search, Trash2, X } from "lucide-react";
+import type { UpdateWorkpadRequest, Workpad, WorkpadScope, WorkpadSummary, WorkpadRevision, WorkpadRevisionSummary } from "../../shared/protocol/workpads.js";
 import { WORKPAD_CONTENT_MAX_CHARACTERS } from "../../shared/protocol/workpads.js";
 import { describeProjectLocations } from "../app/project-locations.js";
 import { installNavigationBlocker, routePath, useRoute, type NavigationBlocker } from "../app/router.js";
+import { useTouchDensity } from "../app/use-touch-density.js";
 import type { WorkspacePanelContext } from "../workspace-panels/registry.js";
 import { useApplicationStore } from "../stores/ApplicationClientStore.js";
+import { relativeTime, shortRelativeTime } from "../lib/time.js";
 import { DiscardChangesDialog } from "../components/ui/discard-changes-dialog.js";
+import { ConfirmDialog } from "../components/ui/confirm-dialog.js";
+import { Dialog, DialogBody, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../components/ui/dialog.js";
+import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuItemDescription, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSeparator, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger, DropdownMenuValue } from "../components/ui/dropdown-menu.js";
+import { SearchableSelectList } from "../components/ui/searchable-select.js";
 import { Button } from "../components/ui/button.js";
+import { Callout } from "../components/ui/callout.js";
+import { EmptyState } from "../components/ui/empty-state.js";
+import { Field } from "../components/ui/field.js";
 import { Input } from "../components/ui/input.js";
 import { Textarea } from "../components/ui/textarea.js";
 import { SegmentedControl, SegmentedControlItem } from "../components/ui/segmented-control.js";
+import { ScopeIcon, useTaskDestinations } from "../components/tasks/task-destinations.js";
+import { parseScopeKey, scopeKey as destinationKey } from "../components/tasks/task-view-model.js";
 import { WorkpadDocument } from "./WorkpadDocument.js";
 import { useWorkpadDraft } from "./use-workpad-draft.js";
 import "./workpads-panel.css";
 
 const message = (error: unknown) => error instanceof Error ? error.message : "Unable to update workpad.";
+/** What renaming, moving or archiving needs of a listed or open workpad. */
+type WorkpadTarget = Pick<WorkpadSummary, "id" | "revision" | "title" | "scope" | "archivedAt">;
 export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
   const { applicationStore: store, visible: open, threadId, workspaceId, host } = context;
   const application = useApplicationStore(store);
@@ -50,11 +64,15 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
   const [revisionCursor, setRevisionCursor] = useState<string>();
   const [revision, setRevision] = useState<WorkpadRevision>();
   const [attribution, setAttribution] = useState(false);
-  const [creating, setCreating] = useState(false);
+  const [newTitle, setNewTitle] = useState("");
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [viewMenuOpen, setViewMenuOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [browsing, setBrowsing] = useState(false);
+  const [renameTarget, setRenameTarget] = useState<WorkpadTarget>();
   const [title, setTitle] = useState("");
-  const [moving, setMoving] = useState(false);
-  const [moveScope, setMoveScope] = useState<WorkpadScope>({ kind: "global" });
-  const [renaming, setRenaming] = useState(false);
+  const [moveTarget, setMoveTarget] = useState<WorkpadTarget>();
+  const [discarding, setDiscarding] = useState(false);
   const [busy, setBusy] = useState(false);
   const [reconciling, setReconciling] = useState(false);
   const draft = useWorkpadDraft(store.api, setError);
@@ -113,7 +131,7 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
     draft.setEditor(undefined);
     setSelected(undefined); setRevision(undefined); setRevisions([]); setRevisionCursor(undefined);
     setItems([]); setCursor(undefined); listCount.current = 0;
-    setCreating(false); setTitle(""); setMoving(false); setRenaming(false); setReconciling(false);
+    setNewTitle(""); setTitle(""); setRenameTarget(undefined); setMoveTarget(undefined); setDiscarding(false); setReconciling(false);
     setError(""); setRefreshError(""); setBusy(false); setLeaveRequest(undefined);
   }, [scopeKey, draft.setEditor, draft.saving, routeKey, contextKey, busy]);
   const run = async (action: (isCurrent: () => boolean) => Promise<void>, mutating = false) => {
@@ -163,7 +181,7 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
     if (token !== generation.current) return;
     selectedRef.current = workpad; revisionRef.current = latest; loadingId.current = undefined;
     setSelected(workpad); setRevisions(history.items); setRevisionCursor(history.nextCursor); setRevision(latest);
-    draft.setEditor(undefined); setReconciling(false); setMoving(false); setRenaming(false);
+    draft.setEditor(undefined); setReconciling(false); setRenameTarget(undefined); setMoveTarget(undefined);
   };
   const refreshDocument = async () => {
     const id = selectedRef.current?.id;
@@ -260,7 +278,6 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
   const hasUnsynced = Boolean(draft.editor && (draft.editor.remote || draft.editor.text !== draft.editor.draft.content));
   useEffect(() => { host.setDirty(hasUnsynced || draft.saving); }, [host, hasUnsynced, draft.saving]);
   useEffect(() => { host.setBusy(busy || draft.saving); }, [host, busy, draft.saving]);
-  useEffect(() => { host.setSubtitle(selected?.title); }, [host, selected?.title]);
   // Router approvals are keyed by callback identity. Keep one registration,
   // forwarding to current state so stream updates cannot invalidate a dialog.
   const navigationGuard = useRef<NavigationBlocker>(() => true);
@@ -294,6 +311,9 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
   };
   useEffect(() => installNavigationBlocker((...args) => navigationGuard.current(...args)), []);
   const beginEditing = async (isCurrent: () => boolean) => {
+    // Read through the ref: creating a workpad opens it and starts editing
+    // in one operation, before this render's `selected` catches up.
+    const selected = selectedRef.current;
     if (!selected) return;
     let value = await store.api.getWorkpadDraft(selected.id);
     let base = await store.api.getWorkpadRevision(selected.id, value.baseRevision);
@@ -314,12 +334,12 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
     await load(result.workpad.id);
     if (isCurrent()) await refreshList();
   };
-  const mutate = async (change: Parameters<typeof store.api.updateWorkpad>[1]) => {
-    if (!selected) return;
+  // Any listed or open workpad; an open one reloads with the result.
+  const mutate = async (target: WorkpadTarget, change: Omit<UpdateWorkpadRequest, "expectedRevision">) => {
     const token = scopeGeneration.current;
-    const result = await store.api.updateWorkpad(selected.id, change);
+    const result = await store.api.updateWorkpad(target.id, { expectedRevision: target.revision, ...change });
     if (token !== scopeGeneration.current) return;
-    await load(result.id);
+    if (selectedRef.current?.id === result.id) await load(result.id);
     if (token === scopeGeneration.current) await refreshList();
   };
   const stale = Boolean(selected && draft.editor && selected.revision !== draft.editor.draft.baseRevision);
@@ -341,40 +361,367 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
     return project ? `Project · ${project.label}` : "Project";
   };
   const threads = application.visibleThreads;
-  const renderScopeTargets = (value: WorkpadScope, onChange: (scope: WorkpadScope) => void) => <>
-    <SegmentedControl aria-label="Destination scope" value={value.kind} onValueChange={kind => onChange(kind === "global" ? { kind: "global" } : kind === "project" ? { kind: "project", projectId: contextProjectId ?? projects[0]?.id ?? "" } : { kind: "thread", threadId: threadId ?? threads[0]?.id ?? "" })}><SegmentedControlItem value="global">Global</SegmentedControlItem><SegmentedControlItem value="project" disabled={!projects.length}>Project</SegmentedControlItem><SegmentedControlItem value="thread" disabled={!threads.length}>Thread</SegmentedControlItem></SegmentedControl>
-    {value.kind === "project" && <select aria-label="Destination project" value={value.projectId} onChange={event => onChange({ kind: "project", projectId: event.target.value })}>{projects.map(project => <option key={project.id} value={project.id}>{project.label}</option>)}</select>}
-    {value.kind === "thread" && <select aria-label="Destination thread" value={value.threadId} onChange={event => onChange({ kind: "thread", threadId: event.target.value })}>{threads.map(thread => <option key={thread.id} value={thread.id}>{thread.title.text}</option>)}</select>}
+  const touch = useTouchDensity();
+  const destinations = useTaskDestinations(application.snapshot, route);
+  const editing = Boolean(draft.editor);
+  const latestRevision = selected?.revision;
+  // An older revision on screen, as opposed to the document's latest.
+  const viewedOlder = revision && latestRevision !== undefined && revision.revision !== latestRevision ? revision : undefined;
+  const noChanges = Boolean(draft.editor && draft.editor.text === draft.editor.baseText);
+  const canSave = Boolean(draft.editor) && !busy && !draft.saving && !stale && !draft.editor?.remote && !noChanges;
+  const browsedThread = scopeKind === "thread" && selectedThread !== (threadId ?? "") && Boolean(selectedThread);
+  const browsedProject = scopeKind === "project" && projectId !== (contextProjectId ?? "") && Boolean(projectId);
+  const narrowed = nested || archived || browsedThread || browsedProject;
+
+  const closeDocument = () => {
+    void run(async isCurrent => {
+      if (draft.editor) await draft.save();
+      if (!isCurrent()) return;
+      draft.setEditor(undefined); selectedRef.current = undefined; revisionRef.current = undefined;
+      setSelected(undefined); setRevision(undefined); ++generation.current;
+    });
+  };
+  const openRename = (target: WorkpadTarget) => { setTitle(target.title); setRenameTarget(target); };
+  const moveTo = (target: WorkpadTarget, destination: WorkpadScope) => { void run(() => mutate(target, { scope: destination }), true); };
+  const archiveWorkpad = (target: WorkpadTarget, value: boolean) => { void run(() => mutate(target, { archived: value }), true); };
+  const finishEditing = () => { void run(async isCurrent => { await draft.save(); if (isCurrent()) draft.setEditor(undefined); }); };
+  const browse = (destination: WorkpadScope) => {
+    setScopeKind(destination.kind);
+    setTargets({ ...currentTargets,
+      ...(destination.kind === "project" ? { projectId: destination.projectId } : {}),
+      ...(destination.kind === "thread" ? { selectedThread: destination.threadId } : {}),
+    });
+  };
+  const stopBrowsing = () => setTargets({ ...currentTargets, projectId: contextProjectId ?? "", selectedThread: threadId ?? "" });
+  const closeSearch = () => { setSearchOpen(false); setQuery(""); };
+  const create = () => {
+    const value = newTitle.trim();
+    if (!value || !scopeValid) return;
+    void run(async isCurrent => {
+      const created = await store.api.createWorkpad({ title: value, scope });
+      if (!isCurrent()) return;
+      setNewTitle("");
+      await load(created.id);
+      // A new workpad opens ready for its first text.
+      if (isCurrent() && selectedRef.current?.id === created.id) await beginEditing(isCurrent);
+    }, true);
+  };
+
+  // The header: a back step while a document is open, and the open
+  // document's actions in its ⋯. Handlers run the latest render's.
+  const handlers = useRef({ closeDocument, openRename, moveTo, archiveWorkpad, selected });
+  handlers.current = { closeDocument, openRename, moveTo, archiveWorkpad, selected };
+  const hasSelection = selected !== undefined;
+  useEffect(() => {
+    host.setBack(hasSelection ? { label: "Back to workpads", onBack: () => handlers.current.closeDocument() } : undefined);
+  }, [host, hasSelection]);
+  const selectedScope = selected ? destinationKey(selected.scope) : undefined;
+  const selectedArchived = Boolean(selected?.archivedAt);
+  const draftSaving = draft.saving;
+  const menuItems = useMemo(() => {
+    if (!hasSelection) return undefined;
+    if (editing) {
+      return <DropdownMenuItem variant="destructive" disabled={draftSaving} onSelect={() => setDiscarding(true)}>
+        <Trash2 /><span>Discard draft…</span>
+      </DropdownMenuItem>;
+    }
+    const current = () => handlers.current.selected;
+    return <>
+      <DropdownMenuItem onSelect={() => { const target = current(); if (target) handlers.current.openRename(target); }}>
+        <Pencil /><span>Rename…</span>
+      </DropdownMenuItem>
+      <DropdownMenuSub>
+        <DropdownMenuSubTrigger><FolderInput /><span>Move to</span></DropdownMenuSubTrigger>
+        <DropdownMenuSubContent>
+          <MoveToItems current={selectedScope} threadId={threadId} projectId={contextProjectId}
+            onMove={destination => { const target = current(); if (target) handlers.current.moveTo(target, destination); }}
+            onChoose={() => { const target = current(); if (target) setMoveTarget(target); }} />
+        </DropdownMenuSubContent>
+      </DropdownMenuSub>
+      <DropdownMenuItem onSelect={() => { const target = current(); if (target) handlers.current.archiveWorkpad(target, !target.archivedAt); }}>
+        {selectedArchived ? <><ArchiveRestore /><span>Unarchive</span></> : <><Archive /><span>Archive</span></>}
+      </DropdownMenuItem>
+    </>;
+  }, [hasSelection, editing, draftSaving, selectedScope, selectedArchived, threadId, contextProjectId]);
+  useEffect(() => { host.setMenuItems(menuItems); }, [host, menuItems]);
+  useEffect(() => () => { host.setBack(undefined); host.setMenuItems(undefined); }, [host]);
+  useEffect(() => { host.setSubtitle(selected ? (draft.editor ? selected.title : revision?.title ?? selected.title) : undefined); },
+    [host, selected, draft.editor, revision?.title]);
+
+  const errorText = error || refreshError;
+  const errorCallout = errorText && <div className="workpads-alert">
+    <Callout tone="danger" role="alert">{errorText}</Callout>
+    <Button variant="ghost" size="icon-xs" className="workpads-alert-dismiss" aria-label="Dismiss error" onClick={() => { setError(""); setRefreshError(""); }}><X aria-hidden="true" /></Button>
+  </div>;
+
+  const chromeActions = !selected && createPortal(<div className="workpads-chrome-actions">
+    <Button variant="ghost" size="icon-sm" aria-label="Search workpads" aria-pressed={searchOpen} title="Search workpads"
+      onClick={() => (searchOpen ? closeSearch() : setSearchOpen(true))}>
+      <Search aria-hidden="true" />
+    </Button>
+    <DropdownMenu presentation={touch ? "sheet" : "menu"} open={open && viewMenuOpen} onOpenChange={setViewMenuOpen}>
+      <DropdownMenuTrigger asChild>
+        <Button variant="ghost" size="icon-sm" className="workpads-view-options" aria-label="View options" title="View options" data-filtering={narrowed || undefined}>
+          <ListFilter aria-hidden="true" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" aria-label="View options" sheetTitle="View options">
+        <DropdownMenuCheckboxItem disabled={busy} checked={nested} onCheckedChange={value => setNested(value === true)}>Include nested scopes</DropdownMenuCheckboxItem>
+        <DropdownMenuCheckboxItem disabled={busy} checked={archived} onCheckedChange={value => setArchived(value === true)}>Archived</DropdownMenuCheckboxItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem disabled={busy} onSelect={() => setBrowsing(true)}><Search /><span>Browse another thread or project…</span></DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  </div>, context.chromeActionsTarget);
+
+  const chips: { key: string; label: string; clear: () => void }[] = [
+    ...(browsedThread || browsedProject ? [{ key: "browse", label: destinations.label(scope), clear: stopBrowsing }] : []),
+    ...(nested ? [{ key: "nested", label: "Nested scopes", clear: () => setNested(false) }] : []),
+    ...(archived ? [{ key: "archived", label: "Archived", clear: () => setArchived(false) }] : []),
+  ];
+  const addPlaceholder = scope.kind === "global" ? "New global workpad…"
+    : scope.kind === "project" ? (browsedProject ? `New workpad in ${destinations.label(scope)}…` : "New workpad in this project…")
+    : browsedThread ? `New workpad in ${destinations.label(scope)}…` : "New workpad in this thread…";
+  const scopeNoun = scope.kind === "global" ? "global workpads" : scope.kind === "project" ? "workpads in this project" : "workpads in this thread";
+  const emptyTitle = loading ? "Loading…"
+    : !scopeValid ? (scope.kind === "thread" ? "Open a thread to see its workpads" : "Choose a project to see its workpads")
+    : query.trim() ? `No workpads match “${query.trim()}”`
+    : archived ? "No archived workpads"
+    : `No ${scopeNoun} yet`;
+
+  const listView = <>
+    {searchOpen && <div className="workpads-search">
+      <Search className="workpads-search-icon" aria-hidden="true" />
+      <input autoFocus type="text" className="workpads-search-input" aria-label="Search workpads" placeholder="Search titles and text"
+        autoComplete="off" maxLength={240} value={query} onChange={event => setQuery(event.target.value)}
+        onKeyDown={event => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); closeSearch(); } }} />
+      <Button variant="ghost" size="icon-xs" aria-label="Close search" onClick={closeSearch}><X aria-hidden="true" /></Button>
+    </div>}
+    <div className="workpads-toolbar">
+      <SegmentedControl disabled={busy} aria-label="Workpad scope" className="w-full" value={scopeKind}
+        onValueChange={value => { setScopeKind(value as WorkpadScope["kind"]); setTargets({ ...currentTargets, projectId: projectId || contextProjectId || projects[0]?.id || "", selectedThread: selectedThread || threadId || threads[0]?.id || "" }); }}>
+        <SegmentedControlItem value="thread" disabled={!threads.length}>Thread</SegmentedControlItem>
+        <SegmentedControlItem value="project" disabled={!projects.length}>Project</SegmentedControlItem>
+        <SegmentedControlItem value="global">Global</SegmentedControlItem>
+      </SegmentedControl>
+      {chips.length > 0 && <div className="workpads-filters" role="group" aria-label="View filters">
+        {chips.map(chip => <Button key={chip.key} variant="outline" size="sm" className="workpads-filter-chip" disabled={busy}
+          aria-label={`Remove filter: ${chip.label}`} onClick={chip.clear}>
+          <span className="workpads-filter-label">{chip.label}</span><X data-icon="inline-end" aria-hidden="true" />
+        </Button>)}
+      </div>}
+      {!archived && <form className="workpads-add" onSubmit={event => { event.preventDefault(); create(); }}>
+        <Plus className="workpads-add-icon" aria-hidden="true" />
+        <input type="text" className="workpads-add-input" aria-label="New workpad title" placeholder={addPlaceholder}
+          autoComplete="off" enterKeyHint="done" maxLength={240} disabled={!scopeValid} value={newTitle}
+          onChange={event => setNewTitle(event.target.value)}
+          onKeyDown={event => { if (event.key === "Escape" && newTitle) { event.preventDefault(); event.stopPropagation(); setNewTitle(""); } }} />
+        {newTitle.trim() && <span className="workpads-add-hint" aria-hidden="true">↵ create</span>}
+      </form>}
+    </div>
+    {errorCallout}
+    <div className="workpads-scroll" aria-busy={loading}>
+      {items.length ? <ul className="workpads-list">
+        {items.map(item => <li key={item.id} className="workpads-row">
+          <button type="button" className="workpads-row-title" data-scope={nested || undefined} onClick={() => { void run(() => load(item.id)); }}>
+            <span className="workpads-row-name">{item.title}</span>
+            {nested && <span className="workpads-row-scope"><ScopeIcon kind={item.scope.kind} />{scopeLabel(item.scope)}</span>}
+          </button>
+          <span className="workpads-row-meta" title={new Date(item.updatedAt).toLocaleString()}>
+            {item.author.kind === "user" ? "" : `${item.author.name} · `}{shortRelativeTime(item.updatedAt)}
+          </span>
+          <DropdownMenu presentation={touch ? "sheet" : "menu"}>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon-sm" className="workpads-row-more" aria-label={`Actions for “${item.title}”`} disabled={busy}>
+                <Ellipsis aria-hidden="true" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" sheetTitle={item.title}>
+              <DropdownMenuItem onSelect={() => openRename(item)}><Pencil /><span>Rename…</span></DropdownMenuItem>
+              <DropdownMenuSub>
+                <DropdownMenuSubTrigger><FolderInput /><span>Move to</span></DropdownMenuSubTrigger>
+                <DropdownMenuSubContent>
+                  <MoveToItems current={destinationKey(item.scope)} threadId={threadId} projectId={contextProjectId}
+                    onMove={destination => moveTo(item, destination)} onChoose={() => setMoveTarget(item)} />
+                </DropdownMenuSubContent>
+              </DropdownMenuSub>
+              <DropdownMenuItem onSelect={() => archiveWorkpad(item, !item.archivedAt)}>
+                {item.archivedAt ? <><ArchiveRestore /><span>Unarchive</span></> : <><Archive /><span>Archive</span></>}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </li>)}
+      </ul> : <EmptyState variant="inline" className="workpads-empty" title={emptyTitle}
+        description={!loading && scopeValid && !query.trim() && !archived ? "Name one above, or ask an agent to start one." : undefined} />}
+      {cursor && <Button variant="ghost" size="sm" className="workpads-more" disabled={busy} onClick={() => { void run(() => refreshList(cursor)); }}>Load more</Button>}
+    </div>
   </>;
-  return <section id="workpads-panel" role="region" aria-label="Workpads" className="workpads-panel">
-    {(error || refreshError) && <div className="workpads-error" role="alert">{error || refreshError}<Button variant="ghost" size="icon-sm" aria-label="Dismiss error" onClick={() => { setError(""); setRefreshError(""); }}><X size={14} /></Button></div>}
-    {!selected ? <>
-      <div className="workpads-filters">
-        <SegmentedControl disabled={busy} aria-label="Workpad scope" className="w-full" value={scopeKind} onValueChange={value => { setScopeKind(value as WorkpadScope["kind"]); setTargets({ ...currentTargets, projectId: projectId || contextProjectId || projects[0]?.id || "", selectedThread: selectedThread || threadId || threads[0]?.id || "" }); }}><SegmentedControlItem value="global">Global</SegmentedControlItem><SegmentedControlItem value="project" disabled={!projects.length}>Project</SegmentedControlItem><SegmentedControlItem value="thread" disabled={!threads.length}>Thread</SegmentedControlItem></SegmentedControl>
-        {scopeKind === "project" && <select disabled={busy} aria-label="Workpad project" value={projectId} onChange={event => setProjectId(event.target.value)}>{projects.map(project => <option key={project.id} value={project.id}>{project.label}</option>)}</select>}
-        {scopeKind === "thread" && <select disabled={busy} aria-label="Workpad thread" value={selectedThread} onChange={event => setSelectedThread(event.target.value)}>{threads.map(thread => <option key={thread.id} value={thread.id}>{thread.title.text}</option>)}</select>}
-        <div className="workpads-toolbar"><Input aria-label="Search workpads" placeholder="Search workpads" value={query} maxLength={240} onChange={event => setQuery(event.target.value)} /><Button variant="secondary" size="sm" disabled={!scopeValid} onClick={() => { setCreating(true); setTitle(""); }}><Plus size={15} />New workpad</Button></div>
-        <div className="workpads-options"><label><input type="checkbox" checked={nested} onChange={event => setNested(event.target.checked)} />Include nested scopes</label><label><input type="checkbox" checked={archived} onChange={event => setArchived(event.target.checked)} />Archived</label></div>
+
+  const revisionLabel = (value: { revision: number }) => value.revision === 0 ? "Created" : `Revision ${value.revision}`;
+  const syncLabel = draft.saving ? "Syncing draft…" : draft.editor?.remote ? "Draft conflict" : hasUnsynced ? "Draft not synced" : noChanges ? "No changes" : "Draft synced";
+  const meta = revision && [
+    scopeLabel(revision.scope),
+    revision.revision === 0 ? `Created by ${revision.author.name}` : `${revisionLabel(revision)} · ${revision.author.name}`,
+    relativeTime(revision.createdAt),
+  ].join(" · ");
+  const orderedRevisions = useMemo(() => [...revisions].sort((left, right) => right.revision - left.revision), [revisions]);
+
+  const documentView = selected && <>
+    <div className="workpads-doc-toolbar">
+      {editing
+        ? <span className="workpads-doc-meta workpads-sync" role="status">{syncLabel}</span>
+        : <span className="workpads-doc-meta" title={revision ? new Date(revision.createdAt).toLocaleString() : undefined}>{meta}</span>}
+      <div className="workpads-doc-actions">
+        {!editing && <Button variant={attribution ? "secondary" : "ghost"} size="icon-sm" aria-label="Show attribution" aria-pressed={attribution}
+          title={attribution ? "Hide attribution" : "Show attribution"} onClick={() => setAttribution(!attribution)}>
+          <Highlighter aria-hidden="true" />
+        </Button>}
+        {!editing && <DropdownMenu presentation={touch ? "sheet" : "menu"} open={open && historyOpen} onOpenChange={setHistoryOpen}>
+          <DropdownMenuTrigger asChild>
+            <Button variant={viewedOlder ? "secondary" : "ghost"} size="icon-sm" aria-label="Revision history" title="Revision history" disabled={!revision}>
+              <History aria-hidden="true" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" sheetTitle="Revisions" className="workpads-history-menu">
+            {!touch && <DropdownMenuLabel>Revisions</DropdownMenuLabel>}
+            <DropdownMenuRadioGroup aria-label="Revision" value={revision ? String(revision.revision) : ""}
+              onValueChange={value => { void run(() => chooseRevision(Number(value))); }}>
+              {orderedRevisions.map(value => <DropdownMenuRadioItem key={value.revision} value={String(value.revision)}>
+                <span className="workpads-history-item">
+                  <span>{revisionLabel(value)}{value.revision === latestRevision ? " · latest" : ""}</span>
+                  <DropdownMenuItemDescription>{value.author.name} · {relativeTime(value.createdAt)}</DropdownMenuItemDescription>
+                </span>
+              </DropdownMenuRadioItem>)}
+            </DropdownMenuRadioGroup>
+            {revisionCursor && <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem disabled={busy} onSelect={event => {
+                event.preventDefault();
+                void run(async isCurrent => { const page = await store.api.listWorkpadRevisions(selected.id, revisionCursor); if (!isCurrent()) return; setRevisions(previous => [...previous, ...page.items]); setRevisionCursor(page.nextCursor); });
+              }}>Older revisions</DropdownMenuItem>
+            </>}
+          </DropdownMenuContent>
+        </DropdownMenu>}
+        <Button variant={editing ? "secondary" : "ghost"} size="icon-sm"
+          aria-label={editing ? "Done editing" : "Edit workpad"} title={editing ? "Done editing" : "Edit workpad"}
+          disabled={busy || (editing ? Boolean(draft.editor?.remote) : Boolean(selected.archivedAt))}
+          onClick={() => { if (editing) finishEditing(); else void run(beginEditing); }}>
+          {editing ? <Check aria-hidden="true" /> : <FilePenLine aria-hidden="true" />}
+        </Button>
+        {editing && <Button variant="ghost" size="icon-sm" aria-label="Save workpad" title="Save as a new revision (Ctrl+S)" aria-busy={busy || undefined}
+          disabled={!canSave} onClick={() => { void run(saveDocument, true); }}>
+          {busy ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <Save aria-hidden="true" />}
+        </Button>}
       </div>
-      {creating && <form className="workpads-inline-form" onSubmit={event => { event.preventDefault(); void run(async isCurrent => { const created = await store.api.createWorkpad({ title: title.trim(), scope }); if (!isCurrent()) return; setCreating(false); await load(created.id); }, true); }}><Input autoFocus aria-label="Title" value={title} maxLength={240} onChange={event => setTitle(event.target.value)} /><Button size="sm" disabled={busy || !title.trim()} type="submit">Create workpad</Button><Button type="button" size="sm" variant="ghost" onClick={() => setCreating(false)}>Cancel</Button></form>}
-      <div className="workpads-list" aria-busy={loading}>{items.map(item => <button className="workpads-row" key={item.id} onClick={() => { void run(() => load(item.id)); }}><strong>{item.title}</strong><span>{scopeLabel(item.scope)} · {item.author.name} · {new Date(item.updatedAt).toLocaleDateString()}</span></button>)}{!items.length && <p className="workpads-empty">{loading ? "Loading…" : "No workpads"}</p>}{cursor && <Button variant="ghost" onClick={() => { void run(() => refreshList(cursor)); }}>Load more</Button>}</div>
-    </> : <>
-      <div className="workpads-title"><Button variant="ghost" size="icon-sm" aria-label="Back to workpads" disabled={busy} onClick={() => { void run(async isCurrent => { if (draft.editor) await draft.save(); if (!isCurrent()) return; draft.setEditor(undefined); selectedRef.current = undefined; revisionRef.current = undefined; setSelected(undefined); setRevision(undefined); ++generation.current; }); }}><ArrowLeft size={16} /></Button><h3>{draft.editor ? selected.title : revision?.title ?? selected.title}</h3><span>{scopeLabel(draft.editor ? selected.scope : revision?.scope ?? selected.scope)}</span></div>
-      <div className="workpads-toolbar workpads-document-actions">
-        {!draft.editor && <><Button size="sm" variant="secondary" disabled={busy || Boolean(selected.archivedAt)} onClick={() => { void run(beginEditing); }}>Edit workpad</Button><Button size="sm" variant="ghost" aria-pressed={attribution} onClick={() => setAttribution(!attribution)}>Show attribution</Button><Button size="sm" variant="ghost" onClick={() => { setMoving(!moving); setMoveScope(selected.scope); }}>Move workpad</Button><Button size="sm" variant="ghost" onClick={() => { setRenaming(!renaming); setTitle(selected.title); }}>Rename</Button><Button size="sm" variant="ghost" disabled={busy} onClick={() => { void run(() => mutate({ expectedRevision: selected.revision, archived: !selected.archivedAt }), true); }}>{selected.archivedAt ? "Restore workpad" : "Archive workpad"}</Button></>}
-        {draft.editor && <><Button size="sm" disabled={busy || draft.saving || stale || Boolean(draft.editor.remote)} onClick={() => { void run(saveDocument, true); }}>Save workpad</Button><Button size="sm" variant="ghost" disabled={busy || Boolean(draft.editor.remote)} onClick={() => { void run(async isCurrent => { await draft.save(); if (isCurrent()) draft.setEditor(undefined); }); }}>Done editing</Button><Button size="sm" variant="ghost" disabled={busy || draft.saving} onClick={() => { void run(draft.discard, true); }}>Discard draft</Button><span className="workpads-sync" role="status">{draft.saving ? "Syncing draft…" : draft.editor.remote ? "Draft conflict" : hasUnsynced ? "Draft not synced" : "Draft synced"}</span></>}
-      </div>
-      {moving && !draft.editor && <div className="workpads-inline-form">{renderScopeTargets(moveScope, setMoveScope)}<Button size="sm" disabled={busy} onClick={() => { void run(() => mutate({ expectedRevision: selected.revision, scope: moveScope }), true); }}>Move</Button><Button size="sm" variant="ghost" onClick={() => setMoving(false)}>Cancel</Button></div>}
-      {renaming && !draft.editor && <form className="workpads-inline-form" onSubmit={event => { event.preventDefault(); void run(() => mutate({ expectedRevision: selected.revision, title: title.trim() }), true); }}><Input aria-label="Workpad title" maxLength={240} value={title} onChange={event => setTitle(event.target.value)} /><Button size="sm" disabled={busy || !title.trim()}>Rename workpad</Button></form>}
-      {draft.editor ? <div className="workpads-editor">
-        {draft.editor.remote && <div className="workpads-conflict" role="alert"><p>This draft changed on another device.</p><details><summary>Other device’s draft</summary><pre>{draft.editor.remote.content}</pre></details><Button size="sm" variant="secondary" onClick={() => { void run(async isCurrent => { const remote = draft.editor!.remote!; const base = await store.api.getWorkpadRevision(selected.id, remote.baseRevision); if (!isCurrent()) return; draft.setEditor({ draft: remote, text: remote.content, baseText: base.content }); }); }}>Use latest draft</Button><Button size="sm" variant="ghost" onClick={() => { const value = draft.editor!; draft.setEditor({ ...value, draft: { ...value.remote!, baseRevision: value.draft.baseRevision }, remote: undefined }); }}>Keep my draft</Button></div>}
-        {stale && <div className="workpads-conflict" role="alert"><p>The document changed. Review the latest version before saving.</p><Button size="sm" variant="secondary" onClick={() => setReconciling(!reconciling)}>{reconciling ? "Hide comparison" : "Review changes"}</Button>{reconciling && <><details open><summary>Starting version · revision {draft.editor.draft.baseRevision}</summary><pre>{draft.editor.baseText}</pre></details><details open><summary>Latest version · revision {selected.revision}</summary><pre>{selected.content}</pre></details><Button size="sm" disabled={Boolean(draft.editor.remote) || draft.saving} onClick={() => { void run(async isCurrent => { const synced = await draft.save(); if (!isCurrent()) return; const rebased = await store.api.saveWorkpadDraft(selected.id, { expectedRevision: synced.revision, baseRevision: selected.revision, content: draft.ref.current!.text }); if (!isCurrent()) return; draft.setEditor({ draft: rebased, text: rebased.content, baseText: selected.content }); setReconciling(false); }, true); }}>Use my reconciled text</Button></>}</div>}
-        <Textarea disabled={busy} aria-label="Workpad content" maxLength={WORKPAD_CONTENT_MAX_CHARACTERS} value={draft.editor.text} onChange={event => draft.setEditor({ ...draft.editor!, text: event.target.value })} spellCheck className="workpads-textarea" />
-      </div> : <>
-        <div className="workpads-history"><Button variant="ghost" size="icon-sm" aria-label="Previous revision" disabled={busy || !revision || !revisions.some(value => value.revision < revision.revision)} onClick={() => { const number = revisions.filter(value => value.revision < revision!.revision).sort((a,b) => b.revision-a.revision)[0]?.revision; if (number !== undefined) void run(() => chooseRevision(number)); }}><ChevronLeft size={16} /></Button><select aria-label="Revision" value={revision?.revision ?? ""} onChange={event => { void run(() => chooseRevision(Number(event.target.value))); }}>{revisions.map(value => <option key={value.revision} value={value.revision}>Revision {value.revision}{value.revision === selected.revision ? " · latest" : ""}</option>)}</select><Button variant="ghost" size="icon-sm" aria-label="Next revision" disabled={busy || !revision || revision.revision === selected.revision} onClick={() => { const number = revisions.filter(value => value.revision > revision!.revision).sort((a,b) => a.revision-b.revision)[0]?.revision; if (number !== undefined) void run(() => chooseRevision(number)); }}><ChevronRight size={16} /></Button>{revision && <span>{revision.author.name} · {new Date(revision.createdAt).toLocaleString()}</span>}{revisionCursor && <Button size="sm" variant="ghost" onClick={() => { void run(async isCurrent => { const page = await store.api.listWorkpadRevisions(selected.id, revisionCursor); if (!isCurrent()) return; setRevisions(previous => [...previous, ...page.items]); setRevisionCursor(page.nextCursor); }); }}>Older revisions</Button>}</div>
-        <div className="workpads-reading">{revision && <><WorkpadDocument active={open} content={revision.content} attribution={revision.attribution} showAttribution={attribution} /><details className="workpads-revision-details"><summary>Revision details</summary><p>{revision.author.name} · {new Date(revision.createdAt).toLocaleString()}</p>{revision.changes.length ? (["removed", "added"] as const).map(kind => { const changes = revision.changes.filter(change => change.kind === kind); return changes.length ? <div key={kind}><strong>{kind === "removed" ? "Removed" : "Added"} by {revision.author.name}</strong>{changes.map((change,index) => <blockquote key={index}>{change.text}</blockquote>)}</div> : null; }) : <p>Document metadata updated.</p>}</details></>}</div>
-      </>}
-    </>}
+    </div>
+    {errorCallout}
+    {selected.archivedAt && !editing && <div className="workpads-notice">
+      <Callout action={<Button size="sm" variant="outline" disabled={busy} onClick={() => archiveWorkpad(selected, false)}>Unarchive</Button>}>
+        This workpad is archived.
+      </Callout>
+    </div>}
+    {viewedOlder && !editing && <div className="workpads-notice">
+      <Callout tone="info" action={<Button size="sm" variant="outline" disabled={busy || latestRevision === undefined}
+        onClick={() => { if (latestRevision !== undefined) void run(() => chooseRevision(latestRevision)); }}>Back to latest</Button>}>
+        Viewing {viewedOlder.revision === 0 ? "the first version" : `revision ${viewedOlder.revision}`}. The latest is revision {latestRevision}.
+      </Callout>
+    </div>}
+    {draft.editor ? <div className="workpads-editor" onKeyDown={event => {
+      if ((event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "s") {
+        event.preventDefault();
+        if (canSave) void run(saveDocument, true);
+      }
+    }}>
+      {draft.editor.remote && <Callout tone="warning" role="alert" className="workpads-conflict" title="This draft changed on another device.">
+        <details><summary>Other device’s draft</summary><pre>{draft.editor.remote.content}</pre></details>
+        <div className="workpads-callout-actions">
+          <Button size="sm" variant="outline" onClick={() => { void run(async isCurrent => { const remote = draft.editor!.remote!; const base = await store.api.getWorkpadRevision(selected.id, remote.baseRevision); if (!isCurrent()) return; draft.setEditor({ draft: remote, text: remote.content, baseText: base.content }); }); }}>Use latest draft</Button>
+          <Button size="sm" variant="ghost" onClick={() => { const value = draft.editor!; draft.setEditor({ ...value, draft: { ...value.remote!, baseRevision: value.draft.baseRevision }, remote: undefined }); }}>Keep my draft</Button>
+        </div>
+      </Callout>}
+      {stale && <Callout tone="warning" role="alert" className="workpads-conflict" title="The document changed.">
+        Review the latest version before saving.
+        {reconciling && <>
+          <details open><summary>Starting version · revision {draft.editor.draft.baseRevision}</summary><pre>{draft.editor.baseText}</pre></details>
+          <details open><summary>Latest version · revision {selected.revision}</summary><pre>{selected.content}</pre></details>
+        </>}
+        <div className="workpads-callout-actions">
+          <Button size="sm" variant="outline" onClick={() => setReconciling(!reconciling)}>{reconciling ? "Hide comparison" : "Review changes"}</Button>
+          {reconciling && <Button size="sm" disabled={Boolean(draft.editor.remote) || draft.saving} onClick={() => { void run(async isCurrent => { const synced = await draft.save(); if (!isCurrent()) return; const rebased = await store.api.saveWorkpadDraft(selected.id, { expectedRevision: synced.revision, baseRevision: selected.revision, content: draft.ref.current!.text }); if (!isCurrent()) return; draft.setEditor({ draft: rebased, text: rebased.content, baseText: selected.content }); setReconciling(false); }, true); }}>Use my reconciled text</Button>}
+        </div>
+      </Callout>}
+      <Textarea disabled={busy} aria-label="Workpad content" maxLength={WORKPAD_CONTENT_MAX_CHARACTERS} value={draft.editor.text}
+        onChange={event => draft.setEditor({ ...draft.editor!, text: event.target.value })} spellCheck className="workpads-textarea" />
+    </div> : <div className="workpads-reading">{revision && <>
+      <WorkpadDocument active={open} content={revision.content} attribution={revision.attribution} showAttribution={attribution} />
+      <details className="workpads-revision-details">
+        <summary>Revision details</summary>
+        <p className="workpads-revision-byline">{revisionLabel(revision)} · {revision.author.name} · {new Date(revision.createdAt).toLocaleString()}</p>
+        {revision.changes.length ? (["removed", "added"] as const).map(kind => {
+          const changes = revision.changes.filter(change => change.kind === kind);
+          return changes.length ? <div key={kind} className="workpads-revision-changes">
+            <strong>{kind === "removed" ? "Removed" : "Added"} by {revision.author.name}</strong>
+            {changes.map((change, index) => <blockquote key={index} data-kind={kind}>{change.text}</blockquote>)}
+          </div> : null;
+        }) : <p>Document metadata updated.</p>}
+      </details>
+    </>}</div>}
+  </>;
+
+  return <section id="workpads-panel" role="region" aria-label="Workpads" className="workpads-panel" data-touch={touch || undefined}>
+    {chromeActions}
+    {selected ? documentView : listView}
+    <Dialog open={open && renameTarget !== undefined} onOpenChange={value => { if (!value) setRenameTarget(undefined); }}>
+      <DialogContent size="sm" aria-describedby={undefined}>
+        <DialogHeader><DialogTitle>Rename workpad</DialogTitle></DialogHeader>
+        <form className="contents" noValidate onSubmit={event => {
+          event.preventDefault();
+          const target = renameTarget;
+          const value = title.trim();
+          if (!target || !value) return;
+          setRenameTarget(undefined);
+          void run(() => mutate(target, { title: value }), true);
+        }}>
+          <DialogBody>
+            <Field label="Title"><Input autoFocus aria-label="Workpad title" maxLength={240} value={title} onChange={event => setTitle(event.target.value)} /></Field>
+          </DialogBody>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setRenameTarget(undefined)}>Cancel</Button>
+            <Button type="submit" disabled={busy || !title.trim()}>Rename</Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+    <Dialog open={open && (moveTarget !== undefined || browsing)} onOpenChange={value => { if (!value) { setMoveTarget(undefined); setBrowsing(false); } }}>
+      <DialogContent size="sm" mobile="sheet" className="searchable-select-sheet workpads-destination-dialog" aria-describedby={undefined}>
+        <DialogHeader><DialogTitle>{moveTarget ? "Move workpad" : "Browse workpads"}</DialogTitle></DialogHeader>
+        <SearchableSelectList
+          label={moveTarget ? "Destination" : "Thread or project"}
+          searchLabel="Search threads and projects"
+          emptyLabel="No matching threads or projects."
+          value={destinationKey(moveTarget ? moveTarget.scope : scope)}
+          options={destinations.options(moveTarget ? moveTarget.scope : scope)}
+          initialDirection="first"
+          onValueChange={value => {
+            const destination = parseScopeKey(value);
+            const target = moveTarget;
+            setMoveTarget(undefined); setBrowsing(false);
+            if (!destination) return;
+            if (target) moveTo(target, destination);
+            else browse(destination);
+          }}
+        />
+      </DialogContent>
+    </Dialog>
+    <ConfirmDialog
+      open={open && discarding}
+      tone="danger"
+      title="Discard draft?"
+      description="Your unsaved edits to this workpad will be lost. Saved revisions are kept."
+      confirmLabel="Discard draft"
+      onOpenChange={value => { if (!value) setDiscarding(false); }}
+      onConfirm={() => run(draft.discard, true)}
+    />
     <DiscardChangesDialog
       open={Boolean(leaveRequest)}
       onOpenChange={value => { if (!value) setLeaveRequest(undefined); }}
@@ -388,4 +735,29 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
       }}
     />
   </section>;
+}
+
+/** This thread · This project · Global · Choose…, the current one disabled. */
+function MoveToItems({ current, threadId, projectId, onMove, onChoose }: {
+  readonly current?: string;
+  readonly threadId?: string;
+  readonly projectId?: string;
+  readonly onMove: (scope: WorkpadScope) => void;
+  readonly onChoose: () => void;
+}) {
+  const choices: readonly { label: string; kind: WorkpadScope["kind"]; scope?: WorkpadScope; missing: string }[] = [
+    { label: "This thread", kind: "thread", missing: "No thread", ...(threadId ? { scope: { kind: "thread", threadId } } : {}) },
+    { label: "This project", kind: "project", missing: "No project", ...(projectId ? { scope: { kind: "project", projectId } } : {}) },
+    { label: "Global", kind: "global", missing: "", scope: { kind: "global" } },
+  ];
+  return <>
+    {choices.map(choice => {
+      const reason = choice.scope && destinationKey(choice.scope) === current ? "Current" : choice.scope ? undefined : choice.missing;
+      return <DropdownMenuItem key={choice.kind} disabled={reason !== undefined} onSelect={() => { if (choice.scope) onMove(choice.scope); }}>
+        <ScopeIcon kind={choice.kind} /><span>{choice.label}</span>{reason && <DropdownMenuValue>{reason}</DropdownMenuValue>}
+      </DropdownMenuItem>;
+    })}
+    <DropdownMenuSeparator />
+    <DropdownMenuItem onSelect={onChoose}><Search /><span>Choose…</span></DropdownMenuItem>
+  </>;
 }
