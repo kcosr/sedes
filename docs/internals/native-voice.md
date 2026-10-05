@@ -94,6 +94,12 @@ Only the exact authenticated binding's thread selection enters the runtime
 snapshot. Switching connections changes that selection without resetting ordinary
 preferences.
 
+The device-wide `onlyVoiceThread` preference remains enabled across connections.
+If the active binding has no default thread, automatic voice remains filtered
+out, and the idle card, quick sheet, and Voice settings show the missing-thread
+condition instead of reporting automatic voice ready. Manual recording remains
+independently available.
+
 Input journals and advisory speech catalogs retain their binding under
 `native-voice/<SHA-256 of profile ID>/<SHA-256 of binding>/`. An Android Keystore
 AES-GCM key protects atomic records in the app's backup-excluded directory;
@@ -154,11 +160,6 @@ settings revisions again after the dialog and before a mutation. Changing the
 provider or endpoint cannot reuse another destination's credential. Ciphertext
 lives under `device-speech-credentials/`. Removing a Sedes profile does not remove
 device speech credentials; the native credential dialog removes a selected key.
-The device-wide `onlyVoiceThread` preference remains enabled across connections.
-If the active binding has no default thread, automatic voice remains filtered
-out, and the idle card, quick sheet, and Voice settings show the missing-thread
-condition instead of reporting automatic voice ready. Manual recording remains
-independently available.
 Every mutating bridge command carries the caller's `expectedConnectionGeneration`;
 native validates it on its owner thread, including after permission prompts.
 A delayed command from an earlier profile cannot mutate the newly active one,
