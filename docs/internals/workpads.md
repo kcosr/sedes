@@ -136,11 +136,20 @@ contract.
 Workpads is a singleton `workpads` panel instance registered with the workspace
 panel tenant registry. The shared layout owns its split/tab placement,
 resizing, chrome, collapse state, and narrow-screen foreground selection. Its
-stable portal retains the editor across docking, collapse, viewport changes,
+stable portal retains the panel across docking, collapse, viewport changes,
 and thread switches. Its open and collapsed state, size, and place are shared
 across this client's thread layouts (`workspace-panels/companion-layout.ts`);
-the selected document and editor stay mounted during thread navigation. Closing
-it or leaving the thread workbench unmounts it, with unsynced draft protection.
+Thread view follows the active thread and Project view follows its project;
+Global view is independent of navigation. Manual thread/project targets last
+until the next thread navigation. A changed effective scope clears the selected
+document, editor, history, and pending form state and invalidates reads from
+the previous scope. The selection and editor survive navigation when the
+effective scope stays the same. Navigation or a project catalog update that
+would leave an unsynced editor or an in-flight mutation requires confirmation.
+Read-only loads do not block navigation. Catalog updates retain any pending
+navigation confirmation and its destination. Synced drafts remain
+principal-owned server state and can be reopened. Closing the panel or leaving the thread workbench unmounts
+it, with unsynced draft protection.
 The document scopes remain principal-owned Global, Project, and Thread scopes,
 independent of the client panel layout. Hidden panels suspend change
 subscriptions and resynchronize when shown again; draft autosave remains
