@@ -153,7 +153,6 @@ public class NativeVoiceE2eTest {
                 await(() -> !runtime.snapshot().isNull("identity"), 45000, "restored authenticated profile");
                 assertEquals(mode, runtime.snapshot().getJSONObject("settings").getString("audioMode"));
                 assertEquals(Long.parseLong(required(args, "savedSettingsRevision")), runtime.snapshot().getLong("settingsRevision"));
-                assertEquals(required(args, "savedOriginClientId"), runtime.snapshot().getString("originClientId"));
             }
             await(() -> runtime.snapshot().optBoolean("ready"), 45000, "native voice ready");
             waitJs("document.querySelector('[aria-label=\"Voice controls\"]') !== null", 15000);
@@ -168,6 +167,8 @@ public class NativeVoiceE2eTest {
                 return;
             }
             if (restoreStartup) {
+                // Authentication publishes before registration; verify the preserved client only after readiness.
+                assertEquals(required(args, "savedOriginClientId"), runtime.snapshot().getString("originClientId"));
                 assertEquals("Restoring readiness must not start recording", 0, supplied.get());
                 assertTrue(runtime.snapshot().isNull("active"));
                 assertFalse(runtime.snapshot().getJSONObject("actions").getBoolean("canResume"));
@@ -204,8 +205,10 @@ public class NativeVoiceE2eTest {
                 if (scenario.equals("retarget")) {
                     String second = required(args, "secondThreadId");
                     await(() -> runtime.snapshot().optString("phase").equals("listening"), 45000, "recognition before retarget");
-                    click("[aria-label^=\"Change recording target\"]");
-                    clickTextIn("[role=\"dialog\"] [role=\"list\"][aria-label=\"Voice threads\"]", args.getString("secondThreadTitle", second));
+                    String retarget = "button[aria-label^=\"Change recording thread\"]:not(:disabled):not([aria-disabled=\"true\"])";
+                    waitJs("document.querySelector(" + JSONObject.quote(retarget) + ") !== null", 15000);
+                    click(retarget);
+                    clickTextIn("[role=\"dialog\"] ul[aria-label=\"Voice threads\"]", args.getString("secondThreadTitle", second));
                     await(() -> second.equals(runtime.snapshot().optJSONObject("active").optString("recognitionThreadId")), 10000, "retarget applied");
                     screenshot("retargeted");
                 }
