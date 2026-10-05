@@ -3,7 +3,7 @@ import { ArrowLeft, ChevronLeft, ChevronRight, Plus, X } from "lucide-react";
 import type { Workpad, WorkpadScope, WorkpadSummary, WorkpadRevision, WorkpadRevisionSummary } from "../../shared/protocol/workpads.js";
 import { WORKPAD_CONTENT_MAX_CHARACTERS } from "../../shared/protocol/workpads.js";
 import { describeProjectLocations } from "../app/project-locations.js";
-import { installNavigationBlocker, routePath, useRoute } from "../app/router.js";
+import { installNavigationBlocker, routePath, useRoute, type NavigationBlocker } from "../app/router.js";
 import type { WorkspacePanelContext } from "../workspace-panels/registry.js";
 import { useApplicationStore } from "../stores/ApplicationClientStore.js";
 import { DiscardChangesDialog } from "../components/ui/discard-changes-dialog.js";
@@ -24,14 +24,14 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
   const contextWorkspaceId = workspaceId ?? (threadId ? store.workspaceIdForThread(threadId) : undefined);
   const contextProjectId = application.snapshot?.workspaces.find(({ id }) => id === contextWorkspaceId)?.projectId;
   const contextKey = JSON.stringify([threadId, contextProjectId]);
-  const [leaveRequest, setLeaveRequest] = useState<{ proceed: () => void; contextKey?: string }>();
+  const [leaveRequest, setLeaveRequest] = useState<{ proceed: () => void; contextKey?: string; pendingMutation?: boolean }>();
   const [scopeKind, setScopeKind] = useState<WorkpadScope["kind"]>(threadId ? "thread" : "global");
   const [targets, setTargets] = useState({ threadId, contextProjectId, projectId: contextProjectId ?? "", selectedThread: threadId ?? "" });
   // Manual targets last until navigation. Remember every context change so an
   // old override cannot reappear when returning to a previously viewed thread.
   const contextChanged = targets.threadId !== threadId || targets.contextProjectId !== contextProjectId;
   const currentTargets = contextChanged
-    ? { threadId, contextProjectId, projectId: contextProjectId ?? "", selectedThread: threadId ?? "" }
+    ? { threadId, contextProjectId, projectId: contextProjectId ?? "", selectedThread: targets.threadId !== threadId ? threadId ?? "" : targets.selectedThread }
     : targets;
   if (contextChanged) setTargets(currentTargets);
   const { projectId, selectedThread } = currentTargets;
@@ -68,6 +68,7 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
   const resumeEvents = useRef<() => void>(() => undefined);
   const listIdentity = useRef("");
   const operationBusy = useRef(false);
+  const operationMutating = useRef(false);
   const scope: WorkpadScope = scopeKind === "global" ? { kind: "global" } : scopeKind === "project" ? { kind: "project", projectId } : { kind: "thread", threadId: selectedThread };
   const scopeKey = JSON.stringify(scope);
   const listKey = JSON.stringify([scopeKey, nested, query, archived]);
@@ -86,7 +87,8 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
     const approved = approval?.scopeKey === scopeKey &&
       (approval.routeKey === undefined || approval.routeKey === routeKey) &&
       (approval.contextKey === undefined || approval.contextKey === contextKey);
-    if (!approved && editor && (draft.saving || editor.remote || editor.text !== editor.draft.content)) {
+    const unsynced = draft.saving || Boolean(editor && (editor.remote || editor.text !== editor.draft.content));
+    if (!approved && (unsynced || operationMutating.current)) {
       // Context can also change through catalog updates (for example moving a
       // thread to another project), without passing through the router guard.
       // Keep the old scope and editor until the user explicitly leaves it.
@@ -95,27 +97,32 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
         ...(retained.kind === "project" ? { projectId: retained.projectId } : {}),
         ...(retained.kind === "thread" ? { selectedThread: retained.threadId } : {}),
       });
-      setLeaveRequest({ contextKey, proceed: () => { approvedLeave.current = { scopeKey, contextKey }; setTargets(currentTargets); } });
+      // A router request already owns the user's intended destination. Keep
+      // its continuation if the catalog changes while confirmation is open.
+      setLeaveRequest(current => current && current.contextKey === undefined ? current : {
+        contextKey, pendingMutation: !unsynced,
+        proceed: () => { approvedLeave.current = { scopeKey, contextKey }; setTargets(currentTargets); },
+      });
       return;
     }
     approvedLeave.current = undefined;
     previousScope.current = scopeKey;
     ++scopeGeneration.current; ++generation.current; ++listGeneration.current;
-    operationBusy.current = false; loadingId.current = undefined;
+    operationBusy.current = false; operationMutating.current = false; loadingId.current = undefined;
     selectedRef.current = undefined; revisionRef.current = undefined;
     draft.setEditor(undefined);
     setSelected(undefined); setRevision(undefined); setRevisions([]); setRevisionCursor(undefined);
     setItems([]); setCursor(undefined); listCount.current = 0;
     setCreating(false); setTitle(""); setMoving(false); setRenaming(false); setReconciling(false);
     setError(""); setRefreshError(""); setBusy(false); setLeaveRequest(undefined);
-  }, [scopeKey, draft.setEditor, draft.saving, routeKey, contextKey]);
-  const run = async (action: (isCurrent: () => boolean) => Promise<void>) => {
+  }, [scopeKey, draft.setEditor, draft.saving, routeKey, contextKey, busy]);
+  const run = async (action: (isCurrent: () => boolean) => Promise<void>, mutating = false) => {
     if (operationBusy.current) return;
     const token = scopeGeneration.current;
     const isCurrent = () => token === scopeGeneration.current;
-    operationBusy.current = true; setBusy(true); setError("");
+    operationBusy.current = true; operationMutating.current = mutating; setBusy(true); setError("");
     try { await action(isCurrent); } catch (failure) { if (isCurrent()) setError(message(failure)); }
-    finally { if (isCurrent()) { operationBusy.current = false; loadingId.current = undefined; setBusy(false); resumeEvents.current(); } }
+    finally { if (isCurrent()) { operationBusy.current = false; operationMutating.current = false; loadingId.current = undefined; setBusy(false); resumeEvents.current(); } }
   };
   const refreshList = useCallback(async (nextCursor?: string) => {
     const token = ++listGeneration.current;
@@ -254,7 +261,10 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
   useEffect(() => { host.setDirty(hasUnsynced || draft.saving); }, [host, hasUnsynced, draft.saving]);
   useEffect(() => { host.setBusy(busy || draft.saving); }, [host, busy, draft.saving]);
   useEffect(() => { host.setSubtitle(selected?.title); }, [host, selected?.title]);
-  useEffect(() => installNavigationBlocker((current, next, proceed) => {
+  // Router approvals are keyed by callback identity. Keep one registration,
+  // forwarding to current state so stream updates cannot invalidate a dialog.
+  const navigationGuard = useRef<NavigationBlocker>(() => true);
+  navigationGuard.current = (current, next, proceed) => {
     // Settings parks the owning thread instead of replacing its workpads.
     if (next.name === "settings") return true;
     const retainedThread = current.name === "thread" ||
@@ -264,23 +274,25 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
       if (scopeKind === "thread" && next.threadId === selectedThread) return true;
       if (scopeKind === "project") {
         const nextWorkspaceId = store.workspaceIdForThread(next.threadId);
-        const nextProjectId = application.snapshot?.workspaces.find(({ id }) => id === nextWorkspaceId)?.projectId;
+        const nextProjectId = store.getSnapshot().snapshot?.workspaces.find(({ id }) => id === nextWorkspaceId)?.projectId;
         if (nextProjectId && nextProjectId === projectId) return true;
       }
     }
-    if (!(hasUnsynced || draft.saving)) return true;
-    const nextThreadId = next.name === "thread" ? next.threadId : undefined;
-    const nextWorkspaceId = nextThreadId ? store.workspaceIdForThread(nextThreadId) : undefined;
-    const nextProjectId = application.snapshot?.workspaces.find(({ id }) => id === nextWorkspaceId)?.projectId;
-    const nextScope: WorkpadScope = scopeKind === "global" ? { kind: "global" }
-      : scopeKind === "thread" ? { kind: "thread", threadId: nextThreadId ?? "" }
-      : { kind: "project", projectId: nextProjectId ?? "" };
-    setLeaveRequest({ proceed: () => {
+    if (!(hasUnsynced || draft.saving || operationMutating.current)) return true;
+    setLeaveRequest({ pendingMutation: !(hasUnsynced || draft.saving), proceed: () => {
+      // The destination may have moved projects while the dialog was open.
+      const nextThreadId = next.name === "thread" ? next.threadId : undefined;
+      const nextWorkspaceId = nextThreadId ? store.workspaceIdForThread(nextThreadId) : undefined;
+      const nextProjectId = store.getSnapshot().snapshot?.workspaces.find(({ id }) => id === nextWorkspaceId)?.projectId;
+      const nextScope: WorkpadScope = scopeKind === "global" ? { kind: "global" }
+        : scopeKind === "thread" ? { kind: "thread", threadId: nextThreadId ?? "" }
+        : { kind: "project", projectId: nextProjectId ?? "" };
       approvedLeave.current = { scopeKey: JSON.stringify(nextScope), routeKey: routePath(next) };
       proceed();
     } });
     return false;
-  }), [hasUnsynced, draft.saving, threadId, scopeKind, selectedThread, projectId, store, application.snapshot]);
+  };
+  useEffect(() => installNavigationBlocker((...args) => navigationGuard.current(...args)), []);
   const beginEditing = async (isCurrent: () => boolean) => {
     if (!selected) return;
     let value = await store.api.getWorkpadDraft(selected.id);
@@ -338,25 +350,25 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
     {(error || refreshError) && <div className="workpads-error" role="alert">{error || refreshError}<Button variant="ghost" size="icon-sm" aria-label="Dismiss error" onClick={() => { setError(""); setRefreshError(""); }}><X size={14} /></Button></div>}
     {!selected ? <>
       <div className="workpads-filters">
-        <SegmentedControl aria-label="Workpad scope" className="w-full" value={scopeKind} onValueChange={value => { setScopeKind(value as WorkpadScope["kind"]); setTargets({ ...currentTargets, projectId: projectId || contextProjectId || projects[0]?.id || "", selectedThread: selectedThread || threadId || threads[0]?.id || "" }); }}><SegmentedControlItem value="global">Global</SegmentedControlItem><SegmentedControlItem value="project" disabled={!projects.length}>Project</SegmentedControlItem><SegmentedControlItem value="thread" disabled={!threads.length}>Thread</SegmentedControlItem></SegmentedControl>
-        {scopeKind === "project" && <select aria-label="Workpad project" value={projectId} onChange={event => setProjectId(event.target.value)}>{projects.map(project => <option key={project.id} value={project.id}>{project.label}</option>)}</select>}
-        {scopeKind === "thread" && <select aria-label="Workpad thread" value={selectedThread} onChange={event => setSelectedThread(event.target.value)}>{threads.map(thread => <option key={thread.id} value={thread.id}>{thread.title.text}</option>)}</select>}
+        <SegmentedControl disabled={busy} aria-label="Workpad scope" className="w-full" value={scopeKind} onValueChange={value => { setScopeKind(value as WorkpadScope["kind"]); setTargets({ ...currentTargets, projectId: projectId || contextProjectId || projects[0]?.id || "", selectedThread: selectedThread || threadId || threads[0]?.id || "" }); }}><SegmentedControlItem value="global">Global</SegmentedControlItem><SegmentedControlItem value="project" disabled={!projects.length}>Project</SegmentedControlItem><SegmentedControlItem value="thread" disabled={!threads.length}>Thread</SegmentedControlItem></SegmentedControl>
+        {scopeKind === "project" && <select disabled={busy} aria-label="Workpad project" value={projectId} onChange={event => setProjectId(event.target.value)}>{projects.map(project => <option key={project.id} value={project.id}>{project.label}</option>)}</select>}
+        {scopeKind === "thread" && <select disabled={busy} aria-label="Workpad thread" value={selectedThread} onChange={event => setSelectedThread(event.target.value)}>{threads.map(thread => <option key={thread.id} value={thread.id}>{thread.title.text}</option>)}</select>}
         <div className="workpads-toolbar"><Input aria-label="Search workpads" placeholder="Search workpads" value={query} maxLength={240} onChange={event => setQuery(event.target.value)} /><Button variant="secondary" size="sm" disabled={!scopeValid} onClick={() => { setCreating(true); setTitle(""); }}><Plus size={15} />New workpad</Button></div>
         <div className="workpads-options"><label><input type="checkbox" checked={nested} onChange={event => setNested(event.target.checked)} />Include nested scopes</label><label><input type="checkbox" checked={archived} onChange={event => setArchived(event.target.checked)} />Archived</label></div>
       </div>
-      {creating && <form className="workpads-inline-form" onSubmit={event => { event.preventDefault(); void run(async isCurrent => { const created = await store.api.createWorkpad({ title: title.trim(), scope }); if (!isCurrent()) return; setCreating(false); await load(created.id); }); }}><Input autoFocus aria-label="Title" value={title} maxLength={240} onChange={event => setTitle(event.target.value)} /><Button size="sm" disabled={busy || !title.trim()} type="submit">Create workpad</Button><Button type="button" size="sm" variant="ghost" onClick={() => setCreating(false)}>Cancel</Button></form>}
+      {creating && <form className="workpads-inline-form" onSubmit={event => { event.preventDefault(); void run(async isCurrent => { const created = await store.api.createWorkpad({ title: title.trim(), scope }); if (!isCurrent()) return; setCreating(false); await load(created.id); }, true); }}><Input autoFocus aria-label="Title" value={title} maxLength={240} onChange={event => setTitle(event.target.value)} /><Button size="sm" disabled={busy || !title.trim()} type="submit">Create workpad</Button><Button type="button" size="sm" variant="ghost" onClick={() => setCreating(false)}>Cancel</Button></form>}
       <div className="workpads-list" aria-busy={loading}>{items.map(item => <button className="workpads-row" key={item.id} onClick={() => { void run(() => load(item.id)); }}><strong>{item.title}</strong><span>{scopeLabel(item.scope)} · {item.author.name} · {new Date(item.updatedAt).toLocaleDateString()}</span></button>)}{!items.length && <p className="workpads-empty">{loading ? "Loading…" : "No workpads"}</p>}{cursor && <Button variant="ghost" onClick={() => { void run(() => refreshList(cursor)); }}>Load more</Button>}</div>
     </> : <>
       <div className="workpads-title"><Button variant="ghost" size="icon-sm" aria-label="Back to workpads" disabled={busy} onClick={() => { void run(async isCurrent => { if (draft.editor) await draft.save(); if (!isCurrent()) return; draft.setEditor(undefined); selectedRef.current = undefined; revisionRef.current = undefined; setSelected(undefined); setRevision(undefined); ++generation.current; }); }}><ArrowLeft size={16} /></Button><h3>{draft.editor ? selected.title : revision?.title ?? selected.title}</h3><span>{scopeLabel(draft.editor ? selected.scope : revision?.scope ?? selected.scope)}</span></div>
       <div className="workpads-toolbar workpads-document-actions">
-        {!draft.editor && <><Button size="sm" variant="secondary" disabled={busy || Boolean(selected.archivedAt)} onClick={() => { void run(beginEditing); }}>Edit workpad</Button><Button size="sm" variant="ghost" aria-pressed={attribution} onClick={() => setAttribution(!attribution)}>Show attribution</Button><Button size="sm" variant="ghost" onClick={() => { setMoving(!moving); setMoveScope(selected.scope); }}>Move workpad</Button><Button size="sm" variant="ghost" onClick={() => { setRenaming(!renaming); setTitle(selected.title); }}>Rename</Button><Button size="sm" variant="ghost" disabled={busy} onClick={() => { void run(() => mutate({ expectedRevision: selected.revision, archived: !selected.archivedAt })); }}>{selected.archivedAt ? "Restore workpad" : "Archive workpad"}</Button></>}
-        {draft.editor && <><Button size="sm" disabled={busy || draft.saving || stale || Boolean(draft.editor.remote)} onClick={() => { void run(saveDocument); }}>Save workpad</Button><Button size="sm" variant="ghost" disabled={busy || Boolean(draft.editor.remote)} onClick={() => { void run(async isCurrent => { await draft.save(); if (isCurrent()) draft.setEditor(undefined); }); }}>Done editing</Button><Button size="sm" variant="ghost" disabled={busy || draft.saving} onClick={() => { void run(draft.discard); }}>Discard draft</Button><span className="workpads-sync" role="status">{draft.saving ? "Syncing draft…" : draft.editor.remote ? "Draft conflict" : hasUnsynced ? "Draft not synced" : "Draft synced"}</span></>}
+        {!draft.editor && <><Button size="sm" variant="secondary" disabled={busy || Boolean(selected.archivedAt)} onClick={() => { void run(beginEditing); }}>Edit workpad</Button><Button size="sm" variant="ghost" aria-pressed={attribution} onClick={() => setAttribution(!attribution)}>Show attribution</Button><Button size="sm" variant="ghost" onClick={() => { setMoving(!moving); setMoveScope(selected.scope); }}>Move workpad</Button><Button size="sm" variant="ghost" onClick={() => { setRenaming(!renaming); setTitle(selected.title); }}>Rename</Button><Button size="sm" variant="ghost" disabled={busy} onClick={() => { void run(() => mutate({ expectedRevision: selected.revision, archived: !selected.archivedAt }), true); }}>{selected.archivedAt ? "Restore workpad" : "Archive workpad"}</Button></>}
+        {draft.editor && <><Button size="sm" disabled={busy || draft.saving || stale || Boolean(draft.editor.remote)} onClick={() => { void run(saveDocument, true); }}>Save workpad</Button><Button size="sm" variant="ghost" disabled={busy || Boolean(draft.editor.remote)} onClick={() => { void run(async isCurrent => { await draft.save(); if (isCurrent()) draft.setEditor(undefined); }); }}>Done editing</Button><Button size="sm" variant="ghost" disabled={busy || draft.saving} onClick={() => { void run(draft.discard, true); }}>Discard draft</Button><span className="workpads-sync" role="status">{draft.saving ? "Syncing draft…" : draft.editor.remote ? "Draft conflict" : hasUnsynced ? "Draft not synced" : "Draft synced"}</span></>}
       </div>
-      {moving && !draft.editor && <div className="workpads-inline-form">{renderScopeTargets(moveScope, setMoveScope)}<Button size="sm" disabled={busy} onClick={() => { void run(() => mutate({ expectedRevision: selected.revision, scope: moveScope })); }}>Move</Button><Button size="sm" variant="ghost" onClick={() => setMoving(false)}>Cancel</Button></div>}
-      {renaming && !draft.editor && <form className="workpads-inline-form" onSubmit={event => { event.preventDefault(); void run(() => mutate({ expectedRevision: selected.revision, title: title.trim() })); }}><Input aria-label="Workpad title" maxLength={240} value={title} onChange={event => setTitle(event.target.value)} /><Button size="sm" disabled={busy || !title.trim()}>Rename workpad</Button></form>}
+      {moving && !draft.editor && <div className="workpads-inline-form">{renderScopeTargets(moveScope, setMoveScope)}<Button size="sm" disabled={busy} onClick={() => { void run(() => mutate({ expectedRevision: selected.revision, scope: moveScope }), true); }}>Move</Button><Button size="sm" variant="ghost" onClick={() => setMoving(false)}>Cancel</Button></div>}
+      {renaming && !draft.editor && <form className="workpads-inline-form" onSubmit={event => { event.preventDefault(); void run(() => mutate({ expectedRevision: selected.revision, title: title.trim() }), true); }}><Input aria-label="Workpad title" maxLength={240} value={title} onChange={event => setTitle(event.target.value)} /><Button size="sm" disabled={busy || !title.trim()}>Rename workpad</Button></form>}
       {draft.editor ? <div className="workpads-editor">
         {draft.editor.remote && <div className="workpads-conflict" role="alert"><p>This draft changed on another device.</p><details><summary>Other device’s draft</summary><pre>{draft.editor.remote.content}</pre></details><Button size="sm" variant="secondary" onClick={() => { void run(async isCurrent => { const remote = draft.editor!.remote!; const base = await store.api.getWorkpadRevision(selected.id, remote.baseRevision); if (!isCurrent()) return; draft.setEditor({ draft: remote, text: remote.content, baseText: base.content }); }); }}>Use latest draft</Button><Button size="sm" variant="ghost" onClick={() => { const value = draft.editor!; draft.setEditor({ ...value, draft: { ...value.remote!, baseRevision: value.draft.baseRevision }, remote: undefined }); }}>Keep my draft</Button></div>}
-        {stale && <div className="workpads-conflict" role="alert"><p>The document changed. Review the latest version before saving.</p><Button size="sm" variant="secondary" onClick={() => setReconciling(!reconciling)}>{reconciling ? "Hide comparison" : "Review changes"}</Button>{reconciling && <><details open><summary>Starting version · revision {draft.editor.draft.baseRevision}</summary><pre>{draft.editor.baseText}</pre></details><details open><summary>Latest version · revision {selected.revision}</summary><pre>{selected.content}</pre></details><Button size="sm" disabled={Boolean(draft.editor.remote) || draft.saving} onClick={() => { void run(async isCurrent => { const synced = await draft.save(); if (!isCurrent()) return; const rebased = await store.api.saveWorkpadDraft(selected.id, { expectedRevision: synced.revision, baseRevision: selected.revision, content: draft.ref.current!.text }); if (!isCurrent()) return; draft.setEditor({ draft: rebased, text: rebased.content, baseText: selected.content }); setReconciling(false); }); }}>Use my reconciled text</Button></>}</div>}
+        {stale && <div className="workpads-conflict" role="alert"><p>The document changed. Review the latest version before saving.</p><Button size="sm" variant="secondary" onClick={() => setReconciling(!reconciling)}>{reconciling ? "Hide comparison" : "Review changes"}</Button>{reconciling && <><details open><summary>Starting version · revision {draft.editor.draft.baseRevision}</summary><pre>{draft.editor.baseText}</pre></details><details open><summary>Latest version · revision {selected.revision}</summary><pre>{selected.content}</pre></details><Button size="sm" disabled={Boolean(draft.editor.remote) || draft.saving} onClick={() => { void run(async isCurrent => { const synced = await draft.save(); if (!isCurrent()) return; const rebased = await store.api.saveWorkpadDraft(selected.id, { expectedRevision: synced.revision, baseRevision: selected.revision, content: draft.ref.current!.text }); if (!isCurrent()) return; draft.setEditor({ draft: rebased, text: rebased.content, baseText: selected.content }); setReconciling(false); }, true); }}>Use my reconciled text</Button></>}</div>}
         <Textarea disabled={busy} aria-label="Workpad content" maxLength={WORKPAD_CONTENT_MAX_CHARACTERS} value={draft.editor.text} onChange={event => draft.setEditor({ ...draft.editor!, text: event.target.value })} spellCheck className="workpads-textarea" />
       </div> : <>
         <div className="workpads-history"><Button variant="ghost" size="icon-sm" aria-label="Previous revision" disabled={busy || !revision || !revisions.some(value => value.revision < revision.revision)} onClick={() => { const number = revisions.filter(value => value.revision < revision!.revision).sort((a,b) => b.revision-a.revision)[0]?.revision; if (number !== undefined) void run(() => chooseRevision(number)); }}><ChevronLeft size={16} /></Button><select aria-label="Revision" value={revision?.revision ?? ""} onChange={event => { void run(() => chooseRevision(Number(event.target.value))); }}>{revisions.map(value => <option key={value.revision} value={value.revision}>Revision {value.revision}{value.revision === selected.revision ? " · latest" : ""}</option>)}</select><Button variant="ghost" size="icon-sm" aria-label="Next revision" disabled={busy || !revision || revision.revision === selected.revision} onClick={() => { const number = revisions.filter(value => value.revision > revision!.revision).sort((a,b) => a.revision-b.revision)[0]?.revision; if (number !== undefined) void run(() => chooseRevision(number)); }}><ChevronRight size={16} /></Button>{revision && <span>{revision.author.name} · {new Date(revision.createdAt).toLocaleString()}</span>}{revisionCursor && <Button size="sm" variant="ghost" onClick={() => { void run(async isCurrent => { const page = await store.api.listWorkpadRevisions(selected.id, revisionCursor); if (!isCurrent()) return; setRevisions(previous => [...previous, ...page.items]); setRevisionCursor(page.nextCursor); }); }}>Older revisions</Button>}</div>
@@ -366,8 +378,8 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
     <DiscardChangesDialog
       open={Boolean(leaveRequest)}
       onOpenChange={value => { if (!value) setLeaveRequest(undefined); }}
-      title="Leave unsynced workpad?"
-      description="Your latest workpad draft changes have not synced. Leave anyway?"
+      title={leaveRequest?.pendingMutation ? "Leave pending workpad changes?" : "Leave unsynced workpad?"}
+      description={leaveRequest?.pendingMutation ? "A workpad change is still in progress. Leaving will hide its result. Leave anyway?" : "Your latest workpad draft changes have not synced. Leave anyway?"}
       discardLabel="Leave anyway"
       onDiscard={() => {
         const request = leaveRequest;

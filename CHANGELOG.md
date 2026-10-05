@@ -423,7 +423,7 @@
 
 - Workpads now follows the active thread in Thread view and its project in
   Project view, while Global view retains its selection. Switching scopes
-  protects unsynced drafts and preserves the panel layout.
+  protects unsynced drafts and pending changes, and preserves the panel layout.
 
 - `thread.status@3` and `thread.list@6` expose read-only thread pin state.
   ([#50](https://github.com/kcosr/sedes/pull/50))

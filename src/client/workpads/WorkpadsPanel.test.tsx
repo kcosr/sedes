@@ -201,6 +201,8 @@ describe("WorkpadsPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: "Create workpad" }));
     expect(createWorkpad).toHaveBeenCalledWith({ title: "Created for first", scope: { kind: "thread", threadId: "first-thread" } });
     view.rerender(<WorkpadsPanel context={{ ...context, threadId: "second-thread" }} />);
+    expect(screen.getByRole("dialog", { name: "Leave pending workpad changes?" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Leave anyway" }));
     await act(async () => { resolveCreated(pad); });
     expect(api.getWorkpad).not.toHaveBeenCalled();
     expect(screen.queryByRole("textbox", { name: "Title" })).not.toBeInTheDocument();
@@ -220,10 +222,38 @@ describe("WorkpadsPanel", () => {
     await waitFor(() => expect(resolveRenamed).toBeDefined());
     const reads = api.getWorkpad.mock.calls.length;
     view.rerender(<WorkpadsPanel context={{ ...context, threadId: "second-thread" }} />);
+    expect(screen.getByRole("dialog", { name: "Leave pending workpad changes?" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Leave anyway" }));
     await act(async () => { resolveRenamed({ ...pad, title: "Renamed document" }); });
     expect(api.getWorkpad).toHaveBeenCalledTimes(reads);
     expect(screen.queryByRole("textbox", { name: "Workpad title" })).not.toBeInTheDocument();
     expect(screen.queryByText("Original")).not.toBeInTheDocument();
+  });
+
+  it.each(["commit", "rename"])("guards a pending %s and shows its failure after cancelling navigation", async operation => {
+    let rejectOperation!: (error: Error) => void;
+    const pending = vi.fn(() => new Promise<never>((_resolve, reject) => { rejectOperation = reject; }));
+    const { store } = fixture(operation === "commit" ? { commitWorkpadDraft: pending } : { updateWorkpad: pending });
+    const context = { ...panelContext(store), threadId: "first-thread" };
+    navigate("/threads/first-thread");
+    render(<WorkpadsPanel context={context} />);
+    fireEvent.click(await screen.findByRole("button", { name: /Integration/ }));
+    if (operation === "commit") {
+      fireEvent.click(await screen.findByRole("button", { name: "Edit workpad" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Save workpad" }));
+    } else {
+      fireEvent.click(await screen.findByRole("button", { name: "Rename" }));
+      fireEvent.change(screen.getByRole("textbox", { name: "Workpad title" }), { target: { value: "Updated title" } });
+      fireEvent.click(screen.getByRole("button", { name: "Rename workpad" }));
+    }
+    await waitFor(() => expect(pending).toHaveBeenCalled());
+    act(() => navigate("/threads/second-thread"));
+    expect(window.location.pathname).toBe("/threads/first-thread");
+    expect(screen.getByRole("dialog", { name: "Leave pending workpad changes?" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Keep editing" }));
+    await act(async () => { rejectOperation(new Error("Workpad changed on the server")); });
+    expect(screen.getByRole("alert")).toHaveTextContent("Workpad changed on the server");
+    expect(window.location.pathname).toBe("/threads/first-thread");
   });
 
   it("allows Settings categories without discarding and protects leaving the retained thread", async () => {
@@ -452,8 +482,8 @@ describe("WorkpadsPanel", () => {
     ],
   };
   /** A store whose snapshot can arrive after the panel mounts. */
-  function withSnapshot(store: ApplicationClientStore, snapshot: object | undefined) {
-    let state = { snapshot, visibleThreads: [{ id: "thread-build", title: { text: "Build thread" } }] };
+  function withSnapshot(store: ApplicationClientStore, snapshot: object | undefined, visibleThreads = [{ id: "thread-build", title: { text: "Build thread" } }]) {
+    let state = { snapshot, visibleThreads };
     const listeners = new Set<() => void>();
     return {
       store: { ...store, getSnapshot: () => state, subscribe: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; } } as unknown as ApplicationClientStore,
@@ -503,6 +533,71 @@ describe("WorkpadsPanel", () => {
     await waitFor(() => expect(api.listWorkpads).toHaveBeenLastCalledWith(expect.objectContaining({ scope: { kind: "project", projectId: "project-docs" } })));
   });
 
+  it.each(["Thread", "Project"])("holds the %s scope controls while creating and shows the result", async kind => {
+    let resolveCreated!: (value: Workpad) => void;
+    const createWorkpad = vi.fn(() => new Promise<Workpad>(resolve => { resolveCreated = resolve; }));
+    const { store: base } = fixture({ createWorkpad });
+    const { store } = withSnapshot(base, projectCatalog);
+    render(<WorkpadsPanel context={{ ...panelContext(store), threadId: "thread-build", workspaceId: "web-build" }} />);
+    fireEvent.click(screen.getByRole("radio", { name: kind }));
+    fireEvent.click(screen.getByRole("button", { name: "New workpad" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Title" }), { target: { value: "Pending creation" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create workpad" }));
+    expect(createWorkpad).toHaveBeenCalled();
+    expect(screen.getByRole("radio", { name: "Global" })).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: kind === "Thread" ? "Workpad thread" : "Workpad project" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("radio", { name: "Global" }));
+    expect(screen.getByRole("radio", { name: kind })).toBeChecked();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    await act(async () => { resolveCreated(pad); });
+    expect(await screen.findByText("Original")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Back to workpads" }));
+    await waitFor(() => expect(screen.getByRole("radio", { name: "Global" })).toBeEnabled());
+    expect(screen.getByRole("combobox", { name: kind === "Thread" ? "Workpad thread" : "Workpad project" })).toBeEnabled();
+  });
+
+  it("preserves a manual Thread target when only the active workspace's project changes", async () => {
+    const { store: base, api } = fixture();
+    const { store, publish } = withSnapshot(base, projectCatalog, [
+      { id: "thread-build", title: { text: "Build thread" } },
+      { id: "thread-manual", title: { text: "Manual thread" } },
+    ]);
+    render(<WorkpadsPanel context={{ ...panelContext(store), threadId: "thread-build", workspaceId: "web-build" }} />);
+    fireEvent.change(screen.getByRole("combobox", { name: "Workpad thread" }), { target: { value: "thread-manual" } });
+    fireEvent.click(await screen.findByRole("button", { name: /Integration/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Edit workpad" }));
+    const editor = await screen.findByRole("textbox", { name: "Workpad content" });
+    vi.useFakeTimers();
+    fireEvent.change(editor, { target: { value: "Manual thread typing" } });
+    publish({ ...projectCatalog, workspaces: projectCatalog.workspaces.map(workspace => workspace.id === "web-build" ? { ...workspace, projectId: "project-docs" } : workspace) });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(editor).toHaveValue("Manual thread typing");
+    expect(api.listWorkpads).toHaveBeenLastCalledWith(expect.objectContaining({ scope: { kind: "thread", threadId: "thread-manual" } }));
+  });
+
+  it.each([false, true])("honors one leave confirmation after a catalog update (project changed: %s)", async reassigned => {
+    const { store: base } = fixture();
+    const { store: catalogStore, publish } = withSnapshot(base, projectCatalog);
+    const store = { ...catalogStore, workspaceIdForThread: () => "docs-local" } as unknown as ApplicationClientStore;
+    const context = { ...panelContext(store), threadId: "thread-build", workspaceId: "web-build" };
+    navigate("/threads/thread-build");
+    const view = render(<WorkpadsPanel context={context} />);
+    fireEvent.click(screen.getByRole("radio", { name: "Project" }));
+    fireEvent.click(await screen.findByRole("button", { name: /Integration/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Edit workpad" }));
+    const editor = await screen.findByRole("textbox", { name: "Workpad content" });
+    vi.useFakeTimers();
+    fireEvent.change(editor, { target: { value: "Unsynced before navigating" } });
+    act(() => navigate("/threads/thread-docs"));
+    publish({ ...projectCatalog, workspaces: projectCatalog.workspaces.map(workspace => reassigned && workspace.id === "web-build" ? { ...workspace, projectId: "project-docs-build" } : workspace) });
+    expect(editor).toHaveValue("Unsynced before navigating");
+    fireEvent.click(screen.getByRole("button", { name: "Leave anyway" }));
+    expect(window.location.pathname).toBe("/threads/thread-docs");
+    view.rerender(<WorkpadsPanel context={{ ...context, threadId: "thread-docs", workspaceId: "docs-local" }} />);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: "Workpad content" })).not.toBeInTheDocument();
+  });
+
   it("retains a project editor within its project and guards leaving that project", async () => {
     const { store: base, api } = fixture();
     const { store: catalogStore } = withSnapshot(base, projectCatalog);
@@ -536,7 +631,7 @@ describe("WorkpadsPanel", () => {
   it("does not reuse a leave approval when another navigation blocker keeps the old thread", async () => {
     const { store: base } = fixture();
     const { store: catalogStore, publish } = withSnapshot(base, projectCatalog);
-    const store = { ...catalogStore, workspaceIdForThread: () => "docs-local" } as ApplicationClientStore;
+    const store = { ...catalogStore, workspaceIdForThread: () => "docs-local" } as unknown as ApplicationClientStore;
     const context = { ...panelContext(store), threadId: "thread-build", workspaceId: "web-build" };
     navigate("/threads/thread-build");
     render(<WorkpadsPanel context={context} />);

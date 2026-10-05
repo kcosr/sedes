@@ -145,7 +145,9 @@ until the next thread navigation. A changed effective scope clears the selected
 document, editor, history, and pending form state and invalidates reads from
 the previous scope. The selection and editor survive navigation when the
 effective scope stays the same. Navigation or a project catalog update that
-would leave an unsynced editor requires confirmation. Synced drafts remain
+would leave an unsynced editor or an in-flight mutation requires confirmation.
+Read-only loads do not block navigation. Catalog updates retain any pending
+navigation confirmation and its destination. Synced drafts remain
 principal-owned server state and can be reopened. Closing the panel or leaving the thread workbench unmounts
 it, with unsynced draft protection.
 The document scopes remain principal-owned Global, Project, and Thread scopes,

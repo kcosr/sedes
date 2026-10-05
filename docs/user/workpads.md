@@ -22,8 +22,9 @@ Their dropdowns let you browse another thread or project until you switch
 threads again. When navigation changes the viewed scope, Workpads returns to
 that scope's list. A selected document stays open when the scope stays the
 same, including **Global** and switching threads within the same project in
-**Project** view. If the editor has unsynced changes, confirm before leaving
-it or choose **Keep editing**; synchronized drafts remain available by
+**Project** view. If the editor has unsynced changes or a workpad change is
+still in progress, confirm before leaving or choose **Keep editing** to see
+its result. Synchronized drafts remain available by
 reopening the workpad and choosing **Edit workpad**.
 
 The project dropdown lists your projects, named as in the sidebar.
