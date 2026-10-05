@@ -28,6 +28,8 @@ export interface ContextualAttachmentDeclaration {
 export interface WorkspacePanelBack {
   readonly label: string;
   readonly onBack: () => void;
+  /** While the tenant cannot leave its current view (an operation runs). */
+  readonly disabled?: boolean;
 }
 
 export interface WorkspacePanelHost {

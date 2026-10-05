@@ -89,6 +89,7 @@ export function PanelChrome({
                 className="workspace-panel-back"
                 aria-label={status.back.label}
                 title={status.back.label}
+                disabled={status.back.disabled}
                 onClick={status.back.onBack}
               >
                 <ChevronLeft aria-hidden="true" />

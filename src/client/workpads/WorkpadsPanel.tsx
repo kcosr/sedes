@@ -413,36 +413,36 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
   handlers.current = { closeDocument, openRename, moveTo, archiveWorkpad, selected };
   const hasSelection = selected !== undefined;
   useEffect(() => {
-    host.setBack(hasSelection ? { label: "Back to workpads", onBack: () => handlers.current.closeDocument() } : undefined);
-  }, [host, hasSelection]);
+    host.setBack(hasSelection ? { label: "Back to workpads", disabled: busy, onBack: () => handlers.current.closeDocument() } : undefined);
+  }, [host, hasSelection, busy]);
   const selectedScope = selected ? destinationKey(selected.scope) : undefined;
   const selectedArchived = Boolean(selected?.archivedAt);
   const draftSaving = draft.saving;
   const menuItems = useMemo(() => {
     if (!hasSelection) return undefined;
     if (editing) {
-      return <DropdownMenuItem variant="destructive" disabled={draftSaving} onSelect={() => setDiscarding(true)}>
+      return <DropdownMenuItem variant="destructive" disabled={busy || draftSaving} onSelect={() => setDiscarding(true)}>
         <Trash2 /><span>Discard draft…</span>
       </DropdownMenuItem>;
     }
     const current = () => handlers.current.selected;
     return <>
-      <DropdownMenuItem onSelect={() => { const target = current(); if (target) handlers.current.openRename(target); }}>
+      <DropdownMenuItem disabled={busy} onSelect={() => { const target = current(); if (target) handlers.current.openRename(target); }}>
         <Pencil /><span>Rename…</span>
       </DropdownMenuItem>
       <DropdownMenuSub>
-        <DropdownMenuSubTrigger><FolderInput /><span>Move to</span></DropdownMenuSubTrigger>
+        <DropdownMenuSubTrigger disabled={busy}><FolderInput /><span>Move to</span></DropdownMenuSubTrigger>
         <DropdownMenuSubContent>
           <MoveToItems current={selectedScope} threadId={threadId} projectId={contextProjectId}
             onMove={destination => { const target = current(); if (target) handlers.current.moveTo(target, destination); }}
             onChoose={() => { const target = current(); if (target) setMoveTarget(target); }} />
         </DropdownMenuSubContent>
       </DropdownMenuSub>
-      <DropdownMenuItem onSelect={() => { const target = current(); if (target) handlers.current.archiveWorkpad(target, !target.archivedAt); }}>
+      <DropdownMenuItem disabled={busy} onSelect={() => { const target = current(); if (target) handlers.current.archiveWorkpad(target, !target.archivedAt); }}>
         {selectedArchived ? <><ArchiveRestore /><span>Unarchive</span></> : <><Archive /><span>Archive</span></>}
       </DropdownMenuItem>
     </>;
-  }, [hasSelection, editing, draftSaving, selectedScope, selectedArchived, threadId, contextProjectId]);
+  }, [hasSelection, editing, busy, draftSaving, selectedScope, selectedArchived, threadId, contextProjectId]);
   useEffect(() => { host.setMenuItems(menuItems); }, [host, menuItems]);
   useEffect(() => () => { host.setBack(undefined); host.setMenuItems(undefined); }, [host]);
   // The open document's title, as the revision on screen names it. Only a

@@ -855,7 +855,7 @@ describe("WorkpadsPanel", () => {
       await openRow();
       // The back step takes the tenant icon's place, the title follows as the subtitle.
       const back = await within(header()).findByRole("button", { name: "Back to workpads" });
-      expect(context.host.setBack).toHaveBeenLastCalledWith({ label: "Back to workpads", onBack: expect.any(Function) });
+      expect(context.host.setBack).toHaveBeenLastCalledWith({ label: "Back to workpads", disabled: false, onBack: expect.any(Function) });
       expect(header().querySelector(".lucide-notepad-text")).toBeNull();
       expect(header()).toHaveTextContent(/^WorkpadsIntegration$/);
       // Leaving an editor syncs its text first.
@@ -1179,11 +1179,9 @@ describe("WorkpadsPanel", () => {
       expect(screen.getByRole("button", { name: "Edit workpad" })).toBeInTheDocument();
     });
 
-    // BUG (WorkpadsPanel.tsx:424): the item is disabled only while the draft
-    // syncs, where the old Discard button was also disabled while busy. During
-    // a slow commit it stays enabled, and confirming closes the dialog without
-    // discarding: run() (line 138) drops a second operation silently.
-    it.fails("disables Discard draft… while another workpad operation runs", async () => {
+    // run() drops a second operation, so a control left enabled during a slow
+    // commit would close its confirmation without doing anything.
+    it("disables Discard draft… while another workpad operation runs", async () => {
       const commitWorkpadDraft = vi.fn(() => new Promise<never>(() => undefined));
       const { store } = fixture({ commitWorkpadDraft });
       render(<Panel context={panelContext(store)} />);
@@ -1191,6 +1189,7 @@ describe("WorkpadsPanel", () => {
       fireEvent.change(await startEditing(), { target: { value: "Original, committing" } });
       fireEvent.click(screen.getByRole("button", { name: "Save workpad" }));
       await waitFor(() => expect(commitWorkpadDraft).toHaveBeenCalled());
+      expect(within(header()).getByRole("button", { name: "Back to workpads" })).toBeDisabled();
       headerMenu();
       expect(screen.getByRole("menuitem", { name: "Discard draft…" })).toHaveAttribute("aria-disabled", "true");
     });
