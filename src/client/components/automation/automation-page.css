@@ -306,13 +306,15 @@
   font-size: var(--text-meta);
 }
 
-/* The whole history: a bounded scroller with its own frame. */
+/* The whole history: a bounded scroller with its own frame. The frame sits
+   outside the rows, so they keep the compact list's columns. */
 .automation-runs-scroll {
   display: grid;
   max-height: 60vh;
   min-width: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
+  margin-inline: calc(-1 * (var(--space-1) + 1px));
   padding: var(--space-1);
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-card);
