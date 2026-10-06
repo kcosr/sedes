@@ -62,6 +62,10 @@ afterEach(() => {
   window.history.replaceState(null, "", "/");
 });
 
+type HeaderAutomation = NonNullable<
+  NormalizedThreadSnapshot["thread"]["automation"]
+>;
+
 function makeSnapshot({
   renameAvailable = false,
   brand,
@@ -71,7 +75,7 @@ function makeSnapshot({
   environmentKind = "ssh",
   automation = false,
 }: {
-  readonly automation?: boolean;
+  readonly automation?: boolean | HeaderAutomation;
   readonly renameAvailable?: boolean;
   readonly brand?: "pi" | "codex" | "claude";
   readonly backingState?: "bound" | "unbound";
@@ -107,7 +111,12 @@ function makeSnapshot({
       available,
       lastActivityAt: "2026-07-30T15:00:00.000Z",
       stateChangedAt: "2026-07-30T15:00:00.000Z",
-      automation: automation ? { status: "enabled" } : null,
+      automation:
+        automation === true
+          ? { status: "enabled" }
+          : automation === false
+            ? null
+            : automation,
     },
     executionWorkspace: { kind: "direct" },
     workspace: {
@@ -166,7 +175,7 @@ function makeSnapshot({
       composerActions: [],
       interactions: [],
       providerFeatures: [],
-      automation: { available: automation },
+      automation: { available: automation !== false },
     },
   } as unknown as NormalizedThreadSnapshot;
 }
@@ -381,7 +390,7 @@ function renderHeader({
 }: {
   readonly projects?: readonly CatalogProject[];
   readonly workspaces?: readonly CatalogWorkspace[];
-  readonly automation?: boolean;
+  readonly automation?: boolean | HeaderAutomation;
   readonly findOpen?: boolean;
   readonly onFindOpenChange?: (open: boolean) => void;
   readonly environmentCount?: number;
@@ -1373,5 +1382,97 @@ describe("ThreadHeader force reset", () => {
         expect.any(String),
       ),
     );
+  });
+});
+
+describe("ThreadHeader automation chip", () => {
+  const NOW = new Date("2026-10-06T03:40:00.000Z");
+  type LastRun = NonNullable<HeaderAutomation["lastRun"]>;
+  const run = (state: LastRun["state"], overrides: Partial<LastRun> = {}): LastRun => ({
+    id: "run-1",
+    state,
+    occurrence: "scheduled",
+    scheduledFor: "2026-10-05T06:30:00.000Z",
+    ...overrides,
+  });
+  const automation = (overrides: Partial<HeaderAutomation>): HeaderAutomation => ({
+    status: "enabled",
+    runMode: "same_thread",
+    scheduleKind: "cron",
+    revision: 1,
+    hasPrecheck: false,
+    ...overrides,
+  });
+
+  it.each([
+    {
+      name: "active",
+      automation: automation({ nextRunAt: "2026-10-07T02:00:00.000Z" }),
+      health: "active",
+      title: /^Automation · next Tmrw \d/u,
+      icon: ".lucide-repeat",
+    },
+    {
+      name: "failed",
+      automation: automation({ lastRun: run("failed", { finishedAt: "2026-10-05T06:40:00.000Z" }) }),
+      health: "failed",
+      title: /^Automation · Failed 21h ago$/u,
+      icon: ".lucide-repeat",
+    },
+    {
+      name: "unknown",
+      automation: automation({ status: "paused", lastRun: run("uncertain") }),
+      health: "unknown",
+      title: /^Automation · Outcome unknown$/u,
+      icon: ".lucide-repeat",
+    },
+    {
+      name: "sending",
+      automation: automation({ lastRun: run("claimed") }),
+      health: "sending",
+      title: /^Automation · Sending$/u,
+      icon: ".comet-spinner",
+    },
+    {
+      name: "paused",
+      automation: automation({ status: "paused", lastRun: run("completed") }),
+      health: "paused",
+      title: /^Automation · Paused$/u,
+      icon: ".lucide-circle-pause",
+    },
+    {
+      name: "not started",
+      automation: automation({ status: "paused" }),
+      health: "not_started",
+      title: /^Automation · Not started$/u,
+      icon: ".lucide-circle-pause",
+    },
+  ])("draws $name with the shared vocabulary", ({ automation, health, title, icon }) => {
+    vi.useFakeTimers({ now: NOW, toFake: ["Date"] });
+    try {
+      renderHeader({ automation });
+    } finally {
+      vi.useRealTimers();
+    }
+    const chip = screen.getByRole("button", { name: "Automation settings" });
+    expect(chip).toHaveAttribute("data-health", health);
+    expect(chip).not.toHaveAttribute("data-status");
+    expect(chip.getAttribute("title")).toMatch(title);
+    expect(chip.querySelector(icon)).not.toBeNull();
+    expect(chip.querySelector(".lucide-clock")).toBeNull();
+  });
+
+  it("opens the automation route from the chip", async () => {
+    renderHeader({ automation: true });
+    await userEvent.click(screen.getByRole("button", { name: "Automation settings" }));
+    expect(window.location.pathname).toBe("/threads/thread-1/automation");
+  });
+
+  it("uses Repeat for the Thread actions automation item", async () => {
+    renderHeader({ automation: true });
+    const menu = await openThreadActions();
+    const item = within(menu).getByRole("menuitem", { name: "Automation settings…" });
+    expect(item.querySelector(".lucide-repeat")).not.toBeNull();
+    expect(item.querySelector(".lucide-calendar-clock")).toBeNull();
   });
 });

@@ -13,7 +13,6 @@ import {
   Moon,
   NotepadText,
   PencilLine,
-  Repeat,
   Server,
   Split,
   TriangleAlert,
@@ -23,15 +22,18 @@ import type { NormalizedApplicationThreadSummary } from "../../../shared/index.j
 import { BackendBrandIcon } from "../brand-icons.js";
 import type { SidebarDensity } from "../../app/sidebar-view-model.js";
 import { sidebarEffectiveTimestamp } from "../../app/sidebar-view-model.js";
+import { futureTimeLabel, shortRelativeTime } from "../../lib/time.js";
 import {
-  shortAutomationTime,
-  shortRelativeTime,
-  snoozeLabel,
-} from "../../lib/time.js";
+  automationHealth,
+  automationIdentityGlyph,
+  automationIdentityLabel,
+  type AutomationHealth,
+} from "../../automation/automation-health.js";
 import {
   backgroundWorkCounts,
   backgroundWorkLabel,
 } from "../../lib/background-work.js";
+import { AutomationGlyph } from "../automation/AutomationGlyph.js";
 import "./flat-thread-row.css";
 
 /**
@@ -60,7 +62,10 @@ export interface FlatThreadRowTaskSummary {
 /**
  * Glyph priority ladder — one glyph, one truth; states never repeat as
  * badges. Moon (snoozed) and Repeat (automation) deliberately split the
- * shared Clock of the legacy shelves: the two interleave in Upcoming.
+ * shared Clock of the legacy shelves: the two interleave in Upcoming. An
+ * automation's glyph follows the shared vocabulary: Repeat, CirclePause while
+ * paused or never started, the spinner while a run is sending; a failed or
+ * unknown outcome keeps Repeat and adds an attention chip.
  */
 export type FlatRowGlyphKind =
   | "failed"
@@ -71,10 +76,21 @@ export type FlatRowGlyphKind =
   | "background-commands"
   | "draft"
   | "snoozed"
+  | "automation-sending"
+  | "automation-paused"
   | "automation"
   | "settled"
   | "disconnected"
   | "idle";
+
+const AUTOMATION_GLYPH_KINDS = {
+  spinner: "automation-sending",
+  pause: "automation-paused",
+  repeat: "automation",
+} as const satisfies Record<
+  ReturnType<typeof automationIdentityGlyph>,
+  FlatRowGlyphKind
+>;
 
 export function flatRowGlyphKind(
   thread: NormalizedApplicationThreadSummary,
@@ -109,7 +125,10 @@ export function flatRowGlyphKind(
   }
   if (thread.backingState === "unbound") return "draft";
   if (thread.inventoryState === "snoozed") return "snoozed";
-  if (thread.automation) return "automation";
+  const automation = automationHealth(thread, Date.now());
+  if (automation) {
+    return AUTOMATION_GLYPH_KINDS[automationIdentityGlyph(automation)];
+  }
   if (thread.inventoryState === "settled") return "settled";
   if (thread.runState === "disconnected") return "disconnected";
   return "idle";
@@ -148,6 +167,14 @@ export function flatRowGlyphLabel(
       ? "Waiting for approval"
       : "Waiting for input";
   }
+  if (
+    kind === "automation" ||
+    kind === "automation-paused" ||
+    kind === "automation-sending"
+  ) {
+    const automation = automationHealth(thread, Date.now());
+    if (automation) return automationIdentityLabel(automation);
+  }
   return kind.charAt(0).toUpperCase() + kind.slice(1);
 }
 
@@ -174,8 +201,12 @@ export function flatRowGlyphIcon(kind: FlatRowGlyphKind): React.ReactNode {
       return <PencilLine size={14} strokeWidth={2} />;
     case "snoozed":
       return <Moon size={14} strokeWidth={2} />;
+    case "automation-sending":
+      return <AutomationGlyph glyph="spinner" tone="info" />;
+    case "automation-paused":
+      return <AutomationGlyph glyph="pause" />;
     case "automation":
-      return <Repeat size={14} strokeWidth={2} />;
+      return <AutomationGlyph glyph="repeat" />;
     case "settled":
       return <Check size={14} strokeWidth={2.2} />;
     case "disconnected":
@@ -183,34 +214,6 @@ export function flatRowGlyphIcon(kind: FlatRowGlyphKind): React.ReactNode {
     case "idle":
       return <span className="flat-row-idle-dot" />;
   }
-}
-
-/**
- * Future-absolute trailing time for future-times groups (Upcoming /
- * Scheduled / Snoozed): "in 45m" → same-day clock time → "Tmrw 9:00 AM" →
- * "Mon 9:00 AM" → "Aug 12". A past-due stamp falls back to the absolute
- * wake-style label; the row colors it warning via data-overdue.
- */
-export function futureTimeLabel(isoDate: string, now = new Date()): string {
-  const date = new Date(isoDate);
-  const difference = date.getTime() - now.getTime();
-  if (difference <= 0) return snoozeLabel(isoDate);
-  if (difference < 3_600_000) {
-    return `in ${Math.max(1, Math.round(difference / 60_000))}m`;
-  }
-  const clock = date.toLocaleTimeString([], {
-    hour: "numeric",
-    minute: "2-digit",
-  });
-  const startOfDay = (value: Date) =>
-    new Date(value.getFullYear(), value.getMonth(), value.getDate()).getTime();
-  const dayDelta = Math.round(
-    (startOfDay(date) - startOfDay(now)) / 86_400_000,
-  );
-  if (dayDelta === 0) return clock;
-  if (dayDelta === 1) return `Tmrw ${clock}`;
-  if (dayDelta < 7) return shortAutomationTime(isoDate);
-  return date.toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
 export interface FlatRowTime {
@@ -244,25 +247,34 @@ export function flatRowTime(
 
 export interface FlatRowContext {
   readonly label: string;
-  readonly tone: "failure" | "neutral";
+  readonly tone: "failure" | "attention" | "neutral";
 }
 
-/** Card line-2 context slot; one string, priority failure > paused > schedule. */
+/**
+ * Card line-2 context slot; one string, priority failure > unknown outcome >
+ * paused > schedule.
+ */
 export function flatRowContext(
   thread: NormalizedApplicationThreadSummary,
+  now = new Date(),
 ): FlatRowContext | undefined {
   const automation = thread.automation ?? undefined;
+  const health = automationHealth(thread, now);
   if (
     thread.attention.automationContext === "failed" ||
-    automation?.lastRun?.state === "failed"
+    health?.kind === "failed"
   ) {
     return { label: "run failed", tone: "failure" };
   }
-  if (automation?.status === "paused")
-    return { label: "paused", tone: "neutral" };
+  if (health?.kind === "unknown") {
+    return { label: "outcome unknown", tone: "attention" };
+  }
+  if (health?.kind === "paused" || health?.kind === "not_started") {
+    return { label: health.label.toLowerCase(), tone: "neutral" };
+  }
   if (automation?.nextRunAt !== undefined) {
     return {
-      label: `next ${futureTimeLabel(automation.nextRunAt)}`,
+      label: `next ${futureTimeLabel(automation.nextRunAt, now)}`,
       tone: "neutral",
     };
   }
@@ -271,7 +283,7 @@ export function flatRowContext(
     thread.snoozedUntil !== undefined
   ) {
     return {
-      label: `wakes ${futureTimeLabel(thread.snoozedUntil)}`,
+      label: `wakes ${futureTimeLabel(thread.snoozedUntil, now)}`,
       tone: "neutral",
     };
   }
@@ -290,6 +302,7 @@ interface RowBadge {
 function buildBadges(
   thread: NormalizedApplicationThreadSummary,
   settled: boolean,
+  automation: AutomationHealth | undefined,
 ): RowBadge[] {
   const badges: RowBadge[] = [];
   // Settled recession: additive status badges are suppressed. Durable fork,
@@ -297,12 +310,12 @@ function buildBadges(
   // and the wake indicator lives there too, surviving settled until it is
   // acknowledged.
   if (!settled) {
-    if (
-      thread.attention.queueFailure ||
-      thread.attention.automationContext === "failed"
-    ) {
+    const automationFailed =
+      thread.attention.automationContext === "failed" ||
+      automation?.kind === "failed";
+    if (thread.attention.queueFailure || automationFailed) {
       const label = thread.attention.queueFailure
-        ? thread.attention.automationContext === "failed"
+        ? automationFailed
           ? "Queued input and automation failed"
           : "Queued input failed"
         : "Automation failed";
@@ -310,6 +323,15 @@ function buildBadges(
         key: "alert",
         chip: "alert",
         label,
+        icon: <TriangleAlert size={14} strokeWidth={2} />,
+      });
+    }
+    // An unknown outcome paused scheduling until the user resolves it.
+    if (automation?.kind === "unknown") {
+      badges.push({
+        key: "attention",
+        chip: "attention",
+        label: "Automation outcome unknown",
         icon: <TriangleAlert size={14} strokeWidth={2} />,
       });
     }
@@ -428,10 +450,11 @@ export function FlatThreadRow({
   const glyphKind = flatRowGlyphKind(thread, backgroundWorkCurrent);
   const glyphVisible = glyphKind !== "idle";
   const renderedGlyphLabel = flatRowGlyphLabel(thread, backgroundWorkCurrent);
-  const time = flatRowTime(thread, futureTimes);
-  const context = density === "card" ? flatRowContext(thread) : undefined;
+  const now = new Date();
+  const time = flatRowTime(thread, futureTimes, now);
+  const context = density === "card" ? flatRowContext(thread, now) : undefined;
 
-  const badges = buildBadges(thread, settled);
+  const badges = buildBadges(thread, settled, automationHealth(thread, now));
 
   const rootClass = [
     "flat-row",

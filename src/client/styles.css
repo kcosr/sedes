@@ -1686,6 +1686,7 @@ textarea:disabled {
 }
 
 .status-chip[data-chip="attention"],
+.status-chip[data-chip="automation-unknown"],
 .status-chip[data-chip="woke"],
 .status-chip[data-chip="needs-input"] {
   color: var(--warning);
@@ -1700,7 +1701,8 @@ textarea:disabled {
 }
 
 .status-chip[data-chip="failed"],
-.status-chip[data-chip="start-failed"] {
+.status-chip[data-chip="start-failed"],
+.status-chip[data-chip="automation-failed"] {
   color: var(--destructive);
 }
 
@@ -4961,7 +4963,9 @@ textarea:disabled {
 }
 
 /* Icon-only automation chip: status is in the tooltip/accessible name, the
-   word badge is gone. Paused reads as a warning tint. */
+   word badge is gone. The ring tints only for a failed (red) or unknown
+   (amber) last run; paused, not-started and suspended automations are a
+   muted CirclePause, never amber. */
 .automation-thread-button {
   display: inline-flex;
   align-items: center;
@@ -4980,15 +4984,32 @@ textarea:disabled {
   color: var(--foreground);
 }
 
-.automation-thread-button[data-status="paused"] {
+.automation-thread-button[data-health="failed"] {
+  border-color: var(--destructive-border);
+  color: var(--destructive);
+}
+
+.automation-thread-button[data-health="unknown"] {
+  border-color: var(--warning-border);
   color: var(--warning);
 }
 
-/* On touch the chip drops its ring and reads as a bare glyph like its
-   neighbours, keeping the phone header's room for the title. */
+.automation-thread-button[data-health="sending"] {
+  color: var(--info);
+}
+
+.automation-thread-button[data-health="paused"],
+.automation-thread-button[data-health="not_started"],
+.automation-thread-button[data-health="archived"],
+.automation-thread-button[data-health="snoozed"] {
+  color: var(--muted-foreground-2);
+}
+
+/* On touch the chip drops its ring, tinted or not, and reads as a bare glyph
+   like its neighbours, keeping the phone header's room for the title. */
 @media (max-width: 819px), (pointer: coarse) {
-  .automation-thread-button,
-  .automation-thread-button:hover {
+  .automation-thread-button[data-health],
+  .automation-thread-button[data-health]:hover {
     border-color: transparent;
   }
 
@@ -5033,6 +5054,21 @@ textarea:disabled {
   min-height: 40px;
   align-items: center;
   gap: 10px;
+}
+
+.thread-attention[data-tone="danger"]::before {
+  background: var(--destructive);
+}
+
+/* Label and detail share one line while they fit; on a narrow row the
+   detail wraps beneath the label instead of squeezing it into a column. */
+.thread-attention-text {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 10px;
 }
 
 .thread-attention p,
@@ -10978,10 +11014,6 @@ tr.diff-hunk td {
   /* Keep the existing reasoning shortcut on mobile; other settings remain
      reachable through the thread actions menu. */
   .desktop-config > :not([data-setting-id="thinking_level"]) {
-    display: none;
-  }
-
-  .automation-thread-button span {
     display: none;
   }
 

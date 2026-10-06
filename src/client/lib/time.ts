@@ -12,8 +12,11 @@ export function relativeTime(isoDate: string): string {
 }
 
 /** Compact Codex-style row timestamp: "now", "24m", "3h", "2d". */
-export function shortRelativeTime(isoDate: string): string {
-  const elapsed = Date.now() - new Date(isoDate).getTime();
+export function shortRelativeTime(
+  isoDate: string,
+  now: number = Date.now(),
+): string {
+  const elapsed = now - new Date(isoDate).getTime();
   if (elapsed < 60_000) return "now";
   if (elapsed < 3_600_000) return `${Math.floor(elapsed / 60_000)}m`;
   if (elapsed < 86_400_000) return `${Math.floor(elapsed / 3_600_000)}h`;
@@ -42,13 +45,38 @@ export function localDateTimeValue(date: Date): string {
   return new Date(date.getTime() - offset).toISOString().slice(0, 16);
 }
 
-/** Compact automation next-run label for list rows: "Fri 9:00 PM". */
-export function shortAutomationTime(isoDate: string): string {
-  return new Date(isoDate).toLocaleString([], {
-    weekday: "short",
+/**
+ * Future-absolute time, the one format for upcoming instants (next runs,
+ * wakes): "in 45m" → same-day clock time → "Tmrw 9:00 AM" → "Mon 9:00 AM" →
+ * "Aug 12". A past-due stamp falls back to the absolute wake-style label;
+ * sidebar rows color it warning via data-overdue.
+ */
+export function futureTimeLabel(isoDate: string, now = new Date()): string {
+  const date = new Date(isoDate);
+  const difference = date.getTime() - now.getTime();
+  if (difference <= 0) return snoozeLabel(isoDate);
+  if (difference < 3_600_000) {
+    return `in ${Math.max(1, Math.round(difference / 60_000))}m`;
+  }
+  const clock = date.toLocaleTimeString([], {
     hour: "numeric",
     minute: "2-digit",
   });
+  const startOfDay = (value: Date) =>
+    new Date(value.getFullYear(), value.getMonth(), value.getDate()).getTime();
+  const dayDelta = Math.round(
+    (startOfDay(date) - startOfDay(now)) / 86_400_000,
+  );
+  if (dayDelta === 0) return clock;
+  if (dayDelta === 1) return `Tmrw ${clock}`;
+  if (dayDelta < 7) {
+    return date.toLocaleString([], {
+      weekday: "short",
+      hour: "numeric",
+      minute: "2-digit",
+    });
+  }
+  return date.toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
 export function automationTimeLabel(isoDate: string): string {

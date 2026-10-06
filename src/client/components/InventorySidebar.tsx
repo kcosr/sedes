@@ -81,10 +81,16 @@ import {
   type PanelPresentation,
 } from "../workspace-panels/panel-presentation.js";
 import {
-  shortAutomationTime,
+  futureTimeLabel,
   shortRelativeTime,
   snoozeLabel,
 } from "../lib/time.js";
+import {
+  automationHealth,
+  automationIdentityGlyph,
+  automationIdentityLabel,
+} from "../automation/automation-health.js";
+import { AutomationGlyph } from "./automation/AutomationGlyph.js";
 import {
   AlarmClock,
   ArchiveRestore,
@@ -4321,6 +4327,7 @@ function ThreadRow({
    */
   const restoreRowFocus = useRef(false);
   const automation = thread.automation ?? undefined;
+  const automationState = automationHealth(thread, Date.now());
   const glyphKind = flatRowGlyphKind(thread, backgroundWorkCurrent);
   const glyphLabel = flatRowGlyphLabel(thread, backgroundWorkCurrent);
   const unseenOwnsGlyph = glyphKind === "unseen";
@@ -4337,13 +4344,19 @@ function ThreadRow({
     thread.runState !== "waiting_for_input" &&
     thread.runState !== "waiting_for_approval" &&
     thread.runState !== "failed";
+  // An automation's meta is its next run, else its scheduling status word;
+  // a failed or unknown outcome is the row's attention chip.
   const metaLabel =
     thread.inventoryState === "snoozed" && thread.snoozedUntil
       ? snoozeLabel(thread.snoozedUntil)
       : automation?.nextRunAt
-        ? shortAutomationTime(automation.nextRunAt)
+        ? futureTimeLabel(automation.nextRunAt)
         : automation
-          ? capitalize(automation.status)
+          ? automation.status === "enabled"
+            ? "Active"
+            : automationState?.kind === "not_started"
+              ? "Not started"
+              : "Paused"
           : shortRelativeTime(thread.lastActivityAt);
   const glyph = (
     <span className="row-glyph">
@@ -4378,8 +4391,14 @@ function ThreadRow({
         </span>
       ) : kind === "settled" ? (
         <Check size={13} strokeWidth={2.2} />
-      ) : kind === "snoozed" || kind === "automations" ? (
+      ) : kind === "snoozed" ? (
         <Clock size={13} strokeWidth={2} />
+      ) : kind === "automations" && automationState ? (
+        <AutomationGlyph
+          glyph={automationIdentityGlyph(automationState)}
+          tone={automationState.kind === "sending" ? "info" : undefined}
+          label={automationIdentityLabel(automationState)}
+        />
       ) : null}
     </span>
   );
@@ -4565,10 +4584,22 @@ function ThreadRow({
             </span>
           )}
           <span className="thread-badges">
-            {thread.attention.queueFailure ||
-            thread.attention.automationContext === "failed" ? (
+            {thread.attention.queueFailure ? (
               <StatusChip chip="attention" label="Attention">
                 <CircleAlert size={14} strokeWidth={2} />
+              </StatusChip>
+            ) : null}
+            {thread.attention.automationContext === "failed" ||
+            automationState?.kind === "failed" ? (
+              <StatusChip chip="automation-failed" label="Automation failed">
+                <TriangleAlert size={14} strokeWidth={2} />
+              </StatusChip>
+            ) : automationState?.kind === "unknown" ? (
+              <StatusChip
+                chip="automation-unknown"
+                label="Automation outcome unknown"
+              >
+                <TriangleAlert size={14} strokeWidth={2} />
               </StatusChip>
             ) : null}
             {thread.attention.wake && (

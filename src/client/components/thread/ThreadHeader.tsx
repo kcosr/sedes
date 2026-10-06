@@ -38,13 +38,12 @@ import {
   ArrowDownToDot,
   ArrowUpFromDot,
   Braces,
-  CalendarClock,
   ChartColumn,
   ChevronDown,
-  Clock,
   CopyPlus,
   FolderInput,
   PanelTop,
+  Repeat,
   RotateCcw,
   Search,
   Settings2,
@@ -53,6 +52,12 @@ import {
   Wrench,
 } from "lucide-react";
 import { Button } from "@client/components/ui/button";
+import {
+  automationHealth,
+  automationIdentityGlyph,
+} from "../../automation/automation-health.js";
+import { automationStatusText } from "../../automation/automation-text.js";
+import { AutomationGlyph } from "../automation/AutomationGlyph.js";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -379,6 +384,11 @@ export const ThreadHeader = memo(function ThreadHeader({
       queueFailure: Boolean(snapshot.attention.queueFailure),
     },
   };
+  const automationNow = new Date();
+  const automationState = automationHealth(
+    applicationThreadSummary,
+    automationNow,
+  );
   // Archive directly when the authoritative impact leaves nothing to decide;
   // otherwise the choices dialog opens with that impact.
   const archiveAction = useArchiveThreadAction({
@@ -682,21 +692,25 @@ export const ThreadHeader = memo(function ThreadHeader({
                 onSelectTurn={onSelectBookmarkTurn}
               />
               {snapshot.thread.automation &&
+                automationState &&
                 snapshot.capabilities.automation.available && (
                   <button
                     className="automation-thread-button"
                     aria-label="Automation settings"
-                    title={
-                      snapshot.thread.automation.status === "enabled"
-                        ? "Automation enabled"
-                        : "Automation paused"
-                    }
-                    data-status={snapshot.thread.automation.status}
+                    title={`Automation · ${automationStatusText(
+                      snapshot.thread.automation,
+                      automationState,
+                      automationNow,
+                    )}`}
+                    data-health={automationState.kind}
                     onClick={() =>
                       navigate(threadAutomationPath(snapshot.thread.id))
                     }
                   >
-                    <Clock size={18} strokeWidth={1.8} />
+                    <AutomationGlyph
+                      glyph={automationIdentityGlyph(automationState)}
+                      size="header"
+                    />
                   </button>
                 )}
               <DropdownMenu
@@ -916,7 +930,7 @@ export const ThreadHeader = memo(function ThreadHeader({
                         navigate(threadAutomationPath(snapshot.thread.id));
                       }}
                     >
-                      <CalendarClock aria-hidden="true" />
+                      <Repeat aria-hidden="true" />
                       {snapshot.thread.automation
                         ? "Automation settings…"
                         : "Automate…"}
