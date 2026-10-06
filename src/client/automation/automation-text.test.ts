@@ -368,7 +368,7 @@ describe("automationErrorText", () => {
 
   it("gives specific copy for the codes users meet most", () => {
     expect(automationErrorText("automation_dispatch_uncertain")).toBe(
-      "Sedes can't tell whether the prompt reached the agent.",
+      "Sedes can't tell whether the last run reached the agent.",
     );
     expect(automationErrorText("automation_precheck_nonzero")).toBe(
       "The precheck exited non-zero, so the agent was not run.",
@@ -376,9 +376,11 @@ describe("automationErrorText", () => {
   });
 
   it("falls back generically for backend and runtime failure codes", () => {
-    expect(automationErrorText("runtime_unavailable")).toBe("The run failed in the backend.");
+    expect(automationErrorText("runtime_unavailable")).toBe(
+      "The agent runtime didn't accept the prompt.",
+    );
     expect(automationErrorText("automation_backend_something_new")).toBe(
-      "The run failed in the backend.",
+      "The agent runtime didn't accept the prompt.",
     );
     expect(automationErrorText("automation_precheck_something_new")).toBe(
       "The precheck failed.",

@@ -437,10 +437,10 @@ export function automationStatusText(
 
 const ERROR_TEXT: Readonly<Record<string, string>> = {
   automation_dispatch_uncertain:
-    "Sedes can't tell whether the prompt reached the agent.",
+    "Sedes can't tell whether the last run reached the agent.",
   automation_dispatch_failed: "The prompt could not be delivered to the agent.",
   automation_dispatch_cancelled: "The queued prompt was cancelled.",
-  automation_dispatch_rejected: "The agent did not accept the prompt.",
+  automation_dispatch_rejected: "The agent didn't accept the prompt.",
   automation_uncertain_resolved: "Marked as failed after an unknown outcome.",
   automation_snoozed: "Skipped because the thread was snoozed.",
   automation_misfire_skipped: "Skipped because Sedes was down when it was due.",
@@ -474,14 +474,16 @@ const ERROR_TEXT: Readonly<Record<string, string>> = {
 
 /**
  * A run's error code as a sentence, for surfaces that have the code but not
- * the diagnostic (the thread summary carries only the code). Unknown codes,
- * such as the execution environment's own failure codes, get a generic line.
+ * the diagnostic (the thread summary carries only the code), worded like the
+ * automation page and the thread notice. Unknown codes, such as the agent
+ * runtime's or execution environment's own failure codes, get a generic
+ * line.
  */
 export function automationErrorText(errorCode: string): string {
   return (
     ERROR_TEXT[errorCode] ??
     (errorCode.startsWith("automation_precheck_")
       ? "The precheck failed."
-      : "The run failed in the backend.")
+      : "The agent runtime didn't accept the prompt.")
   );
 }

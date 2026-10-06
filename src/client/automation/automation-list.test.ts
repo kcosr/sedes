@@ -527,7 +527,7 @@ describe("automationRowPresentation", () => {
     expect(presentationOf("sync")).toEqual({
       primary: { text: "Outcome unknown", tone: "warning" },
       secondary: { text: "Scheduling paused" },
-      detail: "Sedes can't tell whether the prompt reached the agent.",
+      detail: "Sedes can't tell whether the last run reached the agent.",
       outcome: { text: "Outcome unknown", tone: "warning" },
       nextRun: null,
     });
