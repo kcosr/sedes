@@ -147,6 +147,7 @@ function makeRun(overrides: Partial<ThreadAutomationRun> = {}): ThreadAutomation
     state: "completed",
     runMode: "same_thread",
     coalescedCount: 0,
+    definitionRevision: 1,
     ...overrides,
   };
 }
@@ -156,6 +157,8 @@ function precheck(
 ): NonNullable<ThreadAutomationRun["precheck"]> {
   return {
     status: "passed",
+    command: "test -f package-lock.json",
+    timeoutSeconds: 30,
     durationMilliseconds: 20,
     stdoutBytes: 0,
     stdoutIncluded: false,
