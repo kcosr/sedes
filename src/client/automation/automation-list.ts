@@ -32,11 +32,12 @@ import {
  * The Automations page's data pipeline (`/automations`), in two stages like
  * the archive page's:
  *
- * 1. `selectAutomationsBase` turns an application snapshot into one row per
- *    thread with an automation, archived anchors included. It runs on every
- *    application event, so it keeps an unchanged row's object and returns an
- *    unchanged base as-is: activity on an anchor that leaves its automation,
- *    title and location alone does not re-render the page.
+ * 1. `selectAutomationsBase` turns an application snapshot, and the fork
+ *    summaries loaded beyond it, into one row per thread with an
+ *    automation, archived anchors included. It runs on every application
+ *    event, so it keeps an unchanged row's object and returns an unchanged
+ *    base as-is: activity on an anchor that leaves its automation, title and
+ *    location alone does not re-render the page.
  * 2. `projectAutomations` applies the sidebar Scope and the search (title and
  *    prompt preview), computes each automation's health at `now`, and groups
  *    by status or by project.
@@ -228,10 +229,18 @@ function rowMatchesSource(
 /**
  * Rows for every thread with an automation, reusing each unchanged row and,
  * when nothing the page renders changed, the previous base itself.
+ *
+ * The threads are the snapshot's, then the loaded forks it does not hold
+ * (`loadedDescendantThreads`). The snapshot is a bootstrap that bounds fork
+ * summaries, so an automation on a fork outside it that the sidebar has not
+ * loaded is missing from the list until a thread update brings the fork in.
+ * That is a v1 limitation: an exhaustive list would need a server-side
+ * automations endpoint.
  */
 export function selectAutomationsBase(
   snapshot: NormalizedApplicationSnapshot | undefined,
   previous?: AutomationsBase,
+  loadedForks: readonly NormalizedApplicationThreadSummary[] = [],
 ): AutomationsBase {
   if (!snapshot) return previous ?? EMPTY_AUTOMATIONS_BASE;
   const catalog = shareCatalog(previous?.catalog, snapshot);
@@ -239,9 +248,12 @@ export function selectAutomationsBase(
   const index = catalogIndexFor(catalog);
   const previousRows = new Map(previous?.rows.map((row) => [row.id, row]));
   const rows: AutomationListRow[] = [];
+  const listed = new Set<string>();
   let changed = previous === undefined;
-  for (const thread of snapshot.threads) {
-    if (thread.automation === null) continue;
+  for (const thread of [...snapshot.threads, ...loadedForks]) {
+    // The snapshot's copy comes first and is the live one.
+    if (thread.automation === null || listed.has(thread.id)) continue;
+    listed.add(thread.id);
     const source = rowSource(thread, thread.automation);
     const prior = previousRows.get(thread.id);
     const row =

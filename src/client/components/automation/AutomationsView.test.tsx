@@ -814,6 +814,34 @@ describe("AutomationsView live updates", () => {
     expect(screen.getByTestId("automations-count")).toHaveTextContent("6");
   });
 
+  it("lists a fork loaded beyond the bootstrap, and opens its page", () => {
+    const snapshot = makeSnapshot(world);
+    const { store, publish } = createStore(snapshot);
+    const commits = vi.fn();
+    render(
+      <Profiler id="automations" onRender={commits}>
+        <AutomationsView store={store} />
+      </Profiler>,
+    );
+    expect(rowTitles()).not.toContain("Nightly audit fork");
+    const fork = makeThread("loaded-fork", "Nightly audit fork");
+    const descendants = (loading: boolean) =>
+      ({
+        nightly: { descendants: [{ thread: fork }], loading, loaded: true },
+      }) as unknown as ApplicationClientState["descendantPages"];
+    publish({ descendantPages: descendants(false) });
+    expect(rowTitles()).toContain("Nightly audit fork");
+    expect(screen.getByTestId("automations-count")).toHaveTextContent("7");
+
+    // Paging state alone leaves the list as it is.
+    commits.mockClear();
+    publish({ descendantPages: descendants(true) });
+    expect(commits).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("link", { name: "Nightly audit fork" }));
+    expect(window.location.pathname).toBe("/automations/loaded-fork");
+  });
+
   it("does not re-render for events that leave the automations unchanged", () => {
     const snapshot = makeSnapshot(world);
     const { store, publish } = createStore(snapshot);

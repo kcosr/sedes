@@ -314,6 +314,28 @@ describe("selectAutomationsBase", () => {
     );
   });
 
+  it("lists loaded forks beyond the bootstrap after the snapshot's threads, once each", () => {
+    const snapshot = makeSnapshot(world);
+    const fork = makeThread("loaded-fork", "Nightly audit fork", {
+      workspaceId: "ws-acme",
+    });
+    // A loaded copy of a thread the snapshot holds is ignored: the
+    // snapshot's copy is the live one.
+    const staleNightly = { ...snapshot.threads[1]!, title: { text: "Stale" } };
+    const base = selectAutomationsBase(snapshot, undefined, [fork, staleNightly]);
+    expect(base.rows.map(({ id }) => id)).toEqual([
+      ...selectAutomationsBase(snapshot).rows.map(({ id }) => id),
+      "loaded-fork",
+    ]);
+    expect(base.rows.find(({ id }) => id === "nightly")?.displayTitle).not.toBe("Stale");
+    expect(base.rows.at(-1)).toMatchObject({ displayTitle: "Nightly audit fork", projectLabel: "acme-web" });
+    // Loading more forks without automations leaves the base alone.
+    const plainFork = makeThread("plain-fork", "Plain", { automation: null });
+    expect(selectAutomationsBase(structuredClone(snapshot), base, [fork, plainFork])).toBe(base);
+    // A fork that leaves the loaded pages leaves the list.
+    expect(selectAutomationsBase(snapshot, base, []).rows.map(({ id }) => id)).not.toContain("loaded-fork");
+  });
+
   it("keeps the previous base without a snapshot", () => {
     const base = selectAutomationsBase(makeSnapshot(world));
     expect(selectAutomationsBase(undefined, base)).toBe(base);

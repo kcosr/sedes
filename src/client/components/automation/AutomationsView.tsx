@@ -36,6 +36,7 @@ import {
   setAutomationsGroupBy,
   useAutomationsViewPreferences,
 } from "../../automation/automations-view-preferences.js";
+import { loadedDescendantThreads } from "../../automation/loaded-threads.js";
 import { mutationId } from "../../lib/ids.js";
 import {
   messageFrom,
@@ -68,12 +69,16 @@ const SUCCESS_ANNOUNCEMENTS: Readonly<Record<AutomationRowActionKind, string>> =
 
 const countFormat = new Intl.NumberFormat();
 
-/** Only snapshot changes can change the list. */
+/** Only the snapshot and the loaded fork pages can change the list. */
 function selectBase(
   state: ApplicationClientState,
   previous: AutomationsBase | undefined,
 ): AutomationsBase {
-  return selectAutomationsBase(state.snapshot, previous);
+  return selectAutomationsBase(
+    state.snapshot,
+    previous,
+    loadedDescendantThreads(state),
+  );
 }
 
 function AutomationsViewOptions({
