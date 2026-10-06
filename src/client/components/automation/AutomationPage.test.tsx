@@ -186,6 +186,7 @@ describe("AutomationPage", () => {
       setThreadAutomationState: vi.fn().mockResolvedValue(definition({ revision: 4 })),
     });
     expect(screen.getByText("Not started")).toBeInTheDocument();
+    expect(screen.getByText("scheduling paused")).toBeInTheDocument();
     expect(screen.getByText("Paused. This automation won't run until you enable it.")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Enable" }));
     await waitFor(() =>
@@ -196,7 +197,12 @@ describe("AutomationPage", () => {
   it("restores an archived thread and unsnoozes a snoozed one", async () => {
     const archived = renderPage([{ inventoryState: "archived", automation: automationSummary() }]);
     expect(screen.getByText("Runs are suspended while the thread is archived.")).toBeInTheDocument();
+    expect(screen.getByText("runs suspended")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Run now" })).toHaveAttribute("aria-disabled", "true");
+    // Neither the schedule nor Run now will make a first run here.
+    expect(await screen.findByText("No runs yet.")).toBeInTheDocument();
+    expect(screen.queryByText("Run now to try it.")).toBeNull();
+    expect(screen.queryByText(/^The first run is /u)).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: "Restore thread" }));
     await waitFor(() =>
       expect(archived.mutateInventory).toHaveBeenCalledWith(expect.objectContaining({ id: THREAD_ID }), "restore"),

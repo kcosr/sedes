@@ -107,7 +107,7 @@
 
 /* ── Definition card ── */
 .automation-facts {
-  padding-block: var(--space-3);
+  padding-block: var(--space-2);
 }
 
 .automation-fact-sub {
@@ -336,7 +336,8 @@
 @media (max-width: 819px), (pointer: coarse) {
   .automation-run-main {
     min-height: var(--control-touch);
-    grid-template-columns: var(--icon-md) 9.5rem minmax(0, 1fr) var(--icon-md);
+    grid-template-columns: var(--icon-md) 8.5rem minmax(0, 1fr) var(--icon-md);
+    gap: var(--space-1-5);
   }
 
   .automation-run-meta {
@@ -357,7 +358,15 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .automation-page [data-slot="settings-field"][data-orientation="horizontal"] > [data-slot="field-text"] {
+  .automation-page [data-slot="settings-field"][data-orientation="horizontal"] > [data-slot="field-text"],
+  .automation-next-runs {
+    padding-top: 0;
+  }
+}
+
+/* Stacked under the density switch too, the read-out sits under its label. */
+@media (max-width: 819px), (pointer: coarse) {
+  .automation-next-runs {
     padding-top: 0;
   }
 }

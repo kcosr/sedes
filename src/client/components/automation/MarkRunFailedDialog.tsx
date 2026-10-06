@@ -16,9 +16,9 @@ type Choice = "resume" | "keep_paused";
 /**
  * Marks a run whose outcome is unknown as failed. The primary choice also
  * resumes the schedule (the server does both in one request); the
- * secondary keeps the automation paused. Built like ConfirmDialog: a small
- * card with no X, Cancel as the way out, dismissal locked and the pressed
- * action relabelled while it runs, and a failure kept inline.
+ * secondary keeps the automation paused. Built like ConfirmDialog: a card
+ * with no X, Cancel as the way out, dismissal locked and the pressed action
+ * relabelled while it runs, and a failure kept inline.
  */
 export function MarkRunFailedDialog({
   open,
@@ -65,8 +65,10 @@ export function MarkRunFailedDialog({
         if (!pending) onOpenChange(next);
       }}
     >
+      {/* Two ways to confirm need the md width; a card on phones, like ConfirmDialog. */}
       <DialogContent
-        size="sm"
+        size="md"
+        mobile="card"
         showClose={false}
         dismissible={!pending}
         aria-busy={pending ? true : undefined}

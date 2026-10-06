@@ -1,6 +1,14 @@
 import "./automations-view.css";
 import "./automation-page.css";
-import { Ellipsis, Pause, Pencil, Play, Repeat, Trash2 } from "lucide-react";
+import {
+  Ellipsis,
+  MessageSquare,
+  Pause,
+  Pencil,
+  Play,
+  Repeat,
+  Trash2,
+} from "lucide-react";
 import { Tooltip } from "radix-ui";
 import {
   useEffect,
@@ -266,7 +274,10 @@ function actionReasons(
   };
 }
 
-/** The header's state words: "next Tmrw 2:00 AM", or what stops the next run. */
+/**
+ * The meta line's lead: "next Tmrw 2:00 AM", or what keeps the schedule
+ * from running (the chip beside the title already names the state).
+ */
 function headerState(
   automation: SummaryAutomation,
   health: AutomationHealth,
@@ -275,21 +286,19 @@ function headerState(
 ): string {
   switch (health.kind) {
     case "unknown":
+    case "paused":
+    case "not_started":
       return "scheduling paused";
     case "archived":
-      return "thread archived";
+      return "runs suspended";
     case "snoozed":
       return thread.snoozedUntil
         ? `snoozed until ${futureTimeLabel(thread.snoozedUntil, now)}`
         : "snoozed";
-    case "paused":
-      return "paused";
-    case "not_started":
-      return "not started";
     case "active":
     case "failed":
     case "sending":
-      if (automation.status === "paused") return "paused";
+      if (automation.status === "paused") return "scheduling paused";
       return automation.nextRunAt
         ? `next ${futureTimeLabel(automation.nextRunAt, now)}`
         : "no next run";
@@ -508,7 +517,7 @@ function AutomationDetails({
                 </>
               ) : null}
               <DropdownMenuItem onSelect={() => openThread()}>
-                <Repeat aria-hidden="true" />
+                <MessageSquare aria-hidden="true" />
                 Open thread
               </DropdownMenuItem>
               <DropdownMenuSeparator />
@@ -578,9 +587,8 @@ function AutomationDetails({
         runs={runs}
         view={runsView}
         onViewChange={setRunsView}
-        {...(automation.status === "enabled" && automation.nextRunAt
-          ? { nextRunAt: automation.nextRunAt }
-          : {})}
+        nextRunAt={health.kind === "active" ? automation.nextRunAt : undefined}
+        canRunNow={!reasons.runNow}
         revision={revision}
         now={now}
       />

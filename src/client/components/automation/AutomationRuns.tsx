@@ -38,6 +38,7 @@ import {
   runDayTime,
   runDetailTitle,
   runHealth,
+  runKind,
   runPrecheckSummary,
   runTimeline,
   type RunHealth,
@@ -77,6 +78,7 @@ export function AutomationRunsSection({
   view,
   onViewChange,
   nextRunAt,
+  canRunNow,
   revision,
   now,
 }: {
@@ -84,8 +86,10 @@ export function AutomationRunsSection({
   readonly runs: AutomationRuns;
   readonly view: AutomationRunsView;
   readonly onViewChange: (view: AutomationRunsView) => void;
-  /** The next scheduled run, for the empty history. */
+  /** The next run, for the empty history; only while the schedule will make it. */
   readonly nextRunAt?: string;
+  /** Run now is available, so the empty history can suggest it. */
+  readonly canRunNow: boolean;
   /** The definition's current revision, to say a run's has been edited since. */
   readonly revision?: number;
   readonly now: Date;
@@ -170,17 +174,20 @@ export function AutomationRunsSection({
       </Callout>
     );
   } else if (runs.items.length === 0) {
+    const filter = view.expanded ? view.filter : "all";
     body = (
       <EmptyState
         variant="inline"
-        title={FILTER_EMPTY[view.expanded ? view.filter : "all"]}
-        {...((view.expanded ? view.filter : "all") === "all"
-          ? {
-              description: nextRunAt
-                ? `The first run is ${futureTimeLabel(nextRunAt, now)}.`
-                : "Run now to try it.",
-            }
-          : {})}
+        title={FILTER_EMPTY[filter]}
+        description={
+          filter !== "all"
+            ? undefined
+            : nextRunAt
+              ? `The first run is ${futureTimeLabel(nextRunAt, now)}.`
+              : canRunNow
+                ? "Run now to try it."
+                : undefined
+        }
       />
     );
   } else if (view.expanded) {
@@ -276,7 +283,10 @@ export function AutomationRunsSection({
             <DialogHeader>
               <DialogTitle>{runDetailTitle(openRun)}</DialogTitle>
               <DialogDescription>
-                {runDateTime(openRun.scheduledFor)} · {runMeta(openRun)}
+                {runDateTime(openRun.scheduledFor)} · {runKind(openRun)}
+                {openRun.coalescedCount > 0
+                  ? ` · missed ×${openRun.coalescedCount} merged`
+                  : null}
               </DialogDescription>
             </DialogHeader>
             <DialogBody>
