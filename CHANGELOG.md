@@ -15,7 +15,7 @@
   upgrading: previous per-connection preferences are not imported and their
   speech keys are removed. Finish or copy saved dictation first; older recordings
   remain on disk until discarded but cannot be resumed.
-  ([#49](https://github.com/kcosr/sedes/pull/49), [#51](https://github.com/kcosr/sedes/pull/51), [#53](https://github.com/kcosr/sedes/pull/53))
+  ([#49](https://github.com/kcosr/sedes/pull/49), [#51](https://github.com/kcosr/sedes/pull/51), [#53](https://github.com/kcosr/sedes/pull/53), [#55](https://github.com/kcosr/sedes/pull/55))
 
 - Self-hosted speech servers must advertise per-model `realtime` capabilities.
   Hosted recognition accepts only the supported base model IDs, excluding dated
@@ -432,12 +432,14 @@
 - Android voice preferences and speech credentials persist across connection
   switches and deletion. Thread selections and saved input remain specific to
   each server and account.
+  ([#55](https://github.com/kcosr/sedes/pull/55))
 
 - Android saved dictation offers grouped **Copy text**, **Discard**, **Send**,
   and **Add to composer** controls. Adding text opens the original thread and
   preserves its draft and the recording without sending. Interrupted recordings
   show a short status and can be sent without an extra checkbox; unfinished
   transcription offers **Retry**.
+  ([#55](https://github.com/kcosr/sedes/pull/55))
 
 - Voice settings offer searchable models, voices, and threads, with separate
   default recording targets and playback filters. The voice card can choose a
@@ -787,9 +789,11 @@
   picker refreshes when devices change. Missing or ambiguous selections never
   silently switch microphones; Bluetooth routing supports paired endpoints with
   different names.
+  ([#55](https://github.com/kcosr/sedes/pull/55))
 
 - Android voice shows **Default thread needed** when the playback filter
   requires a thread that the current connection has not selected.
+  ([#55](https://github.com/kcosr/sedes/pull/55))
 
 - macOS desktop packages include the local-network permission description.
   ([#53](https://github.com/kcosr/sedes/pull/53))
