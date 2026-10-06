@@ -111,8 +111,10 @@ describe("describeSchedule: cron", () => {
 });
 
 describe("describeSchedule: interval", () => {
-  const interval = (everySeconds: number, anchorAt = "2026-10-06T04:00:00.000Z") =>
-    describeSchedule({ kind: "interval", everySeconds, anchorAt });
+  // After every anchor here, so none of them is still to come.
+  const later = new Date("2026-10-08T00:00:00.000Z");
+  const interval = (everySeconds: number, anchorAt = "2026-10-06T04:00:00.000Z", now = later) =>
+    describeSchedule({ kind: "interval", everySeconds, anchorAt }, now);
 
   it("describes minutes, hours and odd seconds", () => {
     expect(interval(300)).toBe("Every 5 minutes");
@@ -127,6 +129,30 @@ describe("describeSchedule: interval", () => {
     expect(interval(7 * 86_400, "2026-10-06T21:45:00.000Z")).toBe(
       `Every 7 days at ${clock(21, 45)} UTC`,
     );
+  });
+
+  it("says when an interval that has not started yet starts", () => {
+    const now = new Date("2026-10-06T03:40:00.000Z");
+    // A whole-day interval names its UTC day, as it names its UTC time.
+    expect(interval(86_400, "2026-10-06T04:00:00.000Z", now)).toBe(
+      `Every day at ${clock(4, 0)} UTC, starting today`,
+    );
+    expect(interval(2 * 86_400, "2026-10-07T04:00:00.000Z", now)).toBe(
+      `Every 2 days at ${clock(4, 0)} UTC, starting Tmrw`,
+    );
+    expect(interval(86_400, "2026-10-09T04:00:00.000Z", now)).toMatch(
+      new RegExp(`^Every day at ${clock(4, 0)} UTC, starting Oct 9$`, "u"),
+    );
+    expect(interval(86_400, "2027-01-09T04:00:00.000Z", now)).toMatch(/, starting Jan 9, 2027$/u);
+    // A shorter interval names the viewer's day.
+    const start = new Date(2026, 9, 6, 23, 0);
+    const localNow = new Date(2026, 9, 6, 22, 0);
+    expect(interval(4 * 3_600, start.toISOString(), localNow)).toBe("Every 4 hours, starting today");
+    expect(interval(4 * 3_600, new Date(2026, 9, 7, 9, 0).toISOString(), localNow)).toBe(
+      "Every 4 hours, starting Tmrw",
+    );
+    // Once it has started, the sentence is the plain one.
+    expect(interval(86_400, "2026-10-06T03:00:00.000Z", now)).toBe(`Every day at ${clock(3, 0)} UTC`);
   });
 });
 

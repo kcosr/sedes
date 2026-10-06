@@ -40,8 +40,10 @@ const WEEK_ORDER = [1, 2, 3, 4, 5, 6, 0] as const;
 
 /**
  * One sentence for a schedule: "Every day at 2:00 AM UTC", "Every weekday at
- * 6:30 AM Europe/Berlin", "Every 4 hours", "Once · Oct 9, 9:00 PM". Cron
- * expressions outside the common forms fall back to "Cron <expr> (<zone>)".
+ * 6:30 AM Europe/Berlin", "Every 4 hours", "Once · Oct 9, 9:00 PM". An
+ * interval that has not started yet adds when it starts ("…, starting
+ * Tmrw"). Cron expressions outside the common forms fall back to "Cron
+ * <expr> (<zone>)".
  */
 export function describeSchedule(
   schedule: AutomationSchedule,
@@ -51,7 +53,7 @@ export function describeSchedule(
     case "date_time":
       return `Once · ${onceLabel(schedule.runAt, now)}`;
     case "interval":
-      return describeInterval(schedule.everySeconds, schedule.anchorAt);
+      return describeInterval(schedule.everySeconds, schedule.anchorAt, now);
     case "cron": {
       const expression = schedule.expression.trim().replace(/\s+/gu, " ");
       return (
@@ -73,7 +75,12 @@ function onceLabel(runAt: string, now: Date): string {
   });
 }
 
-function describeInterval(everySeconds: number, anchorAt: string): string {
+function describeInterval(everySeconds: number, anchorAt: string, now: Date): string {
+  const wholeDays = everySeconds % 86_400 === 0;
+  return `${describeEvery(everySeconds, anchorAt)}${startingClause(anchorAt, now, wholeDays)}`;
+}
+
+function describeEvery(everySeconds: number, anchorAt: string): string {
   if (everySeconds % 86_400 === 0) {
     const days = everySeconds / 86_400;
     const anchor = new Date(anchorAt);
@@ -86,6 +93,33 @@ function describeInterval(everySeconds: number, anchorAt: string): string {
   }
   if (everySeconds % 60 === 0) return `Every ${everySeconds / 60} minutes`;
   return `Every ${everySeconds} seconds`;
+}
+
+/**
+ * ", starting today", ", starting Tmrw" or ", starting Oct 9" for an
+ * interval whose first run is still to come; nothing once it has started.
+ * A whole-day interval names its UTC day, as its sentence names its UTC
+ * time; a shorter one names the viewer's day.
+ */
+function startingClause(anchorAt: string, now: Date, utc: boolean): string {
+  const anchor = new Date(anchorAt);
+  if (!(anchor.getTime() > now.getTime())) return "";
+  const dayOf = (date: Date) =>
+    utc
+      ? Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate())
+      : new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+  const days = Math.round((dayOf(anchor) - dayOf(now)) / 86_400_000);
+  if (days === 0) return ", starting today";
+  if (days === 1) return ", starting Tmrw";
+  const year = utc ? anchor.getUTCFullYear() : anchor.getFullYear();
+  const nowYear = utc ? now.getUTCFullYear() : now.getFullYear();
+  const date = anchor.toLocaleDateString([], {
+    month: "short",
+    day: "numeric",
+    ...(year === nowYear ? {} : { year: "numeric" }),
+    ...(utc ? { timeZone: "UTC" } : {}),
+  });
+  return `, starting ${date}`;
 }
 
 /**
