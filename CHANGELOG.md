@@ -775,6 +775,7 @@
 - Windows desktop upgrades handle long temporary paths while removing older
   full installations, including upgrades to client-only builds, instead of
   misleadingly reporting that Sedes cannot be closed.
+  ([#54](https://github.com/kcosr/sedes/pull/54))
 
 - macOS desktop packages include the local-network permission description.
   ([#53](https://github.com/kcosr/sedes/pull/53))
