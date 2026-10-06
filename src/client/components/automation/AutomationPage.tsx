@@ -587,6 +587,7 @@ function AutomationDetails({
           open={markFailedOpen}
           onOpenChange={setMarkFailedOpen}
           runTime={dayTimePhrase(lastRun.scheduledFor, now)}
+          oneTime={automation.scheduleKind === "date_time"}
           onResolve={async (resume) => {
             try {
               const resolution = await store.api.resolveThreadAutomationRun(
@@ -667,7 +668,9 @@ function HealthCallout({
           }
         >
           {problem ? `${problem} ` : null}
-          Check the thread, then mark the run as failed to resume scheduling.
+          {automation.scheduleKind === "date_time"
+            ? "Check the thread, then mark the run as failed to end this one-time automation."
+            : "Check the thread, then mark the run as failed to resume scheduling."}
         </Callout>
       );
     case "not_started":

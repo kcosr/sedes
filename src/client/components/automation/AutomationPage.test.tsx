@@ -210,8 +210,13 @@ describe("AutomationPage", () => {
     await userEvent.click(screen.getByRole("button", { name: "Mark as failed…" }));
     let dialog = screen.getByRole("dialog", { name: "Mark the run as failed?" });
     expect(dialog).toHaveTextContent(
-      `Sedes stops waiting on the run from ${dayTimePhrase("2026-10-06T00:00:00.000Z")}.`,
+      `Sedes stops waiting on the run from ${dayTimePhrase("2026-10-06T00:00:00.000Z")}. If the agent`,
     );
+    expect(within(dialog).getAllByRole("button").map((button) => button.textContent)).toEqual([
+      "Cancel",
+      "Mark failed, keep paused",
+      "Mark failed and resume",
+    ]);
     await userEvent.click(within(dialog).getByRole("button", { name: "Mark failed, keep paused" }));
     await waitFor(() =>
       expect(fixture.api.resolveThreadAutomationRun).toHaveBeenLastCalledWith(THREAD_ID, "run-last", { resume: false }),
@@ -224,6 +229,46 @@ describe("AutomationPage", () => {
     await waitFor(() =>
       expect(fixture.api.resolveThreadAutomationRun).toHaveBeenLastCalledWith(THREAD_ID, "run-last", { resume: true }),
     );
+  });
+
+  it("ends a one-time automation with a single Mark failed", async () => {
+    const fixture = renderPage(
+      [
+        {
+          automation: automationSummary({
+            status: "paused",
+            scheduleKind: "date_time",
+            schedule: { kind: "date_time", runAt: "2026-10-06T00:00:00.000Z" },
+            nextRunAt: undefined,
+            lastRun: lastRun("uncertain"),
+          }),
+        },
+      ],
+      {
+        getThreadAutomation: vi.fn().mockResolvedValue(
+          definition({ scheduleKind: "date_time", schedule: { kind: "date_time", runAt: "2026-10-06T00:00:00.000Z" } }),
+        ),
+        resolveThreadAutomationRun: vi.fn().mockResolvedValue({ run: run({ id: "run-last", state: "failed" }), automation: null }),
+      },
+    );
+    expect(
+      screen.getByText("Check the thread, then mark the run as failed to end this one-time automation."),
+    ).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Mark as failed…" }));
+    const dialog = screen.getByRole("dialog", { name: "Mark the run as failed?" });
+    expect(dialog).toHaveTextContent(
+      `Sedes stops waiting on the run from ${dayTimePhrase("2026-10-06T00:00:00.000Z")}, and this one-time automation ends.`,
+    );
+    expect(within(dialog).getAllByRole("button").map((button) => button.textContent)).toEqual([
+      "Cancel",
+      "Mark failed",
+    ]);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Mark failed" }));
+    await waitFor(() =>
+      expect(fixture.api.resolveThreadAutomationRun).toHaveBeenCalledWith(THREAD_ID, "run-last", { resume: false }),
+    );
+    // The automation has ended.
+    expect(await screen.findByText("No automation")).toBeInTheDocument();
   });
 
   it("keeps the mark-failed dialog open with the error when resolving fails", async () => {
