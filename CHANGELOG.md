@@ -4,6 +4,16 @@
 
 ### Breaking Changes
 
+- Browser and packaged clients require client protocol 142, which adds each
+  automation's schedule, missed-run policy, and prompt preview to thread
+  summaries, and its definition revision and precheck command to runs. Upgrade
+  clients together with the server.
+
+- Resolving an uncertain automation run
+  (`POST /api/threads/:threadId/automation/runs/:runId/resolve`) returns
+  `{ run, automation }`, the run and the thread's automation afterwards,
+  instead of the run alone. Update scripts that read the response.
+
 - Browser and packaged clients require client protocol 141, including thread
   workpad counts. Direct inputs accept up to 256 KiB of text and 2 MiB per JSON
   request; input origins use server registration shared by Android native voice
@@ -213,6 +223,29 @@
   Migration preserves old Claude totals separately with unknown coverage. (#8)
 
 ### Added
+
+- An **Automations** page lists every automation, grouped by status (Needs
+  attention, Upcoming, Paused, Suspended) or by project, with search over
+  titles and prompts, the sidebar Scope, and row actions to run, pause, enable,
+  or edit. Open it from **More** in the sidebar footer, or **View all** on the
+  sidebar's Upcoming, Scheduled, and Automations groups.
+
+- Each automation has a page with its state, a callout and action when it
+  needs you, its definition, and its runs: the latest five, or the full history
+  filtered to **Problems** or **Skipped**, with each run's timeline, precheck,
+  problem, revision, and result thread. **Mark as failed…** can resume the
+  schedule in the same step. A full-page editor creates and edits automations;
+  a new one offers **Save and enable** or **Save as paused**.
+
+- `GET /api/threads/:threadId/automation/capability` returns a thread's
+  automation capability without loading its transcript. Run history accepts
+  `filter=all|problems|skipped`, and its first page counts all, problem, and
+  skipped runs; migration 135 indexes runs for these reads. Resolve accepts
+  `resume: true` to enable the automation in the same transaction.
+
+- The automation CLI's `runs` accepts `--filter all|problems|skipped` and
+  prints the counts, and `resolve THREAD_ID RUN_ID [--resume]` marks an
+  uncertain run failed.
 
 - Agent thread switches can request one recording on an exact thread while
   Android is in the background and native voice is already ready. The request
@@ -439,6 +472,24 @@
   Session stats stays in the thread menu rather than flashing during loading. (#8)
 
 ### Changed
+
+- The automation page and editor replace the automation dialog. The header
+  button and **Automation…** in **Thread actions** and the thread menu open the
+  page; **Automate…**, now also in the thread menu, opens the editor. Links to
+  `/threads/<id>/automation` open the automation page.
+
+- A fork run's result thread is titled with its source thread's title and the
+  run time, such as "Nightly review · Oct 6, 3:15 AM", in the cron schedule's
+  time zone or in UTC. Existing threads keep their titles.
+
+- Run history names run states in words. **Delivered** replaces "completed":
+  the agent received the prompt, which does not mean its turn has finished.
+
+- Automation states read the same everywhere. Repeat is the automation icon in
+  menus, the header, and rows; paused and never-started automations show a
+  muted pause glyph, never a warning; the header button turns red after a
+  failed run and amber when the outcome is unknown; and upcoming times share
+  one format.
 
 - Android voice preferences and speech credentials persist across connection
   switches and deletion. Thread selections and saved input remain specific to
@@ -795,6 +846,13 @@
   sidecar runtime protocol 14 now also carries the queued-input marker.
 
 ### Fixed
+
+- An automation whose last run's outcome is unknown shows as needing
+  attention, in the sidebar's State view, on its row, and in the header,
+  instead of looking active or paused.
+
+- Automation notices in a thread no longer break mid-word on phones, and a
+  failed run's notice is marked in red.
 
 - Sidebar Tasks icons match the header button.
   ([#56](https://github.com/kcosr/sedes/pull/56))
