@@ -325,7 +325,8 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
     public void clientReplaced() { report("client_connection_replaced"); }
     public void clientDisconnected() {
         clientConnectionToken = null; clientActions.clear();
-        if (cancelPreparingClientVoice()) drain();
+        // Full disconnect also calls here; let its teardown finish before advancing queued speech.
+        if (cancelPreparingClientVoice()) handler.post(this::drain);
         publish();
     }
     private JSONObject clientResult(String status, String reason) {

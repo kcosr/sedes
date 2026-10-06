@@ -604,6 +604,26 @@ public class NativeVoiceRuntimeTest {
         }
     }
 
+    @Test public void disconnectingDuringBackgroundValidationDoesNotStartQueuedSpeech() throws Exception {
+        for (boolean authenticationLost : new boolean[] { false, true }) {
+            try (Fixture f = new Fixture(false, false)) {
+                f.readyClientVoice("response"); f.policy(true, false, "speak");
+                String target = UUID.randomUUID().toString(); JSONObject command = f.clientSwitch(target, true);
+                assertEquals("accepted", f.clientCommand(command).getString("status")); f.settleClientSwitch(command, null);
+                NativeVoiceHttp.Result validation = f.takeClientTarget(target);
+                f.receiveReply();
+                assertEquals(1, f.runtime.snapshot().getJSONObject("queue").getInt("count"));
+                if (authenticationLost) f.onOwner(f.runtime::clientAuthenticationLost);
+                else f.cancelClientSwitch("disconnect");
+                validation.done(200, Fixture.inputContext(target), null); f.flushEvents();
+                assertTrue("Disconnect must not start even a subsequently cancelled speech request", f.speech.speechRequests.isEmpty());
+                assertTrue(f.runtime.snapshot().isNull("active"));
+                assertEquals(0, f.runtime.snapshot().getJSONObject("queue").getInt("count"));
+                assertTrue(f.speech.transcriptions.isEmpty()); assertTrue(f.openThreads.isEmpty());
+            }
+        }
+    }
+
     @Test public void manualStartSupersedesBackgroundValidationBeforeQueuedReplySpeech() throws Exception {
         try (Fixture f = new Fixture(false, false)) {
             f.readyClientVoice("response"); f.policy(true, false, "speak");
