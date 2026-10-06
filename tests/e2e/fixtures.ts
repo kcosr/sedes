@@ -64,6 +64,13 @@ export const test = base.extend<{
               // navigating away from its view deliberately cancels the read.
               (request.method() === "POST" &&
                 /^\/api\/threads\/[^/]+\/usage\/turn-availability$/u.test(new URL(request.url()).pathname)) ||
+              // The automation page and editor abort stale reads (the
+              // definition, runs, capability and schedule preview) when the
+              // thread summary moves on or they close.
+              (request.method() === "GET" &&
+                /^\/api\/threads\/[^/]+\/automation(?:\/capability|\/runs)?$/u.test(new URL(request.url()).pathname)) ||
+              (request.method() === "POST" &&
+                /^\/api\/threads\/[^/]+\/automation\/preview$/u.test(new URL(request.url()).pathname)) ||
               // Settings and variable previews explicitly abort stale reads
               // on close/selection change; mutation failures remain visible.
               (request.method() === "GET" &&
