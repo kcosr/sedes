@@ -378,6 +378,10 @@ test("native dictation keeps its controls reachable on narrow screens and retain
   await expect(sheet).toContainText("Needs transcription");
   await expect(sheet.getByRole("button", { name: "Copy text" })).toBeVisible();
   await expect(sheet.getByRole("button", { name: "Add to composer" })).toBeDisabled();
+  await expect(sheet.getByRole("button", { name: "Add to composer" })).toHaveAccessibleDescription("Finish transcription to add to the composer.");
+  await expect(sheet.getByText("Finish transcription to add to the composer.", { exact: true })).toBeVisible();
+  await expectNoPageOverflow(page);
+  await capture(page, testInfo, "voice-recovery-transcription-needed-narrow.png");
   await sheet.getByRole("button", { name: "Close", exact: true }).click();
   await expect(composer).toHaveValue(draft);
 
