@@ -23,11 +23,7 @@ import type { NormalizedApplicationThreadSummary } from "../../../shared/index.j
 import { BackendBrandIcon } from "../brand-icons.js";
 import type { SidebarDensity } from "../../app/sidebar-view-model.js";
 import { sidebarEffectiveTimestamp } from "../../app/sidebar-view-model.js";
-import {
-  shortAutomationTime,
-  shortRelativeTime,
-  snoozeLabel,
-} from "../../lib/time.js";
+import { futureTimeLabel, shortRelativeTime } from "../../lib/time.js";
 import {
   backgroundWorkCounts,
   backgroundWorkLabel,
@@ -183,34 +179,6 @@ export function flatRowGlyphIcon(kind: FlatRowGlyphKind): React.ReactNode {
     case "idle":
       return <span className="flat-row-idle-dot" />;
   }
-}
-
-/**
- * Future-absolute trailing time for future-times groups (Upcoming /
- * Scheduled / Snoozed): "in 45m" → same-day clock time → "Tmrw 9:00 AM" →
- * "Mon 9:00 AM" → "Aug 12". A past-due stamp falls back to the absolute
- * wake-style label; the row colors it warning via data-overdue.
- */
-export function futureTimeLabel(isoDate: string, now = new Date()): string {
-  const date = new Date(isoDate);
-  const difference = date.getTime() - now.getTime();
-  if (difference <= 0) return snoozeLabel(isoDate);
-  if (difference < 3_600_000) {
-    return `in ${Math.max(1, Math.round(difference / 60_000))}m`;
-  }
-  const clock = date.toLocaleTimeString([], {
-    hour: "numeric",
-    minute: "2-digit",
-  });
-  const startOfDay = (value: Date) =>
-    new Date(value.getFullYear(), value.getMonth(), value.getDate()).getTime();
-  const dayDelta = Math.round(
-    (startOfDay(date) - startOfDay(now)) / 86_400_000,
-  );
-  if (dayDelta === 0) return clock;
-  if (dayDelta === 1) return `Tmrw ${clock}`;
-  if (dayDelta < 7) return shortAutomationTime(isoDate);
-  return date.toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
 export interface FlatRowTime {

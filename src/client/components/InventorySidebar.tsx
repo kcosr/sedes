@@ -81,7 +81,7 @@ import {
   type PanelPresentation,
 } from "../workspace-panels/panel-presentation.js";
 import {
-  shortAutomationTime,
+  futureTimeLabel,
   shortRelativeTime,
   snoozeLabel,
 } from "../lib/time.js";
@@ -4341,7 +4341,7 @@ function ThreadRow({
     thread.inventoryState === "snoozed" && thread.snoozedUntil
       ? snoozeLabel(thread.snoozedUntil)
       : automation?.nextRunAt
-        ? shortAutomationTime(automation.nextRunAt)
+        ? futureTimeLabel(automation.nextRunAt)
         : automation
           ? capitalize(automation.status)
           : shortRelativeTime(thread.lastActivityAt);

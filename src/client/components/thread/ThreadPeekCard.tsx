@@ -15,13 +15,16 @@ import {
   type DragEvent as ReactDragEvent,
 } from "react";
 import type { NormalizedApplicationThreadSummary } from "../../../shared/index.js";
-import { automationTimeLabel, shortRelativeTime } from "../../lib/time.js";
+import {
+  automationTimeLabel,
+  futureTimeLabel,
+  shortRelativeTime,
+} from "../../lib/time.js";
 import {
   flatRowGlyphIcon,
   flatRowGlyphKind,
   flatRowGlyphLabel,
   flatRowTime,
-  futureTimeLabel,
   type FlatThreadRowForkInfo,
 } from "./FlatThreadRow.js";
 import "./flat-thread-row.css";

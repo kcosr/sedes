@@ -3,12 +3,7 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { NormalizedApplicationThreadSummary } from "../../../shared/index.js";
-import { shortAutomationTime } from "../../lib/time.js";
-import {
-  FlatThreadRow,
-  flatRowGlyphKind,
-  futureTimeLabel,
-} from "./FlatThreadRow.js";
+import { FlatThreadRow, flatRowGlyphKind } from "./FlatThreadRow.js";
 
 type ThreadAutomation = NonNullable<
   NormalizedApplicationThreadSummary["automation"]
@@ -1183,50 +1178,6 @@ describe("trailing time", () => {
     const time = screen.getByTestId("flat-row-time");
     expect(time).toHaveTextContent("2h");
     expect(time).not.toHaveAttribute("data-future");
-  });
-});
-
-describe("futureTimeLabel ladder", () => {
-  const now = new Date(2026, 7, 1, 9, 0, 0); // Sat Aug 1 2026, 09:00 local
-
-  const at = (offsetMs: number) => new Date(now.getTime() + offsetMs);
-  const clock = (date: Date) =>
-    date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-
-  it("relative inside the hour", () => {
-    expect(futureTimeLabel(at(45 * 60_000).toISOString(), now)).toBe("in 45m");
-    expect(futureTimeLabel(at(30_000).toISOString(), now)).toBe("in 1m");
-  });
-
-  it("same-day clock time past the hour", () => {
-    const date = at(5 * 3_600_000);
-    expect(futureTimeLabel(date.toISOString(), now)).toBe(clock(date));
-  });
-
-  it("tomorrow gets the Tmrw prefix", () => {
-    const date = at(24 * 3_600_000);
-    expect(futureTimeLabel(date.toISOString(), now)).toBe(
-      `Tmrw ${clock(date)}`,
-    );
-  });
-
-  it("inside a week gets weekday + time", () => {
-    const date = at(3 * 24 * 3_600_000);
-    expect(futureTimeLabel(date.toISOString(), now)).toBe(
-      shortAutomationTime(date.toISOString()),
-    );
-  });
-
-  it("a week and beyond gets month + day", () => {
-    const date = at(30 * 24 * 3_600_000);
-    expect(futureTimeLabel(date.toISOString(), now)).toBe(
-      date.toLocaleDateString([], { month: "short", day: "numeric" }),
-    );
-  });
-
-  it("past-due falls back to the absolute wake label", () => {
-    const date = at(-3_600_000);
-    expect(futureTimeLabel(date.toISOString(), now)).not.toMatch(/^in /);
   });
 });
 
