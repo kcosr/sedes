@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { Page, Request } from "@playwright/test";
+import type { Locator, Page, Request } from "@playwright/test";
 import { test, expect } from "./fixtures.js";
 import { capture, createDraftThread, expectNoPageOverflow, openWorkspaceDirectory } from "./helpers.js";
 import { workpadDraftSchema, workpadSchema } from "../../src/shared/protocol/workpads.js";
@@ -12,6 +12,23 @@ async function readWorkpad(page: Page, id: string) {
   const response = await page.request.get(`/api/workpads/${id}`);
   expect(response.ok()).toBe(true);
   return workpadSchema.parse((await response.json()).workpad);
+}
+
+async function expectCompactChecklist(document: Locator) {
+  const bounds = await document.getByRole("checkbox", { name: "Repeat this check", exact: true }).evaluateAll(inputs =>
+    inputs.map(input => {
+      const rect = input.closest("label")!.getBoundingClientRect();
+      return { top: rect.top, width: rect.width, height: rect.height };
+    }),
+  );
+  expect(bounds).toHaveLength(2);
+  for (const target of bounds) {
+    expect(target.width).toBeGreaterThanOrEqual(24);
+    expect(target.height).toBeGreaterThanOrEqual(24);
+  }
+  const rowSpacing = bounds[1]!.top - bounds[0]!.top;
+  expect(rowSpacing).toBeGreaterThanOrEqual(bounds[0]!.height);
+  expect(rowSpacing).toBeLessThanOrEqual(36);
 }
 
 // One document's committed revisions and retained draft form a single state
@@ -27,7 +44,11 @@ test("Workpad checkboxes preserve source and drafts while thread badges follow m
   const session = (await (await page.request.get("/api/application/session")).json()) as { csrfToken: string };
   const headers = { "X-CSRF-Token": session.csrfToken };
   const toggle = page.getByTestId("workpads-panel-toggle");
+  const sidebar = page.getByTestId("desktop-sidebar");
+  const sourceIcon = sidebar.locator(`[data-thread-id="${sourceId}"]`).getByRole("img", { name: "1 workpad", exact: true });
+  const destinationIcon = sidebar.locator(`[data-thread-id="${destinationId}"]`).getByRole("img", { name: "1 workpad", exact: true });
   await expect(toggle).toHaveAccessibleName("Open Workpads panel");
+  await expect(sourceIcon).toHaveCount(0);
   const listRequests: Request[] = [];
   const countLists = (request: Request) => {
     if (request.method() === "GET" && new URL(request.url()).pathname === "/api/workpads") listRequests.push(request);
@@ -39,6 +60,8 @@ test("Workpad checkboxes preserve source and drafts while thread badges follow m
   expect(created.status()).toBe(201);
   const workpad = workpadSchema.parse((await created.json()).workpad);
   await expect(toggle).toHaveAccessibleName("Open Workpads panel, 1 workpad in this thread");
+  await expect(sourceIcon).toBeVisible();
+  await expect(sourceIcon).toHaveText("");
   // The closed panel has fetched no list to learn its new count.
   expect(listRequests).toHaveLength(0);
   await toggle.click();
@@ -52,6 +75,7 @@ test("Workpad checkboxes preserve source and drafts while thread badges follow m
   await expect(repeats.nth(0)).not.toBeChecked();
   await expect(document.getByRole("checkbox", { name: "Already done", exact: true })).toBeChecked();
   await expect(panel.getByRole("textbox", { name: "Workpad content", exact: true })).toHaveCount(0);
+  await expectCompactChecklist(document);
 
   const patchUrl = `**/api/workpads/${workpad.id}`;
   let holdPatch = true;
@@ -104,8 +128,9 @@ test("Workpad checkboxes preserve source and drafts while thread badges follow m
     const bounds = input.closest("label")?.getBoundingClientRect();
     return bounds ? { width: bounds.width, height: bounds.height } : null;
   });
-  expect(touchTarget?.width).toBeGreaterThanOrEqual(44);
-  expect(touchTarget?.height).toBeGreaterThanOrEqual(44);
+  expect(touchTarget?.width).toBeGreaterThanOrEqual(24);
+  expect(touchTarget?.height).toBeGreaterThanOrEqual(24);
+  await expectCompactChecklist(document);
   await expectNoPageOverflow(page);
   await capture(page, testInfo, "workpad-checklist-mobile.png");
 
@@ -145,6 +170,7 @@ test("Workpad checkboxes preserve source and drafts while thread badges follow m
   // a move. These requests change real storage; the badge uses application SSE.
   await page.getByRole("button", { name: "Close Workpads panel", exact: true }).click();
   await expect(panel).toHaveCount(0);
+  await page.setViewportSize({ width: 1440, height: 900 });
   listRequests.length = 0;
   const change = async (data: Record<string, unknown>) => {
     const current = await readWorkpad(page, workpad.id);
@@ -155,14 +181,19 @@ test("Workpad checkboxes preserve source and drafts while thread badges follow m
   };
   await change({ archived: true });
   await expect(toggle).toHaveAccessibleName("Open Workpads panel");
+  await expect(sourceIcon).toHaveCount(0);
   await change({ archived: false });
   await expect(toggle).toHaveAccessibleName("Open Workpads panel, 1 workpad in this thread");
+  await expect(sourceIcon).toBeVisible();
   await change({ scope: { kind: "thread", threadId: destinationId } });
   await expect(toggle).toHaveAccessibleName("Open Workpads panel");
+  await expect(sourceIcon).toHaveCount(0);
+  await expect(destinationIcon).toBeVisible();
   await page.goto(destinationPath);
   await expect(toggle).toHaveAccessibleName("Open Workpads panel, 1 workpad in this thread");
   await change({ scope: { kind: "global" } });
   await expect(toggle).toHaveAccessibleName("Open Workpads panel");
+  await expect(destinationIcon).toHaveCount(0);
   expect(listRequests).toHaveLength(0);
   page.off("request", countLists);
 });

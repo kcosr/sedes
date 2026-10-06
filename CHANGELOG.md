@@ -217,6 +217,7 @@
 
 - The Workpads toggle shows the current thread's non-archived workpad count,
   updated through the existing application stream without a separate list fetch.
+  Sidebar thread rows show a Workpads icon without a count.
 
 - Workpad checklist boxes can be checked or unchecked in the latest saved
   document without entering edit mode. Each toggle saves a revision, preserves
@@ -792,6 +793,9 @@
   sidecar runtime protocol 14 now also carries the queued-input marker.
 
 ### Fixed
+
+- Workpad checklists use compact row spacing, and sidebar Tasks icons match
+  the Tasks header button.
 
 - Preferred Android microphones reconnect despite device ID changes, and the
   picker refreshes when devices change. Missing or ambiguous selections never

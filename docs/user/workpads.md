@@ -18,6 +18,9 @@ switch between full-stage panels using the buttons, the panel shortcuts, or the
 menu. Draft text stays mounted while the panel is collapsed or another panel
 is shown. Navigation changes the view, never a document's stored scope.
 
+Sidebar thread rows show the same notepad icon when the thread has active
+workpads. The sidebar icon has no visible count, like the Tasks icon.
+
 Choose **Thread**, **Project**, or **Global** above the list. **Thread**
 follows the current thread, and **Project** follows its project. To look at
 another thread's or project's workpads, open **View options** (the filter icon

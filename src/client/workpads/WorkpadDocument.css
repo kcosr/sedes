@@ -1,11 +1,13 @@
 .workpad-document { position: relative; min-width: 0; overflow-wrap: anywhere; }
 .workpad-document .task-list-item { list-style: none; }
+/* A checklist is a compact list, including GFM's paragraph-wrapped items. */
+.workpad-document .task-list-item > p:first-child { margin-bottom: 0; }
 .workpad-document .markdown-checklist-control {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: var(--control-touch);
-  min-height: var(--control-touch);
+  min-width: var(--control-xs);
+  min-height: var(--control-xs);
   vertical-align: middle;
   cursor: pointer;
 }
