@@ -10,12 +10,11 @@
   together with the server.
   ([#50](https://github.com/kcosr/sedes/pull/50), [#53](https://github.com/kcosr/sedes/pull/53))
 
-- Android voice uses snapshot version 9, device preferences with settings
-  version 7, and dictation manifest version 2. Earlier per-connection preferences
-  are not imported, and obsolete profile-bound speech credential files are removed;
-  configure voice and enter credentials
-  once after upgrading. Finish or copy saved dictation before upgrading: older
-  recording files are retained but unavailable until explicitly discarded.
+- Android voice uses snapshot version 9, settings version 7, and dictation
+  manifest version 2. Reconfigure voice and re-enter speech credentials after
+  upgrading: previous per-connection preferences are not imported and their
+  speech keys are removed. Finish or copy saved dictation first; older recordings
+  remain on disk until discarded but cannot be resumed.
   ([#49](https://github.com/kcosr/sedes/pull/49), [#51](https://github.com/kcosr/sedes/pull/51), [#53](https://github.com/kcosr/sedes/pull/53))
 
 - Self-hosted speech servers must advertise per-model `realtime` capabilities.
@@ -430,14 +429,15 @@
 
 ### Changed
 
-- Android saved-dictation recovery groups its controls, uses shorter labels,
-  and sends interrupted recordings without an extra acknowledgement checkbox.
-  **Add to composer** appends recognized text to the original thread's draft
-  for editing, preserving existing draft content and the saved recording.
+- Android voice preferences and speech credentials persist across connection
+  switches and deletion. Thread selections and saved input remain specific to
+  each server and account.
 
-- Android voice preferences and speech credentials persist across Sedes
-  connections. Thread selections and input recovery remain scoped to the server
-  and account; deleting a connection preserves device preferences and speech keys.
+- Android saved dictation offers grouped **Copy text**, **Discard**, **Send**,
+  and **Add to composer** controls. Adding text opens the original thread and
+  preserves its draft and the recording without sending. Interrupted recordings
+  show a short status and can be sent without an extra checkbox; unfinished
+  transcription offers **Retry**.
 
 - Voice settings offer searchable models, voices, and threads, with separate
   default recording targets and playback filters. The voice card can choose a
@@ -784,8 +784,12 @@
 ### Fixed
 
 - Preferred Android microphones reconnect despite device ID changes, and the
-  picker refreshes as devices connect or disconnect. Missing or ambiguous inputs
-  remain selected without silently switching microphones.
+  picker refreshes when devices change. Missing or ambiguous selections never
+  silently switch microphones; Bluetooth routing supports paired endpoints with
+  different names.
+
+- Android voice shows **Default thread needed** when the playback filter
+  requires a thread that the current connection has not selected.
 
 - macOS desktop packages include the local-network permission description.
   ([#53](https://github.com/kcosr/sedes/pull/53))
