@@ -7,6 +7,7 @@ import {
   type SidebarShowFilters,
   type SidebarViewPreferences,
 } from "../app/sidebar-view-model.js";
+import { automationNeedsAttention } from "../automation/automation-health.js";
 
 /**
  * Pure projectors for the flat sidebar group modes (`time` / `state` /
@@ -236,7 +237,7 @@ export function resolveStateBucket(
     thread.attention.queueFailure ||
     thread.attention.wake ||
     thread.attention.automationContext === "failed" ||
-    thread.automation?.lastRun?.state === "failed"
+    automationNeedsAttention(thread.automation)
   ) {
     return "needs-attention";
   }

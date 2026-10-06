@@ -36,6 +36,7 @@ import {
 } from "../app/keyboard-shortcuts.js";
 import { setClickNamesToFilter } from "../app/settings.js";
 import { InventorySidebar } from "./InventorySidebar.js";
+import { futureTimeLabel } from "../lib/time.js";
 import type { PanelPresentation } from "../workspace-panels/panel-presentation.js";
 import {
   TASK_DRAG_MIME,
@@ -4664,5 +4665,107 @@ describe("sidebar background work authority", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("Projects Automations shelf vocabulary", () => {
+  type Automation = NonNullable<ThreadSummary["automation"]>;
+  type LastRun = NonNullable<Automation["lastRun"]>;
+  const automation = (overrides: Partial<Automation>): Automation => ({
+    status: "enabled",
+    runMode: "same_thread",
+    scheduleKind: "cron",
+    revision: 1,
+    hasPrecheck: false,
+    ...overrides,
+  });
+  const run = (state: LastRun["state"]): LastRun => ({
+    id: `run-${state}`,
+    state,
+    occurrence: "scheduled",
+    scheduledFor: isoAtNoon(-1),
+  });
+  const shelfRow = (id: string) =>
+    document.querySelector<HTMLElement>(
+      `[data-shelf="automations"] [data-thread-id="${id}"]`,
+    )!;
+
+  it("draws Repeat or CirclePause, names the state, and uses the one future time format", () => {
+    seedViewPreferences({});
+    const nextRunAt = new Date(Date.now() + 3 * 86_400_000).toISOString();
+    renderSidebar([
+      makeThread("auto-active", "Active audit", {
+        automation: automation({ nextRunAt }),
+      }),
+      makeThread("auto-paused", "Paused audit", {
+        automation: automation({ status: "paused", lastRun: run("completed") }),
+      }),
+      makeThread("auto-new", "New audit", {
+        automation: automation({ status: "paused" }),
+      }),
+    ]);
+
+    const active = shelfRow("auto-active");
+    expect(
+      within(active).getByRole("img", { name: "Automation" }),
+    ).toHaveClass("lucide-repeat");
+    expect(active.querySelector(".thread-meta")).toHaveTextContent(
+      futureTimeLabel(nextRunAt),
+    );
+    expect(active.querySelector(".row-glyph .lucide-clock")).toBeNull();
+
+    const paused = shelfRow("auto-paused");
+    expect(
+      within(paused).getByRole("img", { name: "Automation paused" }),
+    ).toHaveClass("lucide-circle-pause");
+    expect(paused.querySelector(".thread-meta")).toHaveTextContent(/^Paused$/);
+
+    const fresh = shelfRow("auto-new");
+    expect(
+      within(fresh).getByRole("img", { name: "Automation not started" }),
+    ).toHaveClass("lucide-circle-pause");
+    expect(fresh.querySelector(".thread-meta")).toHaveTextContent(
+      /^Not started$/,
+    );
+  });
+
+  it("flags a failed run with the red triangle and an unknown outcome with the amber one", () => {
+    seedViewPreferences({});
+    renderSidebar([
+      makeThread("auto-failed", "Failed audit", {
+        automation: automation({ lastRun: run("failed") }),
+      }),
+      makeThread("auto-context", "Context audit", {
+        automation: automation({}),
+        attention: {
+          wake: false,
+          automationContext: "failed",
+          unseenCompletion: false,
+          queueFailure: false,
+        },
+      }),
+      makeThread("auto-unknown", "Unknown audit", {
+        automation: automation({ status: "paused", lastRun: run("uncertain") }),
+      }),
+    ]);
+
+    for (const id of ["auto-failed", "auto-context"]) {
+      const chip = within(shelfRow(id)).getByRole("img", {
+        name: "Automation failed",
+      });
+      expect(chip).toHaveAttribute("data-chip", "automation-failed");
+      expect(chip.querySelector(".lucide-triangle-alert")).not.toBeNull();
+      expect(within(shelfRow(id)).queryByRole("img", { name: "Attention" })).toBeNull();
+    }
+    const unknown = shelfRow("auto-unknown");
+    expect(
+      within(unknown).getByRole("img", { name: "Automation outcome unknown" }),
+    ).toHaveAttribute("data-chip", "automation-unknown");
+    // An unknown outcome keeps the Repeat identity; the chip carries the problem.
+    expect(
+      within(unknown).getByRole("img", { name: "Automation outcome unknown" }),
+    ).toBeVisible();
+    expect(unknown.querySelector(".row-glyph .lucide-repeat")).not.toBeNull();
+    expect(unknown.querySelector(".thread-meta")).toHaveTextContent(/^Paused$/);
   });
 });

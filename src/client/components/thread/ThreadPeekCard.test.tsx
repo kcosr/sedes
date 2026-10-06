@@ -194,3 +194,147 @@ describe("ThreadPeekCard detail beneath attention and background glyphs", () => 
     }
   });
 });
+
+describe("ThreadPeekCard automation line", () => {
+  type Automation = NonNullable<NormalizedApplicationThreadSummary["automation"]>;
+  type LastRun = NonNullable<Automation["lastRun"]>;
+  const NOW = new Date("2026-10-06T03:40:00.000Z");
+
+  function automated(
+    automation: Partial<Automation>,
+    overrides: Partial<NormalizedApplicationThreadSummary> = {},
+  ): NormalizedApplicationThreadSummary {
+    return {
+      ...thread(),
+      automation: {
+        status: "enabled",
+        runMode: "same_thread",
+        scheduleKind: "cron",
+        revision: 1,
+        hasPrecheck: false,
+        ...automation,
+      },
+      ...overrides,
+    };
+  }
+
+  function run(state: LastRun["state"], overrides: Partial<LastRun> = {}): LastRun {
+    return {
+      id: "run-1",
+      state,
+      occurrence: "scheduled",
+      scheduledFor: "2026-10-05T06:30:00.000Z",
+      ...overrides,
+    };
+  }
+
+  function renderPeek(subject: NormalizedApplicationThreadSummary) {
+    vi.useFakeTimers({ now: NOW });
+    try {
+      return render(
+        <ThreadPeekCard thread={subject} projectLabel="acme-web" position={{ top: 10, left: 20 }} />,
+      ).container;
+    } finally {
+      vi.useRealTimers();
+    }
+  }
+
+  const automationRow = (container: HTMLElement) =>
+    container.querySelector<HTMLElement>('[data-row="automation"]')!;
+
+  it.each([
+    {
+      name: "active",
+      automation: { nextRunAt: "2026-10-07T02:00:00.000Z", lastRun: run("completed") },
+      text: /^Automation · next Tmrw \d/u,
+      glyph: "repeat",
+      tone: "success",
+    },
+    {
+      name: "failed",
+      automation: { lastRun: run("failed", { finishedAt: "2026-10-05T06:40:00.000Z" }) },
+      text: /^Automation · Failed 21h ago$/u,
+      glyph: "triangle",
+      tone: "danger",
+    },
+    {
+      name: "uncertain",
+      automation: { status: "paused" as const, lastRun: run("uncertain") },
+      text: /^Automation · Outcome unknown$/u,
+      glyph: "triangle",
+      tone: "warning",
+    },
+    {
+      name: "sending",
+      automation: { lastRun: run("dispatching") },
+      text: /^Automation · Sending$/u,
+      glyph: "spinner",
+      tone: "info",
+    },
+    {
+      name: "paused",
+      automation: { status: "paused" as const, lastRun: run("completed") },
+      text: /^Automation · Paused$/u,
+      glyph: "pause",
+      tone: "neutral",
+    },
+    {
+      name: "not started",
+      automation: { status: "paused" as const },
+      text: /^Automation · Not started$/u,
+      glyph: "pause",
+      tone: "neutral",
+    },
+  ])("says $name in one line with its health glyph and tone", ({ automation, text, glyph, tone }) => {
+    const container = renderPeek(automated(automation));
+    const row = automationRow(container);
+    expect(row).toHaveTextContent(text);
+    expect(row).toHaveAttribute("data-tone", tone);
+    expect(row.querySelector(`[data-automation-glyph="${glyph}"]`)).not.toBeNull();
+    expect(container.querySelectorAll('[data-row^="automation"]')).toHaveLength(1);
+    // The automation line replaces the plain "Idle" row and its second Repeat.
+    expect(container.querySelector('[data-row="state"]')).toBeNull();
+    expect(container.querySelectorAll(".lucide-repeat").length).toBeLessThanOrEqual(1);
+  });
+
+  it("keeps the state row when it says more than Idle, without the automation glyph", () => {
+    const container = renderPeek(
+      automated({ status: "paused", lastRun: run("completed") }, { inventoryState: "settled", stateChangedAt: "2026-10-06T00:40:00.000Z" }),
+    );
+    const stateRow = container.querySelector('[data-row="state"]')!;
+    expect(stateRow).toHaveTextContent("Settled 3h ago");
+    expect(stateRow.querySelector("[data-glyph]")).toHaveAttribute("data-glyph", "settled");
+    expect(stateRow.querySelector(".automation-glyph")).toBeNull();
+
+    const queued = renderPeek(automated({}, { queuedInputCount: 2 }));
+    expect(queued.querySelectorAll('[data-row="state"]')[0]).toHaveTextContent("Idle · 2 queued");
+  });
+
+  it("shows a running thread's state beside its automation", () => {
+    const container = renderPeek(automated({ lastRun: run("queued") }, { runState: "running" }));
+    expect(container.querySelector('[data-row="state"]')).toHaveTextContent("Running");
+    expect(automationRow(container)).toHaveTextContent("Automation · Waiting for turn");
+  });
+
+  it("names a suspended automation", () => {
+    const archived = renderPeek(automated({ lastRun: run("completed") }, { inventoryState: "archived" }));
+    expect(automationRow(archived)).toHaveTextContent("Automation · Thread archived");
+    expect(automationRow(archived).querySelector('[data-automation-glyph="archive"]')).not.toBeNull();
+    const snoozed = renderPeek(
+      automated({}, { inventoryState: "snoozed", snoozedUntil: "2026-10-06T09:00:00.000Z" }),
+    );
+    expect(automationRow(snoozed)).toHaveTextContent("Automation · Snoozed");
+  });
+
+  it("keeps the failed-run line for a thread whose automation context failed without an automation", () => {
+    const base = thread();
+    const container = renderPeek({
+      ...base,
+      attention: { ...base.attention, automationContext: "failed" },
+    });
+    const row = container.querySelector('[data-row="automation-failed"]')!;
+    expect(row).toHaveTextContent("Last run failed");
+    expect(row).toHaveAttribute("data-tone", "danger");
+    expect(automationRow(container)).toBeNull();
+  });
+});

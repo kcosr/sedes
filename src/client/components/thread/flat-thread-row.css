@@ -282,6 +282,11 @@
   color: var(--destructive);
 }
 
+/* An automation outcome the user must resolve: amber, not broken. */
+.flat-row-chip[data-chip="attention"] {
+  color: var(--warning);
+}
+
 .flat-row-chip[data-chip="queued"] {
   color: var(--info);
 }
@@ -514,6 +519,10 @@
   color: var(--destructive);
 }
 
+.flat-row-context[data-tone="attention"] {
+  color: var(--warning);
+}
+
 /* ------------------------------------------------------ workspace chip */
 
 .flat-row-location {
@@ -652,9 +661,19 @@
   font-size: 11px;
 }
 
-.thread-peek-row-failure,
-.thread-peek-row-failure .thread-peek-row-icon {
+/* Automation lines take the health tone: red failed, amber unknown, blue
+   sending; the glyph inside colors itself. */
+.thread-peek-row[data-tone="danger"],
+.thread-peek-row[data-tone="danger"] .thread-peek-row-icon {
   color: var(--destructive);
+}
+
+.thread-peek-row[data-tone="warning"] {
+  color: var(--warning);
+}
+
+.thread-peek-row[data-tone="info"] {
+  color: var(--info);
 }
 
 .thread-peek-dot {

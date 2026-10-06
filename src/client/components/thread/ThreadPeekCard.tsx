@@ -2,7 +2,6 @@ import {
   AlarmClock,
   Box,
   Folder,
-  Repeat,
   Server,
   Split,
   TriangleAlert,
@@ -15,16 +14,16 @@ import {
   type DragEvent as ReactDragEvent,
 } from "react";
 import type { NormalizedApplicationThreadSummary } from "../../../shared/index.js";
-import {
-  automationTimeLabel,
-  futureTimeLabel,
-  shortRelativeTime,
-} from "../../lib/time.js";
+import { futureTimeLabel, shortRelativeTime } from "../../lib/time.js";
+import { automationHealth } from "../../automation/automation-health.js";
+import { automationStatusText } from "../../automation/automation-text.js";
+import { AutomationGlyph } from "../automation/AutomationGlyph.js";
 import {
   flatRowGlyphIcon,
   flatRowGlyphKind,
   flatRowGlyphLabel,
   flatRowTime,
+  type FlatRowGlyphKind,
   type FlatThreadRowForkInfo,
 } from "./FlatThreadRow.js";
 import "./flat-thread-row.css";
@@ -271,6 +270,25 @@ export function threadStateInWords(
     : "Idle";
 }
 
+/**
+ * The automation line carries the automation's own glyph, so the state row
+ * falls back to the glyph the thread would show without one.
+ */
+function stateRowGlyphKind(
+  thread: NormalizedApplicationThreadSummary,
+  glyphKind: FlatRowGlyphKind,
+): FlatRowGlyphKind {
+  if (
+    glyphKind !== "automation" &&
+    glyphKind !== "automation-paused" &&
+    glyphKind !== "automation-sending"
+  ) {
+    return glyphKind;
+  }
+  if (thread.inventoryState === "settled") return "settled";
+  return thread.runState === "disconnected" ? "disconnected" : "idle";
+}
+
 export function ThreadPeekCard({
   thread,
   backgroundWorkCurrent = true,
@@ -307,13 +325,15 @@ export function ThreadPeekCard({
   readonly panelRef?: React.Ref<HTMLDivElement>;
 }): React.JSX.Element {
   const title = thread.title.text || "Untitled thread";
-  const time = flatRowTime(thread, futureTimes);
+  const now = new Date();
+  const time = flatRowTime(thread, futureTimes, now);
   const glyphKind = flatRowGlyphKind(thread, backgroundWorkCurrent);
+  const stateGlyphKind = stateRowGlyphKind(thread, glyphKind);
   const stateLabel = threadStateInWords(thread, backgroundWorkCurrent);
   const automation = thread.automation ?? undefined;
-  const automationFailed =
-    thread.attention.automationContext === "failed" ||
-    automation?.lastRun?.state === "failed";
+  const automationState = automation && automationHealth(thread, now);
+  // A plain "Idle" adds nothing beside the automation line.
+  const showStateRow = !automationState || stateLabel !== "Idle";
   const forkCount = fork?.descendantCount ?? 0;
   const lineage = fork
     ? fork.isChild
@@ -377,36 +397,42 @@ export function ThreadPeekCard({
             </span>
           </div>
         )}
-        <div className="thread-peek-row" data-row="state">
-          <span
-            className="thread-peek-row-icon"
-            data-glyph={glyphKind}
-            aria-hidden="true"
-          >
-            {flatRowGlyphIcon(glyphKind)}
-          </span>
-          <span className="thread-peek-row-text" title={stateLabel}>
-            {stateLabel}
-          </span>
-        </div>
-        {automation && (
-          <div className="thread-peek-row" data-row="automation">
-            <span className="thread-peek-row-icon">
-              <Repeat size={13} strokeWidth={2} aria-hidden="true" />
+        {showStateRow && (
+          <div className="thread-peek-row" data-row="state">
+            <span
+              className="thread-peek-row-icon"
+              data-glyph={stateGlyphKind}
+              aria-hidden="true"
+            >
+              {flatRowGlyphIcon(stateGlyphKind)}
             </span>
-            <span className="thread-peek-row-text">
-              {automation.status === "paused"
-                ? "Automation · paused"
-                : automation.nextRunAt !== undefined
-                  ? `Automation · next ${automationTimeLabel(automation.nextRunAt)}`
-                  : "Automation"}
+            <span className="thread-peek-row-text" title={stateLabel}>
+              {stateLabel}
             </span>
           </div>
         )}
-        {automationFailed && (
+        {automation && automationState && (
           <div
-            className="thread-peek-row thread-peek-row-failure"
+            className="thread-peek-row"
+            data-row="automation"
+            data-tone={automationState.tone}
+          >
+            <span className="thread-peek-row-icon">
+              <AutomationGlyph
+                glyph={automationState.glyph}
+                tone={automationState.tone}
+              />
+            </span>
+            <span className="thread-peek-row-text">
+              {`Automation · ${automationStatusText(automation, automationState, now)}`}
+            </span>
+          </div>
+        )}
+        {!automation && thread.attention.automationContext === "failed" && (
+          <div
+            className="thread-peek-row"
             data-row="automation-failed"
+            data-tone="danger"
           >
             <span className="thread-peek-row-icon">
               <TriangleAlert size={13} strokeWidth={2} aria-hidden="true" />

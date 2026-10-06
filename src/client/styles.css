@@ -1686,6 +1686,7 @@ textarea:disabled {
 }
 
 .status-chip[data-chip="attention"],
+.status-chip[data-chip="automation-unknown"],
 .status-chip[data-chip="woke"],
 .status-chip[data-chip="needs-input"] {
   color: var(--warning);
@@ -1700,7 +1701,8 @@ textarea:disabled {
 }
 
 .status-chip[data-chip="failed"],
-.status-chip[data-chip="start-failed"] {
+.status-chip[data-chip="start-failed"],
+.status-chip[data-chip="automation-failed"] {
   color: var(--destructive);
 }
 
