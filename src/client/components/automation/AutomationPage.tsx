@@ -13,6 +13,7 @@ import { Tooltip } from "radix-ui";
 import {
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type ReactElement,
@@ -27,6 +28,7 @@ import {
   threadPath,
 } from "../../app/router.js";
 import { useMediaQuery } from "../../app/use-media-query.js";
+import { useMinuteClock } from "../../app/use-minute-clock.js";
 import {
   automationHealth,
   type AutomationHealth,
@@ -87,26 +89,6 @@ type PageStore = Pick<
 
 type PageAction = "run" | "state" | "restore" | "wake";
 
-/** Wall-clock minutes, so "next in 45m" and "Today" stay true. */
-function useMinuteClock(): Date {
-  const [now, setNow] = useState(() => new Date());
-  useEffect(() => {
-    let timer: ReturnType<typeof setTimeout>;
-    const schedule = () => {
-      timer = setTimeout(
-        () => {
-          setNow(new Date());
-          schedule();
-        },
-        Math.max(1_000, 60_010 - (Date.now() % 60_000)),
-      );
-    };
-    schedule();
-    return () => clearTimeout(timer);
-  }, []);
-  return now;
-}
-
 /** One automation, read-only, with its runs (`/automations/:threadId`). */
 export function AutomationPage({
   store,
@@ -116,7 +98,8 @@ export function AutomationPage({
   threadId: string;
 }): React.JSX.Element {
   const thread = useAutomationThread(store, threadId);
-  const now = useMinuteClock();
+  const minute = useMinuteClock();
+  const now = useMemo(() => new Date(minute), [minute]);
   const back = (
     <SettingsBackLink
       href={automationsPath()}
