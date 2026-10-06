@@ -309,7 +309,9 @@ the helpers and their tests.
 | `compareAutomationsInGroup`, `AUTOMATION_HEALTH_GROUPS` | List group order and the order within a group |
 | `describeSchedule`, `runStateLabel`, `runSkipReason`, `runMeta` | Schedule sentences, run state words, and one-line run facts. `completed` reads "Delivered": the backend accepted the prompt, not that the turn ended |
 | `automationStatusText`, `lastRunAge`, `automationErrorText` | The short state for tooltips and status lines, the last run's age, and an error code as a sentence where only the code is projected |
-| `futureTimeLabel` (`lib/time.ts`) | The one format for upcoming instants: next runs and wake times |
+| `automationActionAvailability` (`automation/automation-actions.ts`) | Whether Run now, Pause or Enable, Edit, and Delete can run, with an instruction for the tooltip and a short hint for a menu row; the list's row menu and the automation page both use it |
+| `futureTimeLabel` (`lib/time.ts`) | The one format for a single upcoming instant: the next run and wake times |
+| `dayTimeLabel`, `dayTimePhrase` | The one format for times in a list (runs and next-run previews), always with the clock time: "Today 3:17 AM", "Tmrw 9:00 AM", "Mon 9:00 AM", "Sun Oct 4 2:00 AM"; and its form inside a sentence ("today at 6:00 PM") |
 | `AutomationGlyph` | Draws a health glyph at `sidebar`, `list`, or `header` size; colors only `danger`, `warning`, and `info`, so Active and Paused stay quiet |
 
 Uncertain runs need attention everywhere, and paused is never a warning tone.
