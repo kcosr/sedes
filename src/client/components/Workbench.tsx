@@ -4,6 +4,9 @@ import type { ApplicationClientStore } from "../stores/ApplicationClientStore";
 import { useApplicationStore } from "../stores/ApplicationClientStore";
 import type { ThreadStoreRegistry } from "../stores/ThreadStoreRegistry";
 import { ArchivedView } from "./ArchivedView";
+import { AutomationEditor } from "./automation/AutomationEditor";
+import { AutomationPage } from "./automation/AutomationPage";
+import { AutomationsView } from "./automation/AutomationsView";
 import { Plus } from "lucide-react";
 import { SedesMark } from "./brand-icons";
 import { Button } from "@client/components/ui/button";
@@ -138,6 +141,24 @@ export function Workbench({
             <SidebarNavTrigger />
           </div>
           {application.experimentalUsageEnabled ? <UsageView store={applicationStore} /> : <p>Experimental usage accounting is disabled on this server.</p>}
+        </div>
+      </main>
+    );
+  }
+  if (route.name === "automations" || route.name === "automation") {
+    return (
+      <main className="workbench">
+        <div className="pane-host pane-host-nav-header">
+          <div className="pane-nav-header">
+            <SidebarNavTrigger />
+          </div>
+          {route.name === "automations" ? (
+            <AutomationsView store={applicationStore} />
+          ) : route.edit ? (
+            <AutomationEditor store={applicationStore} threadId={route.threadId} />
+          ) : (
+            <AutomationPage store={applicationStore} threadId={route.threadId} />
+          )}
         </div>
       </main>
     );

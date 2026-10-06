@@ -19,6 +19,8 @@ export type Route =
     }
   | { name: "archived" }
   | { name: "usage" }
+  | { name: "automations" }
+  | { name: "automation"; threadId: string; edit: boolean }
   | ({ name: "settings"; page?: SettingsPage } & SettingsResourceRoute);
 
 let currentRoute = parseRoute(window.location.pathname, window.location.hash);
@@ -66,6 +68,19 @@ export function parseRoute(pathname: string, hash = ""): Route {
   }
   if (pathname === "/archived") return { name: "archived" };
   if (pathname === "/usage") return { name: "usage" };
+  if (pathname === "/automations") return { name: "automations" };
+  const automationPageMatch = /^\/automations\/([^/]+)(\/edit)?$/.exec(pathname);
+  if (automationPageMatch?.[1]) {
+    try {
+      return {
+        name: "automation",
+        threadId: decodeURIComponent(automationPageMatch[1]),
+        edit: automationPageMatch[2] !== undefined,
+      };
+    } catch {
+      return { name: "home" };
+    }
+  }
   const automationMatch = /^\/threads\/([^/]+)\/automation$/.exec(pathname);
   if (automationMatch?.[1]) {
     try {
@@ -282,6 +297,18 @@ export function usagePath(): string {
   return "/usage";
 }
 
+export function automationsPath(): string {
+  return "/automations";
+}
+
+export function automationPath(threadId: string): string {
+  return `/automations/${encodeURIComponent(threadId)}`;
+}
+
+export function automationEditPath(threadId: string): string {
+  return `${automationPath(threadId)}/edit`;
+}
+
 export function threadTurnPath(threadId: string, turnId: string): string {
   return `${threadPath(threadId)}#turn=${encodeURIComponent(turnId)}`;
 }
@@ -295,6 +322,10 @@ export function routePath(route: Route): string {
   if (route.name === "home") return "/";
   if (route.name === "archived") return "/archived";
   if (route.name === "usage") return usagePath();
+  if (route.name === "automations") return automationsPath();
+  if (route.name === "automation") {
+    return route.edit ? automationEditPath(route.threadId) : automationPath(route.threadId);
+  }
   if (route.name === "settings") return settingsPath(route.page, route);
   if (route.automationOpen) return threadAutomationPath(route.threadId);
   if (route.focusTurnId) return threadTurnPath(route.threadId, route.focusTurnId);

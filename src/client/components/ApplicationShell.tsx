@@ -302,7 +302,7 @@ export function ApplicationShell({
       state={state}
       store={applicationStore}
       threadRegistry={threadRegistry}
-      selectedThreadId={route.name === "thread" ? route.threadId : undefined}
+      selectedThreadId={route.name === "thread" || route.name === "automation" ? route.threadId : undefined}
       onSelectThread={(threadId, presentation) => {
         openThreadChatPanel(panelLayoutStore, threadId, presentation);
       }}

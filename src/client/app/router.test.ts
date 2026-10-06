@@ -3,6 +3,9 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  automationEditPath,
+  automationPath,
+  automationsPath,
   historyStepsBackTo,
   installNavigationBlocker,
   navigate,
@@ -89,8 +92,39 @@ describe("automation routes", () => {
     });
   });
 
+  it("parses the automations list, page and editor routes", () => {
+    const threadId = randomUUID();
+
+    expect(parseRoute(automationsPath())).toEqual({ name: "automations" });
+    expect(parseRoute(automationPath(threadId))).toEqual({
+      name: "automation",
+      threadId,
+      edit: false,
+    });
+    expect(parseRoute(automationEditPath(threadId))).toEqual({
+      name: "automation",
+      threadId,
+      edit: true,
+    });
+    expect(automationPath("a/b")).toBe("/automations/a%2Fb");
+    expect(parseRoute(automationPath("a/b"))).toEqual({
+      name: "automation",
+      threadId: "a/b",
+      edit: false,
+    });
+    expect(routePath({ name: "automations" })).toBe("/automations");
+    expect(routePath({ name: "automation", threadId, edit: false })).toBe(
+      automationPath(threadId),
+    );
+    expect(routePath({ name: "automation", threadId, edit: true })).toBe(
+      automationEditPath(threadId),
+    );
+  });
+
   it("falls home for malformed or partial paths", () => {
-    expect(parseRoute("/automations")).toEqual({ name: "home" });
+    expect(parseRoute("/automations/id/extra")).toEqual({ name: "home" });
+    expect(parseRoute("/automations/id/edit/extra")).toEqual({ name: "home" });
+    expect(parseRoute("/automations/%E0%A4%A")).toEqual({ name: "home" });
     expect(parseRoute("/threads/id/automation/extra")).toEqual({
       name: "home",
     });
