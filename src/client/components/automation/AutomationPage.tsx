@@ -18,7 +18,6 @@ import {
   useState,
   type ReactElement,
 } from "react";
-import type { AutomationSchedule } from "../../../shared/protocol/automation.js";
 import {
   automationEditPath,
   automationsPath,
@@ -68,12 +67,12 @@ import { StatusPill } from "@client/components/ui/status-pill";
 import { AutomationRunsSection, type AutomationRunsView } from "./AutomationRuns.js";
 import { MarkRunFailedDialog } from "./MarkRunFailedDialog.js";
 import { runDayTime } from "./automation-run-format.js";
-import { AUTOMATION_PREVIEW_COUNT } from "./use-automation-editor.js";
 import {
   useAutomationCapability,
   useAutomationDefinition,
 } from "./use-automation-details.js";
 import { useAutomationRuns } from "./use-automation-runs.js";
+import { useNextOccurrences } from "./use-next-occurrences.js";
 import {
   automationLiveKey,
   useAutomationThread,
@@ -547,7 +546,13 @@ function AutomationDetails({
       />
       <SettingsSection title="Definition" card>
         {definition ? (
-          <DefinitionFacts store={store} threadId={thread.id} definition={definition} now={now} />
+          <DefinitionFacts
+            store={store}
+            threadId={thread.id}
+            definition={definition}
+            nextRunAt={automation.nextRunAt}
+            now={now}
+          />
         ) : definitionStatus === "error" ? (
           <Callout
             tone="danger"
@@ -750,39 +755,6 @@ function Sub({ children }: { readonly children: React.ReactNode }): React.JSX.El
   return <span className="automation-fact-sub">{children}</span>;
 }
 
-/** The next few occurrences of an enabled recurring schedule, from the server's preview. */
-function useNextOccurrences(
-  store: Pick<ApplicationClientStore, "api">,
-  threadId: string,
-  schedule: AutomationSchedule | undefined,
-): readonly string[] {
-  const [occurrences, setOccurrences] = useState<readonly string[]>([]);
-  const key = schedule ? JSON.stringify(schedule) : "";
-  useEffect(() => {
-    setOccurrences([]);
-    if (!schedule) return;
-    const controller = new AbortController();
-    store.api
-      .previewThreadAutomationSchedule(
-        threadId,
-        schedule,
-        AUTOMATION_PREVIEW_COUNT,
-        controller.signal,
-      )
-      .then(
-        (result) => {
-          if (!controller.signal.aborted) setOccurrences(result.occurrences);
-        },
-        // The sentence above it still says when; the preview is a nicety.
-        () => undefined,
-      );
-    return () => controller.abort();
-    // The key stands for the schedule's content.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, store, threadId]);
-  return occurrences;
-}
-
 function absoluteTime(iso: string): string {
   return new Date(iso).toLocaleString([], {
     month: "short",
@@ -796,11 +768,14 @@ function DefinitionFacts({
   store,
   threadId,
   definition,
+  nextRunAt,
   now,
 }: {
   readonly store: Pick<ApplicationClientStore, "api">;
   readonly threadId: string;
   readonly definition: ThreadAutomationDefinition;
+  /** The live summary's next run, which moves on as scheduled runs fire. */
+  readonly nextRunAt: string | undefined;
   readonly now: Date;
 }): React.JSX.Element {
   const recurring = definition.schedule.kind !== "date_time";
@@ -808,6 +783,8 @@ function DefinitionFacts({
     store,
     threadId,
     definition.status === "enabled" && recurring ? definition.schedule : undefined,
+    nextRunAt,
+    now,
   );
   const updated = shortRelativeTime(definition.updatedAt, now.getTime());
   const items: KeyValueItem[] = [

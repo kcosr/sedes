@@ -105,6 +105,30 @@ describe("AutomationPage", () => {
     expect(screen.queryByRole("status", { name: /callout/u })).toBeNull();
   });
 
+  it("asks for the next runs again when a scheduled run moves the next run on", async () => {
+    const tomorrow = new Date(Date.now() + 86_400_000);
+    const later = new Date(Date.now() + 2 * 86_400_000);
+    const preview = vi
+      .fn()
+      .mockResolvedValueOnce({ occurrences: [tomorrow.toISOString()] })
+      .mockResolvedValueOnce({ occurrences: [later.toISOString()] });
+    const fixture = renderPage([{ automation: automationSummary({ nextRunAt: tomorrow.toISOString() }) }], {
+      previewThreadAutomationSchedule: preview,
+    });
+    await waitFor(() => expect(preview).toHaveBeenCalledOnce());
+    act(() =>
+      fixture.publish([
+        {
+          automation: automationSummary({
+            nextRunAt: later.toISOString(),
+            lastRun: { id: "run-1", state: "completed", occurrence: "scheduled", scheduledFor: new Date().toISOString() },
+          }),
+        },
+      ]),
+    );
+    await waitFor(() => expect(preview).toHaveBeenCalledTimes(2));
+  });
+
   it("runs now and pauses through the header", async () => {
     const started = run({ occurrence: "manual", state: "claimed", scheduledFor: new Date().toISOString() });
     const fixture = renderPage([{ automation: automationSummary() }], {
