@@ -33,6 +33,33 @@ describe("mergeRunPage", () => {
       nextCursor: "after-a",
     });
   });
+
+  it("starts over from the page when it cannot show it continues the listed runs", () => {
+    const listed = [run(), run(), run()];
+    // More new runs than a page: the page shares no run with the list, so
+    // there may be unseen runs between them. The list was exhausted (null
+    // cursor), but the page's own cursor leads on through that gap.
+    const arrivals = Array.from({ length: AUTOMATION_RUNS_PAGE_SIZE }, () => run());
+    expect(mergeRunPage(listed, null, { items: arrivals, nextCursor: "after-arrivals" })).toEqual({
+      items: arrivals,
+      nextCursor: "after-arrivals",
+    });
+  });
+
+  it("keeps only the listed runs past the page's last shared run", () => {
+    const [a, b, c, d] = [run(), run(), run(), run()];
+    const fresh = run();
+    // b left the filter; c is the page's last listed run, so d continues it.
+    expect(mergeRunPage([a!, b!, c!, d!], "after-d", { items: [fresh, a!, c!], nextCursor: "after-c" })).toEqual({
+      items: [fresh, a, c, d],
+      nextCursor: "after-d",
+    });
+  });
+
+  it("takes a page that holds the whole history as it is", () => {
+    const [a, b] = [run(), run()];
+    expect(mergeRunPage([a!, b!], null, { items: [a!], nextCursor: null })).toEqual({ items: [a], nextCursor: null });
+  });
 });
 
 describe("useAutomationRuns", () => {
@@ -141,6 +168,38 @@ describe("useAutomationRuns", () => {
     await waitFor(() => expect(result.current.items).toEqual([delivered, older]));
     expect(result.current.arrived).toEqual([]);
     expect(list).toHaveBeenCalledTimes(3);
+  });
+
+  it("pages on through a gap after more than a page of runs arrived", async () => {
+    const listed = [run(), run()];
+    const arrivals = Array.from({ length: AUTOMATION_RUNS_PAGE_SIZE }, () => run());
+    const gap = [run(), run()];
+    const list = vi
+      .fn()
+      .mockResolvedValueOnce(page(listed, null))
+      .mockResolvedValueOnce(page(arrivals, "after-arrivals"))
+      .mockResolvedValueOnce(page([...gap, ...listed], null, false));
+    const fixture = automationStore([{ automation: automationSummary() }], { listThreadAutomationRuns: list });
+    const { result } = renderHook(() => useAutomationRuns(fixture.store, THREAD_ID, "all"));
+    await waitFor(() => expect(result.current.status).toBe("ready"));
+    expect(result.current.hasMore).toBe(false);
+
+    const newest = arrivals[0]!;
+    act(() =>
+      fixture.publish([
+        {
+          automation: automationSummary({
+            lastRun: { id: newest.id, state: "completed", occurrence: "scheduled", scheduledFor: newest.scheduledFor },
+          }),
+        },
+      ]),
+    );
+    await waitFor(() => expect(result.current.items).toEqual(arrivals));
+    expect(result.current.hasMore).toBe(true);
+    act(() => result.current.loadMore());
+    await waitFor(() => expect(result.current.items).toEqual([...arrivals, ...gap, ...listed]));
+    expect(list).toHaveBeenLastCalledWith(THREAD_ID, expect.objectContaining({ cursor: "after-arrivals" }));
+    expect(result.current.hasMore).toBe(false);
   });
 
   it("shows a run an action returned at once", async () => {

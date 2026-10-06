@@ -53,20 +53,29 @@ function emptyState(
 }
 
 /**
- * Merges a fresh first page into the listed runs by id, keeping the
- * server's order: the page first, then the older runs it pushed past its
- * end. Those keep the old cursor, which still points after the last of
- * them; when the page holds every listed run, its own cursor applies.
+ * Merges a fresh first page into the listed runs, keeping the server's
+ * order. Both are prefixes of the same newest-first history, so when the
+ * page shares a run with the list it holds everything newer than that run,
+ * and the listed runs after the last shared one continue it: they stay,
+ * with the old cursor, which points past the last of them. When the page
+ * shares nothing, more runs arrived than a page holds and there may be
+ * unseen runs between the two; the page then replaces the list, and its
+ * cursor leads on through that gap. A page without a cursor is the whole
+ * history.
  */
 export function mergeRunPage(
   current: readonly ThreadAutomationRun[],
   currentCursor: string | null,
   page: Pick<ThreadAutomationRunPage, "items" | "nextCursor">,
 ): { readonly items: readonly ThreadAutomationRun[]; readonly nextCursor: string | null } {
+  const replaced = { items: page.items, nextCursor: page.nextCursor };
+  if (page.nextCursor === null) return replaced;
   const fresh = new Set(page.items.map(({ id }) => id));
-  const older = current.filter(({ id }) => !fresh.has(id));
+  const lastShared = current.findLastIndex(({ id }) => fresh.has(id));
+  if (lastShared < 0) return replaced;
+  const older = current.slice(lastShared + 1);
   return older.length === 0
-    ? { items: page.items, nextCursor: page.nextCursor }
+    ? replaced
     : { items: [...page.items, ...older], nextCursor: currentCursor };
 }
 
