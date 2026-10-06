@@ -564,7 +564,7 @@ or disconnected observations do not claim that background work is still live.
 ## Find text in a thread
 
 On narrow screens, Bookmarks and thread settings stay in the main thread
-header, alongside automation settings when the thread has an automation.
+header, alongside the automation button when the thread has an automation.
 Expand the thread toolbar to show **Find in thread** followed by the worktree
 picker on one row. Search opens below that row. Collapsing the toolbar hides
 search and keeps its query for the next time you open it.

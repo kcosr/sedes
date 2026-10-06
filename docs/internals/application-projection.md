@@ -151,3 +151,34 @@ reasons stay server-private: the browser sees a replacement snapshot or a
 disconnected stream. Current means current through the published stream
 position, so a change committing while its publication is pending follows the
 checkpoint as a later event.
+
+## Thread automation summary
+
+A thread summary's `automation` is `null` or a projection of the thread's live
+automation definition and its latest run. It reads only application-owned
+definitions and runs, never a backend, and every backend shares it. It carries
+`status`, `runMode`, `scheduleKind`, the presented `schedule`,
+`misfirePolicy`, `promptPreview`, `nextRunAt`, `revision`, `hasPrecheck`, and
+`lastRun` (`id`, `state`, `occurrence`, `scheduledFor`, `finishedAt`,
+`resultThreadId`, which is the fork child or else the anchor, and
+`errorCode`). The full prompt, run diagnostics, and run history stay behind
+the thread automation routes. A definition change or run transition republishes
+the anchor's summary, so list and sidebar surfaces follow it live.
+
+`promptPreview` lets lists show and search a prompt without carrying up to
+64 KiB per thread. Readers load at most the prompt's first 8 KiB, taken as a
+BLOB because SQLite text functions stop at an embedded NUL, and drop a
+replacement character left by a cut inside a multi-byte character. Whitespace
+and control characters collapse to single spaces, the result is trimmed and
+cut to 140 UTF-16 units without splitting a code point, and "…" ends it when
+more text follows, including when the prompt continues past the loaded
+prefix, which keeps it within the protocol's 160-character bound. It is empty
+only when the prompt has no printable text.
+
+The latest run is the first row in run-history order, `created_at DESC, id
+DESC`: the order of `GET …/automation/runs` and the `automation_runs_history`
+index. The application projection and the thread snapshot share one select
+and a correlated `LIMIT 1` join per definition
+([`thread-automation-summary.ts`](../../src/server/application/thread-automation-summary.ts)),
+and the REST definition summary reads the same first row, so every surface
+names the same run.

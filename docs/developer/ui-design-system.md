@@ -12,6 +12,8 @@ section names the file to read for details. Paths below are relative to
 | Dialog and sheet anatomy, overlay motion | `components/ui/overlay.css` |
 | Floating surface and menu row class recipes | `components/ui/floating.ts` |
 | Settings kit and its only stylesheet | `components/settings/`, `settings.css` |
+| Top-level page frame | `components/Workbench.tsx`, `components/automation/automations-view.css` |
+| Automation state words and glyphs | `automation/automation-health.ts`, `automation/automation-text.ts`, `components/automation/AutomationGlyph.tsx` |
 | Style guardrails | `styles.guardrails.test.ts`, `styles.guardrails.baseline.json` |
 
 Build feature UI from the `components/ui/` primitives (imported as
@@ -245,7 +247,7 @@ description, availability). A new page needs a registry entry, a slug in
 | `SettingsPage` | One page: title, description, `actions` (primary last), `back`, `width` default or `wide` |
 | `SettingsSection`, `SettingsSubgroup` | A titled group, at most one `card` level; a subgroup is a 12px heading over a divider |
 | `SettingsField`, `SwitchField`, `SettingsActionRow` | A labelled row with the control in a 220–360px column (stacking under the density switch or below 640px of page), an on/off row, an item row with buttons |
-| `SaveBar` | The sticky footer of a form: state on the left, Cancel then Save on the right; "Saved" is transient here |
+| `SaveBar` | The sticky footer of a form: state on the left, then Cancel, an optional `secondaryAction`, and Save on the right; "Saved" is transient here. The secondary action is an outline second way to save, such as "Save as paused" beside "Save and enable", enabled exactly when Save is; its `saving` flag moves the saving label onto it |
 | `EntityList`, `EntityRow` | Inventory rows at least 56px tall: the whole row opens the item; one `StatusPill`; the actions menu is its own tab stop |
 | `DangerZone`, `DangerZoneItem` | Always the last section; each `destructive-outline` trigger opens a `ConfirmDialog` (a reversible item uses a plain outline) |
 | `SettingsSearch`, `SettingsBackLink` | The search above a list; the "‹" link, which goes up through history so it and Back agree |
@@ -268,6 +270,50 @@ for the "‹" links and Escape. `useSettingsSplitFocus` restores list scroll and
 focus. Guard unsaved edits with `installNavigationBlocker` and
 `DiscardChangesDialog`; a page that keeps an editor in local state registers it
 with `useSettingsEscapeLevel`.
+
+## Top-level pages
+
+Archived, Usage, Automations, an automation's page, and its editor are pages
+without a thread: `Workbench.tsx` renders each in `pane-host-nav-header`, a
+column whose header holds only the sidebar trigger (shown when the sidebar is
+collapsed or hidden), with no workspace panels and no Tasks. A new page adds
+its root class to the `pane-host-nav-header > …` flex rule in `styles.css`.
+The three automation pages share one frame in `automations-view.css`,
+matching the Archived page: `.automations-view` is the scroller, and
+`.automations-page` is the centred column, `--measure` wide, and the
+`automations-page` query container. Keep both classes on a page root.
+
+A page can build on the settings kit. `SettingsDetailHeader` and
+`SettingsEditor` title themselves as `h2` under a Settings page; pass
+`headingLevel={1}` when they are the page's own header. Section anchors follow
+the nearest scrolling ancestor, so an editor works in a page's own scroller
+as well as the settings column, and `SaveBar` sticks to that scroller. A "‹"
+link to a parent the page is always under uses `navigateUp(path)` (the
+`SettingsBackLink` default); a page reached from several places, such as an
+automation's page, passes `navigateBack(fallback)`, which returns to the
+previous entry when this document opened it and otherwise replaces the entry
+with the fallback.
+
+## Automation state vocabulary
+
+Every surface that shows an automation (sidebar rows and groups, the thread
+preview, the header button, thread notices, the Automations list, and the
+automation page) takes its state, words, and glyph from the shared helpers. Do
+not derive automation state, labels, tones, or icons in a component; extend
+the helpers and their tests.
+
+| Helper | Use |
+| --- | --- |
+| `automationHealth(thread, now)` | The one state, first match wins: `sending`, `failed`, `unknown` (an uncertain last run), `archived`, `snoozed` (only while the wake time is ahead), `active`, `paused`, `not_started`. Each carries its list `group` (`needs_attention`, `upcoming`, `paused`, `suspended`), `glyph`, chip `tone`, and `label` |
+| `automationNeedsAttention`, `automationIdentityGlyph`, `automationIdentityLabel` | Failed or uncertain for attention buckets; the Repeat, CirclePause, or spinner glyph for surfaces that show attention separately, as a row badge or a tinted header button |
+| `compareAutomationsInGroup`, `AUTOMATION_HEALTH_GROUPS` | List group order and the order within a group |
+| `describeSchedule`, `runStateLabel`, `runSkipReason`, `runMeta` | Schedule sentences, run state words, and one-line run facts. `completed` reads "Delivered": the backend accepted the prompt, not that the turn ended |
+| `automationStatusText`, `lastRunAge`, `automationErrorText` | The short state for tooltips and status lines, the last run's age, and an error code as a sentence where only the code is projected |
+| `futureTimeLabel` (`lib/time.ts`) | The one format for upcoming instants: next runs and wake times |
+| `AutomationGlyph` | Draws a health glyph at `sidebar`, `list`, or `header` size; colors only `danger`, `warning`, and `info`, so Active and Paused stay quiet |
+
+Uncertain runs need attention everywhere, and paused is never a warning tone.
+Repeat is the automation icon in menus, headers, and rows.
 
 ## Z layers
 

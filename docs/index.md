@@ -50,7 +50,7 @@ from top to bottom.
 - [Terminal panes](user/terminals.md) — local and Sidecar SSH shells,
   detachable panels, controller transfer, history, and interruption behavior.
 - [Tasks and automations](user/tasks-and-automations.md) — task scopes, file
-  references, scheduling, prechecks, and run history.
+  references, the Automations page, scheduling, prechecks, and run history.
 - [Workpads](user/workpads.md) — shared notes, synchronized drafts, attribution,
   and document history.
 - [Usage and spend](user/usage.md) — the Usage page, its filters and views, and
@@ -104,7 +104,8 @@ from top to bottom.
   module anatomy and workflow before entering the normative contract.
 - [UI design system](developer/ui-design-system.md) — tokens, the
   reference-surface rule, primitives, dialogs and menus, the settings kit,
-  density, z layers, and style guardrails.
+  top-level pages, the automation state vocabulary, density, z layers, and
+  style guardrails.
 - [E2E testing](developer/e2e-testing.md) — isolated coordinator scheduling,
   artifacts, timing baselines, and authoring rules.
 - [Debug diagnostics](developer/diagnostics.md) — implemented, bounded server
@@ -126,7 +127,7 @@ Repository-level entry points include [Contributing](../CONTRIBUTING.md), the
   projection works, and the interoperability and performance consequences.
 - [Materialized application projection](internals/application-projection.md)
   — per-scope projection, fold and epoch model, replay window, catch-up
-  checkpoints, and idle eviction bounds.
+  checkpoints, idle eviction bounds, and the thread automation summary.
 - [Backend integration contract rules](internals/backend-integration-contract-rules.md)
   — normative cross-backend design and audit requirements.
 - [Backend internals](internals/backends/index.md) — provider-private runtime,
