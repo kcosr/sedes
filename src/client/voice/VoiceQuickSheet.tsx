@@ -93,7 +93,7 @@ export function VoiceQuickSheet({ store, threads, open, onOpenChange }: {
           {native?.readiness === "storageUnavailable" ? <Button className={cn("h-(--control-touch) w-full", lockedClass)} aria-disabled={locked}
             onClick={() => { if (!state.pending) void store.reconnect().catch(() => undefined); }}>Retry voice connection</Button> : null}
         </div>
-        <VoiceRecordingRecovery store={store} threads={threads} />
+        <VoiceRecordingRecovery store={store} threads={threads} onAddedToComposer={() => onOpenChange(false)} />
         {native?.actions.keepListeningBlockedReason === "saved_recording_pending" ? <p className="voice-sheet-help">Resolve saved dictation first to enable Keep listening for the current recording.</p>
           : settings.keepListeningByDefault && saved && !native?.actions.canStart ? <p className="voice-sheet-help">Resolve saved dictation first to start with Keep listening.</p> : null}
         {native && saved?.admission && native.actions.canStart ? <Button variant="outline" disabled={state.pending} onClick={start}>Start new recording</Button> : null}

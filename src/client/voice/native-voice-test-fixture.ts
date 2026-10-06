@@ -45,6 +45,9 @@ export function fakeVoicePlugin() {
     startManualListen: state(), setNextRecordingTarget: state(), retargetActiveRecognition: state(), skipCurrentPlayback: state(), stopCurrentInteraction: state(),
     setKeepListening: state(), sendRecording: state(), retryRecordingRecognition: state(), sendRecoveredRecording: state(),
     copyRecognizedRecordingText: state(), discardRecording: state(),
+    readRecognizedRecordingText: vi.fn(async (): Promise<Awaited<ReturnType<NativeVoicePlugin["readRecognizedRecordingText"]>>> => ({
+      recordingId: "saved-recording", revision: 1, threadId: "named", text: "Recovered dictation text.",
+    })),
     resumeInput: state(), discardInput: state(), refreshSpeechCatalog: state(), openSpeechCredentialDialog: state(),
     listInputDevices: vi.fn(async (): Promise<Awaited<ReturnType<NativeVoicePlugin["listInputDevices"]>>> => ({ devices: [] })),
     addListener: vi.fn(async (event: string, listener: (value: unknown) => void) => { listeners.set(event, listener); return { remove }; }),

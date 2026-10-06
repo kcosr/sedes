@@ -715,7 +715,7 @@ describe("Keep listening and saved dictation", () => {
     expect(screen.queryByRole("button", { name: "Cancel voice recording" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Open voice controls" }));
     const sheet = await screen.findByRole("dialog", { name: "Voice" });
-    expect(sheet).toHaveTextContent("The end of this dictation may be missing.");
+    expect(sheet).toHaveTextContent("Needs transcription");
     expect(within(sheet).getByRole("button", { name: "Retry recognition" })).toHaveAttribute("aria-disabled", "true");
     expect(within(sheet).queryByRole("button", { name: /restore|composer/iu })).toBeNull();
     view.unmount();
@@ -735,7 +735,7 @@ describe("Keep listening and saved dictation", () => {
     renderControls();
     fireEvent.click(await screen.findByRole("button", { name: "Retry saved dictation" }));
     await waitFor(() => expect(voice.fake.plugin.retryRecordingRecognition).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, recordingId: "saved-recording", expectedRecoveryRevision: 7 }));
-    await waitFor(() => expect(lines()).toEqual(["Saved dictation · Release review", "Recognizing saved audio…"]));
+    await waitFor(() => expect(lines()).toEqual(["Saved dictation · Release review", "Transcribing…"]));
     expect(screen.queryByRole("button", { name: "Cancel voice recording" })).toBeNull();
     expect(screen.getByRole("button", { name: "Discard saved dictation" })).not.toHaveAttribute("aria-disabled");
     expect(voice.fake.plugin.sendRecoveredRecording).not.toHaveBeenCalled();
@@ -745,7 +745,7 @@ describe("Keep listening and saved dictation", () => {
     expect(buttons()).toEqual(["Open voice controls", "Open thread: Release review", "Discard saved dictation", "Send saved dictation"]);
     voice.fake.plugin.sendRecoveredRecording.mockResolvedValue(voiceSnapshot({ stateRevision: 4 }));
     fireEvent.click(screen.getByRole("button", { name: "Send saved dictation" }));
-    await waitFor(() => expect(voice.fake.plugin.sendRecoveredRecording).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, recordingId: "saved-recording", expectedRecoveryRevision: 9, acknowledgeIncomplete: false }));
+    await waitFor(() => expect(voice.fake.plugin.sendRecoveredRecording).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, recordingId: "saved-recording", expectedRecoveryRevision: 9 }));
     expect(screen.queryByRole("group", { name: "Voice controls" })).toBeNull();
     expect(voice.fake.plugin.startManualListen).not.toHaveBeenCalled();
     expect(voice.fake.plugin.resumeInput).not.toHaveBeenCalled();
@@ -767,14 +767,14 @@ describe("Keep listening and saved dictation", () => {
     const sheet = await screen.findByRole("dialog", { name: "Voice" });
     expect(sheet).toHaveTextContent("Resolve saved dictation first to enable Keep listening for the current recording.");
     voice.fake.plugin.discardRecording.mockResolvedValue({ ...capture(), stateRevision: 2 });
-    fireEvent.click(within(sheet).getByRole("button", { name: "Discard saved dictation" }));
+    fireEvent.click(within(sheet).getByRole("button", { name: "Discard" }));
     await waitFor(() => expect(voice.fake.plugin.discardRecording).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, recordingId: "saved-recording", expectedRecoveryRevision: 1 }));
     expect(voice.fake.plugin.stopCurrentInteraction).not.toHaveBeenCalled();
     fireEvent.click(within(sheet).getByRole("button", { name: "Close" }));
     expect(screen.getByRole("button", { name: "Keep listening" })).not.toHaveAttribute("aria-disabled");
     expect(screen.getByRole("button", { name: "Cancel voice recording" })).toBeEnabled();
   });
-  it("opens the missing-end notice and requires explicit acknowledgment before sending incomplete saved text", async () => {
+  it("sends interrupted saved text directly from the toolbar on an explicit Send", async () => {
     const saved = recordingRecovery({ stage: "ready", revision: 6, captureIncomplete: true, hasUnrecognizedAudio: false,
       canRetryRecognition: false, canSend: true });
     const native = voiceSnapshot({ recordingRecovery: saved });
@@ -783,20 +783,12 @@ describe("Keep listening and saved dictation", () => {
       recordingRecovery: { ...saved, revision: 7, stage: "admitting", canSend: false } });
     renderControls(false);
     const toolbarSend = await screen.findByRole("button", { name: "Send saved dictation" });
-    expect(lines()).toEqual(["Ready to send · Release review", "End may be missing"]);
-    expect(toolbarSend).toHaveAttribute("aria-haspopup", "dialog");
+    expect(lines()).toEqual(["Ready to send · Release review", "Recording interrupted"]);
+    expect(toolbarSend).not.toHaveAttribute("aria-haspopup");
     fireEvent.click(toolbarSend);
-    const sheet = await screen.findByRole("dialog", { name: "Voice" });
-    expect(sheet).toHaveTextContent("The end of this dictation may be missing. Sending uses the saved portion.");
-    const send = within(sheet).getByRole("button", { name: "Send saved dictation" });
-    expect(send).toHaveAttribute("aria-disabled", "true");
-    fireEvent.click(send);
-    expect(voice.fake.plugin.sendRecoveredRecording).not.toHaveBeenCalled();
-    fireEvent.click(within(sheet).getByRole("checkbox", { name: "Send the saved portion even if the end is missing" }));
-    expect(send).not.toHaveAttribute("aria-disabled");
-    fireEvent.click(send);
+    expect(screen.queryByRole("dialog", { name: "Voice" })).toBeNull();
     await waitFor(() => expect(voice.fake.plugin.sendRecoveredRecording).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1,
-      recordingId: saved.recordingId, expectedRecoveryRevision: 6, acknowledgeIncomplete: true }));
+      recordingId: saved.recordingId, expectedRecoveryRevision: 6 }));
   });
   it.each(["retry", "send"] as const)("allows explicit Discard during recovered %s without an ordinary Stop or Cancel delete path", async operation => {
     const retry = operation === "retry";
@@ -811,7 +803,7 @@ describe("Keep listening and saved dictation", () => {
     voice.fake.plugin.discardRecording.mockResolvedValue(voiceSnapshot({ stateRevision: 3 }));
     renderControls();
     fireEvent.click(await screen.findByRole("button", { name: retry ? "Retry saved dictation" : "Send saved dictation" }));
-    await waitFor(() => expect(lines()).toEqual(["Saved dictation · Release review", retry ? "Recognizing saved audio…" : "Sending…"]));
+    await waitFor(() => expect(lines()).toEqual(["Saved dictation · Release review", retry ? "Transcribing…" : "Sending…"]));
     expect(screen.queryByRole("button", { name: /Stop voice interaction|Cancel voice recording/ })).toBeNull();
     const discard = screen.getByRole("button", { name: "Discard saved dictation" });
     expect(discard).not.toHaveAttribute("aria-disabled");

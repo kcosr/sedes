@@ -87,13 +87,13 @@ describe("voice settings page", () => {
     const native = voiceSnapshot({ recordingRecovery: saved });
     const { fake, store } = await renderPage(native, fake => fake.plugin.sendRecoveredRecording.mockResolvedValue({ ...native, stateRevision: 2,
       recordingRecovery: { ...saved, revision: 9, stage: "admitting", canSend: false } }));
-    expect(screen.getByRole("heading", { name: "Ready to send · Release review" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Copy recognized text" })).toBeEnabled();
-    fireEvent.click(screen.getByRole("button", { name: "Send saved dictation" }));
+    expect(screen.getByRole("heading", { name: "Saved dictation", level: 3 })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Copy text" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
     await waitFor(() => expect(fake.plugin.sendRecoveredRecording).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1,
-      recordingId: saved.recordingId, expectedRecoveryRevision: 8, acknowledgeIncomplete: false }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "Discard saved dictation" })).not.toHaveAttribute("aria-disabled"));
-    fireEvent.click(screen.getByRole("button", { name: "Discard saved dictation" }));
+      recordingId: saved.recordingId, expectedRecoveryRevision: 8 }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Discard" })).not.toHaveAttribute("aria-disabled"));
+    fireEvent.click(screen.getByRole("button", { name: "Discard" }));
     await waitFor(() => expect(fake.plugin.discardRecording).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1,
       recordingId: saved.recordingId, expectedRecoveryRevision: 9 }));
     store.dispose();

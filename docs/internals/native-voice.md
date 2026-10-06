@@ -564,10 +564,12 @@ only until restart. Startup cancellation settles its never-captured journal
 directly, without an intermediate interruption write.
 Unreadable storage remains preserved. Restart restores only the draft and immutable admission
 request; it cannot resume the microphone, recognition, or POST automatically.
-Missing interior audio blocks Send. An explicit recovery Send can accept a
-reported incomplete trailing watermark only with `acknowledgeIncomplete: true`
-from the recovery control that displays the warning. The toolbar opens that
-control for an incomplete capture. Key, corruption, and disk failures
+Missing interior audio blocks Send. `captureIncomplete` records an abnormal end
+or a storage gap; it does not prove that meaningful speech was lost. The UI
+reports **Recording interrupted**. Explicit recovery Send accepts the saved
+trailing boundary and durably records that intent before admission; its bridge
+command has no separate acknowledgement flag. No background retry can accept it.
+Key, corruption, and disk failures
 preserve recording files and expose unavailable recovery, rather than resetting
 them. Unknown targets are null and cannot open a thread. A bootstrap storage
 failure without a recoverable item reports storage readiness with an explicit
@@ -584,6 +586,18 @@ even when recognition later succeeds; the user presses Send again.
 Normal finish intents (Send, automatic completion, and Retry) are not presented
 as failure reasons. The original live Send keeps its live controls, including
 Stop during admission; an active recovery Retry or Send uses the recovery controls.
+
+**Add to composer** explicitly reads recognized text through
+`readRecognizedRecordingText`. Native checks the connection generation, binding,
+recording ID and recovery revision before and after the storage read. Text is
+returned only by this command, never by routine state snapshots. The client
+opens the original thread and waits for its active composer, cancelling stale
+handoffs and timing out an unavailable composer. That composer appends to its
+current local draft, retaining skill, attachments and context, and rejects an
+oversized result without truncation. Its existing autosave owns persistence;
+the native recovery item is retained. A successful insertion is remembered for
+that recording revision in the current voice store, preventing repeated taps
+from appending duplicates. Connection changes invalidate pending handoffs.
 
 The recording and final-input journal merge into one recovery item as soon as
 an immutable mutation is allocated. Adopted input entries independently authenticate

@@ -1,6 +1,7 @@
 import { usePickerFocus } from "../../lib/use-picker-focus.js";
 import { setComposerDeliveryMode, useComposerDeliveryMode } from "../../app/composer-delivery-mode.js";
 import { useComposerReasoningFit } from "./use-composer-reasoning-fit.js";
+import { useNativeVoice } from "../../voice/VoiceProvider.js";
 import { QuestionInboxButton, QuestionInboxPanel } from "./QuestionInbox.js";
 import {
   useCallback,
@@ -26,6 +27,7 @@ import {
   COMPOSER_ATTACHMENT_LIMITS,
 } from "../../../shared/index.js";
 import { hasDeliverableComposerInput } from "../../../shared/index.js";
+import { MAXIMUM_DRAFT_BYTES } from "../../../shared/protocol/context-excerpts.js";
 import {
   DeliveryRecoveryRequiredError,
   useThreadStore,
@@ -342,6 +344,7 @@ export function Composer({
   onImmediateSend?: (operationId: string) => void;
 }): React.JSX.Element | null {
   const state = useThreadStore(store);
+  const voice = useNativeVoice();
   const { footerRef: composerFooterRef, onReasoningPickerOpenChange } =
     useComposerReasoningFit();
   const chatViewVisible = useContext(ChatViewVisibilityContext);
@@ -1644,6 +1647,32 @@ export function Composer({
     draftMutationPending,
     effectiveDisabled,
   ]);
+
+  const appendVoiceText = useRef<(text: string) => void>(() => {});
+  appendVoiceText.current = (addition: string) => {
+    const availability = contextExcerptStagingSnapshot();
+    if (!availability.available || !syncedDraft.current || draftMutationRunning.current || queueRestoreRunning.current ||
+        attachmentUploadsRef.current.length > 0 || state.pendingComposerTransfers.length > 0)
+      throw new Error(availability.reason ?? "Wait for the current composer action to finish.");
+    const next = textRef.current.length ? `${textRef.current}\n\n${addition}` : addition;
+    const parsed = normalizedDraftSchema.safeParse({
+      text: next, selectedSkillId: selectedSkillIdRef.current, contextExcerpts: contextExcerptsRef.current,
+      attachments: attachmentsRef.current, taskReferences: taskReferencesRef.current,
+      revision: syncedDraft.current.revision,
+    });
+    if (!parsed.success || new TextEncoder().encode(next).byteLength > MAXIMUM_DRAFT_BYTES)
+      throw new Error("This dictation does not fit in the composer. Copy the text instead.");
+    textRef.current = next;
+    dirtyRef.current = true;
+    setText(next);
+    setDirty(true);
+  };
+  // Navigation can mount the composer before its draft has loaded into React state.
+  const voiceComposerReady = !effectiveDisabled && Boolean(syncedDraft.current);
+  useEffect(() => {
+    if (!active || !voice || !voiceComposerReady) return;
+    return voice.registerComposer(store.threadId, text => appendVoiceText.current(text));
+  }, [active, voice, store, voiceComposerReady]);
 
   useEffect(() => {
     const element = textarea.current;

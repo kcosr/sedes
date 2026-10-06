@@ -430,6 +430,11 @@
 
 ### Changed
 
+- Android saved-dictation recovery groups its controls, uses shorter labels,
+  and sends interrupted recordings without an extra acknowledgement checkbox.
+  **Add to composer** appends recognized text to the original thread's draft
+  for editing, preserving existing draft content and the saved recording.
+
 - Android voice preferences and speech credentials persist across Sedes
   connections. Thread selections and input recovery remain scoped to the server
   and account; deleting a connection preserves device preferences and speech keys.

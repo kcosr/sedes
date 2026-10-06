@@ -23,6 +23,7 @@ export function voiceFixtureState(): NativeVoiceState {
 type VoiceFixture = {
   state: NativeVoiceState;
   calls: { method: string; args: Record<string, unknown> }[];
+  recoveredText: string;
   publish(patch: Partial<NativeVoiceState>): void;
   emitInputSubmitted(event: NativeVoiceInputSubmitted): void;
 };
@@ -47,6 +48,7 @@ export async function installVoiceFixture(page: Page): Promise<void> {
     const fixture: VoiceFixture = window.__voiceFixture = {
       state: retained ? JSON.parse(retained) as NativeVoiceState : initial,
       calls: [],
+      recoveredText: "Recovered dictation text.",
       publish(patch) {
         fixture.state = { ...fixture.state, ...patch, stateRevision: fixture.state.stateRevision + 1 };
         sessionStorage.setItem(retainedKey, JSON.stringify(fixture.state));
@@ -65,7 +67,7 @@ export async function installVoiceFixture(page: Page): Promise<void> {
           header("App", ["exitApp"], true),
           header("NativeVoice", ["setConnection", "getState", "disconnect", "setForegroundContext", "updateSettings", "startManualListen", "setNextRecordingTarget",
             "retargetActiveRecognition", "setKeepListening", "sendRecording", "stopCurrentInteraction", "skipCurrentPlayback", "retryRecordingRecognition",
-            "sendRecoveredRecording", "copyRecognizedRecordingText", "discardRecording", "resumeInput", "discardInput", "listInputDevices",
+            "sendRecoveredRecording", "copyRecognizedRecordingText", "readRecognizedRecordingText", "discardRecording", "resumeInput", "discardInput", "listInputDevices",
             "refreshSpeechCatalog", "openSpeechCredentialDialog"], true),
         ],
         nativeCallback(plugin: string, method: string, args: { eventName: string }, callback: (value: unknown) => void) {
@@ -108,10 +110,12 @@ export async function installVoiceFixture(page: Page): Promise<void> {
           } else if (method === "stopCurrentInteraction") {
             if (args.interactionId !== current.active?.id) throw new Error("The interaction changed.");
             fixture.publish({ phase: "idle", active: null, actions: { ...initial.actions } });
-          } else if (["retryRecordingRecognition", "sendRecoveredRecording", "discardRecording", "copyRecognizedRecordingText"].includes(method)) {
+          } else if (["retryRecordingRecognition", "sendRecoveredRecording", "discardRecording", "copyRecognizedRecordingText", "readRecognizedRecordingText"].includes(method)) {
             const saved = current.recordingRecovery;
             if (!saved || args.recordingId !== saved.recordingId || args.expectedRecoveryRevision !== saved.revision || args.expectedConnectionGeneration !== current.connectionGeneration)
               throw new Error("The saved dictation changed.");
+            if (method === "readRecognizedRecordingText") return { recordingId: saved.recordingId, revision: saved.revision,
+              threadId: saved.threadId, text: fixture.recoveredText };
             if (method === "retryRecordingRecognition") fixture.publish({ phase: "recognizing", active: {
               id: "saved-recognition", eventKind: "manual", threadId: saved.threadId, threadTitle: saved.threadTitle,
               recognitionThreadId: saved.threadId, recognitionThreadTitle: saved.threadTitle, automatic: false,
@@ -120,8 +124,6 @@ export async function installVoiceFixture(page: Page): Promise<void> {
               recordingRecovery: { ...saved, revision: saved.revision + 1, stage: "recognizing", canRetryRecognition: false,
                 canSend: false, canCopyRecognizedText: false, canDiscard: true } });
             if (method === "sendRecoveredRecording") {
-              if (typeof args.acknowledgeIncomplete !== "boolean" || (saved.captureIncomplete && args.acknowledgeIncomplete !== true))
-                throw new Error("Acknowledge that the end may be missing before sending.");
               fixture.publish({ phase: "submitting", active: {
                 id: "saved-send", eventKind: "manual", threadId: saved.threadId, threadTitle: saved.threadTitle,
                 recognitionThreadId: saved.threadId, recognitionThreadTitle: saved.threadTitle, automatic: false,

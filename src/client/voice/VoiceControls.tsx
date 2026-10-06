@@ -111,7 +111,7 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
     line1 = { saved: { label: recordingRecoveryLabel(saved), thread: cardTitle! } };
     line2 = { parts: [state.error ? { alert: state.error, tone: "warning" } : failureReason ? { alert: failureReason, tone: "warning" }
       : needsStorageRetry || (saved.hasUnrecognizedAudio && !saved.canRetryRecognition && !working && !native.ready)
-        ? cardReadiness(native.readiness) : saved.captureIncomplete && saved.stage === "ready" ? "End may be missing" : recordingRecoveryStatus(saved)] };
+        ? cardReadiness(native.readiness) : recordingRecoveryStatus(saved)] };
   } else if (off && !needsStorageRetry) { tile = <MicOff strokeWidth={1.8} aria-hidden="true" />; tone = "muted"; line1 = { parts: ["Voice off"] }; line2 = { parts: ["Open controls to turn on"] }; }
   else if (errorLook) {
     tile = <TriangleAlert strokeWidth={1.8} aria-hidden="true" />; tone = "warning";
@@ -207,12 +207,11 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
                 const command = recordingRecoveryContext(native, saved);
                 act(() => store.plugin.discardRecording(command));
               }}><X strokeWidth={1.8} aria-hidden="true" /></button>
-            {saved.stage === "ready" && !saved.hasUnrecognizedAudio ? <button type="button" className="voice-card-button" aria-label="Send saved dictation" title={saved.captureIncomplete ? "Review missing end before sending" : "Send"}
-              aria-haspopup={saved.captureIncomplete ? "dialog" : undefined} aria-disabled={state.pending || !saved.canSend || undefined} onClick={() => {
+            {saved.stage === "ready" && !saved.hasUnrecognizedAudio ? <button type="button" className="voice-card-button" aria-label="Send saved dictation" title="Send"
+              aria-disabled={state.pending || !saved.canSend || undefined} onClick={() => {
                 if (state.pending || !saved.canSend) return;
-                if (saved.captureIncomplete) { setSheet(true); return; }
                 const command = recordingRecoveryContext(native, saved);
-                act(() => store.plugin.sendRecoveredRecording({ ...command, acknowledgeIncomplete: false }));
+                act(() => store.plugin.sendRecoveredRecording(command));
               }}><ArrowUp strokeWidth={1.8} aria-hidden="true" /></button>
               : <span className="voice-card-send-slot" aria-hidden="true" />}
           </> : <>

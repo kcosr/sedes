@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { NativeVoiceStore, recentVoiceErrors } from "./NativeVoiceStore.js";
 import type { NativeVoiceState } from "./native-voice-plugin.js";
-import { disconnectedVoiceSnapshot, fakeVoicePlugin, VOICE_CONNECTION, VOICE_IDENTITY, voiceSettings, voiceSnapshot as snapshot } from "./native-voice-test-fixture.js";
+import { disconnectedVoiceSnapshot, fakeVoicePlugin, recordingRecovery, VOICE_CONNECTION, VOICE_IDENTITY, voiceSettings, voiceSnapshot as snapshot } from "./native-voice-test-fixture.js";
 
 function fixture() {
   const { plugin, listeners, remove, asPlugin } = fakeVoicePlugin();
@@ -15,6 +15,86 @@ const runtimeError = (message: string, connectionGeneration = 1) => ({ code: "vo
 const submittedEvent = (patch = {}) => ({ ...VOICE_CONNECTION, connectionGeneration: 1,
   threadId: "c61b5d8b-4a77-43c6-bd72-12e23fe42e38", operationId: "618f73db-b94d-4538-8ed9-7566313eb807", text: "Finalized voice transcript", queuedInputId: "queue-1", ...patch });
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
+
+describe("saved dictation to composer", () => {
+  const context = { expectedConnectionGeneration: 1, recordingId: "saved-recording", expectedRecoveryRevision: 1 };
+  async function recovery() {
+    const f = fixture();
+    const saved = recordingRecovery({ stage: "ready", hasUnrecognizedAudio: false, canCopyRecognizedText: true });
+    const native = snapshot({ recordingRecovery: saved });
+    f.plugin.setConnection.mockResolvedValue(native);
+    await f.store.initialize();
+    return { ...f, saved, native };
+  }
+  it("opens the original thread, waits for its composer, and adds once without discarding or sending", async () => {
+    const f = await recovery();
+    const wrong = vi.fn(), append = vi.fn();
+    f.store.registerComposer("other-thread", wrong);
+    const work = f.store.addRecordingToComposer(context);
+    await vi.waitFor(() => expect(f.open).toHaveBeenCalledExactlyOnceWith("named"));
+    expect(wrong).not.toHaveBeenCalled();
+    expect(f.store.getSnapshot().pending).toBe(true);
+    const unregister = f.store.registerComposer("named", append);
+    await work;
+    expect(append).toHaveBeenCalledExactlyOnceWith("Recovered dictation text.");
+    expect(f.store.getSnapshot().native?.recordingRecovery).toEqual(f.saved);
+    expect(f.store.getSnapshot().addedRecording).toEqual(context);
+    expect(f.plugin.discardRecording).not.toHaveBeenCalled();
+    expect(f.plugin.sendRecoveredRecording).not.toHaveBeenCalled();
+    await f.store.addRecordingToComposer(context);
+    expect(append).toHaveBeenCalledTimes(1);
+    unregister(); f.store.dispose();
+  });
+  it("rejects a text response from an earlier connection before navigation", async () => {
+    const f = await recovery();
+    let release!: (value: Awaited<ReturnType<typeof f.plugin.readRecognizedRecordingText>>) => void;
+    f.plugin.readRecognizedRecordingText.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
+    const work = f.store.addRecordingToComposer(context);
+    const result = expect(work).rejects.toThrow("Saved dictation changed");
+    f.listeners.get("stateChanged")!(disconnectedVoiceSnapshot(2));
+    release({ recordingId: "saved-recording", revision: 1, threadId: "named", text: "Old connection text" });
+    await result;
+    expect(f.open).not.toHaveBeenCalled();
+    expect(f.store.getSnapshot().addedRecording).toBeUndefined();
+    f.store.dispose();
+  });
+  it.each(["connection", "revision", "dispose"])("cancels a pending composer handoff on %s change", async change => {
+    const f = await recovery();
+    const work = f.store.addRecordingToComposer(context);
+    const result = expect(work).rejects.toThrow("Saved dictation changed");
+    await vi.waitFor(() => expect(f.open).toHaveBeenCalled());
+    if (change === "dispose") f.store.dispose();
+    else f.listeners.get("stateChanged")!(change === "connection" ? disconnectedVoiceSnapshot(2)
+      : { ...f.native, stateRevision: 2, recordingRecovery: { ...f.saved, revision: 2 } });
+    const append = vi.fn();
+    f.store.registerComposer("named", append);
+    await result;
+    expect(append).not.toHaveBeenCalled();
+    expect(f.store.getSnapshot().addedRecording).toBeUndefined();
+    f.store.dispose();
+  });
+  it("keeps the saved recording after a composer refuses the text", async () => {
+    const f = await recovery();
+    f.store.registerComposer("named", () => { throw new Error("Resolve the draft conflict first."); });
+    await expect(f.store.addRecordingToComposer(context)).rejects.toThrow("Resolve the draft conflict first");
+    expect(f.store.getSnapshot().error).toBe("Resolve the draft conflict first.");
+    expect(f.store.getSnapshot().pending).toBe(false);
+    expect(f.store.getSnapshot().native?.recordingRecovery).toEqual(f.saved);
+    expect(f.store.getSnapshot().addedRecording).toBeUndefined();
+    f.store.dispose();
+  });
+  it("times out an unavailable composer without changing the recording", async () => {
+    vi.useFakeTimers();
+    const f = await recovery();
+    const work = f.store.addRecordingToComposer(context);
+    const result = expect(work).rejects.toThrow("composer is unavailable");
+    await vi.advanceTimersByTimeAsync(10_001);
+    await result;
+    expect(f.store.getSnapshot().native?.recordingRecovery).toEqual(f.saved);
+    expect(f.store.getSnapshot().pending).toBe(false);
+    f.store.dispose();
+  });
+});
 
 describe("local voice submission events", () => {
   it("delivers each exact live operation once without retaining it in state or replaying to new listeners", async () => {

@@ -208,7 +208,8 @@ recognition finalizes. Steer names the exact current normalized target; if it
 is no longer available, or other queued input must deliver first, the input
 queues. Backend support remains explicit: Codex and Pi use a turn target,
 Claude and OpenCode a conversation target, and Grok has no steering. Spoken
-input never edits or clears the composer draft.
+input delivery never edits or clears the composer draft. Saved dictation can be
+added to the composer explicitly through its recovery controls.
 
 The voice card under the composer appears while voice is connected and set to
 Manual or Response, and whenever the selected connection has saved dictation. Wherever no composer is shown, including read-only threads
@@ -386,12 +387,24 @@ can evict old pending progress. Dropped counts appear in Voice settings.
 Interrupted adopted recordings appear in the existing toolbar as **Saved dictation**
 with their target and **Retry**/**Discard** actions. Fully recognized text appears
 as **Ready to send** with **Send**/**Discard**. The status icon opens the same recovery
-item with **Copy recognized text**. Saved dictation remains visible with voice
+item in a separate section with **Copy text**, **Add to composer**, **Discard**,
+and **Send**. Saved dictation remains visible with voice
 Off and after restarting the app. Retry recognizes only unresolved audio and
 requires an enabled, configured voice session; it never opens the microphone or
-sends. Sending complete text needs only the Sedes connection. An interrupted tail
-may be incomplete; its toolbar Send opens the recovery controls so the missing-end
-notice is visible before you explicitly accept that ending and send.
+sends. Sending complete text needs only the Sedes connection. **Recording
+interrupted** means capture stopped without finishing normally; it does not
+assert that spoken words were lost. Once the saved audio has been transcribed,
+press **Send** to submit that text. There is no additional acknowledgement checkbox.
+
+**Add to composer** opens the recording's original thread and appends its fully
+recognized text to the existing draft, preserving its text and attachments.
+The composer uses its normal autosave; nothing is sent. The saved dictation
+remains available until you send or discard it explicitly. The action reports
+**Added to composer** and cannot add the same saved revision again while this
+app session and voice connection remain open. If the combined draft exceeds the composer's limit, it stays
+unchanged and **Copy text** remains available. Finish transcription before adding
+an item that still has unrecognized audio.
+
 **Discard** can also cancel an active recovery Retry or Send and delete its saved
 recording. It cannot withdraw input Sedes has already received. Ordinary **Stop**
 preserves saved recovery data.
