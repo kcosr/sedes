@@ -1720,6 +1720,10 @@ describe("ThreadApplicationService", () => {
       canRunNow: false,
       canCloneOnRun: false,
     });
+    // The capability route composes the same document without the transcript.
+    await expect(service.automationCapability(scope, "thread-1")).resolves.toEqual(
+      snapshot.capabilities.automation,
+    );
     expect(
       snapshot.capabilities.operations.find(
         ({ id }) => id === "remove_automation",

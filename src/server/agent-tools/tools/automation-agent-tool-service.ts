@@ -68,13 +68,13 @@ type AutomationDomain = Pick<
 /** Canonical, source-scoped adapter over the existing automation domain. */
 export class AutomationAgentToolService {
   readonly #automations: AutomationDomain;
-  readonly #threads: Pick<ThreadApplicationService, "snapshot">;
+  readonly #threads: Pick<ThreadApplicationService, "automationCapability">;
   readonly #inventory: Pick<InventoryRepository, "getThread">;
   readonly #now: () => number;
 
   constructor(input: {
     readonly automations: AutomationDomain;
-    readonly threads: Pick<ThreadApplicationService, "snapshot">;
+    readonly threads: Pick<ThreadApplicationService, "automationCapability">;
     readonly inventory: Pick<InventoryRepository, "getThread">;
     readonly now?: () => number;
   }) {
@@ -266,14 +266,17 @@ export class AutomationAgentToolService {
     // fork service deliberately rechecks it at dispatch and records a stable
     // failed run instead of crossing the branch boundary when it is gone.
     if (signal.aborted) throw cancellationError();
-    const snapshot = await this.#threads.snapshot(operationScope, threadId);
-    // The snapshot remains owned by the canonical execution/drain. Cancellation
+    const capability = await this.#threads.automationCapability(
+      operationScope,
+      threadId,
+    );
+    // The capture remains owned by the canonical execution/drain. Cancellation
     // does not detach it; this fence prevents the mutation continuation after
     // the read reaches its real terminal state.
     if (signal.aborted) throw cancellationError();
     assertAutomationCloneEligible({
       runMode,
-      canCloneOnRun: snapshot.capabilities.automation.canCloneOnRun,
+      canCloneOnRun: capability.canCloneOnRun,
     });
   }
 

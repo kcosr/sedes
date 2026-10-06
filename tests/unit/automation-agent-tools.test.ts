@@ -140,10 +140,8 @@ function fixture(input?: {
     })),
   };
   const threads = {
-    snapshot: vi.fn(async () => ({
-      capabilities: {
-        automation: { canCloneOnRun: input?.canCloneOnRun ?? true },
-      },
+    automationCapability: vi.fn(async () => ({
+      canCloneOnRun: input?.canCloneOnRun ?? true,
     })),
   };
   const inventory = {
@@ -206,7 +204,7 @@ describe("automation canonical tool service", () => {
       context(),
     );
 
-    expect(setup.threads.snapshot).not.toHaveBeenCalled();
+    expect(setup.threads.automationCapability).not.toHaveBeenCalled();
     expect(setup.automations.create).toHaveBeenCalledWith(
       scope,
       sourceThreadId,
@@ -278,21 +276,15 @@ describe("automation canonical tool service", () => {
     expect(setup.automations.create).not.toHaveBeenCalled();
   });
 
-  it("owns a cancelled clone snapshot through drain and never later mutates", async () => {
-    let resolveSnapshot!: (value: {
-      readonly capabilities: {
-        readonly automation: { readonly canCloneOnRun: boolean };
-      };
-    }) => void;
-    const snapshot = new Promise<{
-      readonly capabilities: {
-        readonly automation: { readonly canCloneOnRun: boolean };
-      };
-    }>((resolve) => {
-      resolveSnapshot = resolve;
-    });
+  it("owns a cancelled clone capability read through drain and never later mutates", async () => {
+    let resolveCapability!: (value: { readonly canCloneOnRun: boolean }) => void;
+    const capability = new Promise<{ readonly canCloneOnRun: boolean }>(
+      (resolve) => {
+        resolveCapability = resolve;
+      },
+    );
     const setup = fixture();
-    setup.threads.snapshot.mockReturnValue(snapshot);
+    setup.threads.automationCapability.mockReturnValue(capability);
     const controller = new AbortController();
     const executor = canonical(setup);
     const invocation = executor.invoke(
@@ -312,7 +304,7 @@ describe("automation canonical tool service", () => {
       { ...invocationSource, signal: controller.signal },
     );
     await vi.waitFor(() =>
-      expect(setup.threads.snapshot).toHaveBeenCalledOnce(),
+      expect(setup.threads.automationCapability).toHaveBeenCalledOnce(),
     );
     controller.abort();
 
@@ -323,9 +315,7 @@ describe("automation canonical tool service", () => {
     });
     await Promise.resolve();
     expect(closed).toBe(false);
-    resolveSnapshot({
-      capabilities: { automation: { canCloneOnRun: true } },
-    });
+    resolveCapability({ canCloneOnRun: true });
     await close;
     expect(closed).toBe(true);
     expect(setup.automations.create).not.toHaveBeenCalled();
@@ -424,7 +414,7 @@ describe("automation canonical tool service", () => {
     ]) {
       expect(operation).not.toHaveBeenCalled();
     }
-    expect(setup.threads.snapshot).not.toHaveBeenCalled();
+    expect(setup.threads.automationCapability).not.toHaveBeenCalled();
   });
 
   it("registers all six closed canonical contracts with truthful effects", () => {

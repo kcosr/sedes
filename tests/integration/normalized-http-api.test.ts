@@ -763,6 +763,9 @@ async function fixture(
         options.outputImage,
       );
     },
+    async automationCapability(scope: RequestScope, threadId: string) {
+      return (await this.snapshot(scope, threadId)).capabilities.automation;
+    },
     async snapshotFromActorCapture(scope: RequestScope, threadId: string) {
       return threadSnapshot(
         repository,
@@ -6722,6 +6725,80 @@ describe("normalized HTTP application contract", () => {
             retryable: false,
           },
         });
+    } finally {
+      current.close();
+    }
+  });
+
+  it("serves the thread automation capability whether or not an automation exists", async () => {
+    const current = await fixture();
+    try {
+      const workspace = await current
+        .mutate(request(current.app).post("/api/workspaces/open"))
+        .send({
+          environmentId: current.environmentId,
+          path: current.workspacePath,
+          project: { kind: "new", name: "workspace" },
+        })
+        .expect(201);
+      const created = await current
+        .mutate(request(current.app).post("/api/threads"))
+        .send({
+          workspaceId: workspace.body.id,
+          configuration: { kind: "custom", targetId: current.profile.id },
+          executionWorkspace: { kind: "direct" },
+          title: "New thread",
+        })
+        .expect(201);
+      const threadId = created.body.threadId as string;
+
+      const capabilityPath = `/api/threads/${threadId}/automation/capability`;
+
+      await current
+        .withHost(request(current.app).get(capabilityPath))
+        .expect(200)
+        .expect({
+          available: true,
+          canAttach: true,
+          canRunNow: true,
+          canCloneOnRun: true,
+        });
+      await current
+        .withHost(request(current.app).get(capabilityPath))
+        .set("X-Test-Foreign-Principal", "yes")
+        .expect(404);
+      await current
+        .withHost(request(current.app).get(`${capabilityPath}?detail=full`))
+        .expect(400);
+      current.disableCloneAutomation();
+      await current
+        .withHost(request(current.app).get(capabilityPath))
+        .expect(200)
+        .expect(({ body }) => expect(body.canCloneOnRun).toBe(false));
+
+      await current
+        .mutate(
+          request(current.app).post(`/api/threads/${threadId}/automation`),
+        )
+        .send({
+          prompt: "Run scheduled checks",
+          runMode: "same_thread",
+          schedule: {
+            kind: "interval",
+            anchorAt: "2099-07-30T12:00:00.000Z",
+            everySeconds: 3_600,
+          },
+          misfirePolicy: "coalesce",
+          precheck: null,
+          mutationId: randomUUID(),
+        })
+        .expect(201);
+      await current
+        .withHost(request(current.app).get(capabilityPath))
+        .expect(200)
+        .expect(({ body }) =>
+          expect(body).toMatchObject({ available: true, canRunNow: true }),
+        );
     } finally {
       current.close();
     }
