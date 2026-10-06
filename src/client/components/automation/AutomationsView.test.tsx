@@ -645,7 +645,7 @@ describe("AutomationsView row actions", () => {
     );
   });
 
-  it("disables Run now and Pause/Enable with their reasons", async () => {
+  it("disables Run now, Pause/Enable and Edit with the page's instructions", async () => {
     const user = userEvent.setup();
     const { store, api } = createStore(
       makeSnapshot([
@@ -662,10 +662,14 @@ describe("AutomationsView row actions", () => {
     let menu = await openRowMenu(user, "Sync staging fixtures");
     const runNow = within(menu).getByRole("menuitem", { name: /^Run now/u });
     expect(runNow).toHaveAttribute("aria-disabled", "true");
+    // A short hint shows; the instruction is the tooltip and description.
     expect(runNow).toHaveTextContent("Outcome unknown");
-    expect(runNow).toHaveAttribute("title", "Resolve the unknown run first");
-    const enable = within(menu).getByRole("menuitem", { name: /^Enable/u });
-    expect(enable).toHaveAttribute("aria-disabled", "true");
+    expect(runNow).toHaveAccessibleDescription("Resolve the unknown run first");
+    for (const name of [/^Enable/u, /^Edit…/u]) {
+      const item = within(menu).getByRole("menuitem", { name });
+      expect(item).toHaveAttribute("aria-disabled", "true");
+      expect(item).toHaveAttribute("title", "Resolve the unknown run first");
+    }
     await user.click(runNow);
     expect(api.runThreadAutomationNow).not.toHaveBeenCalled();
     await user.keyboard("{Escape}");
@@ -679,12 +683,16 @@ describe("AutomationsView row actions", () => {
     ).toHaveAttribute("aria-disabled", "true");
     await user.keyboard("{Escape}");
 
-    // A suspended anchor cannot run, but its schedule can still be paused.
+    // An archived anchor cannot run or be edited, but its schedule can
+    // still be paused.
     await user.click(screen.getByRole("button", { name: "Suspended · 1" }));
     menu = await openRowMenu(user, "Spike: GraphQL gateway");
     expect(
       within(menu).getByRole("menuitem", { name: /^Run now/u }),
-    ).toHaveAttribute("title", "Restore the thread to run it");
+    ).toHaveAttribute("title", "Restore the thread first");
+    expect(
+      within(menu).getByRole("menuitem", { name: /^Edit…/u }),
+    ).toHaveAttribute("title", "Restore the thread first");
     expect(
       within(menu).getByRole("menuitem", { name: "Pause" }),
     ).not.toHaveAttribute("aria-disabled");

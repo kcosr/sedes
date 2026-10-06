@@ -24,8 +24,8 @@ import {
   navigate,
 } from "../../app/router.js";
 import { useTouchDensity } from "../../app/use-touch-density.js";
+import { automationActionAvailability } from "../../automation/automation-actions.js";
 import {
-  automationRowActions,
   automationRowPresentation,
   type AutomationListEntry,
   type AutomationListRow,
@@ -97,7 +97,9 @@ function AutomationRowMenu({
   // A sheet on touch, like the other row menus.
   const sheet = useTouchDensity();
   const { row, health } = entry;
-  const { runNow, toggle } = automationRowActions(row.automation, health);
+  // The page offers the same actions with the same reasons; the row shows
+  // a short hint and gives the instruction as the item's description.
+  const { runNow, toggle, edit } = automationActionAvailability(row, health);
   return (
     <DropdownMenu presentation={sheet ? "sheet" : "menu"}>
       <DropdownMenuTrigger asChild>
@@ -118,19 +120,19 @@ function AutomationRowMenu({
         sheetDescription={health.label}
       >
         <DropdownMenuItem
-          disabled={busy || runNow.disabled}
-          title={runNow.explanation}
+          disabled={busy || !runNow.available}
+          title={runNow.reason}
           onSelect={() => onAction(row, "run")}
         >
           <Play aria-hidden="true" />
           Run now
-          {runNow.reason && (
-            <DropdownMenuValue aria-hidden="true">{runNow.reason}</DropdownMenuValue>
+          {runNow.hint && (
+            <DropdownMenuValue aria-hidden="true">{runNow.hint}</DropdownMenuValue>
           )}
         </DropdownMenuItem>
         <DropdownMenuItem
-          disabled={busy || toggle.disabled}
-          title={toggle.explanation}
+          disabled={busy || !toggle.available}
+          title={toggle.reason}
           onSelect={() => onAction(row, toggle.action)}
         >
           {toggle.action === "pause" ? (
@@ -139,13 +141,20 @@ function AutomationRowMenu({
             <CirclePlay aria-hidden="true" />
           )}
           {toggle.action === "pause" ? "Pause" : "Enable"}
-          {toggle.reason && (
-            <DropdownMenuValue aria-hidden="true">{toggle.reason}</DropdownMenuValue>
+          {toggle.hint && (
+            <DropdownMenuValue aria-hidden="true">{toggle.hint}</DropdownMenuValue>
           )}
         </DropdownMenuItem>
-        <DropdownMenuItem onSelect={() => navigate(automationEditPath(row.id))}>
+        <DropdownMenuItem
+          disabled={!edit.available}
+          title={edit.reason}
+          onSelect={() => navigate(automationEditPath(row.id))}
+        >
           <Pencil aria-hidden="true" />
           Edit…
+          {edit.hint && (
+            <DropdownMenuValue aria-hidden="true">{edit.hint}</DropdownMenuValue>
+          )}
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem

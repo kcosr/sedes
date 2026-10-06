@@ -488,10 +488,9 @@ outcome and the schedule, and only the next run stays at the end.
 
 Select a row to open its automation page. The row's **⋯** menu, shown on hover
 or focus and always on touch screens, has **Run now**, **Pause** or
-**Enable**, **Edit…**, and **Open thread**. The menu says why an action is
-unavailable: nothing runs or changes state while a run is in progress or its
-outcome is unknown, and **Run now** also waits while the thread is archived or
-snoozed.
+**Enable**, **Edit…**, and **Open thread**. An unavailable action follows the
+same rules as on the automation page (see [Open an automation](#open-an-automation)):
+the menu shows a short hint, and pointing at the action says what to do.
 
 ## Open an automation
 
@@ -511,11 +510,18 @@ suspended", "snoozed until…"), then the project and backend. Its actions are:
 - **⋯** has **Open thread** and **Delete automation…**. On phones, **Pause**
   or **Enable** and **Edit** move into this menu.
 
-**Run now** and **Pause** or **Enable** are unavailable while a run is in
-progress or its outcome is unknown, and **Edit** and **Delete automation…**
-while the outcome is unknown. None of the first three is available while the
-thread is archived or can't take an automation, and **Run now** waits while the
-thread is snoozed. Point at an action to see why.
+Some actions wait for the automation or its thread. Point at an action to see
+what to do:
+
+| While | Unavailable | Says |
+| --- | --- | --- |
+| The last run's outcome is unknown | **Run now**, **Pause** or **Enable**, **Edit**, **Delete automation…** | "Resolve the unknown run first" |
+| A run is in progress | **Run now**, **Pause** or **Enable**, **Delete automation…** | "Wait for the current run to finish" |
+| The thread is archived | **Run now**, **Enable**, **Edit** (**Pause** still works) | "Restore the thread first" |
+| The thread is snoozed | **Run now** | "Unsnooze the thread first" |
+
+On the automation page, **Run now**, **Enable**, and **Edit** are also
+unavailable while the thread can't take an automation.
 
 ### When an automation needs you
 

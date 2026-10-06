@@ -5,7 +5,6 @@ import { automationHealth, type SummaryAutomation, type SummaryAutomationRun } f
 import {
   EMPTY_AUTOMATIONS_BASE,
   automationGroupCollapsedByDefault,
-  automationRowActions,
   automationRowPresentation,
   projectAutomations,
   selectAutomationsBase,
@@ -585,86 +584,6 @@ describe("automationRowPresentation", () => {
     expect(automationRowPresentation(skipped, NOW)).toMatchObject({
       primary: { text: "Paused" },
       secondary: { text: "Skipped 2h ago", delivered: false },
-    });
-  });
-});
-
-describe("automationRowActions", () => {
-  const actionsOf = (thread: Thread) => {
-    const { row, health } = entryFor(thread);
-    return automationRowActions(row.automation, health);
-  };
-
-  it("allows Run now and Pause on an active or failed automation", () => {
-    for (const id of ["nightly", "invoice"]) {
-      expect(actionsOf(world.find((thread) => thread.id === id)!)).toEqual({
-        runNow: { disabled: false },
-        toggle: { action: "pause", disabled: false },
-      });
-    }
-    expect(actionsOf(world.find(({ id }) => id === "weekly")!)).toEqual({
-      runNow: { disabled: false },
-      toggle: { action: "enable", disabled: false },
-    });
-  });
-
-  it("blocks both while a run is in flight or its outcome is unknown", () => {
-    expect(
-      actionsOf(
-        makeThread("x", "X", {
-          automation: automation({
-            lastRun: run("running", { finishedAt: undefined }),
-          }),
-        }),
-      ),
-    ).toEqual({
-      runNow: {
-        disabled: true,
-        reason: "Sending",
-        explanation: "Wait for the current run to finish",
-      },
-      toggle: {
-        action: "pause",
-        disabled: true,
-        reason: "Sending",
-        explanation: "Wait for the current run to finish",
-      },
-    });
-    expect(actionsOf(world.find(({ id }) => id === "sync")!)).toEqual({
-      runNow: {
-        disabled: true,
-        reason: "Outcome unknown",
-        explanation: "Resolve the unknown run first",
-      },
-      toggle: {
-        action: "enable",
-        disabled: true,
-        reason: "Outcome unknown",
-        explanation: "Resolve the unknown run first",
-      },
-    });
-  });
-
-  it("blocks Run now on a suspended anchor but keeps its schedule switch", () => {
-    expect(actionsOf(world.find(({ id }) => id === "spike")!)).toEqual({
-      runNow: {
-        disabled: true,
-        reason: "Thread archived",
-        explanation: "Restore the thread to run it",
-      },
-      toggle: { action: "pause", disabled: false },
-    });
-    expect(
-      actionsOf(
-        makeThread("x", "X", {
-          inventoryState: "snoozed",
-          snoozedUntil: hoursFromNow(1),
-        }),
-      ).runNow,
-    ).toEqual({
-      disabled: true,
-      reason: "Snoozed",
-      explanation: "Unsnooze the thread to run it",
     });
   });
 });

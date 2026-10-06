@@ -40,6 +40,7 @@ import {
   describeSchedule,
   lastRunAge,
 } from "../../automation/automation-text.js";
+import { automationActionAvailability } from "../../automation/automation-actions.js";
 import { mutationId } from "../../lib/ids.js";
 import { futureTimeLabel, shortRelativeTime } from "../../lib/time.js";
 import {
@@ -223,40 +224,6 @@ function LoadedAutomation({
   );
 }
 
-/** Why a header action is off right now, or undefined when it can run. */
-interface ActionReasons {
-  readonly runNow?: string;
-  readonly state?: string;
-  readonly edit?: string;
-  readonly remove?: string;
-}
-
-function actionReasons(
-  health: AutomationHealth,
-  thread: AutomationThread,
-  available: boolean | undefined,
-  unavailableReason: string | undefined,
-): ActionReasons {
-  const unknown = health.kind === "unknown" ? "Resolve the unknown run first" : undefined;
-  const blocked =
-    unknown ?? (health.kind === "sending" ? "A run is in progress" : undefined);
-  const unavailable =
-    thread.inventoryState === "archived"
-      ? "Restore the thread first"
-      : available === false
-        ? (unavailableReason ?? "Automation is unavailable for this thread")
-        : undefined;
-  return {
-    runNow:
-      blocked ??
-      unavailable ??
-      (thread.inventoryState === "snoozed" ? "Unsnooze the thread first" : undefined),
-    state: blocked ?? unavailable,
-    edit: unknown ?? unavailable,
-    remove: unknown,
-  };
-}
-
 /**
  * The meta line's lead: "next Tmrw 2:00 AM", or what keeps the schedule
  * from running (the chip beside the title already names the state).
@@ -359,7 +326,12 @@ function AutomationDetails({
   const moreTrigger = useRef<HTMLButtonElement>(null);
   const revision = definition?.revision ?? automation.revision;
   const paused = automation.status === "paused";
-  const reasons = actionReasons(health, thread, available, unavailableReason);
+  // The Automations list's row menu offers the same actions with the same reasons.
+  const actions = automationActionAvailability(
+    { inventoryState: thread.inventoryState, automation },
+    health,
+    available === undefined ? undefined : { available, unavailableReason },
+  );
   const lastRun = automation.lastRun;
   const lastRunDetail = lastRun
     ? runs.items.find(({ id }) => id === lastRun.id)
@@ -399,13 +371,13 @@ function AutomationDetails({
   const edit = () => navigate(automationEditPath(thread.id));
 
   const runNowButton = (
-    <ActionTooltip label={reasons.runNow ?? "Send the prompt now"}>
+    <ActionTooltip label={actions.runNow.reason ?? "Send the prompt now"}>
       <Button
         type="button"
         variant="outline"
-        aria-disabled={reasons.runNow || busy ? true : undefined}
+        aria-disabled={!actions.runNow.available || busy ? true : undefined}
         onClick={() => {
-          if (!reasons.runNow && !busy) runNow();
+          if (actions.runNow.available && !busy) runNow();
         }}
       >
         <Play data-icon="inline-start" aria-hidden="true" />
@@ -433,29 +405,29 @@ function AutomationDetails({
           {runNowButton}
           {phone ? null : (
             <>
-              <ActionTooltip label={reasons.state ?? stateLabel}>
+              <ActionTooltip label={actions.toggle.reason ?? stateLabel}>
                 <Button
                   type="button"
                   variant="ghost"
                   size="icon"
                   aria-label={`${stateLabel} automation`}
-                  aria-disabled={reasons.state || busy ? true : undefined}
+                  aria-disabled={!actions.toggle.available || busy ? true : undefined}
                   onClick={() => {
-                    if (!reasons.state && !busy) toggleState();
+                    if (actions.toggle.available && !busy) toggleState();
                   }}
                 >
                   {paused ? <Play aria-hidden="true" /> : <Pause aria-hidden="true" />}
                 </Button>
               </ActionTooltip>
-              <ActionTooltip label={reasons.edit ?? "Edit"}>
+              <ActionTooltip label={actions.edit.reason ?? "Edit"}>
                 <Button
                   type="button"
                   variant="ghost"
                   size="icon"
                   aria-label="Edit automation"
-                  aria-disabled={reasons.edit ? true : undefined}
+                  aria-disabled={actions.edit.available ? undefined : true}
                   onClick={() => {
-                    if (!reasons.edit) edit();
+                    if (actions.edit.available) edit();
                   }}
                 >
                   <Pencil aria-hidden="true" />
@@ -479,20 +451,25 @@ function AutomationDetails({
               {phone ? (
                 <>
                   <DropdownMenuItem
-                    disabled={Boolean(reasons.state || busy)}
+                    disabled={!actions.toggle.available || busy !== undefined}
+                    title={actions.toggle.reason}
                     onSelect={toggleState}
                   >
                     {paused ? <Play aria-hidden="true" /> : <Pause aria-hidden="true" />}
                     {stateLabel}
-                    {reasons.state ? (
-                      <DropdownMenuValue aria-hidden="true">{reasons.state}</DropdownMenuValue>
+                    {actions.toggle.hint ? (
+                      <DropdownMenuValue aria-hidden="true">{actions.toggle.hint}</DropdownMenuValue>
                     ) : null}
                   </DropdownMenuItem>
-                  <DropdownMenuItem disabled={Boolean(reasons.edit)} onSelect={edit}>
+                  <DropdownMenuItem
+                    disabled={!actions.edit.available}
+                    title={actions.edit.reason}
+                    onSelect={edit}
+                  >
                     <Pencil aria-hidden="true" />
                     Edit
-                    {reasons.edit ? (
-                      <DropdownMenuValue aria-hidden="true">{reasons.edit}</DropdownMenuValue>
+                    {actions.edit.hint ? (
+                      <DropdownMenuValue aria-hidden="true">{actions.edit.hint}</DropdownMenuValue>
                     ) : null}
                   </DropdownMenuItem>
                 </>
@@ -504,13 +481,14 @@ function AutomationDetails({
               <DropdownMenuSeparator />
               <DropdownMenuItem
                 variant="destructive"
-                disabled={Boolean(reasons.remove)}
+                disabled={!actions.remove.available}
+                title={actions.remove.reason}
                 onSelect={() => setDeleteOpen(true)}
               >
                 <Trash2 aria-hidden="true" />
                 Delete automation…
-                {reasons.remove ? (
-                  <DropdownMenuValue aria-hidden="true">{reasons.remove}</DropdownMenuValue>
+                {actions.remove.hint ? (
+                  <DropdownMenuValue aria-hidden="true">{actions.remove.hint}</DropdownMenuValue>
                 ) : null}
               </DropdownMenuItem>
             </DropdownMenuContent>
@@ -575,7 +553,7 @@ function AutomationDetails({
         view={runsView}
         onViewChange={setRunsView}
         nextRunAt={health.kind === "active" ? automation.nextRunAt : undefined}
-        canRunNow={!reasons.runNow}
+        canRunNow={actions.runNow.available}
         revision={revision}
         now={now}
       />

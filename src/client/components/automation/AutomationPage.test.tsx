@@ -234,6 +234,27 @@ describe("AutomationPage", () => {
     );
   });
 
+  it("offers the header actions by the shared policy", () => {
+    renderPage([{ inventoryState: "archived", automation: automationSummary() }]);
+    // Archived: no run or edit, but the schedule can still be paused.
+    expect(screen.getByRole("button", { name: "Run now" })).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByRole("button", { name: "Pause automation" })).not.toHaveAttribute("aria-disabled");
+    expect(screen.getByRole("button", { name: "Edit automation" })).toHaveAttribute("aria-disabled", "true");
+    cleanup();
+
+    renderPage([
+      {
+        automation: automationSummary({
+          lastRun: { id: "run-1", state: "running", occurrence: "manual", scheduledFor: new Date().toISOString() },
+        }),
+      },
+    ]);
+    // In flight: wait to run or switch the schedule; editing stays open.
+    expect(screen.getByRole("button", { name: "Run now" })).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByRole("button", { name: "Pause automation" })).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByRole("button", { name: "Edit automation" })).not.toHaveAttribute("aria-disabled");
+  });
+
   it("restores an archived thread and unsnoozes a snoozed one", async () => {
     const archived = renderPage([{ inventoryState: "archived", automation: automationSummary() }]);
     expect(screen.getByText("Runs are suspended while the thread is archived.")).toBeInTheDocument();
