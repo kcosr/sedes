@@ -1,11 +1,13 @@
 import { useCallback } from "react";
 import type { NormalizedThreadAttention } from "../../../shared/index.js";
+import { automationPath } from "../../app/router.js";
 import type {
   ApplicationClientState,
   ApplicationClientStore,
 } from "../../stores/ApplicationClientStore.js";
 import { useApplicationStoreSelector } from "../../stores/use-application-store-selector.js";
 import { Button } from "@client/components/ui/button";
+import { followLink } from "../settings/SettingsNav.js";
 
 type AutomationContext = NonNullable<
   NormalizedThreadAttention["automationContext"]
@@ -15,7 +17,8 @@ type AutomationContext = NonNullable<
  * The thread notice for a run an automation sent here: triggered, or failed
  * (red). The run's kind comes from the source thread's last run when that is
  * still the noticed run; the server records context for scheduled runs, so an
- * undeterminable kind keeps the scheduled wording.
+ * undeterminable kind keeps the scheduled wording. While the source thread
+ * still has its automation, the notice links to its page.
  */
 export function AutomationContextNotice({
   context,
@@ -36,6 +39,16 @@ export function AutomationContextNotice({
     [context.runId, context.sourceThreadId],
   );
   const occurrence = useApplicationStoreSelector(store, selectOccurrence);
+  const selectHasAutomation = useCallback(
+    (state: ApplicationClientState) =>
+      Boolean(
+        state.snapshot?.threads.find(({ id }) => id === context.sourceThreadId)
+          ?.automation,
+      ),
+    [context.sourceThreadId],
+  );
+  const hasAutomation = useApplicationStoreSelector(store, selectHasAutomation);
+  const automation = automationPath(context.sourceThreadId);
   const failed = context.outcome === "failed";
   return (
     <aside
@@ -52,6 +65,13 @@ export function AutomationContextNotice({
         </p>
         {context.diagnostic && <small>{context.diagnostic.text}</small>}
       </div>
+      {hasAutomation ? (
+        <Button variant="outline" size="xs" asChild>
+          <a href={automation} onClick={(event) => followLink(event, automation)}>
+            Open automation
+          </a>
+        </Button>
+      ) : null}
       <Button variant="outline" size="xs" onClick={onDismiss}>
         Dismiss
       </Button>

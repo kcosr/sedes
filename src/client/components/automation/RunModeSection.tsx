@@ -1,60 +1,56 @@
-import type { AutomationRunMode } from "../../../shared/protocol/domain";
-import { DialogSection } from "@client/components/ui/dialog";
-import { RadioGroup, RadioGroupItem } from "@client/components/ui/radio-group";
+import type { AutomationRunMode } from "../../../shared/protocol/domain.js";
+import { SettingsSection } from "../settings/SettingsSection.js";
+import { Callout } from "@client/components/ui/callout";
+import { RadioGroup } from "@client/components/ui/radio-group";
+import { AutomationChoice } from "./AutomationChoice.js";
 
-/** "Run mode" section: anchor-thread note plus the same-thread / clone
- * choice. Presentation only — state lives in ThreadAutomationDialog. */
+/**
+ * "Run in": this thread, or a new fork for each run. The fork option stays
+ * visible and is disabled with its reason when the thread cannot fork.
+ * Presentation only; the form lives in useAutomationEditor.
+ */
 export function AutomationRunModeSection({
-  threadTitle,
-  runMode,
-  onRunModeChange,
+  id,
+  value,
+  onChange,
   canCloneOnRun,
 }: {
-  threadTitle: string;
-  runMode: AutomationRunMode;
-  onRunModeChange: (mode: AutomationRunMode) => void;
-  canCloneOnRun: boolean;
+  readonly id: string;
+  readonly value: AutomationRunMode;
+  readonly onChange: (mode: AutomationRunMode) => void;
+  readonly canCloneOnRun: boolean;
 }): React.JSX.Element {
+  const cloneUnavailable = value === "clone" && !canCloneOnRun;
   return (
-    <DialogSection title="Run mode">
-      <div className="automation-section-card">
-        <p className="automation-fixed-thread">
-          This automation belongs to <strong>{threadTitle}</strong>.
-        </p>
-        <RadioGroup
-          className="automation-option-group"
-          aria-label="Run mode"
-          value={runMode}
-          onValueChange={(value) => onRunModeChange(value as AutomationRunMode)}
-        >
-          <label
-            className={`automation-option-row ${runMode === "same_thread" ? "selected" : ""}`}
-          >
-            <RadioGroupItem value="same_thread" />
-            <span>
-              <strong>Continue in this thread</strong>
-              <small>
-                Each occurrence adds the prompt to the anchor conversation.
-              </small>
-            </span>
-          </label>
-          {(canCloneOnRun || runMode === "clone") && (
-            <label
-              className={`automation-option-row ${runMode === "clone" ? "selected" : ""}`}
-            >
-              <RadioGroupItem value="clone" disabled={!canCloneOnRun} />
-              <span>
-                <strong>Start a new cloned thread for each run</strong>
-                <small>
-                  {canCloneOnRun
-                    ? "Native history is cloned through its latest completed point. An empty Draft creates a fresh child."
-                    : "Clone mode is no longer available for this thread. Choose Continue in this thread before saving."}
-                </small>
-              </span>
-            </label>
-          )}
-        </RadioGroup>
-      </div>
-    </DialogSection>
+    <SettingsSection id={id} title="Run in" card>
+      <RadioGroup
+        className="automation-choice-list"
+        aria-label="Run in"
+        aria-invalid={cloneUnavailable || undefined}
+        value={value}
+        onValueChange={(next) => onChange(next as AutomationRunMode)}
+      >
+        <AutomationChoice
+          value="same_thread"
+          title="This thread"
+          description="Each run adds the prompt to this conversation."
+        />
+        <AutomationChoice
+          value="clone"
+          title="A new fork each run"
+          disabled={!canCloneOnRun}
+          description={
+            canCloneOnRun
+              ? "Each run starts a fork of this thread at its latest completed turn, so runs don't pile up here."
+              : "Not available for this thread: forking needs a completed turn and a backend that can fork."
+          }
+        />
+      </RadioGroup>
+      {cloneUnavailable ? (
+        <Callout tone="danger" role="alert">
+          This thread can't fork now. Choose This thread before saving.
+        </Callout>
+      ) : null}
+    </SettingsSection>
   );
 }

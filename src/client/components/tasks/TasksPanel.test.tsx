@@ -1325,7 +1325,7 @@ describe("TasksPanel edit dialog", () => {
   it("keeps an unsaved edit while the surface is suspended", () => {
     const store = seededStore();
     const panelLayoutStore = makePanelLayoutStore();
-    const route = { name: "thread", threadId: "thread-9", automationOpen: false } as const;
+    const route = { name: "thread", threadId: "thread-9" } as const;
     const content = (active: boolean) => (
       <TasksHarness store={store} panelLayoutStore={panelLayoutStore} route={route} active={active} />
     );
@@ -2130,7 +2130,7 @@ describe("TasksPanelContent docked", () => {
         presentation="panel"
         store={store}
         panelLayoutStore={makePanelLayoutStore()}
-        route={{ name: "thread", threadId: "thread-9", automationOpen: false }}
+        route={{ name: "thread", threadId: "thread-9" }}
         active
         onRequestClose={onRequestClose}
         panelControls={panelControls}
@@ -2167,7 +2167,7 @@ describe("TasksPanel host", () => {
     stubDensity(true);
     const store = makeStore([makeTask({ id: "g", title: "Global errand" })]);
     const panelLayoutStore = makePanelLayoutStore();
-    const route = { name: "thread", threadId: "thread-9", automationOpen: false } as const;
+    const route = { name: "thread", threadId: "thread-9" } as const;
     const content = (active: boolean) => (
       <TasksHarness store={store} panelLayoutStore={panelLayoutStore} route={route} active={active} />
     );

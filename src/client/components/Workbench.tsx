@@ -182,7 +182,6 @@ export function Workbench({
               <ThreadView
                 key={route.threadId}
                 threadId={route.threadId}
-                automationOpen={route.automationOpen}
                 focusTurnId={route.focusTurnId}
                 registry={threadRegistry}
                 applicationStore={applicationStore}

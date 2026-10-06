@@ -996,7 +996,7 @@ describe("ThreadContextMenu content per thread state", () => {
     for (const row of rows) {
       expect(row.querySelector("svg")).not.toBeNull();
     }
-    expect(within(menu).queryByText("Automation settings…")).toBeNull();
+    expect(within(menu).queryByText("Automation…")).toBeNull();
     expect(within(menu).queryByText("Wake now")).toBeNull();
     expect(within(menu).queryByText("Unsettle")).toBeNull();
     expect(within(menu).queryByText("Restore to Active")).toBeNull();
@@ -1039,7 +1039,7 @@ describe("ThreadContextMenu content per thread state", () => {
     expect(within(menu).queryByText("Settle")).toBeNull();
   });
 
-  it("adds automation settings only when the thread has an automation", async () => {
+  it("opens the automation page only when the thread has an automation", async () => {
     const onNavigate = vi.fn();
     const trigger = renderMenu(
       makeThread({
@@ -1064,16 +1064,16 @@ describe("ThreadContextMenu content per thread state", () => {
     const menu = await openMenu(trigger);
     expect(within(menu).queryByText("Automate…")).toBeNull();
     const item = within(menu).getByRole("menuitem", {
-      name: "Automation settings…",
+      name: "Automation…",
     });
     expect(item.querySelector(".lucide-repeat")).not.toBeNull();
     expect(item.querySelector(".lucide-calendar-clock")).toBeNull();
     await userEvent.click(item);
-    expect(window.location.pathname).toBe("/threads/thread-1/automation");
+    expect(window.location.pathname).toBe("/automations/thread-1");
     expect(onNavigate).toHaveBeenCalled();
   });
 
-  it("offers Automate… with the thread-actions gating and opens the automation route", async () => {
+  it("offers Automate… with the thread-actions gating and opens the editor to create one", async () => {
     const onNavigate = vi.fn();
     const menu = await openMenu(
       renderMenu(makeThread(), makeStore(), {
@@ -1085,7 +1085,7 @@ describe("ThreadContextMenu content per thread state", () => {
     expect(item).not.toHaveAttribute("data-disabled");
     expect(item.querySelector(".lucide-repeat")).not.toBeNull();
     await userEvent.click(item);
-    expect(window.location.pathname).toBe("/threads/thread-1/automation");
+    expect(window.location.pathname).toBe("/automations/thread-1/edit");
     expect(onNavigate).toHaveBeenCalled();
   });
 

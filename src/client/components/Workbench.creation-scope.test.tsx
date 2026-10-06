@@ -261,7 +261,6 @@ describe("Workbench new-thread creation scope", () => {
         route={{
           name: "thread",
           threadId: "thread-deep-link",
-          automationOpen: false,
         }}
         applicationStore={applicationStore as never}
         threadRegistry={threadRegistry as never}
@@ -285,13 +284,13 @@ describe("Workbench new-thread creation scope", () => {
       panelLayoutStore: { openPanel: vi.fn() } as never,
       panelTenants: {} as never,
     };
-    const { rerender } = render(<Workbench {...props} route={{ name: "thread", threadId: "first", automationOpen: false }} />);
+    const { rerender } = render(<Workbench {...props} route={{ name: "thread", threadId: "first" }} />);
     const panelHost = screen.getByTestId("panel-layout");
     workspaceIdForThread.mockReturnValue(undefined);
-    rerender(<Workbench {...props} route={{ name: "thread", threadId: "second", automationOpen: false }} />);
+    rerender(<Workbench {...props} route={{ name: "thread", threadId: "second" }} />);
     expect(screen.getByTestId("panel-layout")).toBe(panelHost);
     workspaceIdForThread.mockReturnValue("workspace-2");
-    rerender(<Workbench {...props} route={{ name: "thread", threadId: "second", automationOpen: false }} />);
+    rerender(<Workbench {...props} route={{ name: "thread", threadId: "second" }} />);
     expect(screen.getByTestId("panel-layout")).toBe(panelHost);
   });
 
@@ -330,7 +329,6 @@ describe("Workbench new-thread creation scope", () => {
         route={{
           name: "thread",
           threadId: "thread-after-navigation",
-          automationOpen: false,
         }}
         applicationStore={applicationStore as never}
         threadRegistry={threadRegistry as never}

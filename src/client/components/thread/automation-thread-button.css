@@ -1,0 +1,55 @@
+/* Icon-only automation chip: status is in the tooltip/accessible name, the
+   word badge is gone. The ring tints only for a failed (red) or unknown
+   (amber) last run; paused, not-started and suspended automations are a
+   muted CirclePause, never amber. */
+.automation-thread-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted-foreground);
+  transition:
+    border-color var(--motion-fast),
+    color var(--motion-fast);
+}
+
+.automation-thread-button:hover {
+  border-color: var(--muted-foreground-2);
+  color: var(--foreground);
+}
+
+.automation-thread-button[data-health="failed"] {
+  border-color: var(--destructive-border);
+  color: var(--destructive);
+}
+
+.automation-thread-button[data-health="unknown"] {
+  border-color: var(--warning-border);
+  color: var(--warning);
+}
+
+.automation-thread-button[data-health="sending"] {
+  color: var(--info);
+}
+
+.automation-thread-button[data-health="paused"],
+.automation-thread-button[data-health="not_started"],
+.automation-thread-button[data-health="archived"],
+.automation-thread-button[data-health="snoozed"] {
+  color: var(--muted-foreground-2);
+}
+
+/* On touch the chip drops its ring, tinted or not, and reads as a bare glyph
+   like its neighbours, keeping the phone header's room for the title. */
+@media (max-width: 819px), (pointer: coarse) {
+  .automation-thread-button[data-health],
+  .automation-thread-button[data-health]:hover {
+    border-color: transparent;
+  }
+
+  .automation-thread-button {
+    border-radius: var(--radius-ctl);
+  }
+}

@@ -9,7 +9,11 @@ import type {
   ThreadArchiveImpact,
 } from "../../shared/index.js";
 import { DEFAULT_THREAD_TITLE } from "../../shared/index.js";
-import { navigate, threadAutomationPath } from "../app/router.js";
+import {
+  automationEditPath,
+  automationPath,
+  navigate,
+} from "../app/router.js";
 import type { ApplicationClientStore } from "../stores/ApplicationClientStore.js";
 import type {
   ThreadClientState,
@@ -692,19 +696,19 @@ export function ThreadContextMenu({
       {thread.automation ? (
         <ContextMenuItem
           onSelect={() => {
-            navigate(threadAutomationPath(thread.id));
+            navigate(automationPath(thread.id));
             onNavigate?.();
           }}
         >
           <Repeat aria-hidden="true" />
-          Automation settings…
+          Automation…
         </ContextMenuItem>
       ) : automateOffered ? (
         <ContextMenuItem
           disabled={!automateAvailable}
           title={attachAutomation?.unavailableReason?.text}
           onSelect={() => {
-            navigate(threadAutomationPath(thread.id));
+            navigate(automationEditPath(thread.id));
             onNavigate?.();
           }}
         >

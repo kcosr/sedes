@@ -432,7 +432,7 @@ function setup(
       <TasksPanel
         store={applicationStore}
         panelLayoutStore={store}
-        route={{ name: "thread", threadId: "thread-1", automationOpen: false }}
+        route={{ name: "thread", threadId: "thread-1" }}
       >
         {layout}
       </TasksPanel>
