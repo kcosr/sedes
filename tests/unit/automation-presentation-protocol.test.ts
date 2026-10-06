@@ -113,9 +113,10 @@ describe("normalized automation protocol", () => {
       automation.safeParse({ ...projected, promptPreview: "x".repeat(161) })
         .success,
     ).toBe(false);
+    // A prompt with no printable text has an empty preview.
     expect(
       automation.safeParse({ ...projected, promptPreview: "" }).success,
-    ).toBe(false);
+    ).toBe(true);
     // The full prompt stays behind the automation route.
     expect(
       automation.safeParse({ ...projected, prompt: "Review" }).success,

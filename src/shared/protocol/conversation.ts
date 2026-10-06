@@ -1355,7 +1355,8 @@ export const normalizedThreadSummarySchema = z.strictObject({
        * Whitespace-collapsed opening of the prompt for list rows and search.
        * The full prompt (up to 64 KiB) stays behind the automation route.
        */
-      promptPreview: z.string().min(1).max(160),
+      // Empty only when the prompt has no printable text.
+      promptPreview: z.string().max(160),
       nextRunAt: z.iso.datetime().optional(),
       revision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
       hasPrecheck: z.boolean(),

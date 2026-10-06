@@ -66,6 +66,7 @@ import type { ConversationActorListener } from "../../src/server/conversations/c
 import type { DriverInteraction } from "../../src/shared/protocol/backend.js";
 import {
   backendInteractionSchema,
+  normalizedThreadSummarySchema,
   type BackendInteraction,
 } from "../../src/shared/protocol/conversation.js";
 import { NotificationRepository } from "../../src/server/db/repositories/notification-repository.js";
@@ -1927,6 +1928,45 @@ describe("backend-normalized application adapters", () => {
         executionPolicy: { assertCanAutomate: () => undefined },
       }).get(current.scope, current.threadId);
       expect(rest.lastRun?.id).toBe("latest-run-newer");
+    } finally {
+      current.database.close();
+    }
+  });
+
+  it("projects a stored prompt that contains NUL characters", async () => {
+    const current = fixture();
+    try {
+      const inventory = new InventoryRepository(current.database);
+      const queue = new QueuedInputRepository(current.database);
+      const completion = new SubmissionCompletionRepository(current.database);
+      const automation = new AutomationRepository(current.database);
+      automation.createDefinition(current.scope, {
+        id: "nul-prompt-automation",
+        anchorThreadId: current.threadId,
+        name: "NUL prompt",
+        prompt: "\u0000Review the repository\u0000today.",
+        precheck: null,
+        runMode: "same_thread",
+        enabled: false,
+        schedule: { kind: "cron", expression: "0 2 * * *", timeZone: "UTC" },
+        misfirePolicy: "coalesce",
+        nextRunAt: null,
+        now: 500,
+      });
+
+      const [summary] = new DatabaseApplicationThreadSummaryReader({
+        inventory,
+        queue,
+        completion,
+      }).listByIds(current.scope, [current.threadId]);
+      expect(summary!.automation?.promptPreview).toBe(
+        "Review the repository today.",
+      );
+      expect(
+        normalizedThreadSummarySchema.shape.automation.parse(
+          summary!.automation,
+        ),
+      ).toEqual(summary!.automation);
     } finally {
       current.database.close();
     }

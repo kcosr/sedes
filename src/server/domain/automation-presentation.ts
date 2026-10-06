@@ -5,11 +5,12 @@ const PROMPT_PREVIEW_UNITS = 140;
 const THREAD_TITLE_MAXIMUM_UNITS = 240;
 
 /**
- * Prompt characters a summary reader loads to derive the preview, so a
- * projection never materializes complete 64 KiB prompts. Prompts are stored
- * trimmed, so a longer prompt always has more visible text after this prefix.
+ * Prompt bytes a summary reader loads to derive the preview, so a projection
+ * never materializes complete 64 KiB prompts. Readers take the prefix from
+ * the prompt as a BLOB: SQLite's text functions stop at an embedded NUL,
+ * which a stored prompt may contain.
  */
-export const AUTOMATION_PROMPT_PREVIEW_SOURCE_CHARACTERS = 2_048;
+export const AUTOMATION_PROMPT_PREVIEW_SOURCE_BYTES = 8_192;
 
 export function presentAutomationSchedule(
   schedule: AutomationSchedule,
@@ -42,11 +43,23 @@ export function automationPromptPreview(
   source: string,
   sourceTruncated = false,
 ): string {
-  const collapsed = source.replace(/\s+/gu, " ").trim();
+  const collapsed = source.replace(/[\s\p{Cc}]+/gu, " ").trim();
   const preview = takeUnits(collapsed, PROMPT_PREVIEW_UNITS);
   return preview.length < collapsed.length || sourceTruncated
     ? `${preview.trimEnd()}…`
     : preview;
+}
+
+/**
+ * Decodes a prompt prefix read as bytes. A prefix cut inside a multi-byte
+ * character ends in one replacement character, which is dropped.
+ */
+export function decodeAutomationPromptHead(
+  head: Uint8Array,
+  truncated: boolean,
+): string {
+  const text = new TextDecoder().decode(head);
+  return truncated ? text.replace(/\uFFFD$/u, "") : text;
 }
 
 /**

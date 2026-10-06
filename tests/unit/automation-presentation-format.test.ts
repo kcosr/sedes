@@ -3,6 +3,7 @@ import {
   automationCloneThreadTitle,
   automationCloneTitleSuffix,
   automationPromptPreview,
+  decodeAutomationPromptHead,
   presentAutomationSchedule,
 } from "../../src/server/domain/automation-presentation.js";
 
@@ -31,6 +32,19 @@ describe("automation prompt preview", () => {
 
   it("marks a bounded source prefix as continuing", () => {
     expect(automationPromptPreview("Short head", true)).toBe("Short head…");
+  });
+
+  it("treats control characters, NUL included, as separators", () => {
+    expect(automationPromptPreview("\u0000Review\u0000the\u0007repo")).toBe(
+      "Review the repo",
+    );
+    expect(automationPromptPreview("\u0000\u0000")).toBe("");
+  });
+
+  it("drops a multi-byte character cut by the byte prefix", () => {
+    const bytes = new TextEncoder().encode("Fix 🙂");
+    expect(decodeAutomationPromptHead(bytes.subarray(0, 6), true)).toBe("Fix ");
+    expect(decodeAutomationPromptHead(bytes, false)).toBe("Fix 🙂");
   });
 });
 

@@ -2,8 +2,9 @@ import type { NormalizedThreadSummary } from "../../shared/protocol/conversation
 import type { AutomationRunState } from "../domain/automation-models.js";
 import { automationScheduleFromColumns } from "../db/repositories/automation-repository.js";
 import {
-  AUTOMATION_PROMPT_PREVIEW_SOURCE_CHARACTERS,
+  AUTOMATION_PROMPT_PREVIEW_SOURCE_BYTES,
   automationPromptPreview,
+  decodeAutomationPromptHead,
   presentAutomationSchedule,
 } from "../domain/automation-presentation.js";
 
@@ -22,7 +23,7 @@ export type ThreadAutomationSummaryRow = {
   readonly automationCronExpression: string | null;
   readonly automationTimeZone: string | null;
   readonly automationMisfirePolicy: "coalesce" | "skip" | null;
-  readonly automationPromptHead: string | null;
+  readonly automationPromptHead: Uint8Array | null;
   readonly automationPromptTruncated: 0 | 1 | null;
   readonly automationNextRunAt: number | null;
   readonly automationRevision: number | null;
@@ -55,11 +56,11 @@ export function threadAutomationSummaryColumns(
     ${definition}.cron_expression AS automationCronExpression,
     ${definition}.time_zone AS automationTimeZone,
     ${definition}.misfire_policy AS automationMisfirePolicy,
-    substr(${definition}.prompt, 1, ${AUTOMATION_PROMPT_PREVIEW_SOURCE_CHARACTERS})
+    substr(CAST(${definition}.prompt AS BLOB), 1, ${AUTOMATION_PROMPT_PREVIEW_SOURCE_BYTES})
       AS automationPromptHead,
     CASE
       WHEN ${definition}.id IS NULL THEN NULL
-      WHEN length(${definition}.prompt) > ${AUTOMATION_PROMPT_PREVIEW_SOURCE_CHARACTERS}
+      WHEN length(CAST(${definition}.prompt AS BLOB)) > ${AUTOMATION_PROMPT_PREVIEW_SOURCE_BYTES}
       THEN 1 ELSE 0
     END AS automationPromptTruncated,
     ${definition}.next_run_at AS automationNextRunAt,
@@ -131,7 +132,10 @@ export function projectThreadAutomationSummary(
     ),
     misfirePolicy: row.automationMisfirePolicy,
     promptPreview: automationPromptPreview(
-      row.automationPromptHead,
+      decodeAutomationPromptHead(
+        row.automationPromptHead,
+        row.automationPromptTruncated === 1,
+      ),
       row.automationPromptTruncated === 1,
     ),
     ...(row.automationNextRunAt === null
