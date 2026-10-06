@@ -42,6 +42,7 @@ import {
   setArchiveSort,
   useArchiveViewPreferences,
 } from "../archive/archive-view-preferences.js";
+import { useMinuteClock } from "../app/use-minute-clock.js";
 import { useSidebarInventoryScope } from "../app/use-sidebar-inventory-scope.js";
 import { useTouchDensity } from "../app/use-touch-density.js";
 import {
@@ -90,26 +91,6 @@ function selectBase(
 
 function selectSearch(state: ApplicationClientState): string {
   return state.search;
-}
-
-/** Wall-clock minutes for ages and date buckets. */
-function useMinuteClock(): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    let timer: ReturnType<typeof setTimeout>;
-    const schedule = () => {
-      timer = setTimeout(
-        () => {
-          setNow(Date.now());
-          schedule();
-        },
-        Math.max(1_000, 60_010 - (Date.now() % 60_000)),
-      );
-    };
-    schedule();
-    return () => clearTimeout(timer);
-  }, []);
-  return now;
 }
 
 function ArchiveViewOptions({
