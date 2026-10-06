@@ -10,11 +10,18 @@ import {
   THREAD_ID,
 } from "./automation-test-fixture.js";
 import { AUTOMATION_PREVIEW_COUNT, useAutomationEditor } from "./use-automation-editor.js";
+import { useAutomationThread } from "./use-automation-thread.js";
 
 const options = { canCloneOnRun: true };
 
+/** The fixture thread's editor, fed as the page feeds it: from its live summary. */
+function useEditor(fixture: ReturnType<typeof automationStore>, editorOptions: { readonly canCloneOnRun: boolean }) {
+  const thread = useAutomationThread(fixture.store, THREAD_ID);
+  return useAutomationEditor(fixture.store, thread ?? { id: THREAD_ID, automation: null }, editorOptions);
+}
+
 function render(fixture: ReturnType<typeof automationStore>, canCloneOnRun = true) {
-  return renderHook(() => useAutomationEditor(fixture.store, THREAD_ID, { canCloneOnRun }));
+  return renderHook(() => useEditor(fixture, { canCloneOnRun }));
 }
 
 describe("useAutomationEditor", () => {
@@ -244,7 +251,7 @@ describe("useAutomationEditor", () => {
 
   it("reports limits on the prompt, command and timeout", async () => {
     const fixture = automationStore([{ automation: null }]);
-    const { result } = renderHook(() => useAutomationEditor(fixture.store, THREAD_ID, options));
+    const { result } = renderHook(() => useEditor(fixture, options));
     act(() =>
       result.current.update({
         prompt: "x".repeat(65_537),
@@ -274,7 +281,7 @@ describe("useAutomationEditor", () => {
     const fixture = automationStore([{ automation: null }], {
       testThreadAutomationPrecheck: vi.fn().mockResolvedValue(outcome),
     });
-    const { result } = renderHook(() => useAutomationEditor(fixture.store, THREAD_ID, options));
+    const { result } = renderHook(() => useEditor(fixture, options));
     expect(result.current.precheckTest.canTest).toBe(false);
     act(() => result.current.update({ prompt: "Check", precheckEnabled: true, precheckCommand: "false" }));
     expect(result.current.precheckTest.canTest).toBe(true);

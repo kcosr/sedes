@@ -49,7 +49,7 @@ const attachable = {
 
 function renderEditor(threads: readonly FixtureThread[], api: Parameters<typeof automationStore>[1] = {}) {
   const fixture = automationStore(threads, api);
-  render(<AutomationEditor store={fixture.store} threadId={THREAD_ID} />);
+  render(<AutomationEditor store={fixture.store} threadRegistry={fixture.threadRegistry} threadId={THREAD_ID} />);
   return fixture;
 }
 
@@ -165,7 +165,7 @@ describe("AutomationEditor", () => {
         }),
     );
     const fixture = automationStore([{ automation: automationSummary() }], { updateThreadAutomation });
-    const view = render(<AutomationEditor store={fixture.store} threadId={THREAD_ID} />);
+    const view = render(<AutomationEditor store={fixture.store} threadRegistry={fixture.threadRegistry} threadId={THREAD_ID} />);
     const prompt = await screen.findByRole("textbox", { name: "Prompt" });
     await userEvent.type(prompt, " Also check licenses.");
     const save = screen.getByRole("button", { name: "Save" });
@@ -294,10 +294,10 @@ describe("AutomationEditor", () => {
       ],
       { getThreadAutomation, updateThreadAutomation },
     );
-    const view = render(<AutomationEditor store={fixture.store} threadId={THREAD_ID} />);
+    const view = render(<AutomationEditor store={fixture.store} threadRegistry={fixture.threadRegistry} threadId={THREAD_ID} />);
     expect(await screen.findByRole("textbox", { name: "Prompt" })).toHaveValue("First prompt");
 
-    view.rerender(<AutomationEditor store={fixture.store} threadId={otherId} />);
+    view.rerender(<AutomationEditor store={fixture.store} threadRegistry={fixture.threadRegistry} threadId={otherId} />);
     // The first editor's form never shows under the second thread's name.
     expect(screen.queryByRole("textbox", { name: "Prompt" })).toBeNull();
     expect(await screen.findByRole("link", { name: "Weekly release notes draft" })).toBeInTheDocument();
@@ -316,9 +316,20 @@ describe("AutomationEditor", () => {
     );
   });
 
-  it("names a thread the editor cannot find", () => {
-    renderEditor([{ id: "other", automation: null }]);
-    expect(screen.getByText("Thread not found")).toBeInTheDocument();
+  it("edits the automation of a thread the store does not hold, loaded as its route would", async () => {
+    const fixture = renderEditor([{ id: "other", automation: null }]);
+    expect(screen.getByRole("status", { name: "Loading automation" })).toBeInTheDocument();
+    expect(fixture.threadRegistry.retain).toHaveBeenCalledWith(THREAD_ID);
+    act(() => fixture.threadRegistry.settle({ thread: { title: "Deep fork", automation: automationSummary() } }));
+    expect(await screen.findByRole("textbox", { name: "Prompt" })).toHaveValue(definition().prompt);
+    expect(screen.getByRole("link", { name: "Deep fork" })).toBeInTheDocument();
+  });
+
+  it("says why it could not load a thread outside the store", () => {
+    const fixture = renderEditor([{ id: "other", automation: null }]);
+    act(() => fixture.threadRegistry.settle({ error: "The server is unavailable." }));
+    expect(screen.getByText("Couldn't open this thread")).toBeInTheDocument();
+    expect(screen.getByText("The server is unavailable.")).toBeInTheDocument();
   });
 
   it("formats a one-time run in the viewer's zone", async () => {

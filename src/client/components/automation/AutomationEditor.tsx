@@ -25,9 +25,7 @@ import { Button } from "@client/components/ui/button";
 import { Callout } from "@client/components/ui/callout";
 import { ConfirmDialog } from "@client/components/ui/confirm-dialog";
 import { DiscardChangesDialog } from "@client/components/ui/discard-changes-dialog";
-import { EmptyState } from "@client/components/ui/empty-state";
 import { Field } from "@client/components/ui/field";
-import { Skeleton } from "@client/components/ui/skeleton";
 import { Textarea } from "@client/components/ui/textarea";
 import { AutomationPrecheckSection } from "./PrecheckSection.js";
 import { AutomationRunModeSection } from "./RunModeSection.js";
@@ -42,7 +40,15 @@ import {
 } from "./automation-form.js";
 import { useAutomationCapability } from "./use-automation-details.js";
 import { useAutomationEditor } from "./use-automation-editor.js";
-import { useAutomationThread, type AutomationThread } from "./use-automation-thread.js";
+import {
+  useAutomationAnchor,
+  type AutomationThread,
+  type AutomationThreadSource,
+} from "./use-automation-thread.js";
+import {
+  AutomationAnchorLoading,
+  AutomationAnchorUnavailable,
+} from "./AutomationAnchorStates.js";
 
 type EditorStore = Pick<ApplicationClientStore, "api" | "subscribe" | "getSnapshot">;
 
@@ -57,48 +63,31 @@ const SECTION = {
 /** Create or edit a thread's automation (`/automations/:threadId/edit`). */
 export function AutomationEditor({
   store,
+  threadRegistry,
   threadId,
 }: {
   store: EditorStore;
+  /** Loads a thread the application store does not hold, as its route would. */
+  threadRegistry: AutomationThreadSource;
   threadId: string;
 }): React.JSX.Element {
-  const thread = useAutomationThread(store, threadId);
+  const anchor = useAutomationAnchor(store, threadRegistry, threadId);
   let content: React.ReactNode;
-  if (thread === undefined) {
-    content = <EditorLoading />;
-  } else if (thread === null) {
-    content = (
-      <>
-        <SettingsDetailHeader headingLevel={1} title="Automation" />
-        <EmptyState
-          title="Thread not found"
-          description="This thread doesn't exist, or it isn't available here."
-          action={
-            <Button type="button" variant="outline" onClick={() => navigate(automationsPath())}>
-              All automations
-            </Button>
-          }
-        />
-      </>
-    );
+  if (anchor.status === "loading") {
+    content = <AutomationAnchorLoading />;
+  } else if (anchor.status === "unavailable") {
+    content = <AutomationAnchorUnavailable message={anchor.message} onRetry={anchor.retry} />;
   } else {
     // Keyed by thread: another thread's editor starts from its own form,
     // definition and requests, never from this one's.
-    content = <ThreadAutomationEditor key={thread.id} store={store} thread={thread} />;
+    content = (
+      <ThreadAutomationEditor key={anchor.thread.id} store={store} thread={anchor.thread} />
+    );
   }
   return (
     <section className="automations-view" aria-label="Automation editor">
       <div className="automations-page automation-page">{content}</div>
     </section>
-  );
-}
-
-function EditorLoading(): React.JSX.Element {
-  return (
-    <div className="automation-page-loading" role="status" aria-label="Loading automation">
-      <Skeleton className="automation-page-skeleton-title" />
-      <Skeleton className="automation-page-skeleton-card" />
-    </div>
   );
 }
 
@@ -111,7 +100,7 @@ function ThreadAutomationEditor({
 }): React.JSX.Element {
   const capabilityState = useAutomationCapability(store, thread.id, thread);
   const capability = capabilityState.capability;
-  const editor = useAutomationEditor(store, thread.id, {
+  const editor = useAutomationEditor(store, thread, {
     canCloneOnRun: capability?.canCloneOnRun ?? false,
   });
   const saving = editor.pending === "save" || editor.pending === "save_and_enable";
@@ -152,7 +141,7 @@ function ThreadAutomationEditor({
     editor.status === "loading" ||
     (capability === undefined && capabilityState.error === undefined)
   ) {
-    return <EditorLoading />;
+    return <AutomationAnchorLoading />;
   }
   if (editor.status === "error") {
     return (

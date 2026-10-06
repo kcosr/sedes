@@ -32,6 +32,20 @@ function storeWith(lastRun: LastRun | undefined) {
 
 function stateFor(lastRun: LastRun | undefined): ApplicationClientState {
   return {
+    descendantPages: {
+      "other-thread": {
+        descendants: [
+          {
+            thread: {
+              id: "loaded-fork",
+              automation: { status: "paused", runMode: "same_thread", scheduleKind: "cron", revision: 1, hasPrecheck: false },
+            },
+          },
+        ],
+        loading: false,
+        loaded: true,
+      },
+    },
     snapshot: {
       threads: [
         { id: "other-thread", automation: null },
@@ -137,6 +151,20 @@ describe("AutomationContextNotice", () => {
     expect(link).toHaveAttribute("href", "/automations/source-thread");
     await userEvent.click(link);
     expect(window.location.pathname).toBe("/automations/source-thread");
+  });
+
+  it("links to the automation of a source fork loaded beyond the bootstrap", () => {
+    render(
+      <AutomationContextNotice
+        context={{ ...context, outcome: "triggered", sourceThreadId: "loaded-fork" }}
+        store={storeWith(lastRun())}
+        onDismiss={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("link", { name: "Open automation" })).toHaveAttribute(
+      "href",
+      "/automations/loaded-fork",
+    );
   });
 
   it("offers no link when the source thread has no automation any more", () => {

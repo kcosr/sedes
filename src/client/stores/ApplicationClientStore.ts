@@ -318,7 +318,7 @@ export class ApplicationClientStore {
   }
 
   async mutateInventory(
-    thread: NormalizedApplicationThreadSummary,
+    thread: Pick<NormalizedApplicationThreadSummary, "id" | "inventoryRevision">,
     action:
       | "settle"
       | "unsettle"

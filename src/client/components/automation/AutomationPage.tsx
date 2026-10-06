@@ -75,15 +75,20 @@ import { useAutomationRuns } from "./use-automation-runs.js";
 import { useNextOccurrences } from "./use-next-occurrences.js";
 import {
   automationLiveKey,
-  useAutomationThread,
+  useAutomationAnchor,
   type AutomationThread,
+  type AutomationThreadSource,
 } from "./use-automation-thread.js";
+import {
+  AutomationAnchorLoading,
+  AutomationAnchorUnavailable,
+} from "./AutomationAnchorStates.js";
 
 const PHONE_QUERY = "(max-width: 819px)";
 
 type PageStore = Pick<
   ApplicationClientStore,
-  "api" | "subscribe" | "getSnapshot" | "getThreadSummaries" | "mutateInventory"
+  "api" | "subscribe" | "getSnapshot" | "mutateInventory"
 >;
 
 type PageAction = "run" | "state" | "restore" | "wake";
@@ -91,12 +96,16 @@ type PageAction = "run" | "state" | "restore" | "wake";
 /** One automation, read-only, with its runs (`/automations/:threadId`). */
 export function AutomationPage({
   store,
+  threadRegistry,
   threadId,
 }: {
   store: PageStore;
+  /** Loads a thread the application store does not hold, as its route would. */
+  threadRegistry: AutomationThreadSource;
   threadId: string;
 }): React.JSX.Element {
-  const thread = useAutomationThread(store, threadId);
+  const anchor = useAutomationAnchor(store, threadRegistry, threadId);
+  const thread = anchor.status === "ready" ? anchor.thread : undefined;
   const minute = useMinuteClock();
   const now = useMemo(() => new Date(minute), [minute]);
   const back = (
@@ -112,34 +121,23 @@ export function AutomationPage({
   );
 
   let content: React.ReactNode;
-  if (thread === undefined) {
+  if (anchor.status === "loading") {
+    content = <AutomationAnchorLoading back={back} />;
+  } else if (anchor.status === "unavailable") {
     content = (
-      <div className="automation-page-loading" role="status" aria-label="Loading automation">
-        {back}
-        <Skeleton className="automation-page-skeleton-title" />
-        <Skeleton className="automation-page-skeleton-card" />
-      </div>
-    );
-  } else if (thread === null) {
-    content = (
-      <>
-        <SettingsDetailHeader back={back} headingLevel={1} title="Automation" />
-        <EmptyState
-          title="Thread not found"
-          description="This thread doesn't exist, or it isn't available here."
-          action={
-            <Button type="button" variant="outline" onClick={() => navigate(automationsPath())}>
-              All automations
-            </Button>
-          }
-        />
-      </>
+      <AutomationAnchorUnavailable back={back} message={anchor.message} onRetry={anchor.retry} />
     );
   } else {
     // Keyed by thread: another thread's page starts from its own
     // definition, runs, capability and view state, never from this one's.
     content = (
-      <LoadedAutomation key={thread.id} store={store} thread={thread} back={back} now={now} />
+      <LoadedAutomation
+        key={anchor.thread.id}
+        store={store}
+        thread={anchor.thread}
+        back={back}
+        now={now}
+      />
     );
   }
   return (
@@ -350,7 +348,7 @@ function AutomationDetails({
   });
   const runs = useAutomationRuns(
     store,
-    thread.id,
+    thread,
     runsView.expanded ? runsView.filter : "all",
   );
   const [busy, setBusy] = useState<PageAction>();
@@ -393,9 +391,7 @@ function AutomationDetails({
     });
   const inventory = (action: "restore" | "wake") =>
     void act(action, async () => {
-      const summary = store.getThreadSummaries().find(({ id }) => id === thread.id);
-      if (!summary) throw new Error("The thread is no longer available.");
-      await store.mutateInventory(summary, action);
+      await store.mutateInventory(thread, action);
     });
   const openThread = (id = thread.id) => navigate(threadPath(id));
   const toggleState = () => setState(paused ? "enable" : "pause");

@@ -1,6 +1,7 @@
 import { useCallback } from "react";
 import type { NormalizedThreadAttention } from "../../../shared/index.js";
 import { automationPath } from "../../app/router.js";
+import { findLoadedThread } from "../../automation/loaded-threads.js";
 import type {
   ApplicationClientState,
   ApplicationClientStore,
@@ -29,11 +30,11 @@ export function AutomationContextNotice({
   readonly store: Pick<ApplicationClientStore, "subscribe" | "getSnapshot">;
   readonly onDismiss: () => void;
 }): React.JSX.Element {
+  // The source thread can be a fork the sidebar loaded beyond the bootstrap.
   const selectOccurrence = useCallback(
     (state: ApplicationClientState) => {
-      const lastRun = state.snapshot?.threads.find(
-        ({ id }) => id === context.sourceThreadId,
-      )?.automation?.lastRun;
+      const lastRun = findLoadedThread(state, context.sourceThreadId)
+        ?.automation?.lastRun;
       return lastRun?.id === context.runId ? lastRun.occurrence : undefined;
     },
     [context.runId, context.sourceThreadId],
@@ -41,10 +42,7 @@ export function AutomationContextNotice({
   const occurrence = useApplicationStoreSelector(store, selectOccurrence);
   const selectHasAutomation = useCallback(
     (state: ApplicationClientState) =>
-      Boolean(
-        state.snapshot?.threads.find(({ id }) => id === context.sourceThreadId)
-          ?.automation,
-      ),
+      Boolean(findLoadedThread(state, context.sourceThreadId)?.automation),
     [context.sourceThreadId],
   );
   const hasAutomation = useApplicationStoreSelector(store, selectHasAutomation);

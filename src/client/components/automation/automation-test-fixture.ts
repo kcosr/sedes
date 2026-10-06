@@ -1,4 +1,4 @@
-import { vi } from "vitest";
+import { vi, type Mock } from "vitest";
 import type { NormalizedApplicationThreadSummary } from "../../../shared/index.js";
 import type { ThreadAutomationRun } from "../../../shared/protocol/automation-presentation.js";
 import type { SummaryAutomation } from "../../automation/automation-health.js";
@@ -6,7 +6,9 @@ import type {
   ApplicationClientState,
   ApplicationClientStore,
 } from "../../stores/ApplicationClientStore.js";
+import type { ThreadClientState } from "../../stores/ThreadClientStore.js";
 import type { ThreadAutomationDefinition } from "../../types.js";
+import type { AutomationThreadSource } from "./use-automation-thread.js";
 
 /** Test data and a live application store for the automation page and editor. */
 
@@ -95,7 +97,10 @@ function threadSummary(thread: FixtureThread): NormalizedApplicationThreadSummar
   } as unknown as NormalizedApplicationThreadSummary;
 }
 
-function stateFor(threads: readonly FixtureThread[]): ApplicationClientState {
+function stateFor(
+  threads: readonly FixtureThread[],
+  loadedForks: readonly FixtureThread[] = [],
+): ApplicationClientState {
   return {
     status: "ready",
     connection: "connected",
@@ -104,7 +109,16 @@ function stateFor(threads: readonly FixtureThread[]): ApplicationClientState {
     experimentalUsageEnabled: false,
     search: "",
     visibleThreads: [],
-    descendantPages: {},
+    descendantPages:
+      loadedForks.length === 0
+        ? {}
+        : {
+            "fork-root": {
+              descendants: loadedForks.map((fork) => ({ thread: threadSummary(fork) })),
+              loading: false,
+              loaded: true,
+            },
+          },
     pendingThreadConfigurationCopySourceIds: [],
     snapshot: {
       projects: [{ id: "project-1", name: "acme-web" }],
@@ -145,8 +159,46 @@ export interface AutomationStore {
   readonly store: ApplicationClientStore;
   readonly api: AutomationApi;
   readonly mutateInventory: ReturnType<typeof vi.fn>;
-  /** Replaces the threads, as a stream event would. */
-  readonly publish: (threads: readonly FixtureThread[]) => void;
+  /** Replaces the threads (and the loaded fork pages), as a stream event would. */
+  readonly publish: (threads: readonly FixtureThread[], loadedForks?: readonly FixtureThread[]) => void;
+  /** The thread stores a page or editor loads a thread the store lacks from. */
+  readonly threadRegistry: FixtureThreadRegistry;
+}
+
+export interface FixtureThreadRegistry extends AutomationThreadSource {
+  readonly retain: Mock<AutomationThreadSource["retain"]>;
+  readonly release: Mock<AutomationThreadSource["release"]>;
+  readonly retryLoad: Mock<() => void>;
+  /** Settles the retained thread store: the thread loads, or its load fails. */
+  readonly settle: (result: { readonly thread: FixtureThread } | { readonly error: string }) => void;
+}
+
+/** A thread registry whose stores stay loading until `settle`. */
+export function threadRegistry(): FixtureThreadRegistry {
+  const listeners = new Set<() => void>();
+  let state = { status: "loading" } as ThreadClientState;
+  const retryLoad = vi.fn<() => void>();
+  const threadStore = {
+    subscribe: (listener: () => void) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    getSnapshot: () => state,
+    retryLoad,
+  };
+  return {
+    retain: vi.fn<AutomationThreadSource["retain"]>(() => threadStore),
+    release: vi.fn<AutomationThreadSource["release"]>(),
+    retryLoad,
+    settle: (result) => {
+      state = (
+        "error" in result
+          ? { status: "error", error: result.error }
+          : { status: "ready", snapshot: { thread: threadSummary(result.thread) } }
+      ) as ThreadClientState;
+      for (const listener of listeners) listener();
+    },
+  };
 }
 
 /**
@@ -156,10 +208,11 @@ export interface AutomationStore {
 export function automationStore(
   threads: readonly FixtureThread[] | undefined,
   api: Partial<AutomationApi> = {},
+  loadedForks: readonly FixtureThread[] = [],
 ): AutomationStore {
   const listeners = new Set<() => void>();
   let state: ApplicationClientState = threads
-    ? stateFor(threads)
+    ? stateFor(threads, loadedForks)
     : ({ status: "loading", search: "", descendantPages: {} } as unknown as ApplicationClientState);
   const fullApi: AutomationApi = {
     getThreadAutomation: vi.fn().mockResolvedValue(definition()),
@@ -196,16 +249,16 @@ export function automationStore(
       return () => listeners.delete(listener);
     },
     getSnapshot: () => state,
-    getThreadSummaries: () => state.snapshot?.threads ?? [],
     mutateInventory,
   } as unknown as ApplicationClientStore;
   return {
     store,
     api: fullApi,
     mutateInventory,
-    publish: (next) => {
-      state = stateFor(next);
+    publish: (next, forks = []) => {
+      state = stateFor(next, forks);
       for (const listener of listeners) listener();
     },
+    threadRegistry: threadRegistry(),
   };
 }

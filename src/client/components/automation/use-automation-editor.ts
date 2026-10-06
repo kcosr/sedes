@@ -22,16 +22,13 @@ import {
   validPrecheckTimeout,
   type AutomationForm,
 } from "./automation-form.js";
-import {
-  useAutomationThread,
-  type AutomationThread,
-} from "./use-automation-thread.js";
+import type { AutomationThread } from "./use-automation-thread.js";
 
 /** Occurrences the editor and the page preview. */
 export const AUTOMATION_PREVIEW_COUNT = 3;
 const PREVIEW_DEBOUNCE_MS = 200;
 
-type EditorStore = Pick<ApplicationClientStore, "api" | "subscribe" | "getSnapshot">;
+type EditorStore = Pick<ApplicationClientStore, "api">;
 
 export interface AutomationEditorValidation {
   readonly promptBytes: number;
@@ -45,8 +42,6 @@ export interface AutomationEditorValidation {
 }
 
 export interface AutomationEditor {
-  /** Undefined until the application snapshot arrives; null for an unknown thread. */
-  readonly thread: AutomationThread | null | undefined;
   readonly mode: "create" | "edit";
   readonly definition?: ThreadAutomationDefinition;
   /** `loading` while the saved definition is read for the first time. */
@@ -100,11 +95,11 @@ export interface AutomationEditor {
  */
 export function useAutomationEditor(
   store: EditorStore,
-  threadId: string,
+  thread: Pick<AutomationThread, "id" | "automation">,
   options: { readonly canCloneOnRun: boolean },
 ): AutomationEditor {
-  const thread = useAutomationThread(store, threadId);
-  const live = thread?.automation ?? null;
+  const threadId = thread.id;
+  const live = thread.automation;
   const liveRevision = live?.revision;
   const [initial] = useState(() => defaultAutomationForm(new Date()));
   const [definition, setDefinition] = useState<ThreadAutomationDefinition>();
@@ -409,7 +404,6 @@ export function useAutomationEditor(
   };
 
   return {
-    thread,
     mode,
     ...(definition ? { definition } : {}),
     status,

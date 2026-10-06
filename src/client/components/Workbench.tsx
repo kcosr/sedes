@@ -155,9 +155,17 @@ export function Workbench({
           {route.name === "automations" ? (
             <AutomationsView store={applicationStore} />
           ) : route.edit ? (
-            <AutomationEditor store={applicationStore} threadId={route.threadId} />
+            <AutomationEditor
+              store={applicationStore}
+              threadRegistry={threadRegistry}
+              threadId={route.threadId}
+            />
           ) : (
-            <AutomationPage store={applicationStore} threadId={route.threadId} />
+            <AutomationPage
+              store={applicationStore}
+              threadRegistry={threadRegistry}
+              threadId={route.threadId}
+            />
           )}
         </div>
       </main>

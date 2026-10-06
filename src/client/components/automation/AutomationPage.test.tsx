@@ -63,7 +63,7 @@ function lastRun(state: NonNullable<SummaryAutomation["lastRun"]>["state"], id =
 
 function renderPage(threads: readonly FixtureThread[] | undefined, api: Parameters<typeof automationStore>[1] = {}) {
   const fixture = automationStore(threads, api);
-  render(<AutomationPage store={fixture.store} threadId={THREAD_ID} />);
+  render(<AutomationPage store={fixture.store} threadRegistry={fixture.threadRegistry} threadId={THREAD_ID} />);
   return fixture;
 }
 
@@ -261,12 +261,62 @@ describe("AutomationPage", () => {
     expect(window.location.pathname).toBe(`/automations/${THREAD_ID}/edit`);
   });
 
-  it("says when the thread is unknown, and waits for the snapshot", () => {
-    renderPage(undefined);
+  it("waits for the snapshot before deciding where the thread comes from", () => {
+    const fixture = renderPage(undefined);
     expect(screen.getByRole("status", { name: "Loading automation" })).toBeInTheDocument();
-    cleanup();
-    renderPage([{ id: "other-thread", automation: null }]);
-    expect(screen.getByText("Thread not found")).toBeInTheDocument();
+    expect(fixture.threadRegistry.retain).not.toHaveBeenCalled();
+  });
+
+  it("finds a fork the sidebar loaded beyond the bootstrap", async () => {
+    const fixture = automationStore(
+      [{ id: "root-thread", automation: null }],
+      {},
+      [{ title: "Nightly audit fork", inventoryState: "archived", automation: automationSummary() }],
+    );
+    render(<AutomationPage store={fixture.store} threadRegistry={fixture.threadRegistry} threadId={THREAD_ID} />);
+    expect(screen.getByRole("heading", { level: 1, name: "Nightly audit fork" })).toBeInTheDocument();
+    expect(await screen.findByText("Check acme-web for outdated dependencies.")).toBeInTheDocument();
+    expect(fixture.threadRegistry.retain).not.toHaveBeenCalled();
+    // The fork's inventory revision carries a restore.
+    await userEvent.click(screen.getByRole("button", { name: "Restore thread" }));
+    await waitFor(() =>
+      expect(fixture.mutateInventory).toHaveBeenCalledWith(
+        expect.objectContaining({ id: THREAD_ID, inventoryRevision: 4 }),
+        "restore",
+      ),
+    );
+  });
+
+  it("loads a thread the store does not hold as its thread route would, and lets it go", async () => {
+    const fixture = automationStore([{ id: "other-thread", automation: null }]);
+    const view = render(
+      <AutomationPage store={fixture.store} threadRegistry={fixture.threadRegistry} threadId={THREAD_ID} />,
+    );
+    expect(screen.getByRole("status", { name: "Loading automation" })).toBeInTheDocument();
+    expect(screen.queryByText("Thread not found")).toBeNull();
+    expect(fixture.threadRegistry.retain).toHaveBeenCalledWith(THREAD_ID);
+
+    act(() => fixture.threadRegistry.settle({ thread: { title: "Deep fork", automation: automationSummary() } }));
+    expect(screen.getByRole("heading", { level: 1, name: "Deep fork" })).toBeInTheDocument();
+    expect(screen.getByText("acme-web")).toBeInTheDocument();
+    expect(await screen.findByText("Check acme-web for outdated dependencies.")).toBeInTheDocument();
+
+    // A thread update brings the thread into the store; its store is let go.
+    act(() => fixture.publish([{ title: "Deep fork", automation: automationSummary() }]));
+    expect(fixture.threadRegistry.release).toHaveBeenCalledWith(THREAD_ID);
+    expect(screen.getByRole("heading", { level: 1, name: "Deep fork" })).toBeInTheDocument();
+    view.unmount();
+    expect(fixture.threadRegistry.release).toHaveBeenCalledOnce();
+  });
+
+  it("says why a thread outside the store could not be loaded, and retries", async () => {
+    const fixture = automationStore([{ id: "other-thread", automation: null }]);
+    render(<AutomationPage store={fixture.store} threadRegistry={fixture.threadRegistry} threadId={THREAD_ID} />);
+    act(() => fixture.threadRegistry.settle({ error: "This thread was not found." }));
+    expect(screen.getByText("Couldn't open this thread")).toBeInTheDocument();
+    expect(screen.getByText("This thread was not found.")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(fixture.threadRegistry.retryLoad).toHaveBeenCalledOnce();
   });
 
   it("retries a definition that failed to load, and falls back when the server has none", async () => {
@@ -435,10 +485,10 @@ describe("AutomationPage", () => {
       ],
       { getThreadAutomation },
     );
-    const view = render(<AutomationPage store={fixture.store} threadId={THREAD_ID} />);
+    const view = render(<AutomationPage store={fixture.store} threadRegistry={fixture.threadRegistry} threadId={THREAD_ID} />);
     expect(await screen.findByText("First prompt")).toBeInTheDocument();
 
-    view.rerender(<AutomationPage store={fixture.store} threadId={otherId} />);
+    view.rerender(<AutomationPage store={fixture.store} threadRegistry={fixture.threadRegistry} threadId={otherId} />);
     expect(screen.getByRole("heading", { level: 1, name: "Weekly release notes draft" })).toBeInTheDocument();
     // Nothing of the first automation stays on screen while the second loads.
     expect(screen.queryByText("First prompt")).toBeNull();
