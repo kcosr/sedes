@@ -52,6 +52,9 @@ module.exports = {
   win: {
     icon: 'assets/icon.png',
   },
+  nsis: {
+    include: 'installer.nsh',
+  },
   files: [
     'build/**/*',
     'app/**/*',

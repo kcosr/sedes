@@ -440,6 +440,19 @@ not assume an artifact built on one OS represents verified support on another.
 
 ## Desktop acceptance checks
 
+Windows NSIS installers give the previous uninstaller extended-length temporary
+paths, preserving the existing temporary directory and its permissions. This
+also covers full-to-client upgrades from older builds whose nested backend
+dependencies otherwise fail during removal with a misleading "cannot be closed"
+message. The override is process-local and restored before launching Sedes;
+saved connections, credentials, and managed Local state are not removed.
+Upgrades refresh retained Sedes Start Menu and desktop shortcuts, preserving
+intentionally removed shortcuts. Setup launches the installed executable
+directly instead of depending on a retained shortcut's shell metadata.
+Run `npm run test:windows-installer` after installing the Electron dependencies
+to compile and execute isolated NSIS path/upgrade regression fixtures. It never
+operates on the installed Sedes application or its registry entries.
+
 Before handing an installer or unpacked preview to another trusted tester, run
 `electron:verify` on the target platform and exercise at least:
 
