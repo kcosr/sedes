@@ -244,6 +244,41 @@ describe("AutomationEditor", () => {
     expect(fixture.api.testThreadAutomationPrecheck).toHaveBeenCalledOnce();
   });
 
+  it("loads the destination's own automation when moving between editors", async () => {
+    const otherId = "10000000-0000-4000-8000-000000000002";
+    const getThreadAutomation = vi.fn(async (threadId: string) =>
+      definition({ prompt: threadId === THREAD_ID ? "First prompt" : "Second prompt" }),
+    );
+    const updateThreadAutomation = vi.fn().mockResolvedValue(definition({ prompt: "Second prompt, edited", revision: 4 }));
+    const fixture = automationStore(
+      [
+        { automation: automationSummary({ revision: 3 }) },
+        { id: otherId, title: "Weekly release notes draft", automation: automationSummary({ revision: 3 }) },
+      ],
+      { getThreadAutomation, updateThreadAutomation },
+    );
+    const view = render(<AutomationEditor store={fixture.store} threadId={THREAD_ID} />);
+    expect(await screen.findByRole("textbox", { name: "Prompt" })).toHaveValue("First prompt");
+
+    view.rerender(<AutomationEditor store={fixture.store} threadId={otherId} />);
+    // The first editor's form never shows under the second thread's name.
+    expect(screen.queryByRole("textbox", { name: "Prompt" })).toBeNull();
+    expect(await screen.findByRole("link", { name: "Weekly release notes draft" })).toBeInTheDocument();
+    const prompt = screen.getByRole("textbox", { name: "Prompt" });
+    expect(prompt).toHaveValue("Second prompt");
+    expect(getThreadAutomation).toHaveBeenLastCalledWith(otherId, expect.any(AbortSignal));
+
+    await userEvent.type(prompt, ", edited");
+    const save = screen.getByRole("button", { name: "Save" });
+    await waitFor(() => expect(save).toBeEnabled());
+    await userEvent.click(save);
+    await waitFor(() => expect(updateThreadAutomation).toHaveBeenCalledOnce());
+    expect(updateThreadAutomation).toHaveBeenCalledWith(
+      otherId,
+      expect.objectContaining({ prompt: "Second prompt, edited", expectedRevision: 3 }),
+    );
+  });
+
   it("names a thread the editor cannot find", () => {
     renderEditor([{ id: "other", automation: null }]);
     expect(screen.getByText("Thread not found")).toBeInTheDocument();

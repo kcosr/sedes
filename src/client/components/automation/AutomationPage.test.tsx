@@ -394,6 +394,34 @@ describe("AutomationPage", () => {
     await waitFor(() => expect(window.location.pathname).toBe("/automations"));
   });
 
+  it("shows the destination's own automation when moving between pages", async () => {
+    const otherId = "10000000-0000-4000-8000-000000000002";
+    let releaseOther!: (value: ReturnType<typeof definition>) => void;
+    const getThreadAutomation = vi.fn((threadId: string) =>
+      threadId === THREAD_ID
+        ? Promise.resolve(definition({ prompt: "First prompt" }))
+        : new Promise<ReturnType<typeof definition>>((resolve) => {
+            releaseOther = resolve;
+          }),
+    );
+    const fixture = automationStore(
+      [
+        { automation: automationSummary({ revision: 3 }) },
+        { id: otherId, title: "Weekly release notes draft", automation: automationSummary({ revision: 3 }) },
+      ],
+      { getThreadAutomation },
+    );
+    const view = render(<AutomationPage store={fixture.store} threadId={THREAD_ID} />);
+    expect(await screen.findByText("First prompt")).toBeInTheDocument();
+
+    view.rerender(<AutomationPage store={fixture.store} threadId={otherId} />);
+    expect(screen.getByRole("heading", { level: 1, name: "Weekly release notes draft" })).toBeInTheDocument();
+    // Nothing of the first automation stays on screen while the second loads.
+    expect(screen.queryByText("First prompt")).toBeNull();
+    act(() => releaseOther(definition({ prompt: "Second prompt" })));
+    expect(await screen.findByText("Second prompt")).toBeInTheDocument();
+  });
+
   it("goes back where the user came from", async () => {
     navigate(`/threads/${THREAD_ID}`, { replace: true });
     navigate(`/automations/${THREAD_ID}`);

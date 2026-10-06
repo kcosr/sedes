@@ -82,7 +82,9 @@ export function AutomationEditor({
       </>
     );
   } else {
-    content = <ThreadAutomationEditor store={store} thread={thread} />;
+    // Keyed by thread: another thread's editor starts from its own form,
+    // definition and requests, never from this one's.
+    content = <ThreadAutomationEditor key={thread.id} store={store} thread={thread} />;
   }
   return (
     <section className="automations-view" aria-label="Automation editor">

@@ -137,8 +137,10 @@ export function AutomationPage({
       </>
     );
   } else {
+    // Keyed by thread: another thread's page starts from its own
+    // definition, runs, capability and view state, never from this one's.
     content = (
-      <LoadedAutomation store={store} thread={thread} back={back} now={now} />
+      <LoadedAutomation key={thread.id} store={store} thread={thread} back={back} now={now} />
     );
   }
   return (
