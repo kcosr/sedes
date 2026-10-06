@@ -264,8 +264,12 @@ export function ThreadView({
 
   // A visible view with no composer resolves a recovery handoff immediately.
   const unavailableVoiceComposer = state.status === "error" ? "The original thread is unavailable. Copy the text instead."
-    : state.authoritative && state.snapshot?.capabilities.interactionMode === "read_only"
-      ? "This thread is read-only. Copy the text instead." : null;
+    : !state.authoritative ? null
+      : state.snapshot?.capabilities.interactionMode === "read_only" ? "This thread is read-only. Copy the text instead."
+        : state.snapshot?.thread.inventoryState === "archived" ? "This thread is archived. Copy the text instead."
+          : state.snapshot && !state.snapshot.thread.available ? "The original thread is unavailable. Copy the text instead."
+            : state.snapshot?.recovery ? "Resolve this thread's recovery first. You can still copy the text."
+              : focusTurnId ? "Return to the live thread to add text. You can still copy the text." : null;
   useEffect(() => {
     if (!visible || !voice || !unavailableVoiceComposer) return;
     return voice.registerComposer(threadId, () => { throw new Error(unavailableVoiceComposer); });

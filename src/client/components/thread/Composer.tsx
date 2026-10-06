@@ -1675,8 +1675,7 @@ export function Composer({
     setDirty(true);
   };
   // Navigation can mount the composer before its draft has loaded into React state.
-  // A loaded but disabled composer registers too, so it can explain the refusal immediately.
-  const voiceComposerReady = state.connection === "connected" && state.authoritative && Boolean(syncedDraft.current);
+  const voiceComposerReady = !effectiveDisabled && Boolean(syncedDraft.current);
   useEffect(() => {
     if (!active || !voice || !voiceComposerReady) return;
     return voice.registerComposer(store.threadId, text => appendVoiceText.current(text));
