@@ -131,6 +131,18 @@ is a connection fence, not a replacement for authentication. Native and browser
 registration remain live while voice is Off. Old advisory origins retained in
 historical inputs do not become live client authority.
 
+Agent `client.switch_thread` requests share the existing turn-settlement and
+reply-drain queue. A background request with `listen: true` requires an already
+ready native voice session and starts one recognition on the exact target;
+`listen: false` remains a no-op. The runtime captures the voice-only disposition
+at acceptance, so returning to the foreground cannot turn it into navigation.
+That request never queues `openThread` or changes the default or pending in-app target.
+Visibility changes alone do not cancel that recognition request; explicit manual
+supersession, Off, expiry, and connection loss still do. Foreground navigation
+keeps its visibility fence. Native readiness and recording blockers are checked
+again at execution, and normal recording preferences, including Keep listening
+by default, remain in effect. No background service start is attempted.
+
 The device preferences envelope has format version 1 and carries the strict
 settings `RECORD_VERSION` 7. Earlier per-binding settings and profile-bound speech
 credentials are not imported; upgrades require device voice setup and credential

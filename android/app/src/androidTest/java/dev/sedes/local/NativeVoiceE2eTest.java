@@ -58,9 +58,11 @@ public class NativeVoiceE2eTest {
         instrumentation.runOnMainSync(() -> web = activity.getBridge().getWebView()); runtime = NativeVoiceRuntime.get(context);
         AtomicReference<String> currentPhase = new AtomicReference<>("");
         AtomicBoolean stopRequested = new AtomicBoolean(), stoppedItemReleased = new AtomicBoolean();
+        AtomicInteger navigationEvents = new AtomicInteger();
         List<JSONObject> submittedInputs = new CopyOnWriteArrayList<>();
         NativeVoiceRuntime.Observer observer = (event, value) -> {
             if (event.equals("inputSubmitted")) submittedInputs.add(NativeVoiceJson.copy(value));
+            if (event.equals("openThread")) navigationEvents.incrementAndGet();
             if (event.equals("stateChanged")) {
                 String phase = value.optString("phase"); currentPhase.set(phase);
                 if (phases.isEmpty() || !phase.equals(phases.get(phases.size() - 1))) phases.add(phase);
@@ -75,6 +77,7 @@ public class NativeVoiceE2eTest {
         AtomicInteger inputAttempts = new AtomicInteger(), receiptReads = new AtomicInteger();
         AtomicBoolean allowReceipt = new AtomicBoolean(false);
         List<String> mutationIds = new CopyOnWriteArrayList<>();
+        List<JSONObject> backgroundReceipts = new CopyOnWriteArrayList<>();
         boolean recoveryScenario = scenario.equals("lost-ack") || scenario.equals("lost-send") || scenario.equals("cancel-uncertain");
         if (recoveryScenario) NativeVoiceHttp.setTestTransport(new NativeVoiceHttp.TestTransport() {
             public boolean before(String method, String path, JSONObject body, NativeVoiceHttp.Result result) {
@@ -96,6 +99,16 @@ public class NativeVoiceE2eTest {
                 return false;
             }
         });
+        else if (scenario.equals("background-switch")) NativeVoiceHttp.setTestTransport(new NativeVoiceHttp.TestTransport() {
+            public boolean before(String method, String path, JSONObject body, NativeVoiceHttp.Result result) { return false; }
+            public boolean after(String method, String path, JSONObject body, int status, JSONObject response, NativeVoiceHttp.Result result) {
+                // Observe the real admission without replacing any transport result. Background admission deliberately
+                // emits no inputSubmitted presentation event, because the destination is not the visible transcript.
+                if (method.equals("POST") && path.equals("/api/threads/" + args.getString("secondThreadId") + "/inputs") &&
+                    status >= 200 && status < 300 && response != null) backgroundReceipts.add(NativeVoiceJson.copy(response));
+                return false;
+            }
+        });
         AtomicInteger supplied = new AtomicInteger(), silenceChunks = new AtomicInteger();
         AtomicBoolean allowCaptureCompletion = new AtomicBoolean();
         NativeVoiceAudio.setTestSource(() -> {
@@ -113,6 +126,7 @@ public class NativeVoiceE2eTest {
             return pcm;
         });
         long began = SystemClock.elapsedRealtime();
+        JSONObject backgroundSwitch = null;
         try {
             if (!restoreStartup) {
                 waitJs("document.querySelector('#setting-sedes-name') !== null", 45000);
@@ -174,19 +188,43 @@ public class NativeVoiceE2eTest {
                 assertFalse(runtime.snapshot().getJSONObject("actions").getBoolean("canResume"));
                 screenshot("startup-restored");
             }
-            // Route through the actual bundled application; all subsequent operations use its UI.
+            // Route through the actual bundled application so navigation and draft preservation use the real UI.
             js("(()=>{history.pushState({},''," + JSONObject.quote("/threads/" + thread) + ");window.dispatchEvent(new PopStateEvent('popstate'));return true})()");
             waitJs("document.querySelector('[data-testid=\"composer\"] textarea:not(:disabled)') !== null", 45000);
             if (scenario.equals("cycle")) js("localStorage.setItem('sedes-seek-on-submit', '" + mode.equals("manual") + "')");
-            input("[data-testid=\"composer\"] textarea", initial);
-            waitJs("!!document.querySelector('[aria-label=\"Send message\"]:not(:disabled)')", 15000); click("[aria-label=\"Send message\"]");
-            waitJs("document.querySelector('[data-testid=\"composer\"] textarea')?.value === ''", 15000);
+            if (scenario.equals("background-switch")) {
+                // The agent's explicit listen must work independently of automatic reply recognition and the pinned default.
+                command("updateSettings", NativeVoiceJson.object("expectedRevision", runtime.snapshot().getLong("settingsRevision"),
+                    "patch", NativeVoiceJson.object("autoListen", false, "voiceThreadId", thread, "pinDefaultVoiceThread", true)));
+            } else {
+                input("[data-testid=\"composer\"] textarea", initial);
+                waitJs("!!document.querySelector('[aria-label=\"Send message\"]:not(:disabled)')", 15000); click("[aria-label=\"Send message\"]");
+                waitJs("document.querySelector('[data-testid=\"composer\"] textarea')?.value === ''", 15000);
+            }
             input("[data-testid=\"composer\"] textarea", draft);
-            if (!scenario.equals("background") && !scenario.equals("skip") && !scenario.equals("stop") && !scenario.equals("retarget")) screenshot("active");
-            if (scenario.equals("background")) {
+            if (!scenario.equals("background") && !scenario.equals("background-switch") && !scenario.equals("skip") && !scenario.equals("stop") && !scenario.equals("retarget")) screenshot("active");
+            if (scenario.equals("background") || scenario.equals("background-switch")) {
+                if (scenario.equals("background-switch")) {
+                    assertTrue("Save the source draft before backgrounding", awaitServerDraft(server, thread, draft, 15000));
+                    screenshot("before-background-switch");
+                }
                 instrumentation.runOnMainSync(() -> activity.moveTaskToBack(true));
                 await(() -> !runtime.snapshot().optJSONObject("foreground").optBoolean("visible"), 10000, "native background visibility");
                 screenshot("background");
+                if (scenario.equals("background-switch")) {
+                    // Preserve genuine client/turn provenance without racing the UI's pause against the model's tool call.
+                    // The loopback model invokes the real Sedes client.switch_thread tool for this submitted prompt.
+                    submitRegisteredInput(server, thread, initial);
+                    String destination = required(args, "secondThreadId");
+                    await(() -> runtime.snapshot().optString("phase").equals("listening"), 60000, "agent-requested background recognition");
+                    JSONObject state = runtime.snapshot();
+                    assertFalse(state.getJSONObject("foreground").getBoolean("visible"));
+                    assertEquals(destination, state.getJSONObject("active").getString("recognitionThreadId"));
+                    assertTrue("The source reply must play before target recognition", speechPlayed.get());
+                    assertEquals("Background commands must never request navigation", 0, navigationEvents.get());
+                    backgroundSwitch = NativeVoiceJson.object("recognitionThreadId", destination, "foreground", false,
+                        "replyPlayedBeforeRecognition", speechPlayed.get());
+                }
             }
             if (scenario.equals("skip")) {
                 await(() -> {
@@ -263,13 +301,34 @@ public class NativeVoiceE2eTest {
                     js("(()=>{history.pushState({},''," + JSONObject.quote("/threads/" + thread) + ");window.dispatchEvent(new PopStateEvent('popstate'));return true})()");
                 }
             }
-            if (scenario.equals("background")) {
+            if (scenario.equals("background") || scenario.equals("background-switch")) {
                 // MainActivity is singleTask: resume the existing instance instead of waiting for a new launch.
                 instrumentation.runOnMainSync(() -> context.startActivity(new Intent(context, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)));
                 await(() -> runtime.snapshot().optJSONObject("foreground").optBoolean("visible"), 15000, "native foreground visibility after return");
                 waitJs("document.visibilityState === 'visible'", 15000);
             }
             waitJs("document.querySelector('[data-testid=\"composer\"] textarea')?.value === " + JSONObject.quote(draft), 15000);
+            if (scenario.equals("background-switch")) {
+                assertEquals("One real background admission response", 1, backgroundReceipts.size());
+                JSONObject receipt = backgroundReceipts.get(0);
+                assertEquals(required(args, "secondThreadId"), receipt.getString("threadId"));
+                assertEquals("submit", receipt.getString("admittedMode"));
+                assertTrue(List.of("accepted", "queued", "submitting").contains(receipt.getString("status")));
+                assertTrue("Background admission must not replay a transcript presentation event", submittedInputs.isEmpty());
+                JSONObject settings = runtime.snapshot().getJSONObject("settings");
+                assertFalse(settings.getBoolean("autoListen"));
+                assertEquals(thread, settings.getString("voiceThreadId"));
+                assertTrue(settings.getBoolean("pinDefaultVoiceThread"));
+                assertEquals("Resuming must preserve the source screen", JSONObject.quote("/threads/" + thread), js("location.pathname"));
+                assertEquals("Resuming must not replay navigation", 0, navigationEvents.get());
+                NativeVoiceJson.put(backgroundSwitch, "navigationEvents", navigationEvents.get());
+                NativeVoiceJson.put(backgroundSwitch, "resumedPath", "/threads/" + thread);
+                NativeVoiceJson.put(backgroundSwitch, "autoListen", settings.getBoolean("autoListen"));
+                NativeVoiceJson.put(backgroundSwitch, "voiceThreadId", settings.getString("voiceThreadId"));
+                NativeVoiceJson.put(backgroundSwitch, "pinDefaultVoiceThread", settings.getBoolean("pinDefaultVoiceThread"));
+                NativeVoiceJson.put(backgroundSwitch, "inputPresentationEvents", submittedInputs.size());
+                NativeVoiceJson.put(backgroundSwitch, "receipt", receipt);
+            }
             JSONObject inputUi = null;
             if (scenario.equals("cycle")) {
                 await(() -> !submittedInputs.isEmpty(), 15000, "local inputSubmitted event");
@@ -292,6 +351,7 @@ public class NativeVoiceE2eTest {
                 "inputAttempts", inputAttempts.get(), "receiptReads", receiptReads.get(), "mutationIds", new JSONArray(mutationIds),
                 "screenshots", new JSONArray(screenshots));
             if (inputUi != null) NativeVoiceJson.put(result, "inputUi", inputUi);
+            if (backgroundSwitch != null) NativeVoiceJson.put(result, "backgroundSwitch", backgroundSwitch);
             Bundle resultBundle = new Bundle(); resultBundle.putString("voiceResult", result.toString()); instrumentation.sendStatus(0, resultBundle);
         } catch (Exception | AssertionError failure) {
             // Capture before cleanup turns voice Off and removes the state that explains the failure.
@@ -351,6 +411,27 @@ public class NativeVoiceE2eTest {
         sampler.setDaemon(true);
         sampler.start();
         return sampler;
+    }
+    /** Start a real source turn while backgrounded, retaining this device's authenticated client provenance. */
+    private void submitRegisteredInput(String server, String thread, String text) throws Exception {
+        JSONObject state = runtime.snapshot();
+        String credential = new ClientCredentialStore(instrumentation.getTargetContext()).getCredential(state.getString("profileId"), server);
+        assertNotNull("No stored credential for the paired server", credential);
+        assertTrue("Background request requires the existing ready service", state.getBoolean("ready"));
+        assertFalse("Submit only after the activity has backgrounded", state.getJSONObject("foreground").getBoolean("visible"));
+        String csrf = runtime.clientCsrf();
+        assertNotNull("The ready native session must have its CSRF token", csrf);
+        NativeVoiceHttp http = new NativeVoiceHttp();
+        http.clientRegistration(server, credential, state.getString("clientConnectionToken"));
+        CountDownLatch done = new CountDownLatch(1); AtomicInteger status = new AtomicInteger();
+        AtomicReference<JSONObject> body = new AtomicReference<>(); AtomicReference<String> failure = new AtomicReference<>();
+        http.request(server, credential, csrf, "POST", "/api/threads/" + thread + "/inputs",
+            NativeVoiceJson.object("mutationId", java.util.UUID.randomUUID().toString(), "text", text, "runningPolicy", NativeVoiceJson.object("mode", "queue")),
+            (code, value, error) -> { status.set(code); body.set(value); failure.set(error); done.countDown(); });
+        assertTrue("Source prompt admission did not finish", done.await(45, TimeUnit.SECONDS));
+        assertNull(failure.get()); assertEquals(200, status.get()); assertNotNull(body.get());
+        assertEquals(thread, body.get().getString("threadId"));
+        assertTrue("Source prompt must be admitted", List.of("accepted", "queued", "submitting").contains(body.get().getString("status")));
     }
     /** The composer autosaves after a debounce, so poll Sedes itself for the persisted draft. */
     private boolean awaitServerDraft(String server, String thread, String expected, long timeout) throws Exception {

@@ -153,6 +153,12 @@ Focus a scenario through the same coordinator, for example
 Packaged cases cover Response and Manual cycles, background operation,
 restoration after process restart, Skip, Stop, recording retargeting, lost
 admission replies, lost sends, and cancellation of uncertain submissions.
+The `Android response/background-switch` scenario invokes the real
+`client.switch_thread` agent tool through stock OpenCode after backgrounding
+the paired client. With automatic listening disabled and the source thread
+pinned as the default, it verifies reply playback followed by recognition and
+admission on a different requested thread, with no navigation event or screen,
+draft, or default-thread change on resume.
 They preserve the unsent composer and saved server draft, count real model
 admissions, and require one canonical user row for each admitted receipt.
 Automatic recovery is read-only; only **Resume input** resends. Startup

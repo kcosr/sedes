@@ -25,13 +25,20 @@ the default thread stays with the selected Sedes connection and user.
 Enabling voice through an agent cannot grant Android permissions or supply
 missing speech configuration; the result reports any local step still needed.
 
-An end-interaction or thread switch waits until the reply finishes playing.
+An end-interaction or thread switch waits for the turn to complete and the reply
+to finish playing.
 Switching can request one listen even with Auto-listen disabled, but it does not
-turn voice on or change the default/pin. Manual actions, a closed or replaced
-connection supersede pending actions. Actions have a 24-hour turn-completion
-limit and a separate one-hour reply-playback limit after completion. Navigation
-requires the app to remain in the foreground. Browser and Electron clients support
-navigation and report voice controls as unavailable.
+turn voice on or change the default/pin. Recording preferences, including **Keep
+listening by default**, still apply.
+
+While Android is in the background, a switch with `listen: true` can start
+recognition on the requested thread if the native voice session is already ready.
+It leaves the screen alone, even if you reopen the app before the request runs.
+A background switch without listening does nothing. Navigation requires the app
+to remain in the foreground. Manual actions and closed or replaced connections
+supersede pending actions. Actions have a 24-hour turn-completion limit and a
+separate one-hour reply-playback limit after completion. Browser and Electron
+clients support navigation and report voice controls as unavailable.
 
 ## Configure a session
 

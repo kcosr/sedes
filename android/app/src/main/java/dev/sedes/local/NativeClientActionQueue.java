@@ -12,20 +12,23 @@ final class NativeClientActionQueue {
     static final class Action {
         final JSONObject command;
         final Object navigationContext;
+        final boolean voiceOnly;
         boolean settled;
         String replyEventId;
-        Action(JSONObject command, Object context) { this.command = NativeVoiceJson.copy(command); navigationContext = context; }
+        Action(JSONObject command, Object context, boolean voiceOnly) {
+            this.command = NativeVoiceJson.copy(command); navigationContext = context; this.voiceOnly = voiceOnly;
+        }
         boolean matches(String threadId, String turnId) {
             return Objects.equals(threadId, command.optString("sourceThreadId")) && Objects.equals(turnId, command.optString("sourceTurnId"));
         }
     }
     private final LinkedHashMap<String, Action> pending = new LinkedHashMap<>();
     private final LinkedHashSet<String> drained = new LinkedHashSet<>();
-    void stage(JSONObject command, Object navigationContext, long now) {
+    void stage(JSONObject command, Object navigationContext, boolean voiceOnly, long now) {
         expire(now);
         discardTurn(command.optString("sourceThreadId"), command.optString("sourceTurnId"));
         if (pending.size() >= 32) throw new IllegalStateException("client_busy");
-        pending.put(command.optString("id"), new Action(command, navigationContext));
+        pending.put(command.optString("id"), new Action(command, navigationContext, voiceOnly));
     }
     boolean settle(String id, String replyEventId, long expiresAt) {
         Action action = pending.get(id);
@@ -49,12 +52,13 @@ final class NativeClientActionQueue {
             if (!action.settled || voiceActive && action.replyEventId != null && !drained.contains(action.replyEventId) ||
                 action.matches(activeThreadId, activeTurnId)) continue;
             pending.remove(action.command.optString("id"));
-            if (action.command.optString("action").equals("switch_thread") && navigationContext != action.navigationContext) continue;
+            if (!action.voiceOnly && action.command.optString("action").equals("switch_thread") && navigationContext != action.navigationContext) continue;
             ready.add(action);
         }
         return ready;
     }
     void discardTurn(String threadId, String turnId) { pending.values().removeIf(action -> action.matches(threadId, turnId)); }
+    void discardVoiceOnly() { pending.values().removeIf(action -> action.voiceOnly); }
     void expire(long now) { pending.values().removeIf(action -> action.command.optLong("expiresAt") <= now); }
     void clear() { pending.clear(); drained.clear(); }
 }
