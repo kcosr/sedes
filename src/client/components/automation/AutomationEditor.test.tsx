@@ -155,6 +155,43 @@ describe("AutomationEditor", () => {
     expect(window.location.pathname).toBe("/automations");
   });
 
+  it("locks the form and guards leaving while a save is unresolved, and stays put after leaving", async () => {
+    navigate(`/automations/${THREAD_ID}/edit`, { replace: true });
+    let finishSave!: (value: ReturnType<typeof definition>) => void;
+    const updateThreadAutomation = vi.fn(
+      () =>
+        new Promise<ReturnType<typeof definition>>((resolve) => {
+          finishSave = resolve;
+        }),
+    );
+    const fixture = automationStore([{ automation: automationSummary() }], { updateThreadAutomation });
+    const view = render(<AutomationEditor store={fixture.store} threadId={THREAD_ID} />);
+    const prompt = await screen.findByRole("textbox", { name: "Prompt" });
+    await userEvent.type(prompt, " Also check licenses.");
+    const save = screen.getByRole("button", { name: "Save" });
+    await waitFor(() => expect(save).toBeEnabled());
+    await userEvent.click(save);
+    await waitFor(() => expect(updateThreadAutomation).toHaveBeenCalledOnce());
+
+    // No edit can slip in while the request runs.
+    expect(prompt).toBeDisabled();
+    expect(screen.getByRole("radio", { name: "Cron" })).toBeDisabled();
+
+    act(() => navigate("/automations"));
+    expect(window.location.pathname).toBe(`/automations/${THREAD_ID}/edit`);
+    const discard = screen.getByRole("dialog", { name: "Discard automation changes?" });
+    expect(discard).toHaveTextContent("The save hasn't finished");
+    await userEvent.click(within(discard).getByRole("button", { name: "Discard and leave" }));
+    expect(window.location.pathname).toBe("/automations");
+    // The route change unmounts the editor, as the workbench does.
+    view.unmount();
+
+    await act(async () => {
+      finishSave(definition({ prompt: `${definition().prompt} Also check licenses.`, revision: 4 }));
+    });
+    expect(window.location.pathname).toBe("/automations");
+  });
+
   it("puts edits back on Cancel", async () => {
     renderEditor([{ automation: automationSummary() }]);
     const prompt = await screen.findByRole("textbox", { name: "Prompt" });

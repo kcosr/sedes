@@ -53,6 +53,7 @@ export interface AutomationEditor {
   readonly status: "loading" | "ready" | "error";
   readonly loadError?: string;
   readonly form: AutomationForm;
+  /** Changes the form; ignored while a save or delete is in flight. */
   readonly update: (patch: Partial<AutomationForm>) => void;
   readonly schedule?: AutomationSchedule;
   readonly preview: {
@@ -113,6 +114,13 @@ export function useAutomationEditor(
   const [loadError, setLoadError] = useState<string>();
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [pending, setPending] = useState<AutomationEditor["pending"]>();
+  // Read synchronously by update(): an edit made while a request runs would
+  // be overwritten by the response.
+  const pendingRef = useRef(pending);
+  const markPending = useCallback((next: AutomationEditor["pending"]) => {
+    pendingRef.current = next;
+    setPending(next);
+  }, []);
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
   const [deletedElsewhere, setDeletedElsewhere] = useState(false);
@@ -326,7 +334,7 @@ export function useAutomationEditor(
   const save = async (saveOptions?: { readonly enable?: boolean }): Promise<boolean> => {
     if (!schedule || !validation.valid || pending || stale || uncertain) return false;
     const enable = saveOptions?.enable === true && definition === undefined;
-    setPending(enable ? "save_and_enable" : "save");
+    markPending(enable ? "save_and_enable" : "save");
     setError(undefined);
     setNotice(undefined);
     const fields = {
@@ -362,7 +370,7 @@ export function useAutomationEditor(
       } else {
         setError(messageFrom(reason));
       }
-      setPending(undefined);
+      markPending(undefined);
       return false;
     }
     adopt(saved);
@@ -378,22 +386,22 @@ export function useAutomationEditor(
         );
       } catch (reason) {
         setError(`Saved as paused. It could not be enabled: ${messageFrom(reason)}`);
-        setPending(undefined);
+        markPending(undefined);
         return false;
       }
     }
-    setPending(undefined);
+    markPending(undefined);
     return true;
   };
 
   const remove = async (): Promise<void> => {
     if (!definition) return;
-    setPending("delete");
+    markPending("delete");
     setError(undefined);
     try {
       await store.api.deleteThreadAutomation(threadId, definition.revision, mutationId());
     } catch (reason) {
-      setPending(undefined);
+      markPending(undefined);
       throw new Error(messageFrom(reason));
     }
     // The editor leaves after a delete; staying pending keeps it from
@@ -407,10 +415,10 @@ export function useAutomationEditor(
     status,
     ...(loadError === undefined ? {} : { loadError }),
     form,
-    update: useCallback(
-      (patch: Partial<AutomationForm>) => setForm((current) => ({ ...current, ...patch })),
-      [],
-    ),
+    update: useCallback((patch: Partial<AutomationForm>) => {
+      if (pendingRef.current !== undefined) return;
+      setForm((current) => ({ ...current, ...patch }));
+    }, []),
     ...(schedule ? { schedule } : {}),
     preview: {
       occurrences: previewCurrent ? preview.occurrences : [],

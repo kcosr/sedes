@@ -600,3 +600,13 @@
   font-size: var(--text-meta);
   white-space: pre-wrap;
 }
+
+/* The editor's sections, locked as one while a save or delete runs. */
+.automation-editor-fields {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-6);
+  margin: 0;
+  padding: 0;
+  border: 0;
+}

@@ -1,7 +1,7 @@
 import "./automations-view.css";
 import "./automation-page.css";
 import { Trash2 } from "lucide-react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   automationPath,
   automationsPath,
@@ -114,7 +114,20 @@ function ThreadAutomationEditor({
   const editor = useAutomationEditor(store, thread.id, {
     canCloneOnRun: capability?.canCloneOnRun ?? false,
   });
-  const guard = useDirtyNavigationGuard(editor.dirty && editor.pending === undefined);
+  const saving = editor.pending === "save" || editor.pending === "save_and_enable";
+  // Leaving is guarded while a save is unresolved too: its outcome is not
+  // known yet, and the form's edits are the only copy until it is.
+  const guard = useDirtyNavigationGuard(editor.dirty || saving);
+  // A request that finishes after the editor has gone must not navigate:
+  // the user has moved on (the editor is keyed by thread, so another
+  // thread's editor is another mount).
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const deleteTrigger = useRef<HTMLButtonElement>(null);
   const now = new Date();
@@ -163,10 +176,10 @@ function ThreadAutomationEditor({
   const attachBlocked =
     create && capability !== undefined && !(capability.available && capability.canAttach);
   const blocked = editor.stale || editor.uncertain || attachBlocked;
-  const saving = editor.pending === "save" || editor.pending === "save_and_enable";
   const submit = async (enable: boolean) => {
+    const saved = await editor.save({ enable });
     // Up to the automation page: back when the editor was opened from it.
-    if (await editor.save({ enable })) guard.proceed(automationPath(thread.id), { up: true });
+    if (saved && mounted.current) guard.proceed(automationPath(thread.id), { up: true });
   };
   const sections: SettingsEditorSection[] = [
     { id: SECTION.prompt, label: "Prompt" },
@@ -292,79 +305,86 @@ function ThreadAutomationEditor({
           />
         }
       >
-        <SettingsSection
-          id={SECTION.prompt}
-          title="Prompt"
-          description="Sent to the agent in this thread on every run, as if you typed it."
-          card
+        {/* Locked while a request runs, so no edit is lost to its response. */}
+        <fieldset
+          className="automation-editor-fields"
+          disabled={editor.pending !== undefined}
+          aria-busy={editor.pending !== undefined || undefined}
         >
-          <Field
-            className="automation-prompt-field"
-            label="Prompt"
-            description={
-              validation.promptBytes > MAXIMUM_PROMPT_BYTES * BYTE_COUNTER_THRESHOLD
-                ? `${validation.promptBytes.toLocaleString()} / ${MAXIMUM_PROMPT_BYTES.toLocaleString()} UTF-8 bytes`
-                : undefined
-            }
-            error={validation.promptError}
+          <SettingsSection
+            id={SECTION.prompt}
+            title="Prompt"
+            description="Sent to the agent in this thread on every run, as if you typed it."
+            card
           >
-            <Textarea
-              className="automation-prompt-input"
-              value={form.prompt}
-              placeholder="What should the agent do on each run?"
-              onChange={(event) => editor.update({ prompt: event.target.value })}
-            />
-          </Field>
-        </SettingsSection>
-        <AutomationScheduleSection
-          id={SECTION.when}
-          form={form}
-          onChange={editor.update}
-          schedule={editor.schedule}
-          preview={editor.preview}
-          now={now}
-        />
-        <AutomationRunModeSection
-          id={SECTION.runIn}
-          value={form.runMode}
-          onChange={(runMode) => editor.update({ runMode })}
-          canCloneOnRun={capability?.canCloneOnRun ?? false}
-        />
-        <AutomationPrecheckSection
-          id={SECTION.precheck}
-          form={form}
-          onChange={editor.update}
-          commandBytes={validation.commandBytes}
-          commandError={validation.commandError}
-          timeoutError={validation.timeoutError}
-          test={editor.precheckTest}
-        />
-        {isRecurring(form.scheduleKind) ? (
-          <AutomationMisfireSection
-            id={SECTION.misfire}
-            value={form.misfirePolicy}
-            onChange={(misfirePolicy) => editor.update({ misfirePolicy })}
-          />
-        ) : null}
-        {editor.definition ? (
-          <DangerZone>
-            <DangerZoneItem
-              title="Delete automation"
-              description="Stops its runs and removes the schedule. The thread and its messages stay."
-              action={
-                <Button
-                  ref={deleteTrigger}
-                  type="button"
-                  variant="destructive-outline"
-                  disabled={editor.pending !== undefined || editor.uncertain}
-                  onClick={() => setDeleteOpen(true)}
-                >
-                  <Trash2 aria-hidden="true" /> Delete automation…
-                </Button>
+            <Field
+              className="automation-prompt-field"
+              label="Prompt"
+              description={
+                validation.promptBytes > MAXIMUM_PROMPT_BYTES * BYTE_COUNTER_THRESHOLD
+                  ? `${validation.promptBytes.toLocaleString()} / ${MAXIMUM_PROMPT_BYTES.toLocaleString()} UTF-8 bytes`
+                  : undefined
               }
+              error={validation.promptError}
+            >
+              <Textarea
+                className="automation-prompt-input"
+                value={form.prompt}
+                placeholder="What should the agent do on each run?"
+                onChange={(event) => editor.update({ prompt: event.target.value })}
+              />
+            </Field>
+          </SettingsSection>
+          <AutomationScheduleSection
+            id={SECTION.when}
+            form={form}
+            onChange={editor.update}
+            schedule={editor.schedule}
+            preview={editor.preview}
+            now={now}
+          />
+          <AutomationRunModeSection
+            id={SECTION.runIn}
+            value={form.runMode}
+            onChange={(runMode) => editor.update({ runMode })}
+            canCloneOnRun={capability?.canCloneOnRun ?? false}
+          />
+          <AutomationPrecheckSection
+            id={SECTION.precheck}
+            form={form}
+            onChange={editor.update}
+            commandBytes={validation.commandBytes}
+            commandError={validation.commandError}
+            timeoutError={validation.timeoutError}
+            test={editor.precheckTest}
+          />
+          {isRecurring(form.scheduleKind) ? (
+            <AutomationMisfireSection
+              id={SECTION.misfire}
+              value={form.misfirePolicy}
+              onChange={(misfirePolicy) => editor.update({ misfirePolicy })}
             />
-          </DangerZone>
-        ) : null}
+          ) : null}
+          {editor.definition ? (
+            <DangerZone>
+              <DangerZoneItem
+                title="Delete automation"
+                description="Stops its runs and removes the schedule. The thread and its messages stay."
+                action={
+                  <Button
+                    ref={deleteTrigger}
+                    type="button"
+                    variant="destructive-outline"
+                    disabled={editor.pending !== undefined || editor.uncertain}
+                    onClick={() => setDeleteOpen(true)}
+                  >
+                    <Trash2 aria-hidden="true" /> Delete automation…
+                  </Button>
+                }
+              />
+            </DangerZone>
+          ) : null}
+        </fieldset>
       </SettingsEditor>
 
       <DiscardChangesDialog
@@ -374,9 +394,11 @@ function ThreadAutomationEditor({
         }}
         title="Discard automation changes?"
         description={
-          create
-            ? "This automation has not been saved."
-            : "Your changes to this automation have not been saved."
+          saving
+            ? "The save hasn't finished. If you leave now, the changes may or may not be saved."
+            : create
+              ? "This automation has not been saved."
+              : "Your changes to this automation have not been saved."
         }
         discardLabel="Discard and leave"
         onDiscard={guard.discardAndContinue}
@@ -395,7 +417,7 @@ function ThreadAutomationEditor({
           onConfirm={async () => {
             await editor.remove();
             // Up to the list: back when the history came down from it.
-            guard.proceed(automationsPath(), { up: true });
+            if (mounted.current) guard.proceed(automationsPath(), { up: true });
           }}
         />
       ) : null}

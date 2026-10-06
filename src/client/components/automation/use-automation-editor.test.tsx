@@ -160,6 +160,36 @@ describe("useAutomationEditor", () => {
     expect(result.current.dirty).toBe(false);
   });
 
+  it("ignores edits while a save is in flight, so the saved response cannot drop them", async () => {
+    let finishSave!: (value: ReturnType<typeof definition>) => void;
+    const fixture = automationStore([{ automation: automationSummary() }], {
+      updateThreadAutomation: vi.fn(
+        () =>
+          new Promise<ReturnType<typeof definition>>((resolve) => {
+            finishSave = resolve;
+          }),
+      ),
+    });
+    const { result } = render(fixture);
+    await waitFor(() => expect(result.current.status).toBe("ready"));
+    act(() => result.current.update({ prompt: "Saved prompt" }));
+    await waitFor(() => expect(result.current.validation.valid).toBe(true));
+    let saving!: Promise<boolean>;
+    act(() => {
+      saving = result.current.save();
+    });
+    expect(result.current.pending).toBe("save");
+    act(() => result.current.update({ prompt: "Typed during the save" }));
+    expect(result.current.form.prompt).toBe("Saved prompt");
+    await act(async () => {
+      finishSave(definition({ prompt: "Saved prompt", revision: 4 }));
+      await saving;
+    });
+    expect(result.current.dirty).toBe(false);
+    act(() => result.current.update({ prompt: "Typed after the save" }));
+    expect(result.current.form.prompt).toBe("Typed after the save");
+  });
+
   it("shows the existing automation when another client created one first", async () => {
     const existing = definition({ prompt: "Theirs" });
     const fixture = automationStore([{ automation: null }], {
