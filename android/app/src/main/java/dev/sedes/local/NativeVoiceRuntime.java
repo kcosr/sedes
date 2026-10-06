@@ -324,7 +324,8 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
     public void clientAuthenticationLost() { authenticationLost(401, connectionGeneration); }
     public void clientReplaced() { report("client_connection_replaced"); }
     public void clientDisconnected() {
-        clientConnectionToken = null; clientActions.clear(); cancelPreparingClientVoice();
+        clientConnectionToken = null; clientActions.clear();
+        if (cancelPreparingClientVoice()) drain();
         publish();
     }
     private JSONObject clientResult(String status, String reason) {
@@ -589,10 +590,10 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         });
     }
     void detached(NativeVoiceRuntimeService service) {
-        handler.post(() -> { if (this.service == service) { this.service = null; sessionStarted = false; clientActions.clear(); cancelActive(false, "service_stopped"); closeSpeech(); closeEvents(); phase = "off"; publish(); } });
+        handler.post(() -> { if (this.service == service) { this.service = null; sessionStarted = false; clientActions.discardVoiceOnly(); cancelActive(false, "service_stopped"); closeSpeech(); closeEvents(); phase = "off"; publish(); } });
     }
     private void stopSession() {
-        sessionStartId = null; sessionStarted = false; clientActions.clear(); closeSpeech(); audio.stop(); closeEvents();
+        sessionStartId = null; sessionStarted = false; clientActions.discardVoiceOnly(); closeSpeech(); audio.stop(); closeEvents();
         streamFailures = 0; streamFailureReported = false;
         NativeVoiceRuntimeService old = service; service = null;
         if (old != null) main.post(old::finish);
@@ -1025,23 +1026,29 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         startManualRecording(defaultRecordingTarget(settings.value), false);
     }
     private void startManualRecording(JSONObject selected, boolean consumeNextTarget) {
-        clientActions.clear(); cancelPreparingClientVoice(); inputSubmissionContext = new Object();
-        if (!sessionStarted || !speechReady() || binding == null) throw new IllegalStateException("voice_not_ready");
-        if (defaultHeldBlocked()) throw new IllegalStateException("saved_recording_pending");
-        if (active != null || blockingDictation()) throw new IllegalStateException("voice_busy");
-        String target = NativeVoiceJson.nullableString(selected, "threadId", 512), title = NativeVoiceJson.nullableString(selected, "threadTitle", 512);
-        if (target == null) throw new IllegalStateException("voice_target_required");
-        if (consumeNextTarget) nextRecordingTarget = null;
-        active = new Active(target, title); validateTarget(active, false);
+        clientActions.clear(); boolean cancelledVoice = cancelPreparingClientVoice(); inputSubmissionContext = new Object();
+        try {
+            if (!sessionStarted || !speechReady() || binding == null) throw new IllegalStateException("voice_not_ready");
+            if (defaultHeldBlocked()) throw new IllegalStateException("saved_recording_pending");
+            if (active != null || blockingDictation()) throw new IllegalStateException("voice_busy");
+            String target = NativeVoiceJson.nullableString(selected, "threadId", 512), title = NativeVoiceJson.nullableString(selected, "threadTitle", 512);
+            if (target == null) throw new IllegalStateException("voice_target_required");
+            if (consumeNextTarget) nextRecordingTarget = null;
+            active = new Active(target, title); validateTarget(active, false);
+        } finally {
+            // A successful manual start keeps priority over notifications queued behind the cancelled action.
+            if (cancelledVoice && active == null) drain();
+        }
     }
     private void setNextRecordingTarget(JSONObject args) {
         NativeVoiceJson.keys(args, "threadId", "threadTitle");
         String target = NativeVoiceJson.string(args, "threadId", 512), title = NativeVoiceJson.nullableString(args, "threadTitle", 512);
         if (binding == null) throw new IllegalStateException("authentication_required");
         if (!settings.active()) throw new IllegalStateException("voice_not_ready");
-        clientActions.clear(); cancelPreparingClientVoice(); inputSubmissionContext = new Object();
+        clientActions.clear(); boolean cancelledVoice = cancelPreparingClientVoice(); inputSubmissionContext = new Object();
         if (active != null) throw new IllegalStateException("voice_busy");
         nextRecordingTarget = NativeVoiceJson.object("threadId", target, "threadTitle", title);
+        if (cancelledVoice) drain();
     }
     /** In-app Start uses an explicit selection before its initial-target policy. */
     static JSONObject manualTarget(JSONObject supplied, JSONObject pending, JSONObject settings, JSONObject foreground) {
@@ -1067,26 +1074,30 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         return NativeVoiceJson.object("threadId", target, "threadTitle", title);
     }
     private void retarget(JSONObject args, Reply reply) {
-        clientActions.clear(); cancelPreparingClientVoice(); inputSubmissionContext = new Object();
-        NativeVoiceJson.keys(args, "recordingId", "threadId", "threadTitle");
-        // Parse both fields first: a rejected title must not leave the capture retargeted.
-        String target = NativeVoiceJson.string(args, "threadId", 512), title = NativeVoiceJson.nullableString(args, "threadTitle", 512);
-        Active item = requireRecording(NativeVoiceJson.string(args, "recordingId", 160));
-        if (!phase.equals("listening") || item.captureStopping || item.endpointReached) throw new IllegalStateException("voice_not_listening");
-        if (item.recordingMutationPending) throw new IllegalStateException("recording_operation_pending");
-        synchronized (item.captureLock) {
-            if (item.captureStopping || item.endpointReached) throw new IllegalStateException("voice_not_listening");
-            item.recordingMutationPending = true;
+        clientActions.clear(); boolean cancelledVoice = cancelPreparingClientVoice(); inputSubmissionContext = new Object();
+        try {
+            NativeVoiceJson.keys(args, "recordingId", "threadId", "threadTitle");
+            // Parse both fields first: a rejected title must not leave the capture retargeted.
+            String target = NativeVoiceJson.string(args, "threadId", 512), title = NativeVoiceJson.nullableString(args, "threadTitle", 512);
+            Active item = requireRecording(NativeVoiceJson.string(args, "recordingId", 160));
+            if (!phase.equals("listening") || item.captureStopping || item.endpointReached) throw new IllegalStateException("voice_not_listening");
+            if (item.recordingMutationPending) throw new IllegalStateException("recording_operation_pending");
+            synchronized (item.captureLock) {
+                if (item.captureStopping || item.endpointReached) throw new IllegalStateException("voice_not_listening");
+                item.recordingMutationPending = true;
+            }
+            publish();
+            dictationWork(() -> dictations.retarget(item.recordingBinding, item.recordingId, target, title), (record, error) -> {
+                if (active != item || item.stopped) { reply.failed("recording_changed", message("recording_changed")); return; }
+                item.recordingMutationPending = false;
+                if (error != null) { publish(); reply.failed(code(error), message(code(error))); return; }
+                // This edit was accepted before any finishing boundary, even if its durable acknowledgment arrived later.
+                item.targetId = target; item.targetTitle = title; item.automatic = false;
+                item.record = record; acceptDictation(record); publish(); reply.done(snapshot());
+            });
+        } finally {
+            if (cancelledVoice && active == null) drain();
         }
-        publish();
-        dictationWork(() -> dictations.retarget(item.recordingBinding, item.recordingId, target, title), (record, error) -> {
-            if (active != item || item.stopped) { reply.failed("recording_changed", message("recording_changed")); return; }
-            item.recordingMutationPending = false;
-            if (error != null) { publish(); reply.failed(code(error), message(code(error))); return; }
-            // This edit was accepted before any finishing boundary, even if its durable acknowledgment arrived later.
-            item.targetId = target; item.targetTitle = title; item.automatic = false;
-            item.record = record; acceptDictation(record); publish(); reply.done(snapshot());
-        });
     }
     private Active requireRecording(String id) {
         if (active == null || id == null || !id.equals(active.recordingId) || active.stopped)
