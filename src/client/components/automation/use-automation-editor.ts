@@ -217,12 +217,10 @@ export function useAutomationEditor(
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
       store.api
-        .previewThreadAutomationSchedule(
-          threadId,
-          schedule,
-          AUTOMATION_PREVIEW_COUNT,
-          controller.signal,
-        )
+        .previewThreadAutomationSchedule(threadId, schedule, {
+          count: AUTOMATION_PREVIEW_COUNT,
+          signal: controller.signal,
+        })
         .then(
           (result) => {
             if (!controller.signal.aborted) {
@@ -271,9 +269,10 @@ export function useAutomationEditor(
       preview.error === undefined,
   };
 
-  const uncertain =
-    live?.lastRun?.state === "uncertain" ||
-    definition?.lastRun?.state === "uncertain";
+  // From the live summary alone: resolving the run elsewhere changes its
+  // state without a new revision, so the definition read at load would keep
+  // a resolved run uncertain.
+  const uncertain = live?.lastRun?.state === "uncertain";
   const stale = remoteAhead && dirty;
 
   // A changed precheck input voids the last test.

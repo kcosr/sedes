@@ -2481,19 +2481,27 @@ export class ApiClient {
     );
   }
 
+  /** Occurrences after now, or after `after` when that is later (a snooze's wake time). */
   previewThreadAutomationSchedule(
     threadId: string,
     schedule: AutomationSchedule,
-    count = 5,
-    signal?: AbortSignal,
+    input: {
+      count?: number;
+      after?: string;
+      signal?: AbortSignal;
+    } = {},
   ): Promise<ThreadAutomationSchedulePreview> {
     return this.#mutation(
       `/api/threads/${encodeURIComponent(threadId)}/automation/preview`,
       threadAutomationSchedulePreviewSchema,
       {
         method: "POST",
-        body: JSON.stringify({ schedule, count }),
-        signal,
+        body: JSON.stringify({
+          schedule,
+          count: input.count ?? 5,
+          ...(input.after === undefined ? {} : { after: input.after }),
+        }),
+        signal: input.signal,
       },
     );
   }

@@ -96,8 +96,7 @@ describe("AutomationPage", () => {
     expect(fixture.api.previewThreadAutomationSchedule).toHaveBeenCalledWith(
       THREAD_ID,
       definition().schedule,
-      3,
-      expect.any(AbortSignal),
+      { count: 3, signal: expect.any(AbortSignal) },
     );
 
     const runs = await screen.findByRole("list", { name: "Runs, newest first" });
@@ -118,19 +117,32 @@ describe("AutomationPage", () => {
     );
   });
 
-  it("lists only the next runs after a snooze, which skips the ones before it", async () => {
-    const hour = 3_600_000;
-    const wake = new Date(Date.now() + 2.5 * hour).toISOString();
-    const occurrences = Array.from({ length: 10 }, (_, index) => new Date(Date.now() + (index + 1) * hour).toISOString());
-    renderPage([{ inventoryState: "snoozed", snoozedUntil: wake, automation: automationSummary() }], {
-      previewThreadAutomationSchedule: vi.fn().mockResolvedValue({ occurrences }),
-    });
-    expect(await screen.findByText(/^Next after snooze: /u)).toHaveTextContent(
-      `Next after snooze: ${occurrences
-        .slice(2, 5)
-        .map((occurrence) => dayTimeLabel(occurrence))
-        .join(", ")}`,
+  it("lists the next runs after a snooze, asking the server from the wake time", async () => {
+    // A five-minute schedule snoozed for a day skips far more than ten runs.
+    const wake = new Date(Date.now() + 86_400_000).toISOString();
+    const occurrences = [1, 2, 3].map((index) => new Date(Date.parse(wake) + index * 300_000).toISOString());
+    const preview = vi.fn().mockResolvedValue({ occurrences });
+    renderPage(
+      [
+        {
+          inventoryState: "snoozed",
+          snoozedUntil: wake,
+          automation: automationSummary({
+            scheduleKind: "interval",
+            schedule: { kind: "interval", anchorAt: "2026-01-01T00:00:00.000Z", everySeconds: 300 },
+          }),
+        },
+      ],
+      { previewThreadAutomationSchedule: preview },
     );
+    expect(await screen.findByText(/^Next after snooze: /u)).toHaveTextContent(
+      `Next after snooze: ${occurrences.map((occurrence) => dayTimeLabel(occurrence)).join(", ")}`,
+    );
+    expect(preview).toHaveBeenCalledWith(THREAD_ID, definition().schedule, {
+      count: 3,
+      after: wake,
+      signal: expect.any(AbortSignal),
+    });
   });
 
   it("asks for the next runs again when a scheduled run moves the next run on", async () => {
@@ -269,6 +281,81 @@ describe("AutomationPage", () => {
     );
     // The automation has ended.
     expect(await screen.findByText("No automation")).toBeInTheDocument();
+  });
+
+  it("lets a one-time automation's manual run resume or stay paused while its time is ahead", async () => {
+    const runAt = new Date(Date.now() + 2 * 86_400_000).toISOString();
+    const fixture = renderPage(
+      [
+        {
+          automation: automationSummary({
+            status: "paused",
+            scheduleKind: "date_time",
+            schedule: { kind: "date_time", runAt },
+            nextRunAt: undefined,
+            lastRun: { ...lastRun("uncertain"), occurrence: "manual" },
+          }),
+        },
+      ],
+      {
+        getThreadAutomation: vi.fn().mockResolvedValue(
+          definition({ scheduleKind: "date_time", schedule: { kind: "date_time", runAt } }),
+        ),
+        resolveThreadAutomationRun: vi.fn().mockResolvedValue({
+          run: run({ id: "run-last", state: "failed" }),
+          automation: definition({ status: "enabled", scheduleKind: "date_time", schedule: { kind: "date_time", runAt }, revision: 5 }),
+        }),
+      },
+    );
+    expect(
+      screen.getByText("Check the thread, then mark the run as failed to resume scheduling."),
+    ).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Mark as failed…" }));
+    const dialog = screen.getByRole("dialog", { name: "Mark the run as failed?" });
+    expect(dialog).not.toHaveTextContent("ends");
+    expect(within(dialog).getAllByRole("button").map((button) => button.textContent)).toEqual([
+      "Cancel",
+      "Mark failed, keep paused",
+      "Mark failed and resume",
+    ]);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Mark failed and resume" }));
+    await waitFor(() =>
+      expect(fixture.api.resolveThreadAutomationRun).toHaveBeenCalledWith(THREAD_ID, "run-last", { resume: true }),
+    );
+  });
+
+  it("keeps a one-time automation paused after a manual run once its time has passed", async () => {
+    const fixture = renderPage(
+      [
+        {
+          automation: automationSummary({
+            status: "paused",
+            scheduleKind: "date_time",
+            schedule: { kind: "date_time", runAt: "2026-10-06T00:00:00.000Z" },
+            nextRunAt: undefined,
+            lastRun: { ...lastRun("uncertain"), occurrence: "manual" },
+          }),
+        },
+      ],
+      {
+        resolveThreadAutomationRun: vi.fn().mockResolvedValue({
+          run: run({ id: "run-last", state: "failed" }),
+          automation: definition({ status: "paused", scheduleKind: "date_time", revision: 5 }),
+        }),
+      },
+    );
+    expect(screen.getByText(/Check the thread, then mark the run as failed\.$/u)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Mark as failed…" }));
+    const dialog = screen.getByRole("dialog", { name: "Mark the run as failed?" });
+    expect(dialog).toHaveTextContent("The automation stays paused: its time has passed, so edit it to run it again.");
+    expect(within(dialog).getAllByRole("button").map((button) => button.textContent)).toEqual([
+      "Cancel",
+      "Mark failed",
+    ]);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Mark failed" }));
+    await waitFor(() =>
+      expect(fixture.api.resolveThreadAutomationRun).toHaveBeenCalledWith(THREAD_ID, "run-last", { resume: false }),
+    );
   });
 
   it("keeps the mark-failed dialog open with the error when resolving fails", async () => {

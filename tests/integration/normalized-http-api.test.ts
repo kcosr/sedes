@@ -6730,6 +6730,69 @@ describe("normalized HTTP application contract", () => {
     }
   });
 
+  it("previews a schedule's occurrences after now or after a later instant", async () => {
+    const current = await fixture();
+    try {
+      const workspace = await current
+        .mutate(request(current.app).post("/api/workspaces/open"))
+        .send({
+          environmentId: current.environmentId,
+          path: current.workspacePath,
+          project: { kind: "new", name: "workspace" },
+        })
+        .expect(201);
+      const created = await current
+        .mutate(request(current.app).post("/api/threads"))
+        .send({
+          workspaceId: workspace.body.id,
+          configuration: { kind: "custom", targetId: current.profile.id },
+          executionWorkspace: { kind: "direct" },
+          title: "New thread",
+        })
+        .expect(201);
+      const previewPath = `/api/threads/${created.body.threadId as string}/automation/preview`;
+      const schedule = {
+        kind: "interval",
+        anchorAt: "2026-01-01T00:00:00.000Z",
+        everySeconds: 300,
+      };
+      const step = 300_000;
+      const now = Date.now();
+
+      const fromNow = await current
+        .mutate(request(current.app).post(previewPath))
+        .send({ schedule, count: 3 })
+        .expect(200);
+      const first = Date.parse(fromNow.body.occurrences[0]);
+      expect(first).toBeGreaterThan(now);
+      expect(first - now).toBeLessThanOrEqual(step + 60_000);
+
+      // A day ahead holds far more than ten five-minute occurrences.
+      const wake = new Date(Math.ceil((now + 86_400_000) / step) * step + 60_000);
+      const afterWake = await current
+        .mutate(request(current.app).post(previewPath))
+        .send({ schedule, count: 3, after: wake.toISOString() })
+        .expect(200);
+      expect(afterWake.body.occurrences).toEqual(
+        [1, 2, 3].map((index) => new Date(wake.getTime() - 60_000 + index * step).toISOString()),
+      );
+
+      // An instant already past previews from now.
+      const past = await current
+        .mutate(request(current.app).post(previewPath))
+        .send({ schedule, count: 1, after: "2026-01-01T00:00:00.000Z" })
+        .expect(200);
+      expect(Date.parse(past.body.occurrences[0])).toBeGreaterThan(now);
+
+      await current
+        .mutate(request(current.app).post(previewPath))
+        .send({ schedule, count: 1, after: "tomorrow" })
+        .expect(400);
+    } finally {
+      current.close();
+    }
+  });
+
   it("serves the thread automation capability whether or not an automation exists", async () => {
     const current = await fixture();
     try {

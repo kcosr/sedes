@@ -27,7 +27,7 @@ describe("useNextOccurrences", () => {
       .mockResolvedValueOnce({ occurrences: [hour(4), hour(5), hour(6)] });
     const { result, rerender } = render(preview, { now: at(hour(2), 30), nextRunAt: hour(3) });
     await waitFor(() => expect(result.current).toEqual([hour(3), hour(4), hour(5)]));
-    expect(preview).toHaveBeenCalledWith(THREAD_ID, schedule, 3, expect.any(AbortSignal));
+    expect(preview).toHaveBeenCalledWith(THREAD_ID, schedule, { count: 3, signal: expect.any(AbortSignal) });
 
     // The minute clock passes 3:00; the summary has not moved on yet.
     rerender({ schedule, now: at(hour(3), 10), nextRunAt: hour(3) });
@@ -60,15 +60,21 @@ describe("useNextOccurrences", () => {
     expect(result.current).toEqual([hour(4), hour(5)]);
   });
 
-  it("leaves out the occurrences a snooze will skip", async () => {
-    const hourly = Array.from({ length: 10 }, (_, index) => hour(3 + index));
-    const preview = vi.fn().mockResolvedValue({ occurrences: hourly });
+  it("asks for the occurrences after a snooze's wake time, however many it skips", async () => {
+    // A five-minute schedule snoozed for a day skips hundreds of occurrences.
+    const wake = "2026-10-07T02:30:00.000Z";
+    const afterWake = ["2026-10-07T02:35:00.000Z", "2026-10-07T02:40:00.000Z", "2026-10-07T02:45:00.000Z"];
+    const preview = vi.fn().mockResolvedValue({ occurrences: afterWake });
     const fixture = automationStore([{ automation: null }], { previewThreadAutomationSchedule: preview });
     const { result } = renderHook(() =>
-      useNextOccurrences(fixture.store, THREAD_ID, schedule, hour(3), at(hour(2), 30), hour(6)),
+      useNextOccurrences(fixture.store, THREAD_ID, schedule, hour(3), at(hour(2), 30), wake),
     );
-    await waitFor(() => expect(result.current).toEqual([hour(7), hour(8), hour(9)]));
-    expect(preview).toHaveBeenCalledWith(THREAD_ID, schedule, 10, expect.any(AbortSignal));
+    await waitFor(() => expect(result.current).toEqual(afterWake));
+    expect(preview).toHaveBeenCalledWith(THREAD_ID, schedule, {
+      count: 3,
+      after: wake,
+      signal: expect.any(AbortSignal),
+    });
   });
 
   it("asks nothing without a schedule", () => {

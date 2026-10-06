@@ -94,3 +94,26 @@ export function automationActionAvailability(
     remove: availability(unknown ?? inFlight),
   };
 }
+
+/**
+ * What marking an automation's uncertain last run as failed can do, as the
+ * server resolves it: the scheduled run of a one-time automation ends that
+ * automation (`ends`); otherwise the automation stays, paused, and can be
+ * resumed in the same step (`choose`), unless it is a one-time automation
+ * whose time has passed, which has no future run to resume to
+ * (`stays_paused`). Undefined while the last run is not uncertain.
+ */
+export type UncertainRunResolution = "ends" | "choose" | "stays_paused";
+
+export function uncertainRunResolution(
+  automation: Pick<SummaryAutomation, "schedule" | "lastRun">,
+  now: Date | number,
+): UncertainRunResolution | undefined {
+  const lastRun = automation.lastRun;
+  if (lastRun?.state !== "uncertain") return undefined;
+  const schedule = automation.schedule;
+  if (schedule.kind !== "date_time") return "choose";
+  if (lastRun.occurrence === "scheduled") return "ends";
+  const at = typeof now === "number" ? now : now.getTime();
+  return Date.parse(schedule.runAt) > at ? "choose" : "stays_paused";
+}
