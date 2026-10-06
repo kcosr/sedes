@@ -7,7 +7,7 @@ use the focused references for the part of the repository you are changing.
 | --- | --- |
 | [Developer overview](overview.md) | You are new to the codebase, deciding where a change belongs, or choosing tests. |
 | [Development and testing](development.md) | You need installation, build, generated-contract, packaging, or live-provider commands. |
-| [UI design system](ui-design-system.md) | You are changing client presentation: tokens, primitives, dialogs, menus, settings pages, or the style guardrails. |
+| [UI design system](ui-design-system.md) | You are changing client presentation: tokens, primitives, dialogs, menus, settings and other top-level pages, automation state presentation, or the style guardrails. |
 | [E2E testing](e2e-testing.md) | You are writing, running, scheduling, or reviewing Playwright coverage. |
 | [Native voice testing](native-voice-testing.md) | You are validating the Java speech transport, local speech server, Sedes pipeline, and packaged Android client, with a separate optional live OpenAI check. |
 | [Debug diagnostics](diagnostics.md) | You are investigating delivery, thread loading, seeking, or streaming performance. |

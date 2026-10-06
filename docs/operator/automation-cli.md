@@ -282,7 +282,7 @@ syntax, timezone, cadence, and future occurrences.
 | `pause THREAD_ID` | Stop admission of future scheduled runs using the current revision. |
 | `run-now THREAD_ID` | Create a manual run even while paused. It rejects snoozed anchors and can queue on a busy bound thread. This can execute a precheck and schedule provider work. |
 | `runs THREAD_ID [--filter FILTER]` | Return the newest run-history page, currently up to 50 items, with whole-history `counts` (`all`, `problems`, `skipped`). `--filter` is `all` (default), `problems` (failed or uncertain runs), or `skipped`. The response may include `nextCursor`, but this helper has no continuation option. |
-| `resolve THREAD_ID RUN_ID [--resume]` | Mark an `uncertain` run failed after reviewing its result thread. `--resume` also enables the automation in the same operation; if enabling is rejected, the run stays uncertain. Prints the run and the resulting definition (`null` when resolving ended a one-time automation). |
+| `resolve THREAD_ID RUN_ID [--resume]` | Mark an `uncertain` run failed after reviewing its result thread; other states are rejected. `--resume` also enables the automation in the same operation; if enabling is rejected, the run stays uncertain. Resolving the scheduled run of a one-time automation ends that automation, so `--resume` is rejected for it. Resolving an already resolved run changes nothing, even with `--resume`. Prints `{ run, automation }`, where `automation` is the resulting definition or `null` when the thread no longer has one. |
 | `list [TITLE_QUERY]` | Filter automation-bearing threads in one bounded point-in-time application snapshot by case-insensitive title substring. |
 | `remove THREAD_ID` | Delete the automation definition using its current revision; it does not delete the thread. |
 
@@ -372,9 +372,10 @@ file paths, not server-side workspace selection or command execution.
 - Remember that `pause` prevents future scheduler admissions; it is not a stop
   button for work already admitted or running.
 - Review run records in `runs` and the UI; `runs THREAD_ID --filter problems`
-  lists failed and uncertain runs. An `uncertain` result requires recovery
-  review, not an automatic replay. Resolve it with `resolve`, adding `--resume`
-  only when the automation should run on schedule again.
+  lists failed and uncertain runs. An `uncertain` result pauses the automation
+  and requires recovery review, not an automatic replay. Resolve it with
+  `resolve`, adding `--resume` only when the automation should run on schedule
+  again.
 - A successful `run-now` response records queue/provider acceptance, not final
   agent-turn settlement. Follow the result thread or run history to completion.
 
