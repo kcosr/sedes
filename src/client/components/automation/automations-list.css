@@ -1,0 +1,396 @@
+/* Automations list page (AutomationsView, AutomationRow). The header and its
+   status line follow the Archived page; group headings are the Tasks section
+   heading with the Archived "· n" count; rows put the title and the next run
+   on line 1, the schedule and the last outcome on line 2. Layout follows the
+   page width through a container query on .automations-page; touch sizing
+   follows the density switch. */
+
+/* ------------------------------------------------------------- header */
+
+.automations-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-2) var(--space-4);
+  margin-bottom: var(--space-3);
+  padding-inline: var(--space-2);
+}
+
+.automations-heading {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.automations-heading h1 {
+  margin: 0;
+  font-size: var(--text-page);
+  font-weight: var(--weight-semibold);
+  letter-spacing: -0.015em;
+  line-height: var(--leading-tight);
+}
+
+.automations-count {
+  color: var(--muted-foreground-2);
+  font-size: var(--text-ui);
+  font-variant-numeric: tabular-nums;
+}
+
+.automations-tools {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.automations-search {
+  width: 260px;
+  margin: 0;
+}
+
+.automations-view-options {
+  color: var(--muted-foreground-2);
+}
+
+/* What the list shows, dot-separated; it wraps rather than truncating so
+   the Scope stays readable where the sidebar is hidden. */
+.automations-status {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  grid-column: 1 / -1;
+  align-items: baseline;
+  gap: var(--space-0-5) var(--space-1-5);
+  margin: 0;
+  color: var(--muted-foreground-2);
+  font-size: var(--text-meta);
+  font-variant-numeric: tabular-nums;
+  line-height: var(--leading-normal);
+}
+
+/* The dot trails its item, so a wrapped line never starts with one. */
+.automations-status > :not(:last-child)::after {
+  margin-left: var(--space-1-5);
+  content: "·";
+}
+
+.automations-status-action {
+  /* A taller hit area without moving the line. */
+  margin-block: calc(-1 * var(--space-2));
+  padding: var(--space-2) 0;
+  border: 0;
+  background: transparent;
+  color: var(--foreground);
+  font: inherit;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in oklch, currentColor 45%, transparent);
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.automations-status-action:hover {
+  text-decoration-color: currentColor;
+}
+
+/* ------------------------------------------------------------- groups */
+
+.automations-groups > [data-slot="empty-state"] {
+  margin-top: var(--space-6);
+}
+
+.automations-group + .automations-group {
+  margin-top: var(--space-2);
+}
+
+.automations-group-heading {
+  margin: 0;
+  font: inherit;
+}
+
+/* The Tasks section heading: the uppercase label recipe, chevron first. */
+.automations-group-toggle {
+  display: flex;
+  min-width: 0;
+  min-height: var(--control-md);
+  align-items: center;
+  gap: var(--space-1-5);
+  margin-top: var(--space-1);
+  padding: var(--space-2) var(--space-2) var(--space-1);
+  border: 0;
+  border-radius: var(--radius-ctl);
+  background: transparent;
+  color: var(--muted-foreground-2);
+  font: inherit;
+  font-size: var(--text-label);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-label);
+  text-align: left;
+  text-transform: uppercase;
+  cursor: pointer;
+  outline: none;
+}
+
+.automations-group-toggle:hover {
+  color: var(--foreground);
+}
+
+.automations-group-toggle:focus-visible {
+  box-shadow: var(--focus-ring);
+}
+
+.automations-group-chevron {
+  width: var(--icon-xs);
+  height: var(--icon-xs);
+  flex: none;
+  transition: transform var(--motion-fast);
+}
+
+[aria-expanded="true"] > .automations-group-chevron {
+  transform: rotate(90deg);
+}
+
+.automations-group-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.automations-group-count {
+  flex: none;
+  margin-left: calc(-1 * var(--space-1));
+  font-weight: var(--weight-medium);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+}
+
+.automations-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* ---------------------------------------------------------------- row */
+
+.automation-row {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  border-radius: var(--radius-ctl);
+  transition: background var(--motion-fast);
+}
+
+.automation-row:hover,
+.automation-row:has(:focus-visible) {
+  background: var(--hover);
+}
+
+.automation-row[aria-busy="true"] .automation-row-open {
+  opacity: 0.7;
+}
+
+/* One link opens the automation page. Its overlay covers the whole row, so
+   the trailing column opens it too; ⋯ sits above the overlay. */
+.automation-row-open {
+  display: grid;
+  min-width: 0;
+  flex: 1 1 auto;
+  grid-template-areas:
+    "glyph title primary"
+    ".     meta  secondary";
+  grid-template-columns: var(--icon-md) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 3px var(--space-1-5);
+  padding: 7px 0 7px var(--space-2);
+  border-radius: inherit;
+  color: inherit;
+  text-decoration: none;
+}
+
+.automation-row-open::after {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  content: "";
+}
+
+.automation-row-open:focus-visible {
+  outline: none;
+}
+
+.automation-row-open:focus-visible::after {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+
+.automation-row-glyph {
+  display: flex;
+  height: calc(var(--text-ui) * var(--leading-normal));
+  grid-area: glyph;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted-foreground);
+}
+
+/* Paused and suspended automations cannot run on their own: quieter. */
+.automation-row[data-group="paused"] .automation-row-glyph,
+.automation-row[data-group="suspended"] .automation-row-glyph {
+  color: var(--muted-foreground-2);
+}
+
+.automation-row-title {
+  min-width: 0;
+  grid-area: title;
+  overflow: hidden;
+  color: var(--foreground);
+  font-size: var(--text-ui);
+  letter-spacing: -0.006em;
+  line-height: var(--leading-normal);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.automation-row-meta {
+  min-width: 0;
+  grid-area: meta;
+  overflow: hidden;
+  color: var(--muted-foreground-2);
+  font-size: var(--text-meta);
+  line-height: var(--leading-snug);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.automation-row-meta[data-layout="narrow"],
+.automation-row-next {
+  display: none;
+}
+
+.automation-row-primary,
+.automation-row-secondary,
+.automation-row-next {
+  align-items: center;
+  justify-self: end;
+  gap: var(--space-1);
+  margin-left: var(--space-4);
+  color: var(--muted-foreground-2);
+  font-size: var(--text-meta);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.automation-row-primary,
+.automation-row-secondary {
+  display: inline-flex;
+}
+
+.automation-row-primary,
+.automation-row-next {
+  grid-area: primary;
+  line-height: var(--leading-normal);
+}
+
+.automation-row-secondary {
+  grid-area: secondary;
+  line-height: var(--leading-snug);
+}
+
+.automation-row-secondary svg {
+  width: var(--icon-xs);
+  height: var(--icon-xs);
+  flex: none;
+}
+
+/* The sidebar's colour budget: red broken, amber needs the user, info-blue
+   machine working; everything else stays quiet. */
+.automation-row [data-tone="danger"] {
+  color: var(--destructive);
+}
+
+.automation-row [data-tone="warning"] {
+  color: var(--warning);
+}
+
+.automation-row [data-tone="info"] {
+  color: var(--info);
+}
+
+/* ⋯ keeps its slot so the trailing column never shifts; it shows on hover
+   or focus, and always on touch. Positioned after the link, so it paints
+   and takes pointer events above the link's overlay. */
+.automation-row-more {
+  position: relative;
+  margin: 5px var(--space-1) 0;
+  color: var(--muted-foreground);
+  visibility: hidden;
+}
+
+.automation-row:hover > .automation-row-more,
+.automation-row:focus-within > .automation-row-more,
+.automation-row-more[data-state="open"] {
+  visibility: visible;
+}
+
+.automation-row-error {
+  margin: var(--space-1) var(--space-2) var(--space-2)
+    calc(var(--space-2) + var(--icon-md) + var(--space-1-5));
+}
+
+/* Phones: line 2 leads with the outcome, then the schedule; the trailing
+   column keeps only the next run. */
+@container automations-page (max-width: 559px) {
+  .automations-header {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .automations-search {
+    width: auto;
+    flex: 1 1 auto;
+  }
+
+  .automation-row-open {
+    grid-template-areas:
+      "glyph title primary"
+      ".     meta  meta";
+  }
+
+  .automation-row-primary,
+  .automation-row-secondary,
+  .automation-row-meta[data-layout="wide"] {
+    display: none;
+  }
+
+  .automation-row-meta[data-layout="narrow"] {
+    display: block;
+  }
+
+  .automation-row-next:not(:empty) {
+    display: inline-flex;
+  }
+
+  .automation-row-outcome[data-tone] {
+    font-weight: var(--weight-medium);
+  }
+}
+
+/* Touch: ⋯ keeps a 40px target beside the row instead of hiding until
+   hover, and rows gain a little height. */
+@media (max-width: 819px), (pointer: coarse) {
+  .automation-row-open {
+    padding-block: var(--space-2-5);
+  }
+
+  .automation-row-more {
+    width: 40px;
+    height: 40px;
+    margin: 2px 0 0;
+    visibility: visible;
+  }
+
+  .automations-view-options {
+    width: 36px;
+    height: 36px;
+  }
+}
