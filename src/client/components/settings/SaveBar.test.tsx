@@ -100,6 +100,37 @@ describe("SaveBar", () => {
     expect(container.querySelector("[data-slot=save-bar]")).toHaveAttribute("data-placement", "pane");
   });
 
+  it("puts a secondary save between Cancel and Save, enabled with Save", () => {
+    const onSave = vi.fn();
+    const onSecondary = vi.fn();
+    const secondary = { label: "Save as paused", onSave: onSecondary };
+    const { container, rerender } = render(
+      <SaveBar creating dirty={false} saveDisabled onCancel={vi.fn()} onSave={onSave} saveLabel="Save and enable" secondaryAction={secondary} />,
+    );
+    const buttons = () => [...container.querySelectorAll("[data-slot=save-bar-actions] button")];
+    expect(buttons().map((button) => button.textContent)).toEqual(["Cancel", "Save as paused", "Save and enable"]);
+    expect(screen.getByRole("button", { name: "Save as paused" })).toHaveAttribute("data-variant", "outline");
+    expect(screen.getByRole("button", { name: "Save as paused" })).toBeDisabled();
+
+    rerender(<SaveBar creating dirty onCancel={vi.fn()} onSave={onSave} saveLabel="Save and enable" secondaryAction={secondary} />);
+    fireEvent.click(screen.getByRole("button", { name: "Save as paused" }));
+    expect(onSecondary).toHaveBeenCalledOnce();
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it("gives the saving label to whichever save is in flight", () => {
+    const secondary = { label: "Save as paused", onSave: vi.fn() };
+    const { rerender } = render(
+      <SaveBar creating dirty saving onSave={vi.fn()} saveLabel="Save and enable" secondaryAction={{ ...secondary, saving: true }} />,
+    );
+    expect(screen.getByRole("button", { name: "Saving…" })).toHaveAttribute("data-variant", "outline");
+    expect(screen.getByRole("button", { name: "Save and enable" })).toBeDisabled();
+
+    rerender(<SaveBar creating dirty saving onSave={vi.fn()} saveLabel="Save and enable" secondaryAction={secondary} />);
+    expect(screen.getByRole("button", { name: "Save as paused" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Saving…" })).toHaveAttribute("data-variant", "default");
+  });
+
   it("blocks Save while the form is invalid", () => {
     render(<SaveBar dirty saveDisabled onSave={vi.fn()} />);
     expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();

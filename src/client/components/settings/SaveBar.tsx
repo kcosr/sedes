@@ -33,6 +33,18 @@ export type SaveBarProps = Omit<React.ComponentProps<"div">, "children"> & {
   /** Blocks Save while the form is invalid. */
   readonly saveDisabled?: boolean;
   /**
+   * A second way to save, as an outline button between Cancel and Save (a
+   * create form's "Save as paused" beside "Save and enable"). It is enabled
+   * exactly when Save is. Set `saving` on it while the bar's save in flight
+   * is the one it started: it then carries the saving label and Save keeps
+   * its own.
+   */
+  readonly secondaryAction?: {
+    readonly label: string;
+    readonly onSave: () => void;
+    readonly saving?: boolean;
+  };
+  /**
    * `page` (default) is the sticky, full-bleed footer of the page scroller;
    * `pane` sits at the end of a short editor pane, in flow.
    */
@@ -41,8 +53,8 @@ export type SaveBarProps = Omit<React.ComponentProps<"div">, "children"> & {
 
 /**
  * The sticky footer of an editable settings page: the save state on the
- * left, Cancel then Save on the right. It takes its own space in the flow,
- * so it never covers the end of the page.
+ * left, then Cancel, an optional secondary save and Save on the right. It
+ * takes its own space in the flow, so it never covers the end of the page.
  */
 export function SaveBar({
   dirty,
@@ -57,6 +69,7 @@ export function SaveBar({
   savingLabel = "Saving…",
   cancelLabel = "Cancel",
   saveDisabled = false,
+  secondaryAction,
   placement = "page",
   ...props
 }: SaveBarProps): React.JSX.Element {
@@ -73,6 +86,7 @@ export function SaveBar({
 
   const state = error ? "error" : saving ? "saving" : dirty ? "dirty" : savedNotice ? "saved" : "clean";
   const actionable = dirty || creating;
+  const secondarySaving = saving && secondaryAction?.saving === true;
   return (
     <div data-slot="save-bar" data-state={state} data-placement={placement} {...props}>
       {state === "error" ? (
@@ -93,13 +107,23 @@ export function SaveBar({
             {cancelLabel}
           </Button>
         ) : null}
+        {secondaryAction ? (
+          <Button
+            type="button"
+            variant="outline"
+            disabled={!actionable || saving || saveDisabled}
+            onClick={secondaryAction.onSave}
+          >
+            {secondarySaving ? savingLabel : secondaryAction.label}
+          </Button>
+        ) : null}
         <Button
           type={onSave ? "button" : "submit"}
           form={onSave ? undefined : form}
           disabled={!actionable || saving || saveDisabled}
           onClick={onSave}
         >
-          {saving ? savingLabel : saveLabel}
+          {saving && !secondarySaving ? savingLabel : saveLabel}
         </Button>
       </div>
     </div>
