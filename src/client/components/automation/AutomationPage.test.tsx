@@ -118,6 +118,21 @@ describe("AutomationPage", () => {
     );
   });
 
+  it("lists only the next runs after a snooze, which skips the ones before it", async () => {
+    const hour = 3_600_000;
+    const wake = new Date(Date.now() + 2.5 * hour).toISOString();
+    const occurrences = Array.from({ length: 10 }, (_, index) => new Date(Date.now() + (index + 1) * hour).toISOString());
+    renderPage([{ inventoryState: "snoozed", snoozedUntil: wake, automation: automationSummary() }], {
+      previewThreadAutomationSchedule: vi.fn().mockResolvedValue({ occurrences }),
+    });
+    expect(await screen.findByText(/^Next after snooze: /u)).toHaveTextContent(
+      `Next after snooze: ${occurrences
+        .slice(2, 5)
+        .map((occurrence) => dayTimeLabel(occurrence))
+        .join(", ")}`,
+    );
+  });
+
   it("asks for the next runs again when a scheduled run moves the next run on", async () => {
     const tomorrow = new Date(Date.now() + 86_400_000);
     const later = new Date(Date.now() + 2 * 86_400_000);

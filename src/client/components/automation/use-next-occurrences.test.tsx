@@ -60,6 +60,17 @@ describe("useNextOccurrences", () => {
     expect(result.current).toEqual([hour(4), hour(5)]);
   });
 
+  it("leaves out the occurrences a snooze will skip", async () => {
+    const hourly = Array.from({ length: 10 }, (_, index) => hour(3 + index));
+    const preview = vi.fn().mockResolvedValue({ occurrences: hourly });
+    const fixture = automationStore([{ automation: null }], { previewThreadAutomationSchedule: preview });
+    const { result } = renderHook(() =>
+      useNextOccurrences(fixture.store, THREAD_ID, schedule, hour(3), at(hour(2), 30), hour(6)),
+    );
+    await waitFor(() => expect(result.current).toEqual([hour(7), hour(8), hour(9)]));
+    expect(preview).toHaveBeenCalledWith(THREAD_ID, schedule, 10, expect.any(AbortSignal));
+  });
+
   it("asks nothing without a schedule", () => {
     const preview = vi.fn();
     const { result } = render(preview, { now: at(hour(2)), schedule: undefined });

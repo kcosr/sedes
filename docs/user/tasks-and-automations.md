@@ -557,7 +557,7 @@ The **Definition** card shows the saved automation:
 | Item | Shows |
 | --- | --- |
 | **Prompt** | The prompt, four lines at first; **Show all** shows the rest |
-| **Schedule** | The schedule sentence; the next three runs, while a recurring schedule is enabled; and, for a recurring schedule, what happens if Sedes was down |
+| **Schedule** | The schedule sentence; the next three runs, while a recurring schedule is enabled (while the thread is snoozed, the next three after it wakes, since the snooze skips the ones before); and, for a recurring schedule, what happens if Sedes was down |
 | **Run in** | **This thread** or **A new fork each run** |
 | **Precheck** | The command, its timeout, and whether its output is added to the prompt; or **None** |
 | **Created** | When the automation was created and last updated |

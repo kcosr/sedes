@@ -526,6 +526,13 @@ function AutomationDetails({
             threadId={thread.id}
             definition={definition}
             nextRunAt={automation.nextRunAt}
+            skippedUntil={
+              thread.inventoryState === "snoozed" &&
+              thread.snoozedUntil !== undefined &&
+              Date.parse(thread.snoozedUntil) > now.getTime()
+                ? thread.snoozedUntil
+                : undefined
+            }
             now={now}
           />
         ) : definitionStatus === "error" ? (
@@ -744,6 +751,7 @@ function DefinitionFacts({
   threadId,
   definition,
   nextRunAt,
+  skippedUntil,
   now,
 }: {
   readonly store: Pick<ApplicationClientStore, "api">;
@@ -751,6 +759,8 @@ function DefinitionFacts({
   readonly definition: ThreadAutomationDefinition;
   /** The live summary's next run, which moves on as scheduled runs fire. */
   readonly nextRunAt: string | undefined;
+  /** A snooze's wake time: scheduled runs before it are skipped. */
+  readonly skippedUntil: string | undefined;
   readonly now: Date;
 }): React.JSX.Element {
   const recurring = definition.schedule.kind !== "date_time";
@@ -760,6 +770,7 @@ function DefinitionFacts({
     definition.status === "enabled" && recurring ? definition.schedule : undefined,
     nextRunAt,
     now,
+    skippedUntil,
   );
   const updated = shortRelativeTime(definition.updatedAt, now.getTime());
   const items: KeyValueItem[] = [
@@ -770,7 +781,10 @@ function DefinitionFacts({
         <>
           {describeSchedule(definition.schedule, now)}
           {next.length > 0 ? (
-            <Sub>Next: {next.map((occurrence) => dayTimeLabel(occurrence, now)).join(", ")}</Sub>
+            <Sub>
+              {skippedUntil === undefined ? "Next: " : "Next after snooze: "}
+              {next.map((occurrence) => dayTimeLabel(occurrence, now)).join(", ")}
+            </Sub>
           ) : null}
           {recurring ? (
             <Sub>
