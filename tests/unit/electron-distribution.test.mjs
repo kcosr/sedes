@@ -36,6 +36,7 @@ describe('Electron distribution profiles', () => {
     const config = createRequire(import.meta.url)(path.join(root, 'builder.cjs'));
     expect(config.directories.output).toBe(`dist/${profile}`);
     expect(config.artifactName).toContain(`sedes-${profile}-`);
+    expect(config.nsis.include).toBe('installer.nsh');
     expect(config.extraResources.length > 0).toBe(profile === 'full');
     if (profile === 'full') expect(config.extraResources.find(resource => resource.to === 'local-server').filter)
       .toContain('runtime-entrypoints.json');
