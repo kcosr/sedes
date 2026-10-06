@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { mkdtemp, mkdir, readFile, rm } from 'node:fs/promises';
+import { access, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,9 +10,10 @@ import { fileURLToPath } from 'node:url';
 if (process.platform !== 'win32') throw new Error('Installer regression fixtures require native Windows.');
 const root = fileURLToPath(new URL('../', import.meta.url));
 const requireElectron = createRequire(path.join(root, 'electron/package.json'));
-const { getMakeNsisPath } = requireElectron('app-builder-lib/out/toolsets/windows.js');
+const { getMakeNsisPath, getNsisPluginsPath } = requireElectron('app-builder-lib/out/toolsets/windows.js');
 const { spawnAndWriteWithOutput } = requireElectron('builder-util');
 const compiler = await getMakeNsisPath();
+const plugins = await getNsisPluginsPath();
 const fixture = await mkdtemp(path.join(os.tmpdir(), 'sedes-nsis-test-'));
 const environment = { ...process.env };
 delete environment.NODE_ENV;
@@ -31,7 +32,17 @@ Name "Sedes isolated installer regression"
 OutFile ${quote(exe)}
 RequestExecutionLevel user
 SilentInstall silent
+!addplugindir /x86-unicode ${quote(path.join(plugins, 'x86-unicode'))}
 !include ${hook}
+!define APP_ID "dev.sedes.installer-regression"
+!define APP_DESCRIPTION "Sedes isolated shortcut regression"
+Var appExe
+Var keepShortcuts
+Var newStartMenuLink
+Var newDesktopLink
+Var launchLink
+Var noDesktopShortcut
+!define isNoDesktopShortcut '$noDesktopShortcut == "true"'
 ${body}
 `, { cwd: fixture, env: { ...environment, ...compiler.env } });
   return exe;
@@ -133,7 +144,65 @@ SectionEnd
     assert.equal(await readFile(path.join(fixture, 'passed.txt'), 'utf8'), 'passed');
     assert.equal(await source(), 'keep this exact fixture content');
   }
-  console.log('Windows installer regressions passed: legacy failure reproduced; upgrade long-path moves and rollback, locked-file refusal, environment restoration, DOS/UNC/idempotent conversion.');
+
+  const launchProbe = await compile('launch-probe', `
+Section
+  FileOpen $0 "$EXEDIR\\launched.txt" w
+  FileWrite $0 "launched"
+  FileClose $0
+SectionEnd
+`);
+  const startLink = path.join(fixture, 'Start Menu.lnk');
+  const desktopLink = path.join(fixture, 'Desktop.lnk');
+  const repair = await compile('repair-shortcuts', `
+Function .onInit
+  InitPluginsDir
+  !insertmacro customInit
+FunctionEnd
+Section
+  StrCpy $appExe ${quote(launchProbe)}
+  StrCpy $newStartMenuLink ${quote(startLink)}
+  StrCpy $newDesktopLink ${quote(desktopLink)}
+  StrCpy $keepShortcuts "true"
+  ReadEnvStr $noDesktopShortcut SEDES_FIXTURE_NO_DESKTOP
+  SetOutPath "$EXEDIR"
+  !insertmacro customInstall
+  StrCmp $launchLink $appExe +2
+    Abort "Post-install launch still depends on the shortcut"
+SectionEnd
+`);
+  // Corrupt retained links must be replaced, not trusted merely because present.
+  for (const link of [startLink, desktopLink]) await writeFile(link, 'stale shell link');
+  assert.equal(run(repair), 0);
+  for (const link of [startLink, desktopLink]) {
+    const check = spawnSync(path.join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe'), [
+      '-NoProfile', '-NonInteractive', '-Command', `
+        $ErrorActionPreference='Stop'
+        $link=(New-Object -ComObject WScript.Shell).CreateShortcut($env:SEDES_FIXTURE_LINK)
+        if ($link.TargetPath -ne $env:SEDES_FIXTURE_TARGET) { throw 'Incorrect shortcut target' }
+        if ($link.WorkingDirectory -ne $env:SEDES_FIXTURE_ROOT) { throw 'Incorrect shortcut working directory' }
+        if ($link.Arguments -ne '') { throw 'Unexpected shortcut arguments' }
+        $folder=(New-Object -ComObject Shell.Application).NameSpace($env:SEDES_FIXTURE_ROOT)
+        $item=$folder.ParseName([IO.Path]::GetFileName($env:SEDES_FIXTURE_LINK))
+        if ($item.ExtendedProperty('System.AppUserModel.ID') -ne 'dev.sedes.installer-regression') { throw 'Missing shortcut app ID' }
+        Start-Process -FilePath $env:SEDES_FIXTURE_LINK -Wait
+      `,
+    ], { env: { ...environment, SEDES_FIXTURE_LINK: link, SEDES_FIXTURE_TARGET: launchProbe, SEDES_FIXTURE_ROOT: fixture }, windowsHide: true, timeout: 30000, encoding: 'utf8' });
+    if (check.error) throw check.error;
+    assert.equal(check.status, 0, check.stderr);
+    assert.equal(await readFile(path.join(fixture, 'launched.txt'), 'utf8'), 'launched');
+    await rm(path.join(fixture, 'launched.txt'));
+  }
+  // Deleted shortcuts stay deleted; explicit no-desktop leaves that link alone.
+  await rm(startLink);
+  await writeFile(desktopLink, 'operator-retained desktop link');
+  assert.equal(run(repair, { ...environment, SEDES_FIXTURE_NO_DESKTOP: 'true' }), 0);
+  await assert.rejects(access(startLink), { code: 'ENOENT' });
+  assert.equal(await readFile(desktopLink, 'utf8'), 'operator-retained desktop link');
+  await rm(desktopLink);
+  assert.equal(run(repair), 0);
+  for (const link of [startLink, desktopLink]) await assert.rejects(access(link), { code: 'ENOENT' });
+  console.log('Windows installer regressions passed: long-path upgrade/rollback, locked-file refusal, environment restoration, path conversion, retained shortcut repair/launch/app ID, deleted/disabled shortcut preservation, direct post-install launch.');
 } finally {
   // The only recursive cleanup is the unique disposable directory created above.
   assert.equal(path.dirname(fixture), path.resolve(os.tmpdir()));

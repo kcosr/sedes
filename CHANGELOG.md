@@ -775,6 +775,8 @@
 - Windows desktop upgrades handle long temporary paths while removing older
   full installations, including upgrades to client-only builds, instead of
   misleadingly reporting that Sedes cannot be closed.
+  Retained Start Menu and desktop shortcuts are refreshed against the new
+  executable, and the installer launches it directly after completing setup.
   ([#54](https://github.com/kcosr/sedes/pull/54))
 
 - macOS desktop packages include the local-network permission description.

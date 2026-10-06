@@ -49,11 +49,40 @@
   ${EndIf}
 !macroend
 
+!macro sedesRefreshShortcut LINK
+  # Rebuild retained shell-link metadata against the new executable. Keeping
+  # the old .lnk bytes can leave Explorer unable to resolve the replaced target,
+  # even though the displayed TargetPath still names the correct executable.
+  # Never recreate an intentionally removed shortcut.
+  ${If} ${FileExists} "${LINK}"
+    ClearErrors
+    CreateShortCut "${LINK}" "$appExe" "" "$appExe" 0 "" "" "${APP_DESCRIPTION}"
+    ${If} ${Errors}
+      MessageBox MB_OK|MB_ICONEXCLAMATION "Sedes was installed, but its shortcut could not be refreshed: ${LINK}" /SD IDOK
+      Abort "Unable to refresh Sedes shortcut: ${LINK}"
+    ${EndIf}
+    WinShell::SetLnkAUMI "${LINK}" "${APP_ID}"
+  ${EndIf}
+!macroend
+
 !macro customInstall
   # Restore before electron-builder launches Sedes. No registry/system/user
   # environment is changed; cancellation also discards this process's overrides.
   !insertmacro sedesRestoreEnvironment TEMP $sedesOriginalTemp
   !insertmacro sedesRestoreEnvironment TMP $sedesOriginalTmp
+  ${If} $keepShortcuts == "true"
+    !ifndef DO_NOT_CREATE_START_MENU_SHORTCUT
+      !insertmacro sedesRefreshShortcut $newStartMenuLink
+    !endif
+    !ifndef DO_NOT_CREATE_DESKTOP_SHORTCUT
+      ${IfNot} ${isNoDesktopShortcut}
+        !insertmacro sedesRefreshShortcut $newDesktopLink
+      ${EndIf}
+    !endif
+  ${EndIf}
+  # Installation has completed. Launch the executable, not a retained .lnk
+  # whose shell resolution/cache is independent of filesystem existence.
+  StrCpy $launchLink "$appExe"
 !macroend
 
 !endif
