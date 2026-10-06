@@ -271,6 +271,81 @@ describe("AutomationPage", () => {
     expect(await screen.findByText("No automation")).toBeInTheDocument();
   });
 
+  it("lets a one-time automation's manual run resume or stay paused while its time is ahead", async () => {
+    const runAt = new Date(Date.now() + 2 * 86_400_000).toISOString();
+    const fixture = renderPage(
+      [
+        {
+          automation: automationSummary({
+            status: "paused",
+            scheduleKind: "date_time",
+            schedule: { kind: "date_time", runAt },
+            nextRunAt: undefined,
+            lastRun: { ...lastRun("uncertain"), occurrence: "manual" },
+          }),
+        },
+      ],
+      {
+        getThreadAutomation: vi.fn().mockResolvedValue(
+          definition({ scheduleKind: "date_time", schedule: { kind: "date_time", runAt } }),
+        ),
+        resolveThreadAutomationRun: vi.fn().mockResolvedValue({
+          run: run({ id: "run-last", state: "failed" }),
+          automation: definition({ status: "enabled", scheduleKind: "date_time", schedule: { kind: "date_time", runAt }, revision: 5 }),
+        }),
+      },
+    );
+    expect(
+      screen.getByText("Check the thread, then mark the run as failed to resume scheduling."),
+    ).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Mark as failed…" }));
+    const dialog = screen.getByRole("dialog", { name: "Mark the run as failed?" });
+    expect(dialog).not.toHaveTextContent("ends");
+    expect(within(dialog).getAllByRole("button").map((button) => button.textContent)).toEqual([
+      "Cancel",
+      "Mark failed, keep paused",
+      "Mark failed and resume",
+    ]);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Mark failed and resume" }));
+    await waitFor(() =>
+      expect(fixture.api.resolveThreadAutomationRun).toHaveBeenCalledWith(THREAD_ID, "run-last", { resume: true }),
+    );
+  });
+
+  it("keeps a one-time automation paused after a manual run once its time has passed", async () => {
+    const fixture = renderPage(
+      [
+        {
+          automation: automationSummary({
+            status: "paused",
+            scheduleKind: "date_time",
+            schedule: { kind: "date_time", runAt: "2026-10-06T00:00:00.000Z" },
+            nextRunAt: undefined,
+            lastRun: { ...lastRun("uncertain"), occurrence: "manual" },
+          }),
+        },
+      ],
+      {
+        resolveThreadAutomationRun: vi.fn().mockResolvedValue({
+          run: run({ id: "run-last", state: "failed" }),
+          automation: definition({ status: "paused", scheduleKind: "date_time", revision: 5 }),
+        }),
+      },
+    );
+    expect(screen.getByText(/Check the thread, then mark the run as failed\.$/u)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Mark as failed…" }));
+    const dialog = screen.getByRole("dialog", { name: "Mark the run as failed?" });
+    expect(dialog).toHaveTextContent("The automation stays paused: its time has passed, so edit it to run it again.");
+    expect(within(dialog).getAllByRole("button").map((button) => button.textContent)).toEqual([
+      "Cancel",
+      "Mark failed",
+    ]);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Mark failed" }));
+    await waitFor(() =>
+      expect(fixture.api.resolveThreadAutomationRun).toHaveBeenCalledWith(THREAD_ID, "run-last", { resume: false }),
+    );
+  });
+
   it("keeps the mark-failed dialog open with the error when resolving fails", async () => {
     renderPage([{ automation: automationSummary({ status: "paused", lastRun: lastRun("uncertain") }) }], {
       resolveThreadAutomationRun: vi.fn().mockRejectedValue(new Error("Choose an allowed model.")),

@@ -40,7 +40,11 @@ import {
   describeSchedule,
   lastRunAge,
 } from "../../automation/automation-text.js";
-import { automationActionAvailability } from "../../automation/automation-actions.js";
+import {
+  automationActionAvailability,
+  uncertainRunResolution,
+  type UncertainRunResolution,
+} from "../../automation/automation-actions.js";
 import { mutationId } from "../../lib/ids.js";
 import { futureTimeLabel, shortRelativeTime } from "../../lib/time.js";
 import {
@@ -587,7 +591,7 @@ function AutomationDetails({
           open={markFailedOpen}
           onOpenChange={setMarkFailedOpen}
           runTime={dayTimePhrase(lastRun.scheduledFor, now)}
-          oneTime={automation.scheduleKind === "date_time"}
+          resolution={uncertainRunResolution(automation, now) ?? "choose"}
           onResolve={async (resume) => {
             try {
               const resolution = await store.api.resolveThreadAutomationRun(
@@ -606,6 +610,12 @@ function AutomationDetails({
     </>
   );
 }
+
+const RESOLUTION_HINTS: Readonly<Record<UncertainRunResolution, string>> = {
+  ends: "Check the thread, then mark the run as failed to end this one-time automation.",
+  choose: "Check the thread, then mark the run as failed to resume scheduling.",
+  stays_paused: "Check the thread, then mark the run as failed.",
+};
 
 /** The one notice the automation's state calls for, with its way out. */
 function HealthCallout({
@@ -668,9 +678,7 @@ function HealthCallout({
           }
         >
           {problem ? `${problem} ` : null}
-          {automation.scheduleKind === "date_time"
-            ? "Check the thread, then mark the run as failed to end this one-time automation."
-            : "Check the thread, then mark the run as failed to resume scheduling."}
+          {RESOLUTION_HINTS[uncertainRunResolution(automation, now) ?? "choose"]}
         </Callout>
       );
     case "not_started":

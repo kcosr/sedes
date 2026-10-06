@@ -547,8 +547,13 @@ its own. Open the thread to see whether the agent got the prompt, then choose
   step.
 - **Mark failed, keep paused** leaves the schedule paused.
 
-A one-time automation has nothing to resume, so it offers one action, **Mark
-failed**, which ends the automation.
+For a one-time automation, what happens depends on the run:
+
+- Its scheduled run: there is nothing to resume, so the dialog offers one
+  action, **Mark failed**, which ends the automation.
+- A **Run now** attempt: the automation stays. While its time is still
+  ahead, you can resume or keep it paused as above; once its time has passed,
+  **Mark failed** keeps it paused, and you can edit it to run again.
 
 ### Read the definition
 

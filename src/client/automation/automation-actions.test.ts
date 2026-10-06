@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { NormalizedThreadSummary } from "../../shared/index.js";
-import { automationActionAvailability } from "./automation-actions.js";
+import { automationActionAvailability, uncertainRunResolution } from "./automation-actions.js";
 import { automationHealth, type SummaryAutomation, type SummaryAutomationRun } from "./automation-health.js";
 
 const NOW = Date.parse("2026-10-06T03:40:00.000Z");
@@ -109,5 +109,36 @@ describe("automationActionAvailability", () => {
       remove: allowed,
     });
     expect(actions(automation(), {}, { available: false }).toggle).toEqual({ action: "pause", available: true });
+  });
+});
+
+describe("uncertainRunResolution", () => {
+  const once = (runAt: string) => ({ kind: "date_time" as const, runAt });
+  const uncertain = (occurrence: "scheduled" | "manual"): SummaryAutomationRun => ({
+    ...lastRun("uncertain"),
+    occurrence,
+  });
+
+  it("ends a one-time automation whose scheduled run is resolved", () => {
+    expect(
+      uncertainRunResolution({ schedule: once("2026-10-06T02:00:00.000Z"), lastRun: uncertain("scheduled") }, NOW),
+    ).toBe("ends");
+  });
+
+  it("keeps a one-time automation after a manual run, resumable while its time is ahead", () => {
+    expect(
+      uncertainRunResolution({ schedule: once("2026-10-09T09:00:00.000Z"), lastRun: uncertain("manual") }, NOW),
+    ).toBe("choose");
+    // Its time has passed: enabling has no future run to schedule.
+    expect(
+      uncertainRunResolution({ schedule: once("2026-10-06T02:00:00.000Z"), lastRun: uncertain("manual") }, NOW),
+    ).toBe("stays_paused");
+  });
+
+  it("lets a recurring automation resume or stay paused, and says nothing without an uncertain run", () => {
+    const cron = automation().schedule;
+    expect(uncertainRunResolution({ schedule: cron, lastRun: uncertain("scheduled") }, NOW)).toBe("choose");
+    expect(uncertainRunResolution({ schedule: cron, lastRun: uncertain("manual") }, NOW)).toBe("choose");
+    expect(uncertainRunResolution({ schedule: cron, lastRun: lastRun("failed") }, NOW)).toBeUndefined();
   });
 });
