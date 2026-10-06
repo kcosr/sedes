@@ -1964,7 +1964,8 @@ function createBodyTarget(): HTMLElement {
 /**
  * The Tasks host: one retained body, shown beside a thread, docked beside
  * Chat on desktop and as a sheet on phones. Other pages (Home, Archived,
- * Usage) show no Tasks surface, and the Tasks shortcut leaves them alone.
+ * Usage, the automation pages) show no Tasks surface, and the Tasks shortcut
+ * leaves them alone.
  * It wraps the workbench so the workbench bar's toggle and the `tasks`
  * panel tenant reach it through context. The application shell mounts a
  * fresh host when it moves between a thread and another page, so its state
