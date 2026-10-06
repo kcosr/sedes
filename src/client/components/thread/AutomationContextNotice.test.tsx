@@ -82,7 +82,7 @@ const context = {
 };
 
 describe("AutomationContextNotice", () => {
-  it("says the thread was triggered, in the default tone, and dismisses", async () => {
+  it("says the thread was triggered, in the neutral tone (nothing to act on), and dismisses", async () => {
     const onDismiss = vi.fn();
     render(
       <AutomationContextNotice
@@ -93,12 +93,12 @@ describe("AutomationContextNotice", () => {
     );
     const notice = screen.getByRole("complementary");
     expect(notice).toHaveTextContent("This thread was triggered by an automation.");
-    expect(notice).not.toHaveAttribute("data-tone");
+    expect(notice).toHaveAttribute("data-tone", "neutral");
     await userEvent.click(screen.getByRole("button", { name: "Dismiss" }));
     expect(onDismiss).toHaveBeenCalledOnce();
   });
 
-  it("marks a failed scheduled run red, with its diagnostic beside the label", () => {
+  it("marks a failed scheduled run red, with its diagnostic under the label and the actions apart", () => {
     render(
       <AutomationContextNotice
         context={{
@@ -112,12 +112,19 @@ describe("AutomationContextNotice", () => {
     );
     const notice = screen.getByRole("complementary");
     expect(notice).toHaveAttribute("data-tone", "danger");
-    expect(notice.querySelector(".thread-attention-text p")).toHaveTextContent(
-      /^This scheduled run failed\.$/,
-    );
-    expect(notice.querySelector(".thread-attention-text small")).toHaveTextContent(
-      "The execution environment was unreachable.",
-    );
+    // Label over diagnostic in one text block; the actions are their own
+    // group, which wraps under the text when the row is narrow.
+    const text = notice.querySelector(".automation-context-text")!;
+    expect([...text.children].map((child) => [child.tagName, child.textContent])).toEqual([
+      ["P", "This scheduled run failed."],
+      ["SMALL", "The execution environment was unreachable."],
+    ]);
+    const actions = notice.querySelector(".automation-context-actions")!;
+    expect([...actions.children].map((child) => child.textContent)).toEqual([
+      "Open automation",
+      "Dismiss",
+    ]);
+    expect(text.contains(actions)).toBe(false);
   });
 
   it("drops 'scheduled' when the source thread shows the failed run was manual", () => {
