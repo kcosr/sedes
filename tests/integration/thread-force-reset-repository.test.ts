@@ -372,6 +372,7 @@ function archiveService(
             pinRevision: 0,
             bookmarkRevision: aggregate.inventory.bookmarkRevision,
             turnBookmarkCount: 0,
+            nonArchivedWorkpadCount: 0,
             groupId: null,
             groupAssignmentRevision: 0,
             threadRevision: aggregate.thread.revision,

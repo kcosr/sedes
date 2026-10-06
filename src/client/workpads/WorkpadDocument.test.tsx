@@ -1,11 +1,14 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WorkpadAttributionSpan } from "../../shared/protocol/workpads.js";
 import { WorkpadDocument } from "./WorkpadDocument.js";
+import { applyMarkdownChecklistToggle, type MarkdownChecklistToggle } from "../components/conversation/markdown-checklists.js";
+import * as markdownChecklists from "../components/conversation/markdown-checklists.js";
 
 vi.mock("../components/conversation/MermaidDiagram.js", () => ({ MermaidDiagram: () => <div>Diagram</div> }));
-afterEach(cleanup);
+afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 const time = "2026-09-08T12:00:00.000Z";
 function span(start: number, end: number, revision: number, name = "API integration"): WorkpadAttributionSpan {
   return { start, end, revision, createdAt: time, author: revision === 2
@@ -14,6 +17,101 @@ function span(start: number, end: number, revision: number, name = "API integrat
 }
 
 describe("WorkpadDocument", () => {
+  it.each([
+    { source: "🐈\r\n\r\n- [ ] Repeat\r\n- [ ] Repeat\r\n", name: "Repeat", occurrence: 1,
+      expected: "🐈\r\n\r\n- [ ] Repeat\r\n- [x] Repeat\r\n" },
+    { source: "> 1. [X] **Quoted**\n>    - [ ] nested\n", name: "Quoted", occurrence: 0,
+      expected: "> 1. [ ] **Quoted**\n>    - [ ] nested\n" },
+    { source: "> 1. [X] **Quoted**\n>    - [ ] nested\n", name: "nested", occurrence: 0,
+      expected: "> 1. [X] **Quoted**\n>    - [x] nested\n" },
+    { source: "- [ ] First\n\n  More text\n\n- [x] Second\n", name: "Second", occurrence: 0,
+      expected: "- [ ] First\n\n  More text\n\n- [ ] Second\n" },
+    { source: "-\n  [ ] Following line\n", name: "Following line", occurrence: 0,
+      expected: "-\n  [x] Following line\n" },
+    { source: "- [\t] Tab marker\n", name: "Tab marker", occurrence: 0,
+      expected: "- [x] Tab marker\n" },
+    { source: "\uFEFF- [ ] BOM\n- [X] Second\n", name: "BOM", occurrence: 0,
+      expected: "\uFEFF- [x] BOM\n- [X] Second\n" },
+    { source: "\uFEFF- [ ] BOM\n- [X] Second\n", name: "Second", occurrence: 0,
+      expected: "\uFEFF- [ ] BOM\n- [ ] Second\n" },
+  ])("changes only the parser-selected marker in $source", ({ source, name, occurrence, expected }) => {
+    const onToggle = vi.fn<(change: MarkdownChecklistToggle) => void>();
+    render(<WorkpadDocument content={source} attribution={[]} showAttribution={false}
+      checklist={{ disabled: false, pending: false, onToggle }} />);
+    fireEvent.click(screen.getAllByRole("checkbox", { name })[occurrence]!);
+    expect(onToggle).toHaveBeenCalledTimes(1);
+    expect(applyMarkdownChecklistToggle(onToggle.mock.calls[0]![0])).toBe(expected);
+  });
+
+  it("ignores code and escaped markers and names checkboxes from visible task text", () => {
+    const content = "```md\n- [ ] Example\n```\n\n\\- [ ] Literal\n\n- [ ] **A** &amp; [B](https://example.com) `code`\n";
+    const onToggle = vi.fn<(change: MarkdownChecklistToggle) => void>();
+    render(<WorkpadDocument content={content} attribution={[]} showAttribution={false}
+      checklist={{ disabled: false, pending: false, onToggle }} />);
+    expect(screen.getAllByRole("checkbox")).toHaveLength(1);
+    fireEvent.click(screen.getByRole("checkbox", { name: "A & B code" }));
+    expect(applyMarkdownChecklistToggle(onToggle.mock.calls[0]![0])).toBe(content.replace("- [ ] **A**", "- [x] **A**"));
+  });
+
+  it("does not reparse unchanged Markdown when attribution details or equivalent checklist props change", () => {
+    const parser = vi.spyOn(markdownChecklists, "rehypeChecklistInputs");
+    const content = "- [ ] Verify endpoint";
+    const attribution = [span(0, content.length, 1)];
+    const onToggle = vi.fn();
+    const { rerender } = render(<WorkpadDocument content={content} attribution={attribution} showAttribution
+      checklist={{ disabled: false, pending: false, onToggle }} />);
+    const parses = parser.mock.calls.length;
+    expect(parses).toBeGreaterThan(0);
+    const mark = screen.getByRole("button", { name: /Verify endpoint.*last changed/ });
+    fireEvent.mouseOver(mark);
+    expect(screen.getByRole("status")).toBeInTheDocument();
+    fireEvent.focus(mark);
+    fireEvent.click(screen.getByRole("button", { name: "Close attribution details" }));
+    rerender(<WorkpadDocument content={content} attribution={attribution} showAttribution
+      checklist={{ disabled: false, pending: false, onToggle }} />);
+    expect(parser).toHaveBeenCalledTimes(parses);
+    rerender(<WorkpadDocument content={`${content}\nNew paragraph`} attribution={attribution} showAttribution
+      checklist={{ disabled: false, pending: false, onToggle }} />);
+    expect(parser.mock.calls.length).toBeGreaterThan(parses);
+  });
+
+  it("preserves focus and native Space activation through pending saves with attribution enabled", async () => {
+    const user = userEvent.setup();
+    const content = "- [ ] Verify endpoint";
+    const attribution = [span(0, content.length, 1)];
+    const onToggle = vi.fn<(change: MarkdownChecklistToggle) => void>();
+    const controls = { disabled: false, pending: false, onToggle };
+    const { rerender } = render(<WorkpadDocument content={content} attribution={attribution} showAttribution checklist={controls} />);
+    const checkbox = screen.getByRole("checkbox", { name: "Verify endpoint" });
+    checkbox.focus();
+    await user.keyboard(" ");
+    expect(onToggle).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    rerender(<WorkpadDocument content={content} attribution={attribution} showAttribution checklist={{ ...controls, pending: true }} />);
+    expect(checkbox).toHaveFocus();
+    expect(checkbox).toHaveAttribute("aria-disabled", "true");
+    await user.keyboard(" ");
+    expect(onToggle).toHaveBeenCalledTimes(1);
+    const updated = applyMarkdownChecklistToggle(onToggle.mock.calls[0]![0])!;
+    rerender(<WorkpadDocument content={updated} attribution={attribution} showAttribution checklist={controls} />);
+    expect(screen.getByRole("checkbox")).toBe(checkbox);
+    expect(checkbox).toHaveFocus();
+    expect(checkbox).toBeChecked();
+    fireEvent.click(screen.getByRole("button", { name: /Verify endpoint.*last changed/ }));
+    expect(onToggle).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("status")).toBeInTheDocument();
+  });
+
+  it.each(["disabled", "inactive"])("keeps %s checklists read-only", mode => {
+    const onToggle = vi.fn();
+    render(<WorkpadDocument content="- [ ] Read only" attribution={[]} showAttribution={false} active={mode !== "inactive"}
+      checklist={{ disabled: mode === "disabled", pending: false, onToggle }} />);
+    const checkbox = screen.getByRole("checkbox", { name: "Read only" });
+    expect(checkbox).toBeDisabled();
+    fireEvent.click(checkbox);
+    expect(onToggle).not.toHaveBeenCalled();
+  });
+
   it("toggles attribution without changing Markdown structure or visible content", () => {
     const content = "# Decision\n\nUse a **15-minute** timeout.";
     const start = content.indexOf("15-minute");

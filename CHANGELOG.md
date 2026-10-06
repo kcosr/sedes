@@ -4,7 +4,8 @@
 
 ### Breaking Changes
 
-- Browser and packaged clients require client protocol 140. Direct inputs accept
+- Browser and packaged clients require client protocol 141, including thread
+  workpad counts. Direct inputs accept
   up to 256 KiB of text and 2 MiB per JSON request; input origins use server
   registration shared by Android native voice and its WebView. Upgrade clients
   together with the server.
@@ -213,6 +214,13 @@
   Migration preserves old Claude totals separately with unknown coverage. (#8)
 
 ### Added
+
+- The Workpads toggle shows the current thread's non-archived workpad count,
+  updated through the existing application stream without a separate list fetch.
+
+- Workpad checklist boxes can be checked or unchecked in the latest saved
+  document without entering edit mode. Each toggle saves a revision, preserves
+  unfinished drafts, and detects concurrent edits before overwriting text.
 
 - Android **Keep listening** records through pauses until Send, with an optional
   default for new recordings and a configurable limit of one hour by default. Interrupted

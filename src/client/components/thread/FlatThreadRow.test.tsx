@@ -36,6 +36,7 @@ function makeThread(
     groupAssignmentRevision: 0,
     bookmarkRevision: 0,
     turnBookmarkCount: 0,
+    nonArchivedWorkpadCount: 0,
     threadRevision: 0,
     runState: "idle",
     queuedInputCount: 0,

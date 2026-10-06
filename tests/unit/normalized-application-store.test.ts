@@ -37,6 +37,7 @@ function thread(
     groupAssignmentRevision: 0,
     bookmarkRevision: 0,
     turnBookmarkCount: 0,
+    nonArchivedWorkpadCount: 0,
     threadRevision: 0,
     runState: "idle",
     terminalSummary: { runningCount: 0, retainedCount: 0 },
@@ -141,6 +142,19 @@ function envelope(
 }
 
 describe("normalized application protocol", () => {
+  it("requires a nonnegative safe workpad count on every application thread summary", () => {
+    const value = snapshot();
+    expect(normalizedApplicationSnapshotSchema.parse(value).threads[0]?.nonArchivedWorkpadCount).toBe(0);
+    for (const invalid of [undefined, null, -1, 0.5, Number.MAX_SAFE_INTEGER + 1]) {
+      expect(normalizedApplicationSnapshotSchema.safeParse({
+        ...value, threads: [{ ...value.threads[0], nonArchivedWorkpadCount: invalid }],
+      }).success).toBe(false);
+    }
+    expect(normalizedApplicationSnapshotSchema.parse({
+      ...value, threads: [thread({ nonArchivedWorkpadCount: 150 })],
+    }).threads[0]?.nonArchivedWorkpadCount).toBe(150);
+  });
+
   it("rejects mismatched descendant triples and ancestry cycles", () => {
     const child = thread({ id: "child" });
     const origin = {

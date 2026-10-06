@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState, type KeyboardEvent, type MouseEvent } from "react";
+import { memo, useEffect, useMemo, useState, type KeyboardEvent, type MouseEvent } from "react";
 import { diffChars } from "diff";
 import { createPortal } from "react-dom";
 import type { WorkpadAttributionSpan } from "../../shared/protocol/workpads.js";
 import { MarkdownContent } from "../components/conversation/MarkdownContent.js";
+import type { MarkdownChecklistControls } from "../components/conversation/markdown-checklists.js";
 import "./WorkpadDocument.css";
 
 interface DocumentNode {
@@ -19,11 +20,18 @@ export interface WorkpadDocumentProps {
   content: string;
   attribution: readonly WorkpadAttributionSpan[];
   showAttribution: boolean;
+  checklist?: MarkdownChecklistControls;
 }
 
 /** A complete rendered document. Removed text is intentionally only in history. */
-export function WorkpadDocument({ content, attribution, showAttribution, active = true }: WorkpadDocumentProps) {
+export const WorkpadDocument = memo(function WorkpadDocument({ content, attribution, showAttribution, active = true, checklist }: WorkpadDocumentProps) {
   const [selected, setSelected] = useState<{ content: string; span: WorkpadAttributionSpan; top: number; left: number }>();
+  const checklistDisabled = !active || checklist?.disabled === true;
+  const checklistPending = checklist?.pending ?? false;
+  const onChecklistToggle = checklist?.onToggle;
+  const checklistControls = useMemo(() => onChecklistToggle && {
+    disabled: checklistDisabled, pending: checklistPending, onToggle: onChecklistToggle,
+  }, [checklistDisabled, checklistPending, onChecklistToggle]);
   useEffect(() => {
     if (!active || !selected) return;
     const dismiss = () => setSelected(undefined);
@@ -80,14 +88,15 @@ export function WorkpadDocument({ content, attribution, showAttribution, active 
   return (
     <div className="workpad-document" onClick={click} onKeyDown={keyDown}
       onMouseOver={event => { select(event.target); }} onFocus={event => { select(event.target); }}>
-      <MarkdownContent rehypePlugins={plugins} enableMermaid={!showAttribution}>{content}</MarkdownContent>
+      <MarkdownContent rehypePlugins={plugins} enableMermaid={!showAttribution}
+        checklist={checklistControls}>{content}</MarkdownContent>
       {detail && selected && createPortal(<aside className="workpad-attribution-detail" style={{ top: selected.top, left: selected.left }} aria-label="Attribution details" data-selection-action-overlay="" role="status">
         <span><strong>{authorName(detail)}</strong><span className="workpad-attribution-meta"> · Revision {detail.revision} · <time dateTime={detail.createdAt}>{new Date(detail.createdAt).toLocaleString()}</time></span></span>
         <button type="button" aria-label="Close attribution details" onClick={() => setSelected(undefined)}>×</button>
       </aside>, document.body)}
     </div>
   );
-}
+});
 
 function authorName(span: WorkpadAttributionSpan): string {
   return span.author.kind === "user" ? "You" : span.author.name || span.author.nameSnapshot;

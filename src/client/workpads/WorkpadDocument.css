@@ -1,4 +1,24 @@
 .workpad-document { position: relative; min-width: 0; overflow-wrap: anywhere; }
+.workpad-document .task-list-item { list-style: none; }
+.workpad-document .markdown-checklist-control {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--control-touch);
+  min-height: var(--control-touch);
+  vertical-align: middle;
+  cursor: pointer;
+}
+.workpad-document .markdown-checklist-control:has(input:disabled),
+.workpad-document .markdown-checklist-control:has(input[aria-disabled="true"]) { cursor: default; }
+.workpad-document .markdown-checklist-control input {
+  accent-color: var(--primary);
+  cursor: inherit;
+}
+.workpad-document .markdown-checklist-control input:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
 .workpad-attribution { color: inherit; padding: 0; border-radius: 2px; cursor: pointer; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
 /* Attribution marks open author details, but their prose remains copyable. */
 .workpad-attribution {

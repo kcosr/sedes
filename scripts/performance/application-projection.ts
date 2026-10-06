@@ -57,6 +57,7 @@ function fixture(): Snapshot {
     preferredWorktreeRevision: 0,
     bookmarkRevision: 0,
     turnBookmarkCount: 0,
+    nonArchivedWorkpadCount: 0,
     groupId: null,
     groupAssignmentRevision: 0,
     threadRevision: 0,

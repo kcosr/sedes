@@ -81,6 +81,7 @@ function snapshot() {
         pinRevision: 0,
         bookmarkRevision: 0,
         turnBookmarkCount: 0,
+        nonArchivedWorkpadCount: 0,
         groupId: null,
         groupAssignmentRevision: 0,
         threadRevision: 0,
@@ -135,7 +136,7 @@ function associatedTask(
 
 describe("execution-target application protocol", () => {
   it("uses the current client protocol for associated task presentation", () => {
-    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(140);
+    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(141);
   });
 
   it("enforces exact associated-project semantics on task projections", () => {

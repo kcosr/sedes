@@ -7,6 +7,7 @@ import type {
 
 export interface WorkpadChangePublisher {
   publishWorkpadChange(scope: RequestScope, workpadId: string, revision: number, change: "document" | "draft"): Promise<void>;
+  handoffThreadChange(scope: RequestScope, threadId: string): void;
 }
 type PendingPublication = {
   readonly scope: RequestScope;
@@ -35,11 +36,25 @@ export class WorkpadService {
 
   async create(scope: RequestScope, request: CreateWorkpadRequest, actor?: WorkpadActor, now = Date.now()) {
     const pad = this.repository.create(scope, request, actor, now);
+    if (pad.scope.kind === "thread") this.publications.handoffThreadChange(scope, pad.scope.threadId);
     void this.publishWorkpadChange(scope, pad.id, pad.revision, "document", now);
     return pad;
   }
   async update(scope: RequestScope, id: string, request: UpdateWorkpadRequest, actor?: WorkpadActor, now = Date.now()) {
-    const pad = this.repository.update(scope, id, request, actor, now);
+    const { pad, previousThreadId } = this.repository.database.transaction(() => {
+      // A move must retain its source before the write. Read both membership
+      // states in the mutation's transaction, including combined move/archive.
+      const previousThreadId = request.scope !== undefined || request.archived !== undefined
+        ? this.repository.nonArchivedThreadId(scope, id) : undefined;
+      return { previousThreadId, pad: this.repository.update(scope, id, request, actor, now) };
+    })();
+    const nextThreadId = pad.scope.kind === "thread" && pad.archivedAt === null ? pad.scope.threadId : null;
+    if (previousThreadId !== undefined && previousThreadId !== nextThreadId) {
+      // Independent thread hints preserve every affected scope across rapid
+      // moves and publication recovery; document invalidations remain separate.
+      if (previousThreadId !== null) this.publications.handoffThreadChange(scope, previousThreadId);
+      if (nextThreadId !== null) this.publications.handoffThreadChange(scope, nextThreadId);
+    }
     if (pad.revision !== request.expectedRevision) {
       // Document invalidation also refreshes a clean draft that followed it.
       void this.publishWorkpadChange(scope, id, pad.revision, "document", now);

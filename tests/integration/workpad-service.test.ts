@@ -57,7 +57,7 @@ describe("Workpad committed change publications", () => {
   it("publishes document and draft changes, but never rejected or no-op document writes", async () => {
     const f = fixture();
     const publishWorkpadChange = vi.fn(async () => undefined);
-    const service = new WorkpadService(f.repository, { publishWorkpadChange });
+    const service = new WorkpadService(f.repository, { publishWorkpadChange, handoffThreadChange: vi.fn() });
     try {
       const pad = await service.create(f.scope, { title: "Notes", content: "Before", scope: { kind: "global" } });
       expect(publishWorkpadChange).toHaveBeenLastCalledWith(f.scope, pad.id, 0, "document");
@@ -91,7 +91,7 @@ describe("Workpad committed change publications", () => {
   it("returns committed writes without waiting for publication I/O", async () => {
     const f = fixture();
     const publishWorkpadChange = vi.fn(() => new Promise<void>(() => undefined));
-    const service = new WorkpadService(f.repository, { publishWorkpadChange });
+    const service = new WorkpadService(f.repository, { publishWorkpadChange, handoffThreadChange: vi.fn() });
     try {
       await expect(service.create(f.scope, { title: "Notes", scope: { kind: "global" } })).resolves.toMatchObject({ revision: 0 });
       expect(publishWorkpadChange).toHaveBeenCalledTimes(1);
@@ -105,7 +105,7 @@ describe("Workpad committed change publications", () => {
       .mockRejectedValueOnce(new Error("offline"))
       .mockResolvedValue(undefined);
     const onRetryPending = vi.fn();
-    const service = new WorkpadService(f.repository, { publishWorkpadChange }, onRetryPending);
+    const service = new WorkpadService(f.repository, { publishWorkpadChange, handoffThreadChange: vi.fn() }, onRetryPending);
     try {
       const pad = await service.create(f.scope, { title: "Notes", scope: { kind: "global" } }, undefined, 100);
       await service.saveDraft(f.scope, pad.id, { expectedRevision: 0, baseRevision: 0, content: "Draft" }, 200);
@@ -133,7 +133,7 @@ it("does not let an older in-flight success erase a newer publication retry", as
     .mockImplementationOnce(() => older)
     .mockRejectedValueOnce(new Error("offline"))
     .mockResolvedValue(undefined);
-  const service = new WorkpadService(f.repository, { publishWorkpadChange });
+  const service = new WorkpadService(f.repository, { publishWorkpadChange, handoffThreadChange: vi.fn() });
   try {
     const first = service.publishWorkpadChange(f.scope, "pad", 1, "document", 100);
     await service.publishWorkpadChange(f.scope, "pad", 2, "document", 200);

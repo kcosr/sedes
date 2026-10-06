@@ -123,6 +123,14 @@ use it as application identity or authority, or fall back to a loaded thread
 snapshot for sidebar copying. Test unbound-to-bound publication and wrong-scope
 reads whenever changing this projection.
 
+The application thread summary's `nonArchivedWorkpadCount` is also shared by
+Pi, Codex, Claude, Grok, and OpenCode. It counts principal-owned, non-archived
+Workpads scoped directly to the application thread, without opening a provider
+session or loading history. Derive it alongside other durable summary counts;
+publish affected thread summaries after committed membership changes, including
+both ends of a scope move. Content and draft edits do not change membership.
+Keep snapshot, incremental publication, and reconnect projections equivalent.
+
 An actor must replay current authoritative pending interactions to late
 subscribers, including the interaction broker. Remove resolved requests and
 rebuild the pending view from the handle's replay on projection replacement;

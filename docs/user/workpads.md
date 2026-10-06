@@ -8,8 +8,10 @@ They belong to your Sedes account and survive restarts.
 
 In a thread, select the **Workpads** button (the notepad icon, beside
 **Tasks**) to open or close Workpads. It shares the workspace layout with
-**Chat** and **Files**. Resize the split, use **Workpads panel actions** to
-dock it on another edge, or collapse it; when it is collapsed, the button keeps
+**Chat** and **Files**. Its badge counts the current thread's non-archived
+workpads, independently of the panel's filters or selected scope. Zero is
+hidden, and counts above 99 display **99+**. Resize the split, use **Workpads panel
+actions** to dock it on another edge, or collapse it; when it is collapsed, the button keeps
 an outline, and selecting it shows Workpads again. Its open state and place
 stay with you when you switch threads. On narrow screens,
 switch between full-stage panels using the buttons, the panel shortcuts, or the
@@ -53,6 +55,13 @@ preserves its workpads in their current scope. The back arrow in the panel
 header returns to the list.
 
 ## Edit and save
+
+In the latest saved document, click a checklist box or focus it and press
+Space to check or uncheck an item without opening the editor. Each change
+saves immediately as a revision. The surrounding text and any unfinished
+working draft are preserved. If the document changed elsewhere, Sedes reloads
+the latest version so you can check it before trying again. Checkboxes in
+archived workpads and historical revisions are read-only.
 
 Choose **Edit workpad** (the pencil in the workpad's toolbar) to open your
 working draft. Typing autosaves the draft to Sedes and syncs it across your

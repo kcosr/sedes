@@ -178,6 +178,16 @@ export class WorkpadRepository {
     if (!found) throw new DomainError("not_found", "The workpad scope was not found.");
   }
   get(scope: RequestScope, id: string): Workpad { return this.#present(scope, this.#owned(scope, id)); }
+  /** Read count membership without loading the document or its attribution. */
+  nonArchivedThreadId(scope: RequestScope, id: string): string | null {
+    const row = this.database.prepare(`SELECT CASE
+      WHEN scope_kind = 'thread' AND archived_at IS NULL THEN thread_id
+      ELSE NULL END AS threadId
+      FROM workpads WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?`)
+      .get(scope.tenantId, scope.principalId, id) as { threadId: string | null } | undefined;
+    if (!row) throw notFound();
+    return row.threadId;
+  }
   create(scope: RequestScope, input: CreateWorkpadRequest, actor: WorkpadActor = { kind: "user" }, now = Date.now()): Workpad {
     const request = parse(createWorkpadRequestSchema, input);
     return this.database.transaction(() => {
