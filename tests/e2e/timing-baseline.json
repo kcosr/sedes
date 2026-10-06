@@ -10,6 +10,10 @@
       "estimatedMilliseconds": 70000
     },
     {
+      "file": "automations-list.spec.ts",
+      "estimatedMilliseconds": 13000
+    },
+    {
       "file": "blocking-interactions.spec.ts",
       "estimatedMilliseconds": 56000
     },
