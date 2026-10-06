@@ -428,7 +428,10 @@ export function ThreadPeekCard({
             </span>
           </div>
         )}
-        {!automation && thread.attention.automationContext === "failed" && (
+        {/* A failed scheduled run stays flagged until dismissed, even after a
+            later run succeeds; the automation line covers a failed last run. */}
+        {thread.attention.automationContext === "failed" &&
+          automationState?.kind !== "failed" && (
           <div
             className="thread-peek-row"
             data-row="automation-failed"
@@ -437,7 +440,9 @@ export function ThreadPeekCard({
             <span className="thread-peek-row-icon">
               <TriangleAlert size={13} strokeWidth={2} aria-hidden="true" />
             </span>
-            <span className="thread-peek-row-text">Last run failed</span>
+            <span className="thread-peek-row-text">
+              {automation ? "A scheduled run failed" : "Last run failed"}
+            </span>
           </div>
         )}
         {lineage !== undefined && (

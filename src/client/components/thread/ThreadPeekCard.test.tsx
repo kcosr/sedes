@@ -340,4 +340,29 @@ describe("ThreadPeekCard automation line", () => {
     expect(row).toHaveAttribute("data-tone", "danger");
     expect(automationRow(container)).toBeNull();
   });
+
+  it("keeps a retained scheduled failure after a later run succeeds", () => {
+    const base = automated({
+      nextRunAt: "2026-10-07T02:00:00.000Z",
+      lastRun: run("completed", { occurrence: "manual" }),
+    });
+    const container = renderPeek({
+      ...base,
+      attention: { ...base.attention, automationContext: "failed" },
+    });
+    expect(automationRow(container)).toHaveTextContent(/^Automation · next Tmrw/u);
+    const row = container.querySelector('[data-row="automation-failed"]')!;
+    expect(row).toHaveTextContent("A scheduled run failed");
+    expect(row).toHaveAttribute("data-tone", "danger");
+  });
+
+  it("does not repeat a failure the automation line already shows", () => {
+    const base = automated({ lastRun: run("failed") });
+    const container = renderPeek({
+      ...base,
+      attention: { ...base.attention, automationContext: "failed" },
+    });
+    expect(automationRow(container)).toHaveTextContent("Automation · Failed");
+    expect(container.querySelector('[data-row="automation-failed"]')).toBeNull();
+  });
 });
