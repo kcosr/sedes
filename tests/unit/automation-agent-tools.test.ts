@@ -357,6 +357,71 @@ describe("automation canonical tool service", () => {
     );
   });
 
+  it("keeps the frozen run tool shape by stripping browser run detail", async () => {
+    const setup = fixture();
+    const detailed = {
+      id: firstMutationId,
+      occurrence: "manual" as const,
+      scheduledFor: "2026-08-08T00:00:00.000Z",
+      state: "failed" as const,
+      runMode: "same_thread" as const,
+      definitionRevision: 3,
+      coalescedCount: 0,
+      forceResetAt: "2026-08-08T00:05:00.000Z",
+      precheck: {
+        status: "failed" as const,
+        command: "exit 3",
+        timeoutSeconds: 10,
+        durationMilliseconds: 12,
+        stdoutBytes: 0,
+        stdoutIncluded: false,
+        exitCode: 3,
+      },
+    };
+    const frozen = {
+      id: firstMutationId,
+      occurrence: "manual",
+      scheduledFor: "2026-08-08T00:00:00.000Z",
+      state: "failed",
+      runMode: "same_thread",
+      coalescedCount: 0,
+      precheck: {
+        status: "failed",
+        durationMilliseconds: 12,
+        stdoutBytes: 0,
+        stdoutIncluded: false,
+        exitCode: 3,
+      },
+    };
+    setup.automations.listRuns.mockReturnValue({
+      items: [detailed],
+      nextCursor: null,
+      counts: { all: 1, problems: 1, skipped: 0 },
+    } as never);
+    setup.automations.runNow.mockResolvedValue(detailed as never);
+
+    expect(setup.service.listRuns({}, context())).toEqual({
+      items: [frozen],
+      nextCursor: null,
+    });
+    await expect(setup.service.runNow({}, context())).resolves.toEqual(frozen);
+    // The registry validates outputs against the unchanged v1 artifacts.
+    await expect(
+      canonical(setup).invoke(
+        {
+          toolId: "automation.runs",
+          schemaVersion: 1,
+          requestId: "frozen-run-shape",
+          input: {},
+        },
+        invocationSource,
+      ),
+    ).resolves.toMatchObject({
+      state: "completed",
+      output: { items: [frozen], nextCursor: null },
+    });
+  });
+
   it("rejects every unadmitted target before automation state or model work", async () => {
     const setup = fixture();
     const denied = {

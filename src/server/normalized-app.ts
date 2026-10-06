@@ -3688,12 +3688,13 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
       const { threadId, runId } = automationRunRouteParametersSchema.parse(
         request.params,
       );
-      resolveAutomationRunRequestSchema.parse(request.body);
+      const body = resolveAutomationRunRequestSchema.parse(request.body);
       response.json(
         dependencies.automations.resolveUncertainRun(
           requestScope,
           threadId,
           runId,
+          { resume: body.resume },
         ),
       );
     },

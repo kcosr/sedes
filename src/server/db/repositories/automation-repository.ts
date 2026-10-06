@@ -5,6 +5,8 @@ import type {
   AutomationMisfirePolicy,
   AutomationPrecheck,
   AutomationPrecheckStatus,
+  AutomationRunCounts,
+  AutomationRunFilter,
   AutomationRunMode,
   AutomationRunRecord,
   AutomationRunState,
@@ -76,6 +78,7 @@ const runColumns = `
   started_at AS startedAt,
   accepted_at AS acceptedAt,
   finished_at AS finishedAt,
+  force_reset_at AS forceResetAt,
   created_at AS createdAt,
   updated_at AS updatedAt
 `;
@@ -173,6 +176,15 @@ export type AutomationMutationReceipt = {
   readonly mutationKind: "create" | "update" | "state" | "delete";
   readonly requestFingerprint: string;
   readonly resultRevision: number;
+};
+
+/** States behind each run-history filter; `null` reads every run. */
+const RUN_FILTER_STATES: Readonly<
+  Record<AutomationRunFilter, readonly AutomationRunState[] | null>
+> = {
+  all: null,
+  problems: ["failed", "uncertain"],
+  skipped: ["skipped"],
 };
 
 export class AutomationRepository {
@@ -1515,6 +1527,7 @@ export class AutomationRepository {
     input: {
       readonly limit: number;
       readonly after?: { readonly createdAt: number; readonly id: string };
+      readonly filter?: AutomationRunFilter;
     },
   ): AutomationRunRecord[] {
     assertPage(input.limit, 0, 101);
@@ -1530,29 +1543,71 @@ export class AutomationRepository {
         "The automation cursor is invalid.",
       );
     }
+    const page = (state: string) => `
+      SELECT ${runColumns}
+      FROM automation_runs
+      WHERE tenant_id = ? AND owner_principal_id = ?
+        AND automation_id = ?
+        ${state}
+        ${input.after ? "AND (created_at < ? OR (created_at = ? AND id < ?))" : ""}
+      ORDER BY created_at DESC, id DESC
+      LIMIT ?
+    `;
+    const pageParameters = [
+      scope.tenantId,
+      scope.principalId,
+      automationId,
+      ...(input.after
+        ? [input.after.createdAt, input.after.createdAt, input.after.id]
+        : []),
+      input.limit,
+    ];
+    const states = RUN_FILTER_STATES[input.filter ?? "all"];
+    if (states === null) {
+      return (
+        this.database.prepare(page("")).all(...pageParameters) as RunRow[]
+      ).map(runFromRow);
+    }
+    // One ordered, limited branch per state over automation_runs_state_history
+    // keeps a page bounded by its size, however sparse the matching runs are.
     return (
       this.database
         .prepare(
           `
-          SELECT ${runColumns}
-          FROM automation_runs
-          WHERE tenant_id = ? AND owner_principal_id = ?
-            AND automation_id = ?
-            ${input.after ? "AND (created_at < ? OR (created_at = ? AND id < ?))" : ""}
-          ORDER BY created_at DESC, id DESC
-          LIMIT ?
-        `,
+            ${states.map(() => `SELECT * FROM (${page("AND state = ?")})`).join(" UNION ALL ")}
+            ORDER BY createdAt DESC, id DESC
+            LIMIT ?
+          `,
         )
         .all(
-          scope.tenantId,
-          scope.principalId,
-          automationId,
-          ...(input.after
-            ? [input.after.createdAt, input.after.createdAt, input.after.id]
-            : []),
+          ...states.flatMap((state) => [
+            ...pageParameters.slice(0, 3),
+            state,
+            ...pageParameters.slice(3),
+          ]),
           input.limit,
         ) as RunRow[]
     ).map(runFromRow);
+  }
+
+  countRuns(scope: RequestScope, automationId: string): AutomationRunCounts {
+    const row = this.database
+      .prepare(
+        `
+          SELECT count(*) AS total,
+            coalesce(sum(state IN ('failed', 'uncertain')), 0) AS problems,
+            coalesce(sum(state = 'skipped'), 0) AS skipped
+          FROM automation_runs
+          WHERE tenant_id = ? AND owner_principal_id = ?
+            AND automation_id = ?
+        `,
+      )
+      .get(scope.tenantId, scope.principalId, automationId) as {
+      total: number;
+      problems: number;
+      skipped: number;
+    };
+    return { all: row.total, problems: row.problems, skipped: row.skipped };
   }
 
   private insertClaimedRun(

@@ -2,8 +2,9 @@ import { z } from "zod";
 import { authenticationTokenSchema } from "../shared/authentication.js";
 import {
   automationPrecheckTestResultSchema,
-  pageResultSchema,
   threadAutomationDefinitionSchema,
+  threadAutomationRunPageSchema,
+  threadAutomationRunResolutionSchema,
   threadAutomationRunSchema,
   threadAutomationSchedulePreviewSchema,
 } from "../shared/protocol/automation-presentation.js";
@@ -16,7 +17,8 @@ import {
   normalizedApplicationSessionSchema,
   normalizedApplicationSnapshotSchema,
 } from "../shared/protocol/application.js";
-import { normalizedThreadSnapshotSchema } from "../shared/protocol/conversation.js";
+import { automationCapabilitySchema } from "../shared/protocol/conversation.js";
+import type { AutomationRunFilter } from "../shared/protocol/domain.js";
 import type { AutomationCliDefinition } from "./automation-input.js";
 
 const idResponseSchema = z.strictObject({ id: z.uuid() });
@@ -103,11 +105,11 @@ export class SedesCliApiClient {
     return result.threadId;
   }
 
-  getThread(threadId: string) {
+  automationCapability(threadId: string) {
     return this.#request(
-      `/api/threads/${encodeURIComponent(threadId)}?activityDetail=full`,
+      `/api/threads/${encodeURIComponent(threadId)}/automation/capability`,
       {},
-      normalizedThreadSnapshotSchema,
+      automationCapabilitySchema,
     );
   }
 
@@ -214,11 +216,26 @@ export class SedesCliApiClient {
     );
   }
 
-  listRuns(threadId: string, pageSize = 50) {
+  listRuns(threadId: string, filter: AutomationRunFilter = "all", pageSize = 50) {
+    const parameters = new URLSearchParams({
+      pageSize: String(pageSize),
+      filter,
+    });
     return this.#request(
-      `/api/threads/${encodeURIComponent(threadId)}/automation/runs?pageSize=${pageSize}`,
+      `/api/threads/${encodeURIComponent(threadId)}/automation/runs?${parameters.toString()}`,
       {},
-      pageResultSchema(threadAutomationRunSchema),
+      threadAutomationRunPageSchema,
+    );
+  }
+
+  resolveRun(threadId: string, runId: string, resume: boolean) {
+    return this.#mutation(
+      `/api/threads/${encodeURIComponent(threadId)}/automation/runs/${encodeURIComponent(runId)}/resolve`,
+      threadAutomationRunResolutionSchema,
+      {
+        method: "POST",
+        body: JSON.stringify({ action: "mark_failed", resume }),
+      },
     );
   }
 

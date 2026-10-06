@@ -2,6 +2,8 @@ import { createHash, randomUUID } from "node:crypto";
 import type {
   ThreadAutomationDefinition,
   ThreadAutomationRun,
+  ThreadAutomationRunPage,
+  ThreadAutomationRunResolution,
   ThreadAutomationSummary,
 } from "../../shared/protocol/automation-presentation.js";
 import type {
@@ -14,6 +16,7 @@ import type { RequestScope } from "../identity/identity-provider.js";
 import type {
   AutomationDefinitionRecord,
   AutomationMisfirePolicy,
+  AutomationRunFilter,
   AutomationRunMode,
   AutomationRunRecord,
   AutomationSchedule,
@@ -314,36 +317,49 @@ export class AutomationService implements DurableDeadlineSource {
       .map(iso);
   }
 
+  /**
+   * Pages run history newest first. The filter is part of the cursor
+   * fingerprint; only the first page (no cursor) carries the history counts.
+   */
   listRuns(
     scope: RequestScope,
     threadId: string,
     input: {
       cursor?: string;
       pageSize: number;
+      filter?: AutomationRunFilter;
       environmentAuthority?: {
         readonly sourceEnvironmentId: string;
         readonly targetEnvironmentIds: readonly string[];
         readonly policyRevision: number;
       };
     },
-  ): { items: ThreadAutomationRun[]; nextCursor: string | null } {
+  ): ThreadAutomationRunPage {
     const automationId = this.#definitionForThread(scope, threadId).id;
     const pageSize = Math.min(input.pageSize, MAX_HISTORY_PAGE);
+    const filter = input.filter ?? "all";
     const fingerprint = requestFingerprint([
       "automation.runs",
       scope.tenantId,
       scope.principalId,
       automationId,
       pageSize,
+      filter,
       input.environmentAuthority ?? null,
     ]);
     const after = input.cursor
       ? decodeRunCursor(input.cursor, fingerprint)
       : undefined;
-    const rows = this.#repository.listRuns(scope, automationId, {
-      limit: pageSize + 1,
-      ...(after ? { after } : {}),
-    });
+    const { rows, counts } = this.#repository.database.transaction(() => ({
+      rows: this.#repository.listRuns(scope, automationId, {
+        limit: pageSize + 1,
+        filter,
+        ...(after ? { after } : {}),
+      }),
+      counts: after
+        ? undefined
+        : this.#repository.countRuns(scope, automationId),
+    }))();
     const retained = rows.slice(0, pageSize);
     const last = retained.at(-1);
     return {
@@ -355,15 +371,22 @@ export class AutomationService implements DurableDeadlineSource {
               id: last.id,
             })
           : null,
+      ...(counts ? { counts } : {}),
     };
   }
 
+  /**
+   * Marks an uncertain run failed. With `resume`, the same transaction then
+   * enables its definition, so a rejected enable leaves the run uncertain.
+   * Replaying an already-resolved run changes nothing.
+   */
   resolveUncertainRun(
     scope: RequestScope,
     threadId: string,
     runId: string,
+    input: { readonly resume: boolean },
     now = Date.now(),
-  ): ThreadAutomationRun {
+  ): ThreadAutomationRunResolution {
     this.#assertThread(scope, threadId);
     const current = this.#repository.findRunByScopedId(scope, runId);
     if (!current || current.anchorThreadId !== threadId) {
@@ -373,16 +396,37 @@ export class AutomationService implements DurableDeadlineSource {
       current.state === "failed" &&
       current.errorCode === "automation_uncertain_resolved"
     ) {
-      return presentRun(current);
+      return this.#presentResolution(scope, threadId, current);
     }
-    const resolved = this.#repository.resolveUncertainRun(
-      scope,
-      current.automationId,
-      runId,
-      now,
-    );
+    const resolved = this.#repository.database.transaction(() => {
+      const run = this.#repository.resolveUncertainRun(
+        scope,
+        current.automationId,
+        runId,
+        now,
+      );
+      if (input.resume) {
+        const definition = this.#repository.getDefinition(
+          scope,
+          current.automationId,
+        );
+        if (definition.deletedAt !== null) {
+          throw new DomainError(
+            "invalid_transition",
+            "This one-time automation ended with the resolved run, so it cannot be resumed.",
+          );
+        }
+        this.#executionPolicy.assertCanAutomate(scope, threadId);
+        this.#repository.enableDefinition(scope, definition.id, {
+          expectedRevision: definition.revision,
+          nextRunAt: this.#firstOccurrence(definition.schedule, now),
+          now,
+        });
+      }
+      return run;
+    })();
     this.publishRun(scope, resolved);
-    return presentRun(resolved);
+    return this.#presentResolution(scope, threadId, resolved);
   }
 
   async runNow(
@@ -770,6 +814,21 @@ export class AutomationService implements DurableDeadlineSource {
     this.#changed();
   }
 
+  #presentResolution(
+    scope: RequestScope,
+    threadId: string,
+    run: AutomationRunRecord,
+  ): ThreadAutomationRunResolution {
+    const definition = this.#repository.findDefinitionForThread(
+      scope,
+      threadId,
+    );
+    return {
+      run: presentRun(run),
+      automation: definition ? this.presentDefinition(scope, definition) : null,
+    };
+  }
+
   #publishDefinition(
     scope: RequestScope,
     definition: AutomationDefinitionRecord,
@@ -973,6 +1032,7 @@ function presentRun(run: AutomationRunRecord): ThreadAutomationRun {
     scheduledFor: iso(run.scheduledFor),
     state: run.state,
     runMode: run.runMode,
+    definitionRevision: run.definitionRevision,
     ...((run.childThreadId ?? run.anchorThreadId)
       ? { resultThreadId: run.childThreadId ?? run.anchorThreadId }
       : {}),
@@ -983,11 +1043,17 @@ function presentRun(run: AutomationRunRecord): ThreadAutomationRun {
     ...(run.startedAt === null ? {} : { startedAt: iso(run.startedAt) }),
     ...(run.acceptedAt === null ? {} : { acceptedAt: iso(run.acceptedAt) }),
     ...(run.finishedAt === null ? {} : { finishedAt: iso(run.finishedAt) }),
+    ...(run.forceResetAt === null
+      ? {}
+      : { forceResetAt: iso(run.forceResetAt) }),
     ...(run.precheckStatus === "not_configured"
       ? {}
       : {
           precheck: {
             status: run.precheckStatus,
+            // The schema guarantees configured runs keep their snapshots.
+            command: run.precheckCommandSnapshot!,
+            timeoutSeconds: run.precheckTimeoutSeconds!,
             durationMilliseconds: run.precheckDurationMs ?? 0,
             stdoutBytes: run.precheckStdoutBytes ?? 0,
             stdoutIncluded: run.precheckStdoutIncluded ?? false,

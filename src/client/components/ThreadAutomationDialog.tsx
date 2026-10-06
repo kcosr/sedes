@@ -491,7 +491,7 @@ export function ThreadAutomationDialog({
     setBusy("resolve");
     setError("");
     try {
-      const run = await store.api.resolveThreadAutomationRun(
+      const { run } = await store.api.resolveThreadAutomationRun(
         threadId,
         runId,
       );

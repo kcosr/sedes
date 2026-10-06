@@ -2019,19 +2019,14 @@ describe("inactive backend-normalization migration", () => {
         nextRunAt: 90_200,
         now: 90_091,
       });
-      const abortedRun = automations.createManualRun(
-        scope,
-        "repurposed-child-clone",
-        {
-          runId: "repurposed-child-clone-run",
-          occurrenceKey: "manual:repurposed-child-clone-run",
-          scheduledFor: 90_092,
-          claimToken: "repurposed-child-claim",
-          leaseExpiresAt: 100_000,
-          dispatchMutationId: "repurposed-aborted-clone-operation",
-          now: 90_092,
-        },
-      ).run;
+      const abortedRun = insertLegacyClaimedCloneRun(database, scope, {
+        automationId: "repurposed-child-clone",
+        runId: "repurposed-child-clone-run",
+        anchorThreadId: anchor.thread.id,
+        claimToken: "repurposed-child-claim",
+        dispatchMutationId: "repurposed-aborted-clone-operation",
+        now: 90_092,
+      });
       database
         .prepare(
           `
@@ -2227,19 +2222,14 @@ describe("inactive backend-normalization migration", () => {
         nextRunAt: 90_210,
         now: 90_106,
       });
-      const secondAbortedRun = automations.createManualRun(
-        scope,
-        "aborted-first-input-clone",
-        {
-          runId: "aborted-first-input-clone-run",
-          occurrenceKey: "manual:aborted-first-input-clone-run",
-          scheduledFor: 90_107,
-          claimToken: "aborted-first-input-claim",
-          leaseExpiresAt: 100_000,
-          dispatchMutationId: "second-aborted-clone-operation",
-          now: 90_107,
-        },
-      ).run;
+      const secondAbortedRun = insertLegacyClaimedCloneRun(database, scope, {
+        automationId: "aborted-first-input-clone",
+        runId: "aborted-first-input-clone-run",
+        anchorThreadId: child.id,
+        claimToken: "aborted-first-input-claim",
+        dispatchMutationId: "second-aborted-clone-operation",
+        now: 90_107,
+      });
       database
         .prepare(
           `
@@ -2514,15 +2504,14 @@ describe("inactive backend-normalization migration", () => {
         nextRunAt: 90_200,
         now: 90_100,
       });
-      const run = automations.createManualRun(scope, "legacy-aborted-clone", {
+      const run = insertLegacyClaimedCloneRun(database, scope, {
+        automationId: "legacy-aborted-clone",
         runId: "legacy-aborted-clone-run",
-        occurrenceKey: "manual:legacy-aborted-clone-run",
-        scheduledFor: 90_101,
+        anchorThreadId: anchor.thread.id,
         claimToken: "legacy-aborted-claim",
-        leaseExpiresAt: 100_000,
         dispatchMutationId: "legacy-aborted-clone-operation",
         now: 90_101,
-      }).run;
+      });
       database
         .prepare(
           `
@@ -2812,6 +2801,55 @@ function insertRuntimeReceipt(
       input.resultCode,
       input.createdAt,
     );
+}
+
+/**
+ * A claimed manual clone run in a pre-20 schema. The current repository
+ * selects run columns that later migrations add, so seed the row directly.
+ */
+function insertLegacyClaimedCloneRun(
+  database: Database.Database,
+  scope: { tenantId: string; principalId: string },
+  input: {
+    automationId: string;
+    runId: string;
+    anchorThreadId: string;
+    claimToken: string;
+    dispatchMutationId: string;
+    now: number;
+  },
+): { id: string } {
+  database
+    .prepare(
+      `
+        INSERT INTO automation_runs(
+          tenant_id, owner_principal_id, automation_id, id, occurrence_kind,
+          scheduled_for, occurrence_key, definition_revision, coalesced_count,
+          run_mode, state, claim_token, lease_expires_at, claim_attempt_count,
+          prompt_snapshot, precheck_status, dispatch_mutation_id,
+          anchor_thread_id, claimed_at, created_at, updated_at
+        )
+        VALUES (
+          ?, ?, ?, ?, 'manual', ?, ?, 0, 0, 'clone', 'claimed', ?, 100000, 1,
+          'Review', 'not_configured', ?, ?, ?, ?, ?
+        )
+      `,
+    )
+    .run(
+      scope.tenantId,
+      scope.principalId,
+      input.automationId,
+      input.runId,
+      input.now,
+      `manual:${input.runId}`,
+      input.claimToken,
+      input.dispatchMutationId,
+      input.anchorThreadId,
+      input.now,
+      input.now,
+      input.now,
+    );
+  return { id: input.runId };
 }
 
 function seedCloneAutomation(

@@ -27,6 +27,7 @@ describe("AutomationRunHistory", () => {
             state: "completed",
             scheduledFor: "2026-08-28T12:00:00.000Z",
             runMode: "same_thread",
+            definitionRevision: 0,
             coalescedCount: 0,
             resultThreadId: "thread-result",
           },

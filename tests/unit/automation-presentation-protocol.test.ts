@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { createAutomationRequestSchema } from "../../src/shared/protocol/api.js";
+import {
+  createAutomationRequestSchema,
+  listAutomationRunsQuerySchema,
+  resolveAutomationRunRequestSchema,
+} from "../../src/shared/protocol/api.js";
 import {
   threadAutomationDefinitionSchema,
+  threadAutomationRunPageSchema,
+  threadAutomationRunResolutionSchema,
+  threadAutomationRunSchema,
   threadAutomationSummarySchema,
 } from "../../src/shared/protocol/automation-presentation.js";
 import { normalizedThreadSummarySchema } from "../../src/shared/protocol/conversation.js";
@@ -113,5 +120,87 @@ describe("normalized automation protocol", () => {
     expect(
       automation.safeParse({ ...projected, prompt: "Review" }).success,
     ).toBe(false);
+  });
+
+  it("presents run detail, filtered pages with counts, and resolutions", () => {
+    const run = {
+      id: "6ba7b810-9dad-41d1-80b4-00c04fd430c8",
+      occurrence: "scheduled",
+      scheduledFor: new Date(10_000).toISOString(),
+      state: "skipped",
+      runMode: "same_thread",
+      definitionRevision: 3,
+      coalescedCount: 0,
+      finishedAt: new Date(11_000).toISOString(),
+      forceResetAt: new Date(12_000).toISOString(),
+      precheck: {
+        status: "skipped",
+        command: "git diff --quiet",
+        timeoutSeconds: 15,
+        durationMilliseconds: 40,
+        stdoutBytes: 0,
+        stdoutIncluded: false,
+        exitCode: 1,
+      },
+    } as const;
+
+    expect(threadAutomationRunSchema.parse(run)).toEqual(run);
+    const { definitionRevision: _revision, ...withoutRevision } = run;
+    expect(threadAutomationRunSchema.safeParse(withoutRevision).success).toBe(
+      false,
+    );
+    const { command: _command, ...precheckWithoutCommand } = run.precheck;
+    expect(
+      threadAutomationRunSchema.safeParse({
+        ...run,
+        precheck: precheckWithoutCommand,
+      }).success,
+    ).toBe(false);
+
+    const counts = { all: 4, problems: 2, skipped: 1 };
+    expect(
+      threadAutomationRunPageSchema.parse({
+        items: [run],
+        nextCursor: null,
+        counts,
+      }),
+    ).toMatchObject({ counts });
+    expect(
+      threadAutomationRunPageSchema.parse({ items: [], nextCursor: "next" }),
+    ).not.toHaveProperty("counts");
+    expect(
+      threadAutomationRunPageSchema.safeParse({
+        items: [],
+        nextCursor: null,
+        counts: { ...counts, failed: 1 },
+      }).success,
+    ).toBe(false);
+
+    expect(listAutomationRunsQuerySchema.parse({})).toEqual({
+      pageSize: 50,
+      filter: "all",
+    });
+    expect(
+      listAutomationRunsQuerySchema.parse({ filter: "problems", pageSize: "25" }),
+    ).toEqual({ filter: "problems", pageSize: 25 });
+    expect(
+      listAutomationRunsQuerySchema.safeParse({ filter: "failed" }).success,
+    ).toBe(false);
+
+    expect(
+      resolveAutomationRunRequestSchema.parse({ action: "mark_failed" }),
+    ).toEqual({ action: "mark_failed", resume: false });
+    expect(
+      resolveAutomationRunRequestSchema.safeParse({
+        action: "mark_failed",
+        resume: "yes",
+      }).success,
+    ).toBe(false);
+    expect(
+      threadAutomationRunResolutionSchema.parse({ run, automation: null }),
+    ).toEqual({ run, automation: null });
+    expect(threadAutomationRunResolutionSchema.safeParse({ run }).success).toBe(
+      false,
+    );
   });
 });

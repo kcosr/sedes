@@ -6804,6 +6804,196 @@ describe("normalized HTTP application contract", () => {
     }
   });
 
+  it("filters run history with first-page counts and resolves with resume", async () => {
+    const current = await fixture();
+    try {
+      const workspace = await current
+        .mutate(request(current.app).post("/api/workspaces/open"))
+        .send({
+          environmentId: current.environmentId,
+          path: current.workspacePath,
+          project: { kind: "new", name: "workspace" },
+        })
+        .expect(201);
+      const created = await current
+        .mutate(request(current.app).post("/api/threads"))
+        .send({
+          workspaceId: workspace.body.id,
+          configuration: { kind: "custom", targetId: current.profile.id },
+          executionWorkspace: { kind: "direct" },
+          title: "New thread",
+        })
+        .expect(201);
+      const threadId = created.body.threadId as string;
+
+      const definition = await current
+        .mutate(
+          request(current.app).post(`/api/threads/${threadId}/automation`),
+        )
+        .send({
+          prompt: "Run scheduled checks",
+          runMode: "same_thread",
+          schedule: {
+            kind: "interval",
+            anchorAt: "2099-07-30T12:00:00.000Z",
+            everySeconds: 3_600,
+          },
+          misfirePolicy: "coalesce",
+          precheck: null,
+          mutationId: randomUUID(),
+        })
+        .expect(201);
+      const automations = new AutomationRepository(current.database);
+      const automationId = automations.findDefinitionForThread(
+        current.owner,
+        threadId,
+      )!.id;
+      const claim = (now: number) =>
+        automations.createManualRun(current.owner, automationId, {
+          runId: randomUUID(),
+          occurrenceKey: `manual:${now}`,
+          scheduledFor: now,
+          claimToken: `claim-${now}`,
+          leaseExpiresAt: now + 60_000,
+          dispatchMutationId: randomUUID(),
+          now,
+        }).run;
+      const finish = (
+        run: ReturnType<typeof claim>,
+        state: "skipped" | "failed",
+        now: number,
+      ) =>
+        automations.updateRunState(current.owner, automationId, run.id, {
+          expectedState: "claimed",
+          state,
+          claimToken: run.claimToken!,
+          errorCode: `automation_${state}`,
+          now,
+        });
+      const dispatch = (run: ReturnType<typeof claim>, now: number) =>
+        automations.updateRunState(current.owner, automationId, run.id, {
+          expectedState: "claimed",
+          state: "dispatching",
+          claimToken: run.claimToken!,
+          retainPromptSnapshot: true,
+          now,
+        });
+      const skipped = finish(claim(1_000), "skipped", 1_100);
+      const failed = finish(claim(2_000), "failed", 2_100);
+      const delivered = dispatch(claim(3_000), 3_050);
+      automations.updateRunState(current.owner, automationId, delivered.id, {
+        expectedState: "dispatching",
+        state: "completed",
+        claimToken: delivered.claimToken!,
+        now: 3_100,
+      });
+      const unknown = dispatch(claim(4_000), 4_050);
+      automations.markRunUncertainAndPause(
+        current.owner,
+        automationId,
+        unknown.id,
+        {
+          expectedState: "dispatching",
+          claimToken: unknown.claimToken!,
+          errorCode: "automation_dispatch_uncertain",
+          errorDiagnostic: "Acceptance could not be proven.",
+          now: 4_100,
+        },
+      );
+      const runsPath = `/api/threads/${threadId}/automation/runs`;
+
+      const firstProblems = await current
+        .withHost(
+          request(current.app).get(`${runsPath}?filter=problems&pageSize=1`),
+        )
+        .expect(200);
+      expect(firstProblems.body).toMatchObject({
+        items: [
+          {
+            id: unknown.id,
+            state: "uncertain",
+            definitionRevision: definition.body.revision,
+          },
+        ],
+        nextCursor: expect.any(String),
+        counts: { all: 4, problems: 2, skipped: 1 },
+      });
+      const secondProblems = await current
+        .withHost(
+          request(current.app).get(
+            `${runsPath}?filter=problems&pageSize=1&cursor=${firstProblems.body.nextCursor}`,
+          ),
+        )
+        .expect(200);
+      expect(secondProblems.body).toEqual({
+        items: [expect.objectContaining({ id: failed.id, state: "failed" })],
+        nextCursor: null,
+      });
+      // The filter is bound into the cursor fingerprint.
+      await current
+        .withHost(
+          request(current.app).get(
+            `${runsPath}?filter=all&pageSize=1&cursor=${firstProblems.body.nextCursor}`,
+          ),
+        )
+        .expect(409)
+        .expect(({ body }) => expect(body.error.code).toBe("cursor_invalid"));
+      await current
+        .withHost(request(current.app).get(`${runsPath}?filter=skipped`))
+        .expect(200)
+        .expect(({ body }) =>
+          expect(body).toEqual({
+            items: [expect.objectContaining({ id: skipped.id })],
+            nextCursor: null,
+            counts: { all: 4, problems: 2, skipped: 1 },
+          }),
+        );
+      await current
+        .withHost(request(current.app).get(runsPath))
+        .expect(200)
+        .expect(({ body }) =>
+          expect(body.items.map(({ id }: { id: string }) => id)).toEqual([
+            unknown.id,
+            delivered.id,
+            failed.id,
+            skipped.id,
+          ]),
+        );
+      await current
+        .withHost(request(current.app).get(`${runsPath}?filter=failed`))
+        .expect(400);
+
+      const resolved = await current
+        .mutate(
+          request(current.app).post(`${runsPath}/${unknown.id}/resolve`),
+        )
+        .send({ action: "mark_failed", resume: true })
+        .expect(200);
+      expect(resolved.body).toMatchObject({
+        run: {
+          id: unknown.id,
+          state: "failed",
+          errorCode: "automation_uncertain_resolved",
+        },
+        automation: {
+          status: "enabled",
+          nextRunAt: "2099-07-30T12:00:00.000Z",
+          lastRun: { id: unknown.id, state: "failed" },
+        },
+      });
+      // A replay reports the current state without enabling again.
+      await current
+        .mutate(
+          request(current.app).post(`${runsPath}/${unknown.id}/resolve`),
+        )
+        .send({ action: "mark_failed" })
+        .expect(200)
+        .expect(({ body }) => expect(body).toEqual(resolved.body));
+    } finally {
+      current.close();
+    }
+  });
+
   it("serves normalized application and thread handshake events", async () => {
     const current = await fixture();
     const server = current.app.listen(0, "127.0.0.1");

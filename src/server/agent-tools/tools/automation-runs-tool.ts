@@ -1,9 +1,9 @@
 import { Type } from "typebox";
-import type { ThreadAutomationRun } from "../../../shared/protocol/automation-presentation.js";
 import type { AgentToolDefinition } from "../contracts/agent-tool-contracts.js";
 import type {
   AutomationAgentToolService,
   AutomationRunsToolInput,
+  AutomationToolRun,
 } from "./automation-agent-tool-service.js";
 import {
   automationReadWaitCeilings,
@@ -20,7 +20,7 @@ import {
 import { CANONICAL_AGENT_TOOL_MANIFEST } from "../registry/canonical-agent-tool-manifest.js";
 
 export interface AutomationRunsToolResult {
-  readonly items: readonly ThreadAutomationRun[];
+  readonly items: readonly AutomationToolRun[];
   readonly nextCursor: string | null;
 }
 

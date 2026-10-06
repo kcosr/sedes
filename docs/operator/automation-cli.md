@@ -155,7 +155,7 @@ imperative: running `create` twice creates two draft threads.
 | Field | Values and effect |
 | --- | --- |
 | `prompt` | Nonempty prompt, at most 65,536 UTF-8 bytes. |
-| `runMode` | `same_thread` sends work to the anchor thread; `clone` creates a separate result thread for each run and requires a bound, forkable anchor. |
+| `runMode` | `same_thread` sends work to the anchor thread; `clone` creates a separate result thread for each run and requires a bound, forkable anchor. A clone result thread is titled with the anchor's title and the run time, such as `Nightly review · Oct 6, 3:15 AM`: in the cron schedule's time zone, otherwise in UTC with a ` UTC` suffix. |
 | `schedule` | One `date_time`, `interval`, or `cron` shape described below. |
 | `misfirePolicy` | `coalesce` represents missed interval/cron occurrences with one newest due run and its count; `skip` records an occurrence more than 60 seconds late as skipped. |
 | `precheck` | `null`, omitted, or a bounded local command gate. Omission normalizes to `null`. |
@@ -281,7 +281,8 @@ syntax, timezone, cadence, and future occurrences.
 | `enable THREAD_ID` | Enable future scheduled runs using the current revision. |
 | `pause THREAD_ID` | Stop admission of future scheduled runs using the current revision. |
 | `run-now THREAD_ID` | Create a manual run even while paused. It rejects snoozed anchors and can queue on a busy bound thread. This can execute a precheck and schedule provider work. |
-| `runs THREAD_ID` | Return the newest run-history page, currently up to 50 items. The response may include `nextCursor`, but this helper has no continuation option. |
+| `runs THREAD_ID [--filter FILTER]` | Return the newest run-history page, currently up to 50 items, with whole-history `counts` (`all`, `problems`, `skipped`). `--filter` is `all` (default), `problems` (failed or uncertain runs), or `skipped`. The response may include `nextCursor`, but this helper has no continuation option. |
+| `resolve THREAD_ID RUN_ID [--resume]` | Mark an `uncertain` run failed after reviewing its result thread. `--resume` also enables the automation in the same operation; if enabling is rejected, the run stays uncertain. Prints the run and the resulting definition (`null` when resolving ended a one-time automation). |
 | `list [TITLE_QUERY]` | Filter automation-bearing threads in one bounded point-in-time application snapshot by case-insensitive title substring. |
 | `remove THREAD_ID` | Delete the automation definition using its current revision; it does not delete the thread. |
 
@@ -297,7 +298,8 @@ npm run automation -- get THREAD_ID
 npm run automation -- enable THREAD_ID
 npm run automation -- pause THREAD_ID
 npm run automation -- run-now THREAD_ID
-npm run automation -- runs THREAD_ID
+npm run automation -- runs THREAD_ID [--filter all|problems|skipped]
+npm run automation -- resolve THREAD_ID RUN_ID [--resume]
 npm run automation -- list [TITLE_QUERY]
 npm run automation -- remove THREAD_ID
 ```
@@ -369,8 +371,10 @@ file paths, not server-side workspace selection or command execution.
   stale update.
 - Remember that `pause` prevents future scheduler admissions; it is not a stop
   button for work already admitted or running.
-- Review run records in `runs` and the UI. An `uncertain` result requires
-  recovery review, not an automatic replay.
+- Review run records in `runs` and the UI; `runs THREAD_ID --filter problems`
+  lists failed and uncertain runs. An `uncertain` result requires recovery
+  review, not an automatic replay. Resolve it with `resolve`, adding `--resume`
+  only when the automation should run on schedule again.
 - A successful `run-now` response records queue/provider acceptance, not final
   agent-turn settlement. Follow the result thread or run history to completion.
 

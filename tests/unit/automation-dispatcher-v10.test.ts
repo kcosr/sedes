@@ -45,6 +45,7 @@ function run(
     startedAt: null,
     acceptedAt: null,
     finishedAt: null,
+    forceResetAt: null,
     createdAt: 1_000,
     updatedAt: 1_000,
   };

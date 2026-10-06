@@ -10,6 +10,7 @@ import { z } from "zod";
 import { questionRequestsResultSchema } from "./questions.js";
 import {
   automationMisfirePolicySchema,
+  automationRunFilterSchema,
   automationRunModeSchema,
   applicationTurnIdSchema,
   environmentIdSchema,
@@ -293,10 +294,13 @@ export type DismissThreadAttentionRequest = z.infer<
 export const listAutomationRunsQuerySchema = z.strictObject({
   cursor: z.string().max(2048).optional(),
   pageSize: z.coerce.number().int().min(1).max(100).default(50),
+  filter: automationRunFilterSchema.default("all"),
 });
 
 export const resolveAutomationRunRequestSchema = z.strictObject({
   action: z.literal("mark_failed"),
+  /** Enable the definition in the same transaction as the resolution. */
+  resume: z.boolean().default(false),
 });
 
 export const automationRunRouteParametersSchema = z.strictObject({
