@@ -5055,6 +5055,21 @@ textarea:disabled {
   gap: 10px;
 }
 
+.thread-attention[data-tone="danger"]::before {
+  background: var(--destructive);
+}
+
+/* Label and detail share one line while they fit; on a narrow row the
+   detail wraps beneath the label instead of squeezing it into a column. */
+.thread-attention-text {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 10px;
+}
+
 .thread-attention p,
 .thread-attention small {
   min-width: 0;
