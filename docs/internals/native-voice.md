@@ -592,9 +592,11 @@ Stop during admission; an active recovery Retry or Send uses the recovery contro
 recording ID and recovery revision before and after the storage read. Text is
 returned only by this command, never by routine state snapshots. The client
 opens the original thread and waits for its active composer, cancelling stale
-handoffs and timing out an unavailable composer. That composer appends to its
+handoffs and timing out a view that never finishes loading. Known read-only,
+unavailable or disabled views refuse the handoff immediately. That composer appends to its
 current local draft, retaining skill, attachments and context, and rejects an
-oversized result without truncation. Its existing autosave owns persistence;
+oversized result without truncation. Draft adoption updates the current values
+before registration can accept a waiting handoff. Its existing autosave owns persistence;
 the native recovery item is retained. A successful insertion is remembered for
 that recording revision in the current voice store, preventing repeated taps
 from appending duplicates. Connection changes invalidate pending handoffs.

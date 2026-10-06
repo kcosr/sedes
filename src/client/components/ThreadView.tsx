@@ -262,6 +262,15 @@ export function ThreadView({
     visibleCompletionOperationId,
   ]);
 
+  // A visible view with no composer resolves a recovery handoff immediately.
+  const unavailableVoiceComposer = state.status === "error" ? "The original thread is unavailable. Copy the text instead."
+    : state.authoritative && state.snapshot?.capabilities.interactionMode === "read_only"
+      ? "This thread is read-only. Copy the text instead." : null;
+  useEffect(() => {
+    if (!visible || !voice || !unavailableVoiceComposer) return;
+    return voice.registerComposer(threadId, () => { throw new Error(unavailableVoiceComposer); });
+  }, [visible, voice, threadId, unavailableVoiceComposer]);
+
   if (state.status === "loading") return (
     <ThreadLoadingView
       threadId={threadId}

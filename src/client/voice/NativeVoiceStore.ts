@@ -55,7 +55,7 @@ export class NativeVoiceStore {
     return { expectedConnectionGeneration: current.connectionGeneration };
   }
 
-  /** Only a visible composer registers. It owns its unsaved draft and normal autosave. */
+  /** Active views register their composer, or an error when no composer is available. Composers own drafts and autosave. */
   registerComposer(threadId: string, append: (text: string) => void): () => void {
     this.#composers.set(threadId, append);
     for (const listener of this.#composerListeners) listener();

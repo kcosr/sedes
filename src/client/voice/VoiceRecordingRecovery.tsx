@@ -51,7 +51,12 @@ export function VoiceRecordingRecovery({ store, threads, onAddedToComposer }: {
   const offersSend = !saved.hasUnrecognizedAudio && !["rejected", "overflow", "unavailable"].includes(saved.stage);
   const added = state.addedRecording?.recordingId === saved.recordingId && state.addedRecording.expectedRecoveryRevision === saved.revision &&
     state.addedRecording.expectedConnectionGeneration === native.connectionGeneration;
-  const canAdd = saved.canCopyRecognizedText && !saved.hasUnrecognizedAudio && saved.threadId !== null && !added;
+  const target = threads.find(thread => thread.id === saved.threadId);
+  const addUnavailableReason = saved.threadId === null ? "Original thread unknown."
+    : saved.hasUnrecognizedAudio ? "Finish transcription to add to the composer."
+      : target?.inventoryState === "archived" ? "Unarchive the original thread to add text."
+        : target && !target.available ? "Original thread unavailable." : null;
+  const canAdd = saved.canCopyRecognizedText && !addUnavailableReason && !added;
   const status = recordingRecoveryStatus(saved);
   const reason = saved.reason?.replace(/\.$/, "") === status ? null : saved.reason;
   return <section className="voice-recording-recovery grid gap-3 border-y py-3" aria-labelledby={`${id}-title`}>
@@ -64,12 +69,15 @@ export function VoiceRecordingRecovery({ store, threads, onAddedToComposer }: {
       {reason ? <p className="text-muted-foreground">{reason}</p> : null}
       {saved.admission && saved.admission.status !== "rejected" ? <p className="text-muted-foreground">Send checks delivery. Discard only removes this saved copy.</p> : null}
     </div>
-    {saved.canCopyRecognizedText ? <Button variant="outline" className={actionClass} aria-disabled={state.pending || !canAdd || undefined}
-      title={saved.hasUnrecognizedAudio ? "Finish transcription before adding to the composer" : undefined}
+    {saved.canCopyRecognizedText ? <div className="grid gap-1">
+      <Button variant="outline" className={actionClass} aria-disabled={state.pending || !canAdd || undefined}
+      aria-describedby={!added && addUnavailableReason ? `${id}-add-reason` : undefined}
       onClick={() => {
         if (state.pending || !canAdd) return;
         void store.addRecordingToComposer(context).then(onAddedToComposer).catch(() => undefined);
-      }}>{added ? "Added to composer" : "Add to composer"}</Button> : null}
+      }}>{added ? "Added to composer" : "Add to composer"}</Button>
+      {!added && addUnavailableReason ? <p id={`${id}-add-reason`} className="text-sm text-muted-foreground">{addUnavailableReason}</p> : null}
+    </div> : null}
     <div className="grid grid-flow-col auto-cols-fr gap-2">
       {saved.canCopyRecognizedText ? <Button variant="outline" className={actionClass} aria-disabled={state.pending || undefined} onClick={() => {
         if (state.pending) return;

@@ -1225,6 +1225,12 @@ export function Composer({
       const visible = shouldVisuallyClearServerDraft
         ? visuallyClearedDraft(serverDraft)
         : serverDraft;
+      // A newly registered recovery appender can run before the next render.
+      textRef.current = visible.text;
+      selectedSkillIdRef.current = visible.selectedSkillId;
+      contextExcerptsRef.current = visible.contextExcerpts;
+      attachmentsRef.current = visible.attachments;
+      taskReferencesRef.current = visible.taskReferences;
       setText(visible.text);
       setSelectedSkillId(visible.selectedSkillId);
       setContextExcerpts([...visible.contextExcerpts]);
@@ -1650,6 +1656,7 @@ export function Composer({
 
   const appendVoiceText = useRef<(text: string) => void>(() => {});
   appendVoiceText.current = (addition: string) => {
+    if (conflictRef.current) throw new Error("Resolve the draft conflict first.");
     const availability = contextExcerptStagingSnapshot();
     if (!availability.available || !syncedDraft.current || draftMutationRunning.current || queueRestoreRunning.current ||
         attachmentUploadsRef.current.length > 0 || state.pendingComposerTransfers.length > 0)
@@ -1668,7 +1675,8 @@ export function Composer({
     setDirty(true);
   };
   // Navigation can mount the composer before its draft has loaded into React state.
-  const voiceComposerReady = !effectiveDisabled && Boolean(syncedDraft.current);
+  // A loaded but disabled composer registers too, so it can explain the refusal immediately.
+  const voiceComposerReady = state.connection === "connected" && state.authoritative && Boolean(syncedDraft.current);
   useEffect(() => {
     if (!active || !voice || !voiceComposerReady) return;
     return voice.registerComposer(store.threadId, text => appendVoiceText.current(text));

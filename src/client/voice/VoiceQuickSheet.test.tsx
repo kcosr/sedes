@@ -302,6 +302,24 @@ describe("voice quick sheet", () => {
     expect(store.getSnapshot().native?.recordingRecovery?.revision).toBe(2);
     store.dispose();
   });
+  it.each([
+    ["unfinished", "Finish transcription to add to the composer."],
+    ["unknown", "Original thread unknown."],
+    ["archived", "Unarchive the original thread to add text."],
+    ["offline", "Original thread unavailable."],
+  ])("explains the %s composer restriction visibly and accessibly", async (reason, message) => {
+    const saved = recordingRecovery({ canCopyRecognizedText: true, hasUnrecognizedAudio: reason === "unfinished",
+      threadId: reason === "unknown" ? null : reason === "unfinished" ? "standup" : reason });
+    const { fake, store, sheet } = await renderSheet(voiceSnapshot({ recordingRecovery: saved }));
+    const add = within(sheet).getByRole("button", { name: "Add to composer" });
+    expect(add).toHaveAttribute("aria-disabled", "true");
+    expect(add).toHaveAccessibleDescription(message);
+    expect(within(sheet).getByText(message)).toBeVisible();
+    fireEvent.click(add);
+    expect(fake.plugin.readRecognizedRecordingText).not.toHaveBeenCalled();
+    expect(store.getSnapshot().pending).toBe(false);
+    store.dispose();
+  });
   it("adds recognized text to the original composer while Off, closes the sheet, and retains recovery", async () => {
     const saved = recordingRecovery({ revision: 4, stage: "ready", hasUnrecognizedAudio: false, captureIncomplete: true,
       canRetryRecognition: false, canCopyRecognizedText: true, canSend: true });
