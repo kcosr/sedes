@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  automationCloneThreadTitle,
+  automationCloneTitleSuffix,
   automationPromptPreview,
   presentAutomationSchedule,
 } from "../../src/server/domain/automation-presentation.js";
@@ -29,6 +31,46 @@ describe("automation prompt preview", () => {
 
   it("marks a bounded source prefix as continuing", () => {
     expect(automationPromptPreview("Short head", true)).toBe("Short head…");
+  });
+});
+
+describe("automation clone result titles", () => {
+  const runAt = Date.UTC(2026, 9, 6, 8, 15);
+
+  it("formats the run time in the cron schedule's zone", () => {
+    expect(
+      automationCloneTitleSuffix(runAt, {
+        kind: "cron",
+        expression: "15 3 * * *",
+        timeZone: "America/Chicago",
+      }),
+    ).toBe(" · Oct 6, 3:15 AM");
+  });
+
+  it("labels UTC for interval and one-time schedules", () => {
+    expect(
+      automationCloneTitleSuffix(runAt, {
+        kind: "interval",
+        anchorAt: 0,
+        everySeconds: 3_600,
+      }),
+    ).toBe(" · Oct 6, 8:15 AM UTC");
+    expect(
+      automationCloneTitleSuffix(Date.UTC(2026, 9, 6, 15, 5), {
+        kind: "date_time",
+        runAt,
+      }),
+    ).toBe(" · Oct 6, 3:05 PM UTC");
+  });
+
+  it("appends the suffix and shortens long anchor titles to stay valid", () => {
+    expect(automationCloneThreadTitle("Nightly review", " · Oct 6, 3:15 AM")).toBe(
+      "Nightly review · Oct 6, 3:15 AM",
+    );
+    const suffix = " · Oct 6, 3:15 AM UTC";
+    const title = automationCloneThreadTitle("x".repeat(240), suffix);
+    expect(title).toHaveLength(240);
+    expect(title.endsWith(`x…${suffix}`)).toBe(true);
   });
 });
 

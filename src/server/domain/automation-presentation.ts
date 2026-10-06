@@ -2,6 +2,7 @@ import type { AutomationSchedule as ProtocolAutomationSchedule } from "../../sha
 import type { AutomationSchedule } from "./automation-models.js";
 
 const PROMPT_PREVIEW_UNITS = 140;
+const THREAD_TITLE_MAXIMUM_UNITS = 240;
 
 /**
  * Prompt characters a summary reader loads to derive the preview, so a
@@ -46,6 +47,38 @@ export function automationPromptPreview(
   return preview.length < collapsed.length || sourceTruncated
     ? `${preview.trimEnd()}…`
     : preview;
+}
+
+/**
+ * Title suffix for a clone run's result thread: the run time as
+ * "Oct 6, 3:15 AM", in the cron schedule's zone or otherwise UTC (labelled).
+ */
+export function automationCloneTitleSuffix(
+  runAt: number,
+  schedule: AutomationSchedule,
+): string {
+  const timeZone = schedule.kind === "cron" ? schedule.timeZone : "UTC";
+  const formatted = new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZone,
+  })
+    .format(runAt)
+    // ICU separates the day period with a narrow no-break space.
+    .replace(/\s/gu, " ");
+  return ` · ${formatted}${schedule.kind === "cron" ? "" : " UTC"}`;
+}
+
+/** Appends a clone run suffix, shortening the anchor title to stay a valid title. */
+export function automationCloneThreadTitle(
+  anchorTitle: string,
+  suffix: string,
+): string {
+  const available = THREAD_TITLE_MAXIMUM_UNITS - suffix.length;
+  if (anchorTitle.length <= available) return `${anchorTitle}${suffix}`;
+  return `${takeUnits(anchorTitle, available - 1).trimEnd()}…${suffix}`;
 }
 
 function takeUnits(value: string, units: number): string {

@@ -2441,6 +2441,7 @@ describe("inactive backend-normalization migration", () => {
           automationId: "repurposed-child-clone",
           automationRunId: abortedRun.id,
           mutationId: "repurposed-aborted-clone-operation",
+          titleSuffix: " · Oct 6, 3:15 AM UTC",
         }),
       ).resolves.toEqual({
         status: "aborted",
@@ -2706,6 +2707,7 @@ describe("inactive backend-normalization migration", () => {
           automationId: "legacy-aborted-clone",
           automationRunId: run.id,
           mutationId: "legacy-aborted-clone-operation",
+          titleSuffix: " · Oct 6, 3:15 AM UTC",
         }),
       ).resolves.toEqual({
         status: "aborted",

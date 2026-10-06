@@ -191,6 +191,34 @@ describe("AutomationDispatcher v10 backend-neutral dispatch", () => {
       state: "completed",
       childThreadId: "thread-child",
     });
+    // Interval and one-time schedules title the result in labelled UTC.
+    expect(setup.gateway.dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runMode: "clone",
+        resultTitleSuffix: " · Jan 1, 12:00 AM UTC",
+      }),
+    );
+  });
+
+  it("titles a cron clone result in the schedule's time zone", async () => {
+    const clone = { ...run("clone"), scheduledFor: Date.UTC(2026, 9, 6, 8, 15) };
+    const setup = fixture(clone, async () => ({
+      status: "accepted",
+      targetThreadId: "thread-child",
+    }));
+    setup.repository.getDefinition.mockReturnValue({
+      schedule: {
+        kind: "cron",
+        expression: "15 3 * * *",
+        timeZone: "America/Chicago",
+      },
+    } as never);
+
+    await setup.dispatcher.dispatch(clone);
+
+    expect(setup.gateway.dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ resultTitleSuffix: " · Oct 6, 3:15 AM" }),
+    );
   });
 
   it("replays a dispatching clone through the idempotent fork gateway", async () => {
