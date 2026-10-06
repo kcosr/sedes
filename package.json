@@ -31,6 +31,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.server.json",
     "test": "vitest run",
     "test:windows-runtime": "node scripts/test-windows-runtime.mjs",
+    "test:windows-installer": "node scripts/test-windows-installer.mjs",
     "check:docs": "node scripts/check-documentation.mjs",
     "check:agent-tool-contracts": "tsx src/server/agent-tools/schema/check-agent-tool-artifacts.ts",
     "check:e2e-timing-baseline": "node scripts/check-e2e-timing-baseline.mjs",

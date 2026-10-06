@@ -117,6 +117,9 @@ export async function runElectronDistribution(options) {
   if (process.platform === 'win32' && !npmPath) throw new Error('Run Electron packaging through npm run electron:package on Windows.');
   const npm = (args, cwd = root) => npmPath ? node([npmPath, ...args], cwd) : run('npm', args, cwd, env);
   await npm(['ci'], electron);
+  if (process.platform === 'win32' && options.command !== 'sync') {
+    await node(['scripts/test-windows-installer.mjs']);
+  }
   if (options.profile === 'full') await npm(['run', 'build']);
   else await node(['node_modules/vite/bin/vite.js', 'build']);
   await node(['node_modules/@capacitor/cli/bin/capacitor', 'sync', '@capawesome/capacitor-electron']);
