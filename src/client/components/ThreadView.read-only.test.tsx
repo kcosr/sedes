@@ -179,8 +179,8 @@ describe("ThreadView saved dictation", () => {
     expect(native.plugin.discardRecording).not.toHaveBeenCalled();
     expect(state.registry.get(snapshot.thread.id).saveDraft).not.toHaveBeenCalled();
   });
-  it.each(["reconciling", "disconnected"] as const)("waits through a %s backend before appending", async runState => {
-    const base = makeSnapshot("interactive", runState);
+  it.each(["reconciling", "disconnected", "historical"] as const)("waits through a %s view before appending", async transition => {
+    const base = makeSnapshot("interactive", transition === "historical" ? "idle" : transition);
     const snapshot = { ...base, interactions: [], queue: [], draft: { ...base.draft, text: "Current draft" } };
     const saved = recordingRecovery({ threadId: snapshot.thread.id, stage: "ready", hasUnrecognizedAudio: false, canCopyRecognizedText: true });
     const native = fakeVoicePlugin();
@@ -192,7 +192,8 @@ describe("ThreadView saved dictation", () => {
     voiceContext.store = voice;
     await voice.initialize();
     const state = fixture(snapshot);
-    render(<ThreadView threadId={snapshot.thread.id} visible automationOpen={false}
+    const view = render(<ThreadView threadId={snapshot.thread.id} visible automationOpen={false}
+      focusTurnId={transition === "historical" ? "older-turn" : undefined}
       registry={state.registry} applicationStore={state.applicationStore} />);
     let completed = false;
     const handoff = voice.addRecordingToComposer({ expectedConnectionGeneration: 1, recordingId: saved.recordingId,
@@ -201,8 +202,13 @@ describe("ThreadView saved dictation", () => {
     expect(completed).toBe(false);
     expect(voice.getSnapshot().pending).toBe(true);
     expect(native.plugin.discardRecording).not.toHaveBeenCalled();
-    const ready = makeSnapshot("interactive", "idle");
-    act(() => state.updateSnapshot({ ...snapshot, runState: "idle", capabilities: ready.capabilities }));
+    if (transition === "historical") {
+      view.rerender(<ThreadView threadId={snapshot.thread.id} visible automationOpen={false}
+        registry={state.registry} applicationStore={state.applicationStore} />);
+    } else {
+      const ready = makeSnapshot("interactive", "idle");
+      act(() => state.updateSnapshot({ ...snapshot, runState: "idle", capabilities: ready.capabilities }));
+    }
     await act(async () => { expect(await handoff).toBeNull(); });
     expect(screen.getByRole("textbox", { name: "Message Pi" })).toHaveValue("Current draft\n\nRecovered words");
     expect(voice.getSnapshot().pending).toBe(false);
@@ -1668,6 +1674,7 @@ function fixture(
   let projectionViewportAnchor: ThreadProjectionViewportAnchor | undefined;
   const threadStore = {
     threadId: snapshot.thread.id,
+    seekHistoryTurn: vi.fn(async () => ({ status: "not_found" as const })),
     acceptNativeVoiceSubmission: vi.fn(),
     usage: new UsageQueryCache(snapshot.thread.id, {getUsage:vi.fn(),getUsageAvailability:vi.fn()}),
     get activityDetail() {

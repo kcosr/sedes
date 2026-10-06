@@ -592,8 +592,8 @@ Stop during admission; an active recovery Retry or Send uses the recovery contro
 recording ID and recovery revision before and after the storage read. Text is
 returned only by this command, never by routine state snapshots. The client
 opens the original thread and waits for its active composer, cancelling stale
-handoffs and timing out a view that never finishes loading or reconnecting.
-Known read-only, archived, unavailable, recovery or historical views refuse the
+handoffs and timing out a view that never finishes loading, reconnecting or
+navigating back from a historical turn. Known read-only, archived, unavailable or recovery views refuse the
 handoff immediately with guidance. That composer appends to its
 current local draft, retaining skill, attachments and context, and rejects an
 oversized result without truncation. Draft adoption updates the current values
