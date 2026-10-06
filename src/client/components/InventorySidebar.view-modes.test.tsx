@@ -4779,3 +4779,159 @@ describe("Projects Automations shelf vocabulary", () => {
     expect(unknown.querySelector(".thread-meta")).toHaveTextContent(/^Paused$/);
   });
 });
+
+describe("View all automations", () => {
+  const scheduled = (id: string, title: string) =>
+    makeThread(id, title, {
+      automation: {
+        status: "enabled",
+        runMode: "same_thread",
+        scheduleKind: "cron",
+        schedule: { kind: "cron", expression: "0 2 * * *", timeZone: "UTC" },
+        misfirePolicy: "coalesce",
+        promptPreview: "Check dependencies",
+        nextRunAt: new Date(Date.now() + 3_600_000).toISOString(),
+        revision: 1,
+        hasPrecheck: false,
+      },
+    });
+  const threads = [
+    scheduled("auto", "Nightly audit"),
+    makeThread("plain", "Plain thread"),
+    makeThread("snoozed", "Snoozed thread", {
+      inventoryState: "snoozed" as const,
+      snoozedUntil: new Date(Date.now() + 7_200_000).toISOString(),
+    }),
+  ];
+  const viewAllIn = (element: HTMLElement) =>
+    within(element).queryByRole("link", { name: "View all automations" });
+
+  /** The link sits beside the shelf's trigger, opens the page, and leaves the shelf alone. */
+  type OnNavigate = ReturnType<typeof vi.fn<() => void>>;
+
+  async function expectViewAll(shelf: HTMLElement, onNavigate: OnNavigate) {
+    const link = viewAllIn(shelf)!;
+    expect(link).toHaveTextContent(/^View all$/u);
+    expect(link).toHaveAttribute("href", "/automations");
+    const trigger = shelf.querySelector<HTMLElement>(".shelf-trigger")!;
+    expect(trigger).not.toContainElement(link);
+    expect(link.parentElement).toBe(trigger.parentElement);
+    await userEvent.setup().click(link);
+    expect(window.location.pathname).toBe("/automations");
+    expect(onNavigate).toHaveBeenCalledOnce();
+    expect(shelf).toHaveAttribute("data-state", "open");
+  }
+
+  function renderWith(onNavigate: OnNavigate) {
+    const view = renderSidebar(threads);
+    view.rerender(
+      <InventorySidebar
+        state={makeState(threads)}
+        store={view.store}
+        onNavigate={onNavigate}
+        onOpenSettings={() => undefined}
+        peekEnabled
+      />,
+    );
+  }
+
+  afterEach(() => window.history.replaceState(null, "", "/"));
+
+  it("opens the Automations page from the Projects view's Automations shelf only", async () => {
+    seedViewPreferences({ groupBy: "project" });
+    const onNavigate = vi.fn<() => void>();
+    renderWith(onNavigate);
+    const shelves = screen.getAllByTestId("inventory-shelf");
+    const shelf = (kind: string) =>
+      shelves.find((element) => element.dataset.shelf === kind)!;
+    expect(viewAllIn(shelf("snoozed"))).toBeNull();
+    expect(viewAllIn(shelf("settled"))).toBeNull();
+    await expectViewAll(shelf("automations"), onNavigate);
+  });
+
+  it("follows the Automations shelf into a stacked Projects view", () => {
+    seedViewPreferences({ groupBy: "project", stackBy: "group" });
+    renderSidebar(threads);
+    const groups = screen.getAllByTestId("flat-group");
+    expect(
+      groups
+        .filter((group) => viewAllIn(group) !== null)
+        .map((group) => group.dataset.group),
+    ).toEqual(["automations"]);
+  });
+
+  it("opens the Automations page from Timeline's Upcoming", async () => {
+    seedViewPreferences({ groupBy: "time", lastAltGroupBy: "time" });
+    const onNavigate = vi.fn<() => void>();
+    renderWith(onNavigate);
+    const groups = screen.getAllByTestId("flat-group");
+    expect(groups.map((group) => group.dataset.group)).toEqual([
+      "upcoming",
+      "today",
+    ]);
+    expect(viewAllIn(groups[1]!)).toBeNull();
+    // The trigger still names only its group.
+    expect(
+      within(groups[0]!).getByRole("button", { name: /Upcoming/u }),
+    ).toHaveTextContent(/^Upcoming · 2$/u);
+    await expectViewAll(groups[0]!, onNavigate);
+  });
+
+  it("opens the Automations page from State's Scheduled", async () => {
+    seedViewPreferences({ groupBy: "state", lastAltGroupBy: "state" });
+    const onNavigate = vi.fn<() => void>();
+    renderWith(onNavigate);
+    const groups = screen.getAllByTestId("flat-group");
+    expect(
+      groups
+        .filter((group) => viewAllIn(group) !== null)
+        .map((group) => group.dataset.group),
+    ).toEqual(["scheduled"]);
+    await expectViewAll(
+      groups.find((group) => group.dataset.group === "scheduled")!,
+      onNavigate,
+    );
+  });
+
+  it("leaves a modified click to the browser", () => {
+    seedViewPreferences({ groupBy: "time", lastAltGroupBy: "time" });
+    const onNavigate = vi.fn<() => void>();
+    renderWith(onNavigate);
+    const link = screen.getByRole("link", { name: "View all automations" });
+    const taken: boolean[] = [];
+    const record = (event: MouseEvent) => {
+      taken.push(event.defaultPrevented);
+      event.preventDefault();
+    };
+    window.addEventListener("click", record);
+    fireEvent.click(link, { metaKey: true });
+    window.removeEventListener("click", record);
+    expect(taken).toEqual([false]);
+    expect(window.location.pathname).toBe("/");
+    expect(onNavigate).not.toHaveBeenCalled();
+  });
+});
+
+describe("sidebar footer Automations", () => {
+  it("opens the Automations page and closes the drawer", async () => {
+    window.history.replaceState({}, "", "/");
+    const user = userEvent.setup();
+    const onNavigate = vi.fn();
+    const threads = [makeThread("thread-1", "Thread")];
+    const view = renderSidebar(threads);
+    view.rerender(
+      <InventorySidebar
+        state={makeState(threads)}
+        store={view.store}
+        onNavigate={onNavigate}
+        onOpenSettings={() => undefined}
+        peekEnabled
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "More" }));
+    await user.click(screen.getByRole("menuitem", { name: "Automations" }));
+    expect(window.location.pathname).toBe("/automations");
+    expect(onNavigate).toHaveBeenCalledOnce();
+    window.history.replaceState({}, "", "/");
+  });
+});

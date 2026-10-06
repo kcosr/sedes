@@ -1749,6 +1749,39 @@ textarea:disabled {
 .shelf-trigger svg {
   transition: transform 140ms ease;
 }
+
+/* "View all" on shelves of automations: a sibling of the collapsible
+   trigger, laid over its row just before the chevron. */
+.inventory-shelf:has(> .shelf-view-all) {
+  position: relative;
+}
+
+.shelf-view-all {
+  position: absolute;
+  top: 0;
+  right: calc(var(--space-2) + var(--icon-sm) + var(--space-1));
+  display: inline-flex;
+  height: 30px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-inline);
+  color: var(--muted-foreground-2);
+  font-size: var(--text-label);
+  font-weight: var(--weight-medium);
+  text-decoration: none;
+  transition: color var(--motion-fast);
+}
+
+.shelf-view-all:hover {
+  color: var(--foreground);
+}
+
+.shelf-view-all:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
 .shelf-empty {
   margin: 0;
   padding: 4px 8px 8px;
@@ -11130,6 +11163,11 @@ tr.diff-hunk td {
 
   .project-filter-shortcut {
     width: 44px;
+    height: 44px;
+  }
+
+  .shelf-view-all {
+    min-width: 44px;
     height: 44px;
   }
 
