@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ThreadAutomationRun } from "../../shared/index.js";
 import {
   automationErrorText,
+  dayTimeLabel,
+  dayTimePhrase,
   describeSchedule,
   lastRunAge,
   runMeta,
@@ -355,5 +357,44 @@ describe("automationErrorText", () => {
     expect(automationErrorText("automation_precheck_something_new")).toBe(
       "The precheck failed.",
     );
+  });
+});
+
+describe("dayTimeLabel", () => {
+  const now = new Date(2026, 9, 6, 15, 40);
+  const at = (day: number, hour: number, minute = 0, year = 2026, month = 9) =>
+    new Date(year, month, day, hour, minute);
+  const time = (date: Date) =>
+    date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+
+  it("always carries the clock time, with the day in words nearby and the date further out", () => {
+    const today = at(6, 16);
+    const tomorrow = at(7, 9);
+    const yesterday = at(5, 2);
+    const monday = at(12, 9);
+    const nextWeek = at(19, 9);
+    const lastWeek = at(4, 2);
+    expect(dayTimeLabel(today.toISOString(), now)).toBe(`Today ${time(today)}`);
+    expect(dayTimeLabel(tomorrow.toISOString(), now)).toBe(`Tmrw ${time(tomorrow)}`);
+    expect(dayTimeLabel(yesterday.toISOString(), now)).toBe(`Yesterday ${time(yesterday)}`);
+    expect(dayTimeLabel(monday.toISOString(), now)).toBe(`Mon ${time(monday)}`);
+    // A week out the weekday repeats today's, so the date comes back.
+    expect(dayTimeLabel(at(13, 9).toISOString(), now)).toMatch(/^Tue Oct 13 /u);
+    expect(dayTimeLabel(nextWeek.toISOString(), now)).toBe(`Mon Oct 19 ${time(nextWeek)}`);
+    // Past days keep their date, so history reads unambiguously.
+    expect(dayTimeLabel(lastWeek.toISOString(), now)).toBe(`Sun Oct 4 ${time(lastWeek)}`);
+    expect(dayTimeLabel(at(4, 2, 0, 2027).toISOString(), now)).toMatch(/2027/u);
+    // Never a comma inside, so a joined list stays readable.
+    for (const date of [today, tomorrow, monday, nextWeek, lastWeek]) {
+      expect(dayTimeLabel(date.toISOString(), now)).not.toContain(",");
+    }
+  });
+
+  it("reads inside a sentence in lower case with 'at'", () => {
+    expect(dayTimePhrase(at(6, 18).toISOString(), now)).toBe(`today at ${time(at(6, 18))}`);
+    expect(dayTimePhrase(at(7, 9).toISOString(), now)).toBe(`tomorrow at ${time(at(7, 9))}`);
+    expect(dayTimePhrase(at(5, 2).toISOString(), now)).toBe(`yesterday at ${time(at(5, 2))}`);
+    expect(dayTimePhrase(at(12, 9).toISOString(), now)).toBe(`Mon at ${time(at(12, 9))}`);
+    expect(dayTimePhrase(at(4, 2).toISOString(), now)).toBe(`Sun Oct 4 at ${time(at(4, 2))}`);
   });
 });

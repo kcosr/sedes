@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { navigate } from "../../app/router.js";
 import { localDateTimeValue } from "../../lib/time.js";
+import { dayTimeLabel } from "../../automation/automation-text.js";
 import { AutomationEditor } from "./AutomationEditor.js";
 import { nextWholeHour } from "./automation-form.js";
 import {
@@ -90,6 +91,18 @@ describe("AutomationEditor", () => {
       expect.objectContaining({ prompt: "Check dependencies", runMode: "same_thread" }),
     );
     expect(fixture.api.setThreadAutomationState).toHaveBeenCalledWith(THREAD_ID, "enable", 1, expect.any(String));
+  });
+
+  it("lists the next runs with their times, however far out", async () => {
+    const soon = new Date(Date.now() + 7 * 60_000).toISOString();
+    const nextWeek = new Date(Date.now() + 8 * 86_400_000).toISOString();
+    const later = new Date(Date.now() + 15 * 86_400_000).toISOString();
+    renderEditor([{ automation: automationSummary() }], {
+      previewThreadAutomationSchedule: vi.fn().mockResolvedValue({ occurrences: [soon, nextWeek, later] }),
+    });
+    const expected = [soon, nextWeek, later].map((occurrence) => dayTimeLabel(occurrence)).join(", ");
+    expect(await screen.findByText(expected)).toBeInTheDocument();
+    expect(screen.queryByText(/\bin \d+m\b/u)).toBeNull();
   });
 
   it("saves a new automation paused from the secondary action", async () => {

@@ -298,6 +298,84 @@ function precheckDuration(milliseconds: number): string {
   return `${seconds < 10 ? Math.round(seconds * 10) / 10 : Math.round(seconds)} s`;
 }
 
+function startOfLocalDay(date: Date): number {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+}
+
+function localClock(date: Date): string {
+  return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
+/** "Sun Oct 4", with the year when it is not `now`'s. */
+function weekdayDate(date: Date, now: Date): string {
+  const parts = new Intl.DateTimeFormat(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    ...(date.getFullYear() === now.getFullYear() ? {} : { year: "numeric" }),
+  }).formatToParts(date);
+  const part = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((candidate) => candidate.type === type)?.value;
+  return [part("weekday"), part("month"), part("day"), part("year")]
+    .filter(Boolean)
+    .join(" ");
+}
+
+type DayWord = "Today" | "Tmrw" | "Yesterday" | "weekday" | "date";
+
+function dayOf(date: Date, now: Date): DayWord {
+  const days = Math.round((startOfLocalDay(date) - startOfLocalDay(now)) / 86_400_000);
+  if (days === 0) return "Today";
+  if (days === 1) return "Tmrw";
+  if (days === -1) return "Yesterday";
+  // Later this week a weekday is unambiguous; anything else carries its date.
+  return days > 1 && days < 7 ? "weekday" : "date";
+}
+
+/**
+ * The one format for an automation time in a list, a run's or an upcoming
+ * occurrence's, always with its clock time, in the viewer's time zone:
+ * "Today 3:17 AM", "Tmrw 9:00 AM", "Yesterday 2:00 AM", "Mon 9:00 AM" later
+ * this week, otherwise "Sun Oct 4 2:00 AM" (with the year when it is not
+ * this one). No item has a comma, so a list joined by commas reads clearly.
+ * Single upcoming labels (the sidebar, a next run) use `futureTimeLabel`.
+ */
+export function dayTimeLabel(iso: string, now: Date = new Date()): string {
+  const date = new Date(iso);
+  const day = dayOf(date, now);
+  switch (day) {
+    case "Today":
+    case "Tmrw":
+    case "Yesterday":
+      return `${day} ${localClock(date)}`;
+    case "weekday":
+      return `${date.toLocaleDateString([], { weekday: "short" })} ${localClock(date)}`;
+    case "date":
+      return `${weekdayDate(date, now)} ${localClock(date)}`;
+  }
+}
+
+/**
+ * `dayTimeLabel` inside a sentence: "today at 6:00 PM", "tomorrow at 9:00
+ * AM", "yesterday at 2:00 AM", "Mon at 9:00 AM", "Sun Oct 4 at 2:00 AM".
+ */
+export function dayTimePhrase(iso: string, now: Date = new Date()): string {
+  const date = new Date(iso);
+  const clock = localClock(date);
+  switch (dayOf(date, now)) {
+    case "Today":
+      return `today at ${clock}`;
+    case "Tmrw":
+      return `tomorrow at ${clock}`;
+    case "Yesterday":
+      return `yesterday at ${clock}`;
+    case "weekday":
+      return `${date.toLocaleDateString([], { weekday: "short" })} at ${clock}`;
+    case "date":
+      return `${weekdayDate(date, now)} at ${clock}`;
+  }
+}
+
 /** How long ago the last run ended (or was due): "21h ago", "just now". */
 export function lastRunAge(lastRun: SummaryAutomationRun, now: number): string {
   const age = shortRelativeTime(lastRunAt(lastRun), now);

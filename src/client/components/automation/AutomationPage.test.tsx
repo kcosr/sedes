@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "../../api/ApiClient.js";
 import { navigate } from "../../app/router.js";
 import type { SummaryAutomation } from "../../automation/automation-health.js";
+import { dayTimeLabel, dayTimePhrase } from "../../automation/automation-text.js";
 import { AutomationPage } from "./AutomationPage.js";
 import {
   automationStore,
@@ -105,6 +106,18 @@ describe("AutomationPage", () => {
     expect(screen.queryByRole("status", { name: /callout/u })).toBeNull();
   });
 
+  it("lists the next runs with their times, however far out", async () => {
+    const soon = new Date(Date.now() + 20 * 60_000).toISOString();
+    const nextWeek = new Date(Date.now() + 8 * 86_400_000).toISOString();
+    const later = new Date(Date.now() + 15 * 86_400_000).toISOString();
+    renderPage([{ automation: automationSummary() }], {
+      previewThreadAutomationSchedule: vi.fn().mockResolvedValue({ occurrences: [soon, nextWeek, later] }),
+    });
+    expect(await screen.findByText(/^Next: /u)).toHaveTextContent(
+      `Next: ${[soon, nextWeek, later].map((occurrence) => dayTimeLabel(occurrence)).join(", ")}`,
+    );
+  });
+
   it("asks for the next runs again when a scheduled run moves the next run on", async () => {
     const tomorrow = new Date(Date.now() + 86_400_000);
     const later = new Date(Date.now() + 2 * 86_400_000);
@@ -181,6 +194,9 @@ describe("AutomationPage", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Mark as failed…" }));
     let dialog = screen.getByRole("dialog", { name: "Mark the run as failed?" });
+    expect(dialog).toHaveTextContent(
+      `Sedes stops waiting on the run from ${dayTimePhrase("2026-10-06T00:00:00.000Z")}.`,
+    );
     await userEvent.click(within(dialog).getByRole("button", { name: "Mark failed, keep paused" }));
     await waitFor(() =>
       expect(fixture.api.resolveThreadAutomationRun).toHaveBeenLastCalledWith(THREAD_ID, "run-last", { resume: false }),
@@ -446,8 +462,12 @@ describe("AutomationPage", () => {
       listThreadAutomationRuns: vi.fn().mockResolvedValue(page([run({ state: "skipped", errorCode: "automation_snoozed" })])),
     });
     expect(screen.queryByRole("button", { name: "Pause automation" })).toBeNull();
-    await userEvent.click(await screen.findByRole("button", { name: /Skipped, Scheduled$/u }));
+    const row = await screen.findByRole("button", { name: /Skipped, Scheduled$/u });
+    const rowTime = row.querySelector(".automation-run-time")!.textContent!;
+    await userEvent.click(row);
     const sheet = screen.getByRole("dialog", { name: "Skipped run" });
+    // The sheet names the run's time exactly as its row does.
+    expect(within(sheet).getByText(`${rowTime} · Scheduled`)).toBeInTheDocument();
     expect(within(sheet).getByText("Skipped because the thread was snoozed.")).toBeInTheDocument();
     await userEvent.keyboard("{Escape}");
     await userEvent.click(screen.getByRole("button", { name: "More automation actions" }));

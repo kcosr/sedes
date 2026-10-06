@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   durationLabel,
   runAccessibleName,
-  runDayTime,
   runDetailTitle,
   runHealth,
   runPrecheckSummary,
@@ -21,16 +20,6 @@ function clock(date: Date, seconds = false): string {
 }
 
 describe("run format", () => {
-  it("names the day of a run: today, yesterday, then weekday and date", () => {
-    const today = new Date(2026, 9, 6, 3, 17);
-    const yesterday = new Date(2026, 9, 5, 2, 0);
-    const sunday = new Date(2026, 9, 4, 2, 0);
-    expect(runDayTime(today.toISOString(), NOW)).toBe(`Today ${clock(today)}`);
-    expect(runDayTime(yesterday.toISOString(), NOW)).toBe(`Yesterday ${clock(yesterday)}`);
-    expect(runDayTime(sunday.toISOString(), NOW)).toMatch(new RegExp(`^Sun Oct 4 ${clock(sunday)}$`, "u"));
-    expect(runDayTime(new Date(2025, 9, 4, 2, 0).toISOString(), NOW)).toMatch(/2025/u);
-  });
-
   it("writes durations on a readable scale", () => {
     expect(durationLabel(150)).toBe("150 ms");
     expect(durationLabel(1_430)).toBe("1.4 s");

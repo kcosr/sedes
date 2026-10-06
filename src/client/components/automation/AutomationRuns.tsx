@@ -7,6 +7,7 @@ import { useMediaQuery } from "../../app/use-media-query.js";
 import { useTouchDensity } from "../../app/use-touch-density.js";
 import {
   automationErrorText,
+  dayTimeLabel,
   runMeta,
   runStateLabel,
 } from "../../automation/automation-text.js";
@@ -34,8 +35,6 @@ import { Skeleton } from "@client/components/ui/skeleton";
 import { AutomationGlyph } from "./AutomationGlyph.js";
 import {
   runAccessibleName,
-  runDateTime,
-  runDayTime,
   runDetailTitle,
   runHealth,
   runKind,
@@ -283,7 +282,7 @@ export function AutomationRunsSection({
             <DialogHeader>
               <DialogTitle>{runDetailTitle(openRun)}</DialogTitle>
               <DialogDescription>
-                {runDateTime(openRun.scheduledFor)} · {runKind(openRun)}
+                {dayTimeLabel(openRun.scheduledFor, now)} · {runKind(openRun)}
                 {openRun.coalescedCount > 0
                   ? ` · missed ×${openRun.coalescedCount} merged`
                   : null}
@@ -347,7 +346,7 @@ function AutomationRunRow({
         <span className="automation-run-glyph">
           <RunGlyph health={health} />
         </span>
-        <span className="automation-run-time">{runDayTime(run.scheduledFor, now)}</span>
+        <span className="automation-run-time">{dayTimeLabel(run.scheduledFor, now)}</span>
         <span className="automation-run-state" data-health={health}>
           {runStateLabel(run)}
         </span>

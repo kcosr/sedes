@@ -35,6 +35,8 @@ import {
 } from "../../automation/automation-health.js";
 import {
   automationErrorText,
+  dayTimeLabel,
+  dayTimePhrase,
   describeSchedule,
   lastRunAge,
 } from "../../automation/automation-text.js";
@@ -66,7 +68,6 @@ import { Skeleton } from "@client/components/ui/skeleton";
 import { StatusPill } from "@client/components/ui/status-pill";
 import { AutomationRunsSection, type AutomationRunsView } from "./AutomationRuns.js";
 import { MarkRunFailedDialog } from "./MarkRunFailedDialog.js";
-import { runDayTime } from "./automation-run-format.js";
 import {
   useAutomationCapability,
   useAutomationDefinition,
@@ -600,7 +601,7 @@ function AutomationDetails({
         <MarkRunFailedDialog
           open={markFailedOpen}
           onOpenChange={setMarkFailedOpen}
-          runTime={runDayTime(lastRun.scheduledFor, now)}
+          runTime={dayTimePhrase(lastRun.scheduledFor, now)}
           onResolve={async (resume) => {
             try {
               const resolution = await store.api.resolveThreadAutomationRun(
@@ -791,7 +792,7 @@ function DefinitionFacts({
         <>
           {describeSchedule(definition.schedule, now)}
           {next.length > 0 ? (
-            <Sub>Next: {next.map((occurrence) => futureTimeLabel(occurrence, now)).join(", ")}</Sub>
+            <Sub>Next: {next.map((occurrence) => dayTimeLabel(occurrence, now)).join(", ")}</Sub>
           ) : null}
           {recurring ? (
             <Sub>

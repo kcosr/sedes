@@ -2,8 +2,8 @@ import { Repeat } from "lucide-react";
 import { useId, useMemo } from "react";
 import type { AutomationSchedule } from "../../../shared/protocol/automation.js";
 import type { AutomationMisfirePolicy } from "../../../shared/protocol/domain.js";
-import { describeSchedule } from "../../automation/automation-text.js";
-import { futureTimeLabel, localDateTimeValue } from "../../lib/time.js";
+import { dayTimeLabel, describeSchedule } from "../../automation/automation-text.js";
+import { localDateTimeValue } from "../../lib/time.js";
 import { SettingsField } from "../settings/SettingsField.js";
 import { SettingsSection } from "../settings/SettingsSection.js";
 import { Input } from "@client/components/ui/input";
@@ -194,7 +194,7 @@ export function AutomationScheduleSection({
             : preview.checking
               ? "Checking schedule…"
               : preview.occurrences
-                  .map((occurrence) => futureTimeLabel(occurrence, now))
+                  .map((occurrence) => dayTimeLabel(occurrence, now))
                   .join(", ")}
         </p>
       </SettingsField>

@@ -1,9 +1,10 @@
 import type { ThreadAutomationRun } from "../../../shared/protocol/automation-presentation.js";
-import { runStateLabel } from "../../automation/automation-text.js";
+import { dayTimeLabel, runStateLabel } from "../../automation/automation-text.js";
 
 /**
- * Words and times for one run on the automation page: the row's time with
- * its day, the detail timeline, durations and the precheck facts. Pure.
+ * Words and times for one run on the automation page: the detail timeline,
+ * durations and the precheck facts (a run's time with its day is
+ * `dayTimeLabel`). Pure.
  */
 
 /** A run's state as the page draws it: its glyph and the tone of its words. */
@@ -27,49 +28,11 @@ export function runHealth(run: Pick<ThreadAutomationRun, "state">): RunHealth {
   }
 }
 
-function startOfDay(date: Date): number {
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
-}
-
 function clock(date: Date, seconds = false): string {
   return date.toLocaleTimeString([], {
     hour: "numeric",
     minute: "2-digit",
     ...(seconds ? { second: "2-digit" } : {}),
-  });
-}
-
-/**
- * When a run was due, with its day: "Today 3:17 AM", "Yesterday 2:00 AM",
- * "Sun Oct 4 2:00 AM", and the year when it is not this one.
- */
-export function runDayTime(iso: string, now: Date = new Date()): string {
-  const date = new Date(iso);
-  const days = Math.round((startOfDay(now) - startOfDay(date)) / 86_400_000);
-  if (days === 0) return `Today ${clock(date)}`;
-  if (days === 1) return `Yesterday ${clock(date)}`;
-  const parts = new Intl.DateTimeFormat(undefined, {
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-    ...(date.getFullYear() === now.getFullYear() ? {} : { year: "numeric" }),
-  }).formatToParts(date);
-  const part = (type: Intl.DateTimeFormatPartTypes) =>
-    parts.find((candidate) => candidate.type === type)?.value;
-  const day = [part("weekday"), part("month"), part("day"), part("year")]
-    .filter(Boolean)
-    .join(" ");
-  return `${day} ${clock(date)}`;
-}
-
-/** The run's date and time in full, for the phone sheet: "Thu, Oct 1, 2:00 AM". */
-export function runDateTime(iso: string): string {
-  return new Date(iso).toLocaleString([], {
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
   });
 }
 
@@ -153,7 +116,7 @@ export function runKind(run: Pick<ThreadAutomationRun, "occurrence">): string {
 
 /** A run row's accessible name: "Today 3:17 AM Delivered, Manual". */
 export function runAccessibleName(run: ThreadAutomationRun, now: Date = new Date()): string {
-  return `${runDayTime(run.scheduledFor, now)} ${runStateLabel(run)}, ${runKind(run)}`;
+  return `${dayTimeLabel(run.scheduledFor, now)} ${runStateLabel(run)}, ${runKind(run)}`;
 }
 
 /** The phone sheet's title: "Failed run", "Run in progress". */

@@ -28,7 +28,7 @@ export function MarkRunFailedDialog({
 }: {
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
-  /** The run's time as the page shows it ("Today 12:00 AM"). */
+  /** The run's time inside a sentence ("today at 12:00 AM"). */
   readonly runTime: string;
   /** Resolves the run; a rejection keeps the dialog open with its message. */
   readonly onResolve: (resume: boolean) => Promise<void>;
@@ -76,8 +76,8 @@ export function MarkRunFailedDialog({
         <DialogHeader>
           <DialogTitle>Mark the run as failed?</DialogTitle>
           <DialogDescription>
-            Sedes stops waiting on the {runTime} run. If the agent did get the
-            prompt, its work is in the thread either way.
+            Sedes stops waiting on the run from {runTime}. If the agent did get
+            the prompt, its work is in the thread either way.
           </DialogDescription>
         </DialogHeader>
         {error !== undefined && (
