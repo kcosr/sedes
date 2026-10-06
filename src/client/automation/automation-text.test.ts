@@ -40,6 +40,10 @@ describe("describeSchedule: cron", () => {
 
   it("reads Sunday as 0 or 7, names and ranges, and folds full weeks", () => {
     expect(cron("0 8 * * 7")).toBe(`Every Sunday at ${clock(8, 0)} UTC`);
+    expect(cron("0 8 * * 7-7")).toBe(`Every Sunday at ${clock(8, 0)} UTC`);
+    expect(cron("0 8 * * 07-07")).toBe(`Every Sunday at ${clock(8, 0)} UTC`);
+    expect(cron("0 8 * * 06-07")).toBe(`Every Saturday and Sunday at ${clock(8, 0)} UTC`);
+    expect(cron("0 8 * * 0-7")).toBe(`Every day at ${clock(8, 0)} UTC`);
     expect(cron("0 8 * * 5-7")).toBe(
       `Every Friday, Saturday and Sunday at ${clock(8, 0)} UTC`,
     );

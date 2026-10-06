@@ -145,14 +145,18 @@ function cronStep(field: string, cycle: number): number | undefined {
   return step >= 1 && cycle % step === 0 ? step : undefined;
 }
 
+/** A day-of-week token as written: 0–7 (both 0 and 7 are Sunday) or a name. */
 function cronDay(token: string): number | undefined {
   const named = WEEKDAY_ABBREVIATIONS.indexOf(token.toUpperCase());
   if (named >= 0) return named;
-  const value = cronInteger(token, 7);
-  return value === undefined ? undefined : value % 7;
+  return cronInteger(token, 7);
 }
 
-/** The day set of a day-of-week field built from days, names and ranges. */
+/**
+ * The day set of a day-of-week field built from days, names and ranges.
+ * Range endpoints expand as written and fold 7 to Sunday afterwards, so
+ * "5-7" and "7-7" mean what the server's cron parser schedules.
+ */
 function cronDaysOfWeek(field: string): ReadonlySet<number> | undefined {
   if (isWildcard(field)) return new Set([0, 1, 2, 3, 4, 5, 6]);
   const days = new Set<number>();
@@ -160,13 +164,7 @@ function cronDaysOfWeek(field: string): ReadonlySet<number> | undefined {
     const bounds = item.split("-");
     if (bounds.length > 2) return undefined;
     const start = cronDay(bounds[0]!);
-    // "7" may close a range ("5-7"); cronDay folds it to Sunday.
-    const end =
-      bounds.length === 2
-        ? bounds[1] === "7"
-          ? 7
-          : cronDay(bounds[1]!)
-        : start;
+    const end = bounds.length === 2 ? cronDay(bounds[1]!) : start;
     if (start === undefined || end === undefined || end < start) {
       return undefined;
     }
