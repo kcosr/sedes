@@ -5,10 +5,9 @@
 ### Breaking Changes
 
 - Browser and packaged clients require client protocol 141, including thread
-  workpad counts. Direct inputs accept
-  up to 256 KiB of text and 2 MiB per JSON request; input origins use server
-  registration shared by Android native voice and its WebView. Upgrade clients
-  together with the server.
+  workpad counts. Direct inputs accept up to 256 KiB of text and 2 MiB per JSON
+  request; input origins use server registration shared by Android native voice
+  and its WebView. Upgrade clients together with the server.
   ([#50](https://github.com/kcosr/sedes/pull/50), [#53](https://github.com/kcosr/sedes/pull/53))
 
 - Android voice uses snapshot version 9, settings version 7, and dictation
@@ -215,13 +214,9 @@
 
 ### Added
 
-- The Workpads toggle shows the current thread's non-archived workpad count,
-  updated through the existing application stream without a separate list fetch.
-  Sidebar thread rows show a Workpads icon without a count.
-
-- Workpad checklist boxes can be checked or unchecked in the latest saved
-  document without entering edit mode. Each toggle saves a revision, preserves
-  unfinished drafts, and detects concurrent edits before overwriting text.
+- Workpads show the thread's active count in the header and an icon in the
+  sidebar. Toggle checklist boxes directly in saved documents; each change
+  creates a revision, preserves drafts, and detects concurrent edits.
 
 - Android **Keep listening** records through pauses until Send, with an optional
   default for new recordings and a configurable limit of one hour by default. Interrupted
@@ -794,8 +789,7 @@
 
 ### Fixed
 
-- Workpad checklists use compact row spacing, and sidebar Tasks icons match
-  the Tasks header button.
+- Sidebar Tasks icons match the header button.
 
 - Preferred Android microphones reconnect despite device ID changes, and the
   picker refreshes when devices change. Missing or ambiguous selections never
