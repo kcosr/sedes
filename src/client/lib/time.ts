@@ -78,13 +78,3 @@ export function futureTimeLabel(isoDate: string, now = new Date()): string {
   }
   return date.toLocaleDateString([], { month: "short", day: "numeric" });
 }
-
-export function automationTimeLabel(isoDate: string): string {
-  return new Date(isoDate).toLocaleString([], {
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
-}

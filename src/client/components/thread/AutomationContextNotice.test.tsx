@@ -124,6 +124,33 @@ describe("AutomationContextNotice", () => {
     );
   });
 
+  it("links to the source thread's automation page while it has one", async () => {
+    window.history.replaceState(null, "", "/threads/result-thread");
+    render(
+      <AutomationContextNotice
+        context={{ ...context, outcome: "failed" }}
+        store={storeWith(lastRun())}
+        onDismiss={vi.fn()}
+      />,
+    );
+    const link = screen.getByRole("link", { name: "Open automation" });
+    expect(link).toHaveAttribute("href", "/automations/source-thread");
+    await userEvent.click(link);
+    expect(window.location.pathname).toBe("/automations/source-thread");
+  });
+
+  it("offers no link when the source thread has no automation any more", () => {
+    render(
+      <AutomationContextNotice
+        context={{ ...context, outcome: "triggered", sourceThreadId: "other-thread" }}
+        store={storeWith(lastRun())}
+        onDismiss={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole("link", { name: "Open automation" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Dismiss" })).toBeInTheDocument();
+  });
+
   it("keeps the scheduled wording when the run's kind cannot be determined", () => {
     render(
       <AutomationContextNotice

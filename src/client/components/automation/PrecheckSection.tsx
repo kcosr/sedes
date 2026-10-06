@@ -1,186 +1,193 @@
-import type { AutomationPrecheckTestResult } from "../../types";
-import { useId } from "react";
+import { ChevronRight } from "lucide-react";
+import { useState } from "react";
+import type { AutomationPrecheckTestResult } from "../../types.js";
+import { SettingsActionRow, SettingsField, SwitchField } from "../settings/SettingsField.js";
+import { SettingsSection } from "../settings/SettingsSection.js";
 import { Button } from "@client/components/ui/button";
-import { Checkbox } from "@client/components/ui/checkbox";
-import { DialogSection } from "@client/components/ui/dialog";
-import { Field } from "@client/components/ui/field";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@client/components/ui/collapsible";
 import { Input } from "@client/components/ui/input";
-import { Label } from "@client/components/ui/label";
 import { Textarea } from "@client/components/ui/textarea";
-import { AutomationFieldError } from "./AutomationFieldError";
+import {
+  BYTE_COUNTER_THRESHOLD,
+  MAXIMUM_PRECHECK_COMMAND_BYTES,
+  type AutomationForm,
+} from "./automation-form.js";
 
-const maximumPrecheckCommandBytes = 4_096;
+type PrecheckFields = Pick<
+  AutomationForm,
+  "precheckEnabled" | "precheckCommand" | "precheckTimeout" | "precheckIncludeStdout"
+>;
 
-/** "Precheck" section: gate toggle, shell command, timeout/stdout options,
- * and the test affordance. Presentation only — state and the test call live
- * in ThreadAutomationDialog. */
+/**
+ * "Precheck": a disclosure whose summary names the command (or None) and
+ * opens the switch, command, timeout, output option and a test. The
+ * precheck gates every run, manual ones included. Presentation only; the
+ * form and the test call live in useAutomationEditor.
+ */
 export function AutomationPrecheckSection({
-  enabled,
-  onEnabledChange,
-  command,
-  onCommandChange,
+  id,
+  form,
+  onChange,
   commandBytes,
-  timeoutSeconds,
-  onTimeoutSecondsChange,
-  includeStdout,
-  onIncludeStdoutChange,
-  canTest,
-  testing,
-  result,
-  onTest,
+  commandError,
+  timeoutError,
+  test,
 }: {
-  enabled: boolean;
-  onEnabledChange: (enabled: boolean) => void;
-  command: string;
-  onCommandChange: (command: string) => void;
-  commandBytes: number;
-  timeoutSeconds: number;
-  onTimeoutSecondsChange: (seconds: number) => void;
-  includeStdout: boolean;
-  onIncludeStdoutChange: (include: boolean) => void;
-  canTest: boolean;
-  testing: boolean;
-  result: AutomationPrecheckTestResult | undefined;
-  onTest: () => void;
+  readonly id: string;
+  readonly form: PrecheckFields;
+  readonly onChange: (patch: Partial<PrecheckFields>) => void;
+  readonly commandBytes: number;
+  readonly commandError?: string;
+  readonly timeoutError?: string;
+  readonly test: {
+    readonly canTest: boolean;
+    readonly testing: boolean;
+    readonly result?: AutomationPrecheckTestResult;
+    readonly run: () => void;
+  };
 }): React.JSX.Element {
-  const commandId = useId();
-  const commandHelpId = useId();
-  const commandErrorId = useId();
-  const commandTooLong = commandBytes > maximumPrecheckCommandBytes;
+  // Open from the start when something in it needs attention.
+  const [open, setOpen] = useState(Boolean(commandError || timeoutError));
+  const command = form.precheckCommand.trim();
+  const enabled = form.precheckEnabled && command.length > 0;
   return (
-    <DialogSection title="Precheck">
-      <div className="automation-section-card">
-        <label className="automation-option-row">
-          <Checkbox
-            checked={enabled}
-            onCheckedChange={(checked) => onEnabledChange(checked === true)}
-          />
-          <span>
-            <strong>Gate each scheduled run with a shell command</strong>
-            <small>
-              Exit 0 invokes the agent. Any other exit code skips that occurrence.
-            </small>
-          </span>
-        </label>
-        {enabled && (
-          <div className="precheck-fields">
-            <div className="grid gap-1.5">
-              <Label htmlFor={commandId}>Shell command</Label>
-              <Textarea
-                id={commandId}
-                className="precheck-command"
-                aria-label="Precheck shell command"
-                aria-describedby={`${commandHelpId}${commandTooLong ? ` ${commandErrorId}` : ""}`}
-                aria-invalid={commandTooLong || undefined}
-                spellCheck={false}
-                maxLength={4_096}
-                value={command}
-                placeholder="test -f .ready"
-                onChange={(event) => onCommandChange(event.target.value)}
-              />
-              <p id={commandHelpId} className="automation-help">
-                Runs in this thread’s workspace through the configured
-                execution environment.{" "}
-                <span className="tabular-nums">
-                  {commandBytes.toLocaleString()} / 4,096 UTF-8 bytes
-                </span>
-              </p>
-              {commandTooLong && (
-                <AutomationFieldError id={commandErrorId}>
-                  Command must be at most 4,096 UTF-8 bytes.
-                </AutomationFieldError>
+    <SettingsSection id={id} title="Precheck" card>
+      <Collapsible open={open} onOpenChange={setOpen}>
+        <CollapsibleTrigger className="automation-disclosure">
+          <span className="automation-disclosure-text">
+            <span className="automation-disclosure-title">Before each run</span>
+            <span className="automation-disclosure-summary">
+              {enabled ? (
+                <>
+                  <code className="automation-code">{command}</code>
+                  {` · ${form.precheckTimeout} s · ${
+                    form.precheckIncludeStdout ? "output added to prompt" : "output not added"
+                  }`}
+                </>
+              ) : (
+                "None. A shell command can decide whether each run goes ahead."
               )}
-            </div>
-            <div className="precheck-options">
-              <Field label="Timeout in seconds">
+            </span>
+          </span>
+          {open ? null : (
+            <span className="automation-disclosure-action" aria-hidden="true">
+              {enabled ? "Edit" : "Add"}
+            </span>
+          )}
+          <ChevronRight aria-hidden="true" />
+        </CollapsibleTrigger>
+        <CollapsibleContent className="automation-disclosure-content">
+          <SwitchField
+            label="Run a precheck"
+            description="Runs in this thread's workspace before every run, manual runs included. Exit 0 runs the agent; any other exit skips the run."
+            checked={form.precheckEnabled}
+            onCheckedChange={(precheckEnabled) => onChange({ precheckEnabled })}
+          />
+          {form.precheckEnabled ? (
+            <>
+              <SettingsField
+                layout="stacked"
+                label="Shell command"
+                description={
+                  commandBytes > MAXIMUM_PRECHECK_COMMAND_BYTES * BYTE_COUNTER_THRESHOLD
+                    ? `${commandBytes.toLocaleString()} / ${MAXIMUM_PRECHECK_COMMAND_BYTES.toLocaleString()} UTF-8 bytes`
+                    : undefined
+                }
+                error={commandError}
+              >
+                <Textarea
+                  className="automation-precheck-command"
+                  spellCheck={false}
+                  value={form.precheckCommand}
+                  placeholder="test -f .ready"
+                  onChange={(event) => onChange({ precheckCommand: event.target.value })}
+                />
+              </SettingsField>
+              <SettingsField label="Timeout" description="Seconds, from 1 to 60." error={timeoutError}>
                 <Input
                   type="number"
                   min={1}
                   max={60}
                   step={1}
-                  value={timeoutSeconds}
+                  value={Number.isNaN(form.precheckTimeout) ? "" : form.precheckTimeout}
                   onChange={(event) =>
-                    onTimeoutSecondsChange(event.target.valueAsNumber)
+                    onChange({ precheckTimeout: event.target.valueAsNumber })
                   }
                 />
-              </Field>
-              <label className="automation-suboption">
-                <Checkbox
-                  checked={includeStdout}
-                  onCheckedChange={(checked) =>
-                    onIncludeStdoutChange(checked === true)
-                  }
-                />
-                <span>
-                  <strong>Add stdout to the agent prompt</strong>
-                  <small>
-                    Output is included only when the command exits 0.
-                  </small>
-                </span>
-              </label>
-            </div>
-            <Button
-              variant="outline"
-              className="justify-self-start"
-              disabled={!canTest || testing}
-              onClick={onTest}
-            >
-              {testing ? "Testing…" : "Test precheck"}
-            </Button>
-            {result && <PrecheckTestResult result={result} />}
-          </div>
-        )}
-      </div>
-    </DialogSection>
+              </SettingsField>
+              <SwitchField
+                label="Add output to the prompt"
+                description="Only when the command exits 0."
+                checked={form.precheckIncludeStdout}
+                onCheckedChange={(precheckIncludeStdout) => onChange({ precheckIncludeStdout })}
+              />
+              <SettingsActionRow
+                title="Test"
+                description={
+                  test.canTest
+                    ? "Runs the command once now and says what a run would do. Nothing is sent to the agent."
+                    : "Write the prompt and the command first."
+                }
+                actions={
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={!test.canTest || test.testing}
+                    onClick={test.run}
+                  >
+                    {test.testing ? "Testing…" : "Test precheck"}
+                  </Button>
+                }
+              />
+              {test.result ? <PrecheckTestResult result={test.result} /> : null}
+            </>
+          ) : null}
+        </CollapsibleContent>
+      </Collapsible>
+    </SettingsSection>
   );
 }
 
 function PrecheckTestResult({
   result,
 }: {
-  result: AutomationPrecheckTestResult;
+  readonly result: AutomationPrecheckTestResult;
 }): React.JSX.Element {
   return (
-    <div
-      className={`precheck-test-result ${result.decision}`}
-      role="status"
-    >
-      <strong>
+    <div className="automation-precheck-result" role="status">
+      <p className="automation-precheck-result-title">
         {result.decision === "invoke"
-          ? "Would invoke the agent"
+          ? "Would run the agent"
           : result.decision === "skip"
             ? "Would skip this run"
-            : "Precheck failed"}
-      </strong>
-      <span>
-        {result.exitCode === undefined
-          ? "No exit code"
-          : `Exit ${result.exitCode}`}
-        {" · "}
-        {result.durationMilliseconds} ms
-      </span>
-      <span>
+            : "The precheck failed"}
+      </p>
+      <p>
+        {result.exitCode === undefined ? "No exit code" : `Exit ${result.exitCode}`}
+        {` · ${result.durationMilliseconds} ms · `}
         {result.stdoutWillBeIncluded
-          ? `Stdout will be added to the prompt (${result.effectivePromptBytes.toLocaleString()} effective bytes).`
-          : "Stdout will not be added to the prompt."}
-      </span>
-      {result.stdoutPreview && (
+          ? `Output added to prompt (${result.effectivePromptBytes.toLocaleString()} bytes in all)`
+          : "Output not added to prompt"}
+      </p>
+      {result.stdoutPreview ? (
         <details>
-          <summary>
-            Stdout{result.stdoutTruncated ? " (truncated)" : ""}
-          </summary>
+          <summary>Output{result.stdoutTruncated ? " (truncated)" : ""}</summary>
           <pre>{result.stdoutPreview}</pre>
         </details>
-      )}
-      {result.stderrPreview && (
+      ) : null}
+      {result.stderrPreview ? (
         <details>
-          <summary>
-            Stderr{result.stderrTruncated ? " (truncated)" : ""}
-          </summary>
+          <summary>Errors{result.stderrTruncated ? " (truncated)" : ""}</summary>
           <pre>{result.stderrPreview}</pre>
         </details>
-      )}
-      {result.diagnosticCode && <code>{result.diagnosticCode}</code>}
+      ) : null}
+      {result.diagnosticCode ? (
+        <code className="automation-code">{result.diagnosticCode}</code>
+      ) : null}
     </div>
   );
 }

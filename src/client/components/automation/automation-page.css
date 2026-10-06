@@ -1,0 +1,593 @@
+/* The automation page and its editor (AutomationPage, AutomationRuns,
+   AutomationEditor and the section components), inside the shared
+   automations page frame. They build on the settings kit; these rules add
+   what the kit lacks and adapt it to the page column, which is the
+   `automations-page` container rather than the settings column. Tokens
+   only. */
+
+.automation-page {
+  display: grid;
+  align-content: start;
+  gap: var(--space-6);
+}
+
+/* ── Header: the settings detail header anatomy on the page column ── */
+.automation-page [data-slot="settings-page-back"] {
+  margin-bottom: var(--space-1);
+}
+
+.automation-page [data-slot="settings-detail-icon"] {
+  color: var(--muted-foreground-2);
+}
+
+.automation-page [data-slot="settings-detail-icon"] svg {
+  width: var(--icon-md);
+  height: var(--icon-md);
+}
+
+.automation-page [data-slot="settings-page-actions"] {
+  gap: var(--space-1-5);
+}
+
+/* An action that cannot run keeps its focus and tooltip, which say why. */
+.automation-page [data-slot="settings-page-actions"] [aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: var(--disabled-opacity);
+}
+
+/* The dot-separated meta line under the title. */
+.automation-page-meta {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-0-5) var(--space-1-5);
+  color: var(--muted-foreground-2);
+  font-size: var(--text-meta);
+  font-variant-numeric: tabular-nums;
+  line-height: var(--leading-normal);
+}
+
+/* The dot trails its item, so a wrapped line never starts with one. */
+.automation-page-meta > :not(:last-child)::after {
+  margin-left: var(--space-1-5);
+  content: "·";
+}
+
+/* Phones: the title takes the full width, so Run now and ⋯ get their own
+   row under the meta line. */
+@container automations-page (max-width: 559px) {
+  .automation-page [data-slot="settings-page-heading"] > [data-slot="settings-page-titles"] {
+    flex-basis: 100%;
+  }
+
+  .automation-page [data-slot="settings-detail-icon"] {
+    display: none;
+  }
+}
+
+.automation-page-loading,
+.automation-facts-loading,
+.automation-runs-loading {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.automation-page-skeleton-title {
+  width: 40%;
+  height: var(--control-md);
+}
+
+.automation-page-skeleton-card {
+  height: 12rem;
+}
+
+.automation-facts-loading {
+  padding-block: var(--space-3);
+}
+
+/* A text button or link inline with muted copy. */
+.automation-link {
+  /* A taller hit area without moving the line. */
+  margin-block: calc(-1 * var(--space-2));
+  padding: var(--space-2) 0;
+  border: 0;
+  background: transparent;
+  color: var(--foreground);
+  font: inherit;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in oklch, currentColor 45%, transparent);
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.automation-link:hover {
+  text-decoration-color: currentColor;
+}
+
+/* ── Definition card ── */
+.automation-facts {
+  padding-block: var(--space-3);
+}
+
+.automation-fact-sub {
+  display: block;
+  margin-top: var(--space-0-5);
+  color: var(--muted-foreground-2);
+  font-size: var(--text-meta);
+  line-height: var(--leading-normal);
+}
+
+.automation-fact-none {
+  color: var(--muted-foreground-2);
+}
+
+.automation-prompt-preview {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  line-clamp: 4;
+  white-space: pre-wrap;
+}
+
+.automation-prompt-preview[data-expanded] {
+  display: block;
+  -webkit-line-clamp: unset;
+  line-clamp: none;
+}
+
+.automation-show-all {
+  display: block;
+  margin: var(--space-0-5) 0 0;
+  padding-block: var(--space-1);
+  font-size: var(--text-meta);
+}
+
+.automation-code {
+  font-family: var(--font-mono);
+  font-size: var(--text-meta);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+/* ── Runs: one line per run ── */
+.automation-run-list {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.automation-run {
+  min-width: 0;
+  border-radius: var(--radius-ctl);
+}
+
+.automation-run-main {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  min-height: var(--control-lg);
+  grid-template-columns:
+    var(--icon-md) 9.5rem 8.25rem minmax(0, 1fr) var(--icon-md);
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-ctl);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: var(--text-ui);
+  text-align: left;
+  cursor: pointer;
+}
+
+.automation-run-main:hover {
+  background: var(--hover);
+}
+
+.automation-run-main:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.automation-run[data-expanded] > .automation-run-main {
+  background: var(--selected);
+}
+
+.automation-run-glyph {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted-foreground);
+}
+
+.automation-run-glyph svg {
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+}
+
+.automation-run-time {
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.automation-run-state {
+  overflow: hidden;
+  color: var(--foreground);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The sidebar's colour budget: red broken, amber needs the user,
+   info-blue machine working; the rest stays monochrome. */
+.automation-run-state[data-health="failed"] {
+  color: var(--destructive);
+  font-weight: var(--weight-medium);
+}
+
+.automation-run-state[data-health="uncertain"] {
+  color: var(--warning);
+  font-weight: var(--weight-medium);
+}
+
+.automation-run-state[data-health="sending"] {
+  color: var(--info);
+}
+
+.automation-run-state[data-health="skipped"] {
+  color: var(--muted-foreground);
+}
+
+.automation-run-meta {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted-foreground-2);
+  font-size: var(--text-meta);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.automation-run-chevron {
+  display: flex;
+  justify-content: center;
+  color: var(--muted-foreground-2);
+}
+
+.automation-run-chevron svg {
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+  transition: transform var(--motion-fast);
+}
+
+.automation-run[data-expanded] .automation-run-chevron svg {
+  transform: rotate(90deg);
+}
+
+/* Expanded on desktop: the facts line up with the time column. */
+.automation-run-detail {
+  margin: var(--space-1) 0 var(--space-3);
+  padding: var(--space-1) var(--space-2) 0
+    calc(var(--space-2) + var(--icon-md) + var(--space-2));
+}
+
+.automation-timeline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-0-5) var(--space-1-5);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.automation-timeline li {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1);
+}
+
+.automation-timeline li + li::before {
+  margin-right: var(--space-0-5);
+  color: var(--muted-foreground-2);
+  content: "→";
+}
+
+.automation-timeline-time,
+.automation-timeline small {
+  color: var(--muted-foreground-2);
+  font-size: var(--text-meta);
+}
+
+/* The whole history: a bounded scroller with its own frame. */
+.automation-runs-scroll {
+  display: grid;
+  max-height: 60vh;
+  min-width: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: var(--space-1);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-card);
+}
+
+.automation-runs-scroll:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.automation-runs-footer {
+  display: flex;
+  justify-content: center;
+  padding-top: var(--space-2);
+}
+
+.automation-runs-skeleton {
+  height: var(--control-md);
+}
+
+@media (max-width: 819px), (pointer: coarse) {
+  .automation-run-main {
+    min-height: var(--control-touch);
+    grid-template-columns: var(--icon-md) 9.5rem minmax(0, 1fr) var(--icon-md);
+  }
+
+  .automation-run-meta {
+    display: none;
+  }
+
+  .automation-runs-footer [data-slot="button"] {
+    min-height: var(--control-default);
+  }
+}
+
+/* ── Editor pieces the settings kit lacks ── */
+
+/* Field rows stack in a narrow page column, as they do in a narrow
+   settings page. */
+@container automations-page (max-width: 639px) {
+  .automation-page [data-slot="settings-field"][data-orientation="horizontal"] {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .automation-page [data-slot="settings-field"][data-orientation="horizontal"] > [data-slot="field-text"] {
+    padding-top: 0;
+  }
+}
+
+/* Keyboard focus never lands behind the save bar. */
+.automation-page:has([data-slot="save-bar"][data-placement="page"])
+  :is(a[href], button, input, select, textarea, [tabindex]) {
+  scroll-margin-bottom: calc(var(--control-default) + 2 * var(--space-3) + var(--space-2));
+}
+
+/* The prompt's card is its label; the field's own label is for screen readers. */
+.automation-prompt-field > [data-slot="field-label"] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.automation-prompt-input {
+  min-height: calc(var(--control-lg) * 3);
+}
+
+.automation-sentence {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  margin: 0;
+  color: var(--foreground);
+  font-size: var(--text-ui);
+  line-height: var(--leading-snug);
+}
+
+.automation-sentence svg {
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+  flex: none;
+  color: var(--muted-foreground-2);
+}
+
+.automation-interval-fields {
+  display: grid;
+  grid-template-columns: 5rem minmax(0, 1fr);
+  gap: var(--space-2);
+}
+
+.automation-next-runs {
+  margin: 0;
+  padding-top: calc((var(--control-default) - var(--text-ui) * var(--leading-snug)) / 2);
+  font-size: var(--text-ui);
+  font-variant-numeric: tabular-nums;
+  line-height: var(--leading-snug);
+}
+
+.automation-next-runs[data-checking] {
+  color: var(--muted-foreground);
+}
+
+/* Radio rows: a title over a quieter description. */
+.automation-choice-list {
+  display: grid;
+  gap: 0;
+}
+
+.automation-choice {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: var(--space-0-5) var(--space-2-5);
+  padding-block: var(--space-2-5);
+  cursor: pointer;
+}
+
+.automation-choice + .automation-choice {
+  border-top: 1px solid var(--border-soft);
+}
+
+.automation-choice[data-disabled] {
+  cursor: not-allowed;
+}
+
+.automation-choice > [data-slot="radio-group-item"] {
+  margin-top: var(--space-0-5);
+}
+
+.automation-choice-title {
+  margin: 0;
+  font-size: var(--text-ui);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-snug);
+}
+
+.automation-choice[data-disabled] .automation-choice-title {
+  color: var(--muted-foreground);
+}
+
+.automation-choice-description {
+  grid-column: 2;
+  margin: 0;
+  color: var(--muted-foreground-2);
+  font-size: var(--text-meta);
+  line-height: var(--leading-normal);
+}
+
+/* The precheck disclosure: its summary row, then the fields when open. */
+.automation-disclosure {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  min-height: var(--control-lg);
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.automation-disclosure:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.automation-disclosure > svg {
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+  flex: none;
+  color: var(--muted-foreground-2);
+  transition: transform var(--motion-fast);
+}
+
+.automation-disclosure[data-state="open"] > svg {
+  transform: rotate(90deg);
+}
+
+.automation-disclosure-text {
+  display: grid;
+  min-width: 0;
+  flex: 1 1 auto;
+  gap: var(--space-0-5);
+}
+
+.automation-disclosure-title {
+  font-size: var(--text-ui);
+  font-weight: var(--weight-medium);
+}
+
+.automation-disclosure-summary {
+  overflow: hidden;
+  color: var(--muted-foreground-2);
+  font-size: var(--text-meta);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.automation-disclosure-summary .automation-code {
+  font-size: var(--text-label);
+  white-space: nowrap;
+}
+
+.automation-disclosure-action {
+  color: var(--muted-foreground);
+  font-size: var(--text-meta);
+  font-weight: var(--weight-medium);
+}
+
+.automation-disclosure-content {
+  display: grid;
+  min-width: 0;
+  border-top: 1px solid var(--border-soft);
+}
+
+/* Rows inside the open disclosure, divided like a section's rows. */
+.automation-disclosure-content
+  > :is(
+    [data-slot="settings-field"],
+    [data-slot="switch-field"],
+    [data-slot="settings-action-row"]
+  ) {
+  padding-block: var(--space-3);
+}
+
+.automation-disclosure-content
+  > * + :is(
+    [data-slot="settings-field"],
+    [data-slot="switch-field"],
+    [data-slot="settings-action-row"]
+  ) {
+  border-top: 1px solid var(--border-soft);
+}
+
+.automation-precheck-command {
+  min-height: calc(var(--control-lg) * 2);
+  font-family: var(--font-mono);
+}
+
+.automation-precheck-result {
+  display: grid;
+  gap: var(--space-1);
+  margin-bottom: var(--space-3);
+  font-size: var(--text-meta);
+  line-height: var(--leading-normal);
+}
+
+.automation-precheck-result p {
+  margin: 0;
+}
+
+.automation-precheck-result-title {
+  font-size: var(--text-ui);
+  font-weight: var(--weight-medium);
+}
+
+.automation-precheck-result details > summary {
+  color: var(--muted-foreground);
+  cursor: pointer;
+}
+
+.automation-precheck-result pre {
+  max-height: 12rem;
+  margin: var(--space-1) 0 0;
+  overflow: auto;
+  padding: var(--space-2);
+  border-radius: var(--radius-inline);
+  background: var(--code);
+  font-family: var(--font-mono);
+  font-size: var(--text-meta);
+  white-space: pre-wrap;
+}

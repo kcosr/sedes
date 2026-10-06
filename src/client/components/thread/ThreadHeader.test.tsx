@@ -75,7 +75,8 @@ function makeSnapshot({
   environmentKind = "ssh",
   automation = false,
 }: {
-  readonly automation?: boolean | HeaderAutomation;
+  /** `attachable`: no automation yet, and the thread can take one. */
+  readonly automation?: boolean | HeaderAutomation | "attachable";
   readonly renameAvailable?: boolean;
   readonly brand?: "pi" | "codex" | "claude";
   readonly backingState?: "bound" | "unbound";
@@ -114,7 +115,7 @@ function makeSnapshot({
       automation:
         automation === true
           ? { status: "enabled" }
-          : automation === false
+          : automation === false || automation === "attachable"
             ? null
             : automation,
     },
@@ -165,6 +166,15 @@ function makeSnapshot({
               {
                 id: "move_draft",
                 label: { text: "Move draft" },
+                available: true,
+              },
+            ]
+          : []),
+        ...(automation === "attachable"
+          ? [
+              {
+                id: "attach_automation",
+                label: { text: "Automate" },
                 available: true,
               },
             ]
@@ -390,7 +400,8 @@ function renderHeader({
 }: {
   readonly projects?: readonly CatalogProject[];
   readonly workspaces?: readonly CatalogWorkspace[];
-  readonly automation?: boolean | HeaderAutomation;
+  /** `attachable`: no automation yet, and the thread can take one. */
+  readonly automation?: boolean | HeaderAutomation | "attachable";
   readonly findOpen?: boolean;
   readonly onFindOpenChange?: (open: boolean) => void;
   readonly environmentCount?: number;
@@ -661,12 +672,12 @@ describe("ThreadHeader panel chrome", () => {
     expect(toolbar).not.toContainElement(settings);
     const actions = [bookmarks];
     if (automation) {
-      const automationButton = screen.getByRole("button", { name: "Automation settings" });
+      const automationButton = screen.getByRole("button", { name: "Automation" });
       expect(automationButton).toBeVisible();
       expect(toolbar).not.toContainElement(automationButton);
       actions.push(automationButton);
     } else {
-      expect(screen.queryByRole("button", { name: "Automation settings" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Automation" })).toBeNull();
     }
     actions.push(settings, toggle, collapse);
     for (let index = 1; index < actions.length; index += 1) {
@@ -701,7 +712,7 @@ describe("ThreadHeader panel chrome", () => {
     const toolbar = screen.getByTestId("thread-controls");
     expect(screen.queryByRole("button", { name: "Show thread toolbar" })).toBeNull();
     expect(screen.getByRole("button", { name: "Bookmarks" })).toBeVisible();
-    expect(screen.getByRole("button", { name: "Automation settings" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Automation" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Collapse Chat panel" })).toBeVisible();
     expect(toolbar).toHaveAttribute("hidden");
 
@@ -1457,7 +1468,7 @@ describe("ThreadHeader automation chip", () => {
     } finally {
       vi.useRealTimers();
     }
-    const chip = screen.getByRole("button", { name: "Automation settings" });
+    const chip = screen.getByRole("button", { name: "Automation" });
     expect(chip).toHaveAttribute("data-health", health);
     expect(chip).not.toHaveAttribute("data-status");
     expect(chip.getAttribute("title")).toMatch(title);
@@ -1465,17 +1476,27 @@ describe("ThreadHeader automation chip", () => {
     expect(chip.querySelector(".lucide-clock")).toBeNull();
   });
 
-  it("opens the automation route from the chip", async () => {
+  it("opens the automation page from the chip", async () => {
     renderHeader({ automation: true });
-    await userEvent.click(screen.getByRole("button", { name: "Automation settings" }));
-    expect(window.location.pathname).toBe("/threads/thread-1/automation");
+    await userEvent.click(screen.getByRole("button", { name: "Automation" }));
+    expect(window.location.pathname).toBe("/automations/thread-1");
   });
 
-  it("uses Repeat for the Thread actions automation item", async () => {
+  it("opens the automation page from Thread actions, with Repeat", async () => {
     renderHeader({ automation: true });
     const menu = await openThreadActions();
-    const item = within(menu).getByRole("menuitem", { name: "Automation settings…" });
+    const item = within(menu).getByRole("menuitem", { name: "Automation…" });
     expect(item.querySelector(".lucide-repeat")).not.toBeNull();
     expect(item.querySelector(".lucide-calendar-clock")).toBeNull();
+    await userEvent.click(item);
+    expect(window.location.pathname).toBe("/automations/thread-1");
+  });
+
+  it("opens a new automation in the editor from Automate…", async () => {
+    renderHeader({ automation: "attachable" });
+    expect(screen.queryByRole("button", { name: "Automation" })).toBeNull();
+    const menu = await openThreadActions();
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "Automate…" }));
+    expect(window.location.pathname).toBe("/automations/thread-1/edit");
   });
 });

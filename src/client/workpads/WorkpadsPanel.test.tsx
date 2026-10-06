@@ -551,8 +551,8 @@ describe("WorkpadsPanel", () => {
     act(() => navigate("/settings/appearance"));
     expect(window.location.pathname).toBe("/settings/appearance");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    act(() => navigate("/threads/first-thread/automation"));
-    expect(window.location.pathname).toBe("/threads/first-thread/automation");
+    act(() => navigate("/threads/first-thread"));
+    expect(window.location.pathname).toBe("/threads/first-thread");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     act(() => navigate("/settings/appearance"));
     act(() => navigate("/threads/second-thread"));

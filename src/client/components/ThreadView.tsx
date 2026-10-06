@@ -16,7 +16,6 @@ import {
   type ThreadClientStore,
 } from "../stores/ThreadClientStore.js";
 import { ThreadLoadingView } from "./thread/ThreadLoadingView.js";
-import { ThreadAutomationDialog } from "./ThreadAutomationDialog.js";
 import { ChatAtmosphere } from "./thread/ChatAtmosphere.js";
 import { Composer } from "./thread/Composer.js";
 import {
@@ -54,7 +53,6 @@ const CONNECTING_BANNER_DELAY_MS = 5_000;
 export function ThreadView({
   threadId,
   visible,
-  automationOpen,
   focusTurnId,
   registry,
   applicationStore,
@@ -63,7 +61,6 @@ export function ThreadView({
   threadId: string;
   /** Whether this retained singleton is currently presented in the layout. */
   visible: boolean;
-  automationOpen: boolean;
   focusTurnId?: string;
   registry: ThreadStoreRegistry;
   applicationStore: ApplicationClientStore;
@@ -760,17 +757,6 @@ export function ThreadView({
             ) : undefined
           }
         />
-        {visible && automationOpen && snapshot.capabilities.automation.available && (
-          <ThreadAutomationDialog
-            store={applicationStore}
-            threadId={threadId}
-            threadTitle={snapshot.thread.title.text}
-            automationSummary={snapshot.thread.automation}
-            snoozed={snapshot.thread.inventoryState === "snoozed"}
-            canCloneOnRun={snapshot.capabilities.automation.canCloneOnRun}
-            onClose={() => navigate(threadPath(threadId), { replace: true })}
-          />
-        )}
       </section>
     </QuestionInboxProvider>
   );

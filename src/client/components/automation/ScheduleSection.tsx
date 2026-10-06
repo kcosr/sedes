@@ -1,200 +1,244 @@
-import type { AutomationSchedule } from "../../../shared/protocol/automation";
-import type { AutomationMisfirePolicy } from "../../../shared/protocol/domain";
-import { automationTimeLabel, localDateTimeValue } from "../../lib/time";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@client/components/ui/select";
-import { RadioGroup, RadioGroupItem } from "@client/components/ui/radio-group";
-import { Callout } from "@client/components/ui/callout";
-import { DialogSection } from "@client/components/ui/dialog";
-import { Field } from "@client/components/ui/field";
+import { Repeat } from "lucide-react";
+import { useId, useMemo } from "react";
+import type { AutomationSchedule } from "../../../shared/protocol/automation.js";
+import type { AutomationMisfirePolicy } from "../../../shared/protocol/domain.js";
+import { describeSchedule } from "../../automation/automation-text.js";
+import { futureTimeLabel, localDateTimeValue } from "../../lib/time.js";
+import { SettingsField } from "../settings/SettingsField.js";
+import { SettingsSection } from "../settings/SettingsSection.js";
 import { Input } from "@client/components/ui/input";
+import { NativeSelect } from "@client/components/ui/native-select";
+import { RadioGroup } from "@client/components/ui/radio-group";
 import {
   SegmentedControl,
   SegmentedControlItem,
 } from "@client/components/ui/segmented-control";
+import { AutomationChoice } from "./AutomationChoice.js";
+import {
+  browserTimeZone,
+  type AutomationForm,
+  type IntervalUnit,
+  type ScheduleKind,
+} from "./automation-form.js";
 
-export type ScheduleKind = AutomationSchedule["kind"];
-export type IntervalUnit = "minutes" | "hours" | "days";
+type ScheduleFields = Pick<
+  AutomationForm,
+  | "scheduleKind"
+  | "dateTime"
+  | "intervalAmount"
+  | "intervalUnit"
+  | "intervalStart"
+  | "cronExpression"
+  | "timeZone"
+>;
 
-/** "When" section: schedule-kind segmented control, per-kind fields, and
- * the next-occurrences preview. Presentation only — all state lives in
- * ThreadAutomationDialog. */
-export function AutomationScheduleSection({
-  scheduleKind,
-  onScheduleKindChange,
-  dateTime,
-  onDateTimeChange,
-  intervalAmount,
-  onIntervalAmountChange,
-  intervalUnit,
-  onIntervalUnitChange,
-  cronExpression,
-  onCronExpressionChange,
+/** Every zone the browser knows, with the current one first when it is not among them. */
+function timeZoneOptions(current: string): readonly string[] {
+  const known =
+    typeof Intl.supportedValuesOf === "function"
+      ? Intl.supportedValuesOf("timeZone")
+      : [];
+  return [...new Set([current, "UTC", ...known])];
+}
+
+/** The schedule's sentence under its fields, with the Repeat glyph. */
+function ScheduleSentence({
   schedule,
-  timeZone,
-  preview,
-  previewError,
+  now,
 }: {
-  scheduleKind: ScheduleKind;
-  onScheduleKindChange: (kind: ScheduleKind) => void;
-  dateTime: string;
-  onDateTimeChange: (value: string) => void;
-  intervalAmount: number;
-  onIntervalAmountChange: (value: number) => void;
-  intervalUnit: IntervalUnit;
-  onIntervalUnitChange: (unit: IntervalUnit) => void;
-  cronExpression: string;
-  onCronExpressionChange: (value: string) => void;
-  schedule: AutomationSchedule | undefined;
-  timeZone: string;
-  preview: readonly string[];
-  previewError: string;
+  readonly schedule: AutomationSchedule | undefined;
+  readonly now: Date;
+}): React.JSX.Element | null {
+  return schedule ? (
+    <p className="automation-sentence">
+      <Repeat aria-hidden="true" />
+      {describeSchedule(schedule, now)}
+    </p>
+  ) : null;
+}
+
+/**
+ * "When": Once, Every interval (with its first run) or Cron (with its
+ * sentence and time zone), then the next runs from the server's preview.
+ * Presentation only; the form lives in useAutomationEditor.
+ */
+export function AutomationScheduleSection({
+  id,
+  form,
+  onChange,
+  schedule,
+  preview,
+  now,
+}: {
+  readonly id: string;
+  readonly form: ScheduleFields;
+  readonly onChange: (patch: Partial<ScheduleFields>) => void;
+  readonly schedule: AutomationSchedule | undefined;
+  readonly preview: {
+    readonly occurrences: readonly string[];
+    readonly error?: string;
+    readonly checking: boolean;
+  };
+  readonly now: Date;
 }): React.JSX.Element {
+  const unitId = useId();
+  const zones = useMemo(() => timeZoneOptions(form.timeZone), [form.timeZone]);
   return (
-    <DialogSection title="When">
-      <div className="automation-section-card padded">
+    <SettingsSection id={id} title="When" card>
+      <SettingsField label="Repeat">
         <SegmentedControl
-          aria-label="Schedule type"
           className="w-full"
-          value={scheduleKind}
-          onValueChange={(kind) => onScheduleKindChange(kind as ScheduleKind)}
+          value={form.scheduleKind}
+          onValueChange={(kind) => onChange({ scheduleKind: kind as ScheduleKind })}
         >
-          <SegmentedControlItem value="date_time">Date & time</SegmentedControlItem>
+          <SegmentedControlItem value="date_time">Once</SegmentedControlItem>
           <SegmentedControlItem value="interval">Every interval</SegmentedControlItem>
           <SegmentedControlItem value="cron">Cron</SegmentedControlItem>
         </SegmentedControl>
-        {scheduleKind === "date_time" && (
-          <Field label="Local date and time">
-            <Input
-              type="datetime-local"
-              min={localDateTimeValue(new Date(Date.now() + 60_000))}
-              value={dateTime}
-              onChange={(event) => onDateTimeChange(event.target.value)}
-            />
-          </Field>
-        )}
-        {scheduleKind === "interval" && (
-          <div className="interval-fields">
-            <Field label="Every">
+      </SettingsField>
+      {form.scheduleKind === "date_time" && (
+        <SettingsField
+          label="Date and time"
+          description={`In your time zone, ${browserTimeZone()}.`}
+        >
+          <Input
+            type="datetime-local"
+            min={localDateTimeValue(new Date(now.getTime() + 60_000))}
+            value={form.dateTime}
+            onChange={(event) => onChange({ dateTime: event.target.value })}
+          />
+        </SettingsField>
+      )}
+      {form.scheduleKind === "interval" && (
+        <>
+          <SettingsField label="Every">
+            <div className="automation-interval-fields">
               <Input
                 type="number"
-                min={intervalUnit === "minutes" ? 5 : 1}
+                min={form.intervalUnit === "minutes" ? 5 : 1}
                 max={
-                  intervalUnit === "minutes"
+                  form.intervalUnit === "minutes"
                     ? 525_600
-                    : intervalUnit === "hours"
+                    : form.intervalUnit === "hours"
                       ? 8_760
                       : 365
                 }
                 step={1}
-                value={intervalAmount}
+                value={Number.isNaN(form.intervalAmount) ? "" : form.intervalAmount}
                 onChange={(event) =>
-                  onIntervalAmountChange(event.target.valueAsNumber)
+                  onChange({ intervalAmount: event.target.valueAsNumber })
                 }
               />
-            </Field>
-            <Field label="Unit">
-              <Select
-                value={intervalUnit}
-                onValueChange={(value) =>
-                  onIntervalUnitChange(value as IntervalUnit)
+              <NativeSelect
+                id={unitId}
+                aria-label="Interval unit"
+                value={form.intervalUnit}
+                onChange={(event) =>
+                  onChange({ intervalUnit: event.target.value as IntervalUnit })
                 }
               >
-                <SelectTrigger className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="minutes">Minutes</SelectItem>
-                  <SelectItem value="hours">Hours</SelectItem>
-                  <SelectItem value="days">Days</SelectItem>
-                </SelectContent>
-              </Select>
-            </Field>
-          </div>
-        )}
-        {scheduleKind === "cron" && (
-          <Field
-            label="Five-field cron expression"
-            description={`Timezone: ${schedule?.kind === "cron" ? schedule.timeZone : timeZone}`}
+                <option value="minutes">Minutes</option>
+                <option value="hours">Hours</option>
+                <option value="days">Days</option>
+              </NativeSelect>
+            </div>
+          </SettingsField>
+          <SettingsField label="Starting" description="The first run; the interval counts from it.">
+            <Input
+              type="datetime-local"
+              value={form.intervalStart}
+              onChange={(event) => onChange({ intervalStart: event.target.value })}
+            />
+            <ScheduleSentence schedule={schedule} now={now} />
+          </SettingsField>
+        </>
+      )}
+      {form.scheduleKind === "cron" && (
+        <>
+          <SettingsField
+            label="Cron expression"
+            description="Five fields: minute, hour, day of month, month, weekday."
           >
             <Input
               className="font-mono"
-              value={cronExpression}
+              value={form.cronExpression}
               spellCheck={false}
+              autoComplete="off"
               placeholder="0 9 * * 1-5"
-              onChange={(event) => onCronExpressionChange(event.target.value)}
+              onChange={(event) => onChange({ cronExpression: event.target.value })}
             />
-          </Field>
-        )}
-        {previewError ? (
-          <Callout tone="danger" role="alert">
-            {previewError}
-          </Callout>
-        ) : preview.length > 0 ? (
-          <div className="schedule-preview" aria-live="polite">
-            <strong>Next occurrences</strong>
-            <ol>
-              {preview.map((occurrence) => (
-                <li key={occurrence}>{automationTimeLabel(occurrence)}</li>
+            <ScheduleSentence schedule={schedule} now={now} />
+          </SettingsField>
+          <SettingsField label="Time zone">
+            <NativeSelect
+              value={form.timeZone}
+              onChange={(event) => onChange({ timeZone: event.target.value })}
+            >
+              {zones.map((zone) => (
+                <option key={zone} value={zone}>
+                  {zone}
+                </option>
               ))}
-            </ol>
-          </div>
-        ) : schedule ? (
-          <p className="automation-help" role="status">
-            Checking schedule…
-          </p>
-        ) : null}
-      </div>
-    </DialogSection>
+            </NativeSelect>
+          </SettingsField>
+        </>
+      )}
+      <SettingsField label="Next runs" description="After you save." error={preview.error}>
+        <p
+          className="automation-next-runs"
+          data-checking={preview.checking || undefined}
+          aria-live="polite"
+        >
+          {preview.error
+            ? null
+            : preview.checking
+              ? "Checking schedule…"
+              : preview.occurrences
+                  .map((occurrence) => futureTimeLabel(occurrence, now))
+                  .join(", ")}
+        </p>
+      </SettingsField>
+    </SettingsSection>
   );
 }
 
-/** "After downtime" misfire-policy section. Presentation only. */
+/**
+ * "If Sedes was down": run a recurring schedule's missed occurrences once,
+ * or skip them. Presentation only.
+ */
 export function AutomationMisfireSection({
-  misfirePolicy,
-  onMisfirePolicyChange,
+  id,
+  value,
+  onChange,
 }: {
-  misfirePolicy: AutomationMisfirePolicy;
-  onMisfirePolicyChange: (policy: AutomationMisfirePolicy) => void;
+  readonly id: string;
+  readonly value: AutomationMisfirePolicy;
+  readonly onChange: (policy: AutomationMisfirePolicy) => void;
 }): React.JSX.Element {
   return (
-    <DialogSection title="After downtime">
-      <div className="automation-section-card">
-        <RadioGroup
-          className="automation-option-group"
-          aria-label="After downtime"
-          value={misfirePolicy}
-          onValueChange={(value) =>
-            onMisfirePolicyChange(value as AutomationMisfirePolicy)
-          }
-        >
-          <label
-            className={`automation-option-row ${misfirePolicy === "coalesce" ? "selected" : ""}`}
-          >
-            <RadioGroupItem value="coalesce" />
-            <span>
-              <strong>Run once when the server returns</strong>
-              <small>
-                Coalesce missed recurring occurrences into one invocation.
-              </small>
-            </span>
-          </label>
-          <label
-            className={`automation-option-row ${misfirePolicy === "skip" ? "selected" : ""}`}
-          >
-            <RadioGroupItem value="skip" />
-            <span>
-              <strong>Skip missed occurrences</strong>
-              <small>Resume at the next future occurrence.</small>
-            </span>
-          </label>
-        </RadioGroup>
-      </div>
-    </DialogSection>
+    <SettingsSection
+      id={id}
+      title="If Sedes was down"
+      description="Recurring schedules only."
+      card
+    >
+      <RadioGroup
+        className="automation-choice-list"
+        aria-label="If Sedes was down"
+        value={value}
+        onValueChange={(next) => onChange(next as AutomationMisfirePolicy)}
+      >
+        <AutomationChoice
+          value="coalesce"
+          title="Run once when Sedes is back"
+          description="Missed runs merge into one."
+        />
+        <AutomationChoice
+          value="skip"
+          title="Skip missed runs"
+          description="Wait for the next scheduled time."
+        />
+      </RadioGroup>
+    </SettingsSection>
   );
 }

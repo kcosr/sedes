@@ -18,7 +18,11 @@ import type {
   ThreadArchiveImpact,
 } from "../../../shared/index.js";
 import { DEFAULT_THREAD_TITLE } from "../../../shared/index.js";
-import { navigate, threadAutomationPath } from "../../app/router.js";
+import {
+  automationEditPath,
+  automationPath,
+  navigate,
+} from "../../app/router.js";
 import type { ConnectionState } from "../../api/EventStreamTransport.js";
 import {
   useApplicationStore,
@@ -58,6 +62,7 @@ import {
 } from "../../automation/automation-health.js";
 import { automationStatusText } from "../../automation/automation-text.js";
 import { AutomationGlyph } from "../automation/AutomationGlyph.js";
+import "./automation-thread-button.css";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -696,7 +701,7 @@ export const ThreadHeader = memo(function ThreadHeader({
                 snapshot.capabilities.automation.available && (
                   <button
                     className="automation-thread-button"
-                    aria-label="Automation settings"
+                    aria-label="Automation"
                     title={`Automation · ${automationStatusText(
                       snapshot.thread.automation,
                       automationState,
@@ -704,7 +709,7 @@ export const ThreadHeader = memo(function ThreadHeader({
                     )}`}
                     data-health={automationState.kind}
                     onClick={() =>
-                      navigate(threadAutomationPath(snapshot.thread.id))
+                      navigate(automationPath(snapshot.thread.id))
                     }
                   >
                     <AutomationGlyph
@@ -927,13 +932,15 @@ export const ThreadHeader = memo(function ThreadHeader({
                       }
                       onSelect={() => {
                         setActionsOpen(false);
-                        navigate(threadAutomationPath(snapshot.thread.id));
+                        navigate(
+                          snapshot.thread.automation
+                            ? automationPath(snapshot.thread.id)
+                            : automationEditPath(snapshot.thread.id),
+                        );
                       }}
                     >
                       <Repeat aria-hidden="true" />
-                      {snapshot.thread.automation
-                        ? "Automation settings…"
-                        : "Automate…"}
+                      {snapshot.thread.automation ? "Automation…" : "Automate…"}
                       {disabled && <ReasonShortcut reason={busyReason} />}
                     </DropdownMenuItem>
                   )}
