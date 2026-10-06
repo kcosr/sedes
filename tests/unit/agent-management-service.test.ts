@@ -5,6 +5,7 @@ import { InventoryRepository } from "../../src/server/db/repositories/inventory-
 import { savedAgentDatabase } from "../support/saved-agent-fixture.js";
 import { randomUUID } from "node:crypto";
 import type { TaskScope } from "../../src/shared/protocol/tasks.js";
+import type { NormalizedThreadSummary } from "../../src/shared/protocol/conversation.js";
 import { DatabaseAgentToolSourceAuthority } from "../../src/server/agent-tools/application/database-agent-tool-source-authority.js";
 import { TaskRepository } from "../../src/server/db/repositories/task-repository.js";
 import { TaskService } from "../../src/server/domain/task-service.js";
@@ -171,6 +172,10 @@ function discoveryFixture() {
       },
     ],
   ]);
+  const automations = new Map<
+    string,
+    NonNullable<NormalizedThreadSummary["automation"]>
+  >();
   const management = new AgentManagementService({
     database: current.database,
     inventory,
@@ -191,7 +196,7 @@ function discoveryFixture() {
             backingState: "unbound",
             available: true,
             inventoryState: state.inventoryState,
-            automation: null,
+            automation: automations.get(id) ?? null,
           };
         }),
     } as never,
@@ -237,6 +242,7 @@ function discoveryFixture() {
   return {
     ...current,
     management,
+    automations,
     environment,
     workspaceA,
     workspaceB,
@@ -251,6 +257,37 @@ function discoveryFixture() {
 }
 
 describe("AgentManagementService discovery", () => {
+  it("keeps the thread.list automation summary to its frozen fields", async () => {
+    const current = discoveryFixture();
+    try {
+      const frozen = {
+        status: "enabled" as const,
+        runMode: "same_thread" as const,
+        scheduleKind: "cron" as const,
+        nextRunAt: new Date(9_000).toISOString(),
+        revision: 2,
+        hasPrecheck: false,
+      };
+      current.automations.set(current.older.id, {
+        ...frozen,
+        schedule: { kind: "cron", expression: "0 2 * * *", timeZone: "UTC" },
+        misfirePolicy: "skip",
+        promptPreview: "Review the repository.",
+      });
+      const page = await current.management.listThreads(
+        current.scope,
+        undefined,
+        { pageSize: 10 },
+        current.environmentAuthority,
+      );
+      expect(
+        page.items.find(({ id }) => id === current.older.id)?.automation,
+      ).toEqual(frozen);
+    } finally {
+      current.database.close();
+    }
+  });
+
   it("lists workspaces with recency and bounded environment identity", () => {
     const current = discoveryFixture();
     try {

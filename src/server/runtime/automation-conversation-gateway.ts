@@ -37,16 +37,26 @@ export type AutomationConversationDispatchResult =
  * result is not accepted until both the branch child binding and its source
  * checkpoint are durably persisted.
  */
+export type AutomationConversationDispatchInput = {
+  readonly scope: RequestScope;
+  readonly automationId: string;
+  readonly automationRunId: string;
+  readonly anchorThreadId: string;
+  readonly prompt: string;
+  readonly dispatchMutationId: string;
+} & (
+  | { readonly runMode: "same_thread" }
+  | {
+      readonly runMode: "clone";
+      /** Appended to the anchor title when the run's result thread is created. */
+      readonly resultTitleSuffix: string;
+    }
+);
+
 export interface AutomationConversationGateway {
-  dispatch(input: {
-    readonly scope: RequestScope;
-    readonly automationId: string;
-    readonly automationRunId: string;
-    readonly anchorThreadId: string;
-    readonly runMode: "same_thread" | "clone";
-    readonly prompt: string;
-    readonly dispatchMutationId: string;
-  }): Promise<AutomationConversationDispatchResult>;
+  dispatch(
+    input: AutomationConversationDispatchInput,
+  ): Promise<AutomationConversationDispatchResult>;
 }
 
 export interface AutomationThreadExecutionStateReader {
@@ -115,15 +125,9 @@ export class LifecycleAutomationConversationGateway implements AutomationConvers
     this.#now = input.now ?? Date.now;
   }
 
-  async dispatch(input: {
-    readonly scope: RequestScope;
-    readonly automationId: string;
-    readonly automationRunId: string;
-    readonly anchorThreadId: string;
-    readonly runMode: "same_thread" | "clone";
-    readonly prompt: string;
-    readonly dispatchMutationId: string;
-  }): Promise<AutomationConversationDispatchResult> {
+  async dispatch(
+    input: AutomationConversationDispatchInput,
+  ): Promise<AutomationConversationDispatchResult> {
     if (input.runMode === "clone") {
       const fork = await this.#branches.forkAutomation({
         scope: input.scope,
@@ -131,6 +135,7 @@ export class LifecycleAutomationConversationGateway implements AutomationConvers
         automationId: input.automationId,
         automationRunId: input.automationRunId,
         mutationId: input.dispatchMutationId,
+        titleSuffix: input.resultTitleSuffix,
       });
       if (fork.status === "recovery_required") {
         return {

@@ -4256,6 +4256,13 @@ describe("InventorySidebar view modes", () => {
       status: "enabled" as const,
       runMode: "clone" as const,
       scheduleKind: "interval" as const,
+      schedule: {
+        kind: "interval" as const,
+        anchorAt: "2026-07-30T00:00:00.000Z",
+        everySeconds: 3_600,
+      },
+      misfirePolicy: "coalesce" as const,
+      promptPreview: "Review the repository.",
       revision: 1,
       hasPrecheck: false,
     };

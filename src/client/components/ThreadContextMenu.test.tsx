@@ -1047,6 +1047,13 @@ describe("ThreadContextMenu content per thread state", () => {
           status: "enabled",
           runMode: "same_thread",
           scheduleKind: "interval",
+          schedule: {
+            kind: "interval",
+            anchorAt: "2026-07-30T00:00:00.000Z",
+            everySeconds: 3_600,
+          },
+          misfirePolicy: "coalesce",
+          promptPreview: "Review the repository.",
           revision: 1,
           hasPrecheck: false,
         },

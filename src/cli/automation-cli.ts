@@ -11,6 +11,10 @@ import {
   normalizeSedesUrl,
 } from "./sedes-api-client.js";
 import { SEDES_VERSION } from "../shared/version.js";
+import {
+  automationRunFilterSchema,
+  type AutomationRunFilter,
+} from "../shared/protocol/domain.js";
 
 const usage = `Sedes automation CLI
 
@@ -24,13 +28,16 @@ Usage:
   npm run automation -- enable THREAD_ID
   npm run automation -- pause THREAD_ID
   npm run automation -- run-now THREAD_ID
-  npm run automation -- runs THREAD_ID
+  npm run automation -- runs THREAD_ID [--filter all|problems|skipped]
+  npm run automation -- resolve THREAD_ID RUN_ID [--resume]
   npm run automation -- list [QUERY]
   npm run automation -- remove THREAD_ID
 
 Options:
   --server URL       Sedes origin (default: SEDES_URL or http://127.0.0.1:4784)
   --allow-remote     Permit an explicitly trusted non-loopback Sedes origin
+  --filter FILTER    runs: all (default), problems (failed or uncertain), or skipped
+  --resume           resolve: also enable the automation in the same operation
   --help             Show this help
   --version          Print this build's Sedes version
 
@@ -44,12 +51,16 @@ interface CliOptions {
   readonly commandArguments: string[];
   readonly server: string;
   readonly allowRemote: boolean;
+  readonly filter?: AutomationRunFilter;
+  readonly resume: boolean;
 }
 
 function parseOptions(arguments_: string[]): CliOptions {
   const commandArguments: string[] = [];
   let server = process.env.SEDES_URL ?? "http://127.0.0.1:4784";
   let allowRemote = false;
+  let filter: AutomationRunFilter | undefined;
+  let resume = false;
   for (let index = 0; index < arguments_.length; index += 1) {
     const argument = arguments_[index]!;
     if (argument === "--server") {
@@ -59,6 +70,15 @@ function parseOptions(arguments_: string[]): CliOptions {
       index += 1;
     } else if (argument === "--allow-remote") {
       allowRemote = true;
+    } else if (argument === "--filter") {
+      const value = automationRunFilterSchema.safeParse(arguments_[index + 1]);
+      if (!value.success) {
+        throw new Error("--filter requires all, problems, or skipped.");
+      }
+      filter = value.data;
+      index += 1;
+    } else if (argument === "--resume") {
+      resume = true;
     } else if (argument === "--help" || argument === "-h") {
       commandArguments.push("help");
     } else if (argument === "--version" || argument === "-v") {
@@ -69,7 +89,13 @@ function parseOptions(arguments_: string[]): CliOptions {
       commandArguments.push(argument);
     }
   }
-  return { commandArguments, server, allowRemote };
+  return {
+    commandArguments,
+    server,
+    allowRemote,
+    ...(filter ? { filter } : {}),
+    resume,
+  };
 }
 
 async function readInput(path: string): Promise<AutomationCliInput> {
@@ -135,6 +161,12 @@ async function applyDesiredState(
 async function main() {
   const options = parseOptions(process.argv.slice(2));
   const [command, ...arguments_] = options.commandArguments;
+  if (options.filter && command !== "runs") {
+    throw new Error("--filter applies only to runs.");
+  }
+  if (options.resume && command !== "resolve") {
+    throw new Error("--resume applies only to resolve.");
+  }
   if (command === "version") {
     process.stdout.write(`sedes ${SEDES_VERSION}\n`);
     return;
@@ -185,17 +217,14 @@ async function main() {
 
     const threadId = await client.createThread(thread);
     try {
-      const snapshot = await client.getThread(threadId);
-      if (!snapshot.capabilities.automation.canAttach) {
+      const capability = await client.automationCapability(threadId);
+      if (!capability.canAttach) {
         throw new Error(
-          snapshot.capabilities.automation.unavailableReason?.text ??
+          capability.unavailableReason?.text ??
             "Automation cannot be attached to the new thread.",
         );
       }
-      if (
-        input.automation.runMode === "clone" &&
-        !snapshot.capabilities.automation.canCloneOnRun
-      ) {
+      if (input.automation.runMode === "clone" && !capability.canCloneOnRun) {
         throw new Error(
           "Clone-mode automation is unavailable for the new thread.",
         );
@@ -230,10 +259,9 @@ async function main() {
         "Existing-thread commands take the thread ID on the command line; omit the thread block.",
       );
     }
-    const snapshot = await client.getThread(threadId!);
     if (
       input.automation.runMode === "clone" &&
-      !snapshot.capabilities.automation.canCloneOnRun
+      !(await client.automationCapability(threadId!)).canCloneOnRun
     ) {
       throw new Error("Clone-mode automation is unavailable for this thread.");
     }
@@ -305,8 +333,22 @@ async function main() {
   }
 
   if (command === "runs") {
-    const [threadId] = requireArguments(arguments_, 1, "runs THREAD_ID");
-    print(await client.listRuns(threadId!));
+    const [threadId] = requireArguments(
+      arguments_,
+      1,
+      "runs THREAD_ID [--filter all|problems|skipped]",
+    );
+    print(await client.listRuns(threadId!, options.filter));
+    return;
+  }
+
+  if (command === "resolve") {
+    const [threadId, runId] = requireArguments(
+      arguments_,
+      2,
+      "resolve THREAD_ID RUN_ID [--resume]",
+    );
+    print(await client.resolveRun(threadId!, runId!, options.resume));
     return;
   }
 

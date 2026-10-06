@@ -33,6 +33,21 @@ export interface AutomationTargetInput {
   readonly threadId?: string;
 }
 
+/**
+ * The run shape frozen by the `automation.runs@1` and `automation.run_now@1`
+ * output schemas. Browser-only run detail is stripped rather than versioning
+ * the tools.
+ */
+export type AutomationToolRun = Omit<
+  ThreadAutomationRun,
+  "definitionRevision" | "forceResetAt" | "precheck"
+> & {
+  readonly precheck?: Omit<
+    NonNullable<ThreadAutomationRun["precheck"]>,
+    "command" | "timeoutSeconds"
+  >;
+};
+
 export interface AutomationCreateToolInput extends AutomationTargetInput {
   readonly prompt: string;
   readonly runMode: AutomationRunMode;
@@ -68,13 +83,13 @@ type AutomationDomain = Pick<
 /** Canonical, source-scoped adapter over the existing automation domain. */
 export class AutomationAgentToolService {
   readonly #automations: AutomationDomain;
-  readonly #threads: Pick<ThreadApplicationService, "snapshot">;
+  readonly #threads: Pick<ThreadApplicationService, "automationCapability">;
   readonly #inventory: Pick<InventoryRepository, "getThread">;
   readonly #now: () => number;
 
   constructor(input: {
     readonly automations: AutomationDomain;
-    readonly threads: Pick<ThreadApplicationService, "snapshot">;
+    readonly threads: Pick<ThreadApplicationService, "automationCapability">;
     readonly inventory: Pick<InventoryRepository, "getThread">;
     readonly now?: () => number;
   }) {
@@ -98,11 +113,11 @@ export class AutomationAgentToolService {
     input: AutomationRunsToolInput,
     context: TrustedToolInvocationContext,
   ): {
-    readonly items: ThreadAutomationRun[];
+    readonly items: AutomationToolRun[];
     readonly nextCursor: string | null;
   } {
     const threadId = this.#admitTargetThread(input, context);
-    return this.#automations.listRuns(scope(context), threadId, {
+    const page = this.#automations.listRuns(scope(context), threadId, {
       ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
       pageSize: input.pageSize ?? 50,
       environmentAuthority: {
@@ -111,6 +126,7 @@ export class AutomationAgentToolService {
         policyRevision: context.environmentAuthority.policyIdentity.revision,
       },
     });
+    return { items: page.items.map(toolRun), nextCursor: page.nextCursor };
   }
 
   async create(
@@ -226,16 +242,18 @@ export class AutomationAgentToolService {
     return this.#withUpcoming(definition, now);
   }
 
-  runNow(
+  async runNow(
     input: AutomationTargetInput,
     context: TrustedToolInvocationContext,
-  ): Promise<ThreadAutomationRun> {
+  ): Promise<AutomationToolRun> {
     const threadId = this.#admitTargetThread(input, context);
-    return this.#automations.runNow(
-      scope(context),
-      threadId,
-      context.mutationId,
-      this.#now(),
+    return toolRun(
+      await this.#automations.runNow(
+        scope(context),
+        threadId,
+        context.mutationId,
+        this.#now(),
+      ),
     );
   }
 
@@ -266,14 +284,17 @@ export class AutomationAgentToolService {
     // fork service deliberately rechecks it at dispatch and records a stable
     // failed run instead of crossing the branch boundary when it is gone.
     if (signal.aborted) throw cancellationError();
-    const snapshot = await this.#threads.snapshot(operationScope, threadId);
-    // The snapshot remains owned by the canonical execution/drain. Cancellation
+    const capability = await this.#threads.automationCapability(
+      operationScope,
+      threadId,
+    );
+    // The capture remains owned by the canonical execution/drain. Cancellation
     // does not detach it; this fence prevents the mutation continuation after
     // the read reaches its real terminal state.
     if (signal.aborted) throw cancellationError();
     assertAutomationCloneEligible({
       runMode,
-      canCloneOnRun: snapshot.capabilities.automation.canCloneOnRun,
+      canCloneOnRun: capability.canCloneOnRun,
     });
   }
 
@@ -338,4 +359,20 @@ function hasDefinitionChange(input: AutomationUpdateToolInput): boolean {
 
 function cancellationError(): DOMException {
   return new DOMException("The tool invocation was cancelled.", "AbortError");
+}
+
+function toolRun(run: ThreadAutomationRun): AutomationToolRun {
+  const {
+    definitionRevision: _definitionRevision,
+    forceResetAt: _forceResetAt,
+    precheck,
+    ...rest
+  } = run;
+  if (!precheck) return rest;
+  const {
+    command: _command,
+    timeoutSeconds: _timeoutSeconds,
+    ...toolPrecheck
+  } = precheck;
+  return { ...rest, precheck: toolPrecheck };
 }

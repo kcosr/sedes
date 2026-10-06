@@ -170,21 +170,82 @@ describe("automation CLI thread requests", () => {
     ).toEqual(["/api/application/session", "/api/application/snapshot"]);
   });
 
-  it("requests the explicit full activity projection", async () => {
-    const fetch = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({}), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }),
-    );
+  it("reads clone eligibility from the automation capability route", async () => {
+    const capability = {
+      available: true,
+      canAttach: true,
+      canRunNow: false,
+      canCloneOnRun: false,
+    };
+    const fetch = vi.fn().mockResolvedValue(Response.json(capability));
     vi.stubGlobal("fetch", fetch);
     const client = new SedesCliApiClient("http://127.0.0.1:4783");
 
-    await expect(client.getThread("thread/with spaces")).rejects.toThrow();
+    await expect(
+      client.automationCapability("thread/with spaces"),
+    ).resolves.toEqual(capability);
 
     expect(fetch).toHaveBeenCalledOnce();
     expect(fetch.mock.calls[0]?.[0].toString()).toBe(
-      "http://127.0.0.1:4783/api/threads/thread%2Fwith%20spaces?activityDetail=full",
+      "http://127.0.0.1:4783/api/threads/thread%2Fwith%20spaces/automation/capability",
     );
+  });
+
+  it("sends the run-history filter and the resolve-and-resume choice", async () => {
+    const threadId = "10000000-0000-4000-8000-000000000001";
+    const runId = "10000000-0000-4000-8000-000000000002";
+    const run = {
+      id: runId,
+      occurrence: "scheduled",
+      scheduledFor: "2026-10-06T08:15:00.000Z",
+      state: "failed",
+      runMode: "same_thread",
+      definitionRevision: 3,
+      coalescedCount: 0,
+      errorCode: "automation_uncertain_resolved",
+    };
+    const fetch = vi.fn(async (input: string | URL | Request) => {
+      const url = new URL(input.toString());
+      if (url.pathname === "/api/application/session") {
+        return Response.json({
+          clientProtocolVersion: SEDES_CLIENT_PROTOCOL_VERSION,
+          version: SEDES_VERSION,
+          csrfToken: "a".repeat(32),
+          providerPulseEnabled: false,
+          experimentalUsageEnabled: false,
+        });
+      }
+      if (url.pathname.endsWith("/automation/runs")) {
+        return Response.json({
+          items: [run],
+          nextCursor: null,
+          counts: { all: 4, problems: 1, skipped: 2 },
+        });
+      }
+      return Response.json({ run, automation: null });
+    });
+    vi.stubGlobal("fetch", fetch);
+    const client = new SedesCliApiClient("http://127.0.0.1:4783");
+
+    await expect(client.listRuns(threadId, "problems")).resolves.toMatchObject({
+      counts: { all: 4, problems: 1, skipped: 2 },
+    });
+    await expect(client.resolveRun(threadId, runId, true)).resolves.toEqual({
+      run,
+      automation: null,
+    });
+
+    const calls = fetch.mock.calls as unknown as [URL, RequestInit][];
+    expect(calls[0]![0].toString()).toBe(
+      `http://127.0.0.1:4783/api/threads/${threadId}/automation/runs?pageSize=50&filter=problems`,
+    );
+    const resolve = calls.find(([url]) =>
+      url.toString().endsWith(`/runs/${runId}/resolve`),
+    )!;
+    expect(resolve[1].method).toBe("POST");
+    expect(JSON.parse(resolve[1].body as string)).toEqual({
+      action: "mark_failed",
+      resume: true,
+    });
   });
 });

@@ -56,6 +56,8 @@ export const threadAutomationRunSchema = z.strictObject({
   scheduledFor: z.iso.datetime(),
   state: automationRunStateSchema,
   runMode: automationRunModeSchema,
+  /** Definition revision the run was claimed from. */
+  definitionRevision: z.number().int().nonnegative(),
   resultThreadId: z.uuid().optional(),
   coalescedCount: z.number().int().nonnegative(),
   errorCode: z.string().max(120).optional(),
@@ -64,9 +66,14 @@ export const threadAutomationRunSchema = z.strictObject({
   startedAt: z.iso.datetime().optional(),
   acceptedAt: z.iso.datetime().optional(),
   finishedAt: z.iso.datetime().optional(),
+  /** Present when a thread force reset abandoned the run. */
+  forceResetAt: z.iso.datetime().optional(),
   precheck: z
     .strictObject({
       status: z.enum(["pending", "checking", "passed", "skipped", "failed"]),
+      /** Command and timeout as snapshotted when the run was claimed. */
+      command: automationPrecheckSchema.shape.command,
+      timeoutSeconds: automationPrecheckSchema.shape.timeoutSeconds,
       durationMilliseconds: z.number().int().nonnegative(),
       stdoutBytes: z.number().int().nonnegative(),
       stdoutIncluded: z.boolean(),
@@ -75,6 +82,38 @@ export const threadAutomationRunSchema = z.strictObject({
     .optional(),
 });
 export type ThreadAutomationRun = z.infer<typeof threadAutomationRunSchema>;
+
+export const threadAutomationRunCountsSchema = z.strictObject({
+  all: z.number().int().nonnegative(),
+  /** Failed or uncertain runs. */
+  problems: z.number().int().nonnegative(),
+  skipped: z.number().int().nonnegative(),
+});
+export type ThreadAutomationRunCounts = z.infer<
+  typeof threadAutomationRunCountsSchema
+>;
+
+/** `counts` covers the whole history and is present only on the first page. */
+export const threadAutomationRunPageSchema = z.strictObject({
+  items: z.array(threadAutomationRunSchema).max(100),
+  nextCursor: z.string().nullable(),
+  counts: threadAutomationRunCountsSchema.optional(),
+});
+export type ThreadAutomationRunPage = z.infer<
+  typeof threadAutomationRunPageSchema
+>;
+
+/**
+ * Result of resolving an uncertain run: the run and the thread's automation
+ * afterwards (null when resolving ended a one-time automation).
+ */
+export const threadAutomationRunResolutionSchema = z.strictObject({
+  run: threadAutomationRunSchema,
+  automation: threadAutomationDefinitionSchema.nullable(),
+});
+export type ThreadAutomationRunResolution = z.infer<
+  typeof threadAutomationRunResolutionSchema
+>;
 
 export const threadAutomationSchedulePreviewSchema = z.strictObject({
   occurrences: z.array(z.iso.datetime()).min(1).max(10),
@@ -98,10 +137,3 @@ export const automationPrecheckTestResultSchema = z.strictObject({
 export type AutomationPrecheckTestResult = z.infer<
   typeof automationPrecheckTestResultSchema
 >;
-
-export function pageResultSchema<T extends z.ZodType>(item: T) {
-  return z.strictObject({
-    items: z.array(item),
-    nextCursor: z.string().nullable(),
-  });
-}

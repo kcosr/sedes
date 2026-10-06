@@ -1694,6 +1694,13 @@ describe("ThreadApplicationService", () => {
             status: "enabled",
             runMode: "same_thread",
             scheduleKind: "interval",
+            schedule: {
+              kind: "interval",
+              anchorAt: "2026-07-30T10:00:00.000Z",
+              everySeconds: 3_600,
+            },
+            misfirePolicy: "coalesce",
+            promptPreview: "Summarize the open issues.",
             nextRunAt: "2026-07-30T11:00:00.000Z",
             revision: 1,
             hasPrecheck: false,
@@ -1713,6 +1720,10 @@ describe("ThreadApplicationService", () => {
       canRunNow: false,
       canCloneOnRun: false,
     });
+    // The capability route composes the same document without the transcript.
+    await expect(service.automationCapability(scope, "thread-1")).resolves.toEqual(
+      snapshot.capabilities.automation,
+    );
     expect(
       snapshot.capabilities.operations.find(
         ({ id }) => id === "remove_automation",

@@ -194,6 +194,7 @@ import {
   updateApplicationPreferencesRequestSchema,
 } from "../shared/protocol/application-preferences.js";
 import {
+  automationCapabilitySchema,
   composerSkillCatalogSchema,
   normalizedDraftSchema,
   normalizedStashSchema,
@@ -3564,13 +3565,14 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
       const { threadId } = threadRouteParametersSchema.parse(request.params);
       const body = createAutomationRequestSchema.parse(request.body);
       if (body.runMode === "clone") {
-        const snapshot = await dependencies.threads.snapshot(
-          requestScope,
-          threadId,
-        );
         assertAutomationCloneEligible({
           runMode: body.runMode,
-          canCloneOnRun: snapshot.capabilities.automation.canCloneOnRun,
+          canCloneOnRun: (
+            await dependencies.threads.automationCapability(
+              requestScope,
+              threadId,
+            )
+          ).canCloneOnRun,
         });
       }
       response
@@ -3583,6 +3585,22 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
     const { threadId } = threadRouteParametersSchema.parse(request.params);
     response.json(dependencies.automations.get(requestScope, threadId));
   });
+  routes.get(
+    "/api/threads/:threadId/automation/capability",
+    async (request, response) => {
+      z.strictObject({}).parse(request.query);
+      const requestScope = await scope(request);
+      const { threadId } = threadRouteParametersSchema.parse(request.params);
+      response.json(
+        automationCapabilitySchema.parse(
+          await dependencies.threads.automationCapability(
+            requestScope,
+            threadId,
+          ),
+        ),
+      );
+    },
+  );
   routes.patch(
     "/api/threads/:threadId/automation",
     async (request, response) => {
@@ -3590,13 +3608,14 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
       const { threadId } = threadRouteParametersSchema.parse(request.params);
       const body = updateAutomationRequestSchema.parse(request.body);
       if (body.runMode === "clone") {
-        const snapshot = await dependencies.threads.snapshot(
-          requestScope,
-          threadId,
-        );
         assertAutomationCloneEligible({
           runMode: body.runMode,
-          canCloneOnRun: snapshot.capabilities.automation.canCloneOnRun,
+          canCloneOnRun: (
+            await dependencies.threads.automationCapability(
+              requestScope,
+              threadId,
+            )
+          ).canCloneOnRun,
         });
       }
       response.json(
@@ -3669,12 +3688,13 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
       const { threadId, runId } = automationRunRouteParametersSchema.parse(
         request.params,
       );
-      resolveAutomationRunRequestSchema.parse(request.body);
+      const body = resolveAutomationRunRequestSchema.parse(request.body);
       response.json(
         dependencies.automations.resolveUncertainRun(
           requestScope,
           threadId,
           runId,
+          { resume: body.resume },
         ),
       );
     },
