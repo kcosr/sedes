@@ -71,6 +71,15 @@ Attribution is last-change provenance, not semantic authorship or move tracking.
 Revision navigation renders complete snapshots. Revision details separately
 exposes removed and added text without changing the selected document.
 
+The latest unarchived document opts into interactive GFM checklist boxes.
+Parser source positions identify the exact check marker; a toggle replaces
+only its middle character in the original Markdown. The update uses that
+rendered document's revision, never a newer revision paired with older text.
+Each successful toggle follows the ordinary committed update, history, and
+attribution path. Pending writes block repeated activation, and a conflict
+reloads current content rather than replaying a stale replacement. Historical
+revisions, archived documents, and other Markdown surfaces remain read-only.
+
 ## Atomic updates
 
 Every update supplies `expectedRevision`. The repository checks it in the same
@@ -119,6 +128,17 @@ workpad, revision, and whether the document or human draft changed; document
 bodies remain separate authorized reads. Publication follows the application's
 serialized boundary, with failed publications retried by the durable scheduler.
 Rejected writes publish nothing.
+
+Application thread summaries include `nonArchivedWorkpadCount`, derived with
+the other grouped summary counts from rows owned by that tenant and principal,
+scoped directly to the thread, and not archived. The count is not persisted
+separately and does not require a Workpad list fetch in the browser. Creation,
+archive, restore, and scope moves hand off affected thread summaries to the
+application publication boundary after commit. A move retains both the old
+and new counted thread IDs, so publication coalescing or retry cannot leave
+the source badge stale. Draft, title, and content changes—including checklist
+toggles—do not schedule count updates. Snapshot and thread-upsert publication
+carry the same count, including after reconnect.
 
 The open Workpads panel subscribes to these events and fetches affected lists,
 documents, or drafts without periodic polling. Events arriving during a fetch

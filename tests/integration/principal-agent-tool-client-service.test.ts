@@ -108,7 +108,7 @@ function fixture() {
           : undefined,
     },
     management,
-    workpads: new WorkpadAgentToolService({ workpads: new WorkpadService(new WorkpadRepository(database), { publishWorkpadChange: async () => undefined }), authorityReader: authority }),
+    workpads: new WorkpadAgentToolService({ workpads: new WorkpadService(new WorkpadRepository(database), { publishWorkpadChange: async () => undefined, handoffThreadChange: () => undefined }), authorityReader: authority }),
     automations: unavailableDomainService<AutomationAgentToolService>(),
     threadCreation: unavailableDomainService<AgentThreadCreationService>(),
     savedAgents: unavailableDomainService<SavedAgentCanonicalToolService>(),

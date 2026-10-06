@@ -200,6 +200,7 @@ beforeEach(() => {
   Object.assign(applicationStore, {
     api: {
       readTerminal: vi.fn(() => new Promise(() => undefined)),
+      listWorkpads: vi.fn(),
     },
   });
   applicationState = {
@@ -383,7 +384,7 @@ function setup(
     ) : (
       layout
     );
-  const renderLayout = (workspaceId: string, active = true) => fakeHost(
+  const renderLayout = (workspaceId: string, active = true, threadId = "thread-1") => fakeHost(
     <NavigationControlsContext.Provider
       value={{
         openDrawer: vi.fn(),
@@ -401,7 +402,7 @@ function setup(
         tenants={registry}
         applicationStore={applicationStore}
         threadRegistry={threadRegistry}
-        threadId="thread-1"
+        threadId={threadId}
         workspaceId={workspaceId}
         environmentId="environment-1"
         environmentIds={["environment-1", "environment-2"]}
@@ -442,6 +443,7 @@ function setup(
   return Object.assign(store, {
     setActive: (active: boolean) => view.rerender(withHost(renderLayout("workspace-1", active))),
     rerenderWorkspace: (workspaceId: string) => view.rerender(withHost(renderLayout(workspaceId))),
+    rerenderThread: (threadId: string) => view.rerender(withHost(renderLayout("workspace-1", true, threadId))),
   });
 }
 
@@ -484,6 +486,61 @@ function makeThreadTask({
 }
 
 describe("PanelLayout singleton surfaces", () => {
+  it.each([
+    [0, undefined, "Open Workpads panel"],
+    [1, "1", "Open Workpads panel, 1 workpad in this thread"],
+    [99, "99", "Open Workpads panel, 99 workpads in this thread"],
+    [100, "99+", "Open Workpads panel, 100 workpads in this thread"],
+    [187, "99+", "Open Workpads panel, 187 workpads in this thread"],
+  ])("badges %s thread workpads from the application summary without listing documents", (count, shown, label) => {
+    applicationState = { ...applicationState, authoritative: true, snapshot: { tasks: [], threads: [
+      { id: "thread-1", nonArchivedWorkpadCount: count },
+      { id: "thread-2", nonArchivedWorkpadCount: 8 },
+    ] } };
+    setup({ extraTenants: [{ ...filesTenant(), id: "workpads", title: "Workpads", scope: "global" }] });
+    const toggle = screen.getByTestId("workpads-panel-toggle");
+    expect(toggle).toHaveAccessibleName(label);
+    const badge = toggle.querySelector('[data-slot="count-badge"]');
+    if (shown === undefined) expect(badge).toBeNull();
+    else expect(badge).toHaveTextContent(shown);
+    expect(applicationStore.api.listWorkpads).not.toHaveBeenCalled();
+  });
+
+  it("hides unavailable workpad counts and follows the current thread and authoritative summary", () => {
+    const store = setup({ extraTenants: [{ ...filesTenant(), id: "workpads", title: "Workpads", scope: "global" }] });
+    const toggle = screen.getByTestId("workpads-panel-toggle");
+    const publish = (authoritative: boolean, threads: readonly { id: string; nonArchivedWorkpadCount: number }[]) => act(() => {
+      applicationState = { ...applicationState, authoritative, snapshot: { tasks: [], threads } };
+      for (const listener of applicationListeners) listener();
+    });
+    const threads = [
+      { id: "thread-1", nonArchivedWorkpadCount: 2 },
+      { id: "thread-2", nonArchivedWorkpadCount: 3 },
+    ];
+    expect(toggle).toHaveAccessibleName("Open Workpads panel");
+    publish(true, threads);
+    expect(toggle).toHaveAccessibleName("Open Workpads panel, 2 workpads in this thread");
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAccessibleName("Close Workpads panel, 2 workpads in this thread");
+    act(() => store.collapsePanel("workpads"));
+    expect(toggle).toHaveAccessibleName("Show collapsed Workpads panel, 2 workpads in this thread");
+    fireEvent.click(toggle);
+    fireEvent.click(toggle);
+    store.rerenderThread("thread-2");
+    expect(toggle).toHaveAccessibleName("Open Workpads panel, 3 workpads in this thread");
+    // An old thread update cannot become this thread's count.
+    publish(true, [{ ...threads[0]!, nonArchivedWorkpadCount: 9 }, threads[1]!]);
+    expect(toggle).toHaveAccessibleName("Open Workpads panel, 3 workpads in this thread");
+    publish(false, threads);
+    expect(toggle.querySelector('[data-slot="count-badge"]')).toBeNull();
+    publish(true, [threads[0]!]);
+    expect(toggle).toHaveAccessibleName("Open Workpads panel");
+    store.setActive(false);
+    publish(true, threads);
+    expect(toggle.querySelector('[data-slot="count-badge"]')).toBeNull();
+    expect(applicationStore.api.listWorkpads).not.toHaveBeenCalled();
+  });
+
   it("badges only open tasks scoped directly to the current thread in the application header", () => {
     applicationState = { ...applicationState, snapshot: { threads: [], tasks: [
       makeThreadTask({ id: "open-1" }),

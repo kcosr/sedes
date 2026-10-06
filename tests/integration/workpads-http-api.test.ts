@@ -21,7 +21,7 @@ function fixture() {
     cannedPrompts: {} as never,
     workpads: new WorkpadService(
       new WorkpadRepository(database),
-      { publishWorkpadChange: vi.fn().mockResolvedValue(undefined) },
+      { publishWorkpadChange: vi.fn().mockResolvedValue(undefined), handoffThreadChange: vi.fn() },
     ),
     turnBookmarks: unavailableTurnBookmarks(),
     workspaceDiffReviews: {} as never,

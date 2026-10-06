@@ -105,12 +105,13 @@ import {
   Folder,
   ListFilter,
   ListPlus,
-  ListTodo,
+  ListChecks,
   MessageCircleQuestion,
   LoaderCircle,
   ListTree,
   Layers3,
   MoreHorizontal,
+  NotepadText,
   PencilLine,
   Pin,
   PinOff,
@@ -4395,7 +4396,7 @@ function ThreadRow({
   const taskIndicator =
     taskSummary && taskSummary.openCount > 0 ? (
       <StatusChip chip="tasks" label={threadTaskSummaryLabel(taskSummary)}>
-        <ListTodo size={14} strokeWidth={2} />
+        <ListChecks size={14} strokeWidth={2} />
       </StatusChip>
     ) : undefined;
   const questionLabel = `${thread.pendingQuestionCount} unanswered question${thread.pendingQuestionCount === 1 ? "" : "s"}`;
@@ -4438,6 +4439,14 @@ function ThreadRow({
         <Bookmark size={14} strokeWidth={2} />
       </StatusChip>
     ) : undefined;
+  const workpadIndicator = thread.nonArchivedWorkpadCount > 0 ? (
+    <StatusChip
+      chip="workpads"
+      label={`${thread.nonArchivedWorkpadCount} workpad${thread.nonArchivedWorkpadCount === 1 ? "" : "s"}`}
+    >
+      <NotepadText size={14} strokeWidth={2} />
+    </StatusChip>
+  ) : undefined;
   const terminalIndicator =
     thread.terminalSummary.retainedCount > 0 ? (
       <StatusChip
@@ -4623,6 +4632,7 @@ function ThreadRow({
             taskIndicator ||
             stashIndicator ||
             bookmarkIndicator ||
+            workpadIndicator ||
             terminalIndicator ? (
               <span
                 className="thread-row-indicators"
@@ -4639,6 +4649,7 @@ function ThreadRow({
                 {taskIndicator}
                 {stashIndicator}
                 {bookmarkIndicator}
+                {workpadIndicator}
                 {terminalIndicator}
               </span>
             ) : null}

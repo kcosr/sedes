@@ -4,11 +4,11 @@
 
 ### Breaking Changes
 
-- Browser and packaged clients require client protocol 140. Direct inputs accept
-  up to 256 KiB of text and 2 MiB per JSON request; input origins use server
-  registration shared by Android native voice and its WebView. Upgrade clients
-  together with the server.
-  ([#50](https://github.com/kcosr/sedes/pull/50), [#53](https://github.com/kcosr/sedes/pull/53))
+- Browser and packaged clients require client protocol 141, including thread
+  workpad counts. Direct inputs accept up to 256 KiB of text and 2 MiB per JSON
+  request; input origins use server registration shared by Android native voice
+  and its WebView. Upgrade clients together with the server.
+  ([#50](https://github.com/kcosr/sedes/pull/50), [#53](https://github.com/kcosr/sedes/pull/53), [#56](https://github.com/kcosr/sedes/pull/56))
 
 - Android voice uses snapshot version 9, settings version 7, and dictation
   manifest version 2. Reconfigure voice and re-enter speech credentials after
@@ -213,6 +213,11 @@
   Migration preserves old Claude totals separately with unknown coverage. (#8)
 
 ### Added
+
+- Workpads show the thread's active count in the header and an icon in the
+  sidebar. Toggle checklist boxes directly in saved documents; each change
+  creates a revision, preserves drafts, and detects concurrent edits.
+  ([#56](https://github.com/kcosr/sedes/pull/56))
 
 - Android **Keep listening** records through pauses until Send, with an optional
   default for new recordings and a configurable limit of one hour by default. Interrupted
@@ -784,6 +789,9 @@
   sidecar runtime protocol 14 now also carries the queued-input marker.
 
 ### Fixed
+
+- Sidebar Tasks icons match the header button.
+  ([#56](https://github.com/kcosr/sedes/pull/56))
 
 - Preferred Android microphones reconnect despite device ID changes, and the
   picker refreshes when devices change. Missing or ambiguous selections never

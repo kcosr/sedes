@@ -2357,7 +2357,7 @@ describe("application sidebar background-work wire contract", () => {
     lastActivityAt: "2026-08-04T00:00:00.000Z", stateChangedAt: "2026-08-04T00:00:00.000Z",
     automation: null, pinned: false, pinRevision: 0,
     preferredWorktree: null, preferredWorktreeRevision: 0, bookmarkRevision: 0,
-    turnBookmarkCount: 0, groupId: null, groupAssignmentRevision: 0,
+    turnBookmarkCount: 0, nonArchivedWorkpadCount: 0, groupId: null, groupAssignmentRevision: 0,
     stashedPromptCount: 0, pendingQuestionCount: 0,
     terminalSummary: { runningCount: 0, retainedCount: 0 },
     attention: { wake: false, automationContext: null, unseenCompletion: true, queueFailure: false },
@@ -2372,7 +2372,7 @@ describe("application sidebar background-work wire contract", () => {
     advisories: [], defaultNewThreadTargetId: "target-1", counts, tasks: [],
   };
   it("carries the same counts through snapshot and thread-upsert events without changing run state", () => {
-    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(140);
+    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(141);
     expect(normalizedApplicationEventSchema.parse({ type: "snapshot", generation: "generation-1", snapshot }))
       .toMatchObject({ snapshot: { threads: [{ runState: "idle", backgroundWork }] } });
     expect(normalizedApplicationEventSchema.parse({ type: "thread_upsert", generation: "generation-1", thread, counts }))

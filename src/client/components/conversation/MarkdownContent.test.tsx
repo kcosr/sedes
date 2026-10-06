@@ -46,6 +46,33 @@ const fileRequest = (reference: WorkspaceFileLinkReference) => ({
 });
 
 describe("MarkdownContent source-position metadata", () => {
+  it("disables an opted-in checkbox whose source marker metadata is invalid", () => {
+    interface Node { tagName?: string; properties?: Record<string, unknown>; children?: Node[] }
+    const corruptMarker = () => function visit(node: Node) {
+      if (node.tagName === "input" && node.properties) node.properties["data-checklist-start"] = 0;
+      for (const child of node.children ?? []) visit(child);
+    };
+    const onToggle = vi.fn();
+    render(<MarkdownContent checklist={{ disabled: false, pending: false, onToggle }} rehypePlugins={[corruptMarker]}>
+      {"- [ ] Invalid source mapping"}
+    </MarkdownContent>);
+    const checkbox = screen.getByRole("checkbox", { name: "Invalid source mapping" });
+    expect(checkbox).toBeDisabled();
+    expect(checkbox).toHaveAttribute("title", "This checklist item cannot be changed from the preview.");
+    fireEvent.click(checkbox);
+    expect(onToggle).not.toHaveBeenCalled();
+  });
+
+  it("keeps ordinary Markdown task lists read-only without source mutation metadata", () => {
+    const { container } = render(<MarkdownContent>{"- [ ] Pending\n- [x] Done\n"}</MarkdownContent>);
+    const checkboxes = screen.getAllByRole("checkbox");
+    expect(checkboxes[0]).toBeDisabled();
+    expect(checkboxes[0]).not.toBeChecked();
+    expect(checkboxes[1]).toBeDisabled();
+    expect(checkboxes[1]).toBeChecked();
+    expect(container.querySelector("[data-checklist-start]")).toBeNull();
+  });
+
   it("keeps metadata off for ordinary transcript rendering", () => {
     const { container } = render(
       <MarkdownContent># Heading\n\nBody</MarkdownContent>,

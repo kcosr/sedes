@@ -25,6 +25,7 @@ import { ScopeIcon, useTaskDestinations } from "../components/tasks/task-destina
 import { parseScopeKey, scopeKey as destinationKey } from "../components/tasks/task-view-model.js";
 import { WorkpadDocument } from "./WorkpadDocument.js";
 import { useWorkpadDraft } from "./use-workpad-draft.js";
+import { applyMarkdownChecklistToggle, type MarkdownChecklistToggle } from "../components/conversation/markdown-checklists.js";
 import "./workpads-panel.css";
 
 const message = (error: unknown) => error instanceof Error ? error.message : "Unable to update workpad.";
@@ -74,6 +75,8 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
   const [moveTarget, setMoveTarget] = useState<WorkpadTarget>();
   const [discarding, setDiscarding] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [checklistSaving, setChecklistSaving] = useState(false);
+  const [checklistRefreshRequired, setChecklistRefreshRequired] = useState(false);
   const [reconciling, setReconciling] = useState(false);
   const draft = useWorkpadDraft(store.api, setError);
   const selectedRef = useRef(selected); selectedRef.current = selected;
@@ -81,6 +84,7 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
   const revisionRef = useRef(revision); revisionRef.current = revision;
   const generation = useRef(0);
   const scopeGeneration = useRef(0);
+  useEffect(() => () => { ++generation.current; ++scopeGeneration.current; }, []);
   const listGeneration = useRef(0);
   const listCount = useRef(0);
   const loadingId = useRef<string | undefined>(undefined);
@@ -135,6 +139,7 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
     setNewTitle(""); setTitle(""); setRenameTarget(undefined); setMoveTarget(undefined); setDiscarding(false); setReconciling(false);
     setHistoryOpen(false); setViewMenuOpen(false);
     setError(""); setRefreshError(""); setBusy(false); setLeaveRequest(undefined);
+    setChecklistSaving(false); setChecklistRefreshRequired(false);
   }, [scopeKey, draft.setEditor, draft.saving, routeKey, contextKey, busy]);
   const run = async (action: (isCurrent: () => boolean) => Promise<void>, mutating = false) => {
     if (operationBusy.current) return;
@@ -183,6 +188,7 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
     if (token !== generation.current) return;
     selectedRef.current = workpad; revisionRef.current = latest; loadingId.current = undefined;
     setSelected(workpad); setRevisions(history.items); setRevisionCursor(history.nextCursor); setRevision(latest);
+    setChecklistRefreshRequired(false);
     draft.setEditor(undefined); setReconciling(false); setRenameTarget(undefined); setMoveTarget(undefined); setHistoryOpen(false);
   };
   const refreshDocument = async () => {
@@ -200,6 +206,7 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
     if (token !== generation.current || selectedRef.current?.id !== id || operationBusy.current) return;
     selectedRef.current = latest;
     setSelected(latest);
+    setChecklistRefreshRequired(false);
     const retained = revisionRef.current;
     setRevisions(retained && !history.items.some(item => item.revision === retained.revision)
       ? [...history.items, retained] : history.items);
@@ -347,6 +354,47 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
     if (selectedRef.current?.id === result.id) await load(result.id);
     if (token === scopeGeneration.current) await refreshList();
   };
+  const toggleChecklist = (viewed: WorkpadRevision, change: MarkdownChecklistToggle) => {
+    const current = selectedRef.current;
+    if (!open || operationBusy.current || checklistRefreshRequired || draft.ref.current || !current || current.archivedAt ||
+      current.id !== viewed.workpadId || current.revision !== viewed.revision || revisionRef.current !== viewed || change.source !== viewed.content) return;
+    const content = applyMarkdownChecklistToggle(change);
+    if (content === undefined) return;
+    const documentGeneration = generation.current;
+    void run(async isCurrent => {
+      const stillViewing = () => isCurrent() && generation.current === documentGeneration && revisionRef.current === viewed;
+      setChecklistSaving(true);
+      try {
+        try {
+          // The revision belongs to this exact rendered source. A fresher
+          // counter from the selected summary must never authorize old text.
+          await store.api.updateWorkpad(current.id, { expectedRevision: viewed.revision, edit: { kind: "replace", content } });
+        } catch (failure) {
+          if (!stillViewing()) return;
+          // A conflict or lost response needs an authoritative read, never an
+          // automatic retry with the old source and a newer revision counter.
+          try { await load(current.id); } catch {
+            if (isCurrent()) setChecklistRefreshRequired(true);
+          }
+          if (isCurrent()) setError(message(failure));
+          return;
+        }
+        if (!stillViewing()) return;
+        try {
+          await load(current.id);
+        } catch (failure) {
+          if (isCurrent()) {
+            setChecklistRefreshRequired(true);
+            setError(`Checklist change saved, but the updated workpad could not be loaded. ${message(failure)}`);
+          }
+          return;
+        }
+        if (isCurrent()) await refreshList();
+      } finally {
+        if (isCurrent()) setChecklistSaving(false);
+      }
+    }, true);
+  };
   const stale = Boolean(selected && draft.editor && selected.revision !== draft.editor.draft.baseRevision);
   const chooseRevision = async (number: number) => {
     const token = generation.current;
@@ -372,6 +420,14 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
   const latestRevision = selected?.revision;
   // An older revision on screen, as opposed to the document's latest.
   const viewedOlder = revision && latestRevision !== undefined && revision.revision !== latestRevision ? revision : undefined;
+  // Keep Markdown props stable on unrelated application publications, while
+  // invoking the callback belonging to the latest rendered revision/source.
+  const checklistToggleHandler = useRef<(change: MarkdownChecklistToggle) => void>(() => undefined);
+  checklistToggleHandler.current = change => { if (revision) toggleChecklist(revision, change); };
+  const onChecklistToggle = useCallback((change: MarkdownChecklistToggle) => checklistToggleHandler.current(change), []);
+  const checklistDisabled = Boolean(selected?.archivedAt || viewedOlder || checklistRefreshRequired || (busy && !checklistSaving));
+  const checklistControls = useMemo(() => ({ disabled: checklistDisabled, pending: checklistSaving, onToggle: onChecklistToggle }),
+    [checklistDisabled, checklistSaving, onChecklistToggle]);
   const noChanges = Boolean(draft.editor && draft.editor.text === draft.editor.baseText);
   const canSave = Boolean(draft.editor) && !busy && !draft.saving && !stale && !draft.editor?.remote && !noChanges;
   const browsedThread = scopeKind === "thread" && selectedThread !== (threadId ?? "") && Boolean(selectedThread);
@@ -384,6 +440,7 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
       if (!isCurrent()) return;
       draft.setEditor(undefined); selectedRef.current = undefined; revisionRef.current = undefined;
       setSelected(undefined); setRevision(undefined); setHistoryOpen(false); ++generation.current;
+      setChecklistRefreshRequired(false);
     });
   };
   const openRename = (target: WorkpadTarget) => { setTitle(target.title); setRenameTarget(target); };
@@ -456,9 +513,14 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
   const subtitle = selected ? (editing ? selected.title : revision?.title ?? selected.title) : undefined;
   useEffect(() => { host.setSubtitle(subtitle); }, [host, subtitle]);
 
-  const errorText = error || refreshError;
+  const errorText = error || refreshError || (checklistRefreshRequired ? "Reload this workpad before changing checklist items." : "");
   const errorCallout = errorText && <div className="workpads-alert">
-    <Callout tone="danger" role="alert">{errorText}</Callout>
+    <Callout tone="danger" role="alert" action={checklistRefreshRequired && selected && <Button variant="outline" size="sm" disabled={busy || editing || draft.saving}
+      onClick={() => {
+        // Recovery reloads replace the reading view, never an open draft.
+        if (draft.ref.current || draft.saving || selectedRef.current?.id !== selected.id) return;
+        void run(() => load(selected.id));
+      }}>Reload workpad</Button>}>{errorText}</Callout>
     <Button variant="ghost" size="icon-xs" className="workpads-alert-dismiss" aria-label="Dismiss error" onClick={() => { setError(""); setRefreshError(""); }}><X aria-hidden="true" /></Button>
   </div>;
 
@@ -584,6 +646,7 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
     <div className="workpads-doc-toolbar">
       {editing
         ? <span className="workpads-doc-meta workpads-sync" role="status">{syncLabel}</span>
+        : checklistSaving ? <span className="workpads-doc-meta workpads-sync" role="status">Saving checklist item…</span>
         : <span className="workpads-doc-meta" title={revision ? new Date(revision.createdAt).toLocaleString() : undefined}>{meta}</span>}
       <div className="workpads-doc-actions">
         {!editing && <Button variant={attribution ? "secondary" : "ghost"} size="icon-sm" aria-label="Show attribution" aria-pressed={attribution}
@@ -618,8 +681,8 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
         </DropdownMenu>}
         <Button variant="ghost" size="icon-sm"
           aria-label={editing ? "Done editing" : "Edit workpad"} title={editing ? "Done editing" : "Edit workpad"}
-          disabled={busy || (editing ? Boolean(draft.editor?.remote) : Boolean(selected.archivedAt))}
-          onClick={() => { if (editing) finishEditing(); else void run(beginEditing); }}>
+          disabled={busy || (editing ? Boolean(draft.editor?.remote) : Boolean(selected.archivedAt) || checklistRefreshRequired)}
+          onClick={() => { if (editing) finishEditing(); else if (!checklistRefreshRequired) void run(beginEditing); }}>
           {editing ? <Check aria-hidden="true" /> : <FilePenLine aria-hidden="true" />}
         </Button>
         {editing && <Button size="sm" className="workpads-save" aria-label="Save workpad" title="Save as a new revision (Ctrl+S)" aria-busy={(busy && operationMutating.current) || undefined}
@@ -668,7 +731,8 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
       <Textarea disabled={busy} aria-label="Workpad content" maxLength={WORKPAD_CONTENT_MAX_CHARACTERS} value={draft.editor.text}
         onChange={event => draft.setEditor({ ...draft.editor!, text: event.target.value })} spellCheck className="workpads-textarea" />
     </div> : <div className="workpads-reading">{revision && <>
-      <WorkpadDocument active={open} content={revision.content} attribution={revision.attribution} showAttribution={attribution} />
+      <WorkpadDocument active={open} content={revision.content} attribution={revision.attribution} showAttribution={attribution}
+        checklist={checklistControls} />
       <details className="workpads-revision-details">
         <summary>Revision details</summary>
         <p className="workpads-revision-byline">{revisionLabel(revision)} · {revision.author.name} · {new Date(revision.createdAt).toLocaleString()}</p>

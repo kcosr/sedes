@@ -66,6 +66,7 @@ type SummaryRow = {
   readonly automationErrorCode: string | null;
   readonly queuedInputCount: number;
   readonly stashedPromptCount: number;
+  readonly nonArchivedWorkpadCount: number;
   readonly pendingQuestionCount: number;
   readonly wake: 0 | 1;
   readonly automationContext: "triggered" | "failed" | null;
@@ -441,6 +442,16 @@ export class DatabaseApplicationThreadSummaryReader
             WHERE bookmark.tenant_id = ? AND bookmark.principal_id = ?
             GROUP BY bookmark.thread_id
           ),
+          scoped_workpads AS (
+            SELECT workpad.thread_id, count(*) AS non_archived_workpad_count
+            FROM requested_threads AS requested
+            CROSS JOIN workpads AS workpad
+              ON requested.id = workpad.thread_id
+            WHERE workpad.tenant_id = ? AND workpad.owner_principal_id = ?
+              AND workpad.scope_kind = 'thread' AND workpad.project_id IS NULL
+              AND workpad.archived_at IS NULL
+            GROUP BY workpad.thread_id
+          ),
           scoped_questions AS (
             SELECT question.thread_id,
               sum(json_array_length(question.payload_json, '$.questions')) AS pending_question_count
@@ -536,6 +547,7 @@ export class DatabaseApplicationThreadSummaryReader
             run.error_code AS automationErrorCode,
             coalesce(queue.queued_input_count, 0) AS queuedInputCount,
             coalesce(stash.stashed_prompt_count, 0) AS stashedPromptCount,
+            coalesce(workpad.non_archived_workpad_count, 0) AS nonArchivedWorkpadCount,
             coalesce(question.pending_question_count, 0) AS pendingQuestionCount,
             CASE
               WHEN principal.woke_at IS NOT NULL
@@ -599,6 +611,7 @@ export class DatabaseApplicationThreadSummaryReader
           LEFT JOIN scoped_stashes AS stash ON stash.thread_id = thread.id
           LEFT JOIN scoped_turn_bookmarks AS bookmark
             ON bookmark.thread_id = thread.id
+          LEFT JOIN scoped_workpads AS workpad ON workpad.thread_id = thread.id
           LEFT JOIN scoped_questions AS question ON question.thread_id = thread.id
           WHERE thread.tenant_id = ? AND thread.owner_principal_id = ?
           ORDER BY thread.last_activity_at DESC, thread.id
@@ -606,6 +619,8 @@ export class DatabaseApplicationThreadSummaryReader
       )
       .all(
         ...requestedThreadParameters,
+        scope.tenantId,
+        scope.principalId,
         scope.tenantId,
         scope.principalId,
         scope.tenantId,
@@ -669,6 +684,7 @@ export class DatabaseApplicationThreadSummaryReader
       automation: automation(row),
       queuedInputCount: row.queuedInputCount,
       stashedPromptCount: row.stashedPromptCount,
+      nonArchivedWorkpadCount: row.nonArchivedWorkpadCount,
       pendingQuestionCount: row.pendingQuestionCount,
       attention: attention(row),
     }));

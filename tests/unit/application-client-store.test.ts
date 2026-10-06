@@ -34,6 +34,7 @@ function thread(id: string, title = id): NormalizedApplicationThreadSummary {
     groupAssignmentRevision: 0,
     bookmarkRevision: 0,
     turnBookmarkCount: 0,
+    nonArchivedWorkpadCount: 0,
     threadRevision: 1,
     runState: "idle",
     terminalSummary: { runningCount: 0, retainedCount: 0 },

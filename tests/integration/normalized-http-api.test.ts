@@ -202,6 +202,7 @@ function summary(
     pinRevision: inventory.pinRevision,
     bookmarkRevision: inventory.bookmarkRevision,
     turnBookmarkCount: 0,
+    nonArchivedWorkpadCount: 0,
     groupId: groupAssignment.groupId,
     groupAssignmentRevision: groupAssignment.revision,
     threadRevision: thread.revision,
@@ -231,6 +232,7 @@ function threadSnapshot(
   const { thread, draft, inventory } = repository.getThread(scope, threadId);
   const {
     stashedPromptCount: _stashedPromptCount,
+    nonArchivedWorkpadCount: _nonArchivedWorkpadCount,
     pendingQuestionCount: _pendingQuestionCount,
     pinned: _pinned,
     pinRevision: _pinRevision,

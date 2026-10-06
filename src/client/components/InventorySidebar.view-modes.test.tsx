@@ -130,6 +130,7 @@ function makeThread(
     groupAssignmentRevision: 0,
     bookmarkRevision: 0,
     turnBookmarkCount: 0,
+    nonArchivedWorkpadCount: 0,
     threadRevision: 1,
     runState: "idle" as const,
     queuedInputCount: 0,
@@ -3149,6 +3150,7 @@ describe("InventorySidebar view modes", () => {
         stashedPromptCount: 1,
         pendingQuestionCount: 0,
         turnBookmarkCount: 2,
+        nonArchivedWorkpadCount: 1,
       }),
       makeThread("thread-b", "Thread without direct tasks"),
       makeThread("thread-c", "Thread with completed tasks"),
@@ -3177,6 +3179,10 @@ describe("InventorySidebar view modes", () => {
     const projectTaskRow = document.querySelector<HTMLElement>(
       '[data-thread-id="thread-a"]',
     )!;
+    const projectWorkpad = within(projectTaskRow).getByRole("img", { name: "1 workpad" });
+    expect(projectWorkpad.textContent).toBe("");
+    expect(projectWorkpad.querySelector(".lucide-notepad-text")).toBeInTheDocument();
+    expect(within(projectTaskRow).getByRole("img", { name: "1 open task" }).querySelector(".lucide-list-checks")).toBeInTheDocument();
     expect(
       within(projectTaskRow).getByRole("img", {
         name: "1 open task",
@@ -3203,6 +3209,7 @@ describe("InventorySidebar view modes", () => {
     const plainProjectRow = document.querySelector<HTMLElement>(
       '[data-thread-id="thread-b"]',
     )!;
+    expect(within(plainProjectRow).queryByRole("img", { name: /workpad/ })).toBeNull();
     expect(
       within(plainProjectRow).queryByRole("img", { name: /task/i }),
     ).toBeNull();
@@ -3220,6 +3227,10 @@ describe("InventorySidebar view modes", () => {
     const flatTaskRow = document.querySelector<HTMLElement>(
       '[data-thread-id="thread-a"]',
     )!;
+    const flatWorkpad = within(flatTaskRow).getByRole("img", { name: "1 workpad" });
+    expect(flatWorkpad.textContent).toBe("");
+    expect(flatWorkpad.querySelector(".lucide-notepad-text")).toBeInTheDocument();
+    expect(within(flatTaskRow).getByRole("img", { name: "1 open task" }).querySelector(".lucide-list-checks")).toBeInTheDocument();
     expect(
       within(flatTaskRow).getByRole("img", {
         name: "1 open task",
@@ -3241,6 +3252,7 @@ describe("InventorySidebar view modes", () => {
     const plainFlatRow = document.querySelector<HTMLElement>(
       '[data-thread-id="thread-b"]',
     )!;
+    expect(within(plainFlatRow).queryByRole("img", { name: /workpad/ })).toBeNull();
     expect(
       within(plainFlatRow).queryByRole("img", { name: /task/i }),
     ).toBeNull();

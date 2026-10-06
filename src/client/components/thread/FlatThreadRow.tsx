@@ -9,8 +9,9 @@ import {
   Box,
   Folder,
   ListPlus,
-  ListTodo,
+  ListChecks,
   Moon,
+  NotepadText,
   PencilLine,
   Repeat,
   Server,
@@ -498,7 +499,7 @@ export function FlatThreadRow({
         aria-label={taskLabel}
         title={taskLabel}
       >
-        <ListTodo size={14} strokeWidth={1.9} aria-hidden="true" />
+        <ListChecks size={14} strokeWidth={1.9} aria-hidden="true" />
       </span>
     ) : undefined;
 
@@ -548,6 +549,20 @@ export function FlatThreadRow({
         <Bookmark size={14} strokeWidth={1.9} aria-hidden="true" />
       </span>
     ) : undefined;
+
+  const workpadLabel = `${thread.nonArchivedWorkpadCount} workpad${thread.nonArchivedWorkpadCount === 1 ? "" : "s"}`;
+  const workpadIndicator = thread.nonArchivedWorkpadCount > 0 ? (
+    <span
+      className="flat-row-indicator flat-row-workpad-indicator"
+      data-indicator="workpad"
+      data-testid="flat-row-workpad-indicator"
+      role="img"
+      aria-label={workpadLabel}
+      title={workpadLabel}
+    >
+      <NotepadText size={14} strokeWidth={1.9} aria-hidden="true" />
+    </span>
+  ) : undefined;
 
   const terminalLabel = `${thread.terminalSummary.runningCount} running terminal${thread.terminalSummary.runningCount === 1 ? "" : "s"}, ${thread.terminalSummary.retainedCount} retained`;
   const terminalIndicator =
@@ -612,6 +627,7 @@ export function FlatThreadRow({
     taskIndicator ||
     stashIndicator ||
     bookmarkIndicator ||
+    workpadIndicator ||
     terminalIndicator ? (
       <span className="flat-row-indicators" data-testid="flat-row-indicators">
         {wakeIndicator}
@@ -619,6 +635,7 @@ export function FlatThreadRow({
         {taskIndicator}
         {stashIndicator}
         {bookmarkIndicator}
+        {workpadIndicator}
         {terminalIndicator}
       </span>
     ) : undefined;

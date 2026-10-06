@@ -29,6 +29,7 @@ import {
 import { getPanelPresentation } from "../../app/settings.js";
 import { resolvePanelPresentation } from "../../workspace-panels/panel-presentation.js";
 import { rehypeMarkdownSourcePositions } from "./markdown-source-positions.js";
+import { remarkChecklistPositions, rehypeChecklistInputs, markdownChecklistState, type MarkdownChecklistControls } from "./markdown-checklists.js";
 import { MermaidDiagram } from "./MermaidDiagram.js";
 import {
   cachedMarkdownHighlight,
@@ -51,6 +52,7 @@ type MarkdownRenderState = {
   readonly source: string;
   readonly streaming: boolean;
   readonly copyCodeBlocks: boolean;
+  readonly checklist?: MarkdownChecklistControls;
 };
 
 const MarkdownRenderContext = createContext<MarkdownRenderState>({
@@ -58,6 +60,26 @@ const MarkdownRenderContext = createContext<MarkdownRenderState>({
   streaming: false,
   copyCodeBlocks: false,
 });
+
+const CHECKLIST_INPUT_COMPONENT: NonNullable<MarkdownComponents["input"]> = ({ node, ...props }) => {
+  const { source, checklist } = useContext(MarkdownRenderContext);
+  const start = node?.properties["data-checklist-start"];
+  const end = node?.properties["data-checklist-end"];
+  if (!checklist || typeof start !== "number" || typeof end !== "number") return <input {...props} />;
+  const state = markdownChecklistState(source, start, end);
+  if (state === undefined || state !== Boolean(props.checked)) {
+    return <input {...props} disabled title="This checklist item cannot be changed from the preview." />;
+  }
+  return <label className="markdown-checklist-control">
+    <input {...props} disabled={checklist.disabled} aria-disabled={checklist.pending || undefined}
+      onChange={event => {
+        if (!checklist.disabled && !checklist.pending) checklist.onToggle({ source, start, end, checked: event.currentTarget.checked });
+      }} />
+  </label>;
+};
+
+const CHECKLIST_REMARK_PLUGINS = [remarkGfm, remarkChecklistPositions];
+const DEFAULT_REMARK_PLUGINS = [remarkGfm];
 
 // Keep the pre component identity stable across MarkdownContent renders.
 // react-markdown treats a new component function as a new subtree, which
@@ -135,6 +157,7 @@ export const MarkdownContent = memo(function MarkdownContent({
   fileLinkSource,
   sourcePositionMetadata = false,
   rehypePlugins = NO_REHYPE_PLUGINS,
+  checklist,
 }: {
   children: string;
   /** Enables fenced Mermaid recognition. */
@@ -149,18 +172,23 @@ export const MarkdownContent = memo(function MarkdownContent({
   sourcePositionMetadata?: boolean;
   /** Optional document-specific transforms, applied after source metadata. */
   rehypePlugins?: NonNullable<React.ComponentProps<typeof ReactMarkdown>["rehypePlugins"]>;
+  /** Opt-in mutations supplied by an editable document owner. */
+  checklist?: MarkdownChecklistControls;
 }): React.JSX.Element {
+  const checklistEnabled = checklist !== undefined;
   const documentPlugins = useMemo(
-    () => sourcePositionMetadata
-      ? [...SOURCE_POSITION_PLUGINS, ...rehypePlugins]
-      : rehypePlugins,
-    [sourcePositionMetadata, rehypePlugins],
+    () => [
+      ...(sourcePositionMetadata ? SOURCE_POSITION_PLUGINS : []),
+      ...(checklistEnabled ? [rehypeChecklistInputs] : []),
+      ...rehypePlugins,
+    ],
+    [sourcePositionMetadata, rehypePlugins, checklistEnabled],
   );
   const workspaceFileLinks = useWorkspaceFileLinkHandler();
   const [fileLinkNotice, setFileLinkNotice] = useState<string>();
   const renderState = useMemo(
-    () => ({ source: children, streaming, copyCodeBlocks }),
-    [children, copyCodeBlocks, streaming],
+    () => ({ source: children, streaming, copyCodeBlocks, checklist }),
+    [children, copyCodeBlocks, streaming, checklist],
   );
   const mounted = useRef(true);
   useEffect(() => {
@@ -176,7 +204,7 @@ export const MarkdownContent = memo(function MarkdownContent({
     <div className="markdown">
       <MarkdownRenderContext.Provider value={renderState}>
         <ReactMarkdown
-          remarkPlugins={[remarkGfm]}
+          remarkPlugins={checklistEnabled ? CHECKLIST_REMARK_PLUGINS : DEFAULT_REMARK_PLUGINS}
           rehypePlugins={documentPlugins}
           skipHtml
           urlTransform={(url, key) =>
@@ -186,6 +214,7 @@ export const MarkdownContent = memo(function MarkdownContent({
               : defaultUrlTransform(url)
           }
           components={{
+            input: CHECKLIST_INPUT_COMPONENT,
             span: MarkdownStreamSpan,
             pre: enableMermaid ? MERMAID_PRE_COMPONENT : PLAIN_PRE_COMPONENT,
             a({ href, children: linkChildren }) {

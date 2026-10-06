@@ -370,6 +370,7 @@ export const ThreadHeader = memo(function ThreadHeader({
       retainedCount: 0,
     },
     stashedPromptCount: snapshot.stashes.length,
+    nonArchivedWorkpadCount: applicationPin?.nonArchivedWorkpadCount ?? 0,
     pendingQuestionCount: applicationPin?.pendingQuestionCount ?? 0,
     attention: {
       wake: Boolean(snapshot.attention.wake),

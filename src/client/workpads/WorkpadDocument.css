@@ -1,4 +1,26 @@
 .workpad-document { position: relative; min-width: 0; overflow-wrap: anywhere; }
+.workpad-document .task-list-item { list-style: none; }
+/* A checklist is a compact list, including GFM's paragraph-wrapped items. */
+.workpad-document .task-list-item > p:first-child { margin-bottom: 0; }
+.workpad-document .markdown-checklist-control {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--control-xs);
+  min-height: var(--control-xs);
+  vertical-align: middle;
+  cursor: pointer;
+}
+.workpad-document .markdown-checklist-control:has(input:disabled),
+.workpad-document .markdown-checklist-control:has(input[aria-disabled="true"]) { cursor: default; }
+.workpad-document .markdown-checklist-control input {
+  accent-color: var(--primary);
+  cursor: inherit;
+}
+.workpad-document .markdown-checklist-control input:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
 .workpad-attribution { color: inherit; padding: 0; border-radius: 2px; cursor: pointer; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
 /* Attribution marks open author details, but their prose remains copyable. */
 .workpad-attribution {

@@ -217,9 +217,12 @@ function PanelLayoutReady({
       ).length,
     [applicationState.snapshot?.tasks, threadId],
   );
-  const terminalSummary = applicationState.snapshot?.threads.find(
+  const applicationThread = applicationState.snapshot?.threads.find(
     ({ id }) => id === threadId,
-  )?.terminalSummary;
+  );
+  const terminalSummary = applicationThread?.terminalSummary;
+  const workpadCount = active && applicationState.authoritative
+    ? applicationThread?.nonArchivedWorkpadCount : undefined;
   const environmentPalette = useEnvironmentPalette();
   const tones = useMemo(
     () => resolveEnvironmentPaletteTones(environmentIds, environmentPalette),
@@ -1771,6 +1774,10 @@ function PanelLayoutReady({
                 onToggle={toggleWorkpadsPanel}
                 className="workpads-panel-toggle"
                 testId="workpads-panel-toggle"
+                badge={workpadCount === undefined ? undefined : {
+                  count: workpadCount,
+                  label: `${workpadCount} ${workpadCount === 1 ? "workpad" : "workpads"} in this thread`,
+                }}
               />
             )}
           </div>

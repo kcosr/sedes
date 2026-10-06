@@ -118,7 +118,7 @@ function fixture(latestVersion = backendNormalizedMigrations.at(-1)!.version) {
 function toolsFixture() {
   const f = fixture();
   const authorityReader = new DatabaseAgentToolSourceAuthority(f.database, new Uint8Array(32).fill(7));
-  const service = new WorkpadAgentToolService({ workpads: new WorkpadService(f.workpads, { publishWorkpadChange: async () => undefined }), authorityReader });
+  const service = new WorkpadAgentToolService({ workpads: new WorkpadService(f.workpads, { publishWorkpadChange: async () => undefined, handoffThreadChange: () => undefined }), authorityReader });
   const definitions = createWorkpadToolDefinitions(service);
   const registry = new AgentToolRegistry();
   definitions.forEach(definition => registry.register(definition));

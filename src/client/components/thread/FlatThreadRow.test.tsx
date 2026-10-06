@@ -36,6 +36,7 @@ function makeThread(
     groupAssignmentRevision: 0,
     bookmarkRevision: 0,
     turnBookmarkCount: 0,
+    nonArchivedWorkpadCount: 0,
     threadRevision: 0,
     runState: "idle",
     queuedInputCount: 0,
@@ -359,10 +360,10 @@ describe("status badges and wake indicator", () => {
     expect(screen.queryByRole("img", { name: "Needs attention" })).toBeNull();
   });
 
-  it("shows stash and bookmark overlays after fork and tasks, and omits zero", () => {
+  it("shows stash, bookmark, and workpad icons after fork and tasks, and omits zero", () => {
     const { rerender } = render(
       <FlatThreadRow
-        thread={makeThread({ stashedPromptCount: 2, turnBookmarkCount: 3 })}
+        thread={makeThread({ stashedPromptCount: 2, turnBookmarkCount: 3, nonArchivedWorkpadCount: 2 })}
         showBackendBrand
         density="compact"
         fork={fork}
@@ -374,11 +375,17 @@ describe("status badges and wake indicator", () => {
       "task",
       "stash",
       "bookmark",
+      "workpad",
     ]);
     expect(screen.getByRole("img", { name: "2 stashed prompts" })).toBeTruthy();
     expect(
       screen.getByRole("img", { name: "3 bookmarked turns" }),
     ).toBeTruthy();
+
+    const workpad = screen.getByRole("img", { name: "2 workpads" });
+    expect(workpad.textContent).toBe("");
+    expect(workpad.querySelector(".lucide-notepad-text")).toBeTruthy();
+    expect(screen.getByRole("img", { name: "1 open task" }).querySelector(".lucide-list-checks")).toBeTruthy();
     expect(
       screen
         .getByRole("img", { name: "2 stashed prompts" })
@@ -399,6 +406,7 @@ describe("status badges and wake indicator", () => {
     );
     expect(screen.queryByRole("img", { name: /stashed prompt/ })).toBeNull();
     expect(screen.queryByRole("img", { name: /bookmarked turn/ })).toBeNull();
+    expect(screen.queryByRole("img", { name: /workpad/ })).toBeNull();
   });
 
   it("compact shows alert and queued chips with wake in the trailing list", () => {

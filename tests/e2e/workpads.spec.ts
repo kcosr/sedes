@@ -63,6 +63,7 @@ test("Workpads retain attributed history, reconcile shared drafts, and move betw
   const created = page.waitForResponse(response => response.request().method() === "POST" && new URL(response.url()).pathname === "/api/workpads" && response.ok());
   await addRow.press("Enter");
   const workpad = workpadSchema.parse((await (await created).json()).workpad);
+  await expect(workpadsToggle).toHaveAccessibleName("Close Workpads panel, 1 workpad in this thread");
   // A new workpad opens ready for its first text; leave the editor to watch the viewer.
   const editor = panel.getByRole("textbox", { name: "Workpad content", exact: true });
   await expect(editor).toBeVisible();
@@ -110,6 +111,7 @@ test("Workpads retain attributed history, reconcile shared drafts, and move betw
   await capture(page, testInfo, "workpads-follow-thread.png");
   await page.goBack();
   await expect(page).toHaveURL(threadPath);
+  await expect(workpadsToggle).toHaveAccessibleName("Close Workpads panel, 1 workpad in this thread");
   await expect.poll(listedScope).toEqual({ kind: "thread", threadId, projectId: null });
   await panel.getByRole("button", { name: "Authentication integration", exact: true }).click();
   await expect(panel.locator(".workpad-document")).toContainText("15-minute timeout");
@@ -123,7 +125,7 @@ test("Workpads retain attributed history, reconcile shared drafts, and move betw
   await page.getByRole("menuitemradio", { name: "Right", exact: true }).click();
   await page.getByRole("button", { name: "Collapse Workpads panel", exact: true }).click();
   await expect(panel).toBeHidden();
-  await page.getByTestId("workspace-workbench-bar").getByRole("button", { name: "Show collapsed Workpads panel", exact: true }).click();
+  await page.getByTestId("workspace-workbench-bar").getByRole("button", { name: "Show collapsed Workpads panel, 1 workpad in this thread", exact: true }).click();
   await expect(panel.locator(".workpad-document")).toContainText("15-minute timeout");
   await panel.getByRole("button", { name: "Show attribution", exact: true }).click();
   const marks = panel.locator("[data-workpad-attribution]");
@@ -274,6 +276,7 @@ test("Workpads retain attributed history, reconcile shared drafts, and move betw
   await expect(page.getByRole("menuitem", { name: /^This thread/ })).toBeDisabled();
   await page.getByRole("menuitem", { name: "This project", exact: true }).click();
   await expect.poll(async () => (await readWorkpad(page, workpad.id)).scope).toEqual({ kind: "project", projectId });
+  await expect(workpadsToggle).toHaveAccessibleName("Close Workpads panel");
   await expect(panel.locator(".workpads-doc-meta")).toContainText("Project · workpad-workspace");
   const back = pane.getByRole("button", { name: "Back to workpads", exact: true });
   const row = panel.getByRole("button", { name: "Authentication integration", exact: true });
