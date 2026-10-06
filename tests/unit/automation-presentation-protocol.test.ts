@@ -4,6 +4,7 @@ import {
   threadAutomationDefinitionSchema,
   threadAutomationSummarySchema,
 } from "../../src/shared/protocol/automation-presentation.js";
+import { normalizedThreadSummarySchema } from "../../src/shared/protocol/conversation.js";
 
 describe("normalized automation protocol", () => {
   it("bounds prompts by persisted UTF-8 bytes, not JavaScript length", () => {
@@ -76,5 +77,41 @@ describe("normalized automation protocol", () => {
         precheck: null,
       }),
     ).toMatchObject({ createdAt });
+  });
+
+  it("projects schedule detail and a bounded prompt preview on thread summaries", () => {
+    const automation =
+      normalizedThreadSummarySchema.shape.automation.unwrap();
+    const projected = {
+      status: "enabled",
+      runMode: "clone",
+      scheduleKind: "cron",
+      schedule: {
+        kind: "cron",
+        expression: "15 3 * * 1-5",
+        timeZone: "America/Chicago",
+      },
+      misfirePolicy: "skip",
+      promptPreview: "Review the repository and summarize…",
+      revision: 4,
+      hasPrecheck: true,
+    } as const;
+
+    expect(automation.parse(projected)).toEqual(projected);
+    for (const field of ["schedule", "misfirePolicy", "promptPreview"] as const) {
+      const { [field]: _omitted, ...missing } = projected;
+      expect(automation.safeParse(missing).success).toBe(false);
+    }
+    expect(
+      automation.safeParse({ ...projected, promptPreview: "x".repeat(161) })
+        .success,
+    ).toBe(false);
+    expect(
+      automation.safeParse({ ...projected, promptPreview: "" }).success,
+    ).toBe(false);
+    // The full prompt stays behind the automation route.
+    expect(
+      automation.safeParse({ ...projected, prompt: "Review" }).success,
+    ).toBe(false);
   });
 });

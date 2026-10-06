@@ -18,6 +18,7 @@ import type {
   AutomationRunRecord,
   AutomationSchedule,
 } from "./automation-models.js";
+import { presentAutomationSchedule } from "./automation-presentation.js";
 import {
   AutomationScheduleEvaluator,
   AutomationScheduleValidationError,
@@ -181,17 +182,6 @@ export class AutomationService implements DurableDeadlineSource {
     this.#assertThread(scope, threadId);
     const definition = this.#definitionForThread(scope, threadId);
     return this.presentDefinition(scope, definition);
-  }
-
-  findSummaryForThread(
-    scope: RequestScope,
-    threadId: string,
-  ): ThreadAutomationSummary | null {
-    const definition = this.#repository.findDefinitionForThread(
-      scope,
-      threadId,
-    );
-    return definition ? this.presentSummary(scope, definition) : null;
   }
 
   update(
@@ -686,7 +676,7 @@ export class AutomationService implements DurableDeadlineSource {
     return {
       ...this.presentSummary(scope, definition),
       prompt: definition.prompt,
-      schedule: toBrowserSchedule(definition.schedule),
+      schedule: presentAutomationSchedule(definition.schedule),
       misfirePolicy: definition.misfirePolicy,
       precheck: definition.precheck,
     };
@@ -1007,23 +997,6 @@ function presentRun(run: AutomationRunRecord): ThreadAutomationRun {
           },
         }),
   };
-}
-
-function toBrowserSchedule(
-  schedule: AutomationSchedule,
-): ProtocolAutomationSchedule {
-  switch (schedule.kind) {
-    case "date_time":
-      return { kind: schedule.kind, runAt: iso(schedule.runAt) };
-    case "interval":
-      return {
-        kind: schedule.kind,
-        anchorAt: iso(schedule.anchorAt),
-        everySeconds: schedule.everySeconds,
-      };
-    case "cron":
-      return schedule;
-  }
 }
 
 function definitionStatus(

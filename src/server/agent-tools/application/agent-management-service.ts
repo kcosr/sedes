@@ -89,8 +89,17 @@ export type AgentThreadSummary = {
   readonly lifecycle: "active" | "snoozed" | "settled" | "archived";
   readonly pinned: boolean;
   readonly activity: AgentThreadActivity;
-  readonly automation: NormalizedThreadSummary["automation"];
+  readonly automation: AgentThreadAutomation | null;
 };
+
+/**
+ * The automation summary frozen by the `thread.list` output schema; schedule
+ * detail and the prompt preview stay browser projection fields.
+ */
+export type AgentThreadAutomation = Omit<
+  NonNullable<NormalizedThreadSummary["automation"]>,
+  "schedule" | "misfirePolicy" | "promptPreview"
+>;
 
 export type AgentThreadListScope =
   | { readonly kind: "default_environment" }
@@ -550,7 +559,7 @@ export class AgentManagementService {
           lifecycle: summary.inventoryState,
           pinned: row.pinned === 1,
           activity: activity(runState),
-          automation: summary.automation,
+          automation: agentThreadAutomation(summary.automation),
         };
       }),
     );
@@ -757,4 +766,17 @@ export class AgentManagementService {
       ),
     );
   }
+}
+
+function agentThreadAutomation(
+  automation: NormalizedThreadSummary["automation"],
+): AgentThreadAutomation | null {
+  if (!automation) return null;
+  const {
+    schedule: _schedule,
+    misfirePolicy: _misfirePolicy,
+    promptPreview: _promptPreview,
+    ...summary
+  } = automation;
+  return summary;
 }

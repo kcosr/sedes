@@ -27,6 +27,12 @@ import {
 import type { ValidatedWorkspace } from "../execution/contracts.js";
 import type { DatabaseConversationTargetStore } from "./database-conversation-adapters.js";
 import { boundDisplayText } from "./payload-policy.js";
+import {
+  latestAutomationRunJoin,
+  projectThreadAutomationSummary,
+  threadAutomationSummaryColumns,
+  type ThreadAutomationSummaryRow,
+} from "../application/thread-automation-summary.js";
 import type {
   AuthorizedThreadApplicationState,
   ThreadApplicationInventoryReader,
@@ -71,31 +77,6 @@ export const directThreadExecutionWorkspaceReader: ThreadExecutionWorkspaceReade
     read: () => ({ kind: "direct" as const }),
   });
 
-type AutomationRow = {
-  readonly status: "enabled" | "paused";
-  readonly runMode: "same_thread" | "clone";
-  readonly scheduleKind: "date_time" | "interval" | "cron";
-  readonly nextRunAt: number | null;
-  readonly revision: number;
-  readonly hasPrecheck: 0 | 1;
-  readonly runId: string | null;
-  readonly runState:
-    | "claimed"
-    | "dispatching"
-    | "queued"
-    | "running"
-    | "completed"
-    | "failed"
-    | "skipped"
-    | "uncertain"
-    | null;
-  readonly occurrence: "scheduled" | "manual" | null;
-  readonly scheduledFor: number | null;
-  readonly finishedAt: number | null;
-  readonly resultThreadId: string | null;
-  readonly errorCode: string | null;
-};
-
 function iso(milliseconds: number): string {
   return new Date(milliseconds).toISOString();
 }
@@ -108,37 +89,9 @@ function automation(
   const row = database
     .prepare(
       `
-        SELECT
-          CASE WHEN definition.enabled = 1 THEN 'enabled' ELSE 'paused' END
-            AS status,
-          definition.run_mode AS runMode,
-          definition.schedule_kind AS scheduleKind,
-          definition.next_run_at AS nextRunAt,
-          definition.revision,
-          CASE WHEN definition.precheck_command IS NULL THEN 0 ELSE 1 END
-            AS hasPrecheck,
-          run.id AS runId, run.state AS runState,
-          run.occurrence_kind AS occurrence,
-          run.scheduled_for AS scheduledFor,
-          run.finished_at AS finishedAt,
-          coalesce(run.child_thread_id, run.anchor_thread_id) AS resultThreadId,
-          run.error_code AS errorCode
+        SELECT ${threadAutomationSummaryColumns("definition", "run")}
         FROM automation_definitions AS definition
-        LEFT JOIN automation_runs AS run
-          ON run.tenant_id = definition.tenant_id
-          AND run.owner_principal_id = definition.owner_principal_id
-          AND run.automation_id = definition.id
-          AND run.id = (
-            SELECT candidate.id
-            FROM automation_runs AS candidate
-            WHERE candidate.tenant_id = definition.tenant_id
-              AND candidate.owner_principal_id =
-                definition.owner_principal_id
-              AND candidate.automation_id = definition.id
-            ORDER BY candidate.scheduled_for DESC,
-              candidate.created_at DESC, candidate.id DESC
-            LIMIT 1
-          )
+        ${latestAutomationRunJoin("definition", "run")}
         WHERE definition.tenant_id = ?
           AND definition.owner_principal_id = ?
           AND definition.anchor_thread_id = ?
@@ -146,36 +99,9 @@ function automation(
       `,
     )
     .get(scope.tenantId, scope.principalId, applicationThreadId) as
-    AutomationRow | undefined;
-  if (!row) return null;
-  return {
-    status: row.status,
-    runMode: row.runMode,
-    scheduleKind: row.scheduleKind,
-    ...(row.nextRunAt === null ? {} : { nextRunAt: iso(row.nextRunAt) }),
-    revision: row.revision,
-    hasPrecheck: row.hasPrecheck === 1,
-    ...(row.runId === null ||
-    row.runState === null ||
-    row.occurrence === null ||
-    row.scheduledFor === null
-      ? {}
-      : {
-          lastRun: {
-            id: row.runId,
-            state: row.runState,
-            occurrence: row.occurrence,
-            scheduledFor: iso(row.scheduledFor),
-            ...(row.finishedAt === null
-              ? {}
-              : { finishedAt: iso(row.finishedAt) }),
-            ...(row.resultThreadId === null
-              ? {}
-              : { resultThreadId: row.resultThreadId }),
-            ...(row.errorCode === null ? {} : { errorCode: row.errorCode }),
-          },
-        }),
-  };
+    | ThreadAutomationSummaryRow
+    | undefined;
+  return row ? projectThreadAutomationSummary(row) : null;
 }
 
 /**

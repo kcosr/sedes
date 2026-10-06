@@ -83,18 +83,13 @@ const runColumns = `
 type DefinitionRow = Omit<
   AutomationDefinitionRecord,
   "enabled" | "schedule" | "precheck"
-> & {
-  enabled: 0 | 1;
-  precheckCommand: string | null;
-  precheckTimeoutSeconds: number | null;
-  precheckIncludeStdout: 0 | 1 | null;
-  scheduleKind: AutomationSchedule["kind"];
-  runAt: number | null;
-  intervalAnchorAt: number | null;
-  intervalSeconds: number | null;
-  cronExpression: string | null;
-  timeZone: string | null;
-};
+> &
+  AutomationScheduleColumns & {
+    enabled: 0 | 1;
+    precheckCommand: string | null;
+    precheckTimeoutSeconds: number | null;
+    precheckIncludeStdout: 0 | 1 | null;
+  };
 
 type RunRow = Omit<
   AutomationRunRecord,
@@ -1753,27 +1748,40 @@ function flattenSchedule(schedule: AutomationSchedule): {
   }
 }
 
-function definitionFromRow(row: DefinitionRow): AutomationDefinitionRecord {
-  let schedule: AutomationSchedule;
+/** Flat definition schedule columns, as selected by every automation reader. */
+export type AutomationScheduleColumns = {
+  readonly scheduleKind: AutomationSchedule["kind"];
+  readonly runAt: number | null;
+  readonly intervalAnchorAt: number | null;
+  readonly intervalSeconds: number | null;
+  readonly cronExpression: string | null;
+  readonly timeZone: string | null;
+};
+
+/** Inverse of {@link flattenSchedule}; the table CHECKs guarantee the kind's columns. */
+export function automationScheduleFromColumns(
+  row: AutomationScheduleColumns,
+): AutomationSchedule {
   switch (row.scheduleKind) {
     case "date_time":
-      schedule = { kind: row.scheduleKind, runAt: row.runAt! };
-      break;
+      return { kind: row.scheduleKind, runAt: row.runAt! };
     case "interval":
-      schedule = {
+      return {
         kind: row.scheduleKind,
         anchorAt: row.intervalAnchorAt!,
         everySeconds: row.intervalSeconds!,
       };
-      break;
     case "cron":
-      schedule = {
+      return {
         kind: row.scheduleKind,
         expression: row.cronExpression!,
         timeZone: row.timeZone!,
       };
-      break;
   }
+}
+
+function definitionFromRow(row: DefinitionRow): AutomationDefinitionRecord {
+  const schedule = automationScheduleFromColumns(row);
   return {
     tenantId: row.tenantId,
     ownerPrincipalId: row.ownerPrincipalId,
