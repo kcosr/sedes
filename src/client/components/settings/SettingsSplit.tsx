@@ -39,28 +39,33 @@ export function SettingsSplit({ listLabel, list, children, wide = false, empty =
   );
 }
 
+/** A detail or editor pane titles itself under its page (2); a top-level page outside Settings is the page (1). */
+export type SettingsHeadingLevel = 1 | 2;
+
 /**
  * The header of a detail or editor pane, on the settings page header's
  * anatomy: in the stacked layout it stands in for the page header. The
  * heading takes focus when its location opens (`data-detail-heading`).
  */
-export function SettingsDetailHeader({ back, icon, title, headingRef, tags, status, description, actions }: {
+export function SettingsDetailHeader({ back, icon, title, headingRef, headingLevel = 2, tags, status, description, actions }: {
   readonly back?: ReactNode;
   readonly icon?: ReactNode;
   readonly title: ReactNode;
   readonly headingRef?: Ref<HTMLHeadingElement>;
+  readonly headingLevel?: SettingsHeadingLevel;
   readonly tags?: ReactNode;
   readonly status?: ReactNode;
   readonly description?: ReactNode;
   readonly actions?: ReactNode;
 }): React.JSX.Element {
+  const Heading = headingLevel === 1 ? "h1" : "h2";
   return <header data-slot="settings-page-header">
     {back}
     <div data-slot="settings-page-heading">
       <div data-slot="settings-page-titles">
         <div data-slot="settings-detail-title-row">
           {icon ? <span data-slot="settings-detail-icon" aria-hidden="true">{icon}</span> : null}
-          <h2 ref={headingRef} tabIndex={-1} data-slot="settings-page-title" data-detail-heading="">{title}</h2>
+          <Heading ref={headingRef} tabIndex={-1} data-slot="settings-page-title" data-detail-heading="">{title}</Heading>
           {tags || status ? <span data-slot="settings-detail-meta">{tags}{status}</span> : null}
         </div>
         {description ? <p data-slot="settings-page-description">{description}</p> : null}
@@ -75,9 +80,19 @@ export interface SettingsEditorSection {
   readonly label: string;
 }
 
+/** The nearest scrolling ancestor: the settings column, or a page's own scroller. */
+function scrollerOf(element: HTMLElement | null): HTMLElement | null {
+  for (let node = element?.parentElement; node; node = node.parentElement) {
+    const { overflowY } = getComputedStyle(node);
+    if (overflowY === "auto" || overflowY === "scroll") return node;
+  }
+  return null;
+}
+
 /**
- * Section anchors for a long editor. They scroll the settings column rather
- * than change the URL, and mark the section in view.
+ * Section anchors for a long editor. They scroll the editor's scroller (the
+ * settings column, or a page's own) rather than change the URL, and mark
+ * the section in view.
  */
 export function SettingsSectionAnchors({ sections }: { readonly sections: readonly SettingsEditorSection[] }): React.JSX.Element {
   const nav = useRef<HTMLElement>(null);
@@ -88,7 +103,7 @@ export function SettingsSectionAnchors({ sections }: { readonly sections: readon
   useEffect(() => {
     // Stuck under the scroller's top padding, the bar masks that strip so
     // content does not show through above it.
-    const scroller = nav.current?.closest(".settings-content");
+    const scroller = scrollerOf(nav.current);
     if (typeof IntersectionObserver !== "function" || !scroller || !sentinel.current) return;
     const inset = Number.parseFloat(getComputedStyle(scroller).paddingTop) || 0;
     const observer = new IntersectionObserver(([entry]) => setStuck(Boolean(entry && !entry.isIntersecting && entry.boundingClientRect.top < (entry.rootBounds?.top ?? 0) + inset)),
@@ -97,7 +112,7 @@ export function SettingsSectionAnchors({ sections }: { readonly sections: readon
     return () => observer.disconnect();
   }, []);
   useEffect(() => {
-    const scroller = nav.current?.closest(".settings-content");
+    const scroller = scrollerOf(nav.current);
     if (typeof IntersectionObserver !== "function" || !scroller) return;
     const visible = new Map<string, boolean>();
     const observer = new IntersectionObserver((entries) => {
@@ -126,12 +141,13 @@ export function SettingsSectionAnchors({ sections }: { readonly sections: readon
  * The frame of an editor in the detail pane: a way back, the title, section
  * anchors, form-level errors, the sections and a sticky save bar.
  */
-export function SettingsEditor({ label, back, title, headingRef, description, sections, errors, onSubmit, saveBar, children, className }: {
+export function SettingsEditor({ label, back, title, headingRef, headingLevel, description, sections, errors, onSubmit, saveBar, children, className }: {
   /** Names the editor region. */
   readonly label: string;
   readonly back?: ReactNode;
   readonly title: ReactNode;
   readonly headingRef?: Ref<HTMLHeadingElement>;
+  readonly headingLevel?: SettingsHeadingLevel;
   readonly description?: ReactNode;
   readonly sections?: readonly SettingsEditorSection[];
   readonly errors?: ReactNode;
@@ -141,7 +157,7 @@ export function SettingsEditor({ label, back, title, headingRef, description, se
   readonly className?: string;
 }): React.JSX.Element {
   return <section aria-label={label} data-slot="settings-editor" className={className}>
-    <SettingsDetailHeader back={back} title={title} headingRef={headingRef} description={description} />
+    <SettingsDetailHeader back={back} title={title} headingRef={headingRef} headingLevel={headingLevel} description={description} />
     {errors}
     <div data-slot="settings-editor-body">
       {sections && sections.length > 1 ? <SettingsSectionAnchors sections={sections} /> : null}

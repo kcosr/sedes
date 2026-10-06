@@ -94,6 +94,32 @@ describe("SettingsEditor", () => {
     expect(onSubmit).toHaveBeenCalledOnce();
   });
 
+  it("titles a top-level page at level 1 and follows its sections in the page's own scroller", () => {
+    const roots: (Element | Document | null | undefined)[] = [];
+    vi.stubGlobal("IntersectionObserver", class {
+      constructor(_callback: IntersectionObserverCallback, options?: IntersectionObserverInit) {
+        roots.push(options?.root);
+      }
+      observe(): void {}
+      disconnect(): void {}
+    });
+    try {
+      render(
+        <div data-testid="page-scroller" style={{ overflowY: "auto" }}>
+          <SettingsEditor label="Automation editor" title="Edit automation" headingLevel={1}
+            sections={[{ id: "one", label: "One" }, { id: "two", label: "Two" }]} onSubmit={vi.fn()} saveBar={null}>
+            <SettingsSection id="one" title="One"><p>First</p></SettingsSection>
+            <SettingsSection id="two" title="Two"><p>Second</p></SettingsSection>
+          </SettingsEditor>
+        </div>,
+      );
+      expect(screen.getByRole("heading", { name: "Edit automation", level: 1 })).toBeVisible();
+      expect(roots).toEqual([screen.getByTestId("page-scroller"), screen.getByTestId("page-scroller")]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("drops the anchors for a single section", () => {
     render(
       <SettingsEditor label="Editor" title="Edit" sections={[{ id: "only", label: "Only" }]} onSubmit={vi.fn()} saveBar={null}>
