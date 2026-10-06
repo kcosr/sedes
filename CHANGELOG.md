@@ -218,6 +218,7 @@
   Android is in the background and native voice is already ready. The request
   waits for turn completion and reply playback without changing the screen,
   including when the app reopens.
+  ([#57](https://github.com/kcosr/sedes/pull/57))
 
 - Workpads show the thread's active count in the header and an icon in the
   sidebar. Toggle checklist boxes directly in saved documents; each change
