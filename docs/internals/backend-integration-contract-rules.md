@@ -3507,8 +3507,11 @@ Do not reroute to another client, replay after reconnect, or start microphone
 capture on server tool completion before the selected client's playback drains.
 
 Navigation and default-thread writes authorize the exact destination through
-normal thread/environment policy. Settings use the client's revision and local
-profile/identity persistence. Unsupported voice, no active interaction, and local
+normal thread/environment policy. Settings use the client's revision and
+device-owned preferences with exact profile/origin/identity thread selections.
+Sedes authentication and input recovery remain connection-scoped; speech
+credentials belong to the device's selected speech provider and endpoint.
+Unsupported voice, no active interaction, and local
 foreground/permission/setup gates must be reported truthfully. Test all compiled
 backend presentations, explicit foreign targets, stale turn authority across
 approval, wrong principal scope, connection replacement, and the independent

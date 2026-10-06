@@ -1,30 +1,26 @@
-import { useCallback, useSyncExternalStore } from "react";
-import type { NativeVoiceStore } from "./NativeVoiceStore.js";
+import { useSyncExternalStore } from "react";
 
 // A web UI preference, not a native setting: native settings are a strict, versioned record shared with Android.
-const prefix = "sedes-voice-bar-when-off:";
-const storageKey = ({ profileId, serverOrigin, identity }: NativeVoiceStore["connection"]) => `${prefix}${JSON.stringify([profileId, serverOrigin, identity])}`;
-/** The value each binding shows until a write or a storage event; a write storage refuses still holds for this session. */
-const cache = new Map<string, boolean>();
+const storageKey = "sedes-device-voice-bar-when-off";
+/** The value this device shows until a write or a storage event; a write storage refuses still holds for this session. */
+let cachedValue: boolean | undefined;
 const listeners = new Set<() => void>();
 const notify = () => { for (const listener of listeners) listener(); };
 if (typeof window !== "undefined") window.addEventListener("storage", event => {
-  if (event.key !== null && !event.key.startsWith(prefix)) return;
-  if (event.key === null) cache.clear(); else cache.delete(event.key);
+  if (event.key !== null && event.key !== storageKey) return;
+  cachedValue = undefined;
   notify();
 });
 
-function read(key: string): boolean {
-  let value = cache.get(key);
-  if (value === undefined) {
-    try { value = localStorage.getItem(key) === "true"; } catch { value = false; }
-    cache.set(key, value);
+function read(): boolean {
+  if (cachedValue === undefined) {
+    try { cachedValue = localStorage.getItem(storageKey) === "true"; } catch { cachedValue = false; }
   }
-  return value;
+  return cachedValue;
 }
-function write(key: string, value: boolean): void {
-  cache.set(key, value);
-  try { if (value) localStorage.setItem(key, "true"); else localStorage.removeItem(key); } catch { /* The choice still applies in this session. */ }
+function write(value: boolean): void {
+  cachedValue = value;
+  try { if (value) localStorage.setItem(storageKey, "true"); else localStorage.removeItem(storageKey); } catch { /* The choice still applies in this session. */ }
   notify();
 }
 function subscribe(listener: () => void): () => void {
@@ -32,10 +28,8 @@ function subscribe(listener: () => void): () => void {
   return () => { listeners.delete(listener); };
 }
 
-/** Device-local, per voice binding. Default false: Off hides the voice bar, as before. */
-export function useShowVoiceBarWhenOff(store: NativeVoiceStore): readonly [boolean, (value: boolean) => void] {
-  const key = storageKey(store.connection);
-  const value = useSyncExternalStore(subscribe, () => read(key), () => false);
-  const set = useCallback((next: boolean) => write(key, next), [key]);
-  return [value, set] as const;
+/** Device-local across Sedes connections. Default false: Off hides the voice bar, as before. */
+export function useShowVoiceBarWhenOff(): readonly [boolean, (value: boolean) => void] {
+  const value = useSyncExternalStore(subscribe, read, () => false);
+  return [value, write] as const;
 }

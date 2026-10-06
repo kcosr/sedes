@@ -39,7 +39,7 @@ import type { ThreadStoreRegistry } from "../stores/ThreadStoreRegistry.js";
 import { clearDiagnostics, readDiagnostics } from "../app/diagnostics.js";
 import { setDiagnosticCategoryEnabled, setSeekOnSubmit } from "../app/settings.js";
 import { NativeVoiceStore } from "../voice/NativeVoiceStore.js";
-import { fakeVoicePlugin, VOICE_CONNECTION } from "../voice/native-voice-test-fixture.js";
+import { fakeVoicePlugin, recordingRecovery, voiceSnapshot, VOICE_CONNECTION } from "../voice/native-voice-test-fixture.js";
 import {
   beginThreadLoadAttempt,
   resetThreadLoadAttemptsForTests,
@@ -151,6 +151,95 @@ describe("ThreadView local voice Send", () => {
     f.view.rerender(<ThreadView threadId={f.threadId} visible automationOpen={false}
       registry={f.registry} applicationStore={f.applicationStore} />);
     expect(readDiagnostics().some(entry => entry.event === "seek_request_consumed")).toBe(false);
+  });
+});
+
+describe("ThreadView saved dictation", () => {
+  it.each(["read-only", "unavailable", "archived"])("refuses a known %s composer immediately without losing recovery", async reason => {
+    const base = makeSnapshot(reason === "read-only" ? "read_only" : "interactive", "idle");
+    const snapshot = { ...base, interactions: [], queue: [], thread: { ...base.thread,
+      inventoryState: reason === "archived" ? "archived" as const : base.thread.inventoryState } };
+    const saved = recordingRecovery({ threadId: snapshot.thread.id, stage: "ready", hasUnrecognizedAudio: false, canCopyRecognizedText: true });
+    const native = fakeVoicePlugin();
+    native.plugin.setConnection.mockResolvedValue(voiceSnapshot({ recordingRecovery: saved }));
+    native.plugin.readRecognizedRecordingText.mockResolvedValue({ recordingId: saved.recordingId, revision: saved.revision,
+      threadId: snapshot.thread.id, text: "Recovered words" });
+    const voice = new NativeVoiceStore(native.asPlugin, VOICE_CONNECTION, vi.fn());
+    voiceContext.store = voice;
+    await voice.initialize();
+    const state = fixture(snapshot, [], reason === "unavailable" ? { status: "error", snapshot: undefined } : {});
+    render(<ThreadView threadId={snapshot.thread.id} visible automationOpen={false}
+      registry={state.registry} applicationStore={state.applicationStore} />);
+    await act(async () => {
+      await expect(voice.addRecordingToComposer({ expectedConnectionGeneration: 1, recordingId: saved.recordingId,
+        expectedRecoveryRevision: saved.revision })).rejects.toThrow(reason === "unavailable" ? "unavailable" : reason);
+    });
+    expect(voice.getSnapshot().pending).toBe(false);
+    expect(voice.getSnapshot().native?.recordingRecovery).toEqual(saved);
+    expect(native.plugin.discardRecording).not.toHaveBeenCalled();
+    expect(state.registry.get(snapshot.thread.id).saveDraft).not.toHaveBeenCalled();
+  });
+  it.each(["reconciling", "disconnected", "historical"] as const)("waits through a %s view before appending", async transition => {
+    const base = makeSnapshot("interactive", transition === "historical" ? "idle" : transition);
+    const snapshot = { ...base, interactions: [], queue: [], draft: { ...base.draft, text: "Current draft" } };
+    const saved = recordingRecovery({ threadId: snapshot.thread.id, stage: "ready", hasUnrecognizedAudio: false, canCopyRecognizedText: true });
+    const native = fakeVoicePlugin();
+    native.plugin.setConnection.mockResolvedValue(voiceSnapshot({ recordingRecovery: saved }));
+    native.plugin.readRecognizedRecordingText.mockResolvedValue({ recordingId: saved.recordingId, revision: saved.revision,
+      threadId: snapshot.thread.id, text: "Recovered words" });
+    const opened = vi.fn();
+    const voice = new NativeVoiceStore(native.asPlugin, VOICE_CONNECTION, opened);
+    voiceContext.store = voice;
+    await voice.initialize();
+    const state = fixture(snapshot);
+    const view = render(<ThreadView threadId={snapshot.thread.id} visible automationOpen={false}
+      focusTurnId={transition === "historical" ? "older-turn" : undefined}
+      registry={state.registry} applicationStore={state.applicationStore} />);
+    let completed = false;
+    const handoff = voice.addRecordingToComposer({ expectedConnectionGeneration: 1, recordingId: saved.recordingId,
+      expectedRecoveryRevision: saved.revision }).then(() => { completed = true; return null; }, error => { completed = true; return error; });
+    await waitFor(() => expect(opened).toHaveBeenCalledExactlyOnceWith(snapshot.thread.id));
+    expect(completed).toBe(false);
+    expect(voice.getSnapshot().pending).toBe(true);
+    expect(native.plugin.discardRecording).not.toHaveBeenCalled();
+    if (transition === "historical") {
+      view.rerender(<ThreadView threadId={snapshot.thread.id} visible automationOpen={false}
+        registry={state.registry} applicationStore={state.applicationStore} />);
+    } else {
+      const ready = makeSnapshot("interactive", "idle");
+      act(() => state.updateSnapshot({ ...snapshot, runState: "idle", capabilities: ready.capabilities }));
+    }
+    await act(async () => { expect(await handoff).toBeNull(); });
+    expect(screen.getByRole("textbox", { name: "Message Pi" })).toHaveValue("Current draft\n\nRecovered words");
+    expect(voice.getSnapshot().pending).toBe(false);
+    expect(voice.getSnapshot().native?.recordingRecovery).toEqual(saved);
+  });
+  it("exposes the newly adopted draft before registering a composer for recovery", async () => {
+    const native = fakeVoicePlugin();
+    const voice = new NativeVoiceStore(native.asPlugin, VOICE_CONNECTION, vi.fn());
+    voiceContext.store = voice;
+    await voice.initialize();
+    const base = makeSnapshot("interactive", "idle");
+    const cached = { ...base, interactions: [], queue: [], draft: { ...base.draft, text: "Cached old draft", revision: 1 } };
+    const state = fixture(cached, [], { connection: "reconnecting", authoritative: false });
+    // Readiness must be truthful immediately when the appender is registered.
+    const registered = vi.spyOn(voice, "registerComposer").mockImplementation((_threadId, append) => {
+      append("Recovered words");
+      return () => undefined;
+    });
+    const view = render(<ThreadView threadId={base.thread.id} visible automationOpen={false}
+      registry={state.registry} applicationStore={state.applicationStore} />);
+    expect(registered).not.toHaveBeenCalled();
+    const attachment = { id: "79b5e50e-9a0a-4c6f-9f2a-bdb93a418cb7", fileName: "remote.txt", kind: "file" as const,
+      mediaType: "application/octet-stream" as const, byteSize: 4 };
+    const remote = { ...cached, draft: { ...cached.draft, text: "Newer remote draft", revision: 2,
+      selectedSkillId: "remote-skill", attachments: [attachment] } };
+    act(() => state.updateThreadState({ connection: "connected", authoritative: true, snapshot: remote }));
+    expect(screen.getByRole("textbox", { name: "Message Pi" })).toHaveValue("Newer remote draft\n\nRecovered words");
+    view.unmount();
+    await waitFor(() => expect(state.registry.get(base.thread.id).saveDraft).toHaveBeenCalledWith(expect.objectContaining({
+      text: "Newer remote draft\n\nRecovered words", revision: 2, selectedSkillId: "remote-skill", attachments: [attachment],
+    })));
   });
 });
 
@@ -1584,6 +1673,8 @@ function fixture(
   let activityDetail: ActivityDetailMode = "full";
   let projectionViewportAnchor: ThreadProjectionViewportAnchor | undefined;
   const threadStore = {
+    threadId: snapshot.thread.id,
+    seekHistoryTurn: vi.fn(async () => ({ status: "not_found" as const })),
     acceptNativeVoiceSubmission: vi.fn(),
     usage: new UsageQueryCache(snapshot.thread.id, {getUsage:vi.fn(),getUsageAvailability:vi.fn()}),
     get activityDetail() {

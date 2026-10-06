@@ -265,28 +265,28 @@ describe("voice quick sheet", () => {
     const saved = recordingRecovery({ revision: 4, captureIncomplete: true, canRetryRecognition: false, canCopyRecognizedText: true });
     const native = voiceSnapshot({ recordingRecovery: saved });
     const { fake, store, sheet } = await renderSheet(native);
-    const copy = within(sheet).getByRole("button", { name: "Copy recognized text" });
+    const copy = within(sheet).getByRole("button", { name: "Copy text" });
     let release!: (value: NativeVoiceState) => void;
     fake.plugin.copyRecognizedRecordingText.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
-    expect(sheet).toHaveTextContent("The end of this dictation may be missing");
+    expect(sheet).toHaveTextContent("Needs transcription");
     expect(within(sheet).getByRole("button", { name: "Retry recognition" })).toHaveAttribute("aria-disabled", "true");
     act(() => copy.focus());
     fireEvent.click(copy);
     expect(copy).toHaveAttribute("aria-disabled", "true");
     expect(copy).toHaveFocus();
     fireEvent.click(copy);
-    expect(sheet).not.toHaveTextContent("Recognized text copied.");
+    expect(sheet).not.toHaveTextContent("Copied.");
     expect(fake.plugin.copyRecognizedRecordingText).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, recordingId: saved.recordingId, expectedRecoveryRevision: 4 });
     await act(async () => release({ ...native, stateRevision: 2 }));
-    await waitFor(() => expect(sheet).toHaveTextContent("Recognized text copied. The saved dictation remains on this device."));
+    await waitFor(() => expect(sheet).toHaveTextContent("Copied."));
     expect(copy).toHaveFocus();
     expect(store.getSnapshot().native?.recordingRecovery).toEqual(saved);
     fake.plugin.copyRecognizedRecordingText.mockRejectedValueOnce(new Error("Clipboard unavailable."));
     fireEvent.click(copy);
     await waitFor(() => expect(sheet).toHaveTextContent("Clipboard unavailable."));
-    expect(sheet).not.toHaveTextContent("Recognized text copied.");
+    expect(sheet).not.toHaveTextContent("Copied.");
     expect(store.getSnapshot().native?.recordingRecovery).toEqual(saved);
-    expect(within(sheet).queryByRole("button", { name: /restore|composer/i })).toBeNull();
+    expect(within(sheet).getByRole("button", { name: "Add to composer" })).toHaveAttribute("aria-disabled", "true");
     store.dispose();
   });
   it("does not report a stale copy as a copy of the current saved dictation", async () => {
@@ -295,28 +295,59 @@ describe("voice quick sheet", () => {
     const { fake, store, sheet } = await renderSheet(native);
     let release!: (value: NativeVoiceState) => void;
     fake.plugin.copyRecognizedRecordingText.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
-    fireEvent.click(within(sheet).getByRole("button", { name: "Copy recognized text" }));
+    fireEvent.click(within(sheet).getByRole("button", { name: "Copy text" }));
     act(() => fake.emit("stateChanged", { ...native, stateRevision: 3, recordingRecovery: { ...saved, revision: 2 } }));
     await act(async () => release({ ...native, stateRevision: 2 }));
-    expect(sheet).not.toHaveTextContent("Recognized text copied.");
+    expect(sheet).not.toHaveTextContent("Copied.");
     expect(store.getSnapshot().native?.recordingRecovery?.revision).toBe(2);
     store.dispose();
   });
-  it("binds missing-end acknowledgment to the saved revision and preserves Send focus through pending work", async () => {
+  it.each([
+    ["unfinished", "Finish transcription to add to the composer."],
+    ["unknown", "Original thread unknown."],
+    ["archived", "Unarchive the original thread to add text."],
+    ["offline", "Original thread unavailable."],
+  ])("explains the %s composer restriction visibly and accessibly", async (reason, message) => {
+    const saved = recordingRecovery({ canCopyRecognizedText: true, hasUnrecognizedAudio: reason === "unfinished",
+      threadId: reason === "unknown" ? null : reason === "unfinished" ? "standup" : reason });
+    const { fake, store, sheet } = await renderSheet(voiceSnapshot({ recordingRecovery: saved }));
+    const add = within(sheet).getByRole("button", { name: "Add to composer" });
+    expect(add).toHaveAttribute("aria-disabled", "true");
+    expect(add).toHaveAccessibleDescription(message);
+    expect(within(sheet).getByText(message)).toBeVisible();
+    fireEvent.click(add);
+    expect(fake.plugin.readRecognizedRecordingText).not.toHaveBeenCalled();
+    expect(store.getSnapshot().pending).toBe(false);
+    store.dispose();
+  });
+  it("adds recognized text to the original composer while Off, closes the sheet, and retains recovery", async () => {
+    const saved = recordingRecovery({ revision: 4, stage: "ready", hasUnrecognizedAudio: false, captureIncomplete: true,
+      canRetryRecognition: false, canCopyRecognizedText: true, canSend: true });
+    const { fake, store, sheet, onOpenChange } = await renderSheet(voiceSnapshot({ recordingRecovery: saved }));
+    const append = vi.fn();
+    store.registerComposer(saved.threadId!, append);
+    fake.plugin.readRecognizedRecordingText.mockResolvedValue({ recordingId: saved.recordingId, revision: 4,
+      threadId: saved.threadId!, text: "Recovered words" });
+    fireEvent.click(within(sheet).getByRole("button", { name: "Add to composer" }));
+    await waitFor(() => expect(append).toHaveBeenCalledExactlyOnceWith("Recovered words"));
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    expect(within(sheet).getByRole("button", { name: "Added to composer" })).toHaveAttribute("aria-disabled", "true");
+    expect(store.getSnapshot().native?.recordingRecovery).toEqual(saved);
+    expect(fake.plugin.sendRecoveredRecording).not.toHaveBeenCalled();
+    expect(fake.plugin.discardRecording).not.toHaveBeenCalled();
+    expect(within(sheet).queryByRole("checkbox")).toBeNull();
+    store.dispose();
+  });
+  it("sends interrupted dictation explicitly at the current revision and preserves focus through pending work", async () => {
     const saved = recordingRecovery({ stage: "ready", revision: 4, hasUnrecognizedAudio: false, captureIncomplete: true,
       canRetryRecognition: false, canSend: true });
     const native = voiceSnapshot({ recordingRecovery: saved });
     const { fake, store, sheet } = await renderSheet(native);
-    const acknowledgement = within(sheet).getByRole("checkbox", { name: "Send the saved portion even if the end is missing" });
-    const send = within(sheet).getByRole("button", { name: "Send saved dictation" });
-    expect(acknowledgement).toHaveAccessibleDescription("The end of this dictation may be missing. Sending uses the saved portion.");
-    fireEvent.click(acknowledgement);
+    expect(within(sheet).queryByRole("checkbox")).toBeNull();
+    expect(sheet).toHaveTextContent("Recording interrupted");
+    const send = within(sheet).getByRole("button", { name: "Send" });
     expect(send).not.toHaveAttribute("aria-disabled");
     act(() => fake.emit("stateChanged", { ...native, stateRevision: 2, recordingRecovery: { ...saved, revision: 5 } }));
-    expect(acknowledgement).not.toBeChecked();
-    fireEvent.click(send);
-    expect(fake.plugin.sendRecoveredRecording).not.toHaveBeenCalled();
-    fireEvent.click(acknowledgement);
     let release!: (value: NativeVoiceState) => void;
     fake.plugin.sendRecoveredRecording.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
     act(() => send.focus());
@@ -325,12 +356,12 @@ describe("voice quick sheet", () => {
     expect(send).toHaveFocus();
     fireEvent.click(send);
     expect(fake.plugin.sendRecoveredRecording).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1,
-      recordingId: saved.recordingId, expectedRecoveryRevision: 5, acknowledgeIncomplete: true });
+      recordingId: saved.recordingId, expectedRecoveryRevision: 5 });
     await act(async () => release({ ...native, stateRevision: 3,
       recordingRecovery: { ...saved, revision: 6, stage: "admitting", captureIncomplete: false, canSend: false, canDiscard: true } }));
     expect(send).toHaveAttribute("aria-disabled", "true");
     expect(send).toHaveFocus();
-    const discard = within(sheet).getByRole("button", { name: "Discard saved dictation" });
+    const discard = within(sheet).getByRole("button", { name: "Discard" });
     expect(discard).not.toHaveAttribute("aria-disabled");
     fake.plugin.discardRecording.mockResolvedValue(voiceSnapshot({ stateRevision: 4 }));
     fireEvent.click(discard);

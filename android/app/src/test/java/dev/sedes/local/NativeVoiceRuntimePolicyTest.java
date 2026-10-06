@@ -5,6 +5,19 @@ import org.junit.Test;
 
 /** Pure runtime policy: blank input, definitive rejection, reconnect backoff and user-facing failure messages. */
 public class NativeVoiceRuntimePolicyTest {
+    @Test public void captureSettingsCompareMicrophoneIdentityByValue() throws Exception {
+        java.lang.reflect.Method changed = NativeVoiceRuntime.class.getDeclaredMethod("captureSettingsChanged", NativeVoiceSettings.class, NativeVoiceSettings.class);
+        changed.setAccessible(true);
+        NativeVoiceSettings before = NativeVoiceSettings.defaults().patch(0, NativeVoiceJson.object("inputDevice",
+            NativeVoiceJson.object("type", 7, "address", null, "name", "Headset")));
+        NativeVoiceSettings equal = before.patch(1, NativeVoiceJson.object("ttsGain", 80, "inputDevice",
+            NativeVoiceJson.object("name", "Headset", "address", null, "type", 7)));
+        assertEquals(false, changed.invoke(null, before, equal));
+        assertEquals(true, changed.invoke(null, before, equal.patch(2, NativeVoiceJson.object("inputDevice", null))));
+        assertEquals(true, changed.invoke(null, before, equal.patch(2, NativeVoiceJson.object("inputDevice",
+            NativeVoiceJson.object("type", 7, "address", null, "name", "Another headset")))));
+    }
+
     @Test public void manualTargetPrefersExplicitThenPendingBeforePinnedOrForegroundDefaults() {
         org.json.JSONObject settings = NativeVoiceSettings.defaults().patch(0, NativeVoiceJson.object("pinDefaultVoiceThread", true,
             "voiceThreadId", "default", "voiceThreadTitle", "Saved default")).value;

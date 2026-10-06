@@ -41,6 +41,21 @@ test("native dictation keeps its controls reachable on narrow screens and retain
   await measureRow("idleBeforeRecording");
   await capture(page, testInfo, "voice-ready-spacing-narrow.png");
   const base = voiceFixtureState();
+  await publishVoiceState(page, { settings: { ...base.settings, onlyVoiceThread: true } });
+  await expect(toolbar.locator(".voice-card-sub")).toHaveText("Default thread needed");
+  await expect(toolbar.getByRole("button", { name: "Start voice recording", exact: true })).toBeEnabled();
+  await measureRow("defaultThreadNeeded");
+  await capture(page, testInfo, "voice-default-thread-needed-narrow.png");
+  await toolbar.getByRole("button", { name: "Open voice controls", exact: true }).click();
+  const filterSheet = page.getByRole("dialog", { name: "Voice", exact: true });
+  await expect(filterSheet.getByRole("status")).toContainText("Automatic playback and listening are paused.");
+  await expect(filterSheet.getByRole("switch", { name: "Only play from default voice thread", exact: true })).toBeChecked();
+  await expectNoPageOverflow(page);
+  await capture(page, testInfo, "voice-default-thread-warning-sheet-narrow.png");
+  await filterSheet.press("Escape");
+  await expect(filterSheet).toHaveCount(0);
+  await publishVoiceState(page, { settings: base.settings });
+  await expect(toolbar.locator(".voice-card-sub")).toContainText("Ready");
   const idleChooser = toolbar.getByRole("button", { name: "Choose target thread: Voice navigation source", exact: true });
   await expect(idleChooser).toBeVisible();
   await toolbar.locator(".voice-card-title").click();
@@ -360,9 +375,13 @@ test("native dictation keeps its controls reachable on narrow screens and retain
   await expect(toolbar).toContainText("Saved dictation");
   await toolbar.getByRole("button", { name: "Open voice controls" }).click();
   const sheet = page.getByRole("dialog", { name: "Voice", exact: true });
-  await expect(sheet).toContainText("The end of this dictation may be missing");
-  await expect(sheet.getByRole("button", { name: "Copy recognized text" })).toBeVisible();
-  await expect(sheet.getByRole("button", { name: /restore|composer/iu })).toHaveCount(0);
+  await expect(sheet).toContainText("Needs transcription");
+  await expect(sheet.getByRole("button", { name: "Copy text" })).toBeVisible();
+  await expect(sheet.getByRole("button", { name: "Add to composer" })).toBeDisabled();
+  await expect(sheet.getByRole("button", { name: "Add to composer" })).toHaveAccessibleDescription("Finish transcription to add to the composer.");
+  await expect(sheet.getByText("Finish transcription to add to the composer.", { exact: true })).toBeVisible();
+  await expectNoPageOverflow(page);
+  await capture(page, testInfo, "voice-recovery-transcription-needed-narrow.png");
   await sheet.getByRole("button", { name: "Close", exact: true }).click();
   await expect(composer).toHaveValue(draft);
 
@@ -371,7 +390,7 @@ test("native dictation keeps its controls reachable on narrow screens and retain
   const savedRetryBox = (await toolbar.getByRole("button", { name: "Retry saved dictation" }).boundingBox())!;
   const interruptedDiscardBox = (await toolbar.getByRole("button", { name: "Discard saved dictation" }).boundingBox())!;
   await toolbar.getByRole("button", { name: "Retry saved dictation" }).click();
-  await expect(toolbar).toContainText("Recognizing saved audio…");
+  await expect(toolbar).toContainText("Transcribing…");
   await expect(toolbar.getByRole("button", { name: /Stop voice interaction|Cancel voice recording/ })).toHaveCount(0);
   await expect(toolbar.getByRole("button", { name: "Discard saved dictation" })).toBeEnabled();
   await measureRow("savedRecognizing");
@@ -381,7 +400,7 @@ test("native dictation keeps its controls reachable on narrow screens and retain
   await publishVoiceState(page, { phase: "off", active: null, ready: false, readiness: "off", settings: { ...base.settings, audioMode: "off" },
     recordingRecovery: { ...saved, revision: 7, stage: "ready", reason: null, hasUnrecognizedAudio: false, canRetryRecognition: false, canSend: true } });
   await expect(toolbar).toContainText("Ready to send");
-  await expect(toolbar).toContainText("End may be missing");
+  await expect(toolbar).toContainText("Recording interrupted");
   await expect(toolbar.getByRole("button", { name: "Send saved dictation" })).toBeEnabled();
   await expect.poll(() => toolbar.getByRole("button", { name: "Discard saved dictation" }).boundingBox()).toEqual(interruptedDiscardBox);
   await page.mouse.click(savedRetryBox.x + savedRetryBox.width / 2, savedRetryBox.y + savedRetryBox.height / 2);
@@ -392,26 +411,23 @@ test("native dictation keeps its controls reachable on narrow screens and retain
   const savedSendBox = (await toolbar.getByRole("button", { name: "Send saved dictation" }).boundingBox())!;
   const savedDiscardBox = (await toolbar.getByRole("button", { name: "Discard saved dictation" }).boundingBox())!;
   expect(savedSendBox.x - savedDiscardBox.x - savedDiscardBox.width).toBeGreaterThanOrEqual(4);
-  await toolbar.getByRole("button", { name: "Send saved dictation" }).click();
+  await toolbar.getByRole("button", { name: "Open voice controls", exact: true }).click();
   await expect(sheet).toBeVisible();
-  const warning = sheet.getByText("The end of this dictation may be missing. Sending uses the saved portion.", { exact: true });
-  const acknowledge = sheet.getByRole("checkbox", { name: "Send the saved portion even if the end is missing" });
-  const sendSaved = sheet.getByRole("button", { name: "Send saved dictation" });
-  await expect(acknowledge).not.toBeChecked();
-  await expect(sendSaved).toBeDisabled();
-  expect(await page.evaluate(() => window.__voiceFixture.calls.filter(call => call.method === "sendRecoveredRecording"))).toEqual([]);
-  await acknowledge.check();
+  const recovery = sheet.getByRole("region", { name: "Saved dictation", exact: true });
+  const sendSaved = recovery.getByRole("button", { name: "Send", exact: true });
+  await expect(recovery.getByRole("checkbox")).toHaveCount(0);
+  await expect(recovery).toContainText("Recording interrupted");
   await expect(sendSaved).toBeEnabled();
+  expect(await page.evaluate(() => window.__voiceFixture.calls.filter(call => call.method === "sendRecoveredRecording"))).toEqual([]);
   await sendSaved.scrollIntoViewIfNeeded();
-  await expect(warning).toBeInViewport();
-  await expect(acknowledge).toBeInViewport();
+  await expect(recovery.getByRole("status")).toBeInViewport();
   await expect(sendSaved).toBeInViewport();
   await expectNoPageOverflow(page);
-  await capture(page, testInfo, "voice-incomplete-dictation-confirmation-narrow.png");
+  await capture(page, testInfo, "voice-interrupted-dictation-recovery-narrow.png");
   await sendSaved.click();
   await expect(sheet).toContainText("Sending…");
   expect(await page.evaluate(() => window.__voiceFixture.calls.filter(call => call.method === "sendRecoveredRecording"))).toEqual([
-    { method: "sendRecoveredRecording", args: { expectedConnectionGeneration: 1, recordingId: "recording", expectedRecoveryRevision: 7, acknowledgeIncomplete: true } },
+    { method: "sendRecoveredRecording", args: { expectedConnectionGeneration: 1, recordingId: "recording", expectedRecoveryRevision: 7 } },
   ]);
   await sheet.getByRole("button", { name: "Close", exact: true }).click();
   await expect(toolbar).toContainText("Sending…");
@@ -456,4 +472,84 @@ test("native dictation keeps its controls reachable on narrow screens and retain
   await testInfo.attach("voice-row-heights", { body: JSON.stringify({ viewports, originalRowHeight: 60, heights }, null, 2), contentType: "application/json" });
   await testInfo.attach("voice-row-left-offsets", { body: JSON.stringify({ viewports, leftOffsets }, null, 2), contentType: "application/json" });
   await testInfo.attach("voice-recording-control-gaps", { body: JSON.stringify({ viewports, controlGaps }, null, 2), contentType: "application/json" });
+});
+
+test("saved dictation appends to its original composer without losing drafts or truncating text", async ({ page }, testInfo) => {
+  const workspace = path.join(loadE2ERunContext().workspacesDirectory, "voice-composer-recovery");
+  await mkdir(workspace, { recursive: true });
+  await installVoiceFixture(page);
+  await openWorkspaceDirectory(page, workspace);
+  const originalPath = await createDraftThread(page, "Dictation destination");
+  const originalId = originalPath.split("/").at(-1)!;
+  await fillAndPersistDraft(page, "Existing destination draft.");
+  const otherPath = await createDraftThread(page, "Other draft stays separate");
+  await fillAndPersistDraft(page, "Keep this other draft.");
+  await page.setViewportSize({ width: 320, height: 780 });
+  const composer = page.getByRole("textbox", { name: "Message Scripted agent", exact: true });
+  const toolbar = page.getByRole("group", { name: "Voice controls", exact: true });
+  const sheet = page.getByRole("dialog", { name: "Voice", exact: true });
+  const saved: NativeRecordingRecovery = { recordingId: "composer-recovery", revision: 1, threadId: originalId,
+    threadTitle: "Dictation destination", stage: "ready", reason: "Microphone unavailable.", captureIncomplete: true,
+    hasUnrecognizedAudio: false, canRetryRecognition: false, canSend: true, canCopyRecognizedText: true, canDiscard: true, admission: null };
+  await publishVoiceState(page, { phase: "recordingRecovery", active: null, recordingRecovery: saved });
+  await toolbar.getByRole("button", { name: "Open voice controls", exact: true }).click();
+  const recovery = sheet.getByRole("region", { name: "Saved dictation", exact: true });
+  await expect(recovery).toContainText("Recording interrupted");
+  await expect(recovery.getByRole("button", { name: "Copy text", exact: true })).toBeVisible();
+  await expect(recovery.getByRole("checkbox")).toHaveCount(0);
+  await recovery.scrollIntoViewIfNeeded();
+  await expectNoPageOverflow(page);
+  await capture(page, testInfo, "voice-recovery-actions-narrow.png");
+  const firstSaved = page.waitForResponse(response => response.request().method() === "PUT" &&
+    response.url().endsWith(`/threads/${originalId}/draft`) && response.ok() &&
+    response.request().postDataJSON().text === "Existing destination draft.\n\nRecovered dictation text.");
+  await recovery.getByRole("button", { name: "Add to composer", exact: true }).click();
+  await expect(sheet).toHaveCount(0);
+  await expect(page).toHaveURL(new RegExp(`${originalPath}$`, "u"));
+  await expect(composer).toHaveValue("Existing destination draft.\n\nRecovered dictation text.");
+  await firstSaved;
+  expect(await page.evaluate(() => window.__voiceFixture.state.recordingRecovery?.recordingId)).toBe(saved.recordingId);
+  expect(await page.evaluate(() => window.__voiceFixture.calls.filter(call => ["sendRecoveredRecording", "discardRecording"].includes(call.method)))).toEqual([]);
+  await toolbar.getByRole("button", { name: "Open voice controls", exact: true }).click();
+  await expect(sheet.getByRole("button", { name: "Added to composer", exact: true })).toBeDisabled();
+  await sheet.press("Escape");
+
+  // A pending autosave must not make the recovery action read an older server draft.
+  let releaseSave!: () => void;
+  const saveGate = new Promise<void>(resolve => { releaseSave = resolve; });
+  let sawSave!: () => void;
+  const saveStarted = new Promise<void>(resolve => { sawSave = resolve; });
+  let blocked = false;
+  await page.route(`**/api/threads/${originalId}/draft`, async route => {
+    if (route.request().method() === "PUT" && !blocked) { blocked = true; sawSave(); await saveGate; }
+    await route.continue();
+  });
+  const unsaved = "My latest unsaved edits.";
+  const recoveredSaved = page.waitForResponse(response => response.request().method() === "PUT" &&
+    response.url().endsWith(`/threads/${originalId}/draft`) && response.ok() &&
+    response.request().postDataJSON().text === `${unsaved}\n\nMore recovered words.`);
+  await composer.fill(unsaved);
+  await saveStarted;
+  try {
+    await page.evaluate(() => { window.__voiceFixture.recoveredText = "More recovered words."; });
+    await publishVoiceState(page, { recordingRecovery: { ...saved, recordingId: "second-recording" } });
+    await toolbar.getByRole("button", { name: "Open voice controls", exact: true }).click();
+    await sheet.getByRole("button", { name: "Add to composer", exact: true }).click();
+    await expect(sheet).toHaveCount(0);
+    await expect(composer).toHaveValue(`${unsaved}\n\nMore recovered words.`);
+  } finally { releaseSave(); }
+  await recoveredSaved;
+  await page.reload();
+  await expect(composer).toHaveValue(`${unsaved}\n\nMore recovered words.`);
+
+  await page.evaluate(() => { window.__voiceFixture.recoveredText = "é".repeat(32_768); });
+  await publishVoiceState(page, { recordingRecovery: { ...saved, recordingId: "oversized-recording" } });
+  await toolbar.getByRole("button", { name: "Open voice controls", exact: true }).click();
+  await sheet.getByRole("button", { name: "Add to composer", exact: true }).click();
+  await expect(sheet).toContainText("This dictation does not fit in the composer. Copy the text instead.");
+  expect(await page.evaluate(() => window.__voiceFixture.state.recordingRecovery?.recordingId)).toBe("oversized-recording");
+  await sheet.press("Escape");
+  await expect(composer).toHaveValue(`${unsaved}\n\nMore recovered words.`);
+  await page.goto(otherPath);
+  await expect(composer).toHaveValue("Keep this other draft.");
 });

@@ -4,43 +4,50 @@ import static org.junit.Assert.*;
 import org.junit.Test;
 
 public class NativeVoiceSettingsTest {
+    private static final String BINDING = NativeVoiceStore.binding("test", "https://sedes.example", "a".repeat(64));
+    private static org.json.JSONObject record(NativeVoiceSettings settings) {
+        return NativeVoicePreferences.defaults().update(BINDING, settings).record();
+    }
+    private static NativeVoiceSettings restore(org.json.JSONObject record) {
+        return NativeVoicePreferences.fromRecord(record).settings(BINDING);
+    }
     @Test public void longDictationTimeoutIsAWholeMinuteSettingWithNoOldRecordFallback() {
         NativeVoiceSettings defaults = NativeVoiceSettings.defaults();
         assertEquals(3600000, defaults.number("longDictationTimeoutMs"));
-        assertEquals(6, NativeVoiceSettings.RECORD_VERSION);
+        assertEquals(7, NativeVoiceSettings.RECORD_VERSION);
         for (int duration : new int[] { 60000, 3600000, 86400000 }) {
             NativeVoiceSettings configured = defaults.patch(0, NativeVoiceJson.object("longDictationTimeoutMs", duration));
-            assertEquals(duration, NativeVoiceSettings.fromRecord(configured.record()).number("longDictationTimeoutMs"));
+            assertEquals(duration, restore(record(configured)).number("longDictationTimeoutMs"));
         }
         for (Object invalid : new Object[] { 0, 59999, 60001, 86460000, 60000.5, "3600000" })
             assertThrows(IllegalArgumentException.class, () -> defaults.patch(0, NativeVoiceJson.object("longDictationTimeoutMs", invalid)));
-        org.json.JSONObject old = defaults.record(); NativeVoiceJson.put(old, "version", 5);
-        assertThrows(IllegalArgumentException.class, () -> NativeVoiceSettings.fromRecord(old));
-        org.json.JSONObject missing = defaults.record(); missing.optJSONObject("settings").remove("longDictationTimeoutMs");
-        assertThrows(IllegalArgumentException.class, () -> NativeVoiceSettings.fromRecord(missing));
+        org.json.JSONObject old = record(defaults); NativeVoiceJson.put(old, "settingsVersion", 5);
+        assertThrows(IllegalArgumentException.class, () -> restore(old));
+        org.json.JSONObject missing = record(defaults); missing.optJSONObject("preferences").remove("longDictationTimeoutMs");
+        assertThrows(IllegalArgumentException.class, () -> restore(missing));
     }
     @Test public void keepListeningDefaultIsFalseAndStrictlyPersisted() {
         NativeVoiceSettings defaults = NativeVoiceSettings.defaults();
         assertFalse(defaults.flag("keepListeningByDefault"));
         NativeVoiceSettings held = defaults.patch(0, NativeVoiceJson.object("keepListeningByDefault", true));
-        assertTrue(NativeVoiceSettings.fromRecord(held.record()).flag("keepListeningByDefault"));
+        assertTrue(restore(record(held)).flag("keepListeningByDefault"));
         assertTrue(defaults.speechConfigurationEquals(held));
         for (Object invalid : new Object[] { "true", 1, org.json.JSONObject.NULL })
             assertThrows(IllegalArgumentException.class, () -> defaults.patch(0, NativeVoiceJson.object("keepListeningByDefault", invalid)));
-        org.json.JSONObject missing = held.record(); missing.optJSONObject("settings").remove("keepListeningByDefault");
-        assertThrows(IllegalArgumentException.class, () -> NativeVoiceSettings.fromRecord(missing));
+        org.json.JSONObject missing = record(held); missing.optJSONObject("preferences").remove("keepListeningByDefault");
+        assertThrows(IllegalArgumentException.class, () -> restore(missing));
     }
     @Test public void speechCleanupDefaultsOnAndPersistsAsAStrictBoolean() {
         NativeVoiceSettings defaults = NativeVoiceSettings.defaults();
         assertTrue(defaults.flag("cleanSpeechText"));
         NativeVoiceSettings raw = defaults.patch(0, NativeVoiceJson.object("cleanSpeechText", false));
-        assertFalse(NativeVoiceSettings.fromRecord(raw.record()).flag("cleanSpeechText"));
+        assertFalse(restore(record(raw)).flag("cleanSpeechText"));
         assertTrue(defaults.speechConfigurationEquals(raw));
         assertThrows(IllegalArgumentException.class, () -> defaults.patch(0, NativeVoiceJson.object("cleanSpeechText", "false")));
-        org.json.JSONObject missing = defaults.record(); missing.optJSONObject("settings").remove("cleanSpeechText");
-        assertThrows(IllegalArgumentException.class, () -> NativeVoiceSettings.fromRecord(missing));
+        org.json.JSONObject missing = record(defaults); missing.optJSONObject("preferences").remove("cleanSpeechText");
+        assertThrows(IllegalArgumentException.class, () -> restore(missing));
         NativeVoiceJson.put(missing, "version", 3);
-        assertThrows(IllegalArgumentException.class, () -> NativeVoiceSettings.fromRecord(missing));
+        assertThrows(IllegalArgumentException.class, () -> restore(missing));
     }
     @Test public void startsOffAndPatchesByRevision() {
         NativeVoiceSettings defaults = NativeVoiceSettings.defaults();
@@ -49,20 +56,21 @@ public class NativeVoiceSettingsTest {
         NativeVoiceSettings next = defaults.patch(0, NativeVoiceJson.object("audioMode", "response", "speechProvider", "server", "speechEndpoint", "https://EXAMPLE.com:443/"));
         assertEquals(1, next.revision); assertEquals("https://example.com", next.text("speechEndpoint"));
         assertThrows(IllegalStateException.class, () -> next.patch(0, NativeVoiceJson.object("autoListen", false)));
-        assertEquals(next.value.toString(), NativeVoiceSettings.fromRecord(next.record()).value.toString());
+        NativeVoiceSettings restored = restore(record(next));
+        for (String field : NativeVoiceSettings.FIELDS) assertEquals(field, next.value.opt(field), restored.value.opt(field));
     }
     @Test public void storedRecordsValidateStrictlyAgainstTheirExplicitSchemaVersion() {
-        org.json.JSONObject record = NativeVoiceSettings.defaults().record();
-        assertEquals(NativeVoiceSettings.RECORD_VERSION, record.optInt("version"));
+        org.json.JSONObject record = record(NativeVoiceSettings.defaults());
+        assertEquals(NativeVoiceSettings.RECORD_VERSION, record.optInt("settingsVersion"));
         org.json.JSONObject older = NativeVoiceJson.copy(record); NativeVoiceJson.put(older, "version", 2);
-        older.optJSONObject("settings").remove("pinDefaultVoiceThread");
-        assertThrows(IllegalArgumentException.class, () -> NativeVoiceSettings.fromRecord(older));
-        org.json.JSONObject newer = NativeVoiceJson.copy(record); NativeVoiceJson.put(newer, "version", NativeVoiceSettings.RECORD_VERSION + 1);
-        assertThrows(IllegalArgumentException.class, () -> NativeVoiceSettings.fromRecord(newer));
-        org.json.JSONObject missing = NativeVoiceJson.copy(record); missing.optJSONObject("settings").remove("recognitionResultTimeoutMs");
-        assertThrows(IllegalArgumentException.class, () -> NativeVoiceSettings.fromRecord(missing));
-        org.json.JSONObject extra = NativeVoiceJson.copy(record); NativeVoiceJson.put(extra.optJSONObject("settings"), "removedField", true);
-        assertThrows(IllegalArgumentException.class, () -> NativeVoiceSettings.fromRecord(extra));
+        older.optJSONObject("preferences").remove("pinDefaultVoiceThread");
+        assertThrows(IllegalArgumentException.class, () -> restore(older));
+        org.json.JSONObject newer = NativeVoiceJson.copy(record); NativeVoiceJson.put(newer, "settingsVersion", NativeVoiceSettings.RECORD_VERSION + 1);
+        assertThrows(IllegalArgumentException.class, () -> restore(newer));
+        org.json.JSONObject missing = NativeVoiceJson.copy(record); missing.optJSONObject("preferences").remove("recognitionResultTimeoutMs");
+        assertThrows(IllegalArgumentException.class, () -> restore(missing));
+        org.json.JSONObject extra = NativeVoiceJson.copy(record); NativeVoiceJson.put(extra.optJSONObject("preferences"), "removedField", true);
+        assertThrows(IllegalArgumentException.class, () -> restore(extra));
     }
     @Test public void rejectsUnknownFieldsAndWrongScalarTypes() {
         assertThrows(IllegalArgumentException.class, () -> NativeVoiceSettings.defaults().patch(0, NativeVoiceJson.object("enabled", true)));
@@ -72,11 +80,11 @@ public class NativeVoiceSettingsTest {
     }
     @Test public void pinningTheDefaultPersistsSeparatelyFromAutomaticPlaybackFiltering() {
         NativeVoiceSettings pinned = NativeVoiceSettings.defaults().patch(0, NativeVoiceJson.object("pinDefaultVoiceThread", true));
-        NativeVoiceSettings restored = NativeVoiceSettings.fromRecord(pinned.record());
+        NativeVoiceSettings restored = restore(record(pinned));
         assertTrue(restored.flag("pinDefaultVoiceThread")); assertFalse(restored.flag("onlyVoiceThread"));
         assertTrue(restored.patch(1, NativeVoiceJson.object("onlyVoiceThread", true)).flag("pinDefaultVoiceThread"));
-        org.json.JSONObject missing = restored.record(); missing.optJSONObject("settings").remove("pinDefaultVoiceThread");
-        assertThrows(IllegalArgumentException.class, () -> NativeVoiceSettings.fromRecord(missing));
+        org.json.JSONObject missing = record(restored); missing.optJSONObject("preferences").remove("pinDefaultVoiceThread");
+        assertThrows(IllegalArgumentException.class, () -> restore(missing));
     }
     @Test public void originsCannotCarryCredentialsOrArbitraryPaths() {
         for (String value : new String[] { "https://user:pass@example.com", "https://example.com/api", "https://example.com?token=x", "https://example.com/#x", "ftp://example.com" })
@@ -93,7 +101,7 @@ public class NativeVoiceSettingsTest {
         for (String[] url : urls) {
             NativeVoiceSettings settings = NativeVoiceSettings.defaults().patch(0, NativeVoiceJson.object("speechProvider", "server", "speechEndpoint", url[0]));
             assertEquals(url[1], settings.text("speechEndpoint"));
-            assertEquals(url[1], NativeVoiceSettings.fromRecord(settings.record()).text("speechEndpoint"));
+            assertEquals(url[1], restore(record(settings)).text("speechEndpoint"));
             assertEquals(url[1], NativeVoiceSettings.speechBaseUrl(settings.text("speechEndpoint")));
         }
     }
@@ -125,8 +133,8 @@ public class NativeVoiceSettingsTest {
     }
     @Test public void oldAdapterContractIsRejectedInsteadOfAcceptedAsAnAlias() {
         assertThrows(IllegalArgumentException.class, () -> NativeVoiceSettings.defaults().patch(0, NativeVoiceJson.object("adapterUrl", "https://old.test")));
-        org.json.JSONObject record = NativeVoiceSettings.defaults().record(); NativeVoiceJson.put(record, "version", 1);
-        assertThrows(IllegalArgumentException.class, () -> NativeVoiceSettings.fromRecord(record));
+        org.json.JSONObject record = record(NativeVoiceSettings.defaults()); NativeVoiceJson.put(record, "settingsVersion", 1);
+        assertThrows(IllegalArgumentException.class, () -> restore(record));
     }
 
 }

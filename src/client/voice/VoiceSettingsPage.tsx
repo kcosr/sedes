@@ -1,3 +1,4 @@
+import type { PluginListenerHandle } from "@capacitor/core";
 import { useEffect, useId, useRef, useState } from "react";
 import type { ApplicationClientStore } from "../stores/ApplicationClientStore.js";
 import { useApplicationStore } from "../stores/ApplicationClientStore.js";
@@ -13,10 +14,11 @@ import { SearchableSelect } from "../components/ui/searchable-select.js";
 import { useTouchDensity } from "../app/use-touch-density.js";
 import { useVoiceState } from "./VoiceProvider.js";
 import { recentVoiceErrors, type NativeVoiceStore } from "./NativeVoiceStore.js";
-import { nativeThreadTitle, type NativeVoiceSettings, type NativeVoiceState } from "./native-voice-plugin.js";
+import { nativeThreadTitle, type NativeVoiceInputDevice, type NativeVoiceSettings, type NativeVoiceState } from "./native-voice-plugin.js";
+import { inputPreference, selectedInputDevice } from "./native-voice-input.js";
 import { VoiceThreadPicker } from "./VoiceThreadPicker.js";
 import { useShowVoiceBarWhenOff } from "./voice-bar-preference.js";
-import { canEnableVoice, resumeVoice } from "./voice-session.js";
+import { canEnableVoice, resumeVoice, voiceThreadFilterWarning } from "./voice-session.js";
 import { savedRecording, VoiceRecordingRecovery } from "./VoiceRecordingRecovery.js";
 
 const toggles = [
@@ -46,9 +48,28 @@ export function VoiceSettingsPage({ store, applicationStore }: { store: NativeVo
   const state = useVoiceState(store);
   const application = useApplicationStore(applicationStore);
   const [picker, setPicker] = useState(false);
-  const [showBarWhenOff, setShowBarWhenOff] = useShowVoiceBarWhenOff(store);
-  const [devices, setDevices] = useState<Array<{ id: string; label: string; type: number }>>([]);
-  useEffect(() => { void store.plugin.listInputDevices().then(result => setDevices(result.devices)).catch(() => undefined); }, [store]);
+  const [showBarWhenOff, setShowBarWhenOff] = useShowVoiceBarWhenOff();
+  const [devices, setDevices] = useState<NativeVoiceInputDevice[]>([]);
+  useEffect(() => {
+    let disposed = false, revision = 0;
+    let handle: PluginListenerHandle | undefined;
+    const refresh = async () => {
+      const request = ++revision;
+      try {
+        const result = await store.plugin.listInputDevices();
+        if (!disposed && request === revision) setDevices(result.devices);
+      } catch { /* Keep the last inventory until a native callback or foreground refresh succeeds. */ }
+    };
+    void store.plugin.addListener("inputDevicesChanged", result => {
+      if (!disposed) { revision++; setDevices(result.devices); }
+    }).then(registered => {
+      handle = registered;
+      if (disposed) void registered.remove(); else void refresh();
+    }).catch(() => { if (!disposed) void refresh(); });
+    const foreground = () => { if (document.visibilityState === "visible") void refresh(); };
+    document.addEventListener("visibilitychange", foreground);
+    return () => { disposed = true; document.removeEventListener("visibilitychange", foreground); void handle?.remove(); };
+  }, [store]);
   const native = state.native;
   if (!native && state.loading) return <SettingsPage title="Voice"><p role="status">Connecting voice to this server…</p></SettingsPage>;
   if (!native || !native.identity) return <SettingsPage title="Voice"><Callout tone="danger">{state.error ?? "Voice could not connect to this server."}</Callout>
@@ -61,9 +82,10 @@ export function VoiceSettingsPage({ store, applicationStore }: { store: NativeVo
   const update = (patch: Partial<NativeVoiceSettings>) => { void store.update(patch).catch(() => undefined); };
   const errors = recentVoiceErrors(state);
   const deviceLabels = inputDeviceLabels(devices);
+  const selectedDevice = selectedInputDevice(settings.inputDevice, devices);
   const voiceThreadLabel = settings.voiceThreadTitle ?? (settings.voiceThreadId
     ? application.snapshot?.threads.find(thread => thread.id === settings.voiceThreadId)?.title.text.trim() || "Untitled thread" : "Choose thread");
-  return <SettingsPage title="Voice" description="Saved on this device for this server profile.">
+  return <SettingsPage title="Voice" description="Voice preferences are saved on this device. The default thread belongs to the connected account.">
     {errors.length ? <Callout tone="danger" role="alert" action={<Button variant="outline" size="sm" onClick={() => store.dismissErrors()}>Clear errors</Button>}>
       {errors.length === 1 ? errors[0] : <ul className="grid gap-1">{errors.map(error => <li key={error}>{error}</li>)}</ul>}
     </Callout> : null}
@@ -79,7 +101,7 @@ export function VoiceSettingsPage({ store, applicationStore }: { store: NativeVo
       <SwitchField label="Show voice bar when off" description="Keep a dimmed bar under the composer."
         checked={showBarWhenOff} onCheckedChange={setShowBarWhenOff} />
       {settings.audioMode !== "off" && native.actions.canResume ? <Button disabled={state.pending} onClick={() => { void resumeVoice(store).catch(() => undefined); }}>Resume voice</Button> : null}
-      <p role="status">{voiceReadiness(native.readiness)}</p>
+      <p role="status">{native.ready ? voiceThreadFilterWarning(settings) ?? voiceReadiness(native.readiness) : voiceReadiness(native.readiness)}</p>
       {native.readiness === "storageUnavailable" ? <Button aria-disabled={state.pending || undefined} onClick={() => { if (!state.pending) void store.reconnect().catch(() => undefined); }}>Retry voice connection</Button>
         : !native.clientConnectionToken && <Button disabled={state.pending} onClick={() => { void store.reconnect().catch(() => undefined); }}>Retry client connection</Button>}
     </SettingsSection>
@@ -103,11 +125,19 @@ export function VoiceSettingsPage({ store, applicationStore }: { store: NativeVo
         onCheckedChange={value => update({ [key]: value })} />)}
     </SettingsSection>
     <SettingsSection title="Audio and timing" card>
-      <SettingsField label="Microphone input">
-        <NativeSelect value={settings.inputDeviceId ?? ""} disabled={state.pending || recordingWork} onChange={event => update({ inputDeviceId: event.target.value || null })}>
+      <SettingsField label="Microphone input" description={settings.inputDevice && !selectedDevice
+        ? "Recording requires this microphone. Reconnect it or choose another input."
+        : "Remembers this microphone when it reconnects. Indistinguishable inputs cannot be selected individually."}>
+        <NativeSelect value={settings.inputDevice ? selectedDevice?.id ?? "unavailable" : ""} disabled={state.pending || recordingWork} onChange={event => {
+          if (!event.target.value) update({ inputDevice: null });
+          else {
+            const selected = devices.find(device => device.id === event.target.value);
+            if (selected) update({ inputDevice: inputPreference(selected) });
+          }
+        }}>
           <option value="">System default</option>
-          {devices.map(device => <option key={device.id} value={device.id}>{deviceLabels.get(device.id)}</option>)}
-          {settings.inputDeviceId && !devices.some(device => device.id === settings.inputDeviceId) ? <option value={settings.inputDeviceId}>Selected input (unavailable)</option> : null}
+          {devices.map(device => <option key={device.id} value={device.id} disabled={selectedInputDevice(inputPreference(device), devices)?.id !== device.id}>{deviceLabels.get(device.id)}</option>)}
+          {settings.inputDevice && !selectedDevice ? <option value="unavailable">{settings.inputDevice.name} (unavailable)</option> : null}
         </NativeSelect>
       </SettingsField>
       <VoiceTextSetting label="Long dictation timeout (minutes)" description="Maximum time after Keep listening is first enabled. Pauses and toggling it do not restart this limit."

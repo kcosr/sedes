@@ -19,7 +19,7 @@ public class NativeDictationStoreDeviceTest {
     private final Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
     private static JSONObject config() {
         JSONObject result = new JSONObject(), settings = NativeVoiceSettings.defaults().value;
-        for (String field : new String[] { "speechProvider", "speechEndpoint", "sttModel", "inputDeviceId", "recognitionStartTimeoutMs",
+        for (String field : new String[] { "speechProvider", "speechEndpoint", "sttModel", "inputDevice", "recognitionStartTimeoutMs",
             "recognitionCompletionTimeoutMs", "recognitionEndSilenceMs", "recognitionResultTimeoutMs", "longDictationTimeoutMs",
             "recognizeStopCommand", "recognitionCues", "cueGain", "followComposerMode" }) NativeVoiceJson.put(result, field, settings.opt(field));
         return result;

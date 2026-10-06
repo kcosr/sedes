@@ -22,7 +22,7 @@ public class NativeDictationStoreTest {
     private SecretKey key;
     private static final String BINDING = "profile\nhttps://sedes.example\n" + "a".repeat(64);
     private static final String OTHER = "profile\nhttps://other.example\n" + "a".repeat(64);
-    private static final String[] FIELDS = { "speechProvider", "speechEndpoint", "sttModel", "inputDeviceId", "recognitionStartTimeoutMs",
+    private static final String[] FIELDS = { "speechProvider", "speechEndpoint", "sttModel", "inputDevice", "recognitionStartTimeoutMs",
         "recognitionCompletionTimeoutMs", "recognitionEndSilenceMs", "recognitionResultTimeoutMs", "longDictationTimeoutMs",
         "recognizeStopCommand", "recognitionCues", "cueGain", "followComposerMode" };
 
@@ -70,6 +70,31 @@ public class NativeDictationStoreTest {
         journal.append(ordinal, pcm(2)); journal.checkpoint(); journal.seal(ordinal, ordinal, ordinal + 1, 0);
         journal.commitStarted(ordinal, "attempt" + ordinal); journal.committed(ordinal, "attempt" + ordinal, "item" + ordinal);
         journal.complete(ordinal, text);
+    }
+
+    @Test public void obsoleteManifestKeepsEncryptedFilesButCannotBeRetriedOrSent() throws Exception {
+        String id = "obsolete";
+        try (NativeDictationStore store = open()) {
+            NativeDictationStore.Journal journal = create(store, id); journal.adopt(true); completedSegment(journal, 0, "Saved words");
+            journal.finish("send", 1);
+            java.lang.reflect.Method read = NativeDictationStore.class.getDeclaredMethod("readJson", String.class, String.class, String.class, int.class);
+            read.setAccessible(true);
+            JSONObject manifest = (JSONObject) read.invoke(store, BINDING, id, "manifest", 2 * 1024 * 1024);
+            NativeVoiceJson.put(manifest, "version", 1);
+            JSONObject config = manifest.getJSONObject("config"); config.remove("inputDevice"); NativeVoiceJson.put(config, "inputDeviceId", "42");
+            java.lang.reflect.Method write = NativeDictationStore.class.getDeclaredMethod("writeRecord", String.class, String.class, String.class, byte[].class, boolean.class);
+            write.setAccessible(true); write.invoke(store, BINDING, id, "manifest", manifest.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8), true);
+        }
+        List<File> preserved = files();
+        java.util.Map<String, byte[]> content = new java.util.HashMap<>();
+        for (File file : preserved) { byte[] bytes = Files.readAllBytes(file.toPath()); assertEquals(1, bytes[0]); content.put(file.getPath(), bytes); }
+        try (NativeDictationStore store = open()) {
+            NativeDictationStore.Recording recording = store.recover(BINDING);
+            assertEquals("unavailable", recording.stage); assertTrue(recording.adopted); assertEquals("", recording.text);
+            assertTrue(recording.config.length() == 0); assertNull(recording.request); assertFalse(recording.complete());
+            assertEquals(preserved, files());
+            for (File file : preserved) assertArrayEquals(content.get(file.getPath()), Files.readAllBytes(file.toPath()));
+        }
     }
 
     @Test public void transcriptTrimsExactlyEcmaWhitespaceAndPreservesNonWhitespaceControls() throws Exception {

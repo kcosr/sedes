@@ -87,13 +87,13 @@ describe("voice settings page", () => {
     const native = voiceSnapshot({ recordingRecovery: saved });
     const { fake, store } = await renderPage(native, fake => fake.plugin.sendRecoveredRecording.mockResolvedValue({ ...native, stateRevision: 2,
       recordingRecovery: { ...saved, revision: 9, stage: "admitting", canSend: false } }));
-    expect(screen.getByRole("heading", { name: "Ready to send · Release review" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Copy recognized text" })).toBeEnabled();
-    fireEvent.click(screen.getByRole("button", { name: "Send saved dictation" }));
+    expect(screen.getByRole("heading", { name: "Saved dictation", level: 3 })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Copy text" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
     await waitFor(() => expect(fake.plugin.sendRecoveredRecording).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1,
-      recordingId: saved.recordingId, expectedRecoveryRevision: 8, acknowledgeIncomplete: false }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "Discard saved dictation" })).not.toHaveAttribute("aria-disabled"));
-    fireEvent.click(screen.getByRole("button", { name: "Discard saved dictation" }));
+      recordingId: saved.recordingId, expectedRecoveryRevision: 8 }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Discard" })).not.toHaveAttribute("aria-disabled"));
+    fireEvent.click(screen.getByRole("button", { name: "Discard" }));
     await waitFor(() => expect(fake.plugin.discardRecording).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1,
       recordingId: saved.recordingId, expectedRecoveryRevision: 9 }));
     store.dispose();
@@ -179,7 +179,7 @@ describe("voice settings page", () => {
     expect(toggle).toHaveAttribute("aria-checked", "false");
     fireEvent.click(toggle);
     expect(toggle).toHaveAttribute("aria-checked", "true");
-    expect(Object.entries(localStorage)).toEqual([[`sedes-voice-bar-when-off:${JSON.stringify(Object.values(VOICE_CONNECTION))}`, "true"]]);
+    expect(Object.entries(localStorage)).toEqual([["sedes-device-voice-bar-when-off", "true"]]);
     expect(fake.plugin.updateSettings).not.toHaveBeenCalled();
     store.dispose();
   });
@@ -239,6 +239,20 @@ describe("voice settings page", () => {
     expect(fake.plugin.updateSettings).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, expectedRevision: 0, patch: { pinDefaultVoiceThread: true } });
     expect(screen.getByRole("switch", { name: "Only play from default voice thread" })).toBeChecked();
     expect(screen.getByRole("switch", { name: "Only play from default voice thread" })).toHaveAccessibleDescription("Requires a default voice thread.");
+    store.dispose();
+  });
+  it("explains that the carried playback filter needs a default thread on this connection", async () => {
+    const settings = voiceSettings({ audioMode: "response", onlyVoiceThread: true });
+    const native = voiceSnapshot({ settings, ready: true, readiness: "ready", phase: "idle" });
+    const { fake, store } = await renderPage(native);
+    expect(screen.getByRole("status")).toHaveTextContent("Automatic playback and listening are paused. Choose a default voice thread for this connection");
+    expect(screen.getByRole("switch", { name: "Only play from default voice thread" })).toHaveAccessibleDescription("Requires a default voice thread.");
+    act(() => fake.emit("settingsChanged", { ...native, stateRevision: 2, settingsRevision: 1,
+      settings: { ...settings, onlyVoiceThread: false } }));
+    expect(screen.getByRole("status")).toHaveTextContent(/^Voice is ready\.$/u);
+    act(() => fake.emit("settingsChanged", { ...native, stateRevision: 3, settingsRevision: 2,
+      settings: { ...settings, audioMode: "off" }, ready: false, readiness: "off", phase: "off" }));
+    expect(screen.getByRole("status")).toHaveTextContent(/^Voice is off\.$/u);
     store.dispose();
   });
   it("saves speech cleanup on this device and reflects the native setting", async () => {
@@ -435,10 +449,64 @@ describe("voice settings page", () => {
     expect(screen.getByRole("textbox", { name: "Speech model" })).toHaveValue("custom-model");
     store.dispose();
   });
+  it("keeps the preferred microphone across removal and reconnect with a changed device ID", async () => {
+    const headset = { id: "42", type: 7, address: "AA:BB:CC:DD:EE:FF", label: "Headset" };
+    const preferred = { type: headset.type, address: headset.address, name: headset.label };
+    const builtIn = { id: "1", type: 15, address: "bottom", label: "Phone" };
+    const native = voiceSnapshot({ settings: voiceSettings({ inputDevice: preferred }) });
+    const { fake, store, view } = await renderPage(native, fake => {
+      fake.plugin.listInputDevices.mockResolvedValue({ devices: [builtIn, headset] });
+      fake.plugin.updateSettings.mockResolvedValue({ ...native, stateRevision: 2, settingsRevision: 1,
+        settings: { ...native.settings, inputDevice: null } });
+    });
+    const select = screen.getByRole("combobox", { name: "Microphone input" });
+    await waitFor(() => expect(select).toHaveValue("42"));
+    act(() => { fake.emit("inputDevicesChanged", { devices: [builtIn] }); });
+    expect(select).toHaveValue("unavailable");
+    expect(within(select).getByRole("option", { name: "Headset (unavailable)" })).toBeInTheDocument();
+    expect(select).toHaveAccessibleDescription("Recording requires this microphone. Reconnect it or choose another input.");
+    act(() => { fake.emit("inputDevicesChanged", { devices: [builtIn, { ...headset, id: "99", label: "Renamed headset" }] }); });
+    expect(select).toHaveValue("99");
+    expect(fake.plugin.updateSettings).not.toHaveBeenCalled();
+    expect(fake.plugin.startManualListen).not.toHaveBeenCalled();
+    fireEvent.change(select, { target: { value: "" } });
+    await waitFor(() => expect(fake.plugin.updateSettings).toHaveBeenCalledWith({ expectedConnectionGeneration: 1,
+      expectedRevision: 0, patch: { inputDevice: null } }));
+    expect(select).toHaveValue("");
+    const removed = fake.remove.mock.calls.length;
+    view.unmount();
+    await waitFor(() => expect(fake.remove.mock.calls.length).toBeGreaterThan(removed));
+    store.dispose();
+  });
+  it("saves microphone identity and disables ambiguous same-name choices", async () => {
+    const devices = [{ id: "1", label: "Headset", type: 7, address: null }, { id: "2", label: "Headset", type: 7, address: null },
+      { id: "3", label: "USB mic", type: 11, address: null }];
+    const { fake, store } = await renderPage(voiceSnapshot(), fake => fake.plugin.listInputDevices.mockResolvedValue({ devices }));
+    const select = screen.getByRole("combobox", { name: "Microphone input" });
+    await waitFor(() => expect(within(select).getByRole("option", { name: "Headset (Bluetooth) #1" })).toBeDisabled());
+    expect(within(select).getByRole("option", { name: "Headset (Bluetooth) #2" })).toBeDisabled();
+    fireEvent.change(select, { target: { value: "3" } });
+    await waitFor(() => expect(fake.plugin.updateSettings).toHaveBeenCalledWith({ expectedConnectionGeneration: 1,
+      expectedRevision: 0, patch: { inputDevice: { type: 11, address: null, name: "USB mic" } } }));
+    store.dispose();
+  });
+  it("ignores an old inventory reply after a newer reconnect callback", async () => {
+    let finish: (value: { devices: Array<{ id: string; type: number; address: string | null; label: string }> }) => void = () => {};
+    const preferred = { type: 7, address: null, name: "Headset" };
+    const { fake, store } = await renderPage(voiceSnapshot({ settings: voiceSettings({ inputDevice: preferred }) }), fake => {
+      fake.plugin.listInputDevices.mockReturnValue(new Promise(resolve => { finish = resolve; }));
+    });
+    const select = screen.getByRole("combobox", { name: "Microphone input" });
+    act(() => { fake.emit("inputDevicesChanged", { devices: [{ id: "99", type: 7, address: null, label: "Headset" }] }); });
+    await act(async () => { finish({ devices: [] }); });
+    expect(select).toHaveValue("99");
+    expect(fake.plugin.updateSettings).not.toHaveBeenCalled();
+    store.dispose();
+  });
   it("tells microphones with the same product name apart", async () => {
     const devices = [{ id: "1", label: "Pixel 7", type: 15 }, { id: "2", label: "Pixel 7", type: 15 }, { id: "3", label: "Pixel 7", type: 7 }, { id: "4", label: "USB mic", type: 11 }, { id: "5", label: " ", type: 99 }];
     expect([...inputDeviceLabels(devices).values()]).toEqual(["Pixel 7 (Built-in) #1", "Pixel 7 (Built-in) #2", "Pixel 7 (Bluetooth)", "USB mic", "Microphone"]);
-    const { store } = await renderPage(voiceSnapshot(), fake => { fake.plugin.listInputDevices.mockResolvedValue({ devices, selectedId: null }); });
+    const { store } = await renderPage(voiceSnapshot(), fake => { fake.plugin.listInputDevices.mockResolvedValue({ devices: devices.map(device => ({ ...device, address: null })) }); });
     const select = await screen.findByRole("combobox", { name: "Microphone input" });
     await waitFor(() => expect(within(select).getAllByRole("option").map(option => option.textContent)).toEqual(
       ["System default", "Pixel 7 (Built-in) #1", "Pixel 7 (Built-in) #2", "Pixel 7 (Bluetooth)", "USB mic", "Microphone"]));

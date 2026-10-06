@@ -1,5 +1,5 @@
 import type { PluginListenerHandle } from "@capacitor/core";
-import { nativeVoiceInputSubmittedSchema, nativeVoiceStateSchema, type NativeVoiceCommandContext, type NativeVoiceInputSubmitted, type NativeVoiceInteractionCommandContext, type NativeVoicePlugin, type NativeVoiceSettings, type NativeVoiceState } from "./native-voice-plugin.js";
+import { nativeRecordingTextSchema, nativeVoiceInputSubmittedSchema, nativeVoiceStateSchema, type NativeRecordingRecoveryCommandContext, type NativeVoiceCommandContext, type NativeVoiceInputSubmitted, type NativeVoiceInteractionCommandContext, type NativeVoicePlugin, type NativeVoiceSettings, type NativeVoiceState } from "./native-voice-plugin.js";
 
 type NativeVoiceError = NativeVoiceState["errors"][number];
 export interface VoiceClientState {
@@ -8,6 +8,8 @@ export interface VoiceClientState {
   readonly pending: boolean;
   /** The latest action, connection, or runtime failure. It stays until the next user action, a reconnect, or progress. */
   readonly error?: string;
+  /** Copying into a composer leaves the native recovery item intact. */
+  readonly addedRecording?: NativeRecordingRecoveryCommandContext;
   /** Native errors the user cleared on this device; native keeps its own bounded list. */
   readonly dismissedErrors?: { readonly connectionGeneration: number; readonly errors: readonly NativeVoiceError[] };
 }
@@ -36,6 +38,8 @@ export class NativeVoiceStore {
   #pendingActions = 0;
   #actionSequence = 0;
   #stopping = new Map<string, Promise<void>>();
+  #composers = new Map<string, (text: string) => void>();
+  #composerListeners = new Set<() => void>();
   constructor(readonly plugin: NativeVoicePlugin, readonly connection: { profileId: string; serverOrigin: string; identity: string }, readonly openThread: (threadId: string) => void) {}
   getSnapshot = (): VoiceClientState => this.#state;
   subscribe = (listener: () => void): (() => void) => { this.#listeners.add(listener); return () => { this.#listeners.delete(listener); }; };
@@ -49,6 +53,54 @@ export class NativeVoiceStore {
     const current = this.#state.native;
     if (this.#disposed || !current) throw new Error("This voice connection is no longer active.");
     return { expectedConnectionGeneration: current.connectionGeneration };
+  }
+
+  /** Active views register their composer, or an error when no composer is available. Composers own drafts and autosave. */
+  registerComposer(threadId: string, append: (text: string) => void): () => void {
+    this.#composers.set(threadId, append);
+    for (const listener of this.#composerListeners) listener();
+    return () => { if (this.#composers.get(threadId) === append) this.#composers.delete(threadId); };
+  }
+  async addRecordingToComposer(context: NativeRecordingRecoveryCommandContext): Promise<void> {
+    await this.run(async () => {
+      const current = () => {
+        const native = this.#state.native, saved = native?.recordingRecovery;
+        if (this.#disposed || native?.connectionGeneration !== context.expectedConnectionGeneration ||
+            saved?.recordingId !== context.recordingId || saved.revision !== context.expectedRecoveryRevision)
+          throw new Error("Saved dictation changed. Open it again.");
+        return native;
+      };
+      current();
+      const result = nativeRecordingTextSchema.parse(await this.plugin.readRecognizedRecordingText(context));
+      const native = current();
+      if (result.recordingId !== context.recordingId || result.revision !== context.expectedRecoveryRevision ||
+          result.threadId !== native.recordingRecovery?.threadId) throw new Error("Saved dictation changed. Open it again.");
+      const added = this.#state.addedRecording;
+      if (added?.recordingId === context.recordingId && added.expectedRecoveryRevision === context.expectedRecoveryRevision &&
+          added.expectedConnectionGeneration === context.expectedConnectionGeneration) return native;
+      this.openThread(result.threadId);
+      await new Promise<void>((resolve, reject) => {
+        const cleanup = () => { clearTimeout(timer); unsubscribe(); this.#composerListeners.delete(check); };
+        const check = () => {
+          try {
+            current();
+            if (!this.#composers.has(result.threadId)) return;
+            cleanup(); resolve();
+          } catch (error) { cleanup(); reject(error); }
+        };
+        const unsubscribe = this.subscribe(check);
+        const timer = setTimeout(() => { cleanup(); reject(new Error("The composer is unavailable. You can still copy the text.")); }, 10_000);
+        this.#composerListeners.add(check);
+        check();
+      });
+      current();
+      const append = this.#composers.get(result.threadId);
+      if (!append) throw new Error("The composer is unavailable. You can still copy the text.");
+      // Synchronous insertion reads the composer's current draft. No delayed callback can add to another connection.
+      append(result.text);
+      this.#set({ ...this.#state, addedRecording: context });
+      return current();
+    });
   }
 
   async initialize(): Promise<void> {
@@ -193,6 +245,8 @@ export class NativeVoiceStore {
   }
   dispose(): void {
     this.#disposed = true;
+    for (const listener of this.#composerListeners) listener();
+    this.#composers.clear();
     this.#clearRetry();
     for (const handle of this.#handles) void handle.remove();
     this.#handles = [];

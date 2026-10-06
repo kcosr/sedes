@@ -10,11 +10,12 @@
   together with the server.
   ([#50](https://github.com/kcosr/sedes/pull/50), [#53](https://github.com/kcosr/sedes/pull/53))
 
-- Android voice uses OpenAI-compatible Realtime transcription and streamed HTTP
-  speech, with snapshot version 8 and settings record version 6. Older local
-  voice settings reset to Off; reconfigure the provider, endpoint, and models.
-  Separately stored speech credentials remain on the device.
-  ([#49](https://github.com/kcosr/sedes/pull/49), [#51](https://github.com/kcosr/sedes/pull/51), [#53](https://github.com/kcosr/sedes/pull/53))
+- Android voice uses snapshot version 9, settings version 7, and dictation
+  manifest version 2. Reconfigure voice and re-enter speech credentials after
+  upgrading: previous per-connection preferences are not imported and their
+  speech keys are removed. Finish or copy saved dictation first; older recordings
+  remain on disk until discarded but cannot be resumed.
+  ([#49](https://github.com/kcosr/sedes/pull/49), [#51](https://github.com/kcosr/sedes/pull/51), [#53](https://github.com/kcosr/sedes/pull/53), [#55](https://github.com/kcosr/sedes/pull/55))
 
 - Self-hosted speech servers must advertise per-model `realtime` capabilities.
   Hosted recognition accepts only the supported base model IDs, excluding dated
@@ -428,6 +429,18 @@
 
 ### Changed
 
+- Android voice preferences and speech credentials persist across connection
+  switches and deletion. Thread selections and saved input remain specific to
+  each server and account.
+  ([#55](https://github.com/kcosr/sedes/pull/55))
+
+- Android saved dictation offers grouped **Copy text**, **Discard**, **Send**,
+  and **Add to composer** controls. Adding text opens the original thread and
+  preserves its draft and the recording without sending. Interrupted recordings
+  show a short status and can be sent without an extra checkbox; unfinished
+  transcription offers **Retry**.
+  ([#55](https://github.com/kcosr/sedes/pull/55))
+
 - Voice settings offer searchable models, voices, and threads, with separate
   default recording targets and playback filters. The voice card can choose a
   current or next target without changing the default; headset and notification
@@ -771,6 +784,16 @@
   sidecar runtime protocol 14 now also carries the queued-input marker.
 
 ### Fixed
+
+- Preferred Android microphones reconnect despite device ID changes, and the
+  picker refreshes when devices change. Missing or ambiguous selections never
+  silently switch microphones; Bluetooth routing supports paired endpoints with
+  different names.
+  ([#55](https://github.com/kcosr/sedes/pull/55))
+
+- Android voice shows **Default thread needed** when the playback filter
+  requires a thread that the current connection has not selected.
+  ([#55](https://github.com/kcosr/sedes/pull/55))
 
 - Windows desktop upgrades handle long temporary paths while removing older
   full installations, including upgrades to client-only builds, instead of

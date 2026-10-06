@@ -14,7 +14,7 @@ import { cn } from "../lib/utils.js";
 import { useVoiceState } from "./VoiceProvider.js";
 import type { NativeVoiceStore } from "./NativeVoiceStore.js";
 import { voiceReadiness } from "./VoiceSettingsPage.js";
-import { canEnableVoice, resumeVoice } from "./voice-session.js";
+import { canEnableVoice, resumeVoice, voiceThreadFilterWarning } from "./voice-session.js";
 import { nativeThreadTitle, type NativeVoiceSettings } from "./native-voice-plugin.js";
 import { VoiceThreadPicker } from "./VoiceThreadPicker.js";
 import { savedRecording, VoiceRecordingRecovery } from "./VoiceRecordingRecovery.js";
@@ -52,9 +52,11 @@ export function VoiceQuickSheet({ store, threads, open, onOpenChange }: {
   // A pending write locks controls with aria-disabled, not disabled: a disabled control drops focus to the page.
   const locked = state.pending || undefined;
   const update = (patch: Partial<NativeVoiceSettings>) => { if (!state.pending) void store.update(patch).catch(() => undefined); };
+  const filterWarning = settings ? voiceThreadFilterWarning(settings) : null;
   const [status, tone] = state.error ? [state.error, "warning"] : !native ? [state.loading ? "Connecting voice to this server…" : "Voice could not connect to this server.", "warning"]
     : native.readiness === "storageUnavailable" ? [voiceReadiness(native.readiness), "warning"]
-      : native.settings.audioMode === "off" ? ["Voice off", "muted"] : native.ready ? ["Ready", "success"] : [voiceReadiness(native.readiness), "warning"];
+      : native.settings.audioMode === "off" ? ["Voice off", "muted"] : native.ready
+        ? filterWarning ? [filterWarning, "warning"] : ["Ready", "success"] : [voiceReadiness(native.readiness), "warning"];
   const mode = settings ? modes.find(([value]) => value === settings.audioMode)! : undefined;
   // Enabling voice requires both the speech destination and its native credential.
   const blocked = settings?.audioMode === "off" && !canEnableVoice(settings, native?.speech.credentialConfigured === true);
@@ -91,7 +93,7 @@ export function VoiceQuickSheet({ store, threads, open, onOpenChange }: {
           {native?.readiness === "storageUnavailable" ? <Button className={cn("h-(--control-touch) w-full", lockedClass)} aria-disabled={locked}
             onClick={() => { if (!state.pending) void store.reconnect().catch(() => undefined); }}>Retry voice connection</Button> : null}
         </div>
-        <VoiceRecordingRecovery store={store} threads={threads} />
+        <VoiceRecordingRecovery store={store} threads={threads} onAddedToComposer={() => onOpenChange(false)} />
         {native?.actions.keepListeningBlockedReason === "saved_recording_pending" ? <p className="voice-sheet-help">Resolve saved dictation first to enable Keep listening for the current recording.</p>
           : settings.keepListeningByDefault && saved && !native?.actions.canStart ? <p className="voice-sheet-help">Resolve saved dictation first to start with Keep listening.</p> : null}
         {native && saved?.admission && native.actions.canStart ? <Button variant="outline" disabled={state.pending} onClick={start}>Start new recording</Button> : null}

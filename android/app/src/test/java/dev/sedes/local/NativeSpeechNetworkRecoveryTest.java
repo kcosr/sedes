@@ -100,7 +100,7 @@ public class NativeSpeechNetworkRecoveryTest {
         JSONObject config = new JSONObject();
         NativeVoiceSettings settings = NativeVoiceSettings.defaults().patch(0, NativeVoiceJson.object("speechProvider", "server",
             "speechEndpoint", endpoint, "sttModel", "fixture-stt"));
-        for (String field : new String[] {"speechProvider", "speechEndpoint", "sttModel", "inputDeviceId", "recognitionStartTimeoutMs",
+        for (String field : new String[] {"speechProvider", "speechEndpoint", "sttModel", "inputDevice", "recognitionStartTimeoutMs",
                 "recognitionCompletionTimeoutMs", "recognitionEndSilenceMs", "recognitionResultTimeoutMs", "longDictationTimeoutMs",
                 "recognizeStopCommand", "recognitionCues", "cueGain", "followComposerMode"})
             NativeVoiceJson.put(config, field, settings.value.opt(field));

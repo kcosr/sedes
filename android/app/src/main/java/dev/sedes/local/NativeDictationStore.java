@@ -50,6 +50,8 @@ final class NativeDictationStore implements AutoCloseable {
     static final int MAX_SEGMENT_TEXT_BYTES = 65_536;
     static final int MAX_RETAINED_TEXT_BYTES = 327_681;
     private static final int VERSION = 1;
+    // Persistent microphone identity changes the manifest only, not encrypted PCM or checkpoint framing.
+    private static final int MANIFEST_VERSION = 2;
     private static final int BLOCK_PCM_BYTES = SAMPLE_RATE * 2;
     private static final int BLOCK_HEADER_BYTES = 20;
     private static final int ENCRYPTION_BYTES = 29;
@@ -62,7 +64,7 @@ final class NativeDictationStore implements AutoCloseable {
     private static final Map<String, Ledger> LEDGERS = new HashMap<>();
     private static final Set<String> STAGES = new HashSet<>(Arrays.asList("capturing", "finishing", "interrupted",
         "recognizing", "ready", "admitting", "rejected", "overflow", "unavailable"));
-    private static final String[] CONFIG_FIELDS = { "speechProvider", "speechEndpoint", "sttModel", "inputDeviceId",
+    private static final String[] CONFIG_FIELDS = { "speechProvider", "speechEndpoint", "sttModel", "inputDevice",
         "recognitionStartTimeoutMs", "recognitionCompletionTimeoutMs", "recognitionEndSilenceMs", "recognitionResultTimeoutMs",
         "longDictationTimeoutMs", "recognizeStopCommand", "recognitionCues", "cueGain", "followComposerMode" };
 
@@ -284,7 +286,7 @@ final class NativeDictationStore implements AutoCloseable {
             checkOwner(binding); validId(id); validTarget(threadId, threadTitle); validateConfig(config);
             File directory = directory(binding, id);
             if (directory.exists() || live.containsKey(cacheKey(binding, id))) throw new IllegalStateException("dictation_identity_conflict");
-            JSONObject manifest = NativeVoiceJson.object("version", VERSION, "id", id, "binding", binding, "revision", 0,
+            JSONObject manifest = NativeVoiceJson.object("version", MANIFEST_VERSION, "id", id, "binding", binding, "revision", 0,
                 "threadId", threadId, "threadTitle", threadTitle, "config", NativeVoiceJson.copy(config), "stage", "capturing", "reason", null,
                 "adopted", false, "keepListening", false, "captureIncomplete", false, "incompleteAccepted", false,
                 "prefixRevision", 0, "textBytes", 0, "completedOrdinal", -1, "completedSamples", 0,
@@ -910,7 +912,7 @@ final class NativeDictationStore implements AutoCloseable {
         exactKeys(value, "version", "id", "binding", "revision", "threadId", "threadTitle", "config", "stage", "reason",
             "adopted", "keepListening", "captureIncomplete", "incompleteAccepted", "prefixRevision", "textBytes", "completedOrdinal",
             "completedSamples", "segments", "endSample", "mutationId", "preference", "request", "requestFingerprint", "handedOff");
-        NativeVoiceJson.integer(value, "version", VERSION, VERSION);
+        NativeVoiceJson.integer(value, "version", MANIFEST_VERSION, MANIFEST_VERSION);
         if (!id.equals(value.optString("id")) || !binding.equals(value.optString("binding"))) throw new IllegalArgumentException("dictation_identity_invalid");
         validTarget(NativeVoiceJson.string(value, "threadId", 160), NativeVoiceJson.nullableString(value, "threadTitle", 512));
         validateConfig(NativeVoiceJson.requiredObject(value, "config"));
@@ -1207,7 +1209,7 @@ final class NativeDictationStore implements AutoCloseable {
             provider.equals("openai") && !endpoint.equals(NativeVoiceSettings.OPENAI_ENDPOINT)) throw new IllegalArgumentException("dictation_config_invalid");
         String model = NativeVoiceJson.string(value, "sttModel", 160);
         if (!model.equals(model.trim()) || model.chars().anyMatch(Character::isISOControl)) throw new IllegalArgumentException("dictation_config_invalid");
-        NativeVoiceJson.nullableString(value, "inputDeviceId", 80);
+        NativeVoiceInput.read(value);
         for (String field : new String[] { "recognitionStartTimeoutMs", "recognitionCompletionTimeoutMs", "recognitionResultTimeoutMs" })
             NativeVoiceJson.integer(value, field, 1000, 300000);
         NativeVoiceJson.integer(value, "recognitionEndSilenceMs", 100, 30000);

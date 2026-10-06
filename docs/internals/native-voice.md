@@ -2,7 +2,7 @@
 
 The Android `NativeVoice` Capacitor plugin exposes settings, snapshots, and
 actions. `NativeVoiceRuntime` owns the state machine on one handler thread.
-Native snapshot version 8 includes `active.recording` (ID, Keep listening and
+Native snapshot version 9 includes `active.recording` (ID, Keep listening and
 Reconnecting), native-authoritative `canSetKeepListening`/`canSend` actions, the
 Keep listening blocked reason, and an independent `recordingRecovery` item.
 Recovery exposes identity, revision, target, stage, incomplete/unrecognized
@@ -11,8 +11,11 @@ transcript. It remains visible when Off and across restart. Commands use the
 expected connection generation plus recording ID and, for recovery, expected
 recovery revision. Retarget takes the recording ID; Stop takes the interaction
 ID. The strict bridge accepts only this version. The snapshot also includes
-`cleanSpeechText` and registered `clientConnectionToken` alongside `originClientId`. The `pinDefaultVoiceThread` setting is scoped to the
-device/profile/identity with the other voice settings and defaults to false.
+`cleanSpeechText` and registered `clientConnectionToken` alongside `originClientId`.
+The `inputDevice` preference is a nullable type/address/name identity rather than
+an Android connection-local device ID. The device-owned `pinDefaultVoiceThread`
+setting defaults to false; its selected default thread is scoped to the exact
+Sedes profile, origin, and authenticated identity.
 Pinning supplies the initial in-app target from the saved default without
 falling back to the foreground. The nullable native `nextRecordingTarget`
 contains a thread ID/title chosen through generation-fenced
@@ -82,13 +85,30 @@ queued inputs, and initiating client origins are tenant/principal scoped in
 SQLite. Scope comes from normal authenticated request admission. The currently
 single-user identity provider does not make these records installation-global.
 
-Android settings and recovery records bind profile ID, exact normalized server
-origin, and authenticated navigation namespace. An Android Keystore AES-GCM
-key protects atomic records in the app's backup-excluded directory, under
-`native-voice/<SHA-256 of profile ID>/<SHA-256 of binding>/`. Record type and
-binding are authenticated associated data. Removing a profile deletes its
-settings and input journals, including recognized text, for every binding of that
-profile. The input journal holds at most 64 entries and 8 MiB.
+General Android voice preferences belong to the device. `NativeVoicePreferences`
+stores them in one atomic encrypted record under `native-voice-device/`, with
+default-thread selections partitioned by profile ID, exact normalized server
+origin, and authenticated navigation namespace. A single revision covers both
+parts, so a settings mutation changes its device and connection fields atomically.
+Only the exact authenticated binding's thread selection enters the runtime
+snapshot. Switching connections changes that selection without resetting ordinary
+preferences.
+
+The device-wide `onlyVoiceThread` preference remains enabled across connections.
+If the active binding has no default thread, automatic voice remains filtered
+out, and the idle card, quick sheet, and Voice settings show the missing-thread
+condition instead of reporting automatic voice ready. Manual recording remains
+independently available.
+
+Input journals and advisory speech catalogs retain their binding under
+`native-voice/<SHA-256 of profile ID>/<SHA-256 of binding>/`. An Android Keystore
+AES-GCM key protects atomic records in the app's backup-excluded directory;
+record type and binding are authenticated associated data. Removing a profile
+prunes its default-thread selections and deletes its input journals and catalogs
+for every binding of that profile. Both cleanup steps are attempted even when
+one fails; a device-preferences storage failure cannot prevent journal deletion.
+General preferences and other profiles'
+selections survive. The input journal holds at most 64 entries and 8 MiB.
 
 A server registration supplies the shared native/WebView client ID. Paired
 registrations use the authenticated management-client ID; authentication-off
@@ -111,11 +131,11 @@ is a connection fence, not a replacement for authentication. Native and browser
 registration remain live while voice is Off. Old advisory origins retained in
 historical inputs do not become live client authority.
 
-The settings record carries an explicit `RECORD_VERSION` and validates strictly
-against it. Version 5 adds `longDictationTimeoutMs` to speech cleanup and the recording pin, provider, endpoint,
-model, voice, speed, text-limit, and result-timeout settings. Older settings
-records are not migrated; an upgrade resets them with voice Off. Speech
-credentials are stored separately and remain intact. A
+The device preferences envelope has format version 1 and carries the strict
+settings `RECORD_VERSION` 7. Earlier per-binding settings and profile-bound speech
+credentials are not imported; upgrades require device voice setup and credential
+entry once. Native voice initialization deletes the obsolete `speech-credentials/`
+tree without decoding its records. A
 record that exists but cannot be authenticated, decoded, or validated is moved
 aside as `<name>.corrupt` and replaced with defaults. Native reports
 `voice_settings_reset` or `voice_journal_reset`. Only a
@@ -131,14 +151,15 @@ take a Sedes bearer token. Authenticated GETs and mutations preserve the normal
 endpoint and CSRF rules. Speech requests use a separate client and a dedicated
 speech credential; neither client follows redirects.
 
-`SpeechCredentialStore` binds each speech credential to the device profile,
-provider, and normalized API endpoint, with a separate purpose and Keystore
+`SpeechCredentialStore` binds each speech credential to the provider and
+normalized API endpoint, with a separate purpose and Keystore
 alias from Sedes authentication. AES-GCM ciphertext lives in backup-excluded
 native storage. A native masked dialog saves, tests, or removes the credential;
 the WebView sees only whether one is configured. Native checks connection and
 settings revisions again after the dialog and before a mutation. Changing the
-provider or endpoint cannot reuse another destination's credential. Removing a
-profile also removes its speech credentials.
+provider or endpoint cannot reuse another destination's credential. Ciphertext
+lives under `device-speech-credentials/`. Removing a Sedes profile does not remove
+device speech credentials; the native credential dialog removes a selected key.
 Every mutating bridge command carries the caller's `expectedConnectionGeneration`;
 native validates it on its owner thread, including after permission prompts.
 A delayed command from an earlier profile cannot mutate the newly active one,
@@ -449,13 +470,13 @@ stops capture and retains the accepted prefix; it never silently drops PCM.
 publishes capture-ended only after accepted callbacks return and hardware cleanup.
 Cancel invalidates the generation instead.
 
-The device/profile/identity-scoped `keepListeningByDefault` setting defaults to
+The device-owned `keepListeningByDefault` setting defaults to
 false and is shared by the quick sheet and Settings → Voice. Each new manual or
 automatic recording freezes that preference. When enabled, durable adoption and
 held capture policy must succeed before the microphone starts; unavailable
 storage or a saved recording occupying the slot blocks capture. Preference
 edits affect future recordings, while the infinity control changes only the
-current recording. Strict settings record version 6 requires the field.
+current recording. The strict settings contract requires the field.
 Freezing an enabled default immediately clears automatic-policy and client-action
 authority, before asynchronous preflight or adoption can race a policy change.
 An unresolved retained dictation blocks default-held manual and automatic starts
@@ -522,6 +543,11 @@ profile and authenticated Sedes binding. Independent one-second PCM blocks,
 checkpoint watermarks, bounded metadata, and recognized-prefix records use
 AES-GCM with owner/type/identity authenticated data. The serial storage executor
 orders adoption, accepted PCM, result persistence, reclamation, and tombstones.
+Manifest version 2 freezes the preferred microphone identity with the recording
+configuration. Encryption framing and checkpoint format remain version 1.
+Older manifests are unsupported and their recordings remain unavailable, with
+files preserved for explicit discard; there is no migration. Finish or copy saved
+dictation before upgrading.
 Successful text is durable before corresponding audio is deleted. Each recording
 allows 32 MiB unresolved PCM and 128 unresolved segments; the global 64 MiB disk
 budget includes ciphertext, metadata, temporary writes and reserved staging.
@@ -538,10 +564,12 @@ only until restart. Startup cancellation settles its never-captured journal
 directly, without an intermediate interruption write.
 Unreadable storage remains preserved. Restart restores only the draft and immutable admission
 request; it cannot resume the microphone, recognition, or POST automatically.
-Missing interior audio blocks Send. An explicit recovery Send can accept a
-reported incomplete trailing watermark only with `acknowledgeIncomplete: true`
-from the recovery control that displays the warning. The toolbar opens that
-control for an incomplete capture. Key, corruption, and disk failures
+Missing interior audio blocks Send. `captureIncomplete` records an abnormal end
+or a storage gap; it does not prove that meaningful speech was lost. The UI
+reports **Recording interrupted**. Explicit recovery Send accepts the saved
+trailing boundary and durably records that intent before admission; its bridge
+command has no separate acknowledgement flag. No background retry can accept it.
+Key, corruption, and disk failures
 preserve recording files and expose unavailable recovery, rather than resetting
 them. Unknown targets are null and cannot open a thread. A bootstrap storage
 failure without a recoverable item reports storage readiness with an explicit
@@ -558,6 +586,21 @@ even when recognition later succeeds; the user presses Send again.
 Normal finish intents (Send, automatic completion, and Retry) are not presented
 as failure reasons. The original live Send keeps its live controls, including
 Stop during admission; an active recovery Retry or Send uses the recovery controls.
+
+**Add to composer** explicitly reads recognized text through
+`readRecognizedRecordingText`. Native checks the connection generation, binding,
+recording ID and recovery revision before and after the storage read. Text is
+returned only by this command, never by routine state snapshots. The client
+opens the original thread and waits for its active composer, cancelling stale
+handoffs and timing out a view that never finishes loading, reconnecting or
+navigating back from a historical turn. Known read-only, archived, unavailable or recovery views refuse the
+handoff immediately with guidance. That composer appends to its
+current local draft, retaining skill, attachments and context, and rejects an
+oversized result without truncation. Draft adoption updates the current values
+before registration can accept a waiting handoff. Its existing autosave owns persistence;
+the native recovery item is retained. A successful insertion is remembered for
+that recording revision in the current voice store, preventing repeated taps
+from appending duplicates. Connection changes invalidate pending handoffs.
 
 The recording and final-input journal merge into one recovery item as soon as
 an immutable mutation is allocated. Adopted input entries independently authenticate
@@ -659,7 +702,7 @@ voice.
 to speech text before assembly and request chunking. Context, result sections,
 and truncation notices are independent documents, joined with paragraph pauses;
 an unfinished code fence in one part cannot swallow another. The
-device/profile/identity-owned `cleanSpeechText` setting defaults to true. It removes formatting delimiters,
+device-owned `cleanSpeechText` setting defaults to true. It removes formatting delimiters,
 reads link labels and image descriptions, preserves code contents and ordinary
 symbols, and keeps paragraph/list pauses, ordered-list numbers, table cell
 separators, checkbox meaning, and footnote contents with numbered references.
@@ -707,10 +750,26 @@ submitting that text exactly once. An unrelated error awaiting its failure cue
 still reports that original error. Queued items retain their normal advancement
 policy.
 
+`NativeVoiceInput` stores a preferred input's type, usable stable address, and
+product name. Each capture resolves it against fresh Android device enumeration;
+connection-local device IDs never define the saved preference. With a stable
+address, type/address must match uniquely; otherwise type/name must match uniquely.
+Transient USB card addresses and redacted Bluetooth addresses are excluded.
+No match or multiple matches report `microphone_device_unavailable` and retain
+the preference. `inputDevicesChanged` refreshes the open picker after device
+callbacks; reconnecting only affects future capture and never resumes an
+interrupted recording. A null preference explicitly delegates input choice to
+Android.
+
 A Bluetooth SCO or LE input enters communication mode. On API 31 and newer,
-native selects the communication device with the same type and address as the
-chosen input and fails if Android refuses it; earlier versions start SCO.
-Recording waits up to five seconds for the route, then fails with
+the preference identifies the communication output. Native selects that output
+and lets Android select its paired input for `VOICE_COMMUNICATION`; their
+product names need not match. Before accepting audio, native verifies the
+preferred output is uniquely resolved and active, the routed input has the
+same Bluetooth type, and any addresses visible on both endpoints agree.
+Capture then stops if the input ID or selected communication output changes.
+Earlier versions start SCO and resolve the preferred input after the link is
+ready. Recording waits up to five seconds for the route, then fails with
 `microphone_route_failed`. Playback failures report `speech_timeout`,
 `audio_focus_unavailable`, `empty_pcm_stream`, `playback_drain_timeout`, or the
 fallback `playback_failed`. Capture failures report

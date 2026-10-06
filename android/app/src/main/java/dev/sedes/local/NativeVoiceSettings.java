@@ -9,7 +9,7 @@ import org.json.JSONObject;
 final class NativeVoiceSettings {
     static final String[] FIELDS = { "audioMode", "autoListen", "keepListeningByDefault", "ignoreOtherDevices", "readNotificationContext", "cleanSpeechText",
         "speechProvider", "speechEndpoint", "sttModel", "ttsModel", "ttsVoice", "ttsSpeed", "speechTextLimit", "voiceThreadId", "voiceThreadTitle", "pinDefaultVoiceThread", "onlyVoiceThread", "followComposerMode",
-        "inputDeviceId", "recognitionStartTimeoutMs", "recognitionCompletionTimeoutMs", "recognitionResultTimeoutMs", "recognitionEndSilenceMs", "longDictationTimeoutMs",
+        "inputDevice", "recognitionStartTimeoutMs", "recognitionCompletionTimeoutMs", "recognitionResultTimeoutMs", "recognitionEndSilenceMs", "longDictationTimeoutMs",
         "recognizeStopCommand", "recognitionCues", "cueGain", "startupPreRollMs", "ttsGain", "headsetControls" };
     /**
      * Stored records carry this explicit schema version and validate strictly against it. Adding, removing or changing a
@@ -17,7 +17,7 @@ final class NativeVoiceSettings {
      * aliasing or tolerance of missing fields. A record that fails validation is quarantined by the runtime and replaced
      * with defaults, so an unreadable or newer record cannot block voice.
      */
-    static final int RECORD_VERSION = 6;
+    static final int RECORD_VERSION = 7;
     static final String OPENAI_ENDPOINT = "https://api.openai.com/v1";
     final long revision;
     final JSONObject value;
@@ -32,7 +32,7 @@ final class NativeVoiceSettings {
             "audioMode", "off", "autoListen", true, "keepListeningByDefault", false, "ignoreOtherDevices", true, "readNotificationContext", true, "cleanSpeechText", true,
             "speechProvider", "openai", "speechEndpoint", OPENAI_ENDPOINT, "sttModel", "gpt-live-transcribe",
             "ttsModel", "gpt-4o-mini-tts", "ttsVoice", "coral", "ttsSpeed", 1.0, "speechTextLimit", 4096, "voiceThreadId", null, "voiceThreadTitle", null,
-            "pinDefaultVoiceThread", false, "onlyVoiceThread", false, "followComposerMode", false, "inputDeviceId", null,
+            "pinDefaultVoiceThread", false, "onlyVoiceThread", false, "followComposerMode", false, "inputDevice", null,
             "recognitionStartTimeoutMs", 30000, "recognitionCompletionTimeoutMs", 60000,
             "recognitionResultTimeoutMs", 60000, "recognitionEndSilenceMs", 1200, "longDictationTimeoutMs", 3600000, "recognizeStopCommand", true, "recognitionCues", true,
             "cueGain", 100, "startupPreRollMs", 512, "ttsGain", 100, "headsetControls", true));
@@ -65,13 +65,6 @@ final class NativeVoiceSettings {
             if (!value.opt(key).equals(other.value.opt(key))) return false;
         return Double.compare(decimal("ttsSpeed"), other.decimal("ttsSpeed")) == 0;
     }
-    JSONObject record() { return NativeVoiceJson.object("version", RECORD_VERSION, "revision", revision, "settings", value); }
-    static NativeVoiceSettings fromRecord(JSONObject record) {
-        NativeVoiceJson.keys(record, "version", "revision", "settings");
-        NativeVoiceJson.integer(record, "version", RECORD_VERSION, RECORD_VERSION);
-        return new NativeVoiceSettings(NativeVoiceJson.integer(record, "revision", 0, Long.MAX_VALUE),
-            NativeVoiceJson.requiredObject(record, "settings"));
-    }
     private static void validate(JSONObject value) {
         NativeVoiceJson.keys(value, FIELDS);
         for (String key : FIELDS) if (!value.has(key)) throw new IllegalArgumentException("missing_" + key);
@@ -99,7 +92,7 @@ final class NativeVoiceSettings {
         NativeVoiceJson.integer(value, "speechTextLimit", 2, 4096);
         NativeVoiceJson.nullableString(value, "voiceThreadId", 160);
         NativeVoiceJson.nullableString(value, "voiceThreadTitle", 512);
-        NativeVoiceJson.nullableString(value, "inputDeviceId", 80);
+        NativeVoiceInput.read(value);
         NativeVoiceJson.integer(value, "recognitionStartTimeoutMs", 1000, 300000);
         NativeVoiceJson.integer(value, "recognitionCompletionTimeoutMs", 1000, 300000);
         NativeVoiceJson.integer(value, "recognitionResultTimeoutMs", 1000, 300000);

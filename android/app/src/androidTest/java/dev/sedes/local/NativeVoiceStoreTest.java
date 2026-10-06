@@ -16,7 +16,78 @@ public class NativeVoiceStoreTest {
     private static final String IDENTITY_A = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     private static final String IDENTITY_B = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     private static final String ORIGIN = "http://127.0.0.1:65123";
-    private final Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+    private final NativeVoiceTestContext context = new NativeVoiceTestContext();
+    @org.junit.After public void closeInstallation() { context.close(); }
+
+    @Test public void devicePreferencesAndExactThreadSelectionsSurviveRestartAndProfileDeletion() throws Exception {
+        String profile = "voice-test-" + UUID.randomUUID(), other = "voice-test-" + UUID.randomUUID();
+        String a = NativeVoiceStore.binding(profile, ORIGIN, IDENTITY_A);
+        String b = NativeVoiceStore.binding(profile, "https://other.example", IDENTITY_A);
+        String account = NativeVoiceStore.binding(profile, ORIGIN, IDENTITY_B), otherProfile = NativeVoiceStore.binding(other, ORIGIN, IDENTITY_A);
+        NativeVoiceStore store = new NativeVoiceStore(context);
+        store.settings(a, store.settings(a).patch(0, NativeVoiceJson.object("autoListen", false, "ttsVoice", "private-voice",
+            "voiceThreadId", "a-thread", "voiceThreadTitle", "A thread")));
+        assertNull(store.settings(b).text("voiceThreadId")); assertEquals("private-voice", store.settings(b).text("ttsVoice"));
+        store.settings(b, store.settings(b).patch(1, NativeVoiceJson.object("voiceThreadId", "b-thread", "voiceThreadTitle", "B thread")));
+        File stored = new File(store.directory(NativeVoiceStore.DEVICE_BINDING), NativeVoiceStore.PREFERENCES_RECORD + ".enc");
+        assertFalse(new String(Files.readAllBytes(stored.toPath()), StandardCharsets.ISO_8859_1).contains("private-voice"));
+        assertTrue(stored.renameTo(new File(stored.getPath() + ".bak")));
+        NativeVoiceStore restored = new NativeVoiceStore(context);
+        assertEquals("a-thread", restored.settings(a).text("voiceThreadId"));
+        assertEquals("b-thread", restored.settings(b).text("voiceThreadId"));
+        for (String binding : new String[] { account, otherProfile }) {
+            assertNull(restored.settings(binding).text("voiceThreadId")); assertFalse(restored.settings(binding).flag("autoListen"));
+        }
+        restored.removeProfile(profile);
+        for (String binding : new String[] { a, b, account, otherProfile }) {
+            assertNull(restored.settings(binding).text("voiceThreadId")); assertNull(restored.settings(binding).text("voiceThreadTitle"));
+            assertFalse(restored.settings(binding).flag("autoListen")); assertEquals("private-voice", restored.settings(binding).text("ttsVoice"));
+        }
+    }
+
+    @Test public void profileJournalsAreRemovedEvenWhenDevicePreferencesCannotBeReadOrWritten() throws Exception {
+        for (boolean failWrite : new boolean[] { false, true }) {
+            String profile = "voice-test-" + UUID.randomUUID(), binding = NativeVoiceStore.binding(profile, ORIGIN, IDENTITY_A);
+            NativeVoiceStore store = new NativeVoiceStore(context);
+            NativeVoiceSettings settings = store.settings(binding);
+            store.settings(binding, settings.patch(settings.revision, NativeVoiceJson.object("ttsVoice", "saved-voice", "voiceThreadId", "saved-thread")));
+            store.saveEntry(binding, entry(UUID.randomUUID().toString(), "private input must be removed"));
+            File directory = store.directory(NativeVoiceStore.DEVICE_BINDING);
+            File record = new File(directory, NativeVoiceStore.PREFERENCES_RECORD + ".enc"), restricted = failWrite ? directory : record;
+            int mode = Os.stat(restricted.getPath()).st_mode & 0777, recordMode = Os.stat(record.getPath()).st_mode & 0777;
+            try {
+                // Fail writes for both AtomicFile layouts: replacing .new and opening the pre-R base file.
+                if (failWrite) Os.chmod(record.getPath(), 0400);
+                Os.chmod(restricted.getPath(), failWrite ? 0500 : 0000);
+                assertThrows(Exception.class, () -> store.removeProfile(profile));
+                assertFalse("Journal cleanup is independent of preference access", store.directory(binding).exists());
+                assertEquals(0, store.journal(binding).length());
+            } finally { Os.chmod(restricted.getPath(), mode); Os.chmod(record.getPath(), recordMode); }
+            assertEquals("saved-voice", store.settings(binding).text("ttsVoice"));
+            assertEquals("saved-thread", store.settings(binding).text("voiceThreadId"));
+        }
+    }
+
+    @Test public void profileRemovalReportsBothIndependentCleanupFailures() throws Exception {
+        String profile = "voice-test-" + UUID.randomUUID(), binding = NativeVoiceStore.binding(profile, ORIGIN, IDENTITY_A);
+        NativeVoiceStore store = new NativeVoiceStore(context);
+        store.settings(binding, store.settings(binding).patch(0, NativeVoiceJson.object("voiceThreadId", "saved-thread")));
+        store.saveEntry(binding, entry(UUID.randomUUID().toString(), "private input"));
+        File preferences = new File(store.directory(NativeVoiceStore.DEVICE_BINDING), NativeVoiceStore.PREFERENCES_RECORD + ".enc");
+        File journalDirectory = store.directory(binding);
+        int preferenceMode = Os.stat(preferences.getPath()).st_mode & 0777, journalMode = Os.stat(journalDirectory.getPath()).st_mode & 0777;
+        try {
+            Os.chmod(preferences.getPath(), 0000); Os.chmod(journalDirectory.getPath(), 0500);
+            Exception error = assertThrows(Exception.class, () -> store.removeProfile(profile));
+            assertEquals("voice_storage_unavailable", error.getMessage());
+            assertEquals(1, error.getSuppressed().length);
+            assertEquals("voice_storage_unavailable", error.getSuppressed()[0].getMessage());
+        } finally {
+            Os.chmod(preferences.getPath(), preferenceMode); Os.chmod(journalDirectory.getPath(), journalMode);
+        }
+        assertEquals("saved-thread", store.settings(binding).text("voiceThreadId"));
+        store.removeProfile(profile); assertFalse(journalDirectory.exists()); assertNull(store.settings(binding).text("voiceThreadId"));
+    }
 
     @Test public void journalIsEncryptedAtomicAndIdentityBound() throws Exception {
         String profile = "voice-test-" + UUID.randomUUID();
@@ -172,16 +243,17 @@ public class NativeVoiceStoreTest {
             store.settings(binding, NativeVoiceSettings.defaults().patch(0, NativeVoiceJson.object("audioMode", "response")));
             store.saveEntry(binding, entry(UUID.randomUUID().toString(), "unreadable later"));
             byte[] garbage = new byte[64]; garbage[0] = 1;
-            for (String name : new String[] { "settings", "journal" }) {
-                Files.write(new File(store.directory(binding), name + ".enc").toPath(), garbage);
+            for (String name : new String[] { NativeVoiceStore.PREFERENCES_RECORD, "journal" }) {
+                String owner = name.equals(NativeVoiceStore.PREFERENCES_RECORD) ? NativeVoiceStore.DEVICE_BINDING : binding;
+                Files.write(new File(store.directory(owner), name + ".enc").toPath(), garbage);
                 NativeVoiceStore reader = new NativeVoiceStore(context);
                 try {
-                    if (name.equals("settings")) reader.settings(binding); else reader.journal(binding);
+                    if (name.equals(NativeVoiceStore.PREFERENCES_RECORD)) reader.settings(binding); else reader.journal(binding);
                     fail("Accepted a corrupt " + name + " record");
                 } catch (NativeVoiceStore.CorruptRecord expected) { assertEquals(name, expected.record); }
                 reader.quarantine(binding, name);
-                assertTrue(new File(store.directory(binding), name + ".corrupt").exists());
-                if (name.equals("settings")) assertEquals("off", reader.settings(binding).mode());
+                assertTrue(new File(store.directory(owner), name + ".corrupt").exists());
+                if (name.equals(NativeVoiceStore.PREFERENCES_RECORD)) assertEquals("off", reader.settings(binding).mode());
                 else assertEquals(0, reader.journal(binding).length());
             }
         } finally { store.removeProfile(profile); }

@@ -42,6 +42,8 @@ final class NativeVoiceStore {
         CorruptRecord(String record, Throwable cause) { super("voice_record_invalid", cause); this.record = record; }
     }
     private static final Object LOCK = new Object();
+    static final String DEVICE_BINDING = "device-preferences";
+    static final String PREFERENCES_RECORD = "preferences";
     private static final String KEY_ALIAS = "sedes.native-voice.v1";
     private final Context context;
     // Decrypted, validated journals for this owner. Every journal write goes through this instance.
@@ -63,7 +65,10 @@ final class NativeVoiceStore {
         return new File(new File(context.getNoBackupFilesDir(), "native-voice"), digest(profileId));
     }
     /** Records are grouped by profile so profile removal can delete every binding without knowing its origin or identity. */
-    File directory(String binding) throws Exception { return new File(profileDirectory(binding.substring(0, binding.indexOf('\n'))), digest(binding)); }
+    File directory(String binding) throws Exception {
+        if (DEVICE_BINDING.equals(binding)) return new File(context.getNoBackupFilesDir(), "native-voice-device");
+        return new File(profileDirectory(binding.substring(0, binding.indexOf('\n'))), digest(binding));
+    }
     private AtomicFile file(String binding, String name) throws Exception { return new AtomicFile(new File(directory(binding), name + ".enc")); }
     private static SecretKey key() throws Exception {
         KeyStore keys = KeyStore.getInstance("AndroidKeyStore");
@@ -136,6 +141,7 @@ final class NativeVoiceStore {
     /** Moves an unreadable record aside, keeping only the newest copy, so the caller can continue from defaults. */
     void quarantine(String binding, String name) throws Exception {
         synchronized (LOCK) {
+            if (name.equals(PREFERENCES_RECORD)) binding = DEVICE_BINDING;
             if (name.equals("journal")) journals.remove(binding);
             AtomicFile target = file(binding, name);
             File aside = new File(directory(binding), name + ".corrupt");
@@ -144,14 +150,32 @@ final class NativeVoiceStore {
             if (target.getBaseFile().exists()) throw new IllegalStateException("voice_storage_unavailable");
         }
     }
-    /** Deletes every native voice record for the profile: settings, journals and quarantined copies. */
+    /** Deletes this profile's thread selections and recovery records; device preferences survive. */
     void removeProfile(String profileId) throws Exception {
         synchronized (LOCK) {
             Iterator<String> cached = journals.keySet().iterator();
             while (cached.hasNext()) if (cached.next().startsWith(profileId + "\n")) cached.remove();
             File directory = profileDirectory(profileId);
-            delete(directory);
-            if (directory.exists()) throw new IllegalStateException("voice_storage_unavailable");
+            Exception failure = null;
+            try {
+                NativeVoicePreferences preferences;
+                try { preferences = preferences(); }
+                catch (CorruptRecord error) {
+                    // An unreadable device record cannot safely retain possibly owned thread selections.
+                    file(DEVICE_BINDING, PREFERENCES_RECORD).delete(); preferences = NativeVoicePreferences.defaults();
+                }
+                write(DEVICE_BINDING, PREFERENCES_RECORD, preferences.removeProfile(profileId).record());
+                File quarantine = new File(directory(DEVICE_BINDING), PREFERENCES_RECORD + ".corrupt");
+                if (quarantine.exists() && !quarantine.delete()) throw new IllegalStateException("voice_storage_unavailable");
+            } catch (Exception error) { failure = error; }
+            // Journal removal needs no decryption and must still run if device preference I/O or Keystore access failed.
+            try {
+                delete(directory);
+                if (directory.exists()) throw new IllegalStateException("voice_storage_unavailable");
+            } catch (Exception error) {
+                if (failure == null) failure = error; else failure.addSuppressed(error);
+            }
+            if (failure != null) throw failure;
         }
     }
     private static void delete(File file) {
@@ -159,16 +183,17 @@ final class NativeVoiceStore {
         if (children != null) for (File child : children) delete(child);
         file.delete();
     }
+    private NativeVoicePreferences preferences() throws Exception {
+        JSONObject value = read(DEVICE_BINDING, PREFERENCES_RECORD);
+        if (value == null) return NativeVoicePreferences.defaults();
+        try { return NativeVoicePreferences.fromRecord(value); }
+        catch (RuntimeException error) { throw new CorruptRecord(PREFERENCES_RECORD, error); }
+    }
     NativeVoiceSettings settings(String binding) throws Exception {
-        synchronized (LOCK) {
-            JSONObject value = read(binding, "settings");
-            if (value == null) return NativeVoiceSettings.defaults();
-            try { return NativeVoiceSettings.fromRecord(value); }
-            catch (RuntimeException error) { throw new CorruptRecord("settings", error); }
-        }
+        synchronized (LOCK) { return preferences().settings(binding); }
     }
     void settings(String binding, NativeVoiceSettings settings) throws Exception {
-        synchronized (LOCK) { write(binding, "settings", settings.record()); }
+        synchronized (LOCK) { write(DEVICE_BINDING, PREFERENCES_RECORD, preferences().update(binding, settings).record()); }
     }
     NativeSpeechCatalogCache speechCatalog(String binding, String scope) throws Exception {
         synchronized (LOCK) {

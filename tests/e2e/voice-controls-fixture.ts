@@ -4,12 +4,12 @@ import type { NativeVoiceInputSubmitted, NativeVoiceState } from "../../src/clie
 const profileId = "c61b5d8b-4a77-43c6-bd72-12e23fe42e38";
 export function voiceFixtureState(): NativeVoiceState {
   return {
-    version: 8, stateRevision: 1, connectionGeneration: 1, profileId, serverOrigin: null, identity: null,
+    version: 9, stateRevision: 1, connectionGeneration: 1, profileId, serverOrigin: null, identity: null,
     originClientId: "34612c41-0bbb-455f-a5af-725bfc7ae768", clientConnectionToken: null, settingsRevision: 0,
     settings: { audioMode: "response", autoListen: true, keepListeningByDefault: false, ignoreOtherDevices: true, readNotificationContext: true, cleanSpeechText: true,
       speechProvider: "openai", speechEndpoint: "https://api.openai.com/v1", sttModel: "gpt-live-transcribe", ttsModel: "gpt-4o-mini-tts",
       ttsVoice: "coral", ttsSpeed: 1, speechTextLimit: 4096, voiceThreadId: null, voiceThreadTitle: null, pinDefaultVoiceThread: false,
-      onlyVoiceThread: false, followComposerMode: false, inputDeviceId: null, recognitionStartTimeoutMs: 30000, recognitionCompletionTimeoutMs: 60000,
+      onlyVoiceThread: false, followComposerMode: false, inputDevice: null, recognitionStartTimeoutMs: 30000, recognitionCompletionTimeoutMs: 60000,
       recognitionResultTimeoutMs: 60000, longDictationTimeoutMs: 3_600_000, recognitionEndSilenceMs: 1200, recognizeStopCommand: true,
       recognitionCues: true, cueGain: 100, startupPreRollMs: 512, ttsGain: 100, headsetControls: true },
     speech: { credentialConfigured: true, catalogStatus: "idle", catalog: null, error: null }, phase: "idle", ready: true, readiness: "ready",
@@ -23,6 +23,7 @@ export function voiceFixtureState(): NativeVoiceState {
 type VoiceFixture = {
   state: NativeVoiceState;
   calls: { method: string; args: Record<string, unknown> }[];
+  recoveredText: string;
   publish(patch: Partial<NativeVoiceState>): void;
   emitInputSubmitted(event: NativeVoiceInputSubmitted): void;
 };
@@ -47,6 +48,7 @@ export async function installVoiceFixture(page: Page): Promise<void> {
     const fixture: VoiceFixture = window.__voiceFixture = {
       state: retained ? JSON.parse(retained) as NativeVoiceState : initial,
       calls: [],
+      recoveredText: "Recovered dictation text.",
       publish(patch) {
         fixture.state = { ...fixture.state, ...patch, stateRevision: fixture.state.stateRevision + 1 };
         sessionStorage.setItem(retainedKey, JSON.stringify(fixture.state));
@@ -65,7 +67,7 @@ export async function installVoiceFixture(page: Page): Promise<void> {
           header("App", ["exitApp"], true),
           header("NativeVoice", ["setConnection", "getState", "disconnect", "setForegroundContext", "updateSettings", "startManualListen", "setNextRecordingTarget",
             "retargetActiveRecognition", "setKeepListening", "sendRecording", "stopCurrentInteraction", "skipCurrentPlayback", "retryRecordingRecognition",
-            "sendRecoveredRecording", "copyRecognizedRecordingText", "discardRecording", "resumeInput", "discardInput", "listInputDevices",
+            "sendRecoveredRecording", "copyRecognizedRecordingText", "readRecognizedRecordingText", "discardRecording", "resumeInput", "discardInput", "listInputDevices",
             "refreshSpeechCatalog", "openSpeechCredentialDialog"], true),
         ],
         nativeCallback(plugin: string, method: string, args: { eventName: string }, callback: (value: unknown) => void) {
@@ -108,10 +110,12 @@ export async function installVoiceFixture(page: Page): Promise<void> {
           } else if (method === "stopCurrentInteraction") {
             if (args.interactionId !== current.active?.id) throw new Error("The interaction changed.");
             fixture.publish({ phase: "idle", active: null, actions: { ...initial.actions } });
-          } else if (["retryRecordingRecognition", "sendRecoveredRecording", "discardRecording", "copyRecognizedRecordingText"].includes(method)) {
+          } else if (["retryRecordingRecognition", "sendRecoveredRecording", "discardRecording", "copyRecognizedRecordingText", "readRecognizedRecordingText"].includes(method)) {
             const saved = current.recordingRecovery;
             if (!saved || args.recordingId !== saved.recordingId || args.expectedRecoveryRevision !== saved.revision || args.expectedConnectionGeneration !== current.connectionGeneration)
               throw new Error("The saved dictation changed.");
+            if (method === "readRecognizedRecordingText") return { recordingId: saved.recordingId, revision: saved.revision,
+              threadId: saved.threadId, text: fixture.recoveredText };
             if (method === "retryRecordingRecognition") fixture.publish({ phase: "recognizing", active: {
               id: "saved-recognition", eventKind: "manual", threadId: saved.threadId, threadTitle: saved.threadTitle,
               recognitionThreadId: saved.threadId, recognitionThreadTitle: saved.threadTitle, automatic: false,
@@ -120,8 +124,6 @@ export async function installVoiceFixture(page: Page): Promise<void> {
               recordingRecovery: { ...saved, revision: saved.revision + 1, stage: "recognizing", canRetryRecognition: false,
                 canSend: false, canCopyRecognizedText: false, canDiscard: true } });
             if (method === "sendRecoveredRecording") {
-              if (typeof args.acknowledgeIncomplete !== "boolean" || (saved.captureIncomplete && args.acknowledgeIncomplete !== true))
-                throw new Error("Acknowledge that the end may be missing before sending.");
               fixture.publish({ phase: "submitting", active: {
                 id: "saved-send", eventKind: "manual", threadId: saved.threadId, threadTitle: saved.threadTitle,
                 recognitionThreadId: saved.threadId, recognitionThreadTitle: saved.threadTitle, automatic: false,
@@ -133,7 +135,7 @@ export async function installVoiceFixture(page: Page): Promise<void> {
             if (method === "discardRecording") fixture.publish({ recordingRecovery: null,
               ...current.active && current.active.recording?.id !== saved.recordingId ? {} : { active: null,
                 phase: current.settings.audioMode === "off" ? "off" : "idle", actions: { ...initial.actions, canStart: current.settings.audioMode !== "off" } } });
-          } else if (method === "listInputDevices") return { devices: [], selectedId: null };
+          } else if (method === "listInputDevices") return { devices: [] };
           return snapshot();
         },
       },
