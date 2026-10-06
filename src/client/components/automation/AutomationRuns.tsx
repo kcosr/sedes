@@ -47,7 +47,7 @@ import type { AutomationRuns } from "./use-automation-runs.js";
 import { useThreadTitle } from "./use-automation-thread.js";
 
 /** Runs the compact list shows before "Show all runs". */
-export const COMPACT_RUN_COUNT = 5;
+const COMPACT_RUN_COUNT = 5;
 const PHONE_QUERY = "(max-width: 819px)";
 
 export interface AutomationRunsView {

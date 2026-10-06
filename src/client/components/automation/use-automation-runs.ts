@@ -71,7 +71,7 @@ export function mergeRunPage(
 }
 
 /** Whether a run belongs in the list for a filter (problems: failed or uncertain). */
-export function runMatchesFilter(
+function runMatchesFilter(
   run: Pick<ThreadAutomationRun, "state">,
   filter: AutomationRunFilter,
 ): boolean {

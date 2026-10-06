@@ -40,7 +40,7 @@ export function SettingsSplit({ listLabel, list, children, wide = false, empty =
 }
 
 /** A detail or editor pane titles itself under its page (2); a top-level page outside Settings is the page (1). */
-export type SettingsHeadingLevel = 1 | 2;
+type SettingsHeadingLevel = 1 | 2;
 
 /**
  * The header of a detail or editor pane, on the settings page header's
