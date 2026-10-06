@@ -210,6 +210,92 @@ describe("useAutomationRuns", () => {
     expect(result.current.hasMore).toBe(false);
   });
 
+  it("drops a Load more answer once a refresh has replaced the history it continued", async () => {
+    const listed = Array.from({ length: 3 }, () => run());
+    const older = Array.from({ length: 3 }, () => run());
+    const arrivals = Array.from({ length: AUTOMATION_RUNS_PAGE_SIZE }, () => run());
+    let answerOlder!: (value: ReturnType<typeof page>) => void;
+    const list = vi
+      .fn()
+      .mockResolvedValueOnce(page(listed, "after-listed"))
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            answerOlder = resolve;
+          }),
+      )
+      .mockResolvedValueOnce(page(arrivals, "after-arrivals"));
+    const fixture = automationStore([{ automation: automationSummary() }], { listThreadAutomationRuns: list });
+    const { result } = renderHook(() => useRuns(fixture, "all"));
+    await waitFor(() => expect(result.current.status).toBe("ready"));
+    act(() => result.current.loadMore());
+    expect(result.current.loadingMore).toBe(true);
+
+    // More runs arrive than a page holds: the refresh replaces the history.
+    const newest = arrivals[0]!;
+    act(() =>
+      fixture.publish([
+        {
+          automation: automationSummary({
+            lastRun: { id: newest.id, state: "completed", occurrence: "scheduled", scheduledFor: newest.scheduledFor },
+          }),
+        },
+      ]),
+    );
+    await waitFor(() => expect(result.current.items).toEqual(arrivals));
+    expect(result.current.loadingMore).toBe(false);
+    expect(result.current.hasMore).toBe(true);
+
+    // The old page answers late; it continued a history that is gone.
+    await act(async () => {
+      answerOlder(page(older, null, false));
+    });
+    expect(result.current.items).toEqual(arrivals);
+    expect(result.current.hasMore).toBe(true);
+    list.mockResolvedValueOnce(page(listed, null, false));
+    act(() => result.current.loadMore());
+    await waitFor(() => expect(result.current.loadingMore).toBe(false));
+    expect(list).toHaveBeenLastCalledWith(THREAD_ID, expect.objectContaining({ cursor: "after-arrivals" }));
+  });
+
+  it("keeps a pending Load more when a refresh keeps the history it continues", async () => {
+    const [a, b] = [run(), run()];
+    const fresh = run();
+    const older = [run(), run()];
+    let answerOlder!: (value: ReturnType<typeof page>) => void;
+    const list = vi
+      .fn()
+      .mockResolvedValueOnce(page([a!, b!], "after-b"))
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            answerOlder = resolve;
+          }),
+      )
+      .mockResolvedValueOnce(page([fresh, a!], "after-a"));
+    const fixture = automationStore([{ automation: automationSummary() }], { listThreadAutomationRuns: list });
+    const { result } = renderHook(() => useRuns(fixture, "all"));
+    await waitFor(() => expect(result.current.status).toBe("ready"));
+    act(() => result.current.loadMore());
+    act(() =>
+      fixture.publish([
+        {
+          automation: automationSummary({
+            lastRun: { id: fresh.id, state: "completed", occurrence: "scheduled", scheduledFor: fresh.scheduledFor },
+          }),
+        },
+      ]),
+    );
+    await waitFor(() => expect(result.current.items).toEqual([fresh, a, b]));
+    expect(result.current.loadingMore).toBe(true);
+    await act(async () => {
+      answerOlder(page(older, null, false));
+    });
+    expect(result.current.items).toEqual([fresh, a, b, ...older]);
+    expect(result.current.hasMore).toBe(false);
+    expect(result.current.loadingMore).toBe(false);
+  });
+
   it("shows a run an action returned at once", async () => {
     const older = run();
     const fixture = automationStore([{ automation: automationSummary() }], {

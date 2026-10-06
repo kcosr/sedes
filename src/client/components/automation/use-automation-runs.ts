@@ -135,11 +135,16 @@ export function useAutomationRuns(
               if (current.filter !== filter) return current;
               if (mode === "merge" && current.status === "ready") {
                 const listed = new Set(current.items.map(({ id }) => id));
+                const merged = mergeRunPage(current.items, current.nextCursor, page);
+                // A replaced history has a new cursor; a Load more sent with
+                // the old one no longer continues it (its answer is dropped).
+                const continued = merged.nextCursor === current.nextCursor;
                 return {
                   ...current,
-                  ...mergeRunPage(current.items, current.nextCursor, page),
+                  ...merged,
                   counts: page.counts ?? current.counts,
                   arrived: page.items.filter(({ id }) => !listed.has(id)),
+                  ...(continued ? {} : { loadingMore: false, loadMoreError: undefined }),
                 };
               }
               return {
@@ -203,9 +208,15 @@ export function useAutomationRuns(
     const controller = new AbortController();
     nextPage.current = controller;
     setState((latest) => ({ ...latest, loadingMore: true, loadMoreError: undefined }));
+    const cursor = current.nextCursor;
+    // The answer extends the list only while the list still ends where the
+    // cursor continues: a refresh that replaced the history, or another
+    // filter, made it stale.
+    const continues = (latest: RunsState) =>
+      latest.filter === current.filter && latest.nextCursor === cursor;
     store.api
       .listThreadAutomationRuns(threadId, {
-        cursor: current.nextCursor,
+        cursor,
         limit: AUTOMATION_RUNS_PAGE_SIZE,
         filter: current.filter,
         signal: controller.signal,
@@ -214,7 +225,7 @@ export function useAutomationRuns(
         (page) => {
           if (controller.signal.aborted) return;
           setState((latest) => {
-            if (latest.filter !== current.filter) return latest;
+            if (!continues(latest)) return latest;
             const listed = new Set(latest.items.map(({ id }) => id));
             return {
               ...latest,
@@ -226,11 +237,11 @@ export function useAutomationRuns(
         },
         (reason: unknown) => {
           if (controller.signal.aborted) return;
-          setState((latest) => ({
-            ...latest,
-            loadingMore: false,
-            loadMoreError: messageFrom(reason),
-          }));
+          setState((latest) =>
+            continues(latest)
+              ? { ...latest, loadingMore: false, loadMoreError: messageFrom(reason) }
+              : latest,
+          );
         },
       );
   }, [store, threadId]);
