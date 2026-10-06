@@ -30,7 +30,6 @@ import {
   ArchiveRestore,
   ArrowDownToDot,
   ArrowUpFromDot,
-  CalendarClock,
   Copy,
   CopyPlus,
   CornerUpLeft,
@@ -41,6 +40,7 @@ import {
   PencilLine,
   Pin,
   PinOff,
+  Repeat,
   RotateCcw,
   Server,
   Split,
@@ -580,6 +580,23 @@ export function ThreadContextMenu({
       : !forkState || forkState.status === "loading" || !forkState.snapshot
         ? "Loading…"
         : "Unavailable";
+  // "Automate…" follows the thread-actions menu: offered while the retained
+  // thread reports automation available, enabled by its attach capability.
+  const automationSnapshot = forkState?.snapshot;
+  const attachAutomation = automationSnapshot?.capabilities.operations.find(
+    ({ id }) => id === "attach_automation",
+  );
+  const automateOffered =
+    !thread.automation &&
+    threadRegistry !== undefined &&
+    automationSnapshot?.capabilities.automation.available !== false;
+  const automateAvailable =
+    automationSnapshot !== undefined &&
+    forkState?.connection === "connected" &&
+    automationSnapshot.thread.available &&
+    automationSnapshot.runState !== "disconnected" &&
+    automationSnapshot.runState !== "reconciling" &&
+    attachAutomation?.available === true;
   const title = thread.title.text || "Untitled thread";
   const metaLine = threadMetaLine(thread, projectLabel);
 
@@ -672,17 +689,34 @@ export function ThreadContextMenu({
           Snooze…
         </ContextMenuItem>
       )}
-      {thread.automation && (
+      {thread.automation ? (
         <ContextMenuItem
           onSelect={() => {
             navigate(threadAutomationPath(thread.id));
             onNavigate?.();
           }}
         >
-          <CalendarClock aria-hidden="true" />
+          <Repeat aria-hidden="true" />
           Automation settings…
         </ContextMenuItem>
-      )}
+      ) : automateOffered ? (
+        <ContextMenuItem
+          disabled={!automateAvailable}
+          title={attachAutomation?.unavailableReason?.text}
+          onSelect={() => {
+            navigate(threadAutomationPath(thread.id));
+            onNavigate?.();
+          }}
+        >
+          <Repeat aria-hidden="true" />
+          Automate…
+          {!automateAvailable && (
+            <ContextMenuValue aria-hidden="true">
+              {automationSnapshot ? "Unavailable" : "Loading…"}
+            </ContextMenuValue>
+          )}
+        </ContextMenuItem>
+      ) : null}
     </>
   );
 

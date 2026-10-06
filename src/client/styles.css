@@ -4962,7 +4962,9 @@ textarea:disabled {
 }
 
 /* Icon-only automation chip: status is in the tooltip/accessible name, the
-   word badge is gone. Paused reads as a warning tint. */
+   word badge is gone. The ring tints only for a failed (red) or unknown
+   (amber) last run; paused, not-started and suspended automations are a
+   muted CirclePause, never amber. */
 .automation-thread-button {
   display: inline-flex;
   align-items: center;
@@ -4981,15 +4983,32 @@ textarea:disabled {
   color: var(--foreground);
 }
 
-.automation-thread-button[data-status="paused"] {
+.automation-thread-button[data-health="failed"] {
+  border-color: var(--destructive-border);
+  color: var(--destructive);
+}
+
+.automation-thread-button[data-health="unknown"] {
+  border-color: var(--warning-border);
   color: var(--warning);
 }
 
-/* On touch the chip drops its ring and reads as a bare glyph like its
-   neighbours, keeping the phone header's room for the title. */
+.automation-thread-button[data-health="sending"] {
+  color: var(--info);
+}
+
+.automation-thread-button[data-health="paused"],
+.automation-thread-button[data-health="not_started"],
+.automation-thread-button[data-health="archived"],
+.automation-thread-button[data-health="snoozed"] {
+  color: var(--muted-foreground-2);
+}
+
+/* On touch the chip drops its ring, tinted or not, and reads as a bare glyph
+   like its neighbours, keeping the phone header's room for the title. */
 @media (max-width: 819px), (pointer: coarse) {
-  .automation-thread-button,
-  .automation-thread-button:hover {
+  .automation-thread-button[data-health],
+  .automation-thread-button[data-health]:hover {
     border-color: transparent;
   }
 
@@ -10979,10 +10998,6 @@ tr.diff-hunk td {
   /* Keep the existing reasoning shortcut on mobile; other settings remain
      reachable through the thread actions menu. */
   .desktop-config > :not([data-setting-id="thinking_level"]) {
-    display: none;
-  }
-
-  .automation-thread-button span {
     display: none;
   }
 

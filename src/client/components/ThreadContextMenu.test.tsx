@@ -341,6 +341,9 @@ function makeForkRegistry(
     authoritative: true,
     forkAttempts: {},
     snapshot: {
+      thread: { available: true },
+      runState: "idle",
+      capabilities: { automation: { available: false }, operations: [] },
       orderedTurnIds: ["turn-1", "turn-2"],
       turnsById: {
         "turn-1": {
@@ -391,6 +394,49 @@ function makeForkRegistry(
     retain: vi.fn(() => threadStore),
     release: vi.fn(),
   } as unknown as ThreadStoreRegistry;
+}
+
+/** A retained thread whose capabilities decide the "Automate…" row. */
+function automationRegistry({
+  automationAvailable = true,
+  attachAvailable = true,
+  connection = "connected",
+}: {
+  readonly automationAvailable?: boolean;
+  readonly attachAvailable?: boolean;
+  readonly connection?: ThreadClientState["connection"];
+} = {}): ThreadStoreRegistry {
+  return makeForkRegistry(vi.fn(), {
+    connection,
+    snapshot: {
+      thread: { available: true },
+      runState: "idle",
+      capabilities: {
+        automation: { available: automationAvailable },
+        operations: [
+          {
+            id: "attach_automation",
+            label: { text: "Add automation" },
+            available: attachAvailable,
+            ...(attachAvailable
+              ? {}
+              : {
+                  unavailableReason: {
+                    text: "Automation requires an inactive, unarchived thread.",
+                  },
+                }),
+          },
+        ],
+      },
+      orderedTurnIds: [],
+      turnsById: {},
+      forksByTurnId: {},
+      forkSource: {
+        selectedCompletedTurn: { available: false },
+        latestProviderSnapshot: { available: false },
+      },
+    } as unknown as ThreadClientState["snapshot"],
+  });
 }
 
 describe("ThreadContextMenu content per thread state", () => {
@@ -1006,12 +1052,84 @@ describe("ThreadContextMenu content per thread state", () => {
         },
       }),
       makeStore(),
-      { onNavigate },
+      { onNavigate, threadRegistry: automationRegistry() },
     );
     const menu = await openMenu(trigger);
-    await userEvent.click(within(menu).getByText("Automation settings…"));
+    expect(within(menu).queryByText("Automate…")).toBeNull();
+    const item = within(menu).getByRole("menuitem", {
+      name: "Automation settings…",
+    });
+    expect(item.querySelector(".lucide-repeat")).not.toBeNull();
+    expect(item.querySelector(".lucide-calendar-clock")).toBeNull();
+    await userEvent.click(item);
     expect(window.location.pathname).toBe("/threads/thread-1/automation");
     expect(onNavigate).toHaveBeenCalled();
+  });
+
+  it("offers Automate… with the thread-actions gating and opens the automation route", async () => {
+    const onNavigate = vi.fn();
+    const menu = await openMenu(
+      renderMenu(makeThread(), makeStore(), {
+        onNavigate,
+        threadRegistry: automationRegistry(),
+      }),
+    );
+    const item = within(menu).getByRole("menuitem", { name: "Automate…" });
+    expect(item).not.toHaveAttribute("data-disabled");
+    expect(item.querySelector(".lucide-repeat")).not.toBeNull();
+    await userEvent.click(item);
+    expect(window.location.pathname).toBe("/threads/thread-1/automation");
+    expect(onNavigate).toHaveBeenCalled();
+  });
+
+  it("disables Automate… with its reason when the thread cannot take an automation", async () => {
+    const menu = await openMenu(
+      renderMenu(makeThread(), makeStore(), {
+        threadRegistry: automationRegistry({ attachAvailable: false }),
+      }),
+    );
+    const item = within(menu).getByRole("menuitem", { name: /^Automate…/ });
+    expect(item).toHaveAttribute("data-disabled");
+    expect(item).toHaveAttribute(
+      "title",
+      "Automation requires an inactive, unarchived thread.",
+    );
+    expect(item).toHaveTextContent("Unavailable");
+  });
+
+  it("disables Automate… while the thread is offline or still loading", async () => {
+    const offline = await openMenu(
+      renderMenu(makeThread(), makeStore(), {
+        threadRegistry: automationRegistry({ connection: "reconnecting" }),
+      }),
+    );
+    expect(
+      within(offline).getByRole("menuitem", { name: /^Automate…/ }),
+    ).toHaveAttribute("data-disabled");
+    cleanup();
+    const loading = await openMenu(
+      renderMenu(makeThread(), makeStore(), {
+        threadRegistry: makeForkRegistry(vi.fn(), {
+          status: "loading",
+          snapshot: undefined,
+        }),
+      }),
+    );
+    const item = within(loading).getByRole("menuitem", { name: /^Automate…/ });
+    expect(item).toHaveAttribute("data-disabled");
+    expect(item).toHaveTextContent("Loading…");
+  });
+
+  it("leaves Automate… out where automation is unavailable or the row has no live thread", async () => {
+    const unavailable = await openMenu(
+      renderMenu(makeThread(), makeStore(), {
+        threadRegistry: automationRegistry({ automationAvailable: false }),
+      }),
+    );
+    expect(within(unavailable).queryByText("Automate…")).toBeNull();
+    cleanup();
+    const archiveOnly = await openMenu(renderMenu(makeThread(), makeStore()));
+    expect(within(archiveOnly).queryByText("Automate…")).toBeNull();
   });
 
   it.each([false, true])(
