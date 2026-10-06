@@ -46,8 +46,7 @@ describe("useAutomationEditor", () => {
     expect(fixture.api.previewThreadAutomationSchedule).toHaveBeenCalledWith(
       THREAD_ID,
       result.current.schedule,
-      AUTOMATION_PREVIEW_COUNT,
-      expect.any(AbortSignal),
+      { count: AUTOMATION_PREVIEW_COUNT, signal: expect.any(AbortSignal) },
     );
     expect(result.current.preview.occurrences).toHaveLength(3);
 

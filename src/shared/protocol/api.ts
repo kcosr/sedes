@@ -255,6 +255,11 @@ export const runAutomationNowRequestSchema = z.strictObject({
 export const previewAutomationScheduleRequestSchema = z.strictObject({
   schedule: automationScheduleSchema,
   count: z.number().int().min(1).max(10).default(5),
+  /**
+   * Preview occurrences strictly after this instant instead of after now
+   * (for example a snooze's wake time); an instant in the past means now.
+   */
+  after: z.iso.datetime().optional(),
 });
 
 export const testAutomationPrecheckRequestSchema = z.strictObject({

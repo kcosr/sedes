@@ -3533,6 +3533,8 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
         occurrences: dependencies.automations.preview(
           body.schedule,
           body.count,
+          Date.now(),
+          body.after,
         ),
       });
     },

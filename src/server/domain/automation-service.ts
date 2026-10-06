@@ -307,13 +307,19 @@ export class AutomationService implements DurableDeadlineSource {
     this.#changed();
   }
 
+  /**
+   * The next `count` occurrences strictly after now, or after `after` when
+   * that is later (a snooze's wake time).
+   */
   preview(
     schedule: ProtocolAutomationSchedule,
     count: number,
     now = Date.now(),
+    after?: string,
   ): string[] {
+    const from = after === undefined ? now : Math.max(now, Date.parse(after));
     return this.#evaluator
-      .preview(this.#toDomainSchedule(schedule), now, count)
+      .preview(this.#toDomainSchedule(schedule), from, count)
       .map(iso);
   }
 

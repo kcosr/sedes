@@ -64,6 +64,42 @@ describe("ApiClient automation routes", () => {
     );
   });
 
+  it("previews a schedule from now, or after a later instant", async () => {
+    const fetch = vi.fn((url: string, _init?: RequestInit) =>
+      Promise.resolve(
+        url.endsWith("/api/application/session")
+          ? Response.json({
+              clientProtocolVersion: SEDES_CLIENT_PROTOCOL_VERSION,
+              version: "0.1.1",
+              csrfToken: "a".repeat(32),
+              providerPulseEnabled: false,
+              experimentalUsageEnabled: false,
+            })
+          : Response.json({ occurrences: ["2026-10-08T09:00:00.000Z"] }),
+      ),
+    );
+    vi.stubGlobal("fetch", fetch);
+    const api = new ApiClient();
+    await api.session();
+    const schedule = { kind: "cron", expression: "0 9 * * *", timeZone: "UTC" } as const;
+
+    await expect(api.previewThreadAutomationSchedule(threadId, schedule)).resolves.toEqual({
+      occurrences: ["2026-10-08T09:00:00.000Z"],
+    });
+    await api.previewThreadAutomationSchedule(threadId, schedule, {
+      count: 3,
+      after: "2026-10-08T00:00:00.000Z",
+    });
+
+    const bodies = fetch.mock.calls
+      .filter(([url]) => url.endsWith("/automation/preview"))
+      .map(([, init]) => JSON.parse(init!.body as string));
+    expect(bodies).toEqual([
+      { schedule, count: 5 },
+      { schedule, count: 3, after: "2026-10-08T00:00:00.000Z" },
+    ]);
+  });
+
   it("resolves a run with an explicit resume choice", async () => {
     const fetch = vi.fn((url: string, _init?: RequestInit) =>
       Promise.resolve(

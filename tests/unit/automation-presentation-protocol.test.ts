@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   createAutomationRequestSchema,
   listAutomationRunsQuerySchema,
+  previewAutomationScheduleRequestSchema,
   resolveAutomationRunRequestSchema,
 } from "../../src/shared/protocol/api.js";
 import {
@@ -14,6 +15,15 @@ import {
 import { normalizedThreadSummarySchema } from "../../src/shared/protocol/conversation.js";
 
 describe("normalized automation protocol", () => {
+  it("previews from an optional instant, given as an ISO date-time", () => {
+    const schedule = { kind: "cron", expression: "0 9 * * *", timeZone: "UTC" } as const;
+    expect(previewAutomationScheduleRequestSchema.parse({ schedule })).toEqual({ schedule, count: 5 });
+    expect(
+      previewAutomationScheduleRequestSchema.parse({ schedule, count: 3, after: "2026-10-08T00:00:00.000Z" }),
+    ).toEqual({ schedule, count: 3, after: "2026-10-08T00:00:00.000Z" });
+    expect(previewAutomationScheduleRequestSchema.safeParse({ schedule, after: "tomorrow" }).success).toBe(false);
+  });
+
   it("bounds prompts by persisted UTF-8 bytes, not JavaScript length", () => {
     const request = {
       runMode: "same_thread",

@@ -96,8 +96,7 @@ describe("AutomationPage", () => {
     expect(fixture.api.previewThreadAutomationSchedule).toHaveBeenCalledWith(
       THREAD_ID,
       definition().schedule,
-      3,
-      expect.any(AbortSignal),
+      { count: 3, signal: expect.any(AbortSignal) },
     );
 
     const runs = await screen.findByRole("list", { name: "Runs, newest first" });
@@ -118,19 +117,32 @@ describe("AutomationPage", () => {
     );
   });
 
-  it("lists only the next runs after a snooze, which skips the ones before it", async () => {
-    const hour = 3_600_000;
-    const wake = new Date(Date.now() + 2.5 * hour).toISOString();
-    const occurrences = Array.from({ length: 10 }, (_, index) => new Date(Date.now() + (index + 1) * hour).toISOString());
-    renderPage([{ inventoryState: "snoozed", snoozedUntil: wake, automation: automationSummary() }], {
-      previewThreadAutomationSchedule: vi.fn().mockResolvedValue({ occurrences }),
-    });
-    expect(await screen.findByText(/^Next after snooze: /u)).toHaveTextContent(
-      `Next after snooze: ${occurrences
-        .slice(2, 5)
-        .map((occurrence) => dayTimeLabel(occurrence))
-        .join(", ")}`,
+  it("lists the next runs after a snooze, asking the server from the wake time", async () => {
+    // A five-minute schedule snoozed for a day skips far more than ten runs.
+    const wake = new Date(Date.now() + 86_400_000).toISOString();
+    const occurrences = [1, 2, 3].map((index) => new Date(Date.parse(wake) + index * 300_000).toISOString());
+    const preview = vi.fn().mockResolvedValue({ occurrences });
+    renderPage(
+      [
+        {
+          inventoryState: "snoozed",
+          snoozedUntil: wake,
+          automation: automationSummary({
+            scheduleKind: "interval",
+            schedule: { kind: "interval", anchorAt: "2026-01-01T00:00:00.000Z", everySeconds: 300 },
+          }),
+        },
+      ],
+      { previewThreadAutomationSchedule: preview },
     );
+    expect(await screen.findByText(/^Next after snooze: /u)).toHaveTextContent(
+      `Next after snooze: ${occurrences.map((occurrence) => dayTimeLabel(occurrence)).join(", ")}`,
+    );
+    expect(preview).toHaveBeenCalledWith(THREAD_ID, definition().schedule, {
+      count: 3,
+      after: wake,
+      signal: expect.any(AbortSignal),
+    });
   });
 
   it("asks for the next runs again when a scheduled run moves the next run on", async () => {
