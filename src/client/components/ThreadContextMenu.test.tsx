@@ -996,7 +996,7 @@ describe("ThreadContextMenu content per thread state", () => {
     for (const row of rows) {
       expect(row.querySelector("svg")).not.toBeNull();
     }
-    expect(within(menu).queryByText("Automation settings…")).toBeNull();
+    expect(within(menu).queryByText("Automation…")).toBeNull();
     expect(within(menu).queryByText("Wake now")).toBeNull();
     expect(within(menu).queryByText("Unsettle")).toBeNull();
     expect(within(menu).queryByText("Restore to Active")).toBeNull();
