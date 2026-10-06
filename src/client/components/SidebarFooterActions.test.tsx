@@ -50,6 +50,7 @@ function renderActions() {
     onOpenSettings: vi.fn(),
     onOpenUsage: vi.fn(),
     onOpenAgents: vi.fn(),
+    onOpenAutomations: vi.fn(),
     onOpenArchivedThreads: vi.fn(),
   };
   render(<SidebarFooterActions {...callbacks} experimentalUsageEnabled />);
@@ -58,7 +59,7 @@ function renderActions() {
 
 it("hides experimental Usage by default without hiding provider Accounts", async () => {
   const user = userEvent.setup();
-  render(<SidebarFooterActions onOpenSettings={vi.fn()} onOpenUsage={vi.fn()} onOpenAgents={vi.fn()} onOpenArchivedThreads={vi.fn()}
+  render(<SidebarFooterActions onOpenSettings={vi.fn()} onOpenUsage={vi.fn()} onOpenAgents={vi.fn()} onOpenAutomations={vi.fn()} onOpenArchivedThreads={vi.fn()}
     providerPulseEnabled api={{readProviderPulseStatus:vi.fn()} as never}/>);
   await user.click(screen.getByRole("button", {name:"More"}));
   expect(screen.queryByRole("menuitem", {name:/^Usage/})).toBeNull();
@@ -68,10 +69,10 @@ it("hides experimental Usage by default without hiding provider Accounts", async
 describe("SidebarFooterActions", () => {
   it("omits the leading separator when Usage and Accounts are disabled", async () => {
     const user = userEvent.setup();
-    render(<SidebarFooterActions onOpenSettings={vi.fn()} onOpenUsage={vi.fn()} onOpenAgents={vi.fn()} onOpenArchivedThreads={vi.fn()} />);
+    render(<SidebarFooterActions onOpenSettings={vi.fn()} onOpenUsage={vi.fn()} onOpenAgents={vi.fn()} onOpenAutomations={vi.fn()} onOpenArchivedThreads={vi.fn()} />);
     await user.click(screen.getByRole("button", { name: "More" }));
     expect(screen.queryByRole("separator")).toBeNull();
-    expect(screen.getAllByRole("menuitem").map(item => item.textContent)).toEqual(["Agents", "Archived threads"]);
+    expect(screen.getAllByRole("menuitem").map(item => item.textContent)).toEqual(["Agents", "Automations", "Archived threads"]);
   });
   it("uses its visible More text as the menu trigger name", () => {
     renderActions();
@@ -85,6 +86,7 @@ describe("SidebarFooterActions", () => {
       onOpenSettings: vi.fn(),
       onOpenUsage: vi.fn(),
       onOpenAgents: vi.fn(),
+      onOpenAutomations: vi.fn(),
       onOpenArchivedThreads: vi.fn(),
     };
     render(<SidebarFooterActions {...callbacks} connection="disconnected" />);
@@ -126,6 +128,7 @@ describe("SidebarFooterActions", () => {
         onOpenSettings={vi.fn()}
         onOpenUsage={vi.fn()}
         onOpenAgents={vi.fn()}
+        onOpenAutomations={vi.fn()}
         onOpenArchivedThreads={vi.fn()}
         advisories={[codexAdvisory]}
       />,
@@ -150,6 +153,7 @@ describe("SidebarFooterActions", () => {
         onOpenSettings={vi.fn()}
         onOpenUsage={vi.fn()}
         onOpenAgents={vi.fn()}
+        onOpenAutomations={vi.fn()}
         onOpenArchivedThreads={vi.fn()}
         advisories={[
           codexAdvisory,
@@ -235,6 +239,7 @@ describe("SidebarFooterActions", () => {
         onOpenSettings={vi.fn()}
         onOpenUsage={vi.fn()}
         onOpenAgents={vi.fn()}
+        onOpenAutomations={vi.fn()}
         onOpenArchivedThreads={vi.fn()}
         advisories={[codexAdvisory]}
       />,
@@ -252,6 +257,7 @@ describe("SidebarFooterActions", () => {
       onOpenSettings: vi.fn(),
       onOpenUsage: vi.fn(),
       onOpenAgents: vi.fn(),
+      onOpenAutomations: vi.fn(),
       onOpenArchivedThreads: vi.fn(),
     };
     const { rerender } = render(
@@ -277,6 +283,7 @@ describe("SidebarFooterActions", () => {
       onOpenSettings: vi.fn(),
       onOpenUsage: vi.fn(),
       onOpenAgents: vi.fn(),
+      onOpenAutomations: vi.fn(),
       onOpenArchivedThreads: vi.fn(),
     };
     const { rerender } = render(
@@ -311,8 +318,27 @@ describe("SidebarFooterActions", () => {
     expect(menu).toHaveAttribute("data-side", "top");
     expect(
       screen.getAllByRole("menuitem").map((item) => item.textContent),
-    ).toEqual(["Usage (Experimental)", "Agents", "Archived threads"]);
+    ).toEqual(["Usage (Experimental)", "Agents", "Automations", "Archived threads"]);
     expect(screen.queryByRole("menuitem", { name: "Accounts" })).toBeNull();
+  });
+
+  it("opens the Automations page from the More menu, above Archived threads", async () => {
+    const user = userEvent.setup();
+    const callbacks = renderActions();
+
+    await user.click(screen.getByRole("button", { name: "More" }));
+    const automations = screen.getByRole("menuitem", { name: "Automations" });
+    // The Repeat glyph is the automation icon everywhere.
+    expect(automations.querySelector(".lucide-repeat")).not.toBeNull();
+    const items = screen.getAllByRole("menuitem");
+    expect(items.indexOf(automations)).toBe(
+      items.indexOf(screen.getByRole("menuitem", { name: "Archived threads" })) - 1,
+    );
+    await user.click(automations);
+
+    expect(callbacks.onOpenAutomations).toHaveBeenCalledOnce();
+    expect(callbacks.onOpenArchivedThreads).not.toHaveBeenCalled();
+    expect(screen.queryByRole("menu")).toBeNull();
   });
 
   it("opens a full-width accounts sheet on a coarse pointer instead of a submenu", async () => {
@@ -334,6 +360,7 @@ describe("SidebarFooterActions", () => {
         onOpenSettings={vi.fn()}
         onOpenUsage={vi.fn()}
         onOpenAgents={vi.fn()}
+        onOpenAutomations={vi.fn()}
         onOpenArchivedThreads={vi.fn()}
         providerPulseEnabled
         api={
@@ -371,6 +398,7 @@ describe("SidebarFooterActions", () => {
         onOpenSettings={vi.fn()}
         onOpenUsage={vi.fn()}
         onOpenAgents={vi.fn()}
+        onOpenAutomations={vi.fn()}
         onOpenArchivedThreads={vi.fn()}
         providerPulseEnabled
         api={
@@ -388,7 +416,13 @@ describe("SidebarFooterActions", () => {
     expect(screen.getByRole("menuitem", { name: "Accounts" })).toBeVisible();
     expect(
       screen.getAllByRole("menuitem").map((item) => item.textContent),
-    ).toEqual(["Usage (Experimental)", "Accounts", "Agents", "Archived threads"]);
+    ).toEqual([
+      "Usage (Experimental)",
+      "Accounts",
+      "Agents",
+      "Automations",
+      "Archived threads",
+    ]);
   });
 
   it("keeps Usage but hides Accounts when Provider Pulse is disabled", async () => {
@@ -399,6 +433,7 @@ describe("SidebarFooterActions", () => {
         onOpenSettings={vi.fn()}
         onOpenUsage={vi.fn()}
         onOpenAgents={vi.fn()}
+        onOpenAutomations={vi.fn()}
         onOpenArchivedThreads={vi.fn()}
         api={{} as never}
       />,

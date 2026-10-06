@@ -183,6 +183,7 @@ describe("Sidebar Usage", () => {
         onOpenSettings={vi.fn()}
         onOpenUsage={vi.fn()}
         onOpenAgents={vi.fn()}
+        onOpenAutomations={vi.fn()}
         onOpenArchivedThreads={vi.fn()}
         api={apiWith({ ...balanceOnlyStatus, accounts: [] })}
         providerPulseEnabled

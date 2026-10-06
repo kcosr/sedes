@@ -26,6 +26,7 @@ import type {
   ThreadArchiveImpact,
 } from "../../shared/index.js";
 import {
+  automationsPath,
   navigate,
   threadPath,
   threadTurnPath,
@@ -214,6 +215,7 @@ import { useEnvironmentPalette } from "../app/use-environment-palette.js";
 import { useEnvironmentColorsEnabled } from "../app/use-environment-colors-enabled.js";
 import { AddProjectDialog } from "./AddProjectDialog.js";
 import { SidebarFooterActions } from "./SidebarFooterActions.js";
+import { isPlainClick } from "./settings/SettingsNav.js";
 import {
   activePrimaryShortcutModifier,
   keyboardShortcutAriaKey,
@@ -2119,6 +2121,10 @@ export function InventorySidebar({
               onNavigate();
             }}
             onOpenAgents={(trigger) => onOpenSettings(trigger, "agents")}
+            onOpenAutomations={() => {
+              navigate(automationsPath());
+              onNavigate();
+            }}
             onOpenArchivedThreads={() => {
               navigate("/archived");
               onNavigate();
@@ -2458,6 +2464,7 @@ function Shelf({
           className={open ? "rotate" : ""}
         />
       </Collapsible.Trigger>
+      {kind === "automations" && <ViewAllAutomations onNavigate={onNavigate} />}
       <Collapsible.Content>
         <LineageRows
           nodes={nodes}
@@ -3083,6 +3090,49 @@ function ThreadStackItem({
 }
 
 /**
+ * The shelves whose rows are automations: Timeline's Upcoming, State's
+ * Scheduled, and the Projects view's Automations shelf.
+ */
+function listsAutomations(
+  groupBy: SidebarGroupBy,
+  group: Pick<SidebarStackedGroup, "key" | "kind">,
+): boolean {
+  return (
+    group.kind === "upcoming" ||
+    (groupBy === "state" && group.key === "scheduled") ||
+    (groupBy === "project" && group.key === "automations")
+  );
+}
+
+/**
+ * "View all" on a shelf of automations: opens the Automations page. A
+ * sibling of the shelf's collapsible trigger, never inside it, laid over the
+ * header row before the chevron.
+ */
+function ViewAllAutomations({
+  onNavigate,
+}: {
+  readonly onNavigate: () => void;
+}): React.JSX.Element {
+  const path = automationsPath();
+  return (
+    <a
+      className="shelf-view-all"
+      href={path}
+      aria-label="View all automations"
+      onClick={(event) => {
+        if (event.defaultPrevented || !isPlainClick(event)) return;
+        event.preventDefault();
+        navigate(path);
+        onNavigate();
+      }}
+    >
+      View all
+    </a>
+  );
+}
+
+/**
  * The flat (time / state / none) sidebar body: shelf-styled collapsible group
  * headers over FlatThreadRow lists. `none` renders its single group without a
  * header (spec: one list, no headers). Collapse state lives in the parent so
@@ -3364,6 +3414,9 @@ function FlatGroupList({
                 className={open ? "rotate" : ""}
               />
             </Collapsible.Trigger>
+            {listsAutomations(groupBy, group) && (
+              <ViewAllAutomations onNavigate={onNavigate} />
+            )}
             <Collapsible.Content>{list}</Collapsible.Content>
           </Collapsible.Root>
         );

@@ -10,7 +10,8 @@ import { StablePaneSlot } from "../../workspace-panels/StablePaneSlot.js";
 
 /**
  * Where the one retained Tasks body is shown. Tasks belongs to a thread
- * workspace; other pages (Home, Archived, Usage) have no Tasks surface.
+ * workspace; other pages (Home, Archived, Usage, the automation pages) have
+ * no Tasks surface.
  * - `panel`: docked beside Chat (a workspace panel tenant, so it resizes,
  *   collapses and persists like Files and Workpads);
  * - `sheet`: a bottom sheet on phones.

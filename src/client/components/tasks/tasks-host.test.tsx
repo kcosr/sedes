@@ -167,7 +167,8 @@ function Probe({ onHost }: { readonly onHost: (host: ReturnType<typeof useTasksH
 
 /**
  * The workbench: a thread's workspace with its Tasks panel, or a page
- * without a thread (Home, Archived, Usage), which has no Tasks at all.
+ * without a thread (Home, Archived, Usage, the automation pages), which has
+ * no Tasks at all.
  */
 function Page({ spy }: { readonly spy: DockSpy }): React.JSX.Element {
   const route = useRoute();
@@ -261,6 +262,8 @@ const PAGES_WITHOUT_A_THREAD = [
   ["Home", "/"],
   ["Archived", "/archived"],
   ["Usage", "/usage"],
+  ["Automations", "/automations"],
+  ["An automation", "/automations/thread-1"],
 ] as const;
 
 describe("Tasks host on pages without a thread", () => {
