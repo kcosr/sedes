@@ -323,13 +323,18 @@ condition and the actual state. Off stops immediately.
 End-interaction suppresses only this turn's automatic follow-up; it does not
 cancel the agent or change preferences. Switch-thread defaults to `listen: false`.
 With `listen: true`, Android requests one exact-target listen even with auto-listen
-disabled, while retaining voice-mode, permission, setup, and foreground gates.
-Neither operation changes the pinned/default voice thread. Accepted deferred
-actions are acknowledged before turn completion, then wait for the matching reply's
-actual audio drain. Silent replies do not require audio. Failed/interrupted turns,
-playback failure, manual supersession, background navigation, expiry, and connection
-loss prevent deferred navigation/listening. Browser/Electron navigation works;
-voice and voice settings report unsupported with a successful no-op.
+disabled. In the background, it requires an existing ready native voice session
+and starts recognition without navigating now or when the app returns. A request
+accepted in the background remains voice-only even if the app resumes before
+execution. Background `listen: false` is a no-op; foreground navigation requires
+continued visibility. Neither operation enables voice or changes the pinned/default
+thread. Recording preferences, including Keep listening by default, still apply.
+Accepted deferred actions are acknowledged before turn completion, then wait for
+the matching reply's actual audio drain. Silent replies do not require audio.
+Failed/interrupted turns, playback failure, manual supersession, expiry, and
+connection loss prevent deferred actions. Readiness and recording blockers are
+rechecked before recognition starts. Browser/Electron navigation works; voice and
+voice settings report unsupported with a successful no-op.
 
 `research.web_search` is provider-neutral. Its initial Grok CLI provider may
 use general web search, page fetch, and public X search, while Sedes removes

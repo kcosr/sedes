@@ -241,7 +241,7 @@ describe("native voice production pipeline with loopback providers", () => {
     if (errors.length) throw new AggregateError(errors, `Android native ${nativeClass} failed`);
   }, 250_000);
 
-  for (const [mode, scenario] of [["response", "cycle"], ["manual", "cycle"], ["response", "background"],
+  for (const [mode, scenario] of [["response", "cycle"], ["manual", "cycle"], ["response", "background"], ["response", "background-switch"],
     ["response", "startup"], ["manual", "startup"],
     ["response", "skip"], ["response", "stop"], ["response", "retarget"],
     ["response", "lost-ack"], ["response", "lost-send"], ["response", "cancel-uncertain"]] as const) {
@@ -250,7 +250,27 @@ describe("native voice production pipeline with loopback providers", () => {
       const threadTitle = `Voice ${mode} ${scenario}`;
       const threadId = await app.createThread(threadTitle);
       const secondThreadTitle = `Retarget ${mode} ${scenario}`;
-      const secondThreadId = scenario === "retarget" ? await app.createThread(secondThreadTitle) : undefined;
+      const secondThreadId = scenario === "retarget" || scenario === "background-switch" ? await app.createThread(secondThreadTitle) : undefined;
+      const initialText = `native voice fixture start ${mode} ${scenario}`;
+      if (scenario === "background-switch") {
+        const policy = (await app.thread(threadId)).agentTools;
+        await app.json(`/api/threads/${threadId}/operations`, "POST", {
+          kind: "set_agent_tool_policy", mutationId: randomUUID(), expectedPolicyRevision: policy.revision,
+          enabled: true, enabledToolIds: ["client.switch_thread"], accessBoundary: "environment",
+          presentation: { surface: "native", mode: "progressive" },
+        });
+        const discovery = `Discover background client controls ${threadId}`;
+        await app.send(threadId, discovery);
+        await app.waitFor(async () => app.model.requests.some(request => request.lastText === discovery));
+        await app.waitFor(async () => JSON.stringify((await app.thread(threadId)).itemsById).includes("Fixture response"));
+        await app.waitFor(async () => (await app.thread(threadId)).runState === "idle");
+        const nativeTool = app.model.requests.filter(request => request.lastText === discovery)
+          .flatMap(request => request.toolNames).find(name => name.endsWith("_sedes_act"));
+        expect(nativeTool).toBeDefined();
+        // The device submits this prompt only after its real activity is in the background.
+        app.model.callToolNextStream(initialText, nativeTool!, { toolId: "client.switch_thread", schemaVersion: 1,
+          input: { threadId: secondThreadId, listen: true } });
+      }
       const pairingCode = app.authentication.createPairing({ kind: "management" }).token;
       const text = `voice fixture reply ${mode} ${scenario}`;
       await speech.configure({ transcripts: [text, ""], asrDelayMs: 0, ttsDurationSeconds: scenario === "skip" ? 12 : 1, reset: true });
@@ -258,7 +278,7 @@ describe("native voice production pipeline with loopback providers", () => {
       const before = app.model.requests.length;
       const ttsBefore = (await speech.observations()).speech.length;
       const args = { serverOrigin: app.url, speechEndpoint: speech.endpoint, speechToken: speech.token, pairingCode, threadId, threadTitle, mode, scenario,
-        initialText: `native voice fixture start ${mode} ${scenario}`, draftText: `unsent voice fixture draft ${mode} ${scenario}`,
+        initialText, draftText: `unsent voice fixture draft ${mode} ${scenario}`,
         ...(secondThreadId ? { secondThreadId, secondThreadTitle } : {}) };
       const diagnosticPath = path.join(artifactDirectory, `android-${mode}-${scenario}-voice-diagnostics.json`);
       const observer = await observeScenarioVoice(app, [threadId, ...(secondThreadId ? [secondThreadId] : [])]);
@@ -308,6 +328,16 @@ describe("native voice production pipeline with loopback providers", () => {
             expect(Math.abs(evidence.inputUi.targetInset - 16)).toBeLessThanOrEqual(3);
           } else expect(evidence.inputUi.spacerHeight).toBe(0);
         }
+        if (scenario === "background-switch") {
+          expect(evidence.backgroundSwitch).toMatchObject({ recognitionThreadId: secondThreadId, foreground: false,
+            replyPlayedBeforeRecognition: true, navigationEvents: 0, resumedPath: `/threads/${threadId}`,
+            autoListen: false, voiceThreadId: threadId, pinDefaultVoiceThread: true,
+            inputPresentationEvents: 0, receipt: { threadId: secondThreadId, admittedMode: "submit" } });
+          // Native MCP can wrap the tool result in a text envelope. Recognition after settlement also proves acceptance.
+          const toolResults = app.model.requests.slice(before).flatMap(request => request.toolResults).join("\n").replaceAll('\\"', '"');
+          expect(toolResults).toMatch(/"foreground"\s*:\s*false/u);
+          expect(toolResults).toMatch(/"voiceReady"\s*:\s*true/u);
+        }
         // The device polled Sedes for the autosaved draft; confirm it is still the unsent composer text.
         expect((await app.thread(threadId)).draft.text).toBe(args.draftText);
         const submissions = () => app.model.requests.slice(before).filter(request => request.lastRole === "user" && request.lastText === text);
@@ -316,9 +346,13 @@ describe("native voice production pipeline with loopback providers", () => {
         expect(submissions()).toHaveLength(scenario === "stop" ? 0 : 1);
         if (mode === "manual") expect((await speech.observations()).speech.length).toBe(ttsBefore);
         if (secondThreadId) {
+          if (scenario === "background-switch") await app.waitFor(async () => Object.values((await app.thread(secondThreadId)).itemsById)
+            .some(item => item.kind === "user_message" && item.deliveryOperationId === evidence.backgroundSwitch.receipt.operationId));
           const target = await app.thread(secondThreadId);
           expect(JSON.stringify(target)).toContain(text);
           expect(JSON.stringify(await app.thread(threadId))).not.toContain(text);
+          if (scenario === "background-switch") expect(Object.values(target.itemsById).filter(item =>
+            item.kind === "user_message" && item.deliveryOperationId === evidence.backgroundSwitch.receipt.operationId)).toHaveLength(1);
         }
         await writeFile(diagnosticPath, JSON.stringify({ mode, scenario, ...await observer.report(false) }, null, 2));
       } catch (failure) {

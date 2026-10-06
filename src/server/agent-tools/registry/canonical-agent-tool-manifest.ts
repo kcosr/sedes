@@ -131,7 +131,7 @@ export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
   }),
   "client.switch_thread": threadOnlyManifestEntry({
     id: "client.switch_thread", schemaVersion: 1, environmentAuthority: { kind: "direct_resource", resource: "thread" },
-    description: "After this turn\u2019s spoken reply drains, navigate the current client to the exact thread. listen defaults to false; true requests one listen even with autoListen off, but cannot enable voice mode. Current client means the client that started this turn; later Steer input never changes it. Set clientId only when the user explicitly requests another client.",
+    description: "After turn completion and reply playback, navigate the foreground client to the exact thread. listen defaults to false; true requests one listen even with autoListen off, without enabling voice or changing its default. Background Android requires ready native voice for listen=true and never navigates, including on resume; listen=false is a no-op. The current client started this turn; Steer never changes it. Set clientId only when the user explicitly requests another client.",
     catalog: { groupId: "client", label: "Switch thread", order: 30 },
     effects: { application: "write", modelUsage: "none", external: "none" },
   }),

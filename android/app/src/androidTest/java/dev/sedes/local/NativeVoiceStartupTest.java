@@ -186,6 +186,29 @@ public class NativeVoiceStartupTest {
         }
     }
 
+    @Test public void backgroundClientListenNeverColdStartsVoiceOrQueuesRecognitionForResume() throws Exception {
+        for (String mode : new String[] { "off", "manual", "response" }) {
+            try (Fixture f = new Fixture(mode, true, true)) {
+                f.connect(); f.flush();
+                JSONObject command = NativeVoiceJson.object("id", "background-listen", "action", "switch_thread",
+                    "sourceThreadId", "source", "sourceTurnId", "turn", "threadId", "destination", "listen", true,
+                    "expiresAt", System.currentTimeMillis() + 60000);
+                JSONObject result = f.clientCommand(command); f.flush();
+                assertEquals("noop", result.getString("status"));
+                assertEquals(mode.equals("off") ? "voice_off" : "voice_not_ready", result.getString("reason"));
+                assertTrue("An agent cannot cold-start the microphone service", f.starts.isEmpty());
+                assertTrue(f.runtime.snapshot().isNull("active"));
+                assertEquals(mode, f.runtime.snapshot().getJSONObject("settings").getString("audioMode"));
+                f.runtime.nativeVisibility(true); f.flush();
+                if (mode.equals("off")) assertTrue(f.starts.isEmpty());
+                else assertTrue(f.accepted(f.start()));
+                NativeVoiceJson.put(command, "action", "turn_settled"); NativeVoiceJson.put(command, "replyEventId", null);
+                assertEquals("superseded", f.clientCommand(command).getString("reason"));
+                assertTrue("Restoring a saved mode must not replay the rejected recognition", f.runtime.snapshot().isNull("active"));
+            }
+        }
+    }
+
     @Test public void pauseOffAndProfileChangeInvalidateQueuedStarts() throws Exception {
         for (String action : new String[] { "pause", "off", "profile" }) {
             try (Fixture f = new Fixture("response", true, true)) {
@@ -371,7 +394,7 @@ public class NativeVoiceStartupTest {
         NativeClientActionQueue queue = new NativeClientActionQueue();
         Object navigation = new Object();
         JSONObject command = new JSONObject("{\"id\":\"action\",\"action\":\"switch_thread\",\"sourceThreadId\":\"source\",\"sourceTurnId\":\"turn\",\"replyEventId\":null,\"expiresAt\":120000}");
-        queue.stage(command, navigation, 0);
+        queue.stage(command, navigation, false, 0);
         queue.settle("action", NativeVoiceJson.nullableString(command, "replyEventId", 128), 120000);
         assertEquals(1, queue.takeReady(1, true, null, null, navigation).size());
     }

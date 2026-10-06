@@ -3513,6 +3513,11 @@ share one registration. Connection generations, commands, acknowledgements and
 reply-drain correlation remain client plumbing, never provider wire identities.
 Do not reroute to another client, replay after reconnect, or start microphone
 capture on server tool completion before the selected client's playback drains.
+Background Android recognition requires an existing ready native voice session.
+Capture its voice-only disposition at acceptance: visibility changes alone cannot
+turn it into deferred screen navigation or supersede the request.
+This is shared client behavior for Pi, Codex, Claude, Grok, and OpenCode; it does
+not change provider transports or completion authority.
 
 Navigation and default-thread writes authorize the exact destination through
 normal thread/environment policy. Settings use the client's revision and

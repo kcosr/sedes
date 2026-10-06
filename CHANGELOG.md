@@ -214,6 +214,11 @@
 
 ### Added
 
+- Agent thread switches can request one recording on an exact thread while
+  Android is in the background and native voice is already ready. The request
+  waits for turn completion and reply playback without changing the screen,
+  including when the app reopens.
+
 - Workpads show the thread's active count in the header and an icon in the
   sidebar. Toggle checklist boxes directly in saved documents; each change
   creates a revision, preserves drafts, and detects concurrent edits.
