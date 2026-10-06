@@ -20,6 +20,7 @@ export interface AutomationThread {
   readonly inventoryState: NormalizedApplicationThreadSummary["inventoryState"];
   readonly snoozedUntil?: string;
   readonly available: boolean;
+  readonly backingState: NormalizedApplicationThreadSummary["backingState"];
   readonly runState: ThreadRunState;
   readonly automation: SummaryAutomation | null;
 }
@@ -52,6 +53,7 @@ function selectAutomationThread(
       ? {}
       : { snoozedUntil: thread.snoozedUntil }),
     available: thread.available,
+    backingState: thread.backingState,
     runState: thread.runState,
     automation: thread.automation,
   };

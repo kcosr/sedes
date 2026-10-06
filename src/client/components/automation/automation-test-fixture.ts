@@ -74,6 +74,8 @@ export interface FixtureThread {
   readonly title?: string;
   readonly inventoryState?: NormalizedApplicationThreadSummary["inventoryState"];
   readonly snoozedUntil?: string;
+  readonly runState?: NormalizedApplicationThreadSummary["runState"];
+  readonly backingState?: NormalizedApplicationThreadSummary["backingState"];
   readonly automation: SummaryAutomation | null;
 }
 
@@ -87,7 +89,8 @@ function threadSummary(thread: FixtureThread): NormalizedApplicationThreadSummar
     inventoryRevision: 4,
     ...(thread.snoozedUntil ? { snoozedUntil: thread.snoozedUntil } : {}),
     available: true,
-    runState: "idle",
+    backingState: thread.backingState ?? "bound",
+    runState: thread.runState ?? "idle",
     automation: thread.automation,
   } as unknown as NormalizedApplicationThreadSummary;
 }

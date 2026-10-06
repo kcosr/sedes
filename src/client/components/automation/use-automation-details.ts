@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { AutomationCapability } from "../../../shared/index.js";
+import type { AutomationCapability, ThreadRunState } from "../../../shared/index.js";
 import { ApiError } from "../../api/ApiClient.js";
 import {
   messageFrom,
@@ -17,11 +17,35 @@ export interface AutomationCapabilityState {
 }
 
 /**
+ * The phase of the thread's run state as the capability sees it: settled
+ * (idle or failed: Run now is allowed), busy (a turn in flight: nothing can
+ * be attached), or transitioning (the backend is disconnected or
+ * reconciling: automation is unavailable). Steps within a phase do not
+ * change the answer.
+ */
+function runPhase(runState: ThreadRunState): "settled" | "busy" | "transitioning" {
+  switch (runState) {
+    case "idle":
+    case "failed":
+      return "settled";
+    case "disconnected":
+    case "reconciling":
+      return "transitioning";
+    case "starting":
+    case "running":
+    case "waiting_for_approval":
+    case "waiting_for_input":
+    case "stopping":
+      return "busy";
+  }
+}
+
+/**
  * The thread's automation capability (can it take one, run it now, fork per
  * run). It acquires the conversation, so it is read once per page or editor
  * and again only when the summary changes what it depends on: the
- * thread's inventory state, its availability, whether it has an
- * automation, and a disconnected or reconciling backend.
+ * thread's inventory state, its availability, its binding to the backend,
+ * whether it has an automation, and the phase of its run state.
  */
 export function useAutomationCapability(
   store: DetailsStore,
@@ -35,8 +59,9 @@ export function useAutomationCapability(
     ? [
         thread.inventoryState,
         thread.available,
+        thread.backingState,
         thread.automation !== null,
-        thread.runState === "disconnected" || thread.runState === "reconciling",
+        runPhase(thread.runState),
       ].join(":")
     : undefined;
   useEffect(() => {
