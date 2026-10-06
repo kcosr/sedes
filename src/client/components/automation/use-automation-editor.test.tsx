@@ -227,6 +227,49 @@ describe("useAutomationEditor", () => {
     expect(result.current.form.prompt).toBe(definition().prompt);
   });
 
+  it("unblocks as soon as the unknown run is resolved elsewhere, without a new revision", async () => {
+    const uncertainRun = {
+      id: "run-1",
+      state: "uncertain" as const,
+      occurrence: "scheduled" as const,
+      scheduledFor: "2026-10-06T00:00:00.000Z",
+    };
+    const fixture = automationStore([{ automation: automationSummary({ status: "paused", lastRun: uncertainRun }) }], {
+      getThreadAutomation: vi.fn().mockResolvedValue(definition({ status: "paused", lastRun: uncertainRun })),
+      updateThreadAutomation: vi.fn().mockResolvedValue(definition({ status: "paused", prompt: "Changed", revision: 4 })),
+    });
+    const { result } = render(fixture);
+    await waitFor(() => expect(result.current.status).toBe("ready"));
+    expect(result.current.uncertain).toBe(true);
+    act(() => result.current.update({ prompt: "Changed" }));
+
+    // Another client marks it failed and keeps it paused: the run's state
+    // moves, the definition's revision does not.
+    act(() =>
+      fixture.publish([
+        {
+          automation: automationSummary({
+            status: "paused",
+            lastRun: { ...uncertainRun, state: "failed", errorCode: "automation_uncertain_resolved" },
+          }),
+        },
+      ]),
+    );
+    expect(result.current.uncertain).toBe(false);
+    expect(result.current.stale).toBe(false);
+    expect(result.current.form.prompt).toBe("Changed");
+    await waitFor(() => expect(result.current.validation.valid).toBe(true));
+    let saved = false;
+    await act(async () => {
+      saved = await result.current.save();
+    });
+    expect(saved).toBe(true);
+    expect(fixture.api.updateThreadAutomation).toHaveBeenCalledWith(
+      THREAD_ID,
+      expect.objectContaining({ prompt: "Changed", expectedRevision: 3 }),
+    );
+  });
+
   it("refuses to save while the last run's outcome is unknown or a fork cannot be made", async () => {
     const fixture = automationStore([
       {
