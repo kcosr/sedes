@@ -27,6 +27,7 @@ import {
   describeSchedule,
   lastRunAge,
   runStateLabel,
+  runTurnRunning,
 } from "./automation-text.js";
 
 /**
@@ -38,7 +39,8 @@ import {
  *    automation, archived anchors included. It runs on every application
  *    event, so it keeps an unchanged row's object and returns an unchanged
  *    base as-is: activity on an anchor that leaves its automation, title and
- *    location alone does not re-render the page.
+ *    location alone does not re-render the page. The one piece of thread
+ *    activity a row shows is whether its latest run's turn is still going.
  * 2. `projectAutomations` applies the sidebar Scope and the search (title and
  *    prompt preview), computes each automation's health at `now`, and groups
  *    by status or by project.
@@ -73,6 +75,11 @@ export interface AutomationListRow
   readonly locationTag: string | null;
   /** Lower-cased title and prompt preview: what the page's search matches. */
   readonly searchValues: readonly string[];
+  /**
+   * The latest run was delivered and the thread running it (the anchor, or
+   * a fork run's own thread) is still busy with that turn.
+   */
+  readonly latestRunTurnRunning: boolean;
 }
 
 export interface AutomationsBase {
@@ -186,6 +193,7 @@ function catalogIndexFor(catalog: SidebarScopeCatalog): CatalogIndex {
 function rowSource(
   thread: NormalizedApplicationThreadSummary,
   automation: SummaryAutomation,
+  resultRunState: NormalizedApplicationThreadSummary["runState"] | undefined,
 ) {
   return {
     id: thread.id,
@@ -197,6 +205,9 @@ function rowSource(
     targetId: thread.targetId,
     groupId: thread.groupId,
     backendLabel: thread.backend.label.text,
+    latestRunTurnRunning:
+      automation.lastRun !== undefined &&
+      runTurnRunning(automation.lastRun, resultRunState),
   };
 }
 
@@ -251,11 +262,22 @@ export function selectAutomationsBase(
   const rows: AutomationListRow[] = [];
   const listed = new Set<string>();
   let changed = previous === undefined;
-  for (const thread of [...snapshot.threads, ...loadedForks]) {
-    // The snapshot's copy comes first and is the live one.
+  const threads = [...snapshot.threads, ...loadedForks];
+  // A run's turn runs on its result thread: the anchor, or a fork run's own
+  // thread. The snapshot's copy comes first and is the live one.
+  const runStates = new Map<string, NormalizedApplicationThreadSummary["runState"]>();
+  for (const thread of threads) {
+    if (!runStates.has(thread.id)) runStates.set(thread.id, thread.runState);
+  }
+  for (const thread of threads) {
     if (thread.automation === null || listed.has(thread.id)) continue;
     listed.add(thread.id);
-    const source = rowSource(thread, thread.automation);
+    const resultThreadId = thread.automation.lastRun?.resultThreadId ?? thread.id;
+    const source = rowSource(
+      thread,
+      thread.automation,
+      runStates.get(resultThreadId),
+    );
     const prior = previousRows.get(thread.id);
     const row =
       prior !== undefined && catalogUnchanged && rowMatchesSource(prior, source)
@@ -409,6 +431,8 @@ export interface AutomationRowText {
   readonly tone?: AutomationTextTone;
   /** A delivered last run, or its finished turn; the row marks it with a check. */
   readonly check?: boolean;
+  /** The last run's turn is still going; the row marks it with a spinner. */
+  readonly running?: boolean;
 }
 
 /**
@@ -439,11 +463,23 @@ export interface AutomationRowPresentation {
 /**
  * The last run's outcome with its age: once its agent turn settled, how the
  * turn ended ("Finished 23m ago" with a check, "Failed 2h ago" in danger,
- * "Interrupted 1h ago"); before that, the run's state ("Delivered 23m ago"
- * with a check, "Skipped 2h ago"). A failed turn is history only: it never
- * moves the row out of its group.
+ * "Interrupted 1h ago"); while its turn is still going, "Running · 4m" with a
+ * spinner; before that, the run's state ("Delivered 23m ago" with a check,
+ * "Skipped 2h ago"). A failed turn is history only: it never moves the row
+ * out of its group.
  */
-function lastRunOutcome(lastRun: SummaryAutomationRun, now: number): AutomationRowText {
+function lastRunOutcome(
+  lastRun: SummaryAutomationRun,
+  turnRunning: boolean,
+  now: number,
+): AutomationRowText {
+  if (turnRunning) {
+    return {
+      text: runStateLabel(lastRun, { running: true, now }),
+      tone: "info",
+      running: true,
+    };
+  }
   const text = `${runStateLabel(lastRun)} ${lastRunAge(lastRun, now)}`;
   const outcome = lastRun.turn?.outcome;
   if (outcome === "failed") return { text, check: false, tone: "danger" };
@@ -468,7 +504,9 @@ export function automationRowPresentation(
   const scheduling: AutomationRowText = {
     text: nextRun === null ? "Scheduling paused" : `next ${nextRun}`,
   };
-  const lastOutcome = lastRun ? lastRunOutcome(lastRun, now) : null;
+  const lastOutcome = lastRun
+    ? lastRunOutcome(lastRun, row.latestRunTurnRunning, now)
+    : null;
   switch (health.kind) {
     case "failed":
     case "unknown": {
@@ -518,7 +556,8 @@ export function automationRowPresentation(
         primary: { text: health.label },
         secondary: lastOutcome,
         detail: schedule,
-        outcome: { text: health.label },
+        // A turn still going outranks the status word on the phone row.
+        outcome: lastOutcome?.running ? lastOutcome : { text: health.label },
         nextRun,
       };
   }

@@ -68,6 +68,7 @@ function RowText({
   return (
     <span className={className} data-tone={value?.tone} aria-hidden="true">
       {value?.check && <Check aria-hidden="true" />}
+      {value?.running && <AutomationGlyph glyph="spinner" tone="info" />}
       {value?.text}
     </span>
   );

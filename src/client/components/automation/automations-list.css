@@ -303,6 +303,13 @@
   flex: none;
 }
 
+/* A last run whose turn is still going: the spinner takes the check's size. */
+.automation-row-secondary .automation-glyph.comet-spinner[data-size] {
+  --comet-spinner-size: var(--icon-xs);
+  --comet-spinner-thickness: 1.8px;
+  flex: none;
+}
+
 /* The sidebar's colour budget: red broken, amber needs the user, info-blue
    machine working; everything else stays quiet. */
 .automation-row [data-tone="danger"] {

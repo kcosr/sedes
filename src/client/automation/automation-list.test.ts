@@ -261,10 +261,10 @@ describe("selectAutomationsBase", () => {
     const base = selectAutomationsBase(snapshot);
     // A re-parsed, equal snapshot.
     expect(selectAutomationsBase(structuredClone(snapshot), base)).toBe(base);
-    // Activity on an anchor that leaves its automation alone.
+    // Activity on an anchor whose automation has no run to follow.
     const busy = structuredClone(snapshot);
-    busy.threads[0] = {
-      ...busy.threads[0]!,
+    busy.threads[4] = {
+      ...busy.threads[4]!,
       runState: "running",
       lastActivityAt: minutesAgo(0),
       threadRevision: 7,
@@ -274,6 +274,57 @@ describe("selectAutomationsBase", () => {
     const plain = structuredClone(snapshot);
     plain.threads[6] = { ...plain.threads[6]!, title: { text: "Renamed" } };
     expect(selectAutomationsBase(plain, base)).toBe(base);
+  });
+
+  it("follows only whether the latest run's turn is still going", () => {
+    const snapshot = makeSnapshot(world);
+    const base = selectAutomationsBase(snapshot);
+    expect(base.rows[0]!.latestRunTurnRunning).toBe(false);
+
+    const running = structuredClone(snapshot);
+    running.threads[0] = { ...running.threads[0]!, runState: "running" };
+    const started = selectAutomationsBase(running, base);
+    expect(started).not.toBe(base);
+    expect(started.rows[0]!.latestRunTurnRunning).toBe(true);
+    expect(started.rows.slice(1)).toEqual(base.rows.slice(1));
+    started.rows.slice(1).forEach((row, index) => expect(row).toBe(base.rows[index + 1]));
+
+    // Moving between busy phases is not a change the row shows.
+    const waiting = structuredClone(running);
+    waiting.threads[0] = { ...waiting.threads[0]!, runState: "waiting_for_approval" };
+    expect(selectAutomationsBase(waiting, started)).toBe(started);
+
+    // Once the turn settles the run's own ending takes over.
+    const settled = structuredClone(running);
+    const triage = settled.threads[0]!.automation!;
+    settled.threads[0] = {
+      ...settled.threads[0]!,
+      automation: { ...triage, lastRun: { ...triage.lastRun!, turn: { outcome: "completed" } } },
+    };
+    expect(selectAutomationsBase(settled, started).rows[0]!.latestRunTurnRunning).toBe(false);
+  });
+
+  it("follows a fork run's own thread", () => {
+    const anchor = makeThread("anchor", "Triage", {
+      automation: automation({
+        runMode: "clone",
+        lastRun: run("completed", { resultThreadId: "fork" }),
+      }),
+    });
+    const fork = makeThread("fork", "Triage · Oct 6, 3:15 AM", {
+      automation: null,
+      runState: "running",
+    });
+    const [anchorRow] = selectAutomationsBase(makeSnapshot([{ ...anchor, runState: "idle" }, fork])).rows;
+    expect(anchorRow!.latestRunTurnRunning).toBe(true);
+    // The anchor being busy says nothing about the fork's turn.
+    const [idleFork] = selectAutomationsBase(
+      makeSnapshot([{ ...anchor, runState: "running" }, { ...fork, runState: "idle" }]),
+    ).rows;
+    expect(idleFork!.latestRunTurnRunning).toBe(false);
+    // A fork loaded beyond the bootstrap counts too.
+    const [loaded] = selectAutomationsBase(makeSnapshot([anchor]), undefined, [fork]).rows;
+    expect(loaded!.latestRunTurnRunning).toBe(true);
   });
 
   it("rebuilds only the rows that changed", () => {
@@ -590,6 +641,44 @@ describe("automationRowPresentation", () => {
     expect(automationRowPresentation(entry, NOW).detail).toBe(
       "Every day at 2:00 AM UTC",
     );
+  });
+
+  it("reads a delivered run whose turn is still going as Running, paused or not", () => {
+    const delivered = run("completed", { finishedAt: minutesAgo(4) });
+    const active = entryFor(
+      makeThread("x", "X", {
+        runState: "running",
+        automation: automation({ lastRun: delivered }),
+      }),
+    );
+    expect(automationRowPresentation(active, NOW)).toMatchObject({
+      primary: { text: next(22) },
+      secondary: { text: "Running · 4m", tone: "info", running: true },
+      outcome: { text: "Running · 4m", tone: "info", running: true },
+    });
+    // Run now on a paused automation: the row stays Paused, its run is Running.
+    const paused = entryFor(
+      makeThread("x", "X", {
+        runState: "waiting_for_input",
+        automation: automation({ status: "paused", nextRunAt: undefined, lastRun: delivered }),
+      }),
+    );
+    expect(paused.health.group).toBe("paused");
+    expect(automationRowPresentation(paused, NOW)).toMatchObject({
+      primary: { text: "Paused" },
+      secondary: { text: "Running · 4m", tone: "info", running: true },
+      outcome: { text: "Running · 4m", tone: "info", running: true },
+    });
+    // An idle thread: the run was delivered and nothing says it is still going.
+    const idle = entryFor(
+      makeThread("x", "X", {
+        automation: automation({ status: "paused", nextRunAt: undefined, lastRun: delivered }),
+      }),
+    );
+    expect(automationRowPresentation(idle, NOW)).toMatchObject({
+      secondary: { text: "Delivered 4m ago", check: true },
+      outcome: { text: "Paused" },
+    });
   });
 
   it("names a run in flight in the info tone", () => {
