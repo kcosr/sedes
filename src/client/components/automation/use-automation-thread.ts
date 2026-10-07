@@ -219,9 +219,9 @@ export function useAutomationAnchor(
 }
 
 /**
- * The summary fields that move when the automation or its runs change: the
- * definition revision and the latest run's id, state and settled turn. The
- * page refetches when this changes.
+ * The summary fields that move when the automation or its latest run change:
+ * the definition revision and the latest run's id, state and settled turn.
+ * The page refetches the definition when this changes.
  */
 export function automationLiveKey(
   automation: SummaryAutomation | null | undefined,
@@ -264,4 +264,15 @@ export function useThreadRunState(
     [threadId],
   );
   return useApplicationStoreSelector(store, select);
+}
+
+/**
+ * Moves whenever any run of the automation changes as presented, including
+ * an older run's turn settling or its turn times arriving later; the run
+ * history refetches when it changes.
+ */
+export function automationRunsKey(
+  automation: SummaryAutomation | null | undefined,
+): string | undefined {
+  return automation ? String(automation.runsRevision) : undefined;
 }

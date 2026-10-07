@@ -586,6 +586,7 @@ describe("AutomationPage", () => {
       fixture.publish([
         {
           automation: automationSummary({
+            runsRevision: 1,
             lastRun: { id: fresh.id, state: "running", occurrence: "manual", scheduledFor: fresh.scheduledFor },
           }),
         },
@@ -762,6 +763,8 @@ describe("AutomationPage: agent turns", () => {
     const older = run();
     const summary = (turn?: { outcome: "completed" }) =>
       automationSummary({
+        // The server advances the run-history revision when the turn settles.
+        runsRevision: turn ? 1 : 0,
         lastRun: { ...lastRun("completed", delivered.id), ...(turn ? { turn } : {}) },
       });
     const list = vi

@@ -153,6 +153,7 @@ describe("useAutomationRuns", () => {
       fixture.publish([
         {
           automation: automationSummary({
+            runsRevision: 1,
             lastRun: { id: fresh.id, state: "running", occurrence: "scheduled", scheduledFor: fresh.scheduledFor },
           }),
         },
@@ -168,6 +169,7 @@ describe("useAutomationRuns", () => {
       fixture.publish([
         {
           automation: automationSummary({
+            runsRevision: 2,
             lastRun: { id: fresh.id, state: "completed", occurrence: "scheduled", scheduledFor: fresh.scheduledFor },
           }),
         },
@@ -187,6 +189,7 @@ describe("useAutomationRuns", () => {
       fixture.publish([
         {
           automation: automationSummary({
+            runsRevision: 3,
             lastRun: {
               id: fresh.id,
               state: "completed",
@@ -201,6 +204,51 @@ describe("useAutomationRuns", () => {
     await waitFor(() => expect(result.current.items).toEqual([finished, older]));
     expect(result.current.arrived).toEqual([]);
     expect(list).toHaveBeenCalledTimes(4);
+  });
+
+  it("refreshes when an older run settles or gains turn times without the latest run moving", async () => {
+    const older = run({ state: "completed" });
+    const newest = run({ state: "queued" });
+    const latest = {
+      id: newest.id,
+      state: "queued" as const,
+      occurrence: "scheduled" as const,
+      scheduledFor: newest.scheduledFor,
+    };
+    const list = vi.fn().mockResolvedValueOnce(page([newest, older]));
+    const fixture = automationStore(
+      [{ automation: automationSummary({ lastRun: latest, runsRevision: 4 }) }],
+      { listThreadAutomationRuns: list },
+    );
+    const { result } = renderHook(() => useRuns(fixture, "all"));
+    await waitFor(() => expect(result.current.status).toBe("ready"));
+
+    const settled = {
+      ...older,
+      turn: { id: "turn-older", outcome: "failed" as const, settledAt: new Date().toISOString() },
+    };
+    list.mockResolvedValueOnce(page([newest, settled]));
+    act(() =>
+      fixture.publish([{ automation: automationSummary({ lastRun: latest, runsRevision: 5 }) }]),
+    );
+    await waitFor(() => expect(result.current.items).toEqual([newest, settled]));
+
+    const timed = {
+      ...settled,
+      turn: { ...settled.turn, startedAt: "2026-10-06T02:00:02.000Z", endedAt: "2026-10-06T02:02:16.000Z" },
+    };
+    list.mockResolvedValueOnce(page([newest, timed]));
+    act(() =>
+      fixture.publish([{ automation: automationSummary({ lastRun: latest, runsRevision: 6 }) }]),
+    );
+    await waitFor(() => expect(result.current.items).toEqual([newest, timed]));
+    expect(result.current.arrived).toEqual([]);
+
+    // A republish with the same revision is not a change.
+    act(() =>
+      fixture.publish([{ automation: automationSummary({ lastRun: latest, runsRevision: 6 }) }]),
+    );
+    expect(list).toHaveBeenCalledTimes(3);
   });
 
   it("pages on through a gap after more than a page of runs arrived", async () => {
@@ -222,6 +270,7 @@ describe("useAutomationRuns", () => {
       fixture.publish([
         {
           automation: automationSummary({
+            runsRevision: 1,
             lastRun: { id: newest.id, state: "completed", occurrence: "scheduled", scheduledFor: newest.scheduledFor },
           }),
         },
@@ -262,6 +311,7 @@ describe("useAutomationRuns", () => {
       fixture.publish([
         {
           automation: automationSummary({
+            runsRevision: 1,
             lastRun: { id: newest.id, state: "completed", occurrence: "scheduled", scheduledFor: newest.scheduledFor },
           }),
         },
@@ -306,6 +356,7 @@ describe("useAutomationRuns", () => {
       fixture.publish([
         {
           automation: automationSummary({
+            runsRevision: 1,
             lastRun: { id: fresh.id, state: "completed", occurrence: "scheduled", scheduledFor: fresh.scheduledFor },
           }),
         },

@@ -9,7 +9,7 @@ import {
   messageFrom,
   type ApplicationClientStore,
 } from "../../stores/ApplicationClientStore.js";
-import { automationLiveKey, type AutomationThread } from "./use-automation-thread.js";
+import { automationRunsKey, type AutomationThread } from "./use-automation-thread.js";
 
 /** Runs per page, for the first page and for each "Load more". */
 export const AUTOMATION_RUNS_PAGE_SIZE = 25;
@@ -104,8 +104,8 @@ function runMatchesFilter(
 /**
  * One automation's run history for a filter: the first page with the
  * whole-history counts, cursor paging, and a live refresh of the first page
- * whenever the live thread summary's latest run or revision moves (the
- * server publishes a thread update for each run transition).
+ * whenever the live thread summary's run-history revision moves (the server
+ * advances it, and publishes a thread update, for every presented run change).
  */
 export function useAutomationRuns(
   store: Pick<ApplicationClientStore, "api">,
@@ -113,7 +113,7 @@ export function useAutomationRuns(
   filter: AutomationRunFilter,
 ): AutomationRuns {
   const threadId = thread.id;
-  const liveKey = automationLiveKey(thread.automation);
+  const liveKey = automationRunsKey(thread.automation);
   const present = liveKey !== undefined;
   const [state, setState] = useState<RunsState>(() =>
     emptyState(filter, present ? "loading" : "idle"),
