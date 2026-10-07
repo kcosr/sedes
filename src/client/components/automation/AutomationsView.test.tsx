@@ -441,6 +441,70 @@ describe("AutomationsView list", () => {
     expect(text("weekly", "next")).toBe("");
   });
 
+  it("reads the last turn's ending in the row, and keeps each row in its group", () => {
+    const turnWorld = [
+      makeThread("finished", "Nightly dependency audit", {
+        automation: automation({
+          lastRun: run("completed", {
+            finishedAt: minutesAgo(40),
+            turn: { outcome: "completed", endedAt: minutesAgo(23) },
+          }),
+        }),
+      }),
+      makeThread("failed", "Invoice reconciliation report", {
+        automation: automation({
+          nextRunAt: hoursFromNow(3),
+          lastRun: run("completed", {
+            finishedAt: minutesAgo(125),
+            turn: { outcome: "failed", endedAt: minutesAgo(120) },
+          }),
+        }),
+      }),
+      makeThread("interrupted", "Triage new billing issues", {
+        automation: automation({
+          status: "paused",
+          nextRunAt: undefined,
+          lastRun: run("completed", {
+            finishedAt: minutesAgo(60),
+            turn: { outcome: "interrupted" },
+          }),
+        }),
+      }),
+    ];
+    const { store } = createStore(makeSnapshot(turnWorld));
+    render(<AutomationsView store={store} />);
+    // A failed turn adds no attention: no Needs attention group.
+    expect(headings()).toEqual(["Upcoming · 2", "Paused · 1"]);
+    expect(row("failed")).toHaveAttribute("data-group", "upcoming");
+
+    expect(text("finished", "secondary")).toBe("Finished 23m ago");
+    expect(
+      row("finished").querySelector(".automation-row-secondary .lucide-check"),
+    ).not.toBeNull();
+    expect(row("finished").querySelector(".automation-row-secondary")).not.toHaveAttribute("data-tone");
+
+    const failed = row("failed").querySelector(".automation-row-secondary");
+    expect(failed).toHaveTextContent(/^Failed 2h ago$/u);
+    expect(failed).toHaveAttribute("data-tone", "danger");
+    expect(failed?.querySelector(".lucide-check")).toBeNull();
+    expect(text("failed", "primary")).toBe(nextLabel(3));
+    expect(
+      row("failed").querySelector('[data-automation-glyph="repeat"]'),
+    ).not.toBeNull();
+    expect(
+      screen.getByRole("link", { name: "Invoice reconciliation report" }),
+    ).toHaveAccessibleDescription(
+      `Next run ${nextLabel(3)}. Every day at 2:00 AM UTC · acme-web · Pi SDK. Failed 2h ago`,
+    );
+    expect(
+      row("failed").querySelector('[data-layout="narrow"] .automation-row-outcome'),
+    ).toHaveAttribute("data-tone", "danger");
+
+    expect(text("interrupted", "primary")).toBe("Paused");
+    expect(text("interrupted", "secondary")).toBe("Interrupted 1h ago");
+    expect(row("interrupted").querySelector(".automation-row-secondary")).not.toHaveAttribute("data-tone");
+  });
+
   it("opens the automation page from the whole row and leaves modified clicks to the browser", () => {
     const { store } = createStore(makeSnapshot(world));
     render(<AutomationsView store={store} />);

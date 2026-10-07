@@ -8,6 +8,7 @@ import {
   automationNeedsAttention,
   compareAutomationsInGroup,
   lastRunAt,
+  threadRunPhase,
   type AutomationHealthThread,
   type AutomationSortSubject,
   type SummaryAutomation,
@@ -107,6 +108,20 @@ describe("automationHealth", () => {
       tone: "danger",
       label: "Failed",
     });
+  });
+
+  it("a delivered run whose turn failed or was interrupted stays active, without attention", () => {
+    for (const outcome of ["failed", "interrupted", "completed"] as const) {
+      const delivered = automation({
+        lastRun: run("completed", { turn: { outcome, endedAt: "2026-10-06T02:05:00.000Z" } }),
+      });
+      expect(automationHealth(thread({ automation: delivered }), NOW)).toMatchObject({
+        kind: "active",
+        group: "upcoming",
+        tone: "success",
+      });
+      expect(automationNeedsAttention(delivered)).toBe(false);
+    }
   });
 
   it("an uncertain last run needs attention even though it paused scheduling", () => {
@@ -304,6 +319,37 @@ describe("lastRunAt", () => {
     expect(
       lastRunAt(run("failed", { finishedAt: "2026-10-06T02:00:25.000Z" })),
     ).toBe("2026-10-06T02:00:25.000Z");
+  });
+
+  it("prefers the turn's end, when the backend reported it, over the delivery", () => {
+    const delivered = { finishedAt: "2026-10-06T02:00:25.000Z" };
+    expect(
+      lastRunAt(
+        run("completed", {
+          ...delivered,
+          turn: { outcome: "completed", endedAt: "2026-10-06T02:14:00.000Z" },
+        }),
+      ),
+    ).toBe("2026-10-06T02:14:00.000Z");
+    expect(
+      lastRunAt(run("completed", { ...delivered, turn: { outcome: "interrupted" } })),
+    ).toBe("2026-10-06T02:00:25.000Z");
+  });
+});
+
+describe("threadRunPhase", () => {
+  it.each([
+    ["idle", "settled"],
+    ["failed", "settled"],
+    ["starting", "busy"],
+    ["running", "busy"],
+    ["waiting_for_approval", "busy"],
+    ["waiting_for_input", "busy"],
+    ["stopping", "busy"],
+    ["disconnected", "transitioning"],
+    ["reconciling", "transitioning"],
+  ] as const)("reads %s as %s", (runState, phase) => {
+    expect(threadRunPhase(runState)).toBe(phase);
   });
 });
 

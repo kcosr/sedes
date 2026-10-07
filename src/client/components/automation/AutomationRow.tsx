@@ -67,7 +67,7 @@ function RowText({
 }): React.JSX.Element {
   return (
     <span className={className} data-tone={value?.tone} aria-hidden="true">
-      {value?.delivered && <Check aria-hidden="true" />}
+      {value?.check && <Check aria-hidden="true" />}
       {value?.text}
     </span>
   );

@@ -20,6 +20,7 @@ import {
   type AutomationHealthThread,
   type AutomationSortSubject,
   type SummaryAutomation,
+  type SummaryAutomationRun,
 } from "./automation-health.js";
 import {
   automationErrorText,
@@ -406,8 +407,8 @@ export type AutomationTextTone = "danger" | "warning" | "info";
 export interface AutomationRowText {
   readonly text: string;
   readonly tone?: AutomationTextTone;
-  /** A delivered last run; the row marks it with a check. */
-  readonly delivered?: boolean;
+  /** A delivered last run, or its finished turn; the row marks it with a check. */
+  readonly check?: boolean;
 }
 
 /**
@@ -422,9 +423,9 @@ export interface AutomationRowPresentation {
    */
   readonly primary: AutomationRowText;
   /**
-   * Trailing line 2: the last outcome ("Delivered 23m ago"), or for problem
-   * and in-flight rows whether scheduling continues ("next 6:30 AM",
-   * "Scheduling paused").
+   * Trailing line 2: the last outcome ("Finished 23m ago", "Delivered 23m
+   * ago"), or for problem and in-flight rows whether scheduling continues
+   * ("next 6:30 AM", "Scheduling paused").
    */
   readonly secondary: AutomationRowText | null;
   /** Line 2's lead: the schedule sentence, or a problem row's error text. */
@@ -433,6 +434,23 @@ export interface AutomationRowPresentation {
   readonly outcome: AutomationRowText | null;
   /** The next run while scheduling is on; the phone row's trailing time. */
   readonly nextRun: string | null;
+}
+
+/**
+ * The last run's outcome with its age: once its agent turn settled, how the
+ * turn ended ("Finished 23m ago" with a check, "Failed 2h ago" in danger,
+ * "Interrupted 1h ago"); before that, the run's state ("Delivered 23m ago"
+ * with a check, "Skipped 2h ago"). A failed turn is history only: it never
+ * moves the row out of its group.
+ */
+function lastRunOutcome(lastRun: SummaryAutomationRun, now: number): AutomationRowText {
+  const text = `${runStateLabel(lastRun)} ${lastRunAge(lastRun, now)}`;
+  const outcome = lastRun.turn?.outcome;
+  if (outcome === "failed") return { text, check: false, tone: "danger" };
+  return {
+    text,
+    check: outcome === undefined ? lastRun.state === "completed" : outcome === "completed",
+  };
 }
 
 export function automationRowPresentation(
@@ -450,12 +468,7 @@ export function automationRowPresentation(
   const scheduling: AutomationRowText = {
     text: nextRun === null ? "Scheduling paused" : `next ${nextRun}`,
   };
-  const lastOutcome: AutomationRowText | null = lastRun
-    ? {
-        text: `${runStateLabel(lastRun)} ${lastRunAge(lastRun, now)}`,
-        delivered: lastRun.state === "completed",
-      }
-    : null;
+  const lastOutcome = lastRun ? lastRunOutcome(lastRun, now) : null;
   switch (health.kind) {
     case "failed":
     case "unknown": {
