@@ -1,18 +1,30 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   ThreadAutomationRun,
   ThreadAutomationRunCounts,
   ThreadAutomationRunPage,
 } from "../../../shared/protocol/automation-presentation.js";
 import type { AutomationRunFilter } from "../../../shared/protocol/domain.js";
+import { threadRunPhase } from "../../automation/automation-health.js";
+import { findLoadedThread } from "../../automation/loaded-threads.js";
 import {
   messageFrom,
+  type ApplicationClientState,
   type ApplicationClientStore,
 } from "../../stores/ApplicationClientStore.js";
+import { useApplicationStoreSelector } from "../../stores/use-application-store-selector.js";
 import { automationLiveKey, type AutomationThread } from "./use-automation-thread.js";
 
 /** Runs per page, for the first page and for each "Load more". */
 export const AUTOMATION_RUNS_PAGE_SIZE = 25;
+
+/**
+ * How long the refresh after a watched thread's turn ends waits: turn
+ * endings that land together (a queued run starting, a fork and its anchor)
+ * make one request, and the settlement the server records as the turn ends
+ * has committed by then.
+ */
+export const TURN_END_REFRESH_DELAY_MILLISECONDS = 500;
 
 export interface AutomationRuns {
   /** `idle` while the thread has no automation. */
@@ -102,14 +114,48 @@ function runMatchesFilter(
 }
 
 /**
+ * The fork threads whose turn may still settle a listed run: the result
+ * thread of each delivered fork run without a settled turn, sorted and
+ * space-separated (a stable key).
+ */
+function unsettledForkThreads(
+  items: readonly ThreadAutomationRun[],
+  anchorId: string,
+): string {
+  const forks = new Set<string>();
+  for (const run of items) {
+    if (
+      run.state === "completed" &&
+      run.turn === undefined &&
+      run.resultThreadId !== undefined &&
+      run.resultThreadId !== anchorId
+    ) {
+      forks.add(run.resultThreadId);
+    }
+  }
+  return [...forks].sort().join(" ");
+}
+
+function threadIds(key: string): readonly string[] {
+  return key === "" ? [] : key.split(" ");
+}
+
+/**
  * One automation's run history for a filter: the first page with the
  * whole-history counts, cursor paging, and a live refresh of the first page
  * whenever the live thread summary's latest run or revision moves (the
  * server publishes a thread update for each run transition).
+ *
+ * A run that is not the latest settles without moving the summary: in this
+ * thread, an earlier run's turn ends while the next run waits behind it, and
+ * a fork run's turn ends in its own thread. So the first page is also read
+ * again shortly after a watched thread's turn ends (its run phase leaves
+ * busy): this thread, whose runs and own turns can both change the history,
+ * and the fork thread of every listed run whose turn has not settled.
  */
 export function useAutomationRuns(
-  store: Pick<ApplicationClientStore, "api">,
-  thread: Pick<AutomationThread, "id" | "automation">,
+  store: Pick<ApplicationClientStore, "api" | "subscribe" | "getSnapshot">,
+  thread: Pick<AutomationThread, "id" | "automation" | "runState">,
   filter: AutomationRunFilter,
 ): AutomationRuns {
   const threadId = thread.id;
@@ -198,10 +244,51 @@ export function useAutomationRuns(
     fetchFirstPage("merge");
   }, [fetchFirstPage, liveKey]);
 
+  // Busy watched threads, as a stable key: this thread from its live
+  // summary, forks from the application store (unloaded forks are not
+  // watched). Phases, not states, so steps within a turn (running, waiting)
+  // are not an ending.
+  const forkKey = useMemo(
+    () => unsettledForkThreads(state.items, threadId),
+    [state.items, threadId],
+  );
+  const selectBusyForks = useCallback(
+    (application: ApplicationClientState) =>
+      threadIds(forkKey)
+        .filter((forkId) => {
+          const fork = findLoadedThread(application, forkId);
+          return fork !== undefined && threadRunPhase(fork.runState) === "busy";
+        })
+        .join(" "),
+    [forkKey],
+  );
+  const busyForks = useApplicationStoreSelector(store, selectBusyForks);
+  const anchorBusy = threadRunPhase(thread.runState) === "busy";
+  const busyKey = [anchorBusy ? threadId : "", busyForks].filter(Boolean).join(" ");
+  const observedBusy = useRef(busyKey);
+  const turnEndRefresh = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  // The refresh reads the list as it is when it fires, for the filter then.
+  const refreshFirstPage = useRef(fetchFirstPage);
+  refreshFirstPage.current = fetchFirstPage;
+  useEffect(() => {
+    const previous = threadIds(observedBusy.current);
+    observedBusy.current = busyKey;
+    const busy = new Set(threadIds(busyKey));
+    const watched = new Set([threadId, ...threadIds(forkKey)]);
+    // A thread that stopped being watched settled its runs already.
+    if (!previous.some((id) => !busy.has(id) && watched.has(id))) return;
+    clearTimeout(turnEndRefresh.current);
+    turnEndRefresh.current = setTimeout(() => {
+      turnEndRefresh.current = undefined;
+      if (stateRef.current.status === "ready") refreshFirstPage.current("merge");
+    }, TURN_END_REFRESH_DELAY_MILLISECONDS);
+  }, [busyKey, forkKey, threadId]);
+
   useEffect(
     () => () => {
       firstPage.current?.abort();
       nextPage.current?.abort();
+      clearTimeout(turnEndRefresh.current);
     },
     [],
   );

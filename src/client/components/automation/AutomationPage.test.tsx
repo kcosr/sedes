@@ -767,7 +767,7 @@ describe("AutomationPage: agent turns", () => {
     const list = vi
       .fn()
       .mockResolvedValueOnce(page([delivered, older]))
-      .mockResolvedValueOnce(page([{ ...delivered, turn: settledTurn("completed", 300) }, older]));
+      .mockResolvedValue(page([{ ...delivered, turn: settledTurn("completed", 300) }, older]));
     const fixture = renderPage([{ runState: "running", automation: summary() }], { listThreadAutomationRuns: list });
 
     const row = await screen.findByRole("button", { name: /Running for 4m, Scheduled$/u });
@@ -787,7 +787,6 @@ describe("AutomationPage: agent turns", () => {
     expect(screen.queryByText("Running", { selector: ".automation-page-meta > span" })).toBeNull();
     act(() => fixture.publish([{ runState: "idle", automation: summary({ outcome: "completed" }) }]));
     expect(await screen.findByRole("button", { name: /Finished in 5m, Scheduled$/u })).toBeInTheDocument();
-    expect(list).toHaveBeenCalledTimes(2);
   });
 
   it("follows a fork run's own thread for Running, and the anchor for the header hint", async () => {
