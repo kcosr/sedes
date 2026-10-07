@@ -1560,6 +1560,13 @@ textarea:disabled {
   color: var(--muted-foreground);
 }
 
+/* A located row keeps a few title characters readable: the location tag
+   gives up width first and truncates, instead of squeezing the title to an
+   ellipsis. */
+.thread-row-link:has(> .thread-row-location) > .thread-title {
+  min-width: min(8ch, 40%);
+}
+
 .thread-row-location {
   max-width: 42%;
   flex: 0 1 auto;
