@@ -33,7 +33,6 @@ afterEach(cleanup);
 const threadRoute = (threadId: string): Route => ({
   name: "thread",
   threadId,
-  automationOpen: false,
 });
 
 const workspaceResolver =

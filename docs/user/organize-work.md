@@ -385,7 +385,11 @@ dispatch state.
 ## Understand row badges and counts
 
 Rows can surface running or attention state, scheduled work, draft state,
-stashes, bookmarks, pins, and open Tasks. Counts are deliberately local:
+stashes, bookmarks, pins, and open Tasks. A thread with an automation shows the
+automation's glyph; a failed run, or one whose outcome is unknown, adds a
+warning badge and puts the thread in State's **Needs attention**. See
+[Automation states](tasks-and-automations.md#automation-states). Counts are
+deliberately local:
 
 - stash and bookmark counts belong to that thread;
 - only open Tasks directly owned by a thread contribute to its Task count;

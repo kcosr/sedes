@@ -1,8 +1,8 @@
-import type { ThreadAutomationRun } from "../../../shared/protocol/automation-presentation.js";
 import type { AgentToolDefinition } from "../contracts/agent-tool-contracts.js";
 import type {
   AutomationAgentToolService,
   AutomationTargetInput,
+  AutomationToolRun,
 } from "./automation-agent-tool-service.js";
 import {
   automationRunToolSchema,
@@ -24,7 +24,7 @@ export const automationRunNowToolId =
 
 export function createAutomationRunNowToolDefinition(
   service: AutomationAgentToolService,
-): AgentToolDefinition<AutomationTargetInput, ThreadAutomationRun> {
+): AgentToolDefinition<AutomationTargetInput, AutomationToolRun> {
   return {
     ...CANONICAL_AGENT_TOOL_MANIFEST["automation.run_now"],
     inputSchema: automationToolInputSchema({

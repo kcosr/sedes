@@ -1,0 +1,51 @@
+/* The automation notice (AutomationContextNotice) on the shared thread notice
+   anatomy (styles.css, "Thread notices"): its own dot tones, its label over
+   the diagnostic, and its actions beside the text while both fit, on their
+   own row under it otherwise. Everything lines up on the label's row, which
+   is as tall as the actions. */
+.thread-attention.automation-context {
+  align-items: flex-start;
+}
+
+/* The dot (7px in the shared anatomy) centred on the label's row. */
+.thread-attention.automation-context::before {
+  margin-top: calc((var(--control-xs) - 7px) / 2);
+}
+
+.thread-attention.automation-context[data-tone="danger"]::before {
+  background: var(--destructive);
+}
+
+/* Context, not something to act on: amber would say it needs the user. */
+.thread-attention.automation-context[data-tone="neutral"]::before {
+  background: var(--muted-foreground-2);
+}
+
+.automation-context-body {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--space-2) var(--space-2-5);
+}
+
+.automation-context-text {
+  display: grid;
+  min-width: 0;
+  flex: 1 1 16rem;
+  gap: var(--space-0-5);
+}
+
+.automation-context-text > p {
+  display: flex;
+  min-height: var(--control-xs);
+  align-items: center;
+}
+
+.automation-context-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: var(--space-2-5);
+  margin-left: auto;
+}

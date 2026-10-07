@@ -95,6 +95,17 @@ export type AutomationRunRecord = {
   readonly startedAt: number | null;
   readonly acceptedAt: number | null;
   readonly finishedAt: number | null;
+  /** Set when a thread force reset abandoned this run; such runs are immutable. */
+  readonly forceResetAt: number | null;
   readonly createdAt: number;
   readonly updatedAt: number;
+};
+
+/** Run-history views: problems are failed or uncertain runs. */
+export type AutomationRunFilter = "all" | "problems" | "skipped";
+
+export type AutomationRunCounts = {
+  readonly all: number;
+  readonly problems: number;
+  readonly skipped: number;
 };

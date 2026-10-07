@@ -13,8 +13,3 @@ export type ThreadAutomationDefinition = SharedThreadAutomationDefinition;
 export type ThreadAutomationRun = SharedThreadAutomationRun;
 export type ThreadAutomationSchedulePreview =
   SharedThreadAutomationSchedulePreview;
-
-export interface PageResult<T> {
-  items: T[];
-  nextCursor: string | null;
-}

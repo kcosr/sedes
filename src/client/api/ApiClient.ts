@@ -83,10 +83,13 @@ import {
 } from "../../shared/protocol/configuration-operation-recovery.js";
 import {
   automationPrecheckTestResultSchema,
-  pageResultSchema,
   threadAutomationDefinitionSchema,
+  threadAutomationRunPageSchema,
+  threadAutomationRunResolutionSchema,
   threadAutomationRunSchema,
   threadAutomationSchedulePreviewSchema,
+  type ThreadAutomationRunPage,
+  type ThreadAutomationRunResolution,
 } from "../../shared/protocol/automation-presentation.js";
 import {
   apiErrorSchema,
@@ -327,6 +330,10 @@ import {
   type TerminalListResult,
   type TerminalResource,
 } from "../../shared/index.js";
+import {
+  automationCapabilitySchema,
+  type AutomationCapability,
+} from "../../shared/protocol/conversation.js";
 import { WORKSPACE_FILE_MAX_DOWNLOAD_BYTES } from "../../shared/workspace-file-limits.js";
 import { SEDES_VERSION } from "../../shared/version.js";
 import {
@@ -352,7 +359,6 @@ import {
 import type {
   AutomationPrecheck,
   AutomationPrecheckTestResult,
-  PageResult,
   ThreadAutomationDefinition,
   ThreadAutomationRun,
   ThreadAutomationSchedulePreview,
@@ -361,6 +367,7 @@ import type { AutomationSchedule } from "../../shared/protocol/automation.js";
 import type { RegisteredClient } from "../../shared/protocol/client-controls.js";
 import type {
   AutomationMisfirePolicy,
+  AutomationRunFilter,
   AutomationRunMode,
 } from "../../shared/protocol/domain.js";
 import {
@@ -2423,47 +2430,78 @@ export class ApiClient {
     );
   }
 
-  listThreadAutomationRuns(
+  getThreadAutomationCapability(
     threadId: string,
-    input: { cursor?: string; limit?: number; signal?: AbortSignal } = {},
-  ): Promise<PageResult<ThreadAutomationRun>> {
-    const parameters = new URLSearchParams();
-    if (input.cursor) parameters.set("cursor", input.cursor);
-    parameters.set("pageSize", String(input.limit ?? 50));
+    signal?: AbortSignal,
+  ): Promise<AutomationCapability> {
     return this.#request(
-      `/api/threads/${encodeURIComponent(threadId)}/automation/runs?${parameters.toString()}`,
-      { signal: input.signal },
-      pageResultSchema(threadAutomationRunSchema),
+      `/api/threads/${encodeURIComponent(threadId)}/automation/capability`,
+      { signal },
+      automationCapabilitySchema,
     );
   }
 
+  /** The first page (no cursor) also carries whole-history `counts`. */
+  listThreadAutomationRuns(
+    threadId: string,
+    input: {
+      cursor?: string;
+      limit?: number;
+      filter?: AutomationRunFilter;
+      signal?: AbortSignal;
+    } = {},
+  ): Promise<ThreadAutomationRunPage> {
+    const parameters = new URLSearchParams();
+    if (input.cursor) parameters.set("cursor", input.cursor);
+    parameters.set("pageSize", String(input.limit ?? 50));
+    if (input.filter) parameters.set("filter", input.filter);
+    return this.#request(
+      `/api/threads/${encodeURIComponent(threadId)}/automation/runs?${parameters.toString()}`,
+      { signal: input.signal },
+      threadAutomationRunPageSchema,
+    );
+  }
+
+  /** `resume` also enables the definition, in the same server transaction. */
   resolveThreadAutomationRun(
     threadId: string,
     runId: string,
-  ): Promise<ThreadAutomationRun> {
+    input: { resume?: boolean } = {},
+  ): Promise<ThreadAutomationRunResolution> {
     return this.#mutation(
       `/api/threads/${encodeURIComponent(threadId)}/automation/runs/${encodeURIComponent(runId)}/resolve`,
-      threadAutomationRunSchema,
+      threadAutomationRunResolutionSchema,
       {
         method: "POST",
-        body: JSON.stringify({ action: "mark_failed" }),
+        body: JSON.stringify({
+          action: "mark_failed",
+          resume: input.resume ?? false,
+        }),
       },
     );
   }
 
+  /** Occurrences after now, or after `after` when that is later (a snooze's wake time). */
   previewThreadAutomationSchedule(
     threadId: string,
     schedule: AutomationSchedule,
-    count = 5,
-    signal?: AbortSignal,
+    input: {
+      count?: number;
+      after?: string;
+      signal?: AbortSignal;
+    } = {},
   ): Promise<ThreadAutomationSchedulePreview> {
     return this.#mutation(
       `/api/threads/${encodeURIComponent(threadId)}/automation/preview`,
       threadAutomationSchedulePreviewSchema,
       {
         method: "POST",
-        body: JSON.stringify({ schedule, count }),
-        signal,
+        body: JSON.stringify({
+          schedule,
+          count: input.count ?? 5,
+          ...(input.after === undefined ? {} : { after: input.after }),
+        }),
+        signal: input.signal,
       },
     );
   }

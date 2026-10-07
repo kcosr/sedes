@@ -10,7 +10,7 @@ for installation and everyday use, start with the
 | Document | Use it when |
 | --- | --- |
 | [Architecture](architecture.md) | You need the system map, authority model, lifecycle, persistence, or security boundary. |
-| [Materialized application projection](application-projection.md) | You are debugging application-stream catch-up, checkpoints, folds, or projection eviction. |
+| [Materialized application projection](application-projection.md) | You are debugging application-stream catch-up, checkpoints, folds, or projection eviction, or changing the projected thread automation summary. |
 | [Provider-owned conversation state](provider-owned-conversation-state.md) | You need the transcript-storage rationale, projection lifecycle, concurrency limits, or performance methodology. |
 | [Backend integration contract rules](backend-integration-contract-rules.md) | You are adding a backend or changing a contract that reaches any compiled backend. |
 | [Application terminal resources](terminal-panes.md) | You are changing terminal identity, actors, history, attachment, Sidecar, control, or panel ownership. |

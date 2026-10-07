@@ -277,36 +277,69 @@ test.describe.serial("normalized interactive Codex projection", () => {
     await expect(threadActions).toHaveCount(0);
     await page.getByRole("button", { name: "Thread actions" }).click();
     await threadActions.getByRole("menuitem", { name: "Automate…" }).click();
-    const automation = page.getByRole("dialog", {
-      name: `Automation settings for ${renamedTitle}`,
+    const automationThreadId = importedThreadPath.split("/").at(-1)!;
+    await expect(page).toHaveURL(
+      new RegExp(`/automations/${automationThreadId}/edit$`),
+    );
+    const automationEditor = page.getByRole("region", {
+      name: "New automation",
     });
-    await expect(automation).toBeVisible();
     await expect(
-      automation.getByRole("radio", { name: /Continue in this thread/ }),
+      automationEditor.getByRole("heading", { name: "New automation" }),
+    ).toBeVisible();
+    await expect(
+      automationEditor.getByRole("radio", { name: /^This thread/ }),
     ).toBeChecked();
     await expect(
-      automation.getByRole("radio", {
-        name: /Start a new cloned thread for each run/,
-      }),
+      automationEditor.getByRole("radio", { name: /^A new fork each run/ }),
     ).toBeEnabled();
-    await automation
-      .getByRole("textbox", { name: "Canned prompt" })
+    await automationEditor
+      .getByRole("textbox", { name: "Prompt", exact: true })
       .fill("Review this thread on schedule");
-    const saveAutomation = automation.getByRole("button", { name: "Save" });
-    await expect(saveAutomation).toBeEnabled();
-    await saveAutomation.click();
-    await expect(automation.getByText("paused")).toBeVisible();
-    await automation.getByRole("button", { name: "Close", exact: true }).click();
-    const automationSettings = page.getByRole("button", {
-      name: "Automation settings",
+    const saveAsPaused = automationEditor.getByRole("button", {
+      name: "Save as paused",
     });
-    await expect(automationSettings).toBeVisible();
-    await automationSettings.click();
-    await expect(automation).toBeVisible();
+    await expect(saveAsPaused).toBeEnabled();
+    await saveAsPaused.click();
+    await expect(page).toHaveURL(
+      new RegExp(`/automations/${automationThreadId}$`),
+    );
+    const automationPage = page.getByRole("region", {
+      name: `${renamedTitle} automation`,
+    });
     await expect(
-      automation.getByRole("textbox", { name: "Canned prompt" }),
+      automationPage.getByRole("heading", { level: 1, name: renamedTitle }),
+    ).toBeVisible();
+    await expect(
+      automationPage.getByText("Not started", { exact: true }),
+    ).toBeVisible();
+    await expect(
+      automationPage.getByText("Review this thread on schedule", {
+        exact: true,
+      }),
+    ).toBeVisible();
+    // Back returns to the thread the editor was opened from.
+    await page.getByRole("link", { name: "Automations", exact: true }).click();
+    await expect(page).toHaveURL(new RegExp(`${importedThreadPath}$`));
+    const automationChip = page.getByRole("button", {
+      name: "Automation",
+      exact: true,
+    });
+    await expect(automationChip).toBeVisible();
+    await automationChip.click();
+    await expect(page).toHaveURL(
+      new RegExp(`/automations/${automationThreadId}$`),
+    );
+    await page
+      .getByRole("button", { name: "Edit automation", exact: true })
+      .click();
+    const editAutomation = page.getByRole("region", {
+      name: "Automation editor",
+    });
+    await expect(
+      editAutomation.getByRole("textbox", { name: "Prompt", exact: true }),
     ).toHaveValue("Review this thread on schedule");
-    await automation
+    await editAutomation
       .getByRole("button", { name: "Delete automation…" })
       .click();
     const deleteAutomation = page.getByRole("dialog", {
@@ -316,7 +349,15 @@ test.describe.serial("normalized interactive Codex projection", () => {
       .getByRole("button", { name: "Delete automation", exact: true })
       .click();
     await expect(deleteAutomation).toBeHidden();
-    await expect(automation).toBeHidden();
+    await expect(page).toHaveURL(/\/automations$/);
+    await sidebar
+      .getByTestId("thread-row-link")
+      .filter({ hasText: renamedTitle })
+      .click();
+    await expect(page).toHaveURL(new RegExp(`${importedThreadPath}$`));
+    await expect(automationChip).toHaveCount(0);
+    // The reply drafted before the automation pages is still there.
+    await expect(composer).toHaveValue(ordinaryReply);
     await page.getByRole("button", { name: "Thread actions" }).click();
     await expect(
       threadActions.getByRole("menuitem", { name: "Automate…" }),
@@ -442,7 +483,7 @@ test.describe.serial("normalized interactive Codex projection", () => {
       page.getByRole("button", { name: "Send message" }),
     ).toBeVisible();
     await expect(
-      page.getByRole("button", { name: "Automation settings" }),
+      page.getByRole("button", { name: "Automation", exact: true }),
     ).toHaveCount(0);
     await page.getByRole("button", { name: "Thread actions" }).click();
     await expect(codexExecution).toBeEnabled();

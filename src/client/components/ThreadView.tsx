@@ -16,7 +16,6 @@ import {
   type ThreadClientStore,
 } from "../stores/ThreadClientStore.js";
 import { ThreadLoadingView } from "./thread/ThreadLoadingView.js";
-import { ThreadAutomationDialog } from "./ThreadAutomationDialog.js";
 import { ChatAtmosphere } from "./thread/ChatAtmosphere.js";
 import { Composer } from "./thread/Composer.js";
 import {
@@ -27,6 +26,7 @@ import { InteractionPrompt } from "./thread/InteractionPrompt.js";
 import { BackgroundActivityStatus } from "./thread/BackgroundActivityStatus.js";
 import { ReasoningSummaryStatus } from "./thread/ReasoningSummaryStatus.js";
 import { ThreadFailureNotice } from "./thread/ThreadFailureNotice.js";
+import { AutomationContextNotice } from "./thread/AutomationContextNotice.js";
 import { ThreadNotices } from "./thread/ThreadNotices.js";
 import { ThreadHeader } from "./thread/ThreadHeader.js";
 import { ThreadFindBar } from "./thread/ThreadFindBar.js";
@@ -53,7 +53,6 @@ const CONNECTING_BANNER_DELAY_MS = 5_000;
 export function ThreadView({
   threadId,
   visible,
-  automationOpen,
   focusTurnId,
   registry,
   applicationStore,
@@ -62,7 +61,6 @@ export function ThreadView({
   threadId: string;
   /** Whether this retained singleton is currently presented in the layout. */
   visible: boolean;
-  automationOpen: boolean;
   focusTurnId?: string;
   registry: ThreadStoreRegistry;
   applicationStore: ApplicationClientStore;
@@ -629,32 +627,18 @@ export function ThreadView({
           </aside>
         )}
         {snapshot.attention.automationContext && (
-          <aside className="thread-attention automation-context">
-            <p>
-              {snapshot.attention.automationContext.outcome === "failed"
-                ? "This scheduled run failed."
-                : "This thread was triggered by an automation."}
-            </p>
-            {snapshot.attention.automationContext.diagnostic && (
-              <small>
-                {snapshot.attention.automationContext.diagnostic.text}
-              </small>
-            )}
-            <Button
-              variant="outline"
-              size="xs"
-              onClick={() =>
-                void store
-                  .dismissAttention({
-                    kind: "automation_context",
-                    runId: snapshot.attention.automationContext!.runId,
-                  })
-                  .catch(() => undefined)
-              }
-            >
-              Dismiss
-            </Button>
-          </aside>
+          <AutomationContextNotice
+            context={snapshot.attention.automationContext}
+            store={applicationStore}
+            onDismiss={() =>
+              void store
+                .dismissAttention({
+                  kind: "automation_context",
+                  runId: snapshot.attention.automationContext!.runId,
+                })
+                .catch(() => undefined)
+            }
+          />
         )}
         <ThreadFailureNotice snapshot={snapshot} />
         <ThreadNotices notices={store.normalized.state.notices} />
@@ -773,17 +757,6 @@ export function ThreadView({
             ) : undefined
           }
         />
-        {visible && automationOpen && snapshot.capabilities.automation.available && (
-          <ThreadAutomationDialog
-            store={applicationStore}
-            threadId={threadId}
-            threadTitle={snapshot.thread.title.text}
-            automationSummary={snapshot.thread.automation}
-            snoozed={snapshot.thread.inventoryState === "snoozed"}
-            canCloneOnRun={snapshot.capabilities.automation.canCloneOnRun}
-            onClose={() => navigate(threadPath(threadId), { replace: true })}
-          />
-        )}
       </section>
     </QuestionInboxProvider>
   );

@@ -117,7 +117,7 @@ describe("ThreadView local voice Send", () => {
         content: [{ kind: "text", text: { text: "Local spoken message" } }] } },
     };
     const state = fixture(snapshot);
-    const view = render(<ThreadView threadId={threadId} visible={visible} automationOpen={false}
+    const view = render(<ThreadView threadId={threadId} visible={visible}
       registry={state.registry} applicationStore={state.applicationStore} />);
     const viewport = screen.getByRole("region", { name: "Messages", hidden: true });
     Object.defineProperty(viewport, "scrollTo", { configurable: true, value: vi.fn() });
@@ -148,7 +148,7 @@ describe("ThreadView local voice Send", () => {
     expect(f.registry.get(f.threadId).acceptNativeVoiceSubmission).toHaveBeenCalledTimes(reason === "disabled" ? 1 : 0);
     // Later enabling/revealing cannot replay an earlier local event.
     setSeekOnSubmit(true);
-    f.view.rerender(<ThreadView threadId={f.threadId} visible automationOpen={false}
+    f.view.rerender(<ThreadView threadId={f.threadId} visible
       registry={f.registry} applicationStore={f.applicationStore} />);
     expect(readDiagnostics().some(entry => entry.event === "seek_request_consumed")).toBe(false);
   });
@@ -168,7 +168,7 @@ describe("ThreadView saved dictation", () => {
     voiceContext.store = voice;
     await voice.initialize();
     const state = fixture(snapshot, [], reason === "unavailable" ? { status: "error", snapshot: undefined } : {});
-    render(<ThreadView threadId={snapshot.thread.id} visible automationOpen={false}
+    render(<ThreadView threadId={snapshot.thread.id} visible
       registry={state.registry} applicationStore={state.applicationStore} />);
     await act(async () => {
       await expect(voice.addRecordingToComposer({ expectedConnectionGeneration: 1, recordingId: saved.recordingId,
@@ -192,7 +192,7 @@ describe("ThreadView saved dictation", () => {
     voiceContext.store = voice;
     await voice.initialize();
     const state = fixture(snapshot);
-    const view = render(<ThreadView threadId={snapshot.thread.id} visible automationOpen={false}
+    const view = render(<ThreadView threadId={snapshot.thread.id} visible
       focusTurnId={transition === "historical" ? "older-turn" : undefined}
       registry={state.registry} applicationStore={state.applicationStore} />);
     let completed = false;
@@ -203,7 +203,7 @@ describe("ThreadView saved dictation", () => {
     expect(voice.getSnapshot().pending).toBe(true);
     expect(native.plugin.discardRecording).not.toHaveBeenCalled();
     if (transition === "historical") {
-      view.rerender(<ThreadView threadId={snapshot.thread.id} visible automationOpen={false}
+      view.rerender(<ThreadView threadId={snapshot.thread.id} visible
         registry={state.registry} applicationStore={state.applicationStore} />);
     } else {
       const ready = makeSnapshot("interactive", "idle");
@@ -227,7 +227,7 @@ describe("ThreadView saved dictation", () => {
       append("Recovered words");
       return () => undefined;
     });
-    const view = render(<ThreadView threadId={base.thread.id} visible automationOpen={false}
+    const view = render(<ThreadView threadId={base.thread.id} visible
       registry={state.registry} applicationStore={state.applicationStore} />);
     expect(registered).not.toHaveBeenCalled();
     const attachment = { id: "79b5e50e-9a0a-4c6f-9f2a-bdb93a418cb7", fileName: "remote.txt", kind: "file" as const,
@@ -248,7 +248,7 @@ describe("ThreadView load errors", () => {
     const snapshot = makeSnapshot("interactive", "disconnected");
     const state = fixture(snapshot, [], { status: "error", connection: "disconnected", authoritative: false,
       snapshot: undefined, error: "This backend is disabled." });
-    render(<ThreadView threadId={snapshot.thread.id} visible automationOpen={false} registry={state.registry} applicationStore={state.applicationStore} />);
+    render(<ThreadView threadId={snapshot.thread.id} visible registry={state.registry} applicationStore={state.applicationStore} />);
     expect(screen.getByText("Couldn’t open this thread")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Session stats" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Try again" })).toBeVisible();
@@ -310,7 +310,6 @@ describe("ThreadView loading header", () => {
       <ThreadView
         threadId={state.snapshot.thread.id}
         visible
-        automationOpen={false}
         registry={state.registry}
         applicationStore={state.applicationStore}
       />,
@@ -344,7 +343,6 @@ describe("ThreadView loading header", () => {
       <ThreadView
         threadId={state.snapshot.thread.id}
         visible
-        automationOpen={false}
         registry={state.registry}
         applicationStore={state.applicationStore}
       />,
@@ -359,7 +357,6 @@ describe("ThreadView loading header", () => {
       <ThreadView
         threadId="another-thread"
         visible
-        automationOpen={false}
         registry={state.registry}
         applicationStore={state.applicationStore}
       />,
@@ -414,7 +411,6 @@ describe("ThreadView loading header", () => {
       <ThreadView
         threadId={state.summary.id}
         visible
-        automationOpen={false}
         registry={state.registry}
         applicationStore={applicationStore}
       />,
@@ -430,7 +426,6 @@ describe("ThreadView loading header", () => {
       <ThreadView
         threadId={state.snapshot.thread.id}
         visible
-        automationOpen={false}
         registry={state.registry}
         applicationStore={state.applicationStore}
         panelControls={panelControls}
@@ -455,7 +450,6 @@ describe("ThreadView loading header", () => {
       <ThreadView
         threadId={state.snapshot.thread.id}
         visible
-        automationOpen={false}
         registry={state.registry}
         applicationStore={state.applicationStore}
       />,
@@ -487,7 +481,6 @@ describe("ThreadView background activity", () => {
       <ThreadView
         threadId={snapshot.thread.id}
         visible
-        automationOpen={false}
         registry={state.registry}
         applicationStore={state.applicationStore}
       />,
@@ -542,7 +535,6 @@ describe("ThreadView message keyboard navigation", () => {
       <ThreadView
         threadId={snapshot.thread.id}
         visible={visible}
-        automationOpen={false}
         registry={state.registry}
         applicationStore={state.applicationStore}
       />,
@@ -669,7 +661,6 @@ describe("ThreadView backend interaction modes", () => {
         <ThreadView
           threadId={snapshot.thread.id}
           visible
-          automationOpen={false}
           registry={state.registry}
           applicationStore={state.applicationStore}
         />
@@ -749,7 +740,6 @@ describe("ThreadView backend interaction modes", () => {
       <ThreadView
         threadId={snapshot.thread.id}
         visible
-        automationOpen={false}
         registry={state.registry}
         applicationStore={state.applicationStore}
       />,
@@ -791,7 +781,6 @@ describe("ThreadView backend interaction modes", () => {
       <ThreadView
         threadId={snapshot.thread.id}
         visible
-        automationOpen={false}
         registry={state.registry}
         applicationStore={state.applicationStore}
       />,
@@ -822,7 +811,6 @@ describe("ThreadView backend interaction modes", () => {
       <ThreadView
         threadId={snapshot.thread.id}
         visible
-        automationOpen={false}
         registry={state.registry}
         applicationStore={state.applicationStore}
       />,
@@ -850,7 +838,6 @@ describe("ThreadView backend interaction modes", () => {
       <ThreadView
         threadId={snapshot.thread.id}
         visible
-        automationOpen={false}
         registry={state.registry}
         applicationStore={state.applicationStore}
       />,
@@ -880,7 +867,6 @@ describe("ThreadView backend interaction modes", () => {
         <ThreadView
           threadId={snapshot.thread.id}
           visible
-          automationOpen={false}
           registry={state.registry}
           applicationStore={state.applicationStore}
         />,
@@ -924,7 +910,6 @@ describe("ThreadView backend interaction modes", () => {
       <ThreadView
         threadId={full.thread.id}
         visible
-        automationOpen={false}
         registry={state.registry}
         applicationStore={state.applicationStore}
       />,
@@ -981,7 +966,6 @@ describe("ThreadView backend interaction modes", () => {
       <ThreadView
         threadId={full.thread.id}
         visible
-        automationOpen={false}
         registry={state.registry}
         applicationStore={state.applicationStore}
       />,
@@ -1029,7 +1013,6 @@ describe("ThreadView backend interaction modes", () => {
       <ThreadView
         threadId={snapshot.thread.id}
         visible={false}
-        automationOpen={false}
         registry={registry}
         applicationStore={applicationStore}
       />,
@@ -1044,7 +1027,6 @@ describe("ThreadView backend interaction modes", () => {
       <ThreadView
         threadId={snapshot.thread.id}
         visible
-        automationOpen={false}
         registry={registry}
         applicationStore={applicationStore}
       />,
@@ -1091,7 +1073,6 @@ describe("ThreadView backend interaction modes", () => {
       <ThreadView
         threadId={snapshot.thread.id}
         visible
-        automationOpen={false}
         registry={registry}
         applicationStore={applicationStore}
       />,
@@ -1125,7 +1106,6 @@ describe("ThreadView backend interaction modes", () => {
       <ThreadView
         threadId={snapshot.thread.id}
         visible={false}
-        automationOpen={false}
         registry={fixtureState.registry}
         applicationStore={fixtureState.applicationStore}
       />,
@@ -1141,7 +1121,6 @@ describe("ThreadView backend interaction modes", () => {
       <ThreadView
         threadId={snapshot.thread.id}
         visible
-        automationOpen={false}
         registry={fixtureState.registry}
         applicationStore={fixtureState.applicationStore}
       />,
@@ -1164,7 +1143,6 @@ describe("ThreadView backend interaction modes", () => {
       <ThreadView
         threadId={snapshot.thread.id}
         visible={false}
-        automationOpen={false}
         registry={registry}
         applicationStore={applicationStore}
       />,
@@ -1180,7 +1158,6 @@ describe("ThreadView backend interaction modes", () => {
       <ThreadView
         threadId={snapshot.thread.id}
         visible
-        automationOpen={false}
         registry={registry}
         applicationStore={applicationStore}
       />,
@@ -1205,7 +1182,6 @@ describe("ThreadView backend interaction modes", () => {
       <ThreadView
         threadId={snapshot.thread.id}
         visible
-        automationOpen={false}
         registry={registry}
         applicationStore={applicationStore}
       />,
@@ -1277,7 +1253,6 @@ describe("ThreadView backend interaction modes", () => {
       <ThreadView
         threadId={snapshot.thread.id}
         visible
-        automationOpen={false}
         registry={registry}
         applicationStore={ready.applicationStore}
       />,
@@ -1305,7 +1280,6 @@ describe("ThreadView backend interaction modes", () => {
       <ThreadView
         threadId={snapshot.thread.id}
         visible
-        automationOpen={false}
         registry={registry}
         applicationStore={applicationStore}
       />,
@@ -1361,7 +1335,6 @@ describe("ThreadView backend interaction modes", () => {
       <ThreadView
         threadId={snapshot.thread.id}
         visible
-        automationOpen={false}
         registry={registry}
         applicationStore={applicationStore}
       />,
@@ -1403,7 +1376,6 @@ describe("ThreadView backend interaction modes", () => {
       <ThreadView
         threadId={snapshot.thread.id}
         visible
-        automationOpen={false}
         registry={registry}
         applicationStore={applicationStore}
       />,
@@ -1416,7 +1388,6 @@ describe("ThreadView backend interaction modes", () => {
       <ThreadView
         threadId={snapshot.thread.id}
         visible
-        automationOpen={false}
         focusTurnId="turn-fork-source"
         registry={registry}
         applicationStore={applicationStore}
@@ -1441,7 +1412,6 @@ describe("ThreadView backend interaction modes", () => {
       <ThreadView
         threadId={snapshot.thread.id}
         visible
-        automationOpen={false}
         registry={registry}
         applicationStore={applicationStore}
       />,
@@ -1474,7 +1444,6 @@ describe("ThreadView backend interaction modes", () => {
       <ThreadView
         threadId={idleSnapshot.thread.id}
         visible
-        automationOpen={false}
         registry={registry}
         applicationStore={applicationStore}
       />,
@@ -1502,7 +1471,6 @@ describe("ThreadView backend interaction modes", () => {
       <ThreadView
         threadId={snapshot.thread.id}
         visible
-        automationOpen={false}
         registry={registry}
         applicationStore={applicationStore}
       />,
@@ -1525,7 +1493,6 @@ describe("ThreadView backend interaction modes", () => {
       <ThreadView
         threadId={snapshot.thread.id}
         visible
-        automationOpen
         registry={registry}
         applicationStore={applicationStore}
       />,
@@ -1550,7 +1517,7 @@ describe("ThreadView backend interaction modes", () => {
       }),
     ).not.toBeInTheDocument();
     expect(
-      screen.queryByRole("button", { name: "Automation settings" }),
+      screen.queryByRole("button", { name: "Automation" }),
     ).not.toBeInTheDocument();
 
     fireEvent.keyDown(screen.getByRole("button", { name: "Thread actions" }), {
@@ -1562,7 +1529,7 @@ describe("ThreadView backend interaction modes", () => {
     ).toBeInTheDocument();
     expect(screen.queryByText("Compact context")).not.toBeInTheDocument();
     expect(
-      screen.queryByText(/Automate…|Automation settings…/),
+      screen.queryByText(/Automate…|Automation…/),
     ).not.toBeInTheDocument();
     expect(
       screen.queryByText("Approve filesystem access?"),
@@ -1582,7 +1549,6 @@ describe("ThreadView backend interaction modes", () => {
         <ThreadView
           threadId={snapshot.thread.id}
           visible
-          automationOpen={false}
           registry={registry}
           applicationStore={applicationStore}
         />,
@@ -1927,6 +1893,13 @@ function makeSnapshot(
         status: "enabled",
         runMode: "same_thread",
         scheduleKind: "interval",
+        schedule: {
+          kind: "interval",
+          anchorAt: "2026-07-30T00:00:00.000Z",
+          everySeconds: 3_600,
+        },
+        misfirePolicy: "coalesce",
+        promptPreview: "Review the repository.",
         revision: 1,
         hasPrecheck: false,
       },

@@ -37,6 +37,7 @@ import { applicationTurnIdForBackendTurn } from "./conversation-projector.js";
 import type { DatabaseApplicationThreadSummaryReader } from "../application/database-application-summary-reader.js";
 import type { ThreadRuntimeCoordinator } from "../events/thread-runtime-coordinator.js";
 import type { AutomationExecutionPolicy } from "../runtime/automation-execution-policy.js";
+import { automationCloneThreadTitle } from "../domain/automation-presentation.js";
 import type { ThreadRunState } from "../../shared/protocol/conversation.js";
 import {
   requireAdmittedResource,
@@ -115,6 +116,8 @@ type AutomationForkInput = {
   readonly automationId: string;
   readonly automationRunId: string;
   readonly mutationId: string;
+  /** Run-time suffix for the result thread's title, applied at creation. */
+  readonly titleSuffix: string;
 };
 
 type CapturedForkCommon = {
@@ -463,6 +466,7 @@ export class ThreadForkService {
           initiatingPrincipalId: input.scope.principalId,
           automationId: input.automationId,
           automationRunId: input.automationRunId,
+          childTitleSuffix: input.titleSuffix,
         }),
     );
   }
@@ -1037,6 +1041,8 @@ export class ThreadForkService {
     readonly initiatingToolClientId?: string;
     readonly automationId?: string;
     readonly automationRunId?: string;
+    /** Only a new reservation uses it; recovery keeps the persisted title. */
+    readonly childTitleSuffix?: string;
     readonly selection?: ActorBranchCheckpointSelection;
   }): Promise<ThreadForkResult> {
     const aborted = this.input.lineage.findAbortedOperation(
@@ -1297,6 +1303,7 @@ export class ThreadForkService {
       readonly initiatingToolClientId?: string;
       readonly automationId?: string;
       readonly automationRunId?: string;
+      readonly childTitleSuffix?: string;
       readonly selection?: ActorBranchCheckpointSelection;
     },
     captured: CapturedFork,
@@ -1368,7 +1375,10 @@ export class ThreadForkService {
           id: childId,
           workspaceId: source.workspaceId,
           connectionProfileId: source.connectionProfileId,
-          title: source.title,
+          title:
+            input.childTitleSuffix === undefined
+              ? source.title
+              : automationCloneThreadTitle(source.title, input.childTitleSuffix),
           now: this.#now(),
         });
         this.input.environmentVariables?.copy(input.scope, input.sourceThreadId, child.id, input.environmentVariables);
@@ -1650,9 +1660,11 @@ export class ThreadForkService {
             }
           : { creationCorrelation: attempt.backendCreationCorrelation }),
         inheritedSettings: durableSettings,
+        // The provider copy carries the child's own title, which differs from
+        // the source for automation result threads.
         title: this.input.bindings.findThreadDefinition(
           input.scope,
-          input.sourceThreadId,
+          attempt.applicationThreadId,
         )?.title,
       } as const;
       created =

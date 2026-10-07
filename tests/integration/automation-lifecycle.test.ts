@@ -1595,6 +1595,104 @@ describe("thread automation lifecycle", () => {
     expect(repository.findDefinitionForThread(scope, threadId)).toBeUndefined();
   });
 
+  it("resolves an uncertain run and resumes in one transaction", () => {
+    service.create(
+      scope,
+      threadId,
+      {
+        prompt: "Recurring review",
+        runMode: "same_thread",
+        schedule: {
+          kind: "interval",
+          anchorAt: new Date(10_000).toISOString(),
+          everySeconds: 300,
+        },
+        misfirePolicy: "coalesce",
+        precheck: null,
+        mutationId: randomUUID(),
+      },
+      1_000,
+    );
+    const automationId = repository.findDefinitionForThread(scope, threadId)!.id;
+    const claimed = repository.createManualRun(scope, automationId, {
+      runId: randomUUID(),
+      occurrenceKey: "manual:uncertain",
+      scheduledFor: 2_000,
+      claimToken: "uncertain-claim",
+      leaseExpiresAt: 60_000,
+      dispatchMutationId: randomUUID(),
+      now: 2_000,
+    }).run;
+    repository.updateRunState(scope, claimed.automationId, claimed.id, {
+      expectedState: "claimed",
+      state: "dispatching",
+      claimToken: "uncertain-claim",
+      retainPromptSnapshot: true,
+      now: 2_100,
+    });
+    repository.markRunUncertainAndPause(scope, claimed.automationId, claimed.id, {
+      expectedState: "dispatching",
+      claimToken: "uncertain-claim",
+      errorCode: "automation_dispatch_uncertain",
+      errorDiagnostic: "Acceptance could not be proven.",
+      now: 2_200,
+    });
+    const paused = repository.getDefinition(scope, claimed.automationId);
+
+    // A rejected enable rolls the resolution back with it.
+    assertCanAutomate.mockImplementationOnce(() => {
+      throw new DomainError(
+        "invalid_transition",
+        "The backend policy does not permit automation.",
+      );
+    });
+    expect(() =>
+      service.resolveUncertainRun(
+        scope,
+        threadId,
+        claimed.id,
+        { resume: true },
+        20_000,
+      ),
+    ).toThrow(
+      expect.objectContaining({
+        code: "invalid_transition",
+        message: "The backend policy does not permit automation.",
+      }),
+    );
+    expect(repository.getRun(scope, claimed.automationId, claimed.id).state).toBe(
+      "uncertain",
+    );
+    expect(repository.getDefinition(scope, claimed.automationId)).toEqual(paused);
+
+    publishedThreads.length = 0;
+    const resolved = service.resolveUncertainRun(
+      scope,
+      threadId,
+      claimed.id,
+      { resume: true },
+      20_000,
+    );
+    expect(resolved).toMatchObject({
+      run: {
+        id: claimed.id,
+        state: "failed",
+        errorCode: "automation_uncertain_resolved",
+      },
+      automation: {
+        status: "enabled",
+        revision: paused.revision + 1,
+        nextRunAt: new Date(310_000).toISOString(),
+        lastRun: { id: claimed.id, state: "failed" },
+      },
+    });
+    expect(publishedThreads).toContain(threadId);
+    expect(repository.getDefinition(scope, claimed.automationId)).toMatchObject({
+      enabled: true,
+      nextRunAt: 310_000,
+    });
+  });
+
   it("replays a resolved uncertain one-shot after its definition detaches", () => {
     const definition = repository.createDefinition(scope, {
       id: randomUUID(),
@@ -1641,22 +1739,43 @@ describe("thread automation lifecycle", () => {
       now: 2_200,
     });
 
+    expect(() =>
+      service.resolveUncertainRun(
+        scope,
+        threadId,
+        claimed.id,
+        { resume: true },
+        2_250,
+      ),
+    ).toThrow(
+      expect.objectContaining({
+        code: "invalid_transition",
+        message:
+          "This one-time automation ended with the resolved run, so it cannot be resumed.",
+      }),
+    );
+    expect(repository.getRun(scope, definition.id, claimed.id).state).toBe(
+      "uncertain",
+    );
+
     const first = service.resolveUncertainRun(
       scope,
       threadId,
       claimed.id,
+      { resume: false },
       2_300,
     );
     const replay = service.resolveUncertainRun(
       scope,
       threadId,
       claimed.id,
+      { resume: true },
       2_400,
     );
 
     expect(first).toMatchObject({
-      state: "failed",
-      errorCode: "automation_uncertain_resolved",
+      run: { state: "failed", errorCode: "automation_uncertain_resolved" },
+      automation: null,
     });
     expect(replay).toEqual(first);
     expect(repository.findDefinitionForThread(scope, threadId)).toBeUndefined();

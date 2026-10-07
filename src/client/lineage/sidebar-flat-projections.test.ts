@@ -82,6 +82,13 @@ function automation(input: Partial<ThreadAutomation> = {}): ThreadAutomation {
     status: "enabled",
     runMode: "clone",
     scheduleKind: "interval",
+    schedule: {
+      kind: "interval",
+      anchorAt: "2026-07-30T00:00:00.000Z",
+      everySeconds: 3_600,
+    },
+    misfirePolicy: "coalesce",
+    promptPreview: "Review the repository.",
     revision: 1,
     hasPrecheck: false,
     ...input,
@@ -746,6 +753,40 @@ describe("state buckets", () => {
         }),
       ),
     ).toBe("needs-attention");
+    // An unknown outcome pauses scheduling until resolved: it needs the user,
+    // not the Idle bucket next to ordinary threads.
+    expect(
+      resolveStateBucket(
+        thread("t", {
+          automation: automation({
+            status: "paused",
+            lastRun: {
+              id: "run-1",
+              state: "uncertain",
+              occurrence: "scheduled",
+              scheduledFor: at(2026, 7, 12, 6),
+            },
+          }),
+        }),
+      ),
+    ).toBe("needs-attention");
+    for (const state of ["completed", "skipped", "queued"] as const) {
+      expect(
+        resolveStateBucket(
+          thread("t", {
+            automation: automation({
+              status: "paused",
+              lastRun: {
+                id: "run-1",
+                state,
+                occurrence: "scheduled",
+                scheduledFor: at(2026, 7, 12, 6),
+              },
+            }),
+          }),
+        ),
+      ).toBe("idle");
+    }
   });
 
   it("applies first-match precedence across the remaining buckets", () => {

@@ -30,7 +30,10 @@ import {
   type ThreadSettingsSnapshot,
   type UsageSnapshot,
 } from "../../shared/protocol/conversation.js";
-import type { BackendPresentation } from "../../shared/protocol/conversation.js";
+import type {
+  AutomationCapability,
+  BackendPresentation,
+} from "../../shared/protocol/conversation.js";
 import type {
   ProviderFeatureCapability,
   ProviderFeatureStateEnvelope,
@@ -355,17 +358,42 @@ export class ThreadApplicationService {
     applicationThreadId: string,
   ): Promise<NormalizedThreadSnapshot> {
     const inventory = await this.#authorize(scope, applicationThreadId);
-    const capture =
-      inventory.thread.backingState === "bound" &&
-      (inventory.thread.available || inventory.thread.inventoryState === "archived")
-        ? await this.#conversations.capture(scope, applicationThreadId)
-        : ({ status: "disconnected" } as const);
     return this.#composeSnapshot(
       scope,
       applicationThreadId,
       inventory,
-      capture,
+      await this.#capture(scope, applicationThreadId, inventory),
     );
+  }
+
+  /**
+   * The snapshot's `capabilities.automation`, composed from the same capture
+   * and targeted state without materializing the transcript.
+   */
+  async automationCapability(
+    scope: RequestScope,
+    applicationThreadId: string,
+  ): Promise<AutomationCapability> {
+    const inventory = await this.#authorize(scope, applicationThreadId);
+    const { capabilities } = await this.#composeTargetedState(
+      scope,
+      applicationThreadId,
+      inventory,
+      await this.#capture(scope, applicationThreadId, inventory),
+    );
+    return capabilities.automation;
+  }
+
+  #capture(
+    scope: RequestScope,
+    applicationThreadId: string,
+    inventory: AuthorizedThreadApplicationState,
+  ): Promise<ThreadConversationCapture> | ThreadConversationCapture {
+    return inventory.thread.backingState === "bound" &&
+      (inventory.thread.available ||
+        inventory.thread.inventoryState === "archived")
+      ? this.#conversations.capture(scope, applicationThreadId)
+      : { status: "disconnected" };
   }
 
   /** Publishes durable state after a failed attachment without retrying the provider. */

@@ -55,8 +55,8 @@ export const SIDEBAR_ADJACENT_THREAD_COMMANDS = {
 
 /**
  * Opens or closes Tasks beside a thread: the docked panel, or the sheet on
- * phones. Pages without a thread (Home, Archived, Usage) have no Tasks and
- * leave the key alone.
+ * phones. Pages without a thread (Home, Archived, Usage, Automations and an
+ * automation's page) have no Tasks and leave the key alone.
  * Ctrl+Shift+L (⌘⇧L): no browser or app binding uses it, while T and K are
  * taken (reopen tab, web console) and Ctrl+Shift+F opens thread find.
  */

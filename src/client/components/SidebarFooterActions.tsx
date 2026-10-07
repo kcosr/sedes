@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { Archive, Bot, ChartColumnBig, ChevronUp, Settings } from "lucide-react";
+import { Archive, Bot, ChartColumnBig, ChevronUp, Repeat, Settings } from "lucide-react";
 import { Button } from "@client/components/ui/button";
 import {
   DropdownMenu,
@@ -25,6 +25,7 @@ export interface SidebarFooterActionsProps {
   readonly onOpenUsage: () => void;
   /** Opens Settings › Agents; `trigger` is the More button, where focus returns. */
   readonly onOpenAgents: (trigger: HTMLButtonElement) => void;
+  readonly onOpenAutomations: () => void;
   readonly onOpenArchivedThreads: () => void;
   readonly connection?: ConnectionState;
   readonly api?: ApiClient;
@@ -38,6 +39,7 @@ export function SidebarFooterActions({
   onOpenSettings,
   onOpenUsage,
   onOpenAgents,
+  onOpenAutomations,
   onOpenArchivedThreads,
   connection,
   api,
@@ -78,6 +80,10 @@ export function SidebarFooterActions({
           }}>
             <Bot aria-hidden="true" />
             Agents
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={onOpenAutomations}>
+            <Repeat aria-hidden="true" />
+            Automations
           </DropdownMenuItem>
           <DropdownMenuItem onSelect={onOpenArchivedThreads}>
             <Archive aria-hidden="true" />

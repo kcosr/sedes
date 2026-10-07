@@ -4,6 +4,9 @@ import type { ApplicationClientStore } from "../stores/ApplicationClientStore";
 import { useApplicationStore } from "../stores/ApplicationClientStore";
 import type { ThreadStoreRegistry } from "../stores/ThreadStoreRegistry";
 import { ArchivedView } from "./ArchivedView";
+import { AutomationEditor } from "./automation/AutomationEditor";
+import { AutomationPage } from "./automation/AutomationPage";
+import { AutomationsView } from "./automation/AutomationsView";
 import { Plus } from "lucide-react";
 import { SedesMark } from "./brand-icons";
 import { Button } from "@client/components/ui/button";
@@ -142,6 +145,32 @@ export function Workbench({
       </main>
     );
   }
+  if (route.name === "automations" || route.name === "automation") {
+    return (
+      <main className="workbench">
+        <div className="pane-host pane-host-nav-header">
+          <div className="pane-nav-header">
+            <SidebarNavTrigger />
+          </div>
+          {route.name === "automations" ? (
+            <AutomationsView store={applicationStore} />
+          ) : route.edit ? (
+            <AutomationEditor
+              store={applicationStore}
+              threadRegistry={threadRegistry}
+              threadId={route.threadId}
+            />
+          ) : (
+            <AutomationPage
+              store={applicationStore}
+              threadRegistry={threadRegistry}
+              threadId={route.threadId}
+            />
+          )}
+        </div>
+      </main>
+    );
+  }
   if (route.name === "thread") {
     const panelLayout = (
       <main className="workbench">
@@ -161,7 +190,6 @@ export function Workbench({
               <ThreadView
                 key={route.threadId}
                 threadId={route.threadId}
-                automationOpen={route.automationOpen}
                 focusTurnId={route.focusTurnId}
                 registry={threadRegistry}
                 applicationStore={applicationStore}

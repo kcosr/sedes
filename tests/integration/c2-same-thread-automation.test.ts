@@ -587,15 +587,11 @@ describe("C2 same-thread automation acceptance", () => {
       identity: { resolve: async () => subject.scope },
       agentTools: unavailableAgentToolRouterDependencies(),
       threads: {
-        snapshot: async () => ({
-          capabilities: {
-            automation: {
-              available: true,
-              canAttach: true,
-              canRunNow: true,
-              canCloneOnRun: false,
-            },
-          },
+        automationCapability: async () => ({
+          available: true,
+          canAttach: true,
+          canRunNow: true,
+          canCloneOnRun: false,
         }),
       },
       automations: service,

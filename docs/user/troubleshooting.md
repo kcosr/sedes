@@ -202,18 +202,23 @@ Refresh does not discard the dirty editor automatically.
 
 ## An automation did not run
 
-Confirm that:
+Open the thread's automation page, or find it on the **Automations** page,
+and confirm that:
 
-- the automation is enabled rather than paused;
-- its schedule preview shows the expected time zone and next occurrence;
+- its state is **Active**, not paused, not started, or suspended by an
+  archived or snoozed thread;
+- its schedule and next runs show the expected time zone and time;
 - the thread and target are available;
 - a local precheck exited zero;
-- the selected clone boundary is eligible; and
+- for **A new fork each run**, the thread can still fork; and
 - the run is not waiting at an attended approval.
 
-Open automation history to distinguish skipped, missed/coalesced, waiting,
-failed, and uncertain occurrences. SSH prechecks are unsupported and fail
-rather than executing remotely.
+Use **Runs**, and its **Problems** and **Skipped** filters, to tell skipped,
+missed and merged, failed, and unknown runs apart. A **Delivered** run reached
+the agent; look in the thread for its work. A run whose outcome is unknown
+pauses the schedule until you mark it failed. SSH prechecks are unsupported
+and fail rather than executing remotely. See
+[Tasks and automations](tasks-and-automations.md#review-run-history).
 
 ## A packaged client cannot connect
 

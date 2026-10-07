@@ -437,9 +437,26 @@ describe("automation persistence", () => {
       ).toMatchObject({
         precheck: null,
       });
+      // Schema 13 predates later run columns the current repository selects.
       expect(
-        repository.getRun(seeded.scope, definitionId, runId),
-      ).toMatchObject({
+        upgradeDatabase
+          .prepare(
+            `SELECT
+               precheck_command_snapshot AS precheckCommandSnapshot,
+               precheck_timeout_seconds AS precheckTimeoutSeconds,
+               precheck_include_stdout AS precheckIncludeStdout,
+               precheck_status AS precheckStatus
+             FROM automation_runs
+             WHERE tenant_id = ? AND owner_principal_id = ?
+               AND automation_id = ? AND id = ?`,
+          )
+          .get(
+            seeded.scope.tenantId,
+            seeded.scope.principalId,
+            definitionId,
+            runId,
+          ),
+      ).toEqual({
         precheckCommandSnapshot: null,
         precheckTimeoutSeconds: null,
         precheckIncludeStdout: null,

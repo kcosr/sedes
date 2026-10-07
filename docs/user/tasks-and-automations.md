@@ -47,8 +47,8 @@ not send a provider message or settle its thread.
 
 Tasks appears beside a thread. In a thread, select the **Tasks** button (the
 checklist icon) or press Ctrl+Shift+L (Command+Shift+L on macOS) to open or
-close Tasks. Home, Archived, and Usage have no Tasks; to see Global Tasks,
-open any thread and choose **Global**.
+close Tasks. Home, Archived, Usage, and the automation pages have no Tasks; to
+see Global Tasks, open any thread and choose **Global**.
 
 On desktop, Tasks docks beside Chat as a workspace panel, on the right by
 default. Like Files and Workpads, you can resize it, collapse it, dock it on
@@ -360,60 +360,286 @@ the ordinary Task update tool to complete individual Tasks explicitly.
 
 ## Schedule work with an automation
 
-Each thread can have at most one automation. Open **Automation settings…** from
-the thread context menu or **Thread actions**.
+An automation sends a thread a prompt on a schedule. Each thread can have at
+most one automation. It contains:
 
-An automation contains:
-
-- a canned prompt separate from the normal composer draft;
-- a date/time, elapsed interval, or five-field cron schedule;
-- same-thread or per-run clone execution;
+- a prompt, separate from the composer draft;
+- a one-time date and time, an interval, or a five-field cron schedule;
+- whether each run uses this thread or a new fork of it;
 - an optional local shell precheck; and
-- a missed-run policy.
+- for a recurring schedule, what to do with runs missed while Sedes was down.
 
-New automations start paused. Saving the definition does not schedule a run
-until you choose **Enable**. Enabling computes the first deadline.
+A thread with an automation opens it from:
 
-### Create a basic automation
+- the automation button in the thread header;
+- **Automation…** in **Thread actions**, or in the thread's menu in the
+  sidebar (right-click or long-press the row);
+- **Open automation** on a thread notice about an automation run; and
+- its row on the [Automations page](#see-all-automations).
 
-1. Open **Automation settings…** on the intended thread.
-2. Write the exact prompt to run.
-3. Choose **Use this thread** or **Start a new cloned thread for each run** when
-   clone mode is available.
-4. Choose the schedule and review its preview.
-5. Select how a missed occurrence should be handled.
-6. Save the automation.
-7. Choose **Enable**.
+For a thread without one, **Thread actions** and the sidebar menu offer
+**Automate…**, which opens the editor for a new automation. When the thread
+can't take an automation, **Automate…** is unavailable; point at it to see
+why. Older links to a thread's automation open its automation page.
 
-Use **Run now** to create a manual occurrence without changing the recurring
-schedule. Use **Pause** to stop new scheduled admissions while preserving the
-definition and history. Edit or remove the automation from the same screen.
+### Create an automation
+
+1. Choose **Automate…** on the thread.
+2. Under **Prompt**, write the prompt. It is sent to the agent in this thread
+   on every run, as if you typed it.
+3. Under **When**, choose the schedule and check **Next runs**.
+4. Under **Run in**, choose **This thread** or **A new fork each run**.
+5. Optionally, add a [precheck](#use-a-precheck).
+6. For a recurring schedule, choose what happens **If Sedes was down**.
+7. Choose **Save and enable** to start the schedule, or **Save as paused** to
+   enable it later.
+
+A new automation starts as every day, beginning at the next whole hour, in
+this thread, with no precheck. After saving, its automation page opens. If the
+automation is saved but cannot be enabled, the editor stays open, says why,
+and the automation is kept paused.
+
+### Set the schedule
+
+**When** offers three kinds of schedule:
+
+| Kind | Fields |
+| --- | --- |
+| **Once** | A date and time in your time zone |
+| **Every interval** | A number of minutes (at least 5), hours, or days, and **Starting**, the first run; the interval counts from it |
+| **Cron** | A five-field expression (minute, hour, day of month, month, weekday) and a **Time zone**, your browser's zone at first |
+
+Under the fields, the schedule reads as a sentence, such as "Every weekday at
+9:00 AM Europe/Berlin". An expression outside the common forms reads as
+"Cron" followed by the expression and its zone. A cron schedule's times are in
+its own zone. A whole-day interval repeats a fixed number of hours, so its time
+of day is shown in UTC.
+
+**Next runs** shows the next three times, as Sedes will schedule them. Save
+waits until Sedes has checked the current schedule, and a schedule it rejects,
+such as one that would run more often than every five minutes, shows the
+reason there.
+
+**If Sedes was down** applies to recurring schedules:
+
+- **Run once when Sedes is back**, the default, merges the missed runs into
+  one run, which says how many it merged.
+- **Skip missed runs** waits for the next scheduled time; a run more than a
+  minute late is recorded as skipped.
+
+### Edit or delete an automation
+
+Choose **Edit** on the automation page, or **Edit…** in its row menu on the
+Automations page. The editor has the same sections, with links at the top to
+each. Changes apply from the next run; **Run now** and **Pause** act on the
+saved version.
+
+**Save** is available once you change something and the form is valid, and
+returns to the automation page. **Cancel** puts your edits back; for a new
+automation, it leaves the editor. Leaving with unsaved changes asks first:
+**Keep editing**, or **Discard and leave**.
+
+- If the automation changes elsewhere while you edit, Save is refused until you
+  choose **Reload automation**, which discards your edits.
+- If it is deleted elsewhere, the editor says so, and saving creates a new
+  one.
+- While its last run's outcome is unknown, the automation can't be changed.
+  [Resolve that run](#when-an-automation-needs-you) first.
+
+**Delete automation…**, at the bottom of the editor or in the automation
+page's **⋯** menu, asks first. Scheduled and manual runs stop and the schedule
+is removed. The thread, its messages, and any result threads stay, but the run
+history is no longer shown. Deleting returns to the Automations page.
+
+## See all automations
+
+Open **Automations** from the sidebar footer's **More** menu, or choose **View
+all** on a sidebar group of automations: **Upcoming** in Timeline,
+**Scheduled** in State, or **Automations** in Projects.
+
+The page lists every automation, including those on archived threads, and the
+header counts them. **Search automations** matches thread titles and the start
+of each prompt. The page follows the sidebar's Scope, which the two share. A
+line under the search shows the Scope, the grouping, and, while the list is
+narrowed, how many automations match; choose **Clear scope** there to reset the
+Scope.
+
+**View options** groups by **Status**, the default, or **Project**. By status,
+each automation is in exactly one group:
+
+| Group | Contains | Order |
+| --- | --- | --- |
+| **Needs attention** | **Failed** and **Outcome unknown** | Most recent problem first |
+| **Upcoming** | **Active** and **Sending** | Next run first |
+| **Paused** | **Paused** and **Not started** | By title |
+| **Suspended** | **Thread archived** and **Snoozed**; collapsed at first | By title |
+
+By project, each project's automations follow the same status order. Select a
+group heading to collapse or expand it. Sedes remembers the grouping and the
+collapsed groups on this device.
+
+Each row shows the [state](#automation-states) glyph, the thread title, and a
+line with the schedule, project, and backend. At the end of the row are the
+next run, the problem ("Failed 21h ago"), or the state ("Paused"), over the
+last outcome ("Delivered 23m ago"). A row that needs attention shows what went
+wrong in place of the schedule, and whether scheduling continues ("next
+6:30 AM" or "Scheduling paused"). On narrow screens, the second line shows the
+outcome and the schedule, and only the next run stays at the end.
+
+Select a row to open its automation page. The row's **⋯** menu, shown on hover
+or focus and always on touch screens, has **Run now**, **Pause** or
+**Enable**, **Edit…**, and **Open thread**. An unavailable action follows the
+same rules as on the automation page (see [Open an automation](#open-an-automation)):
+the menu shows a short hint, and pointing at the action says what to do.
+
+## Open an automation
+
+An automation's page shows its state, definition, and runs in one scroll.
+**‹ Automations** returns to where you came from, or to the Automations page.
+The sidebar keeps the thread selected.
+
+The header shows the thread title, a [state](#automation-states) chip, and a
+line with the next run, or what holds it ("scheduling paused", "runs
+suspended", "snoozed until…"), then the project and backend. Its actions are:
+
+- **Run now** sends the prompt once without changing the schedule. It works
+  while the schedule is paused, and the precheck still applies.
+- **Pause** or **Enable** (the pause and play buttons) stops or resumes
+  scheduled runs. Pausing does not stop a run that has already started.
+- **Edit** (the pencil) opens the editor.
+- **⋯** has **Open thread** and **Delete automation…**. On phones, **Pause**
+  or **Enable** and **Edit** move into this menu.
+
+Some actions wait for the automation or its thread. Point at an action to see
+what to do:
+
+| While | Unavailable | Says |
+| --- | --- | --- |
+| The last run's outcome is unknown | **Run now**, **Pause** or **Enable**, **Edit**, **Delete automation…** | "Resolve the unknown run first" |
+| A run is in progress | **Run now**, **Pause** or **Enable**, **Delete automation…** | "Wait for the current run to finish" |
+| The thread is archived | **Run now**, **Enable**, **Edit** (**Pause** still works) | "Restore the thread first" |
+| The thread is snoozed | **Run now** | "Unsnooze the thread first" |
+
+On the automation page, **Run now**, **Enable**, and **Edit** are also
+unavailable while the thread can't take an automation.
+
+### When an automation needs you
+
+A callout under the header says when an automation needs a decision:
+
+| Situation | Callout | Actions |
+| --- | --- | --- |
+| The last run failed | "Last run failed", how long ago, and what went wrong | **Open thread** |
+| The outcome is unknown | "Sedes can't tell whether the last run reached the agent." | **Open thread**, **Mark as failed…** |
+| Not started | "Paused. This automation won't run until you enable it." | **Enable** |
+| The thread is archived | "Runs are suspended while the thread is archived." | **Restore thread** |
+| The thread is snoozed | "Scheduled runs are skipped until …", with the wake time | **Unsnooze** |
+
+**Open thread** opens the thread the run used: this thread, or a fork run's
+own thread.
+
+When Sedes cannot prove whether a run reached the agent, it records the
+outcome as unknown, pauses the schedule, and never sends the prompt again on
+its own. Open the thread to see whether the agent got the prompt, then choose
+**Mark as failed…**:
+
+- **Mark failed and resume** also enables the schedule again, in the same
+  step.
+- **Mark failed, keep paused** leaves the schedule paused.
+
+For a one-time automation, what happens depends on the run:
+
+- Its scheduled run: there is nothing to resume, so the dialog offers one
+  action, **Mark failed**, which ends the automation.
+- A **Run now** attempt: the automation stays. While its time is still
+  ahead, you can resume or keep it paused as above; once its time has passed,
+  **Mark failed** keeps it paused, and you can edit it to run again.
+
+### Read the definition
+
+The **Definition** card shows the saved automation:
+
+| Item | Shows |
+| --- | --- |
+| **Prompt** | The prompt, four lines at first; **Show all** shows the rest |
+| **Schedule** | The schedule sentence; the next three runs, while a recurring schedule is enabled (while the thread is snoozed, the next three after it wakes, since the snooze skips the ones before); and, for a recurring schedule, what happens if Sedes was down |
+| **Run in** | **This thread** or **A new fork each run** |
+| **Precheck** | The command, its timeout, and whether its output is added to the prompt; or **None** |
+| **Created** | When the automation was created and last updated |
+
+## Automation states
+
+Sedes names an automation's state with the same words everywhere. The first
+state that applies wins:
+
+| State | Glyph | Meaning |
+| --- | --- | --- |
+| **Sending** | Spinner | A run is in progress; **Waiting for turn** while it waits behind the thread's current turn |
+| **Failed** | Red warning triangle | The last run failed |
+| **Outcome unknown** | Amber warning triangle | Sedes can't tell whether the last run reached the agent; the schedule is paused until you resolve it |
+| **Thread archived** | Archive box | Runs are suspended until the thread is restored |
+| **Snoozed** | Moon | Scheduled runs are skipped until the thread wakes |
+| **Active** | Repeat arrows | Enabled; runs on schedule |
+| **Paused** | Pause circle | Paused after at least one run |
+| **Not started** | Pause circle | Paused and never run, such as an automation saved as paused |
+
+Failed and Outcome unknown automations need attention everywhere: in the
+Automations page's **Needs attention** group, in the sidebar's State view, and
+on their sidebar rows. Paused is never shown as a warning.
+
+Elsewhere in Sedes:
+
+- **Sidebar rows** of threads with automations show the repeat arrows, the
+  pause circle while paused, not started, or suspended, and the spinner while
+  a run is sending. A failed or unknown last run adds a warning badge. In
+  groups of automations, the row's time is the next run; in the Projects
+  view's **Automations** group, a row without one shows **Paused** or **Not
+  started**. In card density, the second line names the problem, the paused
+  state, or the next run.
+- **The thread header's automation button** shows the same glyph as the row.
+  It turns red after a failed run and amber when the outcome is unknown; hover
+  over it for the state, such as "Automation · next Tmrw 2:00 AM".
+- **The thread preview** has an "Automation ·" line with the state or next
+  run.
+- **Thread notices** say that an automation triggered the thread, or, in red,
+  that the run failed. **Open automation** opens the automation page while the
+  thread that owns the automation still has it; **Dismiss** removes the
+  notice.
+
+Upcoming times read the same everywhere: "in 45m", a time today, "Tmrw
+9:00 AM", a weekday within the week, then a date.
 
 ## Choose a run mode
 
-### Use this thread
+### This thread
 
 The automation sends its prompt to the attached thread. It uses the same model,
 reasoning, sandbox, network, approval, and tool configuration as a manual turn
 on that thread. The automation prompt is separate from any draft currently in
 the composer.
 
-### Start a cloned thread for each run
+### A new fork each run
 
-Clone mode creates a normal child from a stable completed checkpoint, then
+Each run creates a normal child from a stable completed checkpoint, then
 queues the automation prompt after the child's provider binding is durable. An
 empty draft source creates a fresh child. The source thread remains the
-automation anchor and each occurrence gets its own conversation.
+automation anchor and each run gets its own conversation, so runs don't pile
+up in the source thread.
 
-Clone availability depends on provider capability and source state. Sedes does
-not fall back to same-thread execution when an explicitly selected clone mode
-is unavailable.
+A fork run's thread is titled with the source thread's title and the run time,
+such as "Nightly review · Oct 6, 3:15 AM". The time is in the cron schedule's
+time zone, or otherwise in UTC and marked "UTC".
+
+Forking needs a completed turn and a backend that can fork. When the thread
+can't fork, **A new fork each run** is unavailable and says why. Sedes does not
+fall back to this thread when a fork run becomes unavailable later.
 
 ## Use a precheck
 
-A precheck is a bounded shell command that decides whether a scheduled run
-should proceed. Enable it, enter the command and timeout, and choose **Test
-precheck** before saving.
+A precheck is a bounded shell command that decides whether a run goes ahead.
+It runs before every run, manual runs included. Under **Precheck**, open
+**Before each run**, turn on **Run a precheck**, enter the **Shell command**
+and its **Timeout**, and choose **Test precheck** before saving.
 
 For a local project, Sedes runs the command through `/bin/sh -lc` in the
 authorized workspace:
@@ -421,12 +647,17 @@ authorized workspace:
 - exit code 0 permits the run;
 - a nonzero exit skips it;
 - standard error is diagnostic only; and
-- standard output is added to the prompt only when **Include stdout** is
-  enabled and the output fits the bounds.
+- standard output is added to the prompt only when **Add output to the
+  prompt** is on, the command exits 0, and the output fits the bounds.
 
-Precheck timeout is 1–60 seconds. SSH command execution is not implemented, so
-a precheck configured on an SSH thread fails rather than running a remote
-shell.
+**Test precheck** runs the command once and says what a run would do: **Would
+run the agent**, **Would skip this run**, or that the precheck failed, with
+its exit code, duration, whether output would be added to the prompt, and the
+output and errors. Nothing is sent to the agent, but the command does run.
+
+Precheck timeout is 1–60 seconds, 30 by default. SSH command execution is not
+implemented, so a precheck configured on an SSH thread fails rather than
+running a remote shell.
 
 A precheck is executable code with the authority of the Sedes server account.
 Use a minimal, reviewed command; do not place credentials in the command or
@@ -446,17 +677,46 @@ explicit operator-approved policy.
 
 ## Review run history
 
-The Automation screen lists scheduled and **Run now** occurrences, their
-outcomes, timing, and precheck result. Use this history to distinguish:
+The automation page's **Runs** section lists scheduled runs and **Run now**
+runs, newest first. Its heading counts all runs and the problems among them;
+select the problem count to list only those.
 
-- a run that executed;
-- a run skipped by precheck;
-- a missed or coalesced schedule occurrence;
-- a run waiting for interaction; and
-- a failed or uncertain creation/delivery operation.
+At first it shows the latest five runs. **Show all runs** shows the whole
+history in a scrolling list, with **Load more** for older runs and a filter:
+**All**, **Problems** (failed and unknown runs), or **Skipped**. **Show fewer**
+returns to the short list. New runs appear as they happen.
 
-If clone creation may have succeeded but cannot be proved, Sedes records
-recovery and does not automatically repeat it. Follow
+Each row shows when the run was due or requested, its state, and a summary:
+**Scheduled** or **Manual**, missed runs merged into it ("missed ×2 merged"),
+why it was skipped ("precheck exit 1", "missed while Sedes was down", or
+"thread was snoozed"), and how the precheck went. Select a row to see its
+details, in place on desktop and in a sheet on phones:
+
+- **Timeline**: when the run was due, claimed, started, and accepted or
+  finished, each with the time since the step before;
+- **Precheck**: its result, exit code, duration, and output size, and the
+  command and timeout as they were for this run;
+- what went wrong or why the run was skipped, and the error code;
+- **Definition**: the revision the run used, and whether the automation was
+  edited since; and
+- **Result thread**: a fork run's own thread.
+
+| Run state | Meaning |
+| --- | --- |
+| **Starting** | Sedes has picked up the run; **Checking** while the precheck runs |
+| **Waiting for turn** | The prompt waits behind the thread's current turn |
+| **Sending** | The prompt is on its way to the agent |
+| **Delivered** | The agent received the prompt |
+| **Skipped** | The prompt was not sent; the row says why |
+| **Failed** | The run did not deliver the prompt, or you marked an unknown run as failed; the details say why |
+| **Outcome unknown** | Sedes can't tell whether the agent received the prompt |
+
+**Delivered** does not mean the agent has finished: its turn can still be
+working, or waiting at an approval. Open the thread, or a fork run's result
+thread, to follow the work.
+
+If a fork may have been created but Sedes cannot prove it, the run's outcome
+is unknown, and Sedes does not repeat it on its own. Follow
 [Troubleshooting and recovery](troubleshooting.md).
 
 Operators can manage the same automation model with the

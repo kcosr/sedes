@@ -763,6 +763,9 @@ async function fixture(
         options.outputImage,
       );
     },
+    async automationCapability(scope: RequestScope, threadId: string) {
+      return (await this.snapshot(scope, threadId)).capabilities.automation;
+    },
     async snapshotFromActorCapture(scope: RequestScope, threadId: string) {
       return threadSnapshot(
         repository,
@@ -6722,6 +6725,333 @@ describe("normalized HTTP application contract", () => {
             retryable: false,
           },
         });
+    } finally {
+      current.close();
+    }
+  });
+
+  it("previews a schedule's occurrences after now or after a later instant", async () => {
+    const current = await fixture();
+    try {
+      const workspace = await current
+        .mutate(request(current.app).post("/api/workspaces/open"))
+        .send({
+          environmentId: current.environmentId,
+          path: current.workspacePath,
+          project: { kind: "new", name: "workspace" },
+        })
+        .expect(201);
+      const created = await current
+        .mutate(request(current.app).post("/api/threads"))
+        .send({
+          workspaceId: workspace.body.id,
+          configuration: { kind: "custom", targetId: current.profile.id },
+          executionWorkspace: { kind: "direct" },
+          title: "New thread",
+        })
+        .expect(201);
+      const previewPath = `/api/threads/${created.body.threadId as string}/automation/preview`;
+      const schedule = {
+        kind: "interval",
+        anchorAt: "2026-01-01T00:00:00.000Z",
+        everySeconds: 300,
+      };
+      const step = 300_000;
+      const now = Date.now();
+
+      const fromNow = await current
+        .mutate(request(current.app).post(previewPath))
+        .send({ schedule, count: 3 })
+        .expect(200);
+      const first = Date.parse(fromNow.body.occurrences[0]);
+      expect(first).toBeGreaterThan(now);
+      expect(first - now).toBeLessThanOrEqual(step + 60_000);
+
+      // A day ahead holds far more than ten five-minute occurrences.
+      const wake = new Date(Math.ceil((now + 86_400_000) / step) * step + 60_000);
+      const afterWake = await current
+        .mutate(request(current.app).post(previewPath))
+        .send({ schedule, count: 3, after: wake.toISOString() })
+        .expect(200);
+      expect(afterWake.body.occurrences).toEqual(
+        [1, 2, 3].map((index) => new Date(wake.getTime() - 60_000 + index * step).toISOString()),
+      );
+
+      // An instant already past previews from now.
+      const past = await current
+        .mutate(request(current.app).post(previewPath))
+        .send({ schedule, count: 1, after: "2026-01-01T00:00:00.000Z" })
+        .expect(200);
+      expect(Date.parse(past.body.occurrences[0])).toBeGreaterThan(now);
+
+      await current
+        .mutate(request(current.app).post(previewPath))
+        .send({ schedule, count: 1, after: "tomorrow" })
+        .expect(400);
+    } finally {
+      current.close();
+    }
+  });
+
+  it("serves the thread automation capability whether or not an automation exists", async () => {
+    const current = await fixture();
+    try {
+      const workspace = await current
+        .mutate(request(current.app).post("/api/workspaces/open"))
+        .send({
+          environmentId: current.environmentId,
+          path: current.workspacePath,
+          project: { kind: "new", name: "workspace" },
+        })
+        .expect(201);
+      const created = await current
+        .mutate(request(current.app).post("/api/threads"))
+        .send({
+          workspaceId: workspace.body.id,
+          configuration: { kind: "custom", targetId: current.profile.id },
+          executionWorkspace: { kind: "direct" },
+          title: "New thread",
+        })
+        .expect(201);
+      const threadId = created.body.threadId as string;
+
+      const capabilityPath = `/api/threads/${threadId}/automation/capability`;
+
+      await current
+        .withHost(request(current.app).get(capabilityPath))
+        .expect(200)
+        .expect({
+          available: true,
+          canAttach: true,
+          canRunNow: true,
+          canCloneOnRun: true,
+        });
+      await current
+        .withHost(request(current.app).get(capabilityPath))
+        .set("X-Test-Foreign-Principal", "yes")
+        .expect(404);
+      await current
+        .withHost(request(current.app).get(`${capabilityPath}?detail=full`))
+        .expect(400);
+      current.disableCloneAutomation();
+      await current
+        .withHost(request(current.app).get(capabilityPath))
+        .expect(200)
+        .expect(({ body }) => expect(body.canCloneOnRun).toBe(false));
+
+      await current
+        .mutate(
+          request(current.app).post(`/api/threads/${threadId}/automation`),
+        )
+        .send({
+          prompt: "Run scheduled checks",
+          runMode: "same_thread",
+          schedule: {
+            kind: "interval",
+            anchorAt: "2099-07-30T12:00:00.000Z",
+            everySeconds: 3_600,
+          },
+          misfirePolicy: "coalesce",
+          precheck: null,
+          mutationId: randomUUID(),
+        })
+        .expect(201);
+      await current
+        .withHost(request(current.app).get(capabilityPath))
+        .expect(200)
+        .expect(({ body }) =>
+          expect(body).toMatchObject({ available: true, canRunNow: true }),
+        );
+    } finally {
+      current.close();
+    }
+  });
+
+  it("filters run history with first-page counts and resolves with resume", async () => {
+    const current = await fixture();
+    try {
+      const workspace = await current
+        .mutate(request(current.app).post("/api/workspaces/open"))
+        .send({
+          environmentId: current.environmentId,
+          path: current.workspacePath,
+          project: { kind: "new", name: "workspace" },
+        })
+        .expect(201);
+      const created = await current
+        .mutate(request(current.app).post("/api/threads"))
+        .send({
+          workspaceId: workspace.body.id,
+          configuration: { kind: "custom", targetId: current.profile.id },
+          executionWorkspace: { kind: "direct" },
+          title: "New thread",
+        })
+        .expect(201);
+      const threadId = created.body.threadId as string;
+
+      const definition = await current
+        .mutate(
+          request(current.app).post(`/api/threads/${threadId}/automation`),
+        )
+        .send({
+          prompt: "Run scheduled checks",
+          runMode: "same_thread",
+          schedule: {
+            kind: "interval",
+            anchorAt: "2099-07-30T12:00:00.000Z",
+            everySeconds: 3_600,
+          },
+          misfirePolicy: "coalesce",
+          precheck: null,
+          mutationId: randomUUID(),
+        })
+        .expect(201);
+      const automations = new AutomationRepository(current.database);
+      const automationId = automations.findDefinitionForThread(
+        current.owner,
+        threadId,
+      )!.id;
+      const claim = (now: number) =>
+        automations.createManualRun(current.owner, automationId, {
+          runId: randomUUID(),
+          occurrenceKey: `manual:${now}`,
+          scheduledFor: now,
+          claimToken: `claim-${now}`,
+          leaseExpiresAt: now + 60_000,
+          dispatchMutationId: randomUUID(),
+          now,
+        }).run;
+      const finish = (
+        run: ReturnType<typeof claim>,
+        state: "skipped" | "failed",
+        now: number,
+      ) =>
+        automations.updateRunState(current.owner, automationId, run.id, {
+          expectedState: "claimed",
+          state,
+          claimToken: run.claimToken!,
+          errorCode: `automation_${state}`,
+          now,
+        });
+      const dispatch = (run: ReturnType<typeof claim>, now: number) =>
+        automations.updateRunState(current.owner, automationId, run.id, {
+          expectedState: "claimed",
+          state: "dispatching",
+          claimToken: run.claimToken!,
+          retainPromptSnapshot: true,
+          now,
+        });
+      const skipped = finish(claim(1_000), "skipped", 1_100);
+      const failed = finish(claim(2_000), "failed", 2_100);
+      const delivered = dispatch(claim(3_000), 3_050);
+      automations.updateRunState(current.owner, automationId, delivered.id, {
+        expectedState: "dispatching",
+        state: "completed",
+        claimToken: delivered.claimToken!,
+        now: 3_100,
+      });
+      const unknown = dispatch(claim(4_000), 4_050);
+      automations.markRunUncertainAndPause(
+        current.owner,
+        automationId,
+        unknown.id,
+        {
+          expectedState: "dispatching",
+          claimToken: unknown.claimToken!,
+          errorCode: "automation_dispatch_uncertain",
+          errorDiagnostic: "Acceptance could not be proven.",
+          now: 4_100,
+        },
+      );
+      const runsPath = `/api/threads/${threadId}/automation/runs`;
+
+      const firstProblems = await current
+        .withHost(
+          request(current.app).get(`${runsPath}?filter=problems&pageSize=1`),
+        )
+        .expect(200);
+      expect(firstProblems.body).toMatchObject({
+        items: [
+          {
+            id: unknown.id,
+            state: "uncertain",
+            definitionRevision: definition.body.revision,
+          },
+        ],
+        nextCursor: expect.any(String),
+        counts: { all: 4, problems: 2, skipped: 1 },
+      });
+      const secondProblems = await current
+        .withHost(
+          request(current.app).get(
+            `${runsPath}?filter=problems&pageSize=1&cursor=${firstProblems.body.nextCursor}`,
+          ),
+        )
+        .expect(200);
+      expect(secondProblems.body).toEqual({
+        items: [expect.objectContaining({ id: failed.id, state: "failed" })],
+        nextCursor: null,
+      });
+      // The filter is bound into the cursor fingerprint.
+      await current
+        .withHost(
+          request(current.app).get(
+            `${runsPath}?filter=all&pageSize=1&cursor=${firstProblems.body.nextCursor}`,
+          ),
+        )
+        .expect(409)
+        .expect(({ body }) => expect(body.error.code).toBe("cursor_invalid"));
+      await current
+        .withHost(request(current.app).get(`${runsPath}?filter=skipped`))
+        .expect(200)
+        .expect(({ body }) =>
+          expect(body).toEqual({
+            items: [expect.objectContaining({ id: skipped.id })],
+            nextCursor: null,
+            counts: { all: 4, problems: 2, skipped: 1 },
+          }),
+        );
+      await current
+        .withHost(request(current.app).get(runsPath))
+        .expect(200)
+        .expect(({ body }) =>
+          expect(body.items.map(({ id }: { id: string }) => id)).toEqual([
+            unknown.id,
+            delivered.id,
+            failed.id,
+            skipped.id,
+          ]),
+        );
+      await current
+        .withHost(request(current.app).get(`${runsPath}?filter=failed`))
+        .expect(400);
+
+      const resolved = await current
+        .mutate(
+          request(current.app).post(`${runsPath}/${unknown.id}/resolve`),
+        )
+        .send({ action: "mark_failed", resume: true })
+        .expect(200);
+      expect(resolved.body).toMatchObject({
+        run: {
+          id: unknown.id,
+          state: "failed",
+          errorCode: "automation_uncertain_resolved",
+        },
+        automation: {
+          status: "enabled",
+          nextRunAt: "2099-07-30T12:00:00.000Z",
+          lastRun: { id: unknown.id, state: "failed" },
+        },
+      });
+      // A replay reports the current state without enabling again.
+      await current
+        .mutate(
+          request(current.app).post(`${runsPath}/${unknown.id}/resolve`),
+        )
+        .send({ action: "mark_failed" })
+        .expect(200)
+        .expect(({ body }) => expect(body).toEqual(resolved.body));
     } finally {
       current.close();
     }

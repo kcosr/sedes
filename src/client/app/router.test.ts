@@ -3,9 +3,13 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  automationEditPath,
+  automationPath,
+  automationsPath,
   historyStepsBackTo,
   installNavigationBlocker,
   navigate,
+  navigateBack,
   navigateUp,
   parseRoute,
   routePath,
@@ -14,7 +18,6 @@ import {
   pushHistoryEntry,
   replaceHistoryEntry,
   type NavigationBlocker,
-  threadAutomationPath,
   threadPath,
   threadTurnPath,
   usagePath,
@@ -55,19 +58,40 @@ describe("thread load diagnostics", () => {
 });
 
 describe("automation routes", () => {
-  it("keeps thread conversation and automation settings routes distinct", () => {
+  it("reads the old automation dialog address as the automation page", () => {
     const threadId = randomUUID();
 
-    expect(parseRoute(threadAutomationPath(threadId))).toEqual({
-      name: "thread",
+    expect(parseRoute(`/threads/${threadId}/automation`)).toEqual({
+      name: "automation",
       threadId,
-      automationOpen: true,
+      edit: false,
     });
     expect(parseRoute(threadPath(threadId))).toEqual({
       name: "thread",
       threadId,
-      automationOpen: false,
     });
+  });
+
+  it("replaces the old automation address with the page's own, keeping one history entry", () => {
+    const threadId = "thread/one";
+    navigate(threadPath("origin"), { replace: true });
+    const length = window.history.length;
+
+    navigate(`/threads/${encodeURIComponent(threadId)}/automation`);
+
+    expect(window.location.pathname).toBe(automationPath(threadId));
+    expect(window.history.length).toBe(length + 1);
+    // The router recorded the page's own address for the entry.
+    navigate(automationEditPath(threadId));
+    expect(historyStepsBackTo(automationPath(threadId))).toBe(-1);
+  });
+
+  it("rewrites an old address that history leads back to", () => {
+    navigate(automationPath("thread-2"), { replace: true });
+    // An entry left from before, under the dialog's address.
+    window.history.replaceState(window.history.state, "", "/threads/thread-2/automation");
+    window.dispatchEvent(new PopStateEvent("popstate", { state: window.history.state }));
+    expect(window.location.pathname).toBe(automationPath("thread-2"));
   });
 
   it("keeps normalized source-turn focus in the URL fragment", () => {
@@ -79,18 +103,47 @@ describe("automation routes", () => {
     expect(parseRoute(threadPath(threadId), "#turn=turn%2Fwith%20spaces")).toEqual({
       name: "thread",
       threadId,
-      automationOpen: false,
       focusTurnId: turnId,
     });
     expect(parseRoute(threadPath(threadId), "#turn=%E0%A4%A")).toEqual({
       name: "thread",
       threadId,
-      automationOpen: false,
     });
   });
 
+  it("parses the automations list, page and editor routes", () => {
+    const threadId = randomUUID();
+
+    expect(parseRoute(automationsPath())).toEqual({ name: "automations" });
+    expect(parseRoute(automationPath(threadId))).toEqual({
+      name: "automation",
+      threadId,
+      edit: false,
+    });
+    expect(parseRoute(automationEditPath(threadId))).toEqual({
+      name: "automation",
+      threadId,
+      edit: true,
+    });
+    expect(automationPath("a/b")).toBe("/automations/a%2Fb");
+    expect(parseRoute(automationPath("a/b"))).toEqual({
+      name: "automation",
+      threadId: "a/b",
+      edit: false,
+    });
+    expect(routePath({ name: "automations" })).toBe("/automations");
+    expect(routePath({ name: "automation", threadId, edit: false })).toBe(
+      automationPath(threadId),
+    );
+    expect(routePath({ name: "automation", threadId, edit: true })).toBe(
+      automationEditPath(threadId),
+    );
+  });
+
   it("falls home for malformed or partial paths", () => {
-    expect(parseRoute("/automations")).toEqual({ name: "home" });
+    expect(parseRoute("/automations/id/extra")).toEqual({ name: "home" });
+    expect(parseRoute("/automations/id/edit/extra")).toEqual({ name: "home" });
+    expect(parseRoute("/automations/%E0%A4%A")).toEqual({ name: "home" });
     expect(parseRoute("/threads/id/automation/extra")).toEqual({
       name: "home",
     });
@@ -120,25 +173,16 @@ describe("routePath", () => {
     expect(
       routePath({ name: "settings", page: "agents", mode: "view", resourceId: "agent/one" }),
     ).toBe("/settings/agents/agent%2Fone");
-    expect(
-      routePath({ name: "thread", threadId: "t1", automationOpen: false }),
-    ).toBe(threadPath("t1"));
-    expect(
-      routePath({ name: "thread", threadId: "t1", automationOpen: true }),
-    ).toBe(threadAutomationPath("t1"));
+    expect(routePath({ name: "thread", threadId: "t1" })).toBe(threadPath("t1"));
     expect(
       routePath({
         name: "thread",
         threadId: "t1",
-        automationOpen: false,
         focusTurnId: "turn/1",
       }),
     ).toBe(threadTurnPath("t1", "turn/1"));
     expect(
-      sameRoute(
-        { name: "thread", threadId: "t1", automationOpen: false },
-        parseRoute(threadPath("t1")),
-      ),
+      sameRoute({ name: "thread", threadId: "t1" }, parseRoute(threadPath("t1"))),
     ).toBe(true);
   });
 });

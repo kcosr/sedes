@@ -10,6 +10,7 @@ import { z } from "zod";
 import { questionRequestsResultSchema } from "./questions.js";
 import {
   automationMisfirePolicySchema,
+  automationRunFilterSchema,
   automationRunModeSchema,
   applicationTurnIdSchema,
   environmentIdSchema,
@@ -254,6 +255,11 @@ export const runAutomationNowRequestSchema = z.strictObject({
 export const previewAutomationScheduleRequestSchema = z.strictObject({
   schedule: automationScheduleSchema,
   count: z.number().int().min(1).max(10).default(5),
+  /**
+   * Preview occurrences strictly after this instant instead of after now
+   * (for example a snooze's wake time); an instant in the past means now.
+   */
+  after: z.iso.datetime().optional(),
 });
 
 export const testAutomationPrecheckRequestSchema = z.strictObject({
@@ -293,10 +299,13 @@ export type DismissThreadAttentionRequest = z.infer<
 export const listAutomationRunsQuerySchema = z.strictObject({
   cursor: z.string().max(2048).optional(),
   pageSize: z.coerce.number().int().min(1).max(100).default(50),
+  filter: automationRunFilterSchema.default("all"),
 });
 
 export const resolveAutomationRunRequestSchema = z.strictObject({
   action: z.literal("mark_failed"),
+  /** Enable the definition in the same transaction as the resolution. */
+  resume: z.boolean().default(false),
 });
 
 export const automationRunRouteParametersSchema = z.strictObject({

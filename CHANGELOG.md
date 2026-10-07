@@ -4,6 +4,15 @@
 
 ### Breaking Changes
 
+- Browser and packaged clients require client protocol 142, which adds
+  automation schedule details to thread summaries and runs. Upgrade clients
+  together with the server.
+  ([#58](https://github.com/kcosr/sedes/pull/58))
+
+- `POST /api/threads/:threadId/automation/runs/:runId/resolve` returns
+  `{ run, automation }` instead of the run alone. Update scripts that read it.
+  ([#58](https://github.com/kcosr/sedes/pull/58))
+
 - Browser and packaged clients require client protocol 141, including thread
   workpad counts. Direct inputs accept up to 256 KiB of text and 2 MiB per JSON
   request; input origins use server registration shared by Android native voice
@@ -213,6 +222,24 @@
   Migration preserves old Claude totals separately with unknown coverage. (#8)
 
 ### Added
+
+- An **Automations** page lists every automation by status (Needs attention,
+  Upcoming, Paused, Suspended) or by project, with search and row actions. Open
+  it from **More** or **View all** on the sidebar's automation groups.
+  ([#58](https://github.com/kcosr/sedes/pull/58))
+
+- Each automation has its own page: its state with an action when it needs
+  you, its definition, and its run history (the latest five, or all runs with
+  **Problems** and **Skipped** filters and run details). A full-page editor
+  creates and edits automations, and a new one can be saved and enabled in one
+  step.
+  ([#58](https://github.com/kcosr/sedes/pull/58))
+
+- The automation API adds `GET …/automation/capability`, a run-history `filter`
+  with counts, `resume` when resolving an uncertain run, and `after` for
+  schedule previews. The CLI adds `runs --filter` and `resolve [--resume]`.
+  Migration 135 adds run indexes.
+  ([#58](https://github.com/kcosr/sedes/pull/58))
 
 - Agent thread switches can request one recording on an exact thread while
   Android is in the background and native voice is already ready. The request
@@ -439,6 +466,20 @@
   Session stats stays in the thread menu rather than flashing during loading. (#8)
 
 ### Changed
+
+- The automation page and editor replace the automation dialog, and
+  `/threads/<id>/automation` links open the page.
+  ([#58](https://github.com/kcosr/sedes/pull/58))
+
+- Automation states look the same in the sidebar, header, menus, and pages:
+  one icon, a muted pause for paused automations, red for a failed run, and
+  amber for an unknown outcome. Run history says **Delivered** (the agent
+  received the prompt) instead of "completed".
+  ([#58](https://github.com/kcosr/sedes/pull/58))
+
+- A fork run's result thread is titled with the run time, such as
+  "Nightly review · Oct 6, 3:15 AM".
+  ([#58](https://github.com/kcosr/sedes/pull/58))
 
 - Android voice preferences and speech credentials persist across connection
   switches and deletion. Thread selections and saved input remain specific to
@@ -795,6 +836,16 @@
   sidecar runtime protocol 14 now also carries the queued-input marker.
 
 ### Fixed
+
+- An automation whose last run's outcome is unknown shows as needing
+  attention instead of looking active or paused.
+  ([#58](https://github.com/kcosr/sedes/pull/58))
+
+- Automation notices in a thread no longer break mid-word on phones.
+  ([#58](https://github.com/kcosr/sedes/pull/58))
+
+- Sidebar Projects-view titles stay readable next to a long location tag.
+  ([#58](https://github.com/kcosr/sedes/pull/58))
 
 - Sidebar Tasks icons match the header button.
   ([#56](https://github.com/kcosr/sedes/pull/56))

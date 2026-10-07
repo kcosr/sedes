@@ -37,6 +37,7 @@ import {
 import { parseResolvedBackendConfiguration } from "../support/resolved-backend-configuration.js";
 import { importLegacyDatabaseConfigurationFixture } from "../support/database-configuration-fixture.js";
 import { AutomationRepository } from "../../src/server/db/repositories/automation-repository.js";
+import { AutomationService } from "../../src/server/domain/automation-service.js";
 import { BackendConfigurationRepository } from "../../src/server/db/repositories/backend-configuration-repository.js";
 import { openOverlayDatabase } from "../../src/server/db/database.js";
 import {
@@ -65,6 +66,7 @@ import type { ConversationActorListener } from "../../src/server/conversations/c
 import type { DriverInteraction } from "../../src/shared/protocol/backend.js";
 import {
   backendInteractionSchema,
+  normalizedThreadSummarySchema,
   type BackendInteraction,
 } from "../../src/shared/protocol/conversation.js";
 import { NotificationRepository } from "../../src/server/db/repositories/notification-repository.js";
@@ -1822,6 +1824,154 @@ describe("backend-normalized application adapters", () => {
     }
   });
 
+  it("applies one latest-run rule and projection across the sidebar, thread snapshot and REST summary", async () => {
+    const current = fixture();
+    try {
+      const inventory = new InventoryRepository(current.database);
+      const queue = new QueuedInputRepository(current.database);
+      const completion = new SubmissionCompletionRepository(current.database);
+      const automation = new AutomationRepository(current.database);
+      const prompt = `Review\n\n  the repository ${"and summarize ".repeat(12)}today.`;
+      automation.createDefinition(current.scope, {
+        id: "latest-run-automation",
+        anchorThreadId: current.threadId,
+        name: "Latest run",
+        prompt,
+        precheck: null,
+        runMode: "same_thread",
+        enabled: false,
+        schedule: {
+          kind: "cron",
+          expression: "30 6 * * 1-5",
+          timeZone: "Europe/London",
+        },
+        misfirePolicy: "skip",
+        nextRunAt: null,
+        now: 500,
+      });
+      // An earlier-created run with a later occurrence time: ordering by
+      // scheduled_for would pick it, but history order picks the newer row.
+      const earlier = automation.createManualRun(
+        current.scope,
+        "latest-run-automation",
+        {
+          runId: "latest-run-earlier",
+          occurrenceKey: "manual:earlier",
+          scheduledFor: 9_000,
+          claimToken: "earlier-claim",
+          leaseExpiresAt: 60_000,
+          dispatchMutationId: "earlier-dispatch",
+          now: 1_000,
+        },
+      ).run;
+      automation.updateRunState(current.scope, earlier.automationId, earlier.id, {
+        expectedState: "claimed",
+        state: "failed",
+        claimToken: "earlier-claim",
+        errorCode: "automation_dispatch_failed",
+        now: 1_100,
+      });
+      automation.createManualRun(current.scope, "latest-run-automation", {
+        runId: "latest-run-newer",
+        occurrenceKey: "manual:newer",
+        scheduledFor: 1_500,
+        claimToken: "newer-claim",
+        leaseExpiresAt: 60_000,
+        dispatchMutationId: "newer-dispatch",
+        now: 2_000,
+      });
+
+      const projected = new DatabaseApplicationThreadSummaryReader({
+        inventory,
+        queue,
+        completion,
+      }).listByIds(current.scope, [current.threadId])[0]!.automation;
+      expect(projected).toEqual({
+        status: "paused",
+        runMode: "same_thread",
+        scheduleKind: "cron",
+        schedule: {
+          kind: "cron",
+          expression: "30 6 * * 1-5",
+          timeZone: "Europe/London",
+        },
+        misfirePolicy: "skip",
+        promptPreview: `Review the repository ${"and summarize ".repeat(12)}today.`
+          .slice(0, 140)
+          .trimEnd()
+          .concat("…"),
+        revision: 0,
+        hasPrecheck: false,
+        lastRun: {
+          id: "latest-run-newer",
+          state: "claimed",
+          occurrence: "manual",
+          scheduledFor: new Date(1_500).toISOString(),
+          resultThreadId: current.threadId,
+        },
+      });
+
+      const snapshot = await new DatabaseThreadApplicationInventoryReader({
+        inventory,
+        queue,
+        completion,
+        ...threadAgentToolPolicyReaderDependencies(current.database),
+        directoryBrowsingAvailability: () => "unavailable",
+        executionWorkspaces: directThreadExecutionWorkspaceReader,
+      }).getAuthorized(current.scope, current.threadId);
+      expect(snapshot.thread.automation).toEqual(projected);
+
+      const rest = new AutomationService({
+        repository: automation,
+        inventory,
+        publisher: { publish: () => undefined },
+        executionPolicy: { assertCanAutomate: () => undefined },
+      }).get(current.scope, current.threadId);
+      expect(rest.lastRun?.id).toBe("latest-run-newer");
+    } finally {
+      current.database.close();
+    }
+  });
+
+  it("projects a stored prompt that contains NUL characters", async () => {
+    const current = fixture();
+    try {
+      const inventory = new InventoryRepository(current.database);
+      const queue = new QueuedInputRepository(current.database);
+      const completion = new SubmissionCompletionRepository(current.database);
+      const automation = new AutomationRepository(current.database);
+      automation.createDefinition(current.scope, {
+        id: "nul-prompt-automation",
+        anchorThreadId: current.threadId,
+        name: "NUL prompt",
+        prompt: "\u0000Review the repository\u0000today.",
+        precheck: null,
+        runMode: "same_thread",
+        enabled: false,
+        schedule: { kind: "cron", expression: "0 2 * * *", timeZone: "UTC" },
+        misfirePolicy: "coalesce",
+        nextRunAt: null,
+        now: 500,
+      });
+
+      const [summary] = new DatabaseApplicationThreadSummaryReader({
+        inventory,
+        queue,
+        completion,
+      }).listByIds(current.scope, [current.threadId]);
+      expect(summary!.automation?.promptPreview).toBe(
+        "Review the repository today.",
+      );
+      expect(
+        normalizedThreadSummarySchema.shape.automation.parse(
+          summary!.automation,
+        ),
+      ).toEqual(summary!.automation);
+    } finally {
+      current.database.close();
+    }
+  });
+
   it("captures a scope-isolated application summary with a constant number of database reads", async () => {
     const current = fixture();
     try {
@@ -2066,6 +2216,9 @@ describe("backend-normalized application adapters", () => {
           status: "enabled",
           runMode: "same_thread",
           scheduleKind: "date_time",
+          schedule: { kind: "date_time", runAt: new Date(900).toISOString() },
+          misfirePolicy: "coalesce",
+          promptPreview: "run the summary automation",
           revision: 1,
           hasPrecheck: true,
           lastRun: {

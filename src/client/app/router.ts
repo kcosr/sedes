@@ -14,14 +14,34 @@ export type Route =
   | {
       name: "thread";
       threadId: string;
-      automationOpen: boolean;
       focusTurnId?: string;
     }
   | { name: "archived" }
   | { name: "usage" }
+  | { name: "automations" }
+  | { name: "automation"; threadId: string; edit: boolean }
   | ({ name: "settings"; page?: SettingsPage } & SettingsResourceRoute);
 
+/** The automation dialog's old address; it now names the automation page. */
+const LEGACY_AUTOMATION_PATH = /^\/threads\/([^/]+)\/automation$/;
+
+/**
+ * Rewrites a legacy alias in the address bar to its route's own path, in
+ * place (a replace), so the old address never stays in history.
+ */
+function canonicalizeLocation(route: Route): void {
+  if (route.name !== "automation" || !LEGACY_AUTOMATION_PATH.test(window.location.pathname)) {
+    return;
+  }
+  window.history.replaceState(
+    window.history.state,
+    "",
+    `${routePath(route)}${window.location.search}`,
+  );
+}
+
 let currentRoute = parseRoute(window.location.pathname, window.location.hash);
+canonicalizeLocation(currentRoute);
 if (currentRoute.name === "thread") {
   beginThreadLoadAttempt(currentRoute.threadId, "initial_route");
 }
@@ -66,13 +86,26 @@ export function parseRoute(pathname: string, hash = ""): Route {
   }
   if (pathname === "/archived") return { name: "archived" };
   if (pathname === "/usage") return { name: "usage" };
-  const automationMatch = /^\/threads\/([^/]+)\/automation$/.exec(pathname);
-  if (automationMatch?.[1]) {
+  if (pathname === "/automations") return { name: "automations" };
+  const automationPageMatch = /^\/automations\/([^/]+)(\/edit)?$/.exec(pathname);
+  if (automationPageMatch?.[1]) {
     try {
       return {
-        name: "thread",
-        threadId: decodeURIComponent(automationMatch[1]),
-        automationOpen: true,
+        name: "automation",
+        threadId: decodeURIComponent(automationPageMatch[1]),
+        edit: automationPageMatch[2] !== undefined,
+      };
+    } catch {
+      return { name: "home" };
+    }
+  }
+  const legacyAutomationMatch = LEGACY_AUTOMATION_PATH.exec(pathname);
+  if (legacyAutomationMatch?.[1]) {
+    try {
+      return {
+        name: "automation",
+        threadId: decodeURIComponent(legacyAutomationMatch[1]),
+        edit: false,
       };
     } catch {
       return { name: "home" };
@@ -85,7 +118,6 @@ export function parseRoute(pathname: string, hash = ""): Route {
       return {
         name: "thread",
         threadId: decodeURIComponent(match[1]),
-        automationOpen: false,
         ...(focusTurnId ? { focusTurnId } : {}),
       };
     } catch {
@@ -130,6 +162,7 @@ export function replaceHistoryEntry(state: unknown, path: string): void {
 }
 
 function publish(next: Route): void {
+  canonicalizeLocation(next);
   currentRoute = next;
   currentLocation = locationPath();
   currentIndex = historyIndex(window.history.state) ?? currentIndex;
@@ -263,6 +296,16 @@ export function navigateUp(path: string): void {
   else window.history.go(steps);
 }
 
+/**
+ * Goes back to wherever the user came from: the previous entry when this
+ * document opened it, otherwise (a deep link or a reload) this entry is
+ * replaced with `fallback`. Guards run either way.
+ */
+export function navigateBack(fallback: string): void {
+  if (entryLocations.has(currentIndex - 1)) window.history.back();
+  else navigate(fallback, { replace: true });
+}
+
 export function installNavigationBlocker(blocker: NavigationBlocker): () => void {
   blockers.add(blocker);
   return () => blockers.delete(blocker);
@@ -282,12 +325,20 @@ export function usagePath(): string {
   return "/usage";
 }
 
-export function threadTurnPath(threadId: string, turnId: string): string {
-  return `${threadPath(threadId)}#turn=${encodeURIComponent(turnId)}`;
+export function automationsPath(): string {
+  return "/automations";
 }
 
-export function threadAutomationPath(threadId: string): string {
-  return `/threads/${encodeURIComponent(threadId)}/automation`;
+export function automationPath(threadId: string): string {
+  return `/automations/${encodeURIComponent(threadId)}`;
+}
+
+export function automationEditPath(threadId: string): string {
+  return `${automationPath(threadId)}/edit`;
+}
+
+export function threadTurnPath(threadId: string, turnId: string): string {
+  return `${threadPath(threadId)}#turn=${encodeURIComponent(turnId)}`;
 }
 
 /** Serialize a route back to the path navigate()/history expect. */
@@ -295,8 +346,11 @@ export function routePath(route: Route): string {
   if (route.name === "home") return "/";
   if (route.name === "archived") return "/archived";
   if (route.name === "usage") return usagePath();
+  if (route.name === "automations") return automationsPath();
+  if (route.name === "automation") {
+    return route.edit ? automationEditPath(route.threadId) : automationPath(route.threadId);
+  }
   if (route.name === "settings") return settingsPath(route.page, route);
-  if (route.automationOpen) return threadAutomationPath(route.threadId);
   if (route.focusTurnId) return threadTurnPath(route.threadId, route.focusTurnId);
   return threadPath(route.threadId);
 }

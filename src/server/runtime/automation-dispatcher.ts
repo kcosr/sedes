@@ -10,6 +10,7 @@ import type { InventoryRepository } from "../db/repositories/inventory-repositor
 import type { RequestScope } from "../identity/identity-provider.js";
 import type { AutomationConversationGateway } from "./automation-conversation-gateway.js";
 import type { AutomationPrecheckExecutor } from "./automation-precheck-executor.js";
+import { automationCloneTitleSuffix } from "../domain/automation-presentation.js";
 
 const UNCERTAIN_CODE = "automation_dispatch_uncertain";
 const MAX_CONCURRENT_DISPATCHES = 4;
@@ -162,15 +163,27 @@ export class AutomationDispatcher {
         this.#service.publishRun(scope, run);
       }
 
-      const dispatched = await this.#gateway.dispatch({
+      const common = {
         scope,
         automationId: run.automationId,
         automationRunId: run.id,
         anchorThreadId: run.anchorThreadId,
-        runMode: run.runMode,
         prompt: requiredPrompt(run),
         dispatchMutationId: run.dispatchMutationId,
-      });
+      };
+      const dispatched = await this.#gateway.dispatch(
+        run.runMode === "clone"
+          ? {
+              ...common,
+              runMode: "clone",
+              resultTitleSuffix: automationCloneTitleSuffix(
+                run.scheduledFor,
+                this.#repository.getDefinition(scope, run.automationId)
+                  .schedule,
+              ),
+            }
+          : { ...common, runMode: "same_thread" },
+      );
       if (
         run.runMode === "same_thread" &&
         dispatched.targetThreadId !== run.anchorThreadId

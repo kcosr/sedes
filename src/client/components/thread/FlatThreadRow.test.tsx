@@ -3,11 +3,11 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { NormalizedApplicationThreadSummary } from "../../../shared/index.js";
-import { shortAutomationTime } from "../../lib/time.js";
 import {
   FlatThreadRow,
+  flatRowContext,
   flatRowGlyphKind,
-  futureTimeLabel,
+  flatRowGlyphLabel,
 } from "./FlatThreadRow.js";
 
 type ThreadAutomation = NonNullable<
@@ -66,6 +66,13 @@ function makeAutomation(
     status: "enabled",
     runMode: "same_thread",
     scheduleKind: "interval",
+    schedule: {
+      kind: "interval",
+      anchorAt: "2026-07-30T00:00:00.000Z",
+      everySeconds: 3_600,
+    },
+    misfirePolicy: "coalesce",
+    promptPreview: "Review the repository.",
     revision: 0,
     hasPrecheck: false,
     ...overrides,
@@ -223,6 +230,44 @@ describe("flatRowGlyphKind ladder", () => {
     expect(flatRowGlyphKind(makeThread({ inventoryState: "settled" }))).toBe(
       "settled",
     );
+  });
+
+  it("an automation's glyph follows its health: Repeat, CirclePause or the sending spinner", () => {
+    const run = (state: "running" | "queued" | "failed" | "uncertain" | "completed") => ({
+      id: `run-${state}`,
+      state,
+      occurrence: "scheduled" as const,
+      scheduledFor: iso(-3_600_000),
+    });
+    const cases = [
+      [makeAutomation(), "automation", "Automation", "lucide-repeat"],
+      [makeAutomation({ lastRun: run("failed") }), "automation", "Automation", "lucide-repeat"],
+      [makeAutomation({ status: "paused", lastRun: run("uncertain") }), "automation", "Automation", "lucide-repeat"],
+      [makeAutomation({ status: "paused", lastRun: run("completed") }), "automation-paused", "Automation paused", "lucide-circle-pause"],
+      [makeAutomation({ status: "paused" }), "automation-paused", "Automation not started", "lucide-circle-pause"],
+      [makeAutomation({ lastRun: run("running") }), "automation-sending", "Automation sending", "comet-spinner"],
+      [makeAutomation({ lastRun: run("queued") }), "automation-sending", "Automation waiting for turn", "comet-spinner"],
+    ] as const;
+    for (const [automation, kind, label, iconClass] of cases) {
+      const thread = makeThread({ automation });
+      expect(flatRowGlyphKind(thread)).toBe(kind);
+      expect(flatRowGlyphLabel(thread)).toBe(label);
+      render(<FlatThreadRow showBackendBrand thread={thread} density="compact" />);
+      const glyph = screen.getByRole("img", { name: label });
+      expect(glyph).toHaveAttribute("data-glyph", kind);
+      expect(glyph.querySelector(`.${iconClass}`)).not.toBeNull();
+      cleanup();
+    }
+    render(
+      <FlatThreadRow
+        showBackendBrand
+        thread={makeThread({ automation: makeAutomation({ lastRun: run("running") }) })}
+        density="compact"
+      />,
+    );
+    expect(
+      screen.getByRole("img", { name: "Automation sending" }).querySelector(".automation-glyph"),
+    ).toHaveAttribute("data-tone", "info");
   });
 
   it("idle is the floor, hollow when disconnected", () => {
@@ -407,6 +452,58 @@ describe("status badges and wake indicator", () => {
     expect(screen.queryByRole("img", { name: /stashed prompt/ })).toBeNull();
     expect(screen.queryByRole("img", { name: /bookmarked turn/ })).toBeNull();
     expect(screen.queryByRole("img", { name: /workpad/ })).toBeNull();
+  });
+
+  it("flags a failed last run red and an unknown outcome amber", () => {
+    const lastRun = (state: "failed" | "uncertain") => ({
+      id: "run-1",
+      state,
+      occurrence: "scheduled" as const,
+      scheduledFor: iso(-3_600_000),
+    });
+    const { container, rerender } = render(
+      <FlatThreadRow
+        thread={makeThread({
+          automation: makeAutomation({ lastRun: lastRun("failed") }),
+        })}
+        showBackendBrand
+        density="compact"
+      />,
+    );
+    expect(chipsOf(container)).toEqual(["alert"]);
+    expect(screen.getByRole("img", { name: "Automation failed" })).toBeVisible();
+
+    rerender(
+      <FlatThreadRow
+        thread={makeThread({
+          automation: makeAutomation({
+            status: "paused",
+            lastRun: lastRun("uncertain"),
+          }),
+        })}
+        showBackendBrand
+        density="compact"
+      />,
+    );
+    expect(chipsOf(container)).toEqual(["attention"]);
+    expect(
+      screen.getByRole("img", { name: "Automation outcome unknown" }),
+    ).toBeVisible();
+
+    rerender(
+      <FlatThreadRow
+        thread={makeThread({
+          inventoryState: "settled",
+          automation: makeAutomation({
+            status: "paused",
+            lastRun: lastRun("uncertain"),
+          }),
+        })}
+        showBackendBrand
+        density="compact"
+      />,
+    );
+    expect(chipsOf(container)).toEqual([]);
   });
 
   it("compact shows alert and queued chips with wake in the trailing list", () => {
@@ -750,7 +847,13 @@ describe("card context slot priority", () => {
     expect(context).toHaveAttribute("data-tone", "failure");
   });
 
-  it("paused beats schedule", () => {
+  it("paused beats schedule, and a never-run automation reads not started", () => {
+    const lastRun = {
+      id: "run-1",
+      state: "completed" as const,
+      occurrence: "scheduled" as const,
+      scheduledFor: iso(-3_600_000),
+    };
     render(
       <FlatThreadRow
         showBackendBrand
@@ -758,12 +861,49 @@ describe("card context slot priority", () => {
           automation: makeAutomation({
             status: "paused",
             nextRunAt: iso(3_600_000),
+            lastRun,
           }),
         })}
         density="card"
       />,
     );
-    expect(screen.getByTestId("flat-row-context")).toHaveTextContent("paused");
+    expect(screen.getByTestId("flat-row-context")).toHaveTextContent(/^paused$/);
+    cleanup();
+    render(
+      <FlatThreadRow
+        showBackendBrand
+        thread={makeThread({
+          automation: makeAutomation({ status: "paused" }),
+        })}
+        density="card"
+      />,
+    );
+    expect(screen.getByTestId("flat-row-context")).toHaveTextContent(
+      /^not started$/,
+    );
+  });
+
+  it("an unknown outcome needs attention ahead of paused", () => {
+    const thread = makeThread({
+      automation: makeAutomation({
+        status: "paused",
+        lastRun: {
+          id: "run-1",
+          state: "uncertain",
+          occurrence: "scheduled",
+          scheduledFor: iso(-3_600_000),
+        },
+      }),
+    });
+    expect(flatRowContext(thread)).toEqual({
+      label: "outcome unknown",
+      tone: "attention",
+    });
+    render(<FlatThreadRow showBackendBrand thread={thread} density="card" />);
+    expect(screen.getByTestId("flat-row-context")).toHaveAttribute(
+      "data-tone",
+      "attention",
+    );
   });
 
   it("schedule renders as next {time}", () => {
@@ -1183,50 +1323,6 @@ describe("trailing time", () => {
     const time = screen.getByTestId("flat-row-time");
     expect(time).toHaveTextContent("2h");
     expect(time).not.toHaveAttribute("data-future");
-  });
-});
-
-describe("futureTimeLabel ladder", () => {
-  const now = new Date(2026, 7, 1, 9, 0, 0); // Sat Aug 1 2026, 09:00 local
-
-  const at = (offsetMs: number) => new Date(now.getTime() + offsetMs);
-  const clock = (date: Date) =>
-    date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-
-  it("relative inside the hour", () => {
-    expect(futureTimeLabel(at(45 * 60_000).toISOString(), now)).toBe("in 45m");
-    expect(futureTimeLabel(at(30_000).toISOString(), now)).toBe("in 1m");
-  });
-
-  it("same-day clock time past the hour", () => {
-    const date = at(5 * 3_600_000);
-    expect(futureTimeLabel(date.toISOString(), now)).toBe(clock(date));
-  });
-
-  it("tomorrow gets the Tmrw prefix", () => {
-    const date = at(24 * 3_600_000);
-    expect(futureTimeLabel(date.toISOString(), now)).toBe(
-      `Tmrw ${clock(date)}`,
-    );
-  });
-
-  it("inside a week gets weekday + time", () => {
-    const date = at(3 * 24 * 3_600_000);
-    expect(futureTimeLabel(date.toISOString(), now)).toBe(
-      shortAutomationTime(date.toISOString()),
-    );
-  });
-
-  it("a week and beyond gets month + day", () => {
-    const date = at(30 * 24 * 3_600_000);
-    expect(futureTimeLabel(date.toISOString(), now)).toBe(
-      date.toLocaleDateString([], { month: "short", day: "numeric" }),
-    );
-  });
-
-  it("past-due falls back to the absolute wake label", () => {
-    const date = at(-3_600_000);
-    expect(futureTimeLabel(date.toISOString(), now)).not.toMatch(/^in /);
   });
 });
 

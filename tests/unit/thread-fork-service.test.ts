@@ -1989,6 +1989,7 @@ describe("ThreadForkService", () => {
         automationId: "migrated-clone",
         automationRunId: "migrated-clone-run",
         mutationId: "migrated-clone-operation",
+        titleSuffix: " · Oct 6, 3:15 AM UTC",
       };
       current.failReadSettingsOnce();
       await expect(current.service.forkAutomation(request)).rejects.toThrow(
@@ -1998,6 +1999,13 @@ describe("ThreadForkService", () => {
         current.scope,
         request.mutationId,
       )!;
+      // The clone result title is fixed when the child is reserved.
+      expect(
+        current.bindings.findThreadDefinition(
+          current.scope,
+          attempt.applicationThreadId,
+        )?.title,
+      ).toBe("Source · Oct 6, 3:15 AM UTC");
       current.database.exec(
         `DROP TRIGGER thread_fork_origins_immutable_update;
          DROP TRIGGER thread_fork_origins_fork_point_immutable;`,
@@ -2049,6 +2057,7 @@ describe("ThreadForkService", () => {
           sourceCheckpoint: expect.objectContaining({
             opaqueReference: "source-leaf",
           }),
+          title: "Source · Oct 6, 3:15 AM UTC",
         }),
       );
     } finally {

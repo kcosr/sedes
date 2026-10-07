@@ -1,0 +1,39 @@
+/* Automation health glyph. Colour follows the sidebar's budget: red broken,
+   amber needs the user, info-blue machine working; everything else inherits
+   the surface's quiet glyph colour. */
+.automation-glyph {
+  flex: 0 0 auto;
+}
+
+.automation-glyph[data-tone="danger"] {
+  color: var(--destructive);
+}
+
+.automation-glyph[data-tone="warning"] {
+  color: var(--warning);
+}
+
+.automation-glyph[data-tone="info"] {
+  color: var(--info);
+}
+
+/* The sending spinner matches the glyph box of its size; sweep, mask and the
+   reduced-motion guard come from .comet-spinner. */
+.automation-glyph.comet-spinner {
+  --comet-spinner-thickness: 2.2px;
+  --comet-spinner-speed: 1s;
+  display: block;
+}
+
+.automation-glyph.comet-spinner[data-size="sidebar"] {
+  --comet-spinner-size: var(--icon-sm);
+}
+
+.automation-glyph.comet-spinner[data-size="list"],
+.automation-glyph.comet-spinner[data-size="header"] {
+  --comet-spinner-size: var(--icon-md);
+}
+
+.automation-glyph.comet-spinner[data-size="header"] {
+  --comet-spinner-thickness: 2px;
+}

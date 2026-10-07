@@ -14,8 +14,14 @@ import type {
   ApplicationThreadDurableSummary,
   ApplicationThreadSummaryReader,
 } from "./application-snapshot-service.js";
+import {
+  latestAutomationRunJoin,
+  projectThreadAutomationSummary,
+  threadAutomationSummaryColumns,
+  type ThreadAutomationSummaryRow,
+} from "./thread-automation-summary.js";
 
-type SummaryRow = {
+type SummaryRow = ThreadAutomationSummaryRow & {
   readonly id: string;
   readonly workspaceId: string;
   readonly targetId: string;
@@ -42,28 +48,6 @@ type SummaryRow = {
   readonly lastActivityAt: number;
   readonly stateChangedAt: number;
   readonly snoozedUntil: number | null;
-  readonly automationStatus: "enabled" | "paused" | null;
-  readonly automationRunMode: "same_thread" | "clone" | null;
-  readonly automationScheduleKind: "date_time" | "interval" | "cron" | null;
-  readonly automationNextRunAt: number | null;
-  readonly automationRevision: number | null;
-  readonly automationHasPrecheck: 0 | 1 | null;
-  readonly automationRunId: string | null;
-  readonly automationRunState:
-    | "claimed"
-    | "dispatching"
-    | "queued"
-    | "running"
-    | "completed"
-    | "failed"
-    | "skipped"
-    | "uncertain"
-    | null;
-  readonly automationOccurrence: "scheduled" | "manual" | null;
-  readonly automationScheduledFor: number | null;
-  readonly automationFinishedAt: number | null;
-  readonly automationResultThreadId: string | null;
-  readonly automationErrorCode: string | null;
   readonly queuedInputCount: number;
   readonly stashedPromptCount: number;
   readonly nonArchivedWorkpadCount: number;
@@ -84,52 +68,6 @@ export const MAXIMUM_APPLICATION_BOOTSTRAP_FORKS = 1_000;
 
 function iso(milliseconds: number): string {
   return new Date(milliseconds).toISOString();
-}
-
-function automation(
-  row: SummaryRow,
-): NormalizedApplicationThreadSummary["automation"] {
-  if (
-    row.automationStatus === null ||
-    row.automationRunMode === null ||
-    row.automationScheduleKind === null ||
-    row.automationRevision === null ||
-    row.automationHasPrecheck === null
-  ) {
-    return null;
-  }
-  return {
-    status: row.automationStatus,
-    runMode: row.automationRunMode,
-    scheduleKind: row.automationScheduleKind,
-    ...(row.automationNextRunAt === null
-      ? {}
-      : { nextRunAt: iso(row.automationNextRunAt) }),
-    revision: row.automationRevision,
-    hasPrecheck: row.automationHasPrecheck === 1,
-    ...(row.automationRunId === null ||
-    row.automationRunState === null ||
-    row.automationOccurrence === null ||
-    row.automationScheduledFor === null
-      ? {}
-      : {
-          lastRun: {
-            id: row.automationRunId,
-            state: row.automationRunState,
-            occurrence: row.automationOccurrence,
-            scheduledFor: iso(row.automationScheduledFor),
-            ...(row.automationFinishedAt === null
-              ? {}
-              : { finishedAt: iso(row.automationFinishedAt) }),
-            ...(row.automationResultThreadId === null
-              ? {}
-              : { resultThreadId: row.automationResultThreadId }),
-            ...(row.automationErrorCode === null
-              ? {}
-              : { errorCode: row.automationErrorCode }),
-          },
-        }),
-  };
 }
 
 function attention(row: SummaryRow): NormalizedSidebarAttention {
@@ -461,31 +399,6 @@ export class DatabaseApplicationThreadSummaryReader
             WHERE question.tenant_id = ? AND question.principal_id = ?
               AND question.payload_json IS NOT NULL
             GROUP BY question.thread_id
-          ),
-          scoped_runs AS (
-            SELECT
-              candidate.automation_id,
-              candidate.id,
-              candidate.state,
-              candidate.occurrence_kind,
-              candidate.scheduled_for,
-              candidate.finished_at,
-              candidate.child_thread_id,
-              candidate.anchor_thread_id,
-              candidate.error_code,
-              row_number() OVER (
-                PARTITION BY candidate.automation_id
-                ORDER BY candidate.scheduled_for DESC,
-                  candidate.created_at DESC, candidate.id DESC
-              ) AS rank
-            FROM target_definitions AS definition
-            CROSS JOIN automation_runs AS candidate
-              ON definition.tenant_id = candidate.tenant_id
-              AND definition.owner_principal_id =
-                candidate.owner_principal_id
-              AND definition.id = candidate.automation_id
-            WHERE candidate.tenant_id = ?
-              AND candidate.owner_principal_id = ?
           )
           SELECT
             thread.id,
@@ -523,28 +436,7 @@ export class DatabaseApplicationThreadSummaryReader
             thread.last_activity_at AS lastActivityAt,
             principal.state_changed_at AS stateChangedAt,
             principal.snoozed_until AS snoozedUntil,
-            CASE
-              WHEN definition.id IS NULL THEN NULL
-              WHEN definition.enabled = 1 THEN 'enabled'
-              ELSE 'paused'
-            END AS automationStatus,
-            definition.run_mode AS automationRunMode,
-            definition.schedule_kind AS automationScheduleKind,
-            definition.next_run_at AS automationNextRunAt,
-            definition.revision AS automationRevision,
-            CASE
-              WHEN definition.id IS NULL THEN NULL
-              WHEN definition.precheck_command IS NULL THEN 0
-              ELSE 1
-            END AS automationHasPrecheck,
-            run.id AS automationRunId,
-            run.state AS automationRunState,
-            run.occurrence_kind AS automationOccurrence,
-            run.scheduled_for AS automationScheduledFor,
-            run.finished_at AS automationFinishedAt,
-            coalesce(run.child_thread_id, run.anchor_thread_id)
-              AS automationResultThreadId,
-            run.error_code AS automationErrorCode,
+            ${threadAutomationSummaryColumns("definition", "run")},
             coalesce(queue.queued_input_count, 0) AS queuedInputCount,
             coalesce(stash.stashed_prompt_count, 0) AS stashedPromptCount,
             coalesce(workpad.non_archived_workpad_count, 0) AS nonArchivedWorkpadCount,
@@ -603,8 +495,7 @@ export class DatabaseApplicationThreadSummaryReader
             ON definition.tenant_id = thread.tenant_id
             AND definition.owner_principal_id = thread.owner_principal_id
             AND definition.anchor_thread_id = thread.id
-          LEFT JOIN scoped_runs AS run
-            ON run.automation_id = definition.id AND run.rank = 1
+          ${latestAutomationRunJoin("definition", "run")}
           LEFT JOIN scoped_queue AS queue ON queue.thread_id = thread.id
           LEFT JOIN scoped_completion AS completion
             ON completion.thread_id = thread.id
@@ -619,8 +510,6 @@ export class DatabaseApplicationThreadSummaryReader
       )
       .all(
         ...requestedThreadParameters,
-        scope.tenantId,
-        scope.principalId,
         scope.tenantId,
         scope.principalId,
         scope.tenantId,
@@ -681,7 +570,7 @@ export class DatabaseApplicationThreadSummaryReader
       ...(row.snoozedUntil === null
         ? {}
         : { snoozedUntil: iso(row.snoozedUntil) }),
-      automation: automation(row),
+      automation: projectThreadAutomationSummary(row),
       queuedInputCount: row.queuedInputCount,
       stashedPromptCount: row.stashedPromptCount,
       nonArchivedWorkpadCount: row.nonArchivedWorkpadCount,

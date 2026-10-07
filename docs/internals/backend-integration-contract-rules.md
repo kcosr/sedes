@@ -131,6 +131,16 @@ publish affected thread summaries after committed membership changes, including
 both ends of a scope move. Content and draft edits do not change membership.
 Keep snapshot, incremental publication, and reconnect projections equivalent.
 
+The thread summary's `automation` projection is likewise shared by Pi, Codex,
+Claude, Grok, and OpenCode and reads only application-owned definitions and
+runs. Its fields, bounded prompt preview, and one latest-run rule are in
+[Materialized application projection](application-projection.md#thread-automation-summary).
+The automation capability route composes the same `capabilities.automation`
+as the thread snapshot without the transcript. Agent tools whose frozen output
+schemas predate the added summary and run fields (`thread.list`,
+`automation.runs`, `automation.run_now`) strip them rather than widening the
+contract.
+
 An actor must replay current authoritative pending interactions to late
 subscribers, including the interaction broker. Remove resolved requests and
 rebuild the pending view from the handle's replay on projection replacement;

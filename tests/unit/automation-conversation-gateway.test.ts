@@ -234,6 +234,7 @@ describe("LifecycleAutomationConversationGateway", () => {
     const dispatch = setup.instance.dispatch({
       ...dispatchInput,
       runMode: "clone",
+      resultTitleSuffix: " · Oct 6, 3:15 AM",
     });
     await vi.waitFor(() => expect(setup.branch).toHaveBeenCalledOnce());
     expect(setup.enqueue).not.toHaveBeenCalled();
@@ -249,6 +250,7 @@ describe("LifecycleAutomationConversationGateway", () => {
       automationId: "automation-1",
       automationRunId: "run-1",
       mutationId: "dispatch-1",
+      titleSuffix: " · Oct 6, 3:15 AM",
     });
     expect(setup.assertCanAutomate).not.toHaveBeenCalled();
     expect(setup.readThread).toHaveBeenCalledWith(scope, "thread-child");
@@ -274,7 +276,11 @@ describe("LifecycleAutomationConversationGateway", () => {
     });
 
     await expect(
-      setup.instance.dispatch({ ...dispatchInput, runMode: "clone" }),
+      setup.instance.dispatch({
+        ...dispatchInput,
+        runMode: "clone",
+        resultTitleSuffix: " · Oct 6, 3:15 AM UTC",
+      }),
     ).rejects.toMatchObject({
       code: "invalid_transition",
       message: "Clone-mode automation is no longer available for this thread.",
@@ -298,7 +304,11 @@ describe("LifecycleAutomationConversationGateway", () => {
     });
 
     await expect(
-      setup.instance.dispatch({ ...dispatchInput, runMode: "clone" }),
+      setup.instance.dispatch({
+        ...dispatchInput,
+        runMode: "clone",
+        resultTitleSuffix: " · Oct 6, 3:15 AM UTC",
+      }),
     ).resolves.toEqual({
       status: "uncertain",
       targetThreadId: "thread-reserved-unknown",
