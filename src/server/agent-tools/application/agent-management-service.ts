@@ -92,14 +92,24 @@ export type AgentThreadSummary = {
   readonly automation: AgentThreadAutomation | null;
 };
 
+type ProjectedThreadAutomation = NonNullable<
+  NormalizedThreadSummary["automation"]
+>;
+
 /**
  * The automation summary frozen by the `thread.list` output schema; schedule
- * detail and the prompt preview stay browser projection fields.
+ * detail, the prompt preview, the run-history revision and the last run's
+ * agent turn stay browser projection fields.
  */
 export type AgentThreadAutomation = Omit<
-  NonNullable<NormalizedThreadSummary["automation"]>,
-  "schedule" | "misfirePolicy" | "promptPreview"
->;
+  ProjectedThreadAutomation,
+  "schedule" | "misfirePolicy" | "promptPreview" | "runsRevision" | "lastRun"
+> & {
+  readonly lastRun?: Omit<
+    NonNullable<ProjectedThreadAutomation["lastRun"]>,
+    "turn"
+  >;
+};
 
 export type AgentThreadListScope =
   | { readonly kind: "default_environment" }
@@ -776,7 +786,11 @@ function agentThreadAutomation(
     schedule: _schedule,
     misfirePolicy: _misfirePolicy,
     promptPreview: _promptPreview,
+    runsRevision: _runsRevision,
+    lastRun,
     ...summary
   } = automation;
-  return summary;
+  if (!lastRun) return summary;
+  const { turn: _turn, ...agentLastRun } = lastRun;
+  return { ...summary, lastRun: agentLastRun };
 }

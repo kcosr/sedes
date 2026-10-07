@@ -38,6 +38,7 @@ import {
 import {
   applicationTurnIdSchema,
   automationMisfirePolicySchema,
+  automationTurnOutcomeSchema,
 } from "./domain.js";
 import { automationScheduleSchema } from "./automation.js";
 import {
@@ -1359,6 +1360,12 @@ export const normalizedThreadSummarySchema = z.strictObject({
       promptPreview: z.string().max(160),
       nextRunAt: z.iso.datetime().optional(),
       revision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+      /**
+       * Advances whenever the automation's run history changes: a new run,
+       * a run state change, or a run's turn settling or gaining its times.
+       * Refresh run history when it changes.
+       */
+      runsRevision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
       hasPrecheck: z.boolean(),
       lastRun: z
         .strictObject({
@@ -1378,6 +1385,13 @@ export const normalizedThreadSummarySchema = z.strictObject({
           finishedAt: z.iso.datetime().optional(),
           resultThreadId: z.string().min(1).max(160).optional(),
           errorCode: z.string().min(1).max(120).optional(),
+          /** How the run's agent turn ended, once it settled. */
+          turn: z
+            .strictObject({
+              outcome: automationTurnOutcomeSchema,
+              endedAt: z.iso.datetime().optional(),
+            })
+            .optional(),
         })
         .optional(),
     })

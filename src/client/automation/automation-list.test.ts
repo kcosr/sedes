@@ -46,6 +46,7 @@ function automation(
     promptPreview: "Check dependencies for advisories",
     nextRunAt: hoursFromNow(22),
     revision: 1,
+    runsRevision: 0,
     hasPrecheck: false,
     ...overrides,
   };
@@ -507,12 +508,59 @@ describe("automationRowPresentation", () => {
   it("shows an active automation's next run over its last outcome", () => {
     expect(presentationOf("nightly")).toEqual({
       primary: { text: next(22) },
-      secondary: { text: "Delivered 23m ago", delivered: true },
+      secondary: { text: "Delivered 23m ago", check: true },
       detail: "Every day at 2:00 AM UTC",
-      outcome: { text: "Delivered 23m ago", delivered: true },
+      outcome: { text: "Delivered 23m ago", check: true },
       nextRun: next(22),
     });
     expect(presentationOf("triage").detail).toBe("Every 4 hours");
+  });
+
+  it("reads the last turn's ending, and keeps the row in its group whatever it was", () => {
+    const withTurn = (
+      turn: NonNullable<SummaryAutomationRun["turn"]>,
+      overrides: Partial<SummaryAutomation> = {},
+    ) =>
+      entryFor(
+        makeThread("x", "X", {
+          automation: automation({
+            lastRun: run("completed", { finishedAt: minutesAgo(150), turn }),
+            ...overrides,
+          }),
+        }),
+      );
+    const finished = withTurn({ outcome: "completed", endedAt: minutesAgo(23) });
+    expect(finished.health.group).toBe("upcoming");
+    expect(automationRowPresentation(finished, NOW)).toEqual({
+      primary: { text: next(22) },
+      secondary: { text: "Finished 23m ago", check: true },
+      detail: "Every day at 2:00 AM UTC",
+      outcome: { text: "Finished 23m ago", check: true },
+      nextRun: next(22),
+    });
+
+    // A failed turn is danger text only: no attention, no problem detail.
+    const failed = withTurn({ outcome: "failed", endedAt: minutesAgo(120) });
+    expect(failed.health).toMatchObject({ kind: "active", group: "upcoming" });
+    expect(automationRowPresentation(failed, NOW)).toEqual({
+      primary: { text: next(22) },
+      secondary: { text: "Failed 2h ago", check: false, tone: "danger" },
+      detail: "Every day at 2:00 AM UTC",
+      outcome: { text: "Failed 2h ago", check: false, tone: "danger" },
+      nextRun: next(22),
+    });
+
+    // Without the turn's end, the age counts from the delivery.
+    expect(automationRowPresentation(withTurn({ outcome: "interrupted" }), NOW)).toMatchObject({
+      secondary: { text: "Interrupted 2h ago", check: false },
+    });
+
+    const paused = withTurn({ outcome: "failed", endedAt: minutesAgo(60) }, { status: "paused", nextRunAt: undefined });
+    expect(paused.health.group).toBe("paused");
+    expect(automationRowPresentation(paused, NOW)).toMatchObject({
+      primary: { text: "Paused" },
+      secondary: { text: "Failed 1h ago", tone: "danger" },
+    });
   });
 
   it("puts a failure first, its error text on line 2, and says whether scheduling continues", () => {
@@ -569,7 +617,7 @@ describe("automationRowPresentation", () => {
     });
     expect(presentationOf("spike")).toMatchObject({
       primary: { text: "Thread archived" },
-      secondary: { text: "Delivered 23m ago", delivered: true },
+      secondary: { text: "Delivered 23m ago", check: true },
       outcome: { text: "Thread archived" },
     });
     const skipped = entryFor(
@@ -583,7 +631,7 @@ describe("automationRowPresentation", () => {
     );
     expect(automationRowPresentation(skipped, NOW)).toMatchObject({
       primary: { text: "Paused" },
-      secondary: { text: "Skipped 2h ago", delivered: false },
+      secondary: { text: "Skipped 2h ago", check: false },
     });
   });
 });

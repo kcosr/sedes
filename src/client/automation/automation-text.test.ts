@@ -7,8 +7,12 @@ import {
   describeSchedule,
   lastRunAge,
   runMeta,
+  runRunningFor,
   runSkipReason,
   runStateLabel,
+  runTurnDuration,
+  runTurnRunning,
+  threadLiveState,
 } from "./automation-text.js";
 
 afterEach(() => {
@@ -199,6 +203,19 @@ function precheck(
   };
 }
 
+function turn(
+  overrides: Partial<NonNullable<ThreadAutomationRun["turn"]>> = {},
+): NonNullable<ThreadAutomationRun["turn"]> {
+  return {
+    id: "turn-1",
+    outcome: "completed",
+    settledAt: "2026-10-06T02:02:20.000Z",
+    startedAt: "2026-10-06T02:00:03.000Z",
+    endedAt: "2026-10-06T02:02:17.000Z",
+    ...overrides,
+  };
+}
+
 describe("runStateLabel", () => {
   it.each([
     ["claimed", "Starting"],
@@ -216,6 +233,108 @@ describe("runStateLabel", () => {
   it("says Checking while the precheck runs", () => {
     expect(runStateLabel(makeRun({ state: "claimed", precheck: precheck({ status: "checking" }) }))).toBe("Checking");
     expect(runStateLabel(makeRun({ state: "claimed", precheck: precheck({ status: "pending" }) }))).toBe("Starting");
+  });
+
+  it.each([
+    ["completed", "Finished"],
+    ["failed", "Failed"],
+    ["interrupted", "Interrupted"],
+  ] as const)("reads a %s turn as %s, with or without its times", (outcome, label) => {
+    expect(runStateLabel(makeRun({ turn: turn({ outcome }) }))).toBe(label);
+    expect(
+      runStateLabel(makeRun({ turn: turn({ outcome, startedAt: undefined, endedAt: undefined }) })),
+    ).toBe(label);
+    // A settled turn wins over a running flag that has not caught up yet.
+    expect(runStateLabel(makeRun({ turn: turn({ outcome }) }), { running: true })).toBe(label);
+  });
+
+  it("reads a delivered run as Running, with the time since the agent accepted it", () => {
+    const delivered = makeRun({
+      acceptedAt: "2026-10-06T02:00:02.000Z",
+      finishedAt: "2026-10-06T02:00:02.000Z",
+    });
+    const at = (iso: string) => ({ running: true, now: new Date(iso) });
+    expect(runStateLabel(delivered)).toBe("Delivered");
+    expect(runStateLabel(delivered, at("2026-10-06T02:00:40.000Z"))).toBe("Running");
+    expect(runStateLabel(delivered, at("2026-10-06T02:04:30.000Z"))).toBe("Running · 4m");
+    expect(runStateLabel(delivered, at("2026-10-06T04:10:00.000Z"))).toBe("Running · 2h");
+    // Only a delivered run can be running.
+    expect(runStateLabel(makeRun({ state: "running" }), at("2026-10-06T02:04:30.000Z"))).toBe("Sending");
+  });
+});
+
+describe("runTurnRunning", () => {
+  const delivered = makeRun();
+  it.each(["starting", "running", "waiting_for_approval", "waiting_for_input", "stopping"] as const)(
+    "is a delivered latest run while its result thread is %s",
+    (runState) => {
+      expect(runTurnRunning(delivered, runState)).toBe(true);
+    },
+  );
+
+  it.each(["idle", "failed", "disconnected", "reconciling", undefined] as const)(
+    "is not while the result thread is %s",
+    (runState) => {
+      expect(runTurnRunning(delivered, runState)).toBe(false);
+    },
+  );
+
+  it("is never a settled turn or a run that was not delivered", () => {
+    expect(runTurnRunning(makeRun({ turn: turn() }), "running")).toBe(false);
+    expect(runTurnRunning({ state: "completed", turn: { outcome: "failed" } }, "running")).toBe(false);
+    for (const state of ["queued", "running", "failed", "uncertain", "skipped"] as const) {
+      expect(runTurnRunning(makeRun({ state }), "running")).toBe(false);
+    }
+  });
+});
+
+describe("runRunningFor", () => {
+  it("counts whole minutes from the acceptance, else the finish", () => {
+    const now = Date.parse("2026-10-06T02:07:59.000Z");
+    expect(runRunningFor({ acceptedAt: "2026-10-06T02:00:00.000Z" }, now)).toBe("7m");
+    expect(runRunningFor({ finishedAt: "2026-10-06T02:05:00.000Z" }, now)).toBe("2m");
+    expect(runRunningFor({ acceptedAt: "2026-10-06T02:07:30.000Z" }, now)).toBeUndefined();
+    expect(runRunningFor({}, now)).toBeUndefined();
+  });
+});
+
+describe("runTurnDuration", () => {
+  it("measures the turn from its own start to its end, as the transcript prints it", () => {
+    expect(runTurnDuration(turn())).toBe("2m 14s");
+    expect(runTurnDuration(turn({ endedAt: "2026-10-06T02:00:43.000Z" }))).toBe("40s");
+    expect(runTurnDuration(turn({ endedAt: "2026-10-06T02:05:03.000Z" }))).toBe("5m");
+  });
+
+  it("is unknown without both times or without a turn", () => {
+    expect(runTurnDuration(turn({ startedAt: undefined }))).toBeUndefined();
+    expect(runTurnDuration(turn({ endedAt: undefined }))).toBeUndefined();
+    expect(runTurnDuration(turn({ startedAt: undefined, endedAt: undefined }))).toBeUndefined();
+    expect(runTurnDuration(undefined)).toBeUndefined();
+  });
+
+  it("is unknown when the end is not after the start, never 0s", () => {
+    // A turn cut off by a restart can carry its start as its end.
+    expect(runTurnDuration(turn({ endedAt: "2026-10-06T02:00:03.000Z" }))).toBeUndefined();
+    expect(runTurnDuration(turn({ endedAt: "2026-10-06T02:00:02.000Z" }))).toBeUndefined();
+    // Any real length still reads, rounded up to a second.
+    expect(runTurnDuration(turn({ endedAt: "2026-10-06T02:00:03.200Z" }))).toBe("1s");
+  });
+});
+
+describe("threadLiveState", () => {
+  it("names a turn in flight: Running in info, Waiting for you in amber", () => {
+    for (const runState of ["starting", "running", "stopping"] as const) {
+      expect(threadLiveState(runState)).toEqual({ label: "Running", tone: "info" });
+    }
+    for (const runState of ["waiting_for_approval", "waiting_for_input"] as const) {
+      expect(threadLiveState(runState)).toEqual({ label: "Waiting for you", tone: "warning" });
+    }
+  });
+
+  it("is quiet while no turn is in flight", () => {
+    for (const runState of ["idle", "failed", "disconnected", "reconciling"] as const) {
+      expect(threadLiveState(runState)).toBeUndefined();
+    }
   });
 });
 
@@ -248,6 +367,19 @@ describe("runMeta", () => {
     expect(
       runMeta(makeRun({ coalescedCount: 2, precheck: precheck({ durationMilliseconds: 210 }) })),
     ).toBe("Scheduled · missed ×2 merged · precheck passed · 210 ms");
+  });
+
+  it("follows the kind with the turn's duration when the backend reported its times", () => {
+    expect(runMeta(makeRun({ turn: turn(), precheck: precheck() }))).toBe(
+      "Scheduled · 2m 14s · precheck passed · 20 ms",
+    );
+    expect(runMeta(makeRun({ occurrence: "manual", turn: turn({ outcome: "failed", endedAt: "2026-10-06T02:00:43.000Z" }) }))).toBe(
+      "Manual · 40s",
+    );
+    expect(runMeta(makeRun({ turn: turn({ outcome: "interrupted", startedAt: undefined }) }))).toBe(
+      "Scheduled",
+    );
+    expect(runMeta(makeRun({ turn: turn({ endedAt: "2026-10-06T02:00:03.000Z" }) }))).toBe("Scheduled");
   });
 
   it("names a precheck skip once, with its duration", () => {
@@ -325,6 +457,20 @@ describe("lastRunAge", () => {
     expect(
       lastRunAge({ id: "r", state: "uncertain", occurrence: "manual", scheduledFor: "2026-10-06T03:39:30.000Z" }, now),
     ).toBe("just now");
+  });
+
+  it("measures a settled turn from its end, else from the delivery", () => {
+    const delivered = {
+      id: "r",
+      state: "completed",
+      occurrence: "scheduled",
+      scheduledFor: "2026-10-06T01:00:00.000Z",
+      finishedAt: "2026-10-06T01:00:05.000Z",
+    } as const;
+    expect(
+      lastRunAge({ ...delivered, turn: { outcome: "completed", endedAt: "2026-10-06T03:17:00.000Z" } }, now),
+    ).toBe("23m ago");
+    expect(lastRunAge({ ...delivered, turn: { outcome: "failed" } }, now)).toBe("2h ago");
   });
 });
 

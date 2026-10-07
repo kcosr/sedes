@@ -26,6 +26,7 @@ export function automationSummary(
     promptPreview: "Check dependencies",
     nextRunAt: "2026-10-07T02:00:00.000Z",
     revision: 3,
+    runsRevision: 0,
     hasPrecheck: false,
     ...overrides,
   };
@@ -40,6 +41,7 @@ export function definition(
     scheduleKind: "cron",
     nextRunAt: "2026-10-07T02:00:00.000Z",
     revision: 3,
+    runsRevision: 0,
     createdAt: "2026-10-06T03:05:00.000Z",
     updatedAt: "2026-10-06T03:15:00.000Z",
     hasPrecheck: false,
@@ -61,6 +63,8 @@ export function run(overrides: Partial<ThreadAutomationRun> = {}): ThreadAutomat
     scheduledFor: "2026-10-06T02:00:00.000Z",
     state: "completed",
     runMode: "same_thread",
+    // The server names the thread a run used, the anchor or a fork run's own.
+    resultThreadId: THREAD_ID,
     definitionRevision: 3,
     coalescedCount: 0,
     claimedAt: "2026-10-06T02:00:00.000Z",
@@ -97,16 +101,22 @@ function threadSummary(thread: FixtureThread): NormalizedApplicationThreadSummar
   } as unknown as NormalizedApplicationThreadSummary;
 }
 
+/** Server settings the application store carries. */
+export interface FixtureSettings {
+  readonly experimentalUsageEnabled?: boolean;
+}
+
 function stateFor(
   threads: readonly FixtureThread[],
   loadedForks: readonly FixtureThread[] = [],
+  settings: FixtureSettings = {},
 ): ApplicationClientState {
   return {
     status: "ready",
     connection: "connected",
     authoritative: true,
     providerPulseEnabled: false,
-    experimentalUsageEnabled: false,
+    experimentalUsageEnabled: settings.experimentalUsageEnabled ?? false,
     search: "",
     visibleThreads: [],
     descendantPages:
@@ -152,7 +162,9 @@ export type AutomationApi = {
     | "deleteThreadAutomation"
     | "runThreadAutomationNow"
     | "resolveThreadAutomationRun"
-    | "testThreadAutomationPrecheck"]: ReturnType<typeof vi.fn>;
+    | "testThreadAutomationPrecheck"
+    | "getUsageAvailability"
+    | "getUsage"]: ReturnType<typeof vi.fn>;
 };
 
 export interface AutomationStore {
@@ -204,15 +216,18 @@ export function threadRegistry(): FixtureThreadRegistry {
 /**
  * An application store with the given threads and an automation API whose
  * calls resolve to plain defaults; pass overrides for the ones a test drives.
+ * The usage reads have no default answer: a test that turns experimental
+ * usage on drives them.
  */
 export function automationStore(
   threads: readonly FixtureThread[] | undefined,
   api: Partial<AutomationApi> = {},
   loadedForks: readonly FixtureThread[] = [],
+  settings: FixtureSettings = {},
 ): AutomationStore {
   const listeners = new Set<() => void>();
   let state: ApplicationClientState = threads
-    ? stateFor(threads, loadedForks)
+    ? stateFor(threads, loadedForks, settings)
     : ({ status: "loading", search: "", descendantPages: {} } as unknown as ApplicationClientState);
   const fullApi: AutomationApi = {
     getThreadAutomation: vi.fn().mockResolvedValue(definition()),
@@ -239,6 +254,8 @@ export function automationStore(
     runThreadAutomationNow: vi.fn(),
     resolveThreadAutomationRun: vi.fn(),
     testThreadAutomationPrecheck: vi.fn(),
+    getUsageAvailability: vi.fn().mockRejectedValue(new Error("Usage is not driven by this test.")),
+    getUsage: vi.fn().mockRejectedValue(new Error("Usage is not driven by this test.")),
     ...api,
   };
   const mutateInventory = vi.fn().mockResolvedValue(undefined);
@@ -256,7 +273,7 @@ export function automationStore(
     api: fullApi,
     mutateInventory,
     publish: (next, forks = []) => {
-      state = stateFor(next, forks);
+      state = stateFor(next, forks, settings);
       for (const listener of listeners) listener();
     },
     threadRegistry: threadRegistry(),

@@ -90,6 +90,7 @@ function automation(input: Partial<ThreadAutomation> = {}): ThreadAutomation {
     misfirePolicy: "coalesce",
     promptPreview: "Review the repository.",
     revision: 1,
+    runsRevision: 0,
     hasPrecheck: false,
     ...input,
   };

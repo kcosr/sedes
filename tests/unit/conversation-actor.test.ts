@@ -5418,7 +5418,7 @@ describe("ConversationActorManager", () => {
     await manager.close();
   });
 
-  it("observes live and restart-replayed accepted completions without a runtime", async () => {
+  it("observes live and restart-replayed accepted completions, with the turn's own times, without a runtime", async () => {
     const observed = vi.fn<AuthoritativeCompletionObserver>();
     const live = fixture(observed);
     live.handle.establishmentSnapshots[0] = snapshot("running", "a");
@@ -5439,6 +5439,7 @@ describe("ConversationActorManager", () => {
         ],
         status: "completed",
         endedBy: "agent_settled",
+        startedAt: "2026-07-30T11:58:00.000Z",
         completedAt: "2026-07-30T12:00:00.000Z",
         orderedBackendItemIds: ["item-1"],
       },
@@ -5455,6 +5456,8 @@ describe("ConversationActorManager", () => {
           outcome: "completed",
           result: { text: "a" },
           classifiedResult: { provisional: null, final: null, unclassified: { text: "a" } },
+          startedAt: "2026-07-30T11:58:00.000Z",
+          completedAt: "2026-07-30T12:00:00.000Z",
         },
       ),
     );
@@ -5466,6 +5469,8 @@ describe("ConversationActorManager", () => {
       outcome: "completed",
       result: { text: "a" },
       classifiedResult: { provisional: null, final: null, unclassified: { text: "a" } },
+      startedAt: "2026-07-30T11:58:00.000Z",
+      completedAt: "2026-07-30T12:00:00.000Z",
     });
     acquired.release();
     await live.manager.close();
@@ -5481,6 +5486,8 @@ describe("ConversationActorManager", () => {
             "accepted-operation",
             "accepted-steer-operation",
           ],
+          startedAt: "2026-07-30T11:58:00.000Z",
+          completedAt: "2026-07-30T12:00:01.000Z",
         },
       },
     };
@@ -5503,6 +5510,8 @@ describe("ConversationActorManager", () => {
           outcome: "completed",
           result: { text: "hello" },
           classifiedResult: { provisional: null, final: null, unclassified: { text: "hello" } },
+          startedAt: "2026-07-30T11:58:00.000Z",
+          completedAt: "2026-07-30T12:00:01.000Z",
         },
       ),
     );
@@ -5514,6 +5523,8 @@ describe("ConversationActorManager", () => {
       outcome: "completed",
       result: { text: "hello" },
       classifiedResult: { provisional: null, final: null, unclassified: { text: "hello" } },
+      startedAt: "2026-07-30T11:58:00.000Z",
+      completedAt: "2026-07-30T12:00:01.000Z",
     });
     replayed.release();
     await reopened.manager.close();

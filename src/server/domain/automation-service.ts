@@ -21,7 +21,11 @@ import type {
   AutomationRunRecord,
   AutomationSchedule,
 } from "./automation-models.js";
-import { presentAutomationSchedule } from "./automation-presentation.js";
+import {
+  presentAutomationLastRunTurn,
+  presentAutomationRunTurn,
+  presentAutomationSchedule,
+} from "./automation-presentation.js";
 import {
   AutomationScheduleEvaluator,
   AutomationScheduleValidationError,
@@ -740,6 +744,7 @@ export class AutomationService implements DurableDeadlineSource {
     const lastRun = this.#repository
       .listRuns(scope, definition.id, { limit: 1 })
       .at(0);
+    const lastRunTurn = lastRun && presentAutomationLastRunTurn(lastRun);
     return {
       status: definitionStatus(definition),
       runMode: definition.runMode,
@@ -764,10 +769,12 @@ export class AutomationService implements DurableDeadlineSource {
                   }
                 : {}),
               ...(lastRun.errorCode ? { errorCode: lastRun.errorCode } : {}),
+              ...(lastRunTurn ? { turn: lastRunTurn } : {}),
             },
           }
         : {}),
       revision: definition.revision,
+      runsRevision: definition.runsRevision,
       createdAt: iso(definition.createdAt),
       updatedAt: iso(definition.updatedAt),
       hasPrecheck: definition.precheck !== null,
@@ -818,6 +825,15 @@ export class AutomationService implements DurableDeadlineSource {
       this.#publishThread(scope, run.childThreadId ?? run.anchorThreadId);
     }
     this.#changed();
+  }
+
+  /**
+   * Publishes a run whose agent turn settled. Unlike {@link publishRun} it
+   * notifies no lifecycle observer (the thread's own turn notification covers
+   * the turn) and leaves scheduling alone: settlement changes neither.
+   */
+  publishRunSettlement(scope: RequestScope, run: AutomationRunRecord): void {
+    this.#publishRun(scope, run);
   }
 
   #presentResolution(
@@ -1032,6 +1048,7 @@ export class AutomationService implements DurableDeadlineSource {
 }
 
 function presentRun(run: AutomationRunRecord): ThreadAutomationRun {
+  const turn = presentAutomationRunTurn(run);
   return {
     id: run.id,
     occurrence: run.occurrenceKind,
@@ -1052,6 +1069,7 @@ function presentRun(run: AutomationRunRecord): ThreadAutomationRun {
     ...(run.forceResetAt === null
       ? {}
       : { forceResetAt: iso(run.forceResetAt) }),
+    ...(turn ? { turn } : {}),
     ...(run.precheckStatus === "not_configured"
       ? {}
       : {

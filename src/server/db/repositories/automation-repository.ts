@@ -11,6 +11,7 @@ import type {
   AutomationRunRecord,
   AutomationRunState,
   AutomationSchedule,
+  AutomationTurnOutcome,
 } from "../../domain/automation-models.js";
 import { DomainError } from "../../domain/errors.js";
 import type { RequestScope } from "../../identity/identity-provider.js";
@@ -30,6 +31,7 @@ const definitionColumns = `
   completed_at AS completedAt,
   deleted_at AS deletedAt,
   revision,
+  runs_revision AS runsRevision,
   schedule_kind AS scheduleKind,
   run_at AS runAt,
   interval_anchor_at AS intervalAnchorAt,
@@ -79,6 +81,11 @@ const runColumns = `
   accepted_at AS acceptedAt,
   finished_at AS finishedAt,
   force_reset_at AS forceResetAt,
+  turn_id AS turnId,
+  turn_outcome AS turnOutcome,
+  turn_settled_at AS turnSettledAt,
+  turn_started_at AS turnStartedAt,
+  turn_ended_at AS turnEndedAt,
   created_at AS createdAt,
   updated_at AS updatedAt
 `;
@@ -178,13 +185,29 @@ export type AutomationMutationReceipt = {
   readonly resultRevision: number;
 };
 
-/** States behind each run-history filter; `null` reads every run. */
-const RUN_FILTER_STATES: Readonly<
-  Record<AutomationRunFilter, readonly AutomationRunState[] | null>
+export type AutomationTurnSettlementInput = {
+  readonly turnId: string;
+  readonly outcome: AutomationTurnOutcome;
+  readonly settledAt: number;
+  readonly startedAt: number | null;
+  readonly endedAt: number | null;
+};
+
+/**
+ * Disjoint conditions behind each run-history filter; `null` reads every run.
+ * A failed turn is a problem however its delivery ended, so its branch leaves
+ * out the states the other problem branches already list.
+ */
+const RUN_FILTER_BRANCHES: Readonly<
+  Record<AutomationRunFilter, readonly string[] | null>
 > = {
   all: null,
-  problems: ["failed", "uncertain"],
-  skipped: ["skipped"],
+  problems: [
+    "AND state = 'failed'",
+    "AND state = 'uncertain'",
+    "AND turn_outcome = 'failed' AND state NOT IN ('failed', 'uncertain')",
+  ],
+  skipped: ["AND state = 'skipped'"],
 };
 
 export class AutomationRepository {
@@ -352,6 +375,101 @@ export class AutomationRepository {
       );
     }
     return rows[0] ? runFromRow(rows[0]) : undefined;
+  }
+
+  /**
+   * Records how the turn a run's prompt started ended, from the completion
+   * rail's observation of `operationId` (the run's dispatch mutation) on its
+   * result thread, and fills in turn times the settlement still lacks.
+   * Replays are frequent, so this returns the run only when it changed it.
+   * Force-reset runs are immutable and never settle.
+   */
+  settleRunTurn(
+    scope: RequestScope,
+    resultThreadId: string,
+    operationId: string,
+    input: AutomationTurnSettlementInput,
+  ): AutomationRunRecord | undefined {
+    return this.database.transaction(() => {
+      const run = this.findRunByDispatchMutation(
+        scope,
+        resultThreadId,
+        operationId,
+      );
+      if (!run || run.forceResetAt !== null) return undefined;
+      if (run.turnId !== null && run.turnId !== input.turnId) {
+        throw new DomainError(
+          "conflict",
+          "The automation run already settled a different turn.",
+        );
+      }
+      let startedAt = run.turnStartedAt ?? input.startedAt;
+      let endedAt = run.turnEndedAt ?? input.endedAt;
+      if (startedAt !== null && endedAt !== null && endedAt < startedAt) {
+        startedAt = run.turnStartedAt;
+        endedAt = run.turnEndedAt;
+      }
+      if (
+        run.turnId !== null &&
+        startedAt === run.turnStartedAt &&
+        endedAt === run.turnEndedAt
+      ) {
+        return undefined;
+      }
+      this.database
+        .prepare(
+          `
+            UPDATE automation_runs
+            SET turn_id = ?, turn_outcome = ?, turn_settled_at = ?,
+              turn_started_at = ?, turn_ended_at = ?
+            WHERE tenant_id = ? AND owner_principal_id = ?
+              AND automation_id = ? AND id = ?
+          `,
+        )
+        .run(
+          input.turnId,
+          run.turnOutcome ?? input.outcome,
+          run.turnSettledAt ?? input.settledAt,
+          startedAt,
+          endedAt,
+          scope.tenantId,
+          scope.principalId,
+          run.automationId,
+          run.id,
+        );
+      return this.getRun(scope, run.automationId, run.id);
+    })();
+  }
+
+  /**
+   * Settles every unsettled run whose turn the completion rail already
+   * recorded: observations that arrived before the observer was bound or
+   * across a crash. The rail keeps no turn times, so a later replay adds
+   * them. Returns the runs it settled.
+   */
+  settleRunTurnsFromCompletions(): AutomationRunRecord[] {
+    return (
+      this.database
+        .prepare(
+          `
+            UPDATE automation_runs AS run
+            SET turn_id = observation.application_turn_id,
+              turn_outcome = observation.completion_outcome,
+              turn_settled_at = observation.completion_observed_at
+            FROM submission_completion_observations AS observation
+            WHERE observation.tenant_id = run.tenant_id
+              AND observation.owner_principal_id = run.owner_principal_id
+              AND observation.application_thread_id =
+                coalesce(run.child_thread_id, run.anchor_thread_id)
+              AND observation.operation_id = run.dispatch_mutation_id
+              AND observation.application_turn_id IS NOT NULL
+              AND run.turn_id IS NULL
+              AND run.force_reset_at IS NULL
+            RETURNING ${runColumns}
+          `,
+        )
+        .all() as RunRow[]
+    ).map(runFromRow);
   }
 
   findDefinitionForThread(
@@ -1543,12 +1661,12 @@ export class AutomationRepository {
         "The automation cursor is invalid.",
       );
     }
-    const page = (state: string) => `
+    const page = (condition: string) => `
       SELECT ${runColumns}
       FROM automation_runs
       WHERE tenant_id = ? AND owner_principal_id = ?
         AND automation_id = ?
-        ${state}
+        ${condition}
         ${input.after ? "AND (created_at < ? OR (created_at = ? AND id < ?))" : ""}
       ORDER BY created_at DESC, id DESC
       LIMIT ?
@@ -1562,47 +1680,53 @@ export class AutomationRepository {
         : []),
       input.limit,
     ];
-    const states = RUN_FILTER_STATES[input.filter ?? "all"];
-    if (states === null) {
+    const branches = RUN_FILTER_BRANCHES[input.filter ?? "all"];
+    if (branches === null) {
       return (
         this.database.prepare(page("")).all(...pageParameters) as RunRow[]
       ).map(runFromRow);
     }
-    // One ordered, limited branch per state over automation_runs_state_history
-    // keeps a page bounded by its size, however sparse the matching runs are.
+    // One ordered, limited branch per condition, each over its own index
+    // (automation_runs_state_history per state, and
+    // automation_runs_failed_turn_history for failed turns), keeps a page
+    // bounded by its size, however sparse the matching runs are.
     return (
       this.database
         .prepare(
           `
-            ${states.map(() => `SELECT * FROM (${page("AND state = ?")})`).join(" UNION ALL ")}
+            ${branches.map((condition) => `SELECT * FROM (${page(condition)})`).join(" UNION ALL ")}
             ORDER BY createdAt DESC, id DESC
             LIMIT ?
           `,
         )
         .all(
-          ...states.flatMap((state) => [
-            ...pageParameters.slice(0, 3),
-            state,
-            ...pageParameters.slice(3),
-          ]),
+          ...branches.flatMap(() => pageParameters),
           input.limit,
         ) as RunRow[]
     ).map(runFromRow);
   }
 
   countRuns(scope: RequestScope, automationId: string): AutomationRunCounts {
+    const parameters = [scope.tenantId, scope.principalId, automationId];
     const row = this.database
       .prepare(
         `
           SELECT count(*) AS total,
-            coalesce(sum(state IN ('failed', 'uncertain')), 0) AS problems,
+            coalesce(sum(state IN ('failed', 'uncertain')), 0) + (
+              SELECT count(*)
+              FROM automation_runs
+              WHERE tenant_id = ? AND owner_principal_id = ?
+                AND automation_id = ?
+                AND turn_outcome = 'failed'
+                AND state NOT IN ('failed', 'uncertain')
+            ) AS problems,
             coalesce(sum(state = 'skipped'), 0) AS skipped
           FROM automation_runs
           WHERE tenant_id = ? AND owner_principal_id = ?
             AND automation_id = ?
         `,
       )
-      .get(scope.tenantId, scope.principalId, automationId) as {
+      .get(...parameters, ...parameters) as {
       total: number;
       problems: number;
       skipped: number;
@@ -1857,6 +1981,7 @@ function definitionFromRow(row: DefinitionRow): AutomationDefinitionRecord {
     completedAt: row.completedAt,
     deletedAt: row.deletedAt,
     revision: row.revision,
+    runsRevision: row.runsRevision,
     schedule,
     misfirePolicy: row.misfirePolicy,
     nextRunAt: row.nextRunAt,

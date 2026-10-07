@@ -1,5 +1,12 @@
 import type { AutomationSchedule as ProtocolAutomationSchedule } from "../../shared/protocol/automation.js";
-import type { AutomationSchedule } from "./automation-models.js";
+import type {
+  ThreadAutomationLastRun,
+  ThreadAutomationRun,
+} from "../../shared/protocol/automation-presentation.js";
+import type {
+  AutomationRunRecord,
+  AutomationSchedule,
+} from "./automation-models.js";
 
 const PROMPT_PREVIEW_UNITS = 140;
 const THREAD_TITLE_MAXIMUM_UNITS = 240;
@@ -31,6 +38,45 @@ export function presentAutomationSchedule(
         timeZone: schedule.timeZone,
       };
   }
+}
+
+/** A run's settled agent turn, absent until it settles. */
+export function presentAutomationRunTurn(
+  run: Pick<
+    AutomationRunRecord,
+    "turnId" | "turnOutcome" | "turnSettledAt" | "turnStartedAt" | "turnEndedAt"
+  >,
+): ThreadAutomationRun["turn"] {
+  if (
+    run.turnId === null ||
+    run.turnOutcome === null ||
+    run.turnSettledAt === null
+  ) {
+    return undefined;
+  }
+  return {
+    id: run.turnId,
+    outcome: run.turnOutcome,
+    settledAt: iso(run.turnSettledAt),
+    ...(run.turnStartedAt === null
+      ? {}
+      : { startedAt: iso(run.turnStartedAt) }),
+    ...(run.turnEndedAt === null ? {} : { endedAt: iso(run.turnEndedAt) }),
+  };
+}
+
+/**
+ * How a latest run's agent turn ended, for the REST and projected automation
+ * summaries; absent until it settles.
+ */
+export function presentAutomationLastRunTurn(
+  run: Pick<AutomationRunRecord, "turnOutcome" | "turnEndedAt">,
+): ThreadAutomationLastRun["turn"] {
+  if (run.turnOutcome === null) return undefined;
+  return {
+    outcome: run.turnOutcome,
+    ...(run.turnEndedAt === null ? {} : { endedAt: iso(run.turnEndedAt) }),
+  };
 }
 
 /**

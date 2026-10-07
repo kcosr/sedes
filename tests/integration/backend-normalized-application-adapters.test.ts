@@ -38,6 +38,7 @@ import { parseResolvedBackendConfiguration } from "../support/resolved-backend-c
 import { importLegacyDatabaseConfigurationFixture } from "../support/database-configuration-fixture.js";
 import { AutomationRepository } from "../../src/server/db/repositories/automation-repository.js";
 import { AutomationService } from "../../src/server/domain/automation-service.js";
+import { AutomationTurnSettlementObserver } from "../../src/server/runtime/automation-conversation-gateway.js";
 import { BackendConfigurationRepository } from "../../src/server/db/repositories/backend-configuration-repository.js";
 import { openOverlayDatabase } from "../../src/server/db/database.js";
 import {
@@ -245,6 +246,134 @@ describe("backend-normalized application adapters", () => {
         expect(summaries.listByIds(scope, [current.threadId])).toEqual([]);
         expect(summaries.list(scope, current.environmentId)).toEqual([]);
       }
+    } finally {
+      await boundary.close();
+      current.database.close();
+    }
+  });
+
+  it("publishes a thread upsert when a run that is not the latest settles and when its turn times arrive", async () => {
+    const current = fixture();
+    const { boundary } = captureFixture(current);
+    try {
+      new ConversationBindingRepository(current.database).bindDiscoveredConversation(
+        current.scope,
+        current.threadId,
+        { backendConversationId: "history-revision-session", now: 500 },
+      );
+      const automation = new AutomationRepository(current.database);
+      automation.createDefinition(current.scope, {
+        id: "history-revision-automation",
+        anchorThreadId: current.threadId,
+        name: "History revision",
+        prompt: "Review the repository",
+        precheck: null,
+        runMode: "same_thread",
+        enabled: false,
+        schedule: { kind: "cron", expression: "0 2 * * *", timeZone: "UTC" },
+        misfirePolicy: "coalesce",
+        nextRunAt: null,
+        now: 600,
+      });
+      const deliver = (runId: string, now: number) => {
+        const claimed = automation.createManualRun(
+          current.scope,
+          "history-revision-automation",
+          {
+            runId,
+            occurrenceKey: `manual:${runId}`,
+            scheduledFor: now,
+            claimToken: `${runId}-claim`,
+            leaseExpiresAt: now + 60_000,
+            dispatchMutationId: `${runId}-dispatch`,
+            now,
+          },
+        ).run;
+        automation.updateRunState(current.scope, claimed.automationId, runId, {
+          expectedState: "claimed",
+          state: "dispatching",
+          claimToken: claimed.claimToken!,
+          retainPromptSnapshot: true,
+          now: now + 10,
+        });
+        return automation.updateRunState(current.scope, claimed.automationId, runId, {
+          expectedState: "dispatching",
+          state: "completed",
+          claimToken: claimed.claimToken!,
+          now: now + 20,
+        });
+      };
+      const older = deliver("history-older", 1_000);
+      deliver("history-newer", 2_000);
+      const completion = new SubmissionCompletionRepository(current.database);
+      completion.recordAccepted(current.scope, current.threadId, {
+        operationId: older.dispatchMutationId,
+        acceptedAt: 1_010,
+        backendCorrelation: older.dispatchMutationId,
+      });
+      const observed = completion.observeBackendCompletion(
+        current.scope,
+        current.threadId,
+        {
+          backendCorrelation: older.dispatchMutationId,
+          completionIdentity: "turn-older:failed",
+          observedAt: 2_500,
+          applicationTurnId: "turn_older",
+          outcome: "failed",
+          result: { text: "Failed" },
+          classifiedResult: null,
+        },
+      )!;
+      const observer = new AutomationTurnSettlementObserver({
+        repository: automation,
+        publisher: new AutomationService({
+          repository: automation,
+          inventory: new InventoryRepository(current.database),
+          publisher: {
+            publish: (scope, id) => boundary.publishThreadChange(scope, id),
+          },
+          executionPolicy: { assertCanAutomate: () => undefined },
+        }),
+      });
+      const hub = boundary.hub(current.scope);
+      const upserts: NonNullable<
+        typeof normalizedThreadSummarySchema._output["automation"]
+      >[] = [];
+      hub.subscribe(({ event }) => {
+        if (event.type === "thread_upsert" && event.thread.automation) {
+          upserts.push(event.thread.automation);
+        }
+      });
+      await boundary.checkpoint(current.scope, hub);
+      const checkpointed = hub
+        .currentCheckpoint()!
+        .event.snapshot.threads.find(({ id }) => id === current.threadId)!
+        .automation!;
+      const observe = async (times?: {
+        readonly startedAt: string;
+        readonly completedAt: string;
+      }) => {
+        observer.observe(current.scope, current.threadId, observed, times);
+        await boundary.flush();
+      };
+
+      await observe();
+      await observe({
+        startedAt: new Date(1_020).toISOString(),
+        completedAt: new Date(2_400).toISOString(),
+      });
+      // Replays change nothing and publish nothing.
+      await observe({
+        startedAt: new Date(1_020).toISOString(),
+        completedAt: new Date(2_400).toISOString(),
+      });
+
+      expect(upserts).toEqual([
+        { ...checkpointed, runsRevision: checkpointed.runsRevision + 1 },
+        { ...checkpointed, runsRevision: checkpointed.runsRevision + 2 },
+      ]);
+      expect(checkpointed.lastRun).toMatchObject({ id: "history-newer" });
+      expect(checkpointed.lastRun).not.toHaveProperty("turn");
     } finally {
       await boundary.close();
       current.database.close();
@@ -1901,6 +2030,8 @@ describe("backend-normalized application adapters", () => {
           .trimEnd()
           .concat("…"),
         revision: 0,
+        // Two run inserts and one state change.
+        runsRevision: 3,
         hasPrecheck: false,
         lastRun: {
           id: "latest-run-newer",
@@ -1928,6 +2059,7 @@ describe("backend-normalized application adapters", () => {
         executionPolicy: { assertCanAutomate: () => undefined },
       }).get(current.scope, current.threadId);
       expect(rest.lastRun?.id).toBe("latest-run-newer");
+      expect(rest.runsRevision).toBe(3);
     } finally {
       current.database.close();
     }
@@ -2081,6 +2213,19 @@ describe("backend-normalized application adapters", () => {
         dispatchMutationId: "summary-dispatch",
         now: 900,
       });
+      // The latest run's turn settlement is read in the same summary query.
+      automation.settleRunTurn(
+        current.scope,
+        current.threadId,
+        "summary-dispatch",
+        {
+          turnId: "summary-turn",
+          outcome: "failed",
+          settledAt: 960,
+          startedAt: 905,
+          endedAt: 950,
+        },
+      );
 
       service.saveDraft(
         current.scope,
@@ -2227,6 +2372,7 @@ describe("backend-normalized application adapters", () => {
             occurrence: "scheduled",
             scheduledFor: new Date(900).toISOString(),
             resultThreadId: current.threadId,
+            turn: { outcome: "failed", endedAt: new Date(950).toISOString() },
           },
         },
       });

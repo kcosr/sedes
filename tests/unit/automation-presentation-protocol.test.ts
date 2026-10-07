@@ -66,6 +66,7 @@ describe("normalized automation protocol", () => {
       scheduleKind: "date_time",
       nextRunAt: new Date(30_000).toISOString(),
       revision: 2,
+      runsRevision: 5,
       createdAt,
       updatedAt: new Date(20_000).toISOString(),
       hasPrecheck: false,
@@ -82,6 +83,10 @@ describe("normalized automation protocol", () => {
     expect(threadAutomationSummarySchema.safeParse(withoutCreatedAt).success).toBe(
       false,
     );
+    const { runsRevision: _runsRevision, ...withoutRunsRevision } = automation;
+    expect(
+      threadAutomationSummarySchema.safeParse(withoutRunsRevision).success,
+    ).toBe(false);
     expect(
       threadAutomationDefinitionSchema.parse({
         ...automation,
@@ -111,14 +116,23 @@ describe("normalized automation protocol", () => {
       misfirePolicy: "skip",
       promptPreview: "Review the repository and summarize…",
       revision: 4,
+      runsRevision: 5,
       hasPrecheck: true,
     } as const;
 
     expect(automation.parse(projected)).toEqual(projected);
-    for (const field of ["schedule", "misfirePolicy", "promptPreview"] as const) {
+    for (const field of [
+      "schedule",
+      "misfirePolicy",
+      "promptPreview",
+      "runsRevision",
+    ] as const) {
       const { [field]: _omitted, ...missing } = projected;
       expect(automation.safeParse(missing).success).toBe(false);
     }
+    expect(
+      automation.safeParse({ ...projected, runsRevision: -1 }).success,
+    ).toBe(false);
     expect(
       automation.safeParse({ ...projected, promptPreview: "x".repeat(161) })
         .success,
@@ -213,5 +227,84 @@ describe("normalized automation protocol", () => {
     expect(threadAutomationRunResolutionSchema.safeParse({ run }).success).toBe(
       false,
     );
+  });
+
+  it("describes a settled run turn and the last run's turn outcome strictly", () => {
+    const run = {
+      id: "6ba7b810-9dad-41d1-80b4-00c04fd430c8",
+      occurrence: "scheduled",
+      scheduledFor: new Date(10_000).toISOString(),
+      state: "completed",
+      runMode: "same_thread",
+      definitionRevision: 3,
+      coalescedCount: 0,
+      finishedAt: new Date(11_000).toISOString(),
+    } as const;
+    const turn = {
+      id: "turn_settled",
+      outcome: "failed",
+      settledAt: new Date(13_000).toISOString(),
+      startedAt: new Date(11_000).toISOString(),
+      endedAt: new Date(12_900).toISOString(),
+    } as const;
+    expect(threadAutomationRunSchema.parse({ ...run, turn })).toEqual({
+      ...run,
+      turn,
+    });
+    const { startedAt: _startedAt, endedAt: _endedAt, ...untimed } = turn;
+    expect(threadAutomationRunSchema.parse({ ...run, turn: untimed })).toEqual(
+      { ...run, turn: untimed },
+    );
+    for (const invalid of [
+      { ...turn, outcome: "cancelled" },
+      { ...turn, steeredBy: "you" },
+      { outcome: "completed", settledAt: turn.settledAt },
+    ]) {
+      expect(
+        threadAutomationRunSchema.safeParse({ ...run, turn: invalid }).success,
+      ).toBe(false);
+    }
+
+    const lastRun = {
+      id: run.id,
+      state: "completed",
+      occurrence: "scheduled",
+      scheduledFor: run.scheduledFor,
+      turn: { outcome: "interrupted", endedAt: turn.endedAt },
+    } as const;
+    const summary = {
+      status: "enabled",
+      runMode: "same_thread",
+      scheduleKind: "date_time",
+      revision: 2,
+      runsRevision: 5,
+      createdAt: new Date(1_000).toISOString(),
+      updatedAt: new Date(2_000).toISOString(),
+      hasPrecheck: false,
+      lastRun,
+    } as const;
+    expect(threadAutomationSummarySchema.parse(summary)).toEqual(summary);
+    expect(
+      threadAutomationSummarySchema.safeParse({
+        ...summary,
+        lastRun: { ...lastRun, turn: { ...lastRun.turn, id: turn.id } },
+      }).success,
+    ).toBe(false);
+    const projected = {
+      ...summary,
+      schedule: { kind: "date_time", runAt: new Date(10_000).toISOString() },
+      misfirePolicy: "coalesce",
+      promptPreview: "Review",
+    } as const;
+    const { createdAt: _createdAt, updatedAt: _updatedAt, ...summaryOnly } =
+      projected;
+    const automation = normalizedThreadSummarySchema.shape.automation.unwrap();
+    expect(automation.parse(summaryOnly)).toEqual(summaryOnly);
+    expect(
+      automation.safeParse({
+        ...summaryOnly,
+        lastRun: { ...lastRun, turn: { outcome: "cancelled" } },
+      }).success,
+    ).toBe(false);
   });
 });

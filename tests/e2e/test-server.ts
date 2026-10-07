@@ -228,6 +228,7 @@ import { PrincipalAgentToolClientRepository } from "../../src/server/db/reposito
 import { createPrincipalAgentToolClientEligibility } from "../../src/server/conversations/thread-agent-tool-policy-dependencies.js";
 import {
   AutomationQueueRunObserver,
+  AutomationTurnSettlementObserver,
   LifecycleAutomationConversationGateway,
 } from "../../src/server/runtime/automation-conversation-gateway.js";
 import {
@@ -4902,6 +4903,7 @@ async function main(): Promise<void> {
     publishTaskChange: (eventScope, taskId) =>
       tasks.publishTaskChange(eventScope, taskId),
   });
+  let observeAutomationTurns: AutomationTurnSettlementObserver | undefined;
   observeAuthoritativeCompletion = async (
     eventScope,
     applicationThreadId,
@@ -4913,6 +4915,16 @@ async function main(): Promise<void> {
       input,
     );
     if (!observed) return;
+    try {
+      observeAutomationTurns?.observe(
+        eventScope,
+        applicationThreadId,
+        observed,
+        input,
+      );
+    } catch {
+      // As in production, run history never breaks completion.
+    }
     notificationLifecycle.completion(eventScope, observed);
     if (observed.applicationTurnId) void clientControls.complete(eventScope, applicationThreadId, observed.applicationTurnId, observed.completionOutcome ?? "interrupted");
     authoritativeCompletionFollowUp.defer(async () => {
@@ -5016,10 +5028,15 @@ async function main(): Promise<void> {
     queue: queueRepository,
     publisher: automations,
   });
+  observeAutomationTurns = new AutomationTurnSettlementObserver({
+    repository: automationRepository,
+    publisher: automations,
+  });
   await queue.recover(scope);
   await completionCallbackDispatcher.deliverReady(scope);
   await mutations.recoverUncertain(scope);
   observeAutomationQueue.recover();
+  observeAutomationTurns.recover();
   const eligibleManagedTuiControllers = [
     codexManagedTui,
     codexUdsManagedTui,

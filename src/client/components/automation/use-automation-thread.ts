@@ -219,16 +219,16 @@ export function useAutomationAnchor(
 }
 
 /**
- * The summary fields that move when the automation or its runs change: the
- * definition revision and the latest run's id and state. The page refetches
- * when this changes.
+ * The summary fields that move when the automation or its latest run change:
+ * the definition revision and the latest run's id, state and settled turn.
+ * The page refetches the definition when this changes.
  */
 export function automationLiveKey(
   automation: SummaryAutomation | null | undefined,
 ): string | undefined {
   if (!automation) return undefined;
   const lastRun = automation.lastRun;
-  return `${automation.revision}:${lastRun?.id ?? ""}:${lastRun?.state ?? ""}`;
+  return `${automation.revision}:${lastRun?.id ?? ""}:${lastRun?.state ?? ""}:${lastRun?.turn?.outcome ?? ""}`;
 }
 
 /**
@@ -248,4 +248,31 @@ export function useThreadTitle(
     [threadId],
   );
   return useApplicationStoreSelector(store, select);
+}
+
+/**
+ * A thread's run state from the application store, also among loaded fork
+ * descendants (a fork run's result thread); undefined when it is not loaded.
+ */
+export function useThreadRunState(
+  store: ThreadStore,
+  threadId: string | undefined,
+): ThreadRunState | undefined {
+  const select = useCallback(
+    (state: ApplicationClientState) =>
+      threadId === undefined ? undefined : findLoadedThread(state, threadId)?.runState,
+    [threadId],
+  );
+  return useApplicationStoreSelector(store, select);
+}
+
+/**
+ * Moves whenever any run of the automation changes as presented, including
+ * an older run's turn settling or its turn times arriving later; the run
+ * history refetches when it changes.
+ */
+export function automationRunsKey(
+  automation: SummaryAutomation | null | undefined,
+): string | undefined {
+  return automation ? String(automation.runsRevision) : undefined;
 }

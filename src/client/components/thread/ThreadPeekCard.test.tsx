@@ -214,6 +214,7 @@ describe("ThreadPeekCard automation line", () => {
         misfirePolicy: "coalesce",
         promptPreview: "Check dependencies",
         revision: 1,
+        runsRevision: 0,
         hasPrecheck: false,
         ...automation,
       },

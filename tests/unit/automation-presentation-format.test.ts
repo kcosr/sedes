@@ -4,8 +4,54 @@ import {
   automationCloneTitleSuffix,
   automationPromptPreview,
   decodeAutomationPromptHead,
+  presentAutomationLastRunTurn,
+  presentAutomationRunTurn,
   presentAutomationSchedule,
 } from "../../src/server/domain/automation-presentation.js";
+
+describe("automation run turn presentation", () => {
+  const unsettled = {
+    turnId: null,
+    turnOutcome: null,
+    turnSettledAt: null,
+    turnStartedAt: null,
+    turnEndedAt: null,
+  };
+
+  it("presents nothing until the turn settles", () => {
+    expect(presentAutomationRunTurn(unsettled)).toBeUndefined();
+    expect(presentAutomationLastRunTurn(unsettled)).toBeUndefined();
+  });
+
+  it("presents the settlement and only the turn times the backend reported", () => {
+    const settled = {
+      ...unsettled,
+      turnId: "turn_1",
+      turnOutcome: "interrupted" as const,
+      turnSettledAt: 3_000,
+    };
+    expect(presentAutomationRunTurn(settled)).toEqual({
+      id: "turn_1",
+      outcome: "interrupted",
+      settledAt: new Date(3_000).toISOString(),
+    });
+    expect(presentAutomationLastRunTurn(settled)).toEqual({
+      outcome: "interrupted",
+    });
+    const timed = { ...settled, turnStartedAt: 1_000, turnEndedAt: 2_500 };
+    expect(presentAutomationRunTurn(timed)).toEqual({
+      id: "turn_1",
+      outcome: "interrupted",
+      settledAt: new Date(3_000).toISOString(),
+      startedAt: new Date(1_000).toISOString(),
+      endedAt: new Date(2_500).toISOString(),
+    });
+    expect(presentAutomationLastRunTurn(timed)).toEqual({
+      outcome: "interrupted",
+      endedAt: new Date(2_500).toISOString(),
+    });
+  });
+});
 
 describe("automation prompt preview", () => {
   it("collapses whitespace and keeps short prompts whole", () => {

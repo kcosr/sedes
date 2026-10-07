@@ -74,6 +74,7 @@ function makeAutomation(
     misfirePolicy: "coalesce",
     promptPreview: "Review the repository.",
     revision: 0,
+    runsRevision: 0,
     hasPrecheck: false,
     ...overrides,
   };

@@ -3,7 +3,9 @@ import {
   automationDefinitionStatusSchema,
   automationMisfirePolicySchema,
   automationRunModeSchema,
+  applicationTurnIdSchema,
   automationRunStateSchema,
+  automationTurnOutcomeSchema,
 } from "./domain.js";
 import {
   automationPrecheckSchema,
@@ -19,6 +21,12 @@ export const threadAutomationLastRunSchema = z.strictObject({
   finishedAt: z.iso.datetime().optional(),
   resultThreadId: z.uuid().optional(),
   errorCode: z.string().max(120).optional(),
+  turn: z
+    .strictObject({
+      outcome: automationTurnOutcomeSchema,
+      endedAt: z.iso.datetime().optional(),
+    })
+    .optional(),
 });
 export type ThreadAutomationLastRun = z.infer<
   typeof threadAutomationLastRunSchema
@@ -31,6 +39,11 @@ export const threadAutomationSummarySchema = z.strictObject({
   nextRunAt: z.iso.datetime().optional(),
   lastRun: threadAutomationLastRunSchema.optional(),
   revision: z.number().int().nonnegative(),
+  /**
+   * Advances whenever the run history changes: a new run, a run state change,
+   * or a run's turn settling or gaining its times.
+   */
+  runsRevision: z.number().int().nonnegative(),
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime(),
   hasPrecheck: z.boolean(),
@@ -68,6 +81,20 @@ export const threadAutomationRunSchema = z.strictObject({
   finishedAt: z.iso.datetime().optional(),
   /** Present when a thread force reset abandoned the run. */
   forceResetAt: z.iso.datetime().optional(),
+  /**
+   * The agent turn the run's prompt started, once it settled. `id` is the
+   * application turn id (turn focus and per-turn usage use it); the times
+   * are the turn's own, absent when the backend reports none.
+   */
+  turn: z
+    .strictObject({
+      id: applicationTurnIdSchema,
+      outcome: automationTurnOutcomeSchema,
+      settledAt: z.iso.datetime(),
+      startedAt: z.iso.datetime().optional(),
+      endedAt: z.iso.datetime().optional(),
+    })
+    .optional(),
   precheck: z
     .strictObject({
       status: z.enum(["pending", "checking", "passed", "skipped", "failed"]),

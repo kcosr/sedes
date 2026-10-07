@@ -56,9 +56,10 @@ test("lists every automation from the More menu and opens one", async ({
   const weekly = ((await weeklyResponse.json()) as { threadId: string })
     .threadId;
 
-  // New automations start paused; the nightly one is enabled.
+  // New automations start paused; the nightly one is enabled. The scripted
+  // agent completes a turn for this prompt in two short steps.
   for (const [threadId, prompt, expression] of [
-    [nightly, "Check dependencies for advisories.", "0 2 * * *"],
+    [nightly, "Measure turn throughput", "0 2 * * *"],
     [weekly, "Draft release notes from merged PRs.", "0 9 * * 1"],
   ] as const) {
     const response = await page.request.post(
@@ -170,4 +171,37 @@ test("lists every automation from the More menu and opens one", async ({
     .getByRole("link", { name: "Nightly dependency audit" })
     .click();
   await expect(page).toHaveURL(`/automations/${nightly}`);
+
+  // Run now: the scripted agent answers, and once its turn settles the run
+  // reads how that turn ended, here and in the list.
+  await view.getByRole("button", { name: "Run now" }).click();
+  const finishedRun = view.getByRole("button", {
+    name: /\sFinished(?: in [^,]+)?, Manual$/u,
+  });
+  await expect(finishedRun).toBeVisible();
+  await view.getByRole("link", { name: "Automations" }).click();
+  await expect(page).toHaveURL("/automations");
+  await expect(
+    row(group(page, "status:upcoming"), nightly).locator(
+      ".automation-row-secondary",
+    ),
+  ).toHaveText(/^Finished (?:just now|\d+m ago)$/u);
+
+  // Go to turn opens the thread at the turn the run started.
+  await row(page, nightly)
+    .getByRole("link", { name: "Nightly dependency audit" })
+    .click();
+  await finishedRun.click();
+  const goToTurn = view.getByRole("link", { name: "Go to turn" });
+  await expect(goToTurn).toHaveAttribute(
+    "href",
+    new RegExp(`^/threads/${nightly}#turn=.+$`, "u"),
+  );
+  const turnId = decodeURIComponent(
+    (await goToTurn.getAttribute("href"))!.split("#turn=")[1]!,
+  );
+  await goToTurn.click();
+  await expect(page).toHaveURL(new RegExp(`/threads/${nightly}#turn=`, "u"));
+  await expect(page.locator(`[data-turn-id="${turnId}"]`).first()).toBeVisible();
+  await expect(page.locator(".source-turn-highlight")).toBeVisible();
 });

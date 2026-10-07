@@ -36,7 +36,7 @@ Usage:
 Options:
   --server URL       Sedes origin (default: SEDES_URL or http://127.0.0.1:4784)
   --allow-remote     Permit an explicitly trusted non-loopback Sedes origin
-  --filter FILTER    runs: all (default), problems (failed or uncertain), or skipped
+  --filter FILTER    runs: all (default), problems (failed, uncertain or failed turn), or skipped
   --resume           resolve: also enable the automation in the same operation
   --help             Show this help
   --version          Print this build's Sedes version

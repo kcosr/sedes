@@ -4,6 +4,7 @@ import type {
   QueuedInputRepository,
 } from "../db/repositories/queued-input-repository.js";
 import type { AutomationRepository } from "../db/repositories/automation-repository.js";
+import type { SubmissionCompletionObservationRecord } from "../db/repositories/submission-completion-repository.js";
 import type { AutomationService } from "../domain/automation-service.js";
 import type { QueuedInputDispatcher } from "../conversations/queued-input-dispatcher.js";
 import { DomainError } from "../domain/errors.js";
@@ -392,4 +393,108 @@ export class AutomationQueueRunObserver {
       }),
     );
   }
+}
+
+/**
+ * Completion-rail hook for automation run history. Production calls it after
+ * an authoritative completion observation commits, both live and on every
+ * snapshot replay, so a run's turn settlement is written once and published
+ * only when this changed the run. It never touches run state or scheduling.
+ */
+export class AutomationTurnSettlementObserver {
+  readonly #repository: Pick<
+    AutomationRepository,
+    "settleRunTurn" | "settleRunTurnsFromCompletions"
+  >;
+  readonly #publisher: Pick<AutomationService, "publishRunSettlement">;
+
+  constructor(input: {
+    readonly repository: Pick<
+      AutomationRepository,
+      "settleRunTurn" | "settleRunTurnsFromCompletions"
+    >;
+    readonly publisher: Pick<AutomationService, "publishRunSettlement">;
+  }) {
+    this.#repository = input.repository;
+    this.#publisher = input.publisher;
+  }
+
+  /** Settles runs whose turn the rail recorded while no observer was bound. */
+  recover(): void {
+    const published = new Set<string>();
+    for (const run of this.#repository.settleRunTurnsFromCompletions()) {
+      const key = JSON.stringify([
+        run.tenantId,
+        run.ownerPrincipalId,
+        run.anchorThreadId,
+        run.childThreadId,
+      ]);
+      if (published.has(key)) continue;
+      published.add(key);
+      this.#publisher.publishRunSettlement(
+        { tenantId: run.tenantId, principalId: run.ownerPrincipalId },
+        run,
+      );
+    }
+  }
+
+  /**
+   * `observation` is the rail record for one accepted operation on
+   * `applicationThreadId`; `turn` carries the backend turn's own times.
+   */
+  observe(
+    scope: RequestScope,
+    applicationThreadId: string,
+    observation: Pick<
+      SubmissionCompletionObservationRecord,
+      | "operationId"
+      | "applicationTurnId"
+      | "completionOutcome"
+      | "completionObservedAt"
+    >,
+    turn: { readonly startedAt?: string; readonly completedAt?: string } = {},
+  ): void {
+    if (
+      observation.applicationTurnId === null ||
+      observation.completionOutcome === null ||
+      observation.completionObservedAt === null
+    ) {
+      return;
+    }
+    const run = this.#repository.settleRunTurn(
+      scope,
+      applicationThreadId,
+      observation.operationId,
+      {
+        turnId: observation.applicationTurnId,
+        outcome: observation.completionOutcome,
+        settledAt: observation.completionObservedAt,
+        ...turnTimes(turn),
+      },
+    );
+    if (run) this.#publisher.publishRunSettlement(scope, run);
+  }
+}
+
+/**
+ * Backend turn times in milliseconds. Times that end before they start are
+ * dropped together, so no false duration is recorded.
+ */
+function turnTimes(turn: {
+  readonly startedAt?: string;
+  readonly completedAt?: string;
+}): { readonly startedAt: number | null; readonly endedAt: number | null } {
+  const startedAt = turnTime(turn.startedAt);
+  const endedAt = turnTime(turn.completedAt);
+  return startedAt !== null && endedAt !== null && endedAt < startedAt
+    ? { startedAt: null, endedAt: null }
+    : { startedAt, endedAt };
+}
+
+function turnTime(value: string | undefined): number | null {
+  if (value === undefined) return null;
+  const milliseconds = Date.parse(value);
+  return Number.isSafeInteger(milliseconds) && milliseconds >= 0
+    ? milliseconds
+    : null;
 }

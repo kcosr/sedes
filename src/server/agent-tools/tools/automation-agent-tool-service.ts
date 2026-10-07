@@ -25,7 +25,18 @@ import { CanonicalAgentToolRequestError } from "../invocation/canonical-inline-a
 
 const UPCOMING_OCCURRENCE_COUNT = 5;
 
-export interface AgentAutomationDefinition extends ThreadAutomationDefinition {
+/**
+ * The definition shape frozen by the `automation.get@1`, `automation.create@1`,
+ * `automation.update@1` and `automation.set_state@1` output schemas. The
+ * run-history revision and the last run's agent turn are browser-only detail
+ * and are stripped.
+ */
+export interface AgentAutomationDefinition
+  extends Omit<ThreadAutomationDefinition, "lastRun" | "runsRevision"> {
+  readonly lastRun?: Omit<
+    NonNullable<ThreadAutomationDefinition["lastRun"]>,
+    "turn"
+  >;
   readonly upcoming: readonly string[];
 }
 
@@ -40,7 +51,7 @@ export interface AutomationTargetInput {
  */
 export type AutomationToolRun = Omit<
   ThreadAutomationRun,
-  "definitionRevision" | "forceResetAt" | "precheck"
+  "definitionRevision" | "forceResetAt" | "precheck" | "turn"
 > & {
   readonly precheck?: Omit<
     NonNullable<ThreadAutomationRun["precheck"]>,
@@ -322,8 +333,10 @@ export class AutomationAgentToolService {
     definition: ThreadAutomationDefinition,
     now: number,
   ): AgentAutomationDefinition {
+    const { lastRun, runsRevision: _runsRevision, ...rest } = definition;
     return {
-      ...definition,
+      ...rest,
+      ...(lastRun ? { lastRun: toolLastRun(lastRun) } : {}),
       upcoming: this.#automations.preview(
         definition.schedule,
         UPCOMING_OCCURRENCE_COUNT,
@@ -361,10 +374,18 @@ function cancellationError(): DOMException {
   return new DOMException("The tool invocation was cancelled.", "AbortError");
 }
 
+function toolLastRun(
+  lastRun: NonNullable<ThreadAutomationDefinition["lastRun"]>,
+): NonNullable<AgentAutomationDefinition["lastRun"]> {
+  const { turn: _turn, ...rest } = lastRun;
+  return rest;
+}
+
 function toolRun(run: ThreadAutomationRun): AutomationToolRun {
   const {
     definitionRevision: _definitionRevision,
     forceResetAt: _forceResetAt,
+    turn: _turn,
     precheck,
     ...rest
   } = run;

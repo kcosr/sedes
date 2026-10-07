@@ -1,10 +1,13 @@
 import type {
   AutomationSchedule,
   ThreadAutomationRun,
+  ThreadRunState,
 } from "../../shared/index.js";
+import { formatActivityDuration } from "../components/thread/activity-groups.js";
 import { futureTimeLabel, shortRelativeTime } from "../lib/time.js";
 import {
   lastRunAt,
+  threadRunPhase,
   type AutomationHealth,
   type SummaryAutomation,
   type SummaryAutomationRun,
@@ -24,6 +27,14 @@ import {
 
 type AutomationRunState = ThreadAutomationRun["state"];
 type RunPrecheck = NonNullable<ThreadAutomationRun["precheck"]>;
+type RunTurn = NonNullable<ThreadAutomationRun["turn"]>;
+
+/** How a run's agent turn ended, in words. */
+const TURN_OUTCOME_LABELS: Readonly<Record<RunTurn["outcome"], string>> = {
+  completed: "Finished",
+  failed: "Failed",
+  interrupted: "Interrupted",
+};
 
 const WEEKDAY_NAMES = [
   "Sunday",
@@ -245,11 +256,48 @@ function pad(value: number): string {
   return String(value).padStart(2, "0");
 }
 
-/** Raw run states in words; "Delivered" means the agent received the prompt. */
-export function runStateLabel(run: {
-  readonly state: AutomationRunState;
-  readonly precheck?: Pick<RunPrecheck, "status">;
-}): string {
+/**
+ * Whether the automation's latest run's agent turn is still going, as far as
+ * the client can tell: the run was delivered, its turn has not settled, and
+ * its result thread is busy (starting, running, waiting for the user or
+ * stopping). Only the latest run is asked: an older one, or one whose result
+ * thread the client does not hold, reads "Delivered" until its turn settles.
+ */
+export function runTurnRunning(
+  latestRun: {
+    readonly state: AutomationRunState;
+    readonly turn?: Pick<RunTurn, "outcome">;
+  },
+  resultRunState: ThreadRunState | undefined,
+): boolean {
+  return (
+    latestRun.state === "completed" &&
+    latestRun.turn === undefined &&
+    resultRunState !== undefined &&
+    threadRunPhase(resultRunState) === "busy"
+  );
+}
+
+/**
+ * A run in words. Once the agent turn it started settles, the turn's ending:
+ * "Finished", "Failed" or "Interrupted". Before that, its raw state:
+ * "Delivered" means the agent received the prompt, and reads "Running · 4m"
+ * (since the agent accepted it) while `running` (see `runTurnRunning`).
+ */
+export function runStateLabel(
+  run: {
+    readonly state: AutomationRunState;
+    readonly precheck?: Pick<RunPrecheck, "status">;
+    readonly turn?: Pick<RunTurn, "outcome">;
+    readonly acceptedAt?: string;
+    readonly finishedAt?: string;
+  },
+  { running = false, now = Date.now() }: {
+    readonly running?: boolean;
+    readonly now?: Date | number;
+  } = {},
+): string {
+  if (run.turn) return TURN_OUTCOME_LABELS[run.turn.outcome];
   switch (run.state) {
     case "claimed":
     case "dispatching":
@@ -258,8 +306,11 @@ export function runStateLabel(run: {
       return "Waiting for turn";
     case "running":
       return "Sending";
-    case "completed":
-      return "Delivered";
+    case "completed": {
+      if (!running) return "Delivered";
+      const elapsed = runRunningFor(run, now);
+      return elapsed === undefined ? "Running" : `Running · ${elapsed}`;
+    }
     case "failed":
       return "Failed";
     case "skipped":
@@ -267,6 +318,34 @@ export function runStateLabel(run: {
     case "uncertain":
       return "Outcome unknown";
   }
+}
+
+/**
+ * How long a delivered run's turn has been going, on a minute clock: "4m",
+ * "2h"; undefined in its first minute.
+ */
+export function runRunningFor(
+  run: { readonly acceptedAt?: string; readonly finishedAt?: string },
+  now: Date | number,
+): string | undefined {
+  const since = run.acceptedAt ?? run.finishedAt;
+  if (since === undefined) return undefined;
+  const elapsed = shortRelativeTime(since, typeof now === "number" ? now : now.getTime());
+  return elapsed === "now" ? undefined : elapsed;
+}
+
+/**
+ * How long a run's agent turn took, as the transcript prints durations
+ * ("2m 14s"); undefined unless the backend reported when it started and
+ * ended. An end that is not after the start is a placeholder (a recovered
+ * turn whose end was never observed), not a zero-length turn.
+ */
+export function runTurnDuration(
+  turn: Pick<RunTurn, "startedAt" | "endedAt"> | undefined,
+): string | undefined {
+  if (turn?.startedAt === undefined || turn.endedAt === undefined) return undefined;
+  const milliseconds = Date.parse(turn.endedAt) - Date.parse(turn.startedAt);
+  return milliseconds > 0 ? formatActivityDuration(milliseconds) : undefined;
 }
 
 /** Why a skipped run did not reach the agent; undefined for other runs. */
@@ -291,12 +370,15 @@ export function runSkipReason(run: {
 }
 
 /**
- * One line of run facts: "Scheduled · missed ×2 merged · precheck passed ·
- * 210 ms", "Manual · precheck exit 1 · 18 ms", "Scheduled · thread was
- * snoozed". A precheck that never ran (pending) is left out.
+ * One line of run facts: "Scheduled · 2m 14s · precheck passed · 210 ms"
+ * (the agent turn's duration when known), "Scheduled · missed ×2 merged",
+ * "Manual · precheck exit 1 · 18 ms", "Scheduled · thread was snoozed". A
+ * precheck that never ran (pending) is left out.
  */
 export function runMeta(run: ThreadAutomationRun): string {
   const parts: string[] = [run.occurrence === "manual" ? "Manual" : "Scheduled"];
+  const duration = runTurnDuration(run.turn);
+  if (duration) parts.push(duration);
   if (run.coalescedCount > 0) parts.push(`missed ×${run.coalescedCount} merged`);
   const skipReason = runSkipReason(run);
   if (skipReason) parts.push(skipReason);
@@ -410,10 +492,32 @@ export function dayTimePhrase(iso: string, now: Date = new Date()): string {
   }
 }
 
-/** How long ago the last run ended (or was due): "21h ago", "just now". */
+/**
+ * How long ago the last run ended, its agent turn's end when known (or when
+ * it was due): "21h ago", "just now".
+ */
 export function lastRunAge(lastRun: SummaryAutomationRun, now: number): string {
   const age = shortRelativeTime(lastRunAt(lastRun), now);
   return age === "now" ? "just now" : `${age} ago`;
+}
+
+/**
+ * A thread's live turn as a hint beside an automation's state, in the
+ * sidebar's colours: "Running" (starting, running or stopping) in info-blue,
+ * or "Waiting for you" (an approval or a question) in amber; undefined while
+ * no turn is in flight. A hint only: it never changes the automation's
+ * health or attention.
+ */
+export function threadLiveState(
+  runState: ThreadRunState,
+):
+  | { readonly label: "Running"; readonly tone: "info" }
+  | { readonly label: "Waiting for you"; readonly tone: "warning" }
+  | undefined {
+  if (threadRunPhase(runState) !== "busy") return undefined;
+  return runState === "waiting_for_approval" || runState === "waiting_for_input"
+    ? { label: "Waiting for you", tone: "warning" }
+    : { label: "Running", tone: "info" };
 }
 
 /**
