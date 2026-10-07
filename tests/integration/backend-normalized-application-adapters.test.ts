@@ -2081,6 +2081,19 @@ describe("backend-normalized application adapters", () => {
         dispatchMutationId: "summary-dispatch",
         now: 900,
       });
+      // The latest run's turn settlement is read in the same summary query.
+      automation.settleRunTurn(
+        current.scope,
+        current.threadId,
+        "summary-dispatch",
+        {
+          turnId: "summary-turn",
+          outcome: "failed",
+          settledAt: 960,
+          startedAt: 905,
+          endedAt: 950,
+        },
+      );
 
       service.saveDraft(
         current.scope,
@@ -2227,6 +2240,7 @@ describe("backend-normalized application adapters", () => {
             occurrence: "scheduled",
             scheduledFor: new Date(900).toISOString(),
             resultThreadId: current.threadId,
+            turn: { outcome: "failed", endedAt: new Date(950).toISOString() },
           },
         },
       });

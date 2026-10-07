@@ -260,6 +260,14 @@ describe("AgentManagementService discovery", () => {
   it("keeps the thread.list automation summary to its frozen fields", async () => {
     const current = discoveryFixture();
     try {
+      const lastRun = {
+        id: "run-1",
+        state: "completed" as const,
+        occurrence: "scheduled" as const,
+        scheduledFor: new Date(8_000).toISOString(),
+        finishedAt: new Date(8_100).toISOString(),
+        resultThreadId: current.older.id,
+      };
       const frozen = {
         status: "enabled" as const,
         runMode: "same_thread" as const,
@@ -267,12 +275,17 @@ describe("AgentManagementService discovery", () => {
         nextRunAt: new Date(9_000).toISOString(),
         revision: 2,
         hasPrecheck: false,
+        lastRun,
       };
       current.automations.set(current.older.id, {
         ...frozen,
         schedule: { kind: "cron", expression: "0 2 * * *", timeZone: "UTC" },
         misfirePolicy: "skip",
         promptPreview: "Review the repository.",
+        lastRun: {
+          ...lastRun,
+          turn: { outcome: "failed", endedAt: new Date(8_500).toISOString() },
+        },
       });
       const page = await current.management.listThreads(
         current.scope,

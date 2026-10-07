@@ -21,7 +21,11 @@ import type {
   AutomationRunRecord,
   AutomationSchedule,
 } from "./automation-models.js";
-import { presentAutomationSchedule } from "./automation-presentation.js";
+import {
+  presentAutomationLastRunTurn,
+  presentAutomationRunTurn,
+  presentAutomationSchedule,
+} from "./automation-presentation.js";
 import {
   AutomationScheduleEvaluator,
   AutomationScheduleValidationError,
@@ -740,6 +744,7 @@ export class AutomationService implements DurableDeadlineSource {
     const lastRun = this.#repository
       .listRuns(scope, definition.id, { limit: 1 })
       .at(0);
+    const lastRunTurn = lastRun && presentAutomationLastRunTurn(lastRun);
     return {
       status: definitionStatus(definition),
       runMode: definition.runMode,
@@ -764,6 +769,7 @@ export class AutomationService implements DurableDeadlineSource {
                   }
                 : {}),
               ...(lastRun.errorCode ? { errorCode: lastRun.errorCode } : {}),
+              ...(lastRunTurn ? { turn: lastRunTurn } : {}),
             },
           }
         : {}),
@@ -1041,6 +1047,7 @@ export class AutomationService implements DurableDeadlineSource {
 }
 
 function presentRun(run: AutomationRunRecord): ThreadAutomationRun {
+  const turn = presentAutomationRunTurn(run);
   return {
     id: run.id,
     occurrence: run.occurrenceKind,
@@ -1061,6 +1068,7 @@ function presentRun(run: AutomationRunRecord): ThreadAutomationRun {
     ...(run.forceResetAt === null
       ? {}
       : { forceResetAt: iso(run.forceResetAt) }),
+    ...(turn ? { turn } : {}),
     ...(run.precheckStatus === "not_configured"
       ? {}
       : {

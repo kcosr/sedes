@@ -192,13 +192,21 @@ export type AutomationTurnSettlementInput = {
   readonly endedAt: number | null;
 };
 
-/** States behind each run-history filter; `null` reads every run. */
-const RUN_FILTER_STATES: Readonly<
-  Record<AutomationRunFilter, readonly AutomationRunState[] | null>
+/**
+ * Disjoint conditions behind each run-history filter; `null` reads every run.
+ * A failed turn is a problem however its delivery ended, so its branch leaves
+ * out the states the other problem branches already list.
+ */
+const RUN_FILTER_BRANCHES: Readonly<
+  Record<AutomationRunFilter, readonly string[] | null>
 > = {
   all: null,
-  problems: ["failed", "uncertain"],
-  skipped: ["skipped"],
+  problems: [
+    "AND state = 'failed'",
+    "AND state = 'uncertain'",
+    "AND turn_outcome = 'failed' AND state NOT IN ('failed', 'uncertain')",
+  ],
+  skipped: ["AND state = 'skipped'"],
 };
 
 export class AutomationRepository {
@@ -1652,12 +1660,12 @@ export class AutomationRepository {
         "The automation cursor is invalid.",
       );
     }
-    const page = (state: string) => `
+    const page = (condition: string) => `
       SELECT ${runColumns}
       FROM automation_runs
       WHERE tenant_id = ? AND owner_principal_id = ?
         AND automation_id = ?
-        ${state}
+        ${condition}
         ${input.after ? "AND (created_at < ? OR (created_at = ? AND id < ?))" : ""}
       ORDER BY created_at DESC, id DESC
       LIMIT ?
@@ -1671,47 +1679,53 @@ export class AutomationRepository {
         : []),
       input.limit,
     ];
-    const states = RUN_FILTER_STATES[input.filter ?? "all"];
-    if (states === null) {
+    const branches = RUN_FILTER_BRANCHES[input.filter ?? "all"];
+    if (branches === null) {
       return (
         this.database.prepare(page("")).all(...pageParameters) as RunRow[]
       ).map(runFromRow);
     }
-    // One ordered, limited branch per state over automation_runs_state_history
-    // keeps a page bounded by its size, however sparse the matching runs are.
+    // One ordered, limited branch per condition, each over its own index
+    // (automation_runs_state_history per state, and
+    // automation_runs_failed_turn_history for failed turns), keeps a page
+    // bounded by its size, however sparse the matching runs are.
     return (
       this.database
         .prepare(
           `
-            ${states.map(() => `SELECT * FROM (${page("AND state = ?")})`).join(" UNION ALL ")}
+            ${branches.map((condition) => `SELECT * FROM (${page(condition)})`).join(" UNION ALL ")}
             ORDER BY createdAt DESC, id DESC
             LIMIT ?
           `,
         )
         .all(
-          ...states.flatMap((state) => [
-            ...pageParameters.slice(0, 3),
-            state,
-            ...pageParameters.slice(3),
-          ]),
+          ...branches.flatMap(() => pageParameters),
           input.limit,
         ) as RunRow[]
     ).map(runFromRow);
   }
 
   countRuns(scope: RequestScope, automationId: string): AutomationRunCounts {
+    const parameters = [scope.tenantId, scope.principalId, automationId];
     const row = this.database
       .prepare(
         `
           SELECT count(*) AS total,
-            coalesce(sum(state IN ('failed', 'uncertain')), 0) AS problems,
+            coalesce(sum(state IN ('failed', 'uncertain')), 0) + (
+              SELECT count(*)
+              FROM automation_runs
+              WHERE tenant_id = ? AND owner_principal_id = ?
+                AND automation_id = ?
+                AND turn_outcome = 'failed'
+                AND state NOT IN ('failed', 'uncertain')
+            ) AS problems,
             coalesce(sum(state = 'skipped'), 0) AS skipped
           FROM automation_runs
           WHERE tenant_id = ? AND owner_principal_id = ?
             AND automation_id = ?
         `,
       )
-      .get(scope.tenantId, scope.principalId, automationId) as {
+      .get(...parameters, ...parameters) as {
       total: number;
       problems: number;
       skipped: number;
