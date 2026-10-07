@@ -11,6 +11,7 @@ import type {
   AutomationRunRecord,
   AutomationRunState,
   AutomationSchedule,
+  AutomationTurnOutcome,
 } from "../../domain/automation-models.js";
 import { DomainError } from "../../domain/errors.js";
 import type { RequestScope } from "../../identity/identity-provider.js";
@@ -79,6 +80,11 @@ const runColumns = `
   accepted_at AS acceptedAt,
   finished_at AS finishedAt,
   force_reset_at AS forceResetAt,
+  turn_id AS turnId,
+  turn_outcome AS turnOutcome,
+  turn_settled_at AS turnSettledAt,
+  turn_started_at AS turnStartedAt,
+  turn_ended_at AS turnEndedAt,
   created_at AS createdAt,
   updated_at AS updatedAt
 `;
@@ -176,6 +182,14 @@ export type AutomationMutationReceipt = {
   readonly mutationKind: "create" | "update" | "state" | "delete";
   readonly requestFingerprint: string;
   readonly resultRevision: number;
+};
+
+export type AutomationTurnSettlementInput = {
+  readonly turnId: string;
+  readonly outcome: AutomationTurnOutcome;
+  readonly settledAt: number;
+  readonly startedAt: number | null;
+  readonly endedAt: number | null;
 };
 
 /** States behind each run-history filter; `null` reads every run. */
@@ -352,6 +366,101 @@ export class AutomationRepository {
       );
     }
     return rows[0] ? runFromRow(rows[0]) : undefined;
+  }
+
+  /**
+   * Records how the turn a run's prompt started ended, from the completion
+   * rail's observation of `operationId` (the run's dispatch mutation) on its
+   * result thread, and fills in turn times the settlement still lacks.
+   * Replays are frequent, so this returns the run only when it changed it.
+   * Force-reset runs are immutable and never settle.
+   */
+  settleRunTurn(
+    scope: RequestScope,
+    resultThreadId: string,
+    operationId: string,
+    input: AutomationTurnSettlementInput,
+  ): AutomationRunRecord | undefined {
+    return this.database.transaction(() => {
+      const run = this.findRunByDispatchMutation(
+        scope,
+        resultThreadId,
+        operationId,
+      );
+      if (!run || run.forceResetAt !== null) return undefined;
+      if (run.turnId !== null && run.turnId !== input.turnId) {
+        throw new DomainError(
+          "conflict",
+          "The automation run already settled a different turn.",
+        );
+      }
+      let startedAt = run.turnStartedAt ?? input.startedAt;
+      let endedAt = run.turnEndedAt ?? input.endedAt;
+      if (startedAt !== null && endedAt !== null && endedAt < startedAt) {
+        startedAt = run.turnStartedAt;
+        endedAt = run.turnEndedAt;
+      }
+      if (
+        run.turnId !== null &&
+        startedAt === run.turnStartedAt &&
+        endedAt === run.turnEndedAt
+      ) {
+        return undefined;
+      }
+      this.database
+        .prepare(
+          `
+            UPDATE automation_runs
+            SET turn_id = ?, turn_outcome = ?, turn_settled_at = ?,
+              turn_started_at = ?, turn_ended_at = ?
+            WHERE tenant_id = ? AND owner_principal_id = ?
+              AND automation_id = ? AND id = ?
+          `,
+        )
+        .run(
+          input.turnId,
+          run.turnOutcome ?? input.outcome,
+          run.turnSettledAt ?? input.settledAt,
+          startedAt,
+          endedAt,
+          scope.tenantId,
+          scope.principalId,
+          run.automationId,
+          run.id,
+        );
+      return this.getRun(scope, run.automationId, run.id);
+    })();
+  }
+
+  /**
+   * Settles every unsettled run whose turn the completion rail already
+   * recorded: observations that arrived before the observer was bound or
+   * across a crash. The rail keeps no turn times, so a later replay adds
+   * them. Returns the runs it settled.
+   */
+  settleRunTurnsFromCompletions(): AutomationRunRecord[] {
+    return (
+      this.database
+        .prepare(
+          `
+            UPDATE automation_runs AS run
+            SET turn_id = observation.application_turn_id,
+              turn_outcome = observation.completion_outcome,
+              turn_settled_at = observation.completion_observed_at
+            FROM submission_completion_observations AS observation
+            WHERE observation.tenant_id = run.tenant_id
+              AND observation.owner_principal_id = run.owner_principal_id
+              AND observation.application_thread_id =
+                coalesce(run.child_thread_id, run.anchor_thread_id)
+              AND observation.operation_id = run.dispatch_mutation_id
+              AND observation.application_turn_id IS NOT NULL
+              AND run.turn_id IS NULL
+              AND run.force_reset_at IS NULL
+            RETURNING ${runColumns}
+          `,
+        )
+        .all() as RunRow[]
+    ).map(runFromRow);
   }
 
   findDefinitionForThread(

@@ -57,6 +57,9 @@ export type AutomationRunState =
   | "skipped"
   | "uncertain";
 
+/** How the agent turn a run's prompt started ended, from the completion rail. */
+export type AutomationTurnOutcome = "completed" | "interrupted" | "failed";
+
 export type AutomationPrecheckStatus =
   "not_configured" | "pending" | "checking" | "passed" | "skipped" | "failed";
 
@@ -97,6 +100,18 @@ export type AutomationRunRecord = {
   readonly finishedAt: number | null;
   /** Set when a thread force reset abandoned this run; such runs are immutable. */
   readonly forceResetAt: number | null;
+  /**
+   * The settlement of the agent turn the run's prompt started: the
+   * application turn id, its outcome and when Sedes observed the end, all
+   * null until the turn settles and then never changed. Separate from
+   * `state`, which records delivery.
+   */
+  readonly turnId: string | null;
+  readonly turnOutcome: AutomationTurnOutcome | null;
+  readonly turnSettledAt: number | null;
+  /** The turn's own start and end, when its backend reports them. */
+  readonly turnStartedAt: number | null;
+  readonly turnEndedAt: number | null;
   readonly createdAt: number;
   readonly updatedAt: number;
 };
