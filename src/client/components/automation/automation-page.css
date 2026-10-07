@@ -324,6 +324,12 @@
   font-size: var(--text-meta);
 }
 
+/* A turn's usage keeps the transcript popover's measure, so each count
+   stays beside its label instead of across the page. */
+.automation-run-facts .recorded-usage {
+  max-width: 16rem;
+}
+
 /* The whole history: a bounded scroller with its own frame. The frame sits
    outside the rows, so they keep the compact list's columns. */
 .automation-runs-scroll {
