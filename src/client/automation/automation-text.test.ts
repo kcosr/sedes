@@ -308,7 +308,16 @@ describe("runTurnDuration", () => {
   it("is unknown without both times or without a turn", () => {
     expect(runTurnDuration(turn({ startedAt: undefined }))).toBeUndefined();
     expect(runTurnDuration(turn({ endedAt: undefined }))).toBeUndefined();
+    expect(runTurnDuration(turn({ startedAt: undefined, endedAt: undefined }))).toBeUndefined();
     expect(runTurnDuration(undefined)).toBeUndefined();
+  });
+
+  it("is unknown when the end is not after the start, never 0s", () => {
+    // A turn cut off by a restart can carry its start as its end.
+    expect(runTurnDuration(turn({ endedAt: "2026-10-06T02:00:03.000Z" }))).toBeUndefined();
+    expect(runTurnDuration(turn({ endedAt: "2026-10-06T02:00:02.000Z" }))).toBeUndefined();
+    // Any real length still reads, rounded up to a second.
+    expect(runTurnDuration(turn({ endedAt: "2026-10-06T02:00:03.200Z" }))).toBe("1s");
   });
 });
 
@@ -370,6 +379,7 @@ describe("runMeta", () => {
     expect(runMeta(makeRun({ turn: turn({ outcome: "interrupted", startedAt: undefined }) }))).toBe(
       "Scheduled",
     );
+    expect(runMeta(makeRun({ turn: turn({ endedAt: "2026-10-06T02:00:03.000Z" }) }))).toBe("Scheduled");
   });
 
   it("names a precheck skip once, with its duration", () => {

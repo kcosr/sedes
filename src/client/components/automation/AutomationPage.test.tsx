@@ -963,6 +963,25 @@ describe("AutomationPage: turn usage", () => {
     expect(fixture.api.getUsage).not.toHaveBeenCalled();
   });
 
+  it("treats a turn whose usage read finds none as no usage, not an error", async () => {
+    const fixture = renderWithUsage(
+      {
+        getUsageAvailability: vi.fn().mockResolvedValue({
+          threadId: THREAD_ID,
+          revision: "1",
+          turns: [{ turnId: "turn-1", available: true }],
+        }),
+        getUsage: vi.fn().mockRejectedValue(new ApiError(404, "not_found", "No usage was recorded for this turn.", false)),
+      },
+      true,
+    );
+    const detail = await openDetail();
+    await waitFor(() => expect(fixture.api.getUsage).toHaveBeenCalled());
+    await waitFor(() => expect(within(detail).queryByText("Usage")).toBeNull());
+    expect(within(detail).queryByText(/could not be refreshed|No usage recorded/u)).toBeNull();
+    expect(within(detail).getByRole("link", { name: "Go to turn" })).toBeInTheDocument();
+  });
+
   it("reads no usage while experimental usage is off", async () => {
     const fixture = renderWithUsage({}, false);
     const detail = await openDetail();

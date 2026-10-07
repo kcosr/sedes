@@ -337,13 +337,15 @@ export function runRunningFor(
 /**
  * How long a run's agent turn took, as the transcript prints durations
  * ("2m 14s"); undefined unless the backend reported when it started and
- * ended.
+ * ended. An end that is not after the start is a placeholder (a recovered
+ * turn whose end was never observed), not a zero-length turn.
  */
 export function runTurnDuration(
   turn: Pick<RunTurn, "startedAt" | "endedAt"> | undefined,
 ): string | undefined {
   if (turn?.startedAt === undefined || turn.endedAt === undefined) return undefined;
-  return formatActivityDuration(Date.parse(turn.endedAt) - Date.parse(turn.startedAt));
+  const milliseconds = Date.parse(turn.endedAt) - Date.parse(turn.startedAt);
+  return milliseconds > 0 ? formatActivityDuration(milliseconds) : undefined;
 }
 
 /** Why a skipped run did not reach the agent; undefined for other runs. */

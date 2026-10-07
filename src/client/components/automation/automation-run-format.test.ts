@@ -112,6 +112,8 @@ describe("run format", () => {
     expect(runAccessibleName(settled("failed", 40), NOW)).toBe(`${time} Failed after 40s, Scheduled`);
     expect(runAccessibleName(settled("interrupted", 300), NOW)).toBe(`${time} Interrupted after 5m, Scheduled`);
     expect(runAccessibleName(settled("interrupted"), NOW)).toBe(`${time} Interrupted, Scheduled`);
+    // An end equal to the start is no duration.
+    expect(runAccessibleName(settled("completed", 0), NOW)).toBe(`${time} Finished, Scheduled`);
 
     const delivered = run({ scheduledFor, acceptedAt: new Date(2026, 9, 6, 3, 36).toISOString() });
     expect(runAccessibleName(delivered, NOW, true)).toBe(`${time} Running for 4m, Scheduled`);
@@ -166,6 +168,11 @@ describe("run format", () => {
     });
     expect(runTurnSummary({ ...turn, outcome: "interrupted", startedAt: undefined, endedAt: undefined })).toEqual({
       outcome: "Interrupted",
+    });
+    // A recovered turn without its own end: the times as reported, no duration.
+    expect(runTurnSummary({ ...turn, endedAt: turn.startedAt })).toEqual({
+      outcome: "Finished",
+      times: `Started ${started} · ended ${started}`,
     });
   });
 });

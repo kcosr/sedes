@@ -400,8 +400,9 @@ const selectUsageEnabled = (state: ApplicationClientState): boolean =>
 
 /**
  * The usage cache for a settled turn while experimental usage accounting is
- * on, once the server reports usage for the turn; undefined otherwise. The
- * cache, like a thread store's, lives only as long as its consumer.
+ * on, once the server reports usage for the turn; undefined otherwise,
+ * including when the turn's usage read finds none (404). The cache, like a
+ * thread store's, lives only as long as its consumer.
  */
 function useTurnUsage(
   store: RunsStore,
@@ -427,11 +428,12 @@ function useTurnUsage(
       cache && turnId !== undefined ? cache.subscribe(turnId, listener) : () => undefined,
     [cache, turnId],
   );
-  const available = useCallback(
-    () => cache !== undefined && turnId !== undefined && cache.getSnapshot(turnId).available === true,
-    [cache, turnId],
-  );
-  return useSyncExternalStore(subscribe, available, available) ? cache : undefined;
+  const recorded = useCallback(() => {
+    if (cache === undefined || turnId === undefined) return false;
+    const usage = cache.getSnapshot(turnId);
+    return usage.available === true && !usage.missing;
+  }, [cache, turnId]);
+  return useSyncExternalStore(subscribe, recorded, recorded) ? cache : undefined;
 }
 
 /**
