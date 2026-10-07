@@ -51,7 +51,18 @@
 /* The dot trails its item, so a wrapped line never starts with one. */
 .automation-page-meta > :not(:last-child)::after {
   margin-left: var(--space-1-5);
+  color: var(--muted-foreground-2);
   content: "·";
+}
+
+/* The thread's live turn, a hint in the sidebar's colours: info-blue while
+   it runs, amber while it waits for the user. */
+.automation-page-meta > [data-tone="info"] {
+  color: var(--info);
+}
+
+.automation-page-meta > [data-tone="warning"] {
+  color: var(--warning);
 }
 
 /* Phones: the title takes the full width, so Run now and ⋯ get their own
@@ -209,6 +220,12 @@
   height: var(--icon-sm);
 }
 
+/* A finished turn's check is the one success-toned run glyph; its words
+   stay neutral. */
+.automation-run-glyph [data-tone="success"] {
+  color: var(--success);
+}
+
 .automation-run-time {
   overflow: hidden;
   color: var(--muted-foreground);
@@ -236,7 +253,8 @@
   font-weight: var(--weight-medium);
 }
 
-.automation-run-state[data-health="sending"] {
+.automation-run-state[data-health="sending"],
+.automation-run-state[data-health="running"] {
   color: var(--info);
 }
 

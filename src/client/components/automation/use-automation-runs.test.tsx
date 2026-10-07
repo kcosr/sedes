@@ -176,6 +176,31 @@ describe("useAutomationRuns", () => {
     await waitFor(() => expect(result.current.items).toEqual([delivered, older]));
     expect(result.current.arrived).toEqual([]);
     expect(list).toHaveBeenCalledTimes(3);
+
+    // Its turn settling, with the state unchanged, refreshes it too.
+    const finished = {
+      ...delivered,
+      turn: { id: "turn-1", outcome: "failed" as const, settledAt: new Date().toISOString() },
+    };
+    list.mockResolvedValueOnce(page([finished, older]));
+    act(() =>
+      fixture.publish([
+        {
+          automation: automationSummary({
+            lastRun: {
+              id: fresh.id,
+              state: "completed",
+              occurrence: "scheduled",
+              scheduledFor: fresh.scheduledFor,
+              turn: { outcome: "failed" },
+            },
+          }),
+        },
+      ]),
+    );
+    await waitFor(() => expect(result.current.items).toEqual([finished, older]));
+    expect(result.current.arrived).toEqual([]);
+    expect(list).toHaveBeenCalledTimes(4);
   });
 
   it("pages on through a gap after more than a page of runs arrived", async () => {
@@ -317,7 +342,14 @@ describe("useAutomationRuns", () => {
     const { result } = renderHook(() => useRuns(fixture, "problems"));
     await waitFor(() => expect(result.current.status).toBe("ready"));
     act(() => result.current.upsert(run({ state: "claimed" })));
+    act(() =>
+      result.current.upsert(run({ turn: { id: "turn-1", outcome: "interrupted", settledAt: new Date().toISOString() } })),
+    );
     expect(result.current.items).toEqual([]);
+    // A failed turn is a problem, as the server counts and filters it.
+    const failedTurn = run({ turn: { id: "turn-2", outcome: "failed", settledAt: new Date().toISOString() } });
+    act(() => result.current.upsert(failedTurn));
+    expect(result.current.items).toEqual([failedTurn]);
   });
 
   it("reports a failed first page and retries it", async () => {

@@ -39,6 +39,8 @@ import {
   dayTimePhrase,
   describeSchedule,
   lastRunAge,
+  runTurnRunning,
+  threadLiveState,
 } from "../../automation/automation-text.js";
 import {
   automationActionAvailability,
@@ -82,6 +84,7 @@ import { useNextOccurrences } from "./use-next-occurrences.js";
 import {
   automationLiveKey,
   useAutomationAnchor,
+  useThreadRunState,
   type AutomationThread,
   type AutomationThreadSource,
 } from "./use-automation-thread.js";
@@ -337,6 +340,22 @@ function AutomationDetails({
     available === undefined ? undefined : { available, unavailableReason },
   );
   const lastRun = automation.lastRun;
+  // The latest run's result thread: this thread, or a fork run's own thread.
+  const resultThreadId = lastRun?.resultThreadId ?? thread.id;
+  const forkRunState = useThreadRunState(
+    store,
+    resultThreadId === thread.id ? undefined : resultThreadId,
+  );
+  const runningRunId =
+    lastRun &&
+    runTurnRunning(
+      lastRun,
+      true,
+      resultThreadId === thread.id ? thread.runState : forkRunState,
+    )
+      ? lastRun.id
+      : undefined;
+  const liveState = threadLiveState(thread.runState);
   const lastRunDetail = lastRun
     ? runs.items.find(({ id }) => id === lastRun.id)
     : undefined;
@@ -399,6 +418,7 @@ function AutomationDetails({
       status={<StatusPill tone={health.tone}>{health.label}</StatusPill>}
       description={
         <span className="automation-page-meta">
+          {liveState ? <span data-tone={liveState.tone}>{liveState.label}</span> : null}
           <span>{headerState(automation, health, thread, now)}</span>
           {thread.projectLabel ? <span>{thread.projectLabel}</span> : null}
           <span>{thread.backendLabel}</span>
@@ -561,6 +581,7 @@ function AutomationDetails({
       <AutomationRunsSection
         store={store}
         runs={runs}
+        runningRunId={runningRunId}
         view={runsView}
         onViewChange={setRunsView}
         nextRunAt={health.kind === "active" ? automation.nextRunAt : undefined}

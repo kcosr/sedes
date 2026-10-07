@@ -79,16 +79,23 @@ export function mergeRunPage(
     : { items: [...page.items, ...older], nextCursor: currentCursor };
 }
 
-/** Whether a run belongs in the list for a filter (problems: failed or uncertain). */
+/**
+ * Whether a run belongs in the list for a filter, as the server filters:
+ * problems are failed or uncertain runs and runs whose agent turn failed.
+ */
 function runMatchesFilter(
-  run: Pick<ThreadAutomationRun, "state">,
+  run: Pick<ThreadAutomationRun, "state" | "turn">,
   filter: AutomationRunFilter,
 ): boolean {
   switch (filter) {
     case "all":
       return true;
     case "problems":
-      return run.state === "failed" || run.state === "uncertain";
+      return (
+        run.state === "failed" ||
+        run.state === "uncertain" ||
+        run.turn?.outcome === "failed"
+      );
     case "skipped":
       return run.state === "skipped";
   }
