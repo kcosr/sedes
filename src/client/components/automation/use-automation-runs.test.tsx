@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { AutomationRunFilter } from "../../../shared/protocol/domain.js";
 import {
   automationStore,
@@ -12,7 +12,6 @@ import {
 } from "./automation-test-fixture.js";
 import {
   AUTOMATION_RUNS_PAGE_SIZE,
-  TURN_END_REFRESH_DELAY_MILLISECONDS,
   mergeRunPage,
   useAutomationRuns,
 } from "./use-automation-runs.js";
@@ -21,16 +20,8 @@ import { useAutomationThread } from "./use-automation-thread.js";
 /** The fixture thread's runs, read as the page does: from its live summary. */
 function useRuns(fixture: AutomationStore, filter: AutomationRunFilter) {
   const thread = useAutomationThread(fixture.store, THREAD_ID);
-  return useAutomationRuns(
-    fixture.store,
-    thread ?? { id: THREAD_ID, automation: null, runState: "idle" },
-    filter,
-  );
+  return useAutomationRuns(fixture.store, thread ?? { id: THREAD_ID, automation: null }, filter);
 }
-
-afterEach(() => {
-  vi.useRealTimers();
-});
 
 const counts = { all: 30, problems: 2, skipped: 4 };
 
@@ -370,127 +361,5 @@ describe("useAutomationRuns", () => {
     act(() => result.current.retry());
     await waitFor(() => expect(result.current.status).toBe("ready"));
     expect(list).toHaveBeenCalledTimes(2);
-  });
-});
-
-describe("useAutomationRuns: turns that end outside the latest run", () => {
-  const CHILD_ID = "30000000-0000-4000-8000-000000000009";
-  const settled = (outcome: "completed" | "failed" = "completed") => ({
-    id: "turn-n",
-    outcome,
-    settledAt: new Date().toISOString(),
-  });
-
-  /** Waits out the turn-end refresh's delay and lets its request answer. */
-  async function afterTurnEndDelay(): Promise<void> {
-    await act(async () => {
-      vi.advanceTimersByTime(TURN_END_REFRESH_DELAY_MILLISECONDS);
-    });
-    await act(async () => {
-      await Promise.resolve();
-    });
-  }
-
-  it("refreshes once when this thread's turn ends, settling a run behind the queued next one", async () => {
-    // Run N delivered and its turn is running; run N+1 waits behind it, so
-    // the summary's latest run (N+1, queued) does not move when N settles.
-    const earlier = run({ state: "completed" });
-    const queued = run({ state: "queued", acceptedAt: undefined, finishedAt: undefined });
-    const summary = automationSummary({
-      lastRun: { id: queued.id, state: "queued", occurrence: "scheduled", scheduledFor: queued.scheduledFor },
-    });
-    const list = vi.fn().mockResolvedValueOnce(page([queued, earlier]));
-    const fixture = automationStore([{ runState: "running", automation: summary }], { listThreadAutomationRuns: list });
-    const { result } = renderHook(() => useRuns(fixture, "all"));
-    await waitFor(() => expect(result.current.status).toBe("ready"));
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-
-    const finished = { ...earlier, turn: settled() };
-    list.mockResolvedValueOnce(page([queued, finished]));
-    // N's turn ends and N+1 starts at once: one refresh, after the delay.
-    act(() => fixture.publish([{ runState: "idle", automation: summary }]));
-    act(() => fixture.publish([{ runState: "starting", automation: summary }]));
-    expect(list).toHaveBeenCalledTimes(1);
-    await afterTurnEndDelay();
-    expect(list).toHaveBeenCalledTimes(2);
-    expect(list).toHaveBeenLastCalledWith(THREAD_ID, expect.objectContaining({ filter: "all" }));
-    expect(result.current.items).toEqual([queued, finished]);
-    expect(result.current.arrived).toEqual([]);
-  });
-
-  it("does not refresh for steps within a turn or while nothing ends", async () => {
-    const delivered = run({ state: "completed" });
-    const summary = automationSummary({
-      lastRun: { id: delivered.id, state: "completed", occurrence: "scheduled", scheduledFor: delivered.scheduledFor },
-    });
-    const list = vi.fn().mockResolvedValue(page([delivered]));
-    const fixture = automationStore([{ runState: "running", automation: summary }], { listThreadAutomationRuns: list });
-    const { result } = renderHook(() => useRuns(fixture, "all"));
-    await waitFor(() => expect(result.current.status).toBe("ready"));
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-
-    for (const runState of ["waiting_for_approval", "running", "stopping"] as const) {
-      act(() => fixture.publish([{ runState, automation: summary }]));
-    }
-    await afterTurnEndDelay();
-    expect(list).toHaveBeenCalledTimes(1);
-    // Stopping to idle ends the turn: one refresh.
-    act(() => fixture.publish([{ runState: "idle", automation: summary }]));
-    await afterTurnEndDelay();
-    expect(list).toHaveBeenCalledTimes(2);
-    // Idle to idle, or a turn starting, is not an ending.
-    act(() => fixture.publish([{ runState: "idle", automation: summary }]));
-    act(() => fixture.publish([{ runState: "running", automation: summary }]));
-    await afterTurnEndDelay();
-    expect(list).toHaveBeenCalledTimes(2);
-  });
-
-  it("refreshes when a listed fork run's own thread ends its turn, until that run settles", async () => {
-    const latest = run({ state: "completed", runMode: "clone", resultThreadId: "30000000-0000-4000-8000-000000000010" });
-    const forked = run({ state: "completed", runMode: "clone", resultThreadId: CHILD_ID });
-    const summary = automationSummary({
-      runMode: "clone",
-      lastRun: { id: latest.id, state: "completed", occurrence: "scheduled", scheduledFor: latest.scheduledFor },
-    });
-    const finished = { ...forked, turn: settled("failed") };
-    const list = vi
-      .fn()
-      .mockResolvedValueOnce(page([latest, forked]))
-      .mockResolvedValue(page([latest, finished]));
-    const threads = (childRunState: "running" | "idle") => [
-      { automation: summary },
-      { id: CHILD_ID, title: "Fork", runState: childRunState, automation: null },
-    ];
-    const fixture = automationStore(threads("running"), { listThreadAutomationRuns: list });
-    const { result } = renderHook(() => useRuns(fixture, "all"));
-    await waitFor(() => expect(result.current.status).toBe("ready"));
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-
-    act(() => fixture.publish(threads("idle")));
-    await afterTurnEndDelay();
-    expect(list).toHaveBeenCalledTimes(2);
-    expect(result.current.items).toEqual([latest, finished]);
-
-    // Its run settled, so the fork is no longer watched.
-    act(() => fixture.publish(threads("running")));
-    act(() => fixture.publish(threads("idle")));
-    await afterTurnEndDelay();
-    expect(list).toHaveBeenCalledTimes(2);
-  });
-
-  it("stops a pending refresh when the page goes away", async () => {
-    const delivered = run({ state: "completed" });
-    const summary = automationSummary({
-      lastRun: { id: delivered.id, state: "completed", occurrence: "scheduled", scheduledFor: delivered.scheduledFor },
-    });
-    const list = vi.fn().mockResolvedValue(page([delivered]));
-    const fixture = automationStore([{ runState: "running", automation: summary }], { listThreadAutomationRuns: list });
-    const { result, unmount } = renderHook(() => useRuns(fixture, "all"));
-    await waitFor(() => expect(result.current.status).toBe("ready"));
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    act(() => fixture.publish([{ runState: "idle", automation: summary }]));
-    unmount();
-    await afterTurnEndDelay();
-    expect(list).toHaveBeenCalledTimes(1);
   });
 });
