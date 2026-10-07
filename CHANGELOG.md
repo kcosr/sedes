@@ -4,15 +4,12 @@
 
 ### Breaking Changes
 
-- Browser and packaged clients require client protocol 142, which adds each
-  automation's schedule, missed-run policy, and prompt preview to thread
-  summaries, and its definition revision and precheck command to runs. Upgrade
-  clients together with the server.
+- Browser and packaged clients require client protocol 142, which adds
+  automation schedule details to thread summaries and runs. Upgrade clients
+  together with the server.
 
-- Resolving an uncertain automation run
-  (`POST /api/threads/:threadId/automation/runs/:runId/resolve`) returns
-  `{ run, automation }`, the run and the thread's automation afterwards,
-  instead of the run alone. Update scripts that read the response.
+- `POST /api/threads/:threadId/automation/runs/:runId/resolve` returns
+  `{ run, automation }` instead of the run alone. Update scripts that read it.
 
 - Browser and packaged clients require client protocol 141, including thread
   workpad counts. Direct inputs accept up to 256 KiB of text and 2 MiB per JSON
@@ -224,28 +221,20 @@
 
 ### Added
 
-- An **Automations** page lists every automation, grouped by status (Needs
-  attention, Upcoming, Paused, Suspended) or by project, with search over
-  titles and prompts, the sidebar Scope, and row actions to run, pause, enable,
-  or edit. Open it from **More** in the sidebar footer, or **View all** on the
-  sidebar's Upcoming, Scheduled, and Automations groups.
+- An **Automations** page lists every automation by status (Needs attention,
+  Upcoming, Paused, Suspended) or by project, with search and row actions. Open
+  it from **More** or **View all** on the sidebar's automation groups.
 
-- Each automation has a page with its state, a callout and action when it
-  needs you, its definition, and its runs: the latest five, or the full history
-  filtered to **Problems** or **Skipped**, with each run's timeline, precheck,
-  problem, revision, and result thread. **Mark as failed…** can resume the
-  schedule in the same step. A full-page editor creates and edits automations;
-  a new one offers **Save and enable** or **Save as paused**.
+- Each automation has its own page: its state with an action when it needs
+  you, its definition, and its run history (the latest five, or all runs with
+  **Problems** and **Skipped** filters and run details). A full-page editor
+  creates and edits automations, and a new one can be saved and enabled in one
+  step.
 
-- `GET /api/threads/:threadId/automation/capability` returns a thread's
-  automation capability without loading its transcript. Run history accepts
-  `filter=all|problems|skipped`, and its first page counts all, problem, and
-  skipped runs; migration 135 indexes runs for these reads. Resolve accepts
-  `resume: true` to enable the automation in the same transaction.
-
-- The automation CLI's `runs` accepts `--filter all|problems|skipped` and
-  prints the counts, and `resolve THREAD_ID RUN_ID [--resume]` marks an
-  uncertain run failed.
+- The automation API adds `GET …/automation/capability`, a run-history `filter`
+  with counts, `resume` when resolving an uncertain run, and `after` for
+  schedule previews. The CLI adds `runs --filter` and `resolve [--resume]`.
+  Migration 135 adds run indexes.
 
 - Agent thread switches can request one recording on an exact thread while
   Android is in the background and native voice is already ready. The request
@@ -473,23 +462,16 @@
 
 ### Changed
 
-- The automation page and editor replace the automation dialog. The header
-  button and **Automation…** in **Thread actions** and the thread menu open the
-  page; **Automate…**, now also in the thread menu, opens the editor. Links to
-  `/threads/<id>/automation` open the automation page.
+- The automation page and editor replace the automation dialog, and
+  `/threads/<id>/automation` links open the page.
 
-- A fork run's result thread is titled with its source thread's title and the
-  run time, such as "Nightly review · Oct 6, 3:15 AM", in the cron schedule's
-  time zone or in UTC. Existing threads keep their titles.
+- Automation states look the same in the sidebar, header, menus, and pages:
+  one icon, a muted pause for paused automations, red for a failed run, and
+  amber for an unknown outcome. Run history says **Delivered** (the agent
+  received the prompt) instead of "completed".
 
-- Run history names run states in words. **Delivered** replaces "completed":
-  the agent received the prompt, which does not mean its turn has finished.
-
-- Automation states read the same everywhere. Repeat is the automation icon in
-  menus, the header, and rows; paused and never-started automations show a
-  muted pause glyph, never a warning; the header button turns red after a
-  failed run and amber when the outcome is unknown; and upcoming times share
-  one format.
+- A fork run's result thread is titled with the run time, such as
+  "Nightly review · Oct 6, 3:15 AM".
 
 - Android voice preferences and speech credentials persist across connection
   switches and deletion. Thread selections and saved input remain specific to
@@ -848,14 +830,11 @@
 ### Fixed
 
 - An automation whose last run's outcome is unknown shows as needing
-  attention, in the sidebar's State view, on its row, and in the header,
-  instead of looking active or paused.
+  attention instead of looking active or paused.
 
-- Automation notices in a thread no longer break mid-word on phones, and a
-  failed run's notice is marked in red.
+- Automation notices in a thread no longer break mid-word on phones.
 
-- In the sidebar's Projects view, a row's location tag truncates before its
-  title, so automation shelf titles no longer shrink to a single character.
+- Sidebar Projects-view titles stay readable next to a long location tag.
 
 - Sidebar Tasks icons match the header button.
   ([#56](https://github.com/kcosr/sedes/pull/56))
