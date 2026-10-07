@@ -858,6 +858,10 @@
 - Force-resetting a thread forked by an automation run ends that run.
   ([#59](https://github.com/kcosr/sedes/pull/59))
 
+- The Automations list shows a run whose turn is still going as **Running**,
+  as the automation page does, instead of "Delivered".
+  ([#60](https://github.com/kcosr/sedes/pull/60))
+
 - Sidebar Tasks icons match the header button.
   ([#56](https://github.com/kcosr/sedes/pull/56))
 
