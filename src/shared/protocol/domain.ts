@@ -59,6 +59,17 @@ export const automationRunStateSchema = z.enum([
 ]);
 export type AutomationRunState = z.infer<typeof automationRunStateSchema>;
 
+/**
+ * How the agent turn an automation run started ended, from the completion
+ * rail. Recorded once; a delivered run has none until its turn settles.
+ */
+export const automationTurnOutcomeSchema = z.enum([
+  "completed",
+  "interrupted",
+  "failed",
+]);
+export type AutomationTurnOutcome = z.infer<typeof automationTurnOutcomeSchema>;
+
 /** Run-history filter: `problems` is failed or uncertain runs. */
 export const automationRunFilterSchema = z.enum(["all", "problems", "skipped"]);
 export type AutomationRunFilter = z.infer<typeof automationRunFilterSchema>;

@@ -38,6 +38,7 @@ import {
 import {
   applicationTurnIdSchema,
   automationMisfirePolicySchema,
+  automationTurnOutcomeSchema,
 } from "./domain.js";
 import { automationScheduleSchema } from "./automation.js";
 import {
@@ -1378,6 +1379,13 @@ export const normalizedThreadSummarySchema = z.strictObject({
           finishedAt: z.iso.datetime().optional(),
           resultThreadId: z.string().min(1).max(160).optional(),
           errorCode: z.string().min(1).max(120).optional(),
+          /** How the run's agent turn ended, once it settled. */
+          turn: z
+            .strictObject({
+              outcome: automationTurnOutcomeSchema,
+              endedAt: z.iso.datetime().optional(),
+            })
+            .optional(),
         })
         .optional(),
     })
