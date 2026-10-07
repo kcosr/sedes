@@ -1,4 +1,7 @@
-import type { NormalizedThreadSummary } from "../../shared/index.js";
+import type {
+  NormalizedThreadSummary,
+  ThreadRunState,
+} from "../../shared/index.js";
 import type { Tone } from "../components/ui/tone.js";
 
 /**
@@ -205,9 +208,37 @@ export function automationIdentityLabel(health: AutomationHealth): string {
     : `Automation ${health.label.toLowerCase()}`;
 }
 
-/** When the last run ended, or when it was due while it has no end yet. */
+/**
+ * When the last run ended: its agent turn's end when the backend reported
+ * it, else the run's own finish (for a delivered run, the delivery), else
+ * when it was due while it has no end yet.
+ */
 export function lastRunAt(lastRun: SummaryAutomationRun): string {
-  return lastRun.finishedAt ?? lastRun.scheduledFor;
+  return lastRun.turn?.endedAt ?? lastRun.finishedAt ?? lastRun.scheduledFor;
+}
+
+/**
+ * The phase of a thread's run state: settled (idle or failed), busy (a turn
+ * in flight: starting, running, waiting for the user or stopping), or
+ * transitioning (the backend is disconnected or reconciling).
+ */
+export function threadRunPhase(
+  runState: ThreadRunState,
+): "settled" | "busy" | "transitioning" {
+  switch (runState) {
+    case "idle":
+    case "failed":
+      return "settled";
+    case "disconnected":
+    case "reconciling":
+      return "transitioning";
+    case "starting":
+    case "running":
+    case "waiting_for_approval":
+    case "waiting_for_input":
+    case "stopping":
+      return "busy";
+  }
 }
 
 export interface AutomationSortSubject {

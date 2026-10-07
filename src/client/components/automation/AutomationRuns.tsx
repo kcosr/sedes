@@ -1,8 +1,14 @@
-import { Check, ChevronRight, CircleDashed } from "lucide-react";
-import { useEffect, useId, useState } from "react";
+import { Check, ChevronRight, CircleDashed, CircleStop } from "lucide-react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import type { ThreadAutomationRun } from "../../../shared/protocol/automation-presentation.js";
 import type { AutomationRunFilter } from "../../../shared/protocol/domain.js";
-import { threadPath } from "../../app/router.js";
+import { threadPath, threadTurnPath } from "../../app/router.js";
 import { useMediaQuery } from "../../app/use-media-query.js";
 import { useTouchDensity } from "../../app/use-touch-density.js";
 import {
@@ -12,9 +18,15 @@ import {
   runStateLabel,
 } from "../../automation/automation-text.js";
 import { futureTimeLabel } from "../../lib/time.js";
-import type { ApplicationClientStore } from "../../stores/ApplicationClientStore.js";
+import type {
+  ApplicationClientState,
+  ApplicationClientStore,
+} from "../../stores/ApplicationClientStore.js";
+import { UsageQueryCache } from "../../stores/UsageQueryCache.js";
+import { useApplicationStoreSelector } from "../../stores/use-application-store-selector.js";
 import { followLink } from "../settings/SettingsNav.js";
 import { SettingsSection } from "../settings/SettingsSection.js";
+import { RecordedUsage } from "../thread/RecordedUsage.js";
 import { Button } from "@client/components/ui/button";
 import { Callout } from "@client/components/ui/callout";
 import {
@@ -40,6 +52,7 @@ import {
   runKind,
   runPrecheckSummary,
   runTimeline,
+  runTurnSummary,
   type RunHealth,
 } from "./automation-run-format.js";
 import type { AutomationRuns } from "./use-automation-runs.js";
@@ -48,6 +61,8 @@ import { useThreadTitle } from "./use-automation-thread.js";
 /** Runs the compact list shows before "Show all runs". */
 const COMPACT_RUN_COUNT = 5;
 const PHONE_QUERY = "(max-width: 819px)";
+
+type RunsStore = Pick<ApplicationClientStore, "api" | "subscribe" | "getSnapshot">;
 
 export interface AutomationRunsView {
   /** The full history in its bounded scroller, with the filter. */
@@ -74,6 +89,7 @@ function plural(count: number, one: string, many: string): string {
 export function AutomationRunsSection({
   store,
   runs,
+  runningRunId,
   view,
   onViewChange,
   nextRunAt,
@@ -81,8 +97,10 @@ export function AutomationRunsSection({
   revision,
   now,
 }: {
-  readonly store: Pick<ApplicationClientStore, "subscribe" | "getSnapshot">;
+  readonly store: RunsStore;
   readonly runs: AutomationRuns;
+  /** The latest run while its agent turn is still going (`runTurnRunning`). */
+  readonly runningRunId?: string;
   readonly view: AutomationRunsView;
   readonly onViewChange: (view: AutomationRunsView) => void;
   /** The next run, for the empty history; only while the schedule will make it. */
@@ -140,6 +158,7 @@ export function AutomationRunsSection({
           key={run.id}
           store={store}
           run={run}
+          running={run.id === runningRunId}
           now={now}
           phone={phone}
           expanded={!phone && openRunId === run.id}
@@ -281,7 +300,7 @@ export function AutomationRunsSection({
         {openRun ? (
           <DialogContent layout="sheet" size="md">
             <DialogHeader>
-              <DialogTitle>{runDetailTitle(openRun)}</DialogTitle>
+              <DialogTitle>{runDetailTitle(openRun, openRun.id === runningRunId)}</DialogTitle>
               <DialogDescription>
                 {dayTimeLabel(openRun.scheduledFor, now)} · {runKind(openRun)}
                 {openRun.coalescedCount > 0
@@ -302,6 +321,7 @@ export function AutomationRunsSection({
 function RunGlyph({ health }: { readonly health: RunHealth }): React.JSX.Element {
   switch (health) {
     case "sending":
+    case "running":
       return <AutomationGlyph glyph="spinner" tone="info" />;
     case "failed":
       return <AutomationGlyph glyph="triangle" tone="danger" />;
@@ -309,6 +329,12 @@ function RunGlyph({ health }: { readonly health: RunHealth }): React.JSX.Element
       return <AutomationGlyph glyph="triangle" tone="warning" />;
     case "skipped":
       return <CircleDashed className="automation-glyph" aria-hidden="true" />;
+    case "interrupted":
+      return <CircleStop className="automation-glyph" aria-hidden="true" />;
+    case "finished":
+      return (
+        <Check className="automation-glyph" data-tone="success" aria-hidden="true" />
+      );
     case "delivered":
       return <Check className="automation-glyph" aria-hidden="true" />;
   }
@@ -317,14 +343,16 @@ function RunGlyph({ health }: { readonly health: RunHealth }): React.JSX.Element
 function AutomationRunRow({
   store,
   run,
+  running,
   now,
   phone,
   expanded,
   revision,
   onToggle,
 }: {
-  readonly store: Pick<ApplicationClientStore, "subscribe" | "getSnapshot">;
+  readonly store: RunsStore;
   readonly run: ThreadAutomationRun;
+  readonly running: boolean;
   readonly now: Date;
   readonly phone: boolean;
   readonly expanded: boolean;
@@ -332,13 +360,13 @@ function AutomationRunRow({
   readonly onToggle: () => void;
 }): React.JSX.Element {
   const detailId = useId();
-  const health = runHealth(run);
+  const health = runHealth(run, running);
   return (
     <li className="automation-run" data-expanded={expanded || undefined}>
       <button
         type="button"
         className="automation-run-main"
-        aria-label={runAccessibleName(run, now)}
+        aria-label={runAccessibleName(run, now, running)}
         {...(phone
           ? { "aria-haspopup": "dialog" as const }
           : { "aria-expanded": expanded, "aria-controls": detailId })}
@@ -349,7 +377,7 @@ function AutomationRunRow({
         </span>
         <span className="automation-run-time">{dayTimeLabel(run.scheduledFor, now)}</span>
         <span className="automation-run-state" data-health={health}>
-          {runStateLabel(run)}
+          {runStateLabel(run, { running, now })}
         </span>
         <span className="automation-run-meta">{runMeta(run)}</span>
         <span className="automation-run-chevron">
@@ -367,19 +395,63 @@ function AutomationRunRow({
   );
 }
 
-/** One run's facts: its timeline, precheck, problem, revision and result thread. */
+const selectUsageEnabled = (state: ApplicationClientState): boolean =>
+  state.experimentalUsageEnabled;
+
+/**
+ * The usage cache for a settled turn while experimental usage accounting is
+ * on, once the server reports usage for the turn; undefined otherwise. The
+ * cache, like a thread store's, lives only as long as its consumer.
+ */
+function useTurnUsage(
+  store: RunsStore,
+  threadId: string | undefined,
+  turnId: string | undefined,
+): UsageQueryCache | undefined {
+  const enabled = useApplicationStoreSelector(store, selectUsageEnabled);
+  const [cache, setCache] = useState<UsageQueryCache>();
+  useEffect(() => {
+    if (!enabled || threadId === undefined || turnId === undefined) return;
+    const next = new UsageQueryCache(threadId, store.api);
+    next.setEnabled(true);
+    setCache(next);
+    const release = next.activateAvailability(turnId);
+    return () => {
+      release();
+      next.dispose();
+      setCache(undefined);
+    };
+  }, [enabled, store.api, threadId, turnId]);
+  const subscribe = useCallback(
+    (listener: () => void) =>
+      cache && turnId !== undefined ? cache.subscribe(turnId, listener) : () => undefined,
+    [cache, turnId],
+  );
+  const available = useCallback(
+    () => cache !== undefined && turnId !== undefined && cache.getSnapshot(turnId).available === true,
+    [cache, turnId],
+  );
+  return useSyncExternalStore(subscribe, available, available) ? cache : undefined;
+}
+
+/**
+ * One run's facts: its timeline, its agent turn (with Go to turn and, while
+ * experimental usage accounting is on, the turn's usage), precheck, problem,
+ * revision and result thread.
+ */
 function AutomationRunFacts({
   store,
   run,
   revision,
 }: {
-  readonly store: Pick<ApplicationClientStore, "subscribe" | "getSnapshot">;
+  readonly store: RunsStore;
   readonly run: ThreadAutomationRun;
   readonly revision?: number;
 }): React.JSX.Element {
   const clone = run.runMode === "clone" && run.resultThreadId !== undefined;
   const resultTitle = useThreadTitle(store, clone ? run.resultThreadId : undefined);
-  const health = runHealth(run);
+  const turn = run.turn;
+  const usage = useTurnUsage(store, run.resultThreadId, turn?.id);
   const problem =
     run.diagnostic ?? (run.errorCode ? automationErrorText(run.errorCode) : undefined);
   const items: KeyValueItem[] = [
@@ -397,6 +469,37 @@ function AutomationRunFacts({
       ),
     },
   ];
+  if (turn) {
+    const summary = runTurnSummary(turn);
+    const turnPath =
+      run.resultThreadId === undefined ? undefined : threadTurnPath(run.resultThreadId, turn.id);
+    items.push({
+      label: "Turn",
+      value: (
+        <>
+          {summary.outcome}
+          {summary.times ? <span className="automation-fact-sub">{summary.times}</span> : null}
+          {turnPath ? (
+            <span className="automation-fact-sub">
+              <a
+                className="automation-link"
+                href={turnPath}
+                onClick={(event) => followLink(event, turnPath)}
+              >
+                Go to turn
+              </a>
+            </span>
+          ) : null}
+        </>
+      ),
+    });
+    if (usage) {
+      items.push({
+        label: "Usage",
+        value: <RecordedUsage cache={usage} turnId={turn.id} />,
+      });
+    }
+  }
   if (run.precheck) {
     items.push({
       label: "Precheck",
@@ -413,7 +516,8 @@ function AutomationRunFacts({
   }
   if (problem) {
     items.push({
-      label: health === "skipped" ? "Reason" : health === "delivered" ? "Note" : "Problem",
+      label:
+        run.state === "skipped" ? "Reason" : run.state === "completed" ? "Note" : "Problem",
       value: problem,
     });
   }

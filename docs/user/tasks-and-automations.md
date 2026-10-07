@@ -481,7 +481,11 @@ collapsed groups on this device.
 Each row shows the [state](#automation-states) glyph, the thread title, and a
 line with the schedule, project, and backend. At the end of the row are the
 next run, the problem ("Failed 21h ago"), or the state ("Paused"), over the
-last outcome ("Delivered 23m ago"). A row that needs attention shows what went
+last outcome. Once the last run's agent turn has ended, the outcome says how
+it ended, counted from its end: "Finished 23m ago", "Failed 2h ago" in red,
+or "Interrupted 1h ago"; until then, "Delivered 23m ago". A failed turn does
+not move the automation into **Needs attention**: the thread itself shows that
+it needs you. A row that needs attention shows what went
 wrong in place of the schedule, and whether scheduling continues ("next
 6:30 AM" or "Scheduling paused"). On narrow screens, the second line shows the
 outcome and the schedule, and only the next run stays at the end.
@@ -500,7 +504,10 @@ The sidebar keeps the thread selected.
 
 The header shows the thread title, a [state](#automation-states) chip, and a
 line with the next run, or what holds it ("scheduling paused", "runs
-suspended", "snoozed until…"), then the project and backend. Its actions are:
+suspended", "snoozed until…"), then the project and backend. While the thread
+has a turn in progress, the line starts with **Running**, or **Waiting for
+you** while the turn waits for an approval or an answer. This is a hint only;
+it does not change the automation's state. Its actions are:
 
 - **Run now** sends the prompt once without changing the schedule. It works
   while the schedule is paused, and the precheck still applies.
@@ -585,7 +592,9 @@ state that applies wins:
 
 Failed and Outcome unknown automations need attention everywhere: in the
 Automations page's **Needs attention** group, in the sidebar's State view, and
-on their sidebar rows. Paused is never shown as a warning.
+on their sidebar rows. A run that delivered its prompt but whose agent turn
+then failed does not; its thread shows what went wrong. Paused is never shown
+as a warning.
 
 Elsewhere in Sedes:
 
@@ -683,17 +692,26 @@ select the problem count to list only those.
 
 At first it shows the latest five runs. **Show all runs** shows the whole
 history in a scrolling list, with **Load more** for older runs and a filter:
-**All**, **Problems** (failed and unknown runs), or **Skipped**. **Show fewer**
-returns to the short list. New runs appear as they happen.
+**All**, **Problems** (failed and unknown runs, and runs whose turn failed),
+or **Skipped**. **Show fewer** returns to the short list. New runs appear as
+they happen.
 
 Each row shows when the run was due or requested, its state, and a summary:
-**Scheduled** or **Manual**, missed runs merged into it ("missed ×2 merged"),
-why it was skipped ("precheck exit 1", "missed while Sedes was down", or
-"thread was snoozed"), and how the precheck went. Select a row to see its
-details, in place on desktop and in a sheet on phones:
+**Scheduled** or **Manual**, how long the agent's turn took ("2m 14s"), missed
+runs merged into it ("missed ×2 merged"), why it was skipped ("precheck exit
+1", "missed while Sedes was down", or "thread was snoozed"), and how the
+precheck went. The turn's length appears only when the backend reported when
+the turn started and ended. Select a row to see its details, in place on
+desktop and in a sheet on phones:
 
 - **Timeline**: when the run was due, claimed, started, and accepted or
   finished, each with the time since the step before;
+- **Turn**: how the agent's turn ended, when it started and ended, and how
+  long it took, with **Go to turn**, which opens the thread, or a fork run's
+  own thread, at that turn;
+- **Usage**: the turn's token usage and cost, when the server operator has
+  turned on [recorded usage](conversations.md#view-recorded-usage) and the
+  turn has some;
 - **Precheck**: its result, exit code, duration, and output size, and the
   command and timeout as they were for this run;
 - what went wrong or why the run was skipped, and the error code;
@@ -706,14 +724,19 @@ details, in place on desktop and in a sheet on phones:
 | **Starting** | Sedes has picked up the run; **Checking** while the precheck runs |
 | **Waiting for turn** | The prompt waits behind the thread's current turn |
 | **Sending** | The prompt is on its way to the agent |
-| **Delivered** | The agent received the prompt |
+| **Running** | The agent is working on the latest run's prompt, or waiting for you, with how long it has been going ("Running · 4m") |
+| **Delivered** | The agent received the prompt, and Sedes has not yet seen how its turn ended |
+| **Finished** | The agent's turn ended normally |
+| **Failed** | The run did not deliver the prompt, or you marked an unknown run as failed, or the agent's turn failed; the details say why |
+| **Interrupted** | The agent's turn was stopped before it finished |
 | **Skipped** | The prompt was not sent; the row says why |
-| **Failed** | The run did not deliver the prompt, or you marked an unknown run as failed; the details say why |
 | **Outcome unknown** | Sedes can't tell whether the agent received the prompt |
 
-**Delivered** does not mean the agent has finished: its turn can still be
-working, or waiting at an approval. Open the thread, or a fork run's result
-thread, to follow the work.
+A run's turn includes anything you steer into it while it works. A failed or
+interrupted turn is part of the run history only: the automation keeps its
+state and schedule, and the next run still goes ahead. **Running** follows the
+thread the run used and applies only to the latest run; open the thread, or a
+fork run's result thread, to follow the work.
 
 If a fork may have been created but Sedes cannot prove it, the run's outcome
 is unknown, and Sedes does not repeat it on its own. Follow

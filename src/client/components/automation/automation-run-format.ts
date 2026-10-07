@@ -1,5 +1,10 @@
 import type { ThreadAutomationRun } from "../../../shared/protocol/automation-presentation.js";
-import { dayTimeLabel, runStateLabel } from "../../automation/automation-text.js";
+import {
+  dayTimeLabel,
+  runRunningFor,
+  runStateLabel,
+  runTurnDuration,
+} from "../../automation/automation-text.js";
 
 /**
  * Words and times for one run on the automation page: the detail timeline,
@@ -7,13 +12,38 @@ import { dayTimeLabel, runStateLabel } from "../../automation/automation-text.js
  * `dayTimeLabel`). Pure.
  */
 
-/** A run's state as the page draws it: its glyph and the tone of its words. */
-export type RunHealth = "sending" | "delivered" | "failed" | "uncertain" | "skipped";
+/**
+ * A run's state as the page draws it: its glyph and the tone of its words.
+ * A settled agent turn decides it (a failed turn is "failed"); before that,
+ * a delivered run is "running" while `running` (see `runTurnRunning`).
+ */
+export type RunHealth =
+  | "sending"
+  | "running"
+  | "delivered"
+  | "finished"
+  | "interrupted"
+  | "failed"
+  | "uncertain"
+  | "skipped";
 
-export function runHealth(run: Pick<ThreadAutomationRun, "state">): RunHealth {
+export function runHealth(
+  run: Pick<ThreadAutomationRun, "state" | "turn">,
+  running = false,
+): RunHealth {
+  switch (run.turn?.outcome) {
+    case "completed":
+      return "finished";
+    case "failed":
+      return "failed";
+    case "interrupted":
+      return "interrupted";
+    case undefined:
+      break;
+  }
   switch (run.state) {
     case "completed":
-      return "delivered";
+      return running ? "running" : "delivered";
     case "failed":
       return "failed";
     case "uncertain":
@@ -71,7 +101,13 @@ export function runTimeline(run: ThreadAutomationRun): readonly RunTimelineStep[
   if (run.claimedAt) moments.push({ label: "Claimed", at: run.claimedAt });
   if (run.startedAt) moments.push({ label: "Started", at: run.startedAt });
   if (run.acceptedAt) moments.push({ label: "Accepted", at: run.acceptedAt });
-  else if (run.finishedAt) moments.push({ label: runStateLabel(run), at: run.finishedAt });
+  else if (run.finishedAt) {
+    // The run's own ending, never its turn's (the Turn fact has that).
+    moments.push({
+      label: runStateLabel({ state: run.state, precheck: run.precheck }),
+      at: run.finishedAt,
+    });
+  }
   if (run.forceResetAt) moments.push({ label: "Force reset", at: run.forceResetAt });
   return moments.map((moment, index) => {
     const previous = moments[index - 1];
@@ -114,16 +150,42 @@ export function runKind(run: Pick<ThreadAutomationRun, "occurrence">): string {
   return run.occurrence === "manual" ? "Manual" : "Scheduled";
 }
 
-/** A run row's accessible name: "Today 3:17 AM Delivered, Manual". */
-export function runAccessibleName(run: ThreadAutomationRun, now: Date = new Date()): string {
-  return `${dayTimeLabel(run.scheduledFor, now)} ${runStateLabel(run)}, ${runKind(run)}`;
+/**
+ * A run row's accessible name, its outcome with the turn's duration when
+ * known: "Today 3:17 AM Finished in 2m 14s, Scheduled", "Today 3:17 AM
+ * Failed after 40s, Manual", "Today 3:17 AM Running for 4m, Scheduled",
+ * "Today 3:17 AM Delivered, Manual".
+ */
+export function runAccessibleName(
+  run: ThreadAutomationRun,
+  now: Date = new Date(),
+  running = false,
+): string {
+  const time = dayTimeLabel(run.scheduledFor, now);
+  const kind = runKind(run);
+  if (runHealth(run, running) === "running") {
+    const elapsed = runRunningFor(run, now);
+    return `${time} Running${elapsed === undefined ? "" : ` for ${elapsed}`}, ${kind}`;
+  }
+  const duration = runTurnDuration(run.turn);
+  const outcome = runStateLabel(run);
+  return duration === undefined
+    ? `${time} ${outcome}, ${kind}`
+    : `${time} ${outcome} ${run.turn?.outcome === "completed" ? "in" : "after"} ${duration}, ${kind}`;
 }
 
-/** The phone sheet's title: "Failed run", "Run in progress". */
-export function runDetailTitle(run: Pick<ThreadAutomationRun, "state">): string {
-  switch (runHealth(run)) {
+/** The phone sheet's title: "Finished run", "Failed run", "Run in progress". */
+export function runDetailTitle(
+  run: Pick<ThreadAutomationRun, "state" | "turn">,
+  running = false,
+): string {
+  switch (runHealth(run, running)) {
     case "delivered":
       return "Delivered run";
+    case "finished":
+      return "Finished run";
+    case "interrupted":
+      return "Interrupted run";
     case "failed":
       return "Failed run";
     case "skipped":
@@ -131,6 +193,30 @@ export function runDetailTitle(run: Pick<ThreadAutomationRun, "state">): string 
     case "uncertain":
       return "Run with an unknown outcome";
     case "sending":
+    case "running":
       return "Run in progress";
   }
+}
+
+/**
+ * A settled turn's facts for the run detail: its ending with its duration
+ * ("Finished · 2m 14s") and, as far as the backend reported them, its times
+ * ("Started 3:17:02 AM · ended 3:19:16 AM").
+ */
+export function runTurnSummary(turn: NonNullable<ThreadAutomationRun["turn"]>): {
+  readonly outcome: string;
+  readonly times?: string;
+} {
+  const duration = runTurnDuration(turn);
+  const outcome = runStateLabel({ state: "completed", turn });
+  const times = [
+    turn.startedAt === undefined ? undefined : `started ${clock(new Date(turn.startedAt), true)}`,
+    turn.endedAt === undefined ? undefined : `ended ${clock(new Date(turn.endedAt), true)}`,
+  ]
+    .filter((part) => part !== undefined)
+    .join(" · ");
+  return {
+    outcome: duration === undefined ? outcome : `${outcome} · ${duration}`,
+    ...(times === "" ? {} : { times: `${times.charAt(0).toUpperCase()}${times.slice(1)}` }),
+  };
 }

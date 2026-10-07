@@ -7,6 +7,7 @@ import { ApiError } from "../../api/ApiClient.js";
 import { navigate } from "../../app/router.js";
 import type { SummaryAutomation } from "../../automation/automation-health.js";
 import { dayTimeLabel, dayTimePhrase } from "../../automation/automation-text.js";
+import { usageReport } from "../../stores/usage-test-fixture.js";
 import { AutomationPage } from "./AutomationPage.js";
 import {
   automationStore,
@@ -691,5 +692,284 @@ describe("AutomationPage", () => {
     renderPage([{ automation: automationSummary() }]);
     await userEvent.click(screen.getByRole("link", { name: "Automations" }));
     await waitFor(() => expect(window.location.pathname).toBe(`/threads/${THREAD_ID}`));
+  });
+});
+
+describe("AutomationPage: agent turns", () => {
+  const CHILD_ID = "30000000-0000-4000-8000-000000000002";
+  const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
+
+  function settledTurn(
+    outcome: "completed" | "failed" | "interrupted",
+    seconds?: number,
+    id = "turn-1",
+  ): NonNullable<ReturnType<typeof run>["turn"]> {
+    const startedAt = "2026-10-06T02:00:03.000Z";
+    return {
+      id,
+      outcome,
+      settledAt: "2026-10-06T02:10:00.000Z",
+      ...(seconds === undefined
+        ? {}
+        : { startedAt, endedAt: new Date(Date.parse(startedAt) + seconds * 1_000).toISOString() }),
+    };
+  }
+
+  function rowParts(row: HTMLElement) {
+    return {
+      state: row.querySelector(".automation-run-state")!,
+      meta: row.querySelector(".automation-run-meta")!.textContent,
+      glyph: row.querySelector(".automation-run-glyph .automation-glyph")!,
+    };
+  }
+
+  it("labels runs by how their turn ended, with its duration, and adds no attention", async () => {
+    const finished = run({ turn: settledTurn("completed", 134) });
+    const failed = run({ turn: settledTurn("failed", 40, "turn-2") });
+    const interrupted = run({ turn: settledTurn("interrupted", undefined, "turn-3") });
+    const delivered = run();
+    renderPage(
+      [{ automation: automationSummary({ lastRun: { ...lastRun("completed", finished.id), turn: { outcome: "failed" } } }) }],
+      { listThreadAutomationRuns: vi.fn().mockResolvedValue(page([finished, failed, interrupted, delivered])) },
+    );
+
+    const finishedRow = rowParts(await screen.findByRole("button", { name: /Finished in 2m 14s, Scheduled$/u }));
+    expect(finishedRow.state).toHaveTextContent("Finished");
+    expect(finishedRow.state).toHaveAttribute("data-health", "finished");
+    expect(finishedRow.meta).toBe("Scheduled · 2m 14s");
+    expect(finishedRow.glyph).toHaveAttribute("data-tone", "success");
+
+    const failedRow = rowParts(screen.getByRole("button", { name: /Failed after 40s, Scheduled$/u }));
+    expect(failedRow.state).toHaveAttribute("data-health", "failed");
+    expect(failedRow.meta).toBe("Scheduled · 40s");
+    expect(failedRow.glyph).toHaveAttribute("data-tone", "danger");
+
+    const interruptedRow = rowParts(screen.getByRole("button", { name: /Interrupted, Scheduled$/u }));
+    expect(interruptedRow.state).toHaveAttribute("data-health", "interrupted");
+    expect(interruptedRow.meta).toBe("Scheduled");
+    expect(interruptedRow.glyph).not.toHaveAttribute("data-tone");
+
+    const deliveredRow = rowParts(screen.getByRole("button", { name: /Delivered, Scheduled$/u }));
+    expect(deliveredRow.glyph).not.toHaveAttribute("data-tone");
+
+    // A failed turn is history only: the automation stays Active, without a callout.
+    expect(screen.getByText("Active")).toBeInTheDocument();
+    expect(document.querySelector("[data-slot=callout]")).toBeNull();
+  });
+
+  it("reads the latest delivered run as Running while its thread works, then as its turn ended", async () => {
+    const delivered = run({ acceptedAt: minutesAgo(4.5), finishedAt: minutesAgo(4.5), scheduledFor: minutesAgo(5) });
+    const older = run();
+    const summary = (turn?: { outcome: "completed" }) =>
+      automationSummary({
+        lastRun: { ...lastRun("completed", delivered.id), ...(turn ? { turn } : {}) },
+      });
+    const list = vi
+      .fn()
+      .mockResolvedValueOnce(page([delivered, older]))
+      .mockResolvedValueOnce(page([{ ...delivered, turn: settledTurn("completed", 300) }, older]));
+    const fixture = renderPage([{ runState: "running", automation: summary() }], { listThreadAutomationRuns: list });
+
+    const row = await screen.findByRole("button", { name: /Running for 4m, Scheduled$/u });
+    expect(rowParts(row).state).toHaveTextContent("Running · 4m");
+    expect(rowParts(row).state).toHaveAttribute("data-health", "running");
+    expect(rowParts(row).glyph).toHaveClass("comet-spinner");
+    // Only the latest run can be running.
+    expect(screen.getByRole("button", { name: /Delivered, Scheduled$/u })).toBeInTheDocument();
+    // The header hints at the thread's turn; the chip keeps the automation's state.
+    expect(screen.getByText("Running", { selector: ".automation-page-meta > span" })).toHaveAttribute("data-tone", "info");
+    expect(screen.getByText("Active")).toBeInTheDocument();
+
+    // The turn ends: Delivered until the server records how, then its ending.
+    act(() => fixture.publish([{ runState: "idle", automation: summary() }]));
+    expect(row).toHaveAccessibleName(/ Delivered, Scheduled$/u);
+    expect(rowParts(row).state).toHaveTextContent("Delivered");
+    expect(screen.queryByText("Running", { selector: ".automation-page-meta > span" })).toBeNull();
+    act(() => fixture.publish([{ runState: "idle", automation: summary({ outcome: "completed" }) }]));
+    expect(await screen.findByRole("button", { name: /Finished in 5m, Scheduled$/u })).toBeInTheDocument();
+    expect(list).toHaveBeenCalledTimes(2);
+  });
+
+  it("follows a fork run's own thread for Running, and the anchor for the header hint", async () => {
+    const forked = run({
+      runMode: "clone",
+      resultThreadId: CHILD_ID,
+      acceptedAt: minutesAgo(12),
+      finishedAt: minutesAgo(12),
+      scheduledFor: minutesAgo(13),
+    });
+    renderPage(
+      [
+        {
+          runState: "waiting_for_input",
+          automation: automationSummary({
+            runMode: "clone",
+            lastRun: { ...lastRun("completed", forked.id), resultThreadId: CHILD_ID },
+          }),
+        },
+        { id: CHILD_ID, title: "Nightly dependency audit · Oct 6", runState: "waiting_for_approval", automation: null },
+      ],
+      { listThreadAutomationRuns: vi.fn().mockResolvedValue(page([forked])) },
+    );
+    expect(await screen.findByRole("button", { name: /Running for 12m, Scheduled$/u })).toBeInTheDocument();
+    expect(screen.getByText("Waiting for you", { selector: ".automation-page-meta > span" })).toHaveAttribute(
+      "data-tone",
+      "warning",
+    );
+    expect(screen.getByText("Active")).toBeInTheDocument();
+  });
+
+  it("leaves a fork run Delivered while its thread is idle or not loaded, and the header quiet", async () => {
+    const forked = run({ runMode: "clone", resultThreadId: CHILD_ID });
+    renderPage(
+      [
+        {
+          automation: automationSummary({
+            runMode: "clone",
+            lastRun: { ...lastRun("completed", forked.id), resultThreadId: CHILD_ID },
+          }),
+        },
+      ],
+      { listThreadAutomationRuns: vi.fn().mockResolvedValue(page([forked])) },
+    );
+    expect(await screen.findByRole("button", { name: /Delivered, Scheduled$/u })).toBeInTheDocument();
+    expect(document.querySelectorAll(".automation-page-meta > span[data-tone]")).toHaveLength(0);
+  });
+
+  it("opens a run's turn with its times and Go to turn, in this thread and in a fork", async () => {
+    const sameThread = run({ resultThreadId: THREAD_ID, turn: settledTurn("completed", 134) });
+    const forked = run({ runMode: "clone", resultThreadId: CHILD_ID, turn: settledTurn("failed", undefined, "turn-9") });
+    renderPage(
+      [
+        { automation: automationSummary() },
+        { id: CHILD_ID, title: "Nightly dependency audit · Oct 6", automation: null },
+      ],
+      { listThreadAutomationRuns: vi.fn().mockResolvedValue(page([sameThread, forked])) },
+    );
+    const finishedRow = await screen.findByRole("button", { name: /Finished in 2m 14s, Scheduled$/u });
+    await userEvent.click(finishedRow);
+    const detail = document.getElementById(finishedRow.getAttribute("aria-controls")!)!;
+    const turnFact = within(detail).getByText("Turn").nextElementSibling as HTMLElement;
+    const clock = (iso: string) =>
+      new Date(iso).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" });
+    expect(turnFact).toHaveTextContent(
+      `Finished · 2m 14sStarted ${clock(sameThread.turn!.startedAt!)} · ended ${clock(sameThread.turn!.endedAt!)}Go to turn`,
+    );
+    // Experimental usage is off: no usage row, and no usage read.
+    expect(within(detail).queryByText("Usage")).toBeNull();
+    const goToTurn = within(detail).getByRole("link", { name: "Go to turn" });
+    expect(goToTurn).toHaveAttribute("href", `/threads/${THREAD_ID}#turn=turn-1`);
+    await userEvent.click(goToTurn);
+    expect(window.location.pathname).toBe(`/threads/${THREAD_ID}`);
+    expect(window.location.hash).toBe("#turn=turn-1");
+
+    const failedRow = screen.getByRole("button", { name: /Failed, Scheduled$/u });
+    await userEvent.click(failedRow);
+    const forkDetail = document.getElementById(failedRow.getAttribute("aria-controls")!)!;
+    expect(within(forkDetail).getByText("Turn").nextElementSibling).toHaveTextContent(/^FailedGo to turn$/u);
+    expect(within(forkDetail).getByRole("link", { name: "Go to turn" })).toHaveAttribute(
+      "href",
+      `/threads/${CHILD_ID}#turn=turn-9`,
+    );
+    expect(within(forkDetail).getByRole("link", { name: "Nightly dependency audit · Oct 6" })).toBeInTheDocument();
+  });
+});
+
+describe("AutomationPage: agent turns on phones", () => {
+  it("titles a run's sheet by its turn and offers Go to turn there", async () => {
+    viewport("(max-width: 819px)");
+    const interrupted = run({
+      turn: { id: "turn-4", outcome: "interrupted", settledAt: "2026-10-06T02:10:00.000Z" },
+    });
+    renderPage([{ automation: automationSummary() }], {
+      listThreadAutomationRuns: vi.fn().mockResolvedValue(page([interrupted])),
+    });
+    await userEvent.click(await screen.findByRole("button", { name: /Interrupted, Scheduled$/u }));
+    const sheet = screen.getByRole("dialog", { name: "Interrupted run" });
+    expect(within(sheet).getByRole("link", { name: "Go to turn" })).toHaveAttribute(
+      "href",
+      `/threads/${THREAD_ID}#turn=turn-4`,
+    );
+  });
+});
+
+describe("AutomationPage: turn usage", () => {
+  function renderWithUsage(api: Parameters<typeof automationStore>[1], experimentalUsageEnabled: boolean) {
+    const finished = run({
+      turn: { id: "turn-1", outcome: "completed", settledAt: "2026-10-06T02:10:00.000Z" },
+    });
+    const fixture = automationStore(
+      [{ automation: automationSummary() }],
+      { listThreadAutomationRuns: vi.fn().mockResolvedValue({ items: [finished], nextCursor: null }), ...api },
+      [],
+      { experimentalUsageEnabled },
+    );
+    render(<AutomationPage store={fixture.store} threadRegistry={fixture.threadRegistry} threadId={THREAD_ID} />);
+    return fixture;
+  }
+
+  async function openDetail(): Promise<HTMLElement> {
+    const row = await screen.findByRole("button", { name: /Finished, Scheduled$/u });
+    await userEvent.click(row);
+    return document.getElementById(row.getAttribute("aria-controls")!)!;
+  }
+
+  it("shows the turn's usage when experimental usage is on and the server recorded some", async () => {
+    const report = usageReport({
+      threadId: THREAD_ID,
+      turnId: "turn-1",
+      summary: {
+        ...usageReport().summary,
+        metrics: {
+          ...usageReport().summary.metrics,
+          input: { value: "12000", quality: "complete", basis: ["provider_reported"], providerPresence: "reported" },
+          output: { value: "800", quality: "complete", basis: ["provider_reported"], providerPresence: "reported" },
+        },
+      },
+    });
+    const fixture = renderWithUsage(
+      {
+        getUsageAvailability: vi.fn().mockResolvedValue({
+          threadId: THREAD_ID,
+          revision: "1",
+          turns: [{ turnId: "turn-1", available: true }],
+        }),
+        getUsage: vi.fn().mockResolvedValue(report),
+      },
+      true,
+    );
+    const detail = await openDetail();
+    const usage = (await within(detail).findByText("Usage")).nextElementSibling as HTMLElement;
+    expect(fixture.api.getUsageAvailability).toHaveBeenCalledWith(THREAD_ID, ["turn-1"], expect.any(AbortSignal));
+    expect(await within(usage).findByText("12,000")).toBeInTheDocument();
+    expect(within(usage).getByText("800")).toBeInTheDocument();
+    expect(fixture.api.getUsage).toHaveBeenCalledWith(THREAD_ID, "turn-1", expect.any(AbortSignal));
+  });
+
+  it("hides usage the server did not record", async () => {
+    const fixture = renderWithUsage(
+      {
+        getUsageAvailability: vi.fn().mockResolvedValue({
+          threadId: THREAD_ID,
+          revision: "1",
+          turns: [{ turnId: "turn-1", available: false }],
+        }),
+      },
+      true,
+    );
+    const detail = await openDetail();
+    await waitFor(() => expect(fixture.api.getUsageAvailability).toHaveBeenCalledOnce());
+    expect(within(detail).getByText("Turn")).toBeInTheDocument();
+    expect(within(detail).queryByText("Usage")).toBeNull();
+    expect(fixture.api.getUsage).not.toHaveBeenCalled();
+  });
+
+  it("reads no usage while experimental usage is off", async () => {
+    const fixture = renderWithUsage({}, false);
+    const detail = await openDetail();
+    expect(within(detail).getByRole("link", { name: "Go to turn" })).toBeInTheDocument();
+    expect(within(detail).queryByText("Usage")).toBeNull();
+    expect(fixture.api.getUsageAvailability).not.toHaveBeenCalled();
+    expect(fixture.api.getUsage).not.toHaveBeenCalled();
   });
 });
