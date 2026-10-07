@@ -1827,21 +1827,17 @@ describe("inactive backend-normalization migration", () => {
         "/tmp/v10-automation-lineage/anchor.jsonl",
         1_000,
       );
-      const beforeCutover = new AutomationRepository(database);
-      beforeCutover.createDefinition(scope, {
+      insertLegacyDefinition(database, scope, {
         id: "neutral-clone",
         anchorThreadId: anchor.thread.id,
         name: "Neutral clone",
         prompt: "Review this branch",
-        precheck: null,
         runMode: "clone",
-        enabled: true,
         schedule: {
           kind: "interval",
           anchorAt: 1_000,
           everySeconds: 3_600,
         },
-        misfirePolicy: "coalesce",
         nextRunAt: 5_000,
         now: 1_000,
       });
@@ -2006,16 +2002,13 @@ describe("inactive backend-normalization migration", () => {
         now: 90_090,
       });
       const automations = new AutomationRepository(database);
-      automations.createDefinition(scope, {
+      insertLegacyDefinition(database, scope, {
         id: "repurposed-child-clone",
         anchorThreadId: anchor.thread.id,
         name: "Repurposed child clone",
         prompt: "Review",
-        precheck: null,
         runMode: "clone",
-        enabled: true,
         schedule: { kind: "date_time", runAt: 90_200 },
-        misfirePolicy: "coalesce",
         nextRunAt: 90_200,
         now: 90_091,
       });
@@ -2209,16 +2202,13 @@ describe("inactive backend-normalization migration", () => {
         initialText: "Retry draft",
         now: 90_105,
       });
-      automations.createDefinition(scope, {
+      insertLegacyDefinition(database, scope, {
         id: "aborted-first-input-clone",
         anchorThreadId: child.id,
         name: "Aborted first-input clone",
         prompt: "Review",
-        precheck: null,
         runMode: "clone",
-        enabled: true,
         schedule: { kind: "date_time", runAt: 90_210 },
-        misfirePolicy: "coalesce",
         nextRunAt: 90_210,
         now: 90_106,
       });
@@ -2491,16 +2481,13 @@ describe("inactive backend-normalization migration", () => {
         now: 90_100,
       });
       const automations = new AutomationRepository(database);
-      automations.createDefinition(scope, {
+      insertLegacyDefinition(database, scope, {
         id: "legacy-aborted-clone",
         anchorThreadId: anchor.thread.id,
         name: "Legacy aborted clone",
         prompt: "Review",
-        precheck: null,
         runMode: "clone",
-        enabled: true,
         schedule: { kind: "date_time", runAt: 90_200 },
-        misfirePolicy: "coalesce",
         nextRunAt: 90_200,
         now: 90_100,
       });
@@ -2804,6 +2791,57 @@ function insertRuntimeReceipt(
 }
 
 /**
+ * An enabled definition in an older schema, inserted as the repository does.
+ * The current repository reads back definition columns that later migrations
+ * add, so seed the row directly.
+ */
+function insertLegacyDefinition(
+  database: Database.Database,
+  scope: { tenantId: string; principalId: string },
+  input: {
+    id: string;
+    anchorThreadId: string;
+    name: string;
+    prompt: string;
+    runMode: "same_thread" | "clone";
+    schedule:
+      | { kind: "date_time"; runAt: number }
+      | { kind: "interval"; anchorAt: number; everySeconds: number };
+    nextRunAt: number;
+    now: number;
+  },
+): void {
+  database
+    .prepare(
+      `
+        INSERT INTO automation_definitions(
+          tenant_id, owner_principal_id, id, anchor_thread_id, name, prompt,
+          run_mode, enabled, revision, schedule_kind, run_at,
+          interval_anchor_at, interval_seconds, misfire_policy, next_run_at,
+          created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?, ?, ?, 'coalesce', ?, ?, ?)
+      `,
+    )
+    .run(
+      scope.tenantId,
+      scope.principalId,
+      input.id,
+      input.anchorThreadId,
+      input.name,
+      input.prompt,
+      input.runMode,
+      input.schedule.kind,
+      input.schedule.kind === "date_time" ? input.schedule.runAt : null,
+      input.schedule.kind === "interval" ? input.schedule.anchorAt : null,
+      input.schedule.kind === "interval" ? input.schedule.everySeconds : null,
+      input.nextRunAt,
+      input.now,
+      input.now,
+    );
+}
+
+/**
  * A claimed manual clone run in a pre-20 schema. The current repository
  * selects run columns that later migrations add, so seed the row directly.
  */
@@ -2858,21 +2896,17 @@ function seedCloneAutomation(
   anchorThreadId: string,
   childThreadId: string,
 ): void {
-  const automations = new AutomationRepository(database);
-  automations.createDefinition(scope, {
+  insertLegacyDefinition(database, scope, {
     id: "clone-automation",
     anchorThreadId,
     name: "Clone automation",
     prompt: "Review the clone",
-    precheck: null,
     runMode: "clone",
-    enabled: true,
     schedule: {
       kind: "interval",
       anchorAt: 8_000,
       everySeconds: 3_600,
     },
-    misfirePolicy: "coalesce",
     nextRunAt: 9_000,
     now: 8_000,
   });
@@ -2916,21 +2950,17 @@ function seedAutomationFirstSend(
     { workspaceId, title: "Automation first send" },
     9_000,
   );
-  const automations = new AutomationRepository(database);
-  automations.createDefinition(scope, {
+  insertLegacyDefinition(database, scope, {
     id: "pending-automation",
     anchorThreadId: thread.thread.id,
     name: "Pending automation",
     prompt: "automation first prompt",
-    precheck: null,
     runMode: "same_thread",
-    enabled: true,
     schedule: {
       kind: "interval",
       anchorAt: 9_000,
       everySeconds: 3_600,
     },
-    misfirePolicy: "coalesce",
     nextRunAt: 10_000,
     now: 9_000,
   });

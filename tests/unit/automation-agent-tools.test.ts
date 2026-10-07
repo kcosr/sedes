@@ -32,6 +32,7 @@ function definition(
     runMode: "same_thread",
     scheduleKind: "interval",
     revision: 4,
+    runsRevision: 0,
     createdAt: "2026-08-08T00:00:00.000Z",
     updatedAt: "2026-08-08T00:00:00.000Z",
     hasPrecheck: true,
@@ -450,6 +451,9 @@ describe("automation canonical tool service", () => {
     await expect(setup.service.get({}, context())).resolves.toMatchObject({
       lastRun,
     });
+    await expect(setup.service.get({}, context())).resolves.not.toHaveProperty(
+      "runsRevision",
+    );
     for (const result of [
       await setup.service.get({}, context()),
       await setup.service.setState(

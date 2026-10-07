@@ -98,12 +98,12 @@ type ProjectedThreadAutomation = NonNullable<
 
 /**
  * The automation summary frozen by the `thread.list` output schema; schedule
- * detail, the prompt preview and the last run's agent turn stay browser
- * projection fields.
+ * detail, the prompt preview, the run-history revision and the last run's
+ * agent turn stay browser projection fields.
  */
 export type AgentThreadAutomation = Omit<
   ProjectedThreadAutomation,
-  "schedule" | "misfirePolicy" | "promptPreview" | "lastRun"
+  "schedule" | "misfirePolicy" | "promptPreview" | "runsRevision" | "lastRun"
 > & {
   readonly lastRun?: Omit<
     NonNullable<ProjectedThreadAutomation["lastRun"]>,
@@ -786,6 +786,7 @@ function agentThreadAutomation(
     schedule: _schedule,
     misfirePolicy: _misfirePolicy,
     promptPreview: _promptPreview,
+    runsRevision: _runsRevision,
     lastRun,
     ...summary
   } = automation;

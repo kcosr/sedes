@@ -39,6 +39,11 @@ export const threadAutomationSummarySchema = z.strictObject({
   nextRunAt: z.iso.datetime().optional(),
   lastRun: threadAutomationLastRunSchema.optional(),
   revision: z.number().int().nonnegative(),
+  /**
+   * Advances whenever the run history changes: a new run, a run state change,
+   * or a run's turn settling or gaining its times.
+   */
+  runsRevision: z.number().int().nonnegative(),
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime(),
   hasPrecheck: z.boolean(),

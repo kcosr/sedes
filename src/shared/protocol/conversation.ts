@@ -1360,6 +1360,12 @@ export const normalizedThreadSummarySchema = z.strictObject({
       promptPreview: z.string().max(160),
       nextRunAt: z.iso.datetime().optional(),
       revision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+      /**
+       * Advances whenever the automation's run history changes: a new run,
+       * a run state change, or a run's turn settling or gaining its times.
+       * Refresh run history when it changes.
+       */
+      runsRevision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
       hasPrecheck: z.boolean(),
       lastRun: z
         .strictObject({

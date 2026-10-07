@@ -66,6 +66,7 @@ describe("normalized automation protocol", () => {
       scheduleKind: "date_time",
       nextRunAt: new Date(30_000).toISOString(),
       revision: 2,
+      runsRevision: 5,
       createdAt,
       updatedAt: new Date(20_000).toISOString(),
       hasPrecheck: false,
@@ -82,6 +83,10 @@ describe("normalized automation protocol", () => {
     expect(threadAutomationSummarySchema.safeParse(withoutCreatedAt).success).toBe(
       false,
     );
+    const { runsRevision: _runsRevision, ...withoutRunsRevision } = automation;
+    expect(
+      threadAutomationSummarySchema.safeParse(withoutRunsRevision).success,
+    ).toBe(false);
     expect(
       threadAutomationDefinitionSchema.parse({
         ...automation,
@@ -111,14 +116,23 @@ describe("normalized automation protocol", () => {
       misfirePolicy: "skip",
       promptPreview: "Review the repository and summarize…",
       revision: 4,
+      runsRevision: 5,
       hasPrecheck: true,
     } as const;
 
     expect(automation.parse(projected)).toEqual(projected);
-    for (const field of ["schedule", "misfirePolicy", "promptPreview"] as const) {
+    for (const field of [
+      "schedule",
+      "misfirePolicy",
+      "promptPreview",
+      "runsRevision",
+    ] as const) {
       const { [field]: _omitted, ...missing } = projected;
       expect(automation.safeParse(missing).success).toBe(false);
     }
+    expect(
+      automation.safeParse({ ...projected, runsRevision: -1 }).success,
+    ).toBe(false);
     expect(
       automation.safeParse({ ...projected, promptPreview: "x".repeat(161) })
         .success,
@@ -263,6 +277,7 @@ describe("normalized automation protocol", () => {
       runMode: "same_thread",
       scheduleKind: "date_time",
       revision: 2,
+      runsRevision: 5,
       createdAt: new Date(1_000).toISOString(),
       updatedAt: new Date(2_000).toISOString(),
       hasPrecheck: false,

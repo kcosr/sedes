@@ -4264,6 +4264,7 @@ describe("InventorySidebar view modes", () => {
       misfirePolicy: "coalesce" as const,
       promptPreview: "Review the repository.",
       revision: 1,
+      runsRevision: 0,
       hasPrecheck: false,
     };
     renderSidebar(
@@ -4686,6 +4687,7 @@ describe("Projects Automations shelf vocabulary", () => {
     misfirePolicy: "coalesce",
     promptPreview: "Check dependencies",
     revision: 1,
+    runsRevision: 0,
     hasPrecheck: false,
     ...overrides,
   });
@@ -4792,6 +4794,7 @@ describe("View all automations", () => {
         promptPreview: "Check dependencies",
         nextRunAt: new Date(Date.now() + 3_600_000).toISOString(),
         revision: 1,
+        runsRevision: 0,
         hasPrecheck: false,
       },
     });

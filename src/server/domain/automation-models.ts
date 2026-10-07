@@ -37,6 +37,11 @@ export type AutomationDefinitionRecord = {
   readonly completedAt: number | null;
   readonly deletedAt: number | null;
   readonly revision: number;
+  /**
+   * Advances whenever the definition's presented run history changes: a new
+   * run, a state change or a turn settlement. Database triggers maintain it.
+   */
+  readonly runsRevision: number;
   readonly schedule: AutomationSchedule;
   readonly misfirePolicy: AutomationMisfirePolicy;
   readonly nextRunAt: number | null;

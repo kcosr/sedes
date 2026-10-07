@@ -46,6 +46,7 @@ function automation(
     promptPreview: "Check dependencies for advisories",
     nextRunAt: hoursFromNow(22),
     revision: 1,
+    runsRevision: 0,
     hasPrecheck: false,
     ...overrides,
   };

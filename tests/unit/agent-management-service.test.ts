@@ -279,6 +279,7 @@ describe("AgentManagementService discovery", () => {
       };
       current.automations.set(current.older.id, {
         ...frozen,
+        runsRevision: 7,
         schedule: { kind: "cron", expression: "0 2 * * *", timeZone: "UTC" },
         misfirePolicy: "skip",
         promptPreview: "Review the repository.",

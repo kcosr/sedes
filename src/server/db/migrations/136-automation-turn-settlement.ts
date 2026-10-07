@@ -15,6 +15,12 @@ import type { DatabaseMigration } from "../migrate.js";
  *
  * Runs whose turn the rail already settled are backfilled. Force-reset runs
  * are immutable and stay unsettled.
+ *
+ * `automation_definitions.runs_revision` advances with every change to the
+ * definition's run history that clients present: a new run, or a change to a
+ * presented run column, including its turn settlement and turn times. Triggers
+ * keep it in the run's own statement, so no writer can miss it, and an update
+ * that leaves those columns unchanged does not advance it.
  */
 export const automationTurnSettlementMigration: DatabaseMigration = {
   version: 136,
@@ -126,5 +132,53 @@ WHERE observation.tenant_id = run.tenant_id
   AND observation.application_turn_id IS NOT NULL
   AND run.turn_id IS NULL
   AND run.force_reset_at IS NULL;
+
+ALTER TABLE automation_definitions
+  ADD COLUMN runs_revision INTEGER NOT NULL DEFAULT 0 CHECK (runs_revision >= 0);
+
+CREATE TRIGGER automation_runs_history_revision_insert
+AFTER INSERT ON automation_runs
+BEGIN
+  UPDATE automation_definitions SET runs_revision = runs_revision + 1
+  WHERE tenant_id = NEW.tenant_id
+    AND owner_principal_id = NEW.owner_principal_id
+    AND id = NEW.automation_id;
+END;
+
+CREATE TRIGGER automation_runs_history_revision_update
+AFTER UPDATE ON automation_runs
+WHEN NEW.state IS NOT OLD.state
+  OR NEW.occurrence_kind IS NOT OLD.occurrence_kind
+  OR NEW.scheduled_for IS NOT OLD.scheduled_for
+  OR NEW.definition_revision IS NOT OLD.definition_revision
+  OR NEW.coalesced_count IS NOT OLD.coalesced_count
+  OR NEW.run_mode IS NOT OLD.run_mode
+  OR NEW.anchor_thread_id IS NOT OLD.anchor_thread_id
+  OR NEW.child_thread_id IS NOT OLD.child_thread_id
+  OR NEW.error_code IS NOT OLD.error_code
+  OR NEW.error_diagnostic IS NOT OLD.error_diagnostic
+  OR NEW.claimed_at IS NOT OLD.claimed_at
+  OR NEW.started_at IS NOT OLD.started_at
+  OR NEW.accepted_at IS NOT OLD.accepted_at
+  OR NEW.finished_at IS NOT OLD.finished_at
+  OR NEW.force_reset_at IS NOT OLD.force_reset_at
+  OR NEW.precheck_status IS NOT OLD.precheck_status
+  OR NEW.precheck_command_snapshot IS NOT OLD.precheck_command_snapshot
+  OR NEW.precheck_timeout_seconds IS NOT OLD.precheck_timeout_seconds
+  OR NEW.precheck_exit_code IS NOT OLD.precheck_exit_code
+  OR NEW.precheck_duration_ms IS NOT OLD.precheck_duration_ms
+  OR NEW.precheck_stdout_bytes IS NOT OLD.precheck_stdout_bytes
+  OR NEW.precheck_stdout_included IS NOT OLD.precheck_stdout_included
+  OR NEW.turn_id IS NOT OLD.turn_id
+  OR NEW.turn_outcome IS NOT OLD.turn_outcome
+  OR NEW.turn_settled_at IS NOT OLD.turn_settled_at
+  OR NEW.turn_started_at IS NOT OLD.turn_started_at
+  OR NEW.turn_ended_at IS NOT OLD.turn_ended_at
+BEGIN
+  UPDATE automation_definitions SET runs_revision = runs_revision + 1
+  WHERE tenant_id = NEW.tenant_id
+    AND owner_principal_id = NEW.owner_principal_id
+    AND id = NEW.automation_id;
+END;
 `,
 };

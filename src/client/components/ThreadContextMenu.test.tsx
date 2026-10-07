@@ -1055,6 +1055,7 @@ describe("ThreadContextMenu content per thread state", () => {
           misfirePolicy: "coalesce",
           promptPreview: "Review the repository.",
           revision: 1,
+          runsRevision: 0,
           hasPrecheck: false,
         },
       }),

@@ -13,7 +13,10 @@ import {
   applyDatabaseMigrations,
   backendNormalizedMigrations,
 } from "../../src/server/db/migrate.js";
-import { AutomationRepository } from "../../src/server/db/repositories/automation-repository.js";
+import {
+  AutomationRepository,
+  type AutomationTurnSettlementInput,
+} from "../../src/server/db/repositories/automation-repository.js";
 import { ConversationBindingRepository } from "../../src/server/db/repositories/conversation-binding-repository.js";
 import { InventoryRepository } from "../../src/server/db/repositories/inventory-repository.js";
 import { SubmissionCompletionRepository } from "../../src/server/db/repositories/submission-completion-repository.js";
@@ -124,19 +127,23 @@ function fixture(latestMigration = Number.POSITIVE_INFINITY) {
       now: 400,
     });
   }
+  // Inserted directly so the fixture also works before migration 136.
+  const automationId = randomUUID();
+  database
+    .prepare(
+      `
+        INSERT INTO automation_definitions(
+          tenant_id, owner_principal_id, id, anchor_thread_id, name, prompt,
+          run_mode, enabled, schedule_kind, interval_anchor_at,
+          interval_seconds, misfire_policy, next_run_at, created_at,
+          updated_at
+        )
+        VALUES (?, ?, ?, ?, 'Turn tracking', 'Review the repository',
+          'clone', 1, 'interval', 1000, 3600, 'coalesce', 1000, 500, 500)
+      `,
+    )
+    .run(scope.tenantId, scope.principalId, automationId, anchorThreadId);
   const automations = new AutomationRepository(database);
-  const automationId = automations.createDefinition(scope, {
-    anchorThreadId,
-    name: "Turn tracking",
-    prompt: "Review the repository",
-    precheck: null,
-    runMode: "clone",
-    enabled: true,
-    schedule: { kind: "interval", anchorAt: 1_000, everySeconds: 3_600 },
-    misfirePolicy: "coalesce",
-    nextRunAt: 1_000,
-    now: 500,
-  }).id;
   return {
     database,
     scope,
@@ -280,6 +287,11 @@ const unsettled = {
   turnEndedAt: null,
 };
 
+function runsRevision(current: Fixture): number {
+  return current.automations.getDefinition(current.scope, current.automationId)
+    .runsRevision;
+}
+
 function plan(database: Database.Database, sql: string): string {
   const parameters = sql.match(/\?/g)?.length ?? 0;
   return (
@@ -418,6 +430,8 @@ describe("automation turn settlement migration", () => {
       for (const run of [cloneOnAnchor, identityOnly, forceReset, unobserved]) {
         expect(settlement(current.database, run.id)).toEqual(unsettled);
       }
+      // The run-history revision starts at zero; the backfill predates it.
+      expect(runsRevision(current)).toBe(0);
     } finally {
       current.database.close();
     }
@@ -928,6 +942,221 @@ describe("AutomationTurnSettlementObserver", () => {
         turnId: "turn_second",
       });
       expect(settlement(current.database, reset.id)).toEqual(unsettled);
+    } finally {
+      current.database.close();
+    }
+  });
+});
+
+describe("automation run-history revision", () => {
+  it("advances once for each run change clients present, and only then", () => {
+    const current = fixture();
+    try {
+      const { automations } = service(current);
+      const step = (change: () => unknown) => {
+        const before = runsRevision(current);
+        change();
+        return runsRevision(current) - before;
+      };
+      let claimed!: AutomationRunRecord;
+      expect(
+        step(() => {
+          claimed = current.automations.createManualRun(
+            current.scope,
+            current.automationId,
+            {
+              runId: randomUUID(),
+              occurrenceKey: "manual:history",
+              scheduledFor: 1_000,
+              claimToken: "claim",
+              leaseExpiresAt: 2_000,
+              dispatchMutationId: randomUUID(),
+              now: 1_000,
+            },
+          ).run;
+        }),
+      ).toBe(1);
+      // A new claim on an expired lease is bookkeeping, not history.
+      expect(
+        step(() =>
+          current.automations.reclaimExpiredRun(
+            current.scope,
+            current.automationId,
+            claimed.id,
+            { claimToken: "reclaim", leaseExpiresAt: 9_000, now: 2_500 },
+          ),
+        ),
+      ).toBe(0);
+      expect(
+        step(() =>
+          current.automations.updateRunState(
+            current.scope,
+            current.automationId,
+            claimed.id,
+            {
+              expectedState: "claimed",
+              state: "dispatching",
+              claimToken: "reclaim",
+              retainPromptSnapshot: true,
+              now: 2_600,
+            },
+          ),
+        ),
+      ).toBe(1);
+      expect(
+        step(() =>
+          current.automations.markRunUncertainAndPause(
+            current.scope,
+            current.automationId,
+            claimed.id,
+            {
+              expectedState: "dispatching",
+              claimToken: "reclaim",
+              errorCode: "automation_dispatch_uncertain",
+              errorDiagnostic: "Acceptance could not be proven.",
+              now: 2_700,
+            },
+          ),
+        ),
+      ).toBe(1);
+      const settleInput: AutomationTurnSettlementInput = {
+        turnId: "turn_history",
+        outcome: "failed",
+        settledAt: 2_800,
+        startedAt: null,
+        endedAt: null,
+      };
+      const settle = (input = settleInput) =>
+        current.automations.settleRunTurn(
+          current.scope,
+          current.anchorThreadId,
+          claimed.dispatchMutationId,
+          input,
+        );
+      expect(step(() => settle())).toBe(1);
+      expect(step(() => settle())).toBe(0);
+      expect(
+        step(() => settle({ ...settleInput, startedAt: 2_610, endedAt: 2_790 })),
+      ).toBe(1);
+      expect(
+        step(() => settle({ ...settleInput, startedAt: 2_610, endedAt: 2_790 })),
+      ).toBe(0);
+      // A rejected write-once change aborts its statement and the bump.
+      expect(
+        step(() =>
+          expect(() =>
+            current.database
+              .prepare(
+                "UPDATE automation_runs SET turn_outcome = 'completed' WHERE id = ?",
+              )
+              .run(claimed.id),
+          ).toThrow("Automation run turn settlement is immutable"),
+        ),
+      ).toBe(0);
+      // A statement that rewrites presented columns unchanged is no change.
+      expect(
+        step(() =>
+          current.database
+            .prepare(
+              `UPDATE automation_runs
+               SET state = state, turn_id = turn_id, updated_at = 2900
+               WHERE id = ?`,
+            )
+            .run(claimed.id),
+        ),
+      ).toBe(0);
+      expect(
+        step(() =>
+          automations.resolveUncertainRun(
+            current.scope,
+            current.anchorThreadId,
+            claimed.id,
+            { resume: false },
+            3_000,
+          ),
+        ),
+      ).toBe(1);
+
+      const recovered = insertRun(current, {
+        state: "completed",
+        createdAt: 4_000,
+      });
+      observeFinal(
+        current,
+        current.anchorThreadId,
+        recovered.dispatchMutationId,
+        { turnId: "turn_recovered", outcome: "completed", observedAt: 4_500 },
+      );
+      expect(
+        step(() => current.automations.settleRunTurnsFromCompletions()),
+      ).toBe(1);
+
+      const reset = insertRun(current, { state: "queued", createdAt: 5_000 });
+      expect(
+        step(() =>
+          current.database
+            .prepare(
+              `UPDATE automation_runs
+               SET state = 'failed', finished_at = 5100, error_code = 'force_reset',
+                 force_reset_at = 5100, force_reset_mutation_id = 'reset-history'
+               WHERE id = ?`,
+            )
+            .run(reset.id),
+        ),
+      ).toBe(1);
+      expect(
+        step(() =>
+          expect(
+            current.automations.settleRunTurn(
+              current.scope,
+              current.anchorThreadId,
+              reset.dispatchMutationId,
+              { ...settleInput, turnId: "turn_reset" },
+            ),
+          ).toBeUndefined(),
+        ),
+      ).toBe(0);
+    } finally {
+      current.database.close();
+    }
+  });
+
+  it("changes the projection when a run that is not the latest settles, and when turn times arrive later", () => {
+    const current = fixture();
+    try {
+      const older = insertRun(current, {
+        state: "completed",
+        createdAt: 1_000,
+        childThreadId: current.childThreadId,
+      });
+      insertRun(current, { state: "completed", createdAt: 2_000 });
+      const before = projectedAutomation(current)!;
+      const settle = (startedAt: number | null, endedAt: number | null) =>
+        current.automations.settleRunTurn(
+          current.scope,
+          current.childThreadId,
+          older.dispatchMutationId,
+          {
+            turnId: "turn_older",
+            outcome: "failed",
+            settledAt: 3_000,
+            startedAt,
+            endedAt,
+          },
+        );
+
+      settle(null, null);
+      const settled = projectedAutomation(current)!;
+      expect(settled.lastRun).toEqual(before.lastRun);
+      expect(settled.runsRevision).toBe(before.runsRevision + 1);
+
+      settle(1_100, 2_900);
+      const timed = projectedAutomation(current)!;
+      expect(timed.lastRun).toEqual(before.lastRun);
+      expect(timed.runsRevision).toBe(before.runsRevision + 2);
+
+      settle(1_100, 2_900);
+      expect(projectedAutomation(current)).toEqual(timed);
     } finally {
       current.database.close();
     }

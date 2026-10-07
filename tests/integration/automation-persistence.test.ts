@@ -431,13 +431,17 @@ describe("automation persistence", () => {
         appliedAt: 2_000,
       });
 
-      const repository = new AutomationRepository(upgradeDatabase);
+      // Schema 13 predates later definition and run columns the current
+      // repository selects.
       expect(
-        repository.getDefinition(seeded.scope, definitionId),
-      ).toMatchObject({
-        precheck: null,
-      });
-      // Schema 13 predates later run columns the current repository selects.
+        upgradeDatabase
+          .prepare(
+            `SELECT precheck_command AS precheckCommand
+             FROM automation_definitions
+             WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?`,
+          )
+          .get(seeded.scope.tenantId, seeded.scope.principalId, definitionId),
+      ).toEqual({ precheckCommand: null });
       expect(
         upgradeDatabase
           .prepare(
