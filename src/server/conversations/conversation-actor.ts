@@ -88,6 +88,16 @@ function assertTurnThroughputSupported(
   });
 }
 
+/** A terminal backend turn's own times, as completion observers receive them. */
+function turnTimes(
+  turn: Pick<BackendTurn, "startedAt" | "completedAt">,
+): { readonly startedAt?: string; readonly completedAt?: string } {
+  return {
+    ...(turn.startedAt ? { startedAt: turn.startedAt } : {}),
+    ...(turn.completedAt ? { completedAt: turn.completedAt } : {}),
+  };
+}
+
 type AncillaryBackendEvent = Extract<
   BackendConversationEvent,
   {
@@ -140,6 +150,9 @@ export type ConversationActorEvent =
       readonly outcome: "completed" | "interrupted" | "failed";
       readonly result: BoundedText;
       readonly classifiedResult: ClassifiedAssistantResult | null;
+      /** The backend turn's own start and end, when it reports them. */
+      readonly startedAt?: string;
+      readonly completedAt?: string;
     }
   | {
       /** A backend user turn now durably carries an application submission. */
@@ -1436,6 +1449,7 @@ export class ConversationActor {
                 outcome: event.event.turn.status,
                 result: completion.result,
                 classifiedResult: completion.classifiedResult,
+                ...turnTimes(event.event.turn),
               });
             }
           }
@@ -1468,6 +1482,7 @@ export class ConversationActor {
           outcome: backendTurn.status,
           result: completion.result,
           classifiedResult: completion.classifiedResult,
+          ...turnTimes(backendTurn),
         };
         if (listener) {
           listener(event);

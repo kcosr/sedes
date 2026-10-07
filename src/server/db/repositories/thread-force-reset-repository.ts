@@ -75,6 +75,12 @@ type Capture = {
 
 export type ThreadForceResetCommit = ThreadForceResetResult & {
   readonly promotedTaskIds: readonly string[];
+  /**
+   * Anchors of the automation runs this reset abandoned, including runs
+   * reached through their clone child. Their automation summaries changed
+   * although they are not themselves reset.
+   */
+  readonly resetRunAnchorThreadIds: readonly string[];
   readonly replayed: boolean;
   readonly resetConversationRuntimes: readonly ThreadForceResetConversationRuntimeBlocker[];
 };
@@ -390,11 +396,21 @@ export class ThreadForceResetRepository {
              updated_at = max(updated_at, ?), force_reset_at = ?,
              force_reset_mutation_id = ?
            WHERE tenant_id = ? AND owner_principal_id = ?
-             AND anchor_thread_id IN (${placeholders})
+             AND (
+               anchor_thread_id IN (${placeholders})
+               OR child_thread_id IN (${placeholders})
+             )
              AND force_reset_at IS NULL
              AND state IN ('claimed', 'dispatching', 'queued', 'running', 'uncertain')`,
         )
-        .run(input.now, input.now, input.now, input.mutationId, ...scoped);
+        .run(
+          input.now,
+          input.now,
+          input.now,
+          input.mutationId,
+          ...scoped,
+          ...threadIds,
+        );
 
       this.database
         .prepare(
@@ -703,15 +719,43 @@ export class ThreadForceResetRepository {
         mayHaveProviderSideEffect: false,
       });
     }
-    collect(
-      `SELECT id, anchor_thread_id AS threadId, state
-       FROM automation_runs
-       WHERE tenant_id = ? AND owner_principal_id = ?
-         AND anchor_thread_id IN (${placeholders})
-         AND state IN ('claimed', 'dispatching', 'queued', 'running', 'uncertain')`,
-      "automation_run",
-      (state) =>
-        state === "dispatching" || state === "running" || state === "uncertain",
+    // A clone run is reset from its anchor or from the child it created.
+    const runRows = this.database
+      .prepare(
+        `SELECT id,
+           CASE
+             WHEN anchor_thread_id IN (${placeholders}) THEN anchor_thread_id
+             ELSE child_thread_id
+           END AS threadId,
+           state
+         FROM automation_runs
+         WHERE tenant_id = ? AND owner_principal_id = ?
+           AND (
+             anchor_thread_id IN (${placeholders})
+             OR child_thread_id IN (${placeholders})
+           )
+           AND state IN ('claimed', 'dispatching', 'queued', 'running', 'uncertain')`,
+      )
+      .all(
+        ...threadIds,
+        scope.tenantId,
+        scope.principalId,
+        ...threadIds,
+        ...threadIds,
+      ) as readonly {
+      readonly id: string;
+      readonly threadId: string;
+      readonly state: string;
+    }[];
+    blockers.push(
+      ...runRows.map((row) => ({
+        kind: "automation_run" as const,
+        ...row,
+        mayHaveProviderSideEffect:
+          row.state === "dispatching" ||
+          row.state === "running" ||
+          row.state === "uncertain",
+      })),
     );
 
     if (pendingInteractions.length > MAXIMUM_AFFECTED_THREADS) {
@@ -943,12 +987,26 @@ export class ThreadForceResetRepository {
       .all(scope.tenantId, scope.principalId, mutationId) as readonly {
       readonly threadId: string;
     }[];
+    const resetRunAnchorThreadIds = this.database
+      .prepare(
+        `SELECT DISTINCT anchor_thread_id AS threadId
+         FROM automation_runs
+         WHERE tenant_id = ? AND owner_principal_id = ?
+           AND force_reset_mutation_id = ?
+         ORDER BY anchor_thread_id`,
+      )
+      .all(scope.tenantId, scope.principalId, mutationId) as readonly {
+      readonly threadId: string;
+    }[];
     return {
       resetAt: receipt.resetAt,
       blockerFingerprint: receipt.blockerFingerprint,
       resetBlockers: [...parseSummaries(receipt.blockerSummaryJson)],
       affectedThreadIds: affectedThreadIds.map(({ threadId }) => threadId),
       promotedTaskIds: promotedTaskIds.map(({ taskId }) => taskId),
+      resetRunAnchorThreadIds: resetRunAnchorThreadIds.map(
+        ({ threadId }) => threadId,
+      ),
       replayed,
       resetConversationRuntimes: [],
     };

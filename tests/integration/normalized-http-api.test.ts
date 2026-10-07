@@ -7057,6 +7057,163 @@ describe("normalized HTTP application contract", () => {
     }
   });
 
+  it("presents settled run turns and lists failed turns as problems", async () => {
+    const current = await fixture();
+    try {
+      const workspace = await current
+        .mutate(request(current.app).post("/api/workspaces/open"))
+        .send({
+          environmentId: current.environmentId,
+          path: current.workspacePath,
+          project: { kind: "new", name: "workspace" },
+        })
+        .expect(201);
+      const created = await current
+        .mutate(request(current.app).post("/api/threads"))
+        .send({
+          workspaceId: workspace.body.id,
+          configuration: { kind: "custom", targetId: current.profile.id },
+          executionWorkspace: { kind: "direct" },
+          title: "New thread",
+        })
+        .expect(201);
+      const threadId = created.body.threadId as string;
+      await current
+        .mutate(
+          request(current.app).post(`/api/threads/${threadId}/automation`),
+        )
+        .send({
+          prompt: "Run scheduled checks",
+          runMode: "same_thread",
+          schedule: {
+            kind: "interval",
+            anchorAt: "2099-07-30T12:00:00.000Z",
+            everySeconds: 3_600,
+          },
+          misfirePolicy: "coalesce",
+          precheck: null,
+          mutationId: randomUUID(),
+        })
+        .expect(201);
+      const automations = new AutomationRepository(current.database);
+      const automationId = automations.findDefinitionForThread(
+        current.owner,
+        threadId,
+      )!.id;
+      const deliver = (now: number) => {
+        const run = automations.createManualRun(current.owner, automationId, {
+          runId: randomUUID(),
+          occurrenceKey: `manual:${now}`,
+          scheduledFor: now,
+          claimToken: `claim-${now}`,
+          leaseExpiresAt: now + 60_000,
+          dispatchMutationId: randomUUID(),
+          now,
+        }).run;
+        automations.updateRunState(current.owner, automationId, run.id, {
+          expectedState: "claimed",
+          state: "dispatching",
+          claimToken: run.claimToken!,
+          retainPromptSnapshot: true,
+          now: now + 10,
+        });
+        return automations.updateRunState(current.owner, automationId, run.id, {
+          expectedState: "dispatching",
+          state: "completed",
+          claimToken: run.claimToken!,
+          now: now + 20,
+        });
+      };
+      const settle = (
+        run: ReturnType<typeof deliver>,
+        outcome: "completed" | "interrupted" | "failed",
+        endedAt: number,
+      ) =>
+        automations.settleRunTurn(
+          current.owner,
+          threadId,
+          run.dispatchMutationId,
+          {
+            turnId: `turn_${run.id}`,
+            outcome,
+            settledAt: endedAt + 5,
+            startedAt: endedAt - 490,
+            endedAt,
+          },
+        );
+      const failedTurn = deliver(1_000);
+      settle(failedTurn, "failed", 1_500);
+      const interrupted = deliver(2_000);
+      settle(interrupted, "interrupted", 2_500);
+      const delivered = deliver(3_000);
+      const finished = deliver(4_000);
+      settle(finished, "completed", 4_500);
+      const runsPath = `/api/threads/${threadId}/automation/runs`;
+
+      await current
+        .withHost(request(current.app).get(`${runsPath}?filter=problems`))
+        .expect(200)
+        .expect(({ body }) =>
+          expect(body).toEqual({
+            items: [
+              expect.objectContaining({
+                id: failedTurn.id,
+                state: "completed",
+                turn: {
+                  id: `turn_${failedTurn.id}`,
+                  outcome: "failed",
+                  settledAt: new Date(1_505).toISOString(),
+                  startedAt: new Date(1_010).toISOString(),
+                  endedAt: new Date(1_500).toISOString(),
+                },
+              }),
+            ],
+            nextCursor: null,
+            counts: { all: 4, problems: 1, skipped: 0 },
+          }),
+        );
+      await current
+        .withHost(request(current.app).get(runsPath))
+        .expect(200)
+        .expect(({ body }) => {
+          expect(
+            body.items.map(
+              ({ id, turn }: { id: string; turn?: { outcome: string } }) => [
+                id,
+                turn?.outcome ?? null,
+              ],
+            ),
+          ).toEqual([
+            [finished.id, "completed"],
+            [delivered.id, null],
+            [interrupted.id, "interrupted"],
+            [failedTurn.id, "failed"],
+          ]);
+        });
+      await current
+        .withHost(
+          request(current.app).get(`/api/threads/${threadId}/automation`),
+        )
+        .expect(200)
+        .expect(({ body }) =>
+          expect(body.lastRun).toEqual({
+            id: finished.id,
+            state: "completed",
+            occurrence: "manual",
+            scheduledFor: new Date(4_000).toISOString(),
+            finishedAt: new Date(4_020).toISOString(),
+            resultThreadId: threadId,
+            turn: {
+              outcome: "completed",
+              endedAt: new Date(4_500).toISOString(),
+            },
+          }),
+        );
+    } finally {
+      current.close();
+    }
+  });
+
   it("serves normalized application and thread handshake events", async () => {
     const current = await fixture();
     const server = current.app.listen(0, "127.0.0.1");

@@ -368,6 +368,13 @@ describe("automation canonical tool service", () => {
       definitionRevision: 3,
       coalescedCount: 0,
       forceResetAt: "2026-08-08T00:05:00.000Z",
+      turn: {
+        id: "turn_settled",
+        outcome: "failed" as const,
+        settledAt: "2026-08-08T00:04:00.000Z",
+        startedAt: "2026-08-08T00:01:00.000Z",
+        endedAt: "2026-08-08T00:03:59.000Z",
+      },
       precheck: {
         status: "failed" as const,
         command: "exit 3",
@@ -420,6 +427,50 @@ describe("automation canonical tool service", () => {
       state: "completed",
       output: { items: [frozen], nextCursor: null },
     });
+  });
+
+  it("keeps the frozen definition shape by stripping the last run's turn", async () => {
+    const lastRun = {
+      id: firstMutationId,
+      state: "completed" as const,
+      occurrence: "scheduled" as const,
+      scheduledFor: "2026-08-08T00:00:00.000Z",
+      finishedAt: "2026-08-08T00:00:02.000Z",
+      resultThreadId: sourceThreadId,
+    };
+    const setup = fixture({
+      definition: definition({
+        lastRun: {
+          ...lastRun,
+          turn: { outcome: "failed", endedAt: "2026-08-08T00:09:00.000Z" },
+        },
+      }),
+    });
+
+    await expect(setup.service.get({}, context())).resolves.toMatchObject({
+      lastRun,
+    });
+    for (const result of [
+      await setup.service.get({}, context()),
+      await setup.service.setState(
+        { expectedRevision: 4, action: "pause" },
+        context(),
+      ),
+    ]) {
+      expect(result.lastRun).toEqual(lastRun);
+    }
+    // The registry validates outputs against the unchanged v1 artifacts.
+    await expect(
+      canonical(setup).invoke(
+        {
+          toolId: "automation.get",
+          schemaVersion: 1,
+          requestId: "frozen-definition-shape",
+          input: {},
+        },
+        invocationSource,
+      ),
+    ).resolves.toMatchObject({ state: "completed", output: { lastRun } });
   });
 
   it("rejects every unadmitted target before automation state or model work", async () => {

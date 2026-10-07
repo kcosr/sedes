@@ -18,6 +18,7 @@ function committed() {
     resetBlockers: [{ kind: "conversation_operation" as const, count: 1 }],
     affectedThreadIds: ["thread-1"],
     promotedTaskIds: [],
+    resetRunAnchorThreadIds: [],
     replayed: false,
     resetConversationRuntimes: [],
   };
@@ -178,6 +179,7 @@ describe("ThreadForceResetService", () => {
         resetBlockers: [{ kind: "pending_interaction" as const, count: 1 }],
         affectedThreadIds: ["thread-1"],
         promotedTaskIds: [],
+        resetRunAnchorThreadIds: [],
         replayed: false,
         resetConversationRuntimes: [],
       })),
@@ -301,6 +303,34 @@ describe("ThreadForceResetService", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("publishes the anchor of an automation run reset through its clone child", async () => {
+    const scheduleThreadPublications = vi.fn();
+    const service = new ThreadForceResetService({
+      repository: {
+        impact: vi.fn(() => impact()),
+        forceReset: vi.fn(() => ({
+          ...committed(),
+          affectedThreadIds: ["clone-child"],
+          resetRunAnchorThreadIds: ["anchor", "clone-child"],
+        })),
+      } as never,
+      interactions: noPendingInteractions,
+      runtimes: noLoadedRuntimes,
+      scheduleThreadPublications,
+      now: () => 200,
+    });
+
+    await service.forceReset(scope, "clone-child", {
+      expectedBlockerFingerprint: "fingerprint",
+      mutationId: "mutation-1",
+    });
+
+    expect(scheduleThreadPublications).toHaveBeenCalledExactlyOnceWith(scope, [
+      "clone-child",
+      "anchor",
+    ]);
   });
 
   it("does not abandon interactions opened after a force-reset receipt replay", async () => {

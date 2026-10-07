@@ -1170,6 +1170,119 @@ describe("thread force-reset repository", () => {
     }
   });
 
+  it("resets an automation run from the clone child it created and names its anchor", () => {
+    const current = fixture();
+    try {
+      bind(current, current.rootId);
+      bind(current, current.childId);
+      const automations = new AutomationRepository(current.database);
+      const automation = automations.createDefinition(current.scope, {
+        id: "clone-child-automation",
+        anchorThreadId: current.rootId,
+        name: "Clone child reset",
+        prompt: "Review in a branch",
+        precheck: null,
+        runMode: "clone",
+        enabled: true,
+        schedule: { kind: "date_time", runAt: 10_000 },
+        misfirePolicy: "coalesce",
+        nextRunAt: 10_000,
+        now: 500,
+      });
+      const claimed = automations.createManualRun(current.scope, automation.id, {
+        runId: "clone-child-run",
+        occurrenceKey: "clone-child-occurrence",
+        scheduledFor: 510,
+        claimToken: "clone-child-claim",
+        leaseExpiresAt: 20_000,
+        dispatchMutationId: "clone-child-dispatch",
+        now: 510,
+      }).run;
+      automations.updateRunState(current.scope, automation.id, claimed.id, {
+        expectedState: "claimed",
+        state: "dispatching",
+        claimToken: claimed.claimToken!,
+        retainPromptSnapshot: true,
+        now: 520,
+      });
+      // The run's prompt now waits in the child it forked.
+      current.database
+        .prepare(
+          `UPDATE automation_runs SET child_thread_id = ?
+           WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?`,
+        )
+        .run(
+          current.childId,
+          current.scope.tenantId,
+          current.scope.principalId,
+          claimed.id,
+        );
+      automations.updateRunState(current.scope, automation.id, claimed.id, {
+        expectedState: "dispatching",
+        state: "queued",
+        claimToken: claimed.claimToken!,
+        now: 530,
+      });
+
+      const resets = new ThreadForceResetRepository(current.database);
+      const impact = resets.impact(current.scope, current.childId);
+      expect(impact.affectedThreads).toEqual([
+        { threadId: current.childId, title: "Child" },
+      ]);
+      expect(impact.blockers).toEqual([{ kind: "automation_run", count: 1 }]);
+      // From the anchor the same run is one blocker, as before.
+      expect(resets.impact(current.scope, current.rootId).blockers).toEqual([
+        { kind: "automation_run", count: 1 },
+      ]);
+
+      const reset = resets.forceReset(current.scope, current.childId, {
+        expectedBlockerFingerprint: impact.blockerFingerprint,
+        mutationId: "force-reset-clone-child",
+        now: 700,
+      });
+      expect(reset).toMatchObject({
+        affectedThreadIds: [current.childId],
+        resetRunAnchorThreadIds: [current.rootId],
+      });
+      expect(
+        automations.getRun(current.scope, automation.id, claimed.id),
+      ).toMatchObject({
+        state: "failed",
+        errorCode: "force_reset",
+        finishedAt: 700,
+        forceResetAt: 700,
+        childThreadId: current.childId,
+      });
+      expect(
+        resets.forceReset(current.scope, current.childId, {
+          expectedBlockerFingerprint: impact.blockerFingerprint,
+          mutationId: "force-reset-clone-child",
+          now: 800,
+        }),
+      ).toMatchObject({
+        replayed: true,
+        resetRunAnchorThreadIds: [current.rootId],
+      });
+      // The reset run is immutable, so its turn never settles.
+      expect(
+        automations.settleRunTurn(
+          current.scope,
+          current.childId,
+          claimed.dispatchMutationId,
+          {
+            turnId: "turn_after_reset",
+            outcome: "completed",
+            settledAt: 900,
+            startedAt: null,
+            endedAt: null,
+          },
+        ),
+      ).toBeUndefined();
+    } finally {
+      current.database.close();
+    }
+  });
+
   it("rejects a late clone-child bind with a structured conflict after force reset", () => {
     const current = fixture();
     try {

@@ -46,6 +46,11 @@ function run(
     acceptedAt: null,
     finishedAt: null,
     forceResetAt: null,
+    turnId: null,
+    turnOutcome: null,
+    turnSettledAt: null,
+    turnStartedAt: null,
+    turnEndedAt: null,
     createdAt: 1_000,
     updatedAt: 1_000,
   };

@@ -210,6 +210,7 @@ import { AuthenticationAdmission, deriveClientNavigationNamespace } from "./auth
 import { createNormalizedApp } from "./normalized-app.js";
 import {
   AutomationQueueRunObserver,
+  AutomationTurnSettlementObserver,
   LifecycleAutomationConversationGateway,
 } from "./runtime/automation-conversation-gateway.js";
 import { ConversationLifecycleAutomationFirstInput } from "./runtime/conversation-lifecycle-automation.js";
@@ -1601,6 +1602,10 @@ export async function startProductionApplication(
         "Thread force-reset publication",
       ),
     });
+    let observeAutomationTurns: AutomationTurnSettlementObserver | undefined;
+    const reportAutomationTurnError = reportBackgroundError(
+      "Automation turn settlement",
+    );
     observeAuthoritativeCompletion = async (
       eventScope,
       applicationThreadId,
@@ -1612,6 +1617,17 @@ export async function startProductionApplication(
         input,
       );
       if (!observed) return;
+      try {
+        observeAutomationTurns?.observe(
+          eventScope,
+          applicationThreadId,
+          observed,
+          input,
+        );
+      } catch (error) {
+        // Run history is an observer; it must never break completion.
+        reportAutomationTurnError(error);
+      }
       notificationLifecycle.completion(eventScope, observed);
       if (observed.applicationTurnId) void clientControls.complete(eventScope, applicationThreadId, observed.applicationTurnId, observed.completionOutcome ?? "interrupted");
       authoritativeCompletionFollowUp.defer(async () => {
@@ -1822,11 +1838,16 @@ export async function startProductionApplication(
       queue: queueRepository,
       publisher: automations,
     });
+    observeAutomationTurns = new AutomationTurnSettlementObserver({
+      repository: automationRepository,
+      publisher: automations,
+    });
 
     await queueDispatcher.recover(scope);
     await completionCallbackDispatcher.deliverReady(scope);
     await mutations.recoverUncertain(scope);
     observeAutomationQueue.recover();
+    observeAutomationTurns.recover();
     scheduler = new DurableScheduler(
       [
         automations,

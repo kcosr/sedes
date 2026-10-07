@@ -1,10 +1,14 @@
 import type { NormalizedThreadSummary } from "../../shared/protocol/conversation.js";
-import type { AutomationRunState } from "../domain/automation-models.js";
+import type {
+  AutomationRunState,
+  AutomationTurnOutcome,
+} from "../domain/automation-models.js";
 import { automationScheduleFromColumns } from "../db/repositories/automation-repository.js";
 import {
   AUTOMATION_PROMPT_PREVIEW_SOURCE_BYTES,
   automationPromptPreview,
   decodeAutomationPromptHead,
+  presentAutomationLastRunTurn,
   presentAutomationSchedule,
 } from "../domain/automation-presentation.js";
 
@@ -35,6 +39,8 @@ export type ThreadAutomationSummaryRow = {
   readonly automationFinishedAt: number | null;
   readonly automationResultThreadId: string | null;
   readonly automationErrorCode: string | null;
+  readonly automationTurnOutcome: AutomationTurnOutcome | null;
+  readonly automationTurnEndedAt: number | null;
 };
 
 /** Select list for a live definition and the run joined by {@link latestAutomationRunJoin}. */
@@ -77,7 +83,9 @@ export function threadAutomationSummaryColumns(
     ${run}.finished_at AS automationFinishedAt,
     coalesce(${run}.child_thread_id, ${run}.anchor_thread_id)
       AS automationResultThreadId,
-    ${run}.error_code AS automationErrorCode`;
+    ${run}.error_code AS automationErrorCode,
+    ${run}.turn_outcome AS automationTurnOutcome,
+    ${run}.turn_ended_at AS automationTurnEndedAt`;
 }
 
 /**
@@ -116,6 +124,10 @@ export function projectThreadAutomationSummary(
   ) {
     return null;
   }
+  const lastRunTurn = presentAutomationLastRunTurn({
+    turnOutcome: row.automationTurnOutcome,
+    turnEndedAt: row.automationTurnEndedAt,
+  });
   return {
     status: row.automationStatus,
     runMode: row.automationRunMode,
@@ -163,6 +175,7 @@ export function projectThreadAutomationSummary(
             ...(row.automationErrorCode === null
               ? {}
               : { errorCode: row.automationErrorCode }),
+            ...(lastRunTurn ? { turn: lastRunTurn } : {}),
           },
         }),
   };

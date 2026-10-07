@@ -70,7 +70,7 @@ export const automationTurnOutcomeSchema = z.enum([
 ]);
 export type AutomationTurnOutcome = z.infer<typeof automationTurnOutcomeSchema>;
 
-/** Run-history filter: `problems` is failed or uncertain runs. */
+/** Run-history filter: `problems` is failed or uncertain runs, or a failed turn. */
 export const automationRunFilterSchema = z.enum(["all", "problems", "skipped"]);
 export type AutomationRunFilter = z.infer<typeof automationRunFilterSchema>;
 
