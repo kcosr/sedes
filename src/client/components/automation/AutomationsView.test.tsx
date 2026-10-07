@@ -915,6 +915,26 @@ describe("AutomationsView live updates", () => {
     expect(window.location.pathname).toBe("/automations/loaded-fork");
   });
 
+  it("shows the latest run as Running while its turn goes, then as delivered", () => {
+    const snapshot = makeSnapshot(world);
+    const { store, publish } = createStore(snapshot);
+    render(<AutomationsView store={store} />);
+    const secondary = () => row("nightly").querySelector(".automation-row-secondary")!;
+    expect(secondary()).toHaveTextContent(/^Delivered /u);
+
+    const busy = structuredClone(snapshot);
+    busy.threads[1] = { ...busy.threads[1]!, runState: "running" };
+    act(() => publish({ snapshot: busy }));
+    expect(secondary()).toHaveTextContent(/^Running/u);
+    expect(secondary()).toHaveAttribute("data-tone", "info");
+    expect(secondary().querySelector(".comet-spinner")).not.toBeNull();
+    expect(secondary().querySelector(".lucide-check")).toBeNull();
+
+    act(() => publish({ snapshot }));
+    expect(secondary()).toHaveTextContent(/^Delivered /u);
+    expect(secondary().querySelector(".comet-spinner")).toBeNull();
+  });
+
   it("does not re-render for events that leave the automations unchanged", () => {
     const snapshot = makeSnapshot(world);
     const { store, publish } = createStore(snapshot);
@@ -927,10 +947,10 @@ describe("AutomationsView live updates", () => {
     commits.mockClear();
     // A re-parsed snapshot with equal values (new object identities).
     publish({ snapshot: structuredClone(snapshot) });
-    // An anchor starts a turn; the connection flickers.
+    // An anchor with no run to follow starts a turn; the connection flickers.
     const busy = structuredClone(snapshot);
-    busy.threads[1] = {
-      ...busy.threads[1]!,
+    busy.threads[4] = {
+      ...busy.threads[4]!,
       runState: "running",
       lastActivityAt: minutesAgo(0),
     };

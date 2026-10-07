@@ -483,7 +483,9 @@ line with the schedule, project, and backend. At the end of the row are the
 next run, the problem ("Failed 21h ago"), or the state ("Paused"), over the
 last outcome. Once the last run's agent turn has ended, the outcome says how
 it ended, counted from its end: "Finished 23m ago", "Failed 2h ago" in red,
-or "Interrupted 1h ago"; until then, "Delivered 23m ago". A failed turn does
+or "Interrupted 1h ago". While the turn is still going it reads "Running ·
+4m" with a spinner, including a **Run now** on a paused automation; otherwise,
+"Delivered 23m ago". A failed turn does
 not move the automation into **Needs attention**: the thread itself shows that
 it needs you. A row that needs attention shows what went
 wrong in place of the schedule, and whether scheduling continues ("next
