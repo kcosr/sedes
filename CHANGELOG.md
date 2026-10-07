@@ -854,6 +854,9 @@
 - Automation notices in a thread no longer break mid-word on phones, and a
   failed run's notice is marked in red.
 
+- In the sidebar's Projects view, a row's location tag truncates before its
+  title, so automation shelf titles no longer shrink to a single character.
+
 - Sidebar Tasks icons match the header button.
   ([#56](https://github.com/kcosr/sedes/pull/56))
 
