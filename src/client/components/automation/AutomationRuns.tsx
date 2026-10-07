@@ -114,7 +114,8 @@ export function AutomationRunsSection({
   const toggle = (run: ThreadAutomationRun) =>
     setOpenRunId((current) => (current === run.id && !phone ? undefined : run.id));
 
-  const countsLine = counts ? (
+  // With no runs the empty state says so; a "0 runs" line above it repeats it.
+  const countsLine = counts && counts.all > 0 ? (
     <>
       {plural(counts.all, "run", "runs")}
       {counts.problems > 0 ? (

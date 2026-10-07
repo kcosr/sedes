@@ -409,6 +409,7 @@ describe("AutomationPage", () => {
     expect(screen.getByRole("button", { name: "Run now" })).toHaveAttribute("aria-disabled", "true");
     // Neither the schedule nor Run now will make a first run here.
     expect(await screen.findByText("No runs yet.")).toBeInTheDocument();
+    expect(screen.queryByText("0 runs")).toBeNull();
     expect(screen.queryByText("Run now to try it.")).toBeNull();
     expect(screen.queryByText(/^The first run is /u)).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: "Restore thread" }));
