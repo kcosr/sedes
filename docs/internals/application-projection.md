@@ -160,10 +160,17 @@ definitions and runs, never a backend, and every backend shares it. It carries
 `status`, `runMode`, `scheduleKind`, the presented `schedule`,
 `misfirePolicy`, `promptPreview`, `nextRunAt`, `revision`, `hasPrecheck`, and
 `lastRun` (`id`, `state`, `occurrence`, `scheduledFor`, `finishedAt`,
-`resultThreadId`, which is the fork child or else the anchor, and
-`errorCode`). The full prompt, run diagnostics, and run history stay behind
-the thread automation routes. A definition change or run transition republishes
-the anchor's summary, so list and sidebar surfaces follow it live.
+`resultThreadId`, which is the fork child or else the anchor, `errorCode`, and
+`turn`). `lastRun.turn` appears once the agent turn the run's prompt started
+has settled on the completion rail. It carries the turn's `outcome`
+(`completed`, `interrupted` or `failed`) and, when the backend reported the
+turn's own end, `endedAt`. A settlement recovered from the rail has no times
+until a later replay fills them, so readers fall back to `finishedAt`. The turn
+is run history only: it never changes `state`, scheduling or attention. The
+full prompt, run diagnostics, and run history, including each run's turn ID,
+settlement time and turn start, stay behind the thread automation routes. A
+definition change, run transition or turn settlement republishes the anchor's
+summary, and a fork run's child, so list and sidebar surfaces follow it live.
 
 `promptPreview` lets lists show and search a prompt without carrying up to
 64 KiB per thread. Readers load at most the prompt's first 8 KiB, taken as a
