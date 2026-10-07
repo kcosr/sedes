@@ -820,6 +820,15 @@ export class AutomationService implements DurableDeadlineSource {
     this.#changed();
   }
 
+  /**
+   * Publishes a run whose agent turn settled. Unlike {@link publishRun} it
+   * notifies no lifecycle observer (the thread's own turn notification covers
+   * the turn) and leaves scheduling alone: settlement changes neither.
+   */
+  publishRunSettlement(scope: RequestScope, run: AutomationRunRecord): void {
+    this.#publishRun(scope, run);
+  }
+
   #presentResolution(
     scope: RequestScope,
     threadId: string,

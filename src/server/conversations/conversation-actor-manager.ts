@@ -103,6 +103,9 @@ export type AuthoritativeCompletionObserver = (
     readonly outcome: "completed" | "interrupted" | "failed";
     readonly result: BoundedText;
     readonly classifiedResult: ClassifiedAssistantResult | null;
+    /** The backend turn's own start and end, when it reports them. */
+    readonly startedAt?: string;
+    readonly completedAt?: string;
   },
 ) => void | Promise<void>;
 
@@ -1423,6 +1426,12 @@ export class ConversationActorManager {
                           outcome: event.outcome,
                           result: event.result,
                           classifiedResult: event.classifiedResult,
+                          ...(event.startedAt
+                            ? { startedAt: event.startedAt }
+                            : {}),
+                          ...(event.completedAt
+                            ? { completedAt: event.completedAt }
+                            : {}),
                         },
                       );
                 await observation;
