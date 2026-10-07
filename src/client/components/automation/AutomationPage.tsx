@@ -348,11 +348,7 @@ function AutomationDetails({
   );
   const runningRunId =
     lastRun &&
-    runTurnRunning(
-      lastRun,
-      true,
-      resultThreadId === thread.id ? thread.runState : forkRunState,
-    )
+    runTurnRunning(lastRun, resultThreadId === thread.id ? thread.runState : forkRunState)
       ? lastRun.id
       : undefined;
   const liveState = threadLiveState(thread.runState);

@@ -257,24 +257,22 @@ function pad(value: number): string {
 }
 
 /**
- * Whether a delivered run's agent turn is still going, as far as the client
- * can tell: the run is the automation's latest, its turn has not settled,
- * and its result thread is busy (starting, running, waiting for the user or
- * stopping). An older run, or one whose result thread the client does not
- * hold, reads "Delivered" until its turn settles.
+ * Whether the automation's latest run's agent turn is still going, as far as
+ * the client can tell: the run was delivered, its turn has not settled, and
+ * its result thread is busy (starting, running, waiting for the user or
+ * stopping). Only the latest run is asked: an older one, or one whose result
+ * thread the client does not hold, reads "Delivered" until its turn settles.
  */
 export function runTurnRunning(
-  run: {
+  latestRun: {
     readonly state: AutomationRunState;
     readonly turn?: Pick<RunTurn, "outcome">;
   },
-  latest: boolean,
   resultRunState: ThreadRunState | undefined,
 ): boolean {
   return (
-    latest &&
-    run.state === "completed" &&
-    run.turn === undefined &&
+    latestRun.state === "completed" &&
+    latestRun.turn === undefined &&
     resultRunState !== undefined &&
     threadRunPhase(resultRunState) === "busy"
   );

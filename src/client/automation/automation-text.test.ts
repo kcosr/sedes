@@ -266,25 +266,24 @@ describe("runStateLabel", () => {
 describe("runTurnRunning", () => {
   const delivered = makeRun();
   it.each(["starting", "running", "waiting_for_approval", "waiting_for_input", "stopping"] as const)(
-    "is the latest delivered run while its result thread is %s",
+    "is a delivered latest run while its result thread is %s",
     (runState) => {
-      expect(runTurnRunning(delivered, true, runState)).toBe(true);
+      expect(runTurnRunning(delivered, runState)).toBe(true);
     },
   );
 
   it.each(["idle", "failed", "disconnected", "reconciling", undefined] as const)(
     "is not while the result thread is %s",
     (runState) => {
-      expect(runTurnRunning(delivered, true, runState)).toBe(false);
+      expect(runTurnRunning(delivered, runState)).toBe(false);
     },
   );
 
-  it("is never an older run, a settled turn or a run that was not delivered", () => {
-    expect(runTurnRunning(delivered, false, "running")).toBe(false);
-    expect(runTurnRunning(makeRun({ turn: turn() }), true, "running")).toBe(false);
-    expect(runTurnRunning({ state: "completed", turn: { outcome: "failed" } }, true, "running")).toBe(false);
+  it("is never a settled turn or a run that was not delivered", () => {
+    expect(runTurnRunning(makeRun({ turn: turn() }), "running")).toBe(false);
+    expect(runTurnRunning({ state: "completed", turn: { outcome: "failed" } }, "running")).toBe(false);
     for (const state of ["queued", "running", "failed", "uncertain", "skipped"] as const) {
-      expect(runTurnRunning(makeRun({ state }), true, "running")).toBe(false);
+      expect(runTurnRunning(makeRun({ state }), "running")).toBe(false);
     }
   });
 });
