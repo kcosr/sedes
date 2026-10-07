@@ -60,25 +60,31 @@ interface HistoryPrefix {
   readonly counts?: ThreadAutomationRunCounts;
 }
 
+/** Pages of the list's size that hold `runs` runs; at least the first. */
+function pagesFor(runs: number): number {
+  return Math.max(1, Math.ceil(runs / AUTOMATION_RUNS_PAGE_SIZE));
+}
+
 /**
- * Reads a filter's run history again from its start, a page of the list's
- * size at a time (a cursor is only valid for the page size it was made
- * with), until the pages hold at least `target()` runs or the history ends.
- * Each page continues the one before by cursor, so the result is a true
- * prefix of the history with the cursor that continues it. `target` is read
- * after every page, so a Load more asked for meanwhile extends the read.
+ * Reads a filter's run history from its start, a page of the list's size at
+ * a time (a cursor is only valid for the page size it was made with), until
+ * it has read `pages()` pages or the history ends. Each page continues the
+ * one before by cursor, so the result is a true prefix of the history with
+ * the cursor that continues it. `pages` is read after every page, so a Load
+ * more asked for meanwhile extends the read.
  */
 async function readHistoryPrefix(
   api: RunsApi,
   threadId: string,
   filter: AutomationRunFilter,
-  target: () => number,
+  pages: () => number,
   signal: AbortSignal,
 ): Promise<HistoryPrefix> {
   const items: ThreadAutomationRun[] = [];
   const read = new Set<string>();
   let cursor: string | null = null;
   let counts: ThreadAutomationRunCounts | undefined;
+  let pagesRead = 0;
   do {
     const page: ThreadAutomationRunPage = await api.listThreadAutomationRuns(threadId, {
       ...(cursor === null ? {} : { cursor }),
@@ -86,6 +92,7 @@ async function readHistoryPrefix(
       filter,
       signal,
     });
+    pagesRead += 1;
     if (cursor === null) counts = page.counts;
     for (const run of page.items) {
       if (read.has(run.id)) continue;
@@ -93,7 +100,7 @@ async function readHistoryPrefix(
       items.push(run);
     }
     cursor = page.nextCursor;
-  } while (cursor !== null && items.length < target());
+  } while (cursor !== null && pagesRead < pages());
   return { items, nextCursor: cursor, ...(counts ? { counts } : {}) };
 }
 
@@ -141,13 +148,15 @@ function runMatchesFilter(
  * thread summary's run-history revision moves (the server advances it, and
  * publishes a thread update, for every presented run change).
  *
- * A refresh reconciles everything listed, not just the first page: any run
- * may have changed, an older one settling its turn or gaining its times, and
- * in Problems an older run may newly match. It reads the history again from
- * its start until it covers as many runs as are listed (one request while
+ * Every read of the history from its start has one owner: the first load (one
+ * page), a retry, and each refresh. Starting one aborts the one before, so
+ * only the newest can land. A refresh reconciles everything listed, not just
+ * the first page: any run may have changed, an older one settling its turn
+ * or gaining its times, and in Problems an older run may newly match. It
+ * reads the pages that hold as many runs as are listed (one request while
  * only the first page is), then replaces the list and its cursor at once.
- * Revisions that move during a refresh make one more refresh after it. A
- * Load more in flight may predate the change, so the refresh takes over its
+ * Revisions that move during a read make one more read after it. A Load more
+ * in flight may predate the change, so a refresh aborts it and reads its
  * page, as it does for a Load more asked for while it runs.
  */
 export function useAutomationRuns(
@@ -163,74 +172,33 @@ export function useAutomationRuns(
   );
   const stateRef = useRef(state);
   stateRef.current = state;
-  const firstPage = useRef<AbortController | undefined>(undefined);
   const nextPage = useRef<AbortController | undefined>(undefined);
-  /** The refresh in flight: the runs it must cover, and whether to run again. */
-  const refreshing = useRef<
-    | { readonly controller: AbortController; target: number; again: boolean }
+  /** The read of the history from its start in flight: its owner. */
+  const reading = useRef<
+    | { readonly controller: AbortController; pages: number; again: boolean }
     | undefined
   >(undefined);
   const [attempt, setAttempt] = useState(0);
 
-  const loadFirstPage = useCallback(() => {
-    firstPage.current?.abort();
-    const controller = new AbortController();
-    firstPage.current = controller;
-    store.api
-      .listThreadAutomationRuns(threadId, {
-        limit: AUTOMATION_RUNS_PAGE_SIZE,
-        filter,
-        signal: controller.signal,
-      })
-      .then(
-        (page) => {
-          if (controller.signal.aborted) return;
-          setState((current) =>
-            current.filter !== filter
-              ? current
-              : {
-                  ...emptyState(filter, "ready"),
-                  items: page.items,
-                  nextCursor: page.nextCursor,
-                  ...(page.counts ? { counts: page.counts } : {}),
-                },
-          );
-        },
-        (reason: unknown) => {
-          if (controller.signal.aborted) return;
-          setState({ ...emptyState(filter, "error"), error: messageFrom(reason) });
-        },
-      );
-  }, [filter, store, threadId]);
-
-  const refresh = useCallback(() => {
-    const current = stateRef.current;
-    // Before the list is ready, its first page is read again instead.
-    if (current.status !== "ready") {
-      loadFirstPage();
-      return;
-    }
-    if (refreshing.current) {
-      refreshing.current.again = true;
-      return;
-    }
-    // A pass covers `listed` runs. When the revision moved meanwhile it runs
-    // once more, covering the runs it just listed (taken from its own result:
-    // React has not rendered them into the state ref yet).
-    const pass = (listed: number) => {
-      const read = {
-        controller: new AbortController(),
-        target: Math.max(listed, AUTOMATION_RUNS_PAGE_SIZE),
-        again: false,
-      };
-      refreshing.current = read;
-      readHistoryPrefix(store.api, threadId, filter, () => read.target, read.controller.signal).then(
+  /**
+   * Reads the history from its start, the pages that hold `listed` runs, in
+   * place of any read in flight. Before the list is ready the answer starts
+   * it; after, it replaces what is listed. When the revision moved meanwhile
+   * it reads once more, covering the runs it just listed (taken from its own
+   * result: React has not rendered them into the state ref yet).
+   */
+  const readHistory = useCallback(
+    function read(listed: number): void {
+      reading.current?.controller.abort();
+      const pass = { controller: new AbortController(), pages: pagesFor(listed), again: false };
+      reading.current = pass;
+      readHistoryPrefix(store.api, threadId, filter, () => pass.pages, pass.controller.signal).then(
         (prefix) => {
-          if (read.controller.signal.aborted) return;
+          if (pass.controller.signal.aborted) return;
+          reading.current = undefined;
           setState((latest) =>
-            latest.filter !== filter || latest.status !== "ready"
-              ? latest
-              : {
+            latest.status === "ready"
+              ? {
                   ...latest,
                   items: prefix.items,
                   nextCursor: prefix.nextCursor,
@@ -238,44 +206,47 @@ export function useAutomationRuns(
                   arrived: arrivedRuns(latest.items, prefix.items),
                   loadingMore: false,
                   loadMoreError: undefined,
+                }
+              : {
+                  ...emptyState(filter, "ready"),
+                  items: prefix.items,
+                  nextCursor: prefix.nextCursor,
+                  ...(prefix.counts ? { counts: prefix.counts } : {}),
                 },
           );
-          refreshing.current = undefined;
-          if (read.again) pass(prefix.items.length);
+          if (pass.again) read(prefix.items.length);
         },
         (reason: unknown) => {
-          if (read.controller.signal.aborted) return;
+          if (pass.controller.signal.aborted) return;
+          reading.current = undefined;
           // A failed refresh keeps the listed runs; the next one retries. A
           // Load more it read for reports the failure.
           setState((latest) =>
-            latest.loadingMore
-              ? { ...latest, loadingMore: false, loadMoreError: messageFrom(reason) }
-              : latest,
+            latest.status !== "ready"
+              ? { ...emptyState(filter, "error"), error: messageFrom(reason) }
+              : latest.loadingMore
+                ? { ...latest, loadingMore: false, loadMoreError: messageFrom(reason) }
+                : latest,
           );
-          refreshing.current = undefined;
-          if (read.again) pass(listed);
+          if (pass.again) read(listed);
         },
       );
-    };
-    // A Load more in flight may have been answered before the change; the
-    // refresh reads its page instead.
-    if (current.loadingMore) nextPage.current?.abort();
-    pass(current.items.length + (current.loadingMore ? AUTOMATION_RUNS_PAGE_SIZE : 0));
-  }, [filter, loadFirstPage, store, threadId]);
+    },
+    [filter, store, threadId],
+  );
 
   // A new thread, filter or automation starts the list over.
   useEffect(() => {
     nextPage.current?.abort();
-    refreshing.current?.controller.abort();
-    refreshing.current = undefined;
     if (!present) {
-      firstPage.current?.abort();
+      reading.current?.controller.abort();
+      reading.current = undefined;
       setState(emptyState(filter, "idle"));
       return;
     }
     setState(emptyState(filter, "loading"));
-    loadFirstPage();
-  }, [attempt, filter, loadFirstPage, present]);
+    readHistory(0);
+  }, [attempt, filter, present, readHistory]);
 
   const observedKey = useRef(liveKey);
   useEffect(() => {
@@ -284,14 +255,22 @@ export function useAutomationRuns(
     if (previous === liveKey || previous === undefined || liveKey === undefined) {
       return;
     }
-    refresh();
-  }, [liveKey, refresh]);
+    // A read in flight, the first load included, reads once more after it.
+    if (reading.current) {
+      reading.current.again = true;
+      return;
+    }
+    // With no read in flight the state ref is current. A Load more in flight
+    // may have been answered before the change; the refresh reads its page.
+    const current = stateRef.current;
+    if (current.loadingMore) nextPage.current?.abort();
+    readHistory(current.items.length + (current.loadingMore ? AUTOMATION_RUNS_PAGE_SIZE : 0));
+  }, [liveKey, readHistory]);
 
   useEffect(
     () => () => {
-      firstPage.current?.abort();
+      reading.current?.controller.abort();
       nextPage.current?.abort();
-      refreshing.current?.controller.abort();
     },
     [],
   );
@@ -303,11 +282,11 @@ export function useAutomationRuns(
     }
     setState((latest) => ({ ...latest, loadingMore: true, loadMoreError: undefined }));
     // A refresh in flight reads the next page with the rest.
-    const inFlight = refreshing.current;
+    const inFlight = reading.current;
     if (inFlight) {
-      inFlight.target = Math.max(
-        inFlight.target,
-        current.items.length + AUTOMATION_RUNS_PAGE_SIZE,
+      inFlight.pages = Math.max(
+        inFlight.pages,
+        pagesFor(current.items.length + AUTOMATION_RUNS_PAGE_SIZE),
       );
       return;
     }

@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 
 import { act, renderHook, waitFor } from "@testing-library/react";
+import { useState } from "react";
+import { flushSync } from "react-dom";
 import { describe, expect, it, vi } from "vitest";
 import type { ThreadAutomationRun } from "../../../shared/protocol/automation-presentation.js";
 import type { AutomationRunFilter } from "../../../shared/protocol/domain.js";
@@ -551,6 +553,72 @@ describe("useAutomationRuns: reconciling the loaded history", () => {
     ]);
     expect(result.current.items).toEqual(server.history().slice(0, 50));
     expect(result.current.loadingMore).toBe(false);
+  });
+
+  it("lets only the newest history read land when the filter and the revision move together", async () => {
+    const newest = run();
+    const older = run();
+    let history: readonly ThreadAutomationRun[] = [newest, older];
+    // Every answer is the history when it was asked, held until answered.
+    const pending: { readonly input: ListInput; readonly answer: () => void }[] = [];
+    const list = vi.fn(
+      (_threadId: string, input: ListInput) =>
+        new Promise((resolve) => {
+          const filter = input.filter ?? "all";
+          const asked = history;
+          const items = asked.filter((item) => matches(item, filter));
+          pending.push({
+            input,
+            answer: () =>
+              resolve({
+                items,
+                nextCursor: null,
+                counts: {
+                  all: asked.length,
+                  problems: asked.filter((item) => matches(item, "problems")).length,
+                  skipped: 0,
+                },
+              }),
+          });
+        }),
+    );
+    const live = () => pending.filter(({ input }) => !input.signal?.aborted);
+    /** Answers what is asked, newest request first, until nothing is asked. */
+    const answerNewestFirst = async () => {
+      while (pending.length > 0) {
+        await act(async () => {
+          for (const { answer } of pending.splice(0).reverse()) answer();
+        });
+      }
+    };
+    const fixture = automationStore([{ automation: automationSummary() }], { listThreadAutomationRuns: list });
+    let setFilter!: (filter: AutomationRunFilter) => void;
+    const { result } = renderHook(() => {
+      const [filter, set] = useState<AutomationRunFilter>("all");
+      setFilter = set;
+      return useRuns(fixture, filter);
+    });
+    await answerNewestFirst();
+    expect(result.current.items).toEqual([newest, older]);
+
+    // Problems and a new revision in one render, then the older run's turn
+    // fails and the revision moves again while the history is being read.
+    act(() =>
+      flushSync(() => {
+        setFilter("problems");
+        fixture.publish([{ automation: automationSummary({ runsRevision: 1 }) }]);
+      }),
+    );
+    history = [newest, { ...older, turn: { id: "turn-older", outcome: "failed", settledAt: new Date().toISOString() } }];
+    act(() => fixture.publish([{ automation: automationSummary({ runsRevision: 2 }) }]));
+    // One read owns the history at a time.
+    expect(live()).toHaveLength(1);
+    expect(live()[0]!.input).toMatchObject({ filter: "problems" });
+
+    await answerNewestFirst();
+    expect(result.current.status).toBe("ready");
+    expect(result.current.items).toEqual([history[1]]);
+    expect(result.current.counts?.problems).toBe(1);
   });
 
   it("keeps the listed runs when a refresh fails, and reports a Load more it took over", async () => {
