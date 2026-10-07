@@ -4,10 +4,10 @@
 
 ### Breaking Changes
 
-- Browser and packaged clients require client protocol 142, which adds
-  automation schedule details to thread summaries and runs. Upgrade clients
-  together with the server.
-  ([#58](https://github.com/kcosr/sedes/pull/58))
+- Browser and packaged clients require client protocol 143, which adds
+  automation schedule details and run turn outcomes to thread summaries and
+  runs. Upgrade clients together with the server.
+  ([#58](https://github.com/kcosr/sedes/pull/58), [#59](https://github.com/kcosr/sedes/pull/59))
 
 - `POST /api/threads/:threadId/automation/runs/:runId/resolve` returns
   `{ run, automation }` instead of the run alone. Update scripts that read it.
@@ -240,6 +240,14 @@
   schedule previews. The CLI adds `runs --filter` and `resolve [--resume]`.
   Migration 135 adds run indexes.
   ([#58](https://github.com/kcosr/sedes/pull/58))
+
+- Automation run history shows how each run's agent turn ended (Finished,
+  Failed, or Interrupted), with its duration, **Go to turn**, and its usage
+  when experimental usage is enabled; a run whose turn is still going reads
+  **Running**. Runs in the API and CLI include their turn, and **Problems**
+  includes failed turns. Migration 136 records turn outcomes and fills them in
+  for existing runs.
+  ([#59](https://github.com/kcosr/sedes/pull/59))
 
 - Agent thread switches can request one recording on an exact thread while
   Android is in the background and native voice is already ready. The request
@@ -846,6 +854,9 @@
 
 - Sidebar Projects-view titles stay readable next to a long location tag.
   ([#58](https://github.com/kcosr/sedes/pull/58))
+
+- Force-resetting a thread forked by an automation run ends that run.
+  ([#59](https://github.com/kcosr/sedes/pull/59))
 
 - Sidebar Tasks icons match the header button.
   ([#56](https://github.com/kcosr/sedes/pull/56))
