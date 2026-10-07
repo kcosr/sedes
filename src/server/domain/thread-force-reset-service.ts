@@ -176,10 +176,12 @@ export class ThreadForceResetService {
       }
     }
     try {
-      this.input.scheduleThreadPublications?.(
-        scope,
-        committed.affectedThreadIds,
-      );
+      this.input.scheduleThreadPublications?.(scope, [
+        ...new Set([
+          ...committed.affectedThreadIds,
+          ...committed.resetRunAnchorThreadIds,
+        ]),
+      ]);
     } catch (error) {
       this.#reportPostCommitError(error);
     }
