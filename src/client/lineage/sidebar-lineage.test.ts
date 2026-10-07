@@ -293,6 +293,7 @@ describe("deriveSidebarLineage", () => {
       misfirePolicy: "coalesce" as const,
       promptPreview: "Review the repository.",
       revision: 0,
+      runsRevision: 0,
       hasPrecheck: false,
     };
     const threads = [
@@ -335,6 +336,7 @@ describe("deriveSidebarLineage", () => {
       misfirePolicy: "coalesce" as const,
       promptPreview: "Review the repository.",
       revision: 2,
+      runsRevision: 0,
       hasPrecheck: false,
     };
     const threads = [

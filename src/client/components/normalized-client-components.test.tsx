@@ -596,6 +596,7 @@ describe("normalized application components", () => {
         misfirePolicy: "coalesce" as const,
         promptPreview: "Review the repository.",
         revision: 1,
+        runsRevision: 0,
         hasPrecheck: false,
       },
     };

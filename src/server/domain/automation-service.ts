@@ -774,6 +774,7 @@ export class AutomationService implements DurableDeadlineSource {
           }
         : {}),
       revision: definition.revision,
+      runsRevision: definition.runsRevision,
       createdAt: iso(definition.createdAt),
       updatedAt: iso(definition.updatedAt),
       hasPrecheck: definition.precheck !== null,

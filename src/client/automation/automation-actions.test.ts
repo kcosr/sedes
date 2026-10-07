@@ -15,6 +15,7 @@ function automation(overrides: Partial<SummaryAutomation> = {}): SummaryAutomati
     promptPreview: "Check dependencies",
     nextRunAt: "2026-10-07T02:00:00.000Z",
     revision: 1,
+    runsRevision: 0,
     hasPrecheck: false,
     ...overrides,
   };

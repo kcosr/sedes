@@ -26,6 +26,7 @@ export function automationSummary(
     promptPreview: "Check dependencies",
     nextRunAt: "2026-10-07T02:00:00.000Z",
     revision: 3,
+    runsRevision: 0,
     hasPrecheck: false,
     ...overrides,
   };
@@ -40,6 +41,7 @@ export function definition(
     scheduleKind: "cron",
     nextRunAt: "2026-10-07T02:00:00.000Z",
     revision: 3,
+    runsRevision: 0,
     createdAt: "2026-10-06T03:05:00.000Z",
     updatedAt: "2026-10-06T03:15:00.000Z",
     hasPrecheck: false,

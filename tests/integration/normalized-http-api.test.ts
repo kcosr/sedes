@@ -7141,8 +7141,18 @@ describe("normalized HTTP application contract", () => {
             endedAt,
           },
         );
+      const automationPath = `/api/threads/${threadId}/automation`;
+      const historyRevision = async () =>
+        (
+          await current
+            .withHost(request(current.app).get(automationPath))
+            .expect(200)
+        ).body.runsRevision as number;
       const failedTurn = deliver(1_000);
+      const beforeSettlement = await historyRevision();
       settle(failedTurn, "failed", 1_500);
+      // Each run change, including a turn settling, advances the revision.
+      expect(await historyRevision()).toBe(beforeSettlement + 1);
       const interrupted = deliver(2_000);
       settle(interrupted, "interrupted", 2_500);
       const delivered = deliver(3_000);

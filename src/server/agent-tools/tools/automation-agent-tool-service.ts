@@ -27,11 +27,12 @@ const UPCOMING_OCCURRENCE_COUNT = 5;
 
 /**
  * The definition shape frozen by the `automation.get@1`, `automation.create@1`,
- * `automation.update@1` and `automation.set_state@1` output schemas. The last
- * run's agent turn is browser-only detail and is stripped.
+ * `automation.update@1` and `automation.set_state@1` output schemas. The
+ * run-history revision and the last run's agent turn are browser-only detail
+ * and are stripped.
  */
 export interface AgentAutomationDefinition
-  extends Omit<ThreadAutomationDefinition, "lastRun"> {
+  extends Omit<ThreadAutomationDefinition, "lastRun" | "runsRevision"> {
   readonly lastRun?: Omit<
     NonNullable<ThreadAutomationDefinition["lastRun"]>,
     "turn"
@@ -332,7 +333,7 @@ export class AutomationAgentToolService {
     definition: ThreadAutomationDefinition,
     now: number,
   ): AgentAutomationDefinition {
-    const { lastRun, ...rest } = definition;
+    const { lastRun, runsRevision: _runsRevision, ...rest } = definition;
     return {
       ...rest,
       ...(lastRun ? { lastRun: toolLastRun(lastRun) } : {}),

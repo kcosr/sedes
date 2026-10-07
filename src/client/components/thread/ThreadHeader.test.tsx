@@ -1414,6 +1414,7 @@ describe("ThreadHeader automation chip", () => {
     misfirePolicy: "coalesce",
     promptPreview: "Check dependencies",
     revision: 1,
+    runsRevision: 0,
     hasPrecheck: false,
     ...overrides,
   });

@@ -31,6 +31,7 @@ export type ThreadAutomationSummaryRow = {
   readonly automationPromptTruncated: 0 | 1 | null;
   readonly automationNextRunAt: number | null;
   readonly automationRevision: number | null;
+  readonly automationRunsRevision: number | null;
   readonly automationHasPrecheck: 0 | 1 | null;
   readonly automationRunId: string | null;
   readonly automationRunState: AutomationRunState | null;
@@ -71,6 +72,7 @@ export function threadAutomationSummaryColumns(
     END AS automationPromptTruncated,
     ${definition}.next_run_at AS automationNextRunAt,
     ${definition}.revision AS automationRevision,
+    ${definition}.runs_revision AS automationRunsRevision,
     CASE
       WHEN ${definition}.id IS NULL THEN NULL
       WHEN ${definition}.precheck_command IS NULL THEN 0
@@ -120,6 +122,7 @@ export function projectThreadAutomationSummary(
     row.automationMisfirePolicy === null ||
     row.automationPromptHead === null ||
     row.automationRevision === null ||
+    row.automationRunsRevision === null ||
     row.automationHasPrecheck === null
   ) {
     return null;
@@ -154,6 +157,7 @@ export function projectThreadAutomationSummary(
       ? {}
       : { nextRunAt: iso(row.automationNextRunAt) }),
     revision: row.automationRevision,
+    runsRevision: row.automationRunsRevision,
     hasPrecheck: row.automationHasPrecheck === 1,
     ...(row.automationRunId === null ||
     row.automationRunState === null ||

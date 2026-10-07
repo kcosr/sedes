@@ -1703,6 +1703,7 @@ describe("ThreadApplicationService", () => {
             promptPreview: "Summarize the open issues.",
             nextRunAt: "2026-07-30T11:00:00.000Z",
             revision: 1,
+            runsRevision: 0,
             hasPrecheck: false,
           },
         },
