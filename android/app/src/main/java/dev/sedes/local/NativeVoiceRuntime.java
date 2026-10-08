@@ -2509,7 +2509,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
             case "recognition_session_timing_unsupported": return "The speech service session limit is too short for the selected recognition timeout.";
             case "voice_target_required": return "Choose a thread for voice input.";
             case "voice_busy": return "Stop the current voice interaction before recording.";
-            case "voice_not_ready": return "Voice is not ready to record yet.";
+            case "voice_not_ready": return "Voice is not ready yet.";
             case "voice_not_listening": return "Voice is not recording.";
             case "voice_not_speaking": return "Voice is not speaking.";
             case "voice_reply_empty": return "This response has no text to speak.";
