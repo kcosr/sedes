@@ -172,4 +172,151 @@ public class NativeVoiceQueueTest {
         IllegalArgumentException error = assertThrows(IllegalArgumentException.class, () -> new NativeVoiceQueue.Item(wire(over), settings("response")));
         assertEquals("voice_payload_too_large", error.getMessage());
     }
+
+    private static JSONObject text(String value) { return NativeVoiceJson.object("text", value); }
+    private static JSONObject replayArgs(String thread, String turn, Object result) {
+        return NativeVoiceJson.object("threadId", thread, "turnId", turn, "assistantResult", result);
+    }
+    private static NativeVoiceQueue.Item replay(String thread, String turn, JSONObject result, NativeVoiceSettings settings) {
+        return NativeVoiceQueue.Item.replay(NativeVoiceQueue.replayRequest(replayArgs(thread, turn, result)), "Thread A", settings);
+    }
+    private static NativeVoiceQueue.Item replay(String turn, String text, NativeVoiceSettings settings) {
+        return replay("thread-a", turn, NativeVoiceJson.object("final", text(text)), settings);
+    }
+    @Test public void replaySpeaksTheReplyInNotificationPhaseOrderWithoutContextOrFollowUp() {
+        JSONObject result = NativeVoiceJson.object("final", text("**Final answer.**"), "unclassified", text("Earlier text."),
+            "provisional", text("Provisional note."));
+        NativeVoiceSettings listening = settings("response").patch(1, NativeVoiceJson.object("autoListen", true, "readNotificationContext", true));
+        for (NativeVoiceSettings configured : new NativeVoiceSettings[] { listening, settings("manual") }) {
+            NativeVoiceQueue.Item item = replay("thread-a", "turn-1", result, configured);
+            assertEquals("Provisional note.\n\nEarlier text.\n\nFinal answer.", item.speech);
+            assertEquals("replay", item.event); assertTrue(item.isReplay()); assertFalse(item.automatic); assertFalse(item.followUp);
+            assertNull(item.envelope); assertNull(item.targetId()); assertNull(item.coalesceKey()); assertFalse(item.progress());
+            assertEquals("thread-a", item.threadId); assertEquals("Thread A", item.threadTitle);
+            assertEquals("thread-a\nturn-1", item.replayIdentity()); assertEquals(NativeVoiceJson.bytes(item.speech), item.bytes);
+        }
+        // Identical to the completion notification's assembly of the same sections, minus its context line.
+        JSONObject notice = envelope("same", "turn.completed", "", null);
+        NativeVoiceJson.put(notice.optJSONObject("payload"), "assistantResult", result);
+        NativeVoiceSettings contextFree = settings("response").patch(1, NativeVoiceJson.object("readNotificationContext", false));
+        assertEquals(new NativeVoiceQueue.Item(notice, contextFree).speech, replay("thread-a", "turn-1", result, listening).speech);
+        assertNotEquals(replay("thread-a", "turn-1", result, listening).id, replay("thread-a", "turn-1", result, listening).id);
+    }
+    @Test public void replayCleansEachPartAndKeepsTheTruncationNotice() {
+        JSONObject result = NativeVoiceJson.object("provisional", NativeVoiceJson.object("text", "```js\nconst a = 1;", "truncation",
+                NativeVoiceJson.object("truncated", true, "originalBytes", 5000, "retainedBytes", 20, "reason", "byte_limit")),
+            "unclassified", JSONObject.NULL, "final", text("**Done.** See [the PR](https://example.test/hidden?token=abc)."));
+        NativeVoiceSettings clean = settings("response");
+        assertEquals("const a = 1;\n\nThe remaining response was truncated.\n\nDone. See the PR.", replay("thread-a", "turn-1", result, clean).speech);
+        NativeVoiceSettings raw = clean.patch(1, NativeVoiceJson.object("cleanSpeechText", false));
+        assertEquals("```js\nconst a = 1;\nThe remaining response was truncated.\n**Done.** See [the PR](https://example.test/hidden?token=abc).",
+            replay("thread-a", "turn-1", result, raw).speech);
+    }
+    @Test public void replyWithoutSpeakableTextIsRejected() {
+        NativeVoiceSettings clean = settings("response");
+        for (JSONObject result : new JSONObject[] { new JSONObject(), NativeVoiceJson.object("final", JSONObject.NULL),
+            NativeVoiceJson.object("unclassified", text(" \n\t ")), NativeVoiceJson.object("final", text("---")) }) {
+            RuntimeException error = assertThrows(RuntimeException.class, () -> replay("thread-a", "turn-1", result, clean));
+            assertEquals(result.toString(), "voice_reply_empty", NativeVoiceRuntime.code(error));
+        }
+        assertEquals("---", replay("turn-1", "---", clean.patch(1, NativeVoiceJson.object("cleanSpeechText", false))).speech);
+    }
+    @Test public void replayRequestIsStrictAndCopied() {
+        JSONObject valid = replayArgs("t".repeat(512), "u".repeat(160), NativeVoiceJson.object("final", text("x".repeat(65536))));
+        JSONObject request = NativeVoiceQueue.replayRequest(valid);
+        NativeVoiceJson.put(valid, "threadId", "changed");
+        assertEquals("t".repeat(512), request.optString("threadId"));
+        JSONObject falseTruncation = NativeVoiceJson.object("text", "x", "truncation",
+            NativeVoiceJson.object("truncated", false, "retainedBytes", 1, "reason", "byte_limit"));
+        JSONObject extra = replayArgs("thread-a", "turn-1", new JSONObject()); NativeVoiceJson.put(extra, "threadTitle", "Title");
+        JSONObject noThread = replayArgs("thread-a", "turn-1", new JSONObject()); noThread.remove("threadId");
+        JSONObject noTurn = replayArgs("thread-a", "turn-1", new JSONObject()); noTurn.remove("turnId");
+        JSONObject noResult = replayArgs("thread-a", "turn-1", new JSONObject()); noResult.remove("assistantResult");
+        Object[][] cases = {
+            { "unknown_field", extra }, { "invalid_threadId", noThread }, { "invalid_threadId", replayArgs("", "turn-1", new JSONObject()) },
+            { "invalid_threadId", replayArgs("t".repeat(513), "turn-1", new JSONObject()) }, { "invalid_turnId", noTurn },
+            { "invalid_turnId", replayArgs("thread-a", "u".repeat(161), new JSONObject()) }, { "invalid_assistantResult", noResult },
+            { "invalid_assistantResult", replayArgs("thread-a", "turn-1", JSONObject.NULL) },
+            { "invalid_assistantResult", replayArgs("thread-a", "turn-1", "Final answer") },
+            { "unknown_field", replayArgs("thread-a", "turn-1", NativeVoiceJson.object("summary", text("x"))) },
+            { "invalid_final", replayArgs("thread-a", "turn-1", NativeVoiceJson.object("final", "Final answer")) },
+            { "unknown_field", replayArgs("thread-a", "turn-1", NativeVoiceJson.object("final", NativeVoiceJson.object("text", "x", "itemId", "i"))) },
+            { "invalid_text", replayArgs("thread-a", "turn-1", NativeVoiceJson.object("final", text("x".repeat(65537)))) },
+            { "invalid_text", replayArgs("thread-a", "turn-1", NativeVoiceJson.object("final", new JSONObject())) },
+            { "invalid_truncation", replayArgs("thread-a", "turn-1", NativeVoiceJson.object("final", falseTruncation)) },
+        };
+        for (Object[] example : cases) {
+            RuntimeException error = assertThrows(RuntimeException.class, () -> NativeVoiceQueue.replayRequest((JSONObject) example[1]));
+            assertEquals(example[1].toString(), example[0], NativeVoiceRuntime.code(error));
+        }
+    }
+    @Test public void replayStaysOutsideNotificationDedupeAndRepeatsOfAQueuedTurnAreNoOps() {
+        NativeVoiceSettings configured = settings("response");
+        NativeVoiceQueue queue = new NativeVoiceQueue();
+        NativeVoiceQueue.Item first = replay("turn-1", "First", configured);
+        assertTrue(queue.addReplay(first));
+        assertTrue("A replay ID never enters notification dedupe", queue.remember(first.id));
+        assertFalse(queue.addReplay(replay("turn-1", "Different text", configured)));
+        assertTrue(queue.addReplay(replay("turn-2", "Other turn", configured)));
+        assertTrue(queue.addReplay(replay("thread-b", "turn-1", NativeVoiceJson.object("final", text("Other thread")), configured)));
+        assertEquals(3, queue.size()); assertEquals(0, queue.state().optInt("droppedCount"));
+        assertEquals(first.id, queue.take().id);
+        assertTrue("A turn no longer queued can be replayed again", queue.addReplay(replay("turn-1", "First", configured)));
+    }
+    @Test public void replayCountsAgainstQueueLimitsAndOverflowIsRefusedExplicitly() {
+        NativeVoiceSettings configured = settings("response");
+        NativeVoiceQueue queue = new NativeVoiceQueue();
+        for (int i = 0; i < 64; i++) queue.add(new NativeVoiceQueue.Item(envelope("item-" + i, i == 5 ? "turn.progress" : "turn.completed", "Text", null), configured));
+        assertTrue("Progress yields to a replay as it does to terminal content", queue.addReplay(replay("turn-1", "Replay", configured)));
+        assertEquals(64, queue.size()); assertEquals(1, queue.state().optJSONObject("droppedReasons").optInt("progress_evicted"));
+        RuntimeException full = assertThrows(RuntimeException.class, () -> queue.addReplay(replay("turn-2", "Replay", configured)));
+        assertEquals("voice_queue_full", NativeVoiceRuntime.code(full));
+        assertEquals(64, queue.size()); assertEquals("A refused replay is not a silent drop", 1, queue.state().optInt("droppedCount"));
+        NativeVoiceQueue large = new NativeVoiceQueue();
+        assertTrue(large.addReplay(replay("turn-1", "é".repeat(60000), configured)));
+        assertTrue(large.addReplay(replay("turn-2", "é".repeat(60000), configured)));
+        assertEquals(240000, large.bytes());
+        RuntimeException bytes = assertThrows(RuntimeException.class, () -> large.addReplay(replay("turn-3", "é".repeat(60000), configured)));
+        assertEquals("voice_queue_full", NativeVoiceRuntime.code(bytes));
+        assertEquals(2, large.size()); assertEquals(240000, large.bytes()); assertEquals(0, large.state().optInt("droppedCount"));
+    }
+    @Test public void reconfigureRebuildsAPendingReplayFromItsRequest() {
+        String markdown = "# Answer\n\nRead [the label](https://example.test/hidden).";
+        NativeVoiceSettings clean = settings("response");
+        NativeVoiceQueue queue = new NativeVoiceQueue();
+        NativeVoiceQueue.Item item = replay("turn-1", markdown, clean);
+        assertEquals("Answer\n\nRead the label.", item.speech);
+        queue.addReplay(item);
+        NativeVoiceSettings raw = clean.patch(1, NativeVoiceJson.object("cleanSpeechText", false));
+        queue.reconfigure(raw);
+        NativeVoiceQueue.Item rebuilt = queue.take();
+        assertEquals(markdown, rebuilt.speech); assertEquals(item.id, rebuilt.id); assertEquals("Thread A", rebuilt.threadTitle);
+        assertEquals(item.replayIdentity(), rebuilt.replayIdentity()); assertFalse(rebuilt.automatic); assertFalse(rebuilt.followUp);
+        assertEquals(markdown, rebuilt.request.optJSONObject("assistantResult").optJSONObject("final").optString("text"));
+        // Audio mode and notification context shape notifications only.
+        queue.addReplay(rebuilt);
+        queue.reconfigure(settings("manual").patch(1, NativeVoiceJson.object("readNotificationContext", true)));
+        assertEquals("Answer\n\nRead the label.", queue.take().speech);
+        // A replay that new cleanup leaves silent leaves the queue without counting as an automatic drop.
+        NativeVoiceQueue silent = new NativeVoiceQueue();
+        silent.addReplay(replay("turn-2", "---", raw)); silent.reconfigure(clean);
+        assertEquals(0, silent.size()); assertEquals(0, silent.bytes()); assertEquals(0, silent.state().optInt("droppedCount"));
+    }
+    @Test public void automaticCancellationKeepsReplaysInOrderWhileOffClearsThem() {
+        NativeVoiceSettings configured = settings("response");
+        NativeVoiceQueue queue = new NativeVoiceQueue();
+        NativeVoiceQueue.Item first = replay("turn-1", "First", configured), second = replay("turn-2", "Second", configured);
+        queue.add(new NativeVoiceQueue.Item(envelope("completed", "turn.completed", "One", null), configured));
+        queue.addReplay(first);
+        queue.add(new NativeVoiceQueue.Item(envelope("progress", "turn.progress", "Working", null), configured));
+        queue.add(new NativeVoiceQueue.Item(envelope("approval", "approval.requested", "", "approval-a"), configured));
+        queue.addReplay(second);
+        queue.clearAutomatic("notification_connection_lost");
+        assertEquals(2, queue.size()); assertEquals(first.bytes + second.bytes, queue.bytes());
+        assertEquals(3, queue.state().optJSONObject("droppedReasons").optInt("notification_connection_lost"));
+        assertEquals(first.id, queue.take().id); assertEquals(second.id, queue.take().id);
+        queue.addReplay(first); queue.addReplay(second); queue.clear("voice_off");
+        assertEquals(0, queue.size()); assertEquals(0, queue.bytes());
+        assertFalse(queue.state().optJSONObject("droppedReasons").has("voice_off")); assertEquals(3, queue.state().optInt("droppedCount"));
+    }
 }
