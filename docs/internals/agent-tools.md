@@ -265,8 +265,9 @@ The canonical catalog groups operations under:
   preference selection;
 - **Threads** — inventory, status, messages, creation, send, fork,
   archive/restore, and related controls;
-- **Client controls** — current-client navigation, interaction completion, and
-  revision-checked basic voice settings;
+- **Client controls** — current-client navigation, interaction completion,
+  revision-checked basic voice settings, and spoken replay of an ended turn's
+  reply;
 - **Agents** — saved Agent discovery and revision-checked management;
 - **Tasks** — bounded reads and revision-checked mutation; and
 - **Automations** — definition/history reads and guarded scheduling controls;
@@ -279,7 +280,8 @@ The canonical catalog groups operations under:
 ### Client controls
 
 `client.list`, `client.end_interaction`, `client.switch_thread`,
-`client.settings.get`, and `client.settings.update` are thread-agent tools on
+`client.settings.get`, `client.settings.update`, and `client.replay_turn` are
+thread-agent tools on
 Pi, Codex, Claude, Grok, and OpenCode through their supported native and CLI
 surfaces. Standalone Tool clients cannot invoke them. Their group and individual
 controls use the existing agent-tool policy UI.
@@ -337,8 +339,43 @@ Accepted deferred actions are acknowledged before turn completion, then wait for
 the matching reply's actual audio drain. Silent replies do not require audio.
 Failed/interrupted turns, playback failure, manual supersession, expiry, and
 connection loss prevent deferred actions. Readiness and recording blockers are
-rechecked before recognition starts. Browser/Electron navigation works; voice and
-voice settings report unsupported with a successful no-op.
+rechecked before recognition starts. Browser/Electron navigation works; voice,
+voice settings, and replay report unsupported with a successful no-op.
+
+`client.replay_turn` queues one ended turn's reply for speech on the current
+client, as the turn footer's speaker does. Its input is
+`{ clientId?, threadId?, turnId }`: `threadId` defaults to the source thread
+and passes the normal thread authority checks, and `turnId` is an application
+turn ID from `turns[].id` of `thread.messages`. Execution re-captures the
+source turn, rejects that still-running turn as invalid input ("The turn has
+not ended."), and reads the reply text the `reply-speech` route serves: the
+stored classification under the principal's phases, else the stored whole
+reply. With neither, it fails as `not_found` ("Sedes stored no reply for that
+turn.") and never attaches a runtime. The reply is fitted beside the command
+so the command stays within 64 KiB, and the command carries the thread's
+inventory title, or null when that is blank. Delivery is immediate, like the
+settings tools: a 120-second expiry and a 25-second acknowledgement wait,
+never deferred to turn completion. Mid-turn, the replay plays before the
+agent's own completion notice. Native queues it behind current voice work as
+speak-only: it never navigates, starts listening, or touches the source
+turn's follow-up. Results pass through unchanged:
+
+| Client | Situation | Result |
+| --- | --- | --- |
+| Android | Replay is active right after the call | `applied`, `replay_playing` |
+| Android | Replay added behind other voice work | `applied`, `replay_queued` |
+| Android | Same thread and turn already active or pending | `noop`, `replay_already_queued` |
+| Android | Audio mode Off | `noop`, `voice_off` |
+| Android | Session not started, speech not ready, or no binding | `noop`, `voice_not_ready` |
+| Android | Prepared text is empty | `failed`, `voice_reply_empty` |
+| Android | Replay doesn't fit the queue | `failed`, `voice_queue_full` |
+| Browser, Electron | Any | `noop`, `voice_unsupported` |
+
+A failed client result from any client control is an `unavailable` error, or
+`conflict` for `settings_revision_conflict`, whose message keeps the reason:
+"The client rejected the request: <reason>." Thread policies store exact tool
+IDs, so a thread that enabled the earlier client controls does not gain
+`client.replay_turn` until the user enables it under Agent tools.
 
 `research.web_search` is provider-neutral. Its initial Grok CLI provider may
 use general web search, page fetch, and public X search, while Sedes removes

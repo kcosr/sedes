@@ -3555,6 +3555,11 @@ share one registration. Connection generations, commands, acknowledgements and
 reply-drain correlation remain client plumbing, never provider wire identities.
 Do not reroute to another client, replay after reconnect, or start microphone
 capture on server tool completion before the selected client's playback drains.
+`client.replay_turn` is immediate, like the settings tools: it is never
+deferred to turn completion, rerouted, or redelivered to a replacement
+connection, and Android never stages it with the turn's deferred actions.
+A poll response is capped by serialized bytes as well as count, so a few large
+replay commands cannot exceed native's response limit.
 Background Android recognition requires an existing ready native voice session.
 Capture its voice-only disposition at acceptance: visibility changes alone cannot
 turn it into deferred screen navigation or supersede the request.
@@ -3566,7 +3571,7 @@ normal thread/environment policy. Settings use the client's revision and
 device-owned preferences with exact profile/origin/identity thread selections.
 Sedes authentication and input recovery remain connection-scoped; speech
 credentials belong to the device's selected speech provider and endpoint.
-Unsupported voice, no active interaction, and local
+Unsupported voice, including Browser/Electron replay, no active interaction, and local
 foreground/permission/setup gates must be reported truthfully. Test all compiled
 backend presentations, explicit foreign targets, stale turn authority across
 approval, wrong principal scope, connection replacement, and the independent

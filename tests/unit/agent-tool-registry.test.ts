@@ -133,7 +133,7 @@ describe("AgentToolRegistry", () => {
         ({ id, schemaVersion }) => `${id}@${schemaVersion}`,
       ),
     );
-    expect(CANONICAL_AGENT_TOOL_MANIFEST_ENTRIES).toHaveLength(43);
+    expect(CANONICAL_AGENT_TOOL_MANIFEST_ENTRIES).toHaveLength(44);
   });
 
   it("assembles the complete production catalog only with every domain adapter", () => {
@@ -203,7 +203,7 @@ describe("AgentToolRegistry", () => {
     });
     const summaries = canonical.catalogSummaries("cli", "thread_agent");
 
-    expect(summaries).toHaveLength(43);
+    expect(summaries).toHaveLength(44);
     expect(
       Buffer.byteLength(JSON.stringify({ tools: summaries }), "utf8"),
     ).toBeLessThanOrEqual(AGENT_TOOL_MAXIMUM_CATALOG_SUMMARY_BYTES);

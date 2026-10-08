@@ -180,7 +180,7 @@ describe("sedes mcp server", () => {
     expect(tools.map(({ name }) => name)).toEqual([
       "sedes_agent_context",
       "sedes_thread_status",
-      "sedes_client_list", "sedes_client_end_interaction", "sedes_client_switch_thread", "sedes_client_settings_get", "sedes_client_settings_update",
+      "sedes_client_list", "sedes_client_end_interaction", "sedes_client_switch_thread", "sedes_client_settings_get", "sedes_client_settings_update", "sedes_client_replay_turn",
       "sedes_saved_agent_delete",
       "sedes_task_create",
       "sedes_research_web_search",
