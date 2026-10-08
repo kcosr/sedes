@@ -41,7 +41,7 @@ at the top of the Backlog section.
 
 Complete a Task when the work is done. Completing a Task unpins it and takes it
 out of the Backlog; reopening it returns it to the open list. Completion does
-not send a provider message or settle its thread.
+not send a provider message or park its thread.
 
 ## Open Tasks
 
@@ -334,23 +334,23 @@ agent and does not grant access to the Task's file paths.
 Structured Task references cannot be represented in Codex TUI keystrokes. Use
 Chat for that prompt.
 
-## Settle or archive threads with open Tasks
+## Park or archive threads with open Tasks
 
-Settle and archive previews list the affected open Tasks and let you choose
+Park and archive previews list the affected open Tasks and let you choose
 **To project**, **To global**, **Keep**, or **Complete all**. The choice applies
 to every open Task in the selected scope. **To project** moves each open
 Thread Task to its thread's project. **Complete all** marks those Tasks
 done and keeps them attached to their original threads. Tasks already completed
 remain unchanged.
 
-Settling one thread affects only its own Tasks. Archiving can also include
+Parking one thread affects only its own Tasks. Archiving can also include
 descendant forks; the preview groups their Tasks separately. Bulk stack actions
 show Tasks from the affected stack members. Lists show up to 100 Tasks per group
 and state how many additional Tasks are not shown; **Complete all** includes
 those additional Tasks too.
 
 If the Tasks change after you open the preview, completion is rejected. Single-thread
-settle and archive previews refresh automatically; for bulk stack actions, select
+park and archive previews refresh automatically; for bulk stack actions, select
 **Refresh impact** to review the updated Tasks before confirming again. Stashes
 remain separate: completing Tasks does not consume stashed prompts.
 
@@ -619,6 +619,24 @@ Elsewhere in Sedes:
 
 Upcoming times read the same everywhere: "in 45m", a time today, "Tmrw
 9:00 AM", a weekday within the week, then a date.
+
+## Park an automated thread
+
+[Park](organize-work.md#park-quiet-work) a thread with an automation to move
+it out of your working set between runs. Parking never pauses the automation.
+Once a run brings the thread back, it stays Active until you park it again.
+
+- With **This thread**, each run's prompt returns the thread to Active.
+- With **A new fork each run**, each run's new thread starts Active and the
+  parked source stays parked.
+- With either run mode, a run that fails, or whose outcome is unknown, returns
+  the parked thread to Active, so a problem is never hidden among parked
+  threads.
+- A run that the precheck skips, or that is skipped as missed while Sedes was
+  down, leaves the thread parked, and so does marking an unknown outcome as
+  failed.
+
+To skip runs instead, snooze the thread or pause the automation.
 
 ## Choose a run mode
 

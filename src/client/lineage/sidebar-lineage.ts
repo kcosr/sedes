@@ -9,7 +9,8 @@ import { createThreadSearchMatcher } from "./sidebar-search.js";
 
 /**
  * Where a root shows in the Projects view. Archived threads are not part of
- * the sidebar: they have their own Archived page.
+ * the sidebar: they have their own Archived page. Parked threads keep their
+ * stored inventory state, `settled`, as their bucket and shelf key.
  */
 export type SidebarBucket =
   `project:${string}` | "automations" | "snoozed" | "settled";

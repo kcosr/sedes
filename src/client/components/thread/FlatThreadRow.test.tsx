@@ -222,14 +222,25 @@ describe("flatRowGlyphKind ladder", () => {
     ).toBe("snoozed");
   });
 
-  it("automation beats settled; settled beats idle", () => {
+  it("automation beats parked; parked beats idle", () => {
     expect(
       flatRowGlyphKind(
         makeThread({ inventoryState: "settled", automation: makeAutomation() }),
       ),
     ).toBe("automation");
     expect(flatRowGlyphKind(makeThread({ inventoryState: "settled" }))).toBe(
-      "settled",
+      "parked",
+    );
+    render(
+      <FlatThreadRow
+        thread={makeThread({ inventoryState: "settled" })}
+        showBackendBrand={false}
+        density="compact"
+      />,
+    );
+    expect(screen.getByRole("img", { name: "Parked" })).toHaveAttribute(
+      "data-glyph",
+      "parked",
     );
   });
 
@@ -596,7 +607,7 @@ describe("status badges and wake indicator", () => {
   });
 });
 
-describe("settled recession", () => {
+describe("parked recession", () => {
   it("mutes the row, suppresses status badges, and retains wake and fork", () => {
     const { container } = render(
       <FlatThreadRow
@@ -611,13 +622,13 @@ describe("settled recession", () => {
       />,
     );
     expect(container.querySelector(".flat-row")).toHaveClass(
-      "flat-row-settled",
+      "flat-row-parked",
     );
     expect(chipsOf(container)).toEqual([]);
     expect(indicatorsOf(container)).toEqual(["wake", "fork"]);
   });
 
-  it("renders no badge cluster when settled without fork context", () => {
+  it("renders no badge cluster when parked without fork context", () => {
     const { container } = render(
       <FlatThreadRow
         showBackendBrand
@@ -660,7 +671,7 @@ describe("thread task indicator", () => {
     expect(indicator.querySelector(".flat-row-indicator-count")).toBeNull();
   });
 
-  it("survives settled-row badge suppression", () => {
+  it("survives parked-row badge suppression", () => {
     const { container } = render(
       <FlatThreadRow
         showBackendBrand
@@ -763,7 +774,7 @@ describe("wake indicator", () => {
     expect(indicator?.querySelector(".flat-row-indicator-count")).toBeNull();
   });
 
-  it("survives settled until acknowledged and omits zero attention", () => {
+  it("survives parking until acknowledged and omits zero attention", () => {
     const { container, rerender } = render(
       <FlatThreadRow
         showBackendBrand

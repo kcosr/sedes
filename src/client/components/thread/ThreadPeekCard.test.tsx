@@ -145,11 +145,11 @@ describe("ThreadPeekCard detail beneath attention and background glyphs", () => 
       label: "Background command running · 1 queued",
     },
     {
-      name: "settled completion",
+      name: "parked completion",
       overrides: { inventoryState: "settled" as const, stateChangedAt: "2026-09-27T11:55:00.000Z" },
       unseen: true,
       glyph: "unseen",
-      label: "Finished while you were away · Settled 5m ago",
+      label: "Finished while you were away · Parked 5m ago",
     },
     {
       name: "disconnected completion",
@@ -306,8 +306,8 @@ describe("ThreadPeekCard automation line", () => {
       automated({ status: "paused", lastRun: run("completed") }, { inventoryState: "settled", stateChangedAt: "2026-10-06T00:40:00.000Z" }),
     );
     const stateRow = container.querySelector('[data-row="state"]')!;
-    expect(stateRow).toHaveTextContent("Settled 3h ago");
-    expect(stateRow.querySelector("[data-glyph]")).toHaveAttribute("data-glyph", "settled");
+    expect(stateRow).toHaveTextContent("Parked 3h ago");
+    expect(stateRow.querySelector("[data-glyph]")).toHaveAttribute("data-glyph", "parked");
     expect(stateRow.querySelector(".automation-glyph")).toBeNull();
 
     const queued = renderPeek(automated({}, { queuedInputCount: 2 }));

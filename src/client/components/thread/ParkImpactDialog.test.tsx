@@ -10,7 +10,7 @@ import {
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ThreadArchiveImpact } from "../../../shared/index.js";
-import { SettleImpactDialog } from "./SettleImpactDialog.js";
+import { ParkImpactDialog } from "./ParkImpactDialog.js";
 
 afterEach(cleanup);
 
@@ -46,100 +46,105 @@ function impact({
   };
 }
 
-describe("SettleImpactDialog", () => {
+describe("ParkImpactDialog", () => {
   it("warns about stash-only impact without offering a recovery choice", async () => {
-    const onSettle = vi.fn().mockResolvedValue(undefined);
+    const onPark = vi.fn().mockResolvedValue(undefined);
     const onOpenChange = vi.fn();
     render(
-      <SettleImpactDialog
+      <ParkImpactDialog
         open
         onOpenChange={onOpenChange}
         impact={impact({ stashes: 2 })}
         loadImpact={vi.fn()}
-        onSettle={onSettle}
+        onPark={onPark}
       />,
     );
 
+    expect(
+      screen.getByRole("dialog", { name: "Park this thread" }),
+    ).toHaveAccessibleDescription(
+      "Review unfinished work before parking this thread.",
+    );
     expect(screen.getByText("2 stashed prompts")).toBeVisible();
     expect(
-      screen.getByText(/remain attached to the settled thread/),
+      screen.getByText(/remain attached to the parked thread/),
     ).toBeVisible();
     expect(
       screen.queryByRole("radiogroup", { name: "Open task handling" }),
     ).not.toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole("button", { name: "Settle" }));
+    await userEvent.click(screen.getByRole("button", { name: "Park" }));
 
-    expect(onSettle).toHaveBeenCalledWith({ expectedStashedPromptCount: 2 });
+    expect(onPark).toHaveBeenCalledWith({ expectedStashedPromptCount: 2 });
     await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
   });
 
-  it("cancels a stash warning without settling", async () => {
-    const onSettle = vi.fn();
+  it("cancels a stash warning without parking", async () => {
+    const onPark = vi.fn();
     const onOpenChange = vi.fn();
     render(
-      <SettleImpactDialog
+      <ParkImpactDialog
         open
         onOpenChange={onOpenChange}
         impact={impact({ stashes: 1 })}
         loadImpact={vi.fn()}
-        onSettle={onSettle}
+        onPark={onPark}
       />,
     );
 
     await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
 
-    expect(onSettle).not.toHaveBeenCalled();
+    expect(onPark).not.toHaveBeenCalled();
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 
   it("combines the confirmed stash count with the selected task disposition", async () => {
-    const onSettle = vi.fn().mockResolvedValue(undefined);
+    const onPark = vi.fn().mockResolvedValue(undefined);
     render(
-      <SettleImpactDialog
+      <ParkImpactDialog
         open
         onOpenChange={vi.fn()}
         impact={impact({ stashes: 1, openTasks: 2 })}
         loadImpact={vi.fn()}
-        onSettle={onSettle}
+        onPark={onPark}
       />,
     );
 
     await userEvent.click(screen.getByRole("radio", { name: "Keep" }));
-    await userEvent.click(screen.getByRole("button", { name: "Settle" }));
+    await userEvent.click(screen.getByRole("button", { name: "Park" }));
 
-    expect(onSettle).toHaveBeenCalledWith({
+    expect(onPark).toHaveBeenCalledWith({
       expectedStashedPromptCount: 1,
       openTaskDisposition: "keep",
     });
   });
 
   it("refreshes stale stash impact and requires a second confirmation", async () => {
-    const onSettle = vi
+    const onPark = vi
       .fn()
       .mockRejectedValueOnce(new Error("Stashed prompts changed."))
       .mockResolvedValueOnce(undefined);
     const loadImpact = vi.fn().mockResolvedValue(impact({ stashes: 3 }));
     render(
-      <SettleImpactDialog
+      <ParkImpactDialog
         open
         onOpenChange={vi.fn()}
         impact={impact({ stashes: 1 })}
         loadImpact={loadImpact}
-        onSettle={onSettle}
+        onPark={onPark}
       />,
     );
 
-    await userEvent.click(screen.getByRole("button", { name: "Settle" }));
+    await userEvent.click(screen.getByRole("button", { name: "Park" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Stashed prompts changed.",
     );
     expect(await screen.findByText("3 stashed prompts")).toBeVisible();
-    expect(onSettle).toHaveBeenCalledTimes(1);
+    expect(onPark).toHaveBeenCalledTimes(1);
 
-    await userEvent.click(screen.getByRole("button", { name: "Settle" }));
-    expect(onSettle).toHaveBeenLastCalledWith({
+    await userEvent.click(screen.getByRole("button", { name: "Park" }));
+    expect(onPark).toHaveBeenLastCalledWith({
       expectedStashedPromptCount: 3,
     });
   });
@@ -168,7 +173,7 @@ describe("SettleImpactDialog", () => {
       total: 2,
       omitted: 1,
     };
-    const onSettle = vi
+    const onPark = vi
       .fn()
       .mockRejectedValueOnce(
         new Error("Open tasks changed. Review the updated list."),
@@ -176,17 +181,17 @@ describe("SettleImpactDialog", () => {
       .mockResolvedValueOnce(undefined);
     const loadImpact = vi.fn().mockResolvedValue(refreshed);
     render(
-      <SettleImpactDialog
+      <ParkImpactDialog
         open
         onOpenChange={vi.fn()}
         impact={initial}
         loadImpact={loadImpact}
-        onSettle={onSettle}
+        onPark={onPark}
       />,
     );
 
     const tasks = screen.getByRole("region", {
-      name: "2 open tasks affected by this settle",
+      name: "2 open tasks affected by this park",
     });
     expect(within(tasks).getByText("First task")).toBeVisible();
     expect(within(tasks).getByText("1 more task not shown")).toBeVisible();
@@ -195,17 +200,17 @@ describe("SettleImpactDialog", () => {
     expect(screen.getByRole("note")).toHaveTextContent(
       "including those not shown",
     );
-    await userEvent.click(screen.getByRole("button", { name: "Settle" }));
-    expect(onSettle).toHaveBeenLastCalledWith({
+    await userEvent.click(screen.getByRole("button", { name: "Park" }));
+    expect(onPark).toHaveBeenLastCalledWith({
       expectedStashedPromptCount: 0,
       openTaskDisposition: "complete",
       expectedOpenTaskSnapshot: "a".repeat(64),
     });
     expect(await screen.findByText("Replacement task")).toBeVisible();
     expect(screen.queryByText("First task")).not.toBeInTheDocument();
-    expect(onSettle).toHaveBeenCalledTimes(1);
-    await userEvent.click(screen.getByRole("button", { name: "Settle" }));
-    expect(onSettle).toHaveBeenLastCalledWith({
+    expect(onPark).toHaveBeenCalledTimes(1);
+    await userEvent.click(screen.getByRole("button", { name: "Park" }));
+    expect(onPark).toHaveBeenLastCalledWith({
       expectedStashedPromptCount: 0,
       openTaskDisposition: "complete",
       expectedOpenTaskSnapshot: "d".repeat(64),

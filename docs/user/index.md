@@ -31,7 +31,7 @@ If Sedes is not running yet, begin with [Getting started](getting-started.md).
    correction or **Queue** for work that should begin after the current turn.
 4. Bookmark useful turns, attach exact file or transcript context to later
    prompts, and create Tasks for work that should survive the conversation.
-5. Pin active threads, snooze work that has a future follow-up, settle work that
+5. Pin active threads, snooze work that has a future follow-up, park work that
    is quiet, and archive work that is finished.
 
 ## Where Sedes saves things

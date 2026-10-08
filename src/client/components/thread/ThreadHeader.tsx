@@ -111,9 +111,9 @@ import { SIDEBAR_NAV_MEDIA_QUERY } from "../SidebarNavTrigger.js";
  */
 const NARROW_HEADER_MEDIA_QUERY = "(max-width: 419px)";
 import {
-  SettleImpactDialog,
-  settleNeedsConfirmation,
-} from "./SettleImpactDialog.js";
+  ParkImpactDialog,
+  parkNeedsConfirmation,
+} from "./ParkImpactDialog.js";
 import { ForceResetDialog } from "./ForceResetDialog.js";
 import { TurnBookmarksMenu } from "./TurnBookmarksMenu.js";
 import { workspaceDisplayLabel } from "../../app/sidebar-scope-presentation.js";
@@ -219,8 +219,8 @@ export const ThreadHeader = memo(function ThreadHeader({
   const [modelSearchFirst, setModelSearchFirst] = useState(false);
   const [snoozeOpen, setSnoozeOpen] = useState(false);
   const [forceResetOpen, setForceResetOpen] = useState(false);
-  const [settleImpact, setSettleImpact] = useState<ThreadArchiveImpact>();
-  const [settleChoicesOpen, setSettleChoicesOpen] = useState(false);
+  const [parkImpact, setParkImpact] = useState<ThreadArchiveImpact>();
+  const [parkChoicesOpen, setParkChoicesOpen] = useState(false);
   const [sessionStatsOpen, setSessionStatsOpen] = useState(false);
   const [agentToolsOpen, setAgentToolsOpen] = useState(false);
   const [environmentVariablesOpen, setEnvironmentVariablesOpen] = useState(false);
@@ -289,7 +289,8 @@ export const ThreadHeader = memo(function ThreadHeader({
   const moveDraft = snapshot.capabilities.operations.find(
     ({ id }) => id === "move_draft",
   );
-  const settle = snapshot.capabilities.operations.find(
+  // Park's capability keeps its wire name, `settle`.
+  const park = snapshot.capabilities.operations.find(
     ({ id }) => id === "settle",
   );
   const snooze = snapshot.capabilities.operations.find(
@@ -460,7 +461,6 @@ export const ThreadHeader = memo(function ThreadHeader({
       | "settle"
       | "unsettle"
       | "snooze"
-      | "remind"
       | "wake"
       | "archive"
       | "restore",
@@ -519,20 +519,20 @@ export const ThreadHeader = memo(function ThreadHeader({
     return () => clearTimeout(timer);
   }, [actionsOpen]);
 
-  const requestSettle = async () => {
+  const requestPark = async () => {
     setInventoryPending(true);
     setInventoryError("");
     try {
       const impact = await applicationStore.getThreadArchiveImpact(
         snapshot.thread.id,
       );
-      if (!settleNeedsConfirmation(impact)) {
+      if (!parkNeedsConfirmation(impact)) {
         await mutateInventory("settle", { expectedStashedPromptCount: 0 });
         return;
       }
       closeActionsBefore(() => {
-        setSettleImpact(impact);
-        setSettleChoicesOpen(true);
+        setParkImpact(impact);
+        setParkChoicesOpen(true);
       });
     } catch (error) {
       setInventoryError(
@@ -876,18 +876,18 @@ export const ThreadHeader = memo(function ThreadHeader({
                       )}
                     >
                       <ArrowUpFromDot aria-hidden="true" />
-                      Unsettle
+                      Unpark
                       {disabled && <ReasonShortcut reason={busyReason} />}
                     </DropdownMenuItem>
                   ) : (
                     <DropdownMenuItem
-                      disabled={disabled || settle?.available !== true}
-                      title={settle?.unavailableReason?.text}
-                      onSelect={keepOpen(() => void requestSettle())}
+                      disabled={disabled || park?.available !== true}
+                      title={park?.unavailableReason?.text}
+                      onSelect={keepOpen(() => void requestPark())}
                     >
                       <ArrowDownToDot aria-hidden="true" />
-                      Settle
-                      {(disabled || settle?.available !== true) && (
+                      Park
+                      {(disabled || park?.available !== true) && (
                         <ReasonShortcut reason={disabled ? busyReason : "Unavailable"} />
                       )}
                     </DropdownMenuItem>
@@ -1193,23 +1193,20 @@ export const ThreadHeader = memo(function ThreadHeader({
         }
         returnFocusRef={actionsTrigger}
       />
-      <SettleImpactDialog
-        open={active && settleChoicesOpen}
-        onOpenChange={setSettleChoicesOpen}
-        impact={settleImpact}
+      <ParkImpactDialog
+        open={active && parkChoicesOpen}
+        onOpenChange={setParkChoicesOpen}
+        impact={parkImpact}
         loadImpact={() =>
           applicationStore.getThreadArchiveImpact(snapshot.thread.id)
         }
-        onSettle={(options) => mutateInventory("settle", options)}
+        onPark={(options) => mutateInventory("settle", options)}
         returnFocusRef={actionsTrigger}
       />
       <SnoozeDialog
         open={active && snoozeOpen}
         onOpenChange={setSnoozeOpen}
         onSnooze={(options) => mutateInventory("snooze", options)}
-        onRemindNow={(wakeReminder) =>
-          mutateInventory("remind", { wakeReminder })
-        }
         returnFocusRef={actionsTrigger}
       />
       <SessionStatsDialog

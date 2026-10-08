@@ -18,6 +18,10 @@ import {
   DialogTitle,
 } from "@client/components/ui/dialog";
 import { ThreadTaskDisposition } from "./ThreadTaskDisposition.js";
+import {
+  inventoryActionLabel,
+  inventoryActionProgress,
+} from "./inventory-action-labels.js";
 
 export function ThreadStackActionDialog({
   open,
@@ -59,8 +63,8 @@ export function ThreadStackActionDialog({
 
   const affectedCount = impact?.affectedCount ?? 0;
   const blockerCount = impact?.blockers.total ?? 0;
-  const actionLabel = action ? capitalize(action) : "Update";
-  const actionPresent = action ? presentParticiple(action) : "Updating";
+  const actionLabel = action ? inventoryActionLabel(action) : "Update";
+  const actionPresent = action ? inventoryActionProgress(action) : "Updating";
   const unavailable =
     !impact || !impact.available || affectedCount === 0 || blockerCount > 0;
 
@@ -111,7 +115,7 @@ export function ThreadStackActionDialog({
 
           {impact && action && action !== "unsettle" ? (
             <ThreadTaskDisposition
-              action={action}
+              action={action === "settle" ? "park" : "archive"}
               description={`The affected threads have ${impact.openTasks.total} open ${impact.openTasks.total === 1 ? "task" : "tasks"}. Choose what should happen before ${actionPresent.toLocaleLowerCase()}.`}
               groups={[
                 {
@@ -211,14 +215,4 @@ export function ThreadStackActionDialog({
       </DialogContent>
     </Dialog>
   );
-}
-
-function capitalize(action: BulkInventoryAction): string {
-  return action.charAt(0).toUpperCase() + action.slice(1);
-}
-
-function presentParticiple(action: BulkInventoryAction): string {
-  if (action === "archive") return "Archiving";
-  if (action === "settle") return "Settling";
-  return "Unsettling";
 }

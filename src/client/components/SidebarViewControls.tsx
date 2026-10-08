@@ -71,7 +71,7 @@ const SHOW_FILTERS: ReadonlyArray<{
   readonly label: string;
 }> = [
   { key: "snoozed", label: "Snoozed" },
-  { key: "settled", label: "Settled" },
+  { key: "settled", label: "Parked" },
   { key: "drafts", label: "Drafts" },
 ];
 

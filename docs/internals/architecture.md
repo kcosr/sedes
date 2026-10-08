@@ -325,8 +325,8 @@ occur.
 Bulk sidebar inventory changes are application-owned rather than provider
 side effects. The server derives tenant/principal scope, freezes revisioned
 targets during authoritative impact calculation, and rechecks runtime and
-durable blockers before commit. Settle, unsettle, or archive changes every
-eligible target, moves or completes any explicitly disposed open Tasks, advances the
+durable blockers before commit. Park (`settle`), unpark (`unsettle`), or archive
+changes every eligible target, moves or completes any explicitly disposed open Tasks, advances the
 principal inventory generation, and records one replay receipt in one SQLite
 transaction. A stale revision, changed confirmation count, invalid target, or
 single blocker aborts the complete database mutation; publications occur only
@@ -340,7 +340,7 @@ If a stream or direct actor borrower remains busy, or closure cannot be proven,
 the archive does not commit. Receipt replay retires only threads that are still
 archived before republishing the receipted state.
 
-Single-thread settle, single/family archive, and bulk inventory previews include
+Single-thread park, single/family archive, and bulk inventory previews include
 bounded open-Task summaries and opaque snapshots of the full scoped Task set.
 Completion requires the reviewed snapshot, covering tenant/principal, affected
 thread membership, and every open Task's ID and revision, including rows omitted

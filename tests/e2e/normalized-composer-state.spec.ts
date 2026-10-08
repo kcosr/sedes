@@ -908,7 +908,7 @@ test.describe.serial("normalized composer state", () => {
 
     await page.getByRole("button", { name: "Thread actions" }).click();
     await threadActions
-      .getByRole("menuitem", { name: "Settle", exact: true })
+      .getByRole("menuitem", { name: "Park", exact: true })
       .click();
     await expect(
       page
@@ -918,7 +918,7 @@ test.describe.serial("normalized composer state", () => {
 
     await page.getByRole("button", { name: "Thread actions" }).click();
     await threadActions
-      .getByRole("menuitem", { name: "Unsettle", exact: true })
+      .getByRole("menuitem", { name: "Unpark", exact: true })
       .click();
     await expect(
       page

@@ -18,23 +18,23 @@ import {
 import { ThreadTaskDisposition } from "./ThreadTaskDisposition.js";
 import { messageFrom } from "../../stores/ApplicationClientStore.js";
 
-export function settleNeedsConfirmation(impact: ThreadArchiveImpact): boolean {
+export function parkNeedsConfirmation(impact: ThreadArchiveImpact): boolean {
   return impact.openTasks.root.total > 0 || impact.stashedPrompts.root > 0;
 }
 
-export function SettleImpactDialog({
+export function ParkImpactDialog({
   open,
   onOpenChange,
   impact,
   loadImpact,
-  onSettle,
+  onPark,
   returnFocusRef,
 }: {
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
   readonly impact: ThreadArchiveImpact | undefined;
   readonly loadImpact: () => Promise<ThreadArchiveImpact>;
-  readonly onSettle: (options: {
+  readonly onPark: (options: {
     readonly expectedStashedPromptCount: number;
     readonly openTaskDisposition?: OpenTaskDisposition;
     readonly expectedOpenTaskSnapshot?: string;
@@ -59,11 +59,11 @@ export function SettleImpactDialog({
   const openTaskCount = currentImpact?.openTasks.root.total ?? 0;
   const stashedPromptCount = currentImpact?.stashedPrompts.root ?? 0;
 
-  const settle = () => {
+  const park = () => {
     if (pending || !currentImpact) return;
     setPending(true);
     setError("");
-    void onSettle({
+    void onPark({
       expectedStashedPromptCount: currentImpact.stashedPrompts.root,
       ...(openTaskCount > 0 ? { openTaskDisposition: disposition } : {}),
       ...(openTaskCount > 0 && disposition === "complete"
@@ -96,9 +96,9 @@ export function SettleImpactDialog({
         returnFocusRef={returnFocusRef}
       >
         <DialogHeader>
-          <DialogTitle>Settle this thread</DialogTitle>
+          <DialogTitle>Park this thread</DialogTitle>
           <DialogDescription>
-            Review unfinished work before settling this thread.
+            Review unfinished work before parking this thread.
           </DialogDescription>
         </DialogHeader>
         <DialogBody>
@@ -106,17 +106,17 @@ export function SettleImpactDialog({
             <DialogAlert
               tone="warning"
               role="note"
-              data-testid="settle-stashed-prompt-warning"
+              data-testid="park-stashed-prompt-warning"
               title={`${stashedPromptCount} stashed ${stashedPromptCount === 1 ? "prompt" : "prompts"}`}
             >
               {stashedPromptCount === 1 ? "It" : "They"} will remain attached
-              to the settled thread.
+              to the parked thread.
             </DialogAlert>
           )}
           {currentImpact && (
             <ThreadTaskDisposition
-              action="settle"
-              description={`This thread has ${openTaskCount} open ${openTaskCount === 1 ? "task" : "tasks"}. Choose what should happen before settling.`}
+              action="park"
+              description={`This thread has ${openTaskCount} open ${openTaskCount === 1 ? "task" : "tasks"}. Choose what should happen before parking.`}
               groups={[
                 { label: "This thread", tasks: currentImpact.openTasks.root },
               ]}
@@ -138,11 +138,11 @@ export function SettleImpactDialog({
           </Button>
           <Button
             type="button"
-            onClick={settle}
+            onClick={park}
             disabled={pending || !currentImpact}
           >
             <ArrowDownToDot />
-            {pending ? "Settling…" : "Settle"}
+            {pending ? "Parking…" : "Park"}
           </Button>
         </DialogFooter>
       </DialogContent>

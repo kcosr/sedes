@@ -382,9 +382,9 @@ test("thread groups stack on desktop and open as a member sheet on mobile", asyn
 
   await expect(groupStack).toHaveCount(1);
   await groupStack.hover();
-  const settleStack = groupStack.getByTestId("thread-stack-face-settle");
-  await expect(settleStack).toHaveAccessibleName(
-    "Settle 2 threads in Focus cluster",
+  const parkStack = groupStack.getByTestId("thread-stack-face-park");
+  await expect(parkStack).toHaveAccessibleName(
+    "Park 2 threads in Focus cluster",
   );
   await expect(groupStack.getByTitle("Pin")).toHaveCount(0);
   await expect(groupStack.getByTitle("Snooze")).toHaveCount(0);
@@ -402,26 +402,26 @@ test("thread groups stack on desktop and open as a member sheet on mobile", asyn
     expect(response.status()).toBe(201);
     stackTasks.push(taskMutationResultSchema.parse(await response.json()).task);
   }
-  const settleRequest = page.waitForResponse(
+  const parkRequest = page.waitForResponse(
     (response) =>
       response.request().method() === "POST" &&
       response.url().endsWith("/api/thread-inventory/bulk") &&
       response.status() === 200,
   );
-  await settleStack.click();
+  await parkStack.click();
   const stackActionDialog = page.getByRole("dialog", {
-    name: "Settle threads in Focus cluster",
+    name: "Park threads in Focus cluster",
   });
   await expect(stackActionDialog).toContainText(
-    "Settle 2 threads.",
+    "Park 2 threads.",
   );
   await expect(stackActionDialog.getByText("Finish selected thread", { exact: true })).toBeVisible();
   await expect(stackActionDialog.getByText("Finish sibling thread", { exact: true })).toBeVisible();
   await expect(stackActionDialog.getByText("Keep filtered thread task open", { exact: true })).toHaveCount(0);
   await stackActionDialog.getByRole("radio", { name: "Complete all", exact: true }).click();
   await capture(page, testInfo, "sidebar-thread-stack-complete-tasks.png");
-  await stackActionDialog.getByRole("button", { name: "Settle" }).click();
-  await settleRequest;
+  await stackActionDialog.getByRole("button", { name: "Park" }).click();
+  await parkRequest;
   await expect(stackActionDialog).toBeHidden();
   await expectInventoryStates(page, {
     [selectedId]: "settled",
@@ -443,30 +443,30 @@ test("thread groups stack on desktop and open as a member sheet on mobile", asyn
   const stackMenu = page.getByTestId("thread-stack-context-menu");
   await expect(stackMenu).toBeVisible();
   await expect(
-    stackMenu.getByRole("menuitem", { name: "Settle stack", exact: true }),
+    stackMenu.getByRole("menuitem", { name: "Park stack", exact: true }),
   ).toBeDisabled();
   await expect(stackMenu.getByRole("menuitem", { name: "Pin" })).toHaveCount(0);
   await expect(
     stackMenu.getByRole("menuitem", { name: "Snooze…" }),
   ).toHaveCount(0);
   await stackMenu
-    .getByRole("menuitem", { name: "Unsettle stack", exact: true })
+    .getByRole("menuitem", { name: "Unpark stack", exact: true })
     .click();
-  const unsettleDialog = page.getByRole("dialog", {
-    name: "Unsettle threads in Focus cluster",
+  const unparkDialog = page.getByRole("dialog", {
+    name: "Unpark threads in Focus cluster",
   });
-  await expect(unsettleDialog).toContainText(
-    "Unsettle 2 threads.",
+  await expect(unparkDialog).toContainText(
+    "Unpark 2 threads.",
   );
-  const unsettleRequest = page.waitForResponse(
+  const unparkRequest = page.waitForResponse(
     (response) =>
       response.request().method() === "POST" &&
       response.url().endsWith("/api/thread-inventory/bulk") &&
       response.status() === 200,
   );
-  await unsettleDialog.getByRole("button", { name: "Unsettle" }).click();
-  await unsettleRequest;
-  await expect(unsettleDialog).toBeHidden();
+  await unparkDialog.getByRole("button", { name: "Unpark" }).click();
+  await unparkRequest;
+  await expect(unparkDialog).toBeHidden();
   await expectInventoryStates(page, {
     [selectedId]: "active",
     [siblingId]: "active",
@@ -618,8 +618,8 @@ test("thread groups stack on desktop and open as a member sheet on mobile", asyn
   await expect(sheet).toBeVisible();
   await expect(sheet.getByTestId("thread-group-member")).toHaveCount(3);
   await expect(
-    sheet.getByTestId("thread-stack-header-settle"),
-  ).toHaveAccessibleName("Settle 3 threads in Focus cluster");
+    sheet.getByTestId("thread-stack-header-park"),
+  ).toHaveAccessibleName("Park 3 threads in Focus cluster");
   await expect(
     page.getByTestId("thread-stack-actions-sheet"),
   ).toHaveCount(0);
@@ -698,10 +698,10 @@ test("thread groups stack on desktop and open as a member sheet on mobile", asyn
   await mobileStack.click({ button: "right" });
   await expect(sheet).toBeVisible();
   await expect(
-    sheet.getByTestId("thread-stack-header-settle"),
-  ).toHaveAccessibleName("Settle 3 threads in Focus cluster");
+    sheet.getByTestId("thread-stack-header-park"),
+  ).toHaveAccessibleName("Park 3 threads in Focus cluster");
   await expect(
-    sheet.getByTestId("thread-stack-header-unsettle"),
+    sheet.getByTestId("thread-stack-header-unpark"),
   ).toBeDisabled();
   const mobileArchiveImpact = page.waitForResponse(
     (response) =>
