@@ -1740,7 +1740,7 @@ describe("application endpoint startup", () => {
     ).not.toHaveProperty("projectFilterName");
   });
 
-  it("focuses sidebar search with Ctrl+Shift+F and clears it with the Scope filters", async () => {
+  it("focuses sidebar search with Ctrl+Shift+F, leaves it on Escape when empty, and clears it with Scope", async () => {
     FakeEventSource.automaticApplicationSnapshots = 1;
     vi.stubGlobal(
       "fetch",
@@ -1763,6 +1763,14 @@ describe("application endpoint startup", () => {
         (search as HTMLInputElement).selectionEnd,
       ]).toEqual([0, "Project".length]);
 
+      // Escape leaves a non-empty search focused, and an empty one returns to sidebar navigation.
+      fireEvent.keyDown(search, { key: "Escape" });
+      expect(search).toHaveFocus();
+      fireEvent.change(search, { target: { value: "" } });
+      fireEvent.keyDown(search, { key: "Escape" });
+      expect(search).not.toHaveFocus();
+
+      fireEvent.change(search, { target: { value: "Project" } });
       act(() => setSidebarInventoryScope({ projectFilterId: "project-1" }));
       fireEvent.click(await within(sidebar).findByRole("button", { name: "Clear" }));
       await waitFor(() => expect(getSidebarViewPreferences().projectFilterId).toBeNull());

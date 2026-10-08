@@ -1643,6 +1643,16 @@ export function InventorySidebar({
                 data-sidebar-search=""
                 value={state.search}
                 onChange={(event) => store.setSearch(event.target.value)}
+                onKeyDown={(event) => {
+                  // Escape in an empty search returns the keyboard to sidebar navigation.
+                  if (
+                    event.key === "Escape" &&
+                    !event.nativeEvent.isComposing &&
+                    event.currentTarget.value === ""
+                  ) {
+                    event.currentTarget.blur();
+                  }
+                }}
               />
             </label>
             <SidebarViewControls

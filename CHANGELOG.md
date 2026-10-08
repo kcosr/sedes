@@ -488,8 +488,8 @@
 ### Changed
 
 - Ctrl+Shift+F (Command+Shift+F) focuses and selects sidebar search instead
-  of opening Find in thread, which keeps Ctrl+F. Scope **Clear** also clears
-  sidebar search.
+  of opening Find in thread, which keeps Ctrl+F. Escape in an empty search
+  leaves it. Scope **Clear** also clears sidebar search.
 
 - Client-control agent tools report the client's rejection reason instead of
   a generic message. ([#62](https://github.com/kcosr/sedes/pull/62))
