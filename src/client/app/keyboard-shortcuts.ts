@@ -58,12 +58,23 @@ export const SIDEBAR_ADJACENT_THREAD_COMMANDS = {
  * phones. Pages without a thread (Home, Archived, Usage, Automations and an
  * automation's page) have no Tasks and leave the key alone.
  * Ctrl+Shift+L (⌘⇧L): no browser or app binding uses it, while T and K are
- * taken (reopen tab, web console) and Ctrl+Shift+F opens thread find.
+ * taken (reopen tab, web console) and Ctrl+Shift+F focuses sidebar search.
  */
 export const TASKS_TOGGLE_COMMAND = {
   id: "tasks.toggle",
   scope: "global",
   defaultBinding: { key: "L", modifiers: ["primary", "shift"] },
+} as const satisfies KeyboardShortcutCommand;
+
+/**
+ * Focuses the sidebar's thread search and selects its text, revealing a
+ * collapsed sidebar or the narrow-layout drawer first. Plain Ctrl+F (⌘F)
+ * stays with Find in thread.
+ */
+export const SIDEBAR_SEARCH_FOCUS_COMMAND = {
+  id: "sidebar.search.focus",
+  scope: "global",
+  defaultBinding: { key: "F", modifiers: ["primary", "shift"] },
 } as const satisfies KeyboardShortcutCommand;
 
 export function activePrimaryShortcutModifier(

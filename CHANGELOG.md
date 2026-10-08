@@ -479,6 +479,11 @@
 
 ### Changed
 
+- Ctrl+Shift+F (Command+Shift+F on macOS) focuses sidebar search and selects
+  its text, opening a collapsed sidebar or the navigation drawer first. It no
+  longer opens Find in thread; Ctrl+F (Command+F) still does. The Scope
+  **Clear** button also clears sidebar search.
+
 - **Park** replaces Settle: a parked thread leaves the working set until new
   input returns it to Active, including an automation run, so parking an
   automated thread hides it until the automation next runs. The API and agent

@@ -1447,7 +1447,10 @@ export function InventorySidebar({
                   variant="ghost"
                   size="sm"
                   className="sidebar-scope-clear"
-                  onClick={clearScope}
+                  onClick={() => {
+                    clearScope();
+                    store.setSearch("");
+                  }}
                 >
                   Clear
                 </Button>
@@ -1637,6 +1640,7 @@ export function InventorySidebar({
                 type="search"
                 className="border-0 bg-transparent shadow-none focus-visible:ring-0 dark:bg-transparent"
                 placeholder="Search threads"
+                data-sidebar-search=""
                 value={state.search}
                 onChange={(event) => store.setSearch(event.target.value)}
               />

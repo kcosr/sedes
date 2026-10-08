@@ -25,6 +25,7 @@ import {
 } from "../app/sidebar-width";
 import { InventorySidebar } from "./InventorySidebar";
 import { installAndroidBackButton } from "../app/android-back.js";
+import { installSidebarSearchShortcut } from "../app/sidebar-search-shortcut.js";
 import { isAndroidClient } from "../app/client-platform.js";
 import { FullPageError, FullPageLoading } from "./LoadingStates";
 import { PaneResizeHandle } from "./PaneResizeHandle";
@@ -219,6 +220,22 @@ export function ApplicationShell({
           ? document.activeElement : null;
         setDrawerOpen(false);
         navigate(settingsPath("prompts"));
+      }),
+    [],
+  );
+
+  const sidebarSearchReveal = useRef({ mobileLayout, sidebarCollapsed, settingsActive });
+  sidebarSearchReveal.current = { mobileLayout, sidebarCollapsed, settingsActive };
+  useEffect(
+    () =>
+      installSidebarSearchShortcut(window, {
+        isAvailable: () => !sidebarSearchReveal.current.settingsActive,
+        reveal: () => {
+          const { mobileLayout, sidebarCollapsed } = sidebarSearchReveal.current;
+          if (mobileLayout) setDrawerOpen(true);
+          else if (sidebarCollapsed) setSidebarCollapsedState(setSidebarCollapsed(false));
+        },
+        drawerId: MOBILE_DRAWER_CONTENT_ID,
       }),
     [],
   );

@@ -253,6 +253,12 @@ describe("ThreadFindBar", () => {
     );
     expect(highlights.has("sedes-thread-find-match")).toBe(false);
 
+    // Ctrl+Shift+F (⌘⇧F) is sidebar search, not Find in thread.
+    for (const modifier of [{ ctrlKey: true }, { metaKey: true }]) {
+      expect(fireEvent.keyDown(document, { key: "F", shiftKey: true, ...modifier })).toBe(true);
+    }
+    expect(document.getElementById("thread-find-test")).toHaveAttribute("data-open", "false");
+
     fireEvent.keyDown(document, { key: "f", ctrlKey: true });
     await waitFor(() => expect(search).toHaveFocus());
     expect(search).toHaveValue("thread");

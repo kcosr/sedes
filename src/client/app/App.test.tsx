@@ -1740,6 +1740,38 @@ describe("application endpoint startup", () => {
     ).not.toHaveProperty("projectFilterName");
   });
 
+  it("focuses sidebar search with Ctrl+Shift+F and clears it with the Scope filters", async () => {
+    FakeEventSource.automaticApplicationSnapshots = 1;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json(applicationSession)),
+    );
+    // jsdom has no layout: give the desktop sidebar's search a box so it counts as shown.
+    const rects = vi.spyOn(Element.prototype, "getClientRects").mockImplementation(function (this: Element) {
+      return { length: this.hasAttribute("data-sidebar-search") ? 1 : 0 } as DOMRectList;
+    });
+    try {
+      render(<App />);
+      const sidebar = await screen.findByTestId("desktop-sidebar");
+      const search = within(sidebar).getByPlaceholderText("Search threads");
+      fireEvent.change(search, { target: { value: "Project" } });
+
+      expect(fireEvent.keyDown(document.body, { key: "F", ctrlKey: true, shiftKey: true })).toBe(false);
+      await waitFor(() => expect(search).toHaveFocus());
+      expect([
+        (search as HTMLInputElement).selectionStart,
+        (search as HTMLInputElement).selectionEnd,
+      ]).toEqual([0, "Project".length]);
+
+      act(() => setSidebarInventoryScope({ projectFilterId: "project-1" }));
+      fireEvent.click(await within(sidebar).findByRole("button", { name: "Clear" }));
+      await waitFor(() => expect(getSidebarViewPreferences().projectFilterId).toBeNull());
+      expect(search).toHaveValue("");
+    } finally {
+      rects.mockRestore();
+    }
+  });
+
   it("unwinds sidebar search and filters before returning to the thread", async () => {
     platform.native = true;
     platform.name = "android";
