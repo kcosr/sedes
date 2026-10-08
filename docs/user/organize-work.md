@@ -217,8 +217,9 @@ with Scope, inventory visibility, and Pinned-only settings. Search bypasses
 thread-group stacking so a matching child is never concealed inside a stack.
 
 Press Ctrl+Shift+F (Command+Shift+F on macOS) to focus sidebar search and
-select its text. It opens a collapsed sidebar, or the navigation drawer on
-narrow screens, first. Ctrl+F (Command+F) still opens Find in thread.
+select its text, even from a terminal. It opens a collapsed sidebar, or the
+navigation drawer on narrow screens, first. Ctrl+F (Command+F) still opens Find
+in thread.
 
 Use [Find in thread](conversations.md#find-text-in-a-thread) for text inside one
 conversation; sidebar search and transcript search serve different purposes.
