@@ -57,6 +57,8 @@ export async function installVoiceFixture(page: Page): Promise<void> {
       emitInputSubmitted(event) { emit("inputSubmitted", event); },
     };
     const snapshot = () => structuredClone(fixture.state);
+    // Queued replay identities; the fake keeps only the queue count in state, and an emptied queue drops them.
+    const queuedReplays = new Set<string>();
     const header = (name: string, methods: readonly string[], events = false) => ({ name,
       methods: [...methods.map(name => ({ name, rtype: "promise" })), ...(events ? [{ name: "addListener", rtype: "callback" }, { name: "removeListener", rtype: "promise" }] : [])] });
     Object.assign(window, {
@@ -110,9 +112,16 @@ export async function installVoiceFixture(page: Page): Promise<void> {
           } else if (method === "speakReply") {
             if (current.settings.audioMode === "off" || !current.ready || args.expectedConnectionGeneration !== current.connectionGeneration)
               throw new Error("Voice is not ready.");
+            // As in native, a replay of a thread and turn already playing or queued is a successful no-op.
+            const identity = JSON.stringify([args.threadId, args.turnId]);
+            if (current.queue.count === 0) queuedReplays.clear();
+            const playing = current.active?.eventKind === "replay" && current.active.threadId === args.threadId && current.active.id === `replay:${String(args.turnId)}`;
+            if (playing || queuedReplays.has(identity)) return snapshot();
             // A replay queues behind current work; idle voice starts it at once.
-            if (current.active) fixture.publish({ queue: { ...current.queue, count: current.queue.count + 1 } });
-            else fixture.publish({ phase: "speaking", active: { id: `replay:${String(args.turnId)}`, eventKind: "replay", threadId: String(args.threadId),
+            if (current.active) {
+              queuedReplays.add(identity);
+              fixture.publish({ queue: { ...current.queue, count: current.queue.count + 1 } });
+            } else fixture.publish({ phase: "speaking", active: { id: `replay:${String(args.turnId)}`, eventKind: "replay", threadId: String(args.threadId),
               threadTitle: typeof args.threadTitle === "string" ? args.threadTitle : null, recognitionThreadId: null, recognitionThreadTitle: null,
               automatic: false, recording: null },
               actions: { ...current.actions, canStart: false, canStop: true, canSkip: true } });
