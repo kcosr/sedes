@@ -18,7 +18,6 @@ export function SnoozeDialog({
   open,
   onOpenChange,
   onSnooze,
-  onRemindNow,
   returnFocusRef,
 }: {
   open: boolean;
@@ -27,7 +26,6 @@ export function SnoozeDialog({
     snoozedUntil: string;
     wakeReminder?: string;
   }) => Promise<void>;
-  onRemindNow: (wakeReminder: string) => Promise<void>;
   /** Focus target on close; the opening menu row unmounts with its menu. */
   returnFocusRef?: React.RefObject<HTMLElement | null>;
 }): React.JSX.Element {
@@ -36,8 +34,7 @@ export function SnoozeDialog({
   );
   const [wakeReminder, setWakeReminder] = useState("");
   const [error, setError] = useState("");
-  const [pendingAction, setPendingAction] = useState<"snooze" | "remind">();
-  const pending = pendingAction !== undefined;
+  const [pending, setPending] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -50,7 +47,7 @@ export function SnoozeDialog({
       setError("Choose a snooze time in the future.");
       return;
     }
-    setPendingAction("snooze");
+    setPending(true);
     setError("");
     try {
       await onSnooze({
@@ -66,27 +63,7 @@ export function SnoozeDialog({
           : "The thread could not be snoozed.",
       );
     } finally {
-      setPendingAction(undefined);
-    }
-  };
-
-  const remindNow = async () => {
-    const reminder = wakeReminder.trim();
-    if (!reminder) return;
-    setPendingAction("remind");
-    setError("");
-    try {
-      await onRemindNow(reminder);
-      setWakeReminder("");
-      onOpenChange(false);
-    } catch (reason) {
-      setError(
-        reason instanceof Error
-          ? reason.message
-          : "The reminder could not be added.",
-      );
-    } finally {
-      setPendingAction(undefined);
+      setPending(false);
     }
   };
 
@@ -108,8 +85,7 @@ export function SnoozeDialog({
         <DialogHeader>
           <DialogTitle>Snooze this thread</DialogTitle>
           <DialogDescription>
-            Choose when this thread returns to Active, or show its reminder now
-            without snoozing.
+            Choose when this thread returns to Active.
           </DialogDescription>
         </DialogHeader>
         <DialogBody>
@@ -165,7 +141,7 @@ export function SnoozeDialog({
               <>
                 Reminder
                 <span className="font-normal text-(length:--text-meta) text-muted-foreground-2">
-                  Optional when snoozing
+                  Optional
                 </span>
               </>
             }
@@ -183,18 +159,7 @@ export function SnoozeDialog({
           </Field>
           {error && <DialogAlert tone="danger">{error}</DialogAlert>}
         </DialogBody>
-        <DialogFooter
-          start={
-            <Button
-              type="button"
-              variant="outline"
-              disabled={pending || !wakeReminder.trim()}
-              onClick={() => void remindNow()}
-            >
-              {pendingAction === "remind" ? "Adding reminder…" : "Remind now"}
-            </Button>
-          }
-        >
+        <DialogFooter>
           <Button
             type="button"
             variant="outline"
@@ -211,7 +176,7 @@ export function SnoozeDialog({
             disabled={pending}
             onClick={() => void snooze()}
           >
-            {pendingAction === "snooze" ? "Snoozing…" : "Snooze"}
+            {pending ? "Snoozing…" : "Snooze"}
           </Button>
         </DialogFooter>
       </DialogContent>

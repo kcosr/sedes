@@ -3874,9 +3874,6 @@ function FlatRowItemContent(
         open={snoozeOpen}
         onOpenChange={setSnoozeOpen}
         onSnooze={(options) => store.mutateInventory(thread, "snooze", options)}
-        onRemindNow={(wakeReminder) =>
-          store.mutateInventory(thread, "remind", { wakeReminder })
-        }
         returnFocusRef={rowLink}
       />
       {renameError && (
@@ -4950,9 +4947,6 @@ function ThreadRow({
         open={snoozeOpen}
         onOpenChange={setSnoozeOpen}
         onSnooze={(options) => store.mutateInventory(thread, "snooze", options)}
-        onRemindNow={(wakeReminder) =>
-          store.mutateInventory(thread, "remind", { wakeReminder })
-        }
         returnFocusRef={rowLink}
       />
       {renameError && (

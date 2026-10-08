@@ -998,9 +998,6 @@ export function ThreadContextMenu({
           onSnooze={(options) =>
             store.mutateInventory(thread, "snooze", options)
           }
-          onRemindNow={(wakeReminder) =>
-            store.mutateInventory(thread, "remind", { wakeReminder })
-          }
           returnFocusRef={returnFocusRef}
         />
       )}

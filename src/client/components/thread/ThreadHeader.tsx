@@ -460,7 +460,6 @@ export const ThreadHeader = memo(function ThreadHeader({
       | "settle"
       | "unsettle"
       | "snooze"
-      | "remind"
       | "wake"
       | "archive"
       | "restore",
@@ -1207,9 +1206,6 @@ export const ThreadHeader = memo(function ThreadHeader({
         open={active && snoozeOpen}
         onOpenChange={setSnoozeOpen}
         onSnooze={(options) => mutateInventory("snooze", options)}
-        onRemindNow={(wakeReminder) =>
-          mutateInventory("remind", { wakeReminder })
-        }
         returnFocusRef={actionsTrigger}
       />
       <SessionStatsDialog

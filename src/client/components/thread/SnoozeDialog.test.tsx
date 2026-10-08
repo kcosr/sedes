@@ -16,14 +16,12 @@ afterEach(cleanup);
 describe("SnoozeDialog", () => {
   it("validates the deadline and submits a trimmed optional reminder", async () => {
     const onSnooze = vi.fn().mockResolvedValue(undefined);
-    const onRemindNow = vi.fn().mockResolvedValue(undefined);
     const onOpenChange = vi.fn();
     render(
       <SnoozeDialog
         open
         onOpenChange={onOpenChange}
         onSnooze={onSnooze}
-        onRemindNow={onRemindNow}
       />,
     );
 
@@ -48,34 +46,25 @@ describe("SnoozeDialog", () => {
     });
   });
 
-  it("shows a trimmed reminder now without submitting a snooze", async () => {
-    const onSnooze = vi.fn().mockResolvedValue(undefined);
-    const onRemindNow = vi.fn().mockResolvedValue(undefined);
-    const onOpenChange = vi.fn();
+  it("offers no way to show the reminder without snoozing", () => {
     render(
       <SnoozeDialog
         open
-        onOpenChange={onOpenChange}
-        onSnooze={onSnooze}
-        onRemindNow={onRemindNow}
+        onOpenChange={vi.fn()}
+        onSnooze={vi.fn().mockResolvedValue(undefined)}
       />,
     );
-
-    const remindNow = screen.getByRole("button", { name: "Remind now" });
-    expect(remindNow).toBeDisabled();
-    fireEvent.change(screen.getByLabelText(/Reminder/), {
-      target: { value: "  Review the result  " },
-    });
-    fireEvent.click(remindNow);
-
-    await waitFor(() => expect(onRemindNow).toHaveBeenCalledWith("Review the result"));
-    expect(onSnooze).not.toHaveBeenCalled();
-    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(
+      screen.getAllByRole("button").map((button) => button.textContent),
+    ).not.toContain("Remind now");
+    expect(screen.getByRole("dialog")).toHaveAccessibleDescription(
+      "Choose when this thread returns to Active.",
+    );
   });
 
-  it("labels only the pending action and locks dismissal while it runs", async () => {
+  it("labels the pending snooze and locks dismissal while it runs", async () => {
     let finish!: () => void;
-    const onRemindNow = vi.fn(
+    const onSnooze = vi.fn(
       () =>
         new Promise<void>((resolve) => {
           finish = resolve;
@@ -83,19 +72,10 @@ describe("SnoozeDialog", () => {
     );
     const onOpenChange = vi.fn();
     render(
-      <SnoozeDialog
-        open
-        onOpenChange={onOpenChange}
-        onSnooze={vi.fn().mockResolvedValue(undefined)}
-        onRemindNow={onRemindNow}
-      />,
+      <SnoozeDialog open onOpenChange={onOpenChange} onSnooze={onSnooze} />,
     );
-    fireEvent.change(screen.getByLabelText(/Reminder/), {
-      target: { value: "Check the deploy" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Remind now" }));
-    expect(screen.getByRole("button", { name: "Adding reminder…" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: /^Snooze$/ })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: /^Snooze$/ }));
+    expect(screen.getByRole("button", { name: "Snoozing…" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Cancel" })).toBeDisabled();
     fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
     expect(onOpenChange).not.toHaveBeenCalled();
@@ -110,7 +90,6 @@ describe("SnoozeDialog", () => {
         open
         onOpenChange={vi.fn()}
         onSnooze={onSnooze}
-        onRemindNow={vi.fn().mockResolvedValue(undefined)}
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: /^Snooze$/ }));
@@ -131,8 +110,7 @@ describe("SnoozeDialog", () => {
           open={open}
           onOpenChange={vi.fn()}
           onSnooze={vi.fn().mockResolvedValue(undefined)}
-          onRemindNow={vi.fn().mockResolvedValue(undefined)}
-          returnFocusRef={trigger}
+            returnFocusRef={trigger}
         />
       </>
     );
