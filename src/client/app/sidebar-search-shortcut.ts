@@ -9,6 +9,9 @@ export const SIDEBAR_SEARCH_ATTRIBUTE = "data-sidebar-search";
 /** Frames to wait for a revealed sidebar or drawer to render its search. */
 const REVEAL_FRAMES = 10;
 
+/** The terminal emulator consumes every key it receives, so the shortcut is claimed before it. */
+const TERMINAL_EMULATOR_SELECTOR = ".terminal-panel-emulator";
+
 export interface SidebarSearchShortcutControls {
   /** False while the sidebar shows something other than the inventory, such as Settings. */
   readonly isAvailable: () => boolean;
@@ -23,21 +26,39 @@ export function installSidebarSearchShortcut(
   target: Window,
   controls: SidebarSearchShortcutControls,
 ): () => void {
-  const onKeyDown = (event: KeyboardEvent) => {
-    if (event.defaultPrevented || event.isComposing || event.repeat) return;
-    if (!matchesKeyboardShortcut(event, SIDEBAR_SEARCH_FOCUS_COMMAND.defaultBinding)) return;
-    if (!controls.isAvailable()) return;
+  const claim = (event: KeyboardEvent): boolean => {
+    if (event.defaultPrevented || event.isComposing || event.repeat) return false;
+    if (!matchesKeyboardShortcut(event, SIDEBAR_SEARCH_FOCUS_COMMAND.defaultBinding)) return false;
+    if (!controls.isAvailable()) return false;
     // A dialog above the workbench keeps its keys.
     const dialog = event.target instanceof Element
       ? event.target.closest('[role="dialog"], [role="alertdialog"]')
       : null;
-    if (dialog && dialog.id !== controls.drawerId) return;
+    if (dialog && dialog.id !== controls.drawerId) return false;
     event.preventDefault();
     controls.reveal();
     focusSidebarSearch(target);
+    return true;
   };
-  target.addEventListener("keydown", onKeyDown);
-  return () => target.removeEventListener("keydown", onKeyDown);
+  // A focused terminal swallows the chord before it bubbles, so take it there
+  // during capture and keep it from reaching the shell. Elsewhere, bubbling
+  // lets focused editors and widgets handle the key first.
+  const onCapture = (event: KeyboardEvent) => {
+    if (insideTerminal(event.target) && claim(event)) event.stopPropagation();
+  };
+  const onBubble = (event: KeyboardEvent) => {
+    if (!insideTerminal(event.target)) claim(event);
+  };
+  target.addEventListener("keydown", onCapture, { capture: true });
+  target.addEventListener("keydown", onBubble);
+  return () => {
+    target.removeEventListener("keydown", onCapture, { capture: true });
+    target.removeEventListener("keydown", onBubble);
+  };
+}
+
+function insideTerminal(target: EventTarget | null): boolean {
+  return target instanceof Element && target.closest(TERMINAL_EMULATOR_SELECTOR) !== null;
 }
 
 /**

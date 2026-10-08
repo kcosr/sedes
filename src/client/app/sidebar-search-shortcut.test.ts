@@ -100,6 +100,33 @@ describe("installSidebarSearchShortcut", () => {
     expect(input).not.toHaveFocus();
   });
 
+  it("takes the chord from a focused terminal before the emulator consumes it", () => {
+    const input = searchInput(document.body);
+    show(input);
+    const emulator = document.createElement("div");
+    emulator.className = "terminal-panel-emulator";
+    const terminalInput = document.createElement("textarea");
+    emulator.append(terminalInput);
+    document.body.append(emulator);
+    // The emulator handles every key it sees and stops it there.
+    const terminalKeys: string[] = [];
+    terminalInput.addEventListener("keydown", (event) => {
+      terminalKeys.push(`${event.shiftKey ? "Shift+" : ""}${event.key}`);
+      event.preventDefault();
+      event.stopPropagation();
+    });
+
+    expect(press(terminalInput, { key: "F", ctrlKey: true, shiftKey: true }).defaultPrevented).toBe(true);
+    expect(reveal).toHaveBeenCalledOnce();
+    expect(input).toHaveFocus();
+    expect(terminalKeys).toEqual([]);
+
+    // Other chords, plain Ctrl+F included, still reach the shell.
+    press(terminalInput, { key: "f", ctrlKey: true });
+    expect(terminalKeys).toEqual(["f"]);
+    expect(reveal).toHaveBeenCalledOnce();
+  });
+
   it("does nothing while the sidebar shows something other than the inventory", () => {
     available = false;
     const input = searchInput(document.body);
