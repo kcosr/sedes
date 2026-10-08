@@ -22,7 +22,7 @@ import {
   serializeTaskReferences,
   taskReferencesFromContexts,
 } from "../composer-tasks-json.js";
-import { activateSettledThreadForAcceptedInput } from "./accepted-input-inventory.js";
+import { activateSettledThread } from "./settled-thread-activation.js";
 import { ThreadCompletionCallbackRepository } from "./thread-completion-callback-repository.js";
 
 export type CreationAttemptPhase =
@@ -831,7 +831,7 @@ export class ConversationCreationRepository {
         now: input.acceptedAt,
       });
       if (accepted.creationKind === "first_input") {
-        activateSettledThreadForAcceptedInput(
+        activateSettledThread(
           this.database,
           scope,
           applicationThreadId,

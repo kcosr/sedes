@@ -1790,7 +1790,7 @@ describe("backend-normalized application adapters", () => {
     }
   });
 
-  it("projects and atomically acknowledges wake attention and immediate reminders", async () => {
+  it("projects and atomically acknowledges deadline and manual wake attention", async () => {
     const current = fixture();
     try {
       const inventory = new InventoryRepository(current.database);
@@ -1850,30 +1850,53 @@ describe("backend-normalized application adapters", () => {
         750,
       );
       await inventoryService.wakeDue(900);
-      const before = inventory.getInventory(current.scope, current.threadId);
-      const reminded = await inventoryService.transition(
+      expect(
+        (await threadReader.getAuthorized(current.scope, current.threadId))
+          .attention,
+      ).toEqual({
+        wake: {
+          wokeAt: new Date(900).toISOString(),
+          text: { text: "Review the second wake" },
+        },
+      });
+      const snoozed = await inventoryService.transition(
         current.scope,
         current.threadId,
         {
-          expectedRevision: before.inventoryRevision,
-          mutationId: "immediate-reminder",
+          expectedRevision: inventory.getInventory(
+            current.scope,
+            current.threadId,
+          ).inventoryRevision,
+          mutationId: "third-wake-cycle",
           change: {
-            action: "remind",
-            wakeReminderText: "Review this immediately",
+            action: "snooze",
+            snoozedUntil: 2_000,
+            wakeReminderText: "Review after a manual wake",
           },
         },
-        900,
+        920,
       );
-      expect(reminded).toMatchObject({
+      const woken = await inventoryService.transition(
+        current.scope,
+        current.threadId,
+        {
+          expectedRevision: snoozed.inventoryRevision,
+          mutationId: "manual-wake",
+          change: { action: "wake" },
+        },
+        950,
+      );
+      // A manual wake keeps the snooze's reminder as its wake attention.
+      expect(woken).toMatchObject({
         inventoryState: "active",
-        stateChangedAt: before.stateChangedAt,
+        stateChangedAt: 950,
         snoozedAt: null,
         snoozedUntil: null,
-        wokeAt: 901,
+        wokeAt: 950,
         wakeReason: "manual",
         wakeAcknowledgedAt: null,
-        wakeReminderText: "Review this immediately",
-        inventoryRevision: before.inventoryRevision + 1,
+        wakeReminderText: "Review after a manual wake",
+        inventoryRevision: snoozed.inventoryRevision + 1,
       });
       expect(inventory.getNearestSnoozeDeadline()).toBeNull();
       expect(
@@ -1881,8 +1904,8 @@ describe("backend-normalized application adapters", () => {
           .attention,
       ).toEqual({
         wake: {
-          wokeAt: new Date(901).toISOString(),
-          text: { text: "Review this immediately" },
+          wokeAt: new Date(950).toISOString(),
+          text: { text: "Review after a manual wake" },
         },
       });
       const generationBefore = current.database
@@ -1911,13 +1934,13 @@ describe("backend-normalized application adapters", () => {
         mutationId: "stale-wake-acknowledgement",
       });
       expect(inventory.getInventory(current.scope, current.threadId)).toEqual(
-        reminded,
+        woken,
       );
 
       publish.mockClear();
       await attention.dismiss(current.scope, current.threadId, {
         kind: "wake",
-        wokeAt: new Date(901).toISOString(),
+        wokeAt: new Date(950).toISOString(),
         mutationId: "current-wake-acknowledgement",
       });
       expect(publish).toHaveBeenCalledOnce();
@@ -1927,7 +1950,7 @@ describe("backend-normalized application adapters", () => {
       ).toMatchObject({
         wakeAcknowledgedAt: 1_000,
         wakeReminderText: null,
-        inventoryRevision: reminded.inventoryRevision + 1,
+        inventoryRevision: woken.inventoryRevision + 1,
       });
       const generationAfter = current.database
         .prepare(

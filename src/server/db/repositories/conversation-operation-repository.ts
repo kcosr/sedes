@@ -22,7 +22,7 @@ import type { ComposerAttachmentDescriptor } from "../../../shared/protocol/comp
 import type { ComposerTaskReference } from "../../../shared/protocol/tasks.js";
 import type { MaterializedTaskContext } from "../../domain/materialized-task-contexts.js";
 import { ComposerAttachmentRepository } from "./composer-attachment-repository.js";
-import { activateSettledThreadForAcceptedInput } from "./accepted-input-inventory.js";
+import { activateSettledThread } from "./settled-thread-activation.js";
 import {
   assertMaterializedComposerBytes,
   materializeTaskReferences,
@@ -1898,7 +1898,7 @@ export class ConversationOperationRepository {
           )
           .run(now, now, scope.tenantId, scope.principalId, current.threadId);
       }
-      activateSettledThreadForAcceptedInput(
+      activateSettledThread(
         this.database,
         scope,
         current.threadId,
