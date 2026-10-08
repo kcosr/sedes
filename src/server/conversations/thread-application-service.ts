@@ -1137,10 +1137,11 @@ function composeCapabilities(input: {
       true,
     ),
     operation(
+      // Shown as Park; the operation id keeps the stored state's name.
       "settle",
-      "Settle",
+      "Park",
       !archived && !mutationBlocked,
-      "Only an inactive, unarchived thread can be settled.",
+      "Only an inactive, unarchived thread can be parked.",
     ),
     {
       id: "snooze",

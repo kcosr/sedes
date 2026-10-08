@@ -3102,7 +3102,7 @@ export class InventoryRepository {
         ) {
           throw new DomainError(
             "invalid_transition",
-            "Only an Active or Snoozed thread can be settled.",
+            "Only an Active or Snoozed thread can be parked.",
           );
         }
         return {
@@ -3120,7 +3120,7 @@ export class InventoryRepository {
         if (current.inventoryState !== "settled") {
           throw new DomainError(
             "invalid_transition",
-            "Only a Settled thread can be unsettled.",
+            "Only a parked thread can be unparked.",
           );
         }
         return { ...base, inventoryState: "active" };
