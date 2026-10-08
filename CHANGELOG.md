@@ -4,10 +4,10 @@
 
 ### Breaking Changes
 
-- Browser and packaged clients require client protocol 144, which adds
+- Browser and packaged clients require client protocol 145, which adds
   automation schedule details and run turn outcomes to thread summaries and
-  runs, and drops the Remind now inventory action. Upgrade clients together
-  with the server.
+  runs, drops the Remind now inventory action, and adds the turn reply speech
+  read. Upgrade clients together with the server.
   ([#58](https://github.com/kcosr/sedes/pull/58), [#59](https://github.com/kcosr/sedes/pull/59), [#61](https://github.com/kcosr/sedes/pull/61))
 
 - `PATCH /api/threads/:threadId/inventory` no longer accepts the `remind`
@@ -226,6 +226,13 @@
   Migration preserves old Claude totals separately with unknown coverage. (#8)
 
 ### Added
+
+- On Android, a speaker button in each ended turn's footer queues that turn's
+  reply for voice playback, for when you missed it. It replays the reply text
+  completion speech would read, using your current Response text selection, or
+  the whole reply for turns finished before Sedes stored that text. It is
+  speak-only, plays in Manual and Response mode, and appears only while voice is
+  on. `GET /api/threads/:threadId/turns/:turnId/reply-speech` serves the text.
 
 - An **Automations** page lists every automation by status (Needs attention,
   Upcoming, Paused, Suspended) or by project, with search and row actions. Open
