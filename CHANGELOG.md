@@ -4,10 +4,14 @@
 
 ### Breaking Changes
 
-- Browser and packaged clients require client protocol 143, which adds
+- Browser and packaged clients require client protocol 144, which adds
   automation schedule details and run turn outcomes to thread summaries and
-  runs. Upgrade clients together with the server.
-  ([#58](https://github.com/kcosr/sedes/pull/58), [#59](https://github.com/kcosr/sedes/pull/59))
+  runs, and drops the Remind now inventory action. Upgrade clients together
+  with the server.
+  ([#58](https://github.com/kcosr/sedes/pull/58), [#59](https://github.com/kcosr/sedes/pull/59), [#61](https://github.com/kcosr/sedes/pull/61))
+
+- `PATCH /api/threads/:threadId/inventory` no longer accepts the `remind`
+  action. ([#61](https://github.com/kcosr/sedes/pull/61))
 
 - `POST /api/threads/:threadId/automation/runs/:runId/resolve` returns
   `{ run, automation }` instead of the run alone. Update scripts that read it.
@@ -475,6 +479,11 @@
 
 ### Changed
 
+- **Park** replaces Settle: a parked thread leaves the working set until new
+  input returns it to Active, including an automation run, so parking an
+  automated thread hides it until the automation next runs. The API and agent
+  tools still report the state as `settled`. ([#61](https://github.com/kcosr/sedes/pull/61))
+
 - The automation page and editor replace the automation dialog, and
   `/threads/<id>/automation` links open the page.
   ([#58](https://github.com/kcosr/sedes/pull/58))
@@ -844,6 +853,12 @@
   sidecar runtime protocol 14 now also carries the queued-input marker.
 
 ### Fixed
+
+- A failed automation run, or one with an unknown outcome, returns its parked
+  thread to Active. ([#61](https://github.com/kcosr/sedes/pull/61))
+
+- The sidebar's State view lists snoozed and parked automated threads under
+  Snoozed and Parked instead of Scheduled. ([#61](https://github.com/kcosr/sedes/pull/61))
 
 - An automation whose last run's outcome is unknown shows as needing
   attention instead of looking active or paused.
@@ -1316,6 +1331,9 @@
   only the four most recent earlier daemon PIDs. Diagnostics remain opt-in.
 
 ### Removed
+
+- **Remind now** is gone; pin the thread and add a task instead. Snooze keeps
+  its optional reminder. ([#61](https://github.com/kcosr/sedes/pull/61))
 
 - Tasks on Home and Archived, including their corner Tasks button. Tasks now
   appears only beside a thread. To see Global Tasks, open any thread and
