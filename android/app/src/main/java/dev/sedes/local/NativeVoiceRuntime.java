@@ -859,6 +859,8 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         queue.clearAutomatic(reason);
         // A finalized transcript or already submitted message keeps its own admission semantics, as when settings change.
         if (active != null && active.automatic && !speechIndependent(active) && !phase.equals("submitting")) cancelActive(true, reason);
+        // Pending replays survive; resume them once the caller has settled its state (an unauthorized stream disconnects first).
+        if (queue.size() > 0) handler.post(this::drain);
     }
     private void drain() {
         if (active != null || !sessionStarted || !speechReady() || binding == null || blockingDictation()) return;

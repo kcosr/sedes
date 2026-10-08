@@ -2521,6 +2521,26 @@ public class NativeVoiceRuntimeTest {
         }
     }
 
+    @Test public void cancellingAnAutomaticNoticeStartsTheReplayQueuedBehindIt() throws Exception {
+        for (boolean agent : new boolean[] { false, true }) for (String interruption : new String[] { "stream", "policy" }) {
+            try (Fixture f = new Fixture(false, false)) {
+                f.readyClientVoice("response"); f.policy(true, false, "speak");
+                f.receiveReply();
+                SpeechJob notice = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(interruption, notice);
+                f.replay(agent, f.target, "turn-1", "Queued replay");
+                assertEquals(interruption, 1, f.queued());
+                if (interruption.equals("stream")) { f.onOwner(() -> f.invoke("streamFailed", new Class<?>[] { String.class }, "stream_closed")); f.flush(); }
+                else f.policy(true, true);
+                f.flush();
+                assertTrue(interruption, notice.cancelled);
+                SpeechJob replay = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(interruption, replay);
+                assertEquals(interruption, "Queued replay", replay.text);
+                assertEquals(interruption, "replay", f.runtime.snapshot().getJSONObject("active").getString("eventKind"));
+                assertEquals(interruption, 0, f.queued());
+            }
+        }
+    }
+
     @Test public void stoppedServiceClearsPendingReplaysSoNoneSpeaksAfterARestart() throws Exception {
         for (boolean agent : new boolean[] { false, true }) try (Fixture f = new Fixture(false, false)) {
             f.readyClientVoice("response"); f.policy(true, false, "speak");

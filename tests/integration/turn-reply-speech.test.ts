@@ -227,6 +227,10 @@ describe("turn reply speech lookup", () => {
       observe(current, { acceptedAt: 14_000, observedAt: 30_000, turnId: "turn-accepted-later" });
       observe(current, { acceptedAt: 13_000, observedAt: 30_000, turnId: "turn-accepted-earlier" });
       expect(current.completions.latestReplyTurnId(current.scope, current.threadId)).toBe("turn-accepted-later");
+      // A later turn that ended before producing assistant text is skipped.
+      observe(current, { acceptedAt: 15_000, observedAt: 40_000, turnId: "turn-failed-empty", result: "" });
+      observe(current, { acceptedAt: 16_000, observedAt: 50_000, turnId: "turn-failed-blank", result: " \n\t" });
+      expect(current.completions.latestReplyTurnId(current.scope, current.threadId)).toBe("turn-accepted-later");
 
       expect(current.completions.latestReplyTurnId(current.scope, current.otherThreadId)).toBeNull();
       expect(current.completions.latestReplyTurnId(current.foreign, current.threadId)).toBeNull();
@@ -266,6 +270,7 @@ describe("turn reply speech lookup", () => {
         AND application_thread_id = ?
         AND application_turn_id IS NOT NULL
         AND assistant_result_json IS NOT NULL
+        AND trim(coalesce(json_extract(assistant_result_json, '$.text'), ''), char(32, 9, 10, 13)) <> ''
       ORDER BY completion_observed_at DESC, accepted_at DESC, operation_id DESC
       LIMIT 1`;
     const indexes = (current: Fixture) => (current.database
@@ -455,11 +460,14 @@ describe("client.replay_turn over stored replies", () => {
       observe(current, { threadId: current.otherThreadId, acceptedAt: 2_000, turnId: "other-latest", result: "Latest" });
       expect(await tool.replay({ threadId: current.otherThreadId })).toMatchObject({ threadId: current.otherThreadId,
         threadTitle: "Other", turnId: "other-latest", assistantResult: { unclassified: { text: "Latest" } } });
-      // The latest ended turn says nothing: it is reported, never skipped for an earlier one.
+      // A later turn that ended without assistant text (a failure before any reply) is skipped by default…
       observe(current, { threadId: current.otherThreadId, acceptedAt: 3_000, turnId: "other-silent", result: " " });
-      await expect(tool.replay({ threadId: current.otherThreadId })).rejects.toMatchObject({
-        code: "not_found", message: "Sedes stored no reply for that thread's most recent ended turn." });
-      expect(tool.request).toHaveBeenCalledOnce();
+      expect(await tool.replay({ threadId: current.otherThreadId })).toMatchObject({ turnId: "other-latest",
+        assistantResult: { unclassified: { text: "Latest" } } });
+      // …but naming it explicitly still reports that nothing is stored.
+      await expect(tool.replay({ threadId: current.otherThreadId, turnId: "other-silent" })).rejects.toMatchObject({
+        code: "not_found", message: "Sedes stored no reply for that turn; it may not have ended yet." });
+      expect(tool.request).toHaveBeenCalledTimes(2);
     } finally {
       current.database.close();
     }

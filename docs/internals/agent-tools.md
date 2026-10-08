@@ -349,8 +349,9 @@ and passes the normal thread authority checks. `turnId` is an application turn
 ID from `turns[].id` of `thread.messages`; it defaults to the thread's most
 recent ended turn with a stored reply, so `{}` repeats the agent's own
 previous reply. The default is read from stored completion observations only:
-the newest finalized observation by completion time, then acceptance. A turn
-still running has none, so it is never chosen. Execution re-captures the
+the newest finalized observation by completion time, then acceptance, whose
+stored reply has text. A turn still running has none, so it is never chosen,
+and a turn that ended before producing any reply text is skipped. Execution re-captures the
 source turn, rejects that still-running turn when named as invalid input ("The
 turn has not ended."), and reads the reply text the `reply-speech` route
 serves: the stored classification under the principal's phases, else the
@@ -361,8 +362,9 @@ attaches a runtime. It fails as `not_found` when:
   turn; it may not have ended yet.";
 - the thread has no ended turn with a stored reply: "Sedes stored no reply for
   that thread; its turns may not have ended yet."; or
-- the default turn's stored reply is blank: "Sedes stored no reply for that
-  thread's most recent ended turn."
+- the default turn's stored reply is blank after whitespace trimming the
+  lookup does not apply: "Sedes stored no reply for that thread's most recent
+  ended turn."
 
 The reply is fitted beside the command so the command stays within 64 KiB, and
 the command carries the resolved turn ID and the thread's inventory title, or

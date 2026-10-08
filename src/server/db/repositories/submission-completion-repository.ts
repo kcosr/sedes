@@ -544,7 +544,8 @@ export class SubmissionCompletionRepository {
    * The application turn id of a thread's most recently completed turn with a
    * stored reply: the newest finalized observation by completion time, then
    * acceptance. A turn still in progress has no finalized observation, so it
-   * is never returned. Null when the thread has none.
+   * is never returned, and a turn that ended without assistant text (a failure
+   * or interruption before any reply) is skipped. Null when the thread has none.
    */
   latestReplyTurnId(
     scope: RequestScope,
@@ -559,6 +560,7 @@ export class SubmissionCompletionRepository {
             AND application_thread_id = ?
             AND application_turn_id IS NOT NULL
             AND assistant_result_json IS NOT NULL
+            AND trim(coalesce(json_extract(assistant_result_json, '$.text'), ''), char(32, 9, 10, 13)) <> ''
           ORDER BY completion_observed_at DESC, accepted_at DESC, operation_id DESC
           LIMIT 1
         `,

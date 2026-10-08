@@ -312,8 +312,9 @@ A replay joins the queue behind current speech, recording, or saved-recording
 recovery, and plays in Manual and Response mode. Drain skips notification
 eligibility for it, so `onlyVoiceThread`, `ignoreOtherDevices`, notification
 enablement, silence, and policy generation do not apply. Stream loss, a policy
-change, and Manual/Response switches keep pending and active replays; Off and
-connection changes clear them with the rest of the queue. When the foreground
+change, and Manual/Response switches keep pending and active replays, and a pending
+replay starts once a cancelled automatic item has left; Off and connection changes
+clear them with the rest of the queue. When the foreground
 service stops, for example when Android destroys it while the process survives,
 native cancels the active item and clears pending replays without counting
 them as drops. Drain would not filter a replay later, so it would otherwise play
