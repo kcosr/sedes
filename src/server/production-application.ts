@@ -118,6 +118,7 @@ import { ThreadForceResetRepository } from "./db/repositories/thread-force-reset
 import { NotificationRepository } from "./db/repositories/notification-repository.js";
 import { NotificationLifecycleObserver } from "./domain/notification-lifecycle-observer.js";
 import { NotificationService } from "./domain/notification-service.js";
+import { TurnReplySpeechService } from "./domain/turn-reply-speech-service.js";
 import { PrincipalApplicationPreferenceRepository } from "./db/repositories/principal-application-preference-repository.js";
 import { WorkspaceFileRootRepository } from "./db/repositories/workspace-file-root-repository.js";
 import { WorkspaceFileLinkedWorktreeRepository } from "./db/repositories/workspace-file-linked-worktree-repository.js";
@@ -3078,6 +3079,11 @@ export async function startProductionApplication(
       lifecycle,
       inventory,
       turnBookmarks,
+      turnReplySpeech: new TurnReplySpeechService({
+        inventory: inventoryRepository,
+        completions: completion,
+        notifications,
+      }),
       threadGroups,
       threadArchives,
       threadBulkInventory,

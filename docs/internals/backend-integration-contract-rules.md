@@ -2233,6 +2233,21 @@ to final and unclassified on new settings and shares notification revision/gener
 response-inclusion control; no separate master boolean is accepted. Filtering
 precedes response copying: unselected sections must not be read or cloned. An
 empty phase selection produces metadata-only delivery.
+
+Native voice replay reads one ended turn's frozen sections through
+`GET /api/threads/:threadId/turns/:turnId/reply-speech`, which returns
+`{ assistantResult }`. The route derives tenant and principal scope, returns
+404 for an unknown or wrong-scope thread, sends `Cache-Control: no-store`, and
+never attaches a runtime or consumes a notification event. Among a turn's
+observations, including steers, the latest accepted one with a classification
+wins. The phase selection and 64 KiB fit are the ones a `turn.completed` payload
+uses, through the shared `selectAssistantResult`; never copy them. An empty
+phase selection returns an empty object. `null` means no stored classification,
+including for an unknown turn ID. Notification enablement, delivery, and
+silence do not apply. The read is application-owned and identical for every
+backend: it needs no provider code and returns whatever sections that
+backend's completion classification froze.
+
 Notification event consumption is deduplicated per principal and normalized
 thread/turn, separately from UI attention acknowledgment. Wake hooks consume
 committed snooze deadline transitions; automation-start hooks require actual

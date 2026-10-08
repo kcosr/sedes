@@ -5,6 +5,7 @@ import { UsageService } from "../../src/server/usage/usage-service.js";
 import { ScopedThreadEventHubRegistry } from "../../src/server/events/thread-runtime-coordinator.js";
 import { NotificationRepository } from "../../src/server/db/repositories/notification-repository.js";
 import { NotificationService } from "../../src/server/domain/notification-service.js";
+import { TurnReplySpeechService } from "../../src/server/domain/turn-reply-speech-service.js";
 import { QuestionRequestService } from "../../src/server/domain/question-request-service.js";
 import { QuestionRequestRepository } from "../../src/server/db/repositories/question-request-repository.js";
 import { QueuedInputRepository } from "../../src/server/db/repositories/queued-input-repository.js";
@@ -1251,6 +1252,9 @@ async function fixture(
     onOpened: () => undefined,
   });
   const clientControls = new ClientControlService();
+  const notifications = new NotificationService({
+    repository: new NotificationRepository(database),
+  });
   const app = createNormalizedApp({
     clientControls,
     ...(options.terminals ? { terminals: options.terminals } : {}),
@@ -1356,8 +1360,11 @@ async function fixture(
     threadTemplates: {} as never,
     applicationSnapshots,
     threadGroups,
-    notifications: new NotificationService({
-      repository: new NotificationRepository(database),
+    notifications,
+    turnReplySpeech: new TurnReplySpeechService({
+      inventory: repository,
+      completions: new SubmissionCompletionRepository(database),
+      notifications,
     }),
     principalPreferences: new PrincipalApplicationPreferenceService({
       repository: new PrincipalApplicationPreferenceRepository(database),
@@ -1761,6 +1768,60 @@ describe("normalized HTTP application contract", () => {
       await current.mutate(request(current.app).post(`/api/threads/00000000-0000-4000-8000-000000000099/usage/turn-availability`)).send({turnIds:["known-turn"]}).expect(404);
       expect(current.runtimeEstablishmentCaptures).not.toHaveBeenCalled();
     } finally {await current.close();}
+  });
+
+  it("reads a turn's reply speech by server-derived scope and the principal's current phases", async () => {
+    const current = await fixture();
+    try {
+      const workspace = await current.mutate(request(current.app).post("/api/workspaces/open"))
+        .send({ environmentId: current.environmentId, path: current.workspacePath, project: { kind: "new", name: "workspace" } })
+        .expect(201);
+      const threadId = (await current.mutate(request(current.app).post("/api/threads"))
+        .send({ workspaceId: workspace.body.id, configuration: { kind: "custom", targetId: current.profile.id },
+          executionWorkspace: { kind: "direct" }, title: "Reply speech" })
+        .expect(201)).body.threadId as string;
+      current.bindThread(threadId);
+      const completions = new SubmissionCompletionRepository(current.database);
+      const observe = (acceptedAt: number, turnId: string, final: string | null) => {
+        const operationId = randomUUID();
+        completions.recordAccepted(current.owner, threadId, { operationId, acceptedAt, backendCorrelation: operationId });
+        completions.observeCompletion(current.owner, threadId, operationId, {
+          completionIdentity: `completion-${operationId}`, observedAt: acceptedAt, createAttention: false,
+          finalized: { applicationTurnId: turnId, outcome: "completed", result: { text: "Whole reply" },
+            classifiedResult: final === null ? null : { provisional: { text: "Looking." }, final: { text: final }, unclassified: null } },
+        });
+      };
+      // A steer gives one turn two classified observations; the later accepted one is read.
+      observe(1_000, "turn-steered", "Before the steer.");
+      observe(2_000, "turn-steered", "After the steer.");
+      observe(3_000, "turn-legacy", null);
+      const read = (turnId: string, targetThreadId = threadId) => current
+        .withHost(request(current.app).get(`/api/threads/${targetThreadId}/turns/${turnId}/reply-speech`));
+
+      const fresh = await read("turn-steered").expect(200).expect("Cache-Control", "no-store");
+      expect(fresh.body).toEqual({ assistantResult: { final: { text: "After the steer." }, unclassified: null } });
+      const { silenced: _silenced, revision, ...settings } = (await current
+        .withHost(request(current.app).get("/api/application/notifications")).expect(200)).body;
+      await current.mutate(request(current.app).put("/api/application/notifications"))
+        .send({ ...settings, assistantResultPhases: ["provisional", "final"], expectedRevision: revision })
+        .expect(200);
+      expect((await read("turn-steered").expect(200)).body)
+        .toEqual({ assistantResult: { provisional: { text: "Looking." }, final: { text: "After the steer." } } });
+      expect((await read("turn-legacy").expect(200)).body).toEqual({ assistantResult: null });
+      expect((await read("turn-missing").expect(200).expect("Cache-Control", "no-store")).body)
+        .toEqual({ assistantResult: null });
+
+      await read("turn-steered").set("X-Test-Foreign-Principal", "yes").expect(404)
+        .expect(({ body }) => expect(body.error.code).toBe("not_found"));
+      await read("turn-steered", randomUUID()).expect(404);
+      await read("not-a-thread", "not-a-thread").expect(400);
+      await read("t".repeat(161)).expect(400);
+      expect((await read("t".repeat(160)).expect(200)).body).toEqual({ assistantResult: null });
+      expect(current.runtimeEstablishmentCaptures).not.toHaveBeenCalled();
+      expect(current.operationCalls).toHaveLength(0);
+    } finally {
+      current.close();
+    }
   });
 
   it("aggregates principal usage analytics with labels from the real schema", async () => {

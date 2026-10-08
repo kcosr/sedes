@@ -1,6 +1,5 @@
 import type { ClassifiedAssistantResult } from "../../shared/protocol/completion-result.js";
 import { createHash, randomUUID } from "node:crypto";
-import type { BoundedText } from "../../shared/protocol/payload.js";
 import {
   testNotificationRequestSchema,
   updateNotificationSettingsRequestSchema,
@@ -8,7 +7,6 @@ import {
   type VoiceAction,
   type VoiceRecognitionTarget,
   type NotificationEventPayload,
-  type NotificationAssistantResultPhase,
   type NotificationPayload,
   type NotificationSettings,
   type NotificationTestResult,
@@ -18,11 +16,15 @@ import {
 import type { NotificationDispatchSettings, NotificationRepository } from "../db/repositories/notification-repository.js";
 import type { RequestScope } from "../identity/identity-provider.js";
 import { executeNotificationScript } from "../runtime/notification-script-executor.js";
+import {
+  fitBoundedText,
+  fitsNotificationBudget,
+  selectAssistantResult,
+} from "./assistant-result-selection.js";
 import { DomainError } from "./errors.js";
 
 const MAX_CONCURRENT = 4;
 const MAX_PENDING = 64;
-const MAX_PAYLOAD_BYTES = 65_536;
 type Pending = {
   readonly scope: RequestScope;
   readonly payload: NotificationPayload;
@@ -329,9 +331,6 @@ export class NotificationService {
   }
 }
 
-const fitsPayload = (payload: NotificationPayload) =>
-  Buffer.byteLength(JSON.stringify(payload), "utf8") <= MAX_PAYLOAD_BYTES;
-
 /** Event metadata is bounded independently of any source transcript size; only progress text shortens. */
 function notificationPayload(
   event: NotificationEventPayload,
@@ -343,9 +342,9 @@ function notificationPayload(
     schemaVersion: 4,
     notificationId: randomUUID(),
   };
-  if (!fitsPayload(payload)) {
+  if (!fitsNotificationBudget(payload)) {
     const progress = payload.progress;
-    if (!progress?.text || !fitText(progress, () => fitsPayload(payload), (text) => {
+    if (!progress?.text || !fitBoundedText(progress, () => fitsNotificationBudget(payload), (text) => {
       payload = { ...payload, progress: { itemId: progress.itemId, ...text } };
     })) return undefined;
   }
@@ -354,67 +353,13 @@ function notificationPayload(
     settings.assistantResultPhases.length > 0 &&
     assistantResult !== undefined
   ) {
-    payload = withAssistantResult(
-      payload,
+    // The result shares the payload budget; with no room the metadata is sent alone.
+    const selected = selectAssistantResult(
       assistantResult,
       settings.assistantResultPhases,
+      payload,
     );
+    if (selected) payload = { ...payload, assistantResult: selected };
   }
   return payload;
-}
-
-/** Keep the longest code-point prefix that fits, marking byte-limit truncation; false if even empty text cannot. */
-function fitText(
-  original: BoundedText,
-  fits: () => boolean,
-  assign: (text: BoundedText) => void,
-): boolean {
-  const points = Array.from(original.text);
-  const candidate = (count: number): BoundedText => {
-    const text = points.slice(0, count).join("") + (count > 0 ? "…" : "");
-    return { text, truncation: {
-      ...original.truncation,
-      truncated: true,
-      retainedBytes: Buffer.byteLength(text, "utf8"),
-      reason: "byte_limit",
-    } };
-  };
-  let best = candidate(0);
-  assign(best);
-  if (!fits()) return false;
-  let low = 1;
-  let high = Math.max(0, points.length - 1);
-  while (low <= high) {
-    const middle = Math.floor((low + high) / 2);
-    const next = candidate(middle);
-    assign(next);
-    if (fits()) { best = next; low = middle + 1; }
-    else high = middle - 1;
-  }
-  assign(best);
-  return true;
-}
-
-/** Fit escaped JSON while preserving final text ahead of provisional/unknown text. */
-function withAssistantResult(
-  metadata: NotificationPayload,
-  result: ClassifiedAssistantResult,
-  selectedPhases: readonly NotificationAssistantResultPhase[],
-): NotificationPayload {
-  const sections: Partial<ClassifiedAssistantResult> = {};
-  // Select before reading or cloning: omitted response phases need no work.
-  for (const phase of ["provisional", "final", "unclassified"] as const) {
-    if (selectedPhases.includes(phase)) {
-      sections[phase] = structuredClone(result[phase]);
-    }
-  }
-  const payload = { ...metadata, assistantResult: sections };
-  const fits = () => fitsPayload(payload);
-  if (fits()) return payload;
-  for (const phase of ["unclassified", "provisional", "final"] as const) {
-    const original = sections[phase];
-    if (original == null || original.text.length === 0) continue;
-    if (fitText(original, fits, (text) => { sections[phase] = text; })) return payload;
-  }
-  return fits() ? payload : metadata;
 }
