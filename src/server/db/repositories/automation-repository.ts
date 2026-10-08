@@ -15,6 +15,7 @@ import type {
 } from "../../domain/automation-models.js";
 import { DomainError } from "../../domain/errors.js";
 import type { RequestScope } from "../../identity/identity-provider.js";
+import { activateSettledThread } from "./settled-thread-activation.js";
 
 const definitionColumns = `
   tenant_id AS tenantId,
@@ -1422,6 +1423,22 @@ export class AutomationRepository {
         throw new DomainError(
           "conflict",
           "The automation run changed in another operation.",
+        );
+      }
+      // A failed or uncertain run returns a parked (stored as settled) anchor
+      // to Active, as accepted input does, so a parked thread cannot hide its
+      // own failure. Clone runs return the anchor too. Resolving an uncertain
+      // run records the user's decision, not a new failure; that uncertainty
+      // already returned the anchor, and a later Park stays authoritative.
+      if (
+        input.state === "uncertain" ||
+        (input.state === "failed" && current.state !== "uncertain")
+      ) {
+        activateSettledThread(
+          this.database,
+          scope,
+          current.anchorThreadId,
+          input.now,
         );
       }
       if (input.completeDefinition) {

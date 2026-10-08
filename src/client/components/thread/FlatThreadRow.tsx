@@ -79,7 +79,7 @@ export type FlatRowGlyphKind =
   | "automation-sending"
   | "automation-paused"
   | "automation"
-  | "settled"
+  | "parked"
   | "disconnected"
   | "idle";
 
@@ -129,7 +129,7 @@ export function flatRowGlyphKind(
   if (automation) {
     return AUTOMATION_GLYPH_KINDS[automationIdentityGlyph(automation)];
   }
-  if (thread.inventoryState === "settled") return "settled";
+  if (thread.inventoryState === "settled") return "parked";
   if (thread.runState === "disconnected") return "disconnected";
   return "idle";
 }
@@ -207,7 +207,7 @@ export function flatRowGlyphIcon(kind: FlatRowGlyphKind): React.ReactNode {
       return <AutomationGlyph glyph="pause" />;
     case "automation":
       return <AutomationGlyph glyph="repeat" />;
-    case "settled":
+    case "parked":
       return <Check size={14} strokeWidth={2.2} />;
     case "disconnected":
       return <span className="flat-row-idle-dot flat-row-idle-dot-hollow" />;
@@ -301,15 +301,15 @@ interface RowBadge {
 
 function buildBadges(
   thread: NormalizedApplicationThreadSummary,
-  settled: boolean,
+  parked: boolean,
   automation: AutomationHealth | undefined,
 ): RowBadge[] {
   const badges: RowBadge[] = [];
-  // Settled recession: additive status badges are suppressed. Durable fork,
+  // Parked recession: additive status badges are suppressed. Durable fork,
   // task, and stash presence render separately in the row indicator group,
-  // and the wake indicator lives there too, surviving settled until it is
+  // and the wake indicator lives there too, surviving parking until it is
   // acknowledged.
-  if (!settled) {
+  if (!parked) {
     const automationFailed =
       thread.attention.automationContext === "failed" ||
       automation?.kind === "failed";
@@ -444,7 +444,7 @@ export function FlatThreadRow({
   readonly selectAriaExpanded?: boolean;
   readonly selectAriaControls?: string;
 }): React.JSX.Element {
-  const settled = thread.inventoryState === "settled";
+  const parked = thread.inventoryState === "settled";
   const unseen = thread.attention.unseenCompletion;
   const title = thread.title.text || "Untitled thread";
   const glyphKind = flatRowGlyphKind(thread, backgroundWorkCurrent);
@@ -454,13 +454,13 @@ export function FlatThreadRow({
   const time = flatRowTime(thread, futureTimes, now);
   const context = density === "card" ? flatRowContext(thread, now) : undefined;
 
-  const badges = buildBadges(thread, settled, automationHealth(thread, now));
+  const badges = buildBadges(thread, parked, automationHealth(thread, now));
 
   const rootClass = [
     "flat-row",
     density === "card" ? "flat-row-card" : "flat-row-compact",
     selected ? "flat-row-selected" : "",
-    settled ? "flat-row-settled" : "",
+    parked ? "flat-row-parked" : "",
     unseen ? "flat-row-unseen" : "",
     density === "card" && groupLabel ? "flat-row-card-has-group" : "",
   ]
@@ -604,7 +604,7 @@ export function FlatThreadRow({
 
   // Pending wake attention is a row indicator, not a status badge: it packs
   // into the trailing icon list like fork/task/stash and stays visible while
-  // the thread is settled until the wake is acknowledged.
+  // the thread is parked until the wake is acknowledged.
   const wakeIndicator = thread.attention.wake ? (
     <span
       className="flat-row-indicator flat-row-wake-indicator"

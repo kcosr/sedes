@@ -249,13 +249,13 @@
   font-weight: 500;
 }
 
-/* Settled recession: muted title and project; additive status badges are
+/* Parked recession: muted title and project; additive status badges are
    suppressed in the component while durable row indicators remain. */
-.flat-row-settled .flat-row-title {
+.flat-row-parked .flat-row-title {
   color: var(--muted-foreground);
 }
 
-.flat-row-settled .flat-row-project {
+.flat-row-parked .flat-row-project {
   opacity: 0.55;
 }
 
@@ -316,7 +316,7 @@
 }
 
 /* Pending wake is warning attention in the trailing icon list; it survives
-   settled suppression until acknowledged. */
+   parked suppression until acknowledged. */
 .flat-row-indicator[data-indicator="wake"] {
   color: var(--warning);
 }
@@ -387,7 +387,7 @@
 }
 
 /* Hover and keyboard-visible focus only. Plain :focus-within would stick
-   after a mouse click selects the row link, leaving settle/archive icons
+   after a mouse click selects the row link, leaving park/archive icons
    visible once the pointer leaves. */
 .flat-row:hover .flat-row-actions,
 .flat-row:has(:focus-visible) .flat-row-actions {

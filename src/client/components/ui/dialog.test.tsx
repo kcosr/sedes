@@ -193,7 +193,7 @@ describe("DialogContent initial focus", () => {
 
   it("focuses the primary action when there is no field", async () => {
     renderDialog(
-      <DialogFooter start={<Button variant="ghost">Remind now</Button>}>
+      <DialogFooter start={<Button variant="ghost">Reset</Button>}>
         <Button variant="outline">Cancel</Button>
         <Button>Snooze</Button>
       </DialogFooter>,
@@ -369,7 +369,7 @@ describe("Dialog slots", () => {
             <DialogDescription>Hide it until a time you choose.</DialogDescription>
           </DialogHeader>
           <DialogBody>Body</DialogBody>
-          <DialogFooter start={<Button variant="ghost">Remind now</Button>}>
+          <DialogFooter start={<Button variant="ghost">Reset</Button>}>
             <Button variant="outline">Cancel</Button>
             <Button>Snooze</Button>
           </DialogFooter>
@@ -383,7 +383,7 @@ describe("Dialog slots", () => {
     expect(footer).toHaveAttribute("data-slot", "dialog-footer");
     expect(footer.firstElementChild).toHaveAttribute("data-slot", "dialog-footer-start");
     expect([...footer.querySelectorAll("button")].map((button) => button.textContent)).toEqual([
-      "Remind now",
+      "Reset",
       "Cancel",
       "Snooze",
     ]);

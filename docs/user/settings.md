@@ -343,7 +343,7 @@ before the turn finishes, from Codex, Pi, or Claude. A turn event
 requires an authoritative terminal outcome; a pause in output or a disconnected
 backend does not count. Snooze wake means its deadline was reached. A completion
 that wakes a snoozed thread produces the selected turn event, not an additional
-wake notification. Manual wake and Remind now do not emit notifications.
+wake notification. Manual wake does not emit a notification.
 Automation started means the agent input was accepted after any pre-check;
 becoming due, waiting in the queue, and a pre-check skipping a run do not count.
 Automation failed before starting covers definitive failures before successful

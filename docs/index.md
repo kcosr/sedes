@@ -24,7 +24,7 @@ from top to bottom.
 | --- | --- |
 | Project, location, environment, target, Agent, template, thread | [Core concepts](user/concepts.md) |
 | Drafts, Send, Steer, Queue, Stop, stashes, search, bookmarks, forks, recovery | [Conversations](user/conversations.md) |
-| Groups, pins, sidebar views, snooze, settle, archive, prompts, Agents, templates | [Organize and reuse work](user/organize-work.md) |
+| Groups, pins, sidebar views, snooze, park, archive, prompts, Agents, templates | [Organize and reuse work](user/organize-work.md) |
 | Files, Git Compare, context excerpts, links, attachments, output images | [Files and context](user/files-and-context.md) |
 | Local and Sidecar SSH shells, panels, control transfer, and retained output | [Terminal panes](user/terminals.md) |
 | Tasks and scheduled or manual automations | [Tasks and automations](user/tasks-and-automations.md) |

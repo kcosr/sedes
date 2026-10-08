@@ -317,13 +317,13 @@ export class ApplicationClientStore {
     return this.api.reopenWorkspace(workspaceId);
   }
 
+  /** Wire action names: `settle` parks a thread and `unsettle` unparks it. */
   async mutateInventory(
     thread: Pick<NormalizedApplicationThreadSummary, "id" | "inventoryRevision">,
     action:
       | "settle"
       | "unsettle"
       | "snooze"
-      | "remind"
       | "wake"
       | "archive"
       | "restore",
@@ -345,9 +345,6 @@ export class ApplicationClientStore {
     if (action === "snooze" && !options?.snoozedUntil) {
       throw new Error("A snooze deadline is required.");
     }
-    if (action === "remind" && !options?.wakeReminder?.trim()) {
-      throw new Error("Reminder text is required.");
-    }
     if (
       (action === "archive" || action === "settle") &&
       options?.expectedStashedPromptCount === undefined
@@ -360,11 +357,9 @@ export class ApplicationClientStore {
       action,
       expectedRevision: thread.inventoryRevision,
       mutationId: crypto.randomUUID(),
-      ...(action === "snooze" || action === "remind"
+      ...(action === "snooze"
         ? {
-            ...(action === "snooze"
-              ? { snoozedUntil: options!.snoozedUntil! }
-              : {}),
+            snoozedUntil: options!.snoozedUntil!,
             ...(options!.wakeReminder?.trim()
               ? { wakeReminder: options!.wakeReminder!.trim() }
               : {}),

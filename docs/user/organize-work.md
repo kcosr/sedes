@@ -17,15 +17,20 @@ Open **View options** and choose one layout:
 | --- | --- |
 | **Projects** | Browsing by project, with optional fork-family nesting |
 | **Timeline** | Seeing recent activity and future snooze or automation deadlines |
-| **State** | Separating attention, running, scheduled, idle, snoozed, and settled work |
+| **State** | Separating attention, running, scheduled, idle, snoozed, and parked work |
 | **Flat list** | A compact working set without time or state headings |
 
 Each view remembers its own sort. Timeline, State, and Flat list also remember
 their own density, detail, and **Pinned only** choices. Visibility controls for
-draft, snoozed, and settled threads apply across views. Collapsed sections,
+draft, snoozed, and parked threads apply across views. Collapsed sections,
 projects and fork families are saved locally on this client and restored
 when you reopen the sidebar or reload the app. Explicitly collapsed projects
 stay collapsed even when they contain the current thread.
+
+State puts each thread in the first group that applies: **Needs attention**,
+**Running**, **Snoozed**, **Parked**, **Scheduled**, then **Idle**. A snoozed
+or parked thread with an automation therefore stays under Snoozed or Parked
+rather than Scheduled.
 
 Large groups initially show a bounded recent set, with an expander for older
 rows. An active search shows all matches, and the selected thread remains
@@ -217,13 +222,13 @@ conversation; sidebar search and transcript search serve different purposes.
 ## Pin important threads
 
 Pin or unpin a thread with its row action or context menu. Pinning is independent
-of Active, Snoozed, Settled, and Archived state.
+of Active, Snoozed, Parked, and Archived state.
 
 - Timeline, State, and Flat list extract matching pinned threads into a
   collapsible **Pinned** section, without duplicating them elsewhere.
 - Projects keeps its workspace tree and shows the pin on the ordinary row.
 - **Pinned only** limits the selected projection to pinned threads.
-- A pin survives snooze, settle, wake, archive, and restore.
+- A pin survives snooze, park, wake, archive, and restore.
 
 Pin state follows you across clients. The selected view, Pinned-only setting,
 and whether the Pinned section is expanded are local browser preferences.
@@ -251,7 +256,7 @@ delete the selected Group. Deleting a populated Group requires confirmation
 and leaves its threads ungrouped; it does not delete or archive them. Empty
 Groups remain available until explicitly deleted.
 
-Group membership survives snooze, settle, and archive. Card-density rows show
+Group membership survives snooze, park, and archive. Card-density rows show
 the Group as a quick-filter badge; compact rows omit the badge.
 
 ## Stack related rows
@@ -274,7 +279,7 @@ thread.
 
 The action location determines the action scope:
 
-- **Settle**, **Unsettle**, and **Archive** on the stack face, its context menu,
+- **Park**, **Unpark**, and **Archive** on the stack face, its context menu,
   or the mobile roster header apply to the stack.
 - Actions on a roster member apply only to that thread. Pin, Snooze, Rename,
   Fork, and other thread-specific actions are available there rather than on
@@ -282,8 +287,8 @@ The action location determines the action scope:
 
 Every stack action requires confirmation. The preview states how many visible
 members the stack contains, how many will change, and whether Tasks, stashes,
-or active work need attention. A mixed stack can offer both Settle and
-Unsettle; members already in the requested state remain unchanged.
+or active work need attention. A mixed stack can offer both Park and Unpark;
+members already in the requested state remain unchanged.
 
 The confirmed target is exactly the roster visible when confirmation begins,
 after Scope, search, visibility, organization, and sorting have been applied.
@@ -306,11 +311,8 @@ it appears in Snoozed or Upcoming.
 
 Choose a local **Wake date and time**, or use **1 hour**, **Tomorrow**, or
 **Next week**. You may add a reminder of up to 1,000 characters; it appears when
-the thread wakes so the reason for the follow-up is not lost.
-
-To keep the thread Active and show that same durable, dismissible reminder
-immediately, enter the reminder and choose **Remind now**. This does not briefly
-move the thread through Snoozed or schedule a deadline.
+the thread wakes so the reason for the follow-up is not lost. To keep a thread
+in view without a deadline, pin it; to keep a note about it, add a Task.
 
 A snoozed thread wakes when its deadline arrives or when qualifying new runtime
 activity requires attention. The wake remains visible until acknowledged.
@@ -320,20 +322,24 @@ Snooze is organization, not a provider timer or pause. It does not stop an
 active provider turn. Sedes prevents unsafe transitions, such as snoozing after
 an automation run has begun dispatching.
 
-## Settle quiet work
+## Park quiet work
 
-Use **Settle** when work is complete or quiet enough to move below the main
-working set but should remain readily accessible.
+Use **Park** when a thread can leave the working set until it has new input,
+but should remain readily accessible. Archive is for finished work. **Unpark**
+returns a parked thread to Active.
 
-- Timeline and Flat list place unpinned settled threads in a bottom **Settled**
+- Timeline and Flat list place unpinned parked threads in a bottom **Parked**
   section.
-- State has its own Settled group.
-- A pinned settled thread remains in Pinned.
-- Projects retains its normal project structure.
+- State has its own Parked group.
+- A pinned parked thread remains in Pinned.
+- Projects shows parked threads on its **Parked** shelf.
 
-Settled is a manual label, not a claim about provider success. Starting new
-manual or automated input automatically returns the thread to Active. Stashes
-remain attached. If open Tasks exist, the settlement preview lists them. Choose
+Parked is a manual label, not a claim about provider success. New manual or
+automated input returns the thread to Active, so a parked thread with an
+automation comes back when a run sends it a prompt or fails; see
+[Park an automated thread](tasks-and-automations.md#park-an-automated-thread).
+Park never pauses an automation; snooze the thread to skip runs. Stashes
+remain attached. If open Tasks exist, the park preview lists them. Choose
 whether to move them to the project or global list, keep them open, or
 **Complete all** while leaving them attached to the thread.
 

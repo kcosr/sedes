@@ -3434,12 +3434,7 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
                   snoozedUntil: Date.parse(body.snoozedUntil),
                   wakeReminderText: body.wakeReminder?.trim() || null,
                 }
-              : body.action === "remind"
-                ? {
-                    action: "remind",
-                    wakeReminderText: body.wakeReminder.trim(),
-                  }
-                : { action: body.action },
+              : { action: body.action },
         });
       }
       response.status(204).end();

@@ -176,6 +176,8 @@ const threadItemSchema = Type.Object(
     lifecycle: Type.String({
       enum: ["active", "snoozed", "settled", "archived"],
       maxLength: 8,
+      description:
+        "Inventory state; settled means parked (stored as settled).",
     }),
     activity: Type.String({
       enum: ["idle", "running", "waiting_for_input"],
@@ -267,6 +269,8 @@ export function createThreadListToolDefinition(
             Type.String({
               enum: ["active", "snoozed", "settled", "archived"],
               maxLength: 8,
+              description:
+                "Inventory state to match; settled selects parked threads (stored as settled).",
             }),
           ),
           lastActivityAfter: Type.Optional(

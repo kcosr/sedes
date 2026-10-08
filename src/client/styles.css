@@ -1325,7 +1325,7 @@ textarea:disabled {
 }
 
 /* Hover and keyboard-visible focus only. Plain :focus-within would stick
-   after a mouse click selects the row link, leaving settle/archive icons
+   after a mouse click selects the row link, leaving park/archive icons
    visible once the pointer leaves. */
 .thread-row:hover .thread-row-actions,
 .thread-row:has(:focus-visible) .thread-row-actions {

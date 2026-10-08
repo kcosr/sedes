@@ -1237,17 +1237,17 @@ describe("ThreadHeader action menu", () => {
     const menu = await openThreadActions();
     const labels = rowLabels(menu);
 
-    const settle = labels.indexOf("Settle");
+    const park = labels.indexOf("Park");
     const snooze = labels.indexOf("Snooze…");
     const create = labels.indexOf("New with same settings");
     const fork = labels.indexOf("Fork");
     const archive = labels.indexOf("Archive");
     const forceReset = labels.indexOf("Force reset…");
-    expect([settle, snooze, create, fork, archive, forceReset]).not.toContain(
+    expect([park, snooze, create, fork, archive, forceReset]).not.toContain(
       -1,
     );
-    expect([settle, snooze, create, fork, archive, forceReset]).toEqual(
-      [...[settle, snooze, create, fork, archive, forceReset]].sort(
+    expect([park, snooze, create, fork, archive, forceReset]).toEqual(
+      [...[park, snooze, create, fork, archive, forceReset]].sort(
         (left, right) => left - right,
       ),
     );
@@ -1373,7 +1373,7 @@ describe("ThreadHeader force reset", () => {
     });
     expect(resetAction).not.toHaveAttribute("data-disabled");
     expect(
-      within(menu).getByRole("menuitem", { name: "Settle" }),
+      within(menu).getByRole("menuitem", { name: "Park" }),
     ).toHaveTextContent("Syncing");
     await userEvent.click(resetAction);
 

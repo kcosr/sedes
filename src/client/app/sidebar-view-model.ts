@@ -36,6 +36,7 @@ export interface SidebarModePreferencesByGroup {
 /** Global across group modes: what data the user cares about, not view shape. */
 export interface SidebarShowFilters {
   readonly snoozed: boolean;
+  /** Show parked threads; saved under the stored inventory state's name. */
   readonly settled: boolean;
   readonly drafts: boolean;
 }
@@ -153,7 +154,7 @@ export function resolveModePreferences<Group extends SidebarGroupBy>(
 
 /**
  * The timestamp that places a thread in recency ordering and time buckets.
- * Inventory transitions (snooze/settle/archive/restore) bump stateChangedAt
+ * Inventory transitions (snooze/park/archive/restore) bump stateChangedAt
  * only, so lastActivityAt alone would strand freshly transitioned threads.
  */
 export function sidebarEffectiveTimestamp(
@@ -169,7 +170,7 @@ export function sidebarEffectiveTimestamp(
 
 /** Output of the flat (time / state / none) projectors. */
 export type SidebarFlatGroupKind =
-  "pinned" | "upcoming" | "time" | "state" | "settled" | "all";
+  "pinned" | "upcoming" | "time" | "state" | "parked" | "all";
 
 export interface SidebarFlatGroup {
   readonly key: string;

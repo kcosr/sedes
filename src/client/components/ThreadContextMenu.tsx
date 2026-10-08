@@ -67,9 +67,9 @@ import {
 import { ExecutionWorkspaceMenu } from "./thread/ExecutionWorkspaceMenu.js";
 import { contextMenuParts } from "./thread/menu-parts.js";
 import {
-  SettleImpactDialog,
-  settleNeedsConfirmation,
-} from "./thread/SettleImpactDialog.js";
+  ParkImpactDialog,
+  parkNeedsConfirmation,
+} from "./thread/ParkImpactDialog.js";
 import { MoveToGroupSubmenu, NewGroupDialog } from "./MoveToGroupMenu.js";
 import {
   configuredPanelPresentation,
@@ -89,6 +89,7 @@ import {
   ContextMenuTrigger,
 } from "@client/components/ui/context-menu";
 
+/** Wire inventory actions: `settle` parks a thread and `unsettle` unparks it. */
 type InventoryContextAction =
   "settle" | "unsettle" | "wake" | "archive" | "restore";
 
@@ -267,8 +268,8 @@ export function ThreadContextMenu({
   )?.projectFolderLabel(thread.workspaceId);
   const [snoozeOpen, setSnoozeOpen] = useState(false);
   const [forceResetOpen, setForceResetOpen] = useState(false);
-  const [settleChoicesOpen, setSettleChoicesOpen] = useState(false);
-  const [settleImpact, setSettleImpact] = useState<ThreadArchiveImpact>();
+  const [parkChoicesOpen, setParkChoicesOpen] = useState(false);
+  const [parkImpact, setParkImpact] = useState<ThreadArchiveImpact>();
   const [menuOpen, setMenuOpen] = useState(false);
   const [workspaceDeleteTarget, setWorkspaceDeleteTarget] =
     useState<IsolatedWorkspace>();
@@ -308,7 +309,7 @@ export function ThreadContextMenu({
     snoozeOpen ||
     archiveChoicesOpen ||
     forceResetOpen ||
-    settleChoicesOpen ||
+    parkChoicesOpen ||
     workspaceDeleteTarget !== undefined;
   useEffect(() => {
     onInteractionOpenChange?.(interactionOpen);
@@ -318,7 +319,7 @@ export function ThreadContextMenu({
   const newGroupDialogMounted = useMountedOnceOpen(newGroupName !== undefined);
   const snoozeDialogMounted = useMountedOnceOpen(snoozeOpen);
   const forceResetDialogMounted = useMountedOnceOpen(forceResetOpen);
-  const settleDialogMounted = useMountedOnceOpen(settleChoicesOpen);
+  const parkDialogMounted = useMountedOnceOpen(parkChoicesOpen);
   const workspaceDeleteDialogMounted = useMountedOnceOpen(
     workspaceDeleteTarget !== undefined,
   );
@@ -382,22 +383,22 @@ export function ThreadContextMenu({
       )
       .finally(() => setPinPending(false));
   };
-  const requestSettle = () => {
+  const requestPark = () => {
     if (pendingAction) return;
     setPendingAction("settle");
     setActionError("");
     void store
       .getThreadArchiveImpact(thread.id)
       .then(async (impact) => {
-        if (!settleNeedsConfirmation(impact)) {
+        if (!parkNeedsConfirmation(impact)) {
           await store.mutateInventory(thread, "settle", {
             expectedStashedPromptCount: 0,
           });
           onAction?.("settle");
           return;
         }
-        setSettleImpact(impact);
-        setSettleChoicesOpen(true);
+        setParkImpact(impact);
+        setParkChoicesOpen(true);
       })
       .catch((error: unknown) =>
         setActionError(
@@ -674,12 +675,12 @@ export function ThreadContextMenu({
       {thread.inventoryState === "settled" ? (
         <ContextMenuItem onSelect={() => mutate("unsettle")}>
           <ArrowUpFromDot aria-hidden="true" />
-          Unsettle
+          Unpark
         </ContextMenuItem>
       ) : (
-        <ContextMenuItem onSelect={() => afterSheet(requestSettle)}>
+        <ContextMenuItem onSelect={() => afterSheet(requestPark)}>
           <ArrowDownToDot aria-hidden="true" />
-          Settle
+          Park
         </ContextMenuItem>
       )}
       {thread.inventoryState === "snoozed" ? (
@@ -979,13 +980,13 @@ export function ThreadContextMenu({
           returnFocusRef={returnFocusRef}
         />
       )}
-      {settleDialogMounted && (
-        <SettleImpactDialog
-          open={settleChoicesOpen}
-          onOpenChange={setSettleChoicesOpen}
-          impact={settleImpact}
+      {parkDialogMounted && (
+        <ParkImpactDialog
+          open={parkChoicesOpen}
+          onOpenChange={setParkChoicesOpen}
+          impact={parkImpact}
           loadImpact={() => store.getThreadArchiveImpact(thread.id)}
-          onSettle={(options) =>
+          onPark={(options) =>
             performMutation("settle", options).then(() => undefined)
           }
           returnFocusRef={returnFocusRef}
@@ -997,9 +998,6 @@ export function ThreadContextMenu({
           onOpenChange={setSnoozeOpen}
           onSnooze={(options) =>
             store.mutateInventory(thread, "snooze", options)
-          }
-          onRemindNow={(wakeReminder) =>
-            store.mutateInventory(thread, "remind", { wakeReminder })
           }
           returnFocusRef={returnFocusRef}
         />

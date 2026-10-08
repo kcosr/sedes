@@ -554,7 +554,7 @@ test.describe.serial("normalized target and mobile navigation", () => {
     );
     await expect(selectedRow.getByTestId("thread-row-archive")).toBeHidden();
     await expect(
-      selectedRow.getByRole("button", { name: /^Settle / }),
+      selectedRow.getByRole("button", { name: /^Park / }),
     ).toBeHidden();
     await expect(selectedRow.locator(".thread-meta")).toBeVisible();
     await expect(selectedRow).toHaveCSS("user-select", "none");

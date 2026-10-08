@@ -971,14 +971,14 @@ describe("ThreadContextMenu content per thread state", () => {
     );
   });
 
-  it("offers pin, rename, settle, snooze, a neutral archive and a destructive force reset for an active thread", async () => {
+  it("offers pin, rename, park, snooze, a neutral archive and a destructive force reset for an active thread", async () => {
     const trigger = renderMenu(makeThread(), makeStore(), {
       onRename: vi.fn(),
     });
     const menu = await openMenu(trigger);
     expect(within(menu).getByText("Pin")).toBeInTheDocument();
     expect(within(menu).getByText("Rename")).toBeInTheDocument();
-    expect(within(menu).getByText("Settle")).toBeInTheDocument();
+    expect(within(menu).getByText("Park")).toBeInTheDocument();
     expect(within(menu).getByText("Snooze…")).toBeInTheDocument();
     const rows = within(menu).getAllByRole("menuitem");
     // Force reset is the only red row, and the last one.
@@ -998,7 +998,7 @@ describe("ThreadContextMenu content per thread state", () => {
     }
     expect(within(menu).queryByText("Automation…")).toBeNull();
     expect(within(menu).queryByText("Wake now")).toBeNull();
-    expect(within(menu).queryByText("Unsettle")).toBeNull();
+    expect(within(menu).queryByText("Unpark")).toBeNull();
     expect(within(menu).queryByText("Restore to Active")).toBeNull();
   });
 
@@ -1025,18 +1025,18 @@ describe("ThreadContextMenu content per thread state", () => {
     const menu = await openMenu(trigger);
     expect(within(menu).getByText("Wake now")).toBeInTheDocument();
     expect(within(menu).queryByText("Snooze…")).toBeNull();
-    expect(within(menu).getByText("Settle")).toBeInTheDocument();
+    expect(within(menu).getByText("Park")).toBeInTheDocument();
     expect(within(menu).getByText("Archive")).toBeInTheDocument();
   });
 
-  it("swaps settle for move-to-active on a settled thread", async () => {
+  it("swaps park for unpark on a parked thread", async () => {
     const trigger = renderMenu(
       makeThread({ inventoryState: "settled" }),
       makeStore(),
     );
     const menu = await openMenu(trigger);
-    expect(within(menu).getByText("Unsettle")).toBeInTheDocument();
-    expect(within(menu).queryByText("Settle")).toBeNull();
+    expect(within(menu).getByText("Unpark")).toBeInTheDocument();
+    expect(within(menu).queryByText("Park")).toBeNull();
   });
 
   it("opens the automation page only when the thread has an automation", async () => {
@@ -1266,7 +1266,7 @@ describe("ThreadContextMenu content per thread state", () => {
       "Pin",
       "Move to group",
       "|",
-      "Settle",
+      "Park",
       "Snooze…",
       "|",
       "New with same settings",
@@ -1816,7 +1816,7 @@ describe("ThreadContextMenu actions", () => {
     );
   });
 
-  it("offers a compact settle action for an active sidebar row", async () => {
+  it("offers a compact park action for an active sidebar row", async () => {
     const thread = makeThread();
     const { state, store } = sidebarFixture(thread);
     render(
@@ -1828,11 +1828,11 @@ describe("ThreadContextMenu actions", () => {
       />,
     );
 
-    const settle = screen.getByRole("button", {
-      name: "Settle Review backend contract",
+    const park = screen.getByRole("button", {
+      name: "Park Review backend contract",
     });
-    expect(settle.querySelector("svg")).not.toBeNull();
-    await userEvent.click(settle);
+    expect(park.querySelector("svg")).not.toBeNull();
+    await userEvent.click(park);
     expect(store.mutateInventory).toHaveBeenCalledWith(thread, "settle", {
       expectedStashedPromptCount: 0,
     });
@@ -1843,7 +1843,7 @@ describe("ThreadContextMenu actions", () => {
     const thread = makeThread();
     const trigger = renderMenu(thread, store);
     let menu = await openMenu(trigger);
-    await userEvent.click(within(menu).getByText("Settle"));
+    await userEvent.click(within(menu).getByText("Park"));
     expect(store.mutateInventory).toHaveBeenCalledWith(thread, "settle", {
       expectedStashedPromptCount: 0,
     });
@@ -1871,7 +1871,7 @@ describe("ThreadContextMenu actions", () => {
     expect(store.archiveThreadFamily).not.toHaveBeenCalled();
   });
 
-  it("prompts for open-task disposition before settling", async () => {
+  it("prompts for open-task disposition before parking", async () => {
     const store = makeStore();
     store.getThreadArchiveImpact.mockResolvedValueOnce({
       descendantCount: 0,
@@ -1886,14 +1886,14 @@ describe("ThreadContextMenu actions", () => {
     const trigger = renderMenu(thread, store);
     const menu = await openMenu(trigger);
 
-    await userEvent.click(within(menu).getByText("Settle"));
+    await userEvent.click(within(menu).getByText("Park"));
     const dialog = await screen.findByRole("dialog", {
-      name: "Settle this thread",
+      name: "Park this thread",
     });
     expect(within(dialog).getByText(/2 open tasks/)).toBeInTheDocument();
     expect(store.mutateInventory).not.toHaveBeenCalledWith(thread, "settle");
     await userEvent.click(
-      within(dialog).getByRole("button", { name: "Settle" }),
+      within(dialog).getByRole("button", { name: "Park" }),
     );
     await waitFor(() =>
       expect(store.mutateInventory).toHaveBeenCalledWith(thread, "settle", {
@@ -1903,7 +1903,7 @@ describe("ThreadContextMenu actions", () => {
     );
   });
 
-  it("requires confirmation before settling a thread with stashed prompts", async () => {
+  it("requires confirmation before parking a thread with stashed prompts", async () => {
     const store = makeStore();
     store.getThreadArchiveImpact.mockResolvedValueOnce({
       descendantCount: 0,
@@ -1917,10 +1917,10 @@ describe("ThreadContextMenu actions", () => {
     const thread = makeThread();
     const menu = await openMenu(renderMenu(thread, store));
 
-    await userEvent.click(within(menu).getByText("Settle"));
+    await userEvent.click(within(menu).getByText("Park"));
 
     const dialog = await screen.findByRole("dialog", {
-      name: "Settle this thread",
+      name: "Park this thread",
     });
     expect(within(dialog).getByText("2 stashed prompts")).toBeVisible();
     expect(
@@ -1929,7 +1929,7 @@ describe("ThreadContextMenu actions", () => {
     expect(store.mutateInventory).not.toHaveBeenCalled();
 
     await userEvent.click(
-      within(dialog).getByRole("button", { name: "Settle" }),
+      within(dialog).getByRole("button", { name: "Park" }),
     );
     expect(store.mutateInventory).toHaveBeenCalledWith(thread, "settle", {
       expectedStashedPromptCount: 2,
@@ -2285,9 +2285,9 @@ describe("ThreadContextMenu actions", () => {
     const trigger = renderMenu(makeThread(), store, { onRename: vi.fn() });
 
     const menu = await openMenu(trigger);
-    await userEvent.click(within(menu).getByText("Settle"));
+    await userEvent.click(within(menu).getByText("Park"));
     const reopened = await openMenu(trigger);
-    await userEvent.click(within(reopened).getByText("Settle"));
+    await userEvent.click(within(reopened).getByText("Park"));
     expect(store.mutateInventory).toHaveBeenCalledTimes(1);
 
     rejectMutation(new Error("Inventory update failed."));
@@ -2898,7 +2898,7 @@ describe("sidebar row archive control", () => {
     );
 
     const quick = screen.getByRole("button", {
-      name: "Unsettle Review backend contract",
+      name: "Unpark Review backend contract",
     });
     const archive = screen.getByRole("button", {
       name: "Archive Review backend contract",

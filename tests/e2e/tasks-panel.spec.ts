@@ -531,7 +531,7 @@ test.describe.serial("Tasks panel", () => {
   });
 });
 
-for (const action of ["Settle", "Archive"] as const) {
+for (const action of ["Park", "Archive"] as const) {
   test(`${action.toLowerCase()} lists tasks and completes them without moving ownership`, async ({ page }, testInfo) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await openTaskWorkspace(page);
@@ -572,7 +572,7 @@ for (const action of ["Settle", "Archive"] as const) {
       expect(completed?.completedAt).toEqual(expect.any(String));
     }
     expect(snapshot.threads.find(({ id }) => id === threadId)?.inventoryState).toBe(
-      action === "Settle" ? "settled" : "archived",
+      action === "Park" ? "settled" : "archived",
     );
   });
 }

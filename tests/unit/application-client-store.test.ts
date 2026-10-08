@@ -185,7 +185,7 @@ describe("ApplicationClientStore lineage", () => {
     });
   });
 
-  it("requires a confirmed stash count before settle or archive mutations", async () => {
+  it("requires a confirmed stash count before park (settle) or archive mutations", async () => {
     const mutateInventory = vi.fn(async () => undefined);
     const api = {
       session: vi.fn(async () => session()),
@@ -204,7 +204,7 @@ describe("ApplicationClientStore lineage", () => {
     expect(mutateInventory).not.toHaveBeenCalled();
   });
 
-  it("sends a trimmed immediate reminder without a snooze deadline", async () => {
+  it("snoozes with a deadline and a trimmed optional reminder", async () => {
     const mutateInventory = vi.fn(async () => undefined);
     const api = {
       session: vi.fn(async () => session()),
@@ -214,23 +214,35 @@ describe("ApplicationClientStore lineage", () => {
     await store.initialize();
     const root = snapshot().threads[0]!;
 
-    await expect(store.mutateInventory(root, "remind")).rejects.toThrow(
-      "Reminder text is required",
+    await expect(store.mutateInventory(root, "snooze")).rejects.toThrow(
+      "A snooze deadline is required",
     );
-    await store.mutateInventory(root, "remind", {
+    await store.mutateInventory(root, "snooze", {
+      snoozedUntil: "2026-10-09T09:00:00.000Z",
       wakeReminder: "  Review this result  ",
     });
+    await store.mutateInventory(root, "snooze", {
+      snoozedUntil: "2026-10-09T09:00:00.000Z",
+      wakeReminder: "   ",
+    });
 
-    expect(mutateInventory).toHaveBeenCalledOnce();
-    expect(mutateInventory).toHaveBeenCalledWith(root.id, {
-      action: "remind",
+    expect(mutateInventory).toHaveBeenCalledTimes(2);
+    expect(mutateInventory).toHaveBeenNthCalledWith(1, root.id, {
+      action: "snooze",
+      snoozedUntil: "2026-10-09T09:00:00.000Z",
       wakeReminder: "Review this result",
+      expectedRevision: root.inventoryRevision,
+      mutationId: expect.any(String),
+    });
+    expect(mutateInventory).toHaveBeenNthCalledWith(2, root.id, {
+      action: "snooze",
+      snoozedUntil: "2026-10-09T09:00:00.000Z",
       expectedRevision: root.inventoryRevision,
       mutationId: expect.any(String),
     });
   });
 
-  it("forwards an explicit open-task disposition when settling", async () => {
+  it("forwards an explicit open-task disposition when parking", async () => {
     const mutateInventory = vi.fn(async () => undefined);
     const api = {
       session: vi.fn(async () => session()),

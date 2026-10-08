@@ -192,9 +192,9 @@ describe("normalized application components", () => {
     expect(screen.getByTestId("project-row")).toHaveTextContent("Sedes");
     expect(screen.getByText("No automations.")).toBeInTheDocument();
     expect(screen.getByText("Nothing snoozed.")).toBeInTheDocument();
-    expect(screen.getByText("Nothing settled.")).toBeInTheDocument();
+    expect(screen.getByText("Nothing parked.")).toBeInTheDocument();
 
-    const settledThread = {
+    const parkedThread = {
       ...thread,
       inventoryState: "settled" as const,
     };
@@ -204,10 +204,10 @@ describe("normalized application components", () => {
           ...state,
           snapshot: {
             ...snapshot,
-            threads: [settledThread],
+            threads: [parkedThread],
             counts: { active: 0, snoozed: 0, settled: 1, archived: 0 },
           },
-          visibleThreads: [settledThread],
+          visibleThreads: [parkedThread],
         }}
         store={store}
         selectedThreadId="thread-1"

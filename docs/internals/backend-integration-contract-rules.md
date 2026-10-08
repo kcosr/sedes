@@ -356,8 +356,8 @@ the complete mutation if any target changes or becomes unavailable. Do not
 reinterpret a browser collection as every member of a persistent Group,
 project, lineage family, or provider-native hierarchy.
 
-Settle, unsettle, archive, and similar inventory operations remain
-application-owned when their meaning is identical across providers. Perform
+Park (`settle`), unpark (`unsettle`), archive, and similar inventory operations
+remain application-owned when their meaning is identical across providers. Perform
 an all-or-nothing principal-scoped database mutation with one replay receipt
 and publish only after commit. External execution-workspace deletion cannot be
 included in that atomic boundary; bulk archive keeps those workspaces. This
@@ -3878,7 +3878,7 @@ and it never reaches a browser or normalized backend contract.
 ### Project and location removal
 
 Removal is principal-owned lifecycle state (`removed_at` on a workspace or a
-project), independent of thread Active/Snoozed/Settled/Archived state and
+project), independent of thread Active/Snoozed/Parked/Archived state and
 environment filesystem grants. Pi, Codex, Claude, Grok and OpenCode share its
 application admission and retirement boundaries; no provider-specific delete
 operation is invoked. Preserve native bindings/history and all
