@@ -1,5 +1,10 @@
 // @vitest-environment jsdom
 vi.mock("./TurnUsageAction.js", () => ({ TurnUsageAction: () => null }));
+const voiceContext = vi.hoisted(() => ({ store: null as NativeVoiceStore | null }));
+vi.mock("../../voice/VoiceProvider.js", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../../voice/VoiceProvider.js")>(),
+  useNativeVoice: () => voiceContext.store,
+}));
 
 import { OperationOverlayHost } from "../../operations/OperationOverlay.js";
 vi.mock("../../operations/thread-readiness.js", () => ({ waitForOperationThreadReady: vi.fn(async () => undefined), setOperationThreadRegistry: vi.fn() }));
@@ -7,6 +12,7 @@ vi.mock("../../operations/thread-readiness.js", () => ({ waitForOperationThreadR
 import { getBlockingOperation } from "../../operations/blocking-operation.js";
 
 import {
+  act,
   cleanup,
   fireEvent,
   isInaccessible,
@@ -16,6 +22,8 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ThreadClientStore } from "../../stores/ThreadClientStore.js";
+import { NativeVoiceStore } from "../../voice/NativeVoiceStore.js";
+import { fakeVoicePlugin, VOICE_CONNECTION, voiceSettings, voiceSnapshot } from "../../voice/native-voice-test-fixture.js";
 import { TurnForkDivider } from "./TurnForkDivider.js";
 
 beforeEach(() => { render(<OperationOverlayHost />); });
@@ -23,6 +31,8 @@ beforeEach(() => { render(<OperationOverlayHost />); });
 afterEach(() => {
   getBlockingOperation()?.dismiss();
   cleanup();
+  voiceContext.store?.dispose();
+  voiceContext.store = null;
   vi.restoreAllMocks();
   window.history.replaceState(null, "", "/");
 });
@@ -561,5 +571,33 @@ describe("TurnForkDivider", () => {
       }),
     ).toBeInTheDocument();
     expect(screen.queryByText("Turn 1")).toBeNull();
+  });
+
+  it("places Play response aloud directly after Copy response on every ended turn with reply text", async () => {
+    const plugin = fakeVoicePlugin();
+    plugin.plugin.setConnection.mockResolvedValue(voiceSnapshot({ ready: true, readiness: "ready", phase: "idle",
+      settings: voiceSettings({ audioMode: "response" }), speech: { ...voiceSnapshot().speech, credentialConfigured: true } }));
+    const voice = new NativeVoiceStore(plugin.asPlugin, VOICE_CONNECTION, vi.fn());
+    await voice.initialize();
+    voiceContext.store = voice;
+    const store = { threadId: "thread-1", forkTurn: vi.fn(), readTurnReplySpeech: vi.fn() } as unknown as ThreadClientStore;
+    const props = { turnNumber: 1, capability, attempt: undefined, connected: true, authoritative: true, store };
+    const buttons = () => screen.getAllByRole("button").map((button) => button.getAttribute("aria-label"));
+    // A live turn completing in place mounts the speaker without changing the footer's hook order.
+    const view = render(<TurnForkDivider {...props} turn={{ ...turn, status: "in_progress" as const }} copyText="Final answer" />);
+    expect(view.container).toBeEmptyDOMElement();
+    view.rerender(<TurnForkDivider {...props} turn={turn} copyText="Final answer" />);
+    expect(buttons()).toEqual(["Copy response", "Play response aloud", expect.stringMatching(/^Fork from here, /u)]);
+    for (const status of ["failed", "interrupted"] as const) {
+      view.rerender(<TurnForkDivider {...props} turn={{ ...turn, status }} copyText="Partial answer" />);
+      expect(buttons()).toEqual(["Copy response", "Play response aloud"]);
+    }
+    view.rerender(<TurnForkDivider {...props} turn={turn} />);
+    expect(buttons()).toEqual([expect.stringMatching(/^Fork from here, /u)]);
+    // Voice Off removes the speaker from the footer instead of greying it out.
+    view.rerender(<TurnForkDivider {...props} turn={turn} copyText="Final answer" />);
+    act(() => plugin.emit("stateChanged", voiceSnapshot({ stateRevision: 2, settings: voiceSettings({ audioMode: "off" }),
+      speech: { ...voiceSnapshot().speech, credentialConfigured: true } })));
+    expect(buttons()).toEqual(["Copy response", expect.stringMatching(/^Fork from here, /u)]);
   });
 });

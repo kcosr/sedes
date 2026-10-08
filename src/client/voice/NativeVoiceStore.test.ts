@@ -354,3 +354,29 @@ describe("native voice state authority", () => {
     store.dispose();
   });
 });
+
+describe("turn reply replay", () => {
+  const reply = { threadId: "thread-1", turnId: "turn-1", assistantResult: { final: { text: "Stored final answer." } } };
+  it("sends the reply with the current connection generation and accepts native's published snapshot", async () => {
+    const { store, plugin } = fixture();
+    await store.initialize();
+    const queued = snapshot({ stateRevision: 4, phase: "speaking", active: { id: "replay", eventKind: "replay", threadId: "thread-1",
+      threadTitle: null, recognitionThreadId: null, recognitionThreadTitle: null, automatic: false, recording: null } });
+    plugin.speakReply.mockResolvedValue(queued);
+    await store.speakReply(reply);
+    expect(plugin.speakReply).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, ...reply });
+    expect(store.getSnapshot()).toMatchObject({ native: queued, pending: false });
+    store.dispose();
+  });
+  it("rejects with native's error and reports it like any voice action", async () => {
+    const { store, plugin } = fixture();
+    await store.initialize();
+    const failure = Object.assign(new Error("Voice is not ready to record yet."), { code: "voice_not_ready" });
+    plugin.speakReply.mockRejectedValue(failure);
+    await expect(store.speakReply(reply)).rejects.toBe(failure);
+    expect(store.getSnapshot()).toMatchObject({ error: "Voice is not ready to record yet.", pending: false });
+    store.dispose();
+    await expect(store.speakReply(reply)).rejects.toThrow("no longer active");
+    expect(plugin.speakReply).toHaveBeenCalledOnce();
+  });
+});

@@ -294,7 +294,7 @@ function cardReadiness(readiness: string): string {
 /** Native `active.eventKind` values that speak; explicit recording ("manual") and unknown kinds get no label. */
 const eventLabels = new Map([["turn.completed", "Response"], ["turn.progress", "Progress"], ["turn.failed", "Turn failed"], ["turn.interrupted", "Interrupted"],
   ["thread.woke", "Snooze wake"], ["automation.started", "Automation"], ["automation.failed", "Automation"], ["approval.requested", "Approval"],
-  ["input.requested", "Input request"], ["question.requested", "Question"]]);
+  ["input.requested", "Input request"], ["question.requested", "Question"], ["replay", "Replay"]]);
 function phaseLabel(phase: string): string {
   return ({ starting: "Starting…", synthesizing: "Preparing speech…", speaking: "Speaking", validating: "Checking thread…", arming: "Preparing microphone…", listening: "Listening", recognizing: "Recognizing…", submitting: "Sending…", cancelling: "Stopping…", recovering: "Checking submission…", recordingRecovery: "Needs attention", error: "Needs attention" } as Record<string, string>)[phase] ?? phase;
 }
