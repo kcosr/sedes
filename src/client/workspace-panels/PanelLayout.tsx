@@ -89,7 +89,6 @@ import {
   type PanelInstance,
   type PanelInstanceId,
   type PanelLayoutTree,
-  type PanelPlacementEdge,
   type SplitNode,
   type TabStackNode,
 } from "./layout-tree.js";
@@ -2041,7 +2040,6 @@ function PanelLayoutReady({
             onStatus={(status) => updateStatus(panel.panelInstanceId, status)}
             onConsumeIntent={(sequence) => store.consumeIntent(panel.panelInstanceId, sequence)}
             onClose={() => closePanel(panel)}
-            onKeyboardMove={(edge) => store.dockPanel(panel.panelInstanceId, edge)}
           />,
           target,
           panel.kind === "files" ? `workspace-files:${workspaceId ?? "none"}` : panel.kind,
@@ -2160,7 +2158,6 @@ function TenantContent({
   onStatus,
   onConsumeIntent,
   onClose,
-  onKeyboardMove,
 }: {
   readonly tenant: WorkspacePanelTenant;
   readonly threadId: string;
@@ -2175,7 +2172,6 @@ function TenantContent({
   readonly onStatus: (status: PanelChromeStatus) => void;
   readonly onConsumeIntent: (sequence: number) => void;
   readonly onClose: () => void;
-  readonly onKeyboardMove: (edge: PanelPlacementEdge) => void;
 }): React.JSX.Element {
   const contextExcerpts = useComposerDraftStaging();
   const [status, setStatus] = useState<PanelChromeStatus>({});
@@ -2222,15 +2218,6 @@ function TenantContent({
       data-tenant-id={tenant.id}
       data-visible={visible ? "true" : "false"}
       tabIndex={-1}
-      onKeyDown={(event) => {
-        if ((event.metaKey || event.ctrlKey) && event.shiftKey) {
-          const edge = arrowEdge(event.key);
-          if (edge) {
-            event.preventDefault();
-            onKeyboardMove(edge);
-          }
-        }
-      }}
     >
       {tenant.render(context)}
     </div>
@@ -2499,14 +2486,6 @@ function withoutMapKey<K, V>(
 
 function tenantIdForKind(kind: "files" | "workpads" | "tasks"): string {
   return kind === "files" ? "workspace-files" : kind;
-}
-
-function arrowEdge(key: string): PanelPlacementEdge | undefined {
-  if (key === "ArrowLeft") return "left";
-  if (key === "ArrowRight") return "right";
-  if (key === "ArrowUp") return "top";
-  if (key === "ArrowDown") return "bottom";
-  return undefined;
 }
 
 function objectStringField(value: unknown, key: string): string | undefined {
