@@ -271,41 +271,52 @@ completion classification filtered by the principal's `assistantResultPhases`. W
 response text as one bounded `unclassified` section. A failed read sends nothing.
 
 The user-initiated `speakReply` bridge method queues one ended turn's reply for
-speech. Its strict keys are `threadId` (1–512 characters), `turnId` (1–160), and
-a required `assistantResult` with the same shape and bounded-text validation as
-a notification's: only `provisional`, `unclassified`, and `final`, each null or
-bounded text. Arguments are validated first. It then requires a started session,
-ready speech configuration and credential, and a bound connection; otherwise,
-including with Audio mode Off, it fails with `voice_not_ready`. Microphone
-permission and notification policy are not required. It returns the published
-snapshot.
+speech. Its strict keys are `threadId` (1–512 characters), `turnId` (1–160), an
+optional `threadTitle`, and a required `assistantResult` with the same shape and
+bounded-text validation as a notification's: only `provisional`, `unclassified`,
+and `final`, each null or bounded text. `threadTitle` is validated like
+`setForegroundContext`'s: absent, null, or a 1–512 character string. Arguments
+are validated first. It then requires a started session, ready speech
+configuration and credential, and a bound connection; otherwise, including with
+Audio mode Off, it fails with `voice_not_ready`, whose message is "Voice is not
+ready yet." Microphone permission and notification policy are not required. It
+returns the published snapshot.
 
 Native speaks the sections in notification order (provisional, unclassified,
 final) with the same per-part `NativeSpeechText` cleanup and truncation notice
 as a completion notice, but never a context line, whatever
 `readNotificationContext` says. Empty prepared text fails with
-`voice_reply_empty`. The bridge carries no title; the active item's title comes
-from the visible foreground thread or the saved default thread when either
-matches, and is otherwise null.
+`voice_reply_empty`. The active item's title, shown on the voice card and the
+media notification, is display-only. It is the WebView's `threadTitle` when that
+is not blank. Otherwise it comes from the visible foreground thread or the saved
+default thread when either matches, and is otherwise null. The title is kept
+with the stored request, so a settings rebuild keeps it.
 
 The replay is a local queue item with no server envelope. Its event, shown as
 `active.eventKind`, is `replay`. Its ID is a fresh UUID that never enters
 notification deduplication. It is not automatic and has no follow-up listen.
 Its identity is the thread and turn ID; a request for a turn already queued or
 playing returns the current snapshot without adding. It counts against the
-64-item and 256 KiB queue limits after normal progress eviction. If it still
-cannot fit, the request fails with `voice_queue_full` rather than dropping
-anything. Queue drop counts report automatic items only.
+64-item and 256 KiB queue limits after normal progress eviction. Before evicting
+anything, native checks whether the replay would fit once every pending progress
+item had yielded. If it would not, the request fails with `voice_queue_full` and
+the queue is left unchanged; no progress is evicted for a refused replay. Queue
+drop counts report automatic items only.
 
 A replay joins the queue behind current speech, recording, or saved-recording
 recovery, and plays in Manual and Response mode. Drain skips notification
 eligibility for it, so `onlyVoiceThread`, `ignoreOtherDevices`, notification
 enablement, silence, and policy generation do not apply. Stream loss, a policy
 change, and Manual/Response switches keep pending and active replays; Off and
-connection changes clear them with the rest of the queue. A settings change
-rebuilds a pending replay from its stored request with the current cleanup
-setting, and the speech text limit chunks it when it starts. Skip ends a replay
-and Stop cancels it; neither listens afterwards. Ending a replay never discards
+connection changes clear them with the rest of the queue. When the foreground
+service stops, for example when Android destroys it while the process survives,
+native cancels the active item and clears pending replays without counting
+them as drops. Drain would not filter a replay later, so it would otherwise play
+whenever the service next started. Pending automatic items stay queued and face
+notification eligibility when drain resumes. A settings change rebuilds a
+pending replay from its stored request with the current cleanup setting, and the
+speech text limit chunks it when it starts. Skip ends a replay and Stop cancels
+it; neither listens afterwards. Ending a replay never discards
 client turn actions, completes a notification ID, or signals reply drain. Like
 any playback, a speech configuration change or focus loss ends it, and an
 explicit Stop still clears pending agent client actions.
