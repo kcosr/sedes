@@ -68,7 +68,7 @@ export async function installVoiceFixture(page: Page): Promise<void> {
           header("NativeVoice", ["setConnection", "getState", "disconnect", "setForegroundContext", "updateSettings", "startManualListen", "setNextRecordingTarget",
             "retargetActiveRecognition", "setKeepListening", "sendRecording", "stopCurrentInteraction", "skipCurrentPlayback", "retryRecordingRecognition",
             "sendRecoveredRecording", "copyRecognizedRecordingText", "readRecognizedRecordingText", "discardRecording", "resumeInput", "discardInput", "listInputDevices",
-            "refreshSpeechCatalog", "openSpeechCredentialDialog"], true),
+            "refreshSpeechCatalog", "openSpeechCredentialDialog", "speakReply"], true),
         ],
         nativeCallback(plugin: string, method: string, args: { eventName: string }, callback: (value: unknown) => void) {
           if (method !== "addListener") throw new Error(`Unexpected callback: ${plugin}.${method}`);
@@ -107,6 +107,14 @@ export async function installVoiceFixture(page: Page): Promise<void> {
               canSetKeepListening: false, canSend: false, canRetarget: false, keepListeningBlockedReason: "not_capturing" } });
             if (method === "retargetActiveRecognition") fixture.publish({ active: { ...current.active,
               recognitionThreadId: String(args.threadId), recognitionThreadTitle: typeof args.threadTitle === "string" ? args.threadTitle : null } });
+          } else if (method === "speakReply") {
+            if (current.settings.audioMode === "off" || !current.ready || args.expectedConnectionGeneration !== current.connectionGeneration)
+              throw new Error("Voice is not ready.");
+            // A replay queues behind current work; idle voice starts it at once.
+            if (current.active) fixture.publish({ queue: { ...current.queue, count: current.queue.count + 1 } });
+            else fixture.publish({ phase: "speaking", active: { id: `replay:${String(args.turnId)}`, eventKind: "replay", threadId: String(args.threadId),
+              threadTitle: null, recognitionThreadId: null, recognitionThreadTitle: null, automatic: false, recording: null },
+              actions: { ...current.actions, canStart: false, canStop: true, canSkip: true } });
           } else if (method === "stopCurrentInteraction") {
             if (args.interactionId !== current.active?.id) throw new Error("The interaction changed.");
             fixture.publish({ phase: "idle", active: null, actions: { ...initial.actions } });
