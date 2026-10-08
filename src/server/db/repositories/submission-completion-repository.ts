@@ -496,6 +496,50 @@ export class SubmissionCompletionRepository {
     }
   }
 
+  /**
+   * The stored whole reply of one application turn: every assistant message
+   * joined and bounded at completion, whether or not it was classified. Like
+   * `latestClassifiedResult`, the latest accepted observation wins. Null when
+   * the turn has none, including turns Sedes never submitted.
+   */
+  latestAssistantResult(
+    scope: RequestScope,
+    applicationThreadId: string,
+    applicationTurnId: string,
+  ): BoundedText | null {
+    const row = this.database
+      .prepare(
+        `
+          SELECT assistant_result_json AS assistantResultJson
+          FROM submission_completion_observations
+          WHERE tenant_id = ? AND owner_principal_id = ?
+            AND application_thread_id = ? AND application_turn_id = ?
+            AND assistant_result_json IS NOT NULL
+          ORDER BY accepted_at DESC, operation_id DESC
+          LIMIT 1
+        `,
+      )
+      .get(
+        scope.tenantId,
+        scope.principalId,
+        applicationThreadId,
+        applicationTurnId,
+      ) as { readonly assistantResultJson: string } | undefined;
+    if (!row) return null;
+    try {
+      return boundedTextSchema.parse(
+        JSON.parse(row.assistantResultJson) as unknown,
+      );
+    } catch (error) {
+      throw new DomainError(
+        "conflict",
+        "The stored completion assistant result is invalid.",
+        false,
+        { cause: error },
+      );
+    }
+  }
+
   hasActiveAcceptedCorrelation(scope: RequestScope, applicationThreadId: string, correlations: readonly string[]): boolean {
     const statement = this.database.prepare(`SELECT 1 FROM submission_completion_observations
       WHERE tenant_id = ? AND owner_principal_id = ? AND application_thread_id = ?

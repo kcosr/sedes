@@ -2241,12 +2241,18 @@ Native voice replay reads one ended turn's frozen sections through
 never attaches a runtime or consumes a notification event. Among a turn's
 observations, including steers, the latest accepted one with a classification
 wins. The phase selection and 64 KiB fit are the ones a `turn.completed` payload
-uses, through the shared `selectAssistantResult`; never copy them. An empty
-phase selection returns an empty object. `null` means no stored classification,
-including for an unknown turn ID. Notification enablement, delivery, and
-silence do not apply. The read is application-owned and identical for every
-backend: it needs no provider code and returns whatever sections that
-backend's completion classification froze.
+uses, through the shared `selectAssistantResult`; never copy them. When the
+selected sections have no non-blank text, including under an empty phase
+selection or for a turn finished before classification existed, the route
+returns the turn's stored whole reply (every assistant message joined and
+bounded at completion, from the latest accepted observation) as
+`{ unclassified }`, fitted the same way. `null` means Sedes
+stored no non-blank reply text for the turn, including an unknown turn ID or a
+turn Sedes did not submit. `client.replay_turn` reads through the same
+`TurnReplySpeechService.select`, fitting beside its command envelope.
+Notification enablement, delivery, and silence do not apply. The read is
+application-owned and identical for every backend: it needs no provider code
+and returns whatever sections that backend's completion froze.
 
 Notification event consumption is deduplicated per principal and normalized
 thread/turn, separately from UI attention acknowledgment. Wake hooks consume

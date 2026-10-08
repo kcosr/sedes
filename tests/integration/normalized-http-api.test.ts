@@ -1807,7 +1807,8 @@ describe("normalized HTTP application contract", () => {
         .expect(200);
       expect((await read("turn-steered").expect(200)).body)
         .toEqual({ assistantResult: { provisional: { text: "Looking." }, final: { text: "After the steer." } } });
-      expect((await read("turn-legacy").expect(200)).body).toEqual({ assistantResult: null });
+      // Without a classification the stored whole reply is read; null means nothing was stored.
+      expect((await read("turn-legacy").expect(200)).body).toEqual({ assistantResult: { unclassified: { text: "Whole reply" } } });
       expect((await read("turn-missing").expect(200).expect("Cache-Control", "no-store")).body)
         .toEqual({ assistantResult: null });
 
