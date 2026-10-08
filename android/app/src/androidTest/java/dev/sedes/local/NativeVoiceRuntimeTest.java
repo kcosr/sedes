@@ -2411,13 +2411,14 @@ public class NativeVoiceRuntimeTest {
     }
 
     @Test public void manualModePlaysAReplayWithoutContextAndNeverListensAfterwards() throws Exception {
-        for (String end : new String[] { "drain", "skip", "stop" }) {
+        // An agent's replay_turn is the same local replay as the speaker button's.
+        for (boolean agent : new boolean[] { false, true }) for (String end : new String[] { "drain", "skip", "stop" }) {
             try (Fixture f = new Fixture(false, false)) {
                 f.readyClientVoice("manual");
                 f.settings(NativeVoiceJson.object("autoListen", true, "readNotificationContext", true));
                 f.runtime.nativeVisibility(true);
                 assertNull(f.command("setForegroundContext", NativeVoiceJson.object("visible", true, "threadId", f.target, "threadTitle", "Visible thread")));
-                assertNull(f.speakReply(f.target, "turn-1", "**Replayed** reply."));
+                f.replay(agent, f.target, "turn-1", "**Replayed** reply.");
                 SpeechJob job = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(end, job);
                 assertEquals("Replayed reply.", job.text);
                 JSONObject state = f.runtime.snapshot(), active = state.getJSONObject("active");
@@ -2440,7 +2441,7 @@ public class NativeVoiceRuntimeTest {
     }
 
     @Test public void replayIgnoresAutomaticVoiceFiltersAndNotificationPolicy() throws Exception {
-        for (String filter : new String[] { "only_voice_thread", "ignore_other_devices", "disabled", "silenced", "no_policy" }) {
+        for (boolean agent : new boolean[] { false, true }) for (String filter : new String[] { "only_voice_thread", "ignore_other_devices", "disabled", "silenced", "no_policy" }) {
             try (Fixture f = new Fixture(false, false)) {
                 f.readyClientVoice("response");
                 // The saved default is f.target; the replay is for another thread.
@@ -2452,7 +2453,7 @@ public class NativeVoiceRuntimeTest {
                 f.receiveNotice(filter.equals("only_voice_thread") ? other : f.target, filter.equals("ignore_other_devices") ? UUID.randomUUID().toString() : null);
                 assertTrue(filter + " filters the automatic notice", f.speech.speechRequests.isEmpty());
                 assertEquals(filter, 1, f.runtime.snapshot().getJSONObject("queue").getJSONObject("droppedReasons").getInt("ineligible"));
-                assertNull(filter, f.speakReply(other, "turn-1", "Replayed elsewhere"));
+                f.replay(agent, other, "turn-1", "Replayed elsewhere");
                 SpeechJob job = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(filter, job);
                 assertEquals("Replayed elsewhere", job.text);
                 assertEquals(other, f.runtime.snapshot().getJSONObject("active").getString("threadId"));
@@ -2461,13 +2462,16 @@ public class NativeVoiceRuntimeTest {
     }
 
     @Test public void endingAReplayNeverDiscardsClientActionsForItsTurn() throws Exception {
-        for (String end : new String[] { "drain", "skip", "failure", "focus_loss" }) {
+        for (boolean agent : new boolean[] { false, true }) for (String end : new String[] { "drain", "skip", "failure", "focus_loss" }) {
             try (Fixture f = new Fixture(false, false)) {
                 f.readyClientVoice("response");
                 JSONObject command = f.clientSwitch(UUID.randomUUID().toString(), true);
                 assertEquals("accepted", f.clientCommand(command).getString("status"));
-                // The replayed turn is the staged action's source turn.
-                assertNull(f.speakReply(f.target, command.getString("sourceTurnId"), "Replay of the source turn"));
+                // The replayed turn is the staged action's source turn. The agent's replay_turn also comes from that
+                // turn, so staging it would have replaced the switch.
+                f.replay(agent, f.target, command.getString("sourceTurnId"), "Replay of the source turn");
+                java.util.Set<String> staged = java.util.Collections.singleton(command.getString("id"));
+                assertEquals(end, staged, f.stagedClientActions());
                 SpeechJob job = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(end, job);
                 switch (end) {
                     case "drain": f.runtime.drained(job.id); f.flush(); break;
@@ -2477,20 +2481,20 @@ public class NativeVoiceRuntimeTest {
                     default: throw new AssertionError(end);
                 }
                 assertTrue(end, f.runtime.snapshot().isNull("active"));
-                assertEquals(end, 1, ((java.util.Map<?, ?>) field(field(f.runtime, "clientActions"), "pending")).size());
+                assertEquals(end, staged, f.stagedClientActions());
                 assertTrue(f.contexts.isEmpty()); assertTrue(f.speech.transcriptions.isEmpty());
             }
         }
     }
 
     @Test public void streamLossPolicyChangeAndModeSwitchKeepReplaysButOffClearsThem() throws Exception {
-        for (String interruption : new String[] { "stream", "policy", "mode", "off" }) {
+        for (boolean agent : new boolean[] { false, true }) for (String interruption : new String[] { "stream", "policy", "mode", "off", "connection" }) {
             try (Fixture f = new Fixture(false, false)) {
                 f.readyClientVoice("response"); f.policy(true, false, "speak");
-                assertNull(f.speakReply(f.target, "turn-1", "First replay"));
+                f.replay(agent, f.target, "turn-1", "First replay");
                 SpeechJob first = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(interruption, first);
                 String playing = f.runtime.snapshot().getJSONObject("active").getString("id");
-                assertNull(f.speakReply(f.target, "turn-2", "Second replay"));
+                f.replay(agent, f.target, "turn-2", "Second replay");
                 f.receiveReply();
                 assertEquals(2, f.queued());
                 switch (interruption) {
@@ -2498,9 +2502,10 @@ public class NativeVoiceRuntimeTest {
                     case "policy": f.policy(true, true); break;
                     case "mode": f.settings(NativeVoiceJson.object("audioMode", "manual")); break;
                     case "off": f.settings(NativeVoiceJson.object("audioMode", "off")); break;
+                    case "connection": assertNull(f.command("disconnect", new JSONObject())); break;
                     default: throw new AssertionError(interruption);
                 }
-                if (interruption.equals("off")) {
+                if (interruption.equals("off") || interruption.equals("connection")) {
                     assertTrue(f.runtime.snapshot().isNull("active")); assertEquals(0, f.queued()); assertTrue(first.cancelled);
                 } else {
                     assertEquals(interruption, playing, f.runtime.snapshot().getJSONObject("active").getString("id"));
@@ -2517,11 +2522,11 @@ public class NativeVoiceRuntimeTest {
     }
 
     @Test public void stoppedServiceClearsPendingReplaysSoNoneSpeaksAfterARestart() throws Exception {
-        try (Fixture f = new Fixture(false, false)) {
+        for (boolean agent : new boolean[] { false, true }) try (Fixture f = new Fixture(false, false)) {
             f.readyClientVoice("response"); f.policy(true, false, "speak");
-            assertNull(f.speakReply(f.target, "turn-1", "First replay"));
+            f.replay(agent, f.target, "turn-1", "First replay");
             SpeechJob first = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(first);
-            assertNull(f.speakReply(f.target, "turn-2", "Second replay"));
+            f.replay(agent, f.target, "turn-2", "Second replay");
             f.receiveReply();
             assertEquals(2, f.queued());
             int dropped = f.runtime.snapshot().getJSONObject("queue").getInt("droppedCount");
@@ -2538,7 +2543,8 @@ public class NativeVoiceRuntimeTest {
             assertTrue(f.runtime.snapshot().isNull("active")); assertEquals(0, f.queued());
             assertTrue("No replay outlives the stopped service", f.speech.speechRequests.isEmpty());
             assertEquals(1, f.runtime.snapshot().getJSONObject("queue").getJSONObject("droppedReasons").getInt("ineligible"));
-            assertNull("A cleared turn can be replayed again", f.speakReply(f.target, "turn-2", "Second replay"));
+            // A cleared turn can be replayed again.
+            f.replay(agent, f.target, "turn-2", "Second replay");
             SpeechJob again = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(again);
             assertEquals("Second replay", again.text);
         }
@@ -2594,6 +2600,119 @@ public class NativeVoiceRuntimeTest {
             assertNull("A finished turn can be replayed again", f.speakReply(f.target, "turn-0", "Playing"));
             assertEquals(NativeVoiceQueue.MAX_ITEMS, f.queued());
         }
+    }
+
+    @Test public void replayTurnCommandReportsWhereTheReplayWent() throws Exception {
+        try (Fixture f = new Fixture(false, false)) {
+            f.readyClientVoice("response");
+            JSONObject playing = f.clientCommand(f.clientReplay(f.target, "turn-0", "**Agent** reply"));
+            assertClientResult(playing, "applied", "replay_playing");
+            assertTrue("The result carries the published state", playing.getJSONObject("state").getJSONObject("runtime").getBoolean("interactionActive"));
+            SpeechJob job = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(job);
+            assertEquals("Agent reply", job.text);
+            JSONObject active = f.runtime.snapshot().getJSONObject("active");
+            assertEquals("replay", active.getString("eventKind")); assertFalse(active.getBoolean("automatic"));
+            assertEquals("Other default", active.getString("threadTitle"));
+            String id = active.getString("id");
+
+            assertClientResult(f.clientCommand(f.clientReplay(f.target, "turn-1", "Queued reply")), "applied", "replay_queued");
+            assertEquals("Queueing behind the active item publishes", 1, f.queued());
+            assertClientResult(f.clientCommand(f.clientReplay(f.target, "turn-0", "**Agent** reply")), "noop", "replay_already_queued");
+            assertClientResult(f.clientCommand(f.clientReplay(f.target, "turn-1", "Different text")), "noop", "replay_already_queued");
+            // One identity for the speaker button and the agent, in either order.
+            assertNull(f.speakReply(f.target, "turn-1", "Queued reply"));
+            assertNull(f.speakReply(f.target, "turn-2", "Button reply"));
+            assertClientResult(f.clientCommand(f.clientReplay(f.target, "turn-2", "Button reply")), "noop", "replay_already_queued");
+            assertEquals(2, f.queued()); assertEquals(id, f.runtime.snapshot().getJSONObject("active").getString("id"));
+
+            assertClientResult(f.clientCommand(f.clientReplay(f.target, "turn-empty", "---")), "failed", "voice_reply_empty");
+            for (int i = 3; i <= NativeVoiceQueue.MAX_ITEMS; i++) f.replay(true, f.target, "turn-" + i, "Queued " + i);
+            assertEquals(NativeVoiceQueue.MAX_ITEMS, f.queued());
+            assertClientResult(f.clientCommand(f.clientReplay(f.target, "turn-overflow", "Too many")), "failed", "voice_queue_full");
+            assertClientResult(f.clientCommand(f.clientReplay(f.target, "turn-1", "Queued reply")), "noop", "replay_already_queued");
+            assertEquals(NativeVoiceQueue.MAX_ITEMS, f.queued());
+            assertEquals(0, f.runtime.snapshot().getJSONObject("queue").getInt("droppedCount"));
+            assertTrue("A replay is never staged as a client action", f.stagedClientActions().isEmpty());
+            assertTrue("Only the first replay has spoken", f.speech.speechRequests.isEmpty());
+            assertTrue(f.contexts.isEmpty()); assertTrue(f.speech.transcriptions.isEmpty());
+            assertEquals(0, f.runtime.snapshot().getJSONArray("errors").length());
+        }
+    }
+
+    @Test public void replayTurnCommandIsANoopWhileVoiceIsOffOrNotReady() throws Exception {
+        for (String gate : new String[] { "off", "service", "credential", "binding" }) {
+            try (Fixture f = new Fixture(false, false)) {
+                f.readyClientVoice("response");
+                // Off also stops the session; voice_off is reported before readiness.
+                if (gate.equals("off")) f.settings(NativeVoiceJson.object("audioMode", "off"));
+                f.onOwner(() -> {
+                    if (gate.equals("service")) set(f.runtime, "sessionStarted", false);
+                    if (gate.equals("credential")) set(f.runtime, "speechCredential", null);
+                    if (gate.equals("binding")) set(f.runtime, "binding", null);
+                });
+                JSONObject malformed = f.clientReplay(f.target, "turn-1", "Reply text"); malformed.remove("turnId");
+                assertClientResult(f.clientCommand(malformed), "failed", "invalid_turnId");
+                assertClientResult(f.clientCommand(f.clientReplay(f.target, "turn-1", "Reply text")), "noop",
+                    gate.equals("off") ? "voice_off" : "voice_not_ready");
+                assertTrue(gate, f.runtime.snapshot().isNull("active")); assertEquals(gate, 0, f.queued());
+                assertTrue(gate, f.speech.speechRequests.isEmpty()); assertNull(gate, field(f.runtime, "sessionStartId"));
+                assertTrue(gate, f.stagedClientActions().isEmpty());
+            }
+        }
+    }
+
+    @Test public void replayTurnCommandRejectsMalformedOrExpiredCommandsWithoutQueueing() throws Exception {
+        try (Fixture f = new Fixture(false, false)) {
+            f.readyClientVoice("response");
+            JSONObject extra = f.clientReplay(f.target, "turn-1", "Reply"); NativeVoiceJson.put(extra, "title", "Title");
+            JSONObject noThread = f.clientReplay(f.target, "turn-1", "Reply"); noThread.remove("threadId");
+            JSONObject noResult = f.clientReplay(f.target, "turn-1", "Reply"); noResult.remove("assistantResult");
+            JSONObject longTurn = f.clientReplay(f.target, "u".repeat(161), "Reply");
+            JSONObject emptyTitle = f.clientReplay(f.target, "turn-1", "Reply"); NativeVoiceJson.put(emptyTitle, "threadTitle", "");
+            JSONObject summary = f.clientReplay(f.target, "turn-1", "Reply");
+            NativeVoiceJson.put(summary, "assistantResult", NativeVoiceJson.object("summary", NativeVoiceJson.object("text", "Reply")));
+            Object[][] cases = { { extra, "unknown_field" }, { noThread, "invalid_threadId" }, { noResult, "invalid_assistantResult" },
+                { longTurn, "invalid_turnId" }, { emptyTitle, "invalid_threadTitle" }, { summary, "unknown_field" } };
+            for (Object[] example : cases) assertClientResult(f.clientCommand((JSONObject) example[0]), "failed", (String) example[1]);
+            JSONObject expired = f.clientReplay(f.target, "turn-1", "Reply"); NativeVoiceJson.put(expired, "expiresAt", 0);
+            assertClientResult(f.clientCommand(expired), "noop", "expired");
+            assertTrue(f.runtime.snapshot().isNull("active")); assertEquals(0, f.queued());
+            assertTrue(f.speech.speechRequests.isEmpty()); assertTrue(f.stagedClientActions().isEmpty());
+            // The 160-character turn ID bound and a titled replay are accepted.
+            JSONObject titled = f.clientReplay(f.target, "u".repeat(160), "Reply"); NativeVoiceJson.put(titled, "threadTitle", "Agent thread");
+            assertClientResult(f.clientCommand(titled), "applied", "replay_playing");
+            assertEquals("Agent thread", f.runtime.snapshot().getJSONObject("active").getString("threadTitle"));
+        }
+    }
+
+    @Test public void replayTurnCommandKeepsItsSourceTurnsFollowUpListen() throws Exception {
+        try (Fixture f = new Fixture(false, false)) {
+            f.readyClientVoice("response"); f.settings(NativeVoiceJson.object("autoListen", true));
+            f.policy(true, false, "speakThenListen");
+            // The agent's own completion notice is speaking and will listen afterwards.
+            String reply = f.clientReply();
+            assertTrue((boolean) field(field(f.runtime, "active"), "followUp"));
+            JSONObject result = f.clientCommand(f.clientReplay(f.target, "client-source-turn", "Replay of the source turn"));
+            assertClientResult(result, "applied", "replay_queued");
+            assertTrue("A replay leaves the source turn's follow-up listen in place", (boolean) field(field(f.runtime, "active"), "followUp"));
+            assertTrue(f.stagedClientActions().isEmpty()); assertEquals(1, f.queued());
+            f.runtime.drained(reply); f.flush();
+            // The source notice validates its automatic follow-up before the replay plays.
+            NativeVoiceHttp.Result validation = f.takeClientTarget(f.target);
+            assertTrue(f.speech.speechRequests.isEmpty());
+            validation.done(200, Fixture.inputContext(f.target), null); f.flush();
+            SpeechJob job = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(job);
+            assertEquals("Replay of the source turn", job.text);
+            assertEquals("replay", f.runtime.snapshot().getJSONObject("active").getString("eventKind"));
+            f.runtime.drained(job.id); f.flush();
+            assertTrue(f.runtime.snapshot().isNull("active"));
+            assertTrue("The replay itself never listens", f.contexts.isEmpty()); assertTrue(f.speech.transcriptions.isEmpty());
+        }
+    }
+    private static void assertClientResult(JSONObject result, String status, String reason) throws Exception {
+        assertEquals(result.toString(), status, result.getString("status"));
+        assertEquals(result.toString(), reason, result.getString("reason"));
+        assertTrue(result.toString(), result.getJSONObject("state").has("runtime"));
     }
 
     private void assertExplicitSurvives(boolean retargeted) throws Exception {
@@ -2855,6 +2974,21 @@ public class NativeVoiceRuntimeTest {
             return command("speakReply", NativeVoiceJson.object("threadId", threadId, "turnId", turnId,
                 "assistantResult", NativeVoiceJson.object("final", NativeVoiceJson.object("text", text))));
         }
+        /** An agent's replay_turn command, sent from clientSwitch's source turn, for one turn's final reply text. */
+        JSONObject clientReplay(String threadId, String turnId, String text) {
+            return NativeVoiceJson.object("id", UUID.randomUUID().toString(), "action", "replay_turn", "sourceThreadId", target,
+                "sourceTurnId", "client-source-turn", "threadId", threadId, "threadTitle", null, "turnId", turnId,
+                "assistantResult", NativeVoiceJson.object("final", NativeVoiceJson.object("text", text)),
+                "expiresAt", System.currentTimeMillis() + 60000);
+        }
+        /** Queues a new replay through the bridge or as an agent's replay_turn command, requiring success either way. */
+        void replay(boolean agent, String threadId, String turnId, String text) throws Exception {
+            if (!agent) { assertNull(speakReply(threadId, turnId, text)); return; }
+            JSONObject result = clientCommand(clientReplay(threadId, turnId, text));
+            assertEquals(result.toString(), "applied", result.getString("status"));
+        }
+        /** IDs of the agent client actions staged for turn settlement. */
+        java.util.Set<?> stagedClientActions() throws Exception { return new java.util.HashSet<>(((java.util.Map<?, ?>) field(field(runtime, "clientActions"), "pending")).keySet()); }
         int queued() throws Exception { return runtime.snapshot().getJSONObject("queue").getInt("count"); }
         void cancelClientSwitch(String cancellation) throws Exception {
             switch (cancellation) {

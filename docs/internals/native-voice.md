@@ -142,6 +142,8 @@ supersession, Off, expiry, and connection loss still do. Foreground navigation
 keeps its visibility fence. Native readiness and recording blockers are checked
 again at execution, and normal recording preferences, including Keep listening
 by default, remain in effect. No background service start is attempted.
+Agent `replay_turn` commands bypass that queue; see
+[Turn reply replay](#turn-reply-replay).
 
 The device preferences envelope has format version 1 and carries the strict
 settings `RECORD_VERSION` 7. Earlier per-binding settings and profile-bound speech
@@ -320,6 +322,31 @@ it; neither listens afterwards. Ending a replay never discards
 client turn actions, completes a notification ID, or signals reply drain. Like
 any playback, a speech configuration change or focus loss ends it, and an
 explicit Stop still clears pending agent client actions.
+
+An agent's `client.replay_turn` reaches native as a `replay_turn` client
+command, whose strict keys include `turnId` and `assistantResult`. Native builds
+the bridge request from the command's `threadId`, `turnId`, `assistantResult`,
+and `threadTitle` alone and validates it exactly as `speakReply`'s, so a
+malformed command fails with the same field code, such as `invalid_turnId`. An
+expired command is a `noop` with `expired`, as for other commands. Audio mode
+Off is then a `noop` with `voice_off`, checked before readiness. Otherwise the
+command calls the bridge's queue function and publishes state before answering:
+
+| Outcome | Result |
+| --- | --- |
+| The replay is the active item after queueing | `applied`, `replay_playing` |
+| The replay waits behind other voice work | `applied`, `replay_queued` |
+| That thread and turn's replay is already active or pending | `noop`, `replay_already_queued` |
+| No started session, speech not ready, or no binding | `noop`, `voice_not_ready` |
+| Empty prepared text | `failed`, `voice_reply_empty` |
+| The replay does not fit the queue | `failed`, `voice_queue_full` |
+
+The command applies at once and is never staged in the turn-settlement queue.
+Staging keys on the agent's source turn, so it would suppress that turn's
+completion follow-up listen and replace the turn's other staged actions. The
+queued item is the same local replay the speaker creates, so everything above
+applies to it unchanged, and one turn's replay is a duplicate whichever path
+queued it. The bridge still treats a duplicate as success.
 
 ## Activity authority and live progress
 

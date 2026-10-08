@@ -40,6 +40,20 @@ supersede pending actions. Actions have a 24-hour turn-completion limit and a
 separate one-hour reply-playback limit after completion. Browser and Electron
 clients support navigation and report voice controls as unavailable.
 
+With **Replay turn reply** ticked in the same group, the agent can queue an
+ended turn's reply on the current device, as if you had tapped that turn's
+**Play response aloud**. Threads that enabled Client controls before this tool
+existed get it only when you tick it. The request runs at once rather than after
+the agent's turn, so the replay plays before that turn's own completion notice.
+It joins the voice queue like any replay, never opens the thread or listens
+afterward, and the agent's turn keeps its normal follow-up listen. The agent
+learns whether the reply is playing, queued, or already queued. While Audio
+mode is Off, or voice is not ready, for example because the session needs
+**Resume** or speech setup is incomplete, nothing is queued and the agent is
+told which; this tool cannot turn voice on. A reply with nothing to speak or a
+full queue is reported as a failure. Browser and Electron clients report voice
+as unsupported.
+
 ## Configure a session
 
 1. Pair the Android app with Sedes as described in [Android](android.md).
@@ -200,6 +214,8 @@ nothing. A replay counts against the queue limits; when it does not fit, the
 button reports a full queue. Off and connection changes clear pending replays
 with the rest of the queue; losing the notification stream, a policy change, or
 switching between Manual and Response does not.
+
+An agent can queue the same replay; see [Agent controls](#agent-controls).
 
 ## Targeting and controls
 
