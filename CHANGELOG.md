@@ -1343,6 +1343,10 @@
 
 ### Removed
 
+- The Ctrl+Shift+Arrow (Command+Shift+Arrow) panel docking shortcut; dock from
+  the panel menu. Ctrl+Shift+Up/Down now always moves between sidebar threads.
+  ([#63](https://github.com/kcosr/sedes/pull/63))
+
 - **Remind now** is gone; pin the thread and add a task instead. Snooze keeps
   its optional reminder. ([#61](https://github.com/kcosr/sedes/pull/61))
 

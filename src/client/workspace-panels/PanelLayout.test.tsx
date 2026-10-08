@@ -4,6 +4,7 @@ import { createRef, useEffect, useMemo, useState } from "react";
 import {
   act,
   cleanup,
+  createEvent,
   fireEvent,
   render,
   screen,
@@ -721,11 +722,16 @@ describe("PanelLayout singleton surfaces", () => {
     await waitFor(() => expect(target).toHaveFocus());
     await waitFor(() => expect(store.getSnapshot().focusRequest).toBeUndefined());
     if (!narrow) {
+      // Mod+Shift+Arrow no longer docks panels; Mod+Shift+Up/Down belongs to sidebar thread navigation.
       const dock = vi.spyOn(store, "dockPanel");
-      fireEvent.keyDown(document.activeElement!, {
-        key: "ArrowDown", ctrlKey: true, shiftKey: true,
-      });
-      expect(dock).toHaveBeenCalledWith("workpads", "bottom");
+      for (const key of ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"]) {
+        for (const modifier of [{ ctrlKey: true }, { metaKey: true }]) {
+          const event = createEvent.keyDown(document.activeElement!, { key, shiftKey: true, ...modifier });
+          fireEvent(document.activeElement!, event);
+          expect(event.defaultPrevented).toBe(false);
+        }
+      }
+      expect(dock).not.toHaveBeenCalled();
     }
   });
 
