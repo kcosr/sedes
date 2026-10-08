@@ -262,6 +262,48 @@ installed. Authority loss, a failed replacement, or timeout produces an
 announcement without a recognition target. A newer activity token leaves the
 old target stale rather than granting access to the newer work.
 
+## Turn reply replay
+
+The user-initiated `speakReply` bridge method queues one ended turn's reply for
+speech. Its strict keys are `threadId` (1–512 characters), `turnId` (1–160), and
+a required `assistantResult` with the same shape and bounded-text validation as
+a notification's: only `provisional`, `unclassified`, and `final`, each null or
+bounded text. Arguments are validated first. It then requires a started session,
+ready speech configuration and credential, and a bound connection; otherwise,
+including with Audio mode Off, it fails with `voice_not_ready`. Microphone
+permission and notification policy are not required. It returns the published
+snapshot.
+
+Native speaks the sections in notification order (provisional, unclassified,
+final) with the same per-part `NativeSpeechText` cleanup and truncation notice
+as a completion notice, but never a context line, whatever
+`readNotificationContext` says. Empty prepared text fails with
+`voice_reply_empty`. The bridge carries no title; the active item's title comes
+from the visible foreground thread or the saved default thread when either
+matches, and is otherwise null.
+
+The replay is a local queue item with no server envelope. Its event, shown as
+`active.eventKind`, is `replay`. Its ID is a fresh UUID that never enters
+notification deduplication. It is not automatic and has no follow-up listen.
+Its identity is the thread and turn ID; a request for a turn already queued or
+playing returns the current snapshot without adding. It counts against the
+64-item and 256 KiB queue limits after normal progress eviction. If it still
+cannot fit, the request fails with `voice_queue_full` rather than dropping
+anything. Queue drop counts report automatic items only.
+
+A replay joins the queue behind current speech, recording, or saved-recording
+recovery, and plays in Manual and Response mode. Drain skips notification
+eligibility for it, so `onlyVoiceThread`, `ignoreOtherDevices`, notification
+enablement, silence, and policy generation do not apply. Stream loss, a policy
+change, and Manual/Response switches keep pending and active replays; Off and
+connection changes clear them with the rest of the queue. A settings change
+rebuilds a pending replay from its stored request with the current cleanup
+setting, and the speech text limit chunks it when it starts. Skip ends a replay
+and Stop cancels it; neither listens afterwards. Ending a replay never discards
+client turn actions, completes a notification ID, or signals reply drain. Like
+any playback, a speech configuration change or focus loss ends it, and an
+explicit Stop still clears pending agent client actions.
+
 ## Activity authority and live progress
 
 `GET /api/threads/:threadId/input-context` returns current non-attaching runtime
@@ -723,9 +765,10 @@ source is preserved. Parser nesting is bounded.
 Disabling cleanup preserves the original single-newline assembly. Original envelopes,
 transcripts, and shared backend notifications are never rewritten; the speech
 server receives the prepared text without a second cleanup pass. Changing this
-setting rebuilds pending utterances from their original envelopes and applies to
-future items without interrupting the active utterance. An empty result makes no
-speech request and retains any eligible follow-up listen.
+setting rebuilds pending utterances from their original envelopes or replay
+requests and applies to future items without interrupting the active utterance.
+An empty result makes no speech request and retains any eligible follow-up
+listen.
 
 HTTP TTS completion is distinct from AudioTrack drain. A logical item stays
 active through all chunks, actual drain, recognition, and input admission.

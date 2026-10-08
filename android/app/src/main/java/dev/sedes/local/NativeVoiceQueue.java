@@ -10,6 +10,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import org.json.JSONObject;
 
 /** Pure queue/presentation policy; the runtime exclusively owns the active item. */
@@ -19,16 +20,22 @@ final class NativeVoiceQueue {
     static final long MAX_PAYLOAD_BYTES = 65536;
     private static final Set<String> EVENTS = new HashSet<>(java.util.Arrays.asList("turn.progress", "turn.completed", "turn.failed",
         "turn.interrupted", "thread.woke", "automation.started", "automation.failed", "approval.requested", "input.requested", "question.requested"));
+    /** Event kind of a local, user-requested turn reply replay. */
+    static final String REPLAY = "replay";
     static final class Item {
         final String id, event, speech, subject, threadId, threadTitle, origin;
         final JSONObject target;
+        /** A server notification's original envelope; null for a local replay. */
         final JSONObject envelope;
+        /** A local replay's validated speakReply request; null for a server notification. */
+        final JSONObject request;
         final long policyGeneration;
         boolean followUp, followUpCancelled;
         final int bytes;
-        boolean automatic = true;
+        /** Notifications are automatic. A replay is user-requested: notification filters and cancellation do not apply. */
+        final boolean automatic;
         Item(JSONObject envelope, NativeVoiceSettings settings) {
-            this.envelope = NativeVoiceJson.copy(envelope);
+            this.envelope = NativeVoiceJson.copy(envelope); request = null; automatic = true;
             NativeVoiceJson.keys(envelope, "payload", "sourceEventId", "voice", "generation", "origin", "recognitionTarget", "subjectId");
             id = NativeVoiceJson.string(envelope, "sourceEventId", 512);
             policyGeneration = NativeVoiceJson.integer(envelope, "generation", 0, Long.MAX_VALUE);
@@ -60,11 +67,7 @@ final class NativeVoiceQueue {
             JSONObject progress = NativeVoiceProtocol.optionalObject(payload, "progress");
             if (progress != null) NativeVoiceProtocol.bounded(progress, true);
             JSONObject result = NativeVoiceProtocol.optionalObject(payload, "assistantResult");
-            if (result != null) {
-                NativeVoiceJson.keys(result, "provisional", "unclassified", "final");
-                for (String phase : new String[] { "provisional", "unclassified", "final" })
-                    if (result.has(phase) && !result.isNull(phase)) NativeVoiceProtocol.bounded(NativeVoiceJson.requiredObject(result, phase), false);
-            }
+            if (result != null) NativeVoiceProtocol.assistantResult(result);
             subject = envelope.has("subjectId") ? NativeVoiceJson.string(envelope, "subjectId", 512) : null;
             String action = NativeVoiceJson.string(envelope, "voice", 32);
             if (!action.equals("none") && !action.equals("speak") && !action.equals("speakThenListen")) throw new IllegalArgumentException("voice_action_invalid");
@@ -76,6 +79,28 @@ final class NativeVoiceQueue {
             speech = !settings.active() || action.equals("none") || (manual && event.equals("turn.completed")) ? "" : speech(payload, settings);
             bytes = NativeVoiceJson.bytes(speech);
         }
+        private Item(String id, JSONObject request, String threadTitle, NativeVoiceSettings settings) {
+            this.id = id; this.request = request; this.threadTitle = threadTitle;
+            envelope = null; event = REPLAY; threadId = request.optString("threadId");
+            subject = null; origin = null; target = null; policyGeneration = -1; automatic = false;
+            // Speak-only: a replay never starts listening afterwards.
+            followUp = false;
+            speech = replaySpeech(request.optJSONObject("assistantResult"), settings);
+            bytes = NativeVoiceJson.bytes(speech);
+        }
+        /** A fresh replay of one turn's reply; its ID never enters notification dedupe. The request comes from replayRequest. */
+        static Item replay(JSONObject request, String threadTitle, NativeVoiceSettings settings) {
+            Item item = new Item(UUID.randomUUID().toString(), request, threadTitle, settings);
+            if (item.speech.isEmpty()) throw new IllegalStateException("voice_reply_empty");
+            return item;
+        }
+        /** Presentation for new settings, rebuilt from the original envelope or replay request. */
+        Item rebuild(NativeVoiceSettings settings) {
+            return request == null ? new Item(envelope, settings) : new Item(id, request, threadTitle, settings);
+        }
+        boolean isReplay() { return request != null; }
+        /** A turn's replay is queued or playing at most once at a time. */
+        String replayIdentity() { return request == null ? null : threadId + "\n" + request.optString("turnId"); }
         String targetId() { return target == null ? null : target.optString("threadId", null); }
         String coalesceKey() {
             if (subject == null || threadId == null || !(event.equals("thread.woke") || event.endsWith(".requested"))) return null;
@@ -106,6 +131,20 @@ final class NativeVoiceQueue {
         for (Item old : pending) if (old.id.equals(item.id)) return false;
         return enqueue(item);
     }
+    /** Queues a replay outside notification dedupe. False when the same turn's replay is already pending. */
+    boolean addReplay(Item item) {
+        for (Item old : pending) if (item.replayIdentity().equals(old.replayIdentity())) return false;
+        // A user request is refused explicitly rather than silently dropped.
+        if (!enqueue(item)) throw new IllegalStateException("voice_queue_full");
+        return true;
+    }
+    /** Strict speakReply bridge arguments, validated before readiness or queue state is considered. */
+    static JSONObject replayRequest(JSONObject args) {
+        NativeVoiceJson.keys(args, "threadId", "turnId", "assistantResult");
+        NativeVoiceJson.string(args, "threadId", 512); NativeVoiceJson.string(args, "turnId", 160);
+        NativeVoiceProtocol.assistantResult(NativeVoiceJson.requiredObject(args, "assistantResult"));
+        return NativeVoiceJson.copy(args);
+    }
     private boolean enqueue(Item item) {
         String key = item.coalesceKey();
         if (key != null) {
@@ -119,22 +158,32 @@ final class NativeVoiceQueue {
                 if (old.progress()) { bytes -= old.bytes; iterator.remove(); drop("progress_evicted"); }
             }
         }
-        if (pending.size() >= MAX_ITEMS || bytes + item.bytes > MAX_BYTES) { drop("overflow"); return false; }
+        if (pending.size() >= MAX_ITEMS || bytes + item.bytes > MAX_BYTES) { drop(item, "overflow"); return false; }
         pending.addLast(item); bytes += item.bytes; return true;
     }
     void cancelFollowups() { for (Item item : pending) { item.followUp = false; item.followUpCancelled = true; } }
     void reconfigure(NativeVoiceSettings settings) {
         ArrayList<Item> old = new ArrayList<>(pending); pending.clear(); bytes = 0;
         for (Item item : old) {
-            Item next = new Item(item.envelope, settings); next.followUpCancelled = item.followUpCancelled;
+            Item next = item.rebuild(settings); next.followUpCancelled = item.followUpCancelled;
             if (next.followUpCancelled) next.followUp = false;
-            if (!next.speech.isEmpty() || next.followUp) enqueue(next); else drop("settings_changed");
+            if (!next.speech.isEmpty() || next.followUp) enqueue(next); else drop(next, "settings_changed");
         }
     }
     Item take() { Item value = pending.pollFirst(); if (value != null) bytes -= value.bytes; return value; }
-    void clear(String reason) { while (!pending.isEmpty()) { take(); drop(reason); } }
+    void clear(String reason) { while (!pending.isEmpty()) drop(take(), reason); }
+    /** Notification loss and policy changes clear automatic notices; user-requested replays stay queued. */
+    void clearAutomatic(String reason) {
+        Iterator<Item> iterator = pending.iterator();
+        while (iterator.hasNext()) {
+            Item item = iterator.next();
+            if (item.automatic) { bytes -= item.bytes; iterator.remove(); drop(reason); }
+        }
+    }
     void reset() { pending.clear(); remembered.clear(); seen.clear(); dropped.clear(); bytes = 0; }
     void drop(String reason) { dropped.put(reason, dropped.getOrDefault(reason, 0) + 1); }
+    /** Drop counts report automatic voice items only; a replay is the user's own request. */
+    private void drop(Item item, String reason) { if (item.automatic) drop(reason); }
     JSONObject state() {
         JSONObject reasons = new JSONObject(); int count = 0;
         for (Map.Entry<String, Integer> entry : dropped.entrySet()) { NativeVoiceJson.put(reasons, entry.getKey(), entry.getValue()); count += entry.getValue(); }
@@ -147,12 +196,21 @@ final class NativeVoiceQueue {
             add(parts, payload.optString("message", ""));
         }
         if (payload.optString("event").equals("turn.progress")) appendBounded(parts, payload.optJSONObject("progress"));
-        else if (payload.optString("event").equals("turn.completed")) {
-            JSONObject result = payload.optJSONObject("assistantResult");
-            if (result != null) for (String phase : new String[] { "provisional", "unclassified", "final" }) appendBounded(parts, result.optJSONObject(phase));
-        } else if (!settings.flag("readNotificationContext")) add(parts, payload.optString("message", ""));
+        else if (payload.optString("event").equals("turn.completed")) appendResult(parts, payload.optJSONObject("assistantResult"));
+        else if (!settings.flag("readNotificationContext")) add(parts, payload.optString("message", ""));
+        return assemble(parts, settings.flag("cleanSpeechText"));
+    }
+    /** A replay speaks the reply alone, never notification context, whatever readNotificationContext says. */
+    private static String replaySpeech(JSONObject result, NativeVoiceSettings settings) {
+        ArrayList<String> parts = new ArrayList<>();
+        appendResult(parts, result);
+        return assemble(parts, settings.flag("cleanSpeechText"));
+    }
+    private static void appendResult(List<String> parts, JSONObject result) {
+        if (result != null) for (String phase : NativeVoiceProtocol.RESULT_PHASES) appendBounded(parts, result.optJSONObject(phase));
+    }
+    private static String assemble(List<String> parts, boolean cleanup) {
         StringBuilder speech = new StringBuilder();
-        boolean cleanup = settings.flag("cleanSpeechText");
         // Each notification part is an independent document. An unfinished fence in a
         // truncated section must not consume context, its truncation notice, or later results.
         for (String part : parts) {

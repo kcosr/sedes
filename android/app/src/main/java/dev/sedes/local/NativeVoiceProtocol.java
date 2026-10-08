@@ -108,6 +108,14 @@ final class NativeVoiceProtocol {
             if (automation.has("diagnostic")) text(automation, "diagnostic", 65536);
         }
     }
+    static final String[] RESULT_PHASES = { "provisional", "unclassified", "final" };
+    /** Selected completion phases: an omitted phase is excluded, null has no text, otherwise bounded text. */
+    static JSONObject assistantResult(JSONObject value) {
+        NativeVoiceJson.keys(value, RESULT_PHASES);
+        for (String phase : RESULT_PHASES)
+            if (value.has(phase) && !value.isNull(phase)) bounded(NativeVoiceJson.requiredObject(value, phase), false);
+        return value;
+    }
     static void bounded(JSONObject value, boolean progress) {
         NativeVoiceJson.keys(value, progress ? new String[] { "text", "truncation", "itemId" } : new String[] { "text", "truncation" });
         text(value, "text", 65536);

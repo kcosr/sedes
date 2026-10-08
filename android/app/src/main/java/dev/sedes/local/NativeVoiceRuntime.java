@@ -133,19 +133,23 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         boolean completedMaySubmit, completionReceived;
         NativeVoiceRecording.FinishReason finishReason;
         NativeVoiceCapturePolicy.End endpoint;
+        /** A server notification; null for manual work and replays, so notification-only paths skip them. */
         final NativeVoiceQueue.Item notification;
+        /** A local, user-requested replay: no envelope, follow-up, client turn action, or automatic policy. */
+        final NativeVoiceQueue.Item replay;
         final List<String> chunks;
         int chunk;
         JSONObject admission;
         Active(NativeVoiceQueue.Item item, int limit) {
             id = item.id; event = item.event; noticeThread = item.threadId; noticeTitle = item.threadTitle;
             targetId = item.targetId(); targetTitle = targetId != null && targetId.equals(item.threadId) ? item.threadTitle : null;
-            automatic = true; followUp = item.followUp; notification = item;
+            automatic = item.automatic; followUp = item.followUp;
+            notification = item.isReplay() ? null : item; replay = item.isReplay() ? item : null;
             chunks = NativeVoiceQueue.chunks(item.speech, limit);
         }
         Active(String threadId, String title) {
             id = UUID.randomUUID().toString(); event = "manual"; noticeThread = threadId; noticeTitle = title;
-            targetId = threadId; targetTitle = title; notification = null; chunks = new ArrayList<>();
+            targetId = threadId; targetTitle = title; notification = null; replay = null; chunks = new ArrayList<>();
         }
     }
     /** In-memory read-only reconciliation of one journaled input for the current binding. */
@@ -215,6 +219,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
                     case "setForegroundContext": foreground(args); break;
                     case "setNextRecordingTarget": setNextRecordingTarget(args); break;
                     case "startManualListen": manual(args); break;
+                    case "speakReply": speakReply(args); break;
                     case "retargetActiveRecognition": retarget(args, reply); return;
                     case "setKeepListening": setKeepListening(args, reply); return;
                     case "sendRecording": sendRecording(args); break;
@@ -387,7 +392,8 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         } catch (Exception error) { return clientResult("failed", code(error)); }
     }
     private static String clientTurn(NativeVoiceQueue.Item item) {
-        if (item == null) return null;
+        // A local replay has no server envelope and no client turn actions.
+        if (item == null || item.envelope == null) return null;
         JSONObject turn = item.envelope.optJSONObject("payload").optJSONObject("turn");
         return turn == null ? null : turn.optString("id", null);
     }
@@ -820,7 +826,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         return true;
     }
     private void cancelAutomatic(String reason) {
-        queue.clear(reason);
+        queue.clearAutomatic(reason);
         // A finalized transcript or already submitted message keeps its own admission semantics, as when settings change.
         if (active != null && active.automatic && !speechIndependent(active) && !phase.equals("submitting")) cancelActive(true, reason);
     }
@@ -828,7 +834,8 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         if (active != null || !sessionStarted || !speechReady() || binding == null || blockingDictation()) return;
         NativeVoiceQueue.Item item;
         while ((item = queue.take()) != null) {
-            if (!eligible(item)) { queue.drop("ineligible"); continue; }
+            // Notification filters and policy govern automatic items only; a replay is the user's explicit request.
+            if (item.automatic && !eligible(item)) { queue.drop("ineligible"); continue; }
             active = new Active(item, settings.number("speechTextLimit"));
             if (active.chunks.isEmpty()) afterSpeech(active); else speakChunk(active);
             publish(); return;
@@ -1021,6 +1028,23 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         String target = NativeVoiceJson.nullableString(args, "threadId", 512), title = NativeVoiceJson.nullableString(args, "threadTitle", 512);
         startManualRecording(manualTarget(NativeVoiceJson.object("threadId", target, "threadTitle", title), nextRecordingTarget,
             settings.value, NativeVoiceJson.object("visible", foregroundVisible, "threadId", foregroundThread, "threadTitle", foregroundTitle)), true);
+    }
+    /**
+     * Queues one turn's reply behind current voice work. Readiness matches an explicit Start, without microphone
+     * or notification policy; an identical turn already queued or playing is a successful no-op.
+     */
+    private void speakReply(JSONObject args) {
+        JSONObject request = NativeVoiceQueue.replayRequest(args);
+        if (!sessionStarted || !settings.active() || !speechReady() || binding == null) throw new IllegalStateException("voice_not_ready");
+        String threadId = request.optString("threadId");
+        NativeVoiceQueue.Item item = NativeVoiceQueue.Item.replay(request, replayTitle(threadId), settings);
+        if (active != null && active.replay != null && active.replay.replayIdentity().equals(item.replayIdentity())) return;
+        if (queue.addReplay(item)) drain();
+    }
+    /** Display only: the bridge sends no title, so use one this device already holds for the thread. */
+    private String replayTitle(String threadId) {
+        if (foregroundVisible && threadId.equals(foregroundThread) && foregroundTitle != null) return foregroundTitle;
+        return threadId.equals(settings.text("voiceThreadId")) ? settings.text("voiceThreadTitle") : null;
     }
     /** Headset and notification Start always use the saved default, even while the app is visible. */
     private void startDefaultRecording() {
@@ -2483,6 +2507,8 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
             case "voice_not_ready": return "Voice is not ready to record yet.";
             case "voice_not_listening": return "Voice is not recording.";
             case "voice_not_speaking": return "Voice is not speaking.";
+            case "voice_reply_empty": return "This response has no text to speak.";
+            case "voice_queue_full": return "The voice queue is full. Try again after current speech finishes.";
             case "connection_changed": return "The Sedes connection changed before the voice action finished.";
             case "client_connection_replaced": return "Client controls moved to another window. Retry the voice connection to use this device.";
             case "authentication_required": return "Pair this Sedes connection before using voice.";

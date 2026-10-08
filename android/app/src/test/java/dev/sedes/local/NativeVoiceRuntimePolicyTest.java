@@ -147,6 +147,9 @@ public class NativeVoiceRuntimePolicyTest {
         }
         assertSpecific("auto_listen_disabled"); assertSpecific("timeout");
     }
+    @Test public void replayRefusalsHaveSpecificMessages() {
+        for (String code : new String[] { "voice_not_ready", "voice_reply_empty", "voice_queue_full" }) assertSpecific(code);
+    }
     private static void assertSpecific(String code) {
         String message = NativeVoiceRuntime.message(code);
         assertFalse("Generic message for " + code, message.contains("(" + code + ")"));
