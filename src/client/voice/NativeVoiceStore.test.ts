@@ -356,7 +356,7 @@ describe("native voice state authority", () => {
 });
 
 describe("turn reply replay", () => {
-  const reply = { threadId: "thread-1", turnId: "turn-1", assistantResult: { final: { text: "Stored final answer." } } };
+  const reply = { threadId: "thread-1", turnId: "turn-1", threadTitle: "Release review", assistantResult: { final: { text: "Stored final answer." } } };
   it("sends the reply with the current connection generation and accepts native's published snapshot", async () => {
     const { store, plugin } = fixture();
     await store.initialize();

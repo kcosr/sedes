@@ -568,44 +568,57 @@ test("a completed turn's footer replays its reply and stays reachable on touch w
   const turn = page.locator(".conversation-turn").last();
   await expect(turn).toHaveAttribute("data-turn-status", "completed");
   const turnId = (await turn.getAttribute("data-turn-id"))!;
-  // The route is mocked so the text choice is deterministic: a stored completion result, then none.
-  const replies = [{ assistantResult: { final: { text: "Stored final answer." }, unclassified: null } }, { assistantResult: null }];
+  // The route is mocked so the text choice is deterministic: a stored completion result for two taps, then none.
+  const storedReply = { assistantResult: { final: { text: "Stored final answer." }, unclassified: null } };
+  const replies = [storedReply, storedReply, { assistantResult: null }];
   const reads: string[] = [];
   await page.route("**/api/threads/*/turns/*/reply-speech", async route => {
     reads.push(new URL(route.request().url()).pathname);
     await route.fulfill({ json: replies.shift(), headers: { "cache-control": "no-store" } });
   });
   const speakCalls = () => page.evaluate(() => window.__voiceFixture.calls.filter(call => call.method === "speakReply"));
+  const storedCall = { method: "speakReply", args: { expectedConnectionGeneration: 1, threadId, turnId, threadTitle: "Voice replay",
+    assistantResult: storedReply.assistantResult } };
   const toolbar = page.getByRole("group", { name: "Voice controls", exact: true });
+  const cardStatus = toolbar.locator(".voice-card-sub");
   const speak = turn.getByRole("button", { name: "Play response aloud", exact: true });
   const footerStatus = (text: string) => turn.getByRole("status").filter({ hasText: new RegExp(`^${text}$`, "u") });
+  const base = voiceFixtureState();
 
   await speak.click();
-  await expect(footerStatus("Playing")).toHaveClass("sr-only");
+  await expect(footerStatus("Queued to play")).toHaveClass("sr-only");
   await expect(speak.locator(".lucide-check")).toBeVisible();
-  await expect(toolbar.locator(".voice-card-sub")).toContainText("Speaking");
-  await expect(toolbar.locator(".voice-card-sub")).toContainText("Replay");
+  await expect(cardStatus).toContainText("Speaking");
+  await expect(cardStatus).toContainText("Replay");
   expect(reads).toEqual([`/api/threads/${threadId}/turns/${turnId}/reply-speech`]);
-  expect(await speakCalls()).toEqual([{ method: "speakReply", args: { expectedConnectionGeneration: 1, threadId, turnId,
-    assistantResult: { final: { text: "Stored final answer." }, unclassified: null } } }]);
+  expect(await speakCalls()).toEqual([storedCall]);
   await capture(page, testInfo, "voice-replay-playing.png");
 
-  // A second tap queues behind current speech; with no stored result it reads the whole reply, as Copy response gives it.
+  // Tapping while this turn's replay plays succeeds and, as in native, adds nothing to the queue.
   await speak.click();
+  await expect.poll(speakCalls).toEqual([storedCall, storedCall]);
   await expect(footerStatus("Queued to play")).toHaveCount(1);
-  expect((await speakCalls()).at(-1)).toEqual({ method: "speakReply", args: { expectedConnectionGeneration: 1, threadId, turnId,
-    assistantResult: { unclassified: { text: "The measured response is complete." } } } });
-  await expect(toolbar.locator(".voice-card-sub")).toContainText("1 queued");
+  await expect(speak.locator(".lucide-check")).toBeVisible();
+  expect(await page.evaluate(() => window.__voiceFixture.state.queue.count)).toBe(0);
+  await expect(cardStatus).not.toContainText("queued");
   await toolbar.getByRole("button", { name: "Stop voice interaction", exact: true }).click();
-  expect(await page.evaluate(() => window.__voiceFixture.calls.filter(call => call.method === "stopCurrentInteraction"))).toEqual([
+  await expect.poll(() => page.evaluate(() => window.__voiceFixture.calls.filter(call => call.method === "stopCurrentInteraction"))).toEqual([
     { method: "stopCurrentInteraction", args: { expectedConnectionGeneration: 1, interactionId: `replay:${turnId}` } },
   ]);
-  const base = voiceFixtureState();
+
+  // Behind another notice a tap queues; with no stored result it reads the whole reply, as Copy response gives it.
+  await publishVoiceState(page, { phase: "speaking", active: { id: "notice", eventKind: "turn.completed", threadId, threadTitle: "Voice replay",
+    recognitionThreadId: null, recognitionThreadTitle: null, automatic: true, recording: null },
+    actions: { ...base.actions, canStart: false, canStop: true, canSkip: true } });
+  await speak.click();
+  await expect(cardStatus).toContainText("1 queued");
+  expect((await speakCalls()).at(-1)).toEqual({ method: "speakReply", args: { ...storedCall.args,
+    assistantResult: { unclassified: { text: "The measured response is complete." } } } });
   await publishVoiceState(page, { settings: { ...base.settings, audioMode: "off" } });
   await expect(speak).toHaveCount(0);
   await publishVoiceState(page, { settings: { ...base.settings, audioMode: "manual" } });
   await expect(speak).toBeVisible();
-  expect(reads).toHaveLength(2);
+  expect(reads).toHaveLength(3);
 
   const touchContext = await browser.newContext({ baseURL: testInfo.project.use.baseURL as string,
     viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });

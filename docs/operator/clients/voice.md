@@ -172,12 +172,20 @@ finished turn's footer shows **Play response aloud**, a speaker after **Copy
 response**. It is absent while voice is Off or speech setup is incomplete, and
 in browser and Electron clients. Read-only and archived threads show it too.
 
-The replay reads the turn's stored completion text in the sections that
+The replay reads the turn's stored completion text in the phases that
 **Response text** under **Turn completed** currently selects, as a spoken
-completion would. Without stored text in those sections, for example for a turn
-that finished before voice was set up, it reads the whole reply, the same text as
-**Copy response**. If Sedes cannot return the turn's text, the button shows a
-failure instead of reading different text.
+completion would. When none of those phases holds text, it reads the whole
+reply, the same text as **Copy response**:
+
+- **No stored completion text.** Sedes stores it only when a turn it submitted
+  completes successfully. Failed and interrupted turns, and turns that finished
+  before Sedes began storing it, have none.
+- **Selected phases empty or blank.** **Response text** selects no phases, or
+  the turn has text only in unselected phases, such as only Provisional
+  commentary under the default Final and Unclassified selection.
+
+If Sedes cannot return the turn's text, the button shows a failure instead of
+reading different text.
 
 A replay joins the voice queue behind current speech or recording, and starts at
 once when voice is idle. The card then shows **Speaking · Replay**. It plays in

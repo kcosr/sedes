@@ -4,10 +4,13 @@ import type { SelectedAssistantResult } from "../../../shared/protocol/notificat
 import { PAYLOAD_LIMITS, type BoundedText } from "../../../shared/protocol/payload.js";
 import type { ThreadClientStore } from "../../stores/ThreadClientStore.js";
 import type { NativeVoiceStore, VoiceClientState } from "../../voice/NativeVoiceStore.js";
+import { nativeThreadTitle } from "../../voice/native-voice-plugin.js";
 import { useNativeVoice } from "../../voice/VoiceProvider.js";
 import { canEnableVoice } from "../../voice/voice-session.js";
 
-type ReplySource = Pick<ThreadClientStore, "threadId" | "readTurnReplySpeech">;
+type ReplySource = Pick<ThreadClientStore, "threadId" | "readTurnReplySpeech"> & {
+  getSnapshot(): { readonly snapshot?: { readonly thread: { readonly title: { readonly text: string } } } };
+};
 type Feedback =
   | { readonly kind: "idle" | "pending" }
   | { readonly kind: "queued" | "failed"; readonly message: string };
@@ -58,11 +61,12 @@ function VoiceTurnSpeak({ voice, store, turnId, copyText }: {
         setFeedback({ kind: "failed", message: "Couldn't load the response to play" });
         return;
       }
-      const before = voice.getSnapshot().native;
-      const idle = before?.active === null && before.queue.count === 0;
+      // Read at tap time, so no footer subscribes to the title. Native names the replay's thread with it.
+      const threadTitle = nativeThreadTitle(store.getSnapshot().snapshot?.thread.title.text ?? "");
       try {
-        await voice.speakReply({ threadId: store.threadId, turnId, assistantResult });
-        setFeedback({ kind: "queued", message: idle ? "Playing" : "Queued to play" });
+        await voice.speakReply({ threadId: store.threadId, turnId, assistantResult, ...threadTitle ? { threadTitle } : {} });
+        // Native may hold the replay behind a saved dictation or treat a repeat tap as a no-op, so success means only queued.
+        setFeedback({ kind: "queued", message: "Queued to play" });
       } catch (error) {
         setFeedback({ kind: "failed", message: speakFailure(error) });
       }

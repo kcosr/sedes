@@ -1,6 +1,5 @@
 import type { PluginListenerHandle } from "@capacitor/core";
-import type { SelectedAssistantResult } from "../../shared/protocol/notification.js";
-import { nativeRecordingTextSchema, nativeVoiceInputSubmittedSchema, nativeVoiceStateSchema, type NativeRecordingRecoveryCommandContext, type NativeVoiceCommandContext, type NativeVoiceInputSubmitted, type NativeVoiceInteractionCommandContext, type NativeVoicePlugin, type NativeVoiceSettings, type NativeVoiceState } from "./native-voice-plugin.js";
+import { nativeRecordingTextSchema, nativeVoiceInputSubmittedSchema, nativeVoiceStateSchema, type NativeRecordingRecoveryCommandContext, type NativeReplySpeech, type NativeVoiceCommandContext, type NativeVoiceInputSubmitted, type NativeVoiceInteractionCommandContext, type NativeVoicePlugin, type NativeVoiceSettings, type NativeVoiceState } from "./native-voice-plugin.js";
 
 type NativeVoiceError = NativeVoiceState["errors"][number];
 export interface VoiceClientState {
@@ -220,7 +219,7 @@ export class NativeVoiceStore {
     return this.#perform(action, false);
   }
   /** Queues one ended turn's reply for speech only; native rejects when voice is not ready, the text is empty, or the queue is full. */
-  speakReply(reply: { threadId: string; turnId: string; assistantResult: SelectedAssistantResult }): Promise<void> {
+  speakReply(reply: NativeReplySpeech): Promise<void> {
     return this.run(() => this.plugin.speakReply({ ...this.commandContext(), ...reply }));
   }
   /** Cancel may stop capture while a durable Keep listening write is pending. Native fences both commands by identity. */
