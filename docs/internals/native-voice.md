@@ -268,9 +268,12 @@ old target stale rather than granting access to the newer work.
 
 The turn footer's speaker reads the reply text through
 `GET /api/threads/:threadId/turns/:turnId/reply-speech`. That route returns the turn's stored
-completion classification filtered by the principal's `assistantResultPhases`. When it returns
-`null`, or no section has non-blank text, the WebView sends the whole reply instead: the Copy
-response text as one bounded `unclassified` section. A failed read sends nothing.
+completion classification filtered by the principal's `assistantResultPhases`. When no
+selected section has non-blank text, it returns the turn's stored whole reply as one
+`unclassified` section. It returns `null` only when Sedes stored no reply text for the
+turn. The WebView then sends the Copy response text as one bounded `unclassified` section.
+A failed read sends nothing. The agent tool `client.replay_turn` uses the same server
+selection, and fails when it returns `null`.
 
 The user-initiated `speakReply` bridge method queues one ended turn's reply for
 speech. Its strict keys are `threadId` (1–512 characters), `turnId` (1–160), an

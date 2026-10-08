@@ -230,10 +230,14 @@
 - On Android, a speaker button in each ended turn's footer queues that turn's
   reply for voice playback, for when you missed it. It replays the reply text
   completion speech would read, using your current Response text selection. It
-  reads the whole reply instead when that selection has no text, for example for
-  turns finished before Sedes stored it. It is speak-only, plays in Manual and
-  Response mode, and appears only while voice is on.
-  `GET /api/threads/:threadId/turns/:turnId/reply-speech` serves the text.
+  reads the whole reply instead when that selection has no text. It is
+  speak-only, plays in Manual and Response mode, and appears only while voice is
+  on. `GET /api/threads/:threadId/turns/:turnId/reply-speech` serves the text.
+
+- Agent tool `client.replay_turn` (**Replay turn reply** in the Client controls
+  group) queues a turn's reply on the current client, as the speaker button
+  does. It never navigates or listens. Take the turn id from `thread.messages`.
+  Threads that already enable Client controls must also turn on this tool.
 
 - An **Automations** page lists every automation by status (Needs attention,
   Upcoming, Paused, Suspended) or by project, with search and row actions. Open
@@ -486,6 +490,10 @@
   Session stats stays in the thread menu rather than flashing during loading. (#8)
 
 ### Changed
+
+- When a client rejects a client-control agent tool, the agent now sees the
+  client's reason ("The client rejected the request: <reason>.") instead of a
+  generic unavailable message.
 
 - **Park** replaces Settle: a parked thread leaves the working set until new
   input returns it to Active, including an automation run, so parking an

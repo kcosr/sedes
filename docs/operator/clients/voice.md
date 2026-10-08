@@ -188,15 +188,14 @@ in browser and Electron clients. Read-only and archived threads show it too.
 
 The replay reads the turn's stored completion text in the phases that
 **Response text** under **Turn completed** currently selects, as a spoken
-completion would. When none of those phases holds text, it reads the whole
-reply, the same text as **Copy response**:
-
-- **No stored completion text.** Sedes stores it only when a turn it submitted
-  completes successfully. Failed and interrupted turns, and turns that finished
-  before Sedes began storing it, have none.
-- **Selected phases empty or blank.** **Response text** selects no phases, or
-  the turn has text only in unselected phases, such as only Provisional
-  commentary under the default Final and Unclassified selection.
+completion would. Sedes stores that text when any turn it submitted ends,
+whether it completed, failed or was interrupted. When none of the selected
+phases holds text, the replay reads the turn's stored whole reply: every agent
+message, bounded to 16 KiB. That happens when **Response text** selects no
+phases, or when the turn has text only in unselected phases, such as only
+Provisional commentary under the default Final and Unclassified selection.
+A turn Sedes didn't submit has no stored text, so the button reads the same
+text as **Copy response**.
 
 If Sedes cannot return the turn's text, the button shows a failure instead of
 reading different text.

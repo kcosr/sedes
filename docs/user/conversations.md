@@ -91,10 +91,9 @@ response** in a finished turn's footer. It appears only while voice is set to
 Manual or Response with speech configured. The reply joins the voice queue
 behind anything already playing and never listens afterward. It reads the
 response text that a spoken completion would. When the phases selected under
-**Response text** hold no text, it reads the whole reply that **Copy response**
-gives instead. That happens for a failed or interrupted turn, or one from
-before Sedes stored response text, and when **Response text** selects no phases
-or the turn has text only in unselected phases, such as Provisional commentary.
+**Response text** hold no text, it reads the whole reply instead. That happens
+when **Response text** selects no phases, or when the turn has text only in
+unselected phases, such as Provisional commentary.
 **Skip** and **Stop** work as for any notice. See
 [Replay a reply](../operator/clients/voice.md#replay-a-reply).
 
