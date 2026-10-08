@@ -308,6 +308,10 @@ instead of repeatedly replacing each other. Silent registrations expire after
 45 seconds. Deferred actions wait for their exact turn for at most 24 hours,
 then receive a separate one-hour playback deadline at settlement. Commands are
 never persisted for replay. An unacknowledged write reports an uncertain outcome.
+One poll response carries at most 64 commands and 768 KiB of serialized
+`{ commands }`, under native's 1 MiB response limit. Commands that do not fit
+stay queued, in order, for the next poll; the first pending command is always
+delivered.
 
 Settings reads identify the client and return capabilities, readiness, and a
 revision. Updates require `expectedRevision` and `patch.voice`, limited to
