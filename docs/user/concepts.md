@@ -146,7 +146,8 @@ provider turn is running.
 - **Active**: ordinary working inventory.
 - **Snoozed**: hidden or placed in Upcoming until a deadline or new activity
   wakes it.
-- **Settled**: quiet work you want below the working set without archiving.
+- **Parked**: out of the working set until new input, including an
+  automation run, returns it to Active. Archive is for finished work.
 - **Archived**: removed from the normal sidebar and unable to accept new input
   until restored.
 

@@ -509,7 +509,7 @@ current text and safely merges the structured content; it does not silently
 overwrite newer draft work from another client.
 
 Stashes belong to one thread, survive restart, and remain attached when the
-thread is settled or archived. The sidebar shows a stash count. Each thread
+thread is parked or archived. The sidebar shows a stash count. Each thread
 can hold up to 50 stashes.
 
 ## Read agent activity
