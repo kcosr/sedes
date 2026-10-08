@@ -343,22 +343,35 @@ rechecked before recognition starts. Browser/Electron navigation works; voice,
 voice settings, and replay report unsupported with a successful no-op.
 
 `client.replay_turn` queues one ended turn's reply for speech on the current
-client, as the turn footer's speaker does. Its input is
-`{ clientId?, threadId?, turnId }`: `threadId` defaults to the source thread
-and passes the normal thread authority checks, and `turnId` is an application
-turn ID from `turns[].id` of `thread.messages`. Execution re-captures the
-source turn, rejects that still-running turn as invalid input ("The turn has
-not ended."), and reads the reply text the `reply-speech` route serves: the
-stored classification under the principal's phases, else the stored whole
-reply. With neither, it fails as `not_found` ("Sedes stored no reply for that
-turn.") and never attaches a runtime. The reply is fitted beside the command
-so the command stays within 64 KiB, and the command carries the thread's
-inventory title, or null when that is blank. Delivery is immediate, like the
-settings tools: a 120-second expiry and a 25-second acknowledgement wait,
-never deferred to turn completion. Mid-turn, the replay plays before the
-agent's own completion notice. Native queues it behind current voice work as
-speak-only: it never navigates, starts listening, or touches the source
-turn's follow-up. Results pass through unchanged:
+client, as the turn footer's speaker does. Every input key is optional:
+`{ clientId?, threadId?, turnId? }`. `threadId` defaults to the source thread
+and passes the normal thread authority checks. `turnId` is an application turn
+ID from `turns[].id` of `thread.messages`; it defaults to the thread's most
+recent ended turn with a stored reply, so `{}` repeats the agent's own
+previous reply. The default is read from stored completion observations only:
+the newest finalized observation by completion time, then acceptance. A turn
+still running has none, so it is never chosen. Execution re-captures the
+source turn, rejects that still-running turn when named as invalid input ("The
+turn has not ended."), and reads the reply text the `reply-speech` route
+serves: the stored classification under the principal's phases, else the
+stored whole reply. Nothing is skipped to find text, and the tool never
+attaches a runtime. It fails as `not_found` when:
+
+- an explicit turn has no stored reply text: "Sedes stored no reply for that
+  turn; it may not have ended yet.";
+- the thread has no ended turn with a stored reply: "Sedes stored no reply for
+  that thread; its turns may not have ended yet."; or
+- the default turn's stored reply is blank: "Sedes stored no reply for that
+  thread's most recent ended turn."
+
+The reply is fitted beside the command so the command stays within 64 KiB, and
+the command carries the resolved turn ID and the thread's inventory title, or
+null when that is blank. Delivery is immediate, like the settings tools: a
+120-second expiry and a 25-second acknowledgement wait, never deferred to turn
+completion. Mid-turn, the replay plays before the agent's own completion
+notice. Native queues it behind current voice work as speak-only: it never
+navigates, starts listening, or touches the source turn's follow-up.
+Non-failed results pass through unchanged; failed ones become errors:
 
 | Client | Situation | Result |
 | --- | --- | --- |

@@ -236,8 +236,10 @@
 
 - Agent tool `client.replay_turn` (**Replay turn reply** in the Client controls
   group) queues a turn's reply on the current client, as the speaker button
-  does. It never navigates or listens. Take the turn id from `thread.messages`.
-  Threads that already enable Client controls must also turn on this tool.
+  does. It never navigates or listens. With no arguments it repeats the agent's
+  own previous reply; `threadId` picks another thread and `turnId`, from
+  `thread.messages`, an earlier turn. Threads that already enable Client
+  controls must also turn on this tool.
 
 - An **Automations** page lists every automation by status (Needs attention,
   Upcoming, Paused, Suspended) or by project, with search and row actions. Open
@@ -493,7 +495,7 @@
 
 - When a client rejects a client-control agent tool, the agent now sees the
   client's reason ("The client rejected the request: <reason>.") instead of a
-  generic unavailable message.
+  generic message.
 
 - **Park** replaces Settle: a parked thread leaves the working set until new
   input returns it to Active, including an automation run, so parking an

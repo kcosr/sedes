@@ -42,8 +42,10 @@ clients support navigation and report voice controls as unavailable.
 
 With **Replay turn reply** ticked in the same group, the agent can queue an
 ended turn's reply on the current device, as if you had tapped that turn's
-**Play response aloud**. Threads that enabled Client controls before this tool
-existed get it only when you tick it. The request runs at once rather than after
+**Play response aloud**. Unless you name a thread or turn, it replays the
+agent's own previous reply in this thread; ask for another thread to hear its
+latest reply, or for a specific earlier turn. Threads that enabled Client
+controls before this tool existed get it only when you tick it. The request runs at once rather than after
 the agent's turn, so the replay plays before that turn's own completion notice.
 It joins the voice queue like any replay, never opens the thread or listens
 afterward, and the agent's turn keeps its normal follow-up listen. The agent

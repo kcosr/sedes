@@ -540,6 +540,35 @@ export class SubmissionCompletionRepository {
     }
   }
 
+  /**
+   * The application turn id of a thread's most recently completed turn with a
+   * stored reply: the newest finalized observation by completion time, then
+   * acceptance. A turn still in progress has no finalized observation, so it
+   * is never returned. Null when the thread has none.
+   */
+  latestReplyTurnId(
+    scope: RequestScope,
+    applicationThreadId: string,
+  ): string | null {
+    const row = this.database
+      .prepare(
+        `
+          SELECT application_turn_id AS applicationTurnId
+          FROM submission_completion_observations
+          WHERE tenant_id = ? AND owner_principal_id = ?
+            AND application_thread_id = ?
+            AND application_turn_id IS NOT NULL
+            AND assistant_result_json IS NOT NULL
+          ORDER BY completion_observed_at DESC, accepted_at DESC, operation_id DESC
+          LIMIT 1
+        `,
+      )
+      .get(scope.tenantId, scope.principalId, applicationThreadId) as
+      | { readonly applicationTurnId: string }
+      | undefined;
+    return row?.applicationTurnId ?? null;
+  }
+
   hasActiveAcceptedCorrelation(scope: RequestScope, applicationThreadId: string, correlations: readonly string[]): boolean {
     const statement = this.database.prepare(`SELECT 1 FROM submission_completion_observations
       WHERE tenant_id = ? AND owner_principal_id = ? AND application_thread_id = ?

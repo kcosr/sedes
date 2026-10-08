@@ -1,5 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { DatabaseAgentToolSourceAuthority } from "../../src/server/agent-tools/application/database-agent-tool-source-authority.js";
+import type { TrustedToolInvocationContext } from "../../src/server/agent-tools/contracts/agent-tool-contracts.js";
+import { ClientControlToolService } from "../../src/server/agent-tools/tools/client-control-tools.js";
+import type { ConversationInputRuntimeObservation } from "../../src/server/conversations/conversation-actor-manager.js";
+import { ClientControlService } from "../../src/server/domain/client-control-service.js";
 import { openOverlayDatabase } from "../../src/server/db/database.js";
 import {
   applyBackendNormalizationMigration,
@@ -122,6 +127,7 @@ function observe(
     readonly turnId?: string;
     readonly classifiedResult?: ClassifiedAssistantResult | null;
     readonly result?: string;
+    readonly observedAt?: number;
   },
 ): string {
   const threadId = input.threadId ?? current.threadId;
@@ -134,7 +140,7 @@ function observe(
   if (input.turnId !== undefined) {
     current.completions.observeCompletion(current.scope, threadId, operationId, {
       completionIdentity: `completion-${operationId}`,
-      observedAt: input.acceptedAt + 10,
+      observedAt: input.observedAt ?? input.acceptedAt + 10,
       createAttention: false,
       finalized: {
         applicationTurnId: input.turnId,
@@ -203,6 +209,35 @@ describe("turn reply speech lookup", () => {
     }
   });
 
+  it("returns a thread's most recently completed turn with a reply, never a running one", () => {
+    const current = fixture();
+    try {
+      expect(current.completions.latestReplyTurnId(current.scope, current.threadId)).toBeNull();
+      // Completion time orders turns, whatever their acceptance order.
+      observe(current, { acceptedAt: 1_000, observedAt: 9_000, turnId: "turn-late" });
+      observe(current, { acceptedAt: 2_000, observedAt: 3_000, turnId: "turn-early" });
+      // A running turn's accepted input has no finalized observation.
+      observe(current, { acceptedAt: 10_000 });
+      expect(current.completions.latestReplyTurnId(current.scope, current.threadId)).toBe("turn-late");
+      // A steered turn completes all its observations together.
+      observe(current, { acceptedAt: 11_000, observedAt: 20_000, turnId: "turn-steered" });
+      observe(current, { acceptedAt: 12_000, observedAt: 20_000, turnId: "turn-steered" });
+      expect(current.completions.latestReplyTurnId(current.scope, current.threadId)).toBe("turn-steered");
+      // Equal completion times fall back to the later acceptance.
+      observe(current, { acceptedAt: 14_000, observedAt: 30_000, turnId: "turn-accepted-later" });
+      observe(current, { acceptedAt: 13_000, observedAt: 30_000, turnId: "turn-accepted-earlier" });
+      expect(current.completions.latestReplyTurnId(current.scope, current.threadId)).toBe("turn-accepted-later");
+
+      expect(current.completions.latestReplyTurnId(current.scope, current.otherThreadId)).toBeNull();
+      expect(current.completions.latestReplyTurnId(current.foreign, current.threadId)).toBeNull();
+      expect(current.completions.latestReplyTurnId(
+        { tenantId: randomUUID(), principalId: current.scope.principalId }, current.threadId,
+      )).toBeNull();
+    } finally {
+      current.database.close();
+    }
+  });
+
   it("reports a corrupt stored classification as a conflict", () => {
     const current = fixture();
     try {
@@ -217,34 +252,48 @@ describe("turn reply speech lookup", () => {
     }
   });
 
-  it("serves both lookups from the turn index added by migration 137", () => {
-    const lookups = ["classified_result_json", "assistant_result_json"].map((column) => `EXPLAIN QUERY PLAN
+  it("serves every lookup from the indexes added by migration 137", () => {
+    const turnLookups = ["classified_result_json", "assistant_result_json"].map((column) => `EXPLAIN QUERY PLAN
       SELECT ${column} FROM submission_completion_observations
       WHERE tenant_id = ? AND owner_principal_id = ?
         AND application_thread_id = ? AND application_turn_id = ?
         AND ${column} IS NOT NULL
       ORDER BY accepted_at DESC, operation_id DESC
       LIMIT 1`);
+    const latestTurnLookup = `EXPLAIN QUERY PLAN
+      SELECT application_turn_id FROM submission_completion_observations
+      WHERE tenant_id = ? AND owner_principal_id = ?
+        AND application_thread_id = ?
+        AND application_turn_id IS NOT NULL
+        AND assistant_result_json IS NOT NULL
+      ORDER BY completion_observed_at DESC, accepted_at DESC, operation_id DESC
+      LIMIT 1`;
     const indexes = (current: Fixture) => (current.database
       .prepare("SELECT name FROM sqlite_schema WHERE type = 'index' AND tbl_name = 'submission_completion_observations'")
       .all() as { name: string }[]).map(({ name }) => name);
     const before = fixture(136);
     try {
       expect(indexes(before)).not.toContain("submission_completion_turn");
+      expect(indexes(before)).not.toContain("submission_completion_latest_turn");
       applyDatabaseMigrations(before.database, backendNormalizedMigrations);
       expect(indexes(before)).toContain("submission_completion_turn");
+      expect(indexes(before)).toContain("submission_completion_latest_turn");
     } finally {
       before.database.close();
     }
     const current = fixture();
     try {
-      for (const lookup of lookups) {
-        const plan = (current.database.prepare(lookup).all("t", "p", "thread", "turn") as { detail: string }[])
-          .map(({ detail }) => detail)
-          .join("\n");
-        expect(plan).toContain("USING INDEX submission_completion_turn");
-        expect(plan).not.toContain("TEMP B-TREE");
+      const plan = (lookup: string, ...parameters: string[]) => (current.database.prepare(lookup).all(...parameters) as { detail: string }[])
+        .map(({ detail }) => detail)
+        .join("\n");
+      for (const lookup of turnLookups) {
+        const turnPlan = plan(lookup, "t", "p", "thread", "turn");
+        expect(turnPlan).toMatch(/USING INDEX submission_completion_turn \(/);
+        expect(turnPlan).not.toContain("TEMP B-TREE");
       }
+      const latestPlan = plan(latestTurnLookup, "t", "p", "thread");
+      expect(latestPlan).toMatch(/USING INDEX submission_completion_latest_turn \(/);
+      expect(latestPlan).not.toContain("TEMP B-TREE");
     } finally {
       current.database.close();
     }
@@ -320,15 +369,117 @@ describe("turn reply speech service", () => {
         [current.foreign, current.threadId],
         [current.scope, randomUUID()],
       ] as const) {
-        let error: unknown;
-        try {
-          current.replies.read(scope, threadId, "turn-1");
-        } catch (caught) {
-          error = caught;
+        for (const read of [
+          () => current.replies.read(scope, threadId, "turn-1"),
+          () => current.replies.latestReplyTurnId(scope, threadId),
+        ]) {
+          let error: unknown;
+          try {
+            read();
+          } catch (caught) {
+            error = caught;
+          }
+          expect(error).toBeInstanceOf(DomainError);
+          expect(error).toMatchObject({ code: "not_found" });
         }
-        expect(error).toBeInstanceOf(DomainError);
-        expect(error).toMatchObject({ code: "not_found" });
       }
+    } finally {
+      current.database.close();
+    }
+  });
+});
+
+describe("client.replay_turn over stored replies", () => {
+  const services: ClientControlService[] = [];
+  afterEach(() => { for (const service of services.splice(0)) service.close(); });
+  const state = { runtime: { foreground: true, voiceReady: true, interactionActive: false }, settings: null };
+
+  /** The source thread is running `runningTurnId` for `scope`; the tool reads the fixture's real repositories. */
+  function replayTool(current: Fixture, runningTurnId: string, scope: RequestScope = current.scope) {
+    const clients = new ClientControlService(); services.push(clients);
+    const registered = clients.register(scope, undefined,
+      { platform: "android", capabilities: { navigate: true, voice: true, voiceSettings: true }, state });
+    const request = vi.spyOn(clients, "request")
+      .mockImplementation(async (target) => ({ status: "applied", reason: "replay_queued", state, client: clients.describe(target) }));
+    const authority = new DatabaseAgentToolSourceAuthority(current.database, new Uint8Array(32));
+    const tools = new ClientControlToolService(clients, {
+      observeInputRuntime: () => ({ authoritative: true, ownerGeneration: "owner", runState: "running", sourceTurnId: runningTurnId,
+        activeTurnId: runningTurnId, sourceTurnStatus: "in_progress", settled: false, firstInput: { operationId: "running" } }) as ConversationInputRuntimeObservation,
+    }, { originForTurn: () => ({ clientId: registered.clientId }) }, authority, current.replies);
+    const environmentId = authority.resolveThread(current.scope, current.threadId)!.environmentId;
+    const context = {
+      tenantId: scope.tenantId, principalId: scope.principalId,
+      subject: { kind: "thread_agent", sourceThreadId: current.threadId },
+      clientTurn: { threadId: current.threadId, turnId: runningTurnId, ownerGeneration: "owner", clientId: registered.clientId },
+      environmentAuthority: { admittedEnvironmentIds: [environmentId] }, abortSignal: new AbortController().signal,
+    } as unknown as TrustedToolInvocationContext;
+    const replay = async (input: Record<string, unknown>) => {
+      await tools.execute("client.replay_turn", input, context);
+      return request.mock.calls.at(-1)![1];
+    };
+    return { replay, request };
+  }
+
+  it("replays this thread's previous answer for {} while the source turn runs", async () => {
+    const current = fixture();
+    try {
+      observe(current, { acceptedAt: 1_000, turnId: "turn-earlier", classifiedResult: classified("Earlier") });
+      // The previous turn was steered: its latest observation's classification is read.
+      observe(current, { acceptedAt: 2_000, observedAt: 5_000, turnId: "turn-previous", classifiedResult: classified("Before the steer") });
+      observe(current, { acceptedAt: 3_000, observedAt: 5_000, turnId: "turn-previous", classifiedResult: classified("Previous") });
+      observe(current, { acceptedAt: 6_000 });
+      const tool = replayTool(current, "turn-running");
+
+      expect(await tool.replay({})).toMatchObject({ action: "replay_turn", sourceThreadId: current.threadId, sourceTurnId: "turn-running",
+        threadId: current.threadId, threadTitle: "Replay", turnId: "turn-previous",
+        assistantResult: { final: { text: "Previous" }, unclassified: null } });
+      expect(await tool.replay({ threadId: current.threadId })).toMatchObject({ turnId: "turn-previous" });
+      expect(await tool.replay({ turnId: "turn-earlier" }))
+        .toMatchObject({ threadId: current.threadId, turnId: "turn-earlier", assistantResult: { final: { text: "Earlier" } } });
+      await expect(tool.replay({ turnId: "turn-running" })).rejects.toMatchObject({ code: "invalid_input", message: "The turn has not ended." });
+      await expect(tool.replay({ turnId: "turn-missing" }))
+        .rejects.toMatchObject({ code: "not_found", message: "Sedes stored no reply for that turn; it may not have ended yet." });
+    } finally {
+      current.database.close();
+    }
+  });
+
+  it("replays another thread's latest ended turn and finds nothing in a thread without replies", async () => {
+    const current = fixture();
+    try {
+      const tool = replayTool(current, "turn-running");
+      await expect(tool.replay({})).rejects.toMatchObject({ code: "not_found", message: "Sedes stored no reply for that thread; its turns may not have ended yet." });
+      await expect(tool.replay({ threadId: current.otherThreadId }))
+        .rejects.toMatchObject({ code: "not_found", message: "Sedes stored no reply for that thread; its turns may not have ended yet." });
+      observe(current, { threadId: current.otherThreadId, acceptedAt: 1_000, turnId: "other-old", result: "Old" });
+      observe(current, { threadId: current.otherThreadId, acceptedAt: 2_000, turnId: "other-latest", result: "Latest" });
+      expect(await tool.replay({ threadId: current.otherThreadId })).toMatchObject({ threadId: current.otherThreadId,
+        threadTitle: "Other", turnId: "other-latest", assistantResult: { unclassified: { text: "Latest" } } });
+      // The latest ended turn says nothing: it is reported, never skipped for an earlier one.
+      observe(current, { threadId: current.otherThreadId, acceptedAt: 3_000, turnId: "other-silent", result: " " });
+      await expect(tool.replay({ threadId: current.otherThreadId })).rejects.toMatchObject({
+        code: "not_found", message: "Sedes stored no reply for that thread's most recent ended turn." });
+      expect(tool.request).toHaveBeenCalledOnce();
+    } finally {
+      current.database.close();
+    }
+  });
+
+  it("does not find unknown threads or another principal's threads, defaulted or explicit", async () => {
+    const current = fixture();
+    try {
+      observe(current, { acceptedAt: 1_000, turnId: "turn-1" });
+      observe(current, { threadId: current.otherThreadId, acceptedAt: 2_000, turnId: "other-1" });
+      const own = replayTool(current, "turn-running");
+      await expect(own.replay({ threadId: randomUUID() })).rejects.toMatchObject({ code: "not_found" });
+      await expect(own.replay({ threadId: randomUUID(), turnId: "turn-1" })).rejects.toMatchObject({ code: "not_found" });
+      expect(own.request).not.toHaveBeenCalled();
+      // An agent of another principal resolves these thread ids in its own scope only.
+      const foreign = replayTool(current, "turn-running", current.foreign);
+      for (const input of [{}, { turnId: "turn-1" }, { threadId: current.otherThreadId }, { threadId: current.threadId, turnId: "turn-1" }]) {
+        await expect(foreign.replay(input)).rejects.toMatchObject({ code: "not_found" });
+      }
+      expect(foreign.request).not.toHaveBeenCalled();
     } finally {
       current.database.close();
     }

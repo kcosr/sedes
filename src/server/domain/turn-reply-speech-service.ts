@@ -23,13 +23,24 @@ export class TurnReplySpeechService {
   constructor(
     private readonly input: {
       readonly inventory: Pick<InventoryRepository, "getThread">;
-      readonly completions: Pick<SubmissionCompletionRepository, "latestClassifiedResult" | "latestAssistantResult">;
+      readonly completions: Pick<SubmissionCompletionRepository, "latestClassifiedResult" | "latestAssistantResult" | "latestReplyTurnId">;
       readonly notifications: Pick<NotificationService, "read">;
     },
   ) {}
 
   read(scope: RequestScope, threadId: string, turnId: string): TurnReplySpeech {
     return { assistantResult: this.select(scope, threadId, turnId) };
+  }
+
+  /**
+   * The thread's most recently completed turn with a stored reply, from stored
+   * completion observations only. A running turn is never returned. Null when
+   * the thread has none.
+   */
+  latestReplyTurnId(scope: RequestScope, threadId: string): string | null {
+    // An unknown or wrong-scope thread is not found; it never falls back.
+    this.input.inventory.getThread(scope, threadId);
+    return this.input.completions.latestReplyTurnId(scope, threadId);
   }
 
   /**
