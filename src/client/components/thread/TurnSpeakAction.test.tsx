@@ -7,7 +7,7 @@ import type { TurnReplySpeech } from "../../../shared/protocol/turn-reply-speech
 import { ApiError } from "../../api/ApiClient.js";
 import { NativeVoiceStore } from "../../voice/NativeVoiceStore.js";
 import type { NativeVoiceState } from "../../voice/native-voice-plugin.js";
-import { fakeVoicePlugin, VOICE_CONNECTION, voiceActions, voiceSettings, voiceSnapshot } from "../../voice/native-voice-test-fixture.js";
+import { fakeVoicePlugin, recordingRecovery, VOICE_CONNECTION, voiceActions, voiceSettings, voiceSnapshot } from "../../voice/native-voice-test-fixture.js";
 
 const voiceContext = vi.hoisted(() => ({ store: null as NativeVoiceStore | null }));
 vi.mock("../../voice/VoiceProvider.js", async (importOriginal) => ({
@@ -95,7 +95,7 @@ describe("TurnSpeakAction", () => {
     expect(fake.plugin.speakReply).toHaveBeenCalledExactlyOnceWith({
       expectedConnectionGeneration: 1, threadId: "thread-1", turnId: "turn-1", assistantResult: stored.assistantResult,
     });
-    expect(status()).toHaveTextContent(/^Playing$/u);
+    expect(status()).toHaveTextContent(/^Queued to play$/u);
     expect(icon()).toContain("lucide-check");
     expect(button()).not.toHaveAttribute("aria-busy");
     await act(() => vi.advanceTimersByTimeAsync(1799));
@@ -105,13 +105,23 @@ describe("TurnSpeakAction", () => {
     expect(status()).toBeEmptyDOMElement();
   });
 
-  it("reports Queued to play behind current speech", async () => {
-    const { fake } = await connect(ready({ phase: "speaking", actions: voiceActions({ canStop: true, canSkip: true }),
-      active: { id: "item", eventKind: "turn.completed", threadId: "other", threadTitle: null, recognitionThreadId: null,
-        recognitionThreadTitle: null, automatic: true, recording: null } }));
+  const speaking = (eventKind: string, threadId: string) => ready({ phase: "speaking", actions: voiceActions({ canStop: true, canSkip: true }),
+    active: { id: "item", eventKind, threadId, threadTitle: null, recognitionThreadId: null, recognitionThreadTitle: null,
+      automatic: eventKind !== "replay", recording: null } });
+  it.each([
+    ["behind current speech", speaking("turn.completed", "other"), { queue: { count: 1, bytes: 40, droppedCount: 0, droppedReasons: {} } }],
+    // Idle-looking voice can still hold the queue: the replay waits until the saved dictation is resolved.
+    ["behind a saved dictation", ready({ phase: "recordingRecovery", recordingRecovery: recordingRecovery() }),
+      { queue: { count: 1, bytes: 40, droppedCount: 0, droppedReasons: {} } }],
+    // Native keeps the replay already queued or playing for this turn and adds nothing.
+    ["when this turn's replay is already playing", speaking("replay", "thread-1"), {}],
+  ])("announces only Queued to play %s", async (_name, native, after) => {
+    const { fake } = await connect(native);
+    fake.plugin.speakReply.mockResolvedValue({ ...native, ...after, stateRevision: native.stateRevision + 1 });
     renderAction();
     fireEvent.click(button());
     await waitFor(() => expect(status()).toHaveTextContent(/^Queued to play$/u));
+    expect(icon()).toContain("lucide-check");
     expect(fake.plugin.speakReply).toHaveBeenCalledOnce();
   });
 
@@ -123,7 +133,7 @@ describe("TurnSpeakAction", () => {
     const { fake } = await connect();
     renderAction(async () => ({ assistantResult }));
     fireEvent.click(button());
-    await waitFor(() => expect(status()).toHaveTextContent("Playing"));
+    await waitFor(() => expect(status()).toHaveTextContent("Queued to play"));
     expect(fake.plugin.speakReply.mock.lastCall?.[0].assistantResult).toEqual({ unclassified: { text: "Whole reply text." } });
   });
 
@@ -178,7 +188,7 @@ describe("TurnSpeakAction", () => {
     fireEvent.click(button());
     expect(read).toHaveBeenCalledOnce();
     release(stored);
-    await waitFor(() => expect(status()).toHaveTextContent("Playing"));
+    await waitFor(() => expect(status()).toHaveTextContent("Queued to play"));
     expect(fake.plugin.speakReply).toHaveBeenCalledOnce();
   });
 });

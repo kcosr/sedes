@@ -58,11 +58,10 @@ function VoiceTurnSpeak({ voice, store, turnId, copyText }: {
         setFeedback({ kind: "failed", message: "Couldn't load the response to play" });
         return;
       }
-      const before = voice.getSnapshot().native;
-      const idle = before?.active === null && before.queue.count === 0;
       try {
         await voice.speakReply({ threadId: store.threadId, turnId, assistantResult });
-        setFeedback({ kind: "queued", message: idle ? "Playing" : "Queued to play" });
+        // Native may hold the replay behind a saved dictation or treat a repeat tap as a no-op, so success means only queued.
+        setFeedback({ kind: "queued", message: "Queued to play" });
       } catch (error) {
         setFeedback({ kind: "failed", message: speakFailure(error) });
       }

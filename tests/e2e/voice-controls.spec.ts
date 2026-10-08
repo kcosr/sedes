@@ -581,7 +581,7 @@ test("a completed turn's footer replays its reply and stays reachable on touch w
   const footerStatus = (text: string) => turn.getByRole("status").filter({ hasText: new RegExp(`^${text}$`, "u") });
 
   await speak.click();
-  await expect(footerStatus("Playing")).toHaveClass("sr-only");
+  await expect(footerStatus("Queued to play")).toHaveClass("sr-only");
   await expect(speak.locator(".lucide-check")).toBeVisible();
   await expect(toolbar.locator(".voice-card-sub")).toContainText("Speaking");
   await expect(toolbar.locator(".voice-card-sub")).toContainText("Replay");
