@@ -230,6 +230,9 @@ describe("turn reply speech lookup", () => {
       // A later turn that ended before producing assistant text is skipped.
       observe(current, { acceptedAt: 15_000, observedAt: 40_000, turnId: "turn-failed-empty", result: "" });
       observe(current, { acceptedAt: 16_000, observedAt: 50_000, turnId: "turn-failed-blank", result: " \n\t" });
+      // Blank means what reply selection's trim() means, including non-ASCII whitespace.
+      observe(current, { acceptedAt: 17_000, observedAt: 60_000, turnId: "turn-nbsp", result: "\u00a0\u2003" });
+      observe(current, { acceptedAt: 18_000, observedAt: 70_000, turnId: "turn-form-feed", result: "\f\v" });
       expect(current.completions.latestReplyTurnId(current.scope, current.threadId)).toBe("turn-accepted-later");
 
       expect(current.completions.latestReplyTurnId(current.scope, current.otherThreadId)).toBeNull();
@@ -271,8 +274,7 @@ describe("turn reply speech lookup", () => {
         AND application_turn_id IS NOT NULL
         AND assistant_result_json IS NOT NULL
         AND trim(coalesce(json_extract(assistant_result_json, '$.text'), ''), char(32, 9, 10, 13)) <> ''
-      ORDER BY completion_observed_at DESC, accepted_at DESC, operation_id DESC
-      LIMIT 1`;
+      ORDER BY completion_observed_at DESC, accepted_at DESC, operation_id DESC`;
     const indexes = (current: Fixture) => (current.database
       .prepare("SELECT name FROM sqlite_schema WHERE type = 'index' AND tbl_name = 'submission_completion_observations'")
       .all() as { name: string }[]).map(({ name }) => name);

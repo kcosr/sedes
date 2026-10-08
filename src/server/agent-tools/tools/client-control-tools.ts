@@ -81,8 +81,9 @@ export class ClientControlToolService {
       if (threadId === turn.threadId && turnId === turn.turnId) throw new CanonicalAgentToolRequestError("invalid_input", "The turn has not ended.");
       const command = { action: "replay_turn" as const, ...source, threadId, threadTitle: threadTitle(thread), turnId };
       const assistantResult = this.replies.select(scope, threadId, turnId, { ...command, ...assignedCommandFields });
+      // The default turn always has non-blank stored text, so only an explicit turn can be empty here.
       if (!assistantResult) throw new CanonicalAgentToolRequestError("not_found", input.turnId
-        ? "Sedes stored no reply for that turn; it may not have ended yet." : "Sedes stored no reply for that thread's most recent ended turn.");
+        ? "Sedes stored no reply for that turn; it may not have ended yet." : "Sedes stored no reply for that thread; its turns may not have ended yet.");
       return settled(await this.clients.request(target, { ...command, assistantResult }, context.abortSignal));
     }
     const action = id.slice("client.".length) as "settings.get" | "settings.update" | "switch_thread" | "end_interaction";

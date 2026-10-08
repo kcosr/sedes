@@ -359,12 +359,9 @@ stored whole reply. Nothing is skipped to find text, and the tool never
 attaches a runtime. It fails as `not_found` when:
 
 - an explicit turn has no stored reply text: "Sedes stored no reply for that
-  turn; it may not have ended yet.";
+  turn; it may not have ended yet."; or
 - the thread has no ended turn with a stored reply: "Sedes stored no reply for
-  that thread; its turns may not have ended yet."; or
-- the default turn's stored reply is blank after whitespace trimming the
-  lookup does not apply: "Sedes stored no reply for that thread's most recent
-  ended turn."
+  that thread; its turns may not have ended yet."
 
 The reply is fitted beside the command so the command stays within 64 KiB, and
 the command carries the resolved turn ID and the thread's inventory title, or

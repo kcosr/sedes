@@ -551,10 +551,13 @@ export class SubmissionCompletionRepository {
     scope: RequestScope,
     applicationThreadId: string,
   ): string | null {
-    const row = this.database
+    // SQL drops ASCII-blank replies cheaply; the JavaScript check applies the same
+    // blank test as reply selection (String.prototype.trim) to whatever remains.
+    const rows = this.database
       .prepare(
         `
-          SELECT application_turn_id AS applicationTurnId
+          SELECT application_turn_id AS applicationTurnId,
+            json_extract(assistant_result_json, '$.text') AS text
           FROM submission_completion_observations
           WHERE tenant_id = ? AND owner_principal_id = ?
             AND application_thread_id = ?
@@ -562,13 +565,16 @@ export class SubmissionCompletionRepository {
             AND assistant_result_json IS NOT NULL
             AND trim(coalesce(json_extract(assistant_result_json, '$.text'), ''), char(32, 9, 10, 13)) <> ''
           ORDER BY completion_observed_at DESC, accepted_at DESC, operation_id DESC
-          LIMIT 1
         `,
       )
-      .get(scope.tenantId, scope.principalId, applicationThreadId) as
-      | { readonly applicationTurnId: string }
-      | undefined;
-    return row?.applicationTurnId ?? null;
+      .iterate(scope.tenantId, scope.principalId, applicationThreadId) as IterableIterator<{
+        readonly applicationTurnId: string;
+        readonly text: unknown;
+      }>;
+    for (const row of rows) {
+      if (typeof row.text === "string" && row.text.trim() !== "") return row.applicationTurnId;
+    }
+    return null;
   }
 
   hasActiveAcceptedCorrelation(scope: RequestScope, applicationThreadId: string, correlations: readonly string[]): boolean {

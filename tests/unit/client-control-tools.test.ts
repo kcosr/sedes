@@ -200,7 +200,7 @@ describe("client.replay_turn", () => {
     expect(empty.select).not.toHaveBeenCalled();
     const silent = fixture(undefined, undefined, undefined, { replies: { select: () => null } });
     await expect(replay(silent, { threadId: sameEnvironment })).rejects.toMatchObject({
-      toolError: { code: "not_found", message: "Sedes stored no reply for that thread's most recent ended turn." } });
+      toolError: { code: "not_found", message: "Sedes stored no reply for that thread; its turns may not have ended yet." } });
     for (const current of [empty, silent]) expect(current.request).not.toHaveBeenCalled();
   });
 
