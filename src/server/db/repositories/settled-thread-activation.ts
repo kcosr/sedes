@@ -3,16 +3,18 @@ import { DomainError } from "../../domain/errors.js";
 import type { RequestScope } from "../../identity/identity-provider.js";
 
 /**
- * Applies the application-owned inventory consequence of accepting new input.
- * Callers must invoke this inside the same SQLite transaction that first
- * records durable acceptance. The conditional update makes receipt replay a
- * no-op and lets a later manual Settle remain authoritative.
+ * Returns a settled thread (Parked in the UI) to Active. This is the
+ * application-owned inventory consequence of a durable fact that needs the
+ * user's attention, such as accepted input. Callers must invoke this inside
+ * the same SQLite transaction that first records that fact. The conditional
+ * update makes replay a no-op and lets a later manual Park remain
+ * authoritative.
  */
-export function activateSettledThreadForAcceptedInput(
+export function activateSettledThread(
   database: Database.Database,
   scope: RequestScope,
   applicationThreadId: string,
-  acceptedAt: number,
+  activatedAt: number,
 ): boolean {
   const changed = database
     .prepare(
@@ -26,7 +28,7 @@ export function activateSettledThreadForAcceptedInput(
       `,
     )
     .run(
-      acceptedAt,
+      activatedAt,
       scope.tenantId,
       scope.principalId,
       applicationThreadId,
@@ -35,7 +37,7 @@ export function activateSettledThreadForAcceptedInput(
   if (changed.changes !== 1) {
     throw new DomainError(
       "conflict",
-      "Accepted input matched more than one scoped inventory record.",
+      "Thread activation matched more than one scoped inventory record.",
     );
   }
   const generation = database
