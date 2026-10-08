@@ -1767,7 +1767,15 @@ describe("application endpoint startup", () => {
       fireEvent.keyDown(search, { key: "Escape" });
       expect(search).toHaveFocus();
       fireEvent.change(search, { target: { value: "" } });
-      fireEvent.keyDown(search, { key: "Escape" });
+      // The handled Escape is consumed, so Find in thread's document listener never sees it.
+      const documentEscape = vi.fn();
+      document.addEventListener("keydown", documentEscape);
+      try {
+        expect(fireEvent.keyDown(search, { key: "Escape" })).toBe(false);
+      } finally {
+        document.removeEventListener("keydown", documentEscape);
+      }
+      expect(documentEscape).not.toHaveBeenCalled();
       expect(search).not.toHaveFocus();
 
       fireEvent.change(search, { target: { value: "Project" } });

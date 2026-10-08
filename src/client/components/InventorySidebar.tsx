@@ -1645,11 +1645,15 @@ export function InventorySidebar({
                 onChange={(event) => store.setSearch(event.target.value)}
                 onKeyDown={(event) => {
                   // Escape in an empty search returns the keyboard to sidebar navigation.
+                  // It is consumed so global Escape handlers, such as Find in thread's,
+                  // don't also act on the now-unfocused page.
                   if (
                     event.key === "Escape" &&
                     !event.nativeEvent.isComposing &&
                     event.currentTarget.value === ""
                   ) {
+                    event.preventDefault();
+                    event.stopPropagation();
                     event.currentTarget.blur();
                   }
                 }}
