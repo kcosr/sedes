@@ -229,10 +229,11 @@
 
 - On Android, a speaker button in each ended turn's footer queues that turn's
   reply for voice playback, for when you missed it. It replays the reply text
-  completion speech would read, using your current Response text selection, or
-  the whole reply for turns finished before Sedes stored that text. It is
-  speak-only, plays in Manual and Response mode, and appears only while voice is
-  on. `GET /api/threads/:threadId/turns/:turnId/reply-speech` serves the text.
+  completion speech would read, using your current Response text selection. It
+  reads the whole reply instead when that selection has no text, for example for
+  turns finished before Sedes stored it. It is speak-only, plays in Manual and
+  Response mode, and appears only while voice is on.
+  `GET /api/threads/:threadId/turns/:turnId/reply-speech` serves the text.
 
 - An **Automations** page lists every automation by status (Needs attention,
   Upcoming, Paused, Suspended) or by project, with search and row actions. Open
