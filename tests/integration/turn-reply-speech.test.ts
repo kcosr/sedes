@@ -121,6 +121,7 @@ function observe(
     readonly acceptedAt: number;
     readonly turnId?: string;
     readonly classifiedResult?: ClassifiedAssistantResult | null;
+    readonly result?: string;
   },
 ): string {
   const threadId = input.threadId ?? current.threadId;
@@ -138,7 +139,7 @@ function observe(
       finalized: {
         applicationTurnId: input.turnId,
         outcome: "completed",
-        result: { text: "Whole reply" },
+        result: { text: input.result ?? "Whole reply" },
         classifiedResult: input.classifiedResult ?? null,
       },
     });
@@ -182,6 +183,26 @@ describe("turn reply speech lookup", () => {
     }
   });
 
+  it("returns the latest accepted whole reply of a turn, classified or not, and nothing outside its scope", () => {
+    const current = fixture();
+    try {
+      observe(current, { acceptedAt: 1_000, turnId: "turn-steered", result: "First", classifiedResult: classified("First") });
+      observe(current, { acceptedAt: 2_000, turnId: "turn-steered", result: "Steered" });
+      observe(current, { acceptedAt: 3_000 });
+
+      expect(current.completions.latestAssistantResult(current.scope, current.threadId, "turn-steered"))
+        .toEqual({ text: "Steered" });
+      expect(current.completions.latestAssistantResult(current.scope, current.threadId, "turn-missing")).toBeNull();
+      expect(current.completions.latestAssistantResult(current.scope, current.otherThreadId, "turn-steered")).toBeNull();
+      expect(current.completions.latestAssistantResult(current.foreign, current.threadId, "turn-steered")).toBeNull();
+      expect(current.completions.latestAssistantResult(
+        { tenantId: randomUUID(), principalId: current.scope.principalId }, current.threadId, "turn-steered",
+      )).toBeNull();
+    } finally {
+      current.database.close();
+    }
+  });
+
   it("reports a corrupt stored classification as a conflict", () => {
     const current = fixture();
     try {
@@ -196,14 +217,14 @@ describe("turn reply speech lookup", () => {
     }
   });
 
-  it("serves the lookup from the turn index added by migration 137", () => {
-    const lookup = `EXPLAIN QUERY PLAN
-      SELECT classified_result_json FROM submission_completion_observations
+  it("serves both lookups from the turn index added by migration 137", () => {
+    const lookups = ["classified_result_json", "assistant_result_json"].map((column) => `EXPLAIN QUERY PLAN
+      SELECT ${column} FROM submission_completion_observations
       WHERE tenant_id = ? AND owner_principal_id = ?
         AND application_thread_id = ? AND application_turn_id = ?
-        AND classified_result_json IS NOT NULL
+        AND ${column} IS NOT NULL
       ORDER BY accepted_at DESC, operation_id DESC
-      LIMIT 1`;
+      LIMIT 1`);
     const indexes = (current: Fixture) => (current.database
       .prepare("SELECT name FROM sqlite_schema WHERE type = 'index' AND tbl_name = 'submission_completion_observations'")
       .all() as { name: string }[]).map(({ name }) => name);
@@ -217,11 +238,13 @@ describe("turn reply speech lookup", () => {
     }
     const current = fixture();
     try {
-      const plan = (current.database.prepare(lookup).all("t", "p", "thread", "turn") as { detail: string }[])
-        .map(({ detail }) => detail)
-        .join("\n");
-      expect(plan).toContain("USING INDEX submission_completion_turn");
-      expect(plan).not.toContain("TEMP B-TREE");
+      for (const lookup of lookups) {
+        const plan = (current.database.prepare(lookup).all("t", "p", "thread", "turn") as { detail: string }[])
+          .map(({ detail }) => detail)
+          .join("\n");
+        expect(plan).toContain("USING INDEX submission_completion_turn");
+        expect(plan).not.toContain("TEMP B-TREE");
+      }
     } finally {
       current.database.close();
     }
@@ -240,9 +263,50 @@ describe("turn reply speech service", () => {
       selectPhases(current, ["provisional"]);
       expect(current.replies.read(current.scope, current.threadId, "turn-1"))
         .toEqual({ assistantResult: { provisional: { text: "Before Done" } } });
-      selectPhases(current, []);
-      expect(current.replies.read(current.scope, current.threadId, "turn-1")).toEqual({ assistantResult: {} });
       expect(current.replies.read(current.scope, current.threadId, "turn-missing")).toEqual({ assistantResult: null });
+    } finally {
+      current.database.close();
+    }
+  });
+
+  it("falls back to the stored whole reply when the selection has no text or nothing was classified", () => {
+    const current = fixture();
+    try {
+      const whole = { assistantResult: { unclassified: { text: "Whole reply" } } };
+      observe(current, { acceptedAt: 1_000, turnId: "turn-1", classifiedResult: classified("Done") });
+      observe(current, { acceptedAt: 2_000, turnId: "turn-blank", classifiedResult: { provisional: { text: "Working." }, final: { text: " \n " }, unclassified: null } });
+      // Turns completed before classification existed stored only the whole reply.
+      observe(current, { acceptedAt: 3_000, turnId: "turn-legacy", classifiedResult: null });
+      observe(current, { acceptedAt: 4_000, turnId: "turn-silent", result: "  ", classifiedResult: { provisional: null, final: { text: "" }, unclassified: null } });
+      observe(current, { acceptedAt: 5_000, turnId: "turn-silent-legacy", result: "", classifiedResult: null });
+
+      expect(current.replies.read(current.scope, current.threadId, "turn-blank")).toEqual(whole);
+      expect(current.replies.read(current.scope, current.threadId, "turn-legacy")).toEqual(whole);
+      selectPhases(current, ["provisional", "final"]);
+      expect(current.replies.read(current.scope, current.threadId, "turn-blank"))
+        .toEqual({ assistantResult: { provisional: { text: "Working." }, final: { text: " \n " } } });
+      selectPhases(current, []);
+      expect(current.replies.read(current.scope, current.threadId, "turn-1")).toEqual(whole);
+      // Null now means Sedes stored no reply text at all.
+      for (const turnId of ["turn-silent", "turn-silent-legacy", "turn-missing"]) {
+        expect(current.replies.read(current.scope, current.threadId, turnId)).toEqual({ assistantResult: null });
+      }
+    } finally {
+      current.database.close();
+    }
+  });
+
+  it("fits the selected reply beside a caller's envelope", () => {
+    const current = fixture();
+    try {
+      const long = "é".repeat(30_000);
+      observe(current, { acceptedAt: 1_000, turnId: "turn-long", result: long, classifiedResult: null });
+      const envelope = { padding: "x".repeat(10_000) };
+      const selected = current.replies.select(current.scope, current.threadId, "turn-long", envelope);
+      expect(Buffer.byteLength(JSON.stringify({ ...envelope, assistantResult: selected }), "utf8")).toBeLessThanOrEqual(65_536);
+      expect(selected).toMatchObject({ unclassified: { truncation: { truncated: true, reason: "byte_limit" } } });
+      expect(current.replies.read(current.scope, current.threadId, "turn-long"))
+        .toEqual({ assistantResult: { unclassified: { text: long } } });
     } finally {
       current.database.close();
     }

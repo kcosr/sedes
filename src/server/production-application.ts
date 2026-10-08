@@ -1784,7 +1784,13 @@ export async function startProductionApplication(
         transitions: inventory,
       }),
     };
-    const clientControlTools = new ClientControlToolService(clientControls, actors, mutations.activity, agentToolSources);
+    // One reply-text source for the turn footer's speaker route and client.replay_turn.
+    const turnReplySpeech = new TurnReplySpeechService({
+      inventory: inventoryRepository,
+      completions: completion,
+      notifications,
+    });
+    const clientControlTools = new ClientControlToolService(clientControls, actors, mutations.activity, agentToolSources, turnReplySpeech);
     const canonicalAgentTools = new CanonicalInlineAgentToolService({
       clientControls: clientControlTools,
       workpads: new WorkpadAgentToolService({ workpads, authorityReader: agentToolSources }),
@@ -3079,11 +3085,7 @@ export async function startProductionApplication(
       lifecycle,
       inventory,
       turnBookmarks,
-      turnReplySpeech: new TurnReplySpeechService({
-        inventory: inventoryRepository,
-        completions: completion,
-        notifications,
-      }),
+      turnReplySpeech,
       threadGroups,
       threadArchives,
       threadBulkInventory,

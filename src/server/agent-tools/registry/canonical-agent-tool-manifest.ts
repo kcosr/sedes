@@ -147,6 +147,12 @@ export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
     catalog: { groupId: "client", label: "Update client settings", order: 50 },
     effects: { application: "write", modelUsage: "none", external: "none" },
   }),
+  "client.replay_turn": threadOnlyManifestEntry({
+    id: "client.replay_turn", schemaVersion: 1, environmentAuthority: { kind: "direct_resource", resource: "thread", defaultToSource: true },
+    description: "Queue one ended turn’s reply for speech on the current client, as the turn footer’s speaker does. It plays behind current voice work, never navigates or listens, and ignores automatic-playback filters. Take turnId from turns[].id of thread.messages; threadId defaults to this thread. Current client means the client that started this turn; later Steer input never changes it. Set clientId only when the user explicitly requests another client.",
+    catalog: { groupId: "client", label: "Replay turn reply", order: 60 },
+    effects: { application: "write", modelUsage: "none", external: "none" },
+  }),
   "agent.context": threadOnlyManifestEntry({
     environmentAuthority: { kind: "source_only" },
     id: "agent.context",
