@@ -6253,20 +6253,19 @@ describe("normalized HTTP application contract", () => {
         )
         .send({
           action: "remind",
-          wakeReminder: "  Review this now  ",
+          wakeReminder: "Review this now",
           expectedRevision: 2,
           mutationId: randomUUID(),
         })
-        .expect(204);
+        .expect(400);
       expect(
         current.repository.getThread(current.owner, created.body.id).inventory,
       ).toMatchObject({
         inventoryState: "active",
-        snoozedAt: null,
-        snoozedUntil: null,
-        wakeReason: "manual",
-        wakeAcknowledgedAt: null,
-        wakeReminderText: "Review this now",
+        inventoryRevision: 2,
+        wokeAt: null,
+        wakeReason: null,
+        wakeReminderText: null,
       });
       await current
         .mutate(
@@ -6278,7 +6277,7 @@ describe("normalized HTTP application contract", () => {
           action: "snooze",
           snoozedUntil: "2099-07-30T12:00:00.000Z",
           wakeReminder: "Review the queued idea",
-          expectedRevision: 3,
+          expectedRevision: 2,
           mutationId: randomUUID(),
         })
         .expect(204);
@@ -6296,10 +6295,21 @@ describe("normalized HTTP application contract", () => {
         )
         .send({
           action: "wake",
-          expectedRevision: 4,
+          expectedRevision: 3,
           mutationId: randomUUID(),
         })
         .expect(204);
+      // A manual wake keeps the snooze's reminder as dismissible attention.
+      expect(
+        current.repository.getThread(current.owner, created.body.id).inventory,
+      ).toMatchObject({
+        inventoryState: "active",
+        snoozedAt: null,
+        snoozedUntil: null,
+        wakeReason: "manual",
+        wakeAcknowledgedAt: null,
+        wakeReminderText: "Review the queued idea",
+      });
       await current
         .mutate(
           request(current.app).patch(
@@ -6308,7 +6318,7 @@ describe("normalized HTTP application contract", () => {
         )
         .send({
           action: "archive",
-          expectedRevision: 5,
+          expectedRevision: 4,
           expectedStashedPromptCount: 1,
           executionWorkspaceDisposition: { kind: "keep" },
           mutationId: randomUUID(),
@@ -6322,7 +6332,7 @@ describe("normalized HTTP application contract", () => {
         )
         .send({
           action: "restore",
-          expectedRevision: 6,
+          expectedRevision: 5,
           mutationId: randomUUID(),
         })
         .expect(204);
@@ -6334,12 +6344,12 @@ describe("normalized HTTP application contract", () => {
         )
         .send({
           action: "settle",
-          expectedRevision: 7,
+          expectedRevision: 6,
           expectedStashedPromptCount: 1,
           mutationId: randomUUID(),
         })
         .expect(204);
-      expect(current.threadSnapshotPublications).toHaveBeenCalledTimes(8);
+      expect(current.threadSnapshotPublications).toHaveBeenCalledTimes(7);
       expect(
         current.repository.getThread(current.owner, created.body.id).inventory
           .inventoryState,

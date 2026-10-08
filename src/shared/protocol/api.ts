@@ -401,12 +401,6 @@ export const inventoryTransitionSchema = z.discriminatedUnion("action", [
     mutationId: mutationIdSchema,
   }),
   z.strictObject({
-    action: z.literal("remind"),
-    wakeReminder: z.string().trim().min(1).max(1_000),
-    expectedRevision: z.number().int().nonnegative(),
-    mutationId: mutationIdSchema,
-  }),
-  z.strictObject({
     action: z.literal("wake"),
     expectedRevision: z.number().int().nonnegative(),
     mutationId: mutationIdSchema,

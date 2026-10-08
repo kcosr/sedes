@@ -796,32 +796,24 @@ describe("thread archive-impact protocol", () => {
 describe("inventory transition confirmation protocol", () => {
   const mutationId = "10000000-0000-4000-8000-000000000001";
 
-  it("accepts only a nonblank bounded reminder for remind", () => {
+  it("rejects the removed immediate remind transition", () => {
+    expect(
+      inventoryTransitionSchema.safeParse({
+        action: "remind",
+        wakeReminder: "Review this result",
+        expectedRevision: 0,
+        mutationId,
+      }).success,
+    ).toBe(false);
     expect(
       inventoryTransitionSchema.parse({
-        action: "remind",
-        wakeReminder: "  Review this result  ",
+        action: "snooze",
+        snoozedUntil: "2026-08-30T12:00:00.000Z",
+        wakeReminder: "Review this result",
         expectedRevision: 0,
         mutationId,
       }),
     ).toMatchObject({ wakeReminder: "Review this result" });
-    expect(
-      inventoryTransitionSchema.safeParse({
-        action: "remind",
-        wakeReminder: "   ",
-        expectedRevision: 0,
-        mutationId,
-      }).success,
-    ).toBe(false);
-    expect(
-      inventoryTransitionSchema.safeParse({
-        action: "remind",
-        wakeReminder: "Review",
-        snoozedUntil: "2026-08-30T12:00:00.000Z",
-        expectedRevision: 0,
-        mutationId,
-      }).success,
-    ).toBe(false);
   });
 
   for (const action of ["settle", "archive", "archive_family"] as const) {
@@ -2372,7 +2364,7 @@ describe("application sidebar background-work wire contract", () => {
     advisories: [], defaultNewThreadTargetId: "target-1", counts, tasks: [],
   };
   it("carries the same counts through snapshot and thread-upsert events without changing run state", () => {
-    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(143);
+    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(144);
     expect(normalizedApplicationEventSchema.parse({ type: "snapshot", generation: "generation-1", snapshot }))
       .toMatchObject({ snapshot: { threads: [{ runState: "idle", backgroundWork }] } });
     expect(normalizedApplicationEventSchema.parse({ type: "thread_upsert", generation: "generation-1", thread, counts }))

@@ -216,15 +216,11 @@ export class InventoryService {
     now = Date.now(),
   ): Promise<InventoryPrincipalStateRecord> {
     if (
-      (input.change.action === "snooze" || input.change.action === "remind") &&
+      input.change.action === "snooze" &&
       input.change.wakeReminderText !== undefined &&
       input.change.wakeReminderText !== null
     ) {
-      if (
-        input.change.wakeReminderText.length === 0 ||
-        (input.change.action === "remind" &&
-          input.change.wakeReminderText.trim().length === 0)
-      ) {
+      if (input.change.wakeReminderText.length === 0) {
         throw new DomainError(
           "invalid_transition",
           "Wake reminder cannot be empty.",

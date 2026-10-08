@@ -338,10 +338,6 @@ export type InventoryTransition =
       readonly snoozedUntil: number;
       readonly wakeReminderText?: string | null;
     }
-  | {
-      readonly action: "remind";
-      readonly wakeReminderText: string;
-    }
   | { readonly action: "wake" }
   | { readonly action: "archive" }
   | { readonly action: "restore" };
@@ -3160,26 +3156,6 @@ export class InventoryRepository {
           wakeReason: null,
           wakeAcknowledgedAt: null,
           wakeReminderText: change.wakeReminderText ?? null,
-        };
-      case "remind":
-        if (current.inventoryState !== "active") {
-          throw new DomainError(
-            "invalid_transition",
-            "Only an Active thread can receive a reminder now.",
-          );
-        }
-        return {
-          ...base,
-          stateChangedAt: current.stateChangedAt,
-          snoozedAt: null,
-          snoozedUntil: null,
-          // `wokeAt` is also the acknowledgement generation token. Keep it
-          // strictly increasing when two reminders are written in one clock
-          // tick so a stale dismissal cannot clear the replacement.
-          wokeAt: Math.max(now, (current.wokeAt ?? now - 1) + 1),
-          wakeReason: "manual",
-          wakeAcknowledgedAt: null,
-          wakeReminderText: change.wakeReminderText,
         };
       case "wake":
         if (current.inventoryState === "active") return current;
