@@ -226,14 +226,24 @@ public class NativeVoiceQueueTest {
         JSONObject request = NativeVoiceQueue.replayRequest(valid);
         NativeVoiceJson.put(valid, "threadId", "changed");
         assertEquals("t".repeat(512), request.optString("threadId"));
+        assertFalse("threadTitle is optional", request.has("threadTitle"));
+        // An optional title is validated like setForegroundContext's and kept on the stored request.
+        for (Object title : new Object[] { "Thread title", "T".repeat(512), JSONObject.NULL }) {
+            JSONObject titled = replayArgs("thread-a", "turn-1", new JSONObject()); NativeVoiceJson.put(titled, "threadTitle", title);
+            assertEquals(title, NativeVoiceQueue.replayRequest(titled).opt("threadTitle"));
+        }
         JSONObject falseTruncation = NativeVoiceJson.object("text", "x", "truncation",
             NativeVoiceJson.object("truncated", false, "retainedBytes", 1, "reason", "byte_limit"));
-        JSONObject extra = replayArgs("thread-a", "turn-1", new JSONObject()); NativeVoiceJson.put(extra, "threadTitle", "Title");
+        JSONObject extra = replayArgs("thread-a", "turn-1", new JSONObject()); NativeVoiceJson.put(extra, "title", "Title");
+        JSONObject longTitle = replayArgs("thread-a", "turn-1", new JSONObject()); NativeVoiceJson.put(longTitle, "threadTitle", "T".repeat(513));
+        JSONObject numericTitle = replayArgs("thread-a", "turn-1", new JSONObject()); NativeVoiceJson.put(numericTitle, "threadTitle", 42);
+        JSONObject emptyTitle = replayArgs("thread-a", "turn-1", new JSONObject()); NativeVoiceJson.put(emptyTitle, "threadTitle", "");
         JSONObject noThread = replayArgs("thread-a", "turn-1", new JSONObject()); noThread.remove("threadId");
         JSONObject noTurn = replayArgs("thread-a", "turn-1", new JSONObject()); noTurn.remove("turnId");
         JSONObject noResult = replayArgs("thread-a", "turn-1", new JSONObject()); noResult.remove("assistantResult");
         Object[][] cases = {
-            { "unknown_field", extra }, { "invalid_threadId", noThread }, { "invalid_threadId", replayArgs("", "turn-1", new JSONObject()) },
+            { "unknown_field", extra }, { "invalid_threadTitle", longTitle }, { "invalid_threadTitle", numericTitle },
+            { "invalid_threadTitle", emptyTitle }, { "invalid_threadId", noThread }, { "invalid_threadId", replayArgs("", "turn-1", new JSONObject()) },
             { "invalid_threadId", replayArgs("t".repeat(513), "turn-1", new JSONObject()) }, { "invalid_turnId", noTurn },
             { "invalid_turnId", replayArgs("thread-a", "u".repeat(161), new JSONObject()) }, { "invalid_assistantResult", noResult },
             { "invalid_assistantResult", replayArgs("thread-a", "turn-1", JSONObject.NULL) },
@@ -344,6 +354,14 @@ public class NativeVoiceQueueTest {
         NativeVoiceQueue silent = new NativeVoiceQueue();
         silent.addReplay(replay("turn-2", "---", raw)); silent.reconfigure(clean);
         assertEquals(0, silent.size()); assertEquals(0, silent.bytes()); assertEquals(0, silent.state().optInt("droppedCount"));
+        // The WebView's title stays on the stored request and the rebuilt item.
+        JSONObject titled = replayArgs("thread-a", "turn-3", NativeVoiceJson.object("final", text(markdown)));
+        NativeVoiceJson.put(titled, "threadTitle", "Provided title");
+        queue.addReplay(NativeVoiceQueue.Item.replay(NativeVoiceQueue.replayRequest(titled), "Provided title", clean));
+        queue.reconfigure(raw);
+        NativeVoiceQueue.Item retitled = queue.take();
+        assertEquals(markdown, retitled.speech); assertEquals("Provided title", retitled.threadTitle);
+        assertEquals("Provided title", retitled.request.optString("threadTitle"));
     }
     @Test public void automaticCancellationKeepsReplaysInOrderWhileOffClearsThem() {
         NativeVoiceSettings configured = settings("response");

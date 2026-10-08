@@ -146,8 +146,9 @@ final class NativeVoiceQueue {
     }
     /** Strict speakReply bridge arguments, validated before readiness or queue state is considered. */
     static JSONObject replayRequest(JSONObject args) {
-        NativeVoiceJson.keys(args, "threadId", "turnId", "assistantResult");
+        NativeVoiceJson.keys(args, "threadId", "turnId", "assistantResult", "threadTitle");
         NativeVoiceJson.string(args, "threadId", 512); NativeVoiceJson.string(args, "turnId", 160);
+        NativeVoiceJson.nullableString(args, "threadTitle", 512);
         NativeVoiceProtocol.assistantResult(NativeVoiceJson.requiredObject(args, "assistantResult"));
         return NativeVoiceJson.copy(args);
     }

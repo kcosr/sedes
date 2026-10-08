@@ -1041,13 +1041,14 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
     private void speakReply(JSONObject args) {
         JSONObject request = NativeVoiceQueue.replayRequest(args);
         if (!sessionStarted || !settings.active() || !speechReady() || binding == null) throw new IllegalStateException("voice_not_ready");
-        String threadId = request.optString("threadId");
-        NativeVoiceQueue.Item item = NativeVoiceQueue.Item.replay(request, replayTitle(threadId), settings);
+        NativeVoiceQueue.Item item = NativeVoiceQueue.Item.replay(request, replayTitle(request), settings);
         if (active != null && active.replay != null && active.replay.replayIdentity().equals(item.replayIdentity())) return;
         if (queue.addReplay(item)) drain();
     }
-    /** Display only: the bridge sends no title, so use one this device already holds for the thread. */
-    private String replayTitle(String threadId) {
+    /** Display only: the WebView's non-blank title first, otherwise one this device already holds for the thread. */
+    private String replayTitle(JSONObject request) {
+        String threadId = request.optString("threadId"), provided = NativeVoiceJson.nullableString(request, "threadTitle", 512);
+        if (provided != null && !blank(provided)) return provided;
         if (foregroundVisible && threadId.equals(foregroundThread) && foregroundTitle != null) return foregroundTitle;
         return threadId.equals(settings.text("voiceThreadId")) ? settings.text("voiceThreadTitle") : null;
     }

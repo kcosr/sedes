@@ -2397,8 +2397,11 @@ public class NativeVoiceRuntimeTest {
         }
         try (Fixture f = new Fixture(false, false)) {
             f.readyClientVoice("response");
-            JSONObject extra = NativeVoiceJson.object("threadId", f.target, "turnId", "turn-1", "threadTitle", "Title", "assistantResult", new JSONObject());
+            JSONObject extra = NativeVoiceJson.object("threadId", f.target, "turnId", "turn-1", "title", "Title", "assistantResult", new JSONObject());
             assertEquals("unknown_field", f.command("speakReply", extra));
+            for (Object title : new Object[] { 42, "", "T".repeat(513) })
+                assertEquals(String.valueOf(title), "invalid_threadTitle", f.command("speakReply", NativeVoiceJson.object("threadId", f.target,
+                    "turnId", "turn-1", "threadTitle", title, "assistantResult", NativeVoiceJson.object("final", NativeVoiceJson.object("text", "Reply")))));
             assertEquals("invalid_assistantResult", f.command("speakReply", NativeVoiceJson.object("threadId", f.target, "turnId", "turn-1")));
             assertEquals("unknown_field", f.command("speakReply", NativeVoiceJson.object("threadId", f.target, "turnId", "turn-1",
                 "assistantResult", NativeVoiceJson.object("summary", NativeVoiceJson.object("text", "Reply")))));
@@ -2539,6 +2542,36 @@ public class NativeVoiceRuntimeTest {
             SpeechJob again = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(again);
             assertEquals("Second replay", again.text);
         }
+    }
+
+    @Test public void replayTitlePrefersTheWebViewTitleOverTitlesNativeHolds() throws Exception {
+        try (Fixture f = new Fixture(false, false)) {
+            f.readyClientVoice("response");
+            String other = UUID.randomUUID().toString();
+            // Hidden: the saved default's title for its thread, otherwise none.
+            assertReplayTitle(f, f.target, null, "Other default");
+            assertReplayTitle(f, other, null, null);
+            assertReplayTitle(f, other, "Provided title", "Provided title");
+            f.runtime.nativeVisibility(true);
+            assertNull(f.command("setForegroundContext", NativeVoiceJson.object("visible", true, "threadId", f.target, "threadTitle", "Visible thread")));
+            assertReplayTitle(f, f.target, null, "Visible thread");
+            assertReplayTitle(f, f.target, JSONObject.NULL, "Visible thread");
+            assertReplayTitle(f, f.target, " \t", "Visible thread");
+            assertReplayTitle(f, f.target, "Provided title", "Provided title");
+        }
+    }
+    /** Plays one replay with an optional threadTitle argument (omitted when null), checks its active title, and skips it. */
+    private static void assertReplayTitle(Fixture f, String threadId, Object title, String expected) throws Exception {
+        JSONObject args = NativeVoiceJson.object("threadId", threadId, "turnId", UUID.randomUUID().toString(),
+            "assistantResult", NativeVoiceJson.object("final", NativeVoiceJson.object("text", "Titled reply")));
+        if (title != null) NativeVoiceJson.put(args, "threadTitle", title);
+        assertNull(f.command("speakReply", args));
+        assertNotNull(f.speech.speechRequests.poll(10, TimeUnit.SECONDS));
+        JSONObject active = f.runtime.snapshot().getJSONObject("active");
+        if (expected == null) assertTrue(String.valueOf(title), active.isNull("threadTitle"));
+        else assertEquals(String.valueOf(title), expected, active.getString("threadTitle"));
+        assertNull(f.command("skipCurrentPlayback", new JSONObject()));
+        assertTrue(f.runtime.snapshot().isNull("active"));
     }
 
     @Test public void replayingAQueuedOrPlayingTurnIsANoOpAndAFullQueueRefusesIt() throws Exception {
