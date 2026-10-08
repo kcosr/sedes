@@ -814,7 +814,7 @@ describe("state buckets", () => {
           automation: automation({ nextRunAt: at(2026, 7, 13, 6) }),
         }),
       ),
-    ).toBe("scheduled");
+    ).toBe("snoozed");
     expect(
       resolveStateBucket(
         thread("t", {
@@ -823,16 +823,75 @@ describe("state buckets", () => {
         }),
       ),
     ).toBe("snoozed");
+    expect(
+      resolveStateBucket(
+        thread("t", {
+          inventoryState: "settled",
+          automation: automation({ nextRunAt: at(2026, 7, 13, 6) }),
+        }),
+      ),
+    ).toBe("settled");
     expect(resolveStateBucket(thread("t", { inventoryState: "settled" }))).toBe(
       "settled",
     );
+    expect(
+      resolveStateBucket(
+        thread("t", {
+          automation: automation({ nextRunAt: at(2026, 7, 13, 6) }),
+        }),
+      ),
+    ).toBe("scheduled");
     expect(resolveStateBucket(thread("t", { runState: "disconnected" }))).toBe(
       "idle",
     );
     expect(resolveStateBucket(thread("t"))).toBe("idle");
   });
 
-  it("emits groups in precedence order and omits empty ones", () => {
+  it("files snoozed and parked automated threads under Snoozed and Parked, not Scheduled", () => {
+    const nextRunAt = at(2026, 7, 13, 6);
+    const groups = project("state", [
+      thread("scheduled", { automation: automation({ nextRunAt }) }),
+      thread("snoozed-automation", {
+        inventoryState: "snoozed",
+        snoozedUntil: at(2026, 7, 14, 9),
+        automation: automation({ nextRunAt }),
+      }),
+      thread("parked-automation", {
+        inventoryState: "settled",
+        automation: automation({ nextRunAt }),
+      }),
+      thread("parked-running", {
+        inventoryState: "settled",
+        runState: "running",
+        automation: automation({ nextRunAt }),
+      }),
+      thread("parked-failed", {
+        inventoryState: "settled",
+        runState: "failed",
+        automation: automation({ nextRunAt }),
+      }),
+    ]);
+    expect(keysOf(groups)).toEqual([
+      "needs-attention",
+      "running",
+      "scheduled",
+      "snoozed",
+      "settled",
+    ]);
+    expect(idsOf(groupFor(groups, "needs-attention"))).toEqual([
+      "parked-failed",
+    ]);
+    expect(idsOf(groupFor(groups, "running"))).toEqual(["parked-running"]);
+    expect(idsOf(groupFor(groups, "scheduled"))).toEqual(["scheduled"]);
+    expect(idsOf(groupFor(groups, "snoozed"))).toEqual(["snoozed-automation"]);
+    expect(groupFor(groups, "settled")).toMatchObject({
+      label: "Parked",
+      futureTimes: false,
+    });
+    expect(idsOf(groupFor(groups, "settled"))).toEqual(["parked-automation"]);
+  });
+
+  it("emits groups in display order and omits empty ones", () => {
     const groups = project("state", [
       thread("idle-1"),
       thread("snoozed-1", { inventoryState: "snoozed" }),

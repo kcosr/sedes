@@ -228,7 +228,12 @@ export function resolveTimeBucket(
 export type SidebarStateBucketKey =
   "needs-attention" | "running" | "scheduled" | "snoozed" | "settled" | "idle";
 
-/** State-mode bucket by precedence; first match wins, each thread once. */
+/**
+ * State-mode bucket by precedence; first match wins, each thread once. The
+ * user's own Snooze and Park outrank an automation's schedule: a parked
+ * automated thread stays under Parked until its next run returns it to
+ * Active.
+ */
 export function resolveStateBucket(
   thread: NormalizedApplicationThreadSummary,
 ): SidebarStateBucketKey {
@@ -245,6 +250,8 @@ export function resolveStateBucket(
     return "needs-attention";
   }
   if (ACTIVE_RUN_STATES.has(thread.runState)) return "running";
+  if (thread.inventoryState === "snoozed") return "snoozed";
+  if (thread.inventoryState === "settled") return "settled";
   if (
     thread.automation !== null &&
     thread.automation.status === "enabled" &&
@@ -252,8 +259,6 @@ export function resolveStateBucket(
   ) {
     return "scheduled";
   }
-  if (thread.inventoryState === "snoozed") return "snoozed";
-  if (thread.inventoryState === "settled") return "settled";
   return "idle";
 }
 

@@ -3825,6 +3825,38 @@ describe("InventorySidebar view modes", () => {
     expect(screen.getByText("Active thread")).toBeInTheDocument();
   });
 
+  it("files a parked automated thread under Parked in the State view", () => {
+    seedViewPreferences({ groupBy: "state", lastAltGroupBy: "state" });
+    const automation = {
+      status: "enabled" as const,
+      runMode: "same_thread" as const,
+      scheduleKind: "cron" as const,
+      schedule: { kind: "cron" as const, expression: "0 2 * * *", timeZone: "UTC" },
+      misfirePolicy: "coalesce" as const,
+      promptPreview: "Check dependencies",
+      nextRunAt: new Date(Date.now() + 3_600_000).toISOString(),
+      revision: 1,
+      runsRevision: 0,
+      hasPrecheck: false,
+    };
+    renderSidebar([
+      makeThread("scheduled-1", "Nightly audit", { automation }),
+      makeThread("parked-1", "Parked audit", {
+        inventoryState: "settled" as const,
+        automation,
+      }),
+    ]);
+
+    const groups = screen.getAllByTestId("flat-group");
+    expect(groups.map((group) => group.getAttribute("data-group"))).toEqual([
+      "scheduled",
+      "settled",
+    ]);
+    expect(within(groups[0]!).queryByText("Parked audit")).toBeNull();
+    expect(groups[1]).toHaveTextContent(/^Parked · 1/u);
+    expect(within(groups[1]!).getByText("Parked audit")).toBeVisible();
+  });
+
   it("hides snoozed threads in flat mode when Show snoozed is off", async () => {
     const user = userEvent.setup();
     seedViewPreferences({ groupBy: "state", lastAltGroupBy: "state" });
