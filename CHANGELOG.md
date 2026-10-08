@@ -6,9 +6,9 @@
 
 - Browser and packaged clients require client protocol 145, which adds
   automation schedule details and run turn outcomes to thread summaries and
-  runs, drops the Remind now inventory action, and adds the turn reply speech
-  read. Upgrade clients together with the server.
-  ([#58](https://github.com/kcosr/sedes/pull/58), [#59](https://github.com/kcosr/sedes/pull/59), [#61](https://github.com/kcosr/sedes/pull/61))
+  runs, drops the Remind now inventory action, and adds turn reply replay.
+  Upgrade clients together with the server.
+  ([#58](https://github.com/kcosr/sedes/pull/58), [#59](https://github.com/kcosr/sedes/pull/59), [#61](https://github.com/kcosr/sedes/pull/61), [#62](https://github.com/kcosr/sedes/pull/62))
 
 - `PATCH /api/threads/:threadId/inventory` no longer accepts the `remind`
   action. ([#61](https://github.com/kcosr/sedes/pull/61))
@@ -227,19 +227,13 @@
 
 ### Added
 
-- On Android, a speaker button in each ended turn's footer queues that turn's
-  reply for voice playback, for when you missed it. It replays the reply text
-  completion speech would read, using your current Response text selection. It
-  reads the whole reply instead when that selection has no text. It is
-  speak-only, plays in Manual and Response mode, and appears only while voice is
-  on. `GET /api/threads/:threadId/turns/:turnId/reply-speech` serves the text.
+- Android: a speaker button in each ended turn's footer queues the turn's
+  reply for voice playback, as completion speech would read it. It appears
+  while voice is on. ([#62](https://github.com/kcosr/sedes/pull/62))
 
-- Agent tool `client.replay_turn` (**Replay turn reply** in the Client controls
-  group) queues a turn's reply on the current client, as the speaker button
-  does. It never navigates or listens. With no arguments it repeats the agent's
-  own previous reply; `threadId` picks another thread and `turnId`, from
-  `thread.messages`, an earlier turn. Threads that already enable Client
-  controls must also turn on this tool.
+- Agent tool `client.replay_turn` (**Replay turn reply**, Client controls)
+  does the same from an agent; `{}` repeats the agent's previous reply.
+  Enable it per thread. ([#62](https://github.com/kcosr/sedes/pull/62))
 
 - An **Automations** page lists every automation by status (Needs attention,
   Upcoming, Paused, Suspended) or by project, with search and row actions. Open
@@ -493,9 +487,8 @@
 
 ### Changed
 
-- When a client rejects a client-control agent tool, the agent now sees the
-  client's reason ("The client rejected the request: <reason>.") instead of a
-  generic message.
+- Client-control agent tools report the client's rejection reason instead of
+  a generic message. ([#62](https://github.com/kcosr/sedes/pull/62))
 
 - **Park** replaces Settle: a parked thread leaves the working set until new
   input returns it to Active, including an automation run, so parking an
