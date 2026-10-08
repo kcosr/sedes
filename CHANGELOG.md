@@ -1343,9 +1343,9 @@
 
 ### Removed
 
-- Ctrl+Shift+Arrow (Command+Shift+Arrow on macOS) no longer moves the focused
-  panel to another edge. Use the panel's menu instead. Ctrl+Shift+Up/Down now
-  moves to the previous or next sidebar thread even while a panel has focus.
+- The Ctrl+Shift+Arrow (Command+Shift+Arrow) panel docking shortcut; dock from
+  the panel menu. Ctrl+Shift+Up/Down now always moves between sidebar threads.
+  ([#63](https://github.com/kcosr/sedes/pull/63))
 
 - **Remind now** is gone; pin the thread and add a task instead. Snooze keeps
   its optional reminder. ([#61](https://github.com/kcosr/sedes/pull/61))
