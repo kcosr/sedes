@@ -320,6 +320,51 @@ describe("thread automation lifecycle", () => {
     );
   }
 
+  function park(now: number) {
+    return inventory.transitionInventory(scope, threadId, {
+      expectedRevision: inventory.getInventory(scope, threadId)
+        .inventoryRevision,
+      mutationId: randomUUID(),
+      change: { action: "settle" },
+      now,
+    }).state;
+  }
+
+  function inventoryGeneration(): number {
+    return (
+      database
+        .prepare(
+          `SELECT inventory_generation AS value
+           FROM principal_generations
+           WHERE tenant_id = ? AND principal_id = ?`,
+        )
+        .get(scope.tenantId, scope.principalId) as { readonly value: number }
+    ).value;
+  }
+
+  function createManual(
+    precheck: Parameters<AutomationService["create"]>[2]["precheck"] = null,
+  ) {
+    service.create(
+      scope,
+      threadId,
+      {
+        prompt: "Manual prompt",
+        runMode: "same_thread",
+        schedule: {
+          kind: "interval",
+          anchorAt: new Date(100_000).toISOString(),
+          everySeconds: 300,
+        },
+        misfirePolicy: "coalesce",
+        precheck,
+        mutationId: randomUUID(),
+      },
+      1_000,
+    );
+    return repository.findDefinitionForThread(scope, threadId)!;
+  }
+
   it("persists a new automation paused until an explicit enable", () => {
     const created = service.create(
       scope,
@@ -984,7 +1029,7 @@ describe("thread automation lifecycle", () => {
     });
   });
 
-  it("keeps a settled clone anchor settled when its one-shot fails", async () => {
+  it("returns a parked clone anchor to Active when its one-shot fails", async () => {
     createEnabled(
       {
         prompt: "Fail once",
@@ -1000,13 +1045,10 @@ describe("thread automation lifecycle", () => {
       1_000,
     );
     const definition = repository.findDefinitionForThread(scope, threadId)!;
-    inventory.transitionInventory(scope, threadId, {
-      expectedRevision: 0,
-      mutationId: randomUUID(),
-      change: { action: "settle" },
-      now: 1_500,
-    });
+    const parked = park(1_500);
+    const generation = inventoryGeneration();
     invokeAutomation.mockRejectedValueOnce(new Error("Backend rejected work"));
+    publishedThreads.length = 0;
 
     clock = 2_000;
     await service.reconcileDue(clock);
@@ -1022,9 +1064,15 @@ describe("thread automation lifecycle", () => {
       childThreadId: expect.any(String),
     });
     expect(inventory.getThread(scope, threadId).inventory).toMatchObject({
-      inventoryState: "settled",
+      inventoryState: "active",
+      inventoryRevision: parked.inventoryRevision + 1,
+      stateChangedAt: 2_000,
       automationContextRunId: null,
     });
+    // The child's automation context and the anchor's activation each
+    // advance the inventory generation.
+    expect(inventoryGeneration()).toBe(generation + 2);
+    expect(publishedThreads).toContain(threadId);
     expect(
       inventory.getThread(scope, run.childThreadId!).inventory,
     ).toMatchObject({
@@ -1036,6 +1084,337 @@ describe("thread automation lifecycle", () => {
       automationContextRunId: run.id,
       automationContextDiagnostic: "Backend rejected work",
     });
+  });
+
+  it.each([
+    {
+      outcome: "fails",
+      state: "failed",
+      dispatch: () =>
+        invokeAutomation.mockRejectedValueOnce(
+          new Error("Backend rejected work"),
+        ),
+    },
+    {
+      outcome: "becomes uncertain",
+      state: "uncertain",
+      dispatch: () =>
+        invokeAutomation.mockResolvedValueOnce({
+          status: "uncertain",
+          targetThreadId: threadId,
+          diagnostic: "Acceptance could not be proven.",
+        }),
+    },
+  ] as const)(
+    "returns a parked anchor to Active when its run $outcome",
+    async ({ state, dispatch }) => {
+      createManual();
+      const parked = park(1_500);
+      const generation = inventoryGeneration();
+      dispatch();
+      publishedThreads.length = 0;
+
+      clock = 2_000;
+      await expect(
+        service.runNow(scope, threadId, randomUUID(), clock),
+      ).resolves.toMatchObject({ state });
+
+      expect(inventory.getThread(scope, threadId).inventory).toMatchObject({
+        inventoryState: "active",
+        inventoryRevision: parked.inventoryRevision + 1,
+        stateChangedAt: 2_000,
+      });
+      expect(inventoryGeneration()).toBe(generation + 1);
+      expect(publishedThreads).toContain(threadId);
+    },
+  );
+
+  it.each(["reports a failure", "throws"] as const)(
+    "returns a parked anchor to Active when its pre-check %s",
+    async (failure) => {
+      createEnabled(
+        {
+          prompt: "Gated one-shot",
+          runMode: "same_thread",
+          schedule: {
+            kind: "date_time",
+            runAt: new Date(2_000).toISOString(),
+          },
+          misfirePolicy: "coalesce",
+          precheck: {
+            command: "gate",
+            timeoutSeconds: 30,
+            includeStdout: false,
+          },
+          mutationId: randomUUID(),
+        },
+        1_000,
+      );
+      const definition = repository.findDefinitionForThread(scope, threadId)!;
+      park(1_500);
+      if (failure === "throws") {
+        precheckError = new Error("provider failed before execution");
+      } else {
+        precheckResult = {
+          decision: "failed",
+          durationMilliseconds: 4,
+          diagnosticCode: "automation_precheck_timeout",
+          diagnostic: "The pre-check timed out.",
+          stdoutBytes: 0,
+        };
+      }
+      publishedThreads.length = 0;
+
+      clock = 2_000;
+      await service.reconcileDue(clock);
+      await vi.waitFor(() => {
+        expect(
+          repository.findDefinitionForThread(scope, threadId),
+        ).toBeUndefined();
+      });
+
+      expect(
+        repository.listRuns(scope, definition.id, { limit: 10 })[0],
+      ).toMatchObject({ state: "failed", precheckStatus: "failed" });
+      expect(invokeAutomation).not.toHaveBeenCalled();
+      expect(inventory.getThread(scope, threadId).inventory).toMatchObject({
+        inventoryState: "active",
+        stateChangedAt: 2_000,
+        automationContextOutcome: "failed",
+      });
+      expect(publishedThreads).toContain(threadId);
+    },
+  );
+
+  it("returns a parked anchor to Active when restart fails its interrupted pre-check", async () => {
+    const definition = createManual({
+      command: "gate",
+      timeoutSeconds: 30,
+      includeStdout: false,
+    });
+    const claimed = repository.createManualRun(scope, definition.id, {
+      runId: randomUUID(),
+      occurrenceKey: `manual:${randomUUID()}`,
+      scheduledFor: 1_500,
+      claimToken: randomUUID(),
+      leaseExpiresAt: 2_000,
+      dispatchMutationId: randomUUID(),
+      now: 1_500,
+    }).run;
+    repository.beginPrecheck(scope, definition.id, claimed.id, {
+      claimToken: claimed.claimToken!,
+      now: 1_600,
+    });
+    const parked = park(1_700);
+    publishedThreads.length = 0;
+
+    await service.reconcileDue(2_000);
+
+    expect(repository.getRun(scope, definition.id, claimed.id)).toMatchObject({
+      state: "failed",
+      errorCode: "automation_precheck_interrupted",
+    });
+    expect(inventory.getThread(scope, threadId).inventory).toMatchObject({
+      inventoryState: "active",
+      inventoryRevision: parked.inventoryRevision + 1,
+      stateChangedAt: 2_000,
+    });
+    expect(publishedThreads).toContain(threadId);
+  });
+
+  it("returns a parked anchor to Active when restart finds its dispatch uncertain", async () => {
+    const definition = createManual();
+    const claimed = repository.createManualRun(scope, definition.id, {
+      runId: randomUUID(),
+      occurrenceKey: `manual:${randomUUID()}`,
+      scheduledFor: 1_500,
+      claimToken: randomUUID(),
+      leaseExpiresAt: 2_000,
+      dispatchMutationId: randomUUID(),
+      now: 1_500,
+    }).run;
+    repository.updateRunState(scope, definition.id, claimed.id, {
+      expectedState: "claimed",
+      state: "dispatching",
+      claimToken: claimed.claimToken!,
+      retainPromptSnapshot: true,
+      now: 1_600,
+    });
+    const parked = park(1_700);
+    publishedThreads.length = 0;
+
+    await service.reconcileDue(2_000);
+
+    expect(repository.getRun(scope, definition.id, claimed.id)).toMatchObject({
+      state: "uncertain",
+      errorCode: "automation_dispatch_uncertain",
+    });
+    expect(inventory.getThread(scope, threadId).inventory).toMatchObject({
+      inventoryState: "active",
+      inventoryRevision: parked.inventoryRevision + 1,
+      stateChangedAt: 2_000,
+    });
+    expect(publishedThreads).toContain(threadId);
+  });
+
+  it.each([
+    { item: "failed", state: "failed", errorCode: "automation_dispatch_failed" },
+    {
+      item: "cancelled",
+      state: "failed",
+      errorCode: "automation_dispatch_cancelled",
+    },
+    {
+      item: "uncertain",
+      state: "uncertain",
+      errorCode: "automation_dispatch_uncertain",
+    },
+  ] as const)(
+    "returns a parked anchor to Active when its queued input ends $item",
+    async ({ item: itemState, state, errorCode }) => {
+      createManual();
+      invokeAutomation.mockResolvedValueOnce({
+        status: "queued",
+        targetThreadId: threadId,
+      });
+      clock = 2_000;
+      const queued = await service.runNow(scope, threadId, randomUUID(), clock);
+      expect(queued.state).toBe("queued");
+      const run = repository.findRunByScopedId(scope, queued.id)!;
+      const parked = park(2_500);
+      const generation = inventoryGeneration();
+      publishedThreads.length = 0;
+      const item = {
+        mutationId: run.dispatchMutationId,
+        state: itemState,
+        diagnostic: null,
+      } as never;
+      clock = 3_000;
+      new AutomationQueueRunObserver({
+        repository,
+        queue: { findByMutationId: () => item },
+        publisher: service,
+        now: () => clock,
+      }).observe(scope, threadId, item);
+
+      expect(repository.getRun(scope, run.automationId, run.id)).toMatchObject({
+        state,
+        errorCode,
+      });
+      expect(inventory.getThread(scope, threadId).inventory).toMatchObject({
+        inventoryState: "active",
+        inventoryRevision: parked.inventoryRevision + 1,
+        stateChangedAt: 3_000,
+      });
+      expect(inventoryGeneration()).toBe(generation + 1);
+      expect(publishedThreads).toContain(threadId);
+    },
+  );
+
+  it.each(["pre-check", "misfire"] as const)(
+    "leaves a parked anchor parked when a %s skips its run",
+    async (skip) => {
+      createEnabled(
+        {
+          prompt: "Skippable one-shot",
+          runMode: "same_thread",
+          schedule: {
+            kind: "date_time",
+            runAt: new Date(2_000).toISOString(),
+          },
+          misfirePolicy: skip === "misfire" ? "skip" : "coalesce",
+          precheck:
+            skip === "pre-check"
+              ? { command: "exit 1", timeoutSeconds: 30, includeStdout: false }
+              : null,
+          mutationId: randomUUID(),
+        },
+        1_000,
+      );
+      const definition = repository.findDefinitionForThread(scope, threadId)!;
+      const parked = park(1_500);
+      const generation = inventoryGeneration();
+      precheckResult = {
+        decision: "skip",
+        durationMilliseconds: 4,
+        exitCode: 1,
+        stdoutBytes: 0,
+      };
+
+      clock = skip === "misfire" ? 2_000 + 60_001 : 2_000;
+      await service.reconcileDue(clock);
+      await vi.waitFor(() => {
+        expect(
+          repository.findDefinitionForThread(scope, threadId),
+        ).toBeUndefined();
+      });
+
+      expect(
+        repository.listRuns(scope, definition.id, { limit: 10 })[0],
+      ).toMatchObject({
+        state: "skipped",
+        errorCode:
+          skip === "misfire"
+            ? "automation_misfire_skipped"
+            : "automation_precheck_nonzero",
+      });
+      expect(invokeAutomation).not.toHaveBeenCalled();
+      expect(inventory.getThread(scope, threadId).inventory).toEqual(parked);
+      expect(inventoryGeneration()).toBe(generation);
+    },
+  );
+
+  it("keeps a re-parked anchor parked when its uncertain run is resolved", async () => {
+    createManual();
+    park(1_500);
+    invokeAutomation.mockResolvedValueOnce({
+      status: "uncertain",
+      targetThreadId: threadId,
+      diagnostic: "Acceptance could not be proven.",
+    });
+    clock = 2_000;
+    const uncertain = await service.runNow(
+      scope,
+      threadId,
+      randomUUID(),
+      clock,
+    );
+    expect(inventory.getThread(scope, threadId).inventory.inventoryState).toBe(
+      "active",
+    );
+    const reparked = park(2_500);
+    const generation = inventoryGeneration();
+
+    expect(
+      service.resolveUncertainRun(
+        scope,
+        threadId,
+        uncertain.id,
+        { resume: false },
+        3_000,
+      ),
+    ).toMatchObject({
+      run: { state: "failed", errorCode: "automation_uncertain_resolved" },
+    });
+    expect(inventory.getThread(scope, threadId).inventory).toEqual(reparked);
+    expect(inventoryGeneration()).toBe(generation);
+  });
+
+  it("leaves an Active anchor's inventory unchanged when its run fails", async () => {
+    createManual();
+    const before = inventory.getThread(scope, threadId).inventory;
+    const generation = inventoryGeneration();
+    invokeAutomation.mockRejectedValueOnce(new Error("Backend rejected work"));
+
+    clock = 2_000;
+    const failed = await service.runNow(scope, threadId, randomUUID(), clock);
+    expect(failed.state).toBe("failed");
+    // Replaying the terminal run neither repeats it nor touches inventory.
+    await dispatcher.dispatch(repository.findRunByScopedId(scope, failed.id)!);
+
+    expect(invokeAutomation).toHaveBeenCalledOnce();
+    expect(inventory.getThread(scope, threadId).inventory).toEqual(before);
+    expect(inventoryGeneration()).toBe(generation);
   });
 
   it("uses exit status as the pre-check gate and does not create a skip notice", async () => {

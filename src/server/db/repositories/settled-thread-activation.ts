@@ -5,10 +5,10 @@ import type { RequestScope } from "../../identity/identity-provider.js";
 /**
  * Returns a settled thread (Parked in the UI) to Active. This is the
  * application-owned inventory consequence of a durable fact that needs the
- * user's attention, such as accepted input. Callers must invoke this inside
- * the same SQLite transaction that first records that fact. The conditional
- * update makes replay a no-op and lets a later manual Park remain
- * authoritative.
+ * user's attention: accepted input, or an automation run anchored on the
+ * thread ending failed or uncertain. Callers must invoke this inside the same
+ * SQLite transaction that first records that fact. The conditional update
+ * makes replay a no-op and lets a later manual Park remain authoritative.
  */
 export function activateSettledThread(
   database: Database.Database,
