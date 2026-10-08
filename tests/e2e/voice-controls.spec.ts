@@ -586,14 +586,14 @@ test("a completed turn's footer replays its reply and stays reachable on touch w
   await expect(toolbar.locator(".voice-card-sub")).toContainText("Speaking");
   await expect(toolbar.locator(".voice-card-sub")).toContainText("Replay");
   expect(reads).toEqual([`/api/threads/${threadId}/turns/${turnId}/reply-speech`]);
-  expect(await speakCalls()).toEqual([{ method: "speakReply", args: { expectedConnectionGeneration: 1, threadId, turnId,
+  expect(await speakCalls()).toEqual([{ method: "speakReply", args: { expectedConnectionGeneration: 1, threadId, turnId, threadTitle: "Voice replay",
     assistantResult: { final: { text: "Stored final answer." }, unclassified: null } } }]);
   await capture(page, testInfo, "voice-replay-playing.png");
 
   // A second tap queues behind current speech; with no stored result it reads the whole reply, as Copy response gives it.
   await speak.click();
   await expect(footerStatus("Queued to play")).toHaveCount(1);
-  expect((await speakCalls()).at(-1)).toEqual({ method: "speakReply", args: { expectedConnectionGeneration: 1, threadId, turnId,
+  expect((await speakCalls()).at(-1)).toEqual({ method: "speakReply", args: { expectedConnectionGeneration: 1, threadId, turnId, threadTitle: "Voice replay",
     assistantResult: { unclassified: { text: "The measured response is complete." } } } });
   await expect(toolbar.locator(".voice-card-sub")).toContainText("1 queued");
   await toolbar.getByRole("button", { name: "Stop voice interaction", exact: true }).click();

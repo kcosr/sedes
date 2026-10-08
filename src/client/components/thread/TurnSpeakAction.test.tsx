@@ -33,9 +33,10 @@ async function connect(native: NativeVoiceState = ready()) {
 }
 function renderAction(read: (turnId: string) => Promise<TurnReplySpeech> = async () => stored, ...text: [copyText?: string | undefined]) {
   const copyText = text.length ? text[0] : "Whole reply text.";
-  const source = { threadId: "thread-1", readTurnReplySpeech: vi.fn(read) };
+  const thread = { title: { text: "Release review" } };
+  const source = { threadId: "thread-1", readTurnReplySpeech: vi.fn(read), getSnapshot: () => ({ snapshot: { thread } }) };
   const view = render(<TurnSpeakAction store={source} turnId="turn-1" copyText={copyText} />);
-  return { ...view, read: source.readTurnReplySpeech };
+  return { ...view, read: source.readTurnReplySpeech, thread };
 }
 const button = () => screen.getByRole("button", { name: "Play response aloud" });
 const icon = () => button().querySelector("svg")!.getAttribute("class");
@@ -93,7 +94,7 @@ describe("TurnSpeakAction", () => {
     await act(() => vi.advanceTimersByTimeAsync(0));
     expect(read).toHaveBeenCalledExactlyOnceWith("turn-1");
     expect(fake.plugin.speakReply).toHaveBeenCalledExactlyOnceWith({
-      expectedConnectionGeneration: 1, threadId: "thread-1", turnId: "turn-1", assistantResult: stored.assistantResult,
+      expectedConnectionGeneration: 1, threadId: "thread-1", turnId: "turn-1", threadTitle: "Release review", assistantResult: stored.assistantResult,
     });
     expect(status()).toHaveTextContent(/^Queued to play$/u);
     expect(icon()).toContain("lucide-check");
@@ -123,6 +124,22 @@ describe("TurnSpeakAction", () => {
     await waitFor(() => expect(status()).toHaveTextContent(/^Queued to play$/u));
     expect(icon()).toContain("lucide-check");
     expect(fake.plugin.speakReply).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["trimmed", "  Renamed review \n", "Renamed review"],
+    ["cut to 512 UTF-16 units without splitting a code point", `${"t".repeat(511)}😀 tail`, "t".repeat(511)],
+    ["omitted when blank", " \n", undefined],
+  ])("sends the thread's current title %s", async (_name, title, sent) => {
+    const { fake } = await connect();
+    const { thread } = renderAction();
+    // A rename after the footer rendered still reaches native: the title is read when tapped.
+    thread.title.text = title;
+    fireEvent.click(button());
+    await waitFor(() => expect(fake.plugin.speakReply).toHaveBeenCalledOnce());
+    const input = fake.plugin.speakReply.mock.lastCall![0];
+    expect(input.threadTitle).toBe(sent);
+    expect("threadTitle" in input).toBe(sent !== undefined);
   });
 
   it.each([

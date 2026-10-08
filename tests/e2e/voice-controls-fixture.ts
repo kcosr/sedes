@@ -113,7 +113,8 @@ export async function installVoiceFixture(page: Page): Promise<void> {
             // A replay queues behind current work; idle voice starts it at once.
             if (current.active) fixture.publish({ queue: { ...current.queue, count: current.queue.count + 1 } });
             else fixture.publish({ phase: "speaking", active: { id: `replay:${String(args.turnId)}`, eventKind: "replay", threadId: String(args.threadId),
-              threadTitle: null, recognitionThreadId: null, recognitionThreadTitle: null, automatic: false, recording: null },
+              threadTitle: typeof args.threadTitle === "string" ? args.threadTitle : null, recognitionThreadId: null, recognitionThreadTitle: null,
+              automatic: false, recording: null },
               actions: { ...current.actions, canStart: false, canStop: true, canSkip: true } });
           } else if (method === "stopCurrentInteraction") {
             if (args.interactionId !== current.active?.id) throw new Error("The interaction changed.");
