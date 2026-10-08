@@ -453,6 +453,49 @@ export class SubmissionCompletionRepository {
     return row ? present(row) : undefined;
   }
 
+  /**
+   * The stored completion classification of one application turn. Steers give
+   * a turn several observations; the latest accepted one with a classification
+   * wins. Null when the turn has none, including turns Sedes never submitted.
+   */
+  latestClassifiedResult(
+    scope: RequestScope,
+    applicationThreadId: string,
+    applicationTurnId: string,
+  ): ClassifiedAssistantResult | null {
+    const row = this.database
+      .prepare(
+        `
+          SELECT classified_result_json AS classifiedResultJson
+          FROM submission_completion_observations
+          WHERE tenant_id = ? AND owner_principal_id = ?
+            AND application_thread_id = ? AND application_turn_id = ?
+            AND classified_result_json IS NOT NULL
+          ORDER BY accepted_at DESC, operation_id DESC
+          LIMIT 1
+        `,
+      )
+      .get(
+        scope.tenantId,
+        scope.principalId,
+        applicationThreadId,
+        applicationTurnId,
+      ) as { readonly classifiedResultJson: string } | undefined;
+    if (!row) return null;
+    try {
+      return classifiedAssistantResultSchema.parse(
+        JSON.parse(row.classifiedResultJson) as unknown,
+      );
+    } catch (error) {
+      throw new DomainError(
+        "conflict",
+        "The stored completion classification is invalid.",
+        false,
+        { cause: error },
+      );
+    }
+  }
+
   hasActiveAcceptedCorrelation(scope: RequestScope, applicationThreadId: string, correlations: readonly string[]): boolean {
     const statement = this.database.prepare(`SELECT 1 FROM submission_completion_observations
       WHERE tenant_id = ? AND owner_principal_id = ? AND application_thread_id = ?
