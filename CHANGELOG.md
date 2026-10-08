@@ -4,11 +4,11 @@
 
 ### Breaking Changes
 
-- Browser and packaged clients require client protocol 144, which adds
+- Browser and packaged clients require client protocol 145, which adds
   automation schedule details and run turn outcomes to thread summaries and
-  runs, and drops the Remind now inventory action. Upgrade clients together
-  with the server.
-  ([#58](https://github.com/kcosr/sedes/pull/58), [#59](https://github.com/kcosr/sedes/pull/59), [#61](https://github.com/kcosr/sedes/pull/61))
+  runs, drops the Remind now inventory action, and adds turn reply replay.
+  Upgrade clients together with the server.
+  ([#58](https://github.com/kcosr/sedes/pull/58), [#59](https://github.com/kcosr/sedes/pull/59), [#61](https://github.com/kcosr/sedes/pull/61), [#62](https://github.com/kcosr/sedes/pull/62))
 
 - `PATCH /api/threads/:threadId/inventory` no longer accepts the `remind`
   action. ([#61](https://github.com/kcosr/sedes/pull/61))
@@ -226,6 +226,14 @@
   Migration preserves old Claude totals separately with unknown coverage. (#8)
 
 ### Added
+
+- Android: a speaker button in each ended turn's footer queues the turn's
+  reply for voice playback, as completion speech would read it. It appears
+  while voice is on. ([#62](https://github.com/kcosr/sedes/pull/62))
+
+- Agent tool `client.replay_turn` (**Replay turn reply**, Client controls)
+  does the same from an agent; `{}` repeats the agent's previous reply.
+  Enable it per thread. ([#62](https://github.com/kcosr/sedes/pull/62))
 
 - An **Automations** page lists every automation by status (Needs attention,
   Upcoming, Paused, Suspended) or by project, with search and row actions. Open
@@ -478,6 +486,9 @@
   Session stats stays in the thread menu rather than flashing during loading. (#8)
 
 ### Changed
+
+- Client-control agent tools report the client's rejection reason instead of
+  a generic message. ([#62](https://github.com/kcosr/sedes/pull/62))
 
 - **Park** replaces Settle: a parked thread leaves the working set until new
   input returns it to Active, including an automation run, so parking an

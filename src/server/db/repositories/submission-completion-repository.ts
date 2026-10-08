@@ -453,6 +453,130 @@ export class SubmissionCompletionRepository {
     return row ? present(row) : undefined;
   }
 
+  /**
+   * The stored completion classification of one application turn. Steers give
+   * a turn several observations; the latest accepted one with a classification
+   * wins. Null when the turn has none, including turns Sedes never submitted.
+   */
+  latestClassifiedResult(
+    scope: RequestScope,
+    applicationThreadId: string,
+    applicationTurnId: string,
+  ): ClassifiedAssistantResult | null {
+    const row = this.database
+      .prepare(
+        `
+          SELECT classified_result_json AS classifiedResultJson
+          FROM submission_completion_observations
+          WHERE tenant_id = ? AND owner_principal_id = ?
+            AND application_thread_id = ? AND application_turn_id = ?
+            AND classified_result_json IS NOT NULL
+          ORDER BY accepted_at DESC, operation_id DESC
+          LIMIT 1
+        `,
+      )
+      .get(
+        scope.tenantId,
+        scope.principalId,
+        applicationThreadId,
+        applicationTurnId,
+      ) as { readonly classifiedResultJson: string } | undefined;
+    if (!row) return null;
+    try {
+      return classifiedAssistantResultSchema.parse(
+        JSON.parse(row.classifiedResultJson) as unknown,
+      );
+    } catch (error) {
+      throw new DomainError(
+        "conflict",
+        "The stored completion classification is invalid.",
+        false,
+        { cause: error },
+      );
+    }
+  }
+
+  /**
+   * The stored whole reply of one application turn: every assistant message
+   * joined and bounded at completion, whether or not it was classified. Like
+   * `latestClassifiedResult`, the latest accepted observation wins. Null when
+   * the turn has none, including turns Sedes never submitted.
+   */
+  latestAssistantResult(
+    scope: RequestScope,
+    applicationThreadId: string,
+    applicationTurnId: string,
+  ): BoundedText | null {
+    const row = this.database
+      .prepare(
+        `
+          SELECT assistant_result_json AS assistantResultJson
+          FROM submission_completion_observations
+          WHERE tenant_id = ? AND owner_principal_id = ?
+            AND application_thread_id = ? AND application_turn_id = ?
+            AND assistant_result_json IS NOT NULL
+          ORDER BY accepted_at DESC, operation_id DESC
+          LIMIT 1
+        `,
+      )
+      .get(
+        scope.tenantId,
+        scope.principalId,
+        applicationThreadId,
+        applicationTurnId,
+      ) as { readonly assistantResultJson: string } | undefined;
+    if (!row) return null;
+    try {
+      return boundedTextSchema.parse(
+        JSON.parse(row.assistantResultJson) as unknown,
+      );
+    } catch (error) {
+      throw new DomainError(
+        "conflict",
+        "The stored completion assistant result is invalid.",
+        false,
+        { cause: error },
+      );
+    }
+  }
+
+  /**
+   * The application turn id of a thread's most recently completed turn with a
+   * stored reply: the newest finalized observation by completion time, then
+   * acceptance. A turn still in progress has no finalized observation, so it
+   * is never returned, and a turn that ended without assistant text (a failure
+   * or interruption before any reply) is skipped. Null when the thread has none.
+   */
+  latestReplyTurnId(
+    scope: RequestScope,
+    applicationThreadId: string,
+  ): string | null {
+    // SQL drops ASCII-blank replies cheaply; the JavaScript check applies the same
+    // blank test as reply selection (String.prototype.trim) to whatever remains.
+    const rows = this.database
+      .prepare(
+        `
+          SELECT application_turn_id AS applicationTurnId,
+            json_extract(assistant_result_json, '$.text') AS text
+          FROM submission_completion_observations
+          WHERE tenant_id = ? AND owner_principal_id = ?
+            AND application_thread_id = ?
+            AND application_turn_id IS NOT NULL
+            AND assistant_result_json IS NOT NULL
+            AND trim(coalesce(json_extract(assistant_result_json, '$.text'), ''), char(32, 9, 10, 13)) <> ''
+          ORDER BY completion_observed_at DESC, accepted_at DESC, operation_id DESC
+        `,
+      )
+      .iterate(scope.tenantId, scope.principalId, applicationThreadId) as IterableIterator<{
+        readonly applicationTurnId: string;
+        readonly text: unknown;
+      }>;
+    for (const row of rows) {
+      if (typeof row.text === "string" && row.text.trim() !== "") return row.applicationTurnId;
+    }
+    return null;
+  }
+
   hasActiveAcceptedCorrelation(scope: RequestScope, applicationThreadId: string, correlations: readonly string[]): boolean {
     const statement = this.database.prepare(`SELECT 1 FROM submission_completion_observations
       WHERE tenant_id = ? AND owner_principal_id = ? AND application_thread_id = ?

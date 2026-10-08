@@ -142,6 +142,8 @@ supersession, Off, expiry, and connection loss still do. Foreground navigation
 keeps its visibility fence. Native readiness and recording blockers are checked
 again at execution, and normal recording preferences, including Keep listening
 by default, remain in effect. No background service start is attempted.
+Agent `replay_turn` commands bypass that queue; see
+[Turn reply replay](#turn-reply-replay).
 
 The device preferences envelope has format version 1 and carries the strict
 settings `RECORD_VERSION` 7. Earlier per-binding settings and profile-bound speech
@@ -261,6 +263,96 @@ completion. Waiting continues while an in-place replacement snapshot is
 installed. Authority loss, a failed replacement, or timeout produces an
 announcement without a recognition target. A newer activity token leaves the
 old target stale rather than granting access to the newer work.
+
+## Turn reply replay
+
+The turn footer's speaker reads the reply text through
+`GET /api/threads/:threadId/turns/:turnId/reply-speech`. That route returns the turn's stored
+completion classification filtered by the principal's `assistantResultPhases`. When no
+selected section has non-blank text, it returns the turn's stored whole reply as one
+`unclassified` section. It returns `null` only when Sedes stored no reply text for the
+turn. The WebView then sends the Copy response text as one bounded `unclassified` section.
+A failed read sends nothing. The agent tool `client.replay_turn` uses the same server
+selection, and fails when it returns `null`.
+
+The user-initiated `speakReply` bridge method queues one ended turn's reply for
+speech. Its strict keys are `threadId` (1–512 characters), `turnId` (1–160), an
+optional `threadTitle`, and a required `assistantResult` with the same shape and
+bounded-text validation as a notification's: only `provisional`, `unclassified`,
+and `final`, each null or bounded text. `threadTitle` is validated like
+`setForegroundContext`'s: absent, null, or a 1–512 character string. Arguments
+are validated first. It then requires a started session, ready speech
+configuration and credential, and a bound connection; otherwise, including with
+Audio mode Off, it fails with `voice_not_ready`, whose message is "Voice is not
+ready yet." Microphone permission and notification policy are not required. It
+returns the published snapshot.
+
+Native speaks the sections in notification order (provisional, unclassified,
+final) with the same per-part `NativeSpeechText` cleanup and truncation notice
+as a completion notice, but never a context line, whatever
+`readNotificationContext` says. Empty prepared text fails with
+`voice_reply_empty`. The active item's title, shown on the voice card and the
+media notification, is display-only. It is the WebView's `threadTitle` when that
+is not blank. Otherwise it comes from the visible foreground thread or the saved
+default thread when either matches, and is otherwise null. The title is kept
+with the stored request, so a settings rebuild keeps it.
+
+The replay is a local queue item with no server envelope. Its event, shown as
+`active.eventKind`, is `replay`. Its ID is a fresh UUID that never enters
+notification deduplication. It is not automatic and has no follow-up listen.
+Its identity is the thread and turn ID; a request for a turn already queued or
+playing returns the current snapshot without adding. It counts against the
+64-item and 256 KiB queue limits after normal progress eviction. Before evicting
+anything, native checks whether the replay would fit once every pending progress
+item had yielded. If it would not, the request fails with `voice_queue_full` and
+the queue is left unchanged; no progress is evicted for a refused replay. Queue
+drop counts report automatic items only.
+
+A replay joins the queue behind current speech, recording, or saved-recording
+recovery, and plays in Manual and Response mode. Drain skips notification
+eligibility for it, so `onlyVoiceThread`, `ignoreOtherDevices`, notification
+enablement, silence, and policy generation do not apply. Stream loss, a policy
+change, and Manual/Response switches keep pending and active replays, and a pending
+replay starts once a cancelled automatic item has left; Off and connection changes
+clear them with the rest of the queue. When the foreground
+service stops, for example when Android destroys it while the process survives,
+native cancels the active item and clears pending replays without counting
+them as drops. Drain would not filter a replay later, so it would otherwise play
+whenever the service next started. Pending automatic items stay queued and face
+notification eligibility when drain resumes. A settings change rebuilds a
+pending replay from its stored request with the current cleanup setting, and the
+speech text limit chunks it when it starts. Skip ends a replay and Stop cancels
+it; neither listens afterwards. Ending a replay never discards
+client turn actions, completes a notification ID, or signals reply drain. Like
+any playback, a speech configuration change or focus loss ends it, and an
+explicit Stop still clears pending agent client actions.
+
+An agent's `client.replay_turn` reaches native as a `replay_turn` client
+command, whose strict keys include `turnId` and `assistantResult`. The server
+resolves the tool's defaults, the source thread and its most recent ended
+turn, so the command always names both. Native builds
+the bridge request from the command's `threadId`, `turnId`, `assistantResult`,
+and `threadTitle` alone and validates it exactly as `speakReply`'s, so a
+malformed command fails with the same field code, such as `invalid_turnId`. An
+expired command is a `noop` with `expired`, as for other commands. Audio mode
+Off is then a `noop` with `voice_off`, checked before readiness. Otherwise the
+command calls the bridge's queue function and publishes state before answering:
+
+| Outcome | Result |
+| --- | --- |
+| The replay is the active item after queueing | `applied`, `replay_playing` |
+| The replay waits behind other voice work | `applied`, `replay_queued` |
+| That thread and turn's replay is already active or pending | `noop`, `replay_already_queued` |
+| No started session, speech not ready, or no binding | `noop`, `voice_not_ready` |
+| Empty prepared text | `failed`, `voice_reply_empty` |
+| The replay does not fit the queue | `failed`, `voice_queue_full` |
+
+The command applies at once and is never staged in the turn-settlement queue.
+Staging keys on the agent's source turn, so it would suppress that turn's
+completion follow-up listen and replace the turn's other staged actions. The
+queued item is the same local replay the speaker creates, so everything above
+applies to it unchanged, and one turn's replay is a duplicate whichever path
+queued it. The bridge still treats a duplicate as success.
 
 ## Activity authority and live progress
 
@@ -723,9 +815,10 @@ source is preserved. Parser nesting is bounded.
 Disabling cleanup preserves the original single-newline assembly. Original envelopes,
 transcripts, and shared backend notifications are never rewritten; the speech
 server receives the prepared text without a second cleanup pass. Changing this
-setting rebuilds pending utterances from their original envelopes and applies to
-future items without interrupting the active utterance. An empty result makes no
-speech request and retains any eligible follow-up listen.
+setting rebuilds pending utterances from their original envelopes or replay
+requests and applies to future items without interrupting the active utterance.
+An empty result makes no speech request and retains any eligible follow-up
+listen.
 
 HTTP TTS completion is distinct from AudioTrack drain. A logical item stays
 active through all chunks, actual drain, recognition, and input admission.

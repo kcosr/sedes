@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { selectedAssistantResultSchema } from "./notification.js";
 
 export const clientVoiceSettingsSchema = z.strictObject({
   audioMode: z.enum(["off", "manual", "response"]),
@@ -41,7 +42,7 @@ export const clientActionResultSchema = z.strictObject({
 });
 export const clientCommandSchema = z.strictObject({
   id: z.string().uuid(),
-  action: z.enum(["settings.get", "settings.update", "end_interaction", "switch_thread", "turn_settled"]),
+  action: z.enum(["settings.get", "settings.update", "end_interaction", "switch_thread", "turn_settled", "replay_turn"]),
   expiresAt: z.number().int().nonnegative(),
   sourceThreadId: z.string().min(1).max(128),
   sourceTurnId: z.string().min(1).max(128),
@@ -51,6 +52,9 @@ export const clientCommandSchema = z.strictObject({
   expectedRevision: z.number().int().nonnegative().optional(),
   patch: clientVoicePatchSchema.optional(),
   replyEventId: z.string().max(128).nullable().optional(),
+  /** `replay_turn` only: the ended application turn whose reply native queues, as the turn footer's speaker does. */
+  turnId: z.string().min(1).max(160).optional(),
+  assistantResult: selectedAssistantResultSchema.optional(),
 });
 export const clientPollRequestSchema = z.strictObject({
   state: clientStateSchema,

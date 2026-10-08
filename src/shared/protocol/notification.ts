@@ -177,6 +177,14 @@ export type NotificationPayload = Omit<NotificationEventPayload, "event"> & {
   readonly event: NotificationEventKind | "notification.test";
 };
 
+/** Completion text phases chosen by `assistantResultPhases`: omitted means excluded; null means unavailable. */
+export const selectedAssistantResultSchema = z.strictObject({
+  provisional: boundedTextSchema.nullable().optional(),
+  unclassified: boundedTextSchema.nullable().optional(),
+  final: boundedTextSchema.nullable().optional(),
+});
+export type SelectedAssistantResult = z.infer<typeof selectedAssistantResultSchema>;
+
 const identity = z.string().min(1).max(512);
 const noticeText = z.string().max(65_536);
 export const notificationPayloadSchema = z.strictObject({
@@ -193,11 +201,7 @@ export const notificationPayloadSchema = z.strictObject({
   wake: z.strictObject({ reason: noticeText, reminderText: noticeText.optional() }).optional(),
   automation: z.strictObject({ id: identity, name: noticeText, runId: identity,
     trigger: z.enum(["scheduled", "manual"]), stage: noticeText.optional(), diagnostic: noticeText.optional() }).optional(),
-  assistantResult: z.strictObject({
-    provisional: boundedTextSchema.nullable().optional(),
-    unclassified: boundedTextSchema.nullable().optional(),
-    final: boundedTextSchema.nullable().optional(),
-  }).optional(),
+  assistantResult: selectedAssistantResultSchema.optional(),
 }).superRefine((value, context) => requireSerializedByteLimit(value, context, 65_536, "Notification exceeds 64 KiB."));
 
 export const voiceRecognitionTargetSchema = z.strictObject({

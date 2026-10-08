@@ -61,6 +61,20 @@ describe("browser client controls", () => {
     expect(navigate).toHaveBeenCalledTimes(1);
     client.close();
   });
+  it("reports a replay as unsupported voice without touching a pending navigation", () => {
+    const navigate = vi.fn(); const client = new ClientControlConnection({ baseUrl: null }, navigate);
+    const replay = command({ action: "replay_turn", listen: undefined, turnId: "ended-turn", threadTitle: "Source",
+      assistantResult: { final: { text: "Done." } } });
+    expect(client.execute(replay)).toMatchObject({ status: "noop", reason: "voice_unsupported", state: { runtime: { voiceReady: false } } });
+    expect(client.execute(command())).toMatchObject({ status: "accepted" });
+    // Sharing the deferred switch's id must not consume or perform it.
+    expect(client.execute(replay)).toMatchObject({ status: "noop", reason: "voice_unsupported" });
+    expect(navigate).not.toHaveBeenCalled();
+    client.execute(command({ action: "turn_settled" }));
+    expect(navigate).toHaveBeenCalledExactlyOnceWith("target");
+    expect(client.execute({ ...replay, expiresAt: 0 })).toMatchObject({ status: "noop", reason: "expired" });
+    client.close();
+  });
   it("drops expired, disconnected, manually superseded, and background navigation", () => {
     const navigate = vi.fn(); const client = new ClientControlConnection({ baseUrl: null }, navigate);
     expect(client.execute(command({ expiresAt: 0 }))).toMatchObject({ status: "noop", reason: "expired" });

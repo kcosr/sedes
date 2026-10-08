@@ -5,6 +5,7 @@ import {
   clientActionResultSchema, type ClientActionResult, type ClientCommand, type ClientState,
   type clientPollRequestSchema, type registerClientSchema,
 } from "../../shared/protocol/client-controls.js";
+import { serializedUtf8Bytes } from "../../shared/protocol/payload.js";
 import type { RequestScope } from "../identity/identity-provider.js";
 import { DomainError } from "./errors.js";
 
@@ -24,6 +25,10 @@ const sameScope = (a: RequestScope, b: RequestScope) => scopeKey(a) === scopeKey
 const turnKey = (threadId: string, turnId: string) => JSON.stringify([threadId, turnId]);
 const unavailable = () => new DomainError("runtime_unavailable", "The selected client is not connected. Reopen that client and try again.");
 const MAX_CLIENTS = 128;
+/** Serialized `{ commands }` limit of one poll response, well under native's 1 MiB response limit. */
+export const MAX_POLL_RESPONSE_BYTES = 768 * 1_024;
+const MAX_POLL_COMMANDS = 64;
+const EMPTY_POLL_RESPONSE_BYTES = serializedUtf8Bytes({ commands: [] });
 
 /** Principal-owned live registrations. Tokens fence connection replacement; commands are never persisted or replayed. */
 export class ClientControlService {
@@ -111,7 +116,22 @@ export class ClientControlService {
     client.session.seen = client.seen;
     // A disconnected waiter cannot consume work intended for its next live poll.
     if (signal.aborted) return { commands: [] };
-    return { commands: client.commands.splice(0, 64).filter(command => command.expiresAt > this.now()) };
+    return { commands: this.#take(client) };
+  }
+
+  /** Unexpired commands in order, up to the poll's count and byte limits; the rest wait for the next poll. */
+  #take(client: Registration): ClientCommand[] {
+    const now = this.now();
+    client.commands = client.commands.filter(command => command.expiresAt > now);
+    let bytes = EMPTY_POLL_RESPONSE_BYTES, count = 0;
+    for (const command of client.commands) {
+      if (count === MAX_POLL_COMMANDS) break;
+      const size = serializedUtf8Bytes(command) + (count > 0 ? 1 : 0);
+      // The first command always goes, so even an oversized one cannot stall the queue; real commands stay within 64 KiB.
+      if (count > 0 && bytes + size > MAX_POLL_RESPONSE_BYTES) break;
+      bytes += size; count += 1;
+    }
+    return client.commands.splice(0, count);
   }
 
   list(scope: RequestScope) {
@@ -135,6 +155,7 @@ export class ClientControlService {
     if (this.#clients.get(client.token) !== client) throw unavailable();
     if (client.pending.size + client.deferred.size >= 32 || client.commands.length >= 64) throw new DomainError("conflict", "The client is busy.");
     signal.throwIfAborted();
+    // Only these wait for their turn's completion; settings and replay_turn act at once and are never deferred.
     const deferred = input.action === "end_interaction" || input.action === "switch_thread";
     const command: ClientCommand = { ...input, id: randomUUID(), expiresAt: this.now() + (deferred ? 86_400_000 : 120_000) };
     const result = await new Promise<ClientActionResult>((resolve, reject) => {
