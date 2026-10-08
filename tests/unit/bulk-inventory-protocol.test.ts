@@ -13,7 +13,7 @@ const secondThreadId = "10000000-0000-4000-8000-000000000002";
 
 describe("bulk inventory protocol", () => {
   it("advances the browser protocol fence", () => {
-    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(144);
+    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(145);
   });
 
   it("accepts only strict, unique, bounded impact target sets", () => {
