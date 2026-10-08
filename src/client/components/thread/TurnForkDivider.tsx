@@ -1,3 +1,4 @@
+import { TurnSpeakAction } from "./TurnSpeakAction.js";
 import { TurnUsageAction } from "./TurnUsageAction.js";
 import { runThreadFork } from "../../operations/thread-creation.js";
 import { Check, Copy, LoaderCircle, RotateCcw, Split, X } from "lucide-react";
@@ -212,6 +213,7 @@ export const TurnForkDivider = memo(function TurnForkDivider({
             </span>
           </>
         )}
+        <TurnSpeakAction store={store} turnId={turn.id} copyText={copyText} />
         <TurnUsageAction cache={store.usage} turn={turn} onOpenChange={setUsageOpen} />
         {turn.status === "completed" && <button
           type="button"

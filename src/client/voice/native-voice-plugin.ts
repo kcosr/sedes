@@ -2,6 +2,7 @@ import { Capacitor, registerPlugin, type PluginListenerHandle } from "@capacitor
 import { z } from "zod";
 import { isAndroidClient } from "../app/client-platform.js";
 import { directInputRequestSchema } from "../../shared/protocol/thread-input.js";
+import type { SelectedAssistantResult } from "../../shared/protocol/notification.js";
 
 export const nativeVoiceInputSchema = z.strictObject({
   type: z.number().int().min(0).max(2147483647), address: z.string().min(1).max(512).nullable(), name: z.string().min(1).max(512),
@@ -93,6 +94,11 @@ export interface NativeVoicePlugin {
   setKeepListening(input: NativeRecordingCommandContext & { enabled: boolean }): Promise<NativeVoiceState>;
   sendRecording(input: NativeRecordingCommandContext): Promise<NativeVoiceState>;
   skipCurrentPlayback(input: NativeVoiceCommandContext): Promise<NativeVoiceState>;
+  /**
+   * Queues one ended turn's reply for speech only, behind current work. A pending or playing replay of the same turn is a
+   * successful no-op. Rejects with `voice_not_ready`, `voice_reply_empty` or `voice_queue_full`.
+   */
+  speakReply(input: NativeVoiceCommandContext & { threadId: string; turnId: string; assistantResult: SelectedAssistantResult }): Promise<NativeVoiceState>;
   stopCurrentInteraction(input: NativeVoiceInteractionCommandContext): Promise<NativeVoiceState>;
   retryRecordingRecognition(input: NativeRecordingRecoveryCommandContext): Promise<NativeVoiceState>;
   sendRecoveredRecording(input: NativeRecordingRecoveryCommandContext): Promise<NativeVoiceState>;
