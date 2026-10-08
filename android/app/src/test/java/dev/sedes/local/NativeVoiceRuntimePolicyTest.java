@@ -152,6 +152,52 @@ public class NativeVoiceRuntimePolicyTest {
         // Shared by recording and replay refusals, so it names neither.
         assertEquals("Voice is not ready yet.", NativeVoiceRuntime.message("voice_not_ready"));
     }
+    @Test public void replayTurnCommandCarriesExactlyTheBridgeReplayRequest() throws Exception {
+        org.json.JSONObject result = NativeVoiceJson.object("final", NativeVoiceJson.object("text", "Reply"), "provisional", org.json.JSONObject.NULL);
+        org.json.JSONObject command = NativeVoiceJson.object("id", "5f1d0b52-8a4e-4c55-9f6e-0c1f4f0d7a10", "action", "replay_turn",
+            "expiresAt", 1, "sourceThreadId", "source-thread", "sourceTurnId", "source-turn", "threadId", "thread-a",
+            "turnId", "u".repeat(160), "assistantResult", result);
+        org.json.JSONObject request = NativeVoiceRuntime.clientReplayRequest(command);
+        assertEquals("Command envelope fields stay out of the replay", 3, request.length());
+        assertEquals("thread-a", request.optString("threadId")); assertEquals("u".repeat(160), request.optString("turnId"));
+        assertEquals("Reply", request.getJSONObject("assistantResult").getJSONObject("final").getString("text"));
+        assertTrue(request.getJSONObject("assistantResult").isNull("provisional"));
+        assertFalse("An omitted title stays omitted", request.has("threadTitle"));
+        NativeVoiceJson.put(result.getJSONObject("final"), "text", "Changed");
+        assertEquals("The request is a copy", "Reply", request.getJSONObject("assistantResult").getJSONObject("final").getString("text"));
+        for (Object title : new Object[] { "Agent thread", org.json.JSONObject.NULL }) {
+            org.json.JSONObject titled = NativeVoiceJson.copy(command); NativeVoiceJson.put(titled, "threadTitle", title);
+            assertEquals(title, NativeVoiceRuntime.clientReplayRequest(titled).opt("threadTitle"));
+        }
+        Object[][] malformed = {
+            { "threadId", null, "invalid_threadId" }, { "threadId", org.json.JSONObject.NULL, "invalid_threadId" },
+            { "turnId", null, "invalid_turnId" }, { "turnId", "u".repeat(161), "invalid_turnId" },
+            { "assistantResult", null, "invalid_assistantResult" },
+            { "assistantResult", NativeVoiceJson.object("summary", NativeVoiceJson.object("text", "x")), "unknown_field" },
+            { "assistantResult", NativeVoiceJson.object("final", "Reply"), "invalid_final" },
+            { "threadTitle", "", "invalid_threadTitle" }, { "threadTitle", "T".repeat(513), "invalid_threadTitle" },
+        };
+        for (Object[] example : malformed) {
+            org.json.JSONObject invalid = NativeVoiceJson.copy(command);
+            if (example[1] == null) invalid.remove((String) example[0]); else NativeVoiceJson.put(invalid, (String) example[0], example[1]);
+            RuntimeException error = assertThrows(RuntimeException.class, () -> NativeVoiceRuntime.clientReplayRequest(invalid));
+            assertEquals(java.util.Arrays.toString(example), example[2], NativeVoiceRuntime.code(error));
+        }
+    }
+    @Test public void replayTurnResultStatusFollowsItsReason() {
+        assertEquals("replay_playing", NativeVoiceRuntime.ReplayDisposition.PLAYING.reason);
+        assertEquals("replay_queued", NativeVoiceRuntime.ReplayDisposition.QUEUED.reason);
+        assertEquals("replay_already_queued", NativeVoiceRuntime.ReplayDisposition.DUPLICATE.reason);
+        String[][] cases = {
+            { "replay_playing", "applied" }, { "replay_queued", "applied" }, { "replay_already_queued", "noop" },
+            { "voice_off", "noop" }, { "voice_not_ready", "noop" },
+            { "voice_reply_empty", "failed" }, { "voice_queue_full", "failed" }, { "voice_action_failed", "failed" },
+        };
+        for (String[] example : cases) assertEquals(example[0], example[1], NativeVoiceRuntime.replayCommandStatus(example[0]));
+        for (NativeVoiceRuntime.ReplayDisposition disposition : NativeVoiceRuntime.ReplayDisposition.values())
+            assertTrue("Every disposition maps to a defined result: " + disposition,
+                java.util.Arrays.asList("applied", "noop").contains(NativeVoiceRuntime.replayCommandStatus(disposition.reason)));
+    }
     private static void assertSpecific(String code) {
         String message = NativeVoiceRuntime.message(code);
         assertFalse("Generic message for " + code, message.contains("(" + code + ")"));
