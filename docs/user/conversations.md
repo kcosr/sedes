@@ -86,6 +86,14 @@ automatic voice and script delivery, while explicit recording remains
 available. The card shows the latest voice error until your next voice action
 or the next interaction.
 
+To hear a reply again, tap **Play response aloud**, the speaker after **Copy
+response** in a finished turn's footer. It appears only while voice is set to
+Manual or Response with speech configured. The reply joins the voice queue
+behind anything already playing, reads the response text that a spoken
+completion would, or the whole reply for a turn without stored response text,
+and never listens afterward. **Skip** and **Stop** work as for any notice. See
+[Replay a reply](../operator/clients/voice.md#replay-a-reply).
+
 If Sedes rejects a spoken message, voice reports that it was not delivered. If
 voice cannot tell whether a message arrived, or Sedes asks it to try again
 later because the thread is busy starting, changing, or being created, it keeps

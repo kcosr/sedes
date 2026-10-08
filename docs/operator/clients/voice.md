@@ -165,6 +165,34 @@ and does not interrupt a reply already playing. Displayed conversations and
 stored transcripts are unchanged. A reply containing only formatting can still
 start an eligible follow-up listen without making a speech request.
 
+## Replay a reply
+
+While voice is set to Manual or Response and speech is configured, each
+finished turn's footer shows **Play response aloud**, a speaker after **Copy
+response**. It is absent while voice is Off or speech setup is incomplete, and
+in browser and Electron clients. Read-only and archived threads show it too.
+
+The replay reads the turn's stored completion text in the sections that
+**Response text** under **Turn completed** currently selects, as a spoken
+completion would. Without stored text in those sections, for example for a turn
+that finished before voice was set up, it reads the whole reply, the same text as
+**Copy response**. If Sedes cannot return the turn's text, the button shows a
+failure instead of reading different text.
+
+A replay joins the voice queue behind current speech or recording, and starts at
+once when voice is idle. The card then shows **Speaking · Replay**. It plays in
+Manual and Response mode and ignores the filters for automatic playback:
+notification enablement, per-event Voice actions, the Silence bell, **Only play
+from default voice thread**, and **Ignore voice started on other devices**.
+**Clean up formatting for speech** and the speech text limit apply. A replay
+reads the reply only, without a context line whatever **Read notification
+context** says, and it never listens afterward. **Skip** ends it and **Stop**
+cancels it. Tapping again while that turn's replay is queued or playing adds
+nothing. A replay counts against the queue limits; when it does not fit, the
+button reports a full queue. Off and connection changes clear pending replays
+with the rest of the queue; losing the notification stream, a policy change, or
+switching between Manual and Response does not.
+
 ## Targeting and controls
 
 Automatic listening stays attached to the notification's source thread and
