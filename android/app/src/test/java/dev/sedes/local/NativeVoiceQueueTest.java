@@ -280,6 +280,35 @@ public class NativeVoiceQueueTest {
         assertEquals("voice_queue_full", NativeVoiceRuntime.code(bytes));
         assertEquals(2, large.size()); assertEquals(240000, large.bytes()); assertEquals(0, large.state().optInt("droppedCount"));
     }
+    @Test public void refusedReplayEvictsNoProgressButAReplayThatFitsStillDoes() {
+        NativeVoiceSettings configured = settings("response");
+        NativeVoiceQueue queue = new NativeVoiceQueue();
+        NativeVoiceQueue.Item progress = new NativeVoiceQueue.Item(envelope("progress", "turn.progress", "p".repeat(10000), null), configured);
+        NativeVoiceQueue.Item first = replay("turn-1", "é".repeat(60000), configured), second = replay("turn-2", "é".repeat(60000), configured);
+        assertTrue(queue.addReplay(first)); assertTrue(queue.add(progress)); assertTrue(queue.addReplay(second));
+        int before = 240000 + progress.bytes; assertEquals(before, queue.bytes());
+        // Even with the progress item evicted, a third large replay exceeds 256 KiB.
+        RuntimeException full = assertThrows(RuntimeException.class, () -> queue.addReplay(replay("turn-3", "é".repeat(60000), configured)));
+        assertEquals("voice_queue_full", NativeVoiceRuntime.code(full));
+        assertEquals("A refused replay evicts nothing", 3, queue.size()); assertEquals(before, queue.bytes());
+        assertEquals(0, queue.state().optInt("droppedCount"));
+        // This replay fits exactly once progress yields, so progress is evicted as for terminal content.
+        int room = NativeVoiceQueue.MAX_BYTES - 240000;
+        assertTrue(before + room > NativeVoiceQueue.MAX_BYTES);
+        NativeVoiceQueue.Item fits = replay("turn-4", "a".repeat(room), configured); assertEquals(room, fits.bytes);
+        assertTrue(queue.addReplay(fits));
+        assertEquals(3, queue.size()); assertEquals(NativeVoiceQueue.MAX_BYTES, queue.bytes());
+        assertEquals(1, queue.state().optJSONObject("droppedReasons").optInt("progress_evicted"));
+        assertEquals(first.id, queue.take().id); assertEquals(second.id, queue.take().id); assertEquals(fits.id, queue.take().id);
+        // Automatic items keep evicting progress before their own overflow drop.
+        NativeVoiceQueue automatic = new NativeVoiceQueue();
+        automatic.addReplay(replay("turn-1", "é".repeat(60000), configured));
+        automatic.add(new NativeVoiceQueue.Item(envelope("progress", "turn.progress", "p".repeat(10000), null), configured));
+        automatic.addReplay(replay("turn-2", "é".repeat(60000), configured));
+        assertFalse(automatic.add(new NativeVoiceQueue.Item(envelope("big", "turn.completed", "é".repeat(30000), null), configured)));
+        assertEquals(2, automatic.size()); assertEquals(1, automatic.state().optJSONObject("droppedReasons").optInt("progress_evicted"));
+        assertEquals(1, automatic.state().optJSONObject("droppedReasons").optInt("overflow"));
+    }
     @Test public void stoppedServiceClearsPendingReplaysAndLeavesAutomaticItems() {
         NativeVoiceSettings configured = settings("response");
         NativeVoiceQueue queue = new NativeVoiceQueue();

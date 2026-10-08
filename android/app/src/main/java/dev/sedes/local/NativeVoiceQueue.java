@@ -134,9 +134,15 @@ final class NativeVoiceQueue {
     /** Queues a replay outside notification dedupe. False when the same turn's replay is already pending. */
     boolean addReplay(Item item) {
         for (Item old : pending) if (item.replayIdentity().equals(old.replayIdentity())) return false;
-        // A user request is refused explicitly rather than silently dropped.
-        if (!enqueue(item)) throw new IllegalStateException("voice_queue_full");
+        // A user request is refused explicitly rather than silently dropped, and a refusal evicts nothing.
+        if (!fitsAfterProgressEviction(item) || !enqueue(item)) throw new IllegalStateException("voice_queue_full");
         return true;
+    }
+    /** Whether a non-progress item fits once every pending progress item, the only evictable kind, has yielded. */
+    private boolean fitsAfterProgressEviction(Item item) {
+        int count = pending.size(), size = bytes;
+        for (Item old : pending) if (old.progress()) { count--; size -= old.bytes; }
+        return count < MAX_ITEMS && size + item.bytes <= MAX_BYTES;
     }
     /** Strict speakReply bridge arguments, validated before readiness or queue state is considered. */
     static JSONObject replayRequest(JSONObject args) {
