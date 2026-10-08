@@ -25,7 +25,7 @@ export function ThreadTaskDisposition({
     readonly tasks: TaskCollection;
     readonly showOwningThread?: boolean;
   }[];
-  readonly action: "archive" | "settle";
+  readonly action: "archive" | "park";
   readonly description?: React.ReactNode;
   readonly value: OpenTaskDisposition;
   readonly onChange: (value: OpenTaskDisposition) => void;

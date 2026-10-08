@@ -185,7 +185,7 @@ describe("ApplicationClientStore lineage", () => {
     });
   });
 
-  it("requires a confirmed stash count before settle or archive mutations", async () => {
+  it("requires a confirmed stash count before park (settle) or archive mutations", async () => {
     const mutateInventory = vi.fn(async () => undefined);
     const api = {
       session: vi.fn(async () => session()),
@@ -242,7 +242,7 @@ describe("ApplicationClientStore lineage", () => {
     });
   });
 
-  it("forwards an explicit open-task disposition when settling", async () => {
+  it("forwards an explicit open-task disposition when parking", async () => {
     const mutateInventory = vi.fn(async () => undefined);
     const api = {
       session: vi.fn(async () => session()),

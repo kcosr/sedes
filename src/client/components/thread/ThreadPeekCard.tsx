@@ -210,7 +210,7 @@ function threadInventoryStateInWords(
   }
   if (thread.inventoryState === "settled") {
     const relative = shortRelativeTime(thread.stateChangedAt);
-    return relative === "now" ? "Settled just now" : `Settled ${relative} ago`;
+    return relative === "now" ? "Parked just now" : `Parked ${relative} ago`;
   }
   return undefined;
 }
@@ -285,7 +285,7 @@ function stateRowGlyphKind(
   ) {
     return glyphKind;
   }
-  if (thread.inventoryState === "settled") return "settled";
+  if (thread.inventoryState === "settled") return "parked";
   return thread.runState === "disconnected" ? "disconnected" : "idle";
 }
 

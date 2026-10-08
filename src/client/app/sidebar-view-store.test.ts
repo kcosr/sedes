@@ -624,6 +624,25 @@ describe("sidebar view preference mutations", () => {
     window.removeEventListener(changedEvent, listener);
   });
 
+  it("keeps a saved Show parked choice under its stored key", () => {
+    // Park was called Settle; the key mirrors the stored inventory state, so
+    // a view saved before the rename keeps hiding parked threads.
+    localStorage.setItem(
+      SIDEBAR_VIEW_STORAGE_KEY,
+      JSON.stringify({
+        ...SIDEBAR_VIEW_DEFAULTS,
+        show: { snoozed: true, settled: false, drafts: true },
+      }),
+    );
+    invalidateSnapshot();
+    expect(getSidebarViewPreferences().show.settled).toBe(false);
+
+    setSidebarShowFilter("settled", true);
+    expect(
+      JSON.parse(localStorage.getItem(SIDEBAR_VIEW_STORAGE_KEY)!).show,
+    ).toEqual({ snoozed: true, settled: true, drafts: true });
+  });
+
   it("setSidebarShowFilter updates one filter and keeps the others", () => {
     setSidebarShowFilter("settled", false);
     expect(getSidebarViewPreferences().show).toEqual({

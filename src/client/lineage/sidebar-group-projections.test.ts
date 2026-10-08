@@ -154,7 +154,7 @@ describe("projectSidebarStacks", () => {
     const groups = projectSidebarStacks({
       groups: [
         bucket("Active", [sedesFirst, console]),
-        bucket("Settled", [sedesLater]),
+        bucket("Parked", [sedesLater]),
       ],
       stackBy: "project",
       threadGroups: [],

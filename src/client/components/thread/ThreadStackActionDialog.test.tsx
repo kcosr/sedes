@@ -49,9 +49,12 @@ function props() {
 }
 
 describe("ThreadStackActionDialog", () => {
-  it.each(["settle", "archive"] as const)(
-    "lists affected tasks and offers completion for %s",
-    async (action) => {
+  it.each([
+    { action: "settle", word: "park", label: "Park" },
+    { action: "archive", word: "archive", label: "Archive" },
+  ] as const)(
+    "lists affected tasks and offers completion for $label",
+    async ({ action, word, label }) => {
       const initial = props();
       render(
         <ThreadStackActionDialog
@@ -60,8 +63,11 @@ describe("ThreadStackActionDialog", () => {
           impact={{ ...initial.impact, action }}
         />,
       );
+      expect(
+        screen.getByRole("dialog", { name: `${label} threads in Release` }),
+      ).toHaveAccessibleDescription(`${label} 1 thread.`);
       const tasks = screen.getByRole("region", {
-        name: `2 open tasks affected by this ${action}`,
+        name: `2 open tasks affected by this ${word}`,
       });
       expect(within(tasks).getByText("Check the release")).toBeVisible();
       expect(within(tasks).getByText("Release thread")).toHaveAttribute(
@@ -74,13 +80,9 @@ describe("ThreadStackActionDialog", () => {
         screen.getByRole("radio", { name: "Complete all" }),
       );
       expect(screen.getByRole("note")).toHaveTextContent(
-        `All open tasks on the threads you ${action}, including those not shown, will be marked completed`,
+        `All open tasks on the threads you ${word}, including those not shown, will be marked completed`,
       );
-      await userEvent.click(
-        screen.getByRole("button", {
-          name: action === "settle" ? "Settle" : "Archive",
-        }),
-      );
+      await userEvent.click(screen.getByRole("button", { name: label }));
       expect(initial.onConfirm).toHaveBeenCalledWith({
         openTaskDisposition: "complete",
       });
@@ -91,7 +93,7 @@ describe("ThreadStackActionDialog", () => {
     const initial = props();
     const { rerender } = render(<ThreadStackActionDialog {...initial} />);
     await userEvent.click(screen.getByRole("radio", { name: "Complete all" }));
-    await userEvent.click(screen.getByRole("button", { name: "Settle" }));
+    await userEvent.click(screen.getByRole("button", { name: "Park" }));
     rerender(
       <ThreadStackActionDialog
         {...initial}
@@ -118,7 +120,24 @@ describe("ThreadStackActionDialog", () => {
     expect(initial.onConfirm).toHaveBeenCalledTimes(1);
   });
 
-  it("does not offer task changes for unsettle", () => {
+  it.each([
+    { action: "settle", progress: "Parking…" },
+    { action: "unsettle", progress: "Unparking…" },
+    { action: "archive", progress: "Archiving…" },
+  ] as const)("names the pending action: $progress", ({ action, progress }) => {
+    const initial = props();
+    render(
+      <ThreadStackActionDialog
+        {...initial}
+        action={action}
+        impact={{ ...initial.impact, action }}
+        pending
+      />,
+    );
+    expect(screen.getByRole("button", { name: progress })).toBeDisabled();
+  });
+
+  it("does not offer task changes for Unpark", () => {
     const initial = props();
     render(
       <ThreadStackActionDialog
@@ -127,6 +146,10 @@ describe("ThreadStackActionDialog", () => {
         impact={{ ...initial.impact, action: "unsettle" }}
       />,
     );
+    expect(
+      screen.getByRole("dialog", { name: "Unpark threads in Release" }),
+    ).toBeVisible();
+    expect(screen.getByRole("button", { name: "Unpark" })).toBeEnabled();
     expect(
       screen.queryByRole("radiogroup", { name: "Open task handling" }),
     ).not.toBeInTheDocument();

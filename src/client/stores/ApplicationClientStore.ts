@@ -317,6 +317,7 @@ export class ApplicationClientStore {
     return this.api.reopenWorkspace(workspaceId);
   }
 
+  /** Wire action names: `settle` parks a thread and `unsettle` unparks it. */
   async mutateInventory(
     thread: Pick<NormalizedApplicationThreadSummary, "id" | "inventoryRevision">,
     action:

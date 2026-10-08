@@ -29,7 +29,7 @@ import {
  * 2. `projectArchivedThreads` applies the sidebar Scope, the search, the sort,
  *    and the grouping; `pageArchivedThreads` bounds how many rows render.
  *
- * Sidebar Show toggles (snoozed, settled, drafts) and pinned-only never apply:
+ * Sidebar Show toggles (snoozed, parked, drafts) and pinned-only never apply:
  * they describe live inventory, and every row here is archived.
  */
 

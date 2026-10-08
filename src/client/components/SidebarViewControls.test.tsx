@@ -208,7 +208,7 @@ describe("SidebarViewControls", () => {
     expect(handlers.onPinnedOnlyToggle).toHaveBeenCalledOnce();
 
     await user.click(screen.getByRole("menuitemcheckbox", { name: "Snoozed" }));
-    await user.click(screen.getByRole("menuitemcheckbox", { name: "Settled" }));
+    await user.click(screen.getByRole("menuitemcheckbox", { name: "Parked" }));
     await user.click(screen.getByRole("menuitemcheckbox", { name: "Drafts" }));
     expect(handlers.onShowToggle.mock.calls).toEqual([
       ["snoozed"],

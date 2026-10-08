@@ -377,8 +377,8 @@ describe("timeline Upcoming membership", () => {
   });
 });
 
-describe("timeline and flat settled shelf", () => {
-  it("extracts unpinned settled threads below time buckets", () => {
+describe("timeline and flat Parked section", () => {
+  it("extracts unpinned parked threads below time buckets", () => {
     const groups = project("time", [
       thread("active-today"),
       thread("settled-today", {
@@ -399,13 +399,13 @@ describe("timeline and flat settled shelf", () => {
       "settled-yesterday",
     ]);
     expect(groupFor(groups, "settled")).toMatchObject({
-      label: "Settled",
-      kind: "settled",
+      label: "Parked",
+      kind: "parked",
       futureTimes: false,
     });
   });
 
-  it("keeps a settled automation out of Upcoming", () => {
+  it("keeps a parked automation out of Upcoming", () => {
     const groups = project("time", [
       thread("settled-automation", {
         inventoryState: "settled",
@@ -422,7 +422,7 @@ describe("timeline and flat settled shelf", () => {
     expect(idsOf(groupFor(groups, "settled"))).toEqual(["settled-automation"]);
   });
 
-  it("leaves snoozed threads in Upcoming rather than the settled shelf", () => {
+  it("leaves snoozed threads in Upcoming rather than the Parked section", () => {
     const groups = project("time", [
       thread("snoozed", {
         inventoryState: "snoozed",
@@ -435,7 +435,7 @@ describe("timeline and flat settled shelf", () => {
     expect(idsOf(groupFor(groups, "settled"))).toEqual(["settled"]);
   });
 
-  it("keeps pinned settled threads in Pinned and omits an empty shelf", () => {
+  it("keeps pinned parked threads in Pinned and omits an empty section", () => {
     const groups = project("time", [
       thread("pinned-settled", { pinned: true, inventoryState: "settled" }),
       thread("plain"),
@@ -444,7 +444,7 @@ describe("timeline and flat settled shelf", () => {
     expect(idsOf(groupFor(groups, "pinned"))).toEqual(["pinned-settled"]);
   });
 
-  it("extracts settled threads below the flat working list", () => {
+  it("extracts parked threads below the flat working list", () => {
     const groups = project("none", [
       thread("older", {
         lastActivityAt: at(2026, 7, 11, 9),
@@ -470,10 +470,10 @@ describe("timeline and flat settled shelf", () => {
       "settled-older",
     ]);
     expect(groupFor(groups, "all")?.kind).toBe("all");
-    expect(groupFor(groups, "settled")?.kind).toBe("settled");
+    expect(groupFor(groups, "settled")?.kind).toBe("parked");
   });
 
-  it("sorts the settled shelf by the resolved axis", () => {
+  it("sorts the Parked section by the resolved axis", () => {
     const threads = [
       thread("settled-b", {
         inventoryState: "settled",
@@ -501,7 +501,7 @@ describe("timeline and flat settled shelf", () => {
     ]);
   });
 
-  it("does not extract settled out of State buckets", () => {
+  it("does not extract parked threads out of State buckets", () => {
     const groups = project("state", [
       thread("idle-1"),
       thread("settled-1", { inventoryState: "settled" }),
@@ -857,7 +857,7 @@ describe("state buckets", () => {
       "Scheduled",
       "Idle",
       "Snoozed",
-      "Settled",
+      "Parked",
     ]);
     expect(groups.every((group) => group.kind === "state")).toBe(true);
   });

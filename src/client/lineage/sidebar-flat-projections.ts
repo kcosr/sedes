@@ -45,21 +45,21 @@ export function projectSidebarFlatGroups(
   const pinnedGroup = projectPinned(pinned, modePreferences);
   switch (mode) {
     case "time": {
-      const { rest, settled } = partitionSettled(ordinary);
+      const { rest, parked } = partitionParked(ordinary);
       return [
         ...pinnedGroup,
         ...projectTimeline(rest, modePreferences, now),
-        ...projectSettled(settled, modePreferences),
+        ...projectParked(parked, modePreferences),
       ];
     }
     case "state":
       return [...pinnedGroup, ...projectState(ordinary, modePreferences)];
     case "none": {
-      const { rest, settled } = partitionSettled(ordinary);
+      const { rest, parked } = partitionParked(ordinary);
       return [
         ...pinnedGroup,
         ...projectAll(rest, modePreferences),
-        ...projectSettled(settled, modePreferences),
+        ...projectParked(parked, modePreferences),
       ];
     }
   }
@@ -82,35 +82,37 @@ function projectPinned(
 }
 
 /**
- * Timeline and Flat list park unpinned settled threads below the working
- * set. State already has its own Settled bucket, including precedence that
- * can keep a settled thread in Needs attention, so it is left alone.
+ * Timeline and Flat list place unpinned parked threads below the working
+ * set. State already has its own Parked bucket, including precedence that
+ * can keep a parked thread in Needs attention, so it is left alone.
  */
-function partitionSettled(
+function partitionParked(
   threads: readonly NormalizedApplicationThreadSummary[],
 ): {
   readonly rest: readonly NormalizedApplicationThreadSummary[];
-  readonly settled: readonly NormalizedApplicationThreadSummary[];
+  readonly parked: readonly NormalizedApplicationThreadSummary[];
 } {
   const rest: NormalizedApplicationThreadSummary[] = [];
-  const settled: NormalizedApplicationThreadSummary[] = [];
+  const parked: NormalizedApplicationThreadSummary[] = [];
   for (const thread of threads) {
-    if (thread.inventoryState === "settled") settled.push(thread);
+    if (thread.inventoryState === "settled") parked.push(thread);
     else rest.push(thread);
   }
-  return { rest, settled };
+  return { rest, parked };
 }
 
-function projectSettled(
+function projectParked(
   threads: readonly NormalizedApplicationThreadSummary[],
   preferences: SidebarModePreferences,
 ): SidebarFlatGroup[] {
   if (threads.length === 0) return [];
   return [
     {
+      // The key names the section's saved disclosure; it keeps the stored
+      // inventory state's name.
       key: "settled",
-      label: "Settled",
-      kind: "settled",
+      label: "Parked",
+      kind: "parked",
       futureTimes: false,
       threads: [...threads].sort(compareBySortAxis(preferences)),
     },
@@ -119,7 +121,7 @@ function projectSettled(
 
 /**
  * The global Show filters, applied before any grouping: archived threads stay
- * on their own page; snoozed, settled, and unbound drafts are opt-out.
+ * on their own page; snoozed, parked, and unbound drafts are opt-out.
  */
 export function filterSidebarThreads(
   threads: readonly NormalizedApplicationThreadSummary[],
@@ -222,6 +224,7 @@ export function resolveTimeBucket(
   };
 }
 
+/** State buckets; Parked keeps its stored name, `settled`, as its key. */
 export type SidebarStateBucketKey =
   "needs-attention" | "running" | "scheduled" | "snoozed" | "settled" | "idle";
 
@@ -264,7 +267,7 @@ const STATE_BUCKETS: readonly {
   { key: "scheduled", label: "Scheduled", futureTimes: true },
   { key: "idle", label: "Idle", futureTimes: false },
   { key: "snoozed", label: "Snoozed", futureTimes: true },
-  { key: "settled", label: "Settled", futureTimes: false },
+  { key: "settled", label: "Parked", futureTimes: false },
 ];
 
 function projectTimeline(

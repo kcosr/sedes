@@ -182,9 +182,10 @@ import { createThreadSearchMatcher } from "../lineage/sidebar-search.js";
 import { ForkProvenanceButton } from "./lineage/ForkProvenanceButton.js";
 import { useArchiveThreadAction } from "./thread/ArchiveChoicesDialog.js";
 import {
-  SettleImpactDialog,
-  settleNeedsConfirmation,
-} from "./thread/SettleImpactDialog.js";
+  ParkImpactDialog,
+  parkNeedsConfirmation,
+} from "./thread/ParkImpactDialog.js";
+import { inventoryActionLabel } from "./thread/inventory-action-labels.js";
 import { SnoozeDialog } from "./thread/SnoozeDialog.js";
 import { BackendBrandIcon } from "./brand-icons.js";
 import {
@@ -656,10 +657,10 @@ export function InventorySidebar({
     (viewPreferences.show.settled || thread.inventoryState !== "settled") &&
     (viewPreferences.show.drafts || thread.backingState !== "unbound");
   /**
-   * The project view honors the global Show filters too: snoozed, settled,
+   * The project view honors the global Show filters too: snoozed, parked,
    * and draft threads are removed before lineage derivation
    * (deriveSidebarLineage otherwise re-adds every snapshot thread when search
-   * is empty), and the Snoozed and Settled shelves disappear entirely while
+   * is empty), and the Snoozed and Parked shelves disappear entirely while
    * their filters are off.
    */
   const projection = useMemo(() => {
@@ -858,7 +859,7 @@ export function InventorySidebar({
       },
       {
         key: "settled",
-        label: "Settled",
+        label: "Parked",
         visible: viewPreferences.show.settled,
         compare: compareProjectRoots(modePreferences),
       },
@@ -1389,7 +1390,7 @@ export function InventorySidebar({
   const scopedSnoozedCount = scopedInventoryThreads.filter(
     ({ inventoryState }) => inventoryState === "snoozed",
   ).length;
-  const scopedSettledCount = scopedInventoryThreads.filter(
+  const scopedParkedCount = scopedInventoryThreads.filter(
     ({ inventoryState }) => inventoryState === "settled",
   ).length;
   return (
@@ -2074,8 +2075,8 @@ export function InventorySidebar({
                   )}
                   {viewPreferences.show.settled && (
                     <Shelf
-                      title="Settled"
-                      count={scopedSettledCount}
+                      title="Parked"
+                      count={scopedParkedCount}
                       nodes={sortProjectNodes(
                         projection?.rootsByBucket.get("settled") ?? [],
                         compareProjectRoots(modePreferences),
@@ -2433,6 +2434,7 @@ function Shelf({
   selectedThreadId?: string;
   onSelectThread?: SelectThread;
   onNavigate: (options?: { readonly keepDrawerOpen?: boolean }) => void;
+  /** The shelf's bucket; Parked keeps its stored name, `settled`. */
   kind: "automations" | "snoozed" | "settled";
   store: ApplicationClientStore;
   threadRegistry?: ThreadStoreRegistry;
@@ -2486,7 +2488,11 @@ function Shelf({
         />
         {nodes.length === 0 && (
           <p className="shelf-empty">
-            {kind === "automations" ? "No automations." : `Nothing ${kind}.`}
+            {kind === "automations"
+              ? "No automations."
+              : kind === "snoozed"
+                ? "Nothing snoozed."
+                : "Nothing parked."}
           </p>
         )}
       </Collapsible.Content>
@@ -2727,10 +2733,10 @@ function ThreadStackItem({
     [],
   );
   const memberCount = entry.members.length;
-  const settleCount = entry.members.filter(
+  const parkCount = entry.members.filter(
     ({ inventoryState }) => inventoryState !== "settled",
   ).length;
-  const unsettleCount = entry.members.filter(
+  const unparkCount = entry.members.filter(
     ({ inventoryState }) => inventoryState === "settled",
   ).length;
   const rosterId = `thread-stack-roster-${entry.stackBy}-${entry.stackId}`;
@@ -2815,15 +2821,15 @@ function ThreadStackItem({
 
   const actionAvailable = (action: BulkInventoryAction) =>
     action === "settle"
-      ? settleCount > 0
+      ? parkCount > 0
       : action === "unsettle"
-        ? unsettleCount > 0
+        ? unparkCount > 0
         : memberCount > 0;
   const actionCount = (action: BulkInventoryAction) =>
     action === "settle"
-      ? settleCount
+      ? parkCount
       : action === "unsettle"
-        ? unsettleCount
+        ? unparkCount
         : memberCount;
   const actionIcon = (action: BulkInventoryAction, size: number) =>
     action === "settle" ? (
@@ -2843,9 +2849,9 @@ function ThreadStackItem({
             ? `thread-quick-action thread-quick-action-icon${action === "archive" ? " thread-row-archive" : ""}`
             : "thread-stack-header-action"
         }
-        data-testid={`thread-stack-${surface}-${action}`}
-        aria-label={`${capitalize(action)} ${actionCount(action)} ${actionCount(action) === 1 ? "thread" : "threads"} in ${stack.label}`}
-        title={`${capitalize(action)} stack`}
+        data-testid={`thread-stack-${surface}-${inventoryActionLabel(action).toLowerCase()}`}
+        aria-label={`${inventoryActionLabel(action)} ${actionCount(action)} ${actionCount(action) === 1 ? "thread" : "threads"} in ${stack.label}`}
+        title={`${inventoryActionLabel(action)} stack`}
         disabled={!actionAvailable(action) || stackMutationPending}
         onClick={() => requestStackAction(action)}
       >
@@ -2919,10 +2925,10 @@ function ThreadStackItem({
               onSelect={() => requestStackAction(action)}
             >
               {actionIcon(action, 16)}
-              {capitalize(action)} stack
+              {inventoryActionLabel(action)} stack
               {!actionAvailable(action) && (
                 <ContextMenuValue aria-hidden="true">
-                  {action === "unsettle" ? "None settled" : "None active"}
+                  {action === "unsettle" ? "None parked" : "None active"}
                 </ContextMenuValue>
               )}
             </ContextMenuItem>
@@ -3441,7 +3447,7 @@ interface FlatDescendantPaging {
 /**
  * One flat-view row: FlatThreadRow plus the same lifecycle / archive hover
  * actions the project-view ThreadRow offers, wrapped in the same
- * ThreadContextMenu (rename, snooze, settle, fork, automation settings,
+ * ThreadContextMenu (rename, snooze, park, fork, automation settings,
  * lineage placement), and the peek hover/focus bindings on the list item.
  */
 function FlatRowItemContent(
@@ -3528,8 +3534,8 @@ function FlatRowItemContent(
   const [pendingAction, setPendingAction] = useState<"quick" | "archive">();
   const [pinPending, setPinPending] = useState(false);
   const [actionError, setActionError] = useState("");
-  const [settleChoicesOpen, setSettleChoicesOpen] = useState(false);
-  const [settleImpact, setSettleImpact] = useState<ThreadArchiveImpact>();
+  const [parkChoicesOpen, setParkChoicesOpen] = useState(false);
+  const [parkImpact, setParkImpact] = useState<ThreadArchiveImpact>();
   const [snoozeOpen, setSnoozeOpen] = useState(false);
   // Inline rename mirrors the project-view ThreadRow's contract: the row
   // swaps to an autofocused input, Enter/blur commit, Escape cancels, and the
@@ -3626,9 +3632,9 @@ function FlatRowItemContent(
     const mutation =
       action === "settle"
         ? store.getThreadArchiveImpact(thread.id).then((impact) => {
-            if (settleNeedsConfirmation(impact)) {
-              setSettleImpact(impact);
-              setSettleChoicesOpen(true);
+            if (parkNeedsConfirmation(impact)) {
+              setParkImpact(impact);
+              setParkChoicesOpen(true);
               return;
             }
             return store.mutateInventory(thread, action, {
@@ -3649,8 +3655,8 @@ function FlatRowItemContent(
         <button
           type="button"
           className={`thread-quick-action ${quickAction === "wake" ? "" : "thread-quick-action-icon"}`}
-          aria-label={`${capitalize(quickAction)} ${thread.title.text}`}
-          title={capitalize(quickAction)}
+          aria-label={`${inventoryActionLabel(quickAction)} ${thread.title.text}`}
+          title={inventoryActionLabel(quickAction)}
           disabled={pendingAction !== undefined}
           onClick={() => runQuickAction(quickAction)}
         >
@@ -3862,12 +3868,12 @@ function FlatRowItemContent(
             wrapper out of layout so FlatThreadRow's CSS applies unchanged. */}
         <div style={{ display: "contents" }}>{row}</div>
       </ThreadContextMenu>
-      <SettleImpactDialog
-        open={settleChoicesOpen}
-        onOpenChange={setSettleChoicesOpen}
-        impact={settleImpact}
+      <ParkImpactDialog
+        open={parkChoicesOpen}
+        onOpenChange={setParkChoicesOpen}
+        impact={parkImpact}
         loadImpact={() => store.getThreadArchiveImpact(thread.id)}
-        onSettle={(options) => store.mutateInventory(thread, "settle", options)}
+        onPark={(options) => store.mutateInventory(thread, "settle", options)}
         returnFocusRef={rowLink}
       />
       <SnoozeDialog
@@ -4342,8 +4348,8 @@ function ThreadRow({
     "quick" | "archive"
   >();
   const [quickActionError, setQuickActionError] = useState("");
-  const [settleChoicesOpen, setSettleChoicesOpen] = useState(false);
-  const [settleImpact, setSettleImpact] = useState<ThreadArchiveImpact>();
+  const [parkChoicesOpen, setParkChoicesOpen] = useState(false);
+  const [parkImpact, setParkImpact] = useState<ThreadArchiveImpact>();
   const [snoozeOpen, setSnoozeOpen] = useState(false);
   const [placementPending, setPlacementPending] = useState(false);
   const [placementError, setPlacementError] = useState("");
@@ -4759,8 +4765,8 @@ function ThreadRow({
               <button
                 type="button"
                 className={`thread-quick-action ${quickAction === "wake" ? "" : "thread-quick-action-icon"}`}
-                aria-label={`${capitalize(quickAction)} ${thread.title.text}`}
-                title={capitalize(quickAction)}
+                aria-label={`${inventoryActionLabel(quickAction)} ${thread.title.text}`}
+                title={inventoryActionLabel(quickAction)}
                 onClick={() => {
                   if (!onQuickAction || inventoryActionPending.current) return;
                   inventoryActionPending.current = true;
@@ -4771,9 +4777,9 @@ function ThreadRow({
                       ? store
                           .getThreadArchiveImpact(thread.id)
                           .then((impact) => {
-                            if (settleNeedsConfirmation(impact)) {
-                              setSettleImpact(impact);
-                              setSettleChoicesOpen(true);
+                            if (parkNeedsConfirmation(impact)) {
+                              setParkImpact(impact);
+                              setParkChoicesOpen(true);
                               return;
                             }
                             return onQuickAction(thread, {
@@ -4935,12 +4941,12 @@ function ThreadRow({
       >
         {row}
       </ThreadContextMenu>
-      <SettleImpactDialog
-        open={settleChoicesOpen}
-        onOpenChange={setSettleChoicesOpen}
-        impact={settleImpact}
+      <ParkImpactDialog
+        open={parkChoicesOpen}
+        onOpenChange={setParkChoicesOpen}
+        impact={parkImpact}
         loadImpact={() => store.getThreadArchiveImpact(thread.id)}
-        onSettle={(options) => store.mutateInventory(thread, "settle", options)}
+        onPark={(options) => store.mutateInventory(thread, "settle", options)}
         returnFocusRef={rowLink}
       />
       <SnoozeDialog
