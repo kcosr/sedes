@@ -149,6 +149,8 @@ public class NativeVoiceRuntimePolicyTest {
     }
     @Test public void replayRefusalsHaveSpecificMessages() {
         for (String code : new String[] { "voice_not_ready", "voice_reply_empty", "voice_queue_full" }) assertSpecific(code);
+        // Shared by recording and replay refusals, so it names neither.
+        assertEquals("Voice is not ready yet.", NativeVoiceRuntime.message("voice_not_ready"));
     }
     private static void assertSpecific(String code) {
         String message = NativeVoiceRuntime.message(code);

@@ -597,7 +597,12 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         });
     }
     void detached(NativeVoiceRuntimeService service) {
-        handler.post(() -> { if (this.service == service) { this.service = null; sessionStarted = false; clientActions.discardVoiceOnly(); cancelActive(false, "service_stopped"); closeSpeech(); closeEvents(); phase = "off"; publish(); } });
+        handler.post(() -> {
+            if (this.service != service) return;
+            this.service = null; sessionStarted = false; clientActions.discardVoiceOnly();
+            // A replay is a request for now, not for whenever the service next starts; drain would not filter it later.
+            queue.clearReplays(); cancelActive(false, "service_stopped"); closeSpeech(); closeEvents(); phase = "off"; publish();
+        });
     }
     private void stopSession() {
         sessionStartId = null; sessionStarted = false; clientActions.discardVoiceOnly(); closeSpeech(); audio.stop(); closeEvents();
@@ -1036,13 +1041,14 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
     private void speakReply(JSONObject args) {
         JSONObject request = NativeVoiceQueue.replayRequest(args);
         if (!sessionStarted || !settings.active() || !speechReady() || binding == null) throw new IllegalStateException("voice_not_ready");
-        String threadId = request.optString("threadId");
-        NativeVoiceQueue.Item item = NativeVoiceQueue.Item.replay(request, replayTitle(threadId), settings);
+        NativeVoiceQueue.Item item = NativeVoiceQueue.Item.replay(request, replayTitle(request), settings);
         if (active != null && active.replay != null && active.replay.replayIdentity().equals(item.replayIdentity())) return;
         if (queue.addReplay(item)) drain();
     }
-    /** Display only: the bridge sends no title, so use one this device already holds for the thread. */
-    private String replayTitle(String threadId) {
+    /** Display only: the WebView's non-blank title first, otherwise one this device already holds for the thread. */
+    private String replayTitle(JSONObject request) {
+        String threadId = request.optString("threadId"), provided = NativeVoiceJson.nullableString(request, "threadTitle", 512);
+        if (provided != null && !blank(provided)) return provided;
         if (foregroundVisible && threadId.equals(foregroundThread) && foregroundTitle != null) return foregroundTitle;
         return threadId.equals(settings.text("voiceThreadId")) ? settings.text("voiceThreadTitle") : null;
     }
@@ -2504,7 +2510,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
             case "recognition_session_timing_unsupported": return "The speech service session limit is too short for the selected recognition timeout.";
             case "voice_target_required": return "Choose a thread for voice input.";
             case "voice_busy": return "Stop the current voice interaction before recording.";
-            case "voice_not_ready": return "Voice is not ready to record yet.";
+            case "voice_not_ready": return "Voice is not ready yet.";
             case "voice_not_listening": return "Voice is not recording.";
             case "voice_not_speaking": return "Voice is not speaking.";
             case "voice_reply_empty": return "This response has no text to speak.";

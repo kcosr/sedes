@@ -226,14 +226,24 @@ public class NativeVoiceQueueTest {
         JSONObject request = NativeVoiceQueue.replayRequest(valid);
         NativeVoiceJson.put(valid, "threadId", "changed");
         assertEquals("t".repeat(512), request.optString("threadId"));
+        assertFalse("threadTitle is optional", request.has("threadTitle"));
+        // An optional title is validated like setForegroundContext's and kept on the stored request.
+        for (Object title : new Object[] { "Thread title", "T".repeat(512), JSONObject.NULL }) {
+            JSONObject titled = replayArgs("thread-a", "turn-1", new JSONObject()); NativeVoiceJson.put(titled, "threadTitle", title);
+            assertEquals(title, NativeVoiceQueue.replayRequest(titled).opt("threadTitle"));
+        }
         JSONObject falseTruncation = NativeVoiceJson.object("text", "x", "truncation",
             NativeVoiceJson.object("truncated", false, "retainedBytes", 1, "reason", "byte_limit"));
-        JSONObject extra = replayArgs("thread-a", "turn-1", new JSONObject()); NativeVoiceJson.put(extra, "threadTitle", "Title");
+        JSONObject extra = replayArgs("thread-a", "turn-1", new JSONObject()); NativeVoiceJson.put(extra, "title", "Title");
+        JSONObject longTitle = replayArgs("thread-a", "turn-1", new JSONObject()); NativeVoiceJson.put(longTitle, "threadTitle", "T".repeat(513));
+        JSONObject numericTitle = replayArgs("thread-a", "turn-1", new JSONObject()); NativeVoiceJson.put(numericTitle, "threadTitle", 42);
+        JSONObject emptyTitle = replayArgs("thread-a", "turn-1", new JSONObject()); NativeVoiceJson.put(emptyTitle, "threadTitle", "");
         JSONObject noThread = replayArgs("thread-a", "turn-1", new JSONObject()); noThread.remove("threadId");
         JSONObject noTurn = replayArgs("thread-a", "turn-1", new JSONObject()); noTurn.remove("turnId");
         JSONObject noResult = replayArgs("thread-a", "turn-1", new JSONObject()); noResult.remove("assistantResult");
         Object[][] cases = {
-            { "unknown_field", extra }, { "invalid_threadId", noThread }, { "invalid_threadId", replayArgs("", "turn-1", new JSONObject()) },
+            { "unknown_field", extra }, { "invalid_threadTitle", longTitle }, { "invalid_threadTitle", numericTitle },
+            { "invalid_threadTitle", emptyTitle }, { "invalid_threadId", noThread }, { "invalid_threadId", replayArgs("", "turn-1", new JSONObject()) },
             { "invalid_threadId", replayArgs("t".repeat(513), "turn-1", new JSONObject()) }, { "invalid_turnId", noTurn },
             { "invalid_turnId", replayArgs("thread-a", "u".repeat(161), new JSONObject()) }, { "invalid_assistantResult", noResult },
             { "invalid_assistantResult", replayArgs("thread-a", "turn-1", JSONObject.NULL) },
@@ -280,6 +290,49 @@ public class NativeVoiceQueueTest {
         assertEquals("voice_queue_full", NativeVoiceRuntime.code(bytes));
         assertEquals(2, large.size()); assertEquals(240000, large.bytes()); assertEquals(0, large.state().optInt("droppedCount"));
     }
+    @Test public void refusedReplayEvictsNoProgressButAReplayThatFitsStillDoes() {
+        NativeVoiceSettings configured = settings("response");
+        NativeVoiceQueue queue = new NativeVoiceQueue();
+        NativeVoiceQueue.Item progress = new NativeVoiceQueue.Item(envelope("progress", "turn.progress", "p".repeat(10000), null), configured);
+        NativeVoiceQueue.Item first = replay("turn-1", "é".repeat(60000), configured), second = replay("turn-2", "é".repeat(60000), configured);
+        assertTrue(queue.addReplay(first)); assertTrue(queue.add(progress)); assertTrue(queue.addReplay(second));
+        int before = 240000 + progress.bytes; assertEquals(before, queue.bytes());
+        // Even with the progress item evicted, a third large replay exceeds 256 KiB.
+        RuntimeException full = assertThrows(RuntimeException.class, () -> queue.addReplay(replay("turn-3", "é".repeat(60000), configured)));
+        assertEquals("voice_queue_full", NativeVoiceRuntime.code(full));
+        assertEquals("A refused replay evicts nothing", 3, queue.size()); assertEquals(before, queue.bytes());
+        assertEquals(0, queue.state().optInt("droppedCount"));
+        // This replay fits exactly once progress yields, so progress is evicted as for terminal content.
+        int room = NativeVoiceQueue.MAX_BYTES - 240000;
+        assertTrue(before + room > NativeVoiceQueue.MAX_BYTES);
+        NativeVoiceQueue.Item fits = replay("turn-4", "a".repeat(room), configured); assertEquals(room, fits.bytes);
+        assertTrue(queue.addReplay(fits));
+        assertEquals(3, queue.size()); assertEquals(NativeVoiceQueue.MAX_BYTES, queue.bytes());
+        assertEquals(1, queue.state().optJSONObject("droppedReasons").optInt("progress_evicted"));
+        assertEquals(first.id, queue.take().id); assertEquals(second.id, queue.take().id); assertEquals(fits.id, queue.take().id);
+        // Automatic items keep evicting progress before their own overflow drop.
+        NativeVoiceQueue automatic = new NativeVoiceQueue();
+        automatic.addReplay(replay("turn-1", "é".repeat(60000), configured));
+        automatic.add(new NativeVoiceQueue.Item(envelope("progress", "turn.progress", "p".repeat(10000), null), configured));
+        automatic.addReplay(replay("turn-2", "é".repeat(60000), configured));
+        assertFalse(automatic.add(new NativeVoiceQueue.Item(envelope("big", "turn.completed", "é".repeat(30000), null), configured)));
+        assertEquals(2, automatic.size()); assertEquals(1, automatic.state().optJSONObject("droppedReasons").optInt("progress_evicted"));
+        assertEquals(1, automatic.state().optJSONObject("droppedReasons").optInt("overflow"));
+    }
+    @Test public void stoppedServiceClearsPendingReplaysAndLeavesAutomaticItems() {
+        NativeVoiceSettings configured = settings("response");
+        NativeVoiceQueue queue = new NativeVoiceQueue();
+        NativeVoiceQueue.Item completed = new NativeVoiceQueue.Item(envelope("completed", "turn.completed", "One", null), configured);
+        NativeVoiceQueue.Item progress = new NativeVoiceQueue.Item(envelope("progress", "turn.progress", "Working", null), configured);
+        queue.addReplay(replay("turn-1", "First", configured)); queue.add(completed);
+        queue.addReplay(replay("turn-2", "Second", configured)); queue.add(progress);
+        queue.clearReplays();
+        assertEquals(2, queue.size()); assertEquals(completed.bytes + progress.bytes, queue.bytes());
+        assertEquals("Cleared replays are not drops", 0, queue.state().optInt("droppedCount"));
+        assertEquals(completed.id, queue.take().id); assertEquals(progress.id, queue.take().id);
+        assertTrue("A cleared turn can be replayed again", queue.addReplay(replay("turn-1", "First", configured)));
+        queue.clearReplays(); assertEquals(0, queue.size()); assertEquals(0, queue.bytes());
+    }
     @Test public void reconfigureRebuildsAPendingReplayFromItsRequest() {
         String markdown = "# Answer\n\nRead [the label](https://example.test/hidden).";
         NativeVoiceSettings clean = settings("response");
@@ -301,6 +354,14 @@ public class NativeVoiceQueueTest {
         NativeVoiceQueue silent = new NativeVoiceQueue();
         silent.addReplay(replay("turn-2", "---", raw)); silent.reconfigure(clean);
         assertEquals(0, silent.size()); assertEquals(0, silent.bytes()); assertEquals(0, silent.state().optInt("droppedCount"));
+        // The WebView's title stays on the stored request and the rebuilt item.
+        JSONObject titled = replayArgs("thread-a", "turn-3", NativeVoiceJson.object("final", text(markdown)));
+        NativeVoiceJson.put(titled, "threadTitle", "Provided title");
+        queue.addReplay(NativeVoiceQueue.Item.replay(NativeVoiceQueue.replayRequest(titled), "Provided title", clean));
+        queue.reconfigure(raw);
+        NativeVoiceQueue.Item retitled = queue.take();
+        assertEquals(markdown, retitled.speech); assertEquals("Provided title", retitled.threadTitle);
+        assertEquals("Provided title", retitled.request.optString("threadTitle"));
     }
     @Test public void automaticCancellationKeepsReplaysInOrderWhileOffClearsThem() {
         NativeVoiceSettings configured = settings("response");

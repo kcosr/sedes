@@ -134,14 +134,21 @@ final class NativeVoiceQueue {
     /** Queues a replay outside notification dedupe. False when the same turn's replay is already pending. */
     boolean addReplay(Item item) {
         for (Item old : pending) if (item.replayIdentity().equals(old.replayIdentity())) return false;
-        // A user request is refused explicitly rather than silently dropped.
-        if (!enqueue(item)) throw new IllegalStateException("voice_queue_full");
+        // A user request is refused explicitly rather than silently dropped, and a refusal evicts nothing.
+        if (!fitsAfterProgressEviction(item) || !enqueue(item)) throw new IllegalStateException("voice_queue_full");
         return true;
+    }
+    /** Whether a non-progress item fits once every pending progress item, the only evictable kind, has yielded. */
+    private boolean fitsAfterProgressEviction(Item item) {
+        int count = pending.size(), size = bytes;
+        for (Item old : pending) if (old.progress()) { count--; size -= old.bytes; }
+        return count < MAX_ITEMS && size + item.bytes <= MAX_BYTES;
     }
     /** Strict speakReply bridge arguments, validated before readiness or queue state is considered. */
     static JSONObject replayRequest(JSONObject args) {
-        NativeVoiceJson.keys(args, "threadId", "turnId", "assistantResult");
+        NativeVoiceJson.keys(args, "threadId", "turnId", "assistantResult", "threadTitle");
         NativeVoiceJson.string(args, "threadId", 512); NativeVoiceJson.string(args, "turnId", 160);
+        NativeVoiceJson.nullableString(args, "threadTitle", 512);
         NativeVoiceProtocol.assistantResult(NativeVoiceJson.requiredObject(args, "assistantResult"));
         return NativeVoiceJson.copy(args);
     }
@@ -178,6 +185,14 @@ final class NativeVoiceQueue {
         while (iterator.hasNext()) {
             Item item = iterator.next();
             if (item.automatic) { bytes -= item.bytes; iterator.remove(); drop(reason); }
+        }
+    }
+    /** A stopped voice service ends pending replays. Automatic items stay for drain to judge; replays never count as drops. */
+    void clearReplays() {
+        Iterator<Item> iterator = pending.iterator();
+        while (iterator.hasNext()) {
+            Item item = iterator.next();
+            if (item.isReplay()) { bytes -= item.bytes; iterator.remove(); }
         }
     }
     void reset() { pending.clear(); remembered.clear(); seen.clear(); dropped.clear(); bytes = 0; }
