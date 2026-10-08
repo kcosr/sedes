@@ -2249,7 +2249,10 @@ bounded at completion, from the latest accepted observation) as
 `{ unclassified }`, fitted the same way. `null` means Sedes
 stored no non-blank reply text for the turn, including an unknown turn ID or a
 turn Sedes did not submit. `client.replay_turn` reads through the same
-`TurnReplySpeechService.select`, fitting beside its command envelope.
+`TurnReplySpeechService.select`, fitting beside its command envelope. Without a
+turn ID it first takes the thread's most recent ended turn with a stored reply
+from completion observations, ordered by completion time then acceptance;
+a running turn has no finalized observation and is never chosen.
 Notification enablement, delivery, and silence do not apply. The read is
 application-owned and identical for every backend: it needs no provider code
 and returns whatever sections that backend's completion froze.

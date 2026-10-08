@@ -30,7 +30,7 @@ const reader: AgentToolEnvironmentAuthorityReader = {
 const storedReply: SelectedAssistantResult = { final: { text: "Done." }, unclassified: null };
 const allClientTools = ["client.list", "client.settings.get", "client.settings.update", "client.switch_thread", "client.end_interaction", "client.replay_turn"];
 function fixture(backendKind: BackendKind = "pi", adapter: AgentToolAdapter = "cli", boundary = "unrestricted",
-  options: { replies?: Pick<TurnReplySpeechService, "select">; enabledToolIds?: string[] } = {}) {
+  options: { replies?: Partial<Pick<TurnReplySpeechService, "select" | "latestReplyTurnId">>; enabledToolIds?: string[] } = {}) {
   const clients = new ClientControlService(); services.push(clients);
   const register = () => clients.register(scope, undefined, { platform: "browser", capabilities: { navigate: true, voice: false, voiceSettings: false }, state });
   const starting = register(), other = register();
@@ -39,8 +39,9 @@ function fixture(backendKind: BackendKind = "pi", adapter: AgentToolAdapter = "c
   const controls = new ClientControlToolService(clients, {
     observeInputRuntime: () => ({ authoritative: current, ownerGeneration: owner, runState: "running", sourceTurnId: turn,
       activeTurnId: turn, sourceTurnStatus: "in_progress", settled: false, firstInput: { operationId: "initial-input" } } as ConversationInputRuntimeObservation),
-  }, { originForTurn: () => ({ clientId: starting.clientId }) }, reader, options.replies ?? { select: () => storedReply });
-  const select = vi.spyOn(controls.replies, "select");
+  }, { originForTurn: () => ({ clientId: starting.clientId }) }, reader,
+  { select: () => storedReply, latestReplyTurnId: () => "previous-turn", ...options.replies });
+  const select = vi.spyOn(controls.replies, "select"), latestReplyTurnId = vi.spyOn(controls.replies, "latestReplyTurnId");
   const request = vi.spyOn(clients, "request").mockImplementation(async target => ({ status: "applied", state, client: clients.describe(target) }));
   const approve = vi.fn(async () => "allow" as const);
   const release = vi.fn();
@@ -55,7 +56,7 @@ function fixture(backendKind: BackendKind = "pi", adapter: AgentToolAdapter = "c
   const invoke = (toolId = "client.settings.get", input = {}) => gate.invoke({ source, adapter,
     request: { toolId, schemaVersion: 1, requestId: randomUUID(), input }, signal: new AbortController().signal,
     ...(backendKind === "opencode" ? { accessDecisionAuthority: { acquire } } : {}) });
-  return { invoke, clients, starting, other, request, select, approve, acquire, release, canonical,
+  return { invoke, clients, starting, other, request, select, latestReplyTurnId, approve, acquire, release, canonical,
     changeTurn: () => { turn = "another-turn"; }, changeOwner: () => { owner = "another-owner"; }, loseAuthority: () => { current = false; } };
 }
 
@@ -100,12 +101,14 @@ describe("canonical client controls", () => {
     ["changeTurn", "client.replay_turn", { threadId: destination, turnId: "ended-turn" }],
     ["changeOwner", "client.replay_turn", { threadId: destination, turnId: "ended-turn" }],
     ["loseAuthority", "client.replay_turn", { threadId: destination, turnId: "ended-turn" }],
+    ["changeTurn", "client.replay_turn", { threadId: destination }],
+    ["loseAuthority", "client.replay_turn", { threadId: destination }],
   ] as const)("rejects %s during destination approval for %s rather than retargeting", async (change, toolId, input) => {
     const current = fixture("pi", "cli", "environment");
     current.approve.mockImplementation(async () => { current[change](); return "allow"; });
     await expect(current.invoke(toolId, input)).rejects.toBeDefined();
     expect(current.request).not.toHaveBeenCalled(); expect(current.select).not.toHaveBeenCalled();
-    expect(current.approve).toHaveBeenCalledOnce();
+    expect(current.latestReplyTurnId).not.toHaveBeenCalled(); expect(current.approve).toHaveBeenCalledOnce();
   });
 
   it("authorizes a nested default-thread patch and does not let it bypass the environment boundary", async () => {
@@ -150,16 +153,17 @@ describe("client.replay_turn", () => {
   it.each([
     ["pi", "pi_sdk"], ["codex_app_server", "mcp"], ["claude_agent_sdk", "mcp"], ["grok_build", "cli"], ["opencode", "mcp"],
     ["pi", "cli"], ["codex_app_server", "cli"], ["claude_agent_sdk", "cli"], ["opencode", "cli"],
-  ] as const)("queues an ended turn of this thread on the starting client through %s/%s", async (backend, adapter) => {
+  ] as const)("queues this thread's previous reply for {} on the starting client through %s/%s", async (backend, adapter) => {
     const current = fixture(backend, adapter);
-    const result = await replay(current, { turnId: "ended-turn" }, { status: "applied", reason: "replay_playing" });
+    const result = await replay(current, {}, { status: "applied", reason: "replay_playing" });
     expect(result).toMatchObject({ state: "completed", output: { status: "applied", reason: "replay_playing", client: { clientId: current.starting.clientId } } });
-    expect(current.select).toHaveBeenCalledExactlyOnceWith(scope, sourceThreadId, "ended-turn", expect.objectContaining({ action: "replay_turn" }));
+    expect(current.latestReplyTurnId).toHaveBeenCalledExactlyOnceWith(scope, sourceThreadId);
+    expect(current.select).toHaveBeenCalledExactlyOnceWith(scope, sourceThreadId, "previous-turn", expect.objectContaining({ action: "replay_turn" }));
     expect(current.request).toHaveBeenCalledOnce();
     const [target, command] = current.request.mock.calls[0]!;
     expect(target.clientId).toBe(current.starting.clientId);
     expect(command).toEqual({ action: "replay_turn", sourceThreadId, sourceTurnId: "turn", threadId: sourceThreadId,
-      threadTitle: "Destination", turnId: "ended-turn", assistantResult: storedReply });
+      threadTitle: "Destination", turnId: "previous-turn", assistantResult: storedReply });
     expect(current.approve).not.toHaveBeenCalled();
     expect(current.acquire).toHaveBeenCalledTimes(backend === "opencode" ? 1 : 0);
   });
@@ -176,6 +180,28 @@ describe("client.replay_turn", () => {
     await expect(replay(current, { turnId: "ended-turn" }, { status: "failed", reason })).rejects.toMatchObject({
       toolError: { code: "unavailable", message: `The client rejected the request: ${reason}.`, retryable: false },
     });
+  });
+
+  it("resolves an omitted turn in the named thread and never for an explicit turn", async () => {
+    const current = fixture();
+    await replay(current, { threadId: sameEnvironment });
+    expect(current.latestReplyTurnId).toHaveBeenCalledExactlyOnceWith(scope, sameEnvironment);
+    expect(current.request.mock.calls[0]?.[1]).toMatchObject({ threadId: sameEnvironment, turnId: "previous-turn" });
+    current.latestReplyTurnId.mockClear();
+    for (const input of [{ turnId: "earlier-turn" }, { threadId: sameEnvironment, turnId: "earlier-turn" }]) await replay(current, input);
+    expect(current.latestReplyTurnId).not.toHaveBeenCalled();
+    expect(current.request.mock.calls.slice(1).map(([, command]) => [command.threadId, command.turnId]))
+      .toEqual([[sourceThreadId, "earlier-turn"], [sameEnvironment, "earlier-turn"]]);
+  });
+
+  it("fails as not found when the thread has no stored reply or its latest turn has no text", async () => {
+    const empty = fixture(undefined, undefined, undefined, { replies: { latestReplyTurnId: () => null } });
+    await expect(replay(empty, {})).rejects.toMatchObject({ toolError: { code: "not_found", message: "Sedes stored no reply for that thread; its turns may not have ended yet." } });
+    expect(empty.select).not.toHaveBeenCalled();
+    const silent = fixture(undefined, undefined, undefined, { replies: { select: () => null } });
+    await expect(replay(silent, { threadId: sameEnvironment })).rejects.toMatchObject({
+      toolError: { code: "not_found", message: "Sedes stored no reply for that thread's most recent ended turn." } });
+    for (const current of [empty, silent]) expect(current.request).not.toHaveBeenCalled();
   });
 
   it("rejects the in-progress source turn but replays the same turn id in another thread", async () => {
@@ -199,13 +225,15 @@ describe("client.replay_turn", () => {
     resolveThread.mockImplementationOnce((_scope, id) => ({ id, environmentId: "environment", label: "Destination" })).mockImplementationOnce(() => undefined);
     await expect(replay(current, { threadId: sameEnvironment, turnId: "ended-turn" })).rejects.toMatchObject({ toolError: { code: "not_found" } });
     resolveThread.mockRestore();
-    expect(current.select).not.toHaveBeenCalled(); expect(current.request).not.toHaveBeenCalled();
+    await expect(replay(current, { threadId: missing })).rejects.toMatchObject({ toolError: { code: "not_found" } });
+    expect(current.select).not.toHaveBeenCalled(); expect(current.latestReplyTurnId).not.toHaveBeenCalled();
+    expect(current.request).not.toHaveBeenCalled();
   });
 
   it("fails as not found when Sedes stored no reply for the turn", async () => {
     const current = fixture(undefined, undefined, undefined, { replies: { select: () => null } });
     await expect(replay(current, { turnId: "unsubmitted-turn" })).rejects.toMatchObject({
-      toolError: { code: "not_found", message: "Sedes stored no reply for that turn." },
+      toolError: { code: "not_found", message: "Sedes stored no reply for that turn; it may not have ended yet." },
     });
     expect(current.request).not.toHaveBeenCalled();
   });
@@ -237,11 +265,13 @@ describe("client.replay_turn", () => {
       completions: {
         latestClassifiedResult: () => ({ provisional: { text: large }, final: { text: large }, unclassified: null }),
         latestAssistantResult: () => ({ text: large }),
+        latestReplyTurnId: () => "ended-turn",
       },
       notifications: { read: () => ({ assistantResultPhases: ["provisional", "final", "unclassified"] }) as never },
     });
     threadLabel = "\u{1F50A}".repeat(256);
-    const current = fixture(undefined, undefined, undefined, { replies });
+    const current = fixture(undefined, undefined, undefined,
+      { replies: { select: replies.select.bind(replies), latestReplyTurnId: replies.latestReplyTurnId.bind(replies) } });
     current.request.mockRestore();
     const invocation = replay(current, { turnId: "ended-turn" });
     const { commands } = await current.clients.poll(scope, current.starting.connectionToken, undefined, { state, acknowledgements: [] }, new AbortController().signal);

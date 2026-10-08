@@ -327,7 +327,9 @@ any playback, a speech configuration change or focus loss ends it, and an
 explicit Stop still clears pending agent client actions.
 
 An agent's `client.replay_turn` reaches native as a `replay_turn` client
-command, whose strict keys include `turnId` and `assistantResult`. Native builds
+command, whose strict keys include `turnId` and `assistantResult`. The server
+resolves the tool's defaults, the source thread and its most recent ended
+turn, so the command always names both. Native builds
 the bridge request from the command's `threadId`, `turnId`, `assistantResult`,
 and `threadTitle` alone and validates it exactly as `speakReply`'s, so a
 malformed command fails with the same field code, such as `invalid_turnId`. An

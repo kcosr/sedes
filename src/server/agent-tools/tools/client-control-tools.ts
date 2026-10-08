@@ -44,7 +44,7 @@ export class ClientControlToolService {
     readonly actors: Pick<ConversationActorManager, "observeInputRuntime">,
     readonly activity: Pick<ThreadActivityService, "originForTurn">,
     readonly authority: Pick<AgentToolEnvironmentAuthorityReader, "resolveThread">,
-    readonly replies: Pick<TurnReplySpeechService, "select">) {}
+    readonly replies: Pick<TurnReplySpeechService, "select" | "latestReplyTurnId">) {}
 
   capture(scope: RequestScope, threadId: string): TrustedClientTurn {
     const observed = this.actors.observeInputRuntime(scope, threadId);
@@ -72,13 +72,17 @@ export class ClientControlToolService {
     const target = this.clients.target(scope, input.clientId ?? turn.clientId);
     const source = { sourceThreadId: turn.threadId, sourceTurnId: turn.turnId };
     if (id === "client.replay_turn") {
-      const threadId = input.threadId ?? turn.threadId, turnId = input.turnId!;
+      const threadId = input.threadId ?? turn.threadId;
       const thread = this.#admittedThread(scope, threadId, context);
+      // Stored observations only: the running source turn has none, so on its own thread this is the previous answer.
+      const turnId = input.turnId ?? this.replies.latestReplyTurnId(scope, threadId);
+      if (!turnId) throw new CanonicalAgentToolRequestError("not_found", "Sedes stored no reply for that thread; its turns may not have ended yet.");
       // Capture proved the source turn is still in progress; it has no reply to replay yet.
       if (threadId === turn.threadId && turnId === turn.turnId) throw new CanonicalAgentToolRequestError("invalid_input", "The turn has not ended.");
       const command = { action: "replay_turn" as const, ...source, threadId, threadTitle: threadTitle(thread), turnId };
       const assistantResult = this.replies.select(scope, threadId, turnId, { ...command, ...assignedCommandFields });
-      if (!assistantResult) throw new CanonicalAgentToolRequestError("not_found", "Sedes stored no reply for that turn.");
+      if (!assistantResult) throw new CanonicalAgentToolRequestError("not_found", input.turnId
+        ? "Sedes stored no reply for that turn; it may not have ended yet." : "Sedes stored no reply for that thread's most recent ended turn.");
       return settled(await this.clients.request(target, { ...command, assistantResult }, context.abortSignal));
     }
     const action = id.slice("client.".length) as "settings.get" | "settings.update" | "switch_thread" | "end_interaction";
@@ -116,7 +120,7 @@ export function createClientControlToolDefinitions(service?: ClientControlToolSe
     const fields: TProperties = id === "client.list" ? {} : { clientId: Type.Optional(str()) };
     if (id === "client.switch_thread") Object.assign(fields, { threadId: str(), listen: Type.Optional(Type.Boolean()) });
     if (id === "client.settings.update") Object.assign(fields, { expectedRevision: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }), patch });
-    if (id === "client.replay_turn") Object.assign(fields, { threadId: Type.Optional(str()), turnId: str(160) });
+    if (id === "client.replay_turn") Object.assign(fields, { threadId: Type.Optional(str()), turnId: Type.Optional(str(160)) });
     const schema = (value: unknown) => normalizeCanonicalAgentToolSchema({ ...value as object, $schema: AGENT_TOOL_JSON_SCHEMA_DIALECT });
     const name = `sedes_${id.replaceAll(".", "_")}`;
     return {
