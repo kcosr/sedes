@@ -1,5 +1,6 @@
 import { usageReportSchema, usageAvailabilitySchema, usageAvailabilityRequestSchema, type UsageAvailability, type UsageReport } from "../../shared/protocol/usage-accounting.js";
 import { usageAnalyticsRequestSchema, usageAnalyticsResponseSchema, type UsageAnalyticsRequest, type UsageAnalyticsResponse } from "../../shared/protocol/usage-analytics.js";
+import { turnReplySpeechSchema, type TurnReplySpeech } from "../../shared/protocol/turn-reply-speech.js";
 import {
   environmentVariablesPreviewQuerySchema,
   environmentVariablesPreviewResultSchema,
@@ -1013,6 +1014,11 @@ export class ApiClient {
   getUsage(threadId: string, turnId: string | null = null, signal?: AbortSignal): Promise<UsageReport> {
     const suffix = turnId === null ? "" : `/turns/${encodeURIComponent(turnId)}`;
     return this.#request(`/api/threads/${encodeURIComponent(threadId)}/usage${suffix}`, { signal }, usageReportSchema);
+  }
+
+  /** One ended turn's stored completion text, filtered by the principal's current completion phases, for native voice replay. */
+  readTurnReplySpeech(threadId: string, turnId: string, signal?: AbortSignal): Promise<TurnReplySpeech> {
+    return this.#request(`/api/threads/${encodeURIComponent(threadId)}/turns/${encodeURIComponent(turnId)}/reply-speech`, { signal }, turnReplySpeechSchema);
   }
 
   /** Principal-wide usage aggregates; a database-only read sent as POST for its bounded body. */

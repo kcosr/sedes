@@ -70,6 +70,7 @@ export class ClientControlConnection {
     if (command.action === "settings.get") return result("applied");
     if (command.action === "settings.update") return result("noop", "voice_settings_unsupported");
     if (command.action === "end_interaction") return result("noop", "no_active_voice_interaction");
+    if (command.action === "replay_turn") return result("noop", "voice_unsupported");
     if (command.action === "switch_thread") {
       if (!this.state().runtime.foreground) return result("noop", "client_in_background");
       for (const [id, pending] of this.#deferred) {

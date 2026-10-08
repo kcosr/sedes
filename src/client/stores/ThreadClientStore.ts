@@ -1,5 +1,6 @@
 import { UsageQueryCache } from "./UsageQueryCache.js";
 import type { EnvironmentVariableOverrides } from "../../shared/protocol/environment-variables.js";
+import type { TurnReplySpeech } from "../../shared/protocol/turn-reply-speech.js";
 import type {
   QuestionRequest,
   QuestionRequestsResult,
@@ -786,6 +787,10 @@ export class ThreadClientStore {
 
   listSkills(): Promise<ComposerSkillCatalog> {
     return this.#api.listSkills(this.threadId);
+  }
+
+  readTurnReplySpeech(turnId: string, signal?: AbortSignal): Promise<TurnReplySpeech> {
+    return this.#api.readTurnReplySpeech(this.threadId, turnId, signal);
   }
 
   uploadComposerAttachment(

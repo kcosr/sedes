@@ -4,11 +4,11 @@
 
 ### Breaking Changes
 
-- Browser and packaged clients require client protocol 144, which adds
+- Browser and packaged clients require client protocol 145, which adds
   automation schedule details and run turn outcomes to thread summaries and
-  runs, and drops the Remind now inventory action. Upgrade clients together
-  with the server.
-  ([#58](https://github.com/kcosr/sedes/pull/58), [#59](https://github.com/kcosr/sedes/pull/59), [#61](https://github.com/kcosr/sedes/pull/61))
+  runs, drops the Remind now inventory action, and adds turn reply replay.
+  Upgrade clients together with the server.
+  ([#58](https://github.com/kcosr/sedes/pull/58), [#59](https://github.com/kcosr/sedes/pull/59), [#61](https://github.com/kcosr/sedes/pull/61), [#62](https://github.com/kcosr/sedes/pull/62))
 
 - `PATCH /api/threads/:threadId/inventory` no longer accepts the `remind`
   action. ([#61](https://github.com/kcosr/sedes/pull/61))
@@ -226,6 +226,14 @@
   Migration preserves old Claude totals separately with unknown coverage. (#8)
 
 ### Added
+
+- Android: a speaker button in each ended turn's footer queues the turn's
+  reply for voice playback, as completion speech would read it. It appears
+  while voice is on. ([#62](https://github.com/kcosr/sedes/pull/62))
+
+- Agent tool `client.replay_turn` (**Replay turn reply**, Client controls)
+  does the same from an agent; `{}` repeats the agent's previous reply.
+  Enable it per thread. ([#62](https://github.com/kcosr/sedes/pull/62))
 
 - An **Automations** page lists every automation by status (Needs attention,
   Upcoming, Paused, Suspended) or by project, with search and row actions. Open
@@ -479,10 +487,12 @@
 
 ### Changed
 
-- Ctrl+Shift+F (Command+Shift+F on macOS) focuses sidebar search and selects
-  its text, opening a collapsed sidebar or the navigation drawer first. It no
-  longer opens Find in thread; Ctrl+F (Command+F) still does. The Scope
-  **Clear** button also clears sidebar search.
+- Ctrl+Shift+F (Command+Shift+F) focuses and selects sidebar search instead
+  of opening Find in thread, which keeps Ctrl+F. Scope **Clear** also clears
+  sidebar search.
+
+- Client-control agent tools report the client's rejection reason instead of
+  a generic message. ([#62](https://github.com/kcosr/sedes/pull/62))
 
 - **Park** replaces Settle: a parked thread leaves the working set until new
   input returns it to Active, including an automation run, so parking an
@@ -1336,6 +1346,10 @@
   only the four most recent earlier daemon PIDs. Diagnostics remain opt-in.
 
 ### Removed
+
+- The Ctrl+Shift+Arrow (Command+Shift+Arrow) panel docking shortcut; dock from
+  the panel menu. Ctrl+Shift+Up/Down now always moves between sidebar threads.
+  ([#63](https://github.com/kcosr/sedes/pull/63))
 
 - **Remind now** is gone; pin the thread and add a task instead. Snooze keeps
   its optional reminder. ([#61](https://github.com/kcosr/sedes/pull/61))

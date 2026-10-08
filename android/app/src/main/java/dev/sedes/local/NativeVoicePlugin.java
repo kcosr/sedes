@@ -134,6 +134,7 @@ public final class NativeVoicePlugin extends Plugin {
         run("updateSettings", call, true);
     }
     @PluginMethod public void startManualListen(PluginCall call) { run("startManualListen", call, true); }
+    @PluginMethod public void speakReply(PluginCall call) { run("speakReply", call, true); }
     /**
      * Android delivers permission results before onResume, while the activity is already visible (at least STARTED).
      * Marking it visible synchronously keeps the user-initiated enable from being queued ahead of the resume notification.
