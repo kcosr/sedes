@@ -280,6 +280,20 @@ public class NativeVoiceQueueTest {
         assertEquals("voice_queue_full", NativeVoiceRuntime.code(bytes));
         assertEquals(2, large.size()); assertEquals(240000, large.bytes()); assertEquals(0, large.state().optInt("droppedCount"));
     }
+    @Test public void stoppedServiceClearsPendingReplaysAndLeavesAutomaticItems() {
+        NativeVoiceSettings configured = settings("response");
+        NativeVoiceQueue queue = new NativeVoiceQueue();
+        NativeVoiceQueue.Item completed = new NativeVoiceQueue.Item(envelope("completed", "turn.completed", "One", null), configured);
+        NativeVoiceQueue.Item progress = new NativeVoiceQueue.Item(envelope("progress", "turn.progress", "Working", null), configured);
+        queue.addReplay(replay("turn-1", "First", configured)); queue.add(completed);
+        queue.addReplay(replay("turn-2", "Second", configured)); queue.add(progress);
+        queue.clearReplays();
+        assertEquals(2, queue.size()); assertEquals(completed.bytes + progress.bytes, queue.bytes());
+        assertEquals("Cleared replays are not drops", 0, queue.state().optInt("droppedCount"));
+        assertEquals(completed.id, queue.take().id); assertEquals(progress.id, queue.take().id);
+        assertTrue("A cleared turn can be replayed again", queue.addReplay(replay("turn-1", "First", configured)));
+        queue.clearReplays(); assertEquals(0, queue.size()); assertEquals(0, queue.bytes());
+    }
     @Test public void reconfigureRebuildsAPendingReplayFromItsRequest() {
         String markdown = "# Answer\n\nRead [the label](https://example.test/hidden).";
         NativeVoiceSettings clean = settings("response");

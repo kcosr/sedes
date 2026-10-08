@@ -597,7 +597,12 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         });
     }
     void detached(NativeVoiceRuntimeService service) {
-        handler.post(() -> { if (this.service == service) { this.service = null; sessionStarted = false; clientActions.discardVoiceOnly(); cancelActive(false, "service_stopped"); closeSpeech(); closeEvents(); phase = "off"; publish(); } });
+        handler.post(() -> {
+            if (this.service != service) return;
+            this.service = null; sessionStarted = false; clientActions.discardVoiceOnly();
+            // A replay is a request for now, not for whenever the service next starts; drain would not filter it later.
+            queue.clearReplays(); cancelActive(false, "service_stopped"); closeSpeech(); closeEvents(); phase = "off"; publish();
+        });
     }
     private void stopSession() {
         sessionStartId = null; sessionStarted = false; clientActions.discardVoiceOnly(); closeSpeech(); audio.stop(); closeEvents();

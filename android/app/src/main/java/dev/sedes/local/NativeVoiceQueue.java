@@ -180,6 +180,14 @@ final class NativeVoiceQueue {
             if (item.automatic) { bytes -= item.bytes; iterator.remove(); drop(reason); }
         }
     }
+    /** A stopped voice service ends pending replays. Automatic items stay for drain to judge; replays never count as drops. */
+    void clearReplays() {
+        Iterator<Item> iterator = pending.iterator();
+        while (iterator.hasNext()) {
+            Item item = iterator.next();
+            if (item.isReplay()) { bytes -= item.bytes; iterator.remove(); }
+        }
+    }
     void reset() { pending.clear(); remembered.clear(); seen.clear(); dropped.clear(); bytes = 0; }
     void drop(String reason) { dropped.put(reason, dropped.getOrDefault(reason, 0) + 1); }
     /** Drop counts report automatic voice items only; a replay is the user's own request. */

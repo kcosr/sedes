@@ -2513,6 +2513,34 @@ public class NativeVoiceRuntimeTest {
         }
     }
 
+    @Test public void stoppedServiceClearsPendingReplaysSoNoneSpeaksAfterARestart() throws Exception {
+        try (Fixture f = new Fixture(false, false)) {
+            f.readyClientVoice("response"); f.policy(true, false, "speak");
+            assertNull(f.speakReply(f.target, "turn-1", "First replay"));
+            SpeechJob first = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(first);
+            assertNull(f.speakReply(f.target, "turn-2", "Second replay"));
+            f.receiveReply();
+            assertEquals(2, f.queued());
+            int dropped = f.runtime.snapshot().getJSONObject("queue").getInt("droppedCount");
+            // Android destroys the service while the process survives.
+            NativeVoiceRuntimeService service = new NativeVoiceRuntimeService();
+            f.onOwner(() -> set(f.runtime, "service", service)); f.runtime.detached(service); f.flush();
+            JSONObject state = f.runtime.snapshot();
+            assertTrue(state.isNull("active")); assertTrue(first.cancelled);
+            assertEquals("Only the automatic notice stays queued", 1, f.queued());
+            assertEquals("Cleared replays are not drops", dropped, state.getJSONObject("queue").getInt("droppedCount"));
+            // The service starts again much later: drain judges the automatic notice, and no stale replay plays.
+            f.onOwner(() -> { set(f.runtime, "sessionStarted", true); set(f.runtime, "speech", f.speech); f.invoke("drain", new Class<?>[0]); });
+            f.flush();
+            assertTrue(f.runtime.snapshot().isNull("active")); assertEquals(0, f.queued());
+            assertTrue("No replay outlives the stopped service", f.speech.speechRequests.isEmpty());
+            assertEquals(1, f.runtime.snapshot().getJSONObject("queue").getJSONObject("droppedReasons").getInt("ineligible"));
+            assertNull("A cleared turn can be replayed again", f.speakReply(f.target, "turn-2", "Second replay"));
+            SpeechJob again = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(again);
+            assertEquals("Second replay", again.text);
+        }
+    }
+
     @Test public void replayingAQueuedOrPlayingTurnIsANoOpAndAFullQueueRefusesIt() throws Exception {
         try (Fixture f = new Fixture(false, false)) {
             f.readyClientVoice("response");
