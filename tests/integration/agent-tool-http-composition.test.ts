@@ -594,7 +594,7 @@ describe("agent-tool HTTP production composition", () => {
         "thread.fork",
         "thread.archive",
         "thread.restore",
-        "client.list", "client.end_interaction", "client.switch_thread", "client.settings.get", "client.settings.update",
+        "client.list", "client.end_interaction", "client.switch_thread", "client.settings.get", "client.settings.update", "client.replay_turn",
       ]);
       expect(providerTools.eligibleCatalog("cli").map(({ id }) => id)).toEqual(
         providerTools.eligibleCatalog("pi_sdk").map(({ id }) => id),

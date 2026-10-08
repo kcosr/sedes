@@ -133,19 +133,23 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         boolean completedMaySubmit, completionReceived;
         NativeVoiceRecording.FinishReason finishReason;
         NativeVoiceCapturePolicy.End endpoint;
+        /** A server notification; null for manual work and replays, so notification-only paths skip them. */
         final NativeVoiceQueue.Item notification;
+        /** A local, user-requested replay: no envelope, follow-up, client turn action, or automatic policy. */
+        final NativeVoiceQueue.Item replay;
         final List<String> chunks;
         int chunk;
         JSONObject admission;
         Active(NativeVoiceQueue.Item item, int limit) {
             id = item.id; event = item.event; noticeThread = item.threadId; noticeTitle = item.threadTitle;
             targetId = item.targetId(); targetTitle = targetId != null && targetId.equals(item.threadId) ? item.threadTitle : null;
-            automatic = true; followUp = item.followUp; notification = item;
+            automatic = item.automatic; followUp = item.followUp;
+            notification = item.isReplay() ? null : item; replay = item.isReplay() ? item : null;
             chunks = NativeVoiceQueue.chunks(item.speech, limit);
         }
         Active(String threadId, String title) {
             id = UUID.randomUUID().toString(); event = "manual"; noticeThread = threadId; noticeTitle = title;
-            targetId = threadId; targetTitle = title; notification = null; chunks = new ArrayList<>();
+            targetId = threadId; targetTitle = title; notification = null; replay = null; chunks = new ArrayList<>();
         }
     }
     /** In-memory read-only reconciliation of one journaled input for the current binding. */
@@ -215,6 +219,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
                     case "setForegroundContext": foreground(args); break;
                     case "setNextRecordingTarget": setNextRecordingTarget(args); break;
                     case "startManualListen": manual(args); break;
+                    case "speakReply": speakReply(args); break;
                     case "retargetActiveRecognition": retarget(args, reply); return;
                     case "setKeepListening": setKeepListening(args, reply); return;
                     case "sendRecording": sendRecording(args); break;
@@ -337,7 +342,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
     public JSONObject clientCommand(JSONObject command) {
         try {
             NativeVoiceJson.keys(command, "id", "action", "expiresAt", "sourceThreadId", "sourceTurnId", "threadId", "threadTitle",
-                "listen", "expectedRevision", "patch", "replyEventId");
+                "listen", "expectedRevision", "patch", "replyEventId", "turnId", "assistantResult");
             String id = NativeVoiceJson.string(command, "id", 128), action = NativeVoiceJson.string(command, "action", 32);
             NativeVoiceJson.string(command, "sourceThreadId", 128); NativeVoiceJson.string(command, "sourceTurnId", 128);
             long expires = NativeVoiceJson.integer(command, "expiresAt", 0, Long.MAX_VALUE);
@@ -360,6 +365,16 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
             if (action.equals("turn_settled")) {
                 if (!clientActions.settle(id, NativeVoiceJson.nullableString(command, "replyEventId", 128), expires)) return clientResult("noop", "superseded");
                 applyClientActions(); return clientResult("accepted", "waiting_for_playback_drain");
+            }
+            if (action.equals("replay_turn")) {
+                // Immediate and never staged: a staged action would suppress its source turn's follow-up listen.
+                JSONObject request = clientReplayRequest(command);
+                if (!settings.active()) return clientResult("noop", "voice_off");
+                String reason;
+                try { reason = queueReplay(request).reason; }
+                catch (Exception refused) { reason = code(refused); }
+                finally { publish(); }
+                return clientResult(replayCommandStatus(reason), reason);
             }
             if (!action.equals("end_interaction") && !action.equals("switch_thread")) throw new IllegalArgumentException("invalid_client_action");
             if (action.equals("end_interaction") && (!settings.active() || !sessionStarted)) return clientResult("noop", "no_active_voice_interaction");
@@ -386,8 +401,24 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
                 ? "navigation_accepted_voice_off" : "after_turn_completion_and_playback");
         } catch (Exception error) { return clientResult("failed", code(error)); }
     }
+    private static final String[] CLIENT_REPLAY_FIELDS = { "threadId", "turnId", "assistantResult", "threadTitle" };
+    /** A replay_turn command's replay, validated exactly as the bridge's speakReply arguments are. */
+    static JSONObject clientReplayRequest(JSONObject command) {
+        JSONObject args = new JSONObject();
+        for (String field : CLIENT_REPLAY_FIELDS) if (command.has(field)) NativeVoiceJson.put(args, field, command.opt(field));
+        return NativeVoiceQueue.replayRequest(args);
+    }
+    /** A replay_turn result status for its reason: a ReplayDisposition reason, voice_off, or a queueReplay refusal code. */
+    static String replayCommandStatus(String reason) {
+        switch (reason) {
+            case "replay_playing": case "replay_queued": return "applied";
+            case "replay_already_queued": case "voice_off": case "voice_not_ready": return "noop";
+            default: return "failed";
+        }
+    }
     private static String clientTurn(NativeVoiceQueue.Item item) {
-        if (item == null) return null;
+        // A local replay has no server envelope and no client turn actions.
+        if (item == null || item.envelope == null) return null;
         JSONObject turn = item.envelope.optJSONObject("payload").optJSONObject("turn");
         return turn == null ? null : turn.optString("id", null);
     }
@@ -591,7 +622,12 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         });
     }
     void detached(NativeVoiceRuntimeService service) {
-        handler.post(() -> { if (this.service == service) { this.service = null; sessionStarted = false; clientActions.discardVoiceOnly(); cancelActive(false, "service_stopped"); closeSpeech(); closeEvents(); phase = "off"; publish(); } });
+        handler.post(() -> {
+            if (this.service != service) return;
+            this.service = null; sessionStarted = false; clientActions.discardVoiceOnly();
+            // A replay is a request for now, not for whenever the service next starts; drain would not filter it later.
+            queue.clearReplays(); cancelActive(false, "service_stopped"); closeSpeech(); closeEvents(); phase = "off"; publish();
+        });
     }
     private void stopSession() {
         sessionStartId = null; sessionStarted = false; clientActions.discardVoiceOnly(); closeSpeech(); audio.stop(); closeEvents();
@@ -820,15 +856,18 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         return true;
     }
     private void cancelAutomatic(String reason) {
-        queue.clear(reason);
+        queue.clearAutomatic(reason);
         // A finalized transcript or already submitted message keeps its own admission semantics, as when settings change.
         if (active != null && active.automatic && !speechIndependent(active) && !phase.equals("submitting")) cancelActive(true, reason);
+        // Pending replays survive; resume them once the caller has settled its state (an unauthorized stream disconnects first).
+        if (queue.size() > 0) handler.post(this::drain);
     }
     private void drain() {
         if (active != null || !sessionStarted || !speechReady() || binding == null || blockingDictation()) return;
         NativeVoiceQueue.Item item;
         while ((item = queue.take()) != null) {
-            if (!eligible(item)) { queue.drop("ineligible"); continue; }
+            // Notification filters and policy govern automatic items only; a replay is the user's explicit request.
+            if (item.automatic && !eligible(item)) { queue.drop("ineligible"); continue; }
             active = new Active(item, settings.number("speechTextLimit"));
             if (active.chunks.isEmpty()) afterSpeech(active); else speakChunk(active);
             publish(); return;
@@ -1021,6 +1060,41 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         String target = NativeVoiceJson.nullableString(args, "threadId", 512), title = NativeVoiceJson.nullableString(args, "threadTitle", 512);
         startManualRecording(manualTarget(NativeVoiceJson.object("threadId", target, "threadTitle", title), nextRecordingTarget,
             settings.value, NativeVoiceJson.object("visible", foregroundVisible, "threadId", foregroundThread, "threadTitle", foregroundTitle)), true);
+    }
+    /** Where queueReplay left a turn's replay; each reason is also the replay_turn client command's result reason. */
+    enum ReplayDisposition {
+        /** The replay is the active item: voice was idle. */
+        PLAYING("replay_playing"),
+        /** The replay waits behind current speech, recording, or saved-recording recovery. */
+        QUEUED("replay_queued"),
+        /** That thread and turn's replay was already active or pending; nothing was added. */
+        DUPLICATE("replay_already_queued");
+        final String reason;
+        ReplayDisposition(String reason) { this.reason = reason; }
+    }
+    /** The bridge's speakReply: a duplicate is a successful no-op, and refusals fail the bridge call. */
+    private void speakReply(JSONObject args) {
+        queueReplay(NativeVoiceQueue.replayRequest(args));
+    }
+    /**
+     * Queues one turn's reply behind current voice work for the bridge and the replay_turn client command alike.
+     * Readiness matches an explicit Start, without microphone or notification policy. Throws voice_not_ready,
+     * voice_reply_empty, or voice_queue_full; the request comes from NativeVoiceQueue.replayRequest.
+     */
+    private ReplayDisposition queueReplay(JSONObject request) {
+        if (!sessionStarted || !settings.active() || !speechReady() || binding == null) throw new IllegalStateException("voice_not_ready");
+        NativeVoiceQueue.Item item = NativeVoiceQueue.Item.replay(request, replayTitle(request), settings);
+        if (active != null && active.replay != null && active.replay.replayIdentity().equals(item.replayIdentity())) return ReplayDisposition.DUPLICATE;
+        if (!queue.addReplay(item)) return ReplayDisposition.DUPLICATE;
+        drain();
+        return active != null && active.replay == item ? ReplayDisposition.PLAYING : ReplayDisposition.QUEUED;
+    }
+    /** Display only: the WebView's non-blank title first, otherwise one this device already holds for the thread. */
+    private String replayTitle(JSONObject request) {
+        String threadId = request.optString("threadId"), provided = NativeVoiceJson.nullableString(request, "threadTitle", 512);
+        if (provided != null && !blank(provided)) return provided;
+        if (foregroundVisible && threadId.equals(foregroundThread) && foregroundTitle != null) return foregroundTitle;
+        return threadId.equals(settings.text("voiceThreadId")) ? settings.text("voiceThreadTitle") : null;
     }
     /** Headset and notification Start always use the saved default, even while the app is visible. */
     private void startDefaultRecording() {
@@ -2480,9 +2554,11 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
             case "recognition_session_timing_unsupported": return "The speech service session limit is too short for the selected recognition timeout.";
             case "voice_target_required": return "Choose a thread for voice input.";
             case "voice_busy": return "Stop the current voice interaction before recording.";
-            case "voice_not_ready": return "Voice is not ready to record yet.";
+            case "voice_not_ready": return "Voice is not ready yet.";
             case "voice_not_listening": return "Voice is not recording.";
             case "voice_not_speaking": return "Voice is not speaking.";
+            case "voice_reply_empty": return "This response has no text to speak.";
+            case "voice_queue_full": return "The voice queue is full. Try again after current speech finishes.";
             case "connection_changed": return "The Sedes connection changed before the voice action finished.";
             case "client_connection_replaced": return "Client controls moved to another window. Retry the voice connection to use this device.";
             case "authentication_required": return "Pair this Sedes connection before using voice.";

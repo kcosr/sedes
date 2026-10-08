@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
-import { ClientControlService } from "../../src/server/domain/client-control-service.js";
+import { ClientControlService, MAX_POLL_RESPONSE_BYTES } from "../../src/server/domain/client-control-service.js";
 import type { AuthenticationClient } from "../../src/shared/authentication.js";
-import type { ClientState } from "../../src/shared/protocol/client-controls.js";
+import type { ClientCommand, ClientState } from "../../src/shared/protocol/client-controls.js";
+import { serializedUtf8Bytes } from "../../src/shared/protocol/payload.js";
 
 const scope = { tenantId: "tenant", principalId: "principal" };
 const state: ClientState = { runtime: { foreground: true, voiceReady: false, interactionActive: false }, settings: null };
@@ -10,8 +11,13 @@ const registration = { platform: "browser" as const, capabilities: { navigate: t
 const services: ClientControlService[] = [];
 const fixture = (now?: () => number) => { const service = new ClientControlService(now); services.push(service); return service; };
 afterEach(() => { for (const service of services.splice(0)) service.close(); vi.useRealTimers(); });
-const poll = (service: ClientControlService, connectionToken: string, acknowledgements: Array<{ id: string; result: { status: "accepted" | "applied"; state: ClientState } }> = [], signal = new AbortController().signal) =>
+const poll = (service: ClientControlService, connectionToken: string, acknowledgements: Array<{ id: string; result: { status: "accepted" | "applied"; reason?: string; state: ClientState } }> = [], signal = new AbortController().signal) =>
   service.poll(scope, connectionToken, undefined, { state, acknowledgements }, signal);
+const aborted = () => { const abort = new AbortController(); abort.abort(); return abort.signal; };
+const replayTurn = (text: string, turnId = "ended-turn"): Omit<ClientCommand, "id" | "expiresAt"> => ({
+  action: "replay_turn", sourceThreadId: "thread", sourceTurnId: "turn", threadId: randomUUID(), threadTitle: "Replay", turnId,
+  assistantResult: { unclassified: { text } },
+});
 
 describe("registered client authority", () => {
   it("registers anonymous clients independently without pairing and denies foreign principals and tokens", () => {
@@ -156,5 +162,66 @@ describe("registered client authority", () => {
     const next = service.register(scope, undefined, registration);
     await service.complete(scope, "thread", "turn");
     expect(await poll(service, next.connectionToken, [], abort.signal)).toEqual({ commands: [] });
+  });
+
+  it("delivers replay_turn at once with the immediate expiry and never defers it to turn completion", async () => {
+    let now = 1_000;
+    const service = fixture(() => now);
+    const registered = service.register(scope, undefined, registration);
+    const requested = service.request(service.target(scope, registered.clientId), replayTurn("Done."), new AbortController().signal);
+    const { commands } = await poll(service, registered.connectionToken);
+    expect(commands).toEqual([{ ...replayTurn("Done."), threadId: expect.any(String), id: expect.any(String), expiresAt: 121_000 }]);
+    // Even an accepted acknowledgement settles the request without waiting for the source turn.
+    await poll(service, registered.connectionToken, [{ id: commands[0]!.id, result: { status: "accepted", state } }], aborted());
+    expect(await requested).toMatchObject({ status: "accepted" });
+    await service.complete(scope, "thread", "turn");
+    expect(await poll(service, registered.connectionToken, [], aborted())).toEqual({ commands: [] });
+  });
+
+  it("does not deliver a pending replay to a replacement connection and reports its outcome as uncertain", async () => {
+    const service = fixture();
+    const registered = service.register(scope, undefined, registration);
+    const requested = service.request(service.target(scope, registered.clientId), replayTurn("Done."), new AbortController().signal);
+    const uncertain = expect(requested).rejects.toMatchObject({ code: "operation_outcome_uncertain" });
+    const next = service.register(scope, undefined, { ...registration, resumeToken: registered.resumeToken });
+    await uncertain;
+    expect(await poll(service, next.connectionToken, [], aborted())).toEqual({ commands: [] });
+  });
+
+  it("caps one poll response by serialized bytes and leaves the rest pending in order", async () => {
+    const service = fixture();
+    const registered = service.register(scope, undefined, registration);
+    const target = service.target(scope, registered.clientId);
+    // Twenty replays near the 64 KiB command limit need two polls under the 768 KiB response budget.
+    const requests = Array.from({ length: 20 }, (_, index) =>
+      service.request(target, replayTurn("x".repeat(64_000), `turn-${index}`), new AbortController().signal));
+    const first = await poll(service, registered.connectionToken);
+    const second = await poll(service, registered.connectionToken);
+    for (const response of [first, second]) expect(serializedUtf8Bytes(response)).toBeLessThanOrEqual(MAX_POLL_RESPONSE_BYTES);
+    expect(first.commands.length).toBe(Math.floor((MAX_POLL_RESPONSE_BYTES - 15) / (serializedUtf8Bytes(first.commands[0]) + 1)));
+    expect([...first.commands, ...second.commands].map(command => command.turnId))
+      .toEqual(Array.from({ length: 20 }, (_, index) => `turn-${index}`));
+    await poll(service, registered.connectionToken, [...first.commands, ...second.commands]
+      .map(({ id }) => ({ id, result: { status: "applied" as const, reason: "replay_queued", state } })), aborted());
+    await expect(Promise.all(requests)).resolves.toHaveLength(20);
+  });
+
+  it("always delivers one oversized command alone instead of stalling the queue", async () => {
+    const service = fixture();
+    const registered = service.register(scope, undefined, registration);
+    const target = service.target(scope, registered.clientId);
+    // Control characters serialize as six-byte escapes: one such command exceeds the whole response budget.
+    const oversized = { ...replayTurn(""), assistantResult: Object.fromEntries((["provisional", "final", "unclassified"] as const)
+      .map(phase => [phase, { text: "\u0001".repeat(65_536) }])) };
+    const requests = [service.request(target, oversized, new AbortController().signal),
+      service.request(target, replayTurn("Next.", "next-turn"), new AbortController().signal)];
+    const first = await poll(service, registered.connectionToken);
+    expect(first.commands).toHaveLength(1);
+    expect(serializedUtf8Bytes(first)).toBeGreaterThan(MAX_POLL_RESPONSE_BYTES);
+    const second = await poll(service, registered.connectionToken);
+    expect(second.commands.map(command => command.turnId)).toEqual(["next-turn"]);
+    await poll(service, registered.connectionToken, [...first.commands, ...second.commands]
+      .map(({ id }) => ({ id, result: { status: "applied" as const, state } })), aborted());
+    await Promise.all(requests);
   });
 });

@@ -118,6 +118,7 @@ import { ThreadForceResetRepository } from "./db/repositories/thread-force-reset
 import { NotificationRepository } from "./db/repositories/notification-repository.js";
 import { NotificationLifecycleObserver } from "./domain/notification-lifecycle-observer.js";
 import { NotificationService } from "./domain/notification-service.js";
+import { TurnReplySpeechService } from "./domain/turn-reply-speech-service.js";
 import { PrincipalApplicationPreferenceRepository } from "./db/repositories/principal-application-preference-repository.js";
 import { WorkspaceFileRootRepository } from "./db/repositories/workspace-file-root-repository.js";
 import { WorkspaceFileLinkedWorktreeRepository } from "./db/repositories/workspace-file-linked-worktree-repository.js";
@@ -1783,7 +1784,13 @@ export async function startProductionApplication(
         transitions: inventory,
       }),
     };
-    const clientControlTools = new ClientControlToolService(clientControls, actors, mutations.activity, agentToolSources);
+    // One reply-text source for the turn footer's speaker route and client.replay_turn.
+    const turnReplySpeech = new TurnReplySpeechService({
+      inventory: inventoryRepository,
+      completions: completion,
+      notifications,
+    });
+    const clientControlTools = new ClientControlToolService(clientControls, actors, mutations.activity, agentToolSources, turnReplySpeech);
     const canonicalAgentTools = new CanonicalInlineAgentToolService({
       clientControls: clientControlTools,
       workpads: new WorkpadAgentToolService({ workpads, authorityReader: agentToolSources }),
@@ -3078,6 +3085,7 @@ export async function startProductionApplication(
       lifecycle,
       inventory,
       turnBookmarks,
+      turnReplySpeech,
       threadGroups,
       threadArchives,
       threadBulkInventory,

@@ -183,6 +183,7 @@ import { DatabaseApplicationLineageSummaryReader } from "../../src/server/applic
 import { AutomationService } from "../../src/server/domain/automation-service.js";
 import { NotificationRepository } from "../../src/server/db/repositories/notification-repository.js";
 import { NotificationService } from "../../src/server/domain/notification-service.js";
+import { TurnReplySpeechService } from "../../src/server/domain/turn-reply-speech-service.js";
 import { ClientControlService } from "../../src/server/domain/client-control-service.js";
 import { NotificationLifecycleObserver } from "../../src/server/domain/notification-lifecycle-observer.js";
 import { InventoryService } from "../../src/server/domain/inventory-service.js";
@@ -6027,6 +6028,11 @@ async function main(): Promise<void> {
             applicationSnapshots.handoffThreadChange(eventScope, threadId),
         },
       ),
+      turnReplySpeech: new TurnReplySpeechService({
+        inventory: inventoryRepository,
+        completions: completion,
+        notifications,
+      }),
       tasks,
       workpads,
       workspaceFiles,

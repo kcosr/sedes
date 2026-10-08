@@ -98,7 +98,7 @@ describe("CanonicalInlineAgentToolService", () => {
       application: { readThreadStatus: async () => undefined },
     });
     expect(service.catalog("http", "thread_agent").map(({ id }) => id)).toEqual(
-      ["agent.context", "thread.status", "client.list", "client.end_interaction", "client.switch_thread", "client.settings.get", "client.settings.update"],
+      ["agent.context", "thread.status", "client.list", "client.end_interaction", "client.switch_thread", "client.settings.get", "client.settings.update", "client.replay_turn"],
     );
     expect(
       service

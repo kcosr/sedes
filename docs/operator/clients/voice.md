@@ -40,6 +40,22 @@ supersede pending actions. Actions have a 24-hour turn-completion limit and a
 separate one-hour reply-playback limit after completion. Browser and Electron
 clients support navigation and report voice controls as unavailable.
 
+With **Replay turn reply** ticked in the same group, the agent can queue an
+ended turn's reply on the current device, as if you had tapped that turn's
+**Play response aloud**. Unless you name a thread or turn, it replays the
+agent's own previous reply in this thread; ask for another thread to hear its
+latest reply, or for a specific earlier turn. Threads that enabled Client
+controls before this tool existed get it only when you tick it. The request runs at once rather than after
+the agent's turn, so the replay plays before that turn's own completion notice.
+It joins the voice queue like any replay, never opens the thread or listens
+afterward, and the agent's turn keeps its normal follow-up listen. The agent
+learns whether the reply is playing, queued, or already queued. While Audio
+mode is Off, or voice is not ready, for example because the session needs
+**Resume** or speech setup is incomplete, nothing is queued and the agent is
+told which; this tool cannot turn voice on. A reply with nothing to speak or a
+full queue is reported as a failure. Browser and Electron clients report voice
+as unsupported.
+
 ## Configure a session
 
 1. Pair the Android app with Sedes as described in [Android](android.md).
@@ -164,6 +180,43 @@ is local to this Android device, applies to queued and future speech,
 and does not interrupt a reply already playing. Displayed conversations and
 stored transcripts are unchanged. A reply containing only formatting can still
 start an eligible follow-up listen without making a speech request.
+
+## Replay a reply
+
+While voice is set to Manual or Response and speech is configured, each
+finished turn's footer shows **Play response aloud**, a speaker after **Copy
+response**. It is absent while voice is Off or speech setup is incomplete, and
+in browser and Electron clients. Read-only and archived threads show it too.
+
+The replay reads the turn's stored completion text in the phases that
+**Response text** under **Turn completed** currently selects, as a spoken
+completion would. Sedes stores that text when any turn it submitted ends,
+whether it completed, failed or was interrupted. When none of the selected
+phases holds text, the replay reads the turn's stored whole reply: every agent
+message, bounded to 16 KiB. That happens when **Response text** selects no
+phases, or when the turn has text only in unselected phases, such as only
+Provisional commentary under the default Final and Unclassified selection.
+A turn Sedes didn't submit has no stored text, so the button reads the same
+text as **Copy response**.
+
+If Sedes cannot return the turn's text, the button shows a failure instead of
+reading different text.
+
+A replay joins the voice queue behind current speech or recording, and starts at
+once when voice is idle. The card then shows **Speaking · Replay**. It plays in
+Manual and Response mode and ignores the filters for automatic playback:
+notification enablement, per-event Voice actions, the Silence bell, **Only play
+from default voice thread**, and **Ignore voice started on other devices**.
+**Clean up formatting for speech** and the speech text limit apply. A replay
+reads the reply only, without a context line whatever **Read notification
+context** says, and it never listens afterward. **Skip** ends it and **Stop**
+cancels it. Tapping again while that turn's replay is queued or playing adds
+nothing. A replay counts against the queue limits; when it does not fit, the
+button reports a full queue. Off and connection changes clear pending replays
+with the rest of the queue; losing the notification stream, a policy change, or
+switching between Manual and Response does not.
+
+An agent can queue the same replay; see [Agent controls](#agent-controls).
 
 ## Targeting and controls
 

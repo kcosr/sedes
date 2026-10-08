@@ -2,7 +2,7 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { NativeRecordingRecovery } from "../../src/client/voice/native-voice-plugin.js";
 import { expect, test } from "./fixtures.js";
-import { capture, createDraftThread, expectNoPageOverflow, fillAndPersistDraft, openWorkspaceDirectory } from "./helpers.js";
+import { capture, createDraftThread, expectNoPageOverflow, fillAndPersistDraft, openWorkspaceDirectory, sendCurrentDraft } from "./helpers.js";
 import { loadE2ERunContext } from "./run-context.js";
 import { installVoiceFixture, publishVoiceState, voiceFixtureState } from "./voice-controls-fixture.js";
 
@@ -552,4 +552,118 @@ test("saved dictation appends to its original composer without losing drafts or 
   await expect(composer).toHaveValue(`${unsaved}\n\nMore recovered words.`);
   await page.goto(otherPath);
   await expect(composer).toHaveValue("Keep this other draft.");
+});
+
+test("a completed turn's footer replays its reply and stays reachable on touch with voice on or Off", async ({ page, browser }, testInfo) => {
+  const workspace = path.join(loadE2ERunContext().workspacesDirectory, "voice-replay");
+  await mkdir(workspace, { recursive: true });
+  await installVoiceFixture(page);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await openWorkspaceDirectory(page, workspace);
+  const threadPath = await createDraftThread(page, "Voice replay");
+  const threadId = threadPath.split("/").at(-1)!;
+  // This script completes in two short steps and gives the footer its fullest content, including the tok/s rate.
+  await fillAndPersistDraft(page, "Measure turn throughput");
+  await sendCurrentDraft(page);
+  const turn = page.locator(".conversation-turn").last();
+  await expect(turn).toHaveAttribute("data-turn-status", "completed");
+  const turnId = (await turn.getAttribute("data-turn-id"))!;
+  // The route is mocked so the text choice is deterministic: a stored completion result for two taps, then none.
+  const storedReply = { assistantResult: { final: { text: "Stored final answer." }, unclassified: null } };
+  const replies = [storedReply, storedReply, { assistantResult: null }];
+  const reads: string[] = [];
+  await page.route("**/api/threads/*/turns/*/reply-speech", async route => {
+    reads.push(new URL(route.request().url()).pathname);
+    await route.fulfill({ json: replies.shift(), headers: { "cache-control": "no-store" } });
+  });
+  const speakCalls = () => page.evaluate(() => window.__voiceFixture.calls.filter(call => call.method === "speakReply"));
+  const storedCall = { method: "speakReply", args: { expectedConnectionGeneration: 1, threadId, turnId, threadTitle: "Voice replay",
+    assistantResult: storedReply.assistantResult } };
+  const toolbar = page.getByRole("group", { name: "Voice controls", exact: true });
+  const cardStatus = toolbar.locator(".voice-card-sub");
+  const speak = turn.getByRole("button", { name: "Play response aloud", exact: true });
+  const footerStatus = (text: string) => turn.getByRole("status").filter({ hasText: new RegExp(`^${text}$`, "u") });
+  const base = voiceFixtureState();
+
+  await speak.click();
+  await expect(footerStatus("Queued to play")).toHaveClass("sr-only");
+  await expect(speak.locator(".lucide-check")).toBeVisible();
+  await expect(cardStatus).toContainText("Speaking");
+  await expect(cardStatus).toContainText("Replay");
+  expect(reads).toEqual([`/api/threads/${threadId}/turns/${turnId}/reply-speech`]);
+  expect(await speakCalls()).toEqual([storedCall]);
+  await capture(page, testInfo, "voice-replay-playing.png");
+
+  // Tapping while this turn's replay plays succeeds and, as in native, adds nothing to the queue.
+  await speak.click();
+  await expect.poll(speakCalls).toEqual([storedCall, storedCall]);
+  await expect(footerStatus("Queued to play")).toHaveCount(1);
+  await expect(speak.locator(".lucide-check")).toBeVisible();
+  expect(await page.evaluate(() => window.__voiceFixture.state.queue.count)).toBe(0);
+  await expect(cardStatus).not.toContainText("queued");
+  await toolbar.getByRole("button", { name: "Stop voice interaction", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => window.__voiceFixture.calls.filter(call => call.method === "stopCurrentInteraction"))).toEqual([
+    { method: "stopCurrentInteraction", args: { expectedConnectionGeneration: 1, interactionId: `replay:${turnId}` } },
+  ]);
+
+  // Behind another notice a tap queues; with no stored result it reads the whole reply, as Copy response gives it.
+  await publishVoiceState(page, { phase: "speaking", active: { id: "notice", eventKind: "turn.completed", threadId, threadTitle: "Voice replay",
+    recognitionThreadId: null, recognitionThreadTitle: null, automatic: true, recording: null },
+    actions: { ...base.actions, canStart: false, canStop: true, canSkip: true } });
+  await speak.click();
+  await expect(cardStatus).toContainText("1 queued");
+  expect((await speakCalls()).at(-1)).toEqual({ method: "speakReply", args: { ...storedCall.args,
+    assistantResult: { unclassified: { text: "The measured response is complete." } } } });
+  await publishVoiceState(page, { settings: { ...base.settings, audioMode: "off" } });
+  await expect(speak).toHaveCount(0);
+  await publishVoiceState(page, { settings: { ...base.settings, audioMode: "manual" } });
+  await expect(speak).toBeVisible();
+  expect(reads).toHaveLength(3);
+
+  const touchContext = await browser.newContext({ baseURL: testInfo.project.use.baseURL as string,
+    viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+  try {
+    const touchPage = await touchContext.newPage();
+    await installVoiceFixture(touchPage);
+    await touchPage.goto(threadPath);
+    const footer = touchPage.getByTestId(`turn-fork-${turnId}`);
+    const touchSpeak = footer.getByRole("button", { name: "Play response aloud", exact: true });
+    await expect(touchSpeak).toBeVisible();
+    await expect(footer.locator(".turn-throughput")).toBeVisible();
+    await footer.scrollIntoViewIfNeeded();
+    const measure = () => footer.locator(".turn-fork-controls").evaluate(controls => ({
+      width: controls.getBoundingClientRect().width,
+      buttons: Array.from(controls.querySelectorAll("button"), button => {
+        const box = button.getBoundingClientRect();
+        return { name: button.getAttribute("aria-label")!, left: box.left, right: box.right, width: box.width, height: box.height };
+      }),
+    }));
+    const expectReachable = (layout: Awaited<ReturnType<typeof measure>>) => {
+      for (const [index, action] of layout.buttons.entries()) {
+        expect(action.width, `${action.name} width`).toBeGreaterThanOrEqual(44);
+        expect(action.height, `${action.name} height`).toBeGreaterThanOrEqual(44);
+        expect(action.left, `${action.name} left`).toBeGreaterThanOrEqual(0);
+        expect(action.right, `${action.name} right`).toBeLessThanOrEqual(390);
+        // Touch footers pack their actions with no gap, so a hidden action leaves none behind.
+        if (index > 0) expect(Math.abs(action.left - layout.buttons[index - 1]!.right), `${action.name} gap`).toBeLessThanOrEqual(0.5);
+      }
+    };
+    const on = await measure();
+    const names = on.buttons.map(action => action.name);
+    expect(names.indexOf("Play response aloud")).toBe(names.indexOf("Copy response") + 1);
+    expectReachable(on);
+    await expectNoPageOverflow(touchPage);
+    await capture(touchPage, testInfo, "voice-replay-footer-touch.png");
+
+    await publishVoiceState(touchPage, { settings: { ...base.settings, audioMode: "off" } });
+    await expect(touchSpeak).toHaveCount(0);
+    const off = await measure();
+    expect(off.buttons.map(action => action.name)).toEqual(names.filter(name => name !== "Play response aloud"));
+    expect(on.width - off.width).toBeCloseTo(44, 0);
+    expectReachable(off);
+    await expectNoPageOverflow(touchPage);
+    await capture(touchPage, testInfo, "voice-replay-footer-touch-off.png");
+  } finally {
+    await touchContext.close();
+  }
 });

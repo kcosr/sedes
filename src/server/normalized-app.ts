@@ -341,6 +341,8 @@ import {
   turnBookmarkRouteParametersSchema,
 } from "../shared/protocol/turn-bookmarks.js";
 import type { ConversationTurnBookmarkService } from "./domain/conversation-turn-bookmark-service.js";
+import { turnReplySpeechSchema } from "../shared/protocol/turn-reply-speech.js";
+import type { TurnReplySpeechService } from "./domain/turn-reply-speech-service.js";
 import {
   cannedPromptLibrarySchema,
   cannedPromptMutationResultSchema,
@@ -392,6 +394,8 @@ export interface NormalizedAppDependencies {
   readonly lifecycle: ConversationLifecycleService;
   readonly inventory: InventoryService;
   readonly turnBookmarks: Pick<ConversationTurnBookmarkService, "list" | "set">;
+  /** Production always supplies turn reply speech; isolated service fixtures may omit it. */
+  readonly turnReplySpeech?: Pick<TurnReplySpeechService, "read">;
   readonly threadGroups: ThreadGroupService;
   readonly composerAttachments: ComposerAttachmentService;
   readonly outputArtifacts: OutputArtifactService;
@@ -1290,6 +1294,17 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
     response.setHeader("Cache-Control", "no-store");
     const {threadId,turnId}=threadRouteParametersSchema.extend({turnId:z.string().min(1).max(160)}).parse(request.params);
     response.json(dependencies.usage.read(requestScope, threadId, turnId));
+  });
+
+  routes.get("/api/threads/:threadId/turns/:turnId/reply-speech", async (request, response) => {
+    const requestScope = await scope(request);
+    response.setHeader("Cache-Control", "no-store");
+    const { threadId, turnId } = threadRouteParametersSchema.extend({ turnId: z.string().min(1).max(160) }).parse(request.params);
+    if (!dependencies.turnReplySpeech) throw new DomainError("runtime_unavailable", "Turn reply speech is unavailable.");
+    const speech = turnReplySpeechSchema.safeParse(dependencies.turnReplySpeech.read(requestScope, threadId, turnId));
+    // Output that fails its contract is a server fault, never a client 400.
+    if (!speech.success) throw new Error("turn_reply_speech_unpresentable", { cause: speech.error });
+    response.json(speech.data);
   });
 
   routes.get("/api/application/session", async (request, response) => {

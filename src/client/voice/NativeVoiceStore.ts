@@ -1,5 +1,5 @@
 import type { PluginListenerHandle } from "@capacitor/core";
-import { nativeRecordingTextSchema, nativeVoiceInputSubmittedSchema, nativeVoiceStateSchema, type NativeRecordingRecoveryCommandContext, type NativeVoiceCommandContext, type NativeVoiceInputSubmitted, type NativeVoiceInteractionCommandContext, type NativeVoicePlugin, type NativeVoiceSettings, type NativeVoiceState } from "./native-voice-plugin.js";
+import { nativeRecordingTextSchema, nativeVoiceInputSubmittedSchema, nativeVoiceStateSchema, type NativeRecordingRecoveryCommandContext, type NativeReplySpeech, type NativeVoiceCommandContext, type NativeVoiceInputSubmitted, type NativeVoiceInteractionCommandContext, type NativeVoicePlugin, type NativeVoiceSettings, type NativeVoiceState } from "./native-voice-plugin.js";
 
 type NativeVoiceError = NativeVoiceState["errors"][number];
 export interface VoiceClientState {
@@ -217,6 +217,10 @@ export class NativeVoiceStore {
   }
   async run(action: () => Promise<NativeVoiceState>): Promise<void> {
     return this.#perform(action, false);
+  }
+  /** Queues one ended turn's reply for speech only; native rejects when voice is not ready, the text is empty, or the queue is full. */
+  speakReply(reply: NativeReplySpeech): Promise<void> {
+    return this.run(() => this.plugin.speakReply({ ...this.commandContext(), ...reply }));
   }
   /** Cancel may stop capture while a durable Keep listening write is pending. Native fences both commands by identity. */
   stopInteraction(context: NativeVoiceInteractionCommandContext): Promise<void> {
