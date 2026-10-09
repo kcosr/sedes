@@ -482,6 +482,38 @@ test("Workpads retain attributed history, reconcile shared drafts, and move betw
   }
   await capture(page, testInfo, "workpads-mobile-list-all.png");
   await page.setViewportSize({ width: 1440, height: 900 });
+
+  // Delete… from a row's ⋯ removes a workpad for good, once confirmed.
+  const deleteDialog = page.getByRole("dialog", { name: "Delete workpad?", exact: true });
+  const deletion = () => page.waitForResponse(response => response.request().method() === "DELETE" &&
+    /^\/api\/workpads\/[^/]+$/u.test(new URL(response.url()).pathname) && response.status() === 204);
+  await panel.getByRole("button", { name: "Actions for “Shared team notes”", exact: true }).click();
+  await capture(page, testInfo, "workpads-delete-menu.png");
+  await page.getByRole("menuitem", { name: "Delete…", exact: true }).click();
+  await expect(deleteDialog).toHaveAccessibleDescription("“Shared team notes” will be permanently deleted, with its content, revision history, and any draft. This can’t be undone.");
+  await capture(page, testInfo, "workpads-delete-confirm.png");
+  const deletedGlobal = deletion();
+  await deleteDialog.getByRole("button", { name: "Delete", exact: true }).click();
+  await deletedGlobal;
+  await expect(deleteDialog).toBeHidden();
+  await expect(segment("All")).toHaveText("All2");
+  await expect(panel.locator(".workpads-list .workpads-row-name")).toHaveText(["Second thread notes", "Authentication integration"]);
+  // And from the open workpad's ⋯, which closes it; the thread's badge follows.
+  await expect(workpadsToggle).toHaveAccessibleName("Close Workpads panel, 1 workpad in this thread");
+  await allRow("Second thread notes").click();
+  await expect(documentTitle).toHaveText("Second thread notes");
+  await panel.getByRole("button", { name: "Workpad actions", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Delete…", exact: true }).click();
+  const deletedThreadPad = deletion();
+  await deleteDialog.getByRole("button", { name: "Delete", exact: true }).click();
+  const deletedId = new URL((await deletedThreadPad).url()).pathname.split("/").at(-1)!;
+  await expect(deleteDialog).toBeHidden();
+  await expect(panel.locator(".workpads-doc-toolbar")).toHaveCount(0);
+  await expect(panel.locator(".workpads-list .workpads-row-name")).toHaveText(["Authentication integration"]);
+  await expect(segment("All")).toHaveText("All1");
+  await expect(workpadsToggle).toHaveAccessibleName("Close Workpads panel");
+  for (const read of ["", "/revisions", "/draft"]) expect((await page.request.get(`/api/workpads/${deletedId}${read}`)).status()).toBe(404);
+
   await pane.getByRole("button", { name: "Close Workpads panel", exact: true }).click();
   await expect(panel).toHaveCount(0);
 });
