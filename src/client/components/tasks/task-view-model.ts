@@ -19,25 +19,38 @@ export const TASK_TITLE_MAX_CHARACTERS = 240;
 /** A multi-line paste creates at most this many tasks at once. */
 export const TASK_PASTE_MAX_TITLES = 50;
 
-/** A View option that narrows the list, shown as a removable chip. */
+/** A View option in effect beyond the view's default, shown as a removable chip. */
 export interface TasksViewFilter {
-  readonly key: "pinned" | "backlog" | "notes" | "files";
+  readonly key: "pinned" | "backlog" | "notes" | "files" | "threads";
   readonly label: string;
   /** The change that removes it. */
   readonly clear: Partial<TasksViewOptions>;
+  /**
+   * Whether it hides tasks (the Only options). Project's thread tasks add
+   * tasks instead, so the list never offers to reset them when empty.
+   */
+  readonly narrows: boolean;
 }
 
-/** The options that narrow the list beyond the view's default, in menu order. */
-export function viewFilters(options: TasksViewOptions): readonly TasksViewFilter[] {
+/**
+ * The View options in effect beyond the view's default, in menu order: the
+ * Only options, which narrow the list, and Project's Include thread tasks.
+ */
+export function viewFilters(
+  options: TasksViewOptions,
+  view: TasksView,
+): readonly TasksViewFilter[] {
   const filters: TasksViewFilter[] = [];
   if (options.onlyPinned)
-    filters.push({ key: "pinned", label: "Pinned only", clear: { onlyPinned: false } });
+    filters.push({ key: "pinned", label: "Pinned only", clear: { onlyPinned: false }, narrows: true });
   if (options.onlyBacklog)
-    filters.push({ key: "backlog", label: "Backlog only", clear: { onlyBacklog: false } });
+    filters.push({ key: "backlog", label: "Backlog only", clear: { onlyBacklog: false }, narrows: true });
   if (options.onlyWithNotes)
-    filters.push({ key: "notes", label: "With notes", clear: { onlyWithNotes: false } });
+    filters.push({ key: "notes", label: "With notes", clear: { onlyWithNotes: false }, narrows: true });
   if (options.onlyWithFiles)
-    filters.push({ key: "files", label: "With files", clear: { onlyWithFiles: false } });
+    filters.push({ key: "files", label: "With files", clear: { onlyWithFiles: false }, narrows: true });
+  if (view === "project" && options.includeThreadTasks)
+    filters.push({ key: "threads", label: "Thread tasks", clear: { includeThreadTasks: false }, narrows: false });
   return filters;
 }
 

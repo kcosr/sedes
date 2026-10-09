@@ -1081,8 +1081,9 @@ export function TasksPanelContent({
       withProject: view === "all",
       projectId: task.associatedProjectId,
     });
-  const filters = viewFilters(options);
-  const filtering = filters.length > 0;
+  // Chips for every option in effect; only the Only options narrow the list.
+  const filters = viewFilters(options, view);
+  const filtering = filters.some(({ narrows }) => narrows);
   const renderRow = (task: AssociatedTask) => (
     <TaskRow
       key={task.id}
@@ -1315,7 +1316,7 @@ export function TasksPanelContent({
           className="tasks-header-button view-options-trigger"
           aria-label="View options"
           title="View options"
-          data-filtering={filtering || undefined}
+          data-filtering={filters.length > 0 || undefined}
         >
           <ListFilter aria-hidden="true" />
         </Button>

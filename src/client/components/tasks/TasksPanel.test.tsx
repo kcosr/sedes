@@ -577,6 +577,27 @@ describe("TasksPanel scope", () => {
     expect(rowOf("Sibling thread task").querySelector(".scope-location")).toHaveTextContent(
       "Sibling thread",
     );
+    // The option shows while it is on: a chip, and the View options dot.
+    // It adds tasks, so it is not a filter the empty list offers to reset.
+    expect(screen.getByRole("button", { name: "View options" })).toHaveAttribute("data-filtering", "true");
+    const chip = screen.getByRole("button", { name: "Remove filter: Thread tasks" });
+    await user.click(chip);
+    expect(titles()).toEqual(["Upgrade the test runner"]);
+    expect(getTasksViewOptions("project").includeThreadTasks).toBe(false);
+    expect(screen.queryByRole("group", { name: "View filters" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "View options" })).not.toHaveAttribute("data-filtering");
+    // Removing the last chip leaves focus on the selected view.
+    expect(segment("Project")).toHaveFocus();
+  });
+
+  it("keeps the thread-tasks chip out of the empty list's reset offer", () => {
+    setTasksViewOptions("project", { includeThreadTasks: true });
+    setTasksLastView("project");
+    act(() => navigate(threadPath("thread-9")));
+    renderPanel(makeStore([], { threads: THREADS, projects: PROJECTS, workspaces: WORKSPACES }));
+    expect(screen.getByRole("button", { name: "Remove filter: Thread tasks" })).toBeInTheDocument();
+    expect(screen.getByText("No tasks for this project yet.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Reset view options" })).not.toBeInTheDocument();
   });
 
   it("says where each task belongs in All without grouping, and not with it", async () => {
