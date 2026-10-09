@@ -1,6 +1,8 @@
 import { UsageService } from "../../src/server/usage/usage-service.js";
 import request from "supertest";
 import { describe, expect, it, vi } from "vitest";
+import { ConversationBindingRepository } from "../../src/server/db/repositories/conversation-binding-repository.js";
+import { InventoryRepository } from "../../src/server/db/repositories/inventory-repository.js";
 import { WorkpadRepository } from "../../src/server/db/repositories/workpad-repository.js";
 import { WorkpadService } from "../../src/server/domain/workpad-service.js";
 import { createNormalizedApp } from "../../src/server/normalized-app.js";
@@ -75,7 +77,7 @@ function fixture() {
   const get = (path: string) => request(app).get(path).set("Host", "127.0.0.1:4783");
   const mutate = (method: "post" | "put" | "patch" | "delete", path: string) =>
     request(app)[method](path).set("Host", "127.0.0.1:4783").set("X-CSRF-Token", "canned-prompts-csrf");
-  return { database, app, get, mutate, changeOwner: () => { activeScope = { ...scope, principalId: "another-user" }; } };
+  return { database, scope, app, get, mutate, changeOwner: () => { activeScope = { ...scope, principalId: "another-user" }; } };
 }
 
 describe("Workpads HTTP", () => {
@@ -127,6 +129,53 @@ describe("Workpads HTTP", () => {
       const { workpad: pad } = (await f.mutate("post", "/api/workpads").send({ title: "Atomic", scope: { kind: "global" }, content: "one two two" }).expect(201)).body;
       await f.mutate("patch", `/api/workpads/${pad.id}`).send({ expectedRevision: pad.revision, edit: { kind: "patch", edits: [{ oldText: "one", newText: "changed" }, { oldText: "two", newText: "ambiguous" }] } }).expect(409);
       expect((await f.get(`/api/workpads/${pad.id}`).expect(200)).body.workpad).toEqual(pad);
+    } finally { f.database.close(); }
+  });
+
+  it("lists by sort and project groups across pages", async () => {
+    const f = fixture();
+    try {
+      const environmentId = (f.database.prepare("SELECT id FROM execution_environments LIMIT 1").get() as { id: string }).id;
+      const profileId = (f.database.prepare("SELECT id FROM agent_connection_profiles LIMIT 1").get() as { id: string }).id;
+      const location = new InventoryRepository(f.database).upsertWorkspace(f.scope, {
+        environmentId, canonicalPath: "/tmp/workpads-http", displayName: "Workpads HTTP", project: { kind: "new", name: "Workpads HTTP" },
+        available: true, trustState: "trusted", environmentConfigurationRevision: 0, now: 100,
+      });
+      const projectId = location.projectId;
+      const threadId = new ConversationBindingRepository(f.database).createUnboundThread(f.scope, { workspaceId: location.id, connectionProfileId: profileId, title: "HTTP thread", now: 100 }).id;
+      const create = async (title: string, scope: unknown) => (await f.mutate("post", "/api/workpads").send({ title, scope }).expect(201)).body.workpad as { id: string; revision: number };
+      const global = await create("b global", { kind: "global" });
+      const thread = await create("c thread", { kind: "thread", threadId });
+      const project = await create("a project", { kind: "project", projectId });
+      const ids = (response: { body: { items: { id: string }[] } }) => response.body.items.map(item => item.id);
+      const readAll = async (path: string) => {
+        const seen: string[] = [];
+        let cursor: string | undefined;
+        do {
+          const page = await f.get(`${path}${cursor ? `&cursor=${cursor}` : ""}`).expect(200);
+          seen.push(...ids(page));
+          cursor = page.body.nextCursor;
+        } while (cursor);
+        return seen;
+      };
+
+      expect(ids(await f.get("/api/workpads?scopeKind=global&scopeMode=subtree").expect(200))).toEqual([project.id, thread.id, global.id]);
+      expect(ids(await f.get("/api/workpads?scopeKind=global&scopeMode=subtree&sort=title").expect(200))).toEqual([project.id, global.id, thread.id]);
+      expect(ids(await f.get("/api/workpads?scopeKind=global&scopeMode=subtree&sort=newest").expect(200))).toEqual([project.id, thread.id, global.id]);
+      expect(await readAll(`/api/workpads?scopeKind=global&scopeMode=subtree&group=project&leadProjectId=${projectId}&limit=1`)).toEqual([global.id, project.id, thread.id]);
+      const first = await f.get("/api/workpads?scopeKind=global&scopeMode=subtree&group=project&limit=1").expect(200);
+      expect((await f.get(`/api/workpads?scopeKind=global&scopeMode=subtree&limit=1&cursor=${first.body.nextCursor}`).expect(409)).body.error.code).toBe("cursor_invalid");
+      await f.get("/api/workpads?scopeKind=global&sort=oldest").expect(400);
+      await f.get("/api/workpads?scopeKind=global&group=thread").expect(400);
+      await f.get("/api/workpads?scopeKind=global&leadProjectId=").expect(400);
+      await f.get(`/api/workpads?scopeKind=global&cursor=${"a".repeat(1025)}`).expect(400);
+      await f.get(`/api/workpads?scopeKind=global&cursor=${"a".repeat(1024)}`).expect(409);
+      // Long titles produce cursors beyond the history route's 256-character bound.
+      const long = [await create(`${"漢".repeat(239)}1`, { kind: "global" }), await create(`${"漢".repeat(239)}2`, { kind: "global" })];
+      const longPage = await f.get("/api/workpads?scopeKind=global&sort=title&limit=2").expect(200);
+      expect(longPage.body.nextCursor.length).toBeGreaterThan(256);
+      expect(await readAll("/api/workpads?scopeKind=global&sort=title&limit=1")).toEqual([global.id, ...long.map(pad => pad.id)]);
+
     } finally { f.database.close(); }
   });
 });
