@@ -270,41 +270,6 @@ describe("PanelChrome", () => {
     ).toBeTruthy();
   });
 
-  it("draws a back step in place of the tenant icon", () => {
-    const onBack = vi.fn();
-    const tenant = { id: "workpads", title: "Workpads", icon: NotepadIcon };
-    const { rerender } = render(
-      <PanelChrome
-        tenant={tenant}
-        status={{
-          subtitle: "Integration",
-          back: { label: "Back to workpads", onBack },
-        }}
-        controls={noControls}
-      />,
-    );
-
-    const header = screen.getByRole("banner", { name: "Workpads panel header" });
-    const back = within(header).getByRole("button", { name: "Back to workpads" });
-    expect(back).toHaveAttribute("title", "Back to workpads");
-    expect(screen.queryByTestId("tenant-icon")).toBeNull();
-    // Back, then the panel title, then the subtitle.
-    expect(header.querySelector(".workspace-panel-title")?.firstElementChild).toBe(back);
-    expect(header.querySelector(".workspace-panel-title")).toHaveTextContent(/^WorkpadsIntegration$/);
-    fireEvent.click(back);
-    expect(onBack).toHaveBeenCalledOnce();
-
-    rerender(
-      <PanelChrome
-        tenant={tenant}
-        status={{ subtitle: "Integration" }}
-        controls={noControls}
-      />,
-    );
-    expect(within(header).queryByRole("button", { name: "Back to workpads" })).toBeNull();
-    expect(screen.getByTestId("tenant-icon")).toBeTruthy();
-  });
-
   it("lists a tenant's own menu items after the Dock group", () => {
     const onRename = vi.fn();
     render(

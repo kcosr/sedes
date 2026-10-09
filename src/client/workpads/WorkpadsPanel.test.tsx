@@ -55,7 +55,6 @@ function panelContext(store: ApplicationClientStore) {
     setBusy: vi.fn((busy: boolean) => publish({ busy })),
     setDirty: vi.fn((dirty: boolean) => publish({ dirty })),
     setSubtitle: vi.fn((subtitle?: string) => publish({ subtitle })),
-    setBack: vi.fn(),
     setMenuItems: vi.fn((menuItems?: ReactNode) => publish({ menuItems })),
   };
   published.set(host, { get: () => status, subscribe: listener => { listeners.add(listener); return () => { listeners.delete(listener); }; } });

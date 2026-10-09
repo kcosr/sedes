@@ -412,7 +412,6 @@ function setupContext(
     setBusy: vi.fn(),
     setDirty: vi.fn(),
     setSubtitle: vi.fn(),
-    setBack: vi.fn(),
     setMenuItems: vi.fn(),
   };
   const chromeActionsTarget = document.createElement("div");
