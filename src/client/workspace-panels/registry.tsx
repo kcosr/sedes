@@ -35,7 +35,6 @@ export interface WorkspacePanelHost {
    * They render inside the layout's menu, so menu primitives work in them.
    * Publish a memoized node: every change re-renders the header.
    */
-  setMenuItems(items?: ReactNode): void;
 }
 
 export interface WorkspacePanelContext {

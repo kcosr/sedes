@@ -32,7 +32,6 @@ export interface PanelChromeStatus {
   readonly dirty?: boolean;
   readonly subtitle?: string;
   /** The tenant's own ⋯ items, published through its host. */
-  readonly menuItems?: React.ReactNode;
 }
 
 export interface PanelChromeControls {

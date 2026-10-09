@@ -65,9 +65,9 @@ icon, title, subtitle, unsaved dot, busy spinner, then collapse, ⋯ (Dock) and
 close. A tenant puts its panel-level actions into the header by portaling
 ghost icon buttons into `context.chromeActionsTarget`, sized like the other
 bar controls (add its container to the `--bar-control` list in
-`styles.css`). Through its host it sets the subtitle, dirty and busy state,
-and its own panel-level ⋯ items after the Dock group (`host.setMenuItems`, a
-memoized node that renders inside the layout's menu, so menu primitives work
+`styles.css`). Through its host it sets the subtitle, dirty and busy state.
+Its panel-level ⋯ items, after the Dock group, come from the tenant's
+`renderMenuItems` (rendered inside the layout's menu, so menu primitives work
 in it; a sheet under touch density). The header never changes into an open
 item's: an open document keeps the panel's title, icon and actions, and its
 title and actions sit in one hairline toolbar under the header, as in the

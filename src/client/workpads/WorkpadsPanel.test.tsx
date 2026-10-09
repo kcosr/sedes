@@ -56,7 +56,6 @@ function panelContext(store: ApplicationClientStore) {
     setBusy: vi.fn((busy: boolean) => publish({ busy })),
     setDirty: vi.fn((dirty: boolean) => publish({ dirty })),
     setSubtitle: vi.fn((subtitle?: string) => publish({ subtitle })),
-    setMenuItems: vi.fn((menuItems?: ReactNode) => publish({ menuItems })),
   };
   published.set(host, { get: () => status, subscribe: listener => { listeners.add(listener); return () => { listeners.delete(listener); }; } });
   return {
@@ -77,7 +76,7 @@ function Panel({ context }: { context: WorkspacePanelContext }) {
   return <>
     <PanelChrome tenant={workpadsTenant} status={status}
       panelActions={<StablePaneSlot className="workspace-panel-chrome-actions-slot" target={context.chromeActionsTarget} />}
-      controls={{ onCollapse: () => undefined, onClose: () => undefined, onDock: () => undefined, renderMenuItems: status.menuItems }} />
+      controls={{ onCollapse: () => undefined, onClose: () => undefined, onDock: () => undefined }} />
     <WorkpadsPanel context={context} />
   </>;
 }
@@ -1111,7 +1110,6 @@ describe("WorkpadsPanel", () => {
       expect(segment("Global")).toHaveAccessibleDescription("0 workpads");
       view.unmount();
       // Nothing is published to the panel's ⋯: it is the panel's own.
-      expect(context.host.setMenuItems).not.toHaveBeenCalled();
     });
 
     it("keeps document actions in the workpad's own ⋯, and only Discard draft… while editing", async () => {
