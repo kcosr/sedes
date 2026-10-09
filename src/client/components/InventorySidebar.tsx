@@ -1447,7 +1447,10 @@ export function InventorySidebar({
                   variant="ghost"
                   size="sm"
                   className="sidebar-scope-clear"
-                  onClick={clearScope}
+                  onClick={() => {
+                    clearScope();
+                    store.setSearch("");
+                  }}
                 >
                   Clear
                 </Button>
@@ -1637,8 +1640,23 @@ export function InventorySidebar({
                 type="search"
                 className="border-0 bg-transparent shadow-none focus-visible:ring-0 dark:bg-transparent"
                 placeholder="Search threads"
+                data-sidebar-search=""
                 value={state.search}
                 onChange={(event) => store.setSearch(event.target.value)}
+                onKeyDown={(event) => {
+                  // Escape in an empty search returns the keyboard to sidebar navigation.
+                  // It is consumed so global Escape handlers, such as Find in thread's,
+                  // don't also act on the now-unfocused page.
+                  if (
+                    event.key === "Escape" &&
+                    !event.nativeEvent.isComposing &&
+                    event.currentTarget.value === ""
+                  ) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    event.currentTarget.blur();
+                  }
+                }}
               />
             </label>
             <SidebarViewControls

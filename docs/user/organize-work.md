@@ -178,8 +178,8 @@ Environment links narrow by the specific environment. Scope filters only the
 sidebar; it doesn't change what Tasks, Files, or agent permissions reach.
 
 Changing Environment clears an incompatible Target. Choose **Ungrouped** to see threads without a Group, or
-**Clear** to reset the entire Scope without changing search or visibility
-toggles.
+**Clear** to reset the entire Scope and sidebar search without changing
+visibility toggles.
 
 Environment, Target, and Project Scope prefill **New thread**: the scoped
 project is preselected, its locations are limited to the scoped environment or
@@ -215,6 +215,12 @@ as available and its settings are admitted.
 Sidebar search filters the currently selected working inventory. It combines
 with Scope, inventory visibility, and Pinned-only settings. Search bypasses
 thread-group stacking so a matching child is never concealed inside a stack.
+
+Press Ctrl+Shift+F (Command+Shift+F on macOS) to focus sidebar search and
+select its text, even from a terminal. It opens a collapsed sidebar, or the
+navigation drawer on narrow screens, first. Ctrl+F (Command+F) still opens Find
+in thread. Press Escape in an empty search to leave it and return to
+Ctrl+Shift+Up/Down sidebar navigation.
 
 Use [Find in thread](conversations.md#find-text-in-a-thread) for text inside one
 conversation; sidebar search and transcript search serve different purposes.

@@ -1740,6 +1740,54 @@ describe("application endpoint startup", () => {
     ).not.toHaveProperty("projectFilterName");
   });
 
+  it("focuses sidebar search with Ctrl+Shift+F, leaves it on Escape when empty, and clears it with Scope", async () => {
+    FakeEventSource.automaticApplicationSnapshots = 1;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json(applicationSession)),
+    );
+    // jsdom has no layout: give the desktop sidebar's search a box so it counts as shown.
+    const rects = vi.spyOn(Element.prototype, "getClientRects").mockImplementation(function (this: Element) {
+      return { length: this.hasAttribute("data-sidebar-search") ? 1 : 0 } as DOMRectList;
+    });
+    try {
+      render(<App />);
+      const sidebar = await screen.findByTestId("desktop-sidebar");
+      const search = within(sidebar).getByPlaceholderText("Search threads");
+      fireEvent.change(search, { target: { value: "Project" } });
+
+      expect(fireEvent.keyDown(document.body, { key: "F", ctrlKey: true, shiftKey: true })).toBe(false);
+      await waitFor(() => expect(search).toHaveFocus());
+      expect([
+        (search as HTMLInputElement).selectionStart,
+        (search as HTMLInputElement).selectionEnd,
+      ]).toEqual([0, "Project".length]);
+
+      // Escape leaves a non-empty search focused, and an empty one returns to sidebar navigation.
+      fireEvent.keyDown(search, { key: "Escape" });
+      expect(search).toHaveFocus();
+      fireEvent.change(search, { target: { value: "" } });
+      // The handled Escape is consumed, so Find in thread's document listener never sees it.
+      const documentEscape = vi.fn();
+      document.addEventListener("keydown", documentEscape);
+      try {
+        expect(fireEvent.keyDown(search, { key: "Escape" })).toBe(false);
+      } finally {
+        document.removeEventListener("keydown", documentEscape);
+      }
+      expect(documentEscape).not.toHaveBeenCalled();
+      expect(search).not.toHaveFocus();
+
+      fireEvent.change(search, { target: { value: "Project" } });
+      act(() => setSidebarInventoryScope({ projectFilterId: "project-1" }));
+      fireEvent.click(await within(sidebar).findByRole("button", { name: "Clear" }));
+      await waitFor(() => expect(getSidebarViewPreferences().projectFilterId).toBeNull());
+      expect(search).toHaveValue("");
+    } finally {
+      rects.mockRestore();
+    }
+  });
+
   it("unwinds sidebar search and filters before returning to the thread", async () => {
     platform.native = true;
     platform.name = "android";

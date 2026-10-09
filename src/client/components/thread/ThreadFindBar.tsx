@@ -295,6 +295,8 @@ export function ThreadFindBar({
       if (
         (event.ctrlKey || event.metaKey) &&
         !event.altKey &&
+        // Ctrl+Shift+F (⌘⇧F) belongs to sidebar search.
+        !event.shiftKey &&
         event.key.toLocaleLowerCase() === "f"
       ) {
         const activeElement = document.activeElement;
