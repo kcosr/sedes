@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { Archive, ArchiveRestore, Bot, Check, Ellipsis, FilePenLine, FolderInput, Highlighter, History, ListFilter, LoaderCircle, Pencil, Plus, Search, Trash2, X } from "lucide-react";
 import type { ListWorkpadsRequest, UpdateWorkpadRequest, Workpad, WorkpadCounts, WorkpadScope, WorkpadSummary, WorkpadRevision, WorkpadRevisionSummary } from "../../shared/protocol/workpads.js";
 import { WORKPAD_CONTENT_MAX_CHARACTERS } from "../../shared/protocol/workpads.js";
+import { ApiError } from "../api/ApiClient.js";
 import { CLOSE_WORKPAD_EVENT } from "../app/android-back.js";
 import { installNavigationBlocker, routePath, useRoute, type NavigationBlocker, type Route } from "../app/router.js";
 import { useTouchDensity } from "../app/use-touch-density.js";
@@ -36,7 +37,7 @@ import { applyMarkdownChecklistToggle, type MarkdownChecklistToggle } from "../c
 import "./workpads-panel.css";
 
 const message = (error: unknown) => error instanceof Error ? error.message : "Unable to update workpad.";
-/** What renaming, moving or archiving needs of a listed or open workpad. */
+/** What renaming, moving, archiving or deleting needs of a listed or open workpad. */
 type WorkpadTarget = Pick<WorkpadSummary, "id" | "revision" | "title" | "scope" | "archivedAt">;
 type ListBase = Omit<ListWorkpadsRequest, "query" | "limit" | "cursor">;
 /** `listed` then the workpads of `page` it does not hold yet, in order. */
@@ -123,6 +124,8 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
   const [title, setTitle] = useState("");
   const [moveTarget, setMoveTarget] = useState<WorkpadTarget>();
   const [discarding, setDiscarding] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<WorkpadTarget>();
+  const [announcement, setAnnouncement] = useState("");
   const [busy, setBusy] = useState(false);
   const [checklistSaving, setChecklistSaving] = useState(false);
   const [checklistRefreshRequired, setChecklistRefreshRequired] = useState(false);
@@ -147,6 +150,10 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
   const archivedIdentity = useRef("");
   const operationBusy = useRef(false);
   const operationMutating = useRef(false);
+  const rootRef = useRef<HTMLElement>(null);
+  const addInputRef = useRef<HTMLInputElement>(null);
+  // The row that takes focus once a deleted workpad's row is gone.
+  const deletedNeighbour = useRef<string | undefined>(undefined);
   const activeRequest = useMemo(() => workpadListRequest(view, target, options), [view, target, options]);
   const archivedRequest = useMemo(() => archivedListRequest(view, target, options), [view, target, options]);
   const scope: WorkpadScope = activeRequest?.scope ?? { kind: "global" };
@@ -202,7 +209,7 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
     setSelected(undefined); setRevision(undefined); setRevisions([]); setRevisionCursor(undefined);
     setItems([]); setCursor(undefined); listCount.current = 0;
     setArchivedItems([]); setArchivedCursor(undefined); archivedCount.current = 0;
-    setNewTitle(""); setTitle(""); setRenameTarget(undefined); setMoveTarget(undefined); setDiscarding(false); setReconciling(false);
+    setNewTitle(""); setTitle(""); setRenameTarget(undefined); setMoveTarget(undefined); setDiscarding(false); setDeleteTarget(undefined); setReconciling(false);
     setHistoryOpen(false); setViewMenuOpen(false); setDocumentMenuOpen(false);
     setError(""); setRefreshError(""); setBusy(false); setLeaveRequest(undefined);
     setChecklistSaving(false); setChecklistRefreshRequired(false);
@@ -323,11 +330,36 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
     setChecklistRefreshRequired(false);
     draft.setEditor(undefined); setReconciling(false); setRenameTarget(undefined); setMoveTarget(undefined); setHistoryOpen(false);
   };
+  /** Closes the open workpad, back to the list. */
+  const leaveDocument = () => {
+    draft.setEditor(undefined); selectedRef.current = undefined; revisionRef.current = undefined;
+    setSelected(undefined); setRevision(undefined); setHistoryOpen(false); setDocumentMenuOpen(false); ++generation.current;
+    setChecklistRefreshRequired(false);
+  };
+  /** A deleted workpad leaves the panel at once: it closes if open, and its row goes. */
+  const forget = (id: string) => {
+    if (selectedRef.current?.id === id) leaveDocument();
+    const without = (listed: WorkpadSummary[]) => listed.filter(item => item.id !== id);
+    itemsRef.current = without(itemsRef.current); setItems(itemsRef.current); listCount.current = itemsRef.current.length;
+    archivedItemsRef.current = without(archivedItemsRef.current); setArchivedItems(archivedItemsRef.current);
+    archivedCount.current = archivedItemsRef.current.length;
+  };
   const refreshDocument = async () => {
     const id = selectedRef.current?.id;
     if (!id) return;
     const token = generation.current;
-    const latest = await store.api.getWorkpad(id);
+    let latest: Workpad;
+    try { latest = await store.api.getWorkpad(id); } catch (failure) {
+      if (!(failure instanceof ApiError && failure.status === 404)) throw failure;
+      // Deleted elsewhere. A stale read, or one an operation overtook, has
+      // nothing to report. A reading view closes; an open editor stays, so
+      // its text can still be copied.
+      const current = selectedRef.current;
+      if (token !== generation.current || current?.id !== id || operationBusy.current) return;
+      if (draft.ref.current) throw failure;
+      forget(id);
+      throw new Error(`“${current.title}” was deleted.`);
+    }
     if (token !== generation.current || selectedRef.current?.id !== id) return;
     const previous = selectedRef.current;
     const viewed = revisionRef.current;
@@ -567,9 +599,7 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
     void run(async isCurrent => {
       if (draft.editor) await draft.save();
       if (!isCurrent()) return;
-      draft.setEditor(undefined); selectedRef.current = undefined; revisionRef.current = undefined;
-      setSelected(undefined); setRevision(undefined); setHistoryOpen(false); setDocumentMenuOpen(false); ++generation.current;
-      setChecklistRefreshRequired(false);
+      leaveDocument();
       then?.();
     });
   };
@@ -579,6 +609,22 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
   const openRename = (target: WorkpadTarget) => { setTitle(target.title); setRenameTarget(target); };
   const moveTo = (target: WorkpadTarget, destination: WorkpadScope) => { void run(() => mutate(target, { scope: destination }), true); };
   const archiveWorkpad = (target: WorkpadTarget, value: boolean) => { void run(() => mutate(target, { archived: value }), true); };
+  const announce = (text: string) => { setAnnouncement(""); window.setTimeout(() => setAnnouncement(text), 0); };
+  /** The confirmed deletion. A failure to delete rejects, keeping the confirmation open with its message. */
+  const deleteWorkpad = async (target: WorkpadTarget) => {
+    let failure: unknown;
+    await run(async isCurrent => {
+      try { await store.api.deleteWorkpad(target.id); } catch (caught) { failure = caught; return; }
+      if (!isCurrent()) return;
+      const listed = [...itemsRef.current, ...archivedItemsRef.current];
+      const index = listed.findIndex(({ id }) => id === target.id);
+      deletedNeighbour.current = index < 0 ? undefined : (listed[index + 1] ?? listed[index - 1])?.id;
+      forget(target.id);
+      announce(`Deleted “${target.title}”.`);
+      await refreshList();
+    }, true);
+    if (failure !== undefined) throw failure instanceof Error ? failure : new Error(message(failure));
+  };
   const finishEditing = () => { void run(async isCurrent => { await draft.save(); if (isCurrent()) draft.setEditor(undefined); }); };
   // Choosing a view returns to its list; the scope guard above confirms
   // leaving unsynced text. Choosing the one in view again closes the workpad.
@@ -671,7 +717,7 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
     busy={busy} touch={touch} threadId={threadId} projectId={contextProjectId}
     onOpen={() => { void run(() => load(item.id)); }} onRename={() => openRename(item)}
     onMove={destination => moveTo(item, destination)} onChooseMove={() => setMoveTarget(item)}
-    onArchive={() => archiveWorkpad(item, !item.archivedAt)} />;
+    onArchive={() => archiveWorkpad(item, !item.archivedAt)} onDelete={() => setDeleteTarget(item)} />;
   const emptyState = (() => {
     if (loading) return <EmptyState variant="inline" className="workpads-empty" title="Loading…" />;
     if (!scopeValid) return <EmptyState variant="inline" className="workpads-empty" title="Open a thread to see its workpads" />;
@@ -790,6 +836,10 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
               <DropdownMenuItem disabled={busy} onSelect={() => archiveWorkpad(selected, !selected.archivedAt)}>
                 {selectedArchived ? <><ArchiveRestore /><span>Unarchive</span></> : <><Archive /><span>Archive</span></>}
               </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem variant="destructive" disabled={busy} onSelect={() => setDeleteTarget(selected)}>
+                <Trash2 /><span>Delete…</span>
+              </DropdownMenuItem>
             </>}
           </DropdownMenuContent>
         </DropdownMenu>
@@ -850,7 +900,7 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
     </>}</div>}
   </>;
 
-  return <section id="workpads-panel" role="region" aria-label="Workpads" className="workpads-panel" data-touch={touch || undefined}
+  return <section ref={rootRef} id="workpads-panel" role="region" aria-label="Workpads" className="workpads-panel" data-touch={touch || undefined}
     data-document-open={selected ? "" : undefined}>
     {chromeActions}
     {searchOpen && !selected && <div className="workpads-search">
@@ -866,7 +916,7 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
         onRemove={() => setWorkpadsViewOptions(view, { includeThreadWorkpads: false })} />}
       {!selected && <form className="workpads-add" onSubmit={event => { event.preventDefault(); create(); }}>
         <Plus className="workpads-add-icon" aria-hidden="true" />
-        <input type="text" className="workpads-add-input" aria-label="New workpad title" placeholder={ADD_PLACEHOLDER[view]}
+        <input ref={addInputRef} type="text" className="workpads-add-input" aria-label="New workpad title" placeholder={ADD_PLACEHOLDER[view]}
           autoComplete="off" enterKeyHint="done" maxLength={240} disabled={!destination} value={newTitle}
           onChange={event => setNewTitle(event.target.value)}
           onKeyDown={event => { if (event.key === "Escape" && newTitle) { event.preventDefault(); event.stopPropagation(); setNewTitle(""); } }} />
@@ -928,6 +978,21 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
         if (failure !== undefined) throw failure instanceof Error ? failure : new Error(message(failure));
       }}
     />
+    <ConfirmDialog
+      open={open && deleteTarget !== undefined}
+      tone="danger"
+      title="Delete workpad?"
+      description={`“${deleteTarget?.title ?? ""}” will be permanently deleted, with its content, revision history, and any draft. This can’t be undone.`}
+      confirmLabel="Delete"
+      pendingLabel="Deleting…"
+      // The opener's row or toolbar is gone: focus the next row, else the add row.
+      fallbackFocus={() => [...rootRef.current?.querySelectorAll<HTMLElement>("[data-workpad-id]") ?? []]
+        .find(row => row.dataset.workpadId === deletedNeighbour.current) ?? addInputRef.current}
+      onOpenChange={value => { if (!value) setDeleteTarget(undefined); }}
+      onConfirm={async () => { if (deleteTarget) await deleteWorkpad(deleteTarget); }}
+    />
+    {/* Mounted throughout, it takes the status role only while it has something to say. */}
+    <div className="sr-only" role={announcement ? "status" : undefined} aria-live="polite">{announcement}</div>
     <DiscardChangesDialog
       open={Boolean(leaveRequest)}
       onOpenChange={value => { if (!value) setLeaveRequest(undefined); }}
@@ -971,9 +1036,9 @@ function MoveToItems({ current, threadId, projectId, onMove, onChoose }: {
 /**
  * One listed workpad: its title (and, in lists that mix scopes, where it
  * belongs on a quiet second line), when it was last edited (and by whom when
- * not you), and ⋯ with Rename…, Move to and Archive or Unarchive.
+ * not you), and ⋯ with Rename…, Move to, Archive or Unarchive, and Delete….
  */
-function WorkpadRow({ item, location, busy, touch, threadId, projectId, onOpen, onRename, onMove, onChooseMove, onArchive }: {
+function WorkpadRow({ item, location, busy, touch, threadId, projectId, onOpen, onRename, onMove, onChooseMove, onArchive, onDelete }: {
   readonly item: WorkpadSummary;
   readonly location?: ScopeLocationLabel;
   readonly busy: boolean;
@@ -985,10 +1050,11 @@ function WorkpadRow({ item, location, busy, touch, threadId, projectId, onOpen, 
   readonly onMove: (scope: WorkpadScope) => void;
   readonly onChooseMove: () => void;
   readonly onArchive: () => void;
+  readonly onDelete: () => void;
 }): React.JSX.Element {
   const locationId = useId();
   return <li className="workpads-row">
-    <button type="button" className="workpads-row-title" data-location={location ? "" : undefined}
+    <button type="button" className="workpads-row-title" data-workpad-id={item.id} data-location={location ? "" : undefined}
       aria-describedby={location ? locationId : undefined} onClick={onOpen}>
       {location ? <>
         <span className="workpads-row-name">{item.title}</span>
@@ -1018,6 +1084,8 @@ function WorkpadRow({ item, location, busy, touch, threadId, projectId, onOpen, 
         <DropdownMenuItem onSelect={onArchive}>
           {item.archivedAt ? <><ArchiveRestore /><span>Unarchive</span></> : <><Archive /><span>Archive</span></>}
         </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem variant="destructive" onSelect={onDelete}><Trash2 /><span>Delete…</span></DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   </li>;

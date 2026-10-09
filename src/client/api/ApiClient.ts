@@ -2126,6 +2126,11 @@ export class ApiClient {
     return (await this.#mutation(`/api/workpads/${encodeURIComponent(id)}`, z.object({ workpad: workpadSchema }), { method: "PATCH", body: JSON.stringify(request) })).workpad;
   }
 
+  /** Permanently deletes a workpad with its revisions and draft. */
+  async deleteWorkpad(id: string): Promise<void> {
+    await this.#mutation(`/api/workpads/${encodeURIComponent(id)}`, z.unknown(), { method: "DELETE" });
+  }
+
   listWorkpadRevisions(id: string, cursor?: string) {
     return this.#request(`/api/workpads/${encodeURIComponent(id)}/revisions${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ""}`, {}, workpadRevisionPageSchema);
   }

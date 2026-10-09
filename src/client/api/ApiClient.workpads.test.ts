@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { SEDES_CLIENT_PROTOCOL_VERSION } from "../../shared/index.js";
+import { SEDES_VERSION } from "../../shared/version.js";
 import { ApiClient } from "./ApiClient.js";
 
 const counts = {
@@ -49,5 +51,29 @@ describe("ApiClient workpads", () => {
   it("rejects counts outside the contract", async () => {
     serve({ ...counts, active: { ...counts.active, all: -1 } });
     await expect(new ApiClient().getWorkpadCounts({})).rejects.toThrow();
+  });
+
+  it("deletes a workpad with a CSRF-protected request and surfaces a missing one", async () => {
+    const requests: { url: URL; init?: RequestInit }[] = [];
+    let status = 204;
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(String(input), "http://sedes.test");
+      if (url.pathname === "/api/application/session") {
+        return Response.json({
+          clientProtocolVersion: SEDES_CLIENT_PROTOCOL_VERSION, version: SEDES_VERSION, csrfToken: "a".repeat(32),
+          providerPulseEnabled: false, experimentalUsageEnabled: false,
+        });
+      }
+      requests.push({ url, init });
+      return status === 204 ? new Response(null, { status })
+        : Response.json({ error: { code: "not_found", message: "The workpad was not found.", retryable: false } }, { status });
+    }));
+    const api = new ApiClient();
+    await expect(api.deleteWorkpad("pad/one")).resolves.toBeUndefined();
+    expect(requests[0]!.url.pathname).toBe("/api/workpads/pad%2Fone");
+    expect(requests[0]!.init).toMatchObject({ method: "DELETE", headers: expect.objectContaining({ "X-CSRF-Token": "a".repeat(32) }) });
+    expect(requests[0]!.init?.body).toBeUndefined();
+    status = 404;
+    await expect(api.deleteWorkpad("pad/one")).rejects.toMatchObject({ name: "ApiError", status: 404, code: "not_found", message: "The workpad was not found." });
   });
 });

@@ -34,6 +34,7 @@ function fixture(overrides: Record<string, unknown> = {}) {
     saveWorkpadDraft: vi.fn(async (_id: string, value: { expectedRevision: number; baseRevision: number; content: string }) => { savedDraft = { ...savedDraft, ...value, revision: value.expectedRevision + 1 }; return savedDraft; }),
     commitWorkpadDraft: vi.fn(async () => ({ workpad: { ...pad, revision: 2 }, draft: { ...savedDraft, revision: 2 } })),
     updateWorkpad: vi.fn(async (_id: string, _change: object) => ({ ...pad, revision: 2 })),
+    deleteWorkpad: vi.fn(async (_id: string): Promise<void> => undefined),
     ...overrides,
   };
   type Change = { workpadId: string; revision: number; change: "document" | "draft" } | undefined;
@@ -1120,14 +1121,17 @@ describe("WorkpadsPanel", () => {
       // The panel's ⋯ is the panel's: Dock alone.
       expect(menuLabels(headerMenu())).toEqual(["Left", "Right", "Top", "Bottom"]);
       closeMenu();
-      expect(menuLabels(documentMenu())).toEqual(["Rename…", "Move to", "Archive"]);
+      expect(menuLabels(documentMenu())).toEqual(["Rename…", "Move to", "Archive", "Delete…"]);
+      // Delete… ends the menu, destructive and apart.
+      expect(screen.getByRole("menuitem", { name: "Delete…" })).toHaveAttribute("data-variant", "destructive");
+      expect(screen.getByRole("menuitem", { name: "Delete…" }).previousElementSibling).toHaveAttribute("role", "separator");
       closeMenu();
       await startEditing();
       expect(menuLabels(documentMenu())).toEqual(["Discard draft…"]);
       closeMenu();
       fireEvent.click(screen.getByRole("button", { name: "Done editing" }));
       await screen.findByRole("button", { name: "Edit workpad" });
-      expect(menuLabels(documentMenu())).toEqual(["Rename…", "Move to", "Archive"]);
+      expect(menuLabels(documentMenu())).toEqual(["Rename…", "Move to", "Archive", "Delete…"]);
     });
 
     it("creates from the add row and opens the new workpad in edit mode", async () => {
@@ -1179,7 +1183,8 @@ describe("WorkpadsPanel", () => {
       const { store, api } = fixture();
       render(<Panel context={panelContext(store)} />);
       await screen.findByRole("button", { name: "Integration" });
-      expect(menuLabels(openMenu("Actions for “Integration”"))).toEqual(["Rename…", "Move to", "Archive"]);
+      expect(menuLabels(openMenu("Actions for “Integration”"))).toEqual(["Rename…", "Move to", "Archive", "Delete…"]);
+      expect(screen.getByRole("menuitem", { name: "Delete…" })).toHaveAttribute("data-variant", "destructive");
       choose("Rename…");
       const title = screen.getByRole("textbox", { name: "Workpad title" });
       expect(title).toHaveValue("Integration");
@@ -1624,7 +1629,7 @@ describe("WorkpadsPanel", () => {
       expect(await screen.findByRole("button", { name: "Old draft" })).toBeInTheDocument();
       expect(api.listWorkpads).toHaveBeenCalledWith({ scope: { kind: "thread", threadId: "thread-build" }, scopeMode: "exact", sort: "title", archived: true });
       // Its rows offer Unarchive, not Archive.
-      expect(menuLabels(openMenu("Actions for “Old notes”"))).toEqual(["Rename…", "Move to", "Unarchive"]);
+      expect(menuLabels(openMenu("Actions for “Old notes”"))).toEqual(["Rename…", "Move to", "Unarchive", "Delete…"]);
       closeMenu();
       const section = screen.getByRole("region", { name: "Archived workpads" });
       fireEvent.click(within(section).getByRole("button", { name: "Load more" }));
@@ -1682,6 +1687,142 @@ describe("WorkpadsPanel", () => {
       fireEvent.click(await screen.findByRole("button", { name: /^Archived/ }));
       expect(await screen.findByRole("button", { name: "Old notes" })).toHaveAccessibleDescription("In docs");
       expect(listWorkpads).toHaveBeenCalledWith({ scope: { kind: "global" }, scopeMode: "subtree", sort: "updated", archived: true });
+    });
+  });
+
+  describe("Delete", () => {
+    const other: Workpad = { ...pad, id: "other", title: "Other" };
+    const globalCounts = (global: number, archived = 0): WorkpadCounts => ({ active: viewCounts({ global, all: global }), archived: viewCounts({ global: archived, all: archived }) });
+    const deleteDialog = () => screen.getByRole("dialog", { name: "Delete workpad?" });
+    /** A list of `listed` until `deleteWorkpad` resolves, then without the deleted one. */
+    function deletable(listed: Workpad[], archived: Workpad[] = []) {
+      let deleted: string | undefined;
+      let finish: (() => void) | undefined;
+      const remaining = (items: Workpad[]) => items.filter(({ id }) => id !== deleted);
+      const f = fixture({
+        listWorkpads: vi.fn(async (request?: Record<string, unknown>) => ({ items: remaining(request?.archived ? archived : listed) })),
+        getWorkpadCounts: vi.fn(async () => globalCounts(remaining(listed).length, remaining(archived).length)),
+        deleteWorkpad: vi.fn((id: string) => new Promise<void>(resolve => { finish = () => { deleted = id; resolve(); }; })),
+      });
+      return { ...f, finish: async () => { await act(async () => { finish!(); }); } };
+    }
+
+    it("confirms deleting a listed workpad from its row ⋯, then drops its row, refreshes counts and announces it", async () => {
+      const { store, api, finish } = deletable([pad, other]);
+      const context = panelContext(store);
+      render(<Panel context={context} />);
+      await screen.findByRole("button", { name: "Other" });
+      await waitFor(() => expect(segment("Global")).toHaveAccessibleDescription("2 workpads"));
+      openMenu("Actions for “Integration”"); choose("Delete…");
+      expect(deleteDialog()).toHaveAccessibleDescription("“Integration” will be permanently deleted, with its content, revision history, and any draft. This can’t be undone.");
+      // Cancel deletes nothing.
+      fireEvent.click(within(deleteDialog()).getByRole("button", { name: "Cancel" }));
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(api.deleteWorkpad).not.toHaveBeenCalled();
+      expect(screen.getByRole("button", { name: "Integration" })).toBeInTheDocument();
+
+      const lists = api.listWorkpads.mock.calls.length;
+      const counts = api.getWorkpadCounts.mock.calls.length;
+      openMenu("Actions for “Integration”"); choose("Delete…");
+      const confirm = within(deleteDialog()).getByRole("button", { name: "Delete" });
+      expect(confirm).toHaveAttribute("data-variant", "destructive");
+      fireEvent.click(confirm);
+      expect(api.deleteWorkpad).toHaveBeenCalledExactlyOnceWith("pad");
+      // Busy like any other workpad change, until it completes.
+      expect(within(deleteDialog()).getByRole("button", { name: "Deleting…" })).toBeDisabled();
+      expect(context.host.setBusy).toHaveBeenLastCalledWith(true);
+      await finish();
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      expect(screen.queryByRole("button", { name: "Integration" })).not.toBeInTheDocument();
+      expect(api.listWorkpads.mock.calls.length).toBeGreaterThan(lists);
+      expect(api.getWorkpadCounts.mock.calls.length).toBeGreaterThan(counts);
+      await waitFor(() => expect(segment("Global")).toHaveAccessibleDescription("1 workpad"));
+      expect(await screen.findByRole("status")).toHaveTextContent("Deleted “Integration”.");
+      // Focus moves to the next row, as the deleted one's ⋯ is gone.
+      expect(screen.getByRole("button", { name: "Other" })).toHaveFocus();
+      expect(context.host.setBusy).toHaveBeenLastCalledWith(false);
+      expect(api.getWorkpad).not.toHaveBeenCalled();
+    });
+
+    it("deletes the open workpad from its toolbar ⋯ and returns to the list", async () => {
+      const { store, api, finish } = deletable([pad, other]);
+      render(<Panel context={panelContext(store)} />);
+      await openRow();
+      await screen.findByRole("button", { name: "Edit workpad" });
+      documentMenu(); choose("Delete…");
+      fireEvent.click(within(deleteDialog()).getByRole("button", { name: "Delete" }));
+      await finish();
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      expect(api.deleteWorkpad).toHaveBeenCalledExactlyOnceWith("pad");
+      expect(screen.queryByRole("button", { name: "Workpad actions" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("heading", { name: "Integration" })).not.toBeInTheDocument();
+      expect(await screen.findByRole("button", { name: "Other" })).toHaveFocus();
+      expect(screen.queryByRole("button", { name: "Integration" })).not.toBeInTheDocument();
+      expect(addRow()).toBeInTheDocument();
+      expect(segment("Global")).not.toHaveAttribute("title");
+    });
+
+    it("deletes an archived workpad, refreshing the Archived section and its count", async () => {
+      const archived: Workpad = { ...pad, id: "old", title: "Old notes", archivedAt: time };
+      const { store, api, finish } = deletable([other], [archived, { ...archived, id: "older", title: "Older notes" }]);
+      render(<Panel context={panelContext(store)} />);
+      const heading = () => screen.getByRole("button", { name: /^Archived/ });
+      await waitFor(() => expect(heading()).toHaveTextContent(/^Archived2$/));
+      fireEvent.click(heading());
+      await screen.findByRole("button", { name: "Old notes" });
+      openMenu("Actions for “Old notes”"); choose("Delete…");
+      fireEvent.click(within(deleteDialog()).getByRole("button", { name: "Delete" }));
+      await finish();
+      await waitFor(() => expect(heading()).toHaveTextContent(/^Archived1$/));
+      expect(api.deleteWorkpad).toHaveBeenCalledExactlyOnceWith("old");
+      expect(screen.queryByRole("button", { name: "Old notes" })).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Older notes" })).toHaveFocus();
+    });
+
+    it("keeps the confirmation open with the error when deleting fails", async () => {
+      const { store, api } = fixture({ deleteWorkpad: vi.fn(async () => { throw new ApiError(404, "not_found", "The workpad was not found.", false); }) });
+      render(<Panel context={panelContext(store)} />);
+      await openRow();
+      await screen.findByRole("button", { name: "Edit workpad" });
+      documentMenu(); choose("Delete…");
+      await act(async () => { fireEvent.click(within(deleteDialog()).getByRole("button", { name: "Delete" })); });
+      expect(within(deleteDialog()).getByRole("alert")).toHaveTextContent("The workpad was not found.");
+      expect(api.deleteWorkpad).toHaveBeenCalledOnce();
+      fireEvent.click(within(deleteDialog()).getByRole("button", { name: "Cancel" }));
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      // The workpad stays open, and the panel itself reports nothing.
+      expect(screen.getByRole("heading", { name: "Integration" })).toBeInTheDocument();
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      expect(screen.queryByText(/^Deleted/)).not.toBeInTheDocument();
+    });
+
+    it("closes a workpad deleted elsewhere, but keeps an open editor's text", async () => {
+      const gone = new ApiError(404, "not_found", "The workpad was not found.", false);
+      const { store, api, emit } = fixture();
+      render(<Panel context={panelContext(store)} />);
+      await openRow();
+      await screen.findByRole("button", { name: "Edit workpad" });
+      // An editor keeps its text on screen, so it can still be copied.
+      fireEvent.change(await startEditing(), { target: { value: "Unsaved words" } });
+      api.getWorkpad.mockRejectedValue(gone);
+      api.getWorkpadDraft.mockRejectedValue(gone);
+      api.listWorkpads.mockResolvedValue({ items: [] });
+      act(() => emit({ workpadId: pad.id, revision: 1, change: "document" }));
+      expect(await screen.findByRole("alert")).toHaveTextContent("The workpad was not found.");
+      expect(screen.getByRole("textbox", { name: "Workpad content" })).toHaveValue("Unsaved words");
+      cleanup();
+
+      const reading = fixture();
+      render(<Panel context={panelContext(reading.store)} />);
+      await openRow();
+      await screen.findByRole("button", { name: "Edit workpad" });
+      reading.api.getWorkpad.mockRejectedValue(gone);
+      reading.api.listWorkpads.mockResolvedValue({ items: [] });
+      act(() => reading.emit({ workpadId: pad.id, revision: 1, change: "document" }));
+      expect(await screen.findByRole("alert")).toHaveTextContent("“Integration” was deleted.");
+      expect(screen.queryByRole("heading", { name: "Integration" })).not.toBeInTheDocument();
+      expect(addRow()).toBeInTheDocument();
+      expect(reading.api.deleteWorkpad).not.toHaveBeenCalled();
     });
   });
 
