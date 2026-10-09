@@ -62,6 +62,17 @@ export class WorkpadService {
     }
     return pad;
   }
+  /**
+   * Permanent deletion, for people only: no agent tool reaches it. Like
+   * Task deletion it takes no expected revision. A thread that counted the
+   * workpad updates its count, and the document invalidation makes open
+   * panels drop it.
+   */
+  async remove(scope: RequestScope, id: string, now = Date.now()): Promise<void> {
+    const { revision, nonArchivedThreadId } = this.repository.remove(scope, id);
+    if (nonArchivedThreadId !== null) this.publications.handoffThreadChange(scope, nonArchivedThreadId);
+    void this.publishWorkpadChange(scope, id, revision, "document", now);
+  }
   async saveDraft(scope: RequestScope, id: string, request: SaveWorkpadDraftRequest, now = Date.now()) {
     const draft = this.repository.saveDraft(scope, id, request, now);
     void this.publishWorkpadChange(scope, id, draft.revision, "draft", now);

@@ -133,6 +133,36 @@ describe("Workpads HTTP", () => {
     } finally { f.database.close(); }
   });
 
+  it("deletes active and archived workpads permanently for their owner only", async () => {
+    const f = fixture();
+    try {
+      const create = async (title: string) => (await f.mutate("post", "/api/workpads").send({ title, scope: { kind: "global" }, content: "Text" }).expect(201)).body.workpad as { id: string; revision: number };
+      const active = await create("Active");
+      const archived = await create("Archived");
+      await f.mutate("patch", `/api/workpads/${archived.id}`).send({ expectedRevision: archived.revision, archived: true }).expect(200);
+      const foreign = await create("Foreign");
+      await request(f.app).delete(`/api/workpads/${active.id}`).set("Host", "127.0.0.1:4783").expect(403);
+      await f.mutate("delete", `/api/workpads/${"x".repeat(129)}`).expect(400);
+      await f.mutate("delete", `/api/workpads/${randomUUID()}`).expect(404);
+
+      for (const pad of [active, archived]) {
+        const deleted = await f.mutate("delete", `/api/workpads/${pad.id}`).expect(204);
+        expect(deleted.text).toBe("");
+        expect(deleted.headers["cache-control"]).toBe("no-store");
+        const path = `/api/workpads/${pad.id}`;
+        for (const read of [path, `${path}/revisions`, `${path}/revisions/0`, `${path}/draft`]) await f.get(read).expect(404);
+        await f.mutate("delete", path).expect(404);
+      }
+      expect((await f.get("/api/workpads/counts").expect(200)).body).toEqual({
+        active: { thread: null, project: null, projectWithThreads: null, global: 1, all: 1 },
+        archived: { thread: null, project: null, projectWithThreads: null, global: 0, all: 0 },
+      });
+      f.changeOwner();
+      await f.mutate("delete", `/api/workpads/${foreign.id}`).expect(404);
+      expect(f.database.prepare("SELECT title FROM workpads WHERE id = ?").get(foreign.id)).toEqual({ title: "Foreign" });
+    } finally { f.database.close(); }
+  });
+
   it("lists by sort across pages and counts each panel view", async () => {
     const f = fixture();
     try {

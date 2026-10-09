@@ -193,6 +193,41 @@ describe("thread workpad counts", () => {
     expect(f.counts(f.hub.currentCheckpoint()!.event.snapshot)).toEqual([0, 0, 0]);
   });
 
+  it("publishes a deleted workpad's thread count and invalidation, live and after replay", async () => {
+    const f = fixture();
+    const [first, second] = f.ids as [string, string, string];
+    const client = new NormalizedApplicationStore();
+    const live = f.hub.subscribe(envelope => { expect(client.apply(envelope)).toEqual({ kind: "applied" }); });
+    const changes: unknown[] = [];
+    client.subscribeWorkpadChanges(change => changes.push(change));
+    await f.boundary.checkpoint(f.scope, f.hub);
+    const counted = await f.workpads.create(f.scope, { title: "Counted", scope: { kind: "thread", threadId: first } });
+    const kept = await f.workpads.create(f.scope, { title: "Kept", scope: { kind: "thread", threadId: first } });
+    let archived = await f.workpads.create(f.scope, { title: "Archived", scope: { kind: "thread", threadId: second } });
+    archived = await f.workpads.update(f.scope, archived.id, { expectedRevision: archived.revision, archived: true });
+    await f.boundary.flush();
+    expect(f.counts(client.state.snapshot!)).toEqual([2, 0, 0]);
+    const handoff = vi.spyOn(f.boundary, "handoffThreadChange");
+    changes.length = 0;
+    await f.workpads.remove(f.scope, counted.id);
+    await f.workpads.remove(f.scope, archived.id);
+    await f.boundary.flush();
+    expect(handoff).toHaveBeenCalledExactlyOnceWith(f.scope, first);
+    expect(f.counts(client.state.snapshot!)).toEqual([1, 0, 0]);
+    expect(f.counts(f.hub.currentCheckpoint()!.event.snapshot)).toEqual([1, 0, 0]);
+    expect(changes).toEqual([
+      { workpadId: counted.id, revision: counted.revision, change: "document" },
+      { workpadId: archived.id, revision: archived.revision, change: "document" },
+    ]);
+    live.close();
+    await f.workpads.remove(f.scope, kept.id);
+    await f.boundary.flush();
+    const resumed = f.hub.subscribe(() => undefined, client.replayCursor);
+    for (const envelope of resumed.replay) expect(client.apply(envelope)).toEqual({ kind: "applied" });
+    expect(f.counts(client.state.snapshot!)).toEqual([0, 0, 0]);
+    resumed.close();
+  });
+
   it("retains all move endpoints while a replacement snapshot is awaiting publication", async () => {
     const f = fixture();
     const [first, second, third] = f.ids as [string, string, string];

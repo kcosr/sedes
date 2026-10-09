@@ -301,6 +301,23 @@ export class WorkpadRepository {
       return this.#present(scope, pad);
     })();
   }
+  /**
+   * Permanently deletes an owned workpad, active or archived. Its revisions
+   * and draft cascade by foreign key. Returns its last revision and, when it
+   * counted toward a thread's non-archived workpads, that thread.
+   */
+  remove(scope: RequestScope, id: string): { revision: number; nonArchivedThreadId: string | null } {
+    return this.database.transaction(() => {
+      const row = this.database.prepare(`SELECT revision, CASE
+        WHEN scope_kind = 'thread' AND archived_at IS NULL THEN thread_id
+        ELSE NULL END AS threadId
+        FROM workpads WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?`)
+        .get(scope.tenantId, scope.principalId, id) as { revision: number; threadId: string | null } | undefined;
+      if (!row) throw notFound();
+      this.database.prepare("DELETE FROM workpads WHERE tenant_id=? AND owner_principal_id=? AND id=?").run(scope.tenantId, scope.principalId, id);
+      return { revision: row.revision, nonArchivedThreadId: row.threadId };
+    })();
+  }
 
   /**
    * Resumes after a cursor's row. A title carried as a prefix resumes at the

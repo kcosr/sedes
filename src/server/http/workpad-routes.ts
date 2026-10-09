@@ -91,6 +91,12 @@ export function registerWorkpadRoutes(
     const workpad = await service.update(owner, workpadId, updateWorkpadRequestSchema.parse(request.body));
     response.json({ workpad: workpadSchema.parse(workpad) });
   });
+  routes.delete("/api/workpads/:workpadId", async (request, response) => {
+    const owner = await scope(request);
+    const { workpadId } = pathSchema.parse(request.params);
+    await service.remove(owner, workpadId);
+    response.status(204).end();
+  });
   routes.get("/api/workpads/:workpadId/revisions", async (request, response) => {
     const owner = await scope(request);
     const { workpadId } = pathSchema.parse(request.params);

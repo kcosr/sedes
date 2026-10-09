@@ -457,9 +457,60 @@ describe("WorkpadRepository", () => {
           () => f.workpads.discardDraft(scope, pad.id, 0),
           () => f.workpads.commitDraft(scope, pad.id, { expectedDraftRevision: 0, expectedRevision: 0 }),
           () => f.workpads.update(scope, pad.id, { expectedRevision: 0, title: "Stolen" }),
+          () => f.workpads.remove(scope, pad.id),
         ]) expect(access).toThrow(errorCode("not_found"));
       }
       expect(f.workpads.get(f.scope, pad.id).content).toBe("Secret");
+    } finally { f.database.close(); }
+  });
+
+  it("deletes active and archived workpads with their history and drafts, only for their owner", () => {
+    const f = fixture();
+    try {
+      expect(f.database.pragma("foreign_keys", { simple: true })).toBe(1);
+      const rows = (table: "workpad_revisions" | "workpad_drafts", id: string, principalId = f.scope.principalId) =>
+        (f.database.prepare(`SELECT count(*) AS count FROM ${table} WHERE tenant_id = ? AND owner_principal_id = ? AND workpad_id = ?`)
+          .get(f.scope.tenantId, principalId, id) as { count: number }).count;
+      const target = { threadId: f.firstThreadId, projectId: f.firstProjectId };
+      const active = f.workpads.create(f.scope, { title: "Active", scope: { kind: "thread", threadId: f.firstThreadId }, content: "One" });
+      f.workpads.update(f.scope, active.id, { expectedRevision: 0, edit: { kind: "append", text: " two" } });
+      f.workpads.saveDraft(f.scope, active.id, { expectedRevision: f.workpads.getDraft(f.scope, active.id).revision, baseRevision: 1, content: "Unsaved" });
+      const archived = f.workpads.create(f.scope, { title: "Archived", scope: { kind: "project", projectId: f.firstProjectId } });
+      f.workpads.update(f.scope, archived.id, { expectedRevision: 0, archived: true });
+      const kept = f.workpads.create(f.scope, { title: "Kept", scope: { kind: "global" } });
+      expect(f.workpads.counts(f.scope, target)).toEqual({
+        active: { thread: 1, project: 0, projectWithThreads: 1, global: 1, all: 2 },
+        archived: { thread: 0, project: 1, projectWithThreads: 1, global: 0, all: 1 },
+      });
+      expect([rows("workpad_revisions", active.id), rows("workpad_drafts", active.id)]).toEqual([2, 1]);
+      // Another owner's workpad with the same ID is never touched.
+      f.database.prepare("INSERT INTO principals(tenant_id, id, kind, created_at) VALUES (?, 'another-principal', 'local_human', 1)").run(f.scope.tenantId);
+      f.database.prepare(`INSERT INTO workpads(tenant_id, owner_principal_id, id, scope_kind, project_id, thread_id, title, revision, archived_at, created_at, updated_at, document_json)
+        SELECT tenant_id, 'another-principal', id, 'global', NULL, NULL, title, revision, archived_at, created_at, updated_at, document_json
+        FROM workpads WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?`).run(f.scope.tenantId, f.scope.principalId, active.id);
+      f.database.prepare(`INSERT INTO workpad_revisions(tenant_id, owner_principal_id, workpad_id, revision, document_json)
+        SELECT tenant_id, 'another-principal', workpad_id, revision, document_json
+        FROM workpad_revisions WHERE tenant_id = ? AND owner_principal_id = ? AND workpad_id = ?`).run(f.scope.tenantId, f.scope.principalId, active.id);
+
+      expect(f.workpads.remove(f.scope, active.id)).toEqual({ revision: 1, nonArchivedThreadId: f.firstThreadId });
+      // An archived workpad no longer counts toward any thread.
+      expect(f.workpads.remove(f.scope, archived.id)).toEqual({ revision: 1, nonArchivedThreadId: null });
+      for (const id of [active.id, archived.id]) {
+        expect([rows("workpad_revisions", id), rows("workpad_drafts", id)]).toEqual([0, 0]);
+        expect(() => f.workpads.get(f.scope, id)).toThrow(errorCode("not_found"));
+        expect(() => f.workpads.revisions(f.scope, id)).toThrow(errorCode("not_found"));
+        expect(() => f.workpads.getDraft(f.scope, id)).toThrow(errorCode("not_found"));
+        expect(() => f.workpads.remove(f.scope, id)).toThrow(errorCode("not_found"));
+      }
+      expect(() => f.workpads.remove(f.scope, "unknown-workpad")).toThrow(errorCode("not_found"));
+      expect(f.workpads.counts(f.scope, target)).toEqual({
+        active: { thread: 0, project: 0, projectWithThreads: 0, global: 1, all: 1 },
+        archived: { thread: 0, project: 0, projectWithThreads: 0, global: 0, all: 0 },
+      });
+      expect(f.workpads.list(f.scope, { scope: { kind: "global" }, scopeMode: "subtree" }).items.map(item => item.id)).toEqual([kept.id]);
+      const another = { ...f.scope, principalId: "another-principal" };
+      expect(f.workpads.get(another, active.id).title).toBe("Active");
+      expect(rows("workpad_revisions", active.id, "another-principal")).toBe(2);
     } finally { f.database.close(); }
   });
 });

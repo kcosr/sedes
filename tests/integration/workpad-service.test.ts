@@ -88,6 +88,33 @@ describe("Workpad committed change publications", () => {
     } finally { f.database.close(); }
   });
 
+  it("publishes a deletion as a document change, but never a rejected one", async () => {
+    const f = fixture();
+    const publishWorkpadChange = vi.fn(async () => undefined);
+    const handoffThreadChange = vi.fn();
+    const service = new WorkpadService(f.repository, { publishWorkpadChange, handoffThreadChange });
+    try {
+      const pad = await service.create(f.scope, { title: "Notes", content: "Before", scope: { kind: "global" } });
+      const edited = await service.update(f.scope, pad.id, { expectedRevision: 0, edit: { kind: "append", text: " after" } });
+      const archived = await service.create(f.scope, { title: "Archived", scope: { kind: "global" } });
+      await service.update(f.scope, archived.id, { expectedRevision: 0, archived: true });
+      publishWorkpadChange.mockClear();
+      for (const owner of [{ ...f.scope, principalId: "other" }, { ...f.scope, tenantId: "other" }]) {
+        await expect(service.remove(owner, pad.id)).rejects.toMatchObject({ code: "not_found" });
+      }
+      await expect(service.remove(f.scope, "unknown")).rejects.toMatchObject({ code: "not_found" });
+      expect(publishWorkpadChange).not.toHaveBeenCalled();
+      await expect(service.remove(f.scope, pad.id)).resolves.toBeUndefined();
+      expect(publishWorkpadChange).toHaveBeenCalledExactlyOnceWith(f.scope, pad.id, edited.revision, "document");
+      await service.remove(f.scope, archived.id);
+      expect(publishWorkpadChange).toHaveBeenLastCalledWith(f.scope, archived.id, 1, "document");
+      // Neither counted toward a thread.
+      expect(handoffThreadChange).not.toHaveBeenCalled();
+      expect(() => service.get(f.scope, pad.id)).toThrow(expect.objectContaining({ code: "not_found" }));
+      await expect(service.remove(f.scope, pad.id)).rejects.toMatchObject({ code: "not_found" });
+    } finally { f.database.close(); }
+  });
+
   it("returns committed writes without waiting for publication I/O", async () => {
     const f = fixture();
     const publishWorkpadChange = vi.fn(() => new Promise<void>(() => undefined));
