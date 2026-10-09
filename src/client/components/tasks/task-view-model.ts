@@ -4,6 +4,7 @@ import type {
   TasksView,
   TasksViewOptions,
 } from "../../app/tasks-panel-store.js";
+import { SCOPE_VIEW_LABEL } from "../scope-view/scope-views.js";
 
 /**
  * Pure presentation logic for the Tasks panel: which tasks a view shows, in
@@ -12,36 +13,44 @@ import type {
  * filtering, grouping and counting happen here on the client.
  */
 
-export const TASKS_VIEW_LABEL: Record<TasksView, string> = {
-  thread: "Thread",
-  project: "Project",
-  global: "Global",
-  all: "All",
-};
+export const TASKS_VIEW_LABEL: Readonly<Record<TasksView, string>> = SCOPE_VIEW_LABEL;
 
 export const TASK_TITLE_MAX_CHARACTERS = 240;
 /** A multi-line paste creates at most this many tasks at once. */
 export const TASK_PASTE_MAX_TITLES = 50;
 
-/** A View option that narrows the list, shown as a removable chip. */
+/** A View option in effect beyond the view's default, shown as a removable chip. */
 export interface TasksViewFilter {
-  readonly key: "pinned" | "backlog" | "notes" | "files";
+  readonly key: "pinned" | "backlog" | "notes" | "files" | "threads";
   readonly label: string;
   /** The change that removes it. */
   readonly clear: Partial<TasksViewOptions>;
+  /**
+   * Whether it hides tasks (the Only options). Project's thread tasks add
+   * tasks instead, so the list never offers to reset them when empty.
+   */
+  readonly narrows: boolean;
 }
 
-/** The options that narrow the list beyond the view's default, in menu order. */
-export function viewFilters(options: TasksViewOptions): readonly TasksViewFilter[] {
+/**
+ * The View options in effect beyond the view's default, in menu order: the
+ * Only options, which narrow the list, and Project's Include thread tasks.
+ */
+export function viewFilters(
+  options: TasksViewOptions,
+  view: TasksView,
+): readonly TasksViewFilter[] {
   const filters: TasksViewFilter[] = [];
   if (options.onlyPinned)
-    filters.push({ key: "pinned", label: "Pinned only", clear: { onlyPinned: false } });
+    filters.push({ key: "pinned", label: "Pinned only", clear: { onlyPinned: false }, narrows: true });
   if (options.onlyBacklog)
-    filters.push({ key: "backlog", label: "Backlog only", clear: { onlyBacklog: false } });
+    filters.push({ key: "backlog", label: "Backlog only", clear: { onlyBacklog: false }, narrows: true });
   if (options.onlyWithNotes)
-    filters.push({ key: "notes", label: "With notes", clear: { onlyWithNotes: false } });
+    filters.push({ key: "notes", label: "With notes", clear: { onlyWithNotes: false }, narrows: true });
   if (options.onlyWithFiles)
-    filters.push({ key: "files", label: "With files", clear: { onlyWithFiles: false } });
+    filters.push({ key: "files", label: "With files", clear: { onlyWithFiles: false }, narrows: true });
+  if (view === "project" && options.includeThreadTasks)
+    filters.push({ key: "threads", label: "Thread tasks", clear: { includeThreadTasks: false }, narrows: false });
   return filters;
 }
 
@@ -58,13 +67,15 @@ export interface TasksContext {
   readonly project?: { readonly id: string; readonly label: string };
 }
 
+/** Why a view does not apply to the chat the panel follows; `items` names what it lists. */
 export function viewUnavailableReason(
   view: TasksView,
   context: TasksContext,
+  items = "tasks",
 ): string | undefined {
   if (view === "thread" && !context.thread) {
     return context.threadArchived
-      ? "This thread is archived. Restore it to see its tasks."
+      ? `This thread is archived. Restore it to see its ${items}.`
       : "This thread isn't available.";
   }
   if (view === "project" && !context.project) {

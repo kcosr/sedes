@@ -1,5 +1,4 @@
 import { createPortal } from "react-dom";
-import { Tooltip } from "radix-ui";
 import { StablePaneSlot } from "../../workspace-panels/StablePaneSlot.js";
 import {
   Dialog,
@@ -40,7 +39,6 @@ import {
   type TaskScope,
 } from "../../../shared/index.js";
 import {
-  TASKS_VIEWS,
   setTasksLastView,
   setTasksViewOptions,
   subscribeReveal,
@@ -80,10 +78,8 @@ import {
 import { EmptyState } from "@client/components/ui/empty-state";
 import { KeyValueList } from "@client/components/ui/key-value-list";
 import { SearchableSelectList } from "@client/components/ui/searchable-select";
-import {
-  SegmentedControl,
-  SegmentedControlItem,
-} from "@client/components/ui/segmented-control";
+import { ScopeSegments } from "../scope-view/ScopeSegments.js";
+import { ListHeadingIcon, ViewFilterChips } from "../scope-view/scope-list.js";
 import type { PanelLayoutStore } from "../../workspace-panels/panel-state.js";
 import {
   PanelChrome,
@@ -116,7 +112,7 @@ import {
   type TaskListEnvironment,
 } from "./TaskList.js";
 import { TaskViewOptionsItems } from "./TaskViewOptions.js";
-import { ScopeIcon, useTaskDestinations } from "./task-destinations.js";
+import { useTaskDestinations } from "./task-destinations.js";
 import {
   clampView,
   destinationScope,
@@ -345,7 +341,6 @@ export function TasksPanelContent({
   const searchButtonRef = useRef<HTMLButtonElement>(null);
   const lastFocused = useRef<{ key: string; element: HTMLElement } | null>(null);
   const lastNavOrder = useRef<readonly string[]>([]);
-  const scopeHintId = useId();
 
   const announce = useCallback((message: string) => {
     setAnnouncement("");
@@ -1079,23 +1074,16 @@ export function TasksPanelContent({
   const showLocation =
     (view === "all" && !options.groupByProject) ||
     (view === "project" && options.includeThreadTasks);
-  const locationOf = (task: AssociatedTask) => {
-    const label = destinations.label(task.scope);
-    if (task.scope.kind !== "thread") return { kind: task.scope.kind, label };
-    // A thread task names its thread, its project in All, and where the
-    // thread runs when the project has several locations.
-    const project =
-      view === "all" && task.associatedProjectId !== null
-        ? destinations.projectLabels.get(task.associatedProjectId)
-        : undefined;
-    const location = destinations.threadLocation(task.scope.threadId);
-    return {
-      kind: task.scope.kind,
-      label: [label, project, location].filter(Boolean).join(" · "),
-    };
-  };
-  const filters = viewFilters(options);
-  const filtering = filters.length > 0;
+  // A thread task names its thread, its project in All, and where the
+  // thread runs when the project has several locations.
+  const locationOf = (task: AssociatedTask) =>
+    destinations.location(task.scope, {
+      withProject: view === "all",
+      projectId: task.associatedProjectId,
+    });
+  // Chips for every option in effect; only the Only options narrow the list.
+  const filters = viewFilters(options, view);
+  const filtering = filters.some(({ narrows }) => narrows);
   const renderRow = (task: AssociatedTask) => (
     <TaskRow
       key={task.id}
@@ -1121,7 +1109,7 @@ export function TasksPanelContent({
     const collapsed = collapsedGroups.has(group.key);
     const navKey = `group:${group.key}`;
     return (
-      <li key={group.key} className="tasks-group" data-kind={group.kind}>
+      <li key={group.key} className="list-group" data-kind={group.kind}>
         <TaskListHeading
           variant="group"
           navKey={navKey}
@@ -1129,7 +1117,7 @@ export function TasksPanelContent({
           expanded={!collapsed}
           onToggle={() => toggleGroup(group.key)}
           onKeyDown={onHeadingKeyDown}
-          icon={<ScopeIcon kind={group.kind} className="tasks-heading-icon" />}
+          icon={<ListHeadingIcon kind={group.kind} />}
           label={group.label}
           count={group.count}
         />
@@ -1234,62 +1222,21 @@ export function TasksPanelContent({
   })();
 
   const scopeControl = (
-    <SegmentedControl
+    <ScopeSegments
       aria-label="Task scope view"
-      aria-describedby={scopeHintId}
-      className="tasks-scope"
       value={view}
-      onValueChange={(value) => {
-        const next = TASKS_VIEWS.find((candidate) => candidate === value);
-        if (next) changeView(next);
-      }}
-    >
-      {TASKS_VIEWS.map((candidate) => {
-        const reason = viewUnavailableReason(candidate, context);
-        const segment = (
-          <SegmentedControlItem
-            value={candidate}
-            disabled={reason !== undefined}
-            className="tasks-scope-item"
-            // A phone sheet opens on the view, not the add bar, so the
-            // soft keyboard does not cover the list on every open.
-            data-autofocus={sheet && candidate === view ? "" : undefined}
-            aria-describedby={`${scopeHintId}-${candidate}`}
-            {...scopeDrop.props(candidate, scopeDropTarget(candidate))}
-          >
-            {TASKS_VIEW_LABEL[candidate]}
-            {reason === undefined && (
-              <span className="tasks-scope-count" aria-hidden="true">
-                {viewCount(candidate)}
-              </span>
-            )}
-          </SegmentedControlItem>
-        );
-        const description = (
-          <span id={`${scopeHintId}-${candidate}`} className="sr-only">
-            {reason ?? `${viewCount(candidate)} open`}
-          </span>
-        );
-        return reason === undefined ? (
-          <span key={candidate} className="tasks-scope-slot">
-            {segment}
-            {description}
-          </span>
-        ) : (
-          <UnavailableScopeSlot key={candidate} reason={reason}>
-            {segment}
-            {description}
-          </UnavailableScopeSlot>
-        );
+      onValueChange={changeView}
+      unavailableReason={(candidate) => viewUnavailableReason(candidate, context)}
+      count={viewCount}
+      describeCount={(count) => `${count} open`}
+      segmentProps={(candidate) => ({
+        // A phone sheet opens on the view, not the add bar, so the soft
+        // keyboard does not cover the list on every open.
+        "data-autofocus": sheet && candidate === view ? "" : undefined,
+        ...scopeDrop.props(candidate, scopeDropTarget(candidate)),
       })}
-    </SegmentedControl>
+    />
   );
-  const scopeHint = TASKS_VIEWS.map((candidate) => {
-    const reason = viewUnavailableReason(candidate, context);
-    return reason ? `${TASKS_VIEW_LABEL[candidate]}: ${reason}` : undefined;
-  })
-    .filter(Boolean)
-    .join(" ");
 
   // ⋯: the docked panel folds these into its actions menu instead.
   const moreItems = (
@@ -1366,10 +1313,10 @@ export function TasksPanelContent({
         <Button
           variant="ghost"
           size="icon-sm"
-          className="tasks-header-button"
+          className="tasks-header-button view-options-trigger"
           aria-label="View options"
           title="View options"
-          data-filtering={filtering || undefined}
+          data-filtering={filters.length > 0 || undefined}
         >
           <ListFilter aria-hidden="true" />
         </Button>
@@ -1428,33 +1375,13 @@ export function TasksPanelContent({
       const target = next
         ? filtersRef.current?.querySelector<HTMLElement>(`[data-filter="${next}"]`)
         : rootRef.current?.querySelector<HTMLElement>(
-            '.tasks-scope-item[data-state="on"]',
+            '.scope-segments-item[data-state="on"]',
           );
       target?.focus();
     });
   };
-  const filterChips = filtering && (
-    <div
-      ref={filtersRef}
-      className="tasks-filters"
-      role="group"
-      aria-label="View filters"
-    >
-      {filters.map((filter, index) => (
-        <Button
-          key={filter.key}
-          variant="outline"
-          size="sm"
-          className="tasks-filter-chip"
-          data-filter={filter.key}
-          aria-label={`Remove filter: ${filter.label}`}
-          onClick={() => removeFilter(index)}
-        >
-          {filter.label}
-          <X data-icon="inline-end" aria-hidden="true" />
-        </Button>
-      ))}
-    </div>
+  const filterChips = (
+    <ViewFilterChips ref={filtersRef} chips={filters} onRemove={removeFilter} />
   );
 
   const header = sheetDetail ? (
@@ -1740,9 +1667,6 @@ export function TasksPanelContent({
             {searchRow}
             <div className="tasks-toolbar">
               {scopeControl}
-              <span id={scopeHintId} className="sr-only">
-                {scopeHint}
-              </span>
               {filterChips}
               {!sheet && addRow}
             </div>
@@ -1906,52 +1830,6 @@ export function TasksPanelContent({
         </DialogContent>
       </Dialog>
     </TaskListProvider>
-  );
-}
-
-/**
- * The slot of a scope segment that does not apply. A disabled segment takes
- * neither focus nor pointer events, so its slot shows the reason: a tooltip
- * on hover, and on a tap or click, which is all touch has. Keyboard and
- * screen-reader users have it in the control's description.
- */
-function UnavailableScopeSlot({
-  reason,
-  children,
-}: {
-  readonly reason: string;
-  readonly children: ReactNode;
-}): React.JSX.Element {
-  const [open, setOpen] = useState(false);
-  return (
-    <Tooltip.Provider delayDuration={300}>
-      <Tooltip.Root open={open} onOpenChange={setOpen}>
-        <Tooltip.Trigger asChild>
-          <span
-            className="tasks-scope-slot"
-            data-unavailable=""
-            onClick={(event) => {
-              // The trigger would close the tooltip on a click.
-              event.preventDefault();
-              setOpen(true);
-            }}
-          >
-            {children}
-          </span>
-        </Tooltip.Trigger>
-        <Tooltip.Portal>
-          <Tooltip.Content
-            className="lineage-tooltip"
-            side="bottom"
-            sideOffset={6}
-            collisionPadding={8}
-          >
-            {reason}
-            <Tooltip.Arrow className="lineage-tooltip-arrow" />
-          </Tooltip.Content>
-        </Tooltip.Portal>
-      </Tooltip.Root>
-    </Tooltip.Provider>
   );
 }
 

@@ -786,14 +786,13 @@ describe("PanelLayout singleton surfaces", () => {
     expect(store.hasPanel("workpads")).toBe(true);
   });
 
-  it("draws the back step and ⋯ items a tenant publishes in its panel header", async () => {
+  it("draws the ⋯ items a tenant publishes in its panel header", async () => {
     const onRename = vi.fn();
     function WorkpadFixture({ context }: { context: Parameters<WorkspacePanelTenant["render"]>[0] }) {
       const [reading, setReading] = useState(true);
       const items = useMemo(() => reading ? <DropdownMenuItem onSelect={onRename}>Rename…</DropdownMenuItem> : undefined, [reading]);
-      useEffect(() => { context.host.setBack(reading ? { label: "Back to workpads", onBack: () => setReading(false) } : undefined); }, [context.host, reading]);
       useEffect(() => { context.host.setMenuItems(items); }, [context.host, items]);
-      return <span>{reading ? "Document" : "List"}</span>;
+      return reading ? <button type="button" onClick={() => setReading(false)}>Back to workpads</button> : <span>List</span>;
     }
     const store = setup({ extraTenants: [{ ...filesTenant(), id: "workpads", title: "Workpads", scope: "global", render: context => <WorkpadFixture context={context} /> }] });
     act(() => store.openPanel("workpads"));
@@ -808,9 +807,9 @@ describe("PanelLayout singleton surfaces", () => {
     fireEvent.click(screen.getByRole("menuitem", { name: "Rename…" }));
     expect(onRename).toHaveBeenCalledOnce();
     await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
-    fireEvent.click(within(header).getByRole("button", { name: "Back to workpads" }));
+    fireEvent.click(screen.getByRole("button", { name: "Back to workpads" }));
     expect(await screen.findByText("List")).toBeInTheDocument();
-    expect(within(header).queryByRole("button", { name: "Back to workpads" })).toBeNull();
+    // Withdrawn items leave the menu.
     expect(await menuRows()).toEqual(["Left", "Right", "Top", "Bottom"]);
   });
 

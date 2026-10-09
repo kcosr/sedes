@@ -1,5 +1,4 @@
 import { useMemo } from "react";
-import { Folder, Globe, MessageSquare } from "lucide-react";
 import type {
   NormalizedApplicationSnapshot,
   TaskScope,
@@ -10,24 +9,10 @@ import {
 } from "../../app/project-locations.js";
 import type { Route } from "../../app/router.js";
 import type { SearchableSelectOption } from "../ui/searchable-select.js";
-import {
-  scopeKey,
-  type TaskGroupKind,
-  type TasksContext,
-} from "./task-view-model.js";
+import { ScopeIcon, type ScopeLocationLabel } from "../scope-view/scope-list.js";
+import { scopeKey, type TasksContext } from "./task-view-model.js";
 
-/** The icon of a scope kind: threads, projects and Global read the same everywhere in Tasks. */
-export function ScopeIcon({
-  kind,
-  className,
-}: {
-  readonly kind: TaskGroupKind | TaskScope["kind"];
-  readonly className?: string;
-}): React.JSX.Element {
-  const Icon =
-    kind === "global" ? Globe : kind === "thread" ? MessageSquare : Folder;
-  return <Icon className={className} aria-hidden="true" />;
-}
+export { ScopeIcon };
 
 export interface TaskDestinations {
   /** The chat the panel follows. */
@@ -40,8 +25,20 @@ export interface TaskDestinations {
    * only what tells its location apart ("aw-personal", a folder).
    */
   threadLocation(threadId: string): string | undefined;
+  /** The project of a thread's location, from the snapshot. */
+  threadProjectId(threadId: string): string | undefined;
   /** A scope's short name: "Global", the project's label or the thread's title. */
   label(scope: TaskScope): string;
+  /**
+   * Where an item belongs, for a row in a list that mixes scopes: Global, the
+   * project's label, or the thread's title, then (with `withProject`) its
+   * project and, in a project with several locations, where the thread runs.
+   * `projectId` names the thread's project when the item knows it already.
+   */
+  location(
+    scope: TaskScope,
+    options?: { readonly withProject?: boolean; readonly projectId?: string | null },
+  ): ScopeLocationLabel;
   /**
    * Every place a task can belong to, for "Belongs to" and Move to ›
    * Choose…: this thread, this project and Global first, then the other
@@ -127,12 +124,29 @@ export function useTaskDestinations(
         ? undefined
         : projectLocations.locationTag(workspaceId);
     };
+    const threadProjectId = (threadId: string) => {
+      const workspaceId = threadWorkspaces.get(threadId);
+      return workspaceList.find(({ id }) => id === workspaceId)?.projectId;
+    };
     const label = (scope: TaskScope): string => {
       if (scope.kind === "global") return "Global";
       if (scope.kind === "project") {
         return projectLabels.get(scope.projectId) ?? "Unavailable project";
       }
       return threadTitles.get(scope.threadId) ?? "Unavailable thread";
+    };
+    const location = (
+      scope: TaskScope,
+      { withProject = false, projectId }: { readonly withProject?: boolean; readonly projectId?: string | null } = {},
+    ): ScopeLocationLabel => {
+      const name = label(scope);
+      if (scope.kind !== "thread") return { kind: scope.kind, label: name };
+      const owner = projectId === undefined ? threadProjectId(scope.threadId) : projectId;
+      const project = withProject && owner ? projectLabels.get(owner) : undefined;
+      return {
+        kind: "thread",
+        label: [name, project, threadLocation(scope.threadId)].filter(Boolean).join(" · "),
+      };
     };
     const compare = (left: SearchableSelectOption, right: SearchableSelectOption) =>
       left.label.localeCompare(right.label, undefined, { numeric: true }) ||
@@ -258,7 +272,9 @@ export function useTaskDestinations(
       projectLabels,
       threadTitles,
       threadLocation,
+      threadProjectId,
       label,
+      location,
       options,
     };
   }, [threads, projects, workspaces, environments, routeThreadId]);

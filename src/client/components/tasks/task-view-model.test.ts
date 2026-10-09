@@ -80,6 +80,10 @@ describe("views", () => {
       viewUnavailableReason("project", { threadArchived: true, project: context.project! }),
     ).toBeUndefined();
     expect(viewUnavailableReason("all", {})).toBeUndefined();
+    // Workpads names its own items.
+    expect(viewUnavailableReason("thread", { threadArchived: true }, "workpads")).toBe(
+      "This thread is archived. Restore it to see its workpads.",
+    );
     expect(clampView("thread", {})).toBe("global");
     expect(clampView("thread", { project: context.project! })).toBe("project");
     expect(clampView("all", {})).toBe("all");
@@ -146,16 +150,26 @@ describe("search, filters and order", () => {
     expect(matchesOnly(task({ backlog: true, pinned: true }), both)).toBe(true);
     expect(matchesOnly(task({ backlog: true }), both)).toBe(false);
     expect(matchesOnly(task({ pinned: true }), both)).toBe(false);
-    expect(viewFilters(TASKS_VIEW_OPTIONS_DEFAULTS.thread)).toEqual([]);
+    expect(viewFilters(TASKS_VIEW_OPTIONS_DEFAULTS.thread, "thread")).toEqual([]);
     // Sorting and search scope do not narrow the list.
-    expect(viewFilters({ ...TASKS_VIEW_OPTIONS_DEFAULTS.thread, sort: "title", searchNotes: true })).toEqual([]);
+    expect(viewFilters({ ...TASKS_VIEW_OPTIONS_DEFAULTS.thread, sort: "title", searchNotes: true }, "thread")).toEqual([]);
     expect(
-      viewFilters({ ...TASKS_VIEW_OPTIONS_DEFAULTS.thread, onlyPinned: true, onlyBacklog: true, onlyWithNotes: true }),
+      viewFilters({ ...TASKS_VIEW_OPTIONS_DEFAULTS.thread, onlyPinned: true, onlyBacklog: true, onlyWithNotes: true }, "thread"),
     ).toEqual([
-      { key: "pinned", label: "Pinned only", clear: { onlyPinned: false } },
-      { key: "backlog", label: "Backlog only", clear: { onlyBacklog: false } },
-      { key: "notes", label: "With notes", clear: { onlyWithNotes: false } },
+      { key: "pinned", label: "Pinned only", clear: { onlyPinned: false }, narrows: true },
+      { key: "backlog", label: "Backlog only", clear: { onlyBacklog: false }, narrows: true },
+      { key: "notes", label: "With notes", clear: { onlyWithNotes: false }, narrows: true },
     ]);
+  });
+
+  it("chips Project's thread tasks, which add to the list rather than narrow it", () => {
+    const withThreads = { ...TASKS_VIEW_OPTIONS_DEFAULTS.project, includeThreadTasks: true };
+    expect(viewFilters(withThreads, "project")).toEqual([
+      { key: "threads", label: "Thread tasks", clear: { includeThreadTasks: false }, narrows: false },
+    ]);
+    // The option belongs to Project; other views ignore a stored value.
+    expect(viewFilters(withThreads, "all")).toEqual([]);
+    expect(viewFilters({ ...withThreads, onlyPinned: true }, "project").map(({ key }) => key)).toEqual(["pinned", "threads"]);
   });
 
   it("puts pinned tasks first in every sort, and never reorders on edit", () => {

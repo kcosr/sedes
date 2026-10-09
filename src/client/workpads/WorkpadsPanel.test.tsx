@@ -5,10 +5,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ApplicationClientStore } from "../stores/ApplicationClientStore.js";
 import { ApiError } from "../api/ApiClient.js";
 import * as markdownChecklists from "../components/conversation/markdown-checklists.js";
-import type { Workpad, WorkpadDraft, WorkpadRevision } from "../../shared/protocol/workpads.js";
+import type { Workpad, WorkpadCounts, WorkpadDraft, WorkpadRevision, WorkpadSummary } from "../../shared/protocol/workpads.js";
 import { WorkpadsPanel } from "./WorkpadsPanel.js";
 import { workpadsTenant } from "./workpads-tenant.js";
-import type { WorkspacePanelBack, WorkspacePanelContext, WorkspacePanelHost } from "../workspace-panels/registry.js";
+import type { WorkspacePanelContext, WorkspacePanelHost } from "../workspace-panels/registry.js";
+import { CLOSE_WORKPAD_EVENT } from "../app/android-back.js";
+import { getWorkpadsPanelPreferences, setWorkpadsLastView, setWorkpadsViewOptions } from "../app/workpads-panel-store.js";
 import { PanelChrome, type PanelChromeStatus } from "../workspace-panels/PanelChrome.js";
 import { StablePaneSlot } from "../workspace-panels/StablePaneSlot.js";
 import { installNavigationBlocker, navigate } from "../app/router.js";
@@ -17,10 +19,13 @@ const time = "2026-09-08T00:00:00.000Z";
 const pad: Workpad = { id: "pad", title: "Integration", scope: { kind: "global" }, revision: 1, content: "Original", attribution: [], author, archivedAt: null, createdAt: time, updatedAt: time };
 const revision: WorkpadRevision = { ...pad, workpadId: pad.id, changes: [] };
 const initialDraft: WorkpadDraft = { workpadId: pad.id, revision: 0, baseRevision: 1, content: pad.content, updatedAt: time };
+const viewCounts = (value: Partial<WorkpadCounts["active"]> = {}): WorkpadCounts["active"] => ({ thread: null, project: null, projectWithThreads: null, global: 0, all: 0, ...value });
+const noCounts: WorkpadCounts = { active: viewCounts(), archived: viewCounts() };
 function fixture(overrides: Record<string, unknown> = {}) {
   let savedDraft = initialDraft;
   const api = {
-    listWorkpads: vi.fn(async () => ({ items: [pad] })),
+    listWorkpads: vi.fn(async (_request?: Record<string, unknown>): Promise<{ items: WorkpadSummary[]; nextCursor?: string }> => ({ items: [pad] })),
+    getWorkpadCounts: vi.fn(async (_request?: { threadId?: string; projectId?: string }): Promise<WorkpadCounts> => noCounts),
     getWorkpad: vi.fn(async () => pad),
     getWorkpadRevision: vi.fn(async () => revision),
     listWorkpadRevisions: vi.fn(async (_id: string, _cursor?: string): Promise<{ items: WorkpadRevision[]; nextCursor?: string }> => ({ items: [revision] })),
@@ -50,7 +55,6 @@ function panelContext(store: ApplicationClientStore) {
     setBusy: vi.fn((busy: boolean) => publish({ busy })),
     setDirty: vi.fn((dirty: boolean) => publish({ dirty })),
     setSubtitle: vi.fn((subtitle?: string) => publish({ subtitle })),
-    setBack: vi.fn((back?: WorkspacePanelBack) => publish({ back })),
     setMenuItems: vi.fn((menuItems?: ReactNode) => publish({ menuItems })),
   };
   published.set(host, { get: () => status, subscribe: listener => { listeners.add(listener); return () => { listeners.delete(listener); }; } });
@@ -81,7 +85,12 @@ const openRow = async (name = "Integration") => { fireEvent.click(await screen.f
 /** Opens a dropdown from its trigger, as Radix expects a primary pointer press. */
 const openMenu = (trigger: string) => { fireEvent.pointerDown(screen.getByRole("button", { name: trigger }), { button: 0, ctrlKey: false }); return screen.getAllByRole("menu").at(-1)!; };
 const headerMenu = () => openMenu("Workpads panel actions");
+/** The open workpad's own ⋯, in its toolbar. */
+const documentMenu = () => openMenu("Workpad actions");
 const viewOptions = () => openMenu("View options");
+/** ‹ Workpads, in the open workpad's toolbar. */
+const back = () => screen.getByRole("button", { name: "Back to workpads" });
+const segment = (name: string) => within(screen.getByRole("radiogroup", { name: "Workpad scope" })).getByRole("radio", { name });
 const closeMenu = () => { fireEvent.keyDown(screen.getAllByRole("menu").at(-1)!, { key: "Escape" }); };
 const choose = (name: string | RegExp) => { fireEvent.click(screen.getByRole("menuitem", { name })); };
 const menuLabels = (menu: HTMLElement) => [...menu.querySelectorAll("[role^=menuitem]")].map(item => item.textContent);
@@ -89,16 +98,11 @@ const menuLabels = (menu: HTMLElement) => [...menu.querySelectorAll("[role^=menu
 const openSubmenu = (name: string) => { fireEvent.click(screen.getByRole("menuitem", { name })); return screen.getByRole("menu", { name }); };
 const addRow = () => screen.getByRole("textbox", { name: "New workpad title" }) as HTMLInputElement;
 const create = (title: string) => { fireEvent.change(addRow(), { target: { value: title } }); fireEvent.submit(addRow().form!); };
-/** The open workpad's header ⋯ › Rename…, then the dialog's title and Rename. */
+/** The open workpad's ⋯ › Rename…, then the dialog's title and Rename. */
 const rename = (title: string) => {
-  headerMenu(); choose("Rename…");
+  documentMenu(); choose("Rename…");
   fireEvent.change(screen.getByRole("textbox", { name: "Workpad title" }), { target: { value: title } });
   fireEvent.click(screen.getByRole("button", { name: "Rename" }));
-};
-/** View options › Browse another thread or project…, then one destination. */
-const browse = (option: string | RegExp) => {
-  viewOptions(); choose("Browse another thread or project…");
-  fireEvent.click(within(screen.getByRole("dialog", { name: "Browse workpads" })).getByRole("option", { name: option }));
 };
 const openSearch = () => { fireEvent.click(screen.getByRole("button", { name: "Search workpads" })); return screen.getByRole("textbox", { name: "Search workpads" }); };
 const chooseRevision = (name: RegExp) => { openMenu("Revision history"); fireEvent.click(screen.getByRole("menuitemradio", { name })); };
@@ -106,19 +110,26 @@ const startEditing = async () => {
   fireEvent.click(await screen.findByRole("button", { name: "Edit workpad" }));
   return screen.findByRole("textbox", { name: "Workpad content" });
 };
-/** The header ⋯ › Discard draft…, then the confirmation. */
+/** The open workpad's ⋯ › Discard draft…, then the confirmation. */
 const discardDraft = async () => {
-  headerMenu(); choose("Discard draft…");
+  documentMenu(); choose("Discard draft…");
   await act(async () => { fireEvent.click(within(screen.getByRole("dialog", { name: "Discard draft?" })).getByRole("button", { name: "Discard draft" })); });
 };
+/** Viewer preferences live in local storage; each test starts from the defaults. */
+function resetStorage() {
+  window.localStorage.clear();
+  // Module caches drop their snapshot on a storage event without a key.
+  window.dispatchEvent(new StorageEvent("storage", { key: null }));
+}
 beforeEach(() => {
+  resetStorage();
   navigate("/", { replace: true });
   // PanelChrome reads the single-pane query; this is the docked desktop layout.
   vi.stubGlobal("matchMedia", (query: string) => ({ matches: false, media: query, onchange: null, addEventListener: vi.fn(), removeEventListener: vi.fn(), dispatchEvent: vi.fn() }));
   // The destination pickers scroll their active option into view; jsdom has no layout.
   Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: vi.fn() });
 });
-afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); Reflect.deleteProperty(HTMLElement.prototype, "scrollIntoView"); });
+afterEach(() => { cleanup(); resetStorage(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); Reflect.deleteProperty(HTMLElement.prototype, "scrollIntoView"); });
 describe("WorkpadsPanel", () => {
   it("commits the displayed checklist revision once, preserving focus and never saving a draft", async () => {
     const content = "- [ ] First\n- [ ] Second\n";
@@ -230,7 +241,7 @@ describe("WorkpadsPanel", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "Reload workpad" })).not.toBeDisabled());
     fireEvent.click(screen.getByRole("button", { name: "Dismiss error" }));
     expect(screen.getByRole("alert")).toHaveTextContent("Reload this workpad");
-    fireEvent.click(within(header()).getByRole("button", { name: "Back to workpads" }));
+    fireEvent.click(back());
     await screen.findByRole("button", { name: "Integration" });
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Reload workpad" })).not.toBeInTheDocument();
@@ -659,7 +670,7 @@ describe("WorkpadsPanel", () => {
     vi.useFakeTimers();
     fireEvent.change(editor, { target: { value: "Pending typing" } });
     await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
-    headerMenu();
+    documentMenu();
     expect(screen.getByRole("menuitem", { name: "Discard draft…" })).toHaveAttribute("aria-disabled", "true");
     choose("Discard draft…");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
@@ -785,25 +796,27 @@ describe("WorkpadsPanel", () => {
     };
   }
 
-  it("scopes Project to the thread's project and lists each project once by its label", async () => {
+  it("scopes Project to the thread's project and names destinations after the followed thread", async () => {
     const { store: base, api } = fixture();
     const { store } = withSnapshot(base, projectCatalog);
     // The thread runs in acme-web's build-host location.
     render(<Panel context={{ ...panelContext(store), threadId: "thread-build", workspaceId: "web-build" }} />);
     await waitFor(() => expect(api.listWorkpads).toHaveBeenCalled());
-    fireEvent.click(screen.getByRole("radio", { name: "Project" }));
+    fireEvent.click(segment("Project"));
     expect(addRow()).toHaveAttribute("placeholder", "New workpad in this project…");
     await waitFor(() => expect(api.listWorkpads).toHaveBeenLastCalledWith(expect.objectContaining({
       scope: { kind: "project", projectId: "project-web" }, scopeMode: "exact",
     })));
-    // Browsing offers each project once, the one in view selected.
-    viewOptions(); choose("Browse another thread or project…");
-    const dialog = screen.getByRole("dialog", { name: "Browse workpads" });
+    // Move to › Choose… leads with the followed thread and project, then
+    // offers each other project once by its label.
+    await screen.findByRole("button", { name: "Integration" });
+    openMenu("Actions for “Integration”");
+    fireEvent.click(within(openSubmenu("Move to")).getByRole("menuitem", { name: "Choose…" }));
+    const dialog = screen.getByRole("dialog", { name: "Move workpad" });
+    expect(within(dialog).getByRole("option", { name: "This thread · Build thread" })).toBeInTheDocument();
+    expect(within(dialog).getByRole("option", { name: "This project · acme-web" })).toBeInTheDocument();
     const projects = within(within(dialog).getByRole("group", { name: "Projects" })).getAllByRole("option");
-    expect(projects.map(option => option.textContent)).toEqual([
-      "acme-web 2 locations · Local, Build host", "docs /src/docs", "docs · Build host /srv/docs",
-    ]);
-    expect(projects.map(option => option.getAttribute("aria-selected"))).toEqual(["true", "false", "false"]);
+    expect(projects.map(option => option.textContent)).toEqual(["docs /src/docs", "docs · Build host /srv/docs"]);
   });
 
   it("adopts the thread's project when the snapshot arrives after the panel", async () => {
@@ -812,26 +825,21 @@ describe("WorkpadsPanel", () => {
     render(<Panel context={{ ...panelContext(store), threadId: "thread-build", workspaceId: "docs-build" }} />);
     publish(projectCatalog);
     fireEvent.click(screen.getByRole("radio", { name: "Project" }));
-    // The thread's own project: nothing is being browsed.
     expect(addRow()).toHaveAttribute("placeholder", "New workpad in this project…");
-    expect(screen.queryByRole("button", { name: /^Remove filter/ })).not.toBeInTheDocument();
     await waitFor(() => expect(api.listWorkpads).toHaveBeenLastCalledWith(expect.objectContaining({
       scope: { kind: "project", projectId: "project-docs-build" },
     })));
   });
 
-  it("follows the active project after a manual project selection", async () => {
+  it("follows the thread's project when the chat moves to another project", async () => {
     const { store: base, api } = fixture();
     const { store } = withSnapshot(base, projectCatalog);
     const context = { ...panelContext(store), threadId: "thread-build", workspaceId: "web-build" };
     const view = render(<Panel context={context} />);
-    fireEvent.click(screen.getByRole("radio", { name: "Project" }));
-    browse(/^docs · Build host/);
-    await waitFor(() => expect(api.listWorkpads).toHaveBeenLastCalledWith(expect.objectContaining({ scope: { kind: "project", projectId: "project-docs-build" } })));
-    expect(screen.getByRole("button", { name: "Remove filter: docs · Build host" })).toBeInTheDocument();
+    fireEvent.click(segment("Project"));
+    await waitFor(() => expect(api.listWorkpads).toHaveBeenLastCalledWith(expect.objectContaining({ scope: { kind: "project", projectId: "project-web" } })));
     view.rerender(<Panel context={{ ...context, threadId: "thread-docs", workspaceId: "docs-local" }} />);
-    expect(screen.queryByRole("button", { name: /^Remove filter/ })).not.toBeInTheDocument();
-    expect(screen.getByRole("radio", { name: "Project" })).toBeChecked();
+    expect(segment("Project")).toBeChecked();
     await waitFor(() => expect(api.listWorkpads).toHaveBeenLastCalledWith(expect.objectContaining({ scope: { kind: "project", projectId: "project-docs" } })));
   });
 
@@ -847,39 +855,35 @@ describe("WorkpadsPanel", () => {
     expect(createWorkpad).toHaveBeenCalled();
     expect(context.host.setBusy).toHaveBeenLastCalledWith(true);
     expect(screen.getByRole("radio", { name: "Global" })).toBeDisabled();
-    // The thread or project in view cannot be swapped out either.
+    // The view's options cannot change what it lists either.
     viewOptions();
-    expect(screen.getByRole("menuitem", { name: "Browse another thread or project…" })).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByRole("menuitemradio", { name: "Title" })).toHaveAttribute("aria-disabled", "true");
     closeMenu();
     fireEvent.click(screen.getByRole("radio", { name: "Global" }));
     expect(screen.getByRole("radio", { name: kind })).toBeChecked();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     await act(async () => { resolveCreated(pad); });
     expect(await screen.findByRole("textbox", { name: "Workpad content" })).toHaveValue("Original");
-    fireEvent.click(within(header()).getByRole("button", { name: "Back to workpads" }));
+    fireEvent.click(back());
     await waitFor(() => expect(screen.getByRole("radio", { name: "Global" })).toBeEnabled());
     expect(context.host.setBusy).toHaveBeenLastCalledWith(false);
     viewOptions();
-    expect(screen.getByRole("menuitem", { name: "Browse another thread or project…" })).not.toHaveAttribute("aria-disabled");
+    expect(screen.getByRole("menuitemradio", { name: "Title" })).not.toHaveAttribute("aria-disabled");
   });
 
-  it("preserves a manual Thread target when only the active workspace's project changes", async () => {
+  it("keeps a Thread editor when only the thread's project changes", async () => {
     const { store: base, api } = fixture();
-    const { store, publish } = withSnapshot(base, projectCatalog, [
-      { id: "thread-build", title: { text: "Build thread" } },
-      { id: "thread-manual", title: { text: "Manual thread" } },
-    ]);
+    const { store, publish } = withSnapshot(base, projectCatalog);
     render(<Panel context={{ ...panelContext(store), threadId: "thread-build", workspaceId: "web-build" }} />);
-    browse(/^Manual thread/);
     await openRow();
     fireEvent.click(await screen.findByRole("button", { name: "Edit workpad" }));
     const editor = await screen.findByRole("textbox", { name: "Workpad content" });
     vi.useFakeTimers();
-    fireEvent.change(editor, { target: { value: "Manual thread typing" } });
+    fireEvent.change(editor, { target: { value: "Thread typing" } });
     publish({ ...projectCatalog, workspaces: projectCatalog.workspaces.map(workspace => workspace.id === "web-build" ? { ...workspace, projectId: "project-docs" } : workspace) });
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    expect(editor).toHaveValue("Manual thread typing");
-    expect(api.listWorkpads).toHaveBeenLastCalledWith(expect.objectContaining({ scope: { kind: "thread", threadId: "thread-manual" } }));
+    expect(editor).toHaveValue("Thread typing");
+    expect(api.listWorkpads).toHaveBeenLastCalledWith(expect.objectContaining({ scope: { kind: "thread", threadId: "thread-build" } }));
   });
 
   it.each([false, true])("honors one leave confirmation after a catalog update (project changed: %s)", async reassigned => {
@@ -1016,90 +1020,107 @@ describe("WorkpadsPanel", () => {
     fireEvent.click(screen.getByRole("radio", { name: "Project" }));
     await openRow();
     await screen.findByText("Original");
-    const lists = api.listWorkpads.mock.calls.length;
     vi.useFakeTimers();
     view.rerender(<Panel context={{ ...context, threadId: "thread-new", workspaceId: "new-location" }} />);
     expect(screen.queryByText("Original")).not.toBeInTheDocument();
     await act(async () => { await vi.advanceTimersByTimeAsync(200); });
-    expect(api.listWorkpads).toHaveBeenCalledTimes(lists);
+    // Without a project, Project is unavailable and Workpads shows Global, as Tasks does.
+    expect(segment("Project")).toBeDisabled();
+    expect(segment("Global")).toBeChecked();
+    expect(api.listWorkpads).toHaveBeenLastCalledWith(expect.objectContaining({ scope: { kind: "global" }, scopeMode: "exact" }));
     publish({ ...projectCatalog, workspaces: [...projectCatalog.workspaces, { ...projectCatalog.workspaces[2], id: "new-location" }] });
     await act(async () => { await vi.advanceTimersByTimeAsync(200); });
     expect(api.listWorkpads).toHaveBeenLastCalledWith(expect.objectContaining({ scope: { kind: "project", projectId: "project-docs" } }));
   });
 
-  it("names a project workpad's project in its nested row and document meta line", async () => {
-    const projectPad: Workpad = { ...pad, scope: { kind: "project", projectId: "project-docs-build" } };
+  it("names where each row belongs in lists that mix scopes, and the open workpad's place", async () => {
+    const projectPad: Workpad = { ...pad, id: "project-pad", title: "Project notes", scope: { kind: "project", projectId: "project-web" } };
+    const threadPad: Workpad = { ...pad, id: "thread-pad", title: "Thread notes", scope: { kind: "thread", threadId: "thread-build" } };
+    const globalPad: Workpad = { ...pad, id: "global-pad", title: "Global notes" };
+    const listWorkpads = vi.fn(async (request?: Record<string, unknown>) => ({
+      items: request?.scopeMode === "subtree" ? (request.scope as { kind: string }).kind === "global" ? [globalPad, projectPad, threadPad] : [projectPad, threadPad]
+        : (request?.scope as { kind: string }).kind === "project" ? [projectPad] : [pad],
+    }));
     const { store: base } = fixture({
-      listWorkpads: vi.fn(async () => ({ items: [projectPad] })),
+      listWorkpads,
       getWorkpad: vi.fn(async () => projectPad),
       getWorkpadRevision: vi.fn(async () => ({ ...revision, scope: projectPad.scope })),
     });
     const { store } = withSnapshot(base, projectCatalog);
-    const context = panelContext(store);
-    render(<Panel context={context} />);
-    // One scope in view needs no label on its rows, nor your own name.
-    expect(await screen.findByRole("button", { name: "Integration" })).toHaveTextContent(/^Integration$/);
+    render(<Panel context={{ ...panelContext(store), threadId: "thread-build", workspaceId: "web-build" }} />);
+    // One scope in view needs no line on its rows.
+    expect(await screen.findByRole("button", { name: "Integration" })).not.toHaveAttribute("aria-describedby");
+    fireEvent.click(segment("Project"));
     viewOptions();
-    fireEvent.click(screen.getByRole("menuitemcheckbox", { name: "Include nested scopes" }));
-    // View options stay open for another pick.
+    fireEvent.click(screen.getByRole("menuitemcheckbox", { name: "Include thread workpads" }));
     closeMenu();
-    // Mixed scopes name each row's own, a project by its label.
-    const row = await screen.findByRole("button", { name: "IntegrationProject · docs · Build host" });
-    fireEvent.click(row);
+    // Project with its threads' workpads names each row's place, as Tasks
+    // rows do: a thread where it runs, its project having two locations.
+    expect(await screen.findByRole("button", { name: "Thread notes" })).toHaveAccessibleDescription("In Build thread · Build host");
+    expect(screen.getByRole("button", { name: "Project notes" })).toHaveAccessibleDescription("In acme-web");
+    expect(screen.getByRole("button", { name: "Thread notes" }).querySelector(".scope-location")).toHaveTextContent("Build thread · Build host");
+    // All without groups adds a thread's project.
+    setWorkpadsViewOptions("all", { groupByProject: false });
+    fireEvent.click(segment("All"));
+    expect(await screen.findByRole("button", { name: "Global notes" })).toHaveAccessibleDescription("In Global");
+    expect(screen.getByRole("button", { name: "Thread notes" })).toHaveAccessibleDescription("In Build thread · acme-web · Build host");
+    // The open workpad names its place the same way, never a generic kind.
+    fireEvent.click(screen.getByRole("button", { name: "Project notes" }));
     await screen.findByRole("button", { name: "Edit workpad" });
-    expect(document.querySelector(".workpads-doc-meta")).toHaveTextContent(/^Revision 1 · .+ · You · Project · docs · Build host$/);
-    expect(context.host.setSubtitle).toHaveBeenLastCalledWith("Integration");
-    expect(header()).toHaveTextContent(/^WorkpadsIntegration$/);
+    expect(document.querySelector(".workpads-doc-meta")).toHaveTextContent(/^Revision 1 · .+ · You · acme-web$/);
+    expect(document.querySelector(".workpads-doc-scope .lucide-folder")).not.toBeNull();
   });
 
   describe("header, toolbar and document controls", () => {
-    it("publishes a back step while a workpad is open and clears it on leaving", async () => {
+    it("keeps the panel header and scope control while a workpad is open, with ‹ Workpads in its toolbar", async () => {
       const { store, api } = fixture();
       const context = panelContext(store);
       const view = render(<Panel context={context} />);
-      await screen.findByRole("button", { name: "Integration" });
-      expect(within(header()).queryByRole("button", { name: "Back to workpads" })).not.toBeInTheDocument();
-      expect(header().querySelector(".lucide-notepad-text")).not.toBeNull();
       await openRow();
-      // The back step takes the tenant icon's place, the title follows as the subtitle.
-      const back = await within(header()).findByRole("button", { name: "Back to workpads" });
-      expect(context.host.setBack).toHaveBeenLastCalledWith({ label: "Back to workpads", disabled: false, onBack: expect.any(Function) });
-      expect(header().querySelector(".lucide-notepad-text")).toBeNull();
-      expect(header()).toHaveTextContent(/^WorkpadsIntegration$/);
+      await screen.findByRole("button", { name: "Edit workpad" });
+      // The header stays Workpads, with its icon, search and View options.
+      expect(header()).toHaveTextContent(/^Workpads$/);
+      expect(header().querySelector(".lucide-notepad-text")).not.toBeNull();
+      expect(within(header()).getByRole("button", { name: "Search workpads" })).toBeInTheDocument();
+      expect(within(header()).getByRole("button", { name: "View options" })).toBeInTheDocument();
+      expect(within(header()).queryByRole("button", { name: "Back to workpads" })).not.toBeInTheDocument();
+      expect(context.host.setSubtitle).not.toHaveBeenCalled();
+      // The scope control stays above the document; the add row and chips do not.
+      expect(segment("Global")).toBeChecked();
+      expect(screen.queryByRole("textbox", { name: "New workpad title" })).not.toBeInTheDocument();
+      // The document's own toolbar: ‹ Workpads, then the title, then its actions.
+      const toolbar = document.querySelector(".workpads-doc-toolbar") as HTMLElement;
+      expect(toolbar.firstElementChild).toBe(back());
+      expect(back()).toHaveTextContent("Workpads");
+      expect(within(toolbar).getByRole("heading", { name: "Integration" })).toBeInTheDocument();
+      expect(within(toolbar).getByRole("button", { name: "Workpad actions" })).toBeInTheDocument();
       // Leaving an editor syncs its text first.
       fireEvent.change(await startEditing(), { target: { value: "Synced on the way out" } });
-      fireEvent.click(back);
+      fireEvent.click(back());
       await screen.findByRole("button", { name: "Integration" });
       expect(api.saveWorkpadDraft).toHaveBeenCalledWith("pad", { expectedRevision: 0, baseRevision: 1, content: "Synced on the way out" });
-      expect(context.host.setBack).toHaveBeenLastCalledWith(undefined);
-      expect(context.host.setSubtitle).toHaveBeenLastCalledWith(undefined);
-      expect(within(header()).queryByRole("button", { name: "Back to workpads" })).not.toBeInTheDocument();
-      expect(header()).toHaveTextContent(/^Workpads$/);
-      // Unmounting with a workpad open takes its header additions along.
-      await openRow();
-      await within(header()).findByRole("button", { name: "Back to workpads" });
+      expect(screen.queryByRole("button", { name: "Back to workpads" })).not.toBeInTheDocument();
+      expect(addRow()).toBeInTheDocument();
       view.unmount();
-      expect(context.host.setBack).toHaveBeenLastCalledWith(undefined);
       expect(context.host.setMenuItems).toHaveBeenLastCalledWith(undefined);
     });
 
-    it("adds Rename, Move to and Archive to the header ⋯, and only Discard draft… while editing", async () => {
+    it("keeps document actions in the workpad's own ⋯, and only Discard draft… while editing", async () => {
       const { store } = fixture();
       render(<Panel context={panelContext(store)} />);
-      await screen.findByRole("button", { name: "Integration" });
-      const dock = ["Left", "Right", "Top", "Bottom"];
-      expect(menuLabels(headerMenu())).toEqual(dock);
-      closeMenu();
       await openRow();
       await screen.findByRole("button", { name: "Edit workpad" });
-      expect(menuLabels(headerMenu())).toEqual([...dock, "Rename…", "Move to", "Archive"]);
+      // The panel's ⋯ is the panel's: Dock alone outside All's groups.
+      expect(menuLabels(headerMenu())).toEqual(["Left", "Right", "Top", "Bottom"]);
+      closeMenu();
+      expect(menuLabels(documentMenu())).toEqual(["Rename…", "Move to", "Archive"]);
       closeMenu();
       await startEditing();
-      expect(menuLabels(headerMenu())).toEqual([...dock, "Discard draft…"]);
+      expect(menuLabels(documentMenu())).toEqual(["Discard draft…"]);
       closeMenu();
       fireEvent.click(screen.getByRole("button", { name: "Done editing" }));
       await screen.findByRole("button", { name: "Edit workpad" });
-      expect(menuLabels(headerMenu())).toEqual([...dock, "Rename…", "Move to", "Archive"]);
+      expect(menuLabels(documentMenu())).toEqual(["Rename…", "Move to", "Archive"]);
     });
 
     it("creates from the add row and opens the new workpad in edit mode", async () => {
@@ -1126,31 +1147,25 @@ describe("WorkpadsPanel", () => {
       expect(api.getWorkpad).toHaveBeenCalledWith("created");
       expect(api.getWorkpadDraft).toHaveBeenCalledWith("created");
       expect(screen.getByRole("button", { name: "Done editing" })).toBeInTheDocument();
-      expect(context.host.setSubtitle).toHaveBeenLastCalledWith("Launch notes");
-      fireEvent.click(within(header()).getByRole("button", { name: "Back to workpads" }));
+      expect(screen.getByRole("heading", { name: "Launch notes" })).toBeInTheDocument();
+      fireEvent.click(back());
       await waitFor(() => expect(addRow()).toHaveValue(""));
     });
 
-    it("names the add row after the scope it creates in", async () => {
-      const { store: base, api } = fixture();
+    it("names the add row after the scope it creates in, and adds from All to Global", async () => {
+      const createWorkpad = vi.fn(async () => pad);
+      const { store: base } = fixture({ createWorkpad });
       const { store } = withSnapshot(base, projectCatalog);
       render(<Panel context={{ ...panelContext(store), threadId: "thread-build", workspaceId: "web-build" }} />);
       expect(addRow()).toHaveAttribute("placeholder", "New workpad in this thread…");
-      fireEvent.click(screen.getByRole("radio", { name: "Project" }));
+      fireEvent.click(segment("Project"));
       expect(addRow()).toHaveAttribute("placeholder", "New workpad in this project…");
-      fireEvent.click(screen.getByRole("radio", { name: "Global" }));
+      fireEvent.click(segment("Global"));
       expect(addRow()).toHaveAttribute("placeholder", "New global workpad…");
-      browse(/^Manual thread/);
-      expect(addRow()).toHaveAttribute("placeholder", "New workpad in Manual thread…");
-      browse(/^docs · Build host/);
-      expect(addRow()).toHaveAttribute("placeholder", "New workpad in docs · Build host…");
-      await waitFor(() => expect(api.listWorkpads).toHaveBeenLastCalledWith(expect.objectContaining({ scope: { kind: "project", projectId: "project-docs-build" } })));
-      // Archived workpads are not created; the row goes away.
-      viewOptions();
-      fireEvent.click(screen.getByRole("menuitemcheckbox", { name: "Archived" }));
-      // View options stay open for another pick.
-      closeMenu();
-      expect(screen.queryByRole("textbox", { name: "New workpad title" })).not.toBeInTheDocument();
+      fireEvent.click(segment("All"));
+      expect(addRow()).toHaveAttribute("placeholder", "New global workpad…");
+      create("Shared notes");
+      expect(createWorkpad).toHaveBeenCalledWith({ title: "Shared notes", scope: { kind: "global" } });
     });
 
     it("renames and archives a listed workpad from its row ⋯ without opening it", async () => {
@@ -1183,7 +1198,7 @@ describe("WorkpadsPanel", () => {
       await openRow();
       expect(await screen.findByText("This workpad is archived.")).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Edit workpad" })).toBeDisabled();
-      expect(menuLabels(headerMenu())).toContain("Unarchive");
+      expect(menuLabels(documentMenu())).toContain("Unarchive");
       closeMenu();
       fireEvent.click(screen.getByRole("button", { name: "Unarchive" }));
       await waitFor(() => expect(api.updateWorkpad).toHaveBeenCalledWith("pad", { expectedRevision: 1, archived: false }));
@@ -1201,7 +1216,7 @@ describe("WorkpadsPanel", () => {
       expect(meta("Integration")).toHaveAttribute("title", expect.stringMatching(/^Last edited by you · /));
     });
 
-    it("moves the open workpad to Global from the header ⋯", async () => {
+    it("moves the open workpad to Global from its ⋯", async () => {
       const threadPad: Workpad = { ...pad, scope: { kind: "thread", threadId: "first-thread" } };
       const { store, api } = fixture({
         listWorkpads: vi.fn(async () => ({ items: [threadPad] })),
@@ -1212,7 +1227,7 @@ describe("WorkpadsPanel", () => {
       render(<Panel context={{ ...panelContext(store), threadId: "first-thread" }} />);
       await openRow();
       await screen.findByRole("button", { name: "Edit workpad" });
-      headerMenu();
+      documentMenu();
       const move = openSubmenu("Move to");
       expect(menuLabels(move)).toEqual(["This threadCurrent", "This projectNo project", "Global", "Choose…"]);
       expect(within(move).getByRole("menuitem", { name: /^This thread/ })).toHaveAttribute("aria-disabled", "true");
@@ -1269,47 +1284,56 @@ describe("WorkpadsPanel", () => {
       expect(screen.getByRole("textbox", { name: "Workpad content", hidden: true })).toBeInTheDocument();
     });
 
-    it("shows a removable chip while browsing another thread and returns to the current one", async () => {
+    it("shows Include thread workpads as a removable chip and a dot, in Project only", async () => {
       const { store: base, api } = fixture();
       const { store } = withSnapshot(base, projectCatalog);
       render(<Panel context={{ ...panelContext(store), threadId: "thread-build", workspaceId: "web-build" }} />);
-      await waitFor(() => expect(api.listWorkpads).toHaveBeenLastCalledWith(expect.objectContaining({ scope: { kind: "thread", threadId: "thread-build" } })));
-      expect(screen.getByRole("button", { name: "View options" })).not.toHaveAttribute("data-filtering");
-      browse(/^Manual thread/);
-      await waitFor(() => expect(api.listWorkpads).toHaveBeenLastCalledWith(expect.objectContaining({ scope: { kind: "thread", threadId: "thread-manual" } })));
-      expect(screen.getByRole("radio", { name: "Thread" })).toBeChecked();
-      expect(screen.getByRole("button", { name: "View options" })).toHaveAttribute("data-filtering", "true");
-      fireEvent.click(screen.getByRole("button", { name: "Remove filter: Manual thread" }));
-      await waitFor(() => expect(api.listWorkpads).toHaveBeenLastCalledWith(expect.objectContaining({ scope: { kind: "thread", threadId: "thread-build" } })));
-      expect(screen.queryByRole("button", { name: /^Remove filter/ })).not.toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "View options" })).not.toHaveAttribute("data-filtering");
-      expect(addRow()).toHaveAttribute("placeholder", "New workpad in this thread…");
+      const options = () => screen.getByRole("button", { name: "View options" });
+      expect(options()).not.toHaveAttribute("data-filtering");
+      fireEvent.click(segment("Project"));
+      viewOptions();
+      fireEvent.click(screen.getByRole("menuitemcheckbox", { name: "Include thread workpads" }));
+      closeMenu();
+      await waitFor(() => expect(api.listWorkpads).toHaveBeenLastCalledWith(expect.objectContaining({ scope: { kind: "project", projectId: "project-web" }, scopeMode: "subtree" })));
+      expect(screen.getByRole("button", { name: "Remove filter: Thread workpads" })).toBeInTheDocument();
+      expect(options()).toHaveAttribute("data-filtering", "true");
+      // The option is Project's own: other views show neither.
+      fireEvent.click(segment("Thread"));
+      expect(screen.queryByRole("group", { name: "View filters" })).not.toBeInTheDocument();
+      expect(options()).not.toHaveAttribute("data-filtering");
+      fireEvent.click(segment("Project"));
+      fireEvent.click(screen.getByRole("button", { name: "Remove filter: Thread workpads" }));
+      await waitFor(() => expect(api.listWorkpads).toHaveBeenLastCalledWith(expect.objectContaining({ scope: { kind: "project", projectId: "project-web" }, scopeMode: "exact" })));
+      expect(screen.queryByRole("group", { name: "View filters" })).not.toBeInTheDocument();
+      expect(getWorkpadsPanelPreferences().views.project.includeThreadWorkpads).toBe(false);
     });
 
-    it("shows nested scopes and archived as removable chips", async () => {
-      const { store, api } = fixture();
-      render(<Panel context={panelContext(store)} />);
+    it("offers Sort and the view's own option in View options, remembered per view", async () => {
+      const { store: base, api } = fixture();
+      const { store } = withSnapshot(base, projectCatalog);
+      render(<Panel context={{ ...panelContext(store), threadId: "thread-build", workspaceId: "web-build" }} />);
       await screen.findByRole("button", { name: "Integration" });
-      viewOptions();
-      fireEvent.click(screen.getByRole("menuitemcheckbox", { name: "Include nested scopes" }));
-      // View options stay open for another pick.
+      const rows = (menu: HTMLElement) => [...menu.querySelectorAll("[role=menuitemradio], [role=menuitemcheckbox]")].map(item => item.textContent);
+      // Thread and Global sort only; Recently updated is the panel's default.
+      let menu = viewOptions();
+      expect(rows(menu)).toEqual(["Newest", "Recently updated", "Title"]);
+      expect(within(menu).queryByText("Show")).not.toBeInTheDocument();
+      expect(screen.getByRole("menuitemradio", { name: "Recently updated" })).toHaveAttribute("aria-checked", "true");
+      fireEvent.click(screen.getByRole("menuitemradio", { name: "Title" }));
       closeMenu();
-      await waitFor(() => expect(api.listWorkpads).toHaveBeenLastCalledWith(expect.objectContaining({ scopeMode: "subtree", archived: false })));
-      expect(screen.getByRole("button", { name: "Remove filter: Nested scopes" })).toBeInTheDocument();
-      viewOptions();
-      expect(screen.getByRole("menuitemcheckbox", { name: "Include nested scopes" })).toHaveAttribute("aria-checked", "true");
-      fireEvent.click(screen.getByRole("menuitemcheckbox", { name: "Archived" }));
-      // View options stay open for another pick.
+      await waitFor(() => expect(api.listWorkpads).toHaveBeenLastCalledWith(expect.objectContaining({ scope: { kind: "thread", threadId: "thread-build" }, sort: "title" })));
+      fireEvent.click(segment("All"));
+      menu = viewOptions();
+      expect(rows(menu)).toEqual(["Newest", "Recently updated", "Title", "Group by project"]);
+      // Each view keeps its own sort.
+      expect(screen.getByRole("menuitemradio", { name: "Recently updated" })).toHaveAttribute("aria-checked", "true");
+      expect(screen.getByRole("menuitemcheckbox", { name: "Group by project" })).toHaveAttribute("aria-checked", "true");
       closeMenu();
-      await waitFor(() => expect(api.listWorkpads).toHaveBeenLastCalledWith(expect.objectContaining({ scopeMode: "subtree", archived: true })));
-      expect(screen.getByRole("button", { name: "Remove filter: Archived" })).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "View options" })).toHaveAttribute("data-filtering", "true");
-      fireEvent.click(screen.getByRole("button", { name: "Remove filter: Nested scopes" }));
-      await waitFor(() => expect(api.listWorkpads).toHaveBeenLastCalledWith(expect.objectContaining({ scopeMode: "exact", archived: true })));
-      fireEvent.click(screen.getByRole("button", { name: "Remove filter: Archived" }));
-      await waitFor(() => expect(api.listWorkpads).toHaveBeenLastCalledWith(expect.objectContaining({ scopeMode: "exact", archived: false })));
-      expect(screen.queryByRole("group", { name: "View filters" })).not.toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "View options" })).not.toHaveAttribute("data-filtering");
+      fireEvent.click(segment("Project"));
+      expect(rows(viewOptions())).toEqual(["Newest", "Recently updated", "Title", "Include thread workpads"]);
+      closeMenu();
+      expect(getWorkpadsPanelPreferences().views.thread.sort).toBe("title");
+      expect(getWorkpadsPanelPreferences().views.all.sort).toBe("updated");
     });
 
     it("opens search from the header and clears it on Escape or Close search", async () => {
@@ -1408,7 +1432,7 @@ describe("WorkpadsPanel", () => {
       const editor = await startEditing();
       vi.useFakeTimers();
       fireEvent.change(editor, { target: { value: "Throwaway" } });
-      headerMenu(); choose("Discard draft…");
+      documentMenu(); choose("Discard draft…");
       const dialog = screen.getByRole("dialog", { name: "Discard draft?" });
       expect(dialog).toHaveTextContent("Your unsaved edits to this workpad will be lost. Saved revisions are kept.");
       fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
@@ -1432,9 +1456,304 @@ describe("WorkpadsPanel", () => {
       fireEvent.change(await startEditing(), { target: { value: "Original, committing" } });
       fireEvent.click(screen.getByRole("button", { name: "Save workpad" }));
       await waitFor(() => expect(commitWorkpadDraft).toHaveBeenCalled());
-      expect(within(header()).getByRole("button", { name: "Back to workpads" })).toBeDisabled();
-      headerMenu();
+      expect(back()).toBeDisabled();
+      documentMenu();
       expect(screen.getByRole("menuitem", { name: "Discard draft…" })).toHaveAttribute("aria-disabled", "true");
+    });
+  });
+
+  describe("scope views and counts", () => {
+    const counts: WorkpadCounts = {
+      active: { thread: 2, project: 1, projectWithThreads: 4, global: 3, all: 9 },
+      archived: { thread: 0, project: 0, projectWithThreads: 1, global: 0, all: 1 },
+    };
+    const labels = () => [...screen.getByRole("radiogroup", { name: "Workpad scope" }).querySelectorAll("[role=radio]")].map(node => node.textContent);
+
+    it("shows Thread, Project, Global and All with their counts, Project's with its threads' while included", async () => {
+      const { store: base, api } = fixture({ getWorkpadCounts: vi.fn(async () => counts) });
+      const { store } = withSnapshot(base, projectCatalog);
+      render(<Panel context={{ ...panelContext(store), threadId: "thread-build", workspaceId: "web-build" }} />);
+      await waitFor(() => expect(labels()).toEqual(["Thread2", "Project1", "Global3", "All9"]));
+      expect(api.getWorkpadCounts).toHaveBeenCalledWith({ threadId: "thread-build", projectId: "project-web" });
+      expect(segment("Thread")).toHaveAccessibleDescription("2 workpads");
+      expect(segment("Project")).toHaveAccessibleDescription("1 workpad");
+      act(() => setWorkpadsViewOptions("project", { includeThreadWorkpads: true }));
+      expect(labels()).toEqual(["Thread2", "Project4", "Global3", "All9"]);
+    });
+
+    it("disables an unavailable view with its reason, and opens on the next view that applies", async () => {
+      const { store: base, api } = fixture();
+      const archivedThread = { id: "thread-old", workspaceId: "web-build", title: { text: "Old thread" }, inventoryState: "archived" };
+      const { store } = withSnapshot(base, { ...projectCatalog, threads: [...projectCatalog.threads, archivedThread] });
+      // The tooltip's positioning measures its arrow.
+      vi.stubGlobal("ResizeObserver", class { observe(): void {} unobserve(): void {} disconnect(): void {} });
+      render(<Panel context={{ ...panelContext(store), threadId: "thread-old", workspaceId: "web-build" }} />);
+      expect(segment("Thread")).toBeDisabled();
+      expect(segment("Project")).toBeChecked();
+      expect(screen.getByRole("radiogroup", { name: "Workpad scope" })).toHaveAccessibleDescription(
+        "Thread: This thread is archived. Restore it to see its workpads.");
+      // A disabled segment takes no pointer events: a tap lands on its slot.
+      fireEvent.click(segment("Thread").parentElement!);
+      expect(await screen.findByRole("tooltip")).toHaveTextContent("This thread is archived. Restore it to see its workpads.");
+      await waitFor(() => expect(api.getWorkpadCounts).toHaveBeenCalledWith({ projectId: "project-web" }));
+      await waitFor(() => expect(api.listWorkpads).toHaveBeenLastCalledWith(expect.objectContaining({ scope: { kind: "project", projectId: "project-web" } })));
+    });
+
+    it("refetches counts whenever the list refreshes, but not for a search", async () => {
+      const { store, api, emit } = fixture();
+      render(<Panel context={{ ...panelContext(store), threadId: "first-thread" }} />);
+      await screen.findByRole("button", { name: "Integration" });
+      await waitFor(() => expect(api.getWorkpadCounts).toHaveBeenCalledTimes(1));
+      await act(async () => { emit({ workpadId: pad.id, revision: 2, change: "document" }); });
+      await waitFor(() => expect(api.getWorkpadCounts).toHaveBeenCalledTimes(2));
+      await act(async () => { window.dispatchEvent(new Event("focus")); });
+      await waitFor(() => expect(api.getWorkpadCounts).toHaveBeenCalledTimes(3));
+      openMenu("Actions for “Integration”"); choose("Archive");
+      await waitFor(() => expect(api.getWorkpadCounts).toHaveBeenCalledTimes(4));
+      fireEvent.change(openSearch(), { target: { value: "integration" } });
+      await waitFor(() => expect(api.listWorkpads).toHaveBeenLastCalledWith(expect.objectContaining({ query: "integration" })));
+      expect(api.getWorkpadCounts).toHaveBeenCalledTimes(4);
+    });
+
+    it("goes without counts when they cannot be read", async () => {
+      const { store } = fixture({ getWorkpadCounts: vi.fn(async () => { throw new Error("Not found"); }) });
+      render(<Panel context={{ ...panelContext(store), threadId: "first-thread" }} />);
+      await screen.findByRole("button", { name: "Integration" });
+      await waitFor(() => expect(screen.getByRole("button", { name: /^Archived/ })).toHaveTextContent(/^Archived$/));
+      expect(labels()).toEqual(["Thread", "Project", "Global", "All"]);
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+
+    it("remembers the view it shows on this device", async () => {
+      const { store } = fixture();
+      const view = render(<Panel context={{ ...panelContext(store), threadId: "first-thread" }} />);
+      expect(segment("Thread")).toBeChecked();
+      fireEvent.click(segment("Global"));
+      expect(getWorkpadsPanelPreferences().lastView).toBe("global");
+      view.unmount();
+      render(<Panel context={{ ...panelContext(store), threadId: "first-thread" }} />);
+      expect(segment("Global")).toBeChecked();
+    });
+  });
+
+  describe("All", () => {
+    const globalPad: WorkpadSummary = { ...pad, id: "global-pad", title: "Global notes" };
+    const webPad: WorkpadSummary = { ...pad, id: "web-pad", title: "Web notes", scope: { kind: "project", projectId: "project-web" } };
+    const buildPad = (id: string, title: string): WorkpadSummary => ({ ...pad, id, title, scope: { kind: "thread", threadId: "thread-build" } });
+    const docsPad: WorkpadSummary = { ...pad, id: "docs-pad", title: "Docs notes", scope: { kind: "project", projectId: "project-docs" } };
+    const headings = () => [...document.querySelectorAll('.list-heading[data-variant="group"]')].map(node => node.textContent);
+
+    it("groups the server's pages under headings, and Load more continues the last group", async () => {
+      // As the server sends them: Global, the lead project with its threads, then the others by name.
+      const first = [globalPad, webPad, buildPad("build-1", "Build log")];
+      const second = [buildPad("build-1", "Build log"), buildPad("build-2", "Build plan"), docsPad];
+      const listWorkpads = vi.fn(async (request?: Record<string, unknown>) =>
+        request?.cursor === "page-2" ? { items: second } : { items: first, nextCursor: "page-2" });
+      const { store: base } = fixture({ listWorkpads });
+      const { store } = withSnapshot(base, projectCatalog);
+      const context = panelContext(store);
+      render(<Panel context={{ ...context, threadId: "thread-build", workspaceId: "web-build" }} />);
+      fireEvent.click(segment("All"));
+      await waitFor(() => expect(headings()).toEqual(["Global1", "acme-web2", "Build thread · Build host1"]));
+      expect(listWorkpads).toHaveBeenLastCalledWith(expect.objectContaining({
+        scope: { kind: "global" }, scopeMode: "subtree", sort: "updated", group: "project", leadProjectId: "project-web",
+      }));
+      // Group headings take the rows' places, so rows have no location line.
+      expect(document.querySelector(".scope-location")).toBeNull();
+      fireEvent.click(screen.getByRole("button", { name: "Load more" }));
+      // A workpad the next page repeats is listed once, where it came first.
+      await waitFor(() => expect(headings()).toEqual(["Global1", "acme-web3", "Build thread · Build host2", "docs1"]));
+      expect(screen.getAllByRole("button", { name: "Build log" })).toHaveLength(1);
+      expect([...document.querySelectorAll(".workpads-row-name")].map(node => node.textContent)).toEqual(
+        ["Global notes", "Web notes", "Build log", "Build plan", "Docs notes"]);
+      // A heading collapses its group, nested threads included.
+      fireEvent.click(screen.getByRole("button", { name: /^acme-web/ }));
+      expect(screen.getByRole("button", { name: /^acme-web/ })).toHaveAttribute("aria-expanded", "false");
+      expect(screen.queryByRole("button", { name: "Build plan" })).not.toBeInTheDocument();
+      // The panel ⋯ expands or collapses every group.
+      expect(menuLabels(headerMenu())).toEqual(["Left", "Right", "Top", "Bottom", "Expand all groups"]);
+      choose("Expand all groups");
+      expect(screen.getByRole("button", { name: "Build plan" })).toBeInTheDocument();
+      headerMenu(); choose("Collapse all groups");
+      expect([...document.querySelectorAll(".list-heading")].filter(node => node.getAttribute("aria-expanded") === "true")).toEqual([]);
+      expect(screen.queryByRole("button", { name: "Global notes" })).not.toBeInTheDocument();
+    });
+
+    it("lists every workpad ungrouped, newest updated first, without Group by project", async () => {
+      const { store: base, api } = fixture({ listWorkpads: vi.fn(async () => ({ items: [webPad, globalPad] })) });
+      const { store } = withSnapshot(base, projectCatalog);
+      setWorkpadsViewOptions("all", { groupByProject: false });
+      setWorkpadsLastView("all");
+      render(<Panel context={{ ...panelContext(store), threadId: "thread-build", workspaceId: "web-build" }} />);
+      expect(await screen.findByRole("button", { name: "Web notes" })).toHaveAccessibleDescription("In acme-web");
+      expect(headings()).toEqual([]);
+      const request = api.listWorkpads.mock.lastCall![0]!;
+      expect(request).toMatchObject({ scope: { kind: "global" }, scopeMode: "subtree", sort: "updated", group: "none" });
+      expect(request).not.toHaveProperty("leadProjectId");
+      expect([...document.querySelectorAll(".workpads-row-name")].map(node => node.textContent)).toEqual(["Web notes", "Global notes"]);
+    });
+  });
+
+  describe("Archived section", () => {
+    const archivedPad = (id: string, title: string, scope: Workpad["scope"] = { kind: "thread", threadId: "thread-build" }): Workpad =>
+      ({ ...pad, id, title, scope, archivedAt: time });
+    const archivedCounts = (thread: number): WorkpadCounts => ({ active: viewCounts({ thread: 1, project: 0, projectWithThreads: 1, global: 1, all: 2 }), archived: viewCounts({ thread, project: 0, projectWithThreads: thread, global: 0, all: thread }) });
+    const heading = () => screen.getByRole("button", { name: /^Archived/ });
+
+    it("ends the list collapsed with the view's archived count, and lists them, paged, when expanded", async () => {
+      const listWorkpads = vi.fn(async (request?: Record<string, unknown>) => !request?.archived ? { items: [pad] }
+        : request.cursor === "older" ? { items: [archivedPad("old-3", "Retired plan")] }
+        : { items: [archivedPad("old-1", "Old notes"), archivedPad("old-2", "Old draft")], nextCursor: "older" });
+      const { store: base, api } = fixture({ listWorkpads, getWorkpadCounts: vi.fn(async () => archivedCounts(3)), getWorkpad: vi.fn(async () => archivedPad("old-1", "Old notes")) });
+      const { store } = withSnapshot(base, projectCatalog);
+      render(<Panel context={{ ...panelContext(store), threadId: "thread-build", workspaceId: "web-build" }} />);
+      await screen.findByRole("button", { name: "Integration" });
+      await waitFor(() => expect(heading()).toHaveTextContent(/^Archived3$/));
+      expect(heading()).toHaveAttribute("aria-expanded", "false");
+      expect(screen.getByRole("region", { name: "Archived workpads" })).toBeInTheDocument();
+      expect(api.listWorkpads).not.toHaveBeenCalledWith(expect.objectContaining({ archived: true }));
+      // The View options of the view apply: its scope and sort, never grouped.
+      act(() => setWorkpadsViewOptions("thread", { sort: "title" }));
+      fireEvent.click(heading());
+      expect(await screen.findByRole("button", { name: "Old draft" })).toBeInTheDocument();
+      expect(api.listWorkpads).toHaveBeenCalledWith({ scope: { kind: "thread", threadId: "thread-build" }, scopeMode: "exact", sort: "title", archived: true });
+      // Its rows offer Unarchive, not Archive.
+      expect(menuLabels(openMenu("Actions for “Old notes”"))).toEqual(["Rename…", "Move to", "Unarchive"]);
+      closeMenu();
+      const section = screen.getByRole("region", { name: "Archived workpads" });
+      fireEvent.click(within(section).getByRole("button", { name: "Load more" }));
+      expect(await screen.findByRole("button", { name: "Retired plan" })).toBeInTheDocument();
+      expect(api.listWorkpads).toHaveBeenLastCalledWith(expect.objectContaining({ archived: true, cursor: "older" }));
+      // An archived workpad opens read-only, with Unarchive.
+      fireEvent.click(screen.getByRole("button", { name: "Old notes" }));
+      expect(await screen.findByText("This workpad is archived.")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Edit workpad" })).toBeDisabled();
+      fireEvent.click(screen.getByRole("button", { name: "Unarchive" }));
+      await waitFor(() => expect(api.updateWorkpad).toHaveBeenCalledWith("old-1", { expectedRevision: 1, archived: false }));
+    });
+
+    it("is absent while the view has no archived workpads", async () => {
+      const { store } = fixture({ getWorkpadCounts: vi.fn(async () => archivedCounts(0)) });
+      render(<Panel context={{ ...panelContext(store), threadId: "thread-build" }} />);
+      await screen.findByRole("button", { name: "Integration" });
+      await waitFor(() => expect(segment("Thread")).toHaveAccessibleDescription("1 workpad"));
+      expect(screen.queryByRole("button", { name: /^Archived/ })).not.toBeInTheDocument();
+    });
+
+    it("says when everything in the view is archived", async () => {
+      const { store } = fixture({ listWorkpads: vi.fn(async () => ({ items: [] })), getWorkpadCounts: vi.fn(async () => archivedCounts(2)) });
+      render(<Panel context={{ ...panelContext(store), threadId: "thread-build" }} />);
+      expect(await screen.findByText("Nothing active.")).toBeInTheDocument();
+      expect(screen.getByText("Every workpad here is archived.")).toBeInTheDocument();
+    });
+
+    it("refreshes an expanded section with the list, and archiving moves a row into it", async () => {
+      let archived: Workpad[] = [];
+      let active: Workpad[] = [pad];
+      const listWorkpads = vi.fn(async (request?: Record<string, unknown>) => ({ items: request?.archived ? archived : active }));
+      const updateWorkpad = vi.fn(async () => { active = []; archived = [{ ...pad, archivedAt: time, revision: 2 }]; return { ...pad, revision: 2 }; });
+      const { store, api } = fixture({ listWorkpads, updateWorkpad, getWorkpadCounts: vi.fn(async () => archivedCounts(1)) });
+      render(<Panel context={{ ...panelContext(store), threadId: "thread-build" }} />);
+      await screen.findByRole("button", { name: "Integration" });
+      fireEvent.click(await screen.findByRole("button", { name: /^Archived/ }));
+      await waitFor(() => expect(listWorkpads).toHaveBeenCalledWith(expect.objectContaining({ archived: true })));
+      expect(screen.getByText("No archived workpads")).toBeInTheDocument();
+      openMenu("Actions for “Integration”"); choose("Archive");
+      const section = screen.getByRole("region", { name: "Archived workpads" });
+      expect(await within(section).findByRole("button", { name: "Integration" })).toBeInTheDocument();
+      expect(api.updateWorkpad).toHaveBeenCalledWith("pad", { expectedRevision: 1, archived: true });
+      expect(screen.getAllByRole("button", { name: "Integration" })).toHaveLength(1);
+    });
+
+    it("names each archived workpad's place in All, whose section is never grouped", async () => {
+      const listWorkpads = vi.fn(async (request?: Record<string, unknown>) => ({
+        items: request?.archived ? [archivedPad("old-1", "Old notes", { kind: "project", projectId: "project-docs" })] : [pad],
+      }));
+      const { store: base } = fixture({ listWorkpads, getWorkpadCounts: vi.fn(async () => archivedCounts(1)) });
+      const { store } = withSnapshot(base, projectCatalog);
+      setWorkpadsLastView("all");
+      render(<Panel context={{ ...panelContext(store), threadId: "thread-build", workspaceId: "web-build" }} />);
+      fireEvent.click(await screen.findByRole("button", { name: /^Archived/ }));
+      expect(await screen.findByRole("button", { name: "Old notes" })).toHaveAccessibleDescription("In docs");
+      expect(listWorkpads).toHaveBeenCalledWith({ scope: { kind: "global" }, scopeMode: "subtree", sort: "updated", archived: true });
+    });
+  });
+
+  describe("an open workpad", () => {
+    it("returns to a view's list from its segment, and to its own view's by choosing it again", async () => {
+      const { store, api } = fixture();
+      render(<Panel context={{ ...panelContext(store), threadId: "first-thread" }} />);
+      await openRow();
+      await screen.findByRole("button", { name: "Edit workpad" });
+      fireEvent.click(segment("Global"));
+      expect(await screen.findByRole("button", { name: "Integration" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Back to workpads" })).not.toBeInTheDocument();
+      await waitFor(() => expect(api.listWorkpads).toHaveBeenLastCalledWith(expect.objectContaining({ scope: { kind: "global" } })));
+      await openRow();
+      await screen.findByRole("button", { name: "Edit workpad" });
+      fireEvent.click(segment("Global"));
+      expect(await screen.findByRole("textbox", { name: "New workpad title" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Edit workpad" })).not.toBeInTheDocument();
+      expect(segment("Global")).toBeChecked();
+    });
+
+    it("returns to the list for Search and for View options", async () => {
+      const { store, api } = fixture();
+      render(<Panel context={{ ...panelContext(store), threadId: "first-thread" }} />);
+      await openRow();
+      await screen.findByRole("button", { name: "Edit workpad" });
+      fireEvent.click(screen.getByRole("button", { name: "Search workpads" }));
+      expect(await screen.findByRole("textbox", { name: "Search workpads" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Edit workpad" })).not.toBeInTheDocument();
+      await openRow();
+      await screen.findByRole("button", { name: "Edit workpad" });
+      // The search waits for the list, open as it was left.
+      expect(screen.queryByRole("textbox", { name: "Search workpads" })).not.toBeInTheDocument();
+      viewOptions();
+      fireEvent.click(screen.getByRole("menuitemradio", { name: "Newest" }));
+      closeMenu();
+      await waitFor(() => expect(screen.queryByRole("button", { name: "Edit workpad" })).not.toBeInTheDocument());
+      expect(screen.getByRole("textbox", { name: "Search workpads" })).toBeInTheDocument();
+      await waitFor(() => expect(api.listWorkpads).toHaveBeenLastCalledWith(expect.objectContaining({ sort: "newest" })));
+    });
+
+    it("confirms leaving unsynced text before another view replaces it", async () => {
+      const { store, api } = fixture();
+      render(<Panel context={{ ...panelContext(store), threadId: "first-thread" }} />);
+      await openRow();
+      const editor = await startEditing();
+      vi.useFakeTimers();
+      fireEvent.change(editor, { target: { value: "Unsynced before switching" } });
+      fireEvent.click(segment("Global"));
+      expect(screen.getByRole("dialog", { name: "Leave unsynced workpad?" })).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Keep editing" }));
+      expect(segment("Thread")).toBeChecked();
+      expect(editor).toHaveValue("Unsynced before switching");
+      expect(getWorkpadsPanelPreferences().lastView).toBe("thread");
+      fireEvent.click(segment("Global"));
+      fireEvent.click(screen.getByRole("button", { name: "Leave anyway" }));
+      expect(segment("Global")).toBeChecked();
+      expect(screen.queryByRole("textbox", { name: "Workpad content" })).not.toBeInTheDocument();
+      await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+      expect(api.listWorkpads).toHaveBeenLastCalledWith(expect.objectContaining({ scope: { kind: "global" } }));
+      expect(api.saveWorkpadDraft).not.toHaveBeenCalled();
+    });
+
+    it("closes on Android Back, which a list or a hidden panel leaves alone", async () => {
+      const { store } = fixture();
+      const context = panelContext(store);
+      const view = render(<Panel context={context} />);
+      await screen.findByRole("button", { name: "Integration" });
+      const back = () => { const event = new Event(CLOSE_WORKPAD_EVENT, { cancelable: true }); act(() => { window.dispatchEvent(event); }); return event.defaultPrevented; };
+      expect(back()).toBe(false);
+      await openRow();
+      await screen.findByRole("button", { name: "Edit workpad" });
+      view.rerender(<Panel context={{ ...context, visible: false }} />);
+      expect(back()).toBe(false);
+      view.rerender(<Panel context={context} />);
+      expect(back()).toBe(true);
+      expect(await screen.findByRole("textbox", { name: "New workpad title" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Edit workpad" })).not.toBeInTheDocument();
     });
   });
 });

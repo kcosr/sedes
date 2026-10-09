@@ -141,8 +141,10 @@ clears the search and closes it.
 Each view remembers its own options on this device. While **Only** hides
 Tasks, a chip for each choice, such as **Pinned only**, sits under the scope
 control, and the filter icon shows a dot; select a chip's **×** to remove it.
-When nothing matches, the list offers to reset them. On phones, View options
-are in the sheet's **⋯** menu.
+When nothing matches, the list offers to reset them. **Include thread tasks**
+shows the same way, as a **Thread tasks** chip and the dot, while it is on in
+Project; it adds Tasks rather than hiding them, so the empty list does not
+offer to reset it. On phones, View options are in the sheet's **⋯** menu.
 
 The **Pin** button in the Tasks header, beside Search, is the same setting as
 **Only** › **Pinned**: select it to see only pinned Tasks, and again to see

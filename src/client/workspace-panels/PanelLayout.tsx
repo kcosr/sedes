@@ -964,7 +964,7 @@ function PanelLayoutReady({
   ) => {
     setStatuses((current) => {
       const next = new Map(current);
-      if (status.busy || status.dirty || status.subtitle || status.back || status.menuItems)
+      if (status.busy || status.dirty || status.subtitle || status.menuItems)
         next.set(panelInstanceId, status);
       else next.delete(panelInstanceId);
       return next;
@@ -2189,7 +2189,6 @@ function TenantContent({
       setDirty: (dirty) => setStatus((current) => ({ ...current, dirty })),
       setSubtitle: (subtitle) =>
         setStatus((current) => ({ ...current, subtitle })),
-      setBack: (back) => setStatus((current) => ({ ...current, back })),
       setMenuItems: (menuItems) =>
         setStatus((current) => ({ ...current, menuItems })),
     }),
@@ -2243,7 +2242,6 @@ function renderTenantMenu(
     setBusy: () => undefined,
     setDirty: () => undefined,
     setSubtitle: () => undefined,
-    setBack: () => undefined,
     setMenuItems: () => undefined,
   };
   return tenant.renderMenuItems({
