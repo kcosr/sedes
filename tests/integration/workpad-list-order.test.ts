@@ -220,7 +220,9 @@ describe("Workpad list order", () => {
       encode([decoded[0], 1.5, ...decoded.slice(2)]),
       encode([decoded[0], "1", ...decoded.slice(2)]),
       encode([...decoded.slice(0, 2), 42, ...decoded.slice(3)]),
-      encode([...decoded.slice(0, 2), ["a", "b"], ...decoded.slice(3)]),
+      encode([...decoded.slice(0, 2), ["a"], ...decoded.slice(3)]),
+      encode([...decoded.slice(0, 2), ["a", 1], ...decoded.slice(3)]),
+      encode([...decoded.slice(0, 2), ["a", "b", "c"], ...decoded.slice(3)]),
       encode(["0".repeat(22), ...decoded.slice(1)]),
     ]) {
       expect(() => f.workpads.list(f.scope, { ...grouped, cursor: forged })).toThrow(errorCode("cursor_invalid"));
@@ -262,6 +264,153 @@ describe("Workpad list order", () => {
     f.workpads.update(f.scope, expected[1]!, { expectedRevision: 0, title: "zzz" }, undefined, 30_000);
     expect(f.workpads.list(f.scope, { scope: { kind: "project", projectId: first.projectId }, sort: "title", limit: 1, cursor: page.nextCursor }).items.map(item => item.id))
       .toEqual([expected[2]]);
+  });
+
+  it("never skips an unchanged row when a boundary label carried as a prefix is renamed", () => {
+    const f = fixture();
+    const long = (character: string, last: string) => `${character.repeat(239)}${last}`;
+    const titleSorted = { scope: { kind: "global" as const }, sort: "title" as const, limit: 1 };
+    /** Pages from a cursor to the end of the list. */
+    const rest = (request: ListWorkpadsRequest, cursor: string | undefined) => {
+      const seen: string[] = [];
+      for (let pages = 0; cursor !== undefined && pages < 100; pages += 1) {
+        const page = f.workpads.list(f.scope, { ...request, cursor });
+        seen.push(...page.items.map(item => item.id));
+        cursor = page.nextCursor;
+      }
+      return seen;
+    };
+    const retitle = (id: string, title: string) =>
+      f.workpads.update(f.scope, id, { expectedRevision: f.workpads.get(f.scope, id).revision, title }, undefined, 40_000);
+
+    // The reported case: a rename keeping the carried prefix must not skip its sibling.
+    const a = f.create(long("漢", "a"), { kind: "global" }, 1_000);
+    const b = f.create(long("漢", "b"), { kind: "global" }, 2_000);
+    const page = f.workpads.list(f.scope, titleSorted);
+    expect(page.items.map(item => item.id)).toEqual([a.id]);
+    retitle(a.id, long("漢", "z"));
+    expect(rest(titleSorted, page.nextCursor)).toEqual([b.id, a.id]);
+    retitle(a.id, long("漢", "a"));
+    // An unchanged boundary label resumes exactly, without repeats.
+    expect(rest(titleSorted, f.workpads.list(f.scope, titleSorted).nextCursor)).toEqual([b.id]);
+
+    // Every boundary, every rename: keeping or changing the prefix, earlier or later.
+    const shared = "漢".repeat(236);
+    const titles = [`${shared}c10`, `${shared}c20`, `${shared}c30`, `${shared}c40`, long("字", "x"), "plain"];
+    const pads = [a, b, ...titles.map((title, index) => f.create(title, { kind: "global" }, 3_000 + index))];
+    const renames = [`${shared}c00`, `${shared}c25`, `${shared}c99`, "aaa", "龍".repeat(10), long("漢", "a").toUpperCase()];
+    for (const limit of [1, 2]) {
+      const request = { ...titleSorted, limit };
+      const order = readAll(cursor => f.workpads.list(f.scope, { ...request, ...(cursor ? { cursor } : {}) })).ids;
+      expect(new Set(order)).toEqual(new Set(pads.map(item => item.id)));
+      for (let boundary = limit; boundary < order.length; boundary += limit) {
+        for (const title of renames) {
+          let cursor: string | undefined;
+          const seen: string[] = [];
+          while (seen.length < boundary) {
+            const next = f.workpads.list(f.scope, { ...request, ...(cursor ? { cursor } : {}) });
+            seen.push(...next.items.map(item => item.id));
+            cursor = next.nextCursor;
+          }
+          const renamed = seen.at(-1)!;
+          const original = f.workpads.get(f.scope, renamed).title;
+          retitle(renamed, title);
+          const after = rest(request, cursor);
+          expect(new Set([...seen, ...after]), `${renamed} -> ${title}`).toEqual(new Set(order));
+          retitle(renamed, original);
+        }
+      }
+    }
+  });
+
+  it("never skips an unchanged row when a grouped project or thread name is renamed at the boundary", () => {
+    const f = fixture();
+    const long = (character: string, last: string) => `${character.repeat(239)}${last}`;
+    const grouped = { ...all, group: "project" as const, limit: 1 };
+    const rest = (request: ListWorkpadsRequest, cursor: string | undefined) => {
+      const seen: string[] = [];
+      for (let pages = 0; cursor !== undefined && pages < 100; pages += 1) {
+        const page = f.workpads.list(f.scope, { ...request, cursor });
+        seen.push(...page.items.map(item => item.id));
+        cursor = page.nextCursor;
+      }
+      return seen;
+    };
+    const renameProject = (id: string, name: string) => f.database.prepare("UPDATE projects SET name=? WHERE id=?").run(name, id);
+    const renameThread = (id: string, title: string) => f.database.prepare("UPDATE application_threads SET title=? WHERE id=?").run(title, id);
+
+    // The reported case for each grouped label: project names, then thread titles.
+    const first = f.location({ name: long("項", "a") });
+    const second = f.location({ name: long("項", "b") });
+    const firstPad = f.create("first", { kind: "project", projectId: first.projectId }, 1_000);
+    const secondPad = f.create("second", { kind: "project", projectId: second.projectId }, 2_000);
+    let page = f.workpads.list(f.scope, grouped);
+    expect(page.items.map(item => item.id)).toEqual([firstPad.id]);
+    renameProject(first.projectId, long("項", "z"));
+    expect(rest(grouped, page.nextCursor)).toEqual([secondPad.id, firstPad.id]);
+    renameProject(first.projectId, long("項", "a"));
+
+    const third = f.location({ name: "zz third" });
+    const threadA = f.thread(third.id, long("題", "a"));
+    const threadB = f.thread(third.id, long("題", "b"));
+    const threadPadA = f.create("thread a", { kind: "thread", threadId: threadA }, 3_000);
+    const threadPadB = f.create("thread b", { kind: "thread", threadId: threadB }, 4_000);
+    const thirdOnly = { scope: { kind: "project" as const, projectId: third.projectId }, scopeMode: "subtree" as const, group: "project" as const, limit: 1 };
+    page = f.workpads.list(f.scope, thirdOnly);
+    expect(page.items.map(item => item.id)).toEqual([threadPadA.id]);
+    renameThread(threadA, long("題", "z"));
+    expect(rest(thirdOnly, page.nextCursor)).toEqual([threadPadB.id, threadPadA.id]);
+    renameThread(threadA, long("題", "a"));
+
+    // Every boundary, every project or thread rename: rows outside the renamed group are never skipped.
+    const shared = (character: string) => character.repeat(236);
+    for (const [index, suffix] of ["c10", "c20", "c30"].entries()) {
+      const location = f.location({ name: `${shared("項")}${suffix}` });
+      f.create(`own ${suffix}`, { kind: "project", projectId: location.projectId }, 5_000 + index);
+      const thread = f.thread(location.id, `${shared("題")}${suffix}`);
+      f.create(`thread ${suffix} one`, { kind: "thread", threadId: thread }, 6_000 + index);
+      f.create(`thread ${suffix} two`, { kind: "thread", threadId: thread }, 7_000 + index);
+    }
+    f.create("global", { kind: "global" }, 8_000);
+    const renames = (character: string) => [`${shared(character)}c00`, `${shared(character)}c25`, `${shared(character)}c99`, "aaa", "龍".repeat(10)];
+    for (const sort of ["updated", "title"] as const) {
+      const request = { ...grouped, sort };
+      const order = readAll(cursor => f.workpads.list(f.scope, { ...request, ...(cursor ? { cursor } : {}) })).ids;
+      const pads = order.map(id => f.workpads.get(f.scope, id));
+      const projectOf = (pad: Workpad) => pad.scope.kind === "project" ? pad.scope.projectId
+        : pad.scope.kind === "thread" ? (f.database.prepare("SELECT w.project_id AS id FROM application_threads t JOIN workspaces w ON w.id=t.workspace_id WHERE t.id=?").get(pad.scope.threadId) as { id: string }).id
+        : null;
+      for (let boundary = 1; boundary < order.length; boundary += 1) {
+        const pad = pads[boundary - 1]!;
+        const projectId = projectOf(pad);
+        const targets: { kind: "project" | "thread"; id: string }[] = [
+          ...(projectId ? [{ kind: "project" as const, id: projectId }] : []),
+          ...(pad.scope.kind === "thread" ? [{ kind: "thread" as const, id: pad.scope.threadId }] : []),
+        ];
+        for (const target of targets) {
+          for (const name of renames(target.kind === "project" ? "項" : "題")) {
+            const read = f.workpads.list(f.scope, request);
+            let cursor = read.nextCursor;
+            const seen = read.items.map(item => item.id);
+            while (seen.length < boundary) {
+              const next = f.workpads.list(f.scope, { ...request, cursor });
+              seen.push(...next.items.map(item => item.id));
+              cursor = next.nextCursor;
+            }
+            const table = target.kind === "project" ? "projects" : "application_threads";
+            const field = target.kind === "project" ? "name" : "title";
+            const original = (f.database.prepare(`SELECT ${field} AS label FROM ${table} WHERE id=?`).get(target.id) as { label: string }).label;
+            (target.kind === "project" ? renameProject : renameThread)(target.id, name);
+            const after = new Set([...seen, ...rest(request, cursor)]);
+            // Rows of the renamed group changed their own keys; every other row must appear.
+            const unchanged = pads.filter(item => target.kind === "project" ? projectOf(item) !== target.id
+              : !(item.scope.kind === "thread" && item.scope.threadId === target.id));
+            for (const item of unchanged) expect(after.has(item.id), `${target.kind} ${target.id} -> ${name}: ${item.title}`).toBe(true);
+            (target.kind === "project" ? renameProject : renameThread)(target.id, original);
+          }
+        }
+      }
+    }
   });
 
   it("counts visible workpads for every panel view and denies other scopes", () => {
