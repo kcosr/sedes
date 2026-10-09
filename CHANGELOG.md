@@ -870,6 +870,10 @@
 
 ### Fixed
 
+- The composer's Steer/Queue menu, and the stash popover, stay just above the
+  composer when a pending row leaves while they're open, instead of floating
+  where the row was.
+
 - A failed automation run, or one with an unknown outcome, returns its parked
   thread to Active. ([#61](https://github.com/kcosr/sedes/pull/61))
 
