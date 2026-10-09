@@ -97,10 +97,12 @@ document. The workpad's own toolbar shows its title over its revision line
 **Rename…**, **Move to**, and **Archive** or **Unarchive**.
 
 To return to the list, choose the selected view again (its tooltip says
-**Back to workpads**); with the keyboard, press Enter or Space on it. Choosing
-another view, searching, or changing a View option also returns to the list,
-and an open editor's text syncs first. On Android, Back closes the workpad
-before it opens the navigation drawer.
+**Back to workpads**); with the keyboard, press Enter or Space on it.
+Searching or changing a View option also returns to the list. These, and
+Android Back, sync an open editor's text before the workpad closes; on
+Android, Back closes the workpad before it opens the navigation drawer.
+Choosing another view leaves the workpad instead: if its text hasn't synced,
+Sedes asks first, and **Leave anyway** discards those changes.
 
 ## Edit and save
 
