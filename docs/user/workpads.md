@@ -55,7 +55,7 @@ change is still in progress, confirm before leaving or choose **Keep
 editing** to see its result. Synchronized drafts remain available by reopening
 the workpad and choosing **Edit workpad**.
 
-## Find, add, and archive workpads
+## Find, add, archive, and delete workpads
 
 Select **Search workpads** (the magnifier in the panel header) to search the
 view's titles and text; Escape clears and closes the search. **View options**
@@ -80,12 +80,18 @@ every host. It stays with the project when you move or remove a location, and
 is hidden while the project is removed. A Thread workpad follows its thread.
 
 Each row's **⋯** menu offers **Rename…**, **Move to** (this thread, this
-project, Global, or **Choose…** for any other), and **Archive**. Archiving
-removes a workpad from the active list without losing its content or history.
-The list ends with a collapsed **Archived** section, shown while the view has
-archived workpads, with their count. Expand it to list them, in the same sort,
-and choose **Unarchive** from a row's **⋯** or the open workpad to resume
-editing. Archiving a thread preserves its workpads in their current scope.
+project, Global, or **Choose…** for any other), **Archive**, and **Delete…**.
+Archiving removes a workpad from the active list without losing its content or
+history. The list ends with a collapsed **Archived** section, shown while the
+view has archived workpads, with their count. Expand it to list them, in the
+same sort, and choose **Unarchive** from a row's **⋯** or the open workpad to
+resume editing. Archiving a thread preserves its workpads in their current
+scope.
+
+**Delete…** removes a workpad for good, active or archived, after you
+confirm: its content, revision history, and any draft are gone, on every
+client, and can't be restored. Archive a workpad instead to keep it out of
+the way. Agents can archive workpads but never delete them.
 
 ## Open a workpad
 
@@ -94,7 +100,8 @@ with search and View options, and the scope control stays above the
 document. The workpad's own toolbar shows its title over its revision line
 (which names the workpad's thread, project, or **Global**), then its actions:
 **Show attribution**, **Revision history**, **Edit workpad**, and **⋯** with
-**Rename…**, **Move to**, and **Archive** or **Unarchive**.
+**Rename…**, **Move to**, **Archive** or **Unarchive**, and **Delete…**.
+Deleting the open workpad returns to the list.
 
 To return to the list, choose the selected view again (its tooltip says
 **Back to workpads**); with the keyboard, press Enter or Space on it.
@@ -153,8 +160,9 @@ records the last edit, not a claim of original authorship.
 ## Agent access
 
 Enable the relevant Workpad tools for a thread to let its agent list, read,
-create, or update workpads. Agents can address other threads' workpads by scope
-and thread ID, then use a workpad ID for individual reads and updates.
+create, or update workpads, including archiving them. No tool deletes a
+workpad. Agents can address other threads' workpads by scope and thread ID,
+then use a workpad ID for individual reads and updates.
 
 The thread's **Access boundary** controls which access requires approval.
 **Ask outside this thread** requires approval for other threads, project

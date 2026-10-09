@@ -161,6 +161,16 @@ input defaults to the caller's project. Agents access committed state, not human
 Listing and history are paginated. Caller-supplied filesystem paths are not
 interpreted as server-side content authority.
 
+## Deletion
+
+`DELETE /api/workpads/:workpadId` permanently deletes an owned workpad, active
+or archived, and answers 204 with no body. Its `workpad_revisions` and
+`workpad_drafts` rows cascade by foreign key; no other table references a
+workpad. Like Task deletion it takes no `expectedRevision`. An unknown ID or
+another owner's workpad is a 404, as on every workpad route, and a malformed
+ID is a 400. Deletion is a browser action only: agents and Tool clients can
+archive a workpad through `workpad.update` but have no delete tool.
+
 ## Human drafts
 
 Each owner/workpad has one synchronized working draft with two independent
@@ -179,24 +189,26 @@ or overwrite another client's draft or an intervening committed revision.
 Committed mutations publish a small `workpad_changed` invalidation through the
 existing principal-scoped application SSE stream. Each event identifies the
 workpad, revision, and whether the document or human draft changed; document
-bodies remain separate authorized reads. Publication follows the application's
-serialized boundary, with failed publications retried by the durable scheduler.
-Rejected writes publish nothing.
+bodies remain separate authorized reads. Deletion publishes a document change
+with the deleted workpad's last revision; reading it then finds no workpad.
+Publication follows the application's serialized boundary, with failed
+publications retried by the durable scheduler. Rejected writes publish nothing.
 
 Application thread summaries include `nonArchivedWorkpadCount`, derived with
 the other grouped summary counts from rows owned by that tenant and principal,
 scoped directly to the thread, and not archived. The count is not persisted
 separately and does not require a Workpad list fetch in the browser. Creation,
-archive, restore, and scope moves hand off affected thread summaries to the
-application publication boundary after commit. A move retains both the old
-and new counted thread IDs, so publication coalescing or retry cannot leave
-the source badge stale. Draft, title, and content changes—including checklist
+archive, restore, scope moves, and deletion of a counted workpad hand off
+affected thread summaries to the application publication boundary after
+commit. A move retains both the old and new counted thread IDs, so publication
+coalescing or retry cannot leave the source badge stale. Draft, title, and content changes—including checklist
 toggles—do not schedule count updates. Snapshot and thread-upsert publication
 carry the same count, including after reconnect.
 
 The open Workpads panel subscribes to these events and fetches affected lists,
-documents, or drafts without periodic polling. Events arriving during a fetch
-or mutation queue a follow-up read. Replayed events and authoritative stream
+documents, or drafts without periodic polling. An open document whose read
+finds it deleted closes, unless its editor is open, which keeps its text.
+Events arriving during a fetch or mutation queue a follow-up read. Replayed events and authoritative stream
 replacements recover missed updates after reconnects. Historical revision
 selection and unsaved working text survive these refreshes.
 

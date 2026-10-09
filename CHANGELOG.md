@@ -7,7 +7,8 @@
 - Browser and packaged clients require client protocol 146, which adds
   automation schedule details and run turn outcomes to thread summaries and
   runs, drops the Remind now inventory action, adds turn reply replay, and adds
-  workpad list sorting and counts. Upgrade clients together with the server.
+  workpad list sorting, counts, and deletion. Upgrade clients together with the
+  server.
   ([#58](https://github.com/kcosr/sedes/pull/58), [#59](https://github.com/kcosr/sedes/pull/59), [#61](https://github.com/kcosr/sedes/pull/61), [#62](https://github.com/kcosr/sedes/pull/62), [#65](https://github.com/kcosr/sedes/pull/65))
 
 - `PATCH /api/threads/:threadId/inventory` no longer accepts the `remind`
@@ -226,6 +227,9 @@
   Migration preserves old Claude totals separately with unknown coverage. (#8)
 
 ### Added
+
+- **Delete…** in a workpad's **⋯** permanently deletes it, with its history and
+  draft, after you confirm; agents can still only archive. ([#65](https://github.com/kcosr/sedes/pull/65))
 
 - Android: a speaker button in each ended turn's footer queues the turn's
   reply for voice playback, as completion speech would read it. It appears
