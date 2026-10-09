@@ -439,9 +439,10 @@
   outline: none;
 }
 
-/* Lists that mix scopes without group headings put where a task belongs on
-   a quiet second line, so it never takes room from the title. The two
-   lines get their own padding rather than sharing the one-line height. */
+/* Lists that mix scopes (All, and Project with its threads' tasks) put
+   where a task belongs on a quiet second line, so it never takes room from
+   the title. The two lines get their own padding rather than sharing the
+   one-line height. */
 .tasks-row-title[data-location] {
   display: flex;
   flex-direction: column;

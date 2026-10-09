@@ -27,7 +27,8 @@ export type TasksSort = ScopeListSort;
 /**
  * The View options of one view, remembered per view. The list always ends
  * with the collapsed Backlog and Completed sections; the Only options
- * combine.
+ * combine. All is one flat list; a retired `groupByProject` is dropped as
+ * it is read.
  */
 export interface TasksViewOptions {
   readonly sort: TasksSort;
@@ -36,8 +37,6 @@ export interface TasksViewOptions {
   readonly onlyBacklog: boolean;
   readonly onlyWithNotes: boolean;
   readonly onlyWithFiles: boolean;
-  /** Applies to All. */
-  readonly groupByProject: boolean;
   /** Applies to Project: its threads' tasks join the project's own. */
   readonly includeThreadTasks: boolean;
   /** Search matches notes as well as titles. */
@@ -58,7 +57,7 @@ const RETIRED_WIDTH_STORAGE_KEY = "sedes.tasks.panel.width";
 
 // A retired sort ("pinned-newest", from when pins were a sort) reads as the
 // default, and a retired `show` choice is dropped: Completed is always the
-// collapsed section now.
+// collapsed section now. So is a retired `groupByProject`: All is flat.
 const TASKS_SORTS: readonly TasksSort[] = SCOPE_LIST_SORTS;
 
 const BASE_VIEW_OPTIONS: TasksViewOptions = Object.freeze({
@@ -67,7 +66,6 @@ const BASE_VIEW_OPTIONS: TasksViewOptions = Object.freeze({
   onlyBacklog: false,
   onlyWithNotes: false,
   onlyWithFiles: false,
-  groupByProject: true,
   includeThreadTasks: false,
   searchNotes: false,
 });
@@ -127,7 +125,6 @@ function parseViewOptions(
     onlyBacklog: flag(value.onlyBacklog, fallback.onlyBacklog),
     onlyWithNotes: flag(value.onlyWithNotes, fallback.onlyWithNotes),
     onlyWithFiles: flag(value.onlyWithFiles, fallback.onlyWithFiles),
-    groupByProject: flag(value.groupByProject, fallback.groupByProject),
     includeThreadTasks: flag(
       value.includeThreadTasks,
       fallback.includeThreadTasks,

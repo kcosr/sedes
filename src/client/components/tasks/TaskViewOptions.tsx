@@ -15,7 +15,7 @@ import type {
 } from "../../app/tasks-panel-store.js";
 
 /**
- * The View options rows (sort, only, grouping, search notes) for one view:
+ * The View options rows (sort, only, thread tasks, search notes) for one view:
  * the desktop View options menu, and on phones part of the ⋯ menu. Sort and
  * the view's scope option are the rows Workpads shares. Pinned tasks lead
  * each section whatever the sort.
@@ -69,15 +69,9 @@ export function TaskViewOptionsItems({
       <DropdownMenuSeparator />
       <ScopeOptionItem
         view={view}
-        groupByProject={options.groupByProject}
         includeThreadItems={options.includeThreadTasks}
         includeThreadLabel="Include thread tasks"
-        onChange={({ groupByProject, includeThreadItems }) =>
-          onChange({
-            ...(groupByProject !== undefined ? { groupByProject } : {}),
-            ...(includeThreadItems !== undefined ? { includeThreadTasks: includeThreadItems } : {}),
-          })
-        }
+        onChange={(includeThreadTasks) => onChange({ includeThreadTasks })}
       />
       <DropdownMenuCheckboxItem
         checked={options.searchNotes}

@@ -5,7 +5,6 @@ import {
   compareCompleted,
   compareOpen,
   destinationScope,
-  groupTasks,
   inViewScope,
   matchesOnly,
   matchesQuery,
@@ -219,50 +218,6 @@ describe("search, filters and order", () => {
     // Only › Backlog: the backlog is the list, with no Backlog section.
     expect(ids({ onlyBacklog: true })).toEqual({ main: ["pinned-later", "later"], backlog: [], completed: [] });
     expect(ids({ onlyBacklog: true, onlyPinned: true })).toEqual({ main: ["pinned-later"], backlog: [], completed: [] });
-  });
-});
-
-describe("grouping", () => {
-  it("puts Global first, then the current project, then others by name, with threads nested", () => {
-    const groups = groupTasks(
-      [otherTask, siblingTask, threadTask, projectTask, task({ id: "global" }), task({ id: "zed", scope: { kind: "project", projectId: "project-0" }, associatedProjectId: "project-0" })],
-      {
-        projects: new Map([
-          ["project-0", "zeta"],
-          ["project-1", "acme-web"],
-          ["project-2", "billing"],
-        ]),
-        threads: new Map([
-          ["thread-1", "Current"],
-          ["thread-2", "Another"],
-        ]),
-      },
-      context,
-    );
-    expect(
-      groups.map((group) => [
-        group.label,
-        group.count,
-        group.tasks.map(({ id }) => id),
-        group.children.map((child) => [child.label, child.tasks.map(({ id }) => id)]),
-      ]),
-    ).toEqual([
-      ["Global", 1, ["global"], []],
-      ["acme-web", 3, ["project"], [["Current", ["thread"]], ["Another", ["sibling"]]]],
-      ["billing", 1, [], [["Thread", ["other"]]]],
-      ["zeta", 1, ["zed"], []],
-    ]);
-    expect(groups.map(({ key }) => key)).toEqual(["global", "project:project-1", "project:project-2", "project:project-0"]);
-    expect(groups[1]!.children[0]!.key).toBe("thread:thread-1");
-  });
-
-  it("names unknown projects and keeps project-less thread tasks together", () => {
-    const groups = groupTasks(
-      [task({ id: "orphan", scope: { kind: "thread", threadId: "gone" } })],
-      { projects: new Map(), threads: new Map() },
-      {},
-    );
-    expect(groups.map(({ label, kind }) => [label, kind])).toEqual([["No project", "project"]]);
   });
 });
 

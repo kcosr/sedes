@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Archive, ArchiveRestore, Bot, Check, ChevronsDownUp, ChevronsUpDown, Ellipsis, FilePenLine, FolderInput, Highlighter, History, ListFilter, LoaderCircle, Pencil, Plus, Search, Trash2, X } from "lucide-react";
+import { Archive, ArchiveRestore, Bot, Check, Ellipsis, FilePenLine, FolderInput, Highlighter, History, ListFilter, LoaderCircle, Pencil, Plus, Search, Trash2, X } from "lucide-react";
 import type { ListWorkpadsRequest, UpdateWorkpadRequest, Workpad, WorkpadCounts, WorkpadScope, WorkpadSummary, WorkpadRevision, WorkpadRevisionSummary } from "../../shared/protocol/workpads.js";
 import { WORKPAD_CONTENT_MAX_CHARACTERS } from "../../shared/protocol/workpads.js";
 import { CLOSE_WORKPAD_EVENT } from "../app/android-back.js";
@@ -25,13 +25,13 @@ import { Field } from "../components/ui/field.js";
 import { Input } from "../components/ui/input.js";
 import { Textarea } from "../components/ui/textarea.js";
 import { ScopeSegments } from "../components/scope-view/ScopeSegments.js";
-import { ListHeading, ListHeadingIcon, ScopeIcon, ScopeLocation, ViewFilterChips, type ScopeLocationLabel, type ViewFilterChip } from "../components/scope-view/scope-list.js";
+import { ListHeading, ScopeIcon, ScopeLocation, ViewFilterChips, type ScopeLocationLabel, type ViewFilterChip } from "../components/scope-view/scope-list.js";
 import { ScopeOptionItem, SortOptionItems } from "../components/scope-view/ViewOptionsItems.js";
 import { useTaskDestinations } from "../components/tasks/task-destinations.js";
 import { clampView, destinationScope, parseScopeKey, scopeKey as destinationKey, viewUnavailableReason, type TasksContext } from "../components/tasks/task-view-model.js";
 import { WorkpadDocument } from "./WorkpadDocument.js";
 import { useWorkpadDraft } from "./use-workpad-draft.js";
-import { archivedListRequest, groupKeys, groupWorkpads, showsLocation, viewCount, workpadListRequest, type WorkpadGroup, type WorkpadsTarget } from "./workpads-view-model.js";
+import { archivedListRequest, showsLocation, viewCount, workpadListRequest, type WorkpadsTarget } from "./workpads-view-model.js";
 import { applyMarkdownChecklistToggle, type MarkdownChecklistToggle } from "../components/conversation/markdown-checklists.js";
 import "./workpads-panel.css";
 
@@ -107,7 +107,6 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
   const [archivedCursor, setArchivedCursor] = useState<string>();
   const [archivedLoading, setArchivedLoading] = useState(false);
   const [counts, setCounts] = useState<{ key: string; value?: WorkpadCounts; failed?: true }>();
-  const [collapsedGroups, setCollapsedGroups] = useState<ReadonlySet<string>>(() => new Set());
   const [error, setError] = useState("");
   const [refreshError, setRefreshError] = useState("");
   const [selected, setSelected] = useState<Workpad>();
@@ -616,30 +615,6 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
     return () => window.removeEventListener(CLOSE_WORKPAD_EVENT, onClose);
   }, [open]);
 
-  // All's groups, named from the snapshot. A thread in a project with
-  // several locations says where it runs.
-  const groups = useMemo(() => view === "all" && options.groupByProject ? groupWorkpads(items, {
-    project: id => destinations.projectLabels.get(id),
-    thread: id => {
-      const name = destinations.threadTitles.get(id);
-      const where = destinations.threadLocation(id);
-      return name && where ? `${name} · ${where}` : name;
-    },
-    threadProject: id => destinations.threadProjectId(id),
-  }) : undefined, [view, options.groupByProject, items, destinations]);
-  const hasSelection = selected !== undefined;
-  const hasGroups = !hasSelection && groups !== undefined && groups.length > 0;
-  const anyCollapsed = collapsedGroups.size > 0;
-  const groupsRef = useRef(groups); groupsRef.current = groups;
-  // The panel's ⋯ collapses or expands All's groups, as Tasks' does.
-  const menuItems = useMemo(() => hasGroups ? <DropdownMenuItem onSelect={() =>
-    setCollapsedGroups(anyCollapsed ? new Set() : new Set(groupKeys(groupsRef.current ?? [])))}>
-    {anyCollapsed ? <ChevronsUpDown /> : <ChevronsDownUp />}
-    <span>{anyCollapsed ? "Expand all groups" : "Collapse all groups"}</span>
-  </DropdownMenuItem> : undefined, [hasGroups, anyCollapsed]);
-  useEffect(() => { host.setMenuItems(menuItems); }, [host, menuItems]);
-  useEffect(() => () => { host.setMenuItems(undefined); }, [host]);
-
   const errorText = error || refreshError || (checklistRefreshRequired ? "Reload this workpad before changing checklist items." : "");
   const errorCallout = errorText && <div className="workpads-alert">
     <Callout tone="danger" role="alert" action={checklistRefreshRequired && selected && <Button variant="outline" size="sm" disabled={busy || editing || draft.saving}
@@ -665,13 +640,10 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" aria-label="View options" sheetTitle="View options">
         <SortOptionItems value={options.sort} disabled={busy} onChange={sort => changeOptions({ sort })} />
-        {(view === "all" || view === "project") && <DropdownMenuSeparator />}
-        <ScopeOptionItem view={view} groupByProject={options.groupByProject} includeThreadItems={options.includeThreadWorkpads}
+        {view === "project" && <DropdownMenuSeparator />}
+        <ScopeOptionItem view={view} includeThreadItems={options.includeThreadWorkpads}
           includeThreadLabel="Include thread workpads" disabled={busy}
-          onChange={({ groupByProject, includeThreadItems }) => changeOptions({
-            ...(groupByProject !== undefined ? { groupByProject } : {}),
-            ...(includeThreadItems !== undefined ? { includeThreadWorkpads: includeThreadItems } : {}),
-          })} />
+          onChange={includeThreadWorkpads => changeOptions({ includeThreadWorkpads })} />
       </DropdownMenuContent>
     </DropdownMenu>
   </div>, context.chromeActionsTarget);
@@ -691,29 +663,15 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
     count={candidate => viewCount(activeCounts, candidate, candidate === "project" && preferences.views.project.includeThreadWorkpads)}
     describeCount={count => `${count} ${count === 1 ? "workpad" : "workpads"}`} />;
 
-  const rowLocation = (item: WorkpadSummary, section: "active" | "archived") =>
-    showsLocation(view, options, section) ? destinations.location(item.scope, { withProject: view === "all" }) : undefined;
+  // Lists that mix scopes say where each workpad belongs: All, and Project
+  // with its threads' workpads. A thread names its project in All.
+  const rowLocation = (item: WorkpadSummary) =>
+    showsLocation(view, options) ? destinations.location(item.scope, { withProject: view === "all" }) : undefined;
   const renderRow = (item: WorkpadSummary, location?: ScopeLocationLabel) => <WorkpadRow key={item.id} item={item} location={location}
     busy={busy} touch={touch} threadId={threadId} projectId={contextProjectId}
     onOpen={() => { void run(() => load(item.id)); }} onRename={() => openRename(item)}
     onMove={destination => moveTo(item, destination)} onChooseMove={() => setMoveTarget(item)}
     onArchive={() => archiveWorkpad(item, !item.archivedAt)} />;
-  const toggleGroup = (key: string) => setCollapsedGroups(current => {
-    const next = new Set(current);
-    if (next.has(key)) next.delete(key); else next.add(key);
-    return next;
-  });
-  const renderGroup = (group: WorkpadGroup): React.JSX.Element => {
-    const collapsed = collapsedGroups.has(group.key);
-    return <li key={group.key} className="list-group" data-kind={group.kind}>
-      <ListHeading variant="group" expanded={!collapsed} onToggle={() => toggleGroup(group.key)}
-        icon={<ListHeadingIcon kind={group.kind} />} label={group.label} count={group.count} />
-      {!collapsed && <ul className="workpads-list" aria-label={group.label}>
-        {group.items.map(item => renderRow(item))}
-        {group.children.map(renderGroup)}
-      </ul>}
-    </li>;
-  };
   const emptyState = (() => {
     if (loading) return <EmptyState variant="inline" className="workpads-empty" title="Loading…" />;
     if (!scopeValid) return <EmptyState variant="inline" className="workpads-empty" title="Open a thread to see its workpads" />;
@@ -722,11 +680,11 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
     return <EmptyState variant="inline" className="workpads-empty" title={`No ${SCOPE_NOUN[view]} yet`} description="Name one above, or ask an agent to start one." />;
   })();
   const archivedSection = archivedShown && <section className="workpads-section" aria-label="Archived workpads">
-    <ListHeading variant="section" expanded={archivedOpen} onToggle={() => setArchivedOpen(value => !value)}
+    <ListHeading expanded={archivedOpen} onToggle={() => setArchivedOpen(value => !value)}
       label="Archived" count={trimmedQuery ? undefined : archivedTotal} />
     {archivedOpen && <>
       {archivedItems.length ? <ul className="workpads-list" aria-label="Archived workpads">
-        {archivedItems.map(item => renderRow(item, rowLocation(item, "archived")))}
+        {archivedItems.map(item => renderRow(item, rowLocation(item)))}
       </ul> : <EmptyState variant="inline" className="workpads-empty"
         title={archivedLoading ? "Loading…" : trimmedQuery ? `No archived workpads match “${trimmedQuery}”` : "No archived workpads"} />}
       {archivedCursor && <Button variant="ghost" size="sm" className="workpads-more" disabled={busy} onClick={() => { void run(() => refreshArchived(archivedCursor)); }}>Load more</Button>}
@@ -737,7 +695,7 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
     {errorCallout}
     <div className="workpads-scroll" aria-busy={loading}>
       {items.length ? <ul className="workpads-list" aria-label={`${view === "all" ? "All" : view === "global" ? "Global" : view === "project" ? "Project" : "Thread"} workpads`}>
-        {groups ? groups.map(renderGroup) : items.map(item => renderRow(item, rowLocation(item, "active")))}
+        {items.map(item => renderRow(item, rowLocation(item)))}
       </ul> : emptyState}
       {cursor && <Button variant="ghost" size="sm" className="workpads-more" disabled={busy} onClick={() => { void run(() => refreshList(cursor)); }}>Load more</Button>}
       {archivedSection}

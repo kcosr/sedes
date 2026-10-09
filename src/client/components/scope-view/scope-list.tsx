@@ -7,8 +7,8 @@ import "./scope-view.css";
 
 /**
  * Shared pieces of the scoped lists (Tasks, Workpads): the scope icon, the
- * quiet line that says where an item belongs, collapsible group and section
- * headings, and the chips of the View options in effect.
+ * quiet line that says where an item belongs, collapsible section headings,
+ * and the chips of the View options in effect.
  */
 
 /** The icon of a scope kind: threads, projects and Global read the same everywhere. */
@@ -31,9 +31,9 @@ export interface ScopeLocationLabel {
 }
 
 /**
- * The quiet second line of a row in a list that mixes scopes without group
- * headings: the scope's icon and name. It is presentation only; the row says
- * the same in its description ("In …").
+ * The quiet second line of a row in a list that mixes scopes (All, and
+ * Project with its threads' items): the scope's icon and name. It is
+ * presentation only; the row says the same in its description ("In …").
  */
 export function ScopeLocation({
   location,
@@ -58,23 +58,21 @@ export type ListHeadingProps = Omit<
   ButtonHTMLAttributes<HTMLButtonElement>,
   "type" | "onClick" | "children"
 > & {
-  /** `group`: an All group (Global, a project, a thread). `section`: Backlog, Completed, Archived. */
-  readonly variant: "group" | "section";
   readonly expanded: boolean;
   readonly onToggle: () => void;
-  readonly icon?: ReactNode;
   readonly label: string;
   /** Omitted while it is not known. */
   readonly count?: number;
   readonly "data-tasks-nav"?: string;
 };
 
-/** A collapsible heading over a group or a section of a list. */
+/**
+ * The collapsible heading of a section that ends a list (Backlog, Completed,
+ * Archived).
+ */
 export function ListHeading({
-  variant,
   expanded,
   onToggle,
-  icon,
   label,
   count,
   className,
@@ -85,21 +83,14 @@ export function ListHeading({
       {...button}
       type="button"
       className={cn("list-heading", className)}
-      data-variant={variant}
       aria-expanded={expanded}
       onClick={onToggle}
     >
       <ChevronRight className="list-heading-chevron" aria-hidden="true" />
-      {icon}
       <span className="list-heading-label">{label}</span>
       {count !== undefined && <span className="list-heading-count">{count}</span>}
     </button>
   );
-}
-
-/** A group heading's icon: the group's scope. */
-export function ListHeadingIcon({ kind }: { readonly kind: TaskScope["kind"] }): React.JSX.Element {
-  return <ScopeIcon kind={kind} className="list-heading-icon" />;
 }
 
 /** A View option in effect, shown as a removable chip under the scope control. */
