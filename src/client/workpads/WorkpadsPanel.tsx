@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Archive, ArchiveRestore, Bot, Check, ChevronLeft, ChevronsDownUp, ChevronsUpDown, Ellipsis, FilePenLine, FolderInput, Highlighter, History, ListFilter, LoaderCircle, Pencil, Plus, Search, Trash2, X } from "lucide-react";
+import { Archive, ArchiveRestore, Bot, Check, ChevronsDownUp, ChevronsUpDown, Ellipsis, FilePenLine, FolderInput, Highlighter, History, ListFilter, LoaderCircle, Pencil, Plus, Search, Trash2, X } from "lucide-react";
 import type { ListWorkpadsRequest, UpdateWorkpadRequest, Workpad, WorkpadCounts, WorkpadScope, WorkpadSummary, WorkpadRevision, WorkpadRevisionSummary } from "../../shared/protocol/workpads.js";
 import { WORKPAD_CONTENT_MAX_CHARACTERS } from "../../shared/protocol/workpads.js";
 import { CLOSE_WORKPAD_EVENT } from "../app/android-back.js";
@@ -561,8 +561,9 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
   const noChanges = Boolean(draft.editor && draft.editor.text === draft.editor.baseText);
   const canSave = Boolean(draft.editor) && !busy && !draft.saving && !stale && !draft.editor?.remote && !noChanges;
 
-  // ‹ Workpads, and everything else that returns to the list: the open
-  // editor's text syncs first, and the document closes once it has.
+  // Choosing the open workpad's view again, and everything else that returns
+  // to the list: the open editor's text syncs first, and the document closes
+  // once it has.
   const closeDocument = (then?: () => void) => {
     void run(async isCurrent => {
       if (draft.editor) await draft.save();
@@ -602,7 +603,7 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
     }, true);
   };
 
-  // Android Back closes an open workpad, as ‹ Workpads does.
+  // Android Back closes an open workpad, as choosing its view again does.
   const closeDocumentRef = useRef(closeDocument); closeDocumentRef.current = closeDocument;
   useEffect(() => {
     if (!open) return;
@@ -683,7 +684,9 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
   const archivedShown = (archivedTotal ?? 0) > 0 || countsFailed || archivedItems.length > 0;
   const segments = <ScopeSegments aria-label="Workpad scope" value={view} disabled={busy}
     onValueChange={changeView}
+    // The way back from an open workpad: choose its view again.
     onReselect={() => { if (selectedRef.current) closeDocument(); }}
+    reselectHint={selected ? "Back to workpads" : undefined}
     unavailableReason={candidate => viewUnavailableReason(candidate, viewContext, "workpads")}
     count={candidate => viewCount(activeCounts, candidate, candidate === "project" && preferences.views.project.includeThreadWorkpads)}
     describeCount={count => `${count} ${count === 1 ? "workpad" : "workpads"}`} />;
@@ -759,11 +762,6 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
 
   const documentView = selected && <>
     <div className="workpads-doc-toolbar">
-      <Button variant="ghost" size="sm" className="workpads-doc-back" aria-label="Back to workpads" title="Back to workpads" disabled={busy}
-        onClick={() => closeDocument()}>
-        <ChevronLeft data-icon="inline-start" aria-hidden="true" />
-        <span className="workpads-doc-back-label">Workpads</span>
-      </Button>
       <div className="workpads-doc-heading">
         <h3 className="workpads-doc-title" title={documentTitle}>{documentTitle}</h3>
         {editing

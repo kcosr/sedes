@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { useSyncExternalStore, type ReactNode } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ApplicationClientStore } from "../stores/ApplicationClientStore.js";
 import { ApiError } from "../api/ApiClient.js";
@@ -88,9 +89,11 @@ const headerMenu = () => openMenu("Workpads panel actions");
 /** The open workpad's own ⋯, in its toolbar. */
 const documentMenu = () => openMenu("Workpad actions");
 const viewOptions = () => openMenu("View options");
-/** ‹ Workpads, in the open workpad's toolbar. */
-const back = () => screen.getByRole("button", { name: "Back to workpads" });
 const segment = (name: string) => within(screen.getByRole("radiogroup", { name: "Workpad scope" })).getByRole("radio", { name });
+/** The selected scope segment: choosing it again returns from an open workpad to its list. */
+const currentSegment = () => within(screen.getByRole("radiogroup", { name: "Workpad scope" })).getAllByRole("radio")
+  .find(radio => radio.getAttribute("aria-checked") === "true")!;
+const backToList = () => { fireEvent.click(currentSegment()); };
 const closeMenu = () => { fireEvent.keyDown(screen.getAllByRole("menu").at(-1)!, { key: "Escape" }); };
 const choose = (name: string | RegExp) => { fireEvent.click(screen.getByRole("menuitem", { name })); };
 const menuLabels = (menu: HTMLElement) => [...menu.querySelectorAll("[role^=menuitem]")].map(item => item.textContent);
@@ -241,7 +244,7 @@ describe("WorkpadsPanel", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "Reload workpad" })).not.toBeDisabled());
     fireEvent.click(screen.getByRole("button", { name: "Dismiss error" }));
     expect(screen.getByRole("alert")).toHaveTextContent("Reload this workpad");
-    fireEvent.click(back());
+    backToList();
     await screen.findByRole("button", { name: "Integration" });
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Reload workpad" })).not.toBeInTheDocument();
@@ -864,7 +867,7 @@ describe("WorkpadsPanel", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     await act(async () => { resolveCreated(pad); });
     expect(await screen.findByRole("textbox", { name: "Workpad content" })).toHaveValue("Original");
-    fireEvent.click(back());
+    backToList();
     await waitFor(() => expect(screen.getByRole("radio", { name: "Global" })).toBeEnabled());
     expect(context.host.setBusy).toHaveBeenLastCalledWith(false);
     viewOptions();
@@ -1072,7 +1075,7 @@ describe("WorkpadsPanel", () => {
   });
 
   describe("header, toolbar and document controls", () => {
-    it("keeps the panel header and scope control while a workpad is open, with ‹ Workpads in its toolbar", async () => {
+    it("keeps the panel header and scope control while a workpad is open, its toolbar leading with the title", async () => {
       const { store, api } = fixture();
       const context = panelContext(store);
       const view = render(<Panel context={context} />);
@@ -1083,24 +1086,30 @@ describe("WorkpadsPanel", () => {
       expect(header().querySelector(".lucide-notepad-text")).not.toBeNull();
       expect(within(header()).getByRole("button", { name: "Search workpads" })).toBeInTheDocument();
       expect(within(header()).getByRole("button", { name: "View options" })).toBeInTheDocument();
-      expect(within(header()).queryByRole("button", { name: "Back to workpads" })).not.toBeInTheDocument();
       expect(context.host.setSubtitle).not.toHaveBeenCalled();
       // The scope control stays above the document; the add row and chips do not.
       expect(segment("Global")).toBeChecked();
       expect(screen.queryByRole("textbox", { name: "New workpad title" })).not.toBeInTheDocument();
-      // The document's own toolbar: ‹ Workpads, then the title, then its actions.
+      // The document's own toolbar: the title, then its actions. The scope
+      // control is the way back, so there is no back button of its own.
       const toolbar = document.querySelector(".workpads-doc-toolbar") as HTMLElement;
-      expect(toolbar.firstElementChild).toBe(back());
-      expect(back()).toHaveTextContent("Workpads");
+      expect(toolbar.firstElementChild).toHaveClass("workpads-doc-heading");
       expect(within(toolbar).getByRole("heading", { name: "Integration" })).toBeInTheDocument();
       expect(within(toolbar).getByRole("button", { name: "Workpad actions" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /back/i })).not.toBeInTheDocument();
+      // The selected view says choosing it again goes back.
+      expect(segment("Global")).toHaveAttribute("title", "Back to workpads");
+      expect(segment("Global")).toHaveAccessibleDescription("0 workpads. Back to workpads");
+      expect(segment("All")).not.toHaveAttribute("title");
       // Leaving an editor syncs its text first.
       fireEvent.change(await startEditing(), { target: { value: "Synced on the way out" } });
-      fireEvent.click(back());
+      backToList();
       await screen.findByRole("button", { name: "Integration" });
       expect(api.saveWorkpadDraft).toHaveBeenCalledWith("pad", { expectedRevision: 0, baseRevision: 1, content: "Synced on the way out" });
-      expect(screen.queryByRole("button", { name: "Back to workpads" })).not.toBeInTheDocument();
       expect(addRow()).toBeInTheDocument();
+      // With the list shown, the selected view has nothing more to do.
+      expect(segment("Global")).not.toHaveAttribute("title");
+      expect(segment("Global")).toHaveAccessibleDescription("0 workpads");
       view.unmount();
       expect(context.host.setMenuItems).toHaveBeenLastCalledWith(undefined);
     });
@@ -1148,7 +1157,7 @@ describe("WorkpadsPanel", () => {
       expect(api.getWorkpadDraft).toHaveBeenCalledWith("created");
       expect(screen.getByRole("button", { name: "Done editing" })).toBeInTheDocument();
       expect(screen.getByRole("heading", { name: "Launch notes" })).toBeInTheDocument();
-      fireEvent.click(back());
+      backToList();
       await waitFor(() => expect(addRow()).toHaveValue(""));
     });
 
@@ -1456,7 +1465,8 @@ describe("WorkpadsPanel", () => {
       fireEvent.change(await startEditing(), { target: { value: "Original, committing" } });
       fireEvent.click(screen.getByRole("button", { name: "Save workpad" }));
       await waitFor(() => expect(commitWorkpadDraft).toHaveBeenCalled());
-      expect(back()).toBeDisabled();
+      // The way back waits too.
+      expect(currentSegment()).toBeDisabled();
       documentMenu();
       expect(screen.getByRole("menuitem", { name: "Discard draft…" })).toHaveAttribute("aria-disabled", "true");
     });
@@ -1687,7 +1697,7 @@ describe("WorkpadsPanel", () => {
       await screen.findByRole("button", { name: "Edit workpad" });
       fireEvent.click(segment("Global"));
       expect(await screen.findByRole("button", { name: "Integration" })).toBeInTheDocument();
-      expect(screen.queryByRole("button", { name: "Back to workpads" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("heading", { name: "Integration" })).not.toBeInTheDocument();
       await waitFor(() => expect(api.listWorkpads).toHaveBeenLastCalledWith(expect.objectContaining({ scope: { kind: "global" } })));
       await openRow();
       await screen.findByRole("button", { name: "Edit workpad" });
@@ -1695,6 +1705,25 @@ describe("WorkpadsPanel", () => {
       expect(await screen.findByRole("textbox", { name: "New workpad title" })).toBeInTheDocument();
       expect(screen.queryByRole("button", { name: "Edit workpad" })).not.toBeInTheDocument();
       expect(segment("Global")).toBeChecked();
+    });
+
+    it("returns to the list from the keyboard: Enter or Space on the selected view", async () => {
+      const user = userEvent.setup();
+      const { store, api } = fixture();
+      render(<Panel context={{ ...panelContext(store), threadId: "first-thread" }} />);
+      for (const key of ["{Enter}", " "]) {
+        await openRow();
+        // An editor's text syncs on the way out, as on every way back.
+        fireEvent.change(await startEditing(), { target: { value: `Typed before ${key}` } });
+        // The selected segment is the scope control's tab stop.
+        segment("Thread").focus();
+        expect(segment("Thread")).toHaveFocus();
+        await user.keyboard(key);
+        expect(await screen.findByRole("textbox", { name: "New workpad title" })).toBeInTheDocument();
+        expect(screen.queryByRole("textbox", { name: "Workpad content" })).not.toBeInTheDocument();
+        expect(api.saveWorkpadDraft).toHaveBeenLastCalledWith("pad", expect.objectContaining({ content: `Typed before ${key}` }));
+        expect(segment("Thread")).toBeChecked();
+      }
     });
 
     it("returns to the list for Search and for View options", async () => {
@@ -1744,14 +1773,14 @@ describe("WorkpadsPanel", () => {
       const context = panelContext(store);
       const view = render(<Panel context={context} />);
       await screen.findByRole("button", { name: "Integration" });
-      const back = () => { const event = new Event(CLOSE_WORKPAD_EVENT, { cancelable: true }); act(() => { window.dispatchEvent(event); }); return event.defaultPrevented; };
-      expect(back()).toBe(false);
+      const androidBack = () => { const event = new Event(CLOSE_WORKPAD_EVENT, { cancelable: true }); act(() => { window.dispatchEvent(event); }); return event.defaultPrevented; };
+      expect(androidBack()).toBe(false);
       await openRow();
       await screen.findByRole("button", { name: "Edit workpad" });
       view.rerender(<Panel context={{ ...context, visible: false }} />);
-      expect(back()).toBe(false);
+      expect(androidBack()).toBe(false);
       view.rerender(<Panel context={context} />);
-      expect(back()).toBe(true);
+      expect(androidBack()).toBe(true);
       expect(await screen.findByRole("textbox", { name: "New workpad title" })).toBeInTheDocument();
       expect(screen.queryByRole("button", { name: "Edit workpad" })).not.toBeInTheDocument();
     });

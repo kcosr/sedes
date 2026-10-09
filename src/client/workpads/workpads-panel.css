@@ -1,9 +1,10 @@
 /* Workpads. The list follows the Tasks panel (the shared scope control,
    chips, group and section headings and location line in
    components/scope-view, a dashed add row, quiet one-line rows). An open
-   document keeps the panel's header and scope control, with one hairline
-   toolbar of its own (‹ Workpads, its title, its actions) over the text, as
-   in the Files editor. Panel-level actions sit in the shared panel header. */
+   document keeps the panel's header and scope control (choosing its view
+   again returns to the list), with one hairline toolbar of its own (its
+   title, its actions) over the text, as in the Files editor. Panel-level
+   actions sit in the shared panel header. */
 
 .workpads-panel {
   --workpads-row-height: var(--control-lg);
@@ -278,8 +279,9 @@
   height: var(--workpads-more-width);
 }
 
-/* ── Document: one hairline toolbar (‹ Workpads, the title over its
-   revision line, the document's actions), then the text ── */
+/* ── Document: one hairline toolbar (the title over its revision line,
+   level with the text below, then the document's actions), then the
+   text ── */
 .workpads-doc-toolbar {
   display: flex;
   flex: none;
@@ -287,22 +289,11 @@
   gap: var(--space-1-5);
   min-width: 0;
   min-height: var(--control-lg);
-  padding: var(--space-1) var(--space-1-5);
+  padding: var(--space-1) var(--space-1-5) var(--space-1) var(--space-5);
   border-top: 1px solid var(--border-soft);
   border-bottom: 1px solid var(--border-soft);
   color: var(--muted-foreground);
   font-size: var(--text-meta);
-}
-
-.workpads-doc-back {
-  flex: none;
-  gap: var(--space-0-5);
-  padding-inline: var(--space-1) var(--space-2);
-  color: var(--muted-foreground);
-}
-
-.workpads-doc-back:hover {
-  color: var(--foreground);
 }
 
 .workpads-doc-heading {
@@ -339,18 +330,6 @@
   height: var(--icon-xs);
   margin-right: var(--space-1);
   vertical-align: -1px;
-}
-
-/* A narrow panel keeps the back step's arrow, and its name for assistive
-   technology. */
-@container workpads (max-width: 359px) {
-  .workpads-doc-back-label {
-    display: none;
-  }
-
-  .workpads-doc-back {
-    padding-inline: var(--space-1);
-  }
 }
 
 .workpads-doc-actions {
@@ -520,8 +499,7 @@
     height: var(--bar-control);
   }
 
-  .workpads-save,
-  .workpads-doc-back {
+  .workpads-save {
     height: var(--bar-control);
   }
 
@@ -535,6 +513,10 @@
   .workpads-reading,
   .workpads-editor > .workpads-textarea {
     padding: var(--space-4);
+  }
+
+  .workpads-doc-toolbar {
+    padding-left: var(--space-4);
   }
 
   .workpads-notice,

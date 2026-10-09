@@ -96,13 +96,16 @@ editing. Archiving a thread preserves its workpads in their current scope.
 
 Selecting a row opens the workpad in the panel. The header stays **Workpads**,
 with search and View options, and the scope control stays above the
-document. The workpad's own toolbar starts with **‹ Workpads**, which returns
-to the list, then the title over its revision line (which names the
-workpad's thread, project, or **Global**), then its actions: **Show
-attribution**, **Revision history**, **Edit workpad**, and **⋯** with
-**Rename…**, **Move to**, and **Archive** or **Unarchive**. Choosing a view,
-searching, or changing a View option also returns to the list. On Android,
-Back closes the workpad before it opens the navigation drawer.
+document. The workpad's own toolbar shows its title over its revision line
+(which names the workpad's thread, project, or **Global**), then its actions:
+**Show attribution**, **Revision history**, **Edit workpad**, and **⋯** with
+**Rename…**, **Move to**, and **Archive** or **Unarchive**.
+
+To return to the list, choose the selected view again (its tooltip says
+**Back to workpads**); with the keyboard, press Enter or Space on it. Choosing
+another view, searching, or changing a View option also returns to the list,
+and an open editor's text syncs first. On Android, Back closes the workpad
+before it opens the navigation drawer.
 
 ## Edit and save
 

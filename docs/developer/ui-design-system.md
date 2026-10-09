@@ -70,9 +70,11 @@ and its own panel-level ⋯ items after the Dock group (`host.setMenuItems`, a
 memoized node that renders inside the layout's menu, so menu primitives work
 in it; a sheet under touch density). The header never changes into an open
 item's: an open document keeps the panel's title, icon and actions, and its
-own way back, title and actions sit in one hairline toolbar under the header,
-as in the Files editor and Workpads (‹ Workpads, the title, then the
-document's actions and its ⋯).
+title and actions sit in one hairline toolbar under the header, as in the
+Files editor and Workpads (the title, then the document's actions and its
+⋯). Workpads has no back button of its own: its scope control stays above the
+document, and choosing the selected view again (`ScopeSegments`'
+`onReselect`, announced by `reselectHint`) returns to the list.
 
 **Scoped lists.** Tasks and Workpads render the same pieces from
 `components/scope-view/`: `ScopeSegments` (Thread · Project · Global · All
