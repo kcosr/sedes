@@ -37,6 +37,10 @@
   --tasks-row-text: var(--text-ui);
   --tasks-row-icon: var(--icon-sm);
   --tasks-more-width: var(--control-sm);
+  /* Section headings start at the completion circle, in either density. */
+  --list-heading-inset: calc(
+    (var(--tasks-check-target) - var(--tasks-check-icon)) / 2
+  );
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
@@ -439,9 +443,10 @@
   outline: none;
 }
 
-/* Lists that mix scopes without group headings put where a task belongs on
-   a quiet second line, so it never takes room from the title. The two
-   lines get their own padding rather than sharing the one-line height. */
+/* Lists that mix scopes (All, and Project with its threads' tasks) put
+   where a task belongs on a quiet second line, so it never takes room from
+   the title. The two lines get their own padding rather than sharing the
+   one-line height. */
 .tasks-row-title[data-location] {
   display: flex;
   flex-direction: column;

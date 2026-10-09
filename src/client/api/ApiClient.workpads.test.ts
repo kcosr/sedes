@@ -21,15 +21,15 @@ function serve(body: unknown) {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("ApiClient workpads", () => {
-  it("sends a list's sort, grouping and lead project, leaving the server's defaults implicit", async () => {
+  it("sends a list's scope and sort, leaving the server's default sort implicit", async () => {
     const urls = serve({ items: [] });
     const api = new ApiClient();
-    await api.listWorkpads({ scope: { kind: "global" }, scopeMode: "subtree", sort: "title", group: "project", leadProjectId: "project-1" });
-    await api.listWorkpads({ scope: { kind: "project", projectId: "project-1" }, scopeMode: "exact", sort: "updated", group: "none" });
+    await api.listWorkpads({ scope: { kind: "global" }, scopeMode: "subtree", sort: "title" });
+    await api.listWorkpads({ scope: { kind: "project", projectId: "project-1" }, scopeMode: "exact", sort: "updated" });
     await api.listWorkpads({ scope: { kind: "thread", threadId: "thread-1" }, archived: true, sort: "newest", cursor: "next" });
     expect(urls.map(url => [url.pathname, Object.fromEntries(url.searchParams)])).toEqual([
-      ["/api/workpads", { scopeKind: "global", scopeMode: "subtree", leadProjectId: "project-1", sort: "title", group: "project" }],
-      // Most recently updated and ungrouped are what the server does unasked.
+      ["/api/workpads", { scopeKind: "global", scopeMode: "subtree", sort: "title" }],
+      // Most recently updated is what the server does unasked.
       ["/api/workpads", { scopeKind: "project", projectId: "project-1", scopeMode: "exact" }],
       ["/api/workpads", { scopeKind: "thread", threadId: "thread-1", archived: "true", cursor: "next", sort: "newest" }],
     ]);

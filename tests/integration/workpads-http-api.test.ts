@@ -133,7 +133,7 @@ describe("Workpads HTTP", () => {
     } finally { f.database.close(); }
   });
 
-  it("lists by sort and project groups across pages and counts each panel view", async () => {
+  it("lists by sort across pages and counts each panel view", async () => {
     const f = fixture();
     try {
       const environmentId = (f.database.prepare("SELECT id FROM execution_environments LIMIT 1").get() as { id: string }).id;
@@ -156,6 +156,7 @@ describe("Workpads HTTP", () => {
           const page = await f.get(`${path}${cursor ? `&cursor=${cursor}` : ""}`).expect(200);
           seen.push(...ids(page));
           cursor = page.body.nextCursor;
+          expect(cursor?.length ?? 0).toBeLessThanOrEqual(256);
         } while (cursor);
         return seen;
       };
@@ -163,19 +164,20 @@ describe("Workpads HTTP", () => {
       expect(ids(await f.get("/api/workpads?scopeKind=global&scopeMode=subtree").expect(200))).toEqual([project.id, thread.id, global.id]);
       expect(ids(await f.get("/api/workpads?scopeKind=global&scopeMode=subtree&sort=title").expect(200))).toEqual([project.id, global.id, thread.id]);
       expect(ids(await f.get("/api/workpads?scopeKind=global&scopeMode=subtree&sort=newest").expect(200))).toEqual([project.id, thread.id, global.id]);
-      expect(await readAll(`/api/workpads?scopeKind=global&scopeMode=subtree&group=project&leadProjectId=${projectId}&limit=1`)).toEqual([global.id, project.id, thread.id]);
-      const first = await f.get("/api/workpads?scopeKind=global&scopeMode=subtree&group=project&limit=1").expect(200);
+      expect(await readAll("/api/workpads?scopeKind=global&scopeMode=subtree&sort=title&limit=1")).toEqual([project.id, global.id, thread.id]);
+      const first = await f.get("/api/workpads?scopeKind=global&scopeMode=subtree&sort=title&limit=1").expect(200);
       expect((await f.get(`/api/workpads?scopeKind=global&scopeMode=subtree&limit=1&cursor=${first.body.nextCursor}`).expect(409)).body.error.code).toBe("cursor_invalid");
       await f.get("/api/workpads?scopeKind=global&sort=oldest").expect(400);
-      await f.get("/api/workpads?scopeKind=global&group=thread").expect(400);
-      await f.get("/api/workpads?scopeKind=global&leadProjectId=").expect(400);
-      await f.get(`/api/workpads?scopeKind=global&cursor=${"a".repeat(1025)}`).expect(400);
-      await f.get(`/api/workpads?scopeKind=global&cursor=${"a".repeat(1024)}`).expect(409);
-      // Long titles produce cursors beyond the history route's 256-character bound.
+      // Lists are not grouped; there is no grouping or lead project parameter.
+      await f.get("/api/workpads?scopeKind=global&group=project").expect(400);
+      await f.get(`/api/workpads?scopeKind=global&leadProjectId=${projectId}`).expect(400);
+      await f.get(`/api/workpads?scopeKind=global&cursor=${"a".repeat(257)}`).expect(400);
+      await f.get(`/api/workpads?scopeKind=global&cursor=${"a".repeat(256)}`).expect(409);
+      // The longest titles still page within the 256-character cursor bound.
       const long = [await create(`${"漢".repeat(239)}1`, { kind: "global" }), await create(`${"漢".repeat(239)}2`, { kind: "global" })];
-      const longPage = await f.get("/api/workpads?scopeKind=global&sort=title&limit=2").expect(200);
-      expect(longPage.body.nextCursor.length).toBeGreaterThan(256);
-      expect(await readAll("/api/workpads?scopeKind=global&sort=title&limit=1")).toEqual([global.id, ...long.map(pad => pad.id)]);
+      for (const limit of [1, 2]) {
+        expect(await readAll(`/api/workpads?scopeKind=global&sort=title&limit=${limit}`)).toEqual([global.id, ...long.map(pad => pad.id)]);
+      }
 
       await f.mutate("patch", `/api/workpads/${thread.id}`).send({ expectedRevision: thread.revision, archived: true }).expect(200);
       const counts = await f.get(`/api/workpads/counts?threadId=${threadId}&projectId=${projectId}`).expect(200);

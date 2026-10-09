@@ -1,4 +1,4 @@
-import { ArrowDownAZ, CalendarArrowDown, Clock, Layers, MessageSquare } from "lucide-react";
+import { ArrowDownAZ, CalendarArrowDown, Clock, MessageSquare } from "lucide-react";
 import {
   DropdownMenuCheckboxItem,
   DropdownMenuLabel,
@@ -49,51 +49,33 @@ export function SortOptionItems({
 }
 
 /**
- * The view's own scope option: All's **Group by project**, or Project's
- * **Include thread …** (its threads' items join the project's own). Other
- * views have none.
+ * Project's own option, **Include thread …**: its threads' items join the
+ * project's own. Other views have none.
  */
 export function ScopeOptionItem({
   view,
-  groupByProject,
   includeThreadItems,
   includeThreadLabel,
   onChange,
   disabled,
 }: {
   readonly view: ScopeView;
-  readonly groupByProject: boolean;
   readonly includeThreadItems: boolean;
   /** "Include thread tasks", "Include thread workpads". */
   readonly includeThreadLabel: string;
-  readonly onChange: (change: { groupByProject?: boolean; includeThreadItems?: boolean }) => void;
+  readonly onChange: (includeThreadItems: boolean) => void;
   readonly disabled?: boolean;
 }): React.JSX.Element | null {
-  if (view === "all") {
-    return (
-      <DropdownMenuCheckboxItem
-        checked={groupByProject}
-        disabled={disabled}
-        onCheckedChange={(checked) => onChange({ groupByProject: checked === true })}
-        onSelect={keepViewOptionsOpen}
-      >
-        <Layers />
-        Group by project
-      </DropdownMenuCheckboxItem>
-    );
-  }
-  if (view === "project") {
-    return (
-      <DropdownMenuCheckboxItem
-        checked={includeThreadItems}
-        disabled={disabled}
-        onCheckedChange={(checked) => onChange({ includeThreadItems: checked === true })}
-        onSelect={keepViewOptionsOpen}
-      >
-        <MessageSquare />
-        {includeThreadLabel}
-      </DropdownMenuCheckboxItem>
-    );
-  }
-  return null;
+  if (view !== "project") return null;
+  return (
+    <DropdownMenuCheckboxItem
+      checked={includeThreadItems}
+      disabled={disabled}
+      onCheckedChange={(checked) => onChange(checked === true)}
+      onSelect={keepViewOptionsOpen}
+    >
+      <MessageSquare />
+      {includeThreadLabel}
+    </DropdownMenuCheckboxItem>
+  );
 }

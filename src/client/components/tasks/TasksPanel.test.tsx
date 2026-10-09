@@ -526,31 +526,35 @@ describe("TasksPanel scope", () => {
     expect(segment("Project")).toHaveAttribute("aria-checked", "true");
   });
 
-  it("groups All by Global, then projects with their threads, collapsibly", () => {
+  it("lists every task in All as one flat list, each row saying where it belongs", () => {
     renderPanel(seededStore());
     fireEvent.click(segment("All"));
 
-    const headings = [...panel().querySelectorAll('.list-heading[data-variant="group"]')].map(
-      (node) => node.textContent,
-    );
-    expect(headings).toEqual([
-      "Global1",
-      "acme-web4",
-      "Checkout flow refactor2",
-      "Sibling thread1",
-      "billing-service1",
-      "Invoice rounding bug1",
+    // No group headings, only the Completed section: every open task in
+    // the view's order, pinned first, whatever its scope.
+    expect(
+      [...panel().querySelectorAll(".list-heading")].map((node) => node.textContent),
+    ).toEqual(["Completed1"]);
+    expect(titles()).toEqual([
+      "Audit checkout error states",
+      "Add retry to the payment call",
+      "Rotate staging credentials",
+      "Round invoices half-even",
+      "Upgrade the test runner",
+      "Sibling thread task",
     ]);
-    // Location shows in the headings, never inline on the rows.
-    expect(panel().querySelector(".scope-location")).toBeNull();
-
-    const acme = screen.getByRole("button", { name: /^acme-web/ });
-    expect(acme).toHaveAttribute("aria-expanded", "true");
-    fireEvent.click(acme);
-    expect(acme).toHaveAttribute("aria-expanded", "false");
-    expect(screen.queryByRole("button", { name: "Upgrade the test runner" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /^Sibling thread/ })).not.toBeInTheDocument();
-    expect(rowTitle("Round invoices half-even")).toBeInTheDocument();
+    expect(rowTitle("Rotate staging credentials")).toHaveAccessibleDescription("In Global");
+    expect(rowTitle("Upgrade the test runner")).toHaveAccessibleDescription("In acme-web");
+    // A thread task names its project too.
+    expect(rowTitle("Add retry to the payment call")).toHaveAccessibleDescription(
+      "In Checkout flow refactor · acme-web",
+    );
+    expect(rowOf("Round invoices half-even").querySelector(".scope-location")).toHaveTextContent(
+      "Invoice rounding bug · billing-service",
+    );
+    expect(rowOf("Round invoices half-even").querySelector(".scope-location .lucide-message-square")).not.toBeNull();
+    expect(rowOf("Rotate staging credentials").querySelector(".scope-location .lucide-globe")).not.toBeNull();
+    expect(rowOf("Upgrade the test runner").querySelector(".scope-location .lucide-folder")).not.toBeNull();
   });
 
   it("includes a project's thread tasks only through the Project view option", async () => {
@@ -600,21 +604,18 @@ describe("TasksPanel scope", () => {
     expect(screen.queryByRole("button", { name: "Reset view options" })).not.toBeInTheDocument();
   });
 
-  it("says where each task belongs in All without grouping, and not with it", async () => {
+  it("offers no grouping in All's View options", async () => {
     const user = userEvent.setup();
     renderPanel(seededStore());
     await user.click(segment("All"));
-    expect(panel().querySelector(".scope-location")).toBeNull();
-    expect(rowTitle("Rotate staging credentials")).not.toHaveAttribute("aria-describedby");
-
     await user.click(screen.getByRole("button", { name: "View options" }));
-    await user.click(screen.getByRole("menuitemcheckbox", { name: "Group by project" }));
+    expect(screen.queryByRole("menuitemcheckbox", { name: "Group by project" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitemcheckbox", { name: "Include thread tasks" })).not.toBeInTheDocument();
     await user.keyboard("{Escape}");
-    expect(rowTitle("Rotate staging credentials")).toHaveAccessibleDescription("In Global");
-    // A thread task names its project too, as the grouped headings do.
-    expect(rowTitle("Add retry to the payment call")).toHaveAccessibleDescription(
-      "In Checkout flow refactor · acme-web",
-    );
+    // Nor anything to collapse in the panel's menu.
+    await user.click(screen.getByRole("button", { name: "Tasks panel actions" }));
+    expect(screen.getByRole("menuitem", { name: "Add a task with notes" })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: /all groups$/ })).not.toBeInTheDocument();
   });
 });
 
@@ -699,20 +700,13 @@ describe("TasksPanel across a project's locations", () => {
     expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
   });
 
-  it("groups All once per project, with each thread saying where it runs", () => {
+  it("names each thread's project in All, and where it runs", () => {
     renderPanel(sharedProjectStore("thread-9"));
     fireEvent.click(segment("All"));
-
-    const headings = [...panel().querySelectorAll('.list-heading[data-variant="group"]')].map(
-      (node) => node.textContent,
+    expect(rowTitle("Deploy from the build host")).toHaveAccessibleDescription(
+      "In Remote checkout · acme-web · Build host",
     );
-    expect(headings).toEqual([
-      "acme-web3",
-      "Checkout flow refactor1",
-      "Remote checkout · Build host1",
-      "billing-service1",
-      "Invoice rounding bug1",
-    ]);
+    expect(rowTitle("Upgrade the test runner")).toHaveAccessibleDescription("In acme-web");
   });
 
   it("offers each project once as a destination, described by its locations", async () => {
@@ -1490,7 +1484,7 @@ const BACKLOG = [
   threadTask({ id: "t-later-pinned", title: "Rewrite the receipts", backlog: true, pinned: true, createdAt: "2026-07-30T10:00:00.000Z" }),
 ];
 const headings = () =>
-  [...panel().querySelectorAll('.list-heading[data-variant="section"]')].map((node) => node.textContent);
+  [...panel().querySelectorAll(".list-heading")].map((node) => node.textContent);
 const backlogHeading = () => screen.getByRole("button", { name: /^Backlog/ });
 
 describe("TasksPanel Backlog and Pin", () => {
@@ -1501,6 +1495,9 @@ describe("TasksPanel Backlog and Pin", () => {
     expect(titles()).toEqual(["Audit checkout error states", "Add retry to the payment call"]);
     expect(headings()).toEqual(["Backlog2", "Completed1"]);
     expect(backlogHeading()).toHaveAttribute("aria-expanded", "false");
+    // The label leads, where the rows start; the chevron follows the count.
+    expect(backlogHeading().firstElementChild).toHaveClass("list-heading-label");
+    expect(backlogHeading().lastElementChild).toHaveClass("list-heading-chevron");
     // Counts cover every open task, the backlog's included.
     expect(segment("Thread")).toHaveAccessibleDescription("4 open");
     expect(panel().querySelector(".tasks-title-count")).toHaveAttribute("aria-label", "4 open");
@@ -1565,14 +1562,14 @@ describe("TasksPanel Backlog and Pin", () => {
       { pinned: false, backlog: true },
     );
 
-    // In All the backlog groups by project like any main list.
+    // In All the backlog is the flat list, each row saying where it belongs.
     await user.click(segment("All"));
     await user.click(screen.getByRole("button", { name: "View options" }));
     await user.click(screen.getByRole("menuitemcheckbox", { name: "Backlog" }));
     await user.keyboard("{Escape}");
-    expect(
-      [...panel().querySelectorAll('.list-heading[data-variant="group"]')].map((node) => node.textContent),
-    ).toEqual(["acme-web2", "Checkout flow refactor2"]);
+    // The task just added leads while it is still being created.
+    expect(titles()).toEqual(["Measure the bundle", "Rewrite the receipts", "Profile cold start"]);
+    expect(rowTitle("Profile cold start")).toHaveAccessibleDescription("In Checkout flow refactor · acme-web");
     expect(headings()).toEqual([]);
   });
 
@@ -1834,7 +1831,6 @@ describe("TasksPanel Backlog and Pin", () => {
 describe("TasksPanel two-line rows", () => {
   beforeEach(() => {
     setTasksLastView("all");
-    setTasksViewOptions("all", { groupByProject: false });
   });
 
   it("keeps the indicators beside the title on desktop", () => {

@@ -52,73 +52,30 @@ const visibleWorkpad = `(p.scope_kind = 'global'
   OR (p.scope_kind = 'thread' AND t.id IS NOT NULL AND ${activeLocationOf("t")}))`;
 function sameScope(a: WorkpadScope, b: WorkpadScope) { return JSON.stringify(a) === JSON.stringify(b); }
 
-type ListRequest = ReturnType<typeof listWorkpadsRequestSchema.parse>;
 /** The list request's cursor bound. */
-const LIST_CURSOR_MAX_LENGTH = 1024;
+const LIST_CURSOR_MAX_LENGTH = 256;
 const threadJoin = "LEFT JOIN application_threads t ON t.tenant_id=p.tenant_id AND t.owner_principal_id=p.owner_principal_id AND t.id=p.thread_id";
 const threadLocationJoin = `LEFT JOIN workspaces AS threadLocation ON threadLocation.tenant_id=t.tenant_id
   AND threadLocation.owner_principal_id=t.owner_principal_id AND threadLocation.id=t.workspace_id`;
-/** A thread workpad belongs to the project of its thread's location. */
-const groupProject = "CASE p.scope_kind WHEN 'project' THEN p.project_id WHEN 'thread' THEN threadLocation.project_id END";
 /**
- * One component of a list's total order, selected as a column of the listed
- * rows. Text compares by code point; `lower()` folds ASCII letters only.
+ * Each sort's key, then workpad ID ascending. Titles compare as SQLite
+ * `lower()` values by code point; `lower()` folds ASCII letters only.
  */
-type ListKey = {
-  readonly column: string;
-  readonly expression: string;
-  readonly descending?: boolean;
-  /** A small integer rank; every other key is text. */
-  readonly rank?: true;
-  /**
-   * An ascending name or title. A cursor carries it whole when it fits,
-   * otherwise as a prefix and a digest of the whole label; continuation
-   * re-reads the label from the row `idColumn` names.
-   */
-  readonly label?: { readonly table: "projects" | "application_threads" | "workpads"; readonly field: "name" | "title"; readonly idColumn: string };
-};
+const listSorts = {
+  updated: { expression: "p.updated_at", descending: true },
+  newest: { expression: "p.created_at", descending: true },
+  title: { expression: "lower(p.title)", descending: false },
+} as const;
+const titleDigest = (title: string) => createHash("sha256").update(title).digest("base64url").slice(0, 16);
 /**
- * Ungrouped: the sort, then id. Grouped by project: Global; the lead project;
- * other projects by name, then id; within a project its own workpads, then
- * each thread's (threads by title, then id); the sort within each group.
+ * A cursor is `[fingerprint, key, id]`. A title key too long to fit travels
+ * as `[prefix, digest]`, its prefix shrinking until the cursor fits.
  */
-function listKeys(request: ListRequest): ListKey[] {
-  const keys: ListKey[] = request.group === "project" ? [
-    { column: "groupRank", rank: true, expression: `CASE WHEN p.scope_kind='global' THEN 0 WHEN ${groupProject}=? THEN 1 ELSE 2 END` },
-    { column: "projectKey", expression: "coalesce(lower(listedProject.name),'')", label: { table: "projects", field: "name", idColumn: "projectId" } },
-    { column: "projectId", expression: `coalesce(${groupProject},'')` },
-    { column: "scopeRank", rank: true, expression: "CASE p.scope_kind WHEN 'thread' THEN 1 ELSE 0 END" },
-    { column: "threadKey", expression: "CASE p.scope_kind WHEN 'thread' THEN coalesce(lower(t.title),'') ELSE '' END", label: { table: "application_threads", field: "title", idColumn: "threadId" } },
-    { column: "threadId", expression: "coalesce(p.thread_id,'')" },
-  ] : [];
-  keys.push(request.sort === "title"
-    ? { column: "titleKey", expression: "lower(p.title)", label: { table: "workpads", field: "title", idColumn: "id" } }
-    : { column: "sortedAt", expression: request.sort === "newest" ? "p.created_at" : "p.updated_at", descending: true });
-  keys.push({ column: "id", expression: "p.id" });
-  return keys;
-}
-type ListKeyValue = string | number;
-/** Rows strictly after `values` in the keys' order. */
-function listedAfter(keys: readonly ListKey[], values: readonly ListKeyValue[]): { sql: string; params: ListKeyValue[] } {
-  const params: ListKeyValue[] = [];
-  const branches = keys.map((key, index) => {
-    const terms = keys.slice(0, index).map((previous, at) => { params.push(values[at]!); return `${previous.column}=?`; });
-    params.push(values[index]!);
-    terms.push(`${key.column}${key.descending ? "<" : ">"}?`);
-    return `(${terms.join(" AND ")})`;
-  });
-  return { sql: `(${branches.join(" OR ")})`, params };
-}
-const labelDigest = (label: string) => createHash("sha256").update(label).digest("base64url").slice(0, 16);
-function clipLabel(value: string, budget: number): string | [string, string] {
-  const points = Array.from(value);
-  return points.length <= budget ? value : [points.slice(0, budget).join(""), labelDigest(value)];
-}
-/** Names and titles shrink to prefixes until the cursor fits its bound. */
-function encodeListCursor(fingerprint: string, keys: readonly ListKey[], values: readonly ListKeyValue[]): string {
-  for (const budget of [Number.POSITIVE_INFINITY, 64, 48, 32, 16, 0]) {
-    const carried = values.map((value, index) => keys[index]!.label && typeof value === "string" ? clipLabel(value, budget) : value);
-    const cursor = Buffer.from(JSON.stringify([fingerprint, ...carried])).toString("base64url");
+function encodeListCursor(fingerprint: string, key: string, id: string, title: boolean): string {
+  const points = Array.from(key);
+  for (const budget of title ? [Number.POSITIVE_INFINITY, 64, 32, 16, 8, 0] : [Number.POSITIVE_INFINITY]) {
+    const carried = points.length <= budget ? key : [points.slice(0, budget).join(""), titleDigest(key)];
+    const cursor = Buffer.from(JSON.stringify([fingerprint, carried, id])).toString("base64url");
     if (cursor.length <= LIST_CURSOR_MAX_LENGTH) return cursor;
   }
   throw new Error("A workpad list cursor exceeds its bound.");
@@ -346,53 +303,32 @@ export class WorkpadRepository {
   }
 
   /**
-   * A cursor is the fingerprint of its query and owner, then the last row's
-   * order keys. A label carried as a prefix resumes at the row's current label
-   * only when that matches the carried digest, so it is unchanged. Otherwise
-   * it resumes at the prefix: a prefix sorts before every label extending it,
-   * so continuation may repeat rows but never skips one whose keys held.
+   * Resumes after a cursor's row. A title carried as a prefix resumes at the
+   * row's current title only when that matches the carried digest, so it is
+   * unchanged. Otherwise it resumes at the prefix: a prefix sorts before every
+   * title extending it, so continuation may repeat rows but never skips one
+   * whose own title held.
    */
-  #listCursorValues(scope: RequestScope, cursor: string, fingerprint: string, keys: readonly ListKey[]): ListKeyValue[] {
+  #listCursorPosition(scope: RequestScope, cursor: string, fingerprint: string, title: boolean): { key: string; id: string } {
     const invalid = () => new DomainError("cursor_invalid", "The workpad cursor does not match this query.");
     let parsed: unknown;
     try { parsed = JSON.parse(Buffer.from(cursor, "base64url").toString()); } catch { throw invalid(); }
-    if (!Array.isArray(parsed) || parsed.length !== keys.length + 1 || parsed[0] !== fingerprint) throw invalid();
-    const carried = parsed.slice(1) as unknown[];
-    const digests = new Map<number, string>();
-    const values = keys.map((key, index): ListKeyValue => {
-      const value = carried[index];
-      if (key.rank) {
-        if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 2) throw invalid();
-        return value;
-      }
-      if (typeof value === "string") return value;
-      if (key.label && Array.isArray(value) && value.length === 2 && typeof value[0] === "string" && typeof value[1] === "string") {
-        digests.set(index, value[1]);
-        return value[0];
-      }
-      throw invalid();
-    });
-    for (const [index, digest] of digests) {
-      const { table, field, idColumn } = keys[index]!.label!;
-      const id = values[keys.findIndex(key => key.column === idColumn)]!;
-      const row = this.database.prepare(`SELECT lower(${field}) AS label FROM ${table} WHERE tenant_id=? AND owner_principal_id=? AND id=?`)
-        .get(scope.tenantId, scope.principalId, id) as { label: string } | undefined;
-      if (row && labelDigest(row.label) === digest) values[index] = row.label;
-    }
-    return values;
+    if (!Array.isArray(parsed) || parsed.length !== 3 || parsed[0] !== fingerprint || typeof parsed[2] !== "string") throw invalid();
+    const [, key, id] = parsed as [string, unknown, string];
+    if (typeof key === "string") return { key, id };
+    if (!title || !Array.isArray(key) || key.length !== 2 || typeof key[0] !== "string" || typeof key[1] !== "string") throw invalid();
+    const row = this.database.prepare("SELECT lower(title) AS title FROM workpads WHERE tenant_id=? AND owner_principal_id=? AND id=?")
+      .get(scope.tenantId, scope.principalId, id) as { title: string } | undefined;
+    return { key: row && titleDigest(row.title) === key[1] ? row.title : key[0], id };
   }
   list(scope: RequestScope, input: ListWorkpadsRequest, authority?: WorkpadListAuthority): WorkpadListPage {
     const request = parse(listWorkpadsRequestSchema, input);
     this.#assertScope(scope, request.scope);
-    const grouped = request.group === "project";
-    // The lead project only orders groups; it needs no lookup and reveals nothing.
-    const leadProjectId = grouped ? request.leadProjectId ?? null : undefined;
     const fingerprint = createHash("sha256").update(JSON.stringify({
-      version: 2, ...request, cursor: undefined, leadProjectId: leadProjectId ?? undefined,
-      authority, tenantId: scope.tenantId, principalId: scope.principalId,
+      version: 2, ...request, cursor: undefined, authority, tenantId: scope.tenantId, principalId: scope.principalId,
     })).digest("base64url").slice(0, 22);
-    const keys = listKeys(request);
-    const after = request.cursor ? this.#listCursorValues(scope, request.cursor, fingerprint, keys) : undefined;
+    const sort = listSorts[request.sort];
+    const after = request.cursor ? this.#listCursorPosition(scope, request.cursor, fingerprint, request.sort === "title") : undefined;
     const conditions = ["p.tenant_id=?", "p.owner_principal_id=?", request.archived ? "p.archived_at IS NOT NULL" : "p.archived_at IS NULL", visibleWorkpad];
     const params: (string | number)[] = [scope.tenantId, scope.principalId];
     if (request.scope.kind === "thread") { conditions.push("p.scope_kind='thread' AND p.thread_id=?"); params.push(request.scope.threadId); }
@@ -414,20 +350,18 @@ export class WorkpadRepository {
       params.push(...ids, ...(request.scope.kind === "project" ? [request.scope.projectId] : ids));
     }
     if (request.query) { conditions.push("(instr(lower(p.title), lower(?)) > 0 OR instr(lower(json_extract(p.document_json,'$.content')), lower(?)) > 0)"); params.push(request.query, request.query); }
-    const keyset = after ? listedAfter(keys, after) : undefined;
-    const rows = this.database.prepare(`WITH listed AS (
-      SELECT json_remove(p.document_json,'$.content','$.attribution') AS json, ${keys.map(key => `${key.expression} AS ${key.column}`).join(", ")}
+    if (after) {
+      conditions.push(`(${sort.expression}${sort.descending ? "<" : ">"}? OR (${sort.expression}=? AND p.id>?))`);
+      params.push(after.key, after.key, after.id);
+    }
+    const rows = this.database.prepare(`SELECT json_remove(p.document_json,'$.content','$.attribution') AS json, ${sort.expression} AS sortKey, p.id AS id
       FROM workpads p ${threadJoin}
-      ${grouped ? `${threadLocationJoin}
-      LEFT JOIN projects AS listedProject ON listedProject.tenant_id=p.tenant_id
-        AND listedProject.owner_principal_id=p.owner_principal_id AND listedProject.id=${groupProject}` : ""}
-      WHERE ${conditions.map(c => `(${c})`).join(" AND ")})
-      SELECT * FROM listed ${keyset ? `WHERE ${keyset.sql}` : ""}
-      ORDER BY ${keys.map(key => `${key.column} ${key.descending ? "DESC" : "ASC"}`).join(", ")} LIMIT ?`)
-      .all(...(grouped ? [leadProjectId] : []), ...params, ...(keyset?.params ?? []), request.limit + 1) as Record<string, ListKeyValue>[];
-    const items = rows.slice(0, request.limit).map(row => this.#present(scope, workpadSummarySchema.parse(JSON.parse(row.json as string))));
+      WHERE ${conditions.map(c => `(${c})`).join(" AND ")}
+      ORDER BY ${sort.expression} ${sort.descending ? "DESC" : "ASC"}, p.id ASC LIMIT ?`)
+      .all(...params, request.limit + 1) as { json: string; sortKey: string; id: string }[];
+    const items = rows.slice(0, request.limit).map(row => this.#present(scope, workpadSummarySchema.parse(JSON.parse(row.json))));
     const last = rows.length > request.limit ? rows[request.limit - 1] : undefined;
-    return { items, ...(last ? { nextCursor: encodeListCursor(fingerprint, keys, keys.map(key => last[key.column]!)) } : {}) };
+    return { items, ...(last ? { nextCursor: encodeListCursor(fingerprint, last.sortKey, last.id, request.sort === "title") } : {}) };
   }
   /**
    * Visible workpad counts for each panel view, under the list's visibility

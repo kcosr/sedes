@@ -47,9 +47,10 @@ tools, as a source or as a destination.
 ## List order and counts
 
 `GET /api/workpads` takes the scope (`scopeKind`, with `projectId` or
-`threadId`, and `scopeMode`), `query`, `archived`, `limit`, `cursor`, `sort`,
-`group`, and `leadProjectId`. Visibility, the archived filter, search, and an
-agent's authority filter apply before ordering.
+`threadId`, and `scopeMode`), `query`, `archived`, `limit`, `cursor`, and
+`sort`. Lists are flat; the server does not group them. Visibility, the
+archived filter, search, and an agent's authority filter apply before
+ordering.
 
 `sort` orders a list:
 
@@ -60,40 +61,26 @@ agent's authority filter apply before ordering.
 Ties break by workpad ID, ascending. The agent `workpad.list` tool has no sort
 input, so it always lists by `updated`.
 
-Titles, project names, and thread titles compare as SQLite `lower()` values
-in code point order. ASCII letters ignore case; other characters, accents,
-and digits compare as written. Tasks sorts in the browser with locale
-collation and numeric order, so the two panels can differ for non-ASCII
-letters and numbers: here "Plan 10" sorts before "Plan 9".
+Titles compare as SQLite `lower()` values in code point order. ASCII letters
+ignore case; other characters, accents, and digits compare as written. Tasks
+sorts in the browser with locale collation and numeric order, so the two
+panels can differ for non-ASCII letters and numbers: here "Plan 10" sorts
+before "Plan 9".
 
-`group=project` keeps each group contiguous, as Tasks' All view groups:
-
-1. Global workpads;
-2. the `leadProjectId` project, then the other projects by name, then by ID;
-3. within a project, its own workpads, then each thread's workpads, threads by
-   title, then by ID.
-
-A thread workpad belongs to the project of its thread's location. `sort`
-applies within each group. `leadProjectId` only orders groups, so it is not
-looked up: an unknown ID leads nothing, and an ungrouped list ignores it.
-There is no lead thread.
-
-Lists page by keyset. A cursor is opaque and at most 1,024 characters. It holds
-a fingerprint of its owner and query, including the sort, grouping, lead
-project, page size, and agent authority, followed by the last row's order
-keys. A cursor from any other query or owner fails with `cursor_invalid`
-(409). A name or title travels whole when it fits. Otherwise the cursor
-carries a prefix of it and a digest of the whole lowercased value. Continuation
-re-reads the row's current value and resumes there only if its digest matches,
-meaning the label is unchanged. Otherwise it resumes at the prefix. A prefix
-sorts before every label that extends it, so this can repeat rows but never
-skips a row whose own order keys held.
+Lists page by keyset. A cursor is opaque and at most 256 characters, like the
+history route's. It is `[fingerprint, key, id]`: a fingerprint of its owner and
+query, including the sort, page size, and agent authority, then the last row's
+sort key and ID. A cursor from any other query or owner fails with
+`cursor_invalid` (409). A title travels whole when it fits. Otherwise the
+cursor carries a prefix of it and a digest of the whole lowercased title.
+Continuation re-reads the row's current title and resumes there only if its
+digest matches, meaning the title is unchanged. Otherwise it resumes at the
+prefix. A prefix sorts before every title that extends it, so this can repeat
+rows but never skips a row whose own title held.
 
 A row whose order changes between pages may be skipped or listed again, as in
-any keyset list. That covers an edit under `updated`, a retitle, a scope move,
-or a renamed project or thread. A client that appends pages should
-deduplicate them by workpad ID. The history route keeps its 256-character
-cursor.
+any keyset list. That covers an edit under `updated` and a retitle under
+`title`. A client that appends pages should deduplicate them by workpad ID.
 
 `GET /api/workpads/counts` takes an optional `threadId` and `projectId` and
 returns `{ active, archived }`, split by `archived_at`. Each half holds:

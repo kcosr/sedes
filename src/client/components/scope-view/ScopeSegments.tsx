@@ -29,6 +29,11 @@ export interface ScopeSegmentsProps {
   readonly segmentProps?: (view: ScopeView) => SegmentProps;
   /** Choosing the selected segment again, which otherwise does nothing. */
   readonly onReselect?: (view: ScopeView) => void;
+  /**
+   * What choosing the selected segment again does, while it does something
+   * ("Back to workpads"): its tooltip, and part of its description.
+   */
+  readonly reselectHint?: string;
   readonly className?: string;
 }
 
@@ -47,6 +52,7 @@ export function ScopeSegments({
   disabled,
   segmentProps,
   onReselect,
+  reselectHint,
   className,
 }: ScopeSegmentsProps): React.JSX.Element {
   const hintId = useId();
@@ -72,7 +78,9 @@ export function ScopeSegments({
         {SCOPE_VIEWS.map((view) => {
           const reason = unavailableReason(view);
           const shown = reason === undefined ? count(view) : undefined;
-          const description = reason ?? (shown === undefined ? undefined : describeCount(shown));
+          const hint = view === value && reason === undefined ? reselectHint : undefined;
+          const description = reason ??
+            ([shown === undefined ? undefined : describeCount(shown), hint].filter(Boolean).join(". ") || undefined);
           const descriptionId = `${hintId}-${view}`;
           const extra = segmentProps?.(view) ?? {};
           const segment = (
@@ -81,6 +89,7 @@ export function ScopeSegments({
               value={view}
               disabled={reason !== undefined}
               className={cn("scope-segments-item", extra.className)}
+              {...(hint ? { title: hint } : {})}
               aria-describedby={description === undefined ? undefined : descriptionId}
               onClick={(event) => {
                 extra.onClick?.(event);

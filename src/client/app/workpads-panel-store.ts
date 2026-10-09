@@ -18,12 +18,14 @@ export const WORKPADS_VIEWS: readonly WorkpadsView[] = SCOPE_VIEWS;
 
 export type WorkpadsSort = ScopeListSort;
 
-/** The View options of one view, remembered per view. */
+/**
+ * The View options of one view, remembered per view. All is one flat list;
+ * an option the panel no longer has (`groupByProject`) is dropped as it is
+ * read.
+ */
 export interface WorkpadsViewOptions {
   /** Newest created, most recently updated (the default) or by title. */
   readonly sort: WorkpadsSort;
-  /** Applies to All. */
-  readonly groupByProject: boolean;
   /** Applies to Project: its threads' workpads join the project's own. */
   readonly includeThreadWorkpads: boolean;
 }
@@ -39,7 +41,6 @@ export const WORKPADS_PANEL_STORAGE_KEY = "sedes.workpads.panel";
 
 const BASE_VIEW_OPTIONS: WorkpadsViewOptions = Object.freeze({
   sort: "updated",
-  groupByProject: true,
   includeThreadWorkpads: false,
 });
 
@@ -87,7 +88,6 @@ function parseViewOptions(value: unknown, fallback: WorkpadsViewOptions): Workpa
   if (!isRecord(value)) return fallback;
   return {
     sort: pick(value.sort, SCOPE_LIST_SORTS, fallback.sort),
-    groupByProject: flag(value.groupByProject, fallback.groupByProject),
     includeThreadWorkpads: flag(value.includeThreadWorkpads, fallback.includeThreadWorkpads),
   };
 }

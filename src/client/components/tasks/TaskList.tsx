@@ -52,7 +52,6 @@ import {
   sameScope,
   taskFileName,
   taskFileParent,
-  type TaskGroup,
 } from "./task-view-model.js";
 
 export type TaskAction = "complete" | "pin" | "backlog" | "move" | "delete";
@@ -506,7 +505,7 @@ function InlineDetail({
   );
 }
 
-/** Where a task belongs, for lists that mix scopes without group headings. */
+/** Where a task belongs, for lists that mix scopes. */
 export type TaskRowLocation = ScopeLocationLabel;
 
 export interface TaskRowProps {
@@ -643,41 +642,34 @@ export function PendingTaskRow({ title }: { readonly title: string }): React.JSX
   );
 }
 
-/** A collapsible heading (an All group, Backlog or Completed) that takes part in list navigation. */
+/** A collapsible section heading (Backlog, Completed) that takes part in list navigation. */
 export function TaskListHeading({
   navKey,
   focusable,
   expanded,
   onToggle,
-  icon,
   label,
   count,
-  variant,
   onKeyDown,
 }: {
   readonly navKey: string;
   readonly focusable: boolean;
   readonly expanded: boolean;
   readonly onToggle: () => void;
-  readonly icon?: ReactNode;
   readonly label: string;
   readonly count: number;
-  readonly variant: "group" | "section";
   readonly onKeyDown: (event: ReactKeyboardEvent<HTMLButtonElement>) => void;
 }): React.JSX.Element {
   return (
     <ListHeading
-      variant={variant}
       data-tasks-nav={navKey}
       tabIndex={focusable ? 0 : -1}
       expanded={expanded}
       onToggle={onToggle}
       onKeyDown={onKeyDown}
-      icon={icon}
       label={label}
       count={count}
     />
   );
 }
 
-export type { TaskGroup };

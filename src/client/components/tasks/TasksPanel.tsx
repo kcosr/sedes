@@ -22,8 +22,6 @@ import {
 import {
   AlignLeft,
   ChevronLeft,
-  ChevronsDownUp,
-  ChevronsUpDown,
   CornerDownLeft,
   Ellipsis,
   Keyboard,
@@ -79,7 +77,7 @@ import { EmptyState } from "@client/components/ui/empty-state";
 import { KeyValueList } from "@client/components/ui/key-value-list";
 import { SearchableSelectList } from "@client/components/ui/searchable-select";
 import { ScopeSegments } from "../scope-view/ScopeSegments.js";
-import { ListHeadingIcon, ViewFilterChips } from "../scope-view/scope-list.js";
+import { ViewFilterChips } from "../scope-view/scope-list.js";
 import type { PanelLayoutStore } from "../../workspace-panels/panel-state.js";
 import {
   PanelChrome,
@@ -116,7 +114,6 @@ import { useTaskDestinations } from "./task-destinations.js";
 import {
   clampView,
   destinationScope,
-  groupTasks,
   inViewScope,
   matchesOnly,
   matchesQuery,
@@ -131,7 +128,6 @@ import {
   taskSections,
   viewFilters,
   viewUnavailableReason,
-  type TaskGroup,
 } from "./task-view-model.js";
 import {
   TASKS_SHEET_QUERY,
@@ -264,7 +260,7 @@ const KEYBOARD_SHORTCUTS: readonly { key: string; action: string }[] = [
 /**
  * The Tasks header and body, for a docked panel or a phone sheet: count and
  * actions, one scope control that follows the current chat, the add row,
- * search, the list (grouped in All) with inline detail, and the collapsed
+ * search, the list (one flat list in All) with inline detail, and the collapsed
  * Backlog and Completed sections. Pending state is per task and action, so
  * nothing else is ever disabled and focus is never dropped.
  */
@@ -312,9 +308,6 @@ export function TasksPanelContent({
   const [activeNavKey, setActiveNavKey] = useState<string | null>(null);
   const [backlogOpen, setBacklogOpen] = useState(false);
   const [completedOpen, setCompletedOpen] = useState(false);
-  const [collapsedGroups, setCollapsedGroups] = useState<ReadonlySet<string>>(
-    () => new Set(),
-  );
   const [editingId, setEditingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [choosingMoveId, setChoosingMoveId] = useState<string | null>(null);
@@ -421,26 +414,6 @@ export function TasksPanelContent({
       ),
     [tasks, view, context, options, query, revealedId],
   );
-  const groups = useMemo(
-    () =>
-      view === "all" && options.groupByProject
-        ? groupTasks(
-            mainTasks,
-            {
-              projects: destinations.projectLabels,
-              // A thread in a project with several locations says where it runs.
-              threads: new Map(
-                [...destinations.threadTitles].map(([threadId, title]) => {
-                  const location = destinations.threadLocation(threadId);
-                  return [threadId, location ? `${title} · ${location}` : title];
-                }),
-              ),
-            },
-            context,
-          )
-        : undefined,
-    [view, options.groupByProject, mainTasks, destinations, context],
-  );
   const viewCount = (candidate: TasksView) =>
     openCount(
       tasks,
@@ -460,14 +433,7 @@ export function TasksPanelContent({
   // The focusable items of the list, in order: the roving tab stop is one of them.
   const navKeys = useMemo(() => {
     const keys: string[] = [];
-    const pushGroup = (group: TaskGroup) => {
-      keys.push(`group:${group.key}`);
-      if (collapsedGroups.has(group.key)) return;
-      for (const task of group.tasks) keys.push(taskNavKey(task.id));
-      for (const child of group.children) pushGroup(child);
-    };
-    if (groups) groups.forEach(pushGroup);
-    else for (const task of mainTasks) keys.push(taskNavKey(task.id));
+    for (const task of mainTasks) keys.push(taskNavKey(task.id));
     const pushSection = (
       key: string,
       tasks: readonly AssociatedTask[],
@@ -481,13 +447,11 @@ export function TasksPanelContent({
     pushSection("completed", completedSection, completedOpen);
     return keys;
   }, [
-    groups,
     mainTasks,
     backlogSection,
     backlogOpen,
     completedSection,
     completedOpen,
-    collapsedGroups,
   ]);
   const rovingKey =
     activeNavKey !== null && navKeys.includes(activeNavKey)
@@ -573,20 +537,6 @@ export function TasksPanelContent({
     );
     if (task.completedAt !== null) setCompletedOpen(true);
     else if (task.backlog && !options.onlyBacklog) setBacklogOpen(true);
-    const scope = scopeKey(task.scope);
-    const parent =
-      task.scope.kind === "thread" && task.associatedProjectId
-        ? `project:${task.associatedProjectId}`
-        : undefined;
-    setCollapsedGroups((current) => {
-      if (!current.has(scope) && (!parent || !current.has(parent))) {
-        return current;
-      }
-      const next = new Set(current);
-      next.delete(scope);
-      if (parent) next.delete(parent);
-      return next;
-    });
     setExpandedId(task.id);
     setActiveNavKey(taskNavKey(task.id));
     setRevealId(null);
@@ -1069,11 +1019,10 @@ export function TasksPanelContent({
 
   // ── Rendering ────────────────────────────────────────────────────────────
   const searchFiltering = query.length > 0;
-  // Lists that mix scopes without group headings say where each task
-  // belongs: All ungrouped, and Project with its threads' tasks.
+  // Lists that mix scopes say where each task belongs: All, and Project
+  // with its threads' tasks.
   const showLocation =
-    (view === "all" && !options.groupByProject) ||
-    (view === "project" && options.includeThreadTasks);
+    view === "all" || (view === "project" && options.includeThreadTasks);
   // A thread task names its thread, its project in All, and where the
   // thread runs when the project has several locations.
   const locationOf = (task: AssociatedTask) =>
@@ -1098,39 +1047,6 @@ export function TasksPanelContent({
       onTitleKeyDown={onTitleKeyDown}
     />
   );
-  const toggleGroup = (key: string) =>
-    setCollapsedGroups((current) => {
-      const next = new Set(current);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
-  const renderGroup = (group: TaskGroup): React.JSX.Element => {
-    const collapsed = collapsedGroups.has(group.key);
-    const navKey = `group:${group.key}`;
-    return (
-      <li key={group.key} className="list-group" data-kind={group.kind}>
-        <TaskListHeading
-          variant="group"
-          navKey={navKey}
-          focusable={rovingKey === navKey}
-          expanded={!collapsed}
-          onToggle={() => toggleGroup(group.key)}
-          onKeyDown={onHeadingKeyDown}
-          icon={<ListHeadingIcon kind={group.kind} />}
-          label={group.label}
-          count={group.count}
-        />
-        {!collapsed && (
-          <ul className="tasks-list" aria-label={group.label}>
-            {group.tasks.map(renderRow)}
-            {group.children.map(renderGroup)}
-          </ul>
-        )}
-      </li>
-    );
-  };
-
   const emptyState = (() => {
     if (mainTasks.length > 0 || visibleCreating.length > 0) return null;
     // Matches in a collapsed section are still matches: say where they are
@@ -1245,27 +1161,6 @@ export function TasksPanelContent({
         <AlignLeft />
         <span>Add a task with notes</span>
       </DropdownMenuItem>
-      {groups && groups.length > 0 && (
-        <DropdownMenuItem
-          onSelect={() =>
-            setCollapsedGroups(
-              collapsedGroups.size > 0
-                ? new Set()
-                : new Set(
-                    groups.flatMap((group) => [
-                      group.key,
-                      ...group.children.map(({ key }) => key),
-                    ]),
-                  ),
-            )
-          }
-        >
-          {collapsedGroups.size > 0 ? <ChevronsUpDown /> : <ChevronsDownUp />}
-          <span>
-            {collapsedGroups.size > 0 ? "Expand all groups" : "Collapse all groups"}
-          </span>
-        </DropdownMenuItem>
-      )}
       {!touch && (
         <DropdownMenuItem onSelect={() => setShortcutsOpen(true)}>
           <Keyboard />
@@ -1502,26 +1397,16 @@ export function TasksPanelContent({
       onFocus={onListFocus}
       onBlur={onListBlur}
     >
-      {groups ? (
-        <ul className="tasks-list" aria-label={`${TASKS_VIEW_LABEL[view]} tasks`}>
-          {visibleCreating.map((entry) => (
-            <PendingTaskRow key={entry.key} title={entry.title} />
-          ))}
-          {groups.map(renderGroup)}
-        </ul>
-      ) : (
-        <ul className="tasks-list" aria-label={`${TASKS_VIEW_LABEL[view]} tasks`}>
-          {visibleCreating.map((entry) => (
-            <PendingTaskRow key={entry.key} title={entry.title} />
-          ))}
-          {mainTasks.map(renderRow)}
-        </ul>
-      )}
+      <ul className="tasks-list" aria-label={`${TASKS_VIEW_LABEL[view]} tasks`}>
+        {visibleCreating.map((entry) => (
+          <PendingTaskRow key={entry.key} title={entry.title} />
+        ))}
+        {mainTasks.map(renderRow)}
+      </ul>
       {emptyState}
       {backlogSection.length > 0 && (
         <section className="tasks-section" aria-label="Backlog tasks">
           <TaskListHeading
-            variant="section"
             navKey="backlog"
             focusable={rovingKey === "backlog"}
             expanded={backlogOpen}
@@ -1540,7 +1425,6 @@ export function TasksPanelContent({
       {completedSection.length > 0 && (
         <section className="tasks-section" aria-label="Completed tasks">
           <TaskListHeading
-            variant="section"
             navKey="completed"
             focusable={rovingKey === "completed"}
             expanded={completedOpen}

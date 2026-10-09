@@ -1,6 +1,6 @@
 /* Shared pieces of the scoped lists, Tasks and Workpads: the scope control,
    the View options chips and dot, the line that says where a row belongs,
-   and collapsible group and section headings. Each panel is a size
+   and the collapsible section headings. Each panel is a size
    container, so the narrow rules follow the panel, not the window. */
 
 /* ── Scope control: Thread · Project · Global · All, each with its count. */
@@ -87,7 +87,7 @@
 }
 
 /* ── Where a row belongs, on a quiet second line under its title, in lists
-   that mix scopes without group headings. */
+   that mix scopes (All, and Project with its threads' items). */
 .scope-location {
   display: flex;
   align-items: center;
@@ -111,14 +111,11 @@
   white-space: nowrap;
 }
 
-/* ── Groups (All: Global, each project, its threads) and the collapsed
-   sections that end a list (Backlog, Completed, Archived). */
-.list-group {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-
+/* ── The collapsed sections that end a list (Backlog, Completed,
+   Archived). The label starts where the rows' content does, never further
+   in: `--list-heading-inset` is the rows' leading inset (Workpads' titles by
+   default; Tasks sets its completion circle's). The chevron follows the
+   count, as the sidebar's project rows end with theirs. */
 .list-heading {
   display: flex;
   align-items: center;
@@ -126,29 +123,21 @@
   width: 100%;
   min-width: 0;
   min-height: var(--control-md);
-  padding: var(--space-2) var(--space-2) var(--space-1);
+  margin-top: var(--space-1);
+  padding: var(--space-2) var(--space-2) var(--space-1)
+    var(--list-heading-inset, var(--space-2));
   border: 0;
   border-radius: var(--radius-ctl);
   background: transparent;
-  color: var(--muted-foreground);
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-  outline: none;
-}
-
-.list-heading[data-variant="group"] {
-  font-size: var(--text-meta);
-  font-weight: var(--weight-semibold);
-}
-
-.list-heading[data-variant="section"] {
-  margin-top: var(--space-1);
   color: var(--muted-foreground-2);
+  font: inherit;
   font-size: var(--text-label);
   font-weight: var(--weight-semibold);
   letter-spacing: var(--tracking-label);
+  text-align: left;
   text-transform: uppercase;
+  cursor: pointer;
+  outline: none;
 }
 
 .list-heading:hover {
@@ -170,13 +159,6 @@
   transform: rotate(90deg);
 }
 
-.list-heading-icon {
-  flex: none;
-  width: var(--icon-sm);
-  height: var(--icon-sm);
-  color: var(--muted-foreground-2);
-}
-
 .list-heading-label {
   min-width: 0;
   overflow: hidden;
@@ -190,13 +172,4 @@
   font-weight: var(--weight-medium);
   letter-spacing: 0;
   font-variant-numeric: tabular-nums;
-}
-
-.list-group[data-kind="thread"] > .list-heading {
-  padding-left: var(--space-5);
-  font-weight: var(--weight-medium);
-}
-
-.list-group[data-kind="thread"] > ul {
-  padding-left: var(--space-3);
 }

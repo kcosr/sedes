@@ -40,16 +40,12 @@ phone, to see why. Workpads opens on the view you last chose; when that view
 is unavailable, it falls back to Project, then Global. To find another
 thread's or project's workpads, use **All** and search.
 
-**All** is grouped by project, as in Tasks: Global first, then the current
-project, then the other projects by name, with each thread's workpads in a
-group under its project. Select a group heading to collapse or expand it, or
-use **Collapse all groups** in **Workpads panel actions** (**⋯**). **Load
-more** continues the last group. Turn off **Group by project** in **View
-options** for one list. In lists without group headings, such as that list or
-Project with **Include thread workpads**, each row shows where its workpad
-belongs on a quiet line under the title: the thread (in All, with its
-project), the project, or **Global**. In a project with several locations, a
-thread also says where it runs, such as its host or folder.
+**All** is one list of every workpad, in the view's sort, as in Tasks. In
+All, and in Project with **Include thread workpads**, each row shows where its
+workpad belongs on a quiet line under the title: **Global**, the project's
+name, or the thread's title, followed in All by its project. In a project with
+several locations, a thread also says where it runs, such as its host or
+folder.
 
 When navigation changes the viewed thread or project, Workpads returns to that
 view's list. A selected document stays open when the view's scope stays the
@@ -68,7 +64,6 @@ view's titles and text; Escape clears and closes the search. **View options**
 | Option | Choices |
 | --- | --- |
 | **Sort** | **Newest**, **Recently updated** (the default), or **Title** |
-| **Group by project** | All only; on by default |
 | **Include thread workpads** | Project only; off by default |
 
 Each view remembers its own options on this device. While **Include thread
@@ -96,13 +91,16 @@ editing. Archiving a thread preserves its workpads in their current scope.
 
 Selecting a row opens the workpad in the panel. The header stays **Workpads**,
 with search and View options, and the scope control stays above the
-document. The workpad's own toolbar starts with **‹ Workpads**, which returns
-to the list, then the title over its revision line (which names the
-workpad's thread, project, or **Global**), then its actions: **Show
-attribution**, **Revision history**, **Edit workpad**, and **⋯** with
-**Rename…**, **Move to**, and **Archive** or **Unarchive**. Choosing a view,
-searching, or changing a View option also returns to the list. On Android,
-Back closes the workpad before it opens the navigation drawer.
+document. The workpad's own toolbar shows its title over its revision line
+(which names the workpad's thread, project, or **Global**), then its actions:
+**Show attribution**, **Revision history**, **Edit workpad**, and **⋯** with
+**Rename…**, **Move to**, and **Archive** or **Unarchive**.
+
+To return to the list, choose the selected view again (its tooltip says
+**Back to workpads**); with the keyboard, press Enter or Space on it. Choosing
+another view, searching, or changing a View option also returns to the list,
+and an open editor's text syncs first. On Android, Back closes the workpad
+before it opens the navigation drawer.
 
 ## Edit and save
 

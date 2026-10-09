@@ -2096,13 +2096,12 @@ export class ApiClient {
     const query = new URLSearchParams({ scopeKind: request.scope.kind });
     if (request.scope.kind === "project") query.set("projectId", request.scope.projectId);
     if (request.scope.kind === "thread") query.set("threadId", request.scope.threadId);
-    for (const key of ["scopeMode", "query", "archived", "limit", "cursor", "leadProjectId"] as const) {
+    for (const key of ["scopeMode", "query", "archived", "limit", "cursor"] as const) {
       if (request[key] !== undefined) query.set(key, String(request[key]));
     }
-    // The server's defaults (most recently updated first, ungrouped) need no
-    // parameter, so a default list request reads as it always has.
+    // The server's default (most recently updated first) needs no parameter,
+    // so a default list request reads as it always has.
     if (request.sort !== undefined && request.sort !== "updated") query.set("sort", request.sort);
-    if (request.group !== undefined && request.group !== "none") query.set("group", request.group);
     return this.#request(`/api/workpads?${query}`, {}, workpadListPageSchema);
   }
 

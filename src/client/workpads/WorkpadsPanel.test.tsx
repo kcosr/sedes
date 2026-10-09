@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { useSyncExternalStore, type ReactNode } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ApplicationClientStore } from "../stores/ApplicationClientStore.js";
 import { ApiError } from "../api/ApiClient.js";
@@ -88,9 +89,11 @@ const headerMenu = () => openMenu("Workpads panel actions");
 /** The open workpad's own ⋯, in its toolbar. */
 const documentMenu = () => openMenu("Workpad actions");
 const viewOptions = () => openMenu("View options");
-/** ‹ Workpads, in the open workpad's toolbar. */
-const back = () => screen.getByRole("button", { name: "Back to workpads" });
 const segment = (name: string) => within(screen.getByRole("radiogroup", { name: "Workpad scope" })).getByRole("radio", { name });
+/** The selected scope segment: choosing it again returns from an open workpad to its list. */
+const currentSegment = () => within(screen.getByRole("radiogroup", { name: "Workpad scope" })).getAllByRole("radio")
+  .find(radio => radio.getAttribute("aria-checked") === "true")!;
+const backToList = () => { fireEvent.click(currentSegment()); };
 const closeMenu = () => { fireEvent.keyDown(screen.getAllByRole("menu").at(-1)!, { key: "Escape" }); };
 const choose = (name: string | RegExp) => { fireEvent.click(screen.getByRole("menuitem", { name })); };
 const menuLabels = (menu: HTMLElement) => [...menu.querySelectorAll("[role^=menuitem]")].map(item => item.textContent);
@@ -241,7 +244,7 @@ describe("WorkpadsPanel", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "Reload workpad" })).not.toBeDisabled());
     fireEvent.click(screen.getByRole("button", { name: "Dismiss error" }));
     expect(screen.getByRole("alert")).toHaveTextContent("Reload this workpad");
-    fireEvent.click(back());
+    backToList();
     await screen.findByRole("button", { name: "Integration" });
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Reload workpad" })).not.toBeInTheDocument();
@@ -864,7 +867,7 @@ describe("WorkpadsPanel", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     await act(async () => { resolveCreated(pad); });
     expect(await screen.findByRole("textbox", { name: "Workpad content" })).toHaveValue("Original");
-    fireEvent.click(back());
+    backToList();
     await waitFor(() => expect(screen.getByRole("radio", { name: "Global" })).toBeEnabled());
     expect(context.host.setBusy).toHaveBeenLastCalledWith(false);
     viewOptions();
@@ -1059,8 +1062,7 @@ describe("WorkpadsPanel", () => {
     expect(await screen.findByRole("button", { name: "Thread notes" })).toHaveAccessibleDescription("In Build thread · Build host");
     expect(screen.getByRole("button", { name: "Project notes" })).toHaveAccessibleDescription("In acme-web");
     expect(screen.getByRole("button", { name: "Thread notes" }).querySelector(".scope-location")).toHaveTextContent("Build thread · Build host");
-    // All without groups adds a thread's project.
-    setWorkpadsViewOptions("all", { groupByProject: false });
+    // All adds a thread's project.
     fireEvent.click(segment("All"));
     expect(await screen.findByRole("button", { name: "Global notes" })).toHaveAccessibleDescription("In Global");
     expect(screen.getByRole("button", { name: "Thread notes" })).toHaveAccessibleDescription("In Build thread · acme-web · Build host");
@@ -1072,7 +1074,7 @@ describe("WorkpadsPanel", () => {
   });
 
   describe("header, toolbar and document controls", () => {
-    it("keeps the panel header and scope control while a workpad is open, with ‹ Workpads in its toolbar", async () => {
+    it("keeps the panel header and scope control while a workpad is open, its toolbar leading with the title", async () => {
       const { store, api } = fixture();
       const context = panelContext(store);
       const view = render(<Panel context={context} />);
@@ -1083,26 +1085,33 @@ describe("WorkpadsPanel", () => {
       expect(header().querySelector(".lucide-notepad-text")).not.toBeNull();
       expect(within(header()).getByRole("button", { name: "Search workpads" })).toBeInTheDocument();
       expect(within(header()).getByRole("button", { name: "View options" })).toBeInTheDocument();
-      expect(within(header()).queryByRole("button", { name: "Back to workpads" })).not.toBeInTheDocument();
       expect(context.host.setSubtitle).not.toHaveBeenCalled();
       // The scope control stays above the document; the add row and chips do not.
       expect(segment("Global")).toBeChecked();
       expect(screen.queryByRole("textbox", { name: "New workpad title" })).not.toBeInTheDocument();
-      // The document's own toolbar: ‹ Workpads, then the title, then its actions.
+      // The document's own toolbar: the title, then its actions. The scope
+      // control is the way back, so there is no back button of its own.
       const toolbar = document.querySelector(".workpads-doc-toolbar") as HTMLElement;
-      expect(toolbar.firstElementChild).toBe(back());
-      expect(back()).toHaveTextContent("Workpads");
+      expect(toolbar.firstElementChild).toHaveClass("workpads-doc-heading");
       expect(within(toolbar).getByRole("heading", { name: "Integration" })).toBeInTheDocument();
       expect(within(toolbar).getByRole("button", { name: "Workpad actions" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /back/i })).not.toBeInTheDocument();
+      // The selected view says choosing it again goes back.
+      expect(segment("Global")).toHaveAttribute("title", "Back to workpads");
+      expect(segment("Global")).toHaveAccessibleDescription("0 workpads. Back to workpads");
+      expect(segment("All")).not.toHaveAttribute("title");
       // Leaving an editor syncs its text first.
       fireEvent.change(await startEditing(), { target: { value: "Synced on the way out" } });
-      fireEvent.click(back());
+      backToList();
       await screen.findByRole("button", { name: "Integration" });
       expect(api.saveWorkpadDraft).toHaveBeenCalledWith("pad", { expectedRevision: 0, baseRevision: 1, content: "Synced on the way out" });
-      expect(screen.queryByRole("button", { name: "Back to workpads" })).not.toBeInTheDocument();
       expect(addRow()).toBeInTheDocument();
+      // With the list shown, the selected view has nothing more to do.
+      expect(segment("Global")).not.toHaveAttribute("title");
+      expect(segment("Global")).toHaveAccessibleDescription("0 workpads");
       view.unmount();
-      expect(context.host.setMenuItems).toHaveBeenLastCalledWith(undefined);
+      // Nothing is published to the panel's ⋯: it is the panel's own.
+      expect(context.host.setMenuItems).not.toHaveBeenCalled();
     });
 
     it("keeps document actions in the workpad's own ⋯, and only Discard draft… while editing", async () => {
@@ -1110,7 +1119,7 @@ describe("WorkpadsPanel", () => {
       render(<Panel context={panelContext(store)} />);
       await openRow();
       await screen.findByRole("button", { name: "Edit workpad" });
-      // The panel's ⋯ is the panel's: Dock alone outside All's groups.
+      // The panel's ⋯ is the panel's: Dock alone.
       expect(menuLabels(headerMenu())).toEqual(["Left", "Right", "Top", "Bottom"]);
       closeMenu();
       expect(menuLabels(documentMenu())).toEqual(["Rename…", "Move to", "Archive"]);
@@ -1148,7 +1157,7 @@ describe("WorkpadsPanel", () => {
       expect(api.getWorkpadDraft).toHaveBeenCalledWith("created");
       expect(screen.getByRole("button", { name: "Done editing" })).toBeInTheDocument();
       expect(screen.getByRole("heading", { name: "Launch notes" })).toBeInTheDocument();
-      fireEvent.click(back());
+      backToList();
       await waitFor(() => expect(addRow()).toHaveValue(""));
     });
 
@@ -1324,10 +1333,10 @@ describe("WorkpadsPanel", () => {
       await waitFor(() => expect(api.listWorkpads).toHaveBeenLastCalledWith(expect.objectContaining({ scope: { kind: "thread", threadId: "thread-build" }, sort: "title" })));
       fireEvent.click(segment("All"));
       menu = viewOptions();
-      expect(rows(menu)).toEqual(["Newest", "Recently updated", "Title", "Group by project"]);
+      // All is one flat list: sort is its only option.
+      expect(rows(menu)).toEqual(["Newest", "Recently updated", "Title"]);
       // Each view keeps its own sort.
       expect(screen.getByRole("menuitemradio", { name: "Recently updated" })).toHaveAttribute("aria-checked", "true");
-      expect(screen.getByRole("menuitemcheckbox", { name: "Group by project" })).toHaveAttribute("aria-checked", "true");
       closeMenu();
       fireEvent.click(segment("Project"));
       expect(rows(viewOptions())).toEqual(["Newest", "Recently updated", "Title", "Include thread workpads"]);
@@ -1456,7 +1465,8 @@ describe("WorkpadsPanel", () => {
       fireEvent.change(await startEditing(), { target: { value: "Original, committing" } });
       fireEvent.click(screen.getByRole("button", { name: "Save workpad" }));
       await waitFor(() => expect(commitWorkpadDraft).toHaveBeenCalled());
-      expect(back()).toBeDisabled();
+      // The way back waits too.
+      expect(currentSegment()).toBeDisabled();
       documentMenu();
       expect(screen.getByRole("menuitem", { name: "Discard draft…" })).toHaveAttribute("aria-disabled", "true");
     });
@@ -1541,56 +1551,51 @@ describe("WorkpadsPanel", () => {
     const webPad: WorkpadSummary = { ...pad, id: "web-pad", title: "Web notes", scope: { kind: "project", projectId: "project-web" } };
     const buildPad = (id: string, title: string): WorkpadSummary => ({ ...pad, id, title, scope: { kind: "thread", threadId: "thread-build" } });
     const docsPad: WorkpadSummary = { ...pad, id: "docs-pad", title: "Docs notes", scope: { kind: "project", projectId: "project-docs" } };
-    const headings = () => [...document.querySelectorAll('.list-heading[data-variant="group"]')].map(node => node.textContent);
+    const names = () => [...document.querySelectorAll(".workpads-row-name")].map(node => node.textContent);
 
-    it("groups the server's pages under headings, and Load more continues the last group", async () => {
-      // As the server sends them: Global, the lead project with its threads, then the others by name.
-      const first = [globalPad, webPad, buildPad("build-1", "Build log")];
+    it("lists every workpad in one flat list, each row naming its place, and Load more continues it", async () => {
+      const first = [webPad, globalPad, buildPad("build-1", "Build log")];
       const second = [buildPad("build-1", "Build log"), buildPad("build-2", "Build plan"), docsPad];
       const listWorkpads = vi.fn(async (request?: Record<string, unknown>) =>
         request?.cursor === "page-2" ? { items: second } : { items: first, nextCursor: "page-2" });
       const { store: base } = fixture({ listWorkpads });
       const { store } = withSnapshot(base, projectCatalog);
-      const context = panelContext(store);
-      render(<Panel context={{ ...context, threadId: "thread-build", workspaceId: "web-build" }} />);
+      render(<Panel context={{ ...panelContext(store), threadId: "thread-build", workspaceId: "web-build" }} />);
       fireEvent.click(segment("All"));
-      await waitFor(() => expect(headings()).toEqual(["Global1", "acme-web2", "Build thread · Build host1"]));
-      expect(listWorkpads).toHaveBeenLastCalledWith(expect.objectContaining({
-        scope: { kind: "global" }, scopeMode: "subtree", sort: "updated", group: "project", leadProjectId: "project-web",
-      }));
-      // Group headings take the rows' places, so rows have no location line.
-      expect(document.querySelector(".scope-location")).toBeNull();
+      // In the server's order, most recently updated first, under no headings.
+      await waitFor(() => expect(names()).toEqual(["Web notes", "Global notes", "Build log"]));
+      const request = listWorkpads.mock.lastCall![0]!;
+      expect(request).toEqual({ scope: { kind: "global" }, scopeMode: "subtree", sort: "updated" });
+      expect(document.querySelector(".list-heading")).toBeNull();
+      // Each row's second line names its scope: Global, a project, or a
+      // thread with its project and, the project having two locations, where it runs.
+      expect(screen.getByRole("button", { name: "Global notes" })).toHaveAccessibleDescription("In Global");
+      expect(screen.getByRole("button", { name: "Web notes" })).toHaveAccessibleDescription("In acme-web");
+      expect(screen.getByRole("button", { name: "Build log" })).toHaveAccessibleDescription("In Build thread · acme-web · Build host");
+      const icon = (title: string, name: string) => screen.getByRole("button", { name: title }).querySelector(`.scope-location .lucide-${name}`);
+      expect(icon("Global notes", "globe")).not.toBeNull();
+      expect(icon("Web notes", "folder")).not.toBeNull();
+      expect(icon("Build log", "message-square")).not.toBeNull();
       fireEvent.click(screen.getByRole("button", { name: "Load more" }));
       // A workpad the next page repeats is listed once, where it came first.
-      await waitFor(() => expect(headings()).toEqual(["Global1", "acme-web3", "Build thread · Build host2", "docs1"]));
-      expect(screen.getAllByRole("button", { name: "Build log" })).toHaveLength(1);
-      expect([...document.querySelectorAll(".workpads-row-name")].map(node => node.textContent)).toEqual(
-        ["Global notes", "Web notes", "Build log", "Build plan", "Docs notes"]);
-      // A heading collapses its group, nested threads included.
-      fireEvent.click(screen.getByRole("button", { name: /^acme-web/ }));
-      expect(screen.getByRole("button", { name: /^acme-web/ })).toHaveAttribute("aria-expanded", "false");
-      expect(screen.queryByRole("button", { name: "Build plan" })).not.toBeInTheDocument();
-      // The panel ⋯ expands or collapses every group.
-      expect(menuLabels(headerMenu())).toEqual(["Left", "Right", "Top", "Bottom", "Expand all groups"]);
-      choose("Expand all groups");
-      expect(screen.getByRole("button", { name: "Build plan" })).toBeInTheDocument();
-      headerMenu(); choose("Collapse all groups");
-      expect([...document.querySelectorAll(".list-heading")].filter(node => node.getAttribute("aria-expanded") === "true")).toEqual([]);
-      expect(screen.queryByRole("button", { name: "Global notes" })).not.toBeInTheDocument();
+      await waitFor(() => expect(names()).toEqual(["Web notes", "Global notes", "Build log", "Build plan", "Docs notes"]));
+      expect(screen.getByRole("button", { name: "Docs notes" })).toHaveAccessibleDescription("In docs");
+      // The panel's ⋯ has nothing to collapse.
+      expect(menuLabels(headerMenu())).toEqual(["Left", "Right", "Top", "Bottom"]);
     });
 
-    it("lists every workpad ungrouped, newest updated first, without Group by project", async () => {
-      const { store: base, api } = fixture({ listWorkpads: vi.fn(async () => ({ items: [webPad, globalPad] })) });
+    it("keeps the sort chosen for All, with no grouping to offer", async () => {
+      const { store: base, api } = fixture({ listWorkpads: vi.fn(async () => ({ items: [globalPad, webPad] })) });
       const { store } = withSnapshot(base, projectCatalog);
-      setWorkpadsViewOptions("all", { groupByProject: false });
+      setWorkpadsViewOptions("all", { sort: "title" });
       setWorkpadsLastView("all");
       render(<Panel context={{ ...panelContext(store), threadId: "thread-build", workspaceId: "web-build" }} />);
       expect(await screen.findByRole("button", { name: "Web notes" })).toHaveAccessibleDescription("In acme-web");
-      expect(headings()).toEqual([]);
-      const request = api.listWorkpads.mock.lastCall![0]!;
-      expect(request).toMatchObject({ scope: { kind: "global" }, scopeMode: "subtree", sort: "updated", group: "none" });
-      expect(request).not.toHaveProperty("leadProjectId");
-      expect([...document.querySelectorAll(".workpads-row-name")].map(node => node.textContent)).toEqual(["Web notes", "Global notes"]);
+      expect(api.listWorkpads.mock.lastCall![0]).toEqual({ scope: { kind: "global" }, scopeMode: "subtree", sort: "title" });
+      viewOptions();
+      expect(screen.queryByRole("menuitemcheckbox", { name: "Group by project" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("menuitemcheckbox", { name: "Include thread workpads" })).not.toBeInTheDocument();
+      closeMenu();
     });
   });
 
@@ -1610,9 +1615,12 @@ describe("WorkpadsPanel", () => {
       await screen.findByRole("button", { name: "Integration" });
       await waitFor(() => expect(heading()).toHaveTextContent(/^Archived3$/));
       expect(heading()).toHaveAttribute("aria-expanded", "false");
+      // The label leads, level with the rows' titles; the chevron follows the count.
+      expect(heading().firstElementChild).toHaveClass("list-heading-label");
+      expect(heading().lastElementChild).toHaveClass("list-heading-chevron");
       expect(screen.getByRole("region", { name: "Archived workpads" })).toBeInTheDocument();
       expect(api.listWorkpads).not.toHaveBeenCalledWith(expect.objectContaining({ archived: true }));
-      // The View options of the view apply: its scope and sort, never grouped.
+      // The View options of the view apply: its scope and sort.
       act(() => setWorkpadsViewOptions("thread", { sort: "title" }));
       fireEvent.click(heading());
       expect(await screen.findByRole("button", { name: "Old draft" })).toBeInTheDocument();
@@ -1665,7 +1673,7 @@ describe("WorkpadsPanel", () => {
       expect(screen.getAllByRole("button", { name: "Integration" })).toHaveLength(1);
     });
 
-    it("names each archived workpad's place in All, whose section is never grouped", async () => {
+    it("names each archived workpad's place in All", async () => {
       const listWorkpads = vi.fn(async (request?: Record<string, unknown>) => ({
         items: request?.archived ? [archivedPad("old-1", "Old notes", { kind: "project", projectId: "project-docs" })] : [pad],
       }));
@@ -1687,7 +1695,7 @@ describe("WorkpadsPanel", () => {
       await screen.findByRole("button", { name: "Edit workpad" });
       fireEvent.click(segment("Global"));
       expect(await screen.findByRole("button", { name: "Integration" })).toBeInTheDocument();
-      expect(screen.queryByRole("button", { name: "Back to workpads" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("heading", { name: "Integration" })).not.toBeInTheDocument();
       await waitFor(() => expect(api.listWorkpads).toHaveBeenLastCalledWith(expect.objectContaining({ scope: { kind: "global" } })));
       await openRow();
       await screen.findByRole("button", { name: "Edit workpad" });
@@ -1695,6 +1703,25 @@ describe("WorkpadsPanel", () => {
       expect(await screen.findByRole("textbox", { name: "New workpad title" })).toBeInTheDocument();
       expect(screen.queryByRole("button", { name: "Edit workpad" })).not.toBeInTheDocument();
       expect(segment("Global")).toBeChecked();
+    });
+
+    it("returns to the list from the keyboard: Enter or Space on the selected view", async () => {
+      const user = userEvent.setup();
+      const { store, api } = fixture();
+      render(<Panel context={{ ...panelContext(store), threadId: "first-thread" }} />);
+      for (const key of ["{Enter}", " "]) {
+        await openRow();
+        // An editor's text syncs on the way out, as on every way back.
+        fireEvent.change(await startEditing(), { target: { value: `Typed before ${key}` } });
+        // The selected segment is the scope control's tab stop.
+        segment("Thread").focus();
+        expect(segment("Thread")).toHaveFocus();
+        await user.keyboard(key);
+        expect(await screen.findByRole("textbox", { name: "New workpad title" })).toBeInTheDocument();
+        expect(screen.queryByRole("textbox", { name: "Workpad content" })).not.toBeInTheDocument();
+        expect(api.saveWorkpadDraft).toHaveBeenLastCalledWith("pad", expect.objectContaining({ content: `Typed before ${key}` }));
+        expect(segment("Thread")).toBeChecked();
+      }
     });
 
     it("returns to the list for Search and for View options", async () => {
@@ -1744,14 +1771,14 @@ describe("WorkpadsPanel", () => {
       const context = panelContext(store);
       const view = render(<Panel context={context} />);
       await screen.findByRole("button", { name: "Integration" });
-      const back = () => { const event = new Event(CLOSE_WORKPAD_EVENT, { cancelable: true }); act(() => { window.dispatchEvent(event); }); return event.defaultPrevented; };
-      expect(back()).toBe(false);
+      const androidBack = () => { const event = new Event(CLOSE_WORKPAD_EVENT, { cancelable: true }); act(() => { window.dispatchEvent(event); }); return event.defaultPrevented; };
+      expect(androidBack()).toBe(false);
       await openRow();
       await screen.findByRole("button", { name: "Edit workpad" });
       view.rerender(<Panel context={{ ...context, visible: false }} />);
-      expect(back()).toBe(false);
+      expect(androidBack()).toBe(false);
       view.rerender(<Panel context={context} />);
-      expect(back()).toBe(true);
+      expect(androidBack()).toBe(true);
       expect(await screen.findByRole("textbox", { name: "New workpad title" })).toBeInTheDocument();
       expect(screen.queryByRole("button", { name: "Edit workpad" })).not.toBeInTheDocument();
     });
