@@ -10,7 +10,6 @@ import {
   workpadCountsSchema,
   workpadDraftSchema,
   workpadIdSchema,
-  workpadListGroupSchema,
   workpadListPageSchema,
   workpadListSortSchema,
   workpadRevisionPageSchema,
@@ -35,7 +34,6 @@ const pageQuerySchema = z.strictObject({
   cursor: z.string().min(1).max(256).optional(),
 });
 const listQuerySchema = pageQuerySchema.extend({
-  cursor: z.string().min(1).max(1024).optional(),
   scopeKind: z.enum(["global", "project", "thread"]),
   projectId: z.string().optional(),
   threadId: z.string().optional(),
@@ -43,8 +41,6 @@ const listQuerySchema = pageQuerySchema.extend({
   query: z.string().optional(),
   archived: z.enum(["true", "false"]).transform(value => value === "true").optional(),
   sort: workpadListSortSchema.optional(),
-  group: workpadListGroupSchema.optional(),
-  leadProjectId: z.string().optional(),
 }).superRefine((query, context) => {
   if ((query.scopeKind !== "project" && query.projectId !== undefined) ||
       (query.scopeKind !== "thread" && query.threadId !== undefined)) {
@@ -69,7 +65,7 @@ export function registerWorkpadRoutes(
     const input = listWorkpadsRequestSchema.parse({
       scope: selectedScope, scopeMode: query.scopeMode, query: query.query,
       archived: query.archived, limit: query.limit, cursor: query.cursor,
-      sort: query.sort, group: query.group, leadProjectId: query.leadProjectId,
+      sort: query.sort,
     });
     response.json(workpadListPageSchema.parse(await service.list(owner, input)));
   });
