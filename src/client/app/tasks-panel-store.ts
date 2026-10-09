@@ -1,4 +1,10 @@
 import { useCallback, useEffect, useRef, useSyncExternalStore } from "react";
+import {
+  SCOPE_LIST_SORTS,
+  SCOPE_VIEWS,
+  type ScopeListSort,
+  type ScopeView,
+} from "../components/scope-view/scope-views.js";
 
 /**
  * Viewer-local Tasks preferences. Task data itself is server-owned
@@ -8,20 +14,15 @@ import { useCallback, useEffect, useRef, useSyncExternalStore } from "react";
  * Whether Tasks is open is not a preference: the panel layout store owns the
  * docked panel, and the phone sheet keeps a local open state in its host.
  */
-export type TasksView = "thread" | "project" | "global" | "all";
+export type TasksView = ScopeView;
 
-export const TASKS_VIEWS: readonly TasksView[] = [
-  "thread",
-  "project",
-  "global",
-  "all",
-];
+export const TASKS_VIEWS: readonly TasksView[] = SCOPE_VIEWS;
 
 /**
  * The order within each section: newest (the default), most recently
  * updated, or by title. Pinned tasks lead every section in every sort.
  */
-export type TasksSort = "newest" | "updated" | "title";
+export type TasksSort = ScopeListSort;
 
 /**
  * The View options of one view, remembered per view. The list always ends
@@ -58,7 +59,7 @@ const RETIRED_WIDTH_STORAGE_KEY = "sedes.tasks.panel.width";
 // A retired sort ("pinned-newest", from when pins were a sort) reads as the
 // default, and a retired `show` choice is dropped: Completed is always the
 // collapsed section now.
-const TASKS_SORTS: readonly TasksSort[] = ["newest", "updated", "title"];
+const TASKS_SORTS: readonly TasksSort[] = SCOPE_LIST_SORTS;
 
 const BASE_VIEW_OPTIONS: TasksViewOptions = Object.freeze({
   sort: "newest",

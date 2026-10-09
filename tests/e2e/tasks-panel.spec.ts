@@ -411,7 +411,7 @@ test.describe.serial("Tasks panel", () => {
     await tasks.getByRole("button", { name: "View options" }).click();
     await page.getByRole("menuitemcheckbox", { name: "Group by project" }).click();
     await page.keyboard.press("Escape");
-    await expect(tasks.locator(".tasks-group-heading")).toHaveCount(0);
+    await expect(tasks.locator('.list-heading[data-variant="group"]')).toHaveCount(0);
     await capture(page, testInfo, "tasks-panel-all.png");
 
     // The docked panel, its width, the last view and its View options
@@ -423,7 +423,7 @@ test.describe.serial("Tasks panel", () => {
       .poll(async () => (await tasksLeaf.boundingBox())?.width ?? 0)
       .toBeCloseTo(widenedWidth, 0);
     await expect(scopes.getByRole("radio", { name: "All" })).toHaveAttribute("aria-checked", "true");
-    await expect(tasks.locator(".tasks-group-heading")).toHaveCount(0);
+    await expect(tasks.locator('.list-heading[data-variant="group"]')).toHaveCount(0);
     await tasks.getByRole("button", { name: "View options" }).click();
     await expect(
       page.getByRole("menuitemcheckbox", { name: "Group by project" }),
@@ -669,8 +669,8 @@ test("a project's tasks are shared by every location of the project", async ({ p
   // All groups the project once, with both locations' threads under it.
   await selectScope(betaTasks, "All");
   const projectGroups = betaTasks
-    .locator('.tasks-group[data-kind="project"]')
-    .filter({ has: page.locator(".tasks-group-heading", { hasText: /^Shared app\d+$/u }) });
+    .locator('.list-group[data-kind="project"]')
+    .filter({ has: page.locator('.list-heading[data-variant="group"]', { hasText: /^Shared app\d+$/u }) });
   await expect(projectGroups).toHaveCount(1);
   await expect(projectGroups.getByRole("button", { name: /^Alpha work · alpha/u })).toBeVisible();
   await expect(taskRow(projectGroups, "Shared release checklist")).toBeVisible();

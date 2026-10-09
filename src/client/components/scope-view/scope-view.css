@@ -1,0 +1,202 @@
+/* Shared pieces of the scoped lists, Tasks and Workpads: the scope control,
+   the View options chips and dot, the line that says where a row belongs,
+   and collapsible group and section headings. Each panel is a size
+   container, so the narrow rules follow the panel, not the window. */
+
+/* ── Scope control: Thread · Project · Global · All, each with its count. */
+.scope-segments {
+  width: 100%;
+}
+
+/* A disabled segment takes no pointer events itself, so its slot shows the
+   reason (UnavailableScopeSlot): a tooltip on hover, a tap or a click. */
+.scope-segments-slot {
+  display: flex;
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.scope-segments-item {
+  gap: var(--space-1);
+}
+
+.scope-segments-count {
+  color: var(--muted-foreground-2);
+  font-size: var(--text-label);
+  font-weight: var(--weight-semibold);
+  font-variant-numeric: tabular-nums;
+}
+
+.scope-segments-item[data-state="on"] .scope-segments-count {
+  color: var(--muted-foreground);
+}
+
+@container (max-width: 339px) {
+  .scope-segments-item {
+    padding-inline: var(--space-1);
+    font-size: var(--text-meta);
+  }
+}
+
+/* ── View options in effect, under the scope control: one removable chip
+   each ("Pinned only ×"), and a dot on the View options button while the
+   menu is closed. */
+.view-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.view-filter-chip {
+  max-width: 100%;
+  border-radius: 999px;
+  color: var(--muted-foreground);
+  font-weight: var(--weight-medium);
+}
+
+.view-filter-chip:hover {
+  color: var(--foreground);
+}
+
+.view-filter-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 819px), (pointer: coarse) {
+  .view-filter-chip {
+    height: var(--control-md);
+  }
+}
+
+.view-options-trigger {
+  position: relative;
+}
+
+.view-options-trigger[data-filtering]::after {
+  content: "";
+  position: absolute;
+  top: var(--space-1);
+  right: var(--space-1);
+  width: var(--space-1-5);
+  height: var(--space-1-5);
+  border-radius: 50%;
+  background: var(--info);
+}
+
+/* ── Where a row belongs, on a quiet second line under its title, in lists
+   that mix scopes without group headings. */
+.scope-location {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  color: var(--muted-foreground-2);
+  font-size: var(--text-meta);
+  line-height: var(--leading-snug);
+}
+
+.scope-location svg {
+  flex: none;
+  width: var(--icon-xs);
+  height: var(--icon-xs);
+}
+
+.scope-location-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Groups (All: Global, each project, its threads) and the collapsed
+   sections that end a list (Backlog, Completed, Archived). */
+.list-group {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.list-heading {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  width: 100%;
+  min-width: 0;
+  min-height: var(--control-md);
+  padding: var(--space-2) var(--space-2) var(--space-1);
+  border: 0;
+  border-radius: var(--radius-ctl);
+  background: transparent;
+  color: var(--muted-foreground);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  outline: none;
+}
+
+.list-heading[data-variant="group"] {
+  font-size: var(--text-meta);
+  font-weight: var(--weight-semibold);
+}
+
+.list-heading[data-variant="section"] {
+  margin-top: var(--space-1);
+  color: var(--muted-foreground-2);
+  font-size: var(--text-label);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+}
+
+.list-heading:hover {
+  color: var(--foreground);
+}
+
+.list-heading:focus-visible {
+  box-shadow: var(--focus-ring);
+}
+
+.list-heading-chevron {
+  flex: none;
+  width: var(--icon-xs);
+  height: var(--icon-xs);
+  transition: transform var(--motion-fast);
+}
+
+[aria-expanded="true"] > .list-heading-chevron {
+  transform: rotate(90deg);
+}
+
+.list-heading-icon {
+  flex: none;
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+  color: var(--muted-foreground-2);
+}
+
+.list-heading-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.list-heading-count {
+  flex: none;
+  color: var(--muted-foreground-2);
+  font-weight: var(--weight-medium);
+  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.list-group[data-kind="thread"] > .list-heading {
+  padding-left: var(--space-5);
+  font-weight: var(--weight-medium);
+}
+
+.list-group[data-kind="thread"] > ul {
+  padding-left: var(--space-3);
+}

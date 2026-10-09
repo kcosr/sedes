@@ -530,7 +530,7 @@ describe("TasksPanel scope", () => {
     renderPanel(seededStore());
     fireEvent.click(segment("All"));
 
-    const headings = [...panel().querySelectorAll(".tasks-group-heading")].map(
+    const headings = [...panel().querySelectorAll('.list-heading[data-variant="group"]')].map(
       (node) => node.textContent,
     );
     expect(headings).toEqual([
@@ -542,7 +542,7 @@ describe("TasksPanel scope", () => {
       "Invoice rounding bug1",
     ]);
     // Location shows in the headings, never inline on the rows.
-    expect(panel().querySelector(".tasks-row-location")).toBeNull();
+    expect(panel().querySelector(".scope-location")).toBeNull();
 
     const acme = screen.getByRole("button", { name: /^acme-web/ });
     expect(acme).toHaveAttribute("aria-expanded", "true");
@@ -574,7 +574,7 @@ describe("TasksPanel scope", () => {
     // line; its name stays the title.
     expect(rowTitle("Sibling thread task")).toHaveAccessibleDescription("In Sibling thread");
     expect(rowTitle("Upgrade the test runner")).toHaveAccessibleDescription("In acme-web");
-    expect(rowOf("Sibling thread task").querySelector(".tasks-row-location")).toHaveTextContent(
+    expect(rowOf("Sibling thread task").querySelector(".scope-location")).toHaveTextContent(
       "Sibling thread",
     );
   });
@@ -583,7 +583,7 @@ describe("TasksPanel scope", () => {
     const user = userEvent.setup();
     renderPanel(seededStore());
     await user.click(segment("All"));
-    expect(panel().querySelector(".tasks-row-location")).toBeNull();
+    expect(panel().querySelector(".scope-location")).toBeNull();
     expect(rowTitle("Rotate staging credentials")).not.toHaveAttribute("aria-describedby");
 
     await user.click(screen.getByRole("button", { name: "View options" }));
@@ -682,7 +682,7 @@ describe("TasksPanel across a project's locations", () => {
     renderPanel(sharedProjectStore("thread-9"));
     fireEvent.click(segment("All"));
 
-    const headings = [...panel().querySelectorAll(".tasks-group-heading")].map(
+    const headings = [...panel().querySelectorAll('.list-heading[data-variant="group"]')].map(
       (node) => node.textContent,
     );
     expect(headings).toEqual([
@@ -1469,7 +1469,7 @@ const BACKLOG = [
   threadTask({ id: "t-later-pinned", title: "Rewrite the receipts", backlog: true, pinned: true, createdAt: "2026-07-30T10:00:00.000Z" }),
 ];
 const headings = () =>
-  [...panel().querySelectorAll(".tasks-section-heading")].map((node) => node.textContent);
+  [...panel().querySelectorAll('.list-heading[data-variant="section"]')].map((node) => node.textContent);
 const backlogHeading = () => screen.getByRole("button", { name: /^Backlog/ });
 
 describe("TasksPanel Backlog and Pin", () => {
@@ -1550,7 +1550,7 @@ describe("TasksPanel Backlog and Pin", () => {
     await user.click(screen.getByRole("menuitemcheckbox", { name: "Backlog" }));
     await user.keyboard("{Escape}");
     expect(
-      [...panel().querySelectorAll(".tasks-group-heading")].map((node) => node.textContent),
+      [...panel().querySelectorAll('.list-heading[data-variant="group"]')].map((node) => node.textContent),
     ).toEqual(["acme-web2", "Checkout flow refactor2"]);
     expect(headings()).toEqual([]);
   });
@@ -1821,7 +1821,7 @@ describe("TasksPanel two-line rows", () => {
     const main = rowOf("Audit checkout error states").querySelector(".tasks-row-main")!;
     expect(rowTitle("Audit checkout error states")).toHaveAttribute("data-location");
     expect(main.querySelector(":scope > .tasks-row-meta")).toHaveTextContent("has notes, 1 file, pinned");
-    expect(main.querySelector(".tasks-row-location .tasks-row-meta")).toBeNull();
+    expect(main.querySelector(".scope-location .tasks-row-meta")).toBeNull();
   });
 
   it("moves the indicators onto the second line on touch, still described", () => {
@@ -1829,7 +1829,7 @@ describe("TasksPanel two-line rows", () => {
     renderPanel(seededStore());
     const main = rowOf("Audit checkout error states").querySelector(".tasks-row-main")!;
     expect(main.querySelector(":scope > .tasks-row-meta")).toBeNull();
-    expect(main.querySelector(".tasks-row-location .tasks-row-meta")).not.toBeNull();
+    expect(main.querySelector(".scope-location .tasks-row-meta")).not.toBeNull();
     // The second line is hidden from assistive technology; the row still
     // says what the indicators show.
     expect(

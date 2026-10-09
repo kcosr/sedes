@@ -4,6 +4,7 @@ import type {
   TasksView,
   TasksViewOptions,
 } from "../../app/tasks-panel-store.js";
+import { SCOPE_VIEW_LABEL } from "../scope-view/scope-views.js";
 
 /**
  * Pure presentation logic for the Tasks panel: which tasks a view shows, in
@@ -12,12 +13,7 @@ import type {
  * filtering, grouping and counting happen here on the client.
  */
 
-export const TASKS_VIEW_LABEL: Record<TasksView, string> = {
-  thread: "Thread",
-  project: "Project",
-  global: "Global",
-  all: "All",
-};
+export const TASKS_VIEW_LABEL: Readonly<Record<TasksView, string>> = SCOPE_VIEW_LABEL;
 
 export const TASK_TITLE_MAX_CHARACTERS = 240;
 /** A multi-line paste creates at most this many tasks at once. */
@@ -58,13 +54,15 @@ export interface TasksContext {
   readonly project?: { readonly id: string; readonly label: string };
 }
 
+/** Why a view does not apply to the chat the panel follows; `items` names what it lists. */
 export function viewUnavailableReason(
   view: TasksView,
   context: TasksContext,
+  items = "tasks",
 ): string | undefined {
   if (view === "thread" && !context.thread) {
     return context.threadArchived
-      ? "This thread is archived. Restore it to see its tasks."
+      ? `This thread is archived. Restore it to see its ${items}.`
       : "This thread isn't available.";
   }
   if (view === "project" && !context.project) {

@@ -80,6 +80,10 @@ describe("views", () => {
       viewUnavailableReason("project", { threadArchived: true, project: context.project! }),
     ).toBeUndefined();
     expect(viewUnavailableReason("all", {})).toBeUndefined();
+    // Workpads names its own items.
+    expect(viewUnavailableReason("thread", { threadArchived: true }, "workpads")).toBe(
+      "This thread is archived. Restore it to see its workpads.",
+    );
     expect(clampView("thread", {})).toBe("global");
     expect(clampView("thread", { project: context.project! })).toBe("project");
     expect(clampView("all", {})).toBe("all");

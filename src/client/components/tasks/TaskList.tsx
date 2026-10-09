@@ -13,7 +13,6 @@ import {
   ArrowDownToLine,
   ArrowRightLeft,
   ArrowUpFromLine,
-  ChevronRight,
   Circle,
   CircleCheck,
   CornerDownLeft,
@@ -44,6 +43,11 @@ import {
   DropdownMenuValue,
 } from "../ui/dropdown-menu.js";
 import { ScopeIcon, type TaskDestinations } from "./task-destinations.js";
+import {
+  ListHeading,
+  ScopeLocation,
+  type ScopeLocationLabel,
+} from "../scope-view/scope-list.js";
 import {
   sameScope,
   taskFileName,
@@ -503,10 +507,7 @@ function InlineDetail({
 }
 
 /** Where a task belongs, for lists that mix scopes without group headings. */
-export interface TaskRowLocation {
-  readonly kind: TaskScope["kind"];
-  readonly label: string;
-}
+export type TaskRowLocation = ScopeLocationLabel;
 
 export interface TaskRowProps {
   readonly task: AssociatedTask;
@@ -595,11 +596,9 @@ export function TaskRow({
           {location ? (
             <>
               <span className="tasks-row-title-text">{task.title}</span>
-              <span className="tasks-row-location" aria-hidden="true">
-                <ScopeIcon kind={location.kind} />
-                <span className="tasks-row-location-label">{location.label}</span>
+              <ScopeLocation location={location}>
                 {indicatorsOnLocation && <TaskIndicators task={task} />}
-              </span>
+              </ScopeLocation>
             </>
           ) : (
             task.title
@@ -667,20 +666,17 @@ export function TaskListHeading({
   readonly onKeyDown: (event: ReactKeyboardEvent<HTMLButtonElement>) => void;
 }): React.JSX.Element {
   return (
-    <button
-      type="button"
-      className={variant === "group" ? "tasks-group-heading" : "tasks-section-heading"}
+    <ListHeading
+      variant={variant}
       data-tasks-nav={navKey}
       tabIndex={focusable ? 0 : -1}
-      aria-expanded={expanded}
-      onClick={onToggle}
+      expanded={expanded}
+      onToggle={onToggle}
       onKeyDown={onKeyDown}
-    >
-      <ChevronRight className="tasks-heading-chevron" aria-hidden="true" />
-      {icon}
-      <span className="tasks-heading-label">{label}</span>
-      <span className="tasks-heading-count">{count}</span>
-    </button>
+      icon={icon}
+      label={label}
+      count={count}
+    />
   );
 }
 
