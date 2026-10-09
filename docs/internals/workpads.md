@@ -44,6 +44,70 @@ active locations is on an admitted environment, and a thread workpad only when
 its thread's environment is admitted. A removed project is not found to agent
 tools, as a source or as a destination.
 
+## List order and counts
+
+`GET /api/workpads` takes the scope (`scopeKind`, with `projectId` or
+`threadId`, and `scopeMode`), `query`, `archived`, `limit`, `cursor`, `sort`,
+`group`, and `leadProjectId`. Visibility, the archived filter, search, and an
+agent's authority filter apply before ordering.
+
+`sort` orders a list:
+
+- `updated`, the default: most recently updated first;
+- `newest`: most recently created first;
+- `title`: by title, ascending.
+
+Ties break by workpad ID, ascending. The agent `workpad.list` tool has no sort
+input, so it always lists by `updated`.
+
+Titles, project names, and thread titles compare as SQLite `lower()` values
+in code point order. ASCII letters ignore case; other characters, accents,
+and digits compare as written. Tasks sorts in the browser with locale
+collation and numeric order, so the two panels can differ for non-ASCII
+letters and numbers: here "Plan 10" sorts before "Plan 9".
+
+`group=project` keeps each group contiguous, as Tasks' All view groups:
+
+1. Global workpads;
+2. the `leadProjectId` project, then the other projects by name, then by ID;
+3. within a project, its own workpads, then each thread's workpads, threads by
+   title, then by ID.
+
+A thread workpad belongs to the project of its thread's location. `sort`
+applies within each group. `leadProjectId` only orders groups, so it is not
+looked up: an unknown ID leads nothing, and an ungrouped list ignores it.
+There is no lead thread.
+
+Lists page by keyset. A cursor is opaque and at most 1,024 characters. It holds
+a fingerprint of its owner and query, including the sort, grouping, lead
+project, page size, and agent authority, followed by the last row's order
+keys. A cursor from any other query or owner fails with `cursor_invalid`
+(409). A name or title travels whole when it fits. Otherwise the cursor
+carries a prefix, and continuation uses the row's current value if it still
+starts with that prefix, or the prefix if not.
+
+A row whose order changes between pages may be skipped or listed again, as in
+any keyset list. That covers an edit under `updated`, a retitle, a scope move,
+or a renamed project or thread. A client that appends pages should
+deduplicate them by workpad ID. The history route keeps its 256-character
+cursor.
+
+`GET /api/workpads/counts` takes an optional `threadId` and `projectId` and
+returns `{ active, archived }`, split by `archived_at`. Each half holds:
+
+- `thread`: the thread's own workpads;
+- `project`: the project's own workpads;
+- `projectWithThreads`: the project's subtree, as in `{project, subtree}`;
+- `global`: global workpads;
+- `all`: the global subtree, every visible workpad.
+
+`thread` is null when the request names no thread; `project` and
+`projectWithThreads` are null when it names no project. Counts use the list's
+visibility rules in one aggregate query, so each count equals its full list's
+length. A malformed ID is a 400. An ID the caller does not own, or a removed
+project, is a 404, as in a list. Like every workpad route, the response is
+`Cache-Control: no-store`.
+
 ## Committed state and attribution
 
 The repository stores a current document and immutable revision snapshots.
