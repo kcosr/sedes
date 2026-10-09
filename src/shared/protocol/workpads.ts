@@ -54,19 +54,11 @@ export type UpdateWorkpadRequest = z.infer<typeof updateWorkpadRequestSchema>;
 /** Newest created first, most recently updated first, or by title. */
 export const workpadListSortSchema = z.enum(["newest", "updated", "title"]);
 export type WorkpadListSort = z.infer<typeof workpadListSortSchema>;
-/**
- * `project` orders a list so its scopes arrive grouped, as Tasks' All view groups them:
- * Global first, then each project (the lead project first, then by name) with its own
- * workpads before its threads' workpads, each thread together. `sort` applies within a group.
- */
-export const workpadListGroupSchema = z.enum(["none", "project"]);
-export type WorkpadListGroup = z.infer<typeof workpadListGroupSchema>;
 export const listWorkpadsRequestSchema = z.strictObject({
   scope: workpadScopeSchema, scopeMode: z.enum(["exact", "subtree"]).default("exact"),
   query: z.string().trim().min(1).max(240).optional(), archived: z.boolean().default(false),
-  limit: z.number().int().min(1).max(100).default(50), cursor: z.string().max(1024).optional(),
-  sort: workpadListSortSchema.default("updated"), group: workpadListGroupSchema.default("none"),
-  leadProjectId: z.string().min(1).max(128).optional(),
+  limit: z.number().int().min(1).max(100).default(50), cursor: z.string().max(256).optional(),
+  sort: workpadListSortSchema.default("updated"),
 });
 export type ListWorkpadsRequest = z.input<typeof listWorkpadsRequestSchema>;
 export const workpadListPageSchema = z.strictObject({ items: z.array(workpadSummarySchema), nextCursor: z.string().optional() });
