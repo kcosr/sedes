@@ -25,12 +25,12 @@ test("Workpads retain attributed history, reconcile shared drafts, and move betw
     const envelope = JSON.parse(message.data) as { event: { type: string; workpadId: string; revision: number; change: "document" | "draft" } };
     if (envelope.event.type === "workpad_changed") workpadEvents.push(envelope.event);
   });
-  // The list's scope has no visible picker any more: the latest list request
-  // names the thread or project the panel follows.
+  // The latest active list request names the thread or project the panel
+  // follows; the Archived section asks separately.
   const listQueries: URLSearchParams[] = [];
   page.on("request", request => {
     const url = new URL(request.url());
-    if (request.method() === "GET" && url.pathname === "/api/workpads") listQueries.push(url.searchParams);
+    if (request.method() === "GET" && url.pathname === "/api/workpads" && url.searchParams.get("archived") !== "true") listQueries.push(url.searchParams);
   });
   const listedScope = () => {
     const query = listQueries.at(-1);
@@ -64,10 +64,15 @@ test("Workpads retain attributed history, reconcile shared drafts, and move betw
   await addRow.press("Enter");
   const workpad = workpadSchema.parse((await (await created).json()).workpad);
   await expect(workpadsToggle).toHaveAccessibleName("Close Workpads panel, 1 workpad in this thread");
-  // A new workpad opens ready for its first text; leave the editor to watch the viewer.
+  // A new workpad opens ready for its first text; leave the editor to watch
+  // the viewer. The header stays the panel's; the workpad's toolbar names it.
   const editor = panel.getByRole("textbox", { name: "Workpad content", exact: true });
   await expect(editor).toBeVisible();
-  await expect(pane.locator(".workspace-panel-subtitle")).toHaveText("Authentication integration");
+  const documentTitle = panel.locator(".workpads-doc-toolbar").getByRole("heading");
+  await expect(documentTitle).toHaveText("Authentication integration");
+  await expect(pane.locator(".workspace-panel-subtitle")).toHaveCount(0);
+  await expect(pane.locator('header[aria-label="Workpads panel header"]')).toHaveText("Workpads");
+  await expect(panel.getByRole("radio", { name: "Thread", exact: true })).toBeChecked();
   await panel.getByRole("button", { name: "Done editing", exact: true }).click();
   await expect(editor).toHaveCount(0);
   const agentEdit = await page.request.post(`/__e2e/workpads/${workpad.id}/agent-edit/${threadId}`, {
@@ -270,33 +275,42 @@ test("Workpads retain attributed history, reconcile shared drafts, and move betw
   };
   const threadWorkspaceId = snapshot.threads.find(({ id }) => id === threadId)!.workspaceId;
   const projectId = snapshot.workspaces.find(({ id }) => id === threadWorkspaceId)!.projectId;
-  // "This project" in the header ⋯ Move to is the thread's project.
-  await page.getByRole("button", { name: "Workpads panel actions", exact: true }).click();
+  // "This project" in the workpad's ⋯ Move to is the thread's project.
+  await panel.getByRole("button", { name: "Workpad actions", exact: true }).click();
   await page.getByRole("menuitem", { name: "Move to", exact: true }).click();
   await expect(page.getByRole("menuitem", { name: /^This thread/ })).toBeDisabled();
   await page.getByRole("menuitem", { name: "This project", exact: true }).click();
   await expect.poll(async () => (await readWorkpad(page, workpad.id)).scope).toEqual({ kind: "project", projectId });
   await expect(workpadsToggle).toHaveAccessibleName("Close Workpads panel");
-  await expect(panel.locator(".workpads-doc-meta")).toContainText("Project · workpad-workspace");
-  const back = pane.getByRole("button", { name: "Back to workpads", exact: true });
+  // The revision line names the place, as rows do: the project's label.
+  await expect(panel.locator(".workpads-doc-meta")).toContainText("workpad-workspace");
+  await expect(panel.locator(".workpads-doc-scope .lucide-folder")).toHaveCount(1);
+  const back = panel.getByRole("button", { name: "Back to workpads", exact: true });
   const row = panel.getByRole("button", { name: "Authentication integration", exact: true });
+  const segment = (name: string) => panel.getByRole("radio", { name, exact: true });
   await back.click();
   await expect(row).toHaveCount(0);
-  await panel.getByRole("radio", { name: "Project", exact: true }).click();
+  await segment("Project").click();
+  // Segments count each view's active workpads.
+  await expect(segment("Project")).toHaveText("Project1");
+  await expect(segment("Thread")).toHaveText("Thread0");
   await row.click();
   const archivedNotice = panel.getByText("This workpad is archived.", { exact: true });
-  await page.getByRole("button", { name: "Workpads panel actions", exact: true }).click();
+  await panel.getByRole("button", { name: "Workpad actions", exact: true }).click();
   await page.getByRole("menuitem", { name: "Archive", exact: true }).click();
   await expect(archivedNotice).toBeVisible();
   await expect(panel.getByRole("button", { name: "Unarchive", exact: true })).toBeVisible();
   await expect(panel.getByRole("button", { name: "Edit workpad", exact: true })).toBeDisabled();
   await back.click();
   await expect(row).toHaveCount(0);
-  await pane.getByRole("button", { name: "View options", exact: true }).click();
-  await page.getByRole("menuitemcheckbox", { name: "Archived", exact: true }).click();
-  // View options stay open for another pick.
-  await page.keyboard.press("Escape");
-  await expect(panel.getByRole("button", { name: "Remove filter: Archived", exact: true })).toBeVisible();
+  // Archived ends the list, collapsed with its count; it lists the view's archived workpads.
+  await expect(segment("Project")).toHaveText("Project0");
+  const archivedHeading = panel.getByRole("button", { name: /^Archived/ });
+  await expect(archivedHeading).toHaveText("Archived1");
+  await expect(archivedHeading).toHaveAttribute("aria-expanded", "false");
+  await archivedHeading.click();
+  await expect(row).toBeVisible();
+  await capture(page, testInfo, "workpads-archived-expanded.png");
   await row.click();
   await panel.getByRole("button", { name: "Unarchive", exact: true }).click();
   await expect(archivedNotice).toHaveCount(0);
@@ -305,6 +319,15 @@ test("Workpads retain attributed history, reconcile shared drafts, and move betw
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(panel).toBeVisible();
   await expectNoPageOverflow(page);
+  // A phone keeps the scope control and the workpad's toolbar inside the panel.
+  const panelBox = (await panel.boundingBox())!;
+  for (const control of [panel.getByRole("radiogroup", { name: "Workpad scope" }), panel.locator(".workpads-doc-toolbar"), back, panel.getByRole("button", { name: "Workpad actions", exact: true })]) {
+    const box = (await control.boundingBox())!;
+    expect(box.x).toBeGreaterThanOrEqual(panelBox.x - 0.5);
+    expect(box.x + box.width).toBeLessThanOrEqual(panelBox.x + panelBox.width + 0.5);
+  }
+  await expect(back).toHaveText("Workpads");
+  await capture(page, testInfo, "workpads-mobile-document.png");
   await expect(marks.first()).toHaveCSS("user-select", "text");
   await capture(page, testInfo, "workpads-mobile-attribution.png");
   await panel.getByRole("button", { name: "Show attribution", exact: true }).click();
@@ -353,13 +376,7 @@ test("Workpads retain attributed history, reconcile shared drafts, and move betw
   const otherProjectThreadPath = await createDraftThread(page);
   await expect(panel.getByRole("radio", { name: "Project", exact: true })).toBeChecked();
   await expect.poll(listedScope).toEqual({ kind: "project", projectId: otherWorkspace.projectId, threadId: null });
-  await pane.getByRole("button", { name: "View options", exact: true }).click();
-  const archivedOption = page.getByRole("menuitemcheckbox", { name: "Archived", exact: true });
-  await expect(archivedOption).toBeChecked();
-  await archivedOption.click();
-  // View options stay open for another pick.
-  await page.keyboard.press("Escape");
-  await expect(panel.getByRole("button", { name: "Remove filter: Archived", exact: true })).toHaveCount(0);
+  await expect(panel.getByRole("button", { name: /^Archived/ })).toHaveCount(0);
   await expect(addRow).toHaveAttribute("placeholder", "New workpad in this project…");
   await expect(panel.getByText("No workpads in this project yet", { exact: true })).toBeVisible();
   await expect(panel.locator(".workpad-document")).toHaveCount(0);
@@ -379,12 +396,11 @@ test("Workpads retain attributed history, reconcile shared drafts, and move betw
   await expect(addRow).toHaveAttribute("placeholder", "New global workpad…");
   await addRow.fill("Shared global notes");
   await addRow.press("Enter");
-  const subtitle = pane.locator(".workspace-panel-subtitle");
-  await expect(subtitle).toHaveText("Shared global notes");
+  await expect(documentTitle).toHaveText("Shared global notes");
   await expect(editor).toBeVisible();
   await page.goForward();
   await expect(page).toHaveURL(otherProjectThreadPath);
-  await expect(subtitle).toHaveText("Shared global notes");
+  await expect(documentTitle).toHaveText("Shared global notes");
   await expect(editor).toBeVisible();
   await back.click();
   await expect(panel.getByRole("radio", { name: "Global", exact: true })).toBeChecked();
@@ -399,6 +415,63 @@ test("Workpads retain attributed history, reconcile shared drafts, and move betw
   await expect(renameDialog).toBeHidden();
   await expect(panel.getByRole("button", { name: "Shared team notes", exact: true })).toBeVisible();
   await expect(globalRow).toHaveCount(0);
+
+  // A thread workpad in this other project's thread, then All: Global, then
+  // this project, then the others, each with its own workpads before its
+  // threads', under collapsible headings.
+  await segment("Thread").click();
+  await addRow.fill("Second thread notes");
+  await addRow.press("Enter");
+  await expect(documentTitle).toHaveText("Second thread notes");
+  await panel.getByRole("button", { name: "Done editing", exact: true }).click();
+  await capture(page, testInfo, "workpads-document.png");
+  // Choosing a segment returns to that view's list.
+  await segment("Thread").click();
+  await expect(panel.getByRole("button", { name: "Second thread notes", exact: true })).toBeVisible();
+  await capture(page, testInfo, "workpads-list-thread.png");
+  await segment("Project").click();
+  await expect(segment("Project")).toHaveText("Project0");
+  await expect(panel.getByText("No workpads in this project yet", { exact: true })).toBeVisible();
+  await pane.getByRole("button", { name: "View options", exact: true }).click();
+  await page.getByRole("menuitemcheckbox", { name: "Include thread workpads", exact: true }).click();
+  await page.keyboard.press("Escape");
+  await expect(segment("Project")).toHaveText("Project1");
+  await expect(panel.getByRole("button", { name: "Remove filter: Thread workpads", exact: true })).toBeVisible();
+  const threadRow = panel.getByRole("button", { name: "Second thread notes", exact: true });
+  await expect(threadRow).toBeVisible();
+  await expect(threadRow.locator(".scope-location")).toHaveText(/\S/);
+  await capture(page, testInfo, "workpads-list-project.png");
+  await segment("Global").click();
+  await expect(panel.getByRole("button", { name: "Shared team notes", exact: true })).toBeVisible();
+  await capture(page, testInfo, "workpads-list-global.png");
+  await segment("All").click();
+  await expect(segment("All")).toHaveText("All3");
+  const groupHeadings = panel.locator('.list-heading[data-variant="group"]');
+  await expect(groupHeadings).toHaveText(["Global1", "task-workspace1", /^.+1$/, "workpad-workspace1"]);
+  await expect(panel.locator(".scope-location")).toHaveCount(0);
+  await capture(page, testInfo, "workpads-all-grouped.png");
+  await page.getByRole("button", { name: "Workpads panel actions", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Collapse all groups", exact: true }).click();
+  await expect(panel.getByRole("button", { name: "Shared team notes", exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "Workpads panel actions", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Expand all groups", exact: true }).click();
+  await expect(panel.getByRole("button", { name: "Shared team notes", exact: true })).toBeVisible();
+  await pane.getByRole("button", { name: "View options", exact: true }).click();
+  await page.getByRole("menuitemcheckbox", { name: "Group by project", exact: true }).click();
+  await page.keyboard.press("Escape");
+  await expect(groupHeadings).toHaveCount(0);
+  await expect(panel.getByRole("button", { name: "Shared team notes", exact: true }).locator(".scope-location")).toHaveText("Global");
+  await capture(page, testInfo, "workpads-list-all.png");
+  // Phones fit the segments and rows; touch keeps each row's ⋯ shown.
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expectNoPageOverflow(page);
+  const narrowPanel = (await panel.boundingBox())!;
+  for (const control of [panel.getByRole("radiogroup", { name: "Workpad scope" }), panel.getByRole("button", { name: "Actions for “Shared team notes”", exact: true })]) {
+    const box = (await control.boundingBox())!;
+    expect(box.x + box.width).toBeLessThanOrEqual(narrowPanel.x + narrowPanel.width + 0.5);
+  }
+  await capture(page, testInfo, "workpads-mobile-list-all.png");
+  await page.setViewportSize({ width: 1440, height: 900 });
   await pane.getByRole("button", { name: "Close Workpads panel", exact: true }).click();
   await expect(panel).toHaveCount(0);
 });
