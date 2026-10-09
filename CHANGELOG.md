@@ -4,10 +4,11 @@
 
 ### Breaking Changes
 
-- Browser and packaged clients require client protocol 145, which adds
+- Browser and packaged clients require client protocol 146, which adds
   automation schedule details and run turn outcomes to thread summaries and
-  runs, drops the Remind now inventory action, and adds turn reply replay.
-  Upgrade clients together with the server.
+  runs, drops the Remind now inventory action, adds turn reply replay, and adds
+  workpad list sorting, grouping and counts. Upgrade clients together with the
+  server.
   ([#58](https://github.com/kcosr/sedes/pull/58), [#59](https://github.com/kcosr/sedes/pull/59), [#61](https://github.com/kcosr/sedes/pull/61), [#62](https://github.com/kcosr/sedes/pull/62))
 
 - `PATCH /api/threads/:threadId/inventory` no longer accepts the `remind`
@@ -486,6 +487,14 @@
   Session stats stays in the thread menu rather than flashing during loading. (#8)
 
 ### Changed
+
+- Workpads works like Tasks: Thread, Project, Global and All views with
+  counts, Sort and Group by project options, a Project-only **Include thread
+  workpads**, rows that name their thread or project, and a collapsed Archived
+  section. An open workpad keeps the panel header and views, and Android Back
+  closes it. The view is remembered on the device.
+
+- Tasks shows **Include thread tasks** as a filter chip while it's on.
 
 - Ctrl+Shift+F (Command+Shift+F) focuses and selects sidebar search instead
   of opening Find in thread, which keeps Ctrl+F. Escape in an empty search
@@ -1351,6 +1360,10 @@
   only the four most recent earlier daemon PIDs. Diagnostics remain opt-in.
 
 ### Removed
+
+- Workpads' **Include nested scopes**, **Archived** switch and **Browse
+  another thread or project…**; use All, Include thread workpads and the
+  Archived section instead.
 
 - The Ctrl+Shift+Arrow (Command+Shift+Arrow) panel docking shortcut; dock from
   the panel menu. Ctrl+Shift+Up/Down now always moves between sidebar threads.

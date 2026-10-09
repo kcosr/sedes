@@ -224,8 +224,9 @@ stable portal retains the panel across docking, collapse, viewport changes,
 and thread switches. Its open and collapsed state, size, and place are shared
 across this client's thread layouts (`workspace-panels/companion-layout.ts`);
 Thread view follows the active thread and Project view follows its project;
-Global view is independent of navigation. Manual thread/project targets last
-until the next thread navigation. A changed effective scope clears the selected
+Global and All views are independent of navigation. The selected view and its
+options are remembered on the device (`workpads-panel-store.ts`, key
+`sedes.workpads.panel`). A changed effective scope clears the selected
 document, editor, history, and pending form state and invalidates reads from
 the previous scope. The selection and editor survive navigation when the
 effective scope stays the same. Navigation or a project catalog update that
