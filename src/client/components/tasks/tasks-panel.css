@@ -37,6 +37,10 @@
   --tasks-row-text: var(--text-ui);
   --tasks-row-icon: var(--icon-sm);
   --tasks-more-width: var(--control-sm);
+  /* Section headings start at the completion circle, in either density. */
+  --list-heading-inset: calc(
+    (var(--tasks-check-target) - var(--tasks-check-icon)) / 2
+  );
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;

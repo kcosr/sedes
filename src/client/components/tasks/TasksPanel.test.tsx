@@ -1495,6 +1495,9 @@ describe("TasksPanel Backlog and Pin", () => {
     expect(titles()).toEqual(["Audit checkout error states", "Add retry to the payment call"]);
     expect(headings()).toEqual(["Backlog2", "Completed1"]);
     expect(backlogHeading()).toHaveAttribute("aria-expanded", "false");
+    // The label leads, where the rows start; the chevron follows the count.
+    expect(backlogHeading().firstElementChild).toHaveClass("list-heading-label");
+    expect(backlogHeading().lastElementChild).toHaveClass("list-heading-chevron");
     // Counts cover every open task, the backlog's included.
     expect(segment("Thread")).toHaveAccessibleDescription("4 open");
     expect(panel().querySelector(".tasks-title-count")).toHaveAttribute("aria-label", "4 open");

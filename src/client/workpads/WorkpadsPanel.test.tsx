@@ -1615,6 +1615,9 @@ describe("WorkpadsPanel", () => {
       await screen.findByRole("button", { name: "Integration" });
       await waitFor(() => expect(heading()).toHaveTextContent(/^Archived3$/));
       expect(heading()).toHaveAttribute("aria-expanded", "false");
+      // The label leads, level with the rows' titles; the chevron follows the count.
+      expect(heading().firstElementChild).toHaveClass("list-heading-label");
+      expect(heading().lastElementChild).toHaveClass("list-heading-chevron");
       expect(screen.getByRole("region", { name: "Archived workpads" })).toBeInTheDocument();
       expect(api.listWorkpads).not.toHaveBeenCalledWith(expect.objectContaining({ archived: true }));
       // The View options of the view apply: its scope and sort.

@@ -421,6 +421,10 @@ test.describe.serial("Tasks panel", () => {
     await expect(
       taskRow(tasks, "Unpinned follow-up").locator(".scope-location .lucide-message-square"),
     ).toBeVisible();
+    // The section heading starts where its rows do, at the completion circle.
+    const headingLabel = (await completedHeading.locator(".list-heading-label").boundingBox())!;
+    const circle = (await taskRow(tasks, "Verify endpoint").locator(".tasks-check svg").boundingBox())!;
+    expect(Math.abs(headingLabel.x - circle.x)).toBeLessThanOrEqual(1);
     await capture(page, testInfo, "tasks-panel-all.png");
     // View options offer no grouping; All's sort is its own.
     await tasks.getByRole("button", { name: "View options" }).click();
@@ -459,6 +463,10 @@ test.describe.serial("Tasks panel", () => {
     // The sheet opens on the last view chosen, whatever presented it.
     await expect(sheet.getByRole("radio", { name: "All" })).toHaveAttribute("aria-checked", "true");
     await expect(rowTitle("Global errand")).toHaveAccessibleDescription("In Global");
+    // Touch density widens the completion circle; the heading follows it.
+    const sheetHeadingLabel = (await sheet.getByRole("button", { name: /^Completed/ }).locator(".list-heading-label").boundingBox())!;
+    const sheetCircle = (await taskRow(tasks, "Global errand").locator(".tasks-check svg").boundingBox())!;
+    expect(Math.abs(sheetHeadingLabel.x - sheetCircle.x)).toBeLessThanOrEqual(1);
     await capture(page, testInfo, "tasks-mobile-all.png");
     await selectScope(tasks, "Global");
     await expect(sheet.getByRole("radio", { name: "Global" })).toHaveAttribute("aria-checked", "true");

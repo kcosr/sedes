@@ -314,6 +314,10 @@ test("Workpads retain attributed history, reconcile shared drafts, and move betw
   await expect(archivedHeading).toHaveAttribute("aria-expanded", "false");
   await archivedHeading.click();
   await expect(row).toBeVisible();
+  // The heading's label starts where its rows' titles do, never further in.
+  const archivedLabel = (await archivedHeading.locator(".list-heading-label").boundingBox())!;
+  const archivedRowName = (await row.locator(".workpads-row-name").boundingBox())!;
+  expect(Math.abs(archivedLabel.x - archivedRowName.x)).toBeLessThanOrEqual(1);
   await capture(page, testInfo, "workpads-archived-expanded.png");
   await row.click();
   await panel.getByRole("button", { name: "Unarchive", exact: true }).click();

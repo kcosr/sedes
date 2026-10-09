@@ -112,7 +112,10 @@
 }
 
 /* ── The collapsed sections that end a list (Backlog, Completed,
-   Archived). */
+   Archived). The label starts where the rows' content does, never further
+   in: `--list-heading-inset` is the rows' leading inset (Workpads' titles by
+   default; Tasks sets its completion circle's). The chevron follows the
+   count, as the sidebar's project rows end with theirs. */
 .list-heading {
   display: flex;
   align-items: center;
@@ -121,7 +124,8 @@
   min-width: 0;
   min-height: var(--control-md);
   margin-top: var(--space-1);
-  padding: var(--space-2) var(--space-2) var(--space-1);
+  padding: var(--space-2) var(--space-2) var(--space-1)
+    var(--list-heading-inset, var(--space-2));
   border: 0;
   border-radius: var(--radius-ctl);
   background: transparent;

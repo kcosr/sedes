@@ -68,7 +68,8 @@ export type ListHeadingProps = Omit<
 
 /**
  * The collapsible heading of a section that ends a list (Backlog, Completed,
- * Archived).
+ * Archived). Its label starts where its rows' content does, so the heading
+ * never sits further in than its rows; the chevron follows the count.
  */
 export function ListHeading({
   expanded,
@@ -86,9 +87,9 @@ export function ListHeading({
       aria-expanded={expanded}
       onClick={onToggle}
     >
-      <ChevronRight className="list-heading-chevron" aria-hidden="true" />
       <span className="list-heading-label">{label}</span>
       {count !== undefined && <span className="list-heading-count">{count}</span>}
+      <ChevronRight className="list-heading-chevron" aria-hidden="true" />
     </button>
   );
 }
