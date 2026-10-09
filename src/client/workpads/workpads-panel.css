@@ -1,7 +1,9 @@
-/* Workpads. The list follows the Tasks panel (one scope control, a dashed
-   add row, quiet one-line rows); an open document follows the Files
-   editor (one hairline toolbar over the document). Panel-level actions sit
-   in the shared panel header. */
+/* Workpads. The list follows the Tasks panel (the shared scope control,
+   chips, group and section headings and location line in
+   components/scope-view, a dashed add row, quiet one-line rows). An open
+   document keeps the panel's header and scope control, with one hairline
+   toolbar of its own (‹ Workpads, its title, its actions) over the text, as
+   in the Files editor. Panel-level actions sit in the shared panel header. */
 
 .workpads-panel {
   --workpads-row-height: var(--control-lg);
@@ -41,22 +43,6 @@
   color: var(--foreground);
 }
 
-/* View options narrow the list: a dot says so while the menu is closed. */
-.workpads-view-options {
-  position: relative;
-}
-
-.workpads-view-options[data-filtering]::after {
-  content: "";
-  position: absolute;
-  top: var(--space-1);
-  right: var(--space-1);
-  width: var(--space-1-5);
-  height: var(--space-1-5);
-  border-radius: 50%;
-  background: var(--info);
-}
-
 /* ── Search row: filters the list; Escape clears and closes it ── */
 .workpads-search {
   display: flex;
@@ -93,43 +79,14 @@
   color: var(--muted-foreground-2);
 }
 
-/* ── Toolbar: the scope control, view chips, then the add row ── */
+/* ── Toolbar: the scope control, view chips, then the add row; over an
+   open document, the scope control alone ── */
 .workpads-toolbar {
   display: flex;
   flex: none;
   flex-direction: column;
   gap: var(--space-2);
   padding: var(--space-3) var(--space-3) var(--space-1-5);
-}
-
-.workpads-filters {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-1);
-}
-
-.workpads-filter-chip {
-  max-width: 100%;
-  border-radius: 999px;
-  color: var(--muted-foreground);
-  font-weight: var(--weight-medium);
-}
-
-.workpads-filter-chip:hover {
-  color: var(--foreground);
-}
-
-.workpads-filter-label {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-@media (max-width: 819px), (pointer: coarse) {
-  .workpads-filter-chip {
-    height: var(--control-md);
-  }
 }
 
 .workpads-add {
@@ -270,7 +227,9 @@
   outline: none;
 }
 
-.workpads-row-title[data-scope] {
+/* A row in a list that mixes scopes says where it belongs on a quiet
+   second line; the two lines get their own padding. */
+.workpads-row-title[data-location] {
   padding-block: var(--space-1-5);
 }
 
@@ -278,24 +237,6 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.workpads-row-scope {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-  min-width: 0;
-  overflow: hidden;
-  color: var(--muted-foreground-2);
-  font-size: var(--text-meta);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.workpads-row-scope svg {
-  flex: none;
-  width: var(--icon-xs);
-  height: var(--icon-xs);
 }
 
 .workpads-row-meta {
@@ -337,26 +278,79 @@
   height: var(--workpads-more-width);
 }
 
-/* ── Document: one hairline toolbar (the Files editor's), then the text ── */
+/* ── Document: one hairline toolbar (‹ Workpads, the title over its
+   revision line, the document's actions), then the text ── */
 .workpads-doc-toolbar {
   display: flex;
   flex: none;
   align-items: center;
-  justify-content: space-between;
-  gap: var(--space-2);
+  gap: var(--space-1-5);
   min-width: 0;
   min-height: var(--control-lg);
-  padding: var(--space-0-5) var(--space-1-5) var(--space-0-5) var(--space-5);
+  padding: var(--space-1) var(--space-1-5);
+  border-top: 1px solid var(--border-soft);
   border-bottom: 1px solid var(--border-soft);
   color: var(--muted-foreground);
   font-size: var(--text-meta);
 }
 
+.workpads-doc-back {
+  flex: none;
+  gap: var(--space-0-5);
+  padding-inline: var(--space-1) var(--space-2);
+  color: var(--muted-foreground);
+}
+
+.workpads-doc-back:hover {
+  color: var(--foreground);
+}
+
+.workpads-doc-heading {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  justify-content: center;
+  min-width: 0;
+}
+
+.workpads-doc-title {
+  margin: 0;
+  overflow: hidden;
+  color: var(--foreground);
+  font-size: var(--text-ui);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-snug);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .workpads-doc-meta {
   min-width: 0;
   overflow: hidden;
+  line-height: var(--leading-snug);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* The workpad's place, named and marked as list rows mark it. */
+.workpads-doc-scope svg {
+  display: inline-block;
+  width: var(--icon-xs);
+  height: var(--icon-xs);
+  margin-right: var(--space-1);
+  vertical-align: -1px;
+}
+
+/* A narrow panel keeps the back step's arrow, and its name for assistive
+   technology. */
+@container workpads (max-width: 359px) {
+  .workpads-doc-back-label {
+    display: none;
+  }
+
+  .workpads-doc-back {
+    padding-inline: var(--space-1);
+  }
 }
 
 .workpads-doc-actions {
@@ -526,7 +520,8 @@
     height: var(--bar-control);
   }
 
-  .workpads-save {
+  .workpads-save,
+  .workpads-doc-back {
     height: var(--bar-control);
   }
 
@@ -540,10 +535,6 @@
   .workpads-reading,
   .workpads-editor > .workpads-textarea {
     padding: var(--space-4);
-  }
-
-  .workpads-doc-toolbar {
-    padding-left: var(--space-4);
   }
 
   .workpads-notice,

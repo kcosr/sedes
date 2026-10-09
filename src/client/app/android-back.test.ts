@@ -3,8 +3,10 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   CLOSE_TASK_DETAIL_EVENT,
+  CLOSE_WORKPAD_EVENT,
   OPEN_OVERLAY_SELECTOR,
   closeExposedTaskDetail,
+  closeExposedWorkpad,
   hasOpenOverlayAboveDrawer,
   resolveAndroidBackAction,
 } from "./android-back.js";
@@ -60,6 +62,46 @@ describe("closeExposedTaskDetail", () => {
 
     popover.remove();
     sheet.remove();
+  });
+});
+
+describe("closeExposedWorkpad", () => {
+  it("lets a shown Workpads panel close its open workpad", () => {
+    const close = vi.fn((event: Event) => event.preventDefault());
+    window.addEventListener(CLOSE_WORKPAD_EVENT, close);
+    try {
+      expect(closeExposedWorkpad()).toBe(true);
+      expect(close).toHaveBeenCalledOnce();
+    } finally {
+      window.removeEventListener(CLOSE_WORKPAD_EVENT, close);
+    }
+  });
+
+  it("leaves Back alone when no panel has a workpad open", () => {
+    const ignore = vi.fn();
+    window.addEventListener(CLOSE_WORKPAD_EVENT, ignore);
+    try {
+      expect(closeExposedWorkpad()).toBe(false);
+      expect(ignore).toHaveBeenCalledOnce();
+    } finally {
+      window.removeEventListener(CLOSE_WORKPAD_EVENT, ignore);
+    }
+  });
+
+  it("leaves Back to an overlay above the workpad, such as its menu or the drawer", () => {
+    const close = vi.fn((event: Event) => event.preventDefault());
+    window.addEventListener(CLOSE_WORKPAD_EVENT, close);
+    const menu = document.createElement("div");
+    menu.setAttribute("role", "menu");
+    menu.dataset.state = "open";
+    document.body.append(menu);
+    try {
+      expect(closeExposedWorkpad()).toBe(false);
+      expect(close).not.toHaveBeenCalled();
+    } finally {
+      menu.remove();
+      window.removeEventListener(CLOSE_WORKPAD_EVENT, close);
+    }
   });
 });
 

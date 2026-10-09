@@ -1,18 +1,22 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Archive, Bot, Check, Ellipsis, FilePenLine, FolderInput, Highlighter, History, Layers, ListFilter, LoaderCircle, Pencil, Plus, Search, Trash2, X, ArchiveRestore } from "lucide-react";
-import type { UpdateWorkpadRequest, Workpad, WorkpadScope, WorkpadSummary, WorkpadRevision, WorkpadRevisionSummary } from "../../shared/protocol/workpads.js";
+import { Archive, ArchiveRestore, Bot, Check, ChevronLeft, ChevronsDownUp, ChevronsUpDown, Ellipsis, FilePenLine, FolderInput, Highlighter, History, ListFilter, LoaderCircle, Pencil, Plus, Search, Trash2, X } from "lucide-react";
+import type { ListWorkpadsRequest, UpdateWorkpadRequest, Workpad, WorkpadCounts, WorkpadScope, WorkpadSummary, WorkpadRevision, WorkpadRevisionSummary } from "../../shared/protocol/workpads.js";
 import { WORKPAD_CONTENT_MAX_CHARACTERS } from "../../shared/protocol/workpads.js";
-import { describeProjectLocations } from "../app/project-locations.js";
-import { installNavigationBlocker, routePath, useRoute, type NavigationBlocker } from "../app/router.js";
+import { CLOSE_WORKPAD_EVENT } from "../app/android-back.js";
+import { installNavigationBlocker, routePath, useRoute, type NavigationBlocker, type Route } from "../app/router.js";
 import { useTouchDensity } from "../app/use-touch-density.js";
+import {
+  getWorkpadsPanelPreferences, setWorkpadsLastView, setWorkpadsViewOptions, useWorkpadsPanelPreferences,
+  type WorkpadsView, type WorkpadsViewOptions,
+} from "../app/workpads-panel-store.js";
 import type { WorkspacePanelContext } from "../workspace-panels/registry.js";
 import { useApplicationStore } from "../stores/ApplicationClientStore.js";
 import { relativeTime, shortRelativeTime } from "../lib/time.js";
 import { DiscardChangesDialog } from "../components/ui/discard-changes-dialog.js";
 import { ConfirmDialog } from "../components/ui/confirm-dialog.js";
 import { Dialog, DialogBody, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../components/ui/dialog.js";
-import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuItemDescription, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSeparator, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger, DropdownMenuValue } from "../components/ui/dropdown-menu.js";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuItemDescription, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSeparator, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger, DropdownMenuValue } from "../components/ui/dropdown-menu.js";
 import { SearchableSelectList } from "../components/ui/searchable-select.js";
 import { Button } from "../components/ui/button.js";
 import { Callout } from "../components/ui/callout.js";
@@ -20,44 +24,90 @@ import { EmptyState } from "../components/ui/empty-state.js";
 import { Field } from "../components/ui/field.js";
 import { Input } from "../components/ui/input.js";
 import { Textarea } from "../components/ui/textarea.js";
-import { SegmentedControl, SegmentedControlItem } from "../components/ui/segmented-control.js";
-import { ScopeIcon, useTaskDestinations } from "../components/tasks/task-destinations.js";
-import { parseScopeKey, scopeKey as destinationKey } from "../components/tasks/task-view-model.js";
+import { ScopeSegments } from "../components/scope-view/ScopeSegments.js";
+import { ListHeading, ListHeadingIcon, ScopeIcon, ScopeLocation, ViewFilterChips, type ScopeLocationLabel, type ViewFilterChip } from "../components/scope-view/scope-list.js";
+import { ScopeOptionItem, SortOptionItems } from "../components/scope-view/ViewOptionsItems.js";
+import { useTaskDestinations } from "../components/tasks/task-destinations.js";
+import { clampView, destinationScope, parseScopeKey, scopeKey as destinationKey, viewUnavailableReason, type TasksContext } from "../components/tasks/task-view-model.js";
 import { WorkpadDocument } from "./WorkpadDocument.js";
 import { useWorkpadDraft } from "./use-workpad-draft.js";
+import { archivedListRequest, groupKeys, groupWorkpads, showsLocation, viewCount, workpadListRequest, type WorkpadGroup, type WorkpadsTarget } from "./workpads-view-model.js";
 import { applyMarkdownChecklistToggle, type MarkdownChecklistToggle } from "../components/conversation/markdown-checklists.js";
 import "./workpads-panel.css";
 
 const message = (error: unknown) => error instanceof Error ? error.message : "Unable to update workpad.";
 /** What renaming, moving or archiving needs of a listed or open workpad. */
 type WorkpadTarget = Pick<WorkpadSummary, "id" | "revision" | "title" | "scope" | "archivedAt">;
+type ListBase = Omit<ListWorkpadsRequest, "query" | "limit" | "cursor">;
+/** `listed` then the workpads of `page` it does not hold yet, in order. */
+function withoutRepeats(listed: readonly WorkpadSummary[], page: readonly WorkpadSummary[]): WorkpadSummary[] {
+  const seen = new Set(listed.map(({ id }) => id));
+  return [...listed, ...page.filter(({ id }) => !seen.has(id) && Boolean(seen.add(id)))];
+}
+/** The guarded identity of what the panel shows: a view and its scope. */
+const viewKey = (view: WorkpadsView, scope: WorkpadScope) => JSON.stringify([view, scope]);
+const ADD_PLACEHOLDER: Record<WorkpadsView, string> = {
+  thread: "New workpad in this thread…",
+  project: "New workpad in this project…",
+  global: "New global workpad…",
+  all: "New global workpad…",
+};
+const SCOPE_NOUN: Record<WorkpadsView, string> = {
+  thread: "workpads in this thread",
+  project: "workpads in this project",
+  global: "global workpads",
+  all: "workpads",
+};
 export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
   const { applicationStore: store, visible: open, threadId, workspaceId, host } = context;
   const application = useApplicationStore(store);
   const route = useRoute();
+  const snapshot = application.snapshot;
   // The panel's project is the project of the thread's location.
   const contextWorkspaceId = workspaceId ?? (threadId ? store.workspaceIdForThread(threadId) : undefined);
-  const contextProjectId = application.snapshot?.workspaces.find(({ id }) => id === contextWorkspaceId)?.projectId;
+  const contextProjectId = snapshot?.workspaces.find(({ id }) => id === contextWorkspaceId)?.projectId;
   const contextKey = JSON.stringify([threadId, contextProjectId]);
   const [leaveRequest, setLeaveRequest] = useState<{ proceed: () => void; contextKey?: string; pendingMutation?: boolean }>();
-  const [scopeKind, setScopeKind] = useState<WorkpadScope["kind"]>(threadId ? "thread" : "global");
+  // The view Workpads opened on, then the one chosen; it is remembered once the panel shows it.
+  const [chosenView, setChosenView] = useState<WorkpadsView>(() => getWorkpadsPanelPreferences().lastView);
+  const preferences = useWorkpadsPanelPreferences();
   const [targets, setTargets] = useState({ threadId, contextProjectId, projectId: contextProjectId ?? "", selectedThread: threadId ?? "" });
-  // Manual targets last until navigation. Remember every context change so an
-  // old override cannot reappear when returning to a previously viewed thread.
+  // The thread and project in view follow the chat. Only an unsynced editor
+  // holds them back (see below), until the user leaves it. Remember every
+  // context change so a held target cannot reappear when returning to a
+  // previously viewed thread.
   const contextChanged = targets.threadId !== threadId || targets.contextProjectId !== contextProjectId;
   const currentTargets = contextChanged
     ? { threadId, contextProjectId, projectId: contextProjectId ?? "", selectedThread: targets.threadId !== threadId ? threadId ?? "" : targets.selectedThread }
     : targets;
   if (contextChanged) setTargets(currentTargets);
   const { projectId, selectedThread } = currentTargets;
-  const setProjectId = (value: string) => setTargets({ ...currentTargets, projectId: value });
-  const setSelectedThread = (value: string) => setTargets({ ...currentTargets, selectedThread: value });
+  // The chat the views follow, as Tasks reads it: an archived thread has no Thread view.
+  // Only what the views read is kept, so unrelated publications change nothing.
+  const shownThreadArchived = Boolean(selectedThread) &&
+    snapshot?.threads?.find(({ id }) => id === selectedThread)?.inventoryState === "archived";
+  const viewContext = useMemo((): TasksContext => ({
+    ...(!selectedThread ? {}
+      : shownThreadArchived ? { threadArchived: true as const }
+      : { thread: { id: selectedThread, title: "", workspaceId: "" } }),
+    ...(projectId ? { project: { id: projectId, label: "" } } : {}),
+  }), [selectedThread, shownThreadArchived, projectId]);
+  const view = clampView(chosenView, viewContext);
+  const options = preferences.views[view];
+  const target: WorkpadsTarget = useMemo(() => ({
+    ...(viewContext.thread ? { threadId: viewContext.thread.id } : {}),
+    ...(viewContext.project ? { projectId: viewContext.project.id } : {}),
+  }), [viewContext]);
   const [query, setQuery] = useState("");
-  const [nested, setNested] = useState(false);
-  const [archived, setArchived] = useState(false);
   const [items, setItems] = useState<WorkpadSummary[]>([]);
   const [cursor, setCursor] = useState<string>();
   const [loading, setLoading] = useState(false);
+  const [archivedOpen, setArchivedOpen] = useState(false);
+  const [archivedItems, setArchivedItems] = useState<WorkpadSummary[]>([]);
+  const [archivedCursor, setArchivedCursor] = useState<string>();
+  const [archivedLoading, setArchivedLoading] = useState(false);
+  const [counts, setCounts] = useState<{ key: string; value?: WorkpadCounts; failed?: true }>();
+  const [collapsedGroups, setCollapsedGroups] = useState<ReadonlySet<string>>(() => new Set());
   const [error, setError] = useState("");
   const [refreshError, setRefreshError] = useState("");
   const [selected, setSelected] = useState<Workpad>();
@@ -69,7 +119,7 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
   const [searchOpen, setSearchOpen] = useState(false);
   const [viewMenuOpen, setViewMenuOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
-  const [browsing, setBrowsing] = useState(false);
+  const [documentMenuOpen, setDocumentMenuOpen] = useState(false);
   const [renameTarget, setRenameTarget] = useState<WorkpadTarget>();
   const [title, setTitle] = useState("");
   const [moveTarget, setMoveTarget] = useState<WorkpadTarget>();
@@ -81,22 +131,34 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
   const draft = useWorkpadDraft(store.api, setError);
   const selectedRef = useRef(selected); selectedRef.current = selected;
   const itemsRef = useRef(items); itemsRef.current = items;
+  const archivedItemsRef = useRef(archivedItems); archivedItemsRef.current = archivedItems;
+  const archivedOpenRef = useRef(archivedOpen); archivedOpenRef.current = archivedOpen;
   const revisionRef = useRef(revision); revisionRef.current = revision;
   const generation = useRef(0);
   const scopeGeneration = useRef(0);
   useEffect(() => () => { ++generation.current; ++scopeGeneration.current; }, []);
   const listGeneration = useRef(0);
   const listCount = useRef(0);
+  const archivedGeneration = useRef(0);
+  const archivedCount = useRef(0);
+  const countsGeneration = useRef(0);
   const loadingId = useRef<string | undefined>(undefined);
   const resumeEvents = useRef<() => void>(() => undefined);
   const listIdentity = useRef("");
+  const archivedIdentity = useRef("");
   const operationBusy = useRef(false);
   const operationMutating = useRef(false);
-  const scope: WorkpadScope = scopeKind === "global" ? { kind: "global" } : scopeKind === "project" ? { kind: "project", projectId } : { kind: "thread", threadId: selectedThread };
-  const scopeKey = JSON.stringify(scope);
-  const listKey = JSON.stringify([scopeKey, nested, query, archived]);
+  const activeRequest = useMemo(() => workpadListRequest(view, target, options), [view, target, options]);
+  const archivedRequest = useMemo(() => archivedListRequest(view, target, options), [view, target, options]);
+  const scope: WorkpadScope = activeRequest?.scope ?? { kind: "global" };
+  const scopeKey = viewKey(view, scope);
+  const trimmedQuery = query.trim();
+  const listKey = JSON.stringify([activeRequest, trimmedQuery]);
   listIdentity.current = listKey;
-  const scopeValid = scope.kind === "global" || (scope.kind === "project" ? Boolean(scope.projectId) : Boolean(scope.threadId));
+  const archivedKey = JSON.stringify([archivedRequest, trimmedQuery]);
+  archivedIdentity.current = archivedKey;
+  const countsKey = JSON.stringify([target.threadId, target.projectId]);
+  const scopeValid = activeRequest !== undefined;
   const previousScope = useRef(scopeKey);
   const approvedLeave = useRef<{ scopeKey: string; routeKey?: string; contextKey?: string } | undefined>(undefined);
   const routeKey = routePath(route);
@@ -112,10 +174,13 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
       (approval.contextKey === undefined || approval.contextKey === contextKey);
     const unsynced = draft.saving || Boolean(editor && (editor.remote || editor.text !== editor.draft.content));
     if (!approved && (unsynced || operationMutating.current)) {
-      // Context can also change through catalog updates (for example moving a
-      // thread to another project), without passing through the router guard.
-      // Keep the old scope and editor until the user explicitly leaves it.
-      const retained = JSON.parse(previousScope.current) as WorkpadScope;
+      // Choosing another view, or a context change (navigation, or a catalog
+      // update such as moving a thread to another project, which never passes
+      // through the router guard), would replace the editor. Keep the old
+      // view and editor until the user explicitly leaves them.
+      const [retainedView, retained] = JSON.parse(previousScope.current) as [WorkpadsView, WorkpadScope];
+      const desiredView = chosenView;
+      setChosenView(retainedView);
       setTargets({ ...currentTargets,
         ...(retained.kind === "project" ? { projectId: retained.projectId } : {}),
         ...(retained.kind === "thread" ? { selectedThread: retained.threadId } : {}),
@@ -124,20 +189,22 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
       // its continuation if the catalog changes while confirmation is open.
       setLeaveRequest(current => current && current.contextKey === undefined ? current : {
         contextKey, pendingMutation: !unsynced,
-        proceed: () => { approvedLeave.current = { scopeKey, contextKey }; setTargets(currentTargets); },
+        proceed: () => { approvedLeave.current = { scopeKey, contextKey }; setTargets(currentTargets); setChosenView(desiredView); },
       });
       return;
     }
     approvedLeave.current = undefined;
     previousScope.current = scopeKey;
-    ++scopeGeneration.current; ++generation.current; ++listGeneration.current;
+    setWorkpadsLastView(chosenView);
+    ++scopeGeneration.current; ++generation.current; ++listGeneration.current; ++archivedGeneration.current;
     operationBusy.current = false; operationMutating.current = false; loadingId.current = undefined;
     selectedRef.current = undefined; revisionRef.current = undefined;
     draft.setEditor(undefined);
     setSelected(undefined); setRevision(undefined); setRevisions([]); setRevisionCursor(undefined);
     setItems([]); setCursor(undefined); listCount.current = 0;
+    setArchivedItems([]); setArchivedCursor(undefined); archivedCount.current = 0;
     setNewTitle(""); setTitle(""); setRenameTarget(undefined); setMoveTarget(undefined); setDiscarding(false); setReconciling(false);
-    setHistoryOpen(false); setViewMenuOpen(false);
+    setHistoryOpen(false); setViewMenuOpen(false); setDocumentMenuOpen(false);
     setError(""); setRefreshError(""); setBusy(false); setLeaveRequest(undefined);
     setChecklistSaving(false); setChecklistRefreshRequired(false);
   }, [scopeKey, draft.setEditor, draft.saving, routeKey, contextKey, busy]);
@@ -149,37 +216,103 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
     try { await action(isCurrent); } catch (failure) { if (isCurrent()) setError(message(failure)); }
     finally { if (isCurrent()) { operationBusy.current = false; operationMutating.current = false; loadingId.current = undefined; setBusy(false); resumeEvents.current(); } }
   };
-  const refreshList = useCallback(async (nextCursor?: string) => {
-    const token = ++listGeneration.current;
-    const identity = JSON.stringify([scopeKey, nested, query, archived]);
-    if (!scopeValid) { setItems([]); setCursor(undefined); return; }
-    const request = { scope: JSON.parse(scopeKey) as WorkpadScope, scopeMode: nested ? "subtree" as const : "exact" as const, ...(query.trim() ? { query: query.trim() } : {}), archived };
+  /**
+   * One list's pages, in the server's order: the next page, or every page
+   * already shown again on a refresh. A workpad whose sort key changed
+   * between pages can come twice; it is listed once, where it came first.
+   */
+  const readPages = useCallback(async (request: ListBase & { query?: string }, known: number, nextCursor: string | undefined, isCurrent: () => boolean) => {
     const page = await store.api.listWorkpads({ ...request, ...(nextCursor ? { cursor: nextCursor } : {}) });
     const refreshed = [...page.items];
     let following = page.nextCursor;
     // A change refreshes every page already displayed, preserving pagination.
-    while (!nextCursor && following && refreshed.length < listCount.current) {
-      if (token !== listGeneration.current || identity !== listIdentity.current) return;
+    while (!nextCursor && following && refreshed.length < known) {
+      if (!isCurrent()) return undefined;
       const next = await store.api.listWorkpads({ ...request, cursor: following });
       refreshed.push(...next.items); following = next.nextCursor;
     }
-    if (token !== listGeneration.current || identity !== listIdentity.current) return;
-    setItems(previous => nextCursor ? [...previous, ...refreshed] : refreshed);
-    listCount.current = nextCursor ? listCount.current + refreshed.length : refreshed.length;
-    setCursor(following);
-  }, [store, scopeKey, scopeValid, nested, query, archived]);
+    return isCurrent() ? { items: withoutRepeats([], refreshed), cursor: following } : undefined;
+  }, [store]);
+  /** The segments' counts, for the thread and project in view. They are secondary: a failure only hides them. */
+  const refreshCounts = useCallback(async () => {
+    const token = ++countsGeneration.current;
+    try {
+      const value = await store.api.getWorkpadCounts({
+        ...(target.threadId ? { threadId: target.threadId } : {}),
+        ...(target.projectId ? { projectId: target.projectId } : {}),
+      });
+      if (token === countsGeneration.current) setCounts({ key: countsKey, value });
+    } catch {
+      if (token === countsGeneration.current) setCounts(current => current?.key === countsKey && current.value ? current : { key: countsKey, failed: true });
+    }
+  }, [store, target, countsKey]);
+  /** The Archived section's workpads, while it is expanded. */
+  const refreshArchived = useCallback(async (nextCursor?: string) => {
+    const token = ++archivedGeneration.current;
+    const identity = archivedKey;
+    if (!archivedRequest || !archivedOpenRef.current) return;
+    const request = { ...archivedRequest, ...(trimmedQuery ? { query: trimmedQuery } : {}) };
+    const isCurrent = () => token === archivedGeneration.current && identity === archivedIdentity.current;
+    const result = await readPages(request, archivedCount.current, nextCursor, isCurrent);
+    if (!result) return;
+    const listed = nextCursor ? withoutRepeats(archivedItemsRef.current, result.items) : result.items;
+    archivedItemsRef.current = listed;
+    setArchivedItems(listed);
+    archivedCount.current = listed.length;
+    setArchivedCursor(result.cursor);
+  }, [archivedRequest, archivedKey, trimmedQuery, readPages]);
+  /**
+   * The list, and with it (unless asked not to) the counts and an expanded
+   * Archived section: whatever refreshes the list refreshes them too. A
+   * cursor loads the next page instead.
+   */
+  const refreshList = useCallback(async (nextCursor?: string, also: { counts?: boolean; archived?: boolean } = {}) => {
+    const token = ++listGeneration.current;
+    const identity = listKey;
+    const alongside = nextCursor ? [] : [
+      ...(also.counts !== false ? [refreshCounts()] : []),
+      ...(also.archived !== false && archivedOpenRef.current ? [refreshArchived()] : []),
+    ];
+    if (!activeRequest) { setItems([]); setCursor(undefined); await Promise.all(alongside); return; }
+    const request = { ...activeRequest, ...(trimmedQuery ? { query: trimmedQuery } : {}) };
+    const isCurrent = () => token === listGeneration.current && identity === listIdentity.current;
+    const [result] = await Promise.all([readPages(request, listCount.current, nextCursor, isCurrent), ...alongside]);
+    if (!result) return;
+    const listed = nextCursor ? withoutRepeats(itemsRef.current, result.items) : result.items;
+    itemsRef.current = listed;
+    setItems(listed);
+    listCount.current = listed.length;
+    setCursor(result.cursor);
+  }, [activeRequest, listKey, trimmedQuery, readPages, refreshCounts, refreshArchived]);
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
     listCount.current = 0;
     setLoading(true);
     const debounce = window.setTimeout(() => {
-      void refreshList().then(() => { if (!cancelled) setRefreshError(""); })
+      void refreshList(undefined, { counts: false, archived: false }).then(() => { if (!cancelled) setRefreshError(""); })
         .catch(failure => { if (!cancelled) setRefreshError(message(failure)); })
         .finally(() => { if (!cancelled) setLoading(false); });
     }, 180);
     return () => { cancelled = true; clearTimeout(debounce); ++listGeneration.current; };
   }, [open, refreshList]);
+  useEffect(() => {
+    if (!open || !archivedOpen) return;
+    let cancelled = false;
+    archivedCount.current = 0;
+    setArchivedLoading(true);
+    const debounce = window.setTimeout(() => {
+      void refreshArchived().catch(failure => { if (!cancelled) setRefreshError(message(failure)); })
+        .finally(() => { if (!cancelled) setArchivedLoading(false); });
+    }, 180);
+    return () => { cancelled = true; clearTimeout(debounce); ++archivedGeneration.current; };
+  }, [open, archivedOpen, refreshArchived]);
+  // Counts follow the thread and project in view; the list's own refreshes refetch them.
+  useEffect(() => {
+    if (!open) return;
+    void refreshCounts();
+    return () => { ++countsGeneration.current; };
+  }, [open, refreshCounts]);
   const load = async (id: string) => {
     const token = ++generation.current;
     loadingId.current = id;
@@ -296,9 +429,10 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
     const retainedThread = current.name === "thread" ||
       (current.name === "settings" && threadId !== undefined);
     if (retainedThread && next.name === "thread") {
-      if (next.threadId === threadId || scopeKind === "global") return true;
-      if (scopeKind === "thread" && next.threadId === selectedThread) return true;
-      if (scopeKind === "project") {
+      // Global and All are the same in every thread.
+      if (next.threadId === threadId || view === "global" || view === "all") return true;
+      if (view === "thread" && next.threadId === selectedThread) return true;
+      if (view === "project") {
         const nextWorkspaceId = store.workspaceIdForThread(next.threadId);
         const nextProjectId = store.getSnapshot().snapshot?.workspaces.find(({ id }) => id === nextWorkspaceId)?.projectId;
         if (nextProjectId && nextProjectId === projectId) return true;
@@ -309,11 +443,18 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
       // The destination may have moved projects while the dialog was open.
       const nextThreadId = next.name === "thread" ? next.threadId : undefined;
       const nextWorkspaceId = nextThreadId ? store.workspaceIdForThread(nextThreadId) : undefined;
-      const nextProjectId = store.getSnapshot().snapshot?.workspaces.find(({ id }) => id === nextWorkspaceId)?.projectId;
-      const nextScope: WorkpadScope = scopeKind === "global" ? { kind: "global" }
-        : scopeKind === "thread" ? { kind: "thread", threadId: nextThreadId ?? "" }
-        : { kind: "project", projectId: nextProjectId ?? "" };
-      approvedLeave.current = { scopeKey: JSON.stringify(nextScope), routeKey: routePath(next) };
+      const nextSnapshot = store.getSnapshot().snapshot;
+      const nextProjectId = nextSnapshot?.workspaces.find(({ id }) => id === nextWorkspaceId)?.projectId;
+      const nextArchived = nextSnapshot?.threads?.find(({ id }) => id === nextThreadId)?.inventoryState === "archived";
+      const nextContext: TasksContext = {
+        ...(!nextThreadId ? {} : nextArchived ? { threadArchived: true as const } : { thread: { id: nextThreadId, title: "", workspaceId: "" } }),
+        ...(nextProjectId ? { project: { id: nextProjectId, label: "" } } : {}),
+      };
+      const nextView = clampView(chosenView, nextContext);
+      const nextScope: WorkpadScope = nextView === "thread" && nextContext.thread ? { kind: "thread", threadId: nextContext.thread.id }
+        : nextView === "project" && nextContext.project ? { kind: "project", projectId: nextContext.project.id }
+        : { kind: "global" };
+      approvedLeave.current = { scopeKey: viewKey(nextView, nextScope), routeKey: routePath(next) };
       proceed();
     } });
     return false;
@@ -348,7 +489,8 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
   // with: live refresh keeps both the open document and the list current.
   const mutate = async (target: WorkpadTarget, change: Omit<UpdateWorkpadRequest, "expectedRevision">) => {
     const token = scopeGeneration.current;
-    const known = selectedRef.current?.id === target.id ? selectedRef.current : itemsRef.current.find(({ id }) => id === target.id) ?? target;
+    const known = selectedRef.current?.id === target.id ? selectedRef.current
+      : itemsRef.current.find(({ id }) => id === target.id) ?? archivedItemsRef.current.find(({ id }) => id === target.id) ?? target;
     const result = await store.api.updateWorkpad(target.id, { expectedRevision: known.revision, ...change });
     if (token !== scopeGeneration.current) return;
     if (selectedRef.current?.id === result.id) await load(result.id);
@@ -400,22 +542,10 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
     const token = generation.current;
     if (selected) { const next = await store.api.getWorkpadRevision(selected.id, number); if (token !== generation.current) return; revisionRef.current = next; setRevision(next); }
   };
-  const snapshot = application.snapshot;
-  // Each project once, named as everywhere else: same-named projects carry a host or path hint.
-  const projects = useMemo(() => {
-    const list = snapshot?.projects ?? [];
-    const locations = describeProjectLocations({ projects: list, workspaces: snapshot?.workspaces ?? [], environments: snapshot?.environments ?? [] });
-    return list.map(project => ({ id: project.id, label: locations.projectLabel(project.id) ?? project.name }))
-      .sort((left, right) => left.label.localeCompare(right.label, undefined, { numeric: true }) || left.id.localeCompare(right.id));
-  }, [snapshot?.projects, snapshot?.workspaces, snapshot?.environments]);
-  const scopeLabel = (value: WorkpadScope) => {
-    if (value.kind !== "project") return value.kind === "thread" ? "Thread" : "Global";
-    const project = projects.find(({ id }) => id === value.projectId);
-    return project ? `Project · ${project.label}` : "Project";
-  };
-  const threads = application.visibleThreads;
   const touch = useTouchDensity();
-  const destinations = useTaskDestinations(application.snapshot, route);
+  // Names follow the chat the panel serves, also while Settings parks it.
+  const followedRoute = useMemo<Route>(() => threadId ? { name: "thread", threadId } : { name: "home" }, [threadId]);
+  const destinations = useTaskDestinations(snapshot, followedRoute);
   const editing = Boolean(draft.editor);
   const latestRevision = selected?.revision;
   // An older revision on screen, as opposed to the document's latest.
@@ -430,38 +560,40 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
     [checklistDisabled, checklistSaving, onChecklistToggle]);
   const noChanges = Boolean(draft.editor && draft.editor.text === draft.editor.baseText);
   const canSave = Boolean(draft.editor) && !busy && !draft.saving && !stale && !draft.editor?.remote && !noChanges;
-  const browsedThread = scopeKind === "thread" && selectedThread !== (threadId ?? "") && Boolean(selectedThread);
-  const browsedProject = scopeKind === "project" && projectId !== (contextProjectId ?? "") && Boolean(projectId);
-  const narrowed = nested || archived || browsedThread || browsedProject;
 
-  const closeDocument = () => {
+  // ‹ Workpads, and everything else that returns to the list: the open
+  // editor's text syncs first, and the document closes once it has.
+  const closeDocument = (then?: () => void) => {
     void run(async isCurrent => {
       if (draft.editor) await draft.save();
       if (!isCurrent()) return;
       draft.setEditor(undefined); selectedRef.current = undefined; revisionRef.current = undefined;
-      setSelected(undefined); setRevision(undefined); setHistoryOpen(false); ++generation.current;
+      setSelected(undefined); setRevision(undefined); setHistoryOpen(false); setDocumentMenuOpen(false); ++generation.current;
       setChecklistRefreshRequired(false);
+      then?.();
     });
   };
+  /** Search and View options act on the list: with a workpad open, they return to it first. */
+  const fromList = (action: () => void) => { if (selectedRef.current) closeDocument(action); else action(); };
+  const changeOptions = (patch: Partial<WorkpadsViewOptions>) => fromList(() => setWorkpadsViewOptions(view, patch));
   const openRename = (target: WorkpadTarget) => { setTitle(target.title); setRenameTarget(target); };
   const moveTo = (target: WorkpadTarget, destination: WorkpadScope) => { void run(() => mutate(target, { scope: destination }), true); };
   const archiveWorkpad = (target: WorkpadTarget, value: boolean) => { void run(() => mutate(target, { archived: value }), true); };
   const finishEditing = () => { void run(async isCurrent => { await draft.save(); if (isCurrent()) draft.setEditor(undefined); }); };
-  const browse = (destination: WorkpadScope) => {
-    setScopeKind(destination.kind);
-    setTargets({ ...currentTargets,
-      ...(destination.kind === "project" ? { projectId: destination.projectId } : {}),
-      ...(destination.kind === "thread" ? { selectedThread: destination.threadId } : {}),
-    });
+  // Choosing a view returns to its list; the scope guard above confirms
+  // leaving unsynced text. Choosing the one in view again closes the workpad.
+  const changeView = (next: WorkpadsView) => {
+    if (viewUnavailableReason(next, viewContext, "workpads") !== undefined) return;
+    setChosenView(next);
   };
-  const stopBrowsing = () => setTargets({ ...currentTargets, projectId: contextProjectId ?? "", selectedThread: threadId ?? "" });
   const searchButtonRef = useRef<HTMLButtonElement>(null);
   const closeSearch = () => { setSearchOpen(false); setQuery(""); requestAnimationFrame(() => searchButtonRef.current?.focus()); };
+  const destination = destinationScope(view, viewContext);
   const create = () => {
     const value = newTitle.trim();
-    if (!value || !scopeValid) return;
+    if (!value || !destination) return;
     void run(async isCurrent => {
-      const created = await store.api.createWorkpad({ title: value, scope });
+      const created = await store.api.createWorkpad({ title: value, scope: destination });
       if (!isCurrent()) return;
       setNewTitle("");
       await load(created.id);
@@ -470,48 +602,42 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
     }, true);
   };
 
-  // The header: a back step while a document is open, and the open
-  // document's actions in its ⋯. Handlers run the latest render's.
-  const handlers = useRef({ closeDocument, openRename, moveTo, archiveWorkpad, selected });
-  handlers.current = { closeDocument, openRename, moveTo, archiveWorkpad, selected };
-  const hasSelection = selected !== undefined;
+  // Android Back closes an open workpad, as ‹ Workpads does.
+  const closeDocumentRef = useRef(closeDocument); closeDocumentRef.current = closeDocument;
   useEffect(() => {
-    host.setBack(hasSelection ? { label: "Back to workpads", disabled: busy, onBack: () => handlers.current.closeDocument() } : undefined);
-  }, [host, hasSelection, busy]);
-  const selectedScope = selected ? destinationKey(selected.scope) : undefined;
-  const selectedArchived = Boolean(selected?.archivedAt);
-  const draftSaving = draft.saving;
-  const menuItems = useMemo(() => {
-    if (!hasSelection) return undefined;
-    if (editing) {
-      return <DropdownMenuItem variant="destructive" disabled={busy || draftSaving} onSelect={() => setDiscarding(true)}>
-        <Trash2 /><span>Discard draft…</span>
-      </DropdownMenuItem>;
-    }
-    const current = () => handlers.current.selected;
-    return <>
-      <DropdownMenuItem disabled={busy} onSelect={() => { const target = current(); if (target) handlers.current.openRename(target); }}>
-        <Pencil /><span>Rename…</span>
-      </DropdownMenuItem>
-      <DropdownMenuSub>
-        <DropdownMenuSubTrigger disabled={busy}><FolderInput /><span>Move to</span></DropdownMenuSubTrigger>
-        <DropdownMenuSubContent>
-          <MoveToItems current={selectedScope} threadId={threadId} projectId={contextProjectId}
-            onMove={destination => { const target = current(); if (target) handlers.current.moveTo(target, destination); }}
-            onChoose={() => { const target = current(); if (target) setMoveTarget(target); }} />
-        </DropdownMenuSubContent>
-      </DropdownMenuSub>
-      <DropdownMenuItem disabled={busy} onSelect={() => { const target = current(); if (target) handlers.current.archiveWorkpad(target, !target.archivedAt); }}>
-        {selectedArchived ? <><ArchiveRestore /><span>Unarchive</span></> : <><Archive /><span>Archive</span></>}
-      </DropdownMenuItem>
-    </>;
-  }, [hasSelection, editing, busy, draftSaving, selectedScope, selectedArchived, threadId, contextProjectId]);
+    if (!open) return;
+    const onClose = (event: Event) => {
+      if (!selectedRef.current) return;
+      event.preventDefault();
+      closeDocumentRef.current();
+    };
+    window.addEventListener(CLOSE_WORKPAD_EVENT, onClose);
+    return () => window.removeEventListener(CLOSE_WORKPAD_EVENT, onClose);
+  }, [open]);
+
+  // All's groups, named from the snapshot. A thread in a project with
+  // several locations says where it runs.
+  const groups = useMemo(() => view === "all" && options.groupByProject ? groupWorkpads(items, {
+    project: id => destinations.projectLabels.get(id),
+    thread: id => {
+      const name = destinations.threadTitles.get(id);
+      const where = destinations.threadLocation(id);
+      return name && where ? `${name} · ${where}` : name;
+    },
+    threadProject: id => destinations.threadProjectId(id),
+  }) : undefined, [view, options.groupByProject, items, destinations]);
+  const hasSelection = selected !== undefined;
+  const hasGroups = !hasSelection && groups !== undefined && groups.length > 0;
+  const anyCollapsed = collapsedGroups.size > 0;
+  const groupsRef = useRef(groups); groupsRef.current = groups;
+  // The panel's ⋯ collapses or expands All's groups, as Tasks' does.
+  const menuItems = useMemo(() => hasGroups ? <DropdownMenuItem onSelect={() =>
+    setCollapsedGroups(anyCollapsed ? new Set() : new Set(groupKeys(groupsRef.current ?? [])))}>
+    {anyCollapsed ? <ChevronsUpDown /> : <ChevronsDownUp />}
+    <span>{anyCollapsed ? "Expand all groups" : "Collapse all groups"}</span>
+  </DropdownMenuItem> : undefined, [hasGroups, anyCollapsed]);
   useEffect(() => { host.setMenuItems(menuItems); }, [host, menuItems]);
-  useEffect(() => () => { host.setBack(undefined); host.setMenuItems(undefined); }, [host]);
-  // The open document's title, as the revision on screen names it. Only a
-  // changed string is published: each publish re-renders the panel layout.
-  const subtitle = selected ? (editing ? selected.title : revision?.title ?? selected.title) : undefined;
-  useEffect(() => { host.setSubtitle(subtitle); }, [host, subtitle]);
+  useEffect(() => () => { host.setMenuItems(undefined); }, [host]);
 
   const errorText = error || refreshError || (checklistRefreshRequired ? "Reload this workpad before changing checklist items." : "");
   const errorCallout = errorText && <div className="workpads-alert">
@@ -524,130 +650,127 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
     <Button variant="ghost" size="icon-xs" className="workpads-alert-dismiss" aria-label="Dismiss error" onClick={() => { setError(""); setRefreshError(""); }}><X aria-hidden="true" /></Button>
   </div>;
 
-  const chromeActions = !selected && createPortal(<div className="workpads-chrome-actions">
-    <Button ref={searchButtonRef} variant="ghost" size="icon-sm" aria-label="Search workpads" aria-pressed={searchOpen} title="Search workpads"
-      onClick={() => (searchOpen ? closeSearch() : setSearchOpen(true))}>
+  const chips: ViewFilterChip[] = view === "project" && options.includeThreadWorkpads ? [{ key: "threads", label: "Thread workpads" }] : [];
+  const chromeActions = createPortal(<div className="workpads-chrome-actions">
+    <Button ref={searchButtonRef} variant="ghost" size="icon-sm" aria-label="Search workpads" aria-pressed={searchOpen && !selected} title="Search workpads"
+      onClick={() => (selected ? fromList(() => setSearchOpen(true)) : searchOpen ? closeSearch() : setSearchOpen(true))}>
       <Search aria-hidden="true" />
     </Button>
     <DropdownMenu presentation={touch ? "sheet" : "menu"} open={open && viewMenuOpen} onOpenChange={setViewMenuOpen}>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="icon-sm" className="workpads-view-options" aria-label="View options" title="View options" data-filtering={narrowed || undefined}>
+        <Button variant="ghost" size="icon-sm" className="view-options-trigger" aria-label="View options" title="View options" data-filtering={chips.length > 0 || undefined}>
           <ListFilter aria-hidden="true" />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" aria-label="View options" sheetTitle="View options">
-        <DropdownMenuLabel>Show</DropdownMenuLabel>
-        <DropdownMenuCheckboxItem disabled={busy} checked={nested} onCheckedChange={value => setNested(value === true)} onSelect={keepOpen}>
-          <Layers />Include nested scopes
-        </DropdownMenuCheckboxItem>
-        <DropdownMenuCheckboxItem disabled={busy} checked={archived} onCheckedChange={value => setArchived(value === true)} onSelect={keepOpen}>
-          <Archive />Archived
-        </DropdownMenuCheckboxItem>
-        <DropdownMenuSeparator />
-        <DropdownMenuItem disabled={busy} onSelect={() => setBrowsing(true)}><Search /><span>Browse another thread or project…</span></DropdownMenuItem>
+        <SortOptionItems value={options.sort} disabled={busy} onChange={sort => changeOptions({ sort })} />
+        {(view === "all" || view === "project") && <DropdownMenuSeparator />}
+        <ScopeOptionItem view={view} groupByProject={options.groupByProject} includeThreadItems={options.includeThreadWorkpads}
+          includeThreadLabel="Include thread workpads" disabled={busy}
+          onChange={({ groupByProject, includeThreadItems }) => changeOptions({
+            ...(groupByProject !== undefined ? { groupByProject } : {}),
+            ...(includeThreadItems !== undefined ? { includeThreadWorkpads: includeThreadItems } : {}),
+          })} />
       </DropdownMenuContent>
     </DropdownMenu>
   </div>, context.chromeActionsTarget);
 
-  const chips: { key: string; label: string; clear: () => void }[] = [
-    ...(browsedThread || browsedProject ? [{ key: "browse", label: destinations.label(scope), clear: stopBrowsing }] : []),
-    ...(nested ? [{ key: "nested", label: "Nested scopes", clear: () => setNested(false) }] : []),
-    ...(archived ? [{ key: "archived", label: "Archived", clear: () => setArchived(false) }] : []),
-  ];
-  const addPlaceholder = scope.kind === "global" ? "New global workpad…"
-    : scope.kind === "project" ? (browsedProject ? `New workpad in ${destinations.label(scope)}…` : "New workpad in this project…")
-    : browsedThread ? `New workpad in ${destinations.label(scope)}…` : "New workpad in this thread…";
-  const scopeNoun = scope.kind === "global" ? "global workpads"
-    : browsedThread || browsedProject ? `workpads in ${destinations.label(scope)}`
-    : scope.kind === "project" ? "workpads in this project" : "workpads in this thread";
-  const emptyTitle = loading ? "Loading…"
-    : !scopeValid ? (scope.kind === "thread" ? "Open a thread to see its workpads" : "Choose a project to see its workpads")
-    : query.trim() ? `No workpads match “${query.trim()}”`
-    : archived ? "No archived workpads"
-    : `No ${scopeNoun} yet`;
+  const activeCounts = counts?.key === countsKey ? counts.value?.active : undefined;
+  const archivedCounts = counts?.key === countsKey ? counts.value?.archived : undefined;
+  const countsFailed = counts?.key === countsKey && counts.failed === true;
+  const archivedTotal = viewCount(archivedCounts, view, options.includeThreadWorkpads);
+  // The section shows while the view has archived workpads, and whenever their count cannot be read.
+  const archivedShown = (archivedTotal ?? 0) > 0 || countsFailed || archivedItems.length > 0;
+  const segments = <ScopeSegments aria-label="Workpad scope" value={view} disabled={busy}
+    onValueChange={changeView}
+    onReselect={() => { if (selectedRef.current) closeDocument(); }}
+    unavailableReason={candidate => viewUnavailableReason(candidate, viewContext, "workpads")}
+    count={candidate => viewCount(activeCounts, candidate, candidate === "project" && preferences.views.project.includeThreadWorkpads)}
+    describeCount={count => `${count} ${count === 1 ? "workpad" : "workpads"}`} />;
+
+  const rowLocation = (item: WorkpadSummary, section: "active" | "archived") =>
+    showsLocation(view, options, section) ? destinations.location(item.scope, { withProject: view === "all" }) : undefined;
+  const renderRow = (item: WorkpadSummary, location?: ScopeLocationLabel) => <WorkpadRow key={item.id} item={item} location={location}
+    busy={busy} touch={touch} threadId={threadId} projectId={contextProjectId}
+    onOpen={() => { void run(() => load(item.id)); }} onRename={() => openRename(item)}
+    onMove={destination => moveTo(item, destination)} onChooseMove={() => setMoveTarget(item)}
+    onArchive={() => archiveWorkpad(item, !item.archivedAt)} />;
+  const toggleGroup = (key: string) => setCollapsedGroups(current => {
+    const next = new Set(current);
+    if (next.has(key)) next.delete(key); else next.add(key);
+    return next;
+  });
+  const renderGroup = (group: WorkpadGroup): React.JSX.Element => {
+    const collapsed = collapsedGroups.has(group.key);
+    return <li key={group.key} className="list-group" data-kind={group.kind}>
+      <ListHeading variant="group" expanded={!collapsed} onToggle={() => toggleGroup(group.key)}
+        icon={<ListHeadingIcon kind={group.kind} />} label={group.label} count={group.count} />
+      {!collapsed && <ul className="workpads-list" aria-label={group.label}>
+        {group.items.map(item => renderRow(item))}
+        {group.children.map(renderGroup)}
+      </ul>}
+    </li>;
+  };
+  const emptyState = (() => {
+    if (loading) return <EmptyState variant="inline" className="workpads-empty" title="Loading…" />;
+    if (!scopeValid) return <EmptyState variant="inline" className="workpads-empty" title="Open a thread to see its workpads" />;
+    if (trimmedQuery) return <EmptyState variant="inline" className="workpads-empty" title={`No workpads match “${trimmedQuery}”`} />;
+    if ((archivedTotal ?? 0) > 0) return <EmptyState variant="inline" className="workpads-empty" title="Nothing active." description="Every workpad here is archived." />;
+    return <EmptyState variant="inline" className="workpads-empty" title={`No ${SCOPE_NOUN[view]} yet`} description="Name one above, or ask an agent to start one." />;
+  })();
+  const archivedSection = archivedShown && <section className="workpads-section" aria-label="Archived workpads">
+    <ListHeading variant="section" expanded={archivedOpen} onToggle={() => setArchivedOpen(value => !value)}
+      label="Archived" count={trimmedQuery ? undefined : archivedTotal} />
+    {archivedOpen && <>
+      {archivedItems.length ? <ul className="workpads-list" aria-label="Archived workpads">
+        {archivedItems.map(item => renderRow(item, rowLocation(item, "archived")))}
+      </ul> : <EmptyState variant="inline" className="workpads-empty"
+        title={archivedLoading ? "Loading…" : trimmedQuery ? `No archived workpads match “${trimmedQuery}”` : "No archived workpads"} />}
+      {archivedCursor && <Button variant="ghost" size="sm" className="workpads-more" disabled={busy} onClick={() => { void run(() => refreshArchived(archivedCursor)); }}>Load more</Button>}
+    </>}
+  </section>;
 
   const listView = <>
-    {searchOpen && <div className="workpads-search">
-      <Search className="workpads-search-icon" aria-hidden="true" />
-      <input autoFocus type="text" className="workpads-search-input" aria-label="Search workpads" placeholder="Search titles and text"
-        autoComplete="off" maxLength={240} value={query} onChange={event => setQuery(event.target.value)}
-        onKeyDown={event => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); closeSearch(); } }} />
-      <Button variant="ghost" size="icon-xs" aria-label="Close search" onClick={closeSearch}><X aria-hidden="true" /></Button>
-    </div>}
-    <div className="workpads-toolbar">
-      <SegmentedControl disabled={busy} aria-label="Workpad scope" className="w-full" value={scopeKind}
-        onValueChange={value => { setScopeKind(value as WorkpadScope["kind"]); setTargets({ ...currentTargets, projectId: projectId || contextProjectId || projects[0]?.id || "", selectedThread: selectedThread || threadId || threads[0]?.id || "" }); }}>
-        <SegmentedControlItem value="thread" disabled={!threads.length}>Thread</SegmentedControlItem>
-        <SegmentedControlItem value="project" disabled={!projects.length}>Project</SegmentedControlItem>
-        <SegmentedControlItem value="global">Global</SegmentedControlItem>
-      </SegmentedControl>
-      {chips.length > 0 && <div className="workpads-filters" role="group" aria-label="View filters">
-        {chips.map(chip => <Button key={chip.key} variant="outline" size="sm" className="workpads-filter-chip" disabled={busy}
-          aria-label={`Remove filter: ${chip.label}`} onClick={chip.clear}>
-          <span className="workpads-filter-label">{chip.label}</span><X data-icon="inline-end" aria-hidden="true" />
-        </Button>)}
-      </div>}
-      {!archived && <form className="workpads-add" onSubmit={event => { event.preventDefault(); create(); }}>
-        <Plus className="workpads-add-icon" aria-hidden="true" />
-        <input type="text" className="workpads-add-input" aria-label="New workpad title" placeholder={addPlaceholder}
-          autoComplete="off" enterKeyHint="done" maxLength={240} disabled={!scopeValid} value={newTitle}
-          onChange={event => setNewTitle(event.target.value)}
-          onKeyDown={event => { if (event.key === "Escape" && newTitle) { event.preventDefault(); event.stopPropagation(); setNewTitle(""); } }} />
-        {newTitle.trim() && <span className="workpads-add-hint" aria-hidden="true">↵ create</span>}
-      </form>}
-    </div>
     {errorCallout}
     <div className="workpads-scroll" aria-busy={loading}>
-      {items.length ? <ul className="workpads-list">
-        {items.map(item => <li key={item.id} className="workpads-row">
-          <button type="button" className="workpads-row-title" data-scope={nested || undefined} onClick={() => { void run(() => load(item.id)); }}>
-            <span className="workpads-row-name">{item.title}</span>
-            {nested && <span className="workpads-row-scope"><ScopeIcon kind={item.scope.kind} />{scopeLabel(item.scope)}</span>}
-          </button>
-          <span className="workpads-row-meta" title={`Last edited by ${item.author.kind === "user" ? "you" : item.author.name} · ${new Date(item.updatedAt).toLocaleString()}`}>
-            {item.author.kind !== "user" && <Bot className="workpads-row-agent" aria-label={`Last edited by ${item.author.name}`} />}
-            {shortRelativeTime(item.updatedAt)}
-          </span>
-          <DropdownMenu presentation={touch ? "sheet" : "menu"}>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon-sm" className="workpads-row-more" aria-label={`Actions for “${item.title}”`} disabled={busy}>
-                <Ellipsis aria-hidden="true" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" sheetTitle={item.title}>
-              <DropdownMenuItem onSelect={() => openRename(item)}><Pencil /><span>Rename…</span></DropdownMenuItem>
-              <DropdownMenuSub>
-                <DropdownMenuSubTrigger><FolderInput /><span>Move to</span></DropdownMenuSubTrigger>
-                <DropdownMenuSubContent>
-                  <MoveToItems current={destinationKey(item.scope)} threadId={threadId} projectId={contextProjectId}
-                    onMove={destination => moveTo(item, destination)} onChoose={() => setMoveTarget(item)} />
-                </DropdownMenuSubContent>
-              </DropdownMenuSub>
-              <DropdownMenuItem onSelect={() => archiveWorkpad(item, !item.archivedAt)}>
-                {item.archivedAt ? <><ArchiveRestore /><span>Unarchive</span></> : <><Archive /><span>Archive</span></>}
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </li>)}
-      </ul> : <EmptyState variant="inline" className="workpads-empty" title={emptyTitle}
-        description={!loading && scopeValid && !query.trim() && !archived ? "Name one above, or ask an agent to start one." : undefined} />}
+      {items.length ? <ul className="workpads-list" aria-label={`${view === "all" ? "All" : view === "global" ? "Global" : view === "project" ? "Project" : "Thread"} workpads`}>
+        {groups ? groups.map(renderGroup) : items.map(item => renderRow(item, rowLocation(item, "active")))}
+      </ul> : emptyState}
       {cursor && <Button variant="ghost" size="sm" className="workpads-more" disabled={busy} onClick={() => { void run(() => refreshList(cursor)); }}>Load more</Button>}
+      {archivedSection}
     </div>
   </>;
 
   const revisionLabel = (value: { revision: number }) => value.revision === 0 ? "Created" : `Revision ${value.revision}`;
   const syncLabel = draft.saving ? "Syncing draft…" : draft.editor?.remote ? "Draft conflict" : hasUnsynced ? "Draft not synced" : noChanges ? "No changes" : "Draft synced";
-  const meta = revision && (revision.revision === 0
-    ? [`Created ${relativeTime(revision.createdAt)} by ${revision.author.name}`, scopeLabel(revision.scope)]
-    : [revisionLabel(revision), relativeTime(revision.createdAt), revision.author.name, scopeLabel(revision.scope)]).join(" · ");
+  // The workpad's place, named as list rows name it.
+  const place = revision && destinations.location(revision.scope, { withProject: true });
+  const meta = revision && place && <>
+    {(revision.revision === 0
+      ? [`Created ${relativeTime(revision.createdAt)} by ${revision.author.name}`]
+      : [revisionLabel(revision), relativeTime(revision.createdAt), revision.author.name]).join(" · ")}
+    {" · "}
+    <span className="workpads-doc-scope"><ScopeIcon kind={place.kind} />{place.label}</span>
+  </>;
   const orderedRevisions = useMemo(() => [...revisions].sort((left, right) => right.revision - left.revision), [revisions]);
+  // The title of the revision on screen; an open editor edits the latest.
+  const documentTitle = selected ? (editing ? selected.title : revision?.title ?? selected.title) : "";
+  const selectedArchived = Boolean(selected?.archivedAt);
 
   const documentView = selected && <>
     <div className="workpads-doc-toolbar">
-      {editing
-        ? <span className="workpads-doc-meta workpads-sync" role="status">{syncLabel}</span>
-        : checklistSaving ? <span className="workpads-doc-meta workpads-sync" role="status">Saving checklist item…</span>
-        : <span className="workpads-doc-meta" title={revision ? new Date(revision.createdAt).toLocaleString() : undefined}>{meta}</span>}
+      <Button variant="ghost" size="sm" className="workpads-doc-back" aria-label="Back to workpads" title="Back to workpads" disabled={busy}
+        onClick={() => closeDocument()}>
+        <ChevronLeft data-icon="inline-start" aria-hidden="true" />
+        <span className="workpads-doc-back-label">Workpads</span>
+      </Button>
+      <div className="workpads-doc-heading">
+        <h3 className="workpads-doc-title" title={documentTitle}>{documentTitle}</h3>
+        {editing
+          ? <span className="workpads-doc-meta workpads-sync" role="status">{syncLabel}</span>
+          : checklistSaving ? <span className="workpads-doc-meta workpads-sync" role="status">Saving checklist item…</span>
+          : <span className="workpads-doc-meta" title={revision ? new Date(revision.createdAt).toLocaleString() : undefined}>{meta}</span>}
+      </div>
       <div className="workpads-doc-actions">
         {!editing && <Button variant={attribution ? "secondary" : "ghost"} size="icon-sm" aria-label="Show attribution" aria-pressed={attribution}
           title={attribution ? "Hide attribution" : "Show attribution"} onClick={() => setAttribution(!attribution)}>
@@ -690,6 +813,30 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
           {busy && operationMutating.current && <LoaderCircle className="animate-spin" data-icon="inline-start" aria-hidden="true" />}
           Save
         </Button>}
+        <DropdownMenu presentation={touch ? "sheet" : "menu"} open={open && documentMenuOpen} onOpenChange={setDocumentMenuOpen}>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="icon-sm" aria-label="Workpad actions" title="More">
+              <Ellipsis aria-hidden="true" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" sheetTitle={documentTitle}>
+            {editing ? <DropdownMenuItem variant="destructive" disabled={busy || draft.saving} onSelect={() => setDiscarding(true)}>
+              <Trash2 /><span>Discard draft…</span>
+            </DropdownMenuItem> : <>
+              <DropdownMenuItem disabled={busy} onSelect={() => openRename(selected)}><Pencil /><span>Rename…</span></DropdownMenuItem>
+              <DropdownMenuSub>
+                <DropdownMenuSubTrigger disabled={busy}><FolderInput /><span>Move to</span></DropdownMenuSubTrigger>
+                <DropdownMenuSubContent>
+                  <MoveToItems current={destinationKey(selected.scope)} threadId={threadId} projectId={contextProjectId}
+                    onMove={value => moveTo(selected, value)} onChoose={() => setMoveTarget(selected)} />
+                </DropdownMenuSubContent>
+              </DropdownMenuSub>
+              <DropdownMenuItem disabled={busy} onSelect={() => archiveWorkpad(selected, !selected.archivedAt)}>
+                {selectedArchived ? <><ArchiveRestore /><span>Unarchive</span></> : <><Archive /><span>Archive</span></>}
+              </DropdownMenuItem>
+            </>}
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
     </div>
     {errorCallout}
@@ -747,8 +894,29 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
     </>}</div>}
   </>;
 
-  return <section id="workpads-panel" role="region" aria-label="Workpads" className="workpads-panel" data-touch={touch || undefined}>
+  return <section id="workpads-panel" role="region" aria-label="Workpads" className="workpads-panel" data-touch={touch || undefined}
+    data-document-open={selected ? "" : undefined}>
     {chromeActions}
+    {searchOpen && !selected && <div className="workpads-search">
+      <Search className="workpads-search-icon" aria-hidden="true" />
+      <input autoFocus type="text" className="workpads-search-input" aria-label="Search workpads" placeholder="Search titles and text"
+        autoComplete="off" maxLength={240} value={query} onChange={event => setQuery(event.target.value)}
+        onKeyDown={event => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); closeSearch(); } }} />
+      <Button variant="ghost" size="icon-xs" aria-label="Close search" onClick={closeSearch}><X aria-hidden="true" /></Button>
+    </div>}
+    <div className="workpads-toolbar">
+      {segments}
+      {!selected && <ViewFilterChips chips={chips} disabled={busy}
+        onRemove={() => setWorkpadsViewOptions(view, { includeThreadWorkpads: false })} />}
+      {!selected && <form className="workpads-add" onSubmit={event => { event.preventDefault(); create(); }}>
+        <Plus className="workpads-add-icon" aria-hidden="true" />
+        <input type="text" className="workpads-add-input" aria-label="New workpad title" placeholder={ADD_PLACEHOLDER[view]}
+          autoComplete="off" enterKeyHint="done" maxLength={240} disabled={!destination} value={newTitle}
+          onChange={event => setNewTitle(event.target.value)}
+          onKeyDown={event => { if (event.key === "Escape" && newTitle) { event.preventDefault(); event.stopPropagation(); setNewTitle(""); } }} />
+        {newTitle.trim() && <span className="workpads-add-hint" aria-hidden="true">↵ create</span>}
+      </form>}
+    </div>
     {selected ? documentView : listView}
     <Dialog open={open && renameTarget !== undefined} onOpenChange={value => { if (!value) setRenameTarget(undefined); }}>
       <DialogContent size="sm" aria-describedby={undefined}>
@@ -771,25 +939,23 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
         </form>
       </DialogContent>
     </Dialog>
-    <Dialog open={open && (moveTarget !== undefined || browsing)} onOpenChange={value => { if (!value) { setMoveTarget(undefined); setBrowsing(false); } }}>
+    <Dialog open={open && moveTarget !== undefined} onOpenChange={value => { if (!value) setMoveTarget(undefined); }}>
       <DialogContent size="sm" mobile="sheet" className="searchable-select-sheet workpads-destination-dialog" aria-describedby={undefined}>
-        <DialogHeader><DialogTitle>{moveTarget ? "Move workpad" : "Browse workpads"}</DialogTitle></DialogHeader>
-        <SearchableSelectList
-          label={moveTarget ? "Destination" : "Thread or project"}
+        <DialogHeader><DialogTitle>Move workpad</DialogTitle></DialogHeader>
+        {moveTarget && <SearchableSelectList
+          label="Destination"
           searchLabel="Search threads and projects"
           emptyLabel="No matching threads or projects."
-          value={destinationKey(moveTarget ? moveTarget.scope : scope)}
-          options={destinations.options(moveTarget ? moveTarget.scope : scopeValid ? scope : undefined)}
+          value={destinationKey(moveTarget.scope)}
+          options={destinations.options(moveTarget.scope)}
           initialDirection="first"
           onValueChange={value => {
             const destination = parseScopeKey(value);
             const target = moveTarget;
-            setMoveTarget(undefined); setBrowsing(false);
-            if (!destination) return;
-            if (target) moveTo(target, destination);
-            else browse(destination);
+            setMoveTarget(undefined);
+            if (destination) moveTo(target, destination);
           }}
-        />
+        />}
       </DialogContent>
     </Dialog>
     <ConfirmDialog
@@ -821,8 +987,6 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
   </section>;
 }
 
-const keepOpen = (event: Event) => event.preventDefault();
-
 /** This thread · This project · Global · Choose…, the current one disabled. */
 function MoveToItems({ current, threadId, projectId, onMove, onChoose }: {
   readonly current?: string;
@@ -846,4 +1010,59 @@ function MoveToItems({ current, threadId, projectId, onMove, onChoose }: {
     <DropdownMenuSeparator />
     <DropdownMenuItem onSelect={onChoose}><Search /><span>Choose…</span></DropdownMenuItem>
   </>;
+}
+
+/**
+ * One listed workpad: its title (and, in lists that mix scopes, where it
+ * belongs on a quiet second line), when it was last edited (and by whom when
+ * not you), and ⋯ with Rename…, Move to and Archive or Unarchive.
+ */
+function WorkpadRow({ item, location, busy, touch, threadId, projectId, onOpen, onRename, onMove, onChooseMove, onArchive }: {
+  readonly item: WorkpadSummary;
+  readonly location?: ScopeLocationLabel;
+  readonly busy: boolean;
+  readonly touch: boolean;
+  readonly threadId?: string;
+  readonly projectId?: string;
+  readonly onOpen: () => void;
+  readonly onRename: () => void;
+  readonly onMove: (scope: WorkpadScope) => void;
+  readonly onChooseMove: () => void;
+  readonly onArchive: () => void;
+}): React.JSX.Element {
+  const locationId = useId();
+  return <li className="workpads-row">
+    <button type="button" className="workpads-row-title" data-location={location ? "" : undefined}
+      aria-describedby={location ? locationId : undefined} onClick={onOpen}>
+      {location ? <>
+        <span className="workpads-row-name">{item.title}</span>
+        <ScopeLocation location={location} />
+      </> : <span className="workpads-row-name">{item.title}</span>}
+    </button>
+    {location && <span id={locationId} className="sr-only">In {location.label}</span>}
+    <span className="workpads-row-meta" title={`Last edited by ${item.author.kind === "user" ? "you" : item.author.name} · ${new Date(item.updatedAt).toLocaleString()}`}>
+      {item.author.kind !== "user" && <Bot className="workpads-row-agent" aria-label={`Last edited by ${item.author.name}`} />}
+      {shortRelativeTime(item.updatedAt)}
+    </span>
+    <DropdownMenu presentation={touch ? "sheet" : "menu"}>
+      <DropdownMenuTrigger asChild>
+        <Button variant="ghost" size="icon-sm" className="workpads-row-more" aria-label={`Actions for “${item.title}”`} disabled={busy}>
+          <Ellipsis aria-hidden="true" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" sheetTitle={item.title}>
+        <DropdownMenuItem onSelect={onRename}><Pencil /><span>Rename…</span></DropdownMenuItem>
+        <DropdownMenuSub>
+          <DropdownMenuSubTrigger><FolderInput /><span>Move to</span></DropdownMenuSubTrigger>
+          <DropdownMenuSubContent>
+            <MoveToItems current={destinationKey(item.scope)} threadId={threadId} projectId={projectId}
+              onMove={onMove} onChoose={onChooseMove} />
+          </DropdownMenuSubContent>
+        </DropdownMenuSub>
+        <DropdownMenuItem onSelect={onArchive}>
+          {item.archivedAt ? <><ArchiveRestore /><span>Unarchive</span></> : <><Archive /><span>Archive</span></>}
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  </li>;
 }

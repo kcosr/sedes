@@ -21,7 +21,8 @@ import { listProjectsResultSchema, locationConflictErrorSchema, mergeProjectRequ
 import { authenticatedFetch } from "../authentication/auth-transport.js";
 import {
   workpadSchema, workpadRevisionSchema, workpadDraftSchema, workpadListPageSchema, workpadRevisionPageSchema,
-  type CreateWorkpadRequest, type UpdateWorkpadRequest, type ListWorkpadsRequest,
+  workpadCountsSchema,
+  type CreateWorkpadRequest, type UpdateWorkpadRequest, type ListWorkpadsRequest, type WorkpadCountsRequest,
   type SaveWorkpadDraftRequest, type CommitWorkpadDraftRequest,
 } from "../../shared/protocol/workpads.js";
 import {
@@ -2095,10 +2096,23 @@ export class ApiClient {
     const query = new URLSearchParams({ scopeKind: request.scope.kind });
     if (request.scope.kind === "project") query.set("projectId", request.scope.projectId);
     if (request.scope.kind === "thread") query.set("threadId", request.scope.threadId);
-    for (const key of ["scopeMode", "query", "archived", "limit", "cursor"] as const) {
+    for (const key of ["scopeMode", "query", "archived", "limit", "cursor", "leadProjectId"] as const) {
       if (request[key] !== undefined) query.set(key, String(request[key]));
     }
+    // The server's defaults (most recently updated first, ungrouped) need no
+    // parameter, so a default list request reads as it always has.
+    if (request.sort !== undefined && request.sort !== "updated") query.set("sort", request.sort);
+    if (request.group !== undefined && request.group !== "none") query.set("group", request.group);
     return this.#request(`/api/workpads?${query}`, {}, workpadListPageSchema);
+  }
+
+  /** Active and archived counts for each Workpads view of a thread and its project. */
+  getWorkpadCounts(request: WorkpadCountsRequest) {
+    const query = new URLSearchParams();
+    if (request.threadId !== undefined) query.set("threadId", request.threadId);
+    if (request.projectId !== undefined) query.set("projectId", request.projectId);
+    const search = query.toString();
+    return this.#request(`/api/workpads/counts${search ? `?${search}` : ""}`, {}, workpadCountsSchema);
   }
 
   async getWorkpad(id: string) {
