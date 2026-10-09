@@ -83,8 +83,11 @@ a fingerprint of its owner and query, including the sort, grouping, lead
 project, page size, and agent authority, followed by the last row's order
 keys. A cursor from any other query or owner fails with `cursor_invalid`
 (409). A name or title travels whole when it fits. Otherwise the cursor
-carries a prefix, and continuation uses the row's current value if it still
-starts with that prefix, or the prefix if not.
+carries a prefix of it and a digest of the whole lowercased value. Continuation
+re-reads the row's current value and resumes there only if its digest matches,
+meaning the label is unchanged. Otherwise it resumes at the prefix. A prefix
+sorts before every label that extends it, so this can repeat rows but never
+skips a row whose own order keys held.
 
 A row whose order changes between pages may be skipped or listed again, as in
 any keyset list. That covers an edit under `updated`, a retitle, a scope move,

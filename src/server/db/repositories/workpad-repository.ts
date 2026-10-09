@@ -71,8 +71,9 @@ type ListKey = {
   /** A small integer rank; every other key is text. */
   readonly rank?: true;
   /**
-   * A name or title. A cursor carries it whole when it fits, otherwise as a
-   * prefix, and continuation re-reads it from the row `idColumn` names.
+   * An ascending name or title. A cursor carries it whole when it fits,
+   * otherwise as a prefix and a digest of the whole label; continuation
+   * re-reads the label from the row `idColumn` names.
    */
   readonly label?: { readonly table: "projects" | "application_threads" | "workpads"; readonly field: "name" | "title"; readonly idColumn: string };
 };
@@ -108,13 +109,14 @@ function listedAfter(keys: readonly ListKey[], values: readonly ListKeyValue[]):
   });
   return { sql: `(${branches.join(" OR ")})`, params };
 }
-function clipLabel(value: string, budget: number): string | [string] {
+const labelDigest = (label: string) => createHash("sha256").update(label).digest("base64url").slice(0, 16);
+function clipLabel(value: string, budget: number): string | [string, string] {
   const points = Array.from(value);
-  return points.length <= budget ? value : [points.slice(0, budget).join("")];
+  return points.length <= budget ? value : [points.slice(0, budget).join(""), labelDigest(value)];
 }
 /** Names and titles shrink to prefixes until the cursor fits its bound. */
 function encodeListCursor(fingerprint: string, keys: readonly ListKey[], values: readonly ListKeyValue[]): string {
-  for (const budget of [Number.POSITIVE_INFINITY, 64, 16, 0]) {
+  for (const budget of [Number.POSITIVE_INFINITY, 64, 48, 32, 16, 0]) {
     const carried = values.map((value, index) => keys[index]!.label && typeof value === "string" ? clipLabel(value, budget) : value);
     const cursor = Buffer.from(JSON.stringify([fingerprint, ...carried])).toString("base64url");
     if (cursor.length <= LIST_CURSOR_MAX_LENGTH) return cursor;
@@ -345,8 +347,10 @@ export class WorkpadRepository {
 
   /**
    * A cursor is the fingerprint of its query and owner, then the last row's
-   * order keys. A name or title carried as a prefix resumes at the row's
-   * current value when that still starts with the prefix, else at the prefix.
+   * order keys. A label carried as a prefix resumes at the row's current label
+   * only when that matches the carried digest, so it is unchanged. Otherwise
+   * it resumes at the prefix: a prefix sorts before every label extending it,
+   * so continuation may repeat rows but never skips one whose keys held.
    */
   #listCursorValues(scope: RequestScope, cursor: string, fingerprint: string, keys: readonly ListKey[]): ListKeyValue[] {
     const invalid = () => new DomainError("cursor_invalid", "The workpad cursor does not match this query.");
@@ -354,7 +358,7 @@ export class WorkpadRepository {
     try { parsed = JSON.parse(Buffer.from(cursor, "base64url").toString()); } catch { throw invalid(); }
     if (!Array.isArray(parsed) || parsed.length !== keys.length + 1 || parsed[0] !== fingerprint) throw invalid();
     const carried = parsed.slice(1) as unknown[];
-    const prefixes = new Map<number, string>();
+    const digests = new Map<number, string>();
     const values = keys.map((key, index): ListKeyValue => {
       const value = carried[index];
       if (key.rank) {
@@ -362,18 +366,18 @@ export class WorkpadRepository {
         return value;
       }
       if (typeof value === "string") return value;
-      if (key.label && Array.isArray(value) && value.length === 1 && typeof value[0] === "string") {
-        prefixes.set(index, value[0]);
+      if (key.label && Array.isArray(value) && value.length === 2 && typeof value[0] === "string" && typeof value[1] === "string") {
+        digests.set(index, value[1]);
         return value[0];
       }
       throw invalid();
     });
-    for (const [index, prefix] of prefixes) {
+    for (const [index, digest] of digests) {
       const { table, field, idColumn } = keys[index]!.label!;
       const id = values[keys.findIndex(key => key.column === idColumn)]!;
       const row = this.database.prepare(`SELECT lower(${field}) AS label FROM ${table} WHERE tenant_id=? AND owner_principal_id=? AND id=?`)
         .get(scope.tenantId, scope.principalId, id) as { label: string } | undefined;
-      if (row?.label.startsWith(prefix)) values[index] = row.label;
+      if (row && labelDigest(row.label) === digest) values[index] = row.label;
     }
     return values;
   }
