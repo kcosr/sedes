@@ -881,6 +881,9 @@
 
 ### Fixed
 
+- Opening a submenu, such as **Move to**, no longer widens the menu it came
+  from. ([#65](https://github.com/kcosr/sedes/pull/65))
+
 - The composer's Steer/Queue menu, and the stash popover, stay just above the
   composer when a pending row leaves while they're open, instead of floating
   where the row was. ([#65](https://github.com/kcosr/sedes/pull/65))

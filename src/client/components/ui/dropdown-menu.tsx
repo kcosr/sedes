@@ -531,6 +531,7 @@ function DropdownMenuSubContent({
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.SubContent>) {
   const sheet = useMenuSheet()
+  const dialogContainer = React.useContext(DialogPortalContainerContext)
   if (sheet) {
     return (
       <MenuSheetSubContent dataSlot="dropdown-menu-sub-content" className={className}>
@@ -538,21 +539,26 @@ function DropdownMenuSubContent({
       </MenuSheetSubContent>
     )
   }
+  // A submenu portals like its parent: rendered inside the parent panel, its rows
+  // would make the parent's :has() width rules (value and description rows) match.
+  if (dialogContainer === null) return null
   return (
-    <DropdownMenuPrimitive.SubContent
-      data-slot="dropdown-menu-sub-content"
-      sideOffset={sideOffset}
-      alignOffset={alignOffset}
-      collisionPadding={collisionPadding}
-      className={cn(
-        menuPanelClass,
-        "max-h-(--radix-dropdown-menu-content-available-height) origin-(--radix-dropdown-menu-content-transform-origin)",
-        className
-      )}
-      {...props}
-    >
-      {children}
-    </DropdownMenuPrimitive.SubContent>
+    <DropdownMenuPrimitive.Portal container={dialogContainer}>
+      <DropdownMenuPrimitive.SubContent
+        data-slot="dropdown-menu-sub-content"
+        sideOffset={sideOffset}
+        alignOffset={alignOffset}
+        collisionPadding={collisionPadding}
+        className={cn(
+          menuPanelClass,
+          "max-h-(--radix-dropdown-menu-content-available-height) origin-(--radix-dropdown-menu-content-transform-origin)",
+          className
+        )}
+        {...props}
+      >
+        {children}
+      </DropdownMenuPrimitive.SubContent>
+    </DropdownMenuPrimitive.Portal>
   )
 }
 
