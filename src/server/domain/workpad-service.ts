@@ -2,7 +2,7 @@ import type { RequestScope } from "../identity/identity-provider.js";
 import { WorkpadRepository, type WorkpadActor, type WorkpadListAuthority } from "../db/repositories/workpad-repository.js";
 import type {
   CreateWorkpadRequest, UpdateWorkpadRequest, ListWorkpadsRequest,
-  SaveWorkpadDraftRequest, CommitWorkpadDraftRequest,
+  SaveWorkpadDraftRequest, CommitWorkpadDraftRequest, WorkpadCountsRequest,
 } from "../../shared/protocol/workpads.js";
 
 export interface WorkpadChangePublisher {
@@ -29,6 +29,7 @@ export class WorkpadService {
     readonly onRetryPending?: () => void,
   ) {}
   list(scope: RequestScope, request: ListWorkpadsRequest, authority?: WorkpadListAuthority) { return this.repository.list(scope, request, authority); }
+  counts(scope: RequestScope, request: WorkpadCountsRequest) { return this.repository.counts(scope, request); }
   get(scope: RequestScope, id: string) { return this.repository.get(scope, id); }
   revisions(scope: RequestScope, id: string, options?: { limit?: number; cursor?: string }) { return this.repository.revisions(scope, id, options); }
   revision(scope: RequestScope, id: string, revision: number) { return this.repository.revision(scope, id, revision); }

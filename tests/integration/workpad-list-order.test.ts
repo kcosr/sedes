@@ -1,7 +1,9 @@
+import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
 import { ConversationBindingRepository } from "../../src/server/db/repositories/conversation-binding-repository.js";
 import { InventoryRepository } from "../../src/server/db/repositories/inventory-repository.js";
 import { WorkpadRepository, type WorkpadListAuthority } from "../../src/server/db/repositories/workpad-repository.js";
+import type { RequestScope } from "../../src/server/identity/identity-provider.js";
 import type { ListWorkpadsRequest, Workpad, WorkpadListPage, WorkpadScope } from "../../src/shared/protocol/workpads.js";
 import { savedAgentDatabase } from "../support/saved-agent-fixture.js";
 
@@ -260,5 +262,69 @@ describe("Workpad list order", () => {
     f.workpads.update(f.scope, expected[1]!, { expectedRevision: 0, title: "zzz" }, undefined, 30_000);
     expect(f.workpads.list(f.scope, { scope: { kind: "project", projectId: first.projectId }, sort: "title", limit: 1, cursor: page.nextCursor }).items.map(item => item.id))
       .toEqual([expected[2]]);
+  });
+
+  it("counts visible workpads for every panel view and denies other scopes", () => {
+    const f = groupedFixture();
+    const { pads } = f;
+    const counts = (threadId?: string, projectId?: string, scope: RequestScope = f.scope) =>
+      f.workpads.counts(scope, { ...(threadId ? { threadId } : {}), ...(projectId ? { projectId } : {}) });
+    const listed = (request: Omit<ListWorkpadsRequest, "limit" | "cursor">) =>
+      readAll(cursor => f.workpads.list(f.scope, { ...request, limit: 100, ...(cursor ? { cursor } : {}) })).ids.length;
+    /** Every count equals the length of the list it stands for. */
+    const expectListLengths = (threadId: string, projectId: string) => {
+      const result = counts(threadId, projectId);
+      for (const archived of [false, true]) {
+        expect(result[archived ? "archived" : "active"]).toEqual({
+          thread: listed({ scope: { kind: "thread", threadId }, archived }),
+          project: listed({ scope: { kind: "project", projectId }, archived }),
+          projectWithThreads: listed({ scope: { kind: "project", projectId }, scopeMode: "subtree", archived }),
+          global: listed({ scope: { kind: "global" }, archived }),
+          all: listed({ ...all, archived }),
+        });
+      }
+    };
+    const none = { thread: 0, project: 0, projectWithThreads: 0, global: 0, all: 0 };
+    expect(counts(f.zeta, f.betaId)).toEqual({
+      active: { thread: 2, project: 2, projectWithThreads: 5, global: 2, all: 11 },
+      archived: none,
+    });
+    expect(counts()).toEqual({
+      active: { thread: null, project: null, projectWithThreads: null, global: 2, all: 11 },
+      archived: { thread: null, project: null, projectWithThreads: null, global: 0, all: 0 },
+    });
+    expect(counts(f.only).active).toEqual({ thread: 2, project: null, projectWithThreads: null, global: 2, all: 11 });
+    expect(counts(undefined, f.gammaId).active).toEqual({ thread: null, project: 1, projectWithThreads: 1, global: 2, all: 11 });
+    expectListLengths(f.zeta, f.betaId);
+
+    for (const pad of [pads.z1, pads.b1, pads.g1]) f.workpads.update(f.scope, pad.id, { expectedRevision: 0, archived: true }, undefined, 20_000);
+    expect(counts(f.zeta, f.betaId)).toEqual({
+      active: { thread: 1, project: 1, projectWithThreads: 3, global: 1, all: 8 },
+      archived: { thread: 1, project: 1, projectWithThreads: 2, global: 1, all: 3 },
+    });
+    expectListLengths(f.zeta, f.betaId);
+
+    // Removed locations and projects hide their workpads from every count.
+    f.removeLocation(f.betaSecondLocationId);
+    expect(counts(f.alphaThread, f.betaId).active).toEqual({ thread: 0, project: 1, projectWithThreads: 2, global: 1, all: 7 });
+    expectListLengths(f.alphaThread, f.betaId);
+    f.removeProject(f.alphaId);
+    expect(() => counts(undefined, f.alphaId)).toThrow(errorCode("not_found"));
+    expect(counts(f.zeta, f.betaId).active).toEqual({ thread: 1, project: 1, projectWithThreads: 2, global: 1, all: 4 });
+    expectListLengths(f.zeta, f.betaId);
+
+    // Unknown and other owners' threads and projects are not found; nothing leaks.
+    expect(() => counts(randomUUID())).toThrow(errorCode("not_found"));
+    expect(() => counts(undefined, randomUUID())).toThrow(errorCode("not_found"));
+    expect(() => counts("not-a-thread-id")).toThrow(errorCode("bad_request"));
+    const other = { ...f.scope, principalId: "another-owner" };
+    expect(() => counts(f.zeta, undefined, other)).toThrow(errorCode("not_found"));
+    expect(() => counts(undefined, f.betaId, other)).toThrow(errorCode("not_found"));
+    expect(counts(undefined, undefined, other)).toEqual({
+      active: { thread: null, project: null, projectWithThreads: null, global: 0, all: 0 },
+      archived: { thread: null, project: null, projectWithThreads: null, global: 0, all: 0 },
+    });
+    expect(() => f.workpads.counts(f.scope, { threadId: "" })).toThrow(errorCode("bad_request"));
+    expect(() => f.workpads.counts(f.scope, { scope: "global" } as never)).toThrow(errorCode("bad_request"));
   });
 });

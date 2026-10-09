@@ -1,4 +1,5 @@
 import { UsageService } from "../../src/server/usage/usage-service.js";
+import { randomUUID } from "node:crypto";
 import request from "supertest";
 import { describe, expect, it, vi } from "vitest";
 import { ConversationBindingRepository } from "../../src/server/db/repositories/conversation-binding-repository.js";
@@ -132,7 +133,7 @@ describe("Workpads HTTP", () => {
     } finally { f.database.close(); }
   });
 
-  it("lists by sort and project groups across pages", async () => {
+  it("lists by sort and project groups across pages and counts each panel view", async () => {
     const f = fixture();
     try {
       const environmentId = (f.database.prepare("SELECT id FROM execution_environments LIMIT 1").get() as { id: string }).id;
@@ -176,6 +177,26 @@ describe("Workpads HTTP", () => {
       expect(longPage.body.nextCursor.length).toBeGreaterThan(256);
       expect(await readAll("/api/workpads?scopeKind=global&sort=title&limit=1")).toEqual([global.id, ...long.map(pad => pad.id)]);
 
+      await f.mutate("patch", `/api/workpads/${thread.id}`).send({ expectedRevision: thread.revision, archived: true }).expect(200);
+      const counts = await f.get(`/api/workpads/counts?threadId=${threadId}&projectId=${projectId}`).expect(200);
+      expect(counts.headers["cache-control"]).toBe("no-store");
+      expect(counts.body).toEqual({
+        active: { thread: 0, project: 1, projectWithThreads: 1, global: 3, all: 4 },
+        archived: { thread: 1, project: 0, projectWithThreads: 1, global: 0, all: 1 },
+      });
+      expect((await f.get("/api/workpads/counts").expect(200)).body).toEqual({
+        active: { thread: null, project: null, projectWithThreads: null, global: 3, all: 4 },
+        archived: { thread: null, project: null, projectWithThreads: null, global: 0, all: 1 },
+      });
+      await f.get(`/api/workpads/counts?threadId=${randomUUID()}`).expect(404);
+      await f.get(`/api/workpads/counts?projectId=${randomUUID()}`).expect(404);
+      for (const query of ["threadId=", "threadId=not-a-thread", "scopeKind=global", `threadId=${threadId}&threadId=${threadId}`]) {
+        await f.get(`/api/workpads/counts?${query}`).expect(400);
+      }
+      f.changeOwner();
+      await f.get(`/api/workpads/counts?threadId=${threadId}`).expect(404);
+      await f.get(`/api/workpads/counts?projectId=${projectId}`).expect(404);
+      expect((await f.get("/api/workpads/counts").expect(200)).body.active).toEqual({ thread: null, project: null, projectWithThreads: null, global: 0, all: 0 });
     } finally { f.database.close(); }
   });
 });

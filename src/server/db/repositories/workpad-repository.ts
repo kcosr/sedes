@@ -4,12 +4,12 @@ import { diffChars, diffLines, diffWordsWithSpace } from "diff";
 import {
   createWorkpadRequestSchema, updateWorkpadRequestSchema, listWorkpadsRequestSchema,
   saveWorkpadDraftRequestSchema, commitWorkpadDraftRequestSchema, workpadSchema, workpadSummarySchema, workpadRevisionSummarySchema,
-  workpadRevisionSchema, workpadDraftSchema, workpadScopeSchema,
+  workpadRevisionSchema, workpadDraftSchema, workpadScopeSchema, workpadCountsRequestSchema,
   type Workpad, type WorkpadScope, type WorkpadAuthor, type WorkpadAttributionSpan,
   type WorkpadChange, type WorkpadRevision, type WorkpadRevisionPage,
   type CreateWorkpadRequest, type UpdateWorkpadRequest, type ListWorkpadsRequest,
   type WorkpadListPage, type WorkpadDraft, type SaveWorkpadDraftRequest,
-  type CommitWorkpadDraftRequest,
+  type CommitWorkpadDraftRequest, type WorkpadCounts, type WorkpadCountsRequest,
 } from "../../../shared/protocol/workpads.js";
 import { DomainError } from "../../domain/errors.js";
 import type { RequestScope } from "../../identity/identity-provider.js";
@@ -424,6 +424,36 @@ export class WorkpadRepository {
     const items = rows.slice(0, request.limit).map(row => this.#present(scope, workpadSummarySchema.parse(JSON.parse(row.json as string))));
     const last = rows.length > request.limit ? rows[request.limit - 1] : undefined;
     return { items, ...(last ? { nextCursor: encodeListCursor(fingerprint, keys, keys.map(key => last[key.column]!)) } : {}) };
+  }
+  /**
+   * Visible workpad counts for each panel view, under the list's visibility
+   * rules, in one aggregate read. A named thread or project must be in scope.
+   */
+  counts(scope: RequestScope, input: WorkpadCountsRequest): WorkpadCounts {
+    const request = parse(workpadCountsRequestSchema, input);
+    if (request.threadId !== undefined) this.#assertScope(scope, { kind: "thread", threadId: request.threadId });
+    if (request.projectId !== undefined) this.#assertScope(scope, { kind: "project", projectId: request.projectId });
+    const views = {
+      thread: "p.scope_kind='thread' AND p.thread_id=@threadId",
+      project: "p.scope_kind='project' AND p.project_id=@projectId",
+      projectWithThreads: "(p.scope_kind='project' AND p.project_id=@projectId) OR (p.scope_kind='thread' AND threadLocation.project_id=@projectId)",
+      global: "p.scope_kind='global'",
+      all: "1",
+    } as const;
+    const states = { active: "p.archived_at IS NULL", archived: "p.archived_at IS NOT NULL" } as const;
+    const columns = Object.entries(states).flatMap(([state, archived]) => Object.entries(views)
+      .map(([view, condition]) => `count(CASE WHEN ${archived} AND (${condition}) THEN 1 END) AS ${state}_${view}`));
+    const row = this.database.prepare(`SELECT ${columns.join(", ")} FROM workpads p ${threadJoin} ${threadLocationJoin}
+      WHERE p.tenant_id=@tenantId AND p.owner_principal_id=@principalId AND ${visibleWorkpad}`)
+      .get({ tenantId: scope.tenantId, principalId: scope.principalId, threadId: request.threadId ?? null, projectId: request.projectId ?? null }) as Record<string, number>;
+    const counts = (state: keyof typeof states) => ({
+      thread: request.threadId === undefined ? null : row[`${state}_thread`]!,
+      project: request.projectId === undefined ? null : row[`${state}_project`]!,
+      projectWithThreads: request.projectId === undefined ? null : row[`${state}_projectWithThreads`]!,
+      global: row[`${state}_global`]!,
+      all: row[`${state}_all`]!,
+    });
+    return { active: counts("active"), archived: counts("archived") };
   }
   revision(scope: RequestScope, id: string, revision: number): WorkpadRevision {
     validRevision(revision);

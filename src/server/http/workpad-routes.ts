@@ -6,6 +6,8 @@ import {
   listWorkpadsRequestSchema,
   saveWorkpadDraftRequestSchema,
   updateWorkpadRequestSchema,
+  workpadCountsRequestSchema,
+  workpadCountsSchema,
   workpadDraftSchema,
   workpadIdSchema,
   workpadListGroupSchema,
@@ -70,6 +72,12 @@ export function registerWorkpadRoutes(
       sort: query.sort, group: query.group, leadProjectId: query.leadProjectId,
     });
     response.json(workpadListPageSchema.parse(await service.list(owner, input)));
+  });
+  // Registered before the workpad routes, so "counts" is never read as a workpad ID.
+  routes.get("/api/workpads/counts", async (request, response) => {
+    const owner = await scope(request);
+    const input = workpadCountsRequestSchema.parse(request.query);
+    response.json(workpadCountsSchema.parse(await service.counts(owner, input)));
   });
   routes.post("/api/workpads", async (request, response) => {
     const owner = await scope(request);
