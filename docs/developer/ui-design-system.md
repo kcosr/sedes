@@ -80,9 +80,11 @@ document, and choosing the selected view again (`ScopeSegments`'
 `components/scope-view/`: `ScopeSegments` (Thread · Project · Global · All
 with counts; an unavailable view is disabled and its slot shows the reason on
 hover or tap, and in the control's description), `ScopeLocation` (the quiet
-icon-and-name line under a row's title in lists that mix scopes without
-group headings), `ListHeading` (collapsible group and section headings),
-`ViewFilterChips` with the `view-options-trigger` dot, and the View options
+icon-and-name line under a row's title in lists that mix scopes: All, and
+Project with its threads' items), `ListHeading` (the collapsible Backlog,
+Completed and Archived sections that end a list; its label starts at the
+rows' leading inset, `--list-heading-inset`, and its chevron follows the
+count), `ViewFilterChips` with the `view-options-trigger` dot, and the View options
 rows `SortOptionItems` and `ScopeOptionItem`. Their styles are in
 `scope-view.css`; the panels are size containers, so its narrow rules follow
 the panel.

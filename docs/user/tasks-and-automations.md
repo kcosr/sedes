@@ -88,15 +88,11 @@ phone, to see why.
 Tasks opens on the view you last chose; when that view is unavailable, it falls
 back to Project, then Global.
 
-**All** is grouped by project: Global first, then one group for each project,
-however many locations it has, the current one first, with each thread's Tasks
-in a group under its project. Select a group heading to collapse or expand it,
-or use **Collapse all groups** in the Tasks menu (**⋯**, or **Tasks panel
-actions** when docked). Turn off **Group by project** in **View options** for
-one flat list. Without group headings, as in that list or in Project with
-**Include thread tasks**, each row shows where its Task belongs on a quiet line
-under the title. In a project with several locations, a thread's group heading
-or row also says where the thread runs, such as its host or folder.
+**All** is one list of every Task, in the view's sort. In All, and in Project
+with **Include thread tasks**, each row shows where its Task belongs on a quiet
+line under the title: **Global**, the project's name, or the thread's title,
+followed in All by its project. In a project with several locations, a
+thread's row also says where the thread runs, such as its host or folder.
 
 ## Add Tasks
 
@@ -134,7 +130,6 @@ clears the search and closes it.
 | --- | --- |
 | **Sort** | **Newest** (the default), **Recently updated**, or **Title** |
 | **Only** | Any of **Pinned**, **Backlog**, **With notes**, and **With files** |
-| **Group by project** | All only; on by default |
 | **Include thread tasks** | Project only; off by default |
 | **Search notes** | Off by default |
 

@@ -7,8 +7,7 @@
 - Browser and packaged clients require client protocol 146, which adds
   automation schedule details and run turn outcomes to thread summaries and
   runs, drops the Remind now inventory action, adds turn reply replay, and adds
-  workpad list sorting, grouping and counts. Upgrade clients together with the
-  server.
+  workpad list sorting and counts. Upgrade clients together with the server.
   ([#58](https://github.com/kcosr/sedes/pull/58), [#59](https://github.com/kcosr/sedes/pull/59), [#61](https://github.com/kcosr/sedes/pull/61), [#62](https://github.com/kcosr/sedes/pull/62), [#65](https://github.com/kcosr/sedes/pull/65))
 
 - `PATCH /api/threads/:threadId/inventory` no longer accepts the `remind`
@@ -489,13 +488,15 @@
 ### Changed
 
 - Workpads works like Tasks: Thread, Project, Global and All views with
-  counts, Sort and Group by project options, a Project-only **Include thread
-  workpads**, rows that name their thread or project, and a collapsed Archived
-  section. An open workpad keeps the panel header and views, and Android Back
+  counts, a Sort option, a Project-only **Include thread workpads**, rows that
+  name their thread or project, and a collapsed Archived section. An open workpad keeps the panel header and views, and Android Back
   closes it. The view is remembered on the device. ([#65](https://github.com/kcosr/sedes/pull/65))
 
 - Tasks shows **Include thread tasks** as a filter chip while it's on.
   ([#65](https://github.com/kcosr/sedes/pull/65))
+
+- Tasks' All view lists every task as a flat list with its thread or project;
+  Group by project is removed. ([#65](https://github.com/kcosr/sedes/pull/65))
 
 - Ctrl+Shift+F (Command+Shift+F) focuses and selects sidebar search instead
   of opening Find in thread, which keeps Ctrl+F. Escape in an empty search
