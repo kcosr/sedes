@@ -325,24 +325,12 @@
     --bar-control: 40px;
     --bar-control-width: var(--control-lg);
     --bar-icon: var(--icon-lg);
-    --bar-toggle-gap: var(--space-2);
-  }
-}
-
-/* Narrow phones. With every panel loaded, and counts on Tasks and Workpads,
-   the workbench bar needs 387px at the touch spacing. Its spacing tightens
-   so that it fits down to 371px, then 355px; narrower still, the quick
-   buttons scroll (see .workspace-workbench-toggles). */
-@media (max-width: 386px) {
-  :root {
-    --bar-toggle-gap: var(--space-1);
-  }
-}
-
-@media (max-width: 370px) {
-  :root {
-    --bar-toggle-gap: var(--space-0-5);
-    --bar-group-gap: var(--space-1);
+    /* With every panel loaded, and counts on Tasks and Workpads, the bar's
+       fixed controls take 339px. Its gaps shrink with the viewport so it
+       fits down to 355px (8px gaps from about 390px); narrower still, the
+       quick buttons scroll (see .workspace-workbench-toggles). */
+    --bar-toggle-gap: clamp(var(--space-0-5), calc((100vw - 357px) / 4), var(--space-2));
+    --bar-group-gap: clamp(var(--space-1), calc((100vw - 349px) / 2), var(--space-2));
   }
 }
 
