@@ -429,8 +429,9 @@ describe("native voice production pipeline with loopback providers", () => {
           expect(evidence.phases.indexOf("listening")).toBeGreaterThan(evidence.phases.indexOf("arming"));
           expect(evidence.phases).not.toContain("submitting");
           const observations = await speech.observations();
-          expect(observations.speech.filter(request => request.text === `Replying to ${canonical.threadTitle}.`)).toHaveLength(1);
-          expect(observations.speech.filter(request => request.text === `Replying to ${viewedCanonical.threadTitle}.`)).toHaveLength(1);
+          expect(observations.speech.filter(request => request.text === `Replying to ${canonical.threadTitle}.`)).toHaveLength(0);
+          expect(observations.speech.filter(request => request.text === `Replying to ${viewedCanonical.threadTitle}.`)).toHaveLength(2);
+          expect(observations.speech.filter(request => request.text.startsWith("Replying to "))).toHaveLength(2);
           expect(observations.transcriptions).toHaveLength(0);
           const source = await app.thread(threadId), viewed = await app.thread(secondThreadId!);
           expect(viewed.draft.text).toBe(args.secondDraftText);

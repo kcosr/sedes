@@ -2824,8 +2824,24 @@ public class NativeVoiceRuntimeTest {
                 assertTrue(live.isNull("recordingRecovery")); assertTrue(live.getJSONObject("actions").getBoolean("canStop"));
                 assertNull(f.command("stopCurrentInteraction", NativeVoiceJson.object("interactionId", live.getJSONObject("active").getString("id"))));
                 post.done(0, null, "network_unavailable"); f.flush();
-                assertTrue(f.runtime.snapshot().isNull("active"));
-                assertEquals(id, f.runtime.snapshot().getJSONObject("recordingRecovery").getString("recordingId"));
+                JSONObject stopped = f.runtime.snapshot();
+                assertTrue(stopped.isNull("active")); assertFalse(stopped.getJSONObject("actions").getBoolean("canStop"));
+                assertEquals("Cancelling a live send never resubmits it", 1, f.inputAttempts.get());
+                JSONArray journal = f.store.journal(f.binding); assertEquals(1, journal.length());
+                JSONObject admission = journal.getJSONObject(0);
+                assertTrue(admission.getBoolean("cancelled"));
+                assertEquals("Live dictated input", admission.getJSONObject("request").getString("text"));
+                if (held) {
+                    assertEquals(id, stopped.getJSONObject("recordingRecovery").getString("recordingId"));
+                    assertEquals(0, stopped.getJSONArray("recovery").length());
+                } else {
+                    assertTrue(stopped.isNull("recordingRecovery"));
+                    JSONArray recovery = stopped.getJSONArray("recovery"); assertEquals(1, recovery.length());
+                    assertEquals(admission.getString("mutationId"), recovery.getJSONObject(0).getString("mutationId"));
+                    assertEquals(f.target, recovery.getJSONObject(0).getString("threadId"));
+                    assertEquals("uncertain", recovery.getJSONObject(0).getString("status"));
+                    assertTrue(recovery.getJSONObject(0).getBoolean("cancelled"));
+                }
             }
         }
     }
@@ -3151,7 +3167,8 @@ public class NativeVoiceRuntimeTest {
 
     @Test public void playbackStopClearsMixedPendingSpeechAndDeferredAgentActionsWithoutDisablingVoice() throws Exception {
         for (String surface : new String[] { "app", "stop_playback" }) try (Fixture f = new Fixture(false, false)) {
-            f.readyClientVoice("speak"); f.foreground(f.target);
+            f.readyClientVoice("speak"); f.runtime.nativeVisibility(true);
+            assertNull(f.command("setForegroundContext", NativeVoiceJson.object("visible", true, "threadId", f.target, "threadTitle", "Source thread")));
             f.settings(NativeVoiceJson.object("autoListen", true, "pinDefaultVoiceThread", false)); f.policy(true, false, "speakThenListen");
             String destination = UUID.randomUUID().toString(); JSONObject command = f.clientSwitch(destination, true);
             assertEquals("accepted", f.clientCommand(command).getString("status"));
@@ -3161,6 +3178,8 @@ public class NativeVoiceRuntimeTest {
             f.replay(false, f.target, "queued-manual", "Queued manual replay"); f.receiveNotice(f.target, null);
             assertEquals(2, f.queued()); assertFalse(f.stagedClientActions().isEmpty());
             JSONObject before = f.runtime.snapshot(); Object navigation = field(f.runtime, "inputSubmissionContext");
+            assertEquals(f.target, before.getJSONObject("retainedVoiceTarget").getString("threadId"));
+            assertEquals("Source thread", before.getJSONObject("retainedVoiceTarget").getString("threadTitle"));
             if (surface.equals("app")) assertNull(f.command("stopPlayback", new JSONObject()));
             else { f.capturedAction(surface, before); f.flush(); }
             assertTrue(reply.cancelled); assertTrue(f.runtime.snapshot().isNull("active")); assertEquals("idle", f.runtime.snapshot().getString("phase"));

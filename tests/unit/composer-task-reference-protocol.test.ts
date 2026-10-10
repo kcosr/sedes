@@ -52,7 +52,7 @@ const reference = { taskId: task.id, titleSnapshot: task.title };
 
 describe("composer Task reference protocol", () => {
   it("uses the current protocol version for the atomic normalized cutover", () => {
-    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(148);
+    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(149);
   });
 
   it("bounds ordered draft references and rejects duplicate Task ids", () => {
