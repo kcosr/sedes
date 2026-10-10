@@ -718,15 +718,16 @@ hides the regions you used least recently and announces which. It never hides
 Chat or the Middle. Hidden panels stay loaded and come back when there is room.
 
 On phones and other narrow screens, the workbench shows one panel at a time:
-use the bar's buttons or the **Panels** menu to switch. Files becomes a
-foreground sheet and Tasks a bottom sheet. Regions, Maximize, and Move to
+use the bar's buttons or the **Panels** menu to switch. Files, Workpads, and
+Tasks each take the whole stage while in front. Regions, Maximize, and Move to
 don't apply. Returning to Chat uses the same retained state rather than
 rebuilding the file view.
 
 Chat is home on a phone. Closing or hiding another panel returns to Chat, and
 so does Android Back, or browser Back from Terminals. A panel you hide or go
-back from stays loaded, and its button brings it back as you left it. On
-Android, Back from Chat opens the navigation drawer.
+back from stays loaded, and its button brings it back as you left it. In Tasks
+and Workpads, Android Back first returns from an open task or workpad to the
+list. On Android, Back from Chat opens the navigation drawer.
 
 Previous: [Core concepts](concepts.md) · Next:
 [Organize and reuse work](organize-work.md)

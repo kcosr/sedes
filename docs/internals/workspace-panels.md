@@ -221,7 +221,8 @@ remounts it. The terminal renderer attaches only while Terminals is visible.
 
 Tasks keeps its retained body in the Tasks host
 (`components/tasks/tasks-host.tsx`); the layout publishes whether Tasks is
-loaded and visible, and its header controls, and Tasks draws its own header.
+loaded and visible, its presentation (`panel`, or `sheet` on phones), its
+header controls, and a way to show Chat, and Tasks draws its own header.
 
 Escape restores a maximized layout unless it belongs to a focused text field,
 composer, or terminal, or to an open dialog, menu, or listbox.
@@ -234,25 +235,36 @@ panel is chosen among the shown panels: the panel a focus request names, else
 the one last selected, else the first in the fixed order, and Chat when none
 is shown, so a thread never shows an empty stage. Switching panels opens them
 in the device layout, so a panel that shares its placement with another
-replaces it there, as on desktop. Tasks is excluded: the Tasks host shows it
-as a bottom sheet that leaves the device layout alone, and closing the sheet
-reveals whatever was in front. Files and Workpads render their `sheet`
-presentation. Panel headers drop Maximize and Move to, and the **Panels** menu
-drops its place buttons.
+replaces it there, as on desktop. Files, Workpads, and Tasks render their
+`sheet` presentation; for Tasks that is the touch layout, with the add bar
+under the list and a task's detail in place of the list. Panel headers drop
+Maximize and Move to, and the **Panels** menu drops its place buttons. Opening
+Tasks without focus, as a transcript task card's **Open task** does, still
+brings it in front.
+
+Crossing the width keeps every loaded panel's content. An open Tasks editor
+keeps its edit: when the new layout leaves Tasks off stage (another panel in
+front on the phone, or make-room on desktop), the Tasks host shows Tasks
+again for it.
 
 Chat is the phone's home. Its header has no ✕, and its quick button does
 nothing while Chat is in front. Closing or hiding the panel in front, or
 Android Back, shows Chat by opening it: when another panel replaced Chat in
 its region, Chat shows there again, which writes the device layout. A hidden
 panel, or one Back left, stays loaded, and Back leaves its region showing it.
-A panel the closed one had replaced in its region does not come back.
+A panel the closed one had replaced in its region does not come back. Tasks'
+**Add to prompt**, and a task's thread link, show Chat the same way, through
+the published `showChat`, so the composer is in front and Tasks stays loaded.
 
-Android Back first runs `handleExposedBack` (`app/android-back.ts`): an
-exposed task detail closes, then an open workpad returns to its list, then a
-cancelable `sedes:show-chat` event, which the active phone layout claims while
-a panel other than Chat is in front. Each step yields to an open overlay,
-menu, or the drawer. Only then does Back dismiss overlays and open the
-drawer, so the drawer opens once Chat is in front.
+Android Back first runs `handleExposedBack` (`app/android-back.ts`), a chain
+of cancelable window events whose listener cancels one to say it took Back:
+`sedes:close-task-detail`, which the Tasks panel in front claims while a task
+detail is open, returning to its list; `sedes:close-workpad`, which a shown
+Workpads panel claims while a workpad is open; then `sedes:show-chat`, which
+the active phone layout claims while a panel other than Chat is in front.
+Each step yields to an open overlay, menu, or the drawer. Only then does Back
+dismiss overlays and open the drawer, so the drawer opens once Chat is in
+front.
 
 Terminals is a viewer, an open `dialog` that Android Back dismisses with a
 cancelable Escape, with a same-URL history entry. Browser Back, Android Back,

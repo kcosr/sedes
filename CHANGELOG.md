@@ -516,9 +516,10 @@
   never Chat, and return when there is room.
   ([#66](https://github.com/kcosr/sedes/pull/66))
 
-- On phones, Chat is home: closing or hiding another panel, or Android Back,
-  returns to Chat, and Back from Chat opens the sidebar. Chat has no ✕ on
-  phones. ([#66](https://github.com/kcosr/sedes/pull/66))
+- On phones, Tasks is a panel like Workpads instead of a bottom sheet, and
+  Chat is home: closing or hiding another panel, or Android Back, returns to
+  Chat, and Back from Chat opens the sidebar. Chat has no ✕ on phones.
+  ([#66](https://github.com/kcosr/sedes/pull/66))
 
 - Workpads show each typed line on its own line; a single line break no longer
   joins lines into one paragraph. Chat and Markdown file previews are
@@ -703,8 +704,8 @@
   the upstream fullscreen default. ([#27](https://github.com/kcosr/sedes/pull/27))
 
 - In a thread, Tasks is a workspace panel beside Chat instead of a floating
-  card, like Files and Workpads. Phones keep a bottom sheet. The card's pin is
-  gone. Tasks opens at about a third of the stage.
+  card, like Files and Workpads. The card's pin is gone. Tasks opens at about
+  a third of the stage.
 
 - One scope control, **Thread**, **Project**, **Global**, and **All**,
   replaces the old view switcher and its project and thread picker. Each view
@@ -726,8 +727,7 @@
   files, when and where it was added, and **Add to prompt**, **Edit**, and
   **Move to…**. Lists without group headings show where each Task belongs on
   a second line. **Edit** opens a dialog with labelled fields, **Belongs to**,
-  Files, Pinned, and **Delete…**. On phones, a Task opens as a detail view in
-  the sheet.
+  Files, Pinned, and **Delete…**. On phones, a Task opens as a detail view.
 
 - Each Task row has a **⋯** menu with **Add to prompt**, **Edit…**, **Pin**,
   **Move to** (this thread, this project, Global, or a searchable choice), and

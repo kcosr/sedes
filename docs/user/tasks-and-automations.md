@@ -61,9 +61,13 @@ current chat. While Tasks is hidden, by you, by another panel opened in its
 region, or to make room, the button keeps an outline; select it to show Tasks
 again.
 
-On phones and other narrow screens, Tasks opens as a bottom sheet. Resizing
-the window across that width closes the sheet, unless you are editing a Task:
-then Tasks stays open in the new presentation, with your edit as you left it.
+On phones and other narrow screens, Tasks is a panel like Files and
+Workpads: it comes in front, and its button appears once it is loaded.
+Hiding it with its button, or Android Back, returns to Chat and keeps it
+loaded; **✕** closes it and returns to Chat (see
+[Arrange panels](conversations.md#arrange-panels)).
+Resizing the window across that width keeps Tasks as it was, with any edit
+in progress.
 
 The button's badge counts the current thread's open Tasks, backlog Tasks
 included. The Tasks header counts the view's open Tasks, Backlog included,
@@ -117,7 +121,7 @@ once. Searching never blocks adding.
   removes list bullets, numbers, and checkboxes, and accepts up to 50 lines at
   a time.
 
-On phones, the add bar sits at the bottom of the sheet, above the on-screen
+On phones, the add bar sits at the bottom of Tasks, above the on-screen
 keyboard. If a Task cannot be added, Tasks shows the error and returns the
 title to the add row unless you have started typing another.
 
@@ -142,7 +146,8 @@ control, and the filter icon shows a dot; select a chip's **×** to remove it.
 When nothing matches, the list offers to reset them. **Include thread tasks**
 shows the same way, as a **Thread tasks** chip and the dot, while it is on in
 Project; it adds Tasks rather than hiding them, so the empty list does not
-offer to reset it. On phones, View options are in the sheet's **⋯** menu.
+offer to reset it. On phones, View options are in the **Tasks panel
+actions** menu (**⋮**).
 
 The **Pin** button in the Tasks header, beside Search, is the same setting as
 **Only** › **Pinned**: select it to see only pinned Tasks, and again to see
@@ -197,9 +202,9 @@ expanded at a time, and its title shows whole. The detail shows:
   was last edited or completed; and
 - **Add to prompt**, **Edit**, and **Move to…**.
 
-On phones, selecting a row opens its detail in the sheet. **Back to tasks**
-returns to the list, and so does Android Back. The detail has **Edit** and
-**Add to prompt** at the bottom.
+On phones, selecting a row opens its detail in place of the list. **Back to
+tasks** returns to the list, and so does Android Back; Back again returns to
+Chat. The detail has **Edit** and **Add to prompt** at the bottom.
 
 ### Edit a Task
 
@@ -289,8 +294,7 @@ shortcuts** in the Tasks menu lists them.
 
 P and B do nothing on a completed Task. The Right arrow moves from a row to its
 **⋯** button. On a group, **Backlog**, or **Completed** heading, the Right and
-Left arrows expand and collapse it. In the
-phone sheet, Escape closes Tasks once the details and search are closed.
+Left arrows expand and collapse it.
 
 ## Link files to a Task
 
@@ -315,7 +319,8 @@ Ctrl+Enter (Command+Enter on macOS) on its row, or drag it onto the composer.
 Sedes adds the Task to the current thread's composer as a compact pill with
 the Task's title and a remove button. A completed Task's pill is muted and a
 deleted Task's pill shows a warning; hover over the pill to see why. On phones,
-Add to prompt closes the sheet so you can see the pill arrive.
+Add to prompt shows Chat so you can see the pill arrive; Tasks stays loaded
+behind it.
 
 Before delivery, the pill follows live Task renames and completion state. At
 Send, Queue, or Steer acceptance, Sedes records an immutable snapshot so the
