@@ -2,7 +2,7 @@ import { Fragment, useEffect, useId, useRef, useState, type ReactNode } from "re
 import { ArrowUp, AudioLines, ChevronDown, Infinity as InfinityIcon, LoaderCircle, Mic, MicOff, RotateCcw, Settings2, SkipForward, TriangleAlert, X } from "lucide-react";
 import type { NormalizedApplicationThreadSummary } from "../../shared/protocol/application.js";
 import { navigate, settingsPath, useRoute } from "../app/router.js";
-import { configuredPanelPresentation, openThreadRoute } from "../workspace-panels/thread-panel-navigation.js";
+import { openThreadRoute } from "../workspace-panels/thread-panel-navigation.js";
 import { useComposerDeliveryMode } from "../app/composer-delivery-mode.js";
 import { useNativeVoice, useVoiceState } from "./VoiceProvider.js";
 import type { NativeVoiceStore } from "./NativeVoiceStore.js";
@@ -172,7 +172,7 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
           data-saved-access={savedElsewhere ? "" : undefined} onClick={() => setSheet(true)}>{tile}<ChevronDown className="voice-card-menu-mark" aria-hidden="true" />
           {savedElsewhere ? <span className="voice-card-saved-indicator" aria-hidden="true" /> : null}</button>
         <div className="voice-card-body">
-          {opens ? <button type="button" className="voice-card-open" aria-label={`Open thread: ${cardTitle ?? "Untitled thread"}`} onClick={() => openThreadRoute(cardThread, configuredPanelPresentation())} /> : null}
+          {opens ? <button type="button" className="voice-card-open" aria-label={`Open thread: ${cardTitle ?? "Untitled thread"}`} onClick={() => openThreadRoute(cardThread)} /> : null}
           {text}
         </div>
         {targetPicker ? <button ref={pickerAnchor} type="button" className="voice-card-target" aria-haspopup="dialog" aria-expanded={picker !== null}

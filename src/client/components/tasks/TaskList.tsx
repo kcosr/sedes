@@ -5,7 +5,6 @@ import {
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
-  type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from "react";
 import {
@@ -66,7 +65,7 @@ export interface TaskListActions {
   requestDelete(task: AssociatedTask): void;
   moveTo(task: AssociatedTask, scope: TaskScope): void;
   chooseMove(task: AssociatedTask): void;
-  openFile(path: string, event: ReactMouseEvent): void;
+  openFile(path: string): void;
   openThread(threadId: string): void;
 }
 
@@ -346,7 +345,7 @@ export function TaskFileChips({ task }: { readonly task: AssociatedTask }): Reac
                 className="tasks-file-chip"
                 title={path}
                 aria-label={`Open ${path} in Files`}
-                onClick={(event) => actions.openFile(path, event)}
+                onClick={() => actions.openFile(path)}
               >
                 {content}
               </button>

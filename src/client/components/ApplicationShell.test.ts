@@ -41,7 +41,7 @@ const workspaceResolver =
     threads.find(({ id }) => id === threadId)?.workspaceId;
 
 describe("thread panel selection", () => {
-  it("opens the destination thread Chat panel with the resolved presentation", () => {
+  it("opens the destination thread's Chat panel with focus", () => {
     const openPanel = vi.fn(() => true);
     const forThread = vi.fn(() => ({ openPanel }));
 
@@ -49,14 +49,10 @@ describe("thread panel selection", () => {
       openThreadChatPanel(
         { forThread } as unknown as Pick<PanelLayoutStore, "forThread">,
         "thread-destination",
-        "single",
       ),
     ).toBe(true);
     expect(forThread).toHaveBeenCalledWith("thread-destination");
-    expect(openPanel).toHaveBeenCalledWith("chat", {
-      focus: true,
-      presentation: "single",
-    });
+    expect(openPanel).toHaveBeenCalledWith("chat", { focus: true });
   });
 });
 

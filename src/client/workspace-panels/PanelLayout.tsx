@@ -125,13 +125,7 @@ import { useEnvironmentPalette } from "../app/use-environment-palette.js";
 import {
   getConfirmTerminalTermination,
   subscribeConfirmTerminalTermination,
-  getPanelPresentation,
-  subscribePanelPresentation,
 } from "../app/settings.js";
-import {
-  resolvePanelPresentation,
-  type PanelPresentation,
-} from "./panel-presentation.js";
 
 const MOBILE_QUERY = "(max-width: 819px)";
 /** The divider's floor, and the minimum of panels without a declared one. */
@@ -268,8 +262,6 @@ function PanelLayoutReady({
   const terminalClosePendingRef = useRef<symbol | undefined>(undefined);
   const [confirmTerminalTermination, setConfirmTerminalTerminationState] =
     useState(getConfirmTerminalTermination);
-  const [panelPresentation, setPanelPresentationState] =
-    useState(getPanelPresentation);
   const [chatTarget] = useState(() => createPortalTarget("chat", "Chat"));
   const [filesTarget] = useState(() =>
     createPortalTarget("workspace-files", "Files"),
@@ -339,7 +331,6 @@ function PanelLayoutReady({
     () => subscribeConfirmTerminalTermination(setConfirmTerminalTerminationState),
     [],
   );
-  useEffect(() => subscribePanelPresentation(setPanelPresentationState), []);
 
   useEffect(() => {
     terminalLookupsMountedRef.current = true;
@@ -1121,8 +1112,8 @@ function PanelLayoutReady({
     threadId,
   ]);
 
-  const openPanelFromControl = (panel: PanelInstance, shiftKey: boolean) => {
-    const presentation = resolvePanelPresentation(panelPresentation, shiftKey);
+  const openPanelFromControl = (panel: PanelInstance) => {
+    const presentation = "split";
     if (collapsed.has(panel.panelInstanceId)) {
       store.restorePanel(panel.panelInstanceId, { presentation });
     } else {
@@ -1689,10 +1680,7 @@ function PanelLayoutReady({
     );
   };
 
-  const openTerminal = (
-    terminal: TerminalResource,
-    presentation?: PanelPresentation,
-  ) => {
+  const openTerminal = (terminal: TerminalResource) => {
     if (terminal.threadId !== threadId) {
       setAnnouncement("That terminal belongs to a different thread.");
       return;
@@ -1703,7 +1691,6 @@ function PanelLayoutReady({
       availableWidth: availableSize.width,
       availableHeight: availableSize.height,
       focus: true,
-      ...(presentation ? { presentation } : {}),
     });
     if (panelInstanceId) setMobilePanelId(panelInstanceId);
     else
@@ -1716,10 +1703,10 @@ function PanelLayoutReady({
     api: applicationStore.api,
     onOpen: openTerminal,
     onRename: renameTerminal,
-    onReveal: (presentation) => {
+    onReveal: () => {
       const panel = store.terminalPanel();
       if (!panel) return false;
-      store.activatePanel(panel.panelInstanceId, { presentation });
+      store.activatePanel(panel.panelInstanceId, { presentation: "split" });
       setMobilePanelId(panel.panelInstanceId);
       return true;
     },
@@ -1797,9 +1784,7 @@ function PanelLayoutReady({
                   data-visible={
                     actuallyVisible(panel.panelInstanceId) || undefined
                   }
-                  onClick={(event) =>
-                    openPanelFromControl(panel, event.shiftKey)
-                  }
+                  onClick={() => openPanelFromControl(panel)}
                 >
                   {panelGlyph(panel, snapshot?.capabilities.backend.brand, 16)}
                 </Button>
@@ -1853,7 +1838,7 @@ function PanelLayoutReady({
                             store.activatePanel(panel.panelInstanceId, { presentation: "split" });
                           setMobilePanelId(panel.panelInstanceId);
                         } else if (id === "terminals") {
-                          terminalEntryRef.current?.open("split", openPanelsTriggerRef.current);
+                          terminalEntryRef.current?.open(undefined, openPanelsTriggerRef.current);
                         } else if (store.openPanel(id, {
                           availableWidth: availableSize.width,
                           availableHeight: availableSize.height,

@@ -12,11 +12,7 @@ import type {
   TurnForkAttempt,
 } from "../../stores/ThreadClientStore.js";
 import { Button } from "../ui/button.js";
-import {
-  openThreadRoute,
-  pointerPanelPresentation,
-} from "../../workspace-panels/thread-panel-navigation.js";
-import type { PanelPresentation } from "../../workspace-panels/panel-presentation.js";
+import { openThreadRoute } from "../../workspace-panels/thread-panel-navigation.js";
 
 function completionLabel(
   turn: Pick<ConversationTurn, "completedAt"> & {
@@ -136,11 +132,7 @@ export const TurnForkDivider = memo(function TurnForkDivider({
     ? "Creating fork…"
     : `Fork from here, ${time.short}`;
 
-  const activate = (
-    presentation: PanelPresentation,
-    restart = false,
-    explicitRecoveryRetry = false,
-  ) => {
+  const activate = (restart = false, explicitRecoveryRetry = false) => {
     if (
       unavailable ||
       pending ||
@@ -151,7 +143,6 @@ export const TurnForkDivider = memo(function TurnForkDivider({
     void runThreadFork({
       fork: (shouldRestart) => store.forkTurn(capability!, { restart: shouldRestart }),
       restart,
-      presentation,
     });
   };
 
@@ -226,7 +217,7 @@ export const TurnForkDivider = memo(function TurnForkDivider({
           title={
             unavailableReason ?? "Fork from here — includes this completed turn"
           }
-          onClick={(event) => activate(pointerPanelPresentation(event), false)}
+          onClick={() => activate(false)}
         >
           {pending ? (
             <LoaderCircle
@@ -256,9 +247,7 @@ export const TurnForkDivider = memo(function TurnForkDivider({
               size="xs"
               disabled={unavailable}
               title={unavailable ? unavailableReason : undefined}
-              onClick={(event) =>
-                activate(pointerPanelPresentation(event), false, true)
-              }
+              onClick={() => activate(false, true)}
             >
               <RotateCcw size={14} aria-hidden="true" /> Retry same fork
             </Button>
@@ -267,12 +256,7 @@ export const TurnForkDivider = memo(function TurnForkDivider({
             <Button
               variant="outline"
               size="xs"
-              onClick={(event) =>
-                openThreadRoute(
-                  attempt.childThreadId,
-                  pointerPanelPresentation(event),
-                )
-              }
+              onClick={() => openThreadRoute(attempt.childThreadId)}
             >
               Open recovery thread
             </Button>
@@ -283,9 +267,7 @@ export const TurnForkDivider = memo(function TurnForkDivider({
               size="xs"
               disabled={unavailable}
               title={unavailable ? unavailableReason : undefined}
-              onClick={(event) =>
-                activate(pointerPanelPresentation(event), true)
-              }
+              onClick={() => activate(true)}
             >
               <Split className="fork-split-icon" size={14} aria-hidden="true" />{" "}
               Start a new fork

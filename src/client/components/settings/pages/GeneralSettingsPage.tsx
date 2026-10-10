@@ -8,24 +8,20 @@ import {
   getActivityDetail,
   getClickNamesToFilter,
   getHistoryPageSize,
-  getPanelPresentation,
   getRightOptionFocusesComposer,
   getSeekOnSubmit,
   HISTORY_PAGE_SIZE_OPTIONS,
   setActivityDetail,
   setClickNamesToFilter,
   setHistoryPageSize,
-  setPanelPresentation,
   setRightOptionFocusesComposer,
   setSeekOnSubmit,
   subscribeActivityDetail,
   subscribeClickNamesToFilter,
   subscribeHistoryPageSize,
-  subscribePanelPresentation,
   subscribeRightOptionFocusesComposer,
   subscribeSeekOnSubmit,
 } from "../../../app/settings.js";
-import type { PanelPresentation } from "../../../workspace-panels/panel-presentation.js";
 import { Button } from "@client/components/ui/button";
 import { Callout } from "@client/components/ui/callout";
 import { NativeSelect } from "@client/components/ui/native-select";
@@ -54,11 +50,9 @@ export function GeneralSettingsPage({
     useState<ActivityDetailMode>(getActivityDetail);
   const [historyPageSize, setHistoryPageSizeState] = useState(getHistoryPageSize);
   const [seekOnSubmit, setSeekOnSubmitState] = useState(getSeekOnSubmit);
-  const [panelPresentation, setPanelPresentationState] = useState(getPanelPresentation);
   const [rightOptionFocusesComposer, setRightOptionFocusesComposerState] =
     useState(getRightOptionFocusesComposer);
   useEffect(() => subscribeSeekOnSubmit(setSeekOnSubmitState), []);
-  useEffect(() => subscribePanelPresentation(setPanelPresentationState), []);
   useEffect(
     () => subscribeRightOptionFocusesComposer(setRightOptionFocusesComposerState),
     [],
@@ -78,22 +72,6 @@ export function GeneralSettingsPage({
           checked={clickNamesToFilter}
           onCheckedChange={setClickNamesToFilter}
         />
-        <SettingsField
-          id="setting-panel-presentation"
-          label="Opening panels"
-          description="Choose whether Chat, Files, and Terminal replace the workbench or open together. Hold Shift while opening to use the other behavior once. Narrow layouts always use the full workbench; this setting applies when there is room to show panels together."
-        >
-          <NativeSelect
-            data-testid="panel-presentation-setting"
-            value={panelPresentation}
-            onChange={(event) =>
-              setPanelPresentation(event.target.value as PanelPresentation)
-            }
-          >
-            <option value="split">Open together</option>
-            <option value="single">Replace the workbench</option>
-          </NativeSelect>
-        </SettingsField>
       </SettingsSection>
       <SettingsSection title="Conversation" card>
         <SettingsField

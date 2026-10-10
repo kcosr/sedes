@@ -31,10 +31,7 @@ import {
   type AutomationListRow,
   type AutomationRowText,
 } from "../../automation/automation-list.js";
-import {
-  configuredPanelPresentation,
-  openThreadRoute,
-} from "../../workspace-panels/thread-panel-navigation.js";
+import { openThreadRoute } from "../../workspace-panels/thread-panel-navigation.js";
 import { followLink } from "../settings/SettingsNav.js";
 import { AutomationGlyph } from "./AutomationGlyph.js";
 
@@ -160,7 +157,7 @@ function AutomationRowMenu({
         <DropdownMenuSeparator />
         <DropdownMenuItem
           onSelect={() =>
-            openThreadRoute(row.id, configuredPanelPresentation())
+            openThreadRoute(row.id)
           }
         >
           <MessageSquare aria-hidden="true" />

@@ -45,7 +45,6 @@ import {
   type TasksHost,
 } from "./tasks-host.js";
 import type { PanelLayoutStore } from "../../workspace-panels/panel-state.js";
-import { setPanelPresentation } from "../../app/settings.js";
 import { TASK_DRAG_MIME, TaskDragProvider } from "../../tasks/task-drag.js";
 import { CLOSE_TASK_DETAIL_EVENT } from "../../app/android-back.js";
 
@@ -1981,15 +1980,13 @@ describe("TasksPanel reveal", () => {
 
 describe("TasksPanel files", () => {
   it("opens a linked file in the Files panel", async () => {
-    setPanelPresentation("single");
     const panelLayoutStore = makePanelLayoutStore();
     renderPanel(seededStore(), { panelLayoutStore });
 
     fireEvent.click(rowTitle("Audit checkout error states"));
-    fireEvent.click(screen.getByRole("button", { name: "Open /workspace/src/checkout.ts in Files" }), { shiftKey: true });
+    fireEvent.click(screen.getByRole("button", { name: "Open /workspace/src/checkout.ts in Files" }));
     await vi.waitFor(() =>
       expect(panelLayoutStore.openPanel).toHaveBeenCalledWith("workspace-files", {
-        presentation: "split",
         intent: expect.objectContaining({
           kind: "open-workspace-file",
           workspaceId: "workspace-1",

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { ArrowUpRight, ListFilter, Search } from "lucide-react";
 import type { UsageAnalyticsResponse } from "../../shared/protocol/usage-analytics.js";
-import { openThreadRoute, pointerPanelPresentation } from "../workspace-panels/thread-panel-navigation.js";
+import { openThreadRoute } from "../workspace-panels/thread-panel-navigation.js";
 import { dimensionLabel, formatCount, formatCost, formatMetric, formatPercent, metricReported, metricValue, toNumber, type UsageMetric } from "./usage-format.js";
 import { toggleFilter, type UsageFilterState } from "./usage-settings.js";
 import { DimensionIcon, MenuSelect, UsageCard } from "./usage-ui.js";
@@ -48,7 +48,7 @@ export function UsageThreads({ data, filters, onFilters }: {
             const filtered = filters.thread?.includes(row.key) ?? false;
             return (
               <li key={row.key} className="usage-thread-row" data-thread-id={row.key ?? undefined} data-selected={filtered ? "true" : undefined}>
-                <button type="button" className="usage-thread-open" onClick={(event) => openThreadRoute(row.key!, pointerPanelPresentation(event))}
+                <button type="button" className="usage-thread-open" onClick={(event) => openThreadRoute(row.key!)}
                   disabled={label.unknown} title={label.unknown ? "This thread no longer exists" : "Open thread"}>
                   <span className="usage-thread-title">
                     <DimensionIcon dimension="thread" label={label} />

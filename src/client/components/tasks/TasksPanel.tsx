@@ -16,7 +16,6 @@ import {
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
-  type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from "react";
 import {
@@ -84,8 +83,6 @@ import {
   type PanelChromeControls,
 } from "../../workspace-panels/PanelChrome.js";
 import type { EnvironmentTintStyle } from "../../app/environment-palette.js";
-import { resolvePanelPresentation } from "../../workspace-panels/panel-presentation.js";
-import { getPanelPresentation } from "../../app/settings.js";
 import { createWorkspaceFilesOpenIntent } from "../../workspace-files/open-intent.js";
 import {
   useTaskDrag,
@@ -668,12 +665,8 @@ export function TasksPanelContent({
   );
 
   const openFile = useCallback(
-    async (absolutePath: string, event: ReactMouseEvent) => {
+    async (absolutePath: string) => {
       if (!workspace?.available) return;
-      const presentationMode = resolvePanelPresentation(
-        getPanelPresentation(),
-        event.shiftKey,
-      );
       if (!workspaceFileAbsolutePathSchema.safeParse(absolutePath).success) {
         setError("That file isn't available in Files.");
         return;
@@ -689,7 +682,6 @@ export function TasksPanelContent({
         }
         setError(null);
         const opened = panelLayoutStore.openPanel("workspace-files", {
-          presentation: presentationMode,
           intent: createWorkspaceFilesOpenIntent({
             workspaceId: workspace.id,
             rootId: resolved.rootId,
@@ -752,7 +744,7 @@ export function TasksPanelContent({
       requestDelete: (task) => setDeletingId(task.id),
       moveTo,
       chooseMove: (task) => setChoosingMoveId(task.id),
-      openFile: (path, event) => void openFile(path, event),
+      openFile: (path) => void openFile(path),
       openThread: (id) => {
         navigate(threadPath(id));
         if (sheet) onRequestClose();

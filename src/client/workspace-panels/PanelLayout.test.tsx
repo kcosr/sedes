@@ -31,7 +31,7 @@ import { PanelChrome, type PanelChromeControls } from "./PanelChrome.js";
 import { PanelLayout } from "./PanelLayout.js";
 import { PanelLayoutStore, type PanelLayoutStorage } from "./panel-state.js";
 import { panelDockEdge, type SplitNode } from "./layout-tree.js";
-import { setConfirmTerminalTermination, setPanelPresentation } from "../app/settings.js";
+import { setConfirmTerminalTermination } from "../app/settings.js";
 import {
   WorkspacePanelTenantRegistry,
   type WorkspacePanelTenant,
@@ -834,11 +834,9 @@ describe("PanelLayout singleton surfaces", () => {
     act(() => {
       store.openTerminalTab(TERMINAL_ID, { focus: false });
     });
-    const terminalShortcut = within(shortcuts).getByRole("button", {
-      name: "Open Terminals panel",
-    });
-    fireEvent.click(terminalShortcut, { shiftKey: true });
-    expect(store.getSnapshot().soloPanelInstanceId).toBe("terminals");
+    expect(
+      within(shortcuts).getByRole("button", { name: "Open Terminals panel" }),
+    ).toBeInTheDocument();
 
     await openPanelsMenu();
     expect(
@@ -871,92 +869,6 @@ describe("PanelLayout singleton surfaces", () => {
     expect(fileDraft).toHaveValue("Unsaved file");
     expect(mountedChat).toHaveBeenCalledTimes(1);
     expect(mountedFiles).toHaveBeenCalledTimes(1);
-  });
-
-  it("projects a Shift-clicked panel alone and restores the split without remounting", async () => {
-    const mountedChat = vi.fn();
-    const unmountedChat = vi.fn();
-    const mountedFiles = vi.fn();
-    const unmountedFiles = vi.fn();
-    const store = setup({
-      mountedChat,
-      unmountedChat,
-      mountedFiles,
-      unmountedFiles,
-    });
-    const chatDraft = screen.getByRole("textbox", { name: "Chat draft" });
-    fireEvent.change(chatDraft, { target: { value: "retained chat" } });
-    await openPanelsMenu();
-    fireEvent.click(screen.getByRole("menuitem", { name: /^Files(?: —|$)/ }));
-    const fileDraft = await screen.findByRole("textbox", {
-      name: "File draft",
-    });
-    fireEvent.change(fileDraft, { target: { value: "retained file" } });
-    const originalTree = store.getSnapshot().tree;
-    const shortcuts = screen.getByRole("group", { name: "Panel shortcuts" });
-
-    fireEvent.click(
-      within(shortcuts).getByRole("button", { name: "Open Chat panel" }),
-      { shiftKey: true },
-    );
-    expect(store.getSnapshot().soloPanelInstanceId).toBe("chat");
-    expect(chatDraft).toBeVisible();
-    expect(fileDraft.closest(".workspace-panel-parking")).not.toBeNull();
-    expect(screen.getByTestId("files-visible")).toHaveTextContent("false");
-    expect(store.getSnapshot().tree).toBe(originalTree);
-
-    fireEvent.click(
-      within(shortcuts).getByRole("button", { name: "Open Files panel" }),
-    );
-    expect(store.getSnapshot().soloPanelInstanceId).toBeUndefined();
-    expect(chatDraft).toBeVisible();
-    expect(fileDraft).toBeVisible();
-    expect(fileDraft.closest(".workspace-panel-parking")).toBeNull();
-    expect(chatDraft).toHaveValue("retained chat");
-    expect(fileDraft).toHaveValue("retained file");
-    expect(store.getSnapshot().tree).toBe(originalTree);
-    expect(mountedChat).toHaveBeenCalledTimes(1);
-    expect(unmountedChat).not.toHaveBeenCalled();
-    expect(mountedFiles).toHaveBeenCalledTimes(1);
-    expect(unmountedFiles).not.toHaveBeenCalled();
-  });
-
-  it("uses the single-panel preference normally and Shift-clicks back to split", async () => {
-    setPanelPresentation("single");
-    const store = setup();
-    act(() => store.openPanel("workspace-files", { focus: false }));
-
-    fireEvent.click(screen.getByRole("button", { name: "Open Files panel" }));
-    expect(store.getSnapshot().soloPanelInstanceId).toBe("workspace-files");
-    expect(screen.getByRole("textbox", { name: "File draft" })).toBeVisible();
-    const shortcuts = screen.getByRole("group", { name: "Panel shortcuts" });
-
-    fireEvent.click(
-      within(shortcuts).getByRole("button", { name: "Open Chat panel" }),
-      { shiftKey: true },
-    );
-    expect(store.getSnapshot().soloPanelInstanceId).toBeUndefined();
-    expect(screen.getByRole("textbox", { name: "Chat draft" })).toBeVisible();
-    expect(screen.getByRole("textbox", { name: "File draft" })).toBeVisible();
-  });
-
-  it("uses a descriptive menu entry to leave solo presentation and restore the split", async () => {
-    const store = setup();
-    await openPanelsMenu();
-    fireEvent.click(screen.getByRole("menuitem", { name: /^Files(?: —|$)/ }));
-    const shortcuts = screen.getByRole("group", { name: "Panel shortcuts" });
-    fireEvent.click(
-      within(shortcuts).getByRole("button", { name: "Open Chat panel" }),
-      { shiftKey: true },
-    );
-    expect(store.getSnapshot().soloPanelInstanceId).toBe("chat");
-
-    await openPanelsMenu();
-    fireEvent.click(screen.getByRole("menuitem", { name: /^Files —/ }));
-
-    expect(store.getSnapshot().soloPanelInstanceId).toBeUndefined();
-    expect(screen.getByRole("textbox", { name: "Chat draft" })).toBeVisible();
-    expect(screen.getByRole("textbox", { name: "File draft" })).toBeVisible();
   });
 
   it("uses Show all to leave solo presentation after restoring collapsed panels", async () => {

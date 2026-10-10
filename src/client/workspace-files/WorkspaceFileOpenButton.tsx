@@ -4,8 +4,6 @@ import {
   useWorkspaceFileLinkHandler,
   workspaceFileReferenceFromPath,
 } from "./workspace-file-link-routing.js";
-import { getPanelPresentation } from "../app/settings.js";
-import { resolvePanelPresentation } from "../workspace-panels/panel-presentation.js";
 
 export function WorkspaceFileOpenButton({
   path,
@@ -41,18 +39,13 @@ export function WorkspaceFileOpenButton({
         aria-label={label}
         className="workspace-file-open-button"
         disabled={busy}
-        onClick={(event) => {
-          const presentation = resolvePanelPresentation(
-            getPanelPresentation(),
-            event.shiftKey,
-          );
+        onClick={() => {
           setBusy(true);
           setNotice(undefined);
           void Promise.resolve(
             handler.openReference({
               reference,
               target: { kind: "source_line", lineNumber },
-              presentation,
             }),
           )
             .then((opened) => {

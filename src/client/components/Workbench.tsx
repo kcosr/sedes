@@ -23,11 +23,7 @@ import {
 import { UsageView } from "../usage/UsageView";
 import { useSidebarInventoryScope } from "../app/use-sidebar-inventory-scope";
 import { useEnvironmentColorsEnabled } from "../app/use-environment-colors-enabled";
-import {
-  configuredPanelPresentation,
-  openThreadRoute,
-  pointerPanelPresentation,
-} from "../workspace-panels/thread-panel-navigation.js";
+import { openThreadRoute } from "../workspace-panels/thread-panel-navigation.js";
 
 export function Workbench({
   route,
@@ -95,11 +91,8 @@ export function Workbench({
                 reference,
                 signal,
               ),
-            open: (intent, presentation) => {
-              panelLayoutStore.openPanel("workspace-files", {
-                intent,
-                presentation,
-              });
+            open: (intent) => {
+              panelLayoutStore.openPanel("workspace-files", { intent });
             },
           }),
     [applicationStore, panelLayoutStore, selectedThreadId, threadWorkspaceId],
@@ -240,7 +233,7 @@ export function Workbench({
                 projectId: sidebarScope.projectId,
               }}
               onCreated={(threadId) => {
-                openThreadRoute(threadId, configuredPanelPresentation());
+                openThreadRoute(threadId);
               }}
             >
               <Plus size={18} strokeWidth={1.8} /> New thread
@@ -248,8 +241,8 @@ export function Workbench({
             {recent && (
               <Button
                 variant="outline"
-                onClick={(event) => {
-                  openThreadRoute(recent.id, pointerPanelPresentation(event));
+                onClick={() => {
+                  openThreadRoute(recent.id);
                 }}
               >
                 Continue recent

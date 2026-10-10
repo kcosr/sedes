@@ -2,7 +2,7 @@ import { createContext, useContext, useEffect, useRef, useState, useSyncExternal
 import { App as CapacitorApp } from "@capacitor/app";
 import type { RegisteredClient } from "../../shared/protocol/client-controls.js";
 import { ClientControlConnection } from "./ClientControlConnection.js";
-import { configuredPanelPresentation, openThreadRoute } from "../workspace-panels/thread-panel-navigation.js";
+import { openThreadRoute } from "../workspace-panels/thread-panel-navigation.js";
 import { NativeVoiceStore } from "./NativeVoiceStore.js";
 import { hasNativeVoice, nativeVoice } from "./native-voice-plugin.js";
 import type { SedesServerEndpoint } from "../app/server-endpoint.js";
@@ -40,7 +40,7 @@ function BrowserOriginProvider({ profileId, endpoint, identity, children }: {
   useEffect(() => {
     if (!identity) return;
     setReplaced(false);
-    const connection = new ClientControlConnection({ baseUrl: endpoint.baseUrl }, id => openThreadRoute(id, configuredPanelPresentation()), () => setReplaced(true));
+    const connection = new ClientControlConnection({ baseUrl: endpoint.baseUrl }, id => openThreadRoute(id), () => setReplaced(true));
     current.current = connection;
     void connection.run();
     return () => { connection.close(); if (current.current === connection) current.current = null; };
@@ -54,7 +54,7 @@ function BrowserOriginProvider({ profileId, endpoint, identity, children }: {
   </OriginContext.Provider>;
 }
 function createStore(profileId: string, serverOrigin: string, identity: string): NativeVoiceStore {
-  return new NativeVoiceStore(nativeVoice, { profileId, serverOrigin, identity }, id => openThreadRoute(id, configuredPanelPresentation()));
+  return new NativeVoiceStore(nativeVoice, { profileId, serverOrigin, identity }, id => openThreadRoute(id));
 }
 /** The application renders at once; voice hydrates beside it and the origin is absent until native connects. */
 function AndroidVoiceProvider({ profileId, serverOrigin, identity, children }: { profileId: string; serverOrigin: string; identity: string; children: ReactNode }) {

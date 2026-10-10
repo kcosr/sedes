@@ -4,7 +4,6 @@ import { useEffect } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { NormalizedApplicationThreadSummary } from "../../shared/protocol/application.js";
 import { navigate, threadPath } from "../app/router.js";
-import { setPanelPresentation } from "../app/settings.js";
 import type { NativeVoiceState } from "./native-voice-plugin.js";
 import { disconnectedVoiceSnapshot, fakeVoicePlugin, recordingRecovery, VOICE_CONNECTION, VOICE_IDENTITY, voiceActions, voiceSettings, voiceSnapshot } from "./native-voice-test-fixture.js";
 
@@ -341,7 +340,6 @@ describe("voice controls card", () => {
     expect(window.location.pathname).toBe(threadPath("long"));
   });
   it("opens the card's thread from the body when it is not the visible thread", async () => {
-    setPanelPresentation("single");
     voice.fake.plugin.setConnection.mockResolvedValue(speaking({ threadId: "named", threadTitle: "Release review", eventKind: "turn.completed" }));
     navigate(threadPath("long"), { replace: true });
     renderControls();
@@ -351,7 +349,7 @@ describe("voice controls card", () => {
     try {
       fireEvent.click(await screen.findByRole("button", { name: "Open thread: Release review" }));
     } finally { stop(); }
-    expect(requests).toEqual([{ threadId: "named", presentation: "single" }]);
+    expect(requests).toEqual([{ threadId: "named" }]);
     expect(window.location.pathname).toBe(threadPath("named"));
     // Now that thread is on screen, the card still names it, but the body is plain text again.
     await waitFor(() => expect(buttons()).not.toContain("Open thread: Release review"));
@@ -359,8 +357,7 @@ describe("voice controls card", () => {
     expect(buttons()).toEqual(["Open voice controls", "Skip voice playback", "Stop voice interaction"]);
     expect(screen.queryByRole("dialog")).toBeNull();
   });
-  it.each(["single", "split"] as const)("opens a native notification's thread with the configured %s panel presentation", async presentation => {
-    setPanelPresentation(presentation);
+  it("opens a native notification's thread through the shell's panel request", async () => {
     voice.fake.plugin.setConnection.mockResolvedValue(ready());
     navigate(threadPath("long"), { replace: true });
     renderControls();
@@ -370,7 +367,7 @@ describe("voice controls card", () => {
     try {
       act(() => voice.fake.emit("openThread", { ...VOICE_CONNECTION, connectionGeneration: 1, threadId: "named" }));
     } finally { stop(); }
-    expect(requests).toEqual([{ threadId: "named", presentation }]);
+    expect(requests).toEqual([{ threadId: "named" }]);
     expect(window.location.pathname).toBe(threadPath("named"));
   });
   it("sends bridge-safe titles for the visible thread and explicit recording", async () => {

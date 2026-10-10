@@ -75,12 +75,7 @@ import type { ThreadStoreRegistry } from "../stores/ThreadStoreRegistry.js";
 import {
   getClickNamesToFilter,
   subscribeClickNamesToFilter,
-  getPanelPresentation,
 } from "../app/settings.js";
-import {
-  resolvePanelPresentation,
-  type PanelPresentation,
-} from "../workspace-panels/panel-presentation.js";
 import {
   futureTimeLabel,
   shortRelativeTime,
@@ -1228,10 +1223,7 @@ export function InventorySidebar({
       }
       confirmQuickSwitch(modifier, threadId, commandIndex);
       event.preventDefault();
-      quickSwitchCallbacksRef.current.onSelectThread?.(
-        threadId,
-        getPanelPresentation(),
-      );
+      quickSwitchCallbacksRef.current.onSelectThread?.(threadId);
       navigate(threadPath(threadId));
       quickSwitchCallbacksRef.current.onNavigate();
     };
@@ -1297,10 +1289,7 @@ export function InventorySidebar({
       if (!row || threadId === undefined) return;
       event.preventDefault();
       sidebarNavigationThreadIdRef.current = threadId;
-      quickSwitchCallbacksRef.current.onSelectThread?.(
-        threadId,
-        getPanelPresentation(),
-      );
+      quickSwitchCallbacksRef.current.onSelectThread?.(threadId);
       navigate(threadPath(threadId));
       row.scrollIntoView?.({ block: "nearest" });
       quickSwitchCallbacksRef.current.onNavigate();
@@ -1617,7 +1606,7 @@ export function InventorySidebar({
               }}
               className="sidebar-create-action"
               onCreated={(threadId) => {
-                onSelectThread?.(threadId, getPanelPresentation());
+                onSelectThread?.(threadId);
                 navigate(threadPath(threadId));
                 onNavigate();
               }}
@@ -2205,7 +2194,7 @@ export function InventorySidebar({
   );
 }
 
-type SelectThread = (threadId: string, presentation: PanelPresentation) => void;
+type SelectThread = (threadId: string) => void;
 
 function GroupManagementControl({
   group,
@@ -3836,22 +3825,16 @@ function FlatRowItemContent(
       selectAriaCurrent={
         stackFace && !stackFace.representativeSelected ? false : undefined
       }
-      onOpenQuestions={(event) => {
+      onOpenQuestions={() => {
         beforeSelect?.();
         threadRegistry?.get(thread.id).requestQuestionInboxOpen();
-        onSelectThread?.(
-          thread.id,
-          resolvePanelPresentation(getPanelPresentation(), event.shiftKey),
-        );
+        onSelectThread?.(thread.id);
         navigate(threadPath(thread.id));
         onNavigate();
       }}
-      onSelect={(event) => {
+      onSelect={() => {
         beforeSelect?.();
-        onSelectThread?.(
-          thread.id,
-          resolvePanelPresentation(getPanelPresentation(), event.shiftKey),
-        );
+        onSelectThread?.(thread.id);
         navigate(threadPath(thread.id));
         onNavigate();
       }}
@@ -4501,12 +4484,9 @@ function ThreadRow({
       data-testid="thread-row-question-indicator"
       aria-label={questionLabel}
       title={questionLabel}
-      onClick={(event) => {
+      onClick={() => {
         threadRegistry?.get(thread.id).requestQuestionInboxOpen();
-        onSelectThread?.(
-          thread.id,
-          resolvePanelPresentation(getPanelPresentation(), event.shiftKey),
-        );
+        onSelectThread?.(thread.id);
         navigate(threadPath(thread.id));
         onNavigate();
       }}
@@ -4634,11 +4614,8 @@ function ThreadRow({
           data-testid="thread-row-link"
           aria-current={selected ? "page" : undefined}
           aria-keyshortcuts={quickSwitchHint?.ariaKey}
-          onClick={(event) => {
-            onSelectThread?.(
-              thread.id,
-              resolvePanelPresentation(getPanelPresentation(), event.shiftKey),
-            );
+          onClick={() => {
+            onSelectThread?.(thread.id);
             navigate(threadPath(thread.id));
             onNavigate();
           }}

@@ -1388,7 +1388,6 @@ describe("normalized conversation renderers", () => {
         path: "src/preview-only.ts",
       },
       target: { kind: "source_line", lineNumber: 44 },
-      presentation: "split",
     });
   });
 
@@ -1429,7 +1428,6 @@ describe("normalized conversation renderers", () => {
     expect(openReference).toHaveBeenCalledExactlyOnceWith({
       reference: { kind: "workspace_relative", path: "src/replaced.ts" },
       target: { kind: "source_line", lineNumber: 1 },
-      presentation: "split",
     });
   });
 
@@ -1556,7 +1554,6 @@ describe("normalized conversation renderers", () => {
     expect(openReference).toHaveBeenLastCalledWith({
       reference: { kind: "workspace_relative", path: "src/reader.ts" },
       target: { kind: "source_line", lineNumber: 12 },
-      presentation: "split",
     });
 
     view.rerender(
@@ -1584,12 +1581,10 @@ describe("normalized conversation renderers", () => {
       await screen.findByRole("button", {
         name: "Open src/new.ts in Files at line 18",
       }),
-      { shiftKey: true },
     );
     expect(openReference).toHaveBeenLastCalledWith({
       reference: { kind: "workspace_relative", path: "src/new.ts" },
       target: { kind: "source_line", lineNumber: 18 },
-      presentation: "single",
     });
   });
 

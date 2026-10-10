@@ -1,10 +1,7 @@
 import { Split } from "lucide-react";
 import { Tooltip } from "radix-ui";
 import type { NormalizedThreadForkOrigin } from "../../../shared/index.js";
-import {
-  openThreadRoute,
-  pointerPanelPresentation,
-} from "../../workspace-panels/thread-panel-navigation.js";
+import { openThreadRoute } from "../../workspace-panels/thread-panel-navigation.js";
 
 // Shared by every fork row: constructing a formatter per render is costly.
 const forkPointTime = new Intl.DateTimeFormat(undefined, {
@@ -59,7 +56,6 @@ export function ForkProvenanceButton({
               onNavigate?.();
               openThreadRoute(
                 origin.sourceThreadId,
-                pointerPanelPresentation(event),
                 origin.sourceTurnId ?? undefined,
               );
             }}
