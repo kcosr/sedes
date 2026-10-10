@@ -46,14 +46,17 @@ depends on a release from another device. Focus does not steal control. Panel
 layout, local viewport, selection, search, and scroll position remain
 presentation state.
 
-Each thread's client-local layout may contain one **Terminals** panel; its
-height is shared with every thread's Terminals panel. That container owns a
-bounded set of nested terminal tabs, each holding only a terminal resource ID
-and stable producer ID. Reopening the same resource activates its existing tab.
-Only the selected tab attaches; inactive tabs rely on the server journal when
-selected again. Closing one tab or the whole container never mutates the server
-terminal. This nested tab state is distinct from the generic workspace tree
-that docks Chat, Files, and the Terminals container.
+Each thread's client-local view may load one **Terminals** panel. Its tabs and
+selected tab are saved per thread on the device; its placement and size are
+device-wide, shared with every thread's Terminals panel
+([Workspace panels](workspace-panels.md)). That container owns a bounded set
+of nested terminal tabs, each holding only a terminal resource ID and stable
+producer ID. Reopening the same resource activates its existing tab. Only the
+selected tab attaches, and only while the panel is visible; inactive tabs rely
+on the server journal when selected again. Closing one tab or the whole
+container never mutates the server terminal. This nested tab state is
+distinct from the panel regions that place Chat, Files, Workpads, Tasks, and
+the Terminals container.
 
 The terminal starts in the thread workspace's canonical project directory.
 That path is a launch location, not a confinement boundary. After startup the

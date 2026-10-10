@@ -225,12 +225,14 @@ contract.
 
 ## Workspace panel host
 
-Workpads is a singleton `workpads` panel instance registered with the workspace
-panel tenant registry. The shared layout owns its split/tab placement,
-resizing, chrome, collapse state, and narrow-screen foreground selection. Its
-stable portal retains the panel across docking, collapse, viewport changes,
-and thread switches. Its open and collapsed state, size, and place are shared
-across this client's thread layouts (`workspace-panels/companion-layout.ts`);
+Workpads is the singleton `workpads` panel kind, registered with the workspace
+panel tenant registry. The panel regions own its placement, sizing, chrome,
+Maximize, and narrow-screen foreground selection
+([Workspace panels](workspace-panels.md)). Its retained portal keeps the
+panel mounted while it is hidden, replaced in its region, moved, or behind a
+maximized panel, and across viewport changes and thread switches. Whether it
+is loaded, its placement, and its size are device-wide, shared by every
+thread (`workspace-panels/regions.ts`, saved under `sedes-panel-regions@1`).
 Thread view follows the active thread and Project view follows its project;
 Global and All views are independent of navigation. The selected view and its
 options are remembered on the device (`workpads-panel-store.ts`, key
