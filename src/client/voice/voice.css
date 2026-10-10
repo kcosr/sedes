@@ -65,6 +65,7 @@
   display: flex;
   min-width: 0;
   flex: 1 1 auto;
+  margin-inline-start: var(--space-1);
   align-self: stretch;
   align-items: center;
 }

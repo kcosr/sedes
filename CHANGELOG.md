@@ -501,8 +501,9 @@
 ### Changed
 
 - Android voice uses a compact single-row bar with composer-sized controls,
-  an inline destination caret, and a blue speaking outline. Idle hides
-  unavailable Next/Stop actions; Send also finishes ordinary recordings.
+  more space between the status icon and text, an inline destination caret,
+  and a blue speaking outline. Idle hides unavailable Next/Stop actions;
+  Send also finishes ordinary recordings.
   ([#68](https://github.com/kcosr/sedes/pull/68))
 
 - Android voice keeps Record/Send and Stop/Cancel in fixed positions; Keep
