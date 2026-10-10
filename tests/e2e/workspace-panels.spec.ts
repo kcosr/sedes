@@ -1,4 +1,4 @@
-import type { Page } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
 import { test, expect } from "./fixtures";
 import {
   capture,
@@ -8,47 +8,58 @@ import {
   openSedesWorkspace,
   sendCurrentDraft,
 } from "./helpers";
+import {
+  openPanel,
+  openPanelsMenu,
+  panelAnnouncement,
+  panelRow,
+  quickButton,
+  stagePanel,
+} from "./workspace-panel-helpers";
 
-function openPanelsTrigger(page: Page) {
-  return page.getByRole("button", { name: "Panels" });
+/** Remembers a panel's node, to tell a retained panel from a remounted one. */
+async function retain(locator: Locator, key: string): Promise<void> {
+  await locator.evaluate((node, name) => {
+    (window as unknown as Record<string, unknown>)[name] = node;
+  }, key);
 }
 
-// The bar's menu always lists every available panel, so collapse is read from the
-// item state rather than from the trigger existing at all.
-async function expectCollapsedPanels(
-  page: Page,
-  panels: readonly ("Chat" | "Files")[],
-) {
-  await openPanelsTrigger(page).click();
-  await expect(page.getByRole("menuitem", { name: /Collapsed$/ })).toHaveCount(
-    panels.length,
+async function isRetained(locator: Locator, key: string): Promise<boolean> {
+  return locator.evaluate(
+    (node, name) => (window as unknown as Record<string, unknown>)[name] === node,
+    key,
   );
-  for (const panel of panels) {
-    await expect(
-      page.getByRole("menuitem", {
-        name: new RegExp(`^${panel} —.*Collapsed$`),
-      }),
-    ).toBeVisible();
-  }
-  await page.keyboard.press("Escape");
 }
 
-async function restoreCollapsed(page: Page, panel: "Chat" | "Files") {
-  await openPanelsTrigger(page).click();
-  const item = page.getByRole("menuitem", {
-    name: new RegExp(`^${panel} —.*Collapsed$`),
-  });
-  await expect(item).toBeVisible();
-  await item.click();
+async function savedLayout(page: Page) {
+  return page.evaluate(
+    () =>
+      JSON.parse(localStorage.getItem("sedes-panel-regions@1") ?? "null") as {
+        readonly shown: Record<string, string | null>;
+        readonly loaded: readonly string[];
+        readonly sizes: Record<string, { readonly width?: number } | undefined>;
+      } | null,
+  );
 }
 
-test.describe("panel-instance workbench", () => {
-  test("collapse, restore, empty state, resize, persistence, and streaming retain both surfaces", async ({
+/**
+ * Waits for Files to finish reading its roots: closing it or reloading
+ * meanwhile cancels the read, which is expected but counts as a failure.
+ */
+async function filesSettled(page: Page): Promise<void> {
+  await expect(
+    page.getByRole("button", { name: "Refresh workspace files" }),
+  ).toBeEnabled({ timeout: 15_000 });
+}
+
+async function width(page: Page, title: "Chat" | "Files"): Promise<number> {
+  return (await stagePanel(page, title).boundingBox())?.width ?? 0;
+}
+
+test.describe("panel workbench", () => {
+  test("hide, show, close, empty stage, resize, persistence, and streaming keep loaded panels", async ({
     page,
   }, testInfo) => {
-    // This comprehensive journey reached ~63s under the former full 12-lane
-    // default even though its targeted runtime is ~11s.
-    test.setTimeout(90_000);
     await page.setViewportSize({ width: 1440, height: 900 });
     let threadEventRequests = 0;
     page.on("request", (request) => {
@@ -60,180 +71,164 @@ test.describe("panel-instance workbench", () => {
     });
     await openSedesWorkspace(page);
     await createDraftThread(page);
+    // The pre-region keys are only read, once, to migrate a device.
     await page.evaluate(() => {
-      localStorage.setItem("sedes-panel-layout@1", "legacy-layout-marker");
+      localStorage.setItem("sedes-panel-companions@1", "legacy-companions-marker");
     });
 
     const chat = page.getByTestId("thread-view");
     await expect(chat).toBeVisible();
-    await chat.evaluate((node) => {
-      (
-        window as typeof window & { __singletonChat?: Element }
-      ).__singletonChat = node;
-    });
-    await capture(page, testInfo, "singleton-chat-default.png");
+    await retain(chat, "__chat");
+    // Only Chat is loaded: one quick button, filled, and Chat in the middle.
+    const loadedPanels = page
+      .getByTestId("workspace-workbench-bar")
+      .getByRole("group", { name: "Loaded panels" })
+      .getByRole("button");
+    await expect(loadedPanels).toHaveCount(1);
+    await expect(quickButton(page, "Chat")).toHaveAccessibleName("Hide Chat panel");
+    await expect(quickButton(page, "Chat")).toHaveAttribute("data-state", "visible");
+    await expect(stagePanel(page, "Chat")).toHaveAttribute("data-region", "middle");
+    await capture(page, testInfo, "panels-chat-default.png");
 
-    await openPanelsTrigger(page).click();
-    // Tasks and Workpads open from their own toggles, not this menu.
-    const panelItems = page.getByRole("menuitem").filter({ hasText: /^(Chat|Files|Workpads|Tasks|Terminals)( —|$)/ });
-    await expect(panelItems).toHaveCount(3);
-    expect((await panelItems.allTextContents()).map(text => text.split(" —")[0])).toEqual(["Chat", "Files", "Terminals"]);
-    await expect(panelItems.nth(0)).toHaveAttribute("aria-description", "Open");
-    for (const item of [1, 2]) await expect(panelItems.nth(item)).toHaveAttribute("aria-description", "Closed");
-    await capture(page, testInfo, "panels-menu-open-and-closed.png");
-    await panelItems.nth(1).click();
+    // ▾ launches every panel, in the fixed order, each row saying its state.
+    const menu = await openPanelsMenu(page);
+    await expect
+      .poll(() =>
+        menu
+          .locator("[data-panel-row]")
+          .evaluateAll((rows) => rows.map((row) => row.getAttribute("aria-label"))),
+      )
+      .toEqual(["Chat, In the middle", "Files", "Workpads", "Tasks", "Terminals"]);
+    await expect(menu.getByRole("menuitem", { name: "Reset layout" })).toBeVisible();
+    await expect(menu.getByRole("menuitem", { name: "Show all" })).toHaveCount(0);
+    await capture(page, testInfo, "panels-menu-states.png");
+    await panelRow(menu, "Files").click();
     const files = page.getByRole("region", { name: "Workspace files" });
     await expect(files).toBeVisible({ timeout: 15_000 });
-    await files.evaluate((node) => {
-      (
-        window as typeof window & { __singletonFiles?: Element }
-      ).__singletonFiles = node;
-    });
-    const split = page.getByTestId("workspace-panel-split");
-    await expect(split).toHaveAttribute("data-orientation", "row");
-    const resize = page.getByRole("separator", {
-      name: "Resize Chat and Files panels",
-    });
-    const resizeBox = await resize.boundingBox();
-    expect(resizeBox).not.toBeNull();
+    await expect(stagePanel(page, "Files")).toHaveAttribute("data-region", "right");
+    await expect(quickButton(page, "Files")).toHaveAttribute("data-state", "visible");
+    await expect(loadedPanels).toHaveCount(2);
+    await filesSettled(page);
+    await retain(files, "__files");
+
+    // The divider resizes Files, remembered for the device.
+    const defaultWidth = await width(page, "Files");
+    const resize = page.getByRole("separator", { name: "Resize Files panel" });
+    const resizeBox = (await resize.boundingBox())!;
     await page.mouse.move(
-      resizeBox!.x + resizeBox!.width / 2,
-      resizeBox!.y + resizeBox!.height / 2,
+      resizeBox.x + resizeBox.width / 2,
+      resizeBox.y + resizeBox.height / 2,
     );
     await page.mouse.down();
     await page.mouse.move(
-      resizeBox!.x + resizeBox!.width / 2 - 72,
-      resizeBox!.y + resizeBox!.height / 2,
+      resizeBox.x + resizeBox.width / 2 - 72,
+      resizeBox.y + resizeBox.height / 2,
+      { steps: 4 },
     );
     await page.mouse.up();
-    const canonicalLayout = await page.evaluate(() =>
-      localStorage.getItem(`sedes-thread-panel-instance-layout@4:${encodeURIComponent(location.pathname.split("/")[2] ?? "")}`),
-    );
-    expect(canonicalLayout).toContain('"version":4');
-    await capture(page, testInfo, "singleton-chat-files-split.png");
+    await expect.poll(() => width(page, "Files")).toBeGreaterThan(defaultWidth + 60);
+    const resizedWidth = await width(page, "Files");
+    expect((await savedLayout(page))?.sizes.files?.width).toEqual(expect.any(Number));
+    await capture(page, testInfo, "panels-chat-files.png");
 
-    const composer = page.getByRole("textbox", {
-      name: "Message Scripted agent",
-    });
-    await fillAndPersistDraft(page, "Collapse must retain this draft");
-    await page.getByRole("button", { name: "Collapse Chat panel" }).click();
+    // Chat's ✕ only hides it: it stays loaded, with its draft and node, and
+    // the right region takes the stage.
+    const composer = page.getByRole("textbox", { name: "Message Scripted agent" });
+    await fillAndPersistDraft(page, "Hiding must retain this draft");
+    await stagePanel(page, "Chat")
+      .getByRole("button", { name: "Hide Chat panel", exact: true })
+      .click();
     await expect(chat).toBeHidden();
+    await expect(stagePanel(page, "Chat")).toHaveCount(0);
+    await expect(panelAnnouncement(page)).toHaveText("Chat panel hidden.");
+    await expect(quickButton(page, "Chat")).toHaveAccessibleName("Show Chat panel");
+    await expect(quickButton(page, "Chat")).toHaveAttribute("data-state", "hidden");
+    const stage = (await page.locator(".workspace-panel-stage").boundingBox())!;
+    await expect.poll(() => width(page, "Files")).toBeCloseTo(stage.width, 0);
     const workbenchBar = page.getByTestId("workspace-workbench-bar");
-    await expect(
-      workbenchBar.getByRole("button", { name: "Panels" }),
-    ).toBeVisible();
-    const hideSidebar = workbenchBar.getByRole("button", {
-      name: "Hide sidebar",
-    });
-    await hideSidebar.click();
+    await workbenchBar.getByRole("button", { name: "Hide sidebar" }).click();
     await expect(page.getByTestId("desktop-sidebar")).toBeHidden();
     await workbenchBar.getByRole("button", { name: "Show sidebar" }).click();
     await expect(page.getByTestId("desktop-sidebar")).toBeVisible();
-    await restoreCollapsed(page, "Chat");
-    await expect(composer).toHaveValue("Collapse must retain this draft");
-    expect(
-      await chat.evaluate(
-        (node) =>
-          (window as typeof window & { __singletonChat?: Element })
-            .__singletonChat === node,
-      ),
-    ).toBe(true);
+    await quickButton(page, "Chat").click();
+    await expect(chat).toBeVisible();
+    await expect(composer).toHaveValue("Hiding must retain this draft");
+    expect(await isRetained(chat, "__chat")).toBe(true);
+    await expect.poll(() => width(page, "Files")).toBeCloseTo(resizedWidth, 0);
 
+    // A stream keeps running, without a new subscription, while Chat is hidden.
     await sendCurrentDraft(page);
     await expect(page.getByRole("button", { name: "Stop" })).toBeVisible();
-    await capture(page, testInfo, "singleton-panels-streaming.png");
-    const requestsBeforeStreamingCollapse = threadEventRequests;
-    await page.getByRole("button", { name: "Collapse Chat panel" }).click();
-    await restoreCollapsed(page, "Chat");
+    await capture(page, testInfo, "panels-streaming.png");
+    const requestsBeforeHiding = threadEventRequests;
+    await quickButton(page, "Chat").click();
+    await expect(chat).toBeHidden();
+    await quickButton(page, "Chat").click();
     await expect(page.getByRole("button", { name: "Stop" })).toBeVisible();
-    expect(threadEventRequests).toBe(requestsBeforeStreamingCollapse);
-    expect(
-      await chat.evaluate(
-        (node) =>
-          (window as typeof window & { __singletonChat?: Element })
-            .__singletonChat === node,
-      ),
-    ).toBe(true);
+    expect(threadEventRequests).toBe(requestsBeforeHiding);
+    expect(await isRetained(chat, "__chat")).toBe(true);
     await page.getByRole("button", { name: "Stop" }).click();
     await expect(page.getByRole("button", { name: "Stop" })).toBeHidden();
 
-    await page.getByRole("button", { name: "Collapse Files panel" }).click();
+    // Files' quick button hides it, still loaded, and shows the same node.
+    await quickButton(page, "Files").click();
     await expect(files).toBeHidden();
-    await restoreCollapsed(page, "Files");
-    expect(
-      await files.evaluate(
-        (node) =>
-          (window as typeof window & { __singletonFiles?: Element })
-            .__singletonFiles === node,
-      ),
-    ).toBe(true);
-
-    await page.getByRole("button", { name: "Collapse Files panel" }).click();
-    await page.getByRole("button", { name: "Collapse Chat panel" }).click();
-    await expect(page.getByTestId("workspace-panel-empty")).toContainText(
-      "All panels are collapsed",
-    );
-    await expectCollapsedPanels(page, ["Chat", "Files"]);
-    await capture(page, testInfo, "singleton-all-collapsed-empty.png");
-    expect(
-      await page.evaluate(() =>
-        localStorage.getItem(`sedes-thread-panel-instance-collapsed@4:${encodeURIComponent(location.pathname.split("/")[2] ?? "")}`),
-      ),
-    ).toBe('{"version":4,"collapsed":["chat","workspace-files"]}');
-
-    await page.reload();
-    await expect(page.getByTestId("workspace-panel-empty")).toContainText(
-      "All panels are collapsed",
-    );
-    await expectCollapsedPanels(page, ["Chat", "Files"]);
-    expect(
-      await page.evaluate(() =>
-        localStorage.getItem(`sedes-thread-panel-instance-layout@4:${encodeURIComponent(location.pathname.split("/")[2] ?? "")}`),
-      ),
-    ).toBe(canonicalLayout);
-
-    await openPanelsTrigger(page).click();
-    await page.getByRole("menuitem", { name: "Show all" }).click();
-    await expect(chat).toBeVisible();
+    await expect(panelAnnouncement(page)).toHaveText("Files panel hidden.");
+    await expect(quickButton(page, "Files")).toHaveAttribute("data-state", "hidden");
+    const hiddenMenu = await openPanelsMenu(page);
+    await expect(panelRow(hiddenMenu, "Files")).toHaveAccessibleName("Files, Loaded, hidden");
+    await page.keyboard.press("Escape");
+    await expect(hiddenMenu).toBeHidden();
+    await quickButton(page, "Files").click();
     await expect(files).toBeVisible();
-    await expect(page.getByTestId("workspace-panel-split")).toBeVisible();
-    expect(
-      await page.evaluate(() =>
-        localStorage.getItem(`sedes-thread-panel-instance-layout@4:${encodeURIComponent(location.pathname.split("/")[2] ?? "")}`),
-      ),
-    ).toBe(canonicalLayout);
-    expect(
-      await page.evaluate(() =>
-        localStorage.getItem("sedes-panel-layout@1"),
-      ),
-    ).toBe("legacy-layout-marker");
-    await capture(page, testInfo, "singleton-restored-split.png");
+    expect(await isRetained(files, "__files")).toBe(true);
+    await filesSettled(page);
 
-    await page.reload();
-    await expect(page.getByTestId("thread-view")).toBeVisible();
-    await expect(
-      page.getByRole("region", { name: "Workspace files" }),
-    ).toBeVisible({
-      timeout: 15_000,
+    // With nothing shown, the stage says so, and that survives a reload.
+    await quickButton(page, "Files").click();
+    await quickButton(page, "Chat").click();
+    const empty = page.getByTestId("workspace-panel-empty");
+    await expect(empty).toContainText("No panels are shown");
+    await capture(page, testInfo, "panels-none-shown.png");
+    expect(await savedLayout(page)).toMatchObject({
+      shown: { middle: null, right: null },
+      loaded: ["files"],
     });
-    // Both surfaces came back, so the menu stays but nothing reads collapsed.
-    await expect(page.getByTestId("workspace-panel-split")).toBeVisible();
-    await expectCollapsedPanels(page, []);
-    expect(
-      await page.evaluate(() =>
-        localStorage.getItem(`sedes-thread-panel-instance-layout@4:${encodeURIComponent(location.pathname.split("/")[2] ?? "")}`),
-      ),
-    ).toBe(canonicalLayout);
-    await page.getByRole("button", { name: "Close Chat panel", exact: true }).click();
-    await expect(chat).toBeHidden();
-    await openPanelsTrigger(page).click();
-    const closedChat = page.getByRole("menuitem", { name: /^Chat(?: —|$)/ });
-    await expect(closedChat).toHaveAttribute("aria-description", "Closed");
-    await closedChat.click();
+    await page.reload();
+    await expect(empty).toContainText("No panels are shown");
+    await expect(quickButton(page, "Chat")).toHaveAttribute("data-state", "hidden");
+    await expect(quickButton(page, "Files")).toHaveAttribute("data-state", "hidden");
+    await quickButton(page, "Chat").click();
+    await quickButton(page, "Files").click();
     await expect(chat).toBeVisible();
+    await expect(files).toBeVisible({ timeout: 15_000 });
+    await filesSettled(page);
+    await expect.poll(() => width(page, "Files")).toBeCloseTo(resizedWidth, 0);
+    expect(
+      await page.evaluate(() => localStorage.getItem("sedes-panel-companions@1")),
+    ).toBe("legacy-companions-marker");
+    await retain(files, "__files");
+
+    // ✕ closes Files: it unloads, its quick button goes, and reopening it
+    // mounts new content in its place, at its remembered width.
+    await stagePanel(page, "Files")
+      .getByRole("button", { name: "Close Files panel", exact: true })
+      .click();
+    await expect(stagePanel(page, "Files")).toHaveCount(0);
+    await expect(panelAnnouncement(page)).toHaveText("Files panel closed.");
+    await expect(quickButton(page, "Files")).toHaveCount(0);
+    await expect(loadedPanels).toHaveCount(1);
+    const closedMenu = await openPanelsMenu(page);
+    await expect(panelRow(closedMenu, "Files")).toHaveAccessibleName("Files");
+    await panelRow(closedMenu, "Files").click();
+    await expect(files).toBeVisible({ timeout: 15_000 });
+    await expect(stagePanel(page, "Files")).toHaveAttribute("data-region", "right");
+    await expect.poll(() => width(page, "Files")).toBeCloseTo(resizedWidth, 0);
+    expect(await isRetained(files, "__files")).toBe(false);
+    await filesSettled(page);
   });
 
-  test("docked Tasks stays open with Chat collapsed, follows thread switches, and selection restores and focuses Chat", async ({
+  test("Tasks stays on the right with Chat hidden, follows thread switches, and selection shows and focuses Chat", async ({
     page,
   }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
@@ -244,48 +239,51 @@ test.describe("panel-instance workbench", () => {
     const secondThreadId = secondThreadPath.split("/").at(-1)!;
 
     const tasks = page.locator('[data-slot="tasks-panel"]');
-    const tasksLeaf = page.locator('[data-panel-id="tasks"]');
-    await page.getByTestId("tasks-panel-toggle").click();
-    await expect(tasks).toBeVisible();
+    await expect(quickButton(page, "Tasks")).toHaveCount(0);
+    await openPanel(page, "Tasks");
     await expect(tasks).toHaveAttribute("data-presentation", "panel");
-    await expect(tasksLeaf).toBeVisible();
-    await page.getByRole("button", { name: "Collapse Chat panel" }).click();
+    await expect(stagePanel(page, "Tasks")).toHaveAttribute("data-region", "right");
+    await expect(quickButton(page, "Tasks")).toHaveAttribute("data-state", "visible");
+    await stagePanel(page, "Chat")
+      .getByRole("button", { name: "Hide Chat panel", exact: true })
+      .click();
+    await expect(stagePanel(page, "Chat")).toHaveCount(0);
     await expect(tasks).toBeVisible();
 
-    await page
-      .getByTestId("desktop-sidebar")
-      .locator(`[data-thread-id="${secondThreadId}"]`)
-      .getByTestId("thread-row-link")
-      .click();
-    await expect(page).toHaveURL(secondThreadPath);
-    await expect(
-      page.getByRole("textbox", { name: "Message Scripted agent" }),
-    ).toBeFocused();
-    await expect(page.locator('[data-panel-id="chat"]')).toHaveCount(1);
-    // Tasks stays docked in the next thread's layout, beside its Chat.
-    await expect(tasksLeaf).toBeVisible();
+    // Selecting a thread shows its Chat wherever it lives, focused, and the
+    // device's Tasks stays beside it.
+    const selectThread = async (threadId: string, threadPath: string) => {
+      await page
+        .getByTestId("desktop-sidebar")
+        .locator(`[data-thread-id="${threadId}"]`)
+        .getByTestId("thread-row-link")
+        .click();
+      await expect(page).toHaveURL(threadPath);
+      await expect(
+        page.getByRole("textbox", { name: "Message Scripted agent" }),
+      ).toBeFocused();
+      await expect(stagePanel(page, "Chat")).toHaveCount(1);
+      await expect(stagePanel(page, "Chat")).toHaveAttribute("data-region", "middle");
+    };
+    await selectThread(firstThreadId, firstThreadPath);
+    await expect(stagePanel(page, "Tasks")).toBeVisible();
     await expect(tasks).toHaveAttribute("data-presentation", "panel");
-    const chatBox = await page.locator('[data-panel-id="chat"]').boundingBox();
-    const tasksBox = await tasksLeaf.boundingBox();
-    expect(tasksBox!.x).toBeGreaterThanOrEqual(chatBox!.x + chatBox!.width);
+    const chatBox = (await stagePanel(page, "Chat").boundingBox())!;
+    const tasksBox = (await stagePanel(page, "Tasks").boundingBox())!;
+    expect(tasksBox.x).toBeGreaterThanOrEqual(chatBox.x + chatBox.width);
 
-    await page.getByRole("button", { name: "Collapse Chat panel" }).click();
-    await page
-      .getByTestId("desktop-sidebar")
-      .locator(`[data-thread-id="${firstThreadId}"]`)
-      .getByTestId("thread-row-link")
+    await stagePanel(page, "Chat")
+      .getByRole("button", { name: "Hide Chat panel", exact: true })
       .click();
-    await expect(page).toHaveURL(firstThreadPath);
-    await expect(
-      page.getByRole("textbox", { name: "Message Scripted agent" }),
-    ).toBeFocused();
-    await expect(page.locator('[data-panel-id="chat"]')).toHaveCount(1);
+    await expect(stagePanel(page, "Chat")).toHaveCount(0);
+    await selectThread(secondThreadId, secondThreadPath);
+    await expect(stagePanel(page, "Tasks")).toBeVisible();
   });
 
-  test("composer shrinks back to its empty height under reduced motion after Chat is collapsed beside Files", async ({
+  test("composer shrinks back to its empty height under reduced motion after Chat is hidden beside Files", async ({
     page,
   }) => {
-    // A collapsed Chat keeps the composer laid out with no content width, so the
+    // A hidden Chat keeps the composer laid out with no content width, so the
     // placeholder wraps and the textarea measures at its 220px maximum. Reduced
     // motion gives every element a 0.01ms transition, which must not hold the
     // old height while the textarea measures itself back down.
@@ -300,15 +298,16 @@ test.describe("panel-instance workbench", () => {
       textarea.evaluate((element) => element.getBoundingClientRect().height);
     const empty = await height();
 
-    await openPanelsTrigger(page).click();
-    await page.getByRole("menuitem", { name: /^Files(?: —|$)/ }).click();
+    await openPanel(page, "Files");
     await expect(
       page.getByRole("region", { name: "Workspace files" }),
     ).toBeVisible({ timeout: 15_000 });
     await expect.poll(height).toBe(empty);
-    await page.getByRole("button", { name: "Collapse Chat panel" }).click();
+    await stagePanel(page, "Chat")
+      .getByRole("button", { name: "Hide Chat panel", exact: true })
+      .click();
     await expect(page.getByTestId("thread-view")).toBeHidden();
-    await restoreCollapsed(page, "Chat");
+    await quickButton(page, "Chat").click();
     await expect(textarea).toBeVisible();
     await expect.poll(height).toBe(empty);
 
@@ -318,85 +317,104 @@ test.describe("panel-instance workbench", () => {
     await expect.poll(height).toBe(empty);
   });
 
-  test("narrow Files panel collapses without unmounting and can become the base surface", async ({
+  test("phones show one foreground panel, switched from the bar, with Tasks as a sheet", async ({
     page,
   }, testInfo) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await openSedesWorkspace(page);
     await createDraftThread(page);
-    await page.setViewportSize({ width: 412, height: 915 });
+    await page.setViewportSize({ width: 390, height: 844 });
+    const chat = page.getByTestId("thread-view");
+    await expect(chat).toBeVisible();
 
-    await page.getByRole("button", { name: "Panels", exact: true }).click();
-    // The shared floating layer already stacks menus above the mobile drawer.
+    // ▾ is a sheet on phones, above the navigation drawer, without places.
+    const menu = await openPanelsMenu(page);
+    await expect(menu).toHaveAttribute("role", "dialog");
     expect(
-      await page
-        .getByRole("menu", { name: "Panels" })
-        .evaluate(
-          (menu) =>
-            Number(getComputedStyle(menu).zIndex) >
-            Number(
-              getComputedStyle(document.documentElement).getPropertyValue(
-                "--z-drawer",
-              ),
-            ),
-        ),
+      await menu.evaluate(
+        (sheet) =>
+          Number(getComputedStyle(sheet).zIndex) >
+          Number(
+            getComputedStyle(document.documentElement).getPropertyValue("--z-drawer"),
+          ),
+      ),
     ).toBe(true);
-    await page.getByRole("menuitem", { name: /^Files(?: —|$)/ }).click();
-    const filesPanel = page.getByRole("region", {
-      name: "Files panel",
-      exact: true,
-    });
+    await expect(menu.getByRole("menuitem", { name: /^Choose where to open/ })).toHaveCount(0);
+    await panelRow(menu, "Files").click();
+    const filesPanel = page.getByRole("region", { name: "Files panel", exact: true });
     const files = page.getByRole("region", { name: "Workspace files" });
     await expect(filesPanel).toBeVisible();
     await expect(files).toBeVisible({ timeout: 15_000 });
-    await files.evaluate((node) => {
-      (window as typeof window & { __narrowFiles?: Element }).__narrowFiles =
-        node;
-    });
+    // One panel on stage; phones have no Maximize.
+    await expect(page.locator(".workspace-panel-stage [data-panel-kind]")).toHaveCount(1);
+    await expect(chat).toBeHidden();
+    await expect(
+      filesPanel.getByRole("button", { name: "Maximize Files panel" }),
+    ).toHaveCount(0);
+    await expect(quickButton(page, "Chat")).toHaveAttribute("data-state", "hidden");
+    await expect(quickButton(page, "Files")).toHaveAttribute("data-state", "visible");
+    await retain(files, "__phoneFiles");
     await files.getByRole("treeitem", { name: /^android(?:\s|$)/ }).click();
-    const visibleFile = files.getByRole("treeitem", {
-      name: /^build\.gradle(?:\s|$)/,
-    });
-    await visibleFile.click();
-    await expect(
-      files.getByRole("tab", { name: /build\.gradle/ }),
-    ).toBeVisible();
-    await capture(page, testInfo, "singleton-mobile-files-sheet.png");
-
-    await page.getByRole("button", { name: "Collapse Files panel" }).click();
-    await expect(filesPanel).toHaveCount(0);
-    await expectCollapsedPanels(page, ["Files"]);
-    await restoreCollapsed(page, "Files");
-    await expect(filesPanel).toBeVisible();
-    await expect(
-      files.getByRole("tab", { name: /build\.gradle/ }),
-    ).toBeVisible();
-    expect(
-      await files.evaluate(
-        (node) =>
-          (window as typeof window & { __narrowFiles?: Element })
-            .__narrowFiles === node,
-      ),
-    ).toBe(true);
-
-    await page.getByRole("button", { name: "Collapse Files panel" }).click();
-    await page.getByRole("button", { name: "Collapse Chat panel" }).click();
-    await expect(page.getByTestId("workspace-panel-empty")).toBeVisible();
-    await restoreCollapsed(page, "Files");
-    await expect(filesPanel).toBeVisible();
-    await expect(files).toBeVisible();
-    await expect(
-      files.getByRole("tab", { name: /build\.gradle/ }),
-    ).toBeVisible();
+    await files.getByRole("treeitem", { name: /^build\.gradle(?:\s|$)/ }).click();
+    await expect(files.getByRole("tab", { name: /build\.gradle/ })).toBeVisible();
     await expectNoPageOverflow(page);
-    await capture(page, testInfo, "singleton-mobile-files-base.png");
+    await capture(page, testInfo, "panels-phone-files.png");
 
-    await page.getByRole("button", { name: "Collapse Files panel" }).click();
-    await restoreCollapsed(page, "Chat");
-    await expect(page.getByTestId("thread-view")).toBeVisible();
+    // The quick buttons switch the foreground; Files stays loaded meanwhile.
+    await quickButton(page, "Chat").click();
+    await expect(chat).toBeVisible();
+    await expect(filesPanel).toHaveCount(0);
+    await expect(quickButton(page, "Files")).toHaveAttribute("data-state", "hidden");
+    await capture(page, testInfo, "panels-phone-chat.png");
+    await quickButton(page, "Files").click();
+    await expect(filesPanel).toBeVisible();
+    await expect(files.getByRole("tab", { name: /build\.gradle/ })).toBeVisible();
+    expect(await isRetained(files, "__phoneFiles")).toBe(true);
+    await filesSettled(page);
+
+    // Files is the base surface with Chat hidden, and with nothing shown the
+    // stage says so.
+    await quickButton(page, "Chat").click();
+    await stagePanel(page, "Chat")
+      .getByRole("button", { name: "Hide Chat panel", exact: true })
+      .click();
+    await expect(filesPanel).toBeVisible();
+    await expect(quickButton(page, "Chat")).toHaveAttribute("data-state", "hidden");
+    await quickButton(page, "Files").click();
+    await expect(page.getByTestId("workspace-panel-empty")).toContainText("No panels are shown");
+    await expectNoPageOverflow(page);
+    await capture(page, testInfo, "panels-phone-none-shown.png");
+    await quickButton(page, "Files").click();
+    await expect(filesPanel).toBeVisible();
+    await expect(files.getByRole("tab", { name: /build\.gradle/ })).toBeVisible();
+    expect(await isRetained(files, "__phoneFiles")).toBe(true);
+    await quickButton(page, "Chat").click();
+    await expect(chat).toBeVisible();
+    await quickButton(page, "Files").click();
+    await expect(filesPanel).toBeVisible();
+    await filesSettled(page);
+
+    // ✕ closes Files, and Chat comes back without raising the keyboard.
+    await filesPanel.getByRole("button", { name: "Close Files panel", exact: true }).click();
+    await expect(filesPanel).toHaveCount(0);
+    await expect(quickButton(page, "Files")).toHaveCount(0);
+    await expect(chat).toBeVisible();
     await expect(
       page.getByRole("textbox", { name: "Message Scripted agent" }),
     ).not.toBeFocused();
+    await expectNoPageOverflow(page);
+
+    // Tasks opens as a sheet over the foreground panel, never on stage.
+    await openPanel(page, "Tasks");
+    const sheet = page.getByRole("dialog", { name: "Tasks", exact: true });
+    await expect(sheet).toBeVisible();
+    await expect(stagePanel(page, "Tasks")).toHaveCount(0);
+    await expect(quickButton(page, "Tasks")).toHaveAttribute("data-state", "visible");
+    await expect(stagePanel(page, "Chat")).toBeAttached();
+    await capture(page, testInfo, "panels-phone-tasks-sheet.png");
+    await sheet.getByRole("button", { name: "Close Tasks panel" }).click();
+    await expect(sheet).toBeHidden();
+    await expect(chat).toBeVisible();
     await expectNoPageOverflow(page);
   });
 });

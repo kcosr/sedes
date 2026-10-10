@@ -3,6 +3,7 @@ import type { Locator, Page, Request } from "@playwright/test";
 import { test, expect } from "./fixtures.js";
 import { capture, createDraftThread, expectNoPageOverflow, openWorkspaceDirectory } from "./helpers.js";
 import { workpadDraftSchema, workpadSchema } from "../../src/shared/protocol/workpads.js";
+import { openPanel, quickButton } from "./workspace-panel-helpers.js";
 
 const workspace = path.resolve(import.meta.dirname, "fixtures/workpad-workspace");
 const content = "\uFEFF# Release checks\n\n- [ ] Repeat this check\n- [ ] Repeat this check\n  - [ ] Nested check\n\n- [X] Already done\n\n```md\n- [ ] Example only\n```\n";
@@ -43,11 +44,12 @@ test("Workpad checkboxes preserve source and drafts while thread badges follow m
   await page.goto(sourcePath);
   const session = (await (await page.request.get("/api/application/session")).json()) as { csrfToken: string };
   const headers = { "X-CSRF-Token": session.csrfToken };
-  const toggle = page.getByTestId("workpads-panel-toggle");
+  // Workpads' quick button, and so its count badge, shows only while it is loaded.
+  const toggle = quickButton(page, "Workpads");
   const sidebar = page.getByTestId("desktop-sidebar");
   const sourceIcon = sidebar.locator(`[data-thread-id="${sourceId}"]`).getByRole("img", { name: "1 workpad", exact: true });
   const destinationIcon = sidebar.locator(`[data-thread-id="${destinationId}"]`).getByRole("img", { name: "1 workpad", exact: true });
-  await expect(toggle).toHaveAccessibleName("Open Workpads panel");
+  await expect(toggle).toHaveCount(0);
   await expect(sourceIcon).toHaveCount(0);
   const listRequests: Request[] = [];
   const countLists = (request: Request) => {
@@ -59,12 +61,12 @@ test("Workpad checkboxes preserve source and drafts while thread badges follow m
   });
   expect(created.status()).toBe(201);
   const workpad = workpadSchema.parse((await created.json()).workpad);
-  await expect(toggle).toHaveAccessibleName("Open Workpads panel, 1 workpad in this thread");
   await expect(sourceIcon).toBeVisible();
   await expect(sourceIcon).toHaveText("");
   // The closed panel has fetched no list to learn its new count.
   expect(listRequests).toHaveLength(0);
-  await toggle.click();
+  await openPanel(page, "Workpads");
+  await expect(toggle).toHaveAccessibleName("Hide Workpads panel, 1 workpad in this thread");
   const panel = page.getByRole("region", { name: "Workpads", exact: true });
   await panel.getByRole("button", { name: "Release checks", exact: true }).click();
   const document = panel.locator(".workpad-document");
@@ -166,12 +168,10 @@ test("Workpad checkboxes preserve source and drafts while thread badges follow m
   await panel.getByRole("button", { name: "Back to latest", exact: true }).click();
   await expect(repeats.nth(1)).toBeChecked();
 
-  // Count publication continues with the panel closed, including both ends of
-  // a move. These requests change real storage; the badge uses application SSE.
-  await page.getByRole("button", { name: "Close Workpads panel", exact: true }).click();
-  await expect(panel).toHaveCount(0);
+  // Count publication continues with the panel hidden, and closed, including
+  // both ends of a move. These requests change real storage; the badge and
+  // the sidebar use application SSE.
   await page.setViewportSize({ width: 1440, height: 900 });
-  listRequests.length = 0;
   const change = async (data: Record<string, unknown>) => {
     const current = await readWorkpad(page, workpad.id);
     const response = await page.request.patch(`/api/workpads/${workpad.id}`, {
@@ -179,21 +179,33 @@ test("Workpad checkboxes preserve source and drafts while thread badges follow m
     });
     expect(response.ok()).toBe(true);
   };
+  // Hidden, Workpads stays loaded: its quick button keeps counting.
+  await toggle.click();
+  await expect(panel).toBeHidden();
+  await expect(toggle).toHaveAccessibleName("Show Workpads panel, 1 workpad in this thread");
   await change({ archived: true });
-  await expect(toggle).toHaveAccessibleName("Open Workpads panel");
+  await expect(toggle).toHaveAccessibleName("Show Workpads panel");
   await expect(sourceIcon).toHaveCount(0);
   await change({ archived: false });
-  await expect(toggle).toHaveAccessibleName("Open Workpads panel, 1 workpad in this thread");
+  await expect(toggle).toHaveAccessibleName("Show Workpads panel, 1 workpad in this thread");
   await expect(sourceIcon).toBeVisible();
   await change({ scope: { kind: "thread", threadId: destinationId } });
-  await expect(toggle).toHaveAccessibleName("Open Workpads panel");
+  await expect(toggle).toHaveAccessibleName("Show Workpads panel");
   await expect(sourceIcon).toHaveCount(0);
   await expect(destinationIcon).toBeVisible();
   await page.goto(destinationPath);
-  await expect(toggle).toHaveAccessibleName("Open Workpads panel, 1 workpad in this thread");
+  await expect(toggle).toHaveAccessibleName("Show Workpads panel, 1 workpad in this thread");
+  // Closed, it unloads: no quick button, and no list read to keep counts.
+  await toggle.click();
+  await page.getByRole("button", { name: "Close Workpads panel", exact: true }).click();
+  await expect(panel).toHaveCount(0);
+  await expect(toggle).toHaveCount(0);
+  listRequests.length = 0;
   await change({ scope: { kind: "global" } });
-  await expect(toggle).toHaveAccessibleName("Open Workpads panel");
   await expect(destinationIcon).toHaveCount(0);
+  await change({ scope: { kind: "thread", threadId: destinationId } });
+  await expect(destinationIcon).toBeVisible();
+  await expect(toggle).toHaveCount(0);
   expect(listRequests).toHaveLength(0);
   page.off("request", countLists);
 });

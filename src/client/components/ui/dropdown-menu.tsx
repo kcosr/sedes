@@ -24,6 +24,7 @@ import {
   menuSeparatorClass,
   menuShortcutClass,
   menuValueClass,
+  submenuOffsetBesideParent,
 } from "@client/components/ui/floating"
 import {
   FloatingOpeningProvider,
@@ -522,16 +523,58 @@ function DropdownMenuSubTrigger({
   )
 }
 
+/** A menu panel that a submenu's trigger may sit in. */
+const MENU_PANEL_SELECTOR =
+  '[data-slot="dropdown-menu-content"], [data-slot="dropdown-menu-sub-content"]'
+
 function DropdownMenuSubContent({
   className,
   sideOffset = SUBMENU_SIDE_OFFSET,
   alignOffset = SUBMENU_ALIGN_OFFSET,
   collisionPadding = FLOATING_COLLISION_PADDING,
+  besideParent = false,
+  ref,
   children,
   ...props
-}: React.ComponentProps<typeof DropdownMenuPrimitive.SubContent>) {
+}: React.ComponentProps<typeof DropdownMenuPrimitive.SubContent> & {
+  /**
+   * Opens beside the parent menu panel rather than beside the trigger, for a
+   * trigger that does not span its row (a row's trailing button): flipped to
+   * the left, the submenu then clears the panel instead of covering its rows.
+   */
+  besideParent?: boolean
+}) {
   const sheet = useMenuSheet()
   const dialogContainer = React.useContext(DialogPortalContainerContext)
+  const [parentOffset, setParentOffset] = React.useState<number>()
+  const padding = typeof collisionPadding === "number" ? collisionPadding : FLOATING_COLLISION_PADDING
+  // Measured as each opening mounts the content, before it is first placed.
+  const contentRef = React.useCallback(
+    (content: HTMLDivElement | null) => {
+      if (typeof ref === "function") ref(content)
+      else if (ref) ref.current = content
+      if (!besideParent || !content) return
+      const trigger = document.getElementById(content.getAttribute("aria-labelledby") ?? "")
+      const panel = trigger?.closest<HTMLElement>(MENU_PANEL_SELECTOR)
+      if (!trigger || !panel) return
+      const panelStyle = getComputedStyle(panel)
+      const panelInner = panel.getBoundingClientRect().left + panel.clientLeft
+      setParentOffset(
+        submenuOffsetBesideParent({
+          trigger: trigger.getBoundingClientRect(),
+          rows: {
+            left: panelInner + parseFloat(panelStyle.paddingLeft),
+            right: panelInner + panel.clientWidth - parseFloat(panelStyle.paddingRight),
+          },
+          submenuWidth: content.offsetWidth,
+          viewportWidth: document.documentElement.clientWidth,
+          sideOffset,
+          collisionPadding: padding,
+        })
+      )
+    },
+    [besideParent, padding, ref, sideOffset]
+  )
   if (sheet) {
     return (
       <MenuSheetSubContent dataSlot="dropdown-menu-sub-content" className={className}>
@@ -545,8 +588,9 @@ function DropdownMenuSubContent({
   return (
     <DropdownMenuPrimitive.Portal container={dialogContainer}>
       <DropdownMenuPrimitive.SubContent
+        ref={contentRef}
         data-slot="dropdown-menu-sub-content"
-        sideOffset={sideOffset}
+        sideOffset={besideParent ? (parentOffset ?? sideOffset) : sideOffset}
         alignOffset={alignOffset}
         collisionPadding={collisionPadding}
         className={cn(
