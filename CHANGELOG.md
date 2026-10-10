@@ -233,6 +233,7 @@
 
 - Opt-in voice delivery diagnostics show server dispatch, Android receipt and
   queue decisions, and speech playback progress without recording message text.
+  ([#69](https://github.com/kcosr/sedes/pull/69))
 
 - Android voice can optionally announce the destination before a new headset
   or notification recording. The setting defaults off.
@@ -942,6 +943,7 @@
 - Automatic completion voice notifications come from live completion changes;
   reopening threads and recovering provider history no longer announces old
   replies. Notifications missed while disconnected are not replayed.
+  ([#69](https://github.com/kcosr/sedes/pull/69))
 
 - Opening a submenu, such as **Move to**, no longer widens the menu it came
   from. ([#65](https://github.com/kcosr/sedes/pull/65))
