@@ -50,6 +50,17 @@ export interface PanelToolbarEntry {
 }
 
 /**
+ * On the narrowest phones the quick buttons scroll sideways (see
+ * `.workspace-workbench-toggles`). The browser leaves a mostly clipped
+ * button where it is when it takes focus, so the group brings it into view.
+ */
+function revealFocusedToggle(event: React.FocusEvent<HTMLDivElement>): void {
+  const group = event.currentTarget;
+  if (group.scrollWidth <= group.clientWidth) return;
+  event.target.scrollIntoView({ block: "nearest", inline: "nearest" });
+}
+
+/**
  * The workbench bar: navigation, a quick button for every loaded panel in
  * the fixed order, and ▾, the launcher for every panel. A row opens its
  * panel in its place; the row's trailing place button opens it in a chosen
@@ -94,6 +105,7 @@ export function PanelToolbar({
           className="workspace-workbench-toggles"
           role="group"
           aria-label="Loaded panels"
+          onFocus={revealFocusedToggle}
         >
           {entries
             .filter(({ state }) => state !== "closed")

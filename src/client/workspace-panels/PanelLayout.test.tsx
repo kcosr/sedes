@@ -478,6 +478,28 @@ describe("PanelLayout workbench bar", () => {
     expect(quickButtons().map(([kind]) => kind)).toEqual(["chat", "files", "terminals"]);
   });
 
+  it("brings a focused quick button into view only while the quick buttons scroll", () => {
+    const store = setup({ extraTenants: [tasksTenant, workpadsTenant()] });
+    act(() => {
+      store.open("tasks", { focus: false });
+      store.open("workpads", { focus: false });
+    });
+    const group = bar().getByRole("group", { name: "Loaded panels" });
+    const reveal = vi.mocked(HTMLElement.prototype.scrollIntoView);
+    reveal.mockClear();
+    // Everything fits (jsdom lays nothing out): focus leaves the group alone.
+    fireEvent.focus(quickButton("tasks"));
+    expect(reveal).not.toHaveBeenCalled();
+
+    // The narrowest phones: the group overflows and scrolls.
+    Object.defineProperty(group, "scrollWidth", { configurable: true, value: 230 });
+    Object.defineProperty(group, "clientWidth", { configurable: true, value: 195 });
+    fireEvent.focus(quickButton("tasks"));
+    expect(reveal).toHaveBeenCalledOnce();
+    expect(reveal.mock.contexts[0]).toBe(quickButton("tasks"));
+    expect(reveal).toHaveBeenCalledWith({ block: "nearest", inline: "nearest" });
+  });
+
   it.each([
     [0, undefined, "Hide Workpads panel"],
     [1, "1", "Hide Workpads panel, 1 workpad in this thread"],

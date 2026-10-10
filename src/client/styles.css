@@ -122,6 +122,8 @@
   --bar-control-width: var(--bar-control);
   --bar-icon: 18px;
   --bar-toggle-gap: var(--space-1);
+  /* Between the bar's groups: navigation, the quick buttons, and ▾. */
+  --bar-group-gap: var(--space-2);
 
   /* motion */
   --duration-fast: 120ms;
@@ -324,6 +326,23 @@
     --bar-control-width: var(--control-lg);
     --bar-icon: var(--icon-lg);
     --bar-toggle-gap: var(--space-2);
+  }
+}
+
+/* Narrow phones. With every panel loaded, and counts on Tasks and Workpads,
+   the workbench bar needs 387px at the touch spacing. Its spacing tightens
+   so that it fits down to 371px, then 355px; narrower still, the quick
+   buttons scroll (see .workspace-workbench-toggles). */
+@media (max-width: 386px) {
+  :root {
+    --bar-toggle-gap: var(--space-1);
+  }
+}
+
+@media (max-width: 370px) {
+  :root {
+    --bar-toggle-gap: var(--space-0-5);
+    --bar-group-gap: var(--space-1);
   }
 }
 
@@ -2234,7 +2253,7 @@ textarea:disabled {
   flex: 0 0 auto;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: var(--bar-group-gap);
   /* Matches .workspace-panel-chrome, minus its text-only left inset: this row
      leads with an icon button, so both ends carry the button inset. */
   padding: var(--space-1-5) 5px;
@@ -2538,16 +2557,31 @@ textarea:disabled {
   display: flex;
   min-width: 0;
   align-items: center;
-  gap: 8px;
+  gap: var(--bar-group-gap);
 }
 
 /* The panel toggles sit as a group, spaced so neighbouring chips and their
-   tap targets stay apart. */
+   tap targets stay apart. Where they can't all fit beside ☰, the bell and
+   ▾ (the narrowest phones), only the group gives way: it scrolls sideways,
+   without a scrollbar, and a focused button scrolls into view. Its padding,
+   given back by the margin, keeps the buttons' 3px focus rings inside the
+   scroller. */
 .workspace-workbench-toggles {
   display: flex;
-  flex: 0 0 auto;
+  min-width: 0;
+  flex: 0 1 auto;
   align-items: center;
   gap: var(--bar-toggle-gap);
+  margin: -3px;
+  padding: 3px;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scroll-padding-inline: 3px;
+  scrollbar-width: none;
+}
+
+.workspace-workbench-toggles::-webkit-scrollbar {
+  display: none;
 }
 
 /* ▾, the panels menu, after the loaded panels' quick buttons. */

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { Locator, Page } from "@playwright/test";
 import { test, expect } from "./fixtures";
 import {
@@ -323,7 +324,7 @@ test.describe("panel workbench", () => {
   }, testInfo) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await openSedesWorkspace(page);
-    await createDraftThread(page);
+    const threadPath = await createDraftThread(page);
     await page.setViewportSize({ width: 390, height: 844 });
     const chat = page.getByTestId("thread-view");
     await expect(chat).toBeVisible();
@@ -465,5 +466,101 @@ test.describe("panel workbench", () => {
     await expect(quickButton(page, "Tasks")).toHaveCount(0);
     await expect(chat).toBeVisible();
     await expectNoPageOverflow(page);
+
+    // The bar's worst case: every panel loaded, Tasks and Workpads with
+    // their counts.
+    const threadId = threadPath.split("/").at(-1)!;
+    const session = await (await page.request.get("/api/application/session")).json();
+    const headers = { "X-CSRF-Token": session.csrfToken };
+    expect(
+      (
+        await page.request.post("/api/tasks", {
+          headers,
+          data: { mutationId: randomUUID(), title: "Bar task", scope: { kind: "thread", threadId } },
+        })
+      ).ok(),
+    ).toBe(true);
+    expect(
+      (
+        await page.request.post("/api/workpads", {
+          headers,
+          data: { title: "Bar workpad", scope: { kind: "thread", threadId } },
+        })
+      ).ok(),
+    ).toBe(true);
+    for (const title of ["Files", "Workpads", "Tasks"] as const) {
+      await openPanel(page, title);
+      await expect(stagePanel(page, title)).toBeVisible();
+    }
+    const terminalCreated = page.waitForResponse(
+      (response) =>
+        response.request().method() === "POST" &&
+        /\/api\/threads\/[^/]+\/terminals$/u.test(new URL(response.url()).pathname) &&
+        response.status() === 201,
+    );
+    await openPanel(page, "Terminals");
+    await terminalCreated;
+    await expect(stagePanel(page, "Terminals")).toBeVisible();
+    await quickButton(page, "Chat").click();
+    await expect(chat).toBeVisible();
+    const bar = page.getByTestId("workspace-workbench-bar");
+    const group = bar.getByRole("group", { name: "Loaded panels" });
+    await expect(group.getByRole("button")).toHaveCount(5);
+    for (const title of ["Workpads", "Tasks"] as const) {
+      await expect(quickButton(page, title).locator('[data-slot="count-badge"]')).toHaveText("1");
+    }
+    /** Whether the quick buttons overflow their group, which then scrolls. */
+    const scrolls = () => group.evaluate((node) => node.scrollWidth > node.clientWidth);
+    const expectInGroup = async (button: Locator) => {
+      const inner = (await button.boundingBox())!;
+      const outer = (await group.boundingBox())!;
+      expect(inner.x).toBeGreaterThanOrEqual(outer.x - 0.5);
+      expect(inner.x + inner.width).toBeLessThanOrEqual(outer.x + outer.width + 0.5);
+    };
+    // A 390px phone fits it all at the touch spacing.
+    await expect(group).toHaveCSS("column-gap", "8px");
+    expect(await scrolls()).toBe(false);
+    // Narrower, the spacing tightens; at 320px the quick buttons scroll.
+    for (const [width, scrolling] of [
+      [360, false],
+      [320, true],
+    ] as const) {
+      await page.setViewportSize({ width, height: 844 });
+      await expect(group).toHaveCSS("column-gap", "2px");
+      await expectNoPageOverflow(page);
+      expect(await scrolls()).toBe(scrolling);
+      await capture(page, testInfo, `panels-phone-bar-${width}.png`);
+      // ☰, the bell and ▾ are never clipped.
+      for (const control of [
+        bar.getByRole("button", { name: "Open thread navigation" }),
+        bar.getByRole("button", { name: /notifications$/ }),
+        bar.getByRole("button", { name: "Panels", exact: true }),
+      ]) {
+        const box = (await control.boundingBox())!;
+        expect(box.x).toBeGreaterThanOrEqual(0);
+        expect(box.x + box.width).toBeLessThanOrEqual(width);
+        await control.click({ trial: true });
+      }
+      // Every quick button is in view, or scrolls into it, and takes a tap.
+      for (const title of ["Chat", "Files", "Workpads", "Tasks", "Terminals"] as const) {
+        const button = quickButton(page, title);
+        await button.scrollIntoViewIfNeeded();
+        await expectInGroup(button);
+        await button.click({ trial: true });
+      }
+    }
+    // Keyboard focus scrolls a clipped quick button into view.
+    await group.evaluate((node) => {
+      node.scrollLeft = 0;
+    });
+    const last = quickButton(page, "Terminals");
+    const clipped = (await last.boundingBox())!;
+    const groupBox = (await group.boundingBox())!;
+    expect(clipped.x + clipped.width).toBeGreaterThan(groupBox.x + groupBox.width);
+    await quickButton(page, "Chat").focus();
+    for (let step = 0; step < 4; step += 1) await page.keyboard.press("Tab");
+    await expect(last).toBeFocused();
+    await expectInGroup(last);
+    await capture(page, testInfo, "panels-phone-bar-320-focused.png");
   });
 });
