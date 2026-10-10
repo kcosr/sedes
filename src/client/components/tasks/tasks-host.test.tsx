@@ -111,8 +111,15 @@ type DockSpy = {
 };
 
 /** A thread workspace with the Tasks panel in its layout. */
-function Workspace({ spy }: { readonly spy: DockSpy }): React.JSX.Element {
-  const [present, setPresent] = useState(true);
+function Workspace({
+  spy,
+  loaded = true,
+}: {
+  readonly spy: DockSpy;
+  /** Whether Tasks starts loaded in the layout. */
+  readonly loaded?: boolean;
+}): React.JSX.Element {
+  const [present, setPresent] = useState(loaded);
   const dock: TasksDock = {
     present,
     visible: present,
@@ -177,10 +184,16 @@ function Probe({ onHost }: { readonly onHost: (host: ReturnType<typeof useTasksH
  * without a thread (Home, Archived, Usage, the automation pages), which has
  * no Tasks at all.
  */
-function Page({ spy }: { readonly spy: DockSpy }): React.JSX.Element {
+function Page({
+  spy,
+  loaded,
+}: {
+  readonly spy: DockSpy;
+  readonly loaded?: boolean;
+}): React.JSX.Element {
   const route = useRoute();
   return route.name === "thread" ? (
-    <Workspace spy={spy} />
+    <Workspace spy={spy} loaded={loaded} />
   ) : (
     <p>{route.name} page</p>
   );
@@ -205,19 +218,22 @@ function renderHost({
   active = true,
   spy = dockSpy(),
   extra,
+  loaded,
 }: {
   readonly thread?: boolean;
   readonly active?: boolean;
   readonly spy?: DockSpy;
   /** More workbench content, such as a transcript task card. */
   readonly extra?: ReactNode;
+  /** Whether Tasks starts loaded in the thread's layout. */
+  readonly loaded?: boolean;
 } = {}) {
   if (thread) act(() => navigate(threadPath("thread-1")));
   let host: ReturnType<typeof useTasksHost>;
   const content = (isActive: boolean) => (
     <TasksPanel store={makeStore()} panelLayoutStore={panelLayoutStore} active={isActive}>
       <Probe onHost={(value) => (host = value)} />
-      <Page spy={spy} />
+      <Page spy={spy} loaded={loaded} />
       {extra}
     </TasksPanel>
   );
@@ -678,6 +694,18 @@ describe("toggle Tasks shortcut", () => {
     press(document.body, { metaKey: true, ctrlKey: false, key: "l" });
     expect(spy.toggle).toHaveBeenCalledTimes(2);
     expect(tasksSurface()).not.toBeNull();
+  });
+
+  it("loads Tasks for the phone sheet when the layout has not loaded it", () => {
+    phone = true;
+    const { spy } = renderHost({ thread: true, loaded: false });
+    press();
+    expect(spy.open).toHaveBeenCalledExactlyOnceWith({ focus: false });
+    expect(screen.getByRole("dialog", { name: "Tasks" })).toBeInTheDocument();
+    // Loaded now, closing the sheet leaves Tasks loaded.
+    press();
+    expect(spy.open).toHaveBeenCalledOnce();
+    expect(spy.close).not.toHaveBeenCalled();
   });
 
   it("toggles the sheet on phones in a thread, from inside it too", () => {
