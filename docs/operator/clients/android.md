@@ -286,7 +286,8 @@ tab's renderer; confirmed observers show the active-tab lock and are read-only;
 **Take control** in the panel menu on a second client immediately changes input
 and resize authority without requiring release on the first; touch scroll injects
 no input; the chat-style Find control searches in both directions; and Android
-Back closes only the local panel.
+Back returns to Chat, leaving the Terminals panel loaded and its shell
+running.
 Verify that healthy application, chat, and terminal connections show no green
 status indicator, while restoring, reconnecting, and terminal lifecycle states
 remain visible. After terminal output sends `CSI 3 J`, close and reopen the
