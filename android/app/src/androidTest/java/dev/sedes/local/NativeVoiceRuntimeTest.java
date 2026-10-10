@@ -3272,7 +3272,7 @@ public class NativeVoiceRuntimeTest {
                 SpeechJob announcement = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(announcement);
                 assertEquals("Replying to Current destination.", announcement.text);
                 JSONObject state = f.runtime.snapshot(), actions = state.getJSONObject("actions");
-                assertEquals("announcing", state.getString("phase")); assertEquals(11, state.getInt("version"));
+                assertEquals("announcing", state.getString("phase")); assertEquals(12, state.getInt("version"));
                 assertEquals("Current destination", state.getJSONObject("active").getString("recognitionThreadTitle"));
                 assertFalse(actions.getBoolean("canSkip")); assertFalse(actions.getBoolean("canRecordDuringPlayback")); assertTrue(actions.getBoolean("canStop"));
                 assertNull(field(field(f.runtime, "active"), "recordingId"));

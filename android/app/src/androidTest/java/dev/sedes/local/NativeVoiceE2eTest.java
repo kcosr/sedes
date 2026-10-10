@@ -218,7 +218,7 @@ public class NativeVoiceE2eTest {
                     command("updateSettings", NativeVoiceJson.object("expectedRevision", runtime.snapshot().getLong("settingsRevision"),
                         "patch", NativeVoiceJson.object("autoListen", false, "pinDefaultVoiceThread", false,
                             "voiceThreadId", required(args, "secondThreadId"), "voiceThreadTitle", required(args, "secondThreadTitle"),
-                            "announceRecordingThread", true, "recognitionCues", true)));
+                            "announceRecordingThread", true, "recognitionCues", true, "startupPreRollMs", 0)));
                 }
                 input("[data-testid=\"composer\"] textarea", initial);
                 waitJs("!!document.querySelector('[aria-label=\"Send message\"]:not(:disabled)')", 15000); click("[aria-label=\"Send message\"]");
@@ -451,7 +451,7 @@ public class NativeVoiceE2eTest {
             instrumentation.runOnMainSync(activity::finish);
         }
     }
-    /** One state chain through real playback, posted notification controls, native capture and idle release. */
+    /** One state chain through real playback, both control surfaces, native capture and both idle-release paths. */
     private JSONObject retainedTargetCycle(Bundle args, AtomicInteger supplied, AtomicBoolean speechPlayed,
         AtomicBoolean announcementPlayed, AtomicBoolean startCuePlayed, AtomicInteger inputAttempts, List<JSONObject> submittedInputs) throws Exception {
         String source = required(args, "threadId"), sourceTitle = required(args, "threadTitle"), viewed = required(args, "secondThreadId");
@@ -477,47 +477,14 @@ public class NativeVoiceE2eTest {
         Context context = instrumentation.getTargetContext();
         RetainedNotificationControls originalControls = retainedNotificationControls(context, sourceTitle, -1);
         JSONObject beforeStart = runtime.snapshot();
-        NativeVoiceAudio audio = runtimeAudio(runtime);
-        audio.holdNextPlaybackForTest();
-        int startDelivery = clickNotificationControl(originalControls.start, "retained Start");
-        await(() -> runtime.snapshot().optString("phase").equals("announcing"), 15000, "retained manual start announcing its destination");
-        await(() -> audio.trackForTest() != null && audio.trackForTest().getPlayState() == AudioTrack.PLAYSTATE_STOPPED,
-            15000, "announcement AudioTrack held before playback");
-        JSONObject announced = runtime.snapshot().getJSONObject("active");
-        assertEquals(source, announced.getString("recognitionThreadId")); assertEquals(sourceTitle, announced.getString("recognitionThreadTitle"));
-        assertTrue("The announcement precedes recording allocation", announced.isNull("recording"));
-        assertEquals("Held announcement must not open microphone capture", 0, supplied.get());
-        assertFalse("Held announcement cannot advance to the cue", phases.contains("arming"));
-        waitJs("document.querySelector('.voice-card-sub')?.textContent.includes('Announcing thread…') === true", 15000);
-        assertEquals("false", js("document.querySelector('[aria-label=\"Next voice interaction\"]') !== null"));
-        screenshot("announcing-retained-thread");
-        AudioTrack announcementTrack = audio.trackForTest(); assertNotNull(announcementTrack);
-        assertEquals(0L, announcementTrack.getPlaybackHeadPosition() & 0xffffffffL);
-        // Release the real track; runtime capture must wait for real playback drain and the real start cue.
-        announcementTrack.play();
-        await(() -> runtime.snapshot().optString("phase").equals("listening") && phases.contains("listening") && supplied.get() > 0,
-            45000, "recording after announcement and cue");
-        assertTrue("The announcement's AudioTrack played", announcementPlayed.get());
-        assertTrue("The start cue's AudioTrack played", startCuePlayed.get());
-        int announcing = phases.indexOf("announcing"), arming = phases.indexOf("arming"), listening = phases.indexOf("listening");
-        assertTrue("Announcement, cue and capture must remain ordered: " + phases, announcing >= 0 && arming > announcing && listening > arming);
-        JSONObject recording = runtime.snapshot().getJSONObject("active");
-        assertEquals(source, recording.getString("recognitionThreadId")); assertEquals(sourceTitle, recording.getString("recognitionThreadTitle"));
-        assertFalse(recording.getBoolean("automatic"));
-        assertEquals(viewed, runtime.snapshot().getJSONObject("foreground").getString("threadId"));
-        screenshot("recording-retained-thread");
-        waitJs("document.querySelector('[aria-label=\"Cancel voice recording\"]') !== null", 15000);
-        click("[aria-label=\"Cancel voice recording\"]");
-        await(() -> idleVoice(runtime.snapshot()) && runtime.snapshot().optJSONObject("actions").optBoolean("canReleaseRetainedTarget"),
-            15000, "cancelled recording settled with retained target");
-        JSONObject afterCancel = runtime.snapshot(), retainedAfterCancel = afterCancel.getJSONObject("retainedVoiceTarget");
-        assertEquals(source, retainedAfterCancel.getString("threadId")); assertEquals(sourceTitle, retainedAfterCancel.getString("threadTitle"));
-        assertTrue(afterCancel.isNull("recordingRecovery")); assertEquals(0, inputAttempts.get()); assertTrue(submittedInputs.isEmpty());
+        JSONObject cardCapture = announcedCaptureAndCancel("card", "retained-thread", source, sourceTitle, viewed,
+            supplied, announcementPlayed, startCuePlayed, this::clickCardStart);
+        JSONObject afterCancel = cardCapture.getJSONObject("afterCancel"), retainedAfterCancel = afterCancel.getJSONObject("retainedVoiceTarget");
+        assertEquals(0, inputAttempts.get()); assertTrue(submittedInputs.isEmpty());
         assertEquals("The stale controls belong to the same connection", beforeStart.getLong("connectionGeneration"), afterCancel.getLong("connectionGeneration"));
         assertTrue("Same-thread idle/active/idle advances the Start fence", afterCancel.getLong("idleTargetRevision") > beforeStart.getLong("idleTargetRevision"));
         assertTrue("Same-thread idle/active/idle advances the release fence",
             retainedAfterCancel.getLong("revision") > beforeStart.getJSONObject("retainedVoiceTarget").getLong("revision"));
-        screenshot("cancelled-with-target-retained");
 
         // The old inflated views still own the original PendingIntents; neither may act on this new idle state.
         int captureAfterCancel = supplied.get();
@@ -530,12 +497,99 @@ public class NativeVoiceE2eTest {
         assertUnchangedRetainedIdle(afterCancel, afterStaleNext);
         assertEquals("Stale Next must not open capture", captureAfterCancel, supplied.get());
 
-        RetainedNotificationControls freshControls = retainedNotificationControls(context, sourceTitle, originalControls.postTime);
-        int releaseDelivery = clickNotificationControl(freshControls.next, "fresh retained Next");
+        RetainedNotificationControls freshStartControls = retainedNotificationControls(context, sourceTitle, originalControls.postTime);
+        JSONObject notificationCapture = announcedCaptureAndCancel("notification", "notification-retained-thread", source, sourceTitle, viewed,
+            supplied, announcementPlayed, startCuePlayed, () -> clickNotificationControl(freshStartControls.start, "fresh retained Start"));
+        assertEquals(0, inputAttempts.get()); assertTrue(submittedInputs.isEmpty());
+        RetainedNotificationControls freshReleaseControls = retainedNotificationControls(context, sourceTitle, freshStartControls.postTime);
+        int releaseDelivery = clickNotificationControl(freshReleaseControls.next, "fresh retained Next");
+        JSONObject notificationRelease = assertRetainedRelease(args, notificationCapture.getJSONObject("afterCancel"), "notification");
+        assertEquals(0, inputAttempts.get()); assertTrue(submittedInputs.isEmpty());
+
+        // Recording the visible/default thread creates fresh retention, which the real card bridge must release.
+        JSONObject viewedCapture = announcedCaptureAndCancel("card", "viewed-thread", viewed, viewedTitle, viewed,
+            supplied, announcementPlayed, startCuePlayed, this::clickCardStart);
+        assertEquals(0, inputAttempts.get()); assertTrue(submittedInputs.isEmpty());
+        waitJs("document.querySelector('[aria-label=\"Next voice interaction\"]:not(:disabled)') !== null", 15000);
+        click("[aria-label=\"Next voice interaction\"]");
+        JSONObject cardRelease = assertRetainedRelease(args, viewedCapture.getJSONObject("afterCancel"), "card");
+        assertEquals(0, inputAttempts.get()); assertTrue(submittedInputs.isEmpty());
+        assertFalse(phases.contains("submitting"));
+        assertNotEquals(cardCapture.getString("recordingId"), notificationCapture.getString("recordingId"));
+        assertNotEquals(cardCapture.getString("recordingId"), viewedCapture.getString("recordingId"));
+        assertNotEquals(notificationCapture.getString("recordingId"), viewedCapture.getString("recordingId"));
+        return NativeVoiceJson.object("retainedAfterPlayback", retainedAfterPlayback,
+            "captures", new JSONArray().put(cardCapture).put(notificationCapture).put(viewedCapture),
+            "releases", new JSONArray().put(notificationRelease).put(cardRelease), "inputPresentationEvents", submittedInputs.size(),
+            "notification", originalControls.evidence,
+            "notificationServiceDeliveries", new JSONArray(new int[] { staleStartDelivery, staleNextDelivery, notificationCapture.getInt("serviceDelivery"), releaseDelivery }),
+            "afterStaleStart", select(afterStaleStart, "phase", "active", "idleTargetRevision", "retainedVoiceTarget"),
+            "afterStaleNext", select(afterStaleNext, "phase", "active", "idleTargetRevision", "retainedVoiceTarget"));
+    }
+    private interface VoiceStart { int run() throws Exception; }
+    private int clickCardStart() throws Exception {
+        waitJs("document.querySelector('[aria-label=\"Start voice recording\"]:not(:disabled)') !== null", 15000);
+        click("[aria-label=\"Start voice recording\"]");
+        return -1;
+    }
+    private JSONObject announcedCaptureAndCancel(String surface, String screenshotLabel, String target, String title, String viewed,
+        AtomicInteger supplied, AtomicBoolean announcementPlayed, AtomicBoolean startCuePlayed, VoiceStart start) throws Exception {
+        int captureBefore = supplied.get(), firstPhase = phases.size();
+        announcementPlayed.set(false); startCuePlayed.set(false);
+        NativeVoiceAudio audio = runtimeAudio(runtime);
+        CountDownLatch primingBlocked = audio.holdNextPlaybackForTest();
+        int serviceDelivery = start.run();
+        await(() -> runtime.snapshot().optString("phase").equals("announcing"), 15000, "retained manual start announcing its destination");
+        // The bounded real fixture PCM fits the stopped track; this latch proves it ended and drain priming is blocked.
+        assertTrue("Completed announcement PCM must reach the held AudioTrack drain", primingBlocked.await(15, TimeUnit.SECONDS));
+        AudioTrack announcementTrack = audio.trackForTest(); assertNotNull(announcementTrack);
+        assertEquals(AudioTrack.PLAYSTATE_STOPPED, announcementTrack.getPlayState());
+        assertEquals("announcing", runtime.snapshot().getString("phase"));
+        JSONObject announced = runtime.snapshot().getJSONObject("active");
+        assertEquals(target, announced.getString("recognitionThreadId")); assertEquals(title, announced.getString("recognitionThreadTitle"));
+        assertTrue("The announcement precedes recording allocation", announced.isNull("recording"));
+        assertEquals("Held announcement must not open microphone capture", captureBefore, supplied.get());
+        assertTrue("Held announcement cannot advance to the cue", phases.lastIndexOf("arming") < firstPhase);
+        waitJs("document.querySelector('.voice-card-sub')?.textContent.includes('Announcing thread…') === true", 15000);
+        assertEquals("false", js("document.querySelector('[aria-label=\"Next voice interaction\"]') !== null"));
+        screenshot("announcing-" + screenshotLabel);
+        assertEquals(0L, announcementTrack.getPlaybackHeadPosition() & 0xffffffffL);
+        // Release the real track; runtime capture must wait for real playback drain and the real start cue.
+        announcementTrack.play();
+        await(() -> runtime.snapshot().optString("phase").equals("listening") && phases.lastIndexOf("listening") >= firstPhase && supplied.get() > captureBefore,
+            45000, "recording after announcement and cue");
+        assertTrue("The announcement's AudioTrack played", announcementPlayed.get());
+        assertTrue("The start cue's AudioTrack played", startCuePlayed.get());
+        List<String> phaseHistory = new java.util.ArrayList<>(phases), capturePhases = phaseHistory.subList(firstPhase, phaseHistory.size());
+        int announcing = capturePhases.indexOf("announcing"), arming = capturePhases.indexOf("arming"), listening = capturePhases.indexOf("listening");
+        assertTrue("Announcement, cue and capture must remain ordered: " + capturePhases, announcing >= 0 && arming > announcing && listening > arming);
+        JSONObject recording = runtime.snapshot().getJSONObject("active");
+        assertEquals(target, recording.getString("recognitionThreadId")); assertEquals(title, recording.getString("recognitionThreadTitle"));
+        assertFalse(recording.getBoolean("automatic"));
+        assertEquals(viewed, runtime.snapshot().getJSONObject("foreground").getString("threadId"));
+        screenshot("recording-" + screenshotLabel);
+        waitJs("document.querySelector('[aria-label=\"Cancel voice recording\"]') !== null", 15000);
+        click("[aria-label=\"Cancel voice recording\"]");
+        await(() -> idleVoice(runtime.snapshot()) && runtime.snapshot().optJSONObject("actions").optBoolean("canReleaseRetainedTarget"),
+            15000, "cancelled recording settled with retained target");
+        JSONObject afterCancel = runtime.snapshot(), retainedAfterCancel = afterCancel.getJSONObject("retainedVoiceTarget");
+        assertEquals(target, retainedAfterCancel.getString("threadId")); assertEquals(title, retainedAfterCancel.getString("threadTitle"));
+        assertTrue(afterCancel.isNull("recordingRecovery"));
+        screenshot("cancelled-" + screenshotLabel);
+        return NativeVoiceJson.object("surface", surface, "serviceDelivery", serviceDelivery,
+            "recognitionThreadId", recording.getString("recognitionThreadId"), "recognitionThreadTitle", recording.getString("recognitionThreadTitle"),
+            "announcedTitle", announced.getString("recognitionThreadTitle"), "recordingId", recording.getJSONObject("recording").getString("id"),
+            "announcementPlayback", announcementPlayed.get(), "startCuePlayback", startCuePlayed.get(),
+            "phases", new JSONArray(capturePhases), "captureChunks", supplied.get() - captureBefore,
+            "afterCancel", select(afterCancel, "phase", "active", "connectionGeneration", "idleTargetRevision", "retainedVoiceTarget", "recordingRecovery", "queue", "actions"));
+    }
+    private JSONObject assertRetainedRelease(Bundle args, JSONObject beforeRelease, String surface) throws Exception {
+        String viewed = required(args, "secondThreadId"), viewedTitle = required(args, "secondThreadTitle");
+        String viewedDraft = required(args, "secondDraftText"), server = required(args, "serverOrigin");
         await(() -> idleVoice(runtime.snapshot()) && runtime.snapshot().isNull("retainedVoiceTarget") &&
             !runtime.snapshot().optJSONObject("actions").optBoolean("canReleaseRetainedTarget"), 15000, "idle Next released only the retained target");
         JSONObject released = runtime.snapshot();
-        assertTrue(released.getLong("idleTargetRevision") > afterCancel.getLong("idleTargetRevision"));
+        assertTrue(released.getLong("idleTargetRevision") > beforeRelease.getLong("idleTargetRevision"));
         assertEquals(viewed, released.getJSONObject("foreground").getString("threadId"));
         assertEquals(viewed, released.getJSONObject("settings").getString("voiceThreadId"));
         assertFalse(released.getJSONObject("settings").getBoolean("pinDefaultVoiceThread"));
@@ -544,20 +598,15 @@ public class NativeVoiceE2eTest {
         assertEquals("false", js("document.querySelector('[aria-label=\"Next voice interaction\"]') !== null"));
         assertEquals("true", js("document.querySelector('[data-testid=\"composer\"] textarea')?.value === " + JSONObject.quote(viewedDraft)));
         boolean viewedDraftPreserved = awaitServerDraft(server, viewed, viewedDraft, 15000);
-        assertTrue(viewedDraftPreserved); assertEquals(0, inputAttempts.get()); assertTrue(submittedInputs.isEmpty());
+        boolean sourceDraftPreserved = awaitServerDraft(server, required(args, "threadId"), required(args, "draftText"), 15000);
+        assertTrue(viewedDraftPreserved); assertTrue(sourceDraftPreserved);
         assertFalse(phases.contains("submitting"));
-        screenshot("idle-next-released-target");
-        return NativeVoiceJson.object("retainedAfterPlayback", retainedAfterPlayback, "retainedAfterCancel", retainedAfterCancel,
-            "recognitionThreadId", recording.getString("recognitionThreadId"), "announcedTitle", announced.getString("recognitionThreadTitle"),
-            "announcementPlayback", announcementPlayed.get(), "startCuePlayback", startCuePlayed.get(),
+        screenshot(surface + "-next-released-target");
+        return NativeVoiceJson.object("surface", surface, "retainedBeforeRelease", beforeRelease.getJSONObject("retainedVoiceTarget"),
             "retainedAfterRelease", released.opt("retainedVoiceTarget"), "releasedIdleTargetRevision", released.getLong("idleTargetRevision"),
-            "cancelledIdleTargetRevision", afterCancel.getLong("idleTargetRevision"), "foregroundThreadId", released.getJSONObject("foreground").getString("threadId"),
+            "cancelledIdleTargetRevision", beforeRelease.getLong("idleTargetRevision"), "foregroundThreadId", released.getJSONObject("foreground").getString("threadId"),
             "voiceThreadId", released.getJSONObject("settings").getString("voiceThreadId"), "pinDefaultVoiceThread", released.getJSONObject("settings").getBoolean("pinDefaultVoiceThread"),
-            "secondDraftPreserved", viewedDraftPreserved, "inputPresentationEvents", submittedInputs.size(),
-            "notification", originalControls.evidence,
-            "notificationServiceDeliveries", new JSONArray(new int[] { startDelivery, staleStartDelivery, staleNextDelivery, releaseDelivery }),
-            "afterStaleStart", select(afterStaleStart, "phase", "active", "idleTargetRevision", "retainedVoiceTarget"),
-            "afterStaleNext", select(afterStaleNext, "phase", "active", "idleTargetRevision", "retainedVoiceTarget"));
+            "secondDraftPreserved", viewedDraftPreserved, "sourceDraftPreserved", sourceDraftPreserved);
     }
     private static void assertUnchangedRetainedIdle(JSONObject expected, JSONObject actual) throws Exception {
         assertTrue("A stale notification must leave voice idle", idleVoice(actual));

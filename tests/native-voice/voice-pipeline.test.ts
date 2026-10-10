@@ -275,7 +275,9 @@ describe("native voice production pipeline with loopback providers", () => {
       const pairingCode = app.authentication.createPairing({ kind: "management" }).token;
       const text = `voice fixture reply ${mode} ${scenario}`;
       // Give the real playback action a usable window even on software emulators.
-      await speech.configure({ transcripts: [text, ""], asrDelayMs: 0, ttsDurationSeconds: scenario === "record" || scenario === "next" ? 12 : 1, reset: true });
+      // This case uses 100ms fixture speech (reply and announcements) so held announcement PCM fits the 200ms buffer.
+      const ttsDurationSeconds = scenario === "retained-target" ? 0.1 : scenario === "record" || scenario === "next" ? 12 : 1;
+      await speech.configure({ transcripts: [text, ""], asrDelayMs: 0, ttsDurationSeconds, reset: true });
       const before = app.model.requests.length;
       const ttsBefore = (await speech.observations()).speech.length;
       const args = { serverOrigin: app.url, speechEndpoint: speech.endpoint, speechToken: speech.token, pairingCode, threadId, threadTitle, mode, scenario,
@@ -331,20 +333,40 @@ describe("native voice production pipeline with loopback providers", () => {
         }
         if (scenario === "retained-target") {
           const canonical = threadInputContextSchema.parse(await app.json(`/api/threads/${threadId}/input-context`));
+          const viewedCanonical = threadInputContextSchema.parse(await app.json(`/api/threads/${secondThreadId!}/input-context`));
           expect(evidence.retainedTarget).toMatchObject({
             retainedAfterPlayback: { threadId, threadTitle: canonical.threadTitle },
-            retainedAfterCancel: { threadId, threadTitle: canonical.threadTitle },
-            recognitionThreadId: threadId, announcedTitle: canonical.threadTitle,
-            announcementPlayback: true, startCuePlayback: true, retainedAfterRelease: null,
-            foregroundThreadId: secondThreadId, voiceThreadId: secondThreadId, pinDefaultVoiceThread: false,
-            secondDraftPreserved: true, inputPresentationEvents: 0,
+            inputPresentationEvents: 0,
             notification: { title: canonical.threadTitle, startLabel: "Start", startEnabled: true,
               stopVisible: false, nextLabel: "Next", nextEnabled: true },
           });
-          expect(evidence.retainedTarget.releasedIdleTargetRevision).toBeGreaterThan(evidence.retainedTarget.cancelledIdleTargetRevision);
+          const captures = evidence.retainedTarget.captures;
+          expect(captures).toHaveLength(3);
+          for (const [index, surface, target, title] of [[0, "card", threadId, canonical.threadTitle],
+            [1, "notification", threadId, canonical.threadTitle], [2, "card", secondThreadId, viewedCanonical.threadTitle]] as const) {
+            const capture = captures[index];
+            expect(capture).toMatchObject({ surface, recognitionThreadId: target, recognitionThreadTitle: title, announcedTitle: title,
+              announcementPlayback: true, startCuePlayback: true,
+              afterCancel: { phase: "idle", active: null, recordingRecovery: null, retainedVoiceTarget: { threadId: target, threadTitle: title } } });
+            expect(capture.captureChunks).toBeGreaterThan(0);
+            expect(capture.phases.indexOf("announcing")).toBeGreaterThanOrEqual(0);
+            expect(capture.phases.indexOf("arming")).toBeGreaterThan(capture.phases.indexOf("announcing"));
+            expect(capture.phases.indexOf("listening")).toBeGreaterThan(capture.phases.indexOf("arming"));
+          }
+          expect(new Set(captures.map((capture: { recordingId: string }) => capture.recordingId)).size).toBe(3);
+          const releases = evidence.retainedTarget.releases;
+          expect(releases).toHaveLength(2);
+          for (const [index, surface, target, title] of [[0, "notification", threadId, canonical.threadTitle],
+            [1, "card", secondThreadId, viewedCanonical.threadTitle]] as const) {
+            const release = releases[index];
+            expect(release).toMatchObject({ surface, retainedBeforeRelease: { threadId: target, threadTitle: title }, retainedAfterRelease: null,
+              foregroundThreadId: secondThreadId, voiceThreadId: secondThreadId, pinDefaultVoiceThread: false,
+              sourceDraftPreserved: true, secondDraftPreserved: true });
+            expect(release.releasedIdleTargetRevision).toBeGreaterThan(release.cancelledIdleTargetRevision);
+          }
           for (const stale of [evidence.retainedTarget.afterStaleStart, evidence.retainedTarget.afterStaleNext]) {
-            expect(stale).toMatchObject({ phase: "idle", active: null, idleTargetRevision: evidence.retainedTarget.cancelledIdleTargetRevision,
-              retainedVoiceTarget: evidence.retainedTarget.retainedAfterCancel });
+            expect(stale).toMatchObject({ phase: "idle", active: null, idleTargetRevision: captures[0].afterCancel.idleTargetRevision,
+              retainedVoiceTarget: captures[0].afterCancel.retainedVoiceTarget });
           }
           const deliveries: number[] = evidence.retainedTarget.notificationServiceDeliveries;
           expect(deliveries).toHaveLength(4);
@@ -356,7 +378,8 @@ describe("native voice production pipeline with loopback providers", () => {
           expect(evidence.phases.indexOf("listening")).toBeGreaterThan(evidence.phases.indexOf("arming"));
           expect(evidence.phases).not.toContain("submitting");
           const observations = await speech.observations();
-          expect(observations.speech.filter(request => request.text === `Replying to ${canonical.threadTitle}.`)).toHaveLength(1);
+          expect(observations.speech.filter(request => request.text === `Replying to ${canonical.threadTitle}.`)).toHaveLength(2);
+          expect(observations.speech.filter(request => request.text === `Replying to ${viewedCanonical.threadTitle}.`)).toHaveLength(1);
           expect(observations.transcriptions).toHaveLength(0);
           const source = await app.thread(threadId), viewed = await app.thread(secondThreadId!);
           expect(viewed.draft.text).toBe(args.secondDraftText);
