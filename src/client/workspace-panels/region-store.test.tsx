@@ -13,7 +13,6 @@ import {
 } from "./region-persistence.js";
 import {
   PanelRegionStore,
-  installPanelRegionStorageSync,
   usePanelRegions,
 } from "./region-store.js";
 import { defaultRegionLayout, MAX_TERMINAL_TABS } from "./regions.js";
@@ -555,81 +554,6 @@ describe("PanelRegionStore persistence", () => {
     expect(store.open("files")).toBe(false);
     expect(store.toggle("workpads")).toBe(false);
     expect(store.open("tasks")).toBe(true);
-  });
-});
-
-describe("PanelRegionStore cross-tab sync", () => {
-  it("applies another tab's device layout without writing it back", () => {
-    const { storage } = memoryStorage();
-    const store = createStore(storage);
-    store.open("files");
-    store.maximize("files");
-    storage.setItem.mockClear();
-    const listener = vi.fn();
-    store.subscribe(listener);
-    const other = defaultRegionLayout();
-    expect(
-      store.applyStorageEvent(
-        PANEL_REGIONS_STORAGE_KEY,
-        serializeRegionLayout({ ...other, loaded: ["tasks"], shown: { ...other.shown, right: "tasks" } }),
-      ),
-    ).toBe(true);
-    expect(listener).toHaveBeenCalled();
-    expect(store.getSnapshot().visible).toEqual(["chat", "tasks"]);
-    // Files is gone in the other tab, so its Maximize ends here.
-    expect(store.maximized()).toBeNull();
-    expect(storage.setItem).not.toHaveBeenCalled();
-    store.open("tasks", { focus: false });
-    expect(storage.setItem).not.toHaveBeenCalled();
-  });
-
-  it("ignores invalid values and unrelated keys, and resets for a removed key", () => {
-    const store = createStore();
-    store.open("files");
-    expect(store.applyStorageEvent(PANEL_REGIONS_STORAGE_KEY, "{")).toBe(false);
-    expect(store.applyStorageEvent("unrelated", "{}")).toBe(false);
-    expect(store.applyStorageEvent(null, null)).toBe(false);
-    expect(store.isLoaded("files")).toBe(true);
-    expect(store.applyStorageEvent(PANEL_REGIONS_STORAGE_KEY, null)).toBe(true);
-    expect(store.isLoaded("files")).toBe(false);
-  });
-
-  it("applies another tab's Terminals to an existing thread store", () => {
-    const root = createStore(memoryStorage().storage, { threadId: null });
-    const one = root.forThread("thread-1");
-    const key = threadPanelRegionsStorageKey("thread-1");
-    const terminals = {
-      tabs: [{ terminalId: "x", producerId: "00000000-0000-4000-8000-000000000042" }],
-      activeTerminalId: "x",
-    };
-    expect(root.applyStorageEvent(key, serializeThreadTerminals("thread-1", terminals))).toBe(true);
-    expect(one.terminalPanel()).toEqual({ threadId: "thread-1", ...terminals });
-    expect(root.applyStorageEvent(key, serializeThreadTerminals("thread-2", null))).toBe(false);
-    expect(
-      root.applyStorageEvent(threadPanelRegionsStorageKey("thread-9"), serializeThreadTerminals("thread-9", null)),
-    ).toBe(false);
-    one.openTerminalTab("x");
-    expect(root.applyStorageEvent(key, null)).toBe(true);
-    expect(one.terminalPanel()).toBeUndefined();
-    expect(one.getSnapshot().focusRequest).toBeUndefined();
-  });
-
-  it("installs a storage listener", () => {
-    const store = createStore();
-    const target = new EventTarget();
-    const dispose = installPanelRegionStorageSync(store, target as unknown as Window);
-    const layout = defaultRegionLayout();
-    const event = Object.assign(new Event("storage"), {
-      key: PANEL_REGIONS_STORAGE_KEY,
-      newValue: serializeRegionLayout({ ...layout, loaded: ["files"], shown: { ...layout.shown, right: "files" } }),
-    });
-    target.dispatchEvent(event);
-    expect(store.isVisible("files")).toBe(true);
-    dispose();
-    target.dispatchEvent(
-      Object.assign(new Event("storage"), { key: PANEL_REGIONS_STORAGE_KEY, newValue: null }),
-    );
-    expect(store.isVisible("files")).toBe(true);
   });
 });
 

@@ -11,7 +11,7 @@ presentation state: no server or protocol state is involved. The code is under
 | `regions.ts` | The pure model: kinds, regions, state, queries, and every layout operation. |
 | `region-geometry.ts` | Size hints, region boxes and dividers, and make-room. |
 | `region-persistence.ts` | Storage keys, strict parsing, and the one-time migration from the previous layout keys. |
-| `region-store.ts` | `PanelRegionStore`: the device layout plus each thread's Terminals, persistence, cross-tab sync, focus requests, intents, and the workspace dirty registry. |
+| `region-store.ts` | `PanelRegionStore`: the device layout plus each thread's Terminals, persistence, focus requests, intents, and the workspace dirty registry. |
 | `PanelLayout.tsx` | One thread's workbench: the bar, the stage, retained panel content, header controls, announcements, and the phone layout. |
 | `RegionStage.tsx` | Positions the visible panels and dividers from the geometry. |
 | `PanelToolbar.tsx`, `PanelChrome.tsx`, `TerminalsPanel.tsx` | The workbench bar, the shared panel header, and the Terminals header and body. |
@@ -147,10 +147,8 @@ dropped on its own. Storage that throws reads as empty, writes are best
 effort, and a value is written only when it changes. On load, Files, Workpads,
 or Tasks without a registered tenant are closed.
 
-Other browser tabs stay in step through `storage` events. A device layout
-write replaces this tab's saved parts, keeping its Maximize (unless that
-panel is no longer loaded) and recency. A thread's write replaces that
-thread's Terminals when its store exists. Nothing is written back.
+Each browser tab keeps its layout in memory and does not follow other tabs'
+writes, so the most recent write is what a reload or a new tab starts from.
 
 ### Migration
 

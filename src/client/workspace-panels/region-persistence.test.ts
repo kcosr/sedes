@@ -11,7 +11,6 @@ import {
   parseThreadTerminals,
   serializeRegionLayout,
   serializeThreadTerminals,
-  threadIdForPanelRegionsStorageKey,
   threadPanelRegionsStorageKey,
   type RegionStorage,
 } from "./region-persistence.js";
@@ -556,12 +555,9 @@ describe("loadThreadTerminals", () => {
 });
 
 describe("storage keys", () => {
-  it("encodes and decodes thread IDs", () => {
+  it("encodes thread IDs in keys", () => {
     const key = threadPanelRegionsStorageKey("thread/1 ü");
     expect(key).toBe("sedes-thread-panel-regions@1:thread%2F1%20%C3%BC");
-    expect(threadIdForPanelRegionsStorageKey(key)).toBe("thread/1 ü");
-    expect(threadIdForPanelRegionsStorageKey(PANEL_REGIONS_STORAGE_KEY)).toBeUndefined();
-    expect(threadIdForPanelRegionsStorageKey("sedes-thread-panel-regions@1:%E0")).toBeUndefined();
     expect(legacyThreadLayoutStorageKey("a b")).toBe("sedes-thread-panel-instance-layout@4:a%20b");
   });
 });

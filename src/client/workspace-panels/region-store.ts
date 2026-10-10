@@ -12,12 +12,8 @@ import {
   PANEL_REGIONS_STORAGE_KEY,
   loadRegionLayout,
   loadThreadTerminals,
-  parseRegionLayout,
-  parseThreadTerminals,
-  regionLayoutFromPersisted,
   serializeRegionLayout,
   serializeThreadTerminals,
-  threadIdForPanelRegionsStorageKey,
   threadPanelRegionsStorageKey,
   type RegionStorage,
 } from "./region-persistence.js";
@@ -26,14 +22,12 @@ import {
   activateTerminalTab as activateTerminalTabIn,
   closePanel,
   closeTerminalTab as closeTerminalTabIn,
-  defaultRegionLayout,
   effectiveMaximized,
   isEdgeRegion,
   isExtended,
   isLoaded,
   isPanelKind,
   isRegionId,
-  isSharedPanelKind,
   isShown,
   loadedPanels,
   maximizePanel,
@@ -582,56 +576,6 @@ export class PanelRegionStore {
   }
 
   // -------------------------------------------------------------------------
-  // Cross-tab sync
-
-  /**
-   * Applies another browser tab's write (a `storage` event). The device
-   * layout replaces this one's saved parts; a thread's Terminals replace that
-   * thread's, when its store exists. Invalid values are ignored. Nothing is
-   * written back.
-   */
-  applyStorageEvent(key: string | null, newValue: string | null): boolean {
-    if (key === null) return false;
-    const shared = this.#shared;
-    if (key === PANEL_REGIONS_STORAGE_KEY) {
-      const persisted =
-        newValue === null ? defaultRegionLayout() : parseRegionLayout(newValue);
-      if (!persisted) return false;
-      const layout = restrictToAvailable(
-        regionLayoutFromPersisted(persisted, {
-          maximized:
-            shared.layout.maximized !== null &&
-            isSharedPanelKind(shared.layout.maximized) &&
-            !persisted.loaded.includes(shared.layout.maximized)
-              ? null
-              : shared.layout.maximized,
-          recency: shared.layout.recency,
-        }),
-        shared.available,
-      );
-      shared.persistedLayout = newValue ?? undefined;
-      shared.layout = layout;
-      this.#publishShared();
-      return true;
-    }
-    const threadId = threadIdForPanelRegionsStorageKey(key);
-    const store = threadId === undefined ? undefined : shared.threadStores.get(threadId);
-    if (!store) return false;
-    const parsed =
-      newValue === null ? { terminals: null } : parseThreadTerminals(store.threadId, newValue);
-    if (!parsed) return false;
-    store.#persistedTerminals = newValue ?? undefined;
-    store.#terminals = parsed.terminals;
-    if (
-      store.#focusRequest?.kind === "terminals" &&
-      parsed.terminals === null
-    )
-      store.#focusRequest = undefined;
-    store.#publishOwn();
-    return true;
-  }
-
-  // -------------------------------------------------------------------------
   // Internals
 
   #canLoad(kind: PanelKind): boolean {
@@ -838,16 +782,4 @@ function restrictToAvailable(
 
 export function usePanelRegions(store: PanelRegionStore): PanelRegionSnapshot {
   return useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
-}
-
-/** Keeps a store in step with other browser tabs' panel region writes. */
-export function installPanelRegionStorageSync(
-  store: Pick<PanelRegionStore, "applyStorageEvent">,
-  target: Pick<Window, "addEventListener" | "removeEventListener"> = window,
-): () => void {
-  const listener = (event: StorageEvent) => {
-    store.applyStorageEvent(event.key, event.newValue);
-  };
-  target.addEventListener("storage", listener);
-  return () => target.removeEventListener("storage", listener);
 }

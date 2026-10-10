@@ -57,16 +57,6 @@ export function threadPanelRegionsStorageKey(threadId: string): string {
   return `${THREAD_PANEL_REGIONS_STORAGE_PREFIX}${encodeURIComponent(threadId)}`;
 }
 
-/** The thread a per-thread key belongs to, or undefined for any other key. */
-export function threadIdForPanelRegionsStorageKey(key: string): string | undefined {
-  if (!key.startsWith(THREAD_PANEL_REGIONS_STORAGE_PREFIX)) return undefined;
-  try {
-    return decodeURIComponent(key.slice(THREAD_PANEL_REGIONS_STORAGE_PREFIX.length));
-  } catch {
-    return undefined;
-  }
-}
-
 /** Pre-region keys, read once by migration. */
 export const LEGACY_PANEL_STORAGE_KEYS = Object.freeze({
   files: "sedes-workspace-files-panel-state@1",
