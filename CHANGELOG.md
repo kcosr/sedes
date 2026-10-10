@@ -608,18 +608,10 @@
   gets the full width.
   ([#39](https://github.com/kcosr/sedes/pull/39))
 
-- Side panels keep one size in every thread. Resizing Files, Workpads, Tasks,
-  or Terminals resizes it in every thread's layout, and opening, collapsing,
-  or closing another panel leaves its width alone; Chat takes the remaining
-  space. Panels tabbed together or split against each other keep their
-  per-thread size. Layouts saved before the upgrade keep their sizes until you
-  open, dock, or resize the panel.
+- Side panels keep one size in every thread; Chat takes the remaining space.
   ([#37](https://github.com/kcosr/sedes/pull/37))
 
-- Workpads has its own button in the thread workbench bar, beside **Tasks**,
-  and behaves like it: select it to open, show, or close Workpads. Tasks and
-  Workpads no longer appear in the **Panels** menu or among the open-panel
-  shortcuts; the menu keeps Chat, Files, and Terminals.
+- Workpads has its own button in the thread workbench bar, like **Tasks**.
   ([#37](https://github.com/kcosr/sedes/pull/37))
 
 - The Tasks, Files, Workpads, and Terminals panel headers use the chat
@@ -628,13 +620,6 @@
 
 - The docked Tasks header shows the thread environment's color, like the other
   panel headers.
-  ([#37](https://github.com/kcosr/sedes/pull/37))
-
-- Tasks and Workpads keep one place in every thread, so switching threads no
-  longer swaps them. They are the outer columns, on the edges and in the order
-  you last set by opening, closing, or docking either one; Chat, Files, and
-  Terminals arrange inside them per thread, so a bottom Terminals panel spans
-  only Chat and Files.
   ([#37](https://github.com/kcosr/sedes/pull/37))
 
 - A project's Tasks and Workpads are shared by every location of the project,
@@ -709,12 +694,9 @@
 - Qualify Codex 0.160.0 and preserve the managed TUI inline transcript despite
   the upstream fullscreen default. ([#27](https://github.com/kcosr/sedes/pull/27))
 
-- In a thread, Tasks docks beside Chat as a workspace panel instead of a
-  floating card, and resizes, collapses, docks on another edge, and closes
-  like Files and Workpads. Phones keep a bottom sheet. The card's pin is
-  gone. Docked Tasks opens at about a third of the stage, and its button keeps
-  an outline while Tasks is collapsed, by hand or to make room for another
-  panel.
+- In a thread, Tasks is a workspace panel beside Chat instead of a floating
+  card, like Files and Workpads. Phones keep a bottom sheet. The card's pin is
+  gone. Tasks opens at about a third of the stage.
 
 - One scope control, **Thread**, **Project**, **Global**, and **All**,
   replaces the old view switcher and its project and thread picker. Each view
@@ -1125,9 +1107,8 @@
 
 - Workspace panels no longer squeeze below their minimum widths when several
   are open: Chat keeps 360px, Tasks 300px, and Files and Workpads 320px while
-  there is room. A panel opened or restored where the visible panels no longer
-  fit collapses the least recently used side panels instead, with an
-  announcement.
+  there is room; otherwise the least recently used edge panels are hidden until
+  there is room again, with an announcement.
 
 - **New group…** now leads the **Move to group** picker, under the search,
   instead of sitting below every group.
@@ -1403,8 +1384,9 @@
   another thread or project…**; use All, Include thread workpads and the
   Archived section instead. ([#65](https://github.com/kcosr/sedes/pull/65))
 
-- The Ctrl+Shift+Arrow (Command+Shift+Arrow) panel docking shortcut; dock from
-  the panel menu. Ctrl+Shift+Up/Down now always moves between sidebar threads.
+- The Ctrl+Shift+Arrow (Command+Shift+Arrow) panel docking shortcut; move
+  panels with the panel menu's **Move to**. Ctrl+Shift+Up/Down now always
+  moves between sidebar threads.
   ([#63](https://github.com/kcosr/sedes/pull/63))
 
 - **Remind now** is gone; pin the thread and add a task instead. Snooze keeps
