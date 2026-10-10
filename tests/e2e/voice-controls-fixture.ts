@@ -152,10 +152,13 @@ export async function installVoiceFixture(page: Page): Promise<void> {
             if (args.interactionId !== current.active?.id || args.expectedConnectionGeneration !== current.connectionGeneration ||
                 !["synthesizing", "speaking"].includes(current.phase)) throw new Error("The playback changed.");
             queuedReplays.clear();
-            fixture.publish({ phase: "idle", active: null, actions: { ...initial.actions }, queue: { ...current.queue, count: 0, bytes: 0 } });
+            fixture.publish({ phase: "idle", active: null,
+              actions: { ...initial.actions, canReleaseRetainedTarget: current.retainedVoiceTarget !== null && !current.settings.pinDefaultVoiceThread },
+              queue: { ...current.queue, count: 0, bytes: 0 } });
           } else if (method === "stopCurrentInteraction" || method === "skipCurrentPlayback") {
             if (args.interactionId !== current.active?.id || args.expectedConnectionGeneration !== current.connectionGeneration) throw new Error("The interaction changed.");
-            fixture.publish({ phase: "idle", active: null, actions: { ...initial.actions } });
+            fixture.publish({ phase: "idle", active: null,
+              actions: { ...initial.actions, canReleaseRetainedTarget: current.retainedVoiceTarget !== null && !current.settings.pinDefaultVoiceThread } });
           } else if (["retryRecordingRecognition", "sendRecoveredRecording", "discardRecording", "copyRecognizedRecordingText", "readRecognizedRecordingText"].includes(method)) {
             const saved = current.recordingRecovery;
             if (!saved || args.recordingId !== saved.recordingId || args.expectedRecoveryRevision !== saved.revision || args.expectedConnectionGeneration !== current.connectionGeneration)

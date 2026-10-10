@@ -1265,8 +1265,10 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
             if (active != null || blockingDictation()) throw new IllegalStateException("voice_busy");
             String target = NativeVoiceJson.nullableString(selected, "threadId", 512), title = NativeVoiceJson.nullableString(selected, "threadTitle", 512);
             if (target == null) throw new IllegalStateException("voice_target_required");
-            // The WebView sends its resolved target explicitly; match retention before activating this new item.
-            boolean retained = retainedVoiceTarget != null && !settings.flag("pinDefaultVoiceThread") && target.equals(retainedVoiceTarget.optString("threadId"));
+            // Retention requires revalidation only when it supplies the fallback, not when
+            // publish() merely remembered the visible or explicitly selected destination.
+            boolean retained = nextRecordingTarget == null && !settings.flag("pinDefaultVoiceThread") &&
+                !(foregroundVisible && foregroundThread != null) && retainedVoiceTarget != null && target.equals(retainedVoiceTarget.optString("threadId"));
             nextRecordingTarget = null;
             Active item = new Active(target, title); item.manualInputValidation = retained;
             item.backgroundControlStart = source == ManualStartOrigin.BACKGROUND_CONTROL;
@@ -1386,10 +1388,19 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
     private void sendRecording(JSONObject args) {
         NativeVoiceJson.keys(args, "recordingId");
         Active item = requireRecording(NativeVoiceJson.string(args, "recordingId", 160));
-        if (item.finishReason == NativeVoiceRecording.FinishReason.SEND) return;
-        if (!phase.equals("listening") || item.captureStopping || item.endpointReached) throw new IllegalStateException("voice_not_listening");
-        if (item.recordingMutationPending) throw new IllegalStateException("recording_operation_pending");
+        synchronized (item.captureLock) {
+            if (item.finishReason == NativeVoiceRecording.FinishReason.SEND || automaticallyFinishingSpeech(item)) return;
+            String blocked = sendRecordingBlockedReason();
+            if (blocked != null) throw new IllegalStateException(blocked);
+        }
         finishCapture(item, NativeVoiceRecording.FinishReason.SEND);
+    }
+    /** Called under captureLock, including the gap before an endpoint reaches the owner thread. */
+    private static boolean automaticallyFinishingSpeech(Active item) {
+        if (item.finishReason != null && item.finishReason != NativeVoiceRecording.FinishReason.AUTOMATIC) return false;
+        return item.endpoint == NativeVoiceCapturePolicy.End.SILENCE || item.endpoint == NativeVoiceCapturePolicy.End.MAX_DURATION ||
+            item.finishReason == NativeVoiceRecording.FinishReason.AUTOMATIC &&
+                (item.recognitionFinalized || item.capturePolicy != null && item.capturePolicy.sawSpeech());
     }
     private void scheduleLongDictationTimeout(Active item) {
         final long deadline = item.longDictationDeadline;
@@ -1721,7 +1732,10 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         if (active != item || item.stopped || item.captureStopping) return;
         synchronized (item.captureLock) {
             if (item.captureStopping) return;
-            if (reason == NativeVoiceRecording.FinishReason.SEND && item.endpointReached) throw new IllegalStateException("voice_not_listening");
+            if (reason == NativeVoiceRecording.FinishReason.SEND && item.endpointReached) {
+                if (automaticallyFinishingSpeech(item)) return;
+                throw new IllegalStateException("voice_not_listening");
+            }
             if (item.recording == null) return;
             item.captureStopping = true; item.finishReason = reason;
             item.recording.beginFinish(reason);
@@ -2616,6 +2630,11 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         if (!policyKnown) return streamFailures == 0 ? "notificationsConnecting" : "notificationsUnavailable";
         return "ready";
     }
+    private String sendRecordingBlockedReason() {
+        if (active == null || active.stopped || active.recordingId == null || !phase.equals("listening") || active.captureStopping || active.endpointReached)
+            return "voice_not_listening";
+        return active.recordingMutationPending ? "recording_operation_pending" : null;
+    }
     private String keepListeningBlockedReason() {
         if (active == null || active.recordingId == null || !phase.equals("listening") || active.captureStopping || active.endpointReached) return "not_capturing";
         if (dictationStorageError) return "storage_unavailable";
@@ -2682,7 +2701,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
                 "canRecordDuringPlayback", canRecordDuringPlayback(),
                 "canRetarget", active != null && phase.equals("listening") && !active.captureStopping && !active.endpointReached && !active.recordingMutationPending,
                 "canSetKeepListening", blocked == null, "keepListeningBlockedReason", blocked,
-                "canSend", active != null && blocked == null,
+                "canSend", sendRecordingBlockedReason() == null,
                 "canResume", binding != null && csrf != null && settings.active() && speechReady() && !sessionStarted && sessionStartId == null),
             "recordingRecovery", recordingRecoveryState(), "recovery", recoveryState(), "errors", NativeVoiceJson.array(errors));
         // Unchanged state is not republished: no bridge event, notification update or media session churn per PCM chunk.

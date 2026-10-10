@@ -1,11 +1,49 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
+import type { Locator, Page } from "@playwright/test";
 import { expect, test } from "./fixtures.js";
 import { capture, createDraftThread, expectNoPageOverflow, fillAndPersistDraft, openWorkspaceDirectory } from "./helpers.js";
 import { loadE2ERunContext } from "./run-context.js";
 import { installVoiceFixture, publishVoiceState, voiceFixtureState } from "./voice-controls-fixture.js";
 
 test.use({ hasTouch: true });
+
+declare global {
+  interface Window { __voiceRepeatTap?: Promise<{ interval: number; target: string | null }> }
+}
+
+/** A real first tap, then a controlled rapid click at the same point after the DOM changes.
+ * Event.timeStamp is not controlled by Playwright's clock; set the repeat interval explicitly
+ * so a slow fixture response cannot turn this into a deliberately late click. */
+async function tapAndRepeatAfterRemoval(page: Page, button: Locator) {
+  await button.evaluate(element => {
+    window.__voiceRepeatTap = new Promise((resolve, reject) => {
+      element.addEventListener("click", raw => {
+        const first = raw as MouseEvent;
+        const observer = new MutationObserver(() => {
+          if (element.isConnected) return;
+          const target = document.elementFromPoint(first.clientX, first.clientY);
+          if (!target) { observer.disconnect(); window.clearTimeout(deadline); reject(new Error("No target at the released action position")); return; }
+          const button = target.closest("button");
+          if (button?.disabled || button?.getAttribute("aria-disabled") === "true") return;
+          observer.disconnect(); window.clearTimeout(deadline);
+          const repeat = new MouseEvent("click", { bubbles: true, cancelable: true, detail: 1, clientX: first.clientX, clientY: first.clientY });
+          Object.defineProperty(repeat, "timeStamp", { value: first.timeStamp + 100 });
+          target.dispatchEvent(repeat);
+          resolve({ interval: repeat.timeStamp - first.timeStamp, target: target.closest("button")?.getAttribute("aria-label") ?? null });
+        });
+        const deadline = window.setTimeout(() => { observer.disconnect(); reject(new Error("Voice action did not unmount")); }, 10000);
+        observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["disabled", "aria-disabled"] });
+      }, { once: true, capture: true });
+    });
+  });
+  await button.tap();
+  const result = await page.evaluate(async () => {
+    try { return await window.__voiceRepeatTap; } finally { delete window.__voiceRepeatTap; }
+  });
+  expect(result?.interval).toBe(100);
+  return result!;
+}
 
 test("playback Record, Next and Stop stay separate on touch while replying to another thread", async ({ page }, testInfo) => {
   const workspace = path.join(loadE2ERunContext().workspacesDirectory, "voice-playback-controls");
@@ -28,7 +66,7 @@ test("playback Record, Next and Stop stay separate on touch while replying to an
   const settings = { ...base.settings, autoListen: false, pinDefaultVoiceThread: true, voiceThreadId: defaultId, voiceThreadTitle: "Pinned thread C" };
   const queue = { count: 2, bytes: 80, droppedCount: 0, droppedReasons: {} };
   const calls = () => page.evaluate(() => window.__voiceFixture.calls.filter(call =>
-    ["recordDuringPlayback", "sendRecording", "skipCurrentPlayback", "stopCurrentInteraction", "stopPlayback", "startManualListen"].includes(call.method)));
+    ["recordDuringPlayback", "sendRecording", "skipCurrentPlayback", "stopCurrentInteraction", "stopPlayback", "startManualListen", "releaseRetainedVoiceTarget"].includes(call.method)));
   const expected: Awaited<ReturnType<typeof calls>> = [];
   const playback = async (id: string, phase: "synthesizing" | "speaking", automatic: boolean) => {
     await publishVoiceState(page, { phase, settings, queue,
@@ -123,21 +161,40 @@ test("playback Record, Next and Stop stay separate on touch while replying to an
     }
   }
   await playback("playback-next", "speaking", true);
-  await toolbar.getByRole("button", { name: "Next voice interaction", exact: true }).tap();
+  await tapAndRepeatAfterRemoval(page, toolbar.getByRole("button", { name: "Next voice interaction", exact: true }));
   expected.push({ method: "skipCurrentPlayback", args: { expectedConnectionGeneration: 1, interactionId: "playback-next" } });
   await expect.poll(calls).toEqual(expected);
   await expect(toolbar.locator(".voice-card-sub")).toContainText("Ready");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  expect(await calls()).toEqual(expected);
   await expect(page).toHaveURL(new RegExp(`${viewedPath}$`, "u"));
   await playback("playback-stop", "speaking", false);
-  await toolbar.getByRole("button", { name: "Stop voice interaction", exact: true }).tap();
+  await tapAndRepeatAfterRemoval(page, toolbar.getByRole("button", { name: "Stop voice interaction", exact: true }));
   expected.push({ method: "stopPlayback", args: { expectedConnectionGeneration: 1, interactionId: "playback-stop" } });
   await expect.poll(calls).toEqual(expected);
   await expect(toolbar.locator(".voice-card-sub")).toContainText("Ready");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  expect(await calls()).toEqual(expected);
   expect(await page.evaluate(() => window.__voiceFixture.state.queue)).toEqual({ ...queue, count: 0, bytes: 0 });
   await expect(toolbar.getByRole("button", { name: "Next voice interaction" })).toHaveCount(0);
   await expect(toolbar.getByRole("button", { name: "Stop voice interaction" })).toHaveCount(0);
   await expect(page).toHaveURL(new RegExp(`${viewedPath}$`, "u"));
   await expect(composer).toHaveValue(draft);
+
+  await page.goto("/settings/voice");
+  expected.length = 0;
+  await playback("unpinned-stop", "speaking", false);
+  await publishVoiceState(page, { settings: { ...settings, pinDefaultVoiceThread: false }, nextRecordingTarget: null,
+    retainedVoiceTarget: { threadId: spokenId, threadTitle: "Spoken thread B", revision: 12 } });
+  const repeat = await tapAndRepeatAfterRemoval(page, toolbar.getByRole("button", { name: "Stop voice interaction", exact: true }));
+  expect(repeat.target).toBe("Next voice interaction");
+  expected.push({ method: "stopPlayback", args: { expectedConnectionGeneration: 1, interactionId: "unpinned-stop" } });
+  await expect.poll(calls).toEqual(expected);
+  await expect(toolbar.getByRole("button", { name: "Next voice interaction", exact: true })).toBeEnabled();
+  await expect(toolbar.locator(".voice-card-title")).toHaveText("Spoken thread B");
+  expect(await page.evaluate(() => window.__voiceFixture.state.retainedVoiceTarget?.threadId)).toBe(spokenId);
+  await expect(page).toHaveURL(/\/settings\/voice$/u);
+  await capture(page, testInfo, "voice-unpinned-after-stop-repeat-480.png");
 });
 
 test("background recording announcements are opt-in and their preparation can be cancelled on a narrow screen", async ({ page }, testInfo) => {
@@ -257,11 +314,12 @@ test("idle navigation follows the viewed thread and only releases a displayed re
   expect(nextBox.x + nextBox.width + 4).toBe(micBox.x);
   await expectNoPageOverflow(page);
   await capture(page, testInfo, "voice-retained-before-release-320.png");
-  await next.tap();
+  await tapAndRepeatAfterRemoval(page, next);
   expected.push({ method: "releaseRetainedVoiceTarget", args: { expectedConnectionGeneration: 1, expectedRetainedRevision: retainedRevision } });
   await expect.poll(calls).toEqual(expected);
   await expect(toolbar.locator(".voice-card-title")).toHaveText("Chosen thread C");
   await expect(next).toHaveCount(0);
+  await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(stop).toHaveCount(0);
   await expect.poll(() => mic.boundingBox()).toEqual(micBox);
   expect(await calls()).toEqual(expected);

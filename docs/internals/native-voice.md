@@ -40,6 +40,9 @@ visible destination, so clearing foreground context on backgrounding does not
 revert to an older voice thread. Explicit pending choices and pinning still take
 priority. Navigation never retargets an active interaction; when it ends with
 the app visible, native reconciles retention to the idle card's destination.
+Remembering a visible thread does not turn its ordinary in-app Start into a
+retained-fallback start. The extra pre/post-cue authority checks apply when
+retention supplies the fallback, or when a background start adds an announcement.
 
 `retainedVoiceTarget` is nullable session state containing a thread ID, a bounded
 nullable title, and a revision. Every new interaction advances its revision,

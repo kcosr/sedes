@@ -166,8 +166,8 @@ expanded-notification **Stop** controls during playback with Auto-listen on and
 a replay queued. Both require an empty queue, no capture or input admission,
 and voice remaining enabled. The notification case delivers its actual
 `PendingIntent` and waits for the service to handle it.
-The `Android response/retained-target` scenario compares the visible card's
-destination with the independently retained background destination. It checks
+The `Android response/retained-target` scenario checks that the visible card and
+notification use the same destination and retain it after leaving the thread. It checks
 that new notification recordings announce their destination, in-app recordings
 skip the announcement, and idle card **Next** releases retention only when
 the card displays that fallback. Card title, route, button state, native
@@ -214,8 +214,9 @@ test app; the caller owns the emulator lifecycle.
 Client tests cover the voice card across application screens and above the
 mobile drawer, its thread-title and phase labels, settings-tile sheet opening,
 body taps opening its thread, the target picker, and current-thread-first
-pickers. Browser checks cover the three fixed action positions, disabled idle
-controls, and visual and keyboard focus order in wide and narrow layouts.
+pickers. Browser checks cover the compact row, stable Stop/Cancel and Record/Send
+positions, hidden unavailable idle actions, conditional playback Next, and visual
+and keyboard focus order in wide and narrow layouts.
 The quick sheet covers mode changes with the speech credential gate,
 Resume, switches, the default voice thread picker and playback filter, and its
 Settings link. Other coverage includes per-binding visibility preferences, recent

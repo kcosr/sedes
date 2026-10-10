@@ -504,8 +504,12 @@
   more space between the status icon and text, an inline destination caret,
   and a blue speaking outline. Idle hides unavailable Next/Stop actions;
   playback hides Next when the queue is empty and Auto-listen is off.
-  Send also finishes ordinary recordings.
+  Send also finishes ordinary recordings, including alongside older saved
+  dictation, and tolerates an automatic speech ending already in progress.
+  The expanded recording notification keeps Send, Cancel, mode, and Rearm accessible.
   Saved-dictation labels truncate within the compact card on narrow screens.
+  Text stays vertically aligned as the destination caret appears, and rapid
+  repeat taps on disappearing actions do not open a thread or release its destination.
   ([#68](https://github.com/kcosr/sedes/pull/68))
 
 - Android voice keeps Record/Send and Stop/Cancel in fixed positions; Keep

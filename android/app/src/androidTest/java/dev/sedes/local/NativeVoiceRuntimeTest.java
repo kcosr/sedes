@@ -117,6 +117,41 @@ public class NativeVoiceRuntimeTest {
                     for (android.app.Notification.Action action : notification.actions) action.actionIntent.cancel();
                 }
             }
+            for (boolean held : new boolean[] { false, true }) {
+                NativeVoiceJson.put(state, "phase", "listening");
+                NativeVoiceJson.put(active, "recording", NativeVoiceJson.object("id", UUID.randomUUID().toString(), "keepListening", held));
+                NativeVoiceJson.put(state.getJSONObject("actions"), "canSend", true);
+                android.app.Notification notification = (android.app.Notification) build.invoke(service, state);
+                try {
+                    assertTrue("Standard templates never overflow", notification.actions == null || notification.actions.length <= 3);
+                    if (held) {
+                        assertNull(notification.bigContentView); assertEquals(2, notification.actions.length);
+                        assertEquals("Cancel", notification.actions[0].title.toString());
+                        assertEquals("Send", notification.actions[1].title.toString());
+                    } else {
+                        assertNotNull(notification.bigContentView);
+                        InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
+                            android.view.View controls = notification.bigContentView.apply(context, null);
+                            int[] ids = { R.id.voice_notification_record, R.id.voice_notification_stop, R.id.voice_notification_mode, R.id.voice_notification_rearm };
+                            String[] labels = { "Send", "Cancel", "Response", "Rearm on" };
+                            for (int i = 0; i < ids.length; i++) {
+                                android.widget.TextView button = controls.findViewById(ids[i]);
+                                assertEquals(labels[i], button.getText().toString());
+                                assertEquals(android.view.View.VISIBLE, button.getVisibility()); assertTrue(button.isEnabled());
+                                assertTrue("Every displayed control has its PendingIntent", button.hasOnClickListeners());
+                            }
+                            assertEquals(android.view.View.GONE, controls.findViewById(R.id.voice_notification_next).getVisibility());
+                        });
+                    }
+                } finally {
+                    notification.contentIntent.cancel();
+                    Method pending = NativeVoiceRuntimeService.class.getDeclaredMethod("pending", String.class, JSONObject.class); pending.setAccessible(true);
+                    for (String action : new String[] { "send", "stop", "skip", "mode", "rearm" })
+                        ((android.app.PendingIntent) pending.invoke(service, action, state)).cancel();
+                }
+            }
+            NativeVoiceJson.put(active, "recording", null);
+            NativeVoiceJson.put(state.getJSONObject("actions"), "canSend", false);
             NativeVoiceJson.put(state.getJSONObject("actions"), "canSkip", true);
             NativeVoiceJson.put(state.getJSONObject("actions"), "canRecordDuringPlayback", true);
             for (String phase : new String[] { "synthesizing", "speaking" }) {
@@ -622,7 +657,9 @@ public class NativeVoiceRuntimeTest {
                     SpeechJob announcement = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(announcement);
                     assertEquals("Replying to Current server title.", announcement.text); f.runtime.drained(announcement.id); f.flush();
                 }
-                if (!source.equals("explicit_app")) { f.takeClientTarget(destination).done(200, current, null); f.flush(); }
+                if (background && !source.equals("explicit_app") || announce && !source.endsWith("app")) {
+                    f.takeClientTarget(destination).done(200, current, null); f.flush();
+                }
                 RecognitionJob recording = f.speech.transcriptions.poll(10, TimeUnit.SECONDS); assertNotNull(recording);
                 f.runtime.captureStarted(recording.captureId); f.flush();
                 assertEquals("Current server title", f.runtime.snapshot().getJSONObject("retainedVoiceTarget").getString("threadTitle"));
@@ -2411,6 +2448,61 @@ public class NativeVoiceRuntimeTest {
                 "threadId", UUID.randomUUID().toString(), "threadTitle", "Late target")));
             assertFalse((boolean) field(active, "adopted")); assertEquals(0L, field(active, "longDictationDeadline"));
             assertEquals(f.target, field(active, "targetId"));
+        }
+    }
+
+    @Test public void ordinarySendRemainsAvailableAlongsideAnOlderHandedOffRecording() throws Exception {
+        try (Fixture f = new Fixture(false, false)) {
+            Object next = field(f.runtime, "active");
+            NativeDictationStore.Recording saved = f.savedRecording(true, false);
+            AtomicReference<NativeDictationStore.Recording> handedOff = new AtomicReference<>();
+            f.onStore(() -> {
+                f.dictations.saveFinalRequest(f.binding, saved.id, NativeVoiceJson.object("mutationId", saved.mutationId, "text", saved.text,
+                    "origin", NativeVoiceJson.object("clientId", f.request.getJSONObject("origin").getString("clientId")), "runningPolicy", NativeVoiceJson.object("mode", "queue")));
+                handedOff.set(f.dictations.markHandedOff(f.binding, saved.id));
+            });
+            f.onOwner(() -> { set(f.runtime, "retainedDictation", handedOff.get()); set(f.runtime, "active", next); });
+            f.recognizing(false);
+            f.onOwner(() -> {
+                set(f.runtime, "phase", "listening"); set(f.runtime, "captureOwner", field(f.runtime, "active"));
+                f.invoke("publish", new Class<?>[0]);
+            });
+            JSONObject state = f.runtime.snapshot();
+            assertEquals("listening", state.getString("phase"));
+            assertEquals(saved.id, state.getJSONObject("recordingRecovery").getString("recordingId"));
+            assertEquals("saved_recording_pending", state.getJSONObject("actions").getString("keepListeningBlockedReason"));
+            assertTrue(state.getJSONObject("actions").getBoolean("canSend"));
+            String id = state.getJSONObject("active").getJSONObject("recording").getString("id");
+            assertNull(f.command("sendRecording", NativeVoiceJson.object("recordingId", id)));
+            assertEquals(NativeVoiceRecording.FinishReason.SEND, field(field(f.runtime, "active"), "finishReason"));
+            assertFalse(f.runtime.snapshot().getJSONObject("actions").getBoolean("canSend"));
+        }
+    }
+
+    @Test public void sendDuringAutomaticSpeechCompletionIsIdempotentBeforeAndAfterTheOwnerHandlesIt() throws Exception {
+        for (boolean beforeOwner : new boolean[] { true, false }) try (Fixture f = new Fixture(false, false)) {
+            String capture = f.recognizing(false);
+            Object active = field(f.runtime, "active");
+            f.onOwner(() -> {
+                set(f.runtime, "phase", "listening"); set(f.runtime, "captureOwner", active);
+                f.invoke("publish", new Class<?>[0]);
+            });
+            assertEquals("listening", f.runtime.snapshot().getString("phase"));
+            String id = f.runtime.snapshot().getJSONObject("active").getJSONObject("recording").getString("id");
+            f.onOwner(() -> {
+                set(active, "capturePolicy", new NativeVoiceCapturePolicy(100, 1000, 100));
+                f.runtime.captured(capture, captureFrame(1000));
+                f.runtime.captured(capture, captureFrame(0));
+                assertTrue((boolean) field(active, "endpointReached"));
+                if (beforeOwner) f.invoke("sendRecording", new Class<?>[] { JSONObject.class }, NativeVoiceJson.object("recordingId", id));
+            });
+            f.flush();
+            assertEquals(NativeVoiceRecording.FinishReason.AUTOMATIC, field(active, "finishReason"));
+            assertNull(f.command("sendRecording", NativeVoiceJson.object("recordingId", id)));
+            assertFalse(f.runtime.snapshot().getJSONObject("actions").getBoolean("canSend"));
+            f.runtime.captureEnded(capture); f.synthetic.ready(); awaitCommit(f, f.synthetic); f.synthetic.complete("Automatically completed reply"); f.flush();
+            assertNotNull(f.inputs.poll(10, TimeUnit.SECONDS)); assertEquals(1, f.inputAttempts.get());
+            assertEquals(0, f.runtime.snapshot().getJSONArray("errors").length());
         }
     }
 

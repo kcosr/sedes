@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useId, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { ArrowUp, AudioLines, ChevronDown, Infinity as InfinityIcon, LoaderCircle, Mic, MicOff, RotateCcw, Settings2, SkipForward, TriangleAlert, X } from "lucide-react";
 import type { NormalizedApplicationThreadSummary } from "../../shared/protocol/application.js";
 import { navigate, settingsPath, useRoute } from "../app/router.js";
@@ -34,6 +34,7 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
   const pickerAnchor = useRef<HTMLButtonElement>(null);
   const pickerRecording = useRef<NativeRecordingCommandContext | null>(null);
   const pickerGeneration = useRef<number | null>(null);
+  const lastActionPress = useRef<{ kind: "next" | "stop"; bounds: DOMRect; at: number } | null>(null);
   const [sheet, setSheet] = useState(false);
   const statusId = useId();
   const threadId = route.name === "thread" ? route.threadId : null;
@@ -171,7 +172,19 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
       pickerGeneration.current = native.connectionGeneration;
       setPicker(current => current === targetPicker ? null : targetPicker);
     }}><ChevronDown aria-hidden="true" /></button> : null;
-  const text = <span className="voice-card-text">
+  const repeatsLastAction = (event: MouseEvent) => {
+    const previous = lastActionPress.current;
+    return event.detail > 0 && previous !== null && event.timeStamp - previous.at < 500 &&
+      event.clientX >= previous.bounds.left && event.clientX <= previous.bounds.right &&
+      event.clientY >= previous.bounds.top && event.clientY <= previous.bounds.bottom;
+  };
+  const text = <span className="voice-card-text" onClickCapture={event => {
+    // Hidden actions free space for the title and picker immediately, but a rapid
+    // repeat tap at their old position still belongs to that action. Keyboard access is unaffected.
+    if (repeatsLastAction(event)) {
+      event.preventDefault(); event.stopPropagation();
+    }
+  }}>
     {opens ? <button type="button" className="voice-card-open" aria-label={`Open thread: ${cardTitle ?? "Untitled thread"}`} onClick={() => openThreadRoute(cardThread)} /> : null}
     <span className="voice-card-heading">{renderLine(line1, "voice-card-title")}{targetControl}</span>
     {renderLine(line2, "voice-card-sub")}
@@ -219,7 +232,9 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
                 act(() => store.plugin.setKeepListening(command));
               }}><InfinityIcon strokeWidth={1.8} aria-hidden="true" /></button>
               : showNext ? <button type="button" className="voice-card-button" aria-label="Next voice interaction" title="Next"
-                disabled={state.pending || !(native.actions.canSkip && active || idleNavigation)} onClick={() => {
+                disabled={state.pending || !(native.actions.canSkip && active || idleNavigation)} onClick={event => {
+                  if (lastActionPress.current?.kind === "stop" && repeatsLastAction(event)) return;
+                  lastActionPress.current = { kind: "next", bounds: event.currentTarget.getBoundingClientRect(), at: event.timeStamp };
                   if (native.actions.canSkip && active) {
                     const command = { expectedConnectionGeneration: native.connectionGeneration, interactionId: active.id };
                     act(() => store.plugin.skipCurrentPlayback(command));
@@ -229,8 +244,9 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
                   }
                 }}><SkipForward strokeWidth={1.8} aria-hidden="true" /></button> : null}
             {active !== null ? <button type="button" className="voice-card-button" aria-label={cancels ? "Cancel voice recording" : "Stop voice interaction"}
-              title={cancels ? "Cancel" : "Stop"} disabled={!native.actions.canStop || !active} onClick={() => {
+              title={cancels ? "Cancel" : "Stop"} disabled={!native.actions.canStop || !active} onClick={event => {
                 if (!active || !native.actions.canStop) return;
+                lastActionPress.current = { kind: "stop", bounds: event.currentTarget.getBoundingClientRect(), at: event.timeStamp };
                 const command = { expectedConnectionGeneration: native.connectionGeneration, interactionId: active.id };
                 void (speaking ? store.stopPlayback(command) : store.stopInteraction(command)).catch(() => undefined);
               }}>{cancels ? <X strokeWidth={1.8} aria-hidden="true" /> : <span className="voice-card-stop" aria-hidden="true" />}</button> : null}

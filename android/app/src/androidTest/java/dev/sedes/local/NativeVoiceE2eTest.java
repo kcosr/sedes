@@ -561,12 +561,12 @@ public class NativeVoiceE2eTest {
         screenshot("retained-after-navigation");
 
         Context context = instrumentation.getTargetContext();
-        idleNotificationControls(context, viewedTitle, -1, false);
+        standardIdleNotification(context, viewedTitle, -1);
         // Leaving the thread keeps its destination; both idle surfaces can now release that fallback.
         String releasePath = "/settings/voice";
         js("(()=>{history.pushState({},''," + JSONObject.quote(releasePath) + ");window.dispatchEvent(new PopStateEvent('popstate'));return true})()");
         await(() -> runtime.snapshot().optJSONObject("foreground").isNull("threadId"), 15000, "settings has no foreground thread");
-        IdleNotificationControls originalControls = idleNotificationControls(context, viewedTitle, -1, true);
+        IdleNotificationControls originalControls = idleNotificationControls(context, viewedTitle, -1);
         JSONObject beforeStart = runtime.snapshot();
         JSONObject notificationCapture = captureAndCancel("notification", "retained-thread", viewed, viewedTitle, null,
             true, supplied, () -> clickNotificationControl(originalControls.start, "retained Start"));
@@ -588,7 +588,7 @@ public class NativeVoiceE2eTest {
         assertUnchangedRetainedIdle(afterCancel, afterStaleNext);
         assertEquals("Stale Next must not open capture", captureAfterCancel, supplied.get());
 
-        IdleNotificationControls freshReleaseControls = idleNotificationControls(context, viewedTitle, originalControls.postTime, true);
+        IdleNotificationControls freshReleaseControls = idleNotificationControls(context, viewedTitle, originalControls.postTime);
         int releaseDelivery = clickNotificationControl(freshReleaseControls.next, "fresh retained Next");
         JSONObject notificationRelease = assertRetainedRelease(args, afterCancel, "notification", releasePath, null);
         assertEquals(0, inputAttempts.get()); assertTrue(submittedInputs.isEmpty());
@@ -599,9 +599,9 @@ public class NativeVoiceE2eTest {
         JSONObject viewedCapture = captureAndCancel("card", "viewed-thread", viewed, viewedTitle, viewed,
             false, supplied, this::clickCardStart);
         assertEquals(0, inputAttempts.get()); assertTrue(submittedInputs.isEmpty());
-        IdleNotificationControls viewedControls = idleNotificationControls(context, viewedTitle, freshReleaseControls.postTime, false);
+        Notification viewedNotification = standardIdleNotification(context, viewedTitle, freshReleaseControls.postTime);
         JSONObject viewedNotificationCapture = captureAndCancel("notification", "notification-viewed-thread", viewed, viewedTitle, viewed,
-            true, supplied, () -> clickNotificationControl(viewedControls.start, "newly retained viewed thread Start"));
+            true, supplied, () -> deliverNotificationControl(() -> viewedNotification.actions[0].actionIntent.send(), "viewed thread Start"));
         assertEquals(0, inputAttempts.get()); assertTrue(submittedInputs.isEmpty());
         assertEquals("Viewed thread is not a releasable fallback", "false", js("document.querySelector('[aria-label=\"Next voice interaction\"]:not(:disabled)') !== null"));
         assertEquals("true", js("document.querySelector('[data-testid=\"composer\"] textarea')?.value === " + JSONObject.quote(viewedDraft)));
@@ -1010,12 +1010,13 @@ public class NativeVoiceE2eTest {
             for (StatusBarNotification notification : context.getSystemService(NotificationManager.class).getActiveNotifications()) {
                 if (notification.getNotification().actions != null) for (Notification.Action action : notification.getNotification().actions)
                     if (title.contentEquals(action.title)) { action.actionIntent.send(); return; }
-                if (notification.getNotification().bigContentView != null && (title.equals("Stop") || title.equals("Record") || title.equals("Start") || title.equals("Next"))) {
+                if (notification.getNotification().bigContentView != null &&
+                    List.of("Stop", "Cancel", "Record", "Start", "Send", "Next").contains(title)) {
                     AtomicBoolean clicked = new AtomicBoolean();
                     InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
                         View view = notification.getNotification().bigContentView.apply(context, null);
-                        View button = view.findViewById(title.equals("Stop") ? R.id.voice_notification_stop :
-                            title.equals("Record") || title.equals("Start") ? R.id.voice_notification_record : R.id.voice_notification_next);
+                        View button = view.findViewById(title.equals("Stop") || title.equals("Cancel") ? R.id.voice_notification_stop :
+                            title.equals("Record") || title.equals("Start") || title.equals("Send") ? R.id.voice_notification_record : R.id.voice_notification_next);
                         if (button instanceof android.widget.TextView && button.getVisibility() == View.VISIBLE && button.isEnabled() &&
                             title.contentEquals(((android.widget.TextView) button).getText())) clicked.set(button.performClick());
                     });
@@ -1030,7 +1031,7 @@ public class NativeVoiceE2eTest {
         final View start, next;
         final long postTime;
         final JSONObject evidence;
-        IdleNotificationControls(View view, long postTime, boolean showNext) {
+        IdleNotificationControls(View view, long postTime) {
             this.postTime = postTime;
             start = view.findViewById(R.id.voice_notification_record); next = view.findViewById(R.id.voice_notification_next);
             View stop = view.findViewById(R.id.voice_notification_stop);
@@ -1038,8 +1039,8 @@ public class NativeVoiceE2eTest {
             assertEquals(View.VISIBLE, start.getVisibility()); assertTrue("Retained notification Start is enabled", start.isEnabled());
             assertEquals("Retained notification hides Stop", View.GONE, stop.getVisibility());
             assertEquals("Next", ((android.widget.TextView) next).getText().toString());
-            assertEquals(showNext ? View.VISIBLE : View.GONE, next.getVisibility());
-            if (showNext) assertTrue("Retained notification Next is enabled", next.isEnabled());
+            assertEquals(View.VISIBLE, next.getVisibility());
+            assertTrue("Retained notification Next is enabled", next.isEnabled());
             evidence = NativeVoiceJson.object("title", ((android.widget.TextView) view.findViewById(R.id.voice_notification_title)).getText().toString(),
                 "startLabel", ((android.widget.TextView) start).getText().toString(), "startEnabled", start.isEnabled(),
                 "stopVisible", stop.getVisibility() == View.VISIBLE, "nextLabel", ((android.widget.TextView) next).getText().toString(), "nextEnabled", next.isEnabled());
@@ -1078,7 +1079,31 @@ public class NativeVoiceE2eTest {
         }
         throw new AssertionError("Posted expanded playback Stop missing: " + title);
     }
-    private IdleNotificationControls idleNotificationControls(Context context, String title, long postedAfter, boolean showNext) throws Exception {
+    /** The visible-thread destination uses the platform template and its real Start PendingIntent. */
+    private Notification standardIdleNotification(Context context, String title, long postedAfter) throws Exception {
+        long deadline = SystemClock.elapsedRealtime() + 10000;
+        while (SystemClock.elapsedRealtime() < deadline) {
+            for (StatusBarNotification posted : context.getSystemService(NotificationManager.class).getActiveNotifications()) {
+                Notification notification = posted.getNotification();
+                if (posted.getPostTime() <= postedAfter || notification.extras == null ||
+                    !title.contentEquals(notification.extras.getCharSequence(Notification.EXTRA_TITLE, "")) ||
+                    !"Ready".contentEquals(notification.extras.getCharSequence(Notification.EXTRA_TEXT, "")) ||
+                    notification.actions == null || notification.actions.length == 0 || !"Start".contentEquals(notification.actions[0].title)) continue;
+                assertNull("Visible-thread idle uses the standard template", notification.bigContentView);
+                assertEquals("Start, mode, and Rearm fit the standard template", 3, notification.actions.length);
+                assertNotNull(notification.actions[0].actionIntent);
+                assertTrue(List.of("Manual", "Response").contains(notification.actions[1].title.toString()));
+                assertTrue(List.of("Rearm on", "Rearm off").contains(notification.actions[2].title.toString()));
+                for (Notification.Action action : notification.actions) {
+                    assertNotEquals("Next", action.title.toString()); assertNotEquals("Stop", action.title.toString());
+                }
+                return notification;
+            }
+            SystemClock.sleep(50);
+        }
+        throw new AssertionError("Posted standard idle notification missing: " + title);
+    }
+    private IdleNotificationControls idleNotificationControls(Context context, String title, long postedAfter) throws Exception {
         long deadline = SystemClock.elapsedRealtime() + 10000;
         while (SystemClock.elapsedRealtime() < deadline) {
             for (StatusBarNotification notification : context.getSystemService(NotificationManager.class).getActiveNotifications()) {
@@ -1091,8 +1116,8 @@ public class NativeVoiceE2eTest {
                     View next = view.findViewById(R.id.voice_notification_next);
                     if (label != null && title.contentEquals(label.getText()) && status != null && "Ready".contentEquals(status.getText()) &&
                         start != null && "Start".contentEquals(start.getText()) && next != null &&
-                        next.getVisibility() == (showNext ? View.VISIBLE : View.GONE))
-                        controls.set(new IdleNotificationControls(view, notification.getPostTime(), showNext));
+                        next.getVisibility() == View.VISIBLE)
+                        controls.set(new IdleNotificationControls(view, notification.getPostTime()));
                 });
                 if (controls.get() != null) return controls.get();
             }
@@ -1102,6 +1127,11 @@ public class NativeVoiceE2eTest {
     }
     /** Observe real onStartCommand delivery before draining the runtime owner; a main-thread barrier alone can race Binder. */
     private int clickNotificationControl(View button, String description) throws Exception {
+        return deliverNotificationControl(() -> instrumentation.runOnMainSync(() ->
+            assertTrue("Click notification " + description, button.performClick())), description);
+    }
+    private interface NotificationControl { void activate() throws Exception; }
+    private int deliverNotificationControl(NotificationControl control, String description) throws Exception {
         command("getState", new JSONObject());
         java.lang.reflect.Field serviceField = NativeVoiceRuntime.class.getDeclaredField("service"); serviceField.setAccessible(true);
         NativeVoiceRuntimeService service = (NativeVoiceRuntimeService) serviceField.get(runtime); assertNotNull("Live voice service", service);
@@ -1112,7 +1142,7 @@ public class NativeVoiceE2eTest {
             catch (IllegalAccessException error) { throw new AssertionError(error); }
         };
         instrumentation.runOnMainSync(readStartId); int previous = delivered.get();
-        instrumentation.runOnMainSync(() -> assertTrue("Click notification " + description, button.performClick()));
+        control.activate();
         await(() -> { instrumentation.runOnMainSync(readStartId); return delivered.get() > previous; }, 10000, "service delivery of " + description);
         command("getState", new JSONObject());
         return delivered.get();

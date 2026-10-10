@@ -286,7 +286,7 @@ quick or full settings edits the saved preference. Those selectors share the
 popup's search and row styling in a modal/mobile sheet, with no mobile search
 autofocus. Pinning does not redirect an active interaction.
 
-While idle and using the retained fallback, **Next** in the left action slot
+While idle and using the retained fallback, **Next**
 releases that destination and returns the card to its default selection.
 Next is hidden when the card already follows a visible or explicitly chosen
 thread. Idle notification Next and
@@ -404,8 +404,9 @@ Its actions are **Stop** during an interaction,
 **Start** when recording can begin and that target is available, a mode button labelled **Manual** or **Response**
 that switches to the other mode, and **Rearm on** or **Rearm off**, which
 toggles Auto-listen. While speech plays, the expanded notification shows Record,
-Next, Stop, the mode button, and Rearm. With an idle retained destination, it
-shows Start, Next, the mode button, and Rearm. During Keep listening, it offers **Cancel** and
+Next, Stop, the mode button, and Rearm. During ordinary recording, the expanded
+notification shows Send, Cancel, the mode button, and Rearm. With an idle retained
+destination, it shows Start, Next, the mode button, and Rearm. During Keep listening, it offers **Cancel** and
 **Send**. Headset pause/stop interrupts and saves an adopted recording; it never
 sends it. Explicit Cancel still discards it. During speech, headset Play/Pause
 starts a reply to the spoken thread when Auto-listen is on and recording is

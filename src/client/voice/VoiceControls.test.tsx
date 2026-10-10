@@ -51,6 +51,11 @@ const card = () => screen.getByRole("group", { name: "Voice controls" });
 const buttons = () => within(card()).getAllByRole("button").map(button => button.getAttribute("aria-label"));
 /** The two visible lines, with the separator dots spaced as they read. */
 const lines = () => Array.from(card().querySelectorAll(".voice-card-title, .voice-card-sub"), line => line.textContent!.replaceAll("·", " · "));
+function clickAtTime(element: HTMLElement, at: number, detail = 1, x = 20) {
+  const event = new MouseEvent("click", { bubbles: true, detail, clientX: x, clientY: 20 });
+  Object.defineProperty(event, "timeStamp", { value: at });
+  fireEvent(element, event);
+}
 beforeEach(() => {
   voice.fake = fakeVoicePlugin(); navigate("/", { replace: true });
   // Another tab clearing storage resets the preference to its default.
@@ -303,6 +308,46 @@ describe("voice controls card", () => {
     await waitFor(() => expect(voice.fake.plugin.releaseRetainedVoiceTarget).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, expectedRetainedRevision: 7 }));
     expect(lines()[0]).toBe("Release review");
     expect(window.location.pathname).toBe("/");
+  });
+  it.each(["later pointer", "keyboard", "different position"])("ignores a rapid repeat tap on released Next but allows a %s open", async kind => {
+    const native = ready({ retainedVoiceTarget: { threadId: "named", threadTitle: "Release review", revision: 7 },
+      actions: voiceActions({ canStart: true, canReleaseRetainedTarget: true }),
+      settings: voiceSettings({ audioMode: "response", voiceThreadId: "long" }) });
+    voice.fake.plugin.setConnection.mockResolvedValue(native);
+    voice.fake.plugin.releaseRetainedVoiceTarget.mockResolvedValue({ ...native, stateRevision: 2, retainedVoiceTarget: null, actions: idleActions });
+    renderControls();
+    const next = await screen.findByRole("button", { name: "Next voice interaction" });
+    vi.spyOn(next, "getBoundingClientRect").mockReturnValue({ left: 0, top: 0, right: 40, bottom: 40 } as DOMRect);
+    clickAtTime(next, 1000);
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Next voice interaction" })).toBeNull());
+    const open = card().querySelector<HTMLButtonElement>(".voice-card-open")!;
+    clickAtTime(open, 1100);
+    expect(window.location.pathname).toBe("/");
+    expect(voice.fake.plugin.releaseRetainedVoiceTarget).toHaveBeenCalledTimes(1);
+    clickAtTime(open, kind === "later pointer" ? 1510 : 1200, kind === "keyboard" ? 0 : 1, kind === "different position" ? 50 : 20);
+    expect(window.location.pathname).toBe(threadPath("long"));
+  });
+  it.each(["Stop", "Cancel"])("a rapid repeat of %s cannot release the retained idle destination", async label => {
+    const stopped = ready({ stateRevision: 2, retainedVoiceTarget: { threadId: "named", threadTitle: "Release review", revision: 7 },
+      actions: voiceActions({ canStart: true, canReleaseRetainedTarget: true }) });
+    voice.fake.plugin.setConnection.mockResolvedValue(label === "Stop"
+      ? speaking({ threadId: "named", threadTitle: "Release review" })
+      : listening({ recognitionThreadId: "named", recognitionThreadTitle: "Release review" }));
+    voice.fake.plugin.stopPlayback.mockResolvedValue(stopped);
+    voice.fake.plugin.stopCurrentInteraction.mockResolvedValue(stopped);
+    renderControls();
+    const stop = await screen.findByRole("button", { name: label === "Stop" ? "Stop voice interaction" : "Cancel voice recording" });
+    vi.spyOn(stop, "getBoundingClientRect").mockReturnValue({ left: 0, top: 0, right: 40, bottom: 40 } as DOMRect);
+    clickAtTime(stop, 1000);
+    const next = await screen.findByRole("button", { name: "Next voice interaction" });
+    await waitFor(() => expect(screen.queryByRole("button", { name: label === "Stop" ? "Stop voice interaction" : "Cancel voice recording" })).toBeNull());
+    await waitFor(() => expect(next).toBeEnabled());
+    clickAtTime(next, 1100);
+    expect(voice.fake.plugin.releaseRetainedVoiceTarget).not.toHaveBeenCalled();
+    expect(lines()[0]).toBe("Release review");
+    expect(window.location.pathname).toBe("/");
+    clickAtTime(next, 1600);
+    await waitFor(() => expect(voice.fake.plugin.releaseRetainedVoiceTarget).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, expectedRetainedRevision: 7 }));
   });
   it("locks both idle actions during release so repeated Next cannot also start recording", async () => {
     const native = ready({ retainedVoiceTarget: { threadId: "named", threadTitle: "Release review", revision: 7 },

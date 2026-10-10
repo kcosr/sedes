@@ -183,20 +183,23 @@ public final class NativeVoiceRuntimeService extends Service {
         JSONObject active = state.optJSONObject("active"), recording = active == null ? null : active.optJSONObject("recording");
         boolean held = recording != null && recording.optBoolean("keepListening");
         boolean retainedIdle = retainedIdleControls(state);
-        if (actions != null && settings != null && (retainedIdle || actions.optBoolean("canStop") && actions.optBoolean("canSkip"))) {
+        boolean ordinarySend = actions != null && actions.optBoolean("canSend") && !held;
+        if (actions != null && settings != null && (retainedIdle || ordinarySend || actions.optBoolean("canStop") && actions.optBoolean("canSkip"))) {
             // Standard templates show at most three actions. The expanded ordinary notification
-            // keeps playback and retained-idle controls accessible; custom content is ineligible for promotion.
+            // keeps recording, playback and retained-idle controls accessible; custom content is ineligible for promotion.
             RemoteViews controls = new RemoteViews(getPackageName(), R.layout.notification_voice_controls);
             controls.setTextViewText(R.id.voice_notification_title, title);
             controls.setTextViewText(R.id.voice_notification_status, label(phase));
             controls.setTextViewText(R.id.voice_notification_mode, mode);
             controls.setTextViewText(R.id.voice_notification_rearm, rearm);
-            controls.setTextViewText(R.id.voice_notification_record, retainedIdle ? "Start" : "Record");
+            controls.setTextViewText(R.id.voice_notification_record, retainedIdle ? "Start" : ordinarySend ? "Send" : "Record");
             controls.setBoolean(R.id.voice_notification_record, "setEnabled", retainedIdle
-                ? actions.optBoolean("canStart") && threadId != null : actions.optBoolean("canRecordDuringPlayback"));
-            controls.setOnClickPendingIntent(R.id.voice_notification_record, pending(retainedIdle ? "start" : "record", state));
+                ? actions.optBoolean("canStart") && threadId != null : ordinarySend || actions.optBoolean("canRecordDuringPlayback"));
+            controls.setOnClickPendingIntent(R.id.voice_notification_record, pending(retainedIdle ? "start" : ordinarySend ? "send" : "record", state));
             controls.setViewVisibility(R.id.voice_notification_stop, retainedIdle ? View.GONE : View.VISIBLE);
-            controls.setOnClickPendingIntent(R.id.voice_notification_stop, pending("stop_playback", state));
+            controls.setTextViewText(R.id.voice_notification_stop, ordinarySend ? "Cancel" : "Stop");
+            controls.setOnClickPendingIntent(R.id.voice_notification_stop, pending(ordinarySend ? "stop" : "stop_playback", state));
+            controls.setViewVisibility(R.id.voice_notification_next, ordinarySend ? View.GONE : View.VISIBLE);
             controls.setOnClickPendingIntent(R.id.voice_notification_next, pending(retainedIdle ? "release" : "skip", state));
             controls.setOnClickPendingIntent(R.id.voice_notification_mode, pending("mode", state));
             controls.setOnClickPendingIntent(R.id.voice_notification_rearm, pending("rearm", state));

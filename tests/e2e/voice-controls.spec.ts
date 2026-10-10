@@ -25,6 +25,7 @@ test("native dictation keeps its controls reachable on narrow screens and retain
   const heights: Record<string, number> = {};
   const viewports: Record<string, number> = {};
   const leftOffsets: Record<string, { tile: number; title: number; status: number }> = {};
+  const topOffsets: Record<string, { title: number; status: number }> = {};
   const measureRow = async (state: string, actionCount = 3) => {
     viewports[state] = page.viewportSize()!.width;
     heights[state] = (await toolbar.boundingBox())!.height;
@@ -33,7 +34,11 @@ test("native dictation keeps its controls reachable on narrow screens and retain
       toolbar.locator(".voice-card-tile").boundingBox(), toolbar.locator(".voice-card-title").boundingBox(), toolbar.locator(".voice-card-sub").boundingBox(),
     ]);
     leftOffsets[state] = { tile: tile!.x, title: title!.x, status: status!.x };
+    const row = (await toolbar.boundingBox())!;
+    topOffsets[state] = { title: title!.y - row.y, status: status!.y - row.y };
     expect(leftOffsets[state], `${state} preserves the Ready-state icon and text positions`).toEqual(leftOffsets.idleBeforeRecording);
+    expect(topOffsets[state].title, `${state} preserves the title baseline`).toBeCloseTo(topOffsets.idleBeforeRecording!.title, 1);
+    expect(topOffsets[state].status, `${state} preserves the status baseline`).toBeCloseTo(topOffsets.idleBeforeRecording!.status, 1);
     expect(title!.x - tile!.x - tile!.width, `${state} keeps settings before the thread`).toBe(8);
     const actions = (await toolbar.locator(".voice-card-actions").boundingBox())!;
     expect(status!.y, `${state} keeps text beside the actions`).toBeLessThan(actions.y + actions.height);
@@ -504,7 +509,7 @@ test("native dictation keeps its controls reachable on narrow screens and retain
   await capture(page, testInfo, "voice-saved-access-during-recording-narrow.png");
   await expect(composer).toHaveValue(draft);
   await testInfo.attach("voice-row-heights", { body: JSON.stringify({ viewports, originalRowHeight: 60, heights }, null, 2), contentType: "application/json" });
-  await testInfo.attach("voice-row-left-offsets", { body: JSON.stringify({ viewports, leftOffsets }, null, 2), contentType: "application/json" });
+  await testInfo.attach("voice-row-text-offsets", { body: JSON.stringify({ viewports, leftOffsets, topOffsets }, null, 2), contentType: "application/json" });
   await testInfo.attach("voice-recording-control-gaps", { body: JSON.stringify({ viewports, controlGaps }, null, 2), contentType: "application/json" });
 });
 
