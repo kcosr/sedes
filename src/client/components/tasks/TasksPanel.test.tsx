@@ -234,21 +234,32 @@ function HostProbe(): null {
 /** Stands in for a thread workspace with the Tasks panel docked in it. */
 function DockedTasks({ active }: { readonly active: boolean }): React.JSX.Element {
   const [present, setPresent] = useState(true);
+  const [shown, setShown] = useState(true);
   usePublishTasksDock({
     present,
-    visible: present && active,
+    visible: present && shown && active,
     controls: {
       active,
       onClose: () => setPresent(false),
     },
-    open: () => setPresent(true),
-    toggle: () => setPresent((current) => !current),
+    open: () => {
+      setPresent(true);
+      setShown(true);
+    },
+    // Hides a shown panel, keeping it loaded; shows (or loads) otherwise.
+    toggle: () => {
+      if (present && shown) setShown(false);
+      else {
+        setPresent(true);
+        setShown(true);
+      }
+    },
     close: () => setPresent(false),
   });
   // Settings hides the retained workspace (and so the docked panel).
   return (
-    <div hidden={!active}>
-      <TasksDockSlot />
+    <div hidden={!active || !shown}>
+      {present ? <TasksDockSlot /> : null}
     </div>
   );
 }

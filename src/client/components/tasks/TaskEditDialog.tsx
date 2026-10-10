@@ -117,6 +117,7 @@ export function TaskEditDialog({
   store,
   destinations,
   onClose,
+  onDirtyChange,
 }: {
   /** The live task; undefined once it has been deleted elsewhere. */
   readonly task: AssociatedTask | undefined;
@@ -126,6 +127,11 @@ export function TaskEditDialog({
   readonly store: ApplicationClientStore;
   readonly destinations: TaskDestinations;
   readonly onClose: () => void;
+  /**
+   * Whether the edit has unsaved changes, so whatever would discard the
+   * editor (closing or unloading Tasks) can ask first. False on unmount.
+   */
+  readonly onDirtyChange?: (dirty: boolean) => void;
 }): React.JSX.Element {
   const touch = useTouchDensity();
   // The task as it was when editing began: the baseline for "dirty" and the
@@ -165,6 +171,11 @@ export function TaskEditDialog({
       draft.backlog !== initial.backlog ||
       !sameFiles(draft.files, initial.files) ||
       newFilePath.trim().length > 0);
+
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
+  useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
 
   const requestClose = () => {
     if (saving) return;

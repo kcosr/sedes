@@ -1,6 +1,7 @@
 import {
   createContext,
   useContext,
+  useEffect,
   useLayoutEffect,
   useRef,
 } from "react";
@@ -9,6 +10,7 @@ import type {
   PanelChromeControls,
   PanelRegionControls,
 } from "../../workspace-panels/PanelChrome.js";
+import type { WorkspacePanelHost } from "../../workspace-panels/registry.js";
 import { StablePaneSlot } from "../../workspace-panels/StablePaneSlot.js";
 
 /**
@@ -51,6 +53,8 @@ export interface TasksHost {
   readonly placement: TasksPresentation | undefined;
   /** Whether the phone sheet is open (its local open state). */
   readonly sheetOpen: boolean;
+  /** Whether the retained body holds an edit with unsaved changes. */
+  readonly dirty: boolean;
   toggleSheet(): void;
   /** Must be stable: a thread workspace publishes its panel through it. */
   publishDock(dock: TasksDock | undefined): void;
@@ -158,9 +162,22 @@ export function TasksSurface({
   );
 }
 
-/** The `tasks` workspace panel tenant's content: the docked body's slot. */
-export function TasksDockSlot(): React.JSX.Element | null {
+/**
+ * The `tasks` workspace panel tenant's content: the docked body's slot. It
+ * stays mounted while Tasks is loaded, shown or hidden, and reports the
+ * retained body's unsaved edit through the tenant host, as other tenants
+ * report theirs, so the layout asks before ✕ or Reset layout unloads it.
+ */
+export function TasksDockSlot({
+  panelHost,
+}: {
+  readonly panelHost?: Pick<WorkspacePanelHost, "setDirty">;
+} = {}): React.JSX.Element | null {
   const host = useTasksHost();
+  const dirty = host?.dirty ?? false;
+  useEffect(() => {
+    panelHost?.setDirty(dirty);
+  }, [dirty, panelHost]);
   return host?.placement === "panel" ? (
     <TasksSurface presentation="panel" target={host.bodyTarget} />
   ) : null;

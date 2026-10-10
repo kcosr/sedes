@@ -108,9 +108,14 @@ type DockSpy = {
   readonly close: Mock<() => void>;
   readonly onMaximize: Mock<() => void>;
   readonly onClose: Mock<(invoker: HTMLElement) => void>;
+  /** The tenant host's dirty report. */
+  readonly setDirty: Mock<(dirty: boolean) => void>;
 };
 
-/** A thread workspace with the Tasks panel in its layout. */
+/**
+ * A thread workspace with the Tasks panel in its layout: loaded (present)
+ * or not, and while loaded shown or hidden, as the panel layout keeps it.
+ */
 function Workspace({
   spy,
   loaded = true,
@@ -120,9 +125,10 @@ function Workspace({
   readonly loaded?: boolean;
 }): React.JSX.Element {
   const [present, setPresent] = useState(loaded);
+  const [shown, setShown] = useState(true);
   const dock: TasksDock = {
     present,
-    visible: present,
+    visible: present && shown,
     controls: {
       active: true,
       region: {
@@ -146,10 +152,17 @@ function Workspace({
     open: (options) => {
       spy.open(options);
       setPresent(true);
+      setShown(true);
     },
+    // Hides a shown panel, keeping it loaded; shows (or loads) otherwise.
     toggle: (invoker) => {
       spy.toggle(invoker);
-      setPresent((current) => !current);
+      if (present && shown) {
+        setShown(false);
+      } else {
+        setPresent(true);
+        setShown(true);
+      }
     },
     close: () => {
       spy.close();
@@ -157,9 +170,10 @@ function Workspace({
     },
   };
   usePublishTasksDock(dock);
+  // A hidden panel stays mounted, parked out of view.
   return (
-    <section aria-label="Tasks panel">
-      <TasksDockSlot />
+    <section aria-label="Tasks panel" hidden={!shown}>
+      {present ? <TasksDockSlot panelHost={{ setDirty: spy.setDirty }} /> : null}
     </section>
   );
 }
@@ -171,6 +185,7 @@ function dockSpy(): DockSpy {
     close: vi.fn(),
     onMaximize: vi.fn(),
     onClose: vi.fn(),
+    setDirty: vi.fn(),
   };
 }
 
@@ -358,6 +373,47 @@ describe("Tasks host from one thread to the next", () => {
 });
 
 describe("Tasks host in a thread workspace", () => {
+  it("reports an unsaved edit through the tenant host, hidden or shown", async () => {
+    const user = userEvent.setup();
+    const { spy, host } = renderHost({ thread: true });
+    expect(spy.setDirty).toHaveBeenLastCalledWith(false);
+    await editNotes(user);
+    expect(spy.setDirty).toHaveBeenLastCalledWith(true);
+    expect(host()?.dirty).toBe(true);
+
+    // Hiding Tasks keeps the body and the edit in it.
+    pressShortcut();
+    expect(spy.toggle).toHaveBeenCalledOnce();
+    expect(editor()).toBeNull();
+    expect(spy.setDirty).toHaveBeenLastCalledWith(true);
+    pressShortcut();
+    expect(within(editor()!).getByRole("textbox", { name: "Notes" })).toHaveValue(
+      "Unsaved notes",
+    );
+  });
+
+  it("discards the body and its edit when the layout unloads Tasks", async () => {
+    const user = userEvent.setup();
+    const { spy, host } = renderHost({ thread: true });
+    await editNotes(user);
+    const body = document.querySelector(".tasks-content");
+    // ✕ (or Reset layout) unloads Tasks after the layout's confirmation.
+    fireEvent.click(screen.getByRole("button", { name: "Close Tasks panel", hidden: true }));
+    expect(spy.onClose).toHaveBeenCalledOnce();
+    expect(editor()).toBeNull();
+    expect(host()?.dirty).toBe(false);
+    expect(document.querySelector(".tasks-content")).toBeNull();
+
+    // Opened again, Tasks has a new body, without the editor.
+    pressShortcut();
+    expect(tasksSurface()).not.toBeNull();
+    expect(document.querySelector(".tasks-content")).not.toBe(body);
+    expect(editor()).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Audit error states" }),
+    ).toBeInTheDocument();
+  });
+
   it("docks the retained body in the panel with the panel's own controls", () => {
     const { spy, host } = renderHost({ thread: true });
     const panel = screen.getByRole("region", { name: "Tasks panel" });

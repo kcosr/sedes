@@ -169,6 +169,8 @@ export interface TasksPanelContentProps {
   readonly panelEnvironmentTint?: EnvironmentTintStyle;
   /** Whether a task is open in the editor, whose unsaved edits the host keeps. */
   readonly onEditingChange?: (editing: boolean) => void;
+  /** Whether the open editor has unsaved changes. */
+  readonly onDirtyChange?: (dirty: boolean) => void;
 }
 
 type PendingActions = ReadonlyMap<string, ReadonlySet<TaskAction>>;
@@ -271,6 +273,7 @@ export function TasksPanelContent({
   panelControls,
   panelEnvironmentTint,
   onEditingChange,
+  onDirtyChange,
 }: TasksPanelContentProps): React.JSX.Element {
   const sheet = presentation === "sheet";
   const application = useApplicationStore(store);
@@ -1565,6 +1568,7 @@ export function TasksPanelContent({
           store={store}
           destinations={destinations}
           onClose={() => setEditingId(null)}
+          onDirtyChange={onDirtyChange}
         />
       )}
       <ConfirmDialog
@@ -1745,6 +1749,9 @@ export function TasksPanel({
   const routeKey = threadWorkspace ? `thread:${route.threadId}` : route.name;
   const [sheetOpen, setSheetOpen] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  // A new body: what an unload discards (see below).
+  const [bodyGeneration, setBodyGeneration] = useState(0);
   const [announcement, setAnnouncement] = useState("");
   const [dock, publishDock] = useState<TasksDock>();
   const [bodyTarget] = useState(createBodyTarget);
@@ -1796,6 +1803,23 @@ export function TasksPanel({
     }
   }, [routeKey, mobile]);
 
+  // Hiding Tasks (its toggle, another panel replacing it, make-room,
+  // Maximize, Settings, the breakpoint) keeps the body and any edit in it.
+  // Unloading it (✕, Reset layout) discards both: the layout asked first
+  // when the edit had unsaved changes, which the body reports through the
+  // tenant host (see TasksDockSlot). The layout reports an unload as the
+  // panel leaving its loaded panels.
+  const present = dock?.present;
+  const wasPresent = useRef(present);
+  useEffect(() => {
+    const before = wasPresent.current;
+    wasPresent.current = present;
+    if (before !== true || present !== false) return;
+    setEditing(false);
+    setDirty(false);
+    setBodyGeneration((generation) => generation + 1);
+  }, [present]);
+
   const toggleSheet = useCallback(() => setSheetOpen((open) => !open), []);
   // Only the sheet asks to close: the docked panel has the layout's controls.
   const requestClose = useCallback((message?: string) => {
@@ -1841,8 +1865,8 @@ export function TasksPanel({
   }, [active, toggleSheet]);
 
   const host = useMemo<TasksHost>(
-    () => ({ bodyTarget, placement, sheetOpen, toggleSheet, publishDock }),
-    [bodyTarget, placement, sheetOpen, toggleSheet],
+    () => ({ bodyTarget, placement, sheetOpen, dirty, toggleSheet, publishDock }),
+    [bodyTarget, placement, sheetOpen, dirty, toggleSheet],
   );
 
   const surface =
@@ -1920,6 +1944,7 @@ export function TasksPanel({
       {placement || editing
         ? createPortal(
             <TasksPanelContent
+              key={bodyGeneration}
               store={store}
               panelLayoutStore={panelLayoutStore}
               route={route}
@@ -1938,6 +1963,7 @@ export function TasksPanel({
                 placement === "panel" ? dock?.environmentTintStyle : undefined
               }
               onEditingChange={setEditing}
+              onDirtyChange={setDirty}
             />,
             bodyTarget,
           )
