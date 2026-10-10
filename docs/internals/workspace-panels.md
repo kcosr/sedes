@@ -231,7 +231,10 @@ composer, or terminal, or to an open dialog, menu, or listbox.
 At `(max-width: 819px)` there is no stage geometry, make-room, Maximize, or
 Move to; a maximized layout is restored on crossing the width. One foreground
 panel is chosen among the shown panels: the panel a focus request names, else
-the one last selected, else the first in the fixed order. Tasks is excluded:
+the one last selected, else the first in the fixed order. Switching panels
+opens them in the device layout, so a panel that shares its placement with
+another replaces it there, as on desktop, and closing it leaves that region
+empty rather than bringing the other back. Tasks is excluded:
 the Tasks host shows it as a bottom sheet that leaves the device layout
 alone. Files and Workpads render their `sheet` presentation. Terminals is a
 dismissible viewer with a same-URL history entry, so Back or Escape closes
