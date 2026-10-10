@@ -15,7 +15,7 @@ export function voiceSettings(patch: Partial<NativeVoiceSettings> = {}): NativeV
 }
 export function voiceSnapshot(patch: Partial<NativeVoiceState> = {}): NativeVoiceState {
   return {
-    version: 9, stateRevision: 1, connectionGeneration: 1, ...VOICE_CONNECTION, originClientId: VOICE_ORIGIN_ID, clientConnectionToken: "a".repeat(43), settingsRevision: 0,
+    version: 10, stateRevision: 1, connectionGeneration: 1, ...VOICE_CONNECTION, originClientId: VOICE_ORIGIN_ID, clientConnectionToken: "a".repeat(43), settingsRevision: 0,
     settings: voiceSettings(), phase: "off", ready: false, readiness: "off", foreground: { visible: false, threadId: null, threadTitle: null }, active: null,
     nextRecordingTarget: null, queue: { count: 0, bytes: 0, droppedCount: 0, droppedReasons: {} },
     speech: { credentialConfigured: false, catalogStatus: "idle", catalog: null, error: null },
@@ -23,7 +23,7 @@ export function voiceSnapshot(patch: Partial<NativeVoiceState> = {}): NativeVoic
   };
 }
 export function voiceActions(patch: Partial<NativeVoiceState["actions"]> = {}): NativeVoiceState["actions"] {
-  return { canStart: false, canStop: false, canSkip: false, canRetarget: false, canResume: false,
+  return { canStart: false, canStop: false, canSkip: false, canRecordDuringPlayback: false, canRetarget: false, canResume: false,
     canSetKeepListening: false, canSend: false, keepListeningBlockedReason: "not_capturing", ...patch };
 }
 export function recordingRecovery(patch: Partial<NativeRecordingRecovery> = {}): NativeRecordingRecovery {
@@ -42,7 +42,7 @@ export function fakeVoicePlugin() {
   const state = () => vi.fn(async (): Promise<NativeVoiceState> => voiceSnapshot());
   const plugin = {
     setConnection: state(), getState: state(), updateSettings: state(), disconnect: state(), setForegroundContext: state(),
-    startManualListen: state(), setNextRecordingTarget: state(), retargetActiveRecognition: state(), skipCurrentPlayback: state(), stopCurrentInteraction: state(),
+    startManualListen: state(), setNextRecordingTarget: state(), retargetActiveRecognition: state(), recordDuringPlayback: state(), skipCurrentPlayback: state(), stopCurrentInteraction: state(),
     speakReply: vi.fn(async (_input: Parameters<NativeVoicePlugin["speakReply"]>[0]): Promise<NativeVoiceState> => voiceSnapshot()),
     setKeepListening: state(), sendRecording: state(), retryRecordingRecognition: state(), sendRecoveredRecording: state(),
     copyRecognizedRecordingText: state(), discardRecording: state(),

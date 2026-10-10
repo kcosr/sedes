@@ -415,7 +415,7 @@ function createService(input?: {
     skills: [],
   });
   const readPresentation = vi.fn(presentation);
-  const readCachedPresentation = vi.fn(presentation);
+  const readCachedPresentation = vi.fn(async () => ({ ...await presentation(), inputTargetAvailable: true }));
   const service = new ThreadApplicationService({
     usage: { registerVisibleTurns: () => undefined },
     inventory: { getAuthorized },

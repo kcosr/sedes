@@ -243,14 +243,14 @@ describe("native voice production pipeline with loopback providers", () => {
 
   for (const [mode, scenario] of [["response", "cycle"], ["manual", "cycle"], ["response", "background"], ["response", "background-switch"],
     ["response", "startup"], ["manual", "startup"],
-    ["response", "skip"], ["response", "stop"], ["response", "retarget"],
+    ["response", "record"], ["response", "next"], ["response", "stop"], ["response", "retarget"],
     ["response", "lost-ack"], ["response", "lost-send"], ["response", "cancel-uncertain"]] as const) {
     it.skipIf(!androidSerial)(`runs packaged Android ${mode}/${scenario} through the actual UI and media stack`, async () => {
       await adb(["shell", "pm", "clear", "dev.sedes.local"]);
       const threadTitle = `Voice ${mode} ${scenario}`;
       const threadId = await app.createThread(threadTitle);
-      const secondThreadTitle = `Retarget ${mode} ${scenario}`;
-      const secondThreadId = scenario === "retarget" || scenario === "background-switch" ? await app.createThread(secondThreadTitle) : undefined;
+      const secondThreadTitle = `${scenario === "record" ? "Pinned default" : "Retarget"} ${mode} ${scenario}`;
+      const secondThreadId = scenario === "record" || scenario === "retarget" || scenario === "background-switch" ? await app.createThread(secondThreadTitle) : undefined;
       const initialText = `native voice fixture start ${mode} ${scenario}`;
       if (scenario === "background-switch") {
         const policy = (await app.thread(threadId)).agentTools;
@@ -273,8 +273,8 @@ describe("native voice production pipeline with loopback providers", () => {
       }
       const pairingCode = app.authentication.createPairing({ kind: "management" }).token;
       const text = `voice fixture reply ${mode} ${scenario}`;
-      await speech.configure({ transcripts: [text, ""], asrDelayMs: 0, ttsDurationSeconds: scenario === "skip" ? 12 : 1, reset: true });
       // Give the real playback action a usable window even on software emulators.
+      await speech.configure({ transcripts: [text, ""], asrDelayMs: 0, ttsDurationSeconds: scenario === "record" || scenario === "next" ? 12 : 1, reset: true });
       const before = app.model.requests.length;
       const ttsBefore = (await speech.observations()).speech.length;
       const args = { serverOrigin: app.url, speechEndpoint: speech.endpoint, speechToken: speech.token, pairingCode, threadId, threadTitle, mode, scenario,
@@ -311,11 +311,22 @@ describe("native voice production pipeline with loopback providers", () => {
         const rawResult = /^INSTRUMENTATION_STATUS: voiceResult=(.+)$/mu.exec(result.stdout)?.[1];
         expect(rawResult).toBeDefined();
         const evidence = JSON.parse(rawResult!);
-        // Every scenario records after a start cue, so a real AudioTrack always plays; Response speech is observed separately.
+        // Next exercises speech playback without opening capture; every other scenario records after a start cue.
         expect(evidence).toMatchObject({ draftPreserved: true, composerDraftPreserved: true, serverDraftPreserved: true,
-          audioSource: "deterministic-pcm", audioSink: "AudioTrack" });
+          audioSource: scenario === "next" ? "none" : "deterministic-pcm", audioSink: "AudioTrack" });
         if (mode === "response" && scenario !== "stop") expect(evidence.speechPlayback).toBe(true);
         expect(evidence.journalOutstanding).toBe(0);
+        if (scenario === "record") {
+          expect(evidence.playbackControl).toMatchObject({ action: "Record", sourceThreadId: threadId, autoListen: false,
+            recognitionThreadId: threadId, automatic: false, voiceThreadId: secondThreadId, pinDefaultVoiceThread: true });
+          expect(evidence.phases).toContain("listening");
+        } else if (scenario === "next") {
+          expect(evidence.playbackControl).toMatchObject({ action: "Next", sourceThreadId: threadId, autoListen: true, released: true });
+          expect(evidence.captureChunks).toBe(0);
+          expect(evidence.phases).not.toContain("listening");
+          expect(evidence.phases).not.toContain("submitting");
+          expect((await speech.observations()).transcriptions).toHaveLength(0);
+        }
         if (scenario === "cycle") {
           expect(evidence.inputUi).toMatchObject({ rowCount: 1, provisional: false, routineLabelCount: 0,
             seekEnabled: mode === "manual", submitted: { threadId } });
@@ -342,15 +353,16 @@ describe("native voice production pipeline with loopback providers", () => {
         expect((await app.thread(threadId)).draft.text).toBe(args.draftText);
         const submissions = () => app.model.requests.slice(before).filter(request => request.lastRole === "user" && request.lastText === text);
         // A definitive admission receipt may precede asynchronous provider dispatch.
-        if (scenario !== "stop") await waitForSpeech(() => submissions().length > 0);
-        expect(submissions()).toHaveLength(scenario === "stop" ? 0 : 1);
+        const submitsReply = scenario !== "stop" && scenario !== "next";
+        if (submitsReply) await waitForSpeech(() => submissions().length > 0);
+        expect(submissions()).toHaveLength(submitsReply ? 1 : 0);
         if (mode === "manual") expect((await speech.observations()).speech.length).toBe(ttsBefore);
         if (secondThreadId) {
           if (scenario === "background-switch") await app.waitFor(async () => Object.values((await app.thread(secondThreadId)).itemsById)
             .some(item => item.kind === "user_message" && item.deliveryOperationId === evidence.backgroundSwitch.receipt.operationId));
-          const target = await app.thread(secondThreadId);
+          const target = await app.thread(scenario === "record" ? threadId : secondThreadId);
           expect(JSON.stringify(target)).toContain(text);
-          expect(JSON.stringify(await app.thread(threadId))).not.toContain(text);
+          expect(JSON.stringify(await app.thread(scenario === "record" ? secondThreadId : threadId))).not.toContain(text);
           if (scenario === "background-switch") expect(Object.values(target.itemsById).filter(item =>
             item.kind === "user_message" && item.deliveryOperationId === evidence.backgroundSwitch.receipt.operationId)).toHaveLength(1);
         }

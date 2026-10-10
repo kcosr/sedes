@@ -35,6 +35,7 @@ import {
 } from "../application/thread-automation-summary.js";
 import type {
   AuthorizedThreadApplicationState,
+  CachedThreadApplicationPresentation,
   ThreadApplicationInventoryReader,
   ThreadApplicationPresentation,
   ThreadApplicationPresentationReader,
@@ -495,7 +496,7 @@ export class DatabaseThreadApplicationPresentationReader implements ThreadApplic
     scope: RequestScope,
     applicationThreadId: string,
     effectiveSettings?: BackendEffectiveSettings,
-  ): Promise<ThreadApplicationPresentation> {
+  ): Promise<CachedThreadApplicationPresentation> {
     const target = await this.#targets.presentationForThread(
       scope,
       applicationThreadId,
@@ -510,13 +511,20 @@ export class DatabaseThreadApplicationPresentationReader implements ThreadApplic
         catalog = cached.catalog;
       }
     }
-    return this.#readProvider(
+    const presentation = await this.#readProvider(
       scope,
       applicationThreadId,
       target,
       catalog,
       effectiveSettings,
     );
+    const instance = target.driver?.instance;
+    const inputTargetAvailable = target.workspace !== undefined && instance !== undefined &&
+      instance.id === target.backend.id && instance.tenantId === target.backend.tenantId &&
+      instance.kind === target.backend.kind && instance.enabled === target.backend.enabled &&
+      instance.configurationRevision === target.backend.configurationRevision &&
+      instance.protocolRelease === target.backend.protocolRelease;
+    return { ...presentation, inputTargetAvailable };
   }
 
   async #readProvider(

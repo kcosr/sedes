@@ -62,6 +62,8 @@ export const threadInputContextSchema = z.strictObject({
   runState: threadRunStateSchema.nullable(),
   sourceTurnId: applicationTurnIdSchema.optional(),
   automaticListenEligible: z.boolean(),
+  /** Local permission to capture new input; submission still validates current provider admission. */
+  manualListenEligible: z.boolean(),
   steer: z.discriminatedUnion("availability", [
     z.strictObject({ availability: z.literal("available"), target: steerTargetSchema }),
     z.strictObject({ availability: z.literal("unsupported") }),

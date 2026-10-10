@@ -6090,7 +6090,9 @@ describe("actor-owned input observation", () => {
   it("invalidates input authority at maintenance and close boundaries and never reuses an owner generation", async () => {
     const { actorManager, manager, handle, driver } = fixture(undefined, undefined, 60_000);
     const input = { scope, binding, workspace, opaqueBindingDetail: "opaque", driver };
+    expect(actorManager.isInputRuntimeDormant(scope, binding.applicationThreadId)).toBe(true);
     const acquired = await manager.acquire(input);
+    expect(actorManager.isInputRuntimeDormant(scope, binding.applicationThreadId)).toBe(false);
     const generation = actorManager.observeInputRuntime(scope, binding.applicationThreadId)!.generation;
     const observed: Array<boolean | undefined> = [];
     const unsubscribe = actorManager.subscribeInputActivity((observedScope, threadId) => {
@@ -6102,15 +6104,18 @@ describe("actor-owned input observation", () => {
       disposition: { kind: "idle" }, detachCoordinatorRuntime: () => detach, operation: async () => undefined });
     try {
       expect(actorManager.observeInputRuntime(scope, binding.applicationThreadId)).toBeUndefined();
+      expect(actorManager.isInputRuntimeDormant(scope, binding.applicationThreadId)).toBe(false);
       expect(observed).toEqual([undefined]);
       acquired.release();
       releaseDetach();
       await retirement;
       expect(handle.close).toHaveBeenCalledOnce();
+      expect(actorManager.isInputRuntimeDormant(scope, binding.applicationThreadId)).toBe(true);
       const replacement = await manager.acquire(input);
       expect(actorManager.observeInputRuntime(scope, binding.applicationThreadId)?.generation).not.toBe(generation);
       const closing = replacement.actor.close();
       expect(actorManager.observeInputRuntime(scope, binding.applicationThreadId)).toBeUndefined();
+      expect(actorManager.isInputRuntimeDormant(scope, binding.applicationThreadId)).toBe(false);
       expect(observed.at(-1)).toBeUndefined();
       await closing;
       replacement.release();

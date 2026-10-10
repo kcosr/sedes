@@ -4,12 +4,13 @@
 
 ### Breaking Changes
 
-- Browser and packaged clients require client protocol 146, which adds
+- Browser and packaged clients require client protocol 147, which adds
   automation schedule details and run turn outcomes to thread summaries and
   runs, drops the Remind now inventory action, adds turn reply replay, and adds
-  workpad list sorting, counts, and deletion. Upgrade clients together with the
-  server.
-  ([#58](https://github.com/kcosr/sedes/pull/58), [#59](https://github.com/kcosr/sedes/pull/59), [#61](https://github.com/kcosr/sedes/pull/61), [#62](https://github.com/kcosr/sedes/pull/62), [#65](https://github.com/kcosr/sedes/pull/65))
+  workpad list sorting, counts, and deletion. Input contexts include current
+  manual-input eligibility for replay Auto-listen. Upgrade clients together
+  with the server.
+  ([#58](https://github.com/kcosr/sedes/pull/58), [#59](https://github.com/kcosr/sedes/pull/59), [#61](https://github.com/kcosr/sedes/pull/61), [#62](https://github.com/kcosr/sedes/pull/62), [#65](https://github.com/kcosr/sedes/pull/65), [#67](https://github.com/kcosr/sedes/pull/67))
 
 - `PATCH /api/threads/:threadId/inventory` no longer accepts the `remind`
   action. ([#61](https://github.com/kcosr/sedes/pull/61))
@@ -24,12 +25,12 @@
   and its WebView. Upgrade clients together with the server.
   ([#50](https://github.com/kcosr/sedes/pull/50), [#53](https://github.com/kcosr/sedes/pull/53), [#56](https://github.com/kcosr/sedes/pull/56))
 
-- Android voice uses snapshot version 9, settings version 7, and dictation
+- Android voice uses snapshot version 10, settings version 7, and dictation
   manifest version 2. Reconfigure voice and re-enter speech credentials after
   upgrading: previous per-connection preferences are not imported and their
   speech keys are removed. Finish or copy saved dictation first; older recordings
   remain on disk until discarded but cannot be resumed.
-  ([#49](https://github.com/kcosr/sedes/pull/49), [#51](https://github.com/kcosr/sedes/pull/51), [#53](https://github.com/kcosr/sedes/pull/53), [#55](https://github.com/kcosr/sedes/pull/55))
+  ([#49](https://github.com/kcosr/sedes/pull/49), [#51](https://github.com/kcosr/sedes/pull/51), [#53](https://github.com/kcosr/sedes/pull/53), [#55](https://github.com/kcosr/sedes/pull/55), [#67](https://github.com/kcosr/sedes/pull/67))
 
 - Self-hosted speech servers must advertise per-model `realtime` capabilities.
   Hosted recognition accepts only the supported base model IDs, excluding dated
@@ -490,6 +491,18 @@
   Session stats stays in the thread menu rather than flashing during loading. (#8)
 
 ### Changed
+
+- Android playback offers **Record** to reply to the spoken thread and **Next**
+  to skip speech and its follow-up recording. Headset Play/Pause records during
+  speech when Auto-listen is on and recording is available; otherwise it skips.
+  During speech, dedicated headset Next always skips the interaction. Record
+  takes priority over queued speech and works with Auto-listen off.
+  ([#67](https://github.com/kcosr/sedes/pull/67))
+
+- Android **Play response aloud** now follows **Auto-listen**: after replay,
+  record a new reply to that thread when its current input policy allows it.
+  Archived, read-only, and unavailable targets remain playback-only.
+  ([#67](https://github.com/kcosr/sedes/pull/67))
 
 - Panels open into five regions: Middle, Left, Right, Top, and Bottom. Each
   region shows one panel; opening a panel replaces what its region showed,

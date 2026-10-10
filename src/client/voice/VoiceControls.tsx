@@ -223,8 +223,16 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
             : !busy || failed ? <button type="button" className="voice-card-button" aria-label={startLabel} disabled={off || state.pending} onClick={start}
               title={off ? "Voice is off" : native.actions.canStart ? startLabel : cardReadiness(native.readiness)}>
               {settings.keepListeningByDefault ? <InfinityIcon strokeWidth={1.8} aria-hidden="true" /> : <Mic strokeWidth={1.8} aria-hidden="true" />}</button> : null}
-          {native.actions.canSkip ? <button type="button" className="voice-card-button" data-variant="ghost" aria-label="Skip voice playback" title="Skip"
-            disabled={state.pending} onClick={() => act(() => store.plugin.skipCurrentPlayback(store.commandContext()))}><SkipForward strokeWidth={1.8} aria-hidden="true" /></button> : null}
+          {native.actions.canRecordDuringPlayback && active ? <button type="button" className="voice-card-button" aria-label="Record reply" title="Record reply"
+            disabled={state.pending} onClick={() => {
+              const command = { expectedConnectionGeneration: native.connectionGeneration, interactionId: active.id };
+              act(() => store.plugin.recordDuringPlayback(command));
+            }}><Mic strokeWidth={1.8} aria-hidden="true" /></button> : null}
+          {native.actions.canSkip && active ? <button type="button" className="voice-card-button" data-variant="ghost" aria-label="Next voice interaction" title="Next"
+            disabled={state.pending} onClick={() => {
+              const command = { expectedConnectionGeneration: native.connectionGeneration, interactionId: active.id };
+              act(() => store.plugin.skipCurrentPlayback(command));
+            }}><SkipForward strokeWidth={1.8} aria-hidden="true" /></button> : null}
           {native.actions.canStop && active ? <button type="button" className="voice-card-button" aria-label={cancels ? "Cancel voice recording" : "Stop voice interaction"}
             title={cancels ? "Cancel" : "Stop"} onClick={() => {
               void store.stopInteraction({ expectedConnectionGeneration: native.connectionGeneration, interactionId: active.id }).catch(() => undefined);

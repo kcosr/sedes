@@ -218,7 +218,7 @@ export class NativeVoiceStore {
   async run(action: () => Promise<NativeVoiceState>): Promise<void> {
     return this.#perform(action, false);
   }
-  /** Queues one ended turn's reply for speech only; native rejects when voice is not ready, the text is empty, or the queue is full. */
+  /** Queues one ended turn's reply with current Auto-listen applying afterward; native rejects when voice is not ready, the text is empty, or the queue is full. */
   speakReply(reply: NativeReplySpeech): Promise<void> {
     return this.run(() => this.plugin.speakReply({ ...this.commandContext(), ...reply }));
   }

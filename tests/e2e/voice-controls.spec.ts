@@ -609,7 +609,7 @@ test("a completed turn's footer replays its reply and stays reachable on touch w
   // Behind another notice a tap queues; with no stored result it reads the whole reply, as Copy response gives it.
   await publishVoiceState(page, { phase: "speaking", active: { id: "notice", eventKind: "turn.completed", threadId, threadTitle: "Voice replay",
     recognitionThreadId: null, recognitionThreadTitle: null, automatic: true, recording: null },
-    actions: { ...base.actions, canStart: false, canStop: true, canSkip: true } });
+    actions: { ...base.actions, canStart: false, canStop: true, canSkip: true, canRecordDuringPlayback: true } });
   await speak.click();
   await expect(cardStatus).toContainText("1 queued");
   expect((await speakCalls()).at(-1)).toEqual({ method: "speakReply", args: { ...storedCall.args,

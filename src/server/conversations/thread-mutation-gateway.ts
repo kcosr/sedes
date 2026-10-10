@@ -11,7 +11,7 @@ import {
 import { DirectInputRepository } from "../db/repositories/direct-input-repository.js";
 import { QueuedInputRepository } from "../db/repositories/queued-input-repository.js";
 import { ThreadActivityService } from "./thread-activity-service.js";
-import { initialThreadSettingsReady } from "./thread-input-readiness.js";
+import { directInputRuntimeReady, initialThreadSettingsReady } from "./thread-input-readiness.js";
 import type {
   ThreadDeliveryMutationResult,
   ThreadApplicationMutationResult,
@@ -463,8 +463,7 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
           }
           const timeline = runtime.actor.timeline;
           const settled = runtime.actor.authoritativelySettled;
-          const active = ["running", "waiting_for_input", "waiting_for_approval"].includes(timeline.runState);
-          if (!settled && !active) throw transientAdmission("Input cannot be delivered while the runtime is transitional.");
+          if (!directInputRuntimeReady({ settled, runState: timeline.runState })) throw transientAdmission("Input cannot be delivered while the runtime is transitional.");
           const modes = runtime.hub.snapshot?.capabilities.deliveryModes ?? [];
           const steer = modes.find(mode => mode.id === "steer");
           // A backend without Steer has no valid target shape; fail closed rather than queue.

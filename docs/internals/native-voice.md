@@ -2,15 +2,17 @@
 
 The Android `NativeVoice` Capacitor plugin exposes settings, snapshots, and
 actions. `NativeVoiceRuntime` owns the state machine on one handler thread.
-Native snapshot version 9 includes `active.recording` (ID, Keep listening and
+Native snapshot version 10 includes `active.recording` (ID, Keep listening and
 Reconnecting), native-authoritative `canSetKeepListening`/`canSend` actions, the
 Keep listening blocked reason, and an independent `recordingRecovery` item.
 Recovery exposes identity, revision, target, stage, incomplete/unrecognized
 flags, eligible actions, and optional admission identity; it carries no PCM or
 transcript. It remains visible when Off and across restart. Commands use the
 expected connection generation plus recording ID and, for recovery, expected
-recovery revision. Retarget takes the recording ID; Stop takes the interaction
-ID. The strict bridge accepts only this version. The snapshot also includes
+recovery revision. Retarget takes the recording ID; Stop, `skipCurrentPlayback`
+(Next), and `recordDuringPlayback` take the interaction ID. The required
+`canRecordDuringPlayback` action combines speech-phase and local recording
+readiness. The strict bridge accepts only this version. The snapshot also includes
 `cleanSpeechText` and registered `clientConnectionToken` alongside `originClientId`.
 The `inputDevice` preference is a nullable type/address/name identity rather than
 an Android connection-local device ID. The device-owned `pinDefaultVoiceThread`
@@ -29,6 +31,30 @@ label uses the same default target. A missing default cannot fall back to the
 foreground or pending choice. Local readiness rejection preserves it; Off and
 connection changes clear it. The setter rejects an active interaction or Off.
 Automatic notification replies preserve it and retain their own targets.
+During speech, Record cancels the current playback and reserves a new manual
+recording for the spoken source thread before queued work can drain. It clears
+deferred client switch actions and consumes the pending in-app choice, while
+the spoken thread remains the exact destination. It validates current
+`manualListenEligible`, then rechecks that eligibility and the fresh activity
+token after the cue. An unavailable target ends this start without fallback.
+This explicit request is independent of Auto-listen and notification policy;
+it preserves queued speech. Next ends current speech and its optional follow-up,
+while preserving deferred agent switch/listen actions as distinct pending work.
+It signals normal reply drain, including when the skipped item was a mid-turn
+progress notice. A Next captured during speech still discards that interaction's
+unsent follow-up if validation, cues, recording preparation, or capture begins
+before the command arrives, including a held default. It cannot cancel a new
+manual Record interaction or undo an admitted input. The UI offers Next only
+during speech. Notification and headset Next require the null recording ID
+captured before recording starts. A fresh headset Next carrying the current
+recording ID leaves capture unchanged; other recording commands retain exact
+recording-ID equality.
+Both bridge commands reject stale
+connection generations or interaction IDs. The expanded notification exposes
+Record, Next, and Stop. Headset Play/Pause during speech invokes Record only
+while Auto-listen is on and recording is available; otherwise it invokes Next.
+Dedicated headset Next skips during speech, and active recording retains its
+existing Cancel/Stop behavior.
 `NativeVoiceRuntimeService` supplies Android foreground execution and controls;
 it does not run a WebView. `NativeSpeechTransport` connects directly to OpenAI
 or the OpenAI-Compatible Speech Server. `NativeVoiceHttp` owns authenticated
@@ -299,9 +325,25 @@ with the stored request, so a settings rebuild keeps it.
 
 The replay is a local queue item with no server envelope. Its event, shown as
 `active.eventKind`, is `replay`. Its ID is a fresh UUID that never enters
-notification deduplication. It is not automatic and has no follow-up listen.
-Its identity is the thread and turn ID; a request for a turn already queued or
-playing returns the current snapshot without adding. It counts against the
+notification deduplication. Its playback is user-requested and independent of
+notification policy. At speech completion, current `autoListen` can authorize
+one new recording on the replay's thread in either Manual or Response mode.
+The runtime validates fresh `manualListenEligible` through `input-context`,
+captures that response's activity token, and rechecks both after the start cue.
+It never compares the historical replay turn with the current source turn or
+uses a notification's historical activity token. Dormant and running threads
+can accept a reply when current manual-input policy allows it; ordinary input
+admission and the existing Queue/Steer preference remain authoritative. Invalid
+current availability or changed activity before capture ends the replay without
+recording. Playback remains available for unwritable threads.
+The replay's target is independent of foreground/default/pinning and preserves
+`nextRecordingTarget`. Auto-listen Off during validation, arming, or ordinary
+capture cancels the continuation; explicit retargeting or Keep listening adopts
+it under the existing manual recording rules. Late callbacks cannot reopen it.
+Its identity is the thread and turn ID; a request for a turn whose speech is
+already queued or playing returns the current snapshot without adding. Once
+speech finishes, another replay can queue behind its follow-up recording.
+It counts against the
 64-item and 256 KiB queue limits after normal progress eviction. Before evicting
 anything, native checks whether the replay would fit once every pending progress
 item had yielded. If it would not, the request fails with `voice_queue_full` and
@@ -321,8 +363,9 @@ them as drops. Drain would not filter a replay later, so it would otherwise play
 whenever the service next started. Pending automatic items stay queued and face
 notification eligibility when drain resumes. A settings change rebuilds a
 pending replay from its stored request with the current cleanup setting, and the
-speech text limit chunks it when it starts. Skip ends a replay and Stop cancels
-it; neither listens afterwards. Ending a replay never discards
+speech text limit chunks it when it starts. Next ends the replay's speech and
+skips its follow-up; Record starts an explicit reply to its thread regardless
+of Auto-listen. Stop cancels the interaction. Ending a replay never discards
 client turn actions, completes a notification ID, or signals reply drain. Like
 any playback, a speech configuration change or focus loss ends it, and an
 explicit Stop still clears pending agent client actions.
@@ -342,7 +385,7 @@ command calls the bridge's queue function and publishes state before answering:
 | --- | --- |
 | The replay is the active item after queueing | `applied`, `replay_playing` |
 | The replay waits behind other voice work | `applied`, `replay_queued` |
-| That thread and turn's replay is already active or pending | `noop`, `replay_already_queued` |
+| That thread and turn's speech is already playing or pending | `noop`, `replay_already_queued` |
 | No started session, speech not ready, or no binding | `noop`, `voice_not_ready` |
 | Empty prepared text | `failed`, `voice_reply_empty` |
 | The replay does not fit the queue | `failed`, `voice_queue_full` |
@@ -357,7 +400,7 @@ queued it. The bridge still treats a duplicate as success.
 ## Activity authority and live progress
 
 `GET /api/threads/:threadId/input-context` returns current non-attaching runtime
-authority, activity token, run state, automatic-listen eligibility, and any
+authority, activity token, run state, automatic- and manual-listen eligibility, and any
 available normalized steering target. Reading it never attaches a backend.
 
 Activity tokens are independent of inventory revisions. Admission and lifecycle
@@ -898,7 +941,7 @@ consumes its raw 24 kHz PCM response incrementally. Outgoing transcription
 buffers, request deadlines, and streamed audio bytes are bounded. The incoming
 WebSocket message limit is the smaller of 512 KiB and the provider output limit,
 checked before JSON parsing; OkHttp has already
-buffered that message before delivering it to the listener. Local Skip/Stop
+buffered that message before delivering it to the listener. Local Next/Stop
 intent remains authoritative even if a provider completes concurrently.
 Recognition reconnection and replay follow the coordinator's bounded policy above. OkHttp may repeat a pre-upgrade WebSocket GET after HTTP 503 with
 `Retry-After: 0`; no session or audio has been sent at that point.

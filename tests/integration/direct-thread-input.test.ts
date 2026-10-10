@@ -165,7 +165,7 @@ describe("direct thread input admission", { timeout: 30_000 }, () => {
       const id = created.applicationThreadId;
       const acquire = vi.spyOn(h.actors, "acquire");
       const catalog = vi.spyOn(h.driver, "catalog");
-      expect(await h.mutations.inputContext(h.scope, id)).toMatchObject({ authority: "unbound", automaticListenEligible: false });
+      expect(await h.mutations.inputContext(h.scope, id)).toMatchObject({ authority: "unbound", automaticListenEligible: false, manualListenEligible: true });
       expect(acquire).not.toHaveBeenCalled();
       expect(catalog).not.toHaveBeenCalled();
       await h.mutations.admitInput(h.scope, id, request());
@@ -174,13 +174,13 @@ describe("direct thread input admission", { timeout: 30_000 }, () => {
       const current = await presentation.readCached(h.scope, id);
       const cached = vi.spyOn(presentation, "readCached");
       cached.mockResolvedValueOnce({ ...current, interactionMode: "read_only" });
-      expect(await h.mutations.inputContext(h.scope, id)).toMatchObject({ authority: "current", automaticListenEligible: false });
+      expect(await h.mutations.inputContext(h.scope, id)).toMatchObject({ authority: "current", automaticListenEligible: false, manualListenEligible: false });
       cached.mockResolvedValueOnce({ ...current, settingDescriptors: [{
         id: "model", label: { text: "Model" }, requiredForFirstSubmission: true,
         available: true, options: [],
       }] });
-      expect(await h.mutations.inputContext(h.scope, id)).toMatchObject({ authority: "current", automaticListenEligible: false });
-      expect(await h.mutations.inputContext(h.scope, id)).toMatchObject({ automaticListenEligible: true });
+      expect(await h.mutations.inputContext(h.scope, id)).toMatchObject({ authority: "current", automaticListenEligible: false, manualListenEligible: false });
+      expect(await h.mutations.inputContext(h.scope, id)).toMatchObject({ automaticListenEligible: true, manualListenEligible: true });
 
       let release!: (value: typeof current) => void;
       cached.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
@@ -191,9 +191,9 @@ describe("direct thread input admission", { timeout: 30_000 }, () => {
         change: { action: "snooze", snoozedUntil: Date.now() + 60_000 }, now: Date.now(),
       });
       release(current);
-      expect(await pending).toMatchObject({ automaticListenEligible: false });
+      expect(await pending).toMatchObject({ automaticListenEligible: false, manualListenEligible: false });
       acquire.mockClear(); catalog.mockClear();
-      expect(await h.mutations.inputContext(h.scope, id)).toMatchObject({ automaticListenEligible: false });
+      expect(await h.mutations.inputContext(h.scope, id)).toMatchObject({ automaticListenEligible: false, manualListenEligible: false });
       expect(acquire).not.toHaveBeenCalled();
       expect(catalog).not.toHaveBeenCalled();
     } finally { vi.restoreAllMocks(); await h.close(); }
@@ -253,6 +253,7 @@ describe("direct thread input admission", { timeout: 30_000 }, () => {
       await h.mutations.admitInput(h.scope, id, initial);
       await vi.waitFor(async () => expect((await h.mutations.inputContext(h.scope, id)).steer.availability).toBe("available"), { timeout: 15_000 });
       const active = await h.mutations.inputContext(h.scope, id);
+      expect(active).toMatchObject({ automaticListenEligible: false, manualListenEligible: true });
       if (active.steer.availability !== "available") throw new Error("missing_test_steer");
       const emit = vi.fn();
       const notifications = new NotificationLifecycleObserver(h.inventoryRepository, emit);
@@ -308,7 +309,8 @@ describe("direct thread input admission", { timeout: 30_000 }, () => {
       await h.mutations.admitInput(h.scope, id, request());
       await settled(h, id);
       let observation: ConversationInputRuntimeObservation | undefined = { ...h.actors.observeInputRuntime(h.scope, id)!, runState: "running", settled: false, sourceTurnStatus: "in_progress" };
-      activity = new ThreadActivityService({ database: h.database, actors: { observeInputRuntime: () => observation, subscribeInputActivity: () => () => undefined }, presentation: h.mutations.input.presentation });
+      activity = new ThreadActivityService({ database: h.database, actors: { observeInputRuntime: () => observation,
+        isInputRuntimeDormant: () => observation === undefined, subscribeInputActivity: () => () => undefined }, presentation: h.mutations.input.presentation });
       const running = await activity.capture(h.scope, id);
       observation = { ...observation, sourceTurnStatus: "completed" };
       const terminal = await activity.capture(h.scope, id);
@@ -339,7 +341,8 @@ describe("direct thread input admission", { timeout: 30_000 }, () => {
       expect(again.activityToken).not.toBe(terminal.activityToken);
       observation = undefined;
       expect(await activity.capture(h.scope, id)).toMatchObject({ authority: "unavailable", automaticListenEligible: false });
-      const reboot = new ThreadActivityService({ database: h.database, actors: { observeInputRuntime: () => observation, subscribeInputActivity: () => () => undefined }, presentation: h.mutations.input.presentation });
+      const reboot = new ThreadActivityService({ database: h.database, actors: { observeInputRuntime: () => observation,
+        isInputRuntimeDormant: () => observation === undefined, subscribeInputActivity: () => () => undefined }, presentation: h.mutations.input.presentation });
       expect((await reboot.capture(h.scope, id)).activityToken).not.toBe((await activity.capture(h.scope, id)).activityToken);
       reboot.close();
     } finally { activity?.close(); await h.close(); }

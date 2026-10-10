@@ -30,6 +30,10 @@ describe("native voice bridge helpers", () => {
     expect(nativeVoiceStateSchema.safeParse({ ...state, version: 6 }).success).toBe(false);
     expect(nativeVoiceStateSchema.safeParse({ ...state, version: 7 }).success).toBe(false);
     expect(nativeVoiceStateSchema.safeParse({ ...state, version: 8 }).success).toBe(false);
+    expect(nativeVoiceStateSchema.safeParse({ ...state, version: 9 }).success).toBe(false);
+    const { canRecordDuringPlayback: _record, ...missingRecord } = state.actions;
+    expect(nativeVoiceStateSchema.safeParse({ ...state, actions: missingRecord }).success).toBe(false);
+    expect(nativeVoiceStateSchema.safeParse({ ...state, actions: { ...state.actions, canRecordDuringPlayback: "true" } }).success).toBe(false);
     const { nextRecordingTarget: _target, ...missingTarget } = state;
     expect(nativeVoiceStateSchema.safeParse(missingTarget).success).toBe(false);
     expect(nativeVoiceStateSchema.parse({ ...state, nextRecordingTarget: { threadId: "thread", threadTitle: null } }).nextRecordingTarget?.threadId).toBe("thread");
@@ -49,7 +53,7 @@ describe("native voice bridge helpers", () => {
       expect(nativeVoiceStateSchema.safeParse({ ...state, settings: { ...state.settings, inputDevice } }).success).toBe(false);
     expect(nativeVoiceStateSchema.safeParse({ ...state, settings: { ...state.settings, inputDeviceId: null } }).success).toBe(false);
   });
-  it("requires the strict v9 recording and recovery identities without exposing audio or transcript text", () => {
+  it("requires the strict v10 recording and recovery identities without exposing audio or transcript text", () => {
     const state = voiceSnapshot({ phase: "listening", active: { id: "interaction", eventKind: "manual", threadId: "thread", threadTitle: "Thread",
       recognitionThreadId: "thread", recognitionThreadTitle: "Thread", automatic: false,
       recording: { id: "recording", keepListening: true, reconnecting: true } },
