@@ -51,6 +51,16 @@ export async function installVoiceFixture(page: Page): Promise<void> {
       recoveredText: "Recovered dictation text.",
       publish(patch) {
         fixture.state = { ...fixture.state, ...patch, stateRevision: fixture.state.stateRevision + 1 };
+        const state = fixture.state;
+        if (state.phase === "idle" && !state.active && !state.nextRecordingTarget && !state.settings.pinDefaultVoiceThread &&
+            state.foreground.visible && state.foreground.threadId) {
+          const { threadId, threadTitle } = state.foreground;
+          if (state.retainedVoiceTarget?.threadId !== threadId || state.retainedVoiceTarget.threadTitle !== threadTitle) {
+            state.idleTargetRevision += 1;
+            state.retainedVoiceTarget = { threadId, threadTitle, revision: state.idleTargetRevision };
+          }
+          state.actions = { ...state.actions, canReleaseRetainedTarget: true };
+        }
         sessionStorage.setItem(retainedKey, JSON.stringify(fixture.state));
         emit("stateChanged", fixture.state);
       },
@@ -109,7 +119,7 @@ export async function installVoiceFixture(page: Page): Promise<void> {
             if (!current.active?.recording || args.recordingId !== current.active.recording.id || args.expectedConnectionGeneration !== current.connectionGeneration)
               throw new Error("The recording changed.");
             if (method === "setKeepListening") fixture.publish({ active: { ...current.active, automatic: false,
-              recording: { ...current.active.recording, keepListening: args.enabled === true } }, actions: { ...current.actions, canSend: args.enabled === true } });
+              recording: { ...current.active.recording, keepListening: args.enabled === true } } });
             if (method === "sendRecording") fixture.publish({ phase: "recognizing", actions: { ...current.actions,
               canSetKeepListening: false, canSend: false, canRetarget: false, keepListeningBlockedReason: "not_capturing" } });
             if (method === "retargetActiveRecognition") fixture.publish({ active: { ...current.active,
@@ -137,7 +147,7 @@ export async function installVoiceFixture(page: Page): Promise<void> {
               recognitionThreadId: current.active.threadId, recognitionThreadTitle: current.active.threadTitle,
               recording: { id: `recording:${current.active.id}`, keepListening: current.settings.keepListeningByDefault, reconnecting: false } },
               actions: { ...initial.actions, canStart: false, canStop: true, canRetarget: true, canSetKeepListening: true,
-                canSend: current.settings.keepListeningByDefault, keepListeningBlockedReason: null } });
+                canSend: true, keepListeningBlockedReason: null } });
           } else if (method === "stopPlayback") {
             if (args.interactionId !== current.active?.id || args.expectedConnectionGeneration !== current.connectionGeneration ||
                 !["synthesizing", "speaking"].includes(current.phase)) throw new Error("The playback changed.");

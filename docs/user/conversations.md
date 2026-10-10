@@ -36,10 +36,11 @@ The second line is the state, such as **Ready · Response · Auto-listen on**,
 **Speaking** with the notice kind and queued count, or **Listening**. If voice
 needs to resume, the card offers **Resume**.
 
-Voice retains its last active thread after playback or recording ends, including
-Stop or Cancel. Browsing changes the next in-app recording target but preserves
-that background destination. While idle and showing the retained fallback,
-**Next** releases it and restores the default selection. Next stays disabled
+Voice retains its last active thread after playback or recording ends in the
+background, including Stop or Cancel. While idle in the app, browsing updates
+the destination for in-app, headset, and notification recording. That destination
+stays selected when you background the app. While idle and showing the retained fallback,
+**Next** releases it and restores the default selection. Next stays hidden
 when the card follows a visible or explicitly chosen thread. Releasing does
 not record, send, navigate, or change the draft.
 Off, a connection change, an ended voice session, or enabling pinning clears
@@ -47,14 +48,13 @@ retention. Turning pinning off during an interaction retains its current thread.
 
 Tap the title and status area to open the voice target thread. Its separate
 chevron opens **Choose target thread**, a popup available with pinning on or off.
-While idle, it chooses the next recording started in the app; while listening,
+While idle, it chooses the next manual recording; while listening,
 it changes the current recording target.
 The choice leaves the viewed thread and saved default unchanged, and navigation
-does not redirect it. The choice is consumed when a new in-app recording
+does not redirect it. The choice is consumed when a new manual recording
 starts, and clears when voice is turned Off or the connection changes.
-Headset and notification Start use the pinned default, otherwise the retained
-voice thread, otherwise the saved default. They ignore the viewed thread and
-preserve your pending in-app choice. Idle headset or notification **Next** releases
+Headset and notification Start use that same choice, followed by the pinned
+default, visible thread, retained destination, or saved default. Idle headset or notification **Next** releases
 the retained destination. Automatic notification replies keep their own targets.
 The popup lists the visible thread first. On mobile, search stays visible and
 the keyboard stays closed until you tap it. **Default voice thread** in quick

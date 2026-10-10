@@ -447,7 +447,7 @@ public class NativeVoiceE2eTest {
                     + "const status=card?.querySelector('.voice-card-sub')?.textContent.trim()??'';"
                     + "const stop=card?.querySelector('button[aria-label=\"Stop voice interaction\"]');"
                     + "const start=card?.querySelector('button[aria-label=\"Start voice recording\"]');"
-                    + "return status.startsWith('Ready')&&!status.includes('queued')&&stop instanceof HTMLButtonElement&&stop.disabled"
+                    + "return status.startsWith('Ready')&&!status.includes('queued')&&stop==null"
                     + "&&start instanceof HTMLButtonElement&&!start.disabled})()";
                 waitJs(settledCard, 15000);
                 // A committed DOM can precede paint; let it cross a frame before capturing the display.
@@ -549,18 +549,26 @@ public class NativeVoiceE2eTest {
         JSONObject idleCardAfterNavigation = idleCardUi(), navigatedState = runtime.snapshot();
         NativeVoiceJson.put(idleCardAfterNavigation, "foregroundThreadId", navigatedState.getJSONObject("foreground").opt("threadId"));
         NativeVoiceJson.put(idleCardAfterNavigation, "nativeCanReleaseRetainedTarget", navigatedState.getJSONObject("actions").getBoolean("canReleaseRetainedTarget"));
+        NativeVoiceJson.put(idleCardAfterNavigation, "retainedThreadId", navigatedState.getJSONObject("retainedVoiceTarget").getString("threadId"));
+        NativeVoiceJson.put(idleCardAfterNavigation, "notificationThreadId", NativeVoiceRuntimeService.notificationTarget(navigatedState).getString("threadId"));
         assertEquals(viewedTitle, idleCardAfterNavigation.getString("cardTitle"));
         assertEquals("/threads/" + viewed, idleCardAfterNavigation.getString("path"));
-        assertFalse("Viewed thread wins for in-app Start", idleCardAfterNavigation.getBoolean("cardNextEnabled"));
-        assertTrue("Background controls may still release retained A", idleCardAfterNavigation.getBoolean("nativeCanReleaseRetainedTarget"));
-        assertEquals(source, navigatedState.getJSONObject("retainedVoiceTarget").getString("threadId"));
+        assertFalse("Viewed thread wins for every manual Start", idleCardAfterNavigation.getBoolean("cardNextEnabled"));
+        assertTrue(idleCardAfterNavigation.getBoolean("nativeCanReleaseRetainedTarget"));
+        assertEquals(viewed, idleCardAfterNavigation.getString("retainedThreadId"));
+        assertEquals(viewed, idleCardAfterNavigation.getString("notificationThreadId"));
         assertFalse(navigatedState.getJSONObject("settings").getBoolean("pinDefaultVoiceThread"));
         screenshot("retained-after-navigation");
 
         Context context = instrumentation.getTargetContext();
-        RetainedNotificationControls originalControls = retainedNotificationControls(context, sourceTitle, -1);
+        idleNotificationControls(context, viewedTitle, -1, false);
+        // Leaving the thread keeps its destination; both idle surfaces can now release that fallback.
+        String releasePath = "/settings/voice";
+        js("(()=>{history.pushState({},''," + JSONObject.quote(releasePath) + ");window.dispatchEvent(new PopStateEvent('popstate'));return true})()");
+        await(() -> runtime.snapshot().optJSONObject("foreground").isNull("threadId"), 15000, "settings has no foreground thread");
+        IdleNotificationControls originalControls = idleNotificationControls(context, viewedTitle, -1, true);
         JSONObject beforeStart = runtime.snapshot();
-        JSONObject notificationCapture = captureAndCancel("notification", "retained-thread", source, sourceTitle, viewed,
+        JSONObject notificationCapture = captureAndCancel("notification", "retained-thread", viewed, viewedTitle, null,
             true, supplied, () -> clickNotificationControl(originalControls.start, "retained Start"));
         JSONObject afterCancel = notificationCapture.getJSONObject("afterCancel"), retainedAfterCancel = afterCancel.getJSONObject("retainedVoiceTarget");
         assertEquals(0, inputAttempts.get()); assertTrue(submittedInputs.isEmpty());
@@ -580,23 +588,24 @@ public class NativeVoiceE2eTest {
         assertUnchangedRetainedIdle(afterCancel, afterStaleNext);
         assertEquals("Stale Next must not open capture", captureAfterCancel, supplied.get());
 
-        RetainedNotificationControls freshReleaseControls = retainedNotificationControls(context, sourceTitle, originalControls.postTime);
+        IdleNotificationControls freshReleaseControls = idleNotificationControls(context, viewedTitle, originalControls.postTime, true);
         int releaseDelivery = clickNotificationControl(freshReleaseControls.next, "fresh retained Next");
-        JSONObject notificationRelease = assertRetainedRelease(args, afterCancel, "notification", "/threads/" + viewed, viewed);
+        JSONObject notificationRelease = assertRetainedRelease(args, afterCancel, "notification", releasePath, null);
         assertEquals(0, inputAttempts.get()); assertTrue(submittedInputs.isEmpty());
 
-        // In-app Start records the viewed thread immediately; the preference applies only to background controls.
+        js("(()=>{history.pushState({},''," + JSONObject.quote("/threads/" + viewed) + ");window.dispatchEvent(new PopStateEvent('popstate'));return true})()");
+        await(() -> viewed.equals(runtime.snapshot().optJSONObject("foreground").optString("threadId")), 15000, "returned to the viewed thread");
+        // In-app and notification Start both record the same displayed destination.
         JSONObject viewedCapture = captureAndCancel("card", "viewed-thread", viewed, viewedTitle, viewed,
             false, supplied, this::clickCardStart);
         assertEquals(0, inputAttempts.get()); assertTrue(submittedInputs.isEmpty());
-        RetainedNotificationControls viewedControls = retainedNotificationControls(context, viewedTitle, freshReleaseControls.postTime);
+        IdleNotificationControls viewedControls = idleNotificationControls(context, viewedTitle, freshReleaseControls.postTime, false);
         JSONObject viewedNotificationCapture = captureAndCancel("notification", "notification-viewed-thread", viewed, viewedTitle, viewed,
             true, supplied, () -> clickNotificationControl(viewedControls.start, "newly retained viewed thread Start"));
         assertEquals(0, inputAttempts.get()); assertTrue(submittedInputs.isEmpty());
         assertEquals("Viewed thread is not a releasable fallback", "false", js("document.querySelector('[aria-label=\"Next voice interaction\"]:not(:disabled)') !== null"));
         assertEquals("true", js("document.querySelector('[data-testid=\"composer\"] textarea')?.value === " + JSONObject.quote(viewedDraft)));
         // On a non-thread page the card falls back to retention, so Next releases that actual start target.
-        String releasePath = "/settings/voice";
         js("(()=>{history.pushState({},''," + JSONObject.quote(releasePath) + ");window.dispatchEvent(new PopStateEvent('popstate'));return true})()");
         await(() -> runtime.snapshot().optJSONObject("foreground").isNull("threadId"), 15000, "settings has no foreground thread");
         waitJs("document.querySelector('.voice-card-title')?.textContent.trim() === " + JSONObject.quote(viewedTitle), 15000);
@@ -681,7 +690,8 @@ public class NativeVoiceE2eTest {
         JSONObject recording = runtime.snapshot().getJSONObject("active");
         assertEquals(target, recording.getString("recognitionThreadId")); assertEquals(title, recording.getString("recognitionThreadTitle"));
         assertFalse(recording.getBoolean("automatic"));
-        assertEquals(viewed, runtime.snapshot().getJSONObject("foreground").getString("threadId"));
+        JSONObject foreground = runtime.snapshot().getJSONObject("foreground");
+        assertEquals(viewed, foreground.isNull("threadId") ? null : foreground.getString("threadId"));
         screenshot("recording-" + screenshotLabel);
         waitJs("document.querySelector('[aria-label=\"Cancel voice recording\"]') !== null", 15000);
         click("[aria-label=\"Cancel voice recording\"]");
@@ -710,7 +720,7 @@ public class NativeVoiceE2eTest {
         assertFalse(released.getJSONObject("settings").getBoolean("pinDefaultVoiceThread"));
         assertEquals("true", js("decodeURI(location.pathname) === " + JSONObject.quote(expectedPath)));
         waitJs("document.querySelector('.voice-card-title')?.textContent.trim() === " + JSONObject.quote(viewedTitle), 15000);
-        waitJs("document.querySelector('[aria-label=\"Next voice interaction\"]:not(:disabled)') === null", 15000);
+        waitJs("document.querySelector('[aria-label=\"Next voice interaction\"]') === null", 15000);
         JSONObject releasedCard = idleCardUi();
         assertEquals(expectedPath, releasedCard.getString("path"));
         assertFalse(releasedCard.getBoolean("cardNextEnabled"));
@@ -1016,11 +1026,11 @@ public class NativeVoiceE2eTest {
         }
         fail("Notification action missing: " + title);
     }
-    private static final class RetainedNotificationControls {
+    private static final class IdleNotificationControls {
         final View start, next;
         final long postTime;
         final JSONObject evidence;
-        RetainedNotificationControls(View view, long postTime) {
+        IdleNotificationControls(View view, long postTime, boolean showNext) {
             this.postTime = postTime;
             start = view.findViewById(R.id.voice_notification_record); next = view.findViewById(R.id.voice_notification_next);
             View stop = view.findViewById(R.id.voice_notification_stop);
@@ -1028,7 +1038,8 @@ public class NativeVoiceE2eTest {
             assertEquals(View.VISIBLE, start.getVisibility()); assertTrue("Retained notification Start is enabled", start.isEnabled());
             assertEquals("Retained notification hides Stop", View.GONE, stop.getVisibility());
             assertEquals("Next", ((android.widget.TextView) next).getText().toString());
-            assertEquals(View.VISIBLE, next.getVisibility()); assertTrue("Retained notification Next is enabled", next.isEnabled());
+            assertEquals(showNext ? View.VISIBLE : View.GONE, next.getVisibility());
+            if (showNext) assertTrue("Retained notification Next is enabled", next.isEnabled());
             evidence = NativeVoiceJson.object("title", ((android.widget.TextView) view.findViewById(R.id.voice_notification_title)).getText().toString(),
                 "startLabel", ((android.widget.TextView) start).getText().toString(), "startEnabled", start.isEnabled(),
                 "stopVisible", stop.getVisibility() == View.VISIBLE, "nextLabel", ((android.widget.TextView) next).getText().toString(), "nextEnabled", next.isEnabled());
@@ -1067,18 +1078,21 @@ public class NativeVoiceE2eTest {
         }
         throw new AssertionError("Posted expanded playback Stop missing: " + title);
     }
-    private RetainedNotificationControls retainedNotificationControls(Context context, String title, long postedAfter) throws Exception {
+    private IdleNotificationControls idleNotificationControls(Context context, String title, long postedAfter, boolean showNext) throws Exception {
         long deadline = SystemClock.elapsedRealtime() + 10000;
         while (SystemClock.elapsedRealtime() < deadline) {
             for (StatusBarNotification notification : context.getSystemService(NotificationManager.class).getActiveNotifications()) {
                 if (notification.getPostTime() <= postedAfter || notification.getNotification().bigContentView == null) continue;
-                AtomicReference<RetainedNotificationControls> controls = new AtomicReference<>();
+                AtomicReference<IdleNotificationControls> controls = new AtomicReference<>();
                 instrumentation.runOnMainSync(() -> {
                     View view = notification.getNotification().bigContentView.apply(context, null);
                     android.widget.TextView label = view.findViewById(R.id.voice_notification_title), status = view.findViewById(R.id.voice_notification_status);
                     android.widget.TextView start = view.findViewById(R.id.voice_notification_record);
+                    View next = view.findViewById(R.id.voice_notification_next);
                     if (label != null && title.contentEquals(label.getText()) && status != null && "Ready".contentEquals(status.getText()) &&
-                        start != null && "Start".contentEquals(start.getText())) controls.set(new RetainedNotificationControls(view, notification.getPostTime()));
+                        start != null && "Start".contentEquals(start.getText()) && next != null &&
+                        next.getVisibility() == (showNext ? View.VISIBLE : View.GONE))
+                        controls.set(new IdleNotificationControls(view, notification.getPostTime(), showNext));
                 });
                 if (controls.get() != null) return controls.get();
             }

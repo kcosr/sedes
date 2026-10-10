@@ -67,15 +67,15 @@ public class NativeVoiceRuntimePolicyTest {
             org.json.JSONObject settings = NativeVoiceSettings.defaults().patch(0, NativeVoiceJson.object("pinDefaultVoiceThread", pinned,
                 "voiceThreadId", "default", "voiceThreadTitle", "Saved default")).value;
             org.json.JSONObject retained = NativeVoiceJson.object("threadId", "retained", "threadTitle", "Last voice thread", "revision", 7);
-            org.json.JSONObject target = NativeVoiceRuntime.backgroundRecordingTarget(settings, null);
+            org.json.JSONObject target = NativeVoiceRuntime.manualTarget(null, null, settings, null, null);
             assertEquals("default", target.optString("threadId")); assertEquals("Saved default", target.optString("threadTitle"));
-            target = NativeVoiceRuntime.backgroundRecordingTarget(settings, retained);
+            target = NativeVoiceRuntime.manualTarget(null, null, settings, retained, null);
             assertEquals(pinned ? "default" : "retained", target.optString("threadId"));
             assertEquals(pinned ? "Saved default" : "Last voice thread", target.optString("threadTitle"));
             NativeVoiceJson.put(settings, "voiceThreadId", null);
-            target = NativeVoiceRuntime.backgroundRecordingTarget(settings, null);
+            target = NativeVoiceRuntime.manualTarget(null, null, settings, null, null);
             assertTrue(target.isNull("threadId")); assertTrue(target.isNull("threadTitle"));
-            target = NativeVoiceRuntime.backgroundRecordingTarget(settings, retained);
+            target = NativeVoiceRuntime.manualTarget(null, null, settings, retained, null);
             if (pinned) { assertTrue(target.isNull("threadId")); assertTrue(target.isNull("threadTitle")); }
             else assertEquals("retained", target.optString("threadId"));
         }

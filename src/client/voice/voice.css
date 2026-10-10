@@ -361,6 +361,9 @@
 
 .voice-card-saved-label {
   flex: none;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .voice-card-saved-thread {

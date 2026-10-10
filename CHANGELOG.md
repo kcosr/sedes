@@ -505,6 +505,7 @@
   and a blue speaking outline. Idle hides unavailable Next/Stop actions;
   playback hides Next when the queue is empty and Auto-listen is off.
   Send also finishes ordinary recordings.
+  Saved-dictation labels truncate within the compact card on narrow screens.
   ([#68](https://github.com/kcosr/sedes/pull/68))
 
 - Android voice keeps Record/Send and Stop/Cancel in fixed positions; Keep
@@ -512,8 +513,9 @@
   notification clears queued speech; headset Play/Pause and Next preserve it.
   ([#68](https://github.com/kcosr/sedes/pull/68))
 
-- Unpinned Android voice follows the visible thread for new in-app recordings
-  and keeps the last voice thread for headset and notification starts.
+- Unpinned Android voice follows the idle bar's visible destination for in-app,
+  headset, and notification recordings, and keeps it selected after backgrounding.
+  All manual starts honor and consume an explicit choice from the target picker.
   Without a visible thread, the card uses that retained fallback; idle **Next**
   releases it without navigating or changing a pending target.
   ([#68](https://github.com/kcosr/sedes/pull/68))
@@ -616,8 +618,8 @@
 
 - Voice settings offer searchable models, voices, and threads, with separate
   default recording targets and playback filters. The voice card can choose a
-  current or next target without changing the default; headset and notification
-  Start use the saved default, while automatic replies keep their source thread.
+  current or next target without changing the default; manual starts share the
+  selected destination, while automatic replies keep their source thread.
   ([#49](https://github.com/kcosr/sedes/pull/49), [#53](https://github.com/kcosr/sedes/pull/53))
 
 - Mobile Prompts supports search, and voice thread pickers open without raising

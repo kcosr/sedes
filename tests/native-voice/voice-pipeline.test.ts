@@ -364,15 +364,15 @@ describe("native voice production pipeline with loopback providers", () => {
           expect(evidence.retainedTarget).toMatchObject({
             retainedAfterPlayback: { threadId, threadTitle: canonical.threadTitle },
             idleCardAfterNavigation: { foregroundThreadId: secondThreadId, path: `/threads/${secondThreadId}`, cardTitle: viewedCanonical.threadTitle,
-              cardNextEnabled: false, nativeCanReleaseRetainedTarget: true },
+              cardNextEnabled: false, nativeCanReleaseRetainedTarget: true, retainedThreadId: secondThreadId, notificationThreadId: secondThreadId },
             replyPlayback: { sampleRate: 24_000, writtenFrames: 2400 },
             inputPresentationEvents: 0,
-            notification: { title: canonical.threadTitle, startLabel: "Start", startEnabled: true,
+            notification: { title: viewedCanonical.threadTitle, startLabel: "Start", startEnabled: true,
               stopVisible: false, nextLabel: "Next", nextEnabled: true },
           });
           const captures = evidence.retainedTarget.captures;
           expect(captures).toHaveLength(3);
-          for (const [index, surface, target, title, announces] of [[0, "notification", threadId, canonical.threadTitle, true],
+          for (const [index, surface, target, title, announces] of [[0, "notification", secondThreadId, viewedCanonical.threadTitle, true],
             [1, "card", secondThreadId, viewedCanonical.threadTitle, false], [2, "notification", secondThreadId, viewedCanonical.threadTitle, true]] as const) {
             const capture = captures[index];
             expect(capture).toMatchObject({ surface, recognitionThreadId: target, recognitionThreadTitle: title, announcedTitle: announces ? title : null,
@@ -405,12 +405,11 @@ describe("native voice production pipeline with loopback providers", () => {
           }
           const releases = evidence.retainedTarget.releases;
           expect(releases).toHaveLength(2);
-          for (const [index, surface, target, title] of [[0, "notification", threadId, canonical.threadTitle],
+          for (const [index, surface, target, title] of [[0, "notification", secondThreadId, viewedCanonical.threadTitle],
             [1, "card", secondThreadId, viewedCanonical.threadTitle]] as const) {
             const release = releases[index];
             expect(release).toMatchObject({ surface, retainedBeforeRelease: { threadId: target, threadTitle: title }, retainedAfterRelease: null,
-              foregroundThreadId: surface === "notification" ? secondThreadId : null,
-              path: surface === "notification" ? `/threads/${secondThreadId}` : "/settings/voice",
+              foregroundThreadId: null, path: "/settings/voice",
               cardTitle: viewedCanonical.threadTitle, cardNextEnabled: false,
               voiceThreadId: secondThreadId, pinDefaultVoiceThread: false,
               sourceDraftPreserved: true, secondDraftPreserved: true });

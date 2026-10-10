@@ -24,20 +24,22 @@ falling back to another thread. The nullable native `nextRecordingTarget`
 contains a thread ID/title chosen through generation-fenced
 `setNextRecordingTarget`. This transient state is independent of navigation and
 saved settings. Explicit start arguments take priority, then this pending
-choice, then the pin/foreground/retained/default policy. In-app starts consume it
-when the interaction is admitted, before asynchronous target validation. Headset
-and notification Start use the pinned default, otherwise the retained voice
-destination, otherwise the saved default. They ignore the foreground and preserve
-the pending in-app choice. The idle notification label and open action use that
-same resolver. An unpinned retained target works without a saved default; a missing
+choice, then the pin/foreground/retained/default policy. In-app, headset, and
+notification starts share this policy and consume the pending choice when the
+interaction is admitted, before asynchronous target validation. The idle
+notification label and open action use the same resolver. An unpinned retained
+target works without a saved default; a missing
 pinned default cannot fall back to another thread. Local readiness rejection
 preserves the pending choice; Off and
 connection changes clear it. The setter rejects an active interaction or Off.
 Automatic notification replies preserve it and retain their own targets.
 The in-app card follows a visible available thread before using retention.
 An unavailable visible thread opens the chooser; retention and the saved default
-are fallbacks only when no thread is visible. Navigation does not update the
-retained background destination or retarget an active interaction.
+are fallbacks only when no thread is visible. While idle, native retains the
+visible destination, so clearing foreground context on backgrounding does not
+revert to an older voice thread. Explicit pending choices and pinning still take
+priority. Navigation never retargets an active interaction; when it ends with
+the app visible, native reconciles retention to the idle card's destination.
 
 `retainedVoiceTarget` is nullable session state containing a thread ID, a bounded
 nullable title, and a revision. Every new interaction advances its revision,
@@ -48,7 +50,8 @@ their validation is accepted. Manual and recovery activations retain their
 destination, and successful retargets update it after durable acknowledgement.
 Current input-context titles refresh this metadata independently of announcements. Pure
 threadless notices preserve the previous ID/title while advancing the revision.
-Completion, Stop, cancellation, and a drained queue preserve retention. Off,
+Completion, Stop, cancellation, and a drained queue preserve retention while
+backgrounded; an idle visible thread replaces it when the app is open. Off,
 disconnect or connection-identity changes, session teardown, service detach, and
 pinning clear it. Pinning suppresses retention; unpinning during an interaction
 seeds its spoken thread or accepted recording destination. Nothing is persisted to settings,
@@ -59,8 +62,10 @@ Idle `releaseRetainedVoiceTarget` takes the expected connection generation and
 capture readiness; unavailable targets remain releasable. A stale revision or
 an active interaction makes release a no-op, preserving queued work, settings,
 and the explicit pending app selection. An idle headset Next or notification Next
-performs the same release. `idleTargetRevision` also advances on default/pin edits
-and session teardown. Notification identities and extras, and headset dispatch,
+performs the same release. The notification exposes Next only while displaying
+the retained fallback. `idleTargetRevision` also advances on default/pin edits,
+pending choices, idle foreground changes, and session teardown.
+Notification identities and extras, and headset dispatch,
 capture both revisions alongside generation and interaction/recording IDs, so an
 old idle Start or Next cannot act on a later idle session, even after an
 idle/active/idle or same-target transition. Ordinary manual/headset starts that

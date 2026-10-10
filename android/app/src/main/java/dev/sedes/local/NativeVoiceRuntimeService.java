@@ -153,14 +153,17 @@ public final class NativeVoiceRuntimeService extends Service {
             JSONObject recovery = state.optJSONObject("recordingRecovery");
             threadId = nullable(recovery, "threadId"); threadTitle = nullable(recovery, "threadTitle");
         } else if (settings != null) {
-            return NativeVoiceRuntime.backgroundRecordingTarget(settings, state.optJSONObject("retainedVoiceTarget"));
+            return NativeVoiceRuntime.manualTarget(null, state.optJSONObject("nextRecordingTarget"), settings,
+                state.optJSONObject("retainedVoiceTarget"), state.optJSONObject("foreground"));
         }
         return NativeVoiceJson.object("threadId", threadId, "threadTitle", threadTitle);
     }
-    /** Recovery names the saved recording, so its notification must not release a different idle target. */
+    /** Show Next only when the notification actually uses the releasable retained fallback. */
     static boolean retainedIdleControls(JSONObject state) {
-        JSONObject actions = state.optJSONObject("actions");
+        JSONObject actions = state.optJSONObject("actions"), foreground = state.optJSONObject("foreground");
         return state.optString("phase").equals("idle") && state.optJSONObject("active") == null &&
+            state.optJSONObject("nextRecordingTarget") == null &&
+            !(foreground != null && foreground.optBoolean("visible") && nullable(foreground, "threadId") != null) &&
             actions != null && actions.optBoolean("canReleaseRetainedTarget");
     }
     private Notification build(JSONObject state) {
