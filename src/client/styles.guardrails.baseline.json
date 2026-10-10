@@ -28,7 +28,7 @@
   "borderRadiusLiterals": {
     "components/thread/flat-thread-row.css": 3,
     "components/thread/question-inbox.css": 3,
-    "styles.css": 21,
+    "styles.css": 20,
     "usage/usage.css": 17,
     "workpads/WorkpadDocument.css": 3
   },

@@ -77,7 +77,7 @@ import { KeyValueList } from "@client/components/ui/key-value-list";
 import { SearchableSelectList } from "@client/components/ui/searchable-select";
 import { ScopeSegments } from "../scope-view/ScopeSegments.js";
 import { ViewFilterChips } from "../scope-view/scope-list.js";
-import type { PanelLayoutStore } from "../../workspace-panels/panel-state.js";
+import type { PanelRegionStore } from "../../workspace-panels/region-store.js";
 import {
   PanelChrome,
   type PanelChromeControls,
@@ -144,7 +144,7 @@ export interface TasksPanelContentProps {
   /** Where the content is hosted: a docked workspace panel or a phone sheet. */
   readonly presentation: TasksPresentation;
   readonly store: ApplicationClientStore;
-  readonly panelLayoutStore: PanelLayoutStore;
+  readonly panelLayoutStore: Pick<PanelRegionStore, "open">;
   /** The route the panel follows (a retained surface keeps its own). */
   readonly route: Route;
   /**
@@ -681,7 +681,7 @@ export function TasksPanelContent({
           return;
         }
         setError(null);
-        const opened = panelLayoutStore.openPanel("workspace-files", {
+        const opened = panelLayoutStore.open("files", {
           intent: createWorkspaceFilesOpenIntent({
             workspaceId: workspace.id,
             rootId: resolved.rootId,
@@ -1733,7 +1733,7 @@ export function TasksPanel({
   children,
 }: {
   store: ApplicationClientStore;
-  panelLayoutStore: PanelLayoutStore;
+  panelLayoutStore: Pick<PanelRegionStore, "open">;
   active?: boolean;
   route?: Route;
   children?: ReactNode;
@@ -1809,9 +1809,12 @@ export function TasksPanel({
     () =>
       subscribeReveal(() => {
         const { mobile, dock } = latest.current;
-        // The content switches view and expands the task itself.
-        if (mobile) setSheetOpen(true);
-        else dock?.open({ focus: false });
+        // The content switches view and expands the task itself. On phones
+        // the sheet shows Tasks, which it loads when it is not loaded yet.
+        if (mobile) {
+          if (dock && !dock.present) dock.open({ focus: false });
+          setSheetOpen(true);
+        } else dock?.open({ focus: false });
       }),
     [],
   );
@@ -1832,8 +1835,10 @@ export function TasksPanel({
           : null;
       if (dialog && !dialog.querySelector('[data-slot="tasks-panel"]')) return;
       event.preventDefault();
-      if (mobile) toggleSheet();
-      else dock?.toggle();
+      if (mobile) {
+        if (dock && !dock.present) dock.open({ focus: false });
+        toggleSheet();
+      } else dock?.toggle();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);

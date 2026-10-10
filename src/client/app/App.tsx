@@ -19,7 +19,7 @@ import {
   useApplicationStore,
 } from "../stores/ApplicationClientStore.js";
 import { ThreadStoreRegistry } from "../stores/ThreadStoreRegistry.js";
-import { PanelLayoutStore } from "../workspace-panels/panel-state.js";
+import { PanelRegionStore } from "../workspace-panels/region-store.js";
 import {
   workspacePanelTenants,
   type WorkspacePanelTenantRegistry,
@@ -707,7 +707,7 @@ function ConnectedApp({
       mounted: false,
       started: false,
       disposed: false,
-      panelLayoutStore: new PanelLayoutStore(panelTenants),
+      panelLayoutStore: new PanelRegionStore(panelTenants),
     };
   }, [endpoint.baseUrl, panelTenants]);
   const state = useApplicationStore(dependencies.applicationStore);

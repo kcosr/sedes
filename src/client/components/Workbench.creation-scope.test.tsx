@@ -254,7 +254,7 @@ describe("Workbench new-thread creation scope", () => {
         }}
         applicationStore={applicationStore as never}
         threadRegistry={threadRegistry as never}
-        panelLayoutStore={{ isVisible: () => false, openPanel } as never}
+        panelLayoutStore={{ isVisible: () => false, open: openPanel } as never}
         panelTenants={{} as never}
       />,
     );
@@ -271,7 +271,7 @@ describe("Workbench new-thread creation scope", () => {
     const props = {
       applicationStore: applicationStore as never,
       threadRegistry: { retain: vi.fn(), release: vi.fn() } as never,
-      panelLayoutStore: { openPanel: vi.fn() } as never,
+      panelLayoutStore: { open: vi.fn() } as never,
       panelTenants: {} as never,
     };
     const { rerender } = render(<Workbench {...props} route={{ name: "thread", threadId: "first" }} />);
@@ -298,7 +298,7 @@ describe("Workbench new-thread creation scope", () => {
     const openPanel = vi.fn();
     const panelLayoutStore = {
       isVisible: () => true,
-      openPanel,
+      open: openPanel,
     } as never;
     const threadRegistry = {
       retain: vi.fn(),

@@ -5,15 +5,18 @@ import {
   useRef,
 } from "react";
 import type { EnvironmentTintStyle } from "../../app/environment-palette.js";
-import type { PanelChromeControls } from "../../workspace-panels/PanelChrome.js";
+import type {
+  PanelChromeControls,
+  PanelRegionControls,
+} from "../../workspace-panels/PanelChrome.js";
 import { StablePaneSlot } from "../../workspace-panels/StablePaneSlot.js";
 
 /**
  * Where the one retained Tasks body is shown. Tasks belongs to a thread
  * workspace; other pages (Home, Archived, Usage, the automation pages) have
  * no Tasks surface.
- * - `panel`: docked beside Chat (a workspace panel tenant, so it resizes,
- *   collapses and persists like Files and Workpads);
+ * - `panel`: a workspace panel tenant in its region, so it moves, resizes,
+ *   hides and persists like Files and Workpads;
  * - `sheet`: a bottom sheet on phones.
  */
 export type TasksPresentation = "panel" | "sheet";
@@ -23,22 +26,22 @@ export const TASKS_SHEET_QUERY = "(max-width: 819px)";
 
 /** What a mounted thread workspace tells the Tasks host about its panel. */
 export interface TasksDock {
-  /** The Tasks panel is in this layout, on stage or collapsed. */
+  /** The Tasks panel is loaded, on stage or hidden. */
   readonly present: boolean;
   /** The Tasks panel is on stage. */
   readonly visible: boolean;
   /**
-   * The panel's collapse, dock and close controls. The content renders the
-   * panel header itself, so it shows these in its `PanelChrome`.
+   * The panel's Maximize, Move to and close controls. The content renders
+   * the panel header itself, so it shows these in its `PanelChrome`.
    */
   readonly controls: PanelChromeControls;
   /** The thread environment's tint, as the other panel headers show it. */
   readonly environmentTintStyle?: EnvironmentTintStyle;
-  /** Adds the panel to the layout or reveals it there. */
+  /** Loads the panel if needed and shows it in its place. */
   open(options: { readonly focus: boolean }): void;
-  /** Closes the panel when it is on stage, otherwise opens or reveals it. */
+  /** Hides the panel when it is on stage, otherwise shows (or opens) it. */
   toggle(invoker?: HTMLElement): void;
-  /** Closes the panel; focus moves to the next surface. */
+  /** Closes (unloads) the panel; focus moves to the next surface. */
   close(): void;
 }
 
@@ -61,9 +64,9 @@ export function useTasksHost(): TasksHost | undefined {
 
 /**
  * Publishes the thread workspace's Tasks panel to the host. Only the
- * presence, visibility, dock edge and header tint are compared; the
- * callbacks always run the latest render's, so frequent layout renders do
- * not re-render Tasks.
+ * presence, visibility, the header's region state and tint are compared;
+ * the callbacks always run the latest render's, so frequent layout renders
+ * do not re-render Tasks.
  */
 export function usePublishTasksDock(dock: TasksDock | undefined): void {
   const publish = useTasksHost()?.publishDock;
@@ -73,7 +76,16 @@ export function usePublishTasksDock(dock: TasksDock | undefined): void {
   const present = dock?.present ?? false;
   const visible = dock?.visible ?? false;
   const active = dock?.controls.active;
-  const dockEdge = dock?.controls.dockEdge;
+  const closeAction = dock?.controls.closeAction;
+  const region = dock?.controls.region;
+  // The region controls' state, compared by value.
+  const regionState = region
+    ? JSON.stringify({
+        region: region.region,
+        maximized: region.maximized,
+        extended: region.extended,
+      })
+    : undefined;
   // A tint is rebuilt each render, so it is compared by value.
   const tint = dock?.environmentTintStyle
     ? JSON.stringify(dock.environmentTintStyle)
@@ -84,15 +96,31 @@ export function usePublishTasksDock(dock: TasksDock | undefined): void {
       publish(undefined);
       return;
     }
+    const state = regionState === undefined
+      ? undefined
+      : (JSON.parse(regionState) as Pick<
+          PanelRegionControls,
+          "region" | "maximized" | "extended"
+        >);
+    const current = () => latest.current?.controls.region;
     publish({
       present,
       visible,
       controls: {
         ...(active === undefined ? {} : { active }),
-        ...(dockEdge === undefined ? {} : { dockEdge }),
-        onCollapse: () => latest.current?.controls.onCollapse(),
+        ...(closeAction === undefined ? {} : { closeAction }),
         onClose: (invoker) => latest.current?.controls.onClose(invoker),
-        onDock: (edge) => latest.current?.controls.onDock(edge),
+        ...(state === undefined
+          ? {}
+          : {
+              region: {
+                ...state,
+                onMaximize: () => current()?.onMaximize(),
+                onRestore: () => current()?.onRestore(),
+                onMove: (target) => current()?.onMove(target),
+                onExtend: (on) => current()?.onExtend(on),
+              },
+            }),
       },
       ...(tint === undefined
         ? {}
@@ -101,7 +129,7 @@ export function usePublishTasksDock(dock: TasksDock | undefined): void {
       toggle: (invoker) => latest.current?.toggle(invoker),
       close: () => latest.current?.close(),
     });
-  }, [publish, defined, present, visible, active, dockEdge, tint]);
+  }, [publish, defined, present, visible, active, closeAction, regionState, tint]);
   useLayoutEffect(() => () => publish?.(undefined), [publish]);
 }
 

@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { useState, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi, type Mock } from "vitest";
 import type { ApplicationClientStore } from "../../stores/ApplicationClientStore.js";
-import type { PanelLayoutStore } from "../../workspace-panels/panel-state.js";
+import type { PanelRegionStore } from "../../workspace-panels/region-store.js";
 import { navigate, threadPath, useRoute } from "../../app/router.js";
 import {
   TASKS_PANEL_STORAGE_KEY,
@@ -16,7 +16,8 @@ import {
 } from "../../app/tasks-panel-store.js";
 import { MessageTaskCard } from "../conversation/renderers/MessageTaskCard.js";
 import { TasksPanel } from "./TasksPanel.js";
-import { TasksPanelToggle } from "./TasksPanelToggle.js";
+import { ListChecks } from "lucide-react";
+import { WorkbenchPanelToggle } from "../WorkbenchPanelToggle.js";
 import {
   TasksDockSlot,
   usePublishTasksDock,
@@ -99,13 +100,13 @@ function makeStore(): ApplicationClientStore {
   } as unknown as ApplicationClientStore;
 }
 
-const panelLayoutStore = { openPanel: vi.fn(() => true) } as unknown as PanelLayoutStore;
+const panelLayoutStore = { open: vi.fn(() => true) } as unknown as Pick<PanelRegionStore, "open">;
 
 type DockSpy = {
   readonly open: Mock<(options: { readonly focus: boolean }) => void>;
   readonly toggle: Mock<(invoker?: HTMLElement) => void>;
   readonly close: Mock<() => void>;
-  readonly onCollapse: Mock<() => void>;
+  readonly onMaximize: Mock<() => void>;
   readonly onClose: Mock<(invoker: HTMLElement) => void>;
 };
 
@@ -117,13 +118,19 @@ function Workspace({ spy }: { readonly spy: DockSpy }): React.JSX.Element {
     visible: present,
     controls: {
       active: true,
-      dockEdge: "right",
-      onCollapse: spy.onCollapse,
+      region: {
+        region: "right",
+        maximized: false,
+        extended: true,
+        onMaximize: spy.onMaximize,
+        onRestore: vi.fn(),
+        onMove: vi.fn(),
+        onExtend: vi.fn(),
+      },
       onClose: (invoker) => {
         spy.onClose(invoker);
         setPresent(false);
       },
-      onDock: vi.fn(),
     },
     environmentTintStyle: {
       "--environment-hue": 210,
@@ -155,7 +162,7 @@ function dockSpy(): DockSpy {
     open: vi.fn(),
     toggle: vi.fn(),
     close: vi.fn(),
-    onCollapse: vi.fn(),
+    onMaximize: vi.fn(),
     onClose: vi.fn(),
   };
 }
@@ -179,13 +186,16 @@ function Page({ spy }: { readonly spy: DockSpy }): React.JSX.Element {
   );
 }
 
-/** The workbench bar's Tasks toggle on phones, as the panel layout renders it. */
+/** The workbench bar's Tasks quick button on phones, as the panel layout renders it. */
 function PhoneToggle(): React.JSX.Element {
   const host = useTasksHost();
   return (
-    <TasksPanelToggle
-      open={host?.sheetOpen ?? false}
+    <WorkbenchPanelToggle
+      title="Tasks"
+      icon={<ListChecks aria-hidden="true" />}
+      visible={host?.sheetOpen ?? false}
       onToggle={() => host?.toggleSheet()}
+      testId="tasks-panel-toggle"
     />
   );
 }
@@ -338,15 +348,15 @@ describe("Tasks host in a thread workspace", () => {
     const surface = within(panel).getByRole("region", { name: "Tasks" });
     expect(host()?.placement).toBe("panel");
     expect(surface).toHaveAttribute("data-presentation", "panel");
-    // One header: the content's panel chrome, with collapse, dock and close.
+    // One header: the content's panel chrome, with Maximize, Move to and close.
     expect(surface.querySelectorAll("header")).toHaveLength(1);
     const header = surface.querySelector<HTMLElement>(".workspace-panel-chrome");
     expect(header).not.toBeNull();
     // Like the other panel headers, it carries the thread environment's tint.
     expect(header).toHaveAttribute("data-environment-tint", "true");
     expect(header!.style.getPropertyValue("--environment-hue")).toBe("210");
-    fireEvent.click(within(surface).getByRole("button", { name: "Collapse Tasks panel" }));
-    expect(spy.onCollapse).toHaveBeenCalledTimes(1);
+    fireEvent.click(within(surface).getByRole("button", { name: "Maximize Tasks panel" }));
+    expect(spy.onMaximize).toHaveBeenCalledTimes(1);
     expect(within(surface).getByRole("button", { name: "Tasks panel actions" })).toBeInTheDocument();
     fireEvent.click(within(surface).getByRole("button", { name: "Close Tasks panel" }));
     expect(spy.onClose).toHaveBeenCalledTimes(1);

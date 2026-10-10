@@ -42,7 +42,7 @@ vi.mock("../stores/ApplicationClientStore.js", () => ({
   },
   useApplicationStore: (store: { getSnapshot: () => unknown }) => store.getSnapshot(),
 }));
-vi.mock("../workspace-panels/panel-state.js", () => ({ PanelLayoutStore: class {} }));
+vi.mock("../workspace-panels/region-store.js", () => ({ PanelRegionStore: class {} }));
 vi.mock("../workspace-panels/registry.js", () => ({ workspacePanelTenants: {} }));
 vi.mock("../components/ApplicationShell.js", () => ({ ApplicationShell: () => <main>Application ready</main> }));
 vi.mock("../operations/OperationOverlay.js", () => ({ OperationOverlayHost: () => null }));

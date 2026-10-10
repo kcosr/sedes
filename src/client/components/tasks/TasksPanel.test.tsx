@@ -44,7 +44,9 @@ import {
   useTasksHost,
   type TasksHost,
 } from "./tasks-host.js";
-import type { PanelLayoutStore } from "../../workspace-panels/panel-state.js";
+import type { PanelRegionStore } from "../../workspace-panels/region-store.js";
+
+type PanelLayoutStore = Pick<PanelRegionStore, "open">;
 import { TASK_DRAG_MIME, TaskDragProvider } from "../../tasks/task-drag.js";
 import { CLOSE_TASK_DETAIL_EVENT } from "../../app/android-back.js";
 
@@ -195,8 +197,8 @@ function makeStore(
   };
 }
 
-function makePanelLayoutStore(): PanelLayoutStore {
-  return { openPanel: vi.fn(() => true) } as unknown as PanelLayoutStore;
+function makePanelLayoutStore(): { open: ReturnType<typeof vi.fn> } & PanelLayoutStore {
+  return { open: vi.fn(() => true) } as unknown as { open: ReturnType<typeof vi.fn> } & PanelLayoutStore;
 }
 
 function DraftConsumer({
@@ -237,9 +239,7 @@ function DockedTasks({ active }: { readonly active: boolean }): React.JSX.Elemen
     visible: present && active,
     controls: {
       active,
-      onCollapse: () => undefined,
       onClose: () => setPresent(false),
-      onDock: () => undefined,
     },
     open: () => setPresent(true),
     toggle: () => setPresent((current) => !current),
@@ -1986,7 +1986,7 @@ describe("TasksPanel files", () => {
     fireEvent.click(rowTitle("Audit checkout error states"));
     fireEvent.click(screen.getByRole("button", { name: "Open /workspace/src/checkout.ts in Files" }));
     await vi.waitFor(() =>
-      expect(panelLayoutStore.openPanel).toHaveBeenCalledWith("workspace-files", {
+      expect(panelLayoutStore.open).toHaveBeenCalledWith("files", {
         intent: expect.objectContaining({
           kind: "open-workspace-file",
           workspaceId: "workspace-1",
@@ -2137,7 +2137,18 @@ describe("TasksPanelContent docked", () => {
   it("draws the panel family's header with one actions menu and the layout's controls", async () => {
     const user = userEvent.setup();
     const store = seededStore();
-    const panelControls = { onCollapse: vi.fn(), onClose: vi.fn(), onDock: vi.fn(), dockEdge: "right" as const };
+    const panelControls = {
+      onClose: vi.fn(),
+      region: {
+        region: "right" as const,
+        maximized: false,
+        extended: true,
+        onMaximize: vi.fn(),
+        onRestore: vi.fn(),
+        onMove: vi.fn(),
+        onExtend: vi.fn(),
+      },
+    };
     const onRequestClose = vi.fn();
     render(
       <TasksPanelContent

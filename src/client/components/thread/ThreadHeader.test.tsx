@@ -26,7 +26,11 @@ import type {
 } from "../../stores/ApplicationClientStore.js";
 import type { ThreadClientStore } from "../../stores/ThreadClientStore.js";
 import { UsageQueryCache } from "../../stores/UsageQueryCache.js";
-import type { PanelChromeControls } from "../../workspace-panels/PanelChrome.js";
+import type {
+  PanelChromeControls,
+  PanelRegionControls,
+} from "../../workspace-panels/PanelChrome.js";
+import type { RegionId } from "../../workspace-panels/regions.js";
 import { setEnvironmentColorsEnabled } from "../../app/environment-palette.js";
 import { ThreadHeader } from "./ThreadHeader.js";
 import {
@@ -427,9 +431,9 @@ function renderHeader({
   });
   const panelControls: PanelChromeControls | undefined = withPanelControls
     ? {
-        onCollapse: vi.fn(),
         onClose: vi.fn(),
-        onDock: vi.fn(),
+        closeAction: "hide",
+        region: chatRegion(),
       }
     : undefined;
   const view = render(
@@ -486,6 +490,20 @@ function rowLabels(menu: HTMLElement): string[] {
     );
 }
 
+
+/** The Chat panel's region controls, as PanelLayout passes them. */
+function chatRegion(region: RegionId = "middle"): PanelRegionControls {
+  return {
+    region,
+    maximized: false,
+    ...(region === "middle" ? {} : { extended: false }),
+    onMaximize: vi.fn(),
+    onRestore: vi.fn(),
+    onMove: vi.fn(),
+    onExtend: vi.fn(),
+  };
+}
+
 describe("ThreadHeader panel chrome", () => {
   it("colors Chat by its environment only when environments are distinguishable", () => {
     renderHeader({ environmentCount: 2 });
@@ -518,13 +536,13 @@ describe("ThreadHeader panel chrome", () => {
     const header = screen.getByRole("banner", { name: "Chat panel header" });
     expect(header).toHaveClass("workspace-panel-chrome", "thread-header");
     expect(
-      screen.getByRole("button", { name: "Collapse Chat panel" }),
+      screen.getByRole("button", { name: "Maximize Chat panel" }),
     ).toBeVisible();
     expect(
       screen.getByRole("button", { name: "Chat panel actions" }),
     ).toBeVisible();
     expect(
-      screen.getByRole("button", { name: "Close Chat panel" }),
+      screen.getByRole("button", { name: "Hide Chat panel" }),
     ).toBeVisible();
 
     const threadActions = screen.getByRole("button", {
@@ -534,7 +552,7 @@ describe("ThreadHeader panel chrome", () => {
     expect(threadActions.querySelector(".lucide-ellipsis")).toBeNull();
     expect(
       threadActions.compareDocumentPosition(
-        screen.getByRole("button", { name: "Collapse Chat panel" }),
+        screen.getByRole("button", { name: "Maximize Chat panel" }),
       ),
     ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
     expect(header.querySelector(".thread-panel-identity")).toBeNull();
@@ -550,7 +568,7 @@ describe("ThreadHeader panel chrome", () => {
     );
   });
 
-  it("passes the chat panel's dock edge to its Dock menu", async () => {
+  it("passes the chat panel's region to its Move to menu", async () => {
     const { applicationStore, threadStore } = fixture(0);
     render(
       <ThreadHeader
@@ -567,10 +585,9 @@ describe("ThreadHeader panel chrome", () => {
         pendingBookmarkTurnIds={[]}
         onSelectBookmarkTurn={vi.fn()}
         panelControls={{
-          onCollapse: vi.fn(),
           onClose: vi.fn(),
-          onDock: vi.fn(),
-          dockEdge: "right",
+          closeAction: "hide",
+          region: chatRegion("right"),
         }}
         findOpen={false}
         findButtonRef={{ current: null }}
@@ -580,7 +597,7 @@ describe("ThreadHeader panel chrome", () => {
     await userEvent.click(
       screen.getByRole("button", { name: "Chat panel actions" }),
     );
-    const dock = await screen.findByRole("group", { name: "Dock" });
+    const dock = await screen.findByRole("group", { name: "Move to" });
     expect(
       within(dock).getByRole("menuitemradio", { name: "Right" }),
     ).toHaveAttribute("aria-checked", "true");
@@ -663,7 +680,8 @@ describe("ThreadHeader panel chrome", () => {
     const toggle = screen.getByRole("button", { name: "Show thread toolbar" });
     const bookmarks = screen.getByRole("button", { name: "Bookmarks" });
     const settings = screen.getByRole("button", { name: "Thread actions" });
-    const collapse = screen.getByRole("button", { name: "Collapse Chat panel" });
+    // Phones have no Maximize: the panel's ✕ is its first common control.
+    const collapse = screen.getByRole("button", { name: "Hide Chat panel" });
     expect(toggle).toHaveAttribute("aria-expanded", "false");
     expect(toolbar).toHaveAttribute("hidden");
     expect(bookmarks).toBeVisible();
@@ -713,7 +731,9 @@ describe("ThreadHeader panel chrome", () => {
     expect(screen.queryByRole("button", { name: "Show thread toolbar" })).toBeNull();
     expect(screen.getByRole("button", { name: "Bookmarks" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Automation" })).toBeVisible();
-    expect(screen.getByRole("button", { name: "Collapse Chat panel" })).toBeVisible();
+    // Phones have no Maximize; Chat's ✕ stays.
+    expect(screen.queryByRole("button", { name: "Maximize Chat panel" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Hide Chat panel" })).toBeVisible();
     expect(toolbar).toHaveAttribute("hidden");
 
     await userEvent.click(screen.getByRole("button", { name: "Thread actions" }));

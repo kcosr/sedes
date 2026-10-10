@@ -3,7 +3,13 @@
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DropdownMenuItem } from "../components/ui/dropdown-menu.js";
-import { PanelChrome, panelContentId } from "./PanelChrome.js";
+import {
+  PanelChrome,
+  panelContentId,
+  type PanelChromeControls,
+  type PanelRegionControls,
+} from "./PanelChrome.js";
+import type { RegionId } from "./regions.js";
 
 function FileIcon(): React.JSX.Element {
   return <svg aria-hidden="true" />;
@@ -13,16 +19,36 @@ function NotepadIcon(): React.JSX.Element {
   return <svg data-testid="tenant-icon" aria-hidden="true" />;
 }
 
-const noControls = {
-  onCollapse: () => undefined,
-  onClose: () => undefined,
-  onDock: () => undefined,
-};
+function regionControls(
+  region: RegionId,
+  overrides: Partial<PanelRegionControls> = {},
+): PanelRegionControls {
+  return {
+    region,
+    maximized: false,
+    onMaximize: vi.fn(),
+    onRestore: vi.fn(),
+    onMove: vi.fn(),
+    onExtend: vi.fn(),
+    ...overrides,
+  };
+}
+
+function controls(overrides: Partial<PanelChromeControls> = {}): PanelChromeControls {
+  return { onClose: () => undefined, ...overrides };
+}
 
 /** Each row of an open menu in order, separators included. */
 function menuRows(menu: HTMLElement): string[] {
   return [...menu.querySelectorAll("[role^=menuitem], [role=separator]")].map(
     (row) => (row.getAttribute("role") === "separator" ? "—" : row.textContent ?? ""),
+  );
+}
+
+function openActions(title: string): void {
+  fireEvent.pointerDown(
+    screen.getByRole("button", { name: `${title} panel actions` }),
+    { button: 0, ctrlKey: false },
   );
 }
 
@@ -55,11 +81,7 @@ describe("PanelChrome", () => {
       <PanelChrome
         tenant={{ id: "workspace-files", title: "Files", icon: FileIcon }}
         status={{ subtitle: "demo", dirty: true, busy: true }}
-        controls={{
-          onCollapse: () => undefined,
-          onClose: () => undefined,
-          onDock: () => undefined,
-        }}
+        controls={controls()}
       />,
     );
 
@@ -71,28 +93,55 @@ describe("PanelChrome", () => {
     expect(screen.queryByRole("tab")).toBeNull();
   });
 
-  it("provides distinct collapse and close controls", () => {
-    const onCollapse = vi.fn();
+  it("offers Maximize, ⋯ and ✕, and no collapse button", () => {
     const onClose = vi.fn();
+    const region = regionControls("right");
     render(
       <PanelChrome
         tenant={{ id: "workspace-files", title: "Files", icon: FileIcon }}
-        controls={{
-          onCollapse,
-          onClose,
-          onDock: () => undefined,
-        }}
+        controls={controls({ onClose, region })}
       />,
     );
 
-    fireEvent.click(
-      screen.getByRole("button", { name: "Collapse Files panel" }),
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Close Files panel" }));
+    const header = screen.getByRole("banner", { name: "Files panel header" });
+    expect(
+      within(header).getAllByRole("button").map((button) => button.getAttribute("aria-label")),
+    ).toEqual(["Maximize Files panel", "Files panel actions", "Close Files panel"]);
+    expect(screen.queryByRole("button", { name: /Collapse/ })).toBeNull();
 
-    expect(onCollapse).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByRole("button", { name: "Maximize Files panel" }));
+    expect(region.onMaximize).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByRole("button", { name: "Close Files panel" }));
     expect(onClose).toHaveBeenCalledOnce();
     expect(onClose.mock.calls[0]?.[0]).toBeInstanceOf(HTMLElement);
+  });
+
+  it("turns Maximize into Restore while maximized", () => {
+    const region = regionControls("middle", { maximized: true });
+    render(
+      <PanelChrome
+        panelTitle="Chat"
+        leading={<span>Thread title</span>}
+        controls={controls({ region })}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Restore Chat panel" }));
+    expect(region.onRestore).toHaveBeenCalledOnce();
+    expect(region.onMaximize).not.toHaveBeenCalled();
+  });
+
+  it("names Chat's ✕ for what it does: it hides Chat", () => {
+    const onClose = vi.fn();
+    render(
+      <PanelChrome
+        panelTitle="Chat"
+        leading={<span>Thread title</span>}
+        controls={controls({ onClose, closeAction: "hide" })}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Hide Chat panel" }));
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("button", { name: "Close Chat panel" })).toBeNull();
   });
 
   it("keeps panel-specific controls to the left of common panel controls", () => {
@@ -101,201 +150,120 @@ describe("PanelChrome", () => {
         panelTitle="Chat"
         leading={<span>Thread title</span>}
         panelActions={<button>Find</button>}
-        controls={{
-          onCollapse: () => undefined,
-          onClose: () => undefined,
-          onDock: () => undefined,
-        }}
+        controls={controls({ region: regionControls("middle") })}
       />,
     );
 
     const header = screen.getByRole("banner", { name: "Chat panel header" });
     expect(header.textContent).toContain("Thread titleFind");
-    expect(
-      screen.getByRole("button", { name: "Chat panel actions" }),
-    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Chat panel actions" })).toBeTruthy();
     expect(header.querySelector(".lucide-ellipsis-vertical")).not.toBeNull();
     expect(header.querySelector(".lucide-ellipsis")).toBeNull();
   });
 
-  it("checks the current dock edge and docks only at another edge", () => {
-    const onDock = vi.fn();
+  it("checks the current region in Move to and moves only to another", () => {
+    const region = regionControls("right");
     render(
       <PanelChrome
         tenant={{ id: "workspace-files", title: "Files", icon: FileIcon }}
-        controls={{
-          onCollapse: () => undefined,
-          onClose: () => undefined,
-          onDock,
-          dockEdge: "right",
-        }}
+        controls={controls({ region })}
       />,
     );
 
-    const openMenu = () =>
-      fireEvent.pointerDown(
-        screen.getByRole("button", { name: "Files panel actions" }),
-        { button: 0, ctrlKey: false },
-      );
-    openMenu();
-    const dock = screen.getByRole("group", { name: "Dock" });
-    const edges = within(dock).getAllByRole("menuitemradio");
-    expect(edges.map((edge) => edge.textContent)).toEqual([
+    openActions("Files");
+    const moveTo = screen.getByRole("group", { name: "Move to" });
+    const regions = within(moveTo).getAllByRole("menuitemradio");
+    expect(regions.map((item) => item.textContent)).toEqual([
+      "Middle",
       "Left",
       "Right",
       "Top",
       "Bottom",
     ]);
-    expect(
-      edges.map((edge) => edge.getAttribute("aria-checked")),
-    ).toEqual(["false", "true", "false", "false"]);
-    expect(edges[1]).toHaveAttribute("data-state", "checked");
+    expect(regions.map((item) => item.getAttribute("aria-checked"))).toEqual([
+      "false",
+      "false",
+      "true",
+      "false",
+      "false",
+    ]);
 
-    // The current edge is a no-op; another edge docks there.
-    fireEvent.click(within(dock).getByRole("menuitemradio", { name: "Right" }));
-    expect(onDock).not.toHaveBeenCalled();
-    openMenu();
+    // The current region is a no-op; another moves the panel there.
+    fireEvent.click(within(moveTo).getByRole("menuitemradio", { name: "Right" }));
+    expect(region.onMove).not.toHaveBeenCalled();
+    openActions("Files");
     fireEvent.click(screen.getByRole("menuitemradio", { name: "Bottom" }));
-    expect(onDock).toHaveBeenCalledExactlyOnceWith("bottom");
+    expect(region.onMove).toHaveBeenCalledExactlyOnceWith("bottom");
   });
 
-  it("checks no edge for a panel that is not docked at one", () => {
-    render(
-      <PanelChrome
-        tenant={{ id: "workspace-files", title: "Files", icon: FileIcon }}
-        controls={{
-          onCollapse: () => undefined,
-          onClose: () => undefined,
-          onDock: () => undefined,
-        }}
-      />,
-    );
-    fireEvent.pointerDown(
-      screen.getByRole("button", { name: "Files panel actions" }),
-      { button: 0, ctrlKey: false },
-    );
-    expect(
-      screen
-        .getAllByRole("menuitemradio")
-        .map((edge) => edge.getAttribute("aria-checked")),
-    ).toEqual(["false", "false", "false", "false"]);
-  });
+  it.each([
+    ["left", "Full height", true],
+    ["right", "Full height", false],
+    ["top", "Full width", false],
+    ["bottom", "Full width", true],
+  ] as const)(
+    "offers the %s region's corner toggle as %s",
+    (edge, label, extended) => {
+      const region = regionControls(edge, { extended });
+      render(
+        <PanelChrome
+          tenant={{ id: "workspace-files", title: "Files", icon: FileIcon }}
+          controls={controls({ region })}
+        />,
+      );
+      openActions("Files");
+      const toggle = screen.getByRole("menuitemcheckbox", { name: label });
+      expect(toggle).toHaveAttribute("aria-checked", String(extended));
+      fireEvent.click(toggle);
+      expect(region.onExtend).toHaveBeenCalledExactlyOnceWith(!extended);
+    },
+  );
 
-  it("presents the Dock group with panel items as a sheet on touch", () => {
-    coarsePointer = true;
-    const onDock = vi.fn();
-    render(
-      <PanelChrome
-        panelTitle="Terminals"
-        leading={<span>Terminals</span>}
-        controls={{
-          onCollapse: () => undefined,
-          onClose: () => undefined,
-          onDock,
-          dockEdge: "bottom",
-          renderMenuItems: <button>Transcript</button>,
-        }}
-      />,
-    );
-
-    fireEvent.click(
-      screen.getByRole("button", { name: "Terminals panel actions" }),
-    );
-    const sheet = screen.getByRole("dialog", { name: "Terminals panel" });
-    expect(
-      within(sheet).getByRole("menuitemradio", { name: "Bottom" }),
-    ).toHaveAttribute("aria-checked", "true");
-    fireEvent.click(within(sheet).getByRole("menuitemradio", { name: "Left" }));
-    expect(onDock).toHaveBeenCalledExactlyOnceWith("left");
-    cleanup();
-
-    // Four Dock rows alone stay a menu.
+  it("offers no corner toggle in the Middle", () => {
     render(
       <PanelChrome
         panelTitle="Chat"
         leading={<span>Chat</span>}
-        controls={{
-          onCollapse: () => undefined,
-          onClose: () => undefined,
-          onDock: () => undefined,
-        }}
+        controls={controls({ region: regionControls("middle") })}
       />,
     );
-    fireEvent.pointerDown(
-      screen.getByRole("button", { name: "Chat panel actions" }),
-      { button: 0, ctrlKey: false },
-    );
-    expect(screen.getByRole("menu")).toBeTruthy();
-    expect(screen.queryByRole("dialog")).toBeNull();
+    openActions("Chat");
+    expect(screen.queryByRole("menuitemcheckbox")).toBeNull();
+    expect(menuRows(screen.getByRole("menu"))).toEqual([
+      "Middle",
+      "Left",
+      "Right",
+      "Top",
+      "Bottom",
+    ]);
   });
 
-  it("drops the panel menu on single-pane layouts that cannot dock", () => {
-    singlePane = true;
-    const { rerender } = render(
-      <PanelChrome
-        tenant={{ id: "workspace-files", title: "Files", icon: FileIcon }}
-        controls={{
-          onCollapse: () => undefined,
-          onClose: () => undefined,
-          onDock: () => undefined,
-        }}
-      />,
-    );
-
-    // Collapse and close still apply; only the dock-only menu goes away.
-    expect(
-      screen.queryByRole("button", { name: "Files panel actions" }),
-    ).toBeNull();
-    expect(
-      screen.getByRole("button", { name: "Collapse Files panel" }),
-    ).toBeTruthy();
-    expect(
-      screen.getByRole("button", { name: "Close Files panel" }),
-    ).toBeTruthy();
-
-    // A tenant with its own items still needs somewhere to put them.
-    rerender(
-      <PanelChrome
-        tenant={{ id: "workspace-files", title: "Files", icon: FileIcon }}
-        controls={{
-          onCollapse: () => undefined,
-          onClose: () => undefined,
-          onDock: () => undefined,
-          renderMenuItems: <button>Reveal</button>,
-        }}
-      />,
-    );
-    expect(
-      screen.getByRole("button", { name: "Files panel actions" }),
-    ).toBeTruthy();
-  });
-
-  it("lists a tenant's own menu items after the Dock group", () => {
+  it("lists a tenant's own menu items after Move to and the corner toggle", () => {
     const onRename = vi.fn();
     render(
       <PanelChrome
         tenant={{ id: "workpads", title: "Workpads", icon: NotepadIcon }}
-        controls={{
-          ...noControls,
+        controls={controls({
+          region: regionControls("right", { extended: true }),
           renderMenuItems: (
             <>
               <DropdownMenuItem onSelect={onRename}>Rename…</DropdownMenuItem>
               <DropdownMenuItem>Archive</DropdownMenuItem>
             </>
           ),
-        }}
+        })}
       />,
     );
 
-    fireEvent.pointerDown(
-      screen.getByRole("button", { name: "Workpads panel actions" }),
-      { button: 0, ctrlKey: false },
-    );
+    openActions("Workpads");
     expect(menuRows(screen.getByRole("menu"))).toEqual([
+      "Middle",
       "Left",
       "Right",
       "Top",
       "Bottom",
+      "—",
+      "Full height",
       "—",
       "Rename…",
       "Archive",
@@ -305,34 +273,75 @@ describe("PanelChrome", () => {
     expect(screen.queryByRole("menu")).toBeNull();
   });
 
-  it("keeps the panel menu for tenant items on single-pane layouts, as a sheet without docking", () => {
-    singlePane = true;
-    const onRename = vi.fn();
+  it("presents Move to with panel items as a sheet on touch, and alone as a menu", () => {
+    coarsePointer = true;
+    const region = regionControls("bottom");
     render(
       <PanelChrome
-        tenant={{ id: "workpads", title: "Workpads", icon: NotepadIcon }}
-        controls={{
-          ...noControls,
-          renderMenuItems: (
-            <DropdownMenuItem onSelect={onRename}>Rename…</DropdownMenuItem>
-          ),
-        }}
+        panelTitle="Terminals"
+        leading={<span>Terminals</span>}
+        controls={controls({
+          region,
+          renderMenuItems: <DropdownMenuItem>Transcript</DropdownMenuItem>,
+        })}
       />,
     );
 
-    // A sheet opens on click, as a button does.
-    fireEvent.click(screen.getByRole("button", { name: "Workpads panel actions" }));
-    // Nothing to dock beside, so no Dock group or separator: just the items,
+    fireEvent.click(screen.getByRole("button", { name: "Terminals panel actions" }));
+    const sheet = screen.getByRole("dialog", { name: "Terminals panel" });
+    expect(
+      within(sheet).getByRole("menuitemradio", { name: "Bottom" }),
+    ).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(within(sheet).getByRole("menuitemradio", { name: "Left" }));
+    expect(region.onMove).toHaveBeenCalledExactlyOnceWith("left");
+    cleanup();
+
+    render(
+      <PanelChrome
+        panelTitle="Chat"
+        leading={<span>Chat</span>}
+        controls={controls({ region: regionControls("middle") })}
+      />,
+    );
+    openActions("Chat");
+    expect(screen.getByRole("menu")).toBeTruthy();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("drops Maximize and Move to on single-pane layouts", () => {
+    singlePane = true;
+    const { rerender } = render(
+      <PanelChrome
+        tenant={{ id: "workspace-files", title: "Files", icon: FileIcon }}
+        controls={controls({ region: regionControls("right") })}
+      />,
+    );
+
+    // Close still applies; Maximize and the Move to-only menu go away.
+    expect(screen.queryByRole("button", { name: "Files panel actions" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Maximize Files panel" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Close Files panel" })).toBeTruthy();
+
+    // A tenant with its own items still needs somewhere to put them.
+    rerender(
+      <PanelChrome
+        tenant={{ id: "workspace-files", title: "Files", icon: FileIcon }}
+        controls={controls({
+          region: regionControls("right"),
+          renderMenuItems: <DropdownMenuItem>Reveal</DropdownMenuItem>,
+        })}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Files panel actions" }));
+    // Nothing to place beside, so no Move to or separator: just the items,
     // in the touch sheet a single-pane layout always uses.
-    expect(menuRows(screen.getByRole("dialog", { name: "Workpads panel" }))).toEqual(["Rename…"]);
-    expect(screen.queryByRole("group", { name: "Dock" })).toBeNull();
-    fireEvent.click(screen.getByRole("menuitem", { name: "Rename…" }));
-    expect(onRename).toHaveBeenCalledOnce();
+    expect(menuRows(screen.getByRole("dialog", { name: "Files panel" }))).toEqual([
+      "Reveal",
+    ]);
+    expect(screen.queryByRole("group", { name: "Move to" })).toBeNull();
   });
 
   it("keeps content ids safe for DOM use", () => {
-    expect(panelContentId("files/a b")).toBe(
-      "workspace-panel-content-files_a_b",
-    );
+    expect(panelContentId("files/a b")).toBe("workspace-panel-content-files_a_b");
   });
 });

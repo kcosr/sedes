@@ -14,7 +14,7 @@ import { NewThreadControl } from "./NewThreadControl";
 import { SidebarNavTrigger } from "./SidebarNavTrigger";
 import { ThreadView } from "./ThreadView";
 import { PanelLayout } from "../workspace-panels/PanelLayout";
-import type { PanelLayoutStore } from "../workspace-panels/panel-state";
+import type { PanelRegionStore } from "../workspace-panels/region-store";
 import type { WorkspacePanelTenantRegistry } from "../workspace-panels/registry";
 import {
   createWorkspaceFileLinkHandler,
@@ -37,7 +37,7 @@ export function Workbench({
   active?: boolean;
   applicationStore: ApplicationClientStore;
   threadRegistry: ThreadStoreRegistry;
-  panelLayoutStore: PanelLayoutStore;
+  panelLayoutStore: PanelRegionStore;
   panelTenants: WorkspacePanelTenantRegistry;
 }): React.JSX.Element {
   const application = useApplicationStore(applicationStore);
@@ -92,7 +92,7 @@ export function Workbench({
                 signal,
               ),
             open: (intent) => {
-              panelLayoutStore.openPanel("workspace-files", { intent });
+              panelLayoutStore.open("files", { intent });
             },
           }),
     [applicationStore, panelLayoutStore, selectedThreadId, threadWorkspaceId],
@@ -107,7 +107,7 @@ export function Workbench({
     const changed = threadId !== previousThreadId;
     lastThreadRoute.current = threadId;
     if (changed && threadId) {
-      panelLayoutStore.openPanel("chat", {
+      panelLayoutStore.open("chat", {
         focus: true,
         focusScope: { kind: "thread", threadId },
       });

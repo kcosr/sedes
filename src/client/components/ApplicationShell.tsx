@@ -53,7 +53,7 @@ import {
   ServerSettingsForm,
   type ServerSettingsControls,
 } from "./ServerSettingsForm";
-import type { PanelLayoutStore } from "../workspace-panels/panel-state";
+import type { PanelRegionStore } from "../workspace-panels/region-store";
 import type { WorkspacePanelTenantRegistry } from "../workspace-panels/registry";
 import { installThreadPanelOpenRequestListener } from "../workspace-panels/thread-panel-navigation.js";
 import { ComposerDraftProvider } from "../context-excerpts/coordinator.js";
@@ -81,7 +81,7 @@ export function ApplicationShell({
   threadRegistry: ThreadStoreRegistry;
   serverSettings?: ServerSettingsControls;
   electronConnectionSettings?: ElectronConnectionSettingsControls;
-  panelLayoutStore: PanelLayoutStore;
+  panelLayoutStore: PanelRegionStore;
   panelTenants: WorkspacePanelTenantRegistry;
   toolClientEndpoint: string;
 }): React.JSX.Element {
@@ -338,7 +338,7 @@ export function ApplicationShell({
     workbenchRoute,
     applicationStore.workspaceIdForThread,
   );
-  const routedPanelLayoutStore =
+  const routedPanelRegionStore =
     workbenchRoute.name === "thread"
       ? panelLayoutStore.forThread(workbenchRoute.threadId)
       : panelLayoutStore;
@@ -350,14 +350,14 @@ export function ApplicationShell({
       active={!settingsActive}
       route={workbenchRoute}
       store={applicationStore}
-      panelLayoutStore={routedPanelLayoutStore}
+      panelLayoutStore={routedPanelRegionStore}
     >
       <Workbench
         route={workbenchRoute}
         active={!settingsActive}
         applicationStore={applicationStore}
         threadRegistry={threadRegistry}
-        panelLayoutStore={routedPanelLayoutStore}
+        panelLayoutStore={routedPanelRegionStore}
         panelTenants={panelTenants}
       />
     </TasksPanel>
@@ -544,12 +544,10 @@ export function toolClientResources(
 }
 
 export function openThreadChatPanel(
-  panelLayoutStore: Pick<PanelLayoutStore, "forThread">,
+  panelLayoutStore: Pick<PanelRegionStore, "forThread">,
   threadId: string,
 ): boolean {
-  return panelLayoutStore
-    .forThread(threadId)
-    .openPanel("chat", { focus: true });
+  return panelLayoutStore.forThread(threadId).open("chat", { focus: true });
 }
 
 export function installPromptSettingsRequestListener(
@@ -582,7 +580,7 @@ export interface WorkspacePanelNavigationBlockHandlers {
 export function createWorkspacePanelNavigationBlocker(
   workspaceForThread: (threadId: string) => string | undefined,
   panelLayoutStore: Pick<
-    PanelLayoutStore,
+    PanelRegionStore,
     "hasDirtyWorkspacePanels" | "discardWorkspacePanelChanges"
   >,
   handlers: WorkspacePanelNavigationBlockHandlers,
@@ -612,7 +610,7 @@ export function createWorkspacePanelNavigationBlocker(
 
 export function installWorkspacePanelBeforeUnloadGuard(
   panelLayoutStore: Pick<
-    PanelLayoutStore,
+    PanelRegionStore,
     "hasAnyDirtyWorkspacePanels" | "subscribeWorkspaceDirty"
   >,
   target: Pick<Window, "addEventListener" | "removeEventListener">,

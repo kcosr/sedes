@@ -30,11 +30,6 @@ export interface WorkspacePanelHost {
   setBusy(busy: boolean): void;
   setDirty(dirty: boolean): void;
   setSubtitle(text?: string): void;
-  /**
-   * The tenant's own items for the header's ⋯ menu, after the Dock group.
-   * They render inside the layout's menu, so menu primitives work in them.
-   * Publish a memoized node: every change re-renders the header.
-   */
 }
 
 export interface WorkspacePanelContext {
@@ -50,9 +45,10 @@ export interface WorkspacePanelContext {
   /** Route-bound access to the active thread's composer draft, when mounted. */
   readonly contextExcerpts?: ComposerDraftStagingTarget;
   /**
-   * Whether the singleton surface is currently displayed. Collapsed surfaces
-   * remain mounted and must suppress layout- or focus-affecting work while
-   * this is false.
+   * Whether the singleton surface is currently displayed. Hidden surfaces
+   * (replaced in their region, hidden, made room for, or behind a maximized
+   * panel) remain mounted and must suppress layout- or focus-affecting work
+   * while this is false.
    */
   readonly visible: boolean;
   readonly intent?: unknown;
@@ -66,7 +62,7 @@ export interface WorkspacePanelTenant {
   /**
    * Who renders the panel header. `chrome` (the default): the layout's
    * shared `PanelChrome`. `tenant`: the content renders its own header and
-   * shows the layout's collapse, dock and close controls in it, so the
+   * shows the layout's Maximize, Move to and close controls in it, so the
    * surface never carries two headers.
    */
   readonly header?: "chrome" | "tenant";
@@ -76,12 +72,17 @@ export interface WorkspacePanelTenant {
     readonly preferredWidth: number;
     readonly preferredHeight: number;
     /**
-     * The share of the stage a first open takes along its edge's axis,
-     * between the minimum and the preferred size; without one, it takes
-     * the preferred size. A narrow stage then keeps room for Chat.
+     * The share of the stage the panel takes along its region's axis until
+     * it is resized, between the minimum and the preferred size; without
+     * one, it takes the preferred size. A narrow stage then keeps room for
+     * Chat.
      */
     readonly preferredShare?: number;
   };
+  /**
+   * Unused by panel regions, whose default placements are in regions.ts
+   * (`DEFAULT_PLACEMENT`).
+   */
   readonly preferredPlacement: {
     readonly edge: "right" | "bottom";
   };
