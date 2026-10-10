@@ -27,12 +27,17 @@ import {
  * instead, so the stage never has a hole.
  *
  * Make-room: when the visible panels' minimums do not fit the stage, edge
- * regions are hidden, least recently shown first, until they fit. Hiding is
- * derived from the stage size and never stored: the panels stay loaded and
- * their regions keep showing them, so they return when the stage has room.
- * The Middle is never hidden, nor is Chat wherever it lives, nor the edge
- * panel shown or used most recently (the one just opened). When even the
- * kept panels do not fit, their minimums shrink together in proportion.
+ * regions are hidden, least recently shown or used first. Every edge region
+ * but Chat's may go, the one just opened included when nothing else makes
+ * room; the Middle and Chat, wherever it lives, never do. Of the sets of
+ * regions whose hiding makes the layout fit, make-room hides the one whose
+ * most recently used region is least recent, then the smallest: so it hides
+ * older regions together before a newer one, and never a region the fit
+ * does not need. Hiding is derived from the stage size and never stored: the
+ * panels stay loaded and their regions keep showing them, so they return
+ * when the stage has room. When no set fits, it hides the set that leaves
+ * the least overflow, by the same preferences, and the remaining minimums
+ * shrink together in proportion.
  *
  * Maximize fills the whole stage with one panel and skips all of this.
  */
@@ -175,7 +180,7 @@ export interface RegionGeometry {
   /** Visible panels, outermost first; the Middle (or the filler) last. */
   readonly panels: readonly RegionPanelBox[];
   readonly handles: readonly RegionResizeHandle[];
-  /** Panels make-room hid, in the order it hid them. */
+  /** Panels make-room hid, least recently shown or used first. */
   readonly hiddenByMakeRoom: readonly PanelKind[];
   readonly maximized: PanelKind | null;
   /** The kept panels' minimums did not fit and were shrunk together. */
@@ -360,42 +365,62 @@ function makeRoom(
 ): PanelKind[] {
   // An unmeasured stage has no room to make.
   if (stage.width <= 0 || stage.height <= 0) return [];
-  let current = arrangement;
-  let overflow = overflowOf(current, stage, hints, handleSize);
-  if (overflow <= EPSILON) return [];
+  if (overflowOf(arrangement, stage, hints, handleSize) <= EPSILON) return [];
   const { recency } = view.layout;
   const used = (kind: PanelKind) => recency.indexOf(kind);
-  const eligible = arrangement.edges.filter(({ kind }) => kind !== "chat");
-  // The edge panel shown or used last stays: the one just opened.
-  const latest = eligible.reduce<PlacedEdge | undefined>(
-    (best, edge) =>
-      used(edge.kind) >= 0 && (best === undefined || used(edge.kind) > used(best.kind))
-        ? edge
-        : best,
-    undefined,
-  );
-  const candidates = eligible
-    .filter((edge) => edge !== latest)
+  // Every edge region but Chat's, least recently shown or used first.
+  const candidates = arrangement.edges
+    .filter(({ kind }) => kind !== "chat")
     .sort(
       (left, right) =>
         used(left.kind) - used(right.kind) ||
         PANEL_KINDS.indexOf(left.kind) - PANEL_KINDS.indexOf(right.kind),
     );
-  const hidden: PanelKind[] = [];
-  for (const candidate of candidates) {
-    if (overflow <= EPSILON) break;
-    const trial: Arrangement = {
-      ...current,
-      edges: current.edges.filter((edge) => edge !== candidate),
+  // At most four candidates: every subset can be weighed.
+  let best: HidingChoice | undefined;
+  for (let mask = 0; mask < 1 << candidates.length; mask += 1) {
+    const ranks = candidates
+      .map((_, rank) => rank)
+      .filter((rank) => mask & (1 << rank));
+    const hidden = new Set(ranks.map((rank) => candidates[rank]!));
+    const choice: HidingChoice = {
+      ranks,
+      overflow: overflowOf(
+        { ...arrangement, edges: arrangement.edges.filter((edge) => !hidden.has(edge)) },
+        stage,
+        hints,
+        handleSize,
+      ),
     };
-    const next = overflowOf(trial, stage, hints, handleSize);
-    // Only hide a region that makes room.
-    if (next >= overflow - EPSILON) continue;
-    current = trial;
-    overflow = next;
-    hidden.push(candidate.kind);
+    if (!best || betterHiding(choice, best)) best = choice;
   }
-  return hidden;
+  return best!.ranks.map((rank) => candidates[rank]!.kind);
+}
+
+interface HidingChoice {
+  /** Hidden candidates' recency ranks, least recent first. */
+  readonly ranks: readonly number[];
+  readonly overflow: number;
+}
+
+/**
+ * Least overflow (a fit is none); then the least recent most recently used
+ * region, so older regions go together before a newer one; then the fewest
+ * regions; then the older ones.
+ */
+function betterHiding(choice: HidingChoice, best: HidingChoice): boolean {
+  const fit = (overflow: number) => (overflow <= EPSILON ? 0 : overflow);
+  const overflow = fit(choice.overflow) - fit(best.overflow);
+  if (Math.abs(overflow) > EPSILON) return overflow < 0;
+  const latest = (ranks: readonly number[]) => ranks.at(-1) ?? -1;
+  if (latest(choice.ranks) !== latest(best.ranks))
+    return latest(choice.ranks) < latest(best.ranks);
+  if (choice.ranks.length !== best.ranks.length)
+    return choice.ranks.length < best.ranks.length;
+  for (let index = choice.ranks.length - 1; index >= 0; index -= 1)
+    if (choice.ranks[index] !== best.ranks[index])
+      return choice.ranks[index]! < best.ranks[index]!;
+  return false;
 }
 
 interface BuildContext {

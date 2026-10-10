@@ -14,6 +14,7 @@ import {
   MIN_PANEL_SHARE,
   closePanel,
   defaultRegionView,
+  hidePanel,
   maximizePanel,
   movePanel,
   openPanel,
@@ -244,38 +245,120 @@ describe("make-room", () => {
     expect(geometry.panels.map(({ kind }) => kind)).toEqual(["tasks", "chat"]);
   });
 
-  it("never hides Chat, the Middle, or the most recently shown panel; minimums then shrink together", () => {
+  it("hides the latest edge panel when nothing else makes room, so Chat keeps its minimum", () => {
     let view = movePanel(defaultRegionView(), "chat", "left");
     view = openPanel(view, "files", "middle");
     view = openPanel(view, "workpads");
-    // 360 + 5 + 320 + 5 + 320 = 1010 > 900, and nothing may hide.
+    // 360 + 5 + 320 + 5 + 320 = 1010 > 900; Chat and the Middle may not hide.
     const geometry = computeRegionGeometry(view, NARROW);
+    expect(geometry.hiddenByMakeRoom).toEqual(["workpads"]);
+    expect(geometry.overflow).toBe(false);
+    expect(boxes(geometry)).toEqual({
+      left: { kind: "chat", x: 0, y: 0, width: 360, height: 800 },
+      middle: { kind: "files", x: 365, y: 0, width: 535, height: 800 },
+    });
+  });
+
+  it("never hides Chat or the Middle; their minimums then shrink together", () => {
+    let view = movePanel(defaultRegionView(), "chat", "left");
+    view = openPanel(view, "files", "middle");
+    // 360 + 5 + 320 = 685 > 600, and nothing may hide.
+    const geometry = computeRegionGeometry(view, { width: 600, height: 800 });
     expect(geometry.hiddenByMakeRoom).toEqual([]);
     expect(geometry.overflow).toBe(true);
     const placed = boxes(geometry);
-    expect(placed.left!.width).toBeCloseTo((360 * 895) / 1005);
-    expect(placed.left!.width + placed.right!.width + placed.middle!.width + 10).toBeCloseTo(900);
-    expect(placed.right!.width).toBeCloseTo(placed.middle!.width);
+    expect(placed.left!.width).toBeCloseTo((360 * 595) / 680);
+    expect(placed.middle!.width).toBeCloseTo((320 * 595) / 680);
+    expect(placed.left!.width + placed.middle!.width + 5).toBeCloseTo(600);
   });
 
-  it("protects the most recently shown panel other than Chat", () => {
-    let view = openPanel(defaultRegionView(), "workpads", "left");
+  it("hides older regions that only make room together before the newest one", () => {
+    let view = movePanel(defaultRegionView(), "chat", "left");
+    view = openPanel(view, "files", "top");
+    view = openPanel(view, "workpads", "bottom");
     view = openPanel(view, "tasks");
-    view = openPanel(view, "chat");
-    expect(view.layout.recency).toEqual(["workpads", "tasks", "chat"]);
-    expect(hiddenByMakeRoom(view, NARROW)).toEqual(["workpads"]);
+    expect(view.layout.recency).toEqual(["chat", "files", "workpads", "tasks"]);
+    // 360 + 5 + 300 + 5 + max(320, 320) = 990 > 950. Hiding Files or
+    // Workpads alone leaves the other's 320; hiding both fits, as would
+    // hiding Tasks alone, but Tasks was opened last.
+    const geometry = computeRegionGeometry(view, { width: 950, height: 800 });
+    expect(geometry.hiddenByMakeRoom).toEqual(["files", "workpads"]);
+    expect(geometry.overflow).toBe(false);
+    expect(boxes(geometry)).toEqual({
+      left: { kind: "chat", x: 0, y: 0, width: 380, height: 800 },
+      right: { kind: "tasks", x: 385, y: 0, width: 565, height: 800 },
+    });
   });
 
-  it("protects the latest edge panel even when a Middle panel was opened after it", () => {
+  it("hides every edge region the Middle needs room from", () => {
     let view = openPanel(defaultRegionView(), "workpads", "left");
     view = openPanel(view, "tasks");
     view = openPanel(view, "files", "middle");
-    expect(view.layout.recency).toEqual(["workpads", "tasks", "files"]);
-    // 320 + 5 + 300 + 5 + 320 = 950; without Workpads, 625 still exceeds 600.
+    // 320 + 5 + 300 + 5 + 320 = 950; without one side, 625 or 645 > 600.
     const geometry = computeRegionGeometry(view, { width: 600, height: 800 });
+    expect(geometry.hiddenByMakeRoom).toEqual(["workpads", "tasks"]);
+    expect(geometry.overflow).toBe(false);
+    expect(geometry.panels.map(({ kind }) => kind)).toEqual(["files"]);
+  });
+
+  it("hides as little as possible, the least overflow first, when nothing fits", () => {
+    let view = movePanel(defaultRegionView(), "chat", "left");
+    view = openPanel(view, "files", "middle");
+    view = openPanel(view, "workpads");
+    view = withTerminal(openPanel(view, "tasks", "top"));
+    // Width: Workpads helps; the Top and Bottom never do. Nothing fits 500.
+    const geometry = computeRegionGeometry(view, { width: 500, height: 2000 });
     expect(geometry.hiddenByMakeRoom).toEqual(["workpads"]);
     expect(geometry.overflow).toBe(true);
-    expect(geometry.panels.map(({ kind }) => kind)).toEqual(["tasks", "files"]);
+  });
+
+  it("keeps Chat's minimum whenever hiding edge regions can make the layout fit", () => {
+    let seed = 7;
+    const random = (limit: number) => {
+      seed = (seed * 1103515245 + 12345) % 2147483648;
+      return seed % limit;
+    };
+    const regions = ["middle", "left", "right", "top", "bottom"] as const;
+    const kinds = ["files", "workpads", "tasks", "terminals"] as const;
+    let checked = 0;
+    for (let index = 0; index < 400; index += 1) {
+      let view = movePanel(defaultRegionView(), "chat", regions[random(5)]!);
+      for (let step = 0; step < 6; step += 1) {
+        const kind = kinds[random(4)]!;
+        view =
+          kind === "terminals"
+            ? withTerminal(movePanel(view, "terminals", regions[random(5)]!))
+            : openPanel(view, kind, regions[random(5)]!);
+        if (random(4) === 0) view = openPanel(view, "chat");
+      }
+      const stage = { width: 500 + random(1200), height: 300 + random(800) };
+      const geometry = computeRegionGeometry(view, stage);
+      const edgeKinds = geometry.panels
+        .filter(({ region, kind }) => region !== "middle" && kind !== "chat")
+        .map(({ kind }) => kind);
+      const hideAll = [...edgeKinds, ...geometry.hiddenByMakeRoom].reduce(
+        (current, kind) => hidePanel(current, kind),
+        view,
+      );
+      const floor = regionMinimums(hideAll);
+      if (floor.width > stage.width || floor.height > stage.height) continue;
+      checked += 1;
+      expect(geometry.overflow).toBe(false);
+      const chat = geometry.panels.find(({ kind }) => kind === "chat");
+      if (chat) {
+        expect(chat.box.width).toBeGreaterThanOrEqual(360 - 1e-6);
+        expect(chat.box.height).toBeGreaterThanOrEqual(160 - 1e-6);
+      }
+      // Every hidden region is needed: showing any one again overflows.
+      for (const kind of geometry.hiddenByMakeRoom) {
+        const others = geometry.hiddenByMakeRoom
+          .filter((hidden) => hidden !== kind)
+          .reduce((current, hidden) => hidePanel(current, hidden), view);
+        const needed = regionMinimums(others);
+        expect(needed.width > stage.width || needed.height > stage.height).toBe(true);
+      }
+    }
+    expect(checked).toBeGreaterThan(100);
   });
 
   it("breaks recency ties in the fixed kind order", () => {
