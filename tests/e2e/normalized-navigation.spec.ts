@@ -333,9 +333,13 @@ test.describe.serial("normalized target and mobile navigation", () => {
     await expect(page.locator(".thread-project-name")).toBeVisible();
     const bookmarks = page.getByRole("button", { name: "Bookmarks", exact: true });
     const settings = page.getByRole("button", { name: "Thread actions" });
-    const collapseChat = page.getByRole("button", { name: "Collapse Chat panel" });
-    const closeChat = page.getByRole("button", { name: "Close Chat panel", exact: true });
-    const headerControls = [bookmarks, settings, threadToolbarToggle, collapseChat, closeChat];
+    // Chat's ✕ hides it. Phones have no regions, so the header has no
+    // Maximize and no ⋯ with Move to.
+    const chatHeader = page.locator(".thread-header");
+    const hideChat = chatHeader.getByRole("button", { name: "Hide Chat panel", exact: true });
+    await expect(chatHeader.getByRole("button", { name: "Maximize Chat panel" })).toHaveCount(0);
+    await expect(chatHeader.getByRole("button", { name: "Chat panel actions" })).toHaveCount(0);
+    const headerControls = [bookmarks, settings, threadToolbarToggle, hideChat];
     const headerBoxes = [];
     for (const control of headerControls) {
       await expect(control).toBeVisible();
@@ -368,7 +372,7 @@ test.describe.serial("normalized target and mobile navigation", () => {
     // the title keeps its full width beside the remaining buttons.
     await page.setViewportSize({ width: 390, height: 844 });
     await expect(threadToolbarToggle).toHaveCount(0);
-    for (const control of [bookmarks, settings, collapseChat, closeChat]) {
+    for (const control of [bookmarks, settings, hideChat]) {
       const box = await control.boundingBox();
       expect(box!.width).toBeGreaterThanOrEqual(36);
       expect(box!.height).toBeGreaterThanOrEqual(40);
@@ -399,11 +403,11 @@ test.describe.serial("normalized target and mobile navigation", () => {
     const findInThread = page.getByRole("button", {
       name: "Find in thread",
     });
-    const tasksToggle = page
+    const panelsTrigger = page
       .getByTestId("workspace-workbench-bar")
-      .getByTestId("tasks-panel-toggle");
+      .getByRole("button", { name: "Panels", exact: true });
     await expect(findInThread).toBeVisible();
-    await expect(tasksToggle).toBeVisible();
+    await expect(panelsTrigger).toBeVisible();
     const worktree = page.getByRole("button", { name: /^Thread worktree:/ });
     await expect(worktree).toBeVisible();
     const searchButtonBox = await findInThread.boundingBox();
