@@ -144,6 +144,19 @@ describe("PanelChrome", () => {
     expect(screen.queryByRole("button", { name: "Close Chat panel" })).toBeNull();
   });
 
+  it("draws no ✕ without a close action, and no empty actions on a phone", () => {
+    singlePane = true;
+    const { container } = render(
+      <PanelChrome
+        panelTitle="Chat"
+        leading={<span>Thread title</span>}
+        controls={{ region: regionControls("middle") }}
+      />,
+    );
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(container.querySelector(".workspace-panel-actions")).toBeNull();
+  });
+
   it("keeps panel-specific controls to the left of common panel controls", () => {
     render(
       <PanelChrome

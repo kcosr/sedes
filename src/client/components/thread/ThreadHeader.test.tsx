@@ -414,7 +414,8 @@ function renderHeader({
   readonly renameAvailable?: boolean;
   readonly connection?: "connected" | "reconnecting" | "disconnected";
   readonly brand?: "pi" | "codex" | "claude";
-  readonly withPanelControls?: boolean;
+  /** "phone": what a phone layout passes Chat, which has no ✕ there. */
+  readonly withPanelControls?: boolean | "phone";
   readonly available?: boolean;
   readonly forkOrigins?: readonly {
     readonly childThreadId: string;
@@ -429,13 +430,16 @@ function renderHeader({
     ...(projects === undefined ? {} : { projects }),
     ...(workspaces === undefined ? {} : { workspaces }),
   });
-  const panelControls: PanelChromeControls | undefined = withPanelControls
-    ? {
-        onClose: vi.fn(),
-        closeAction: "hide",
-        region: chatRegion(),
-      }
-    : undefined;
+  const panelControls: PanelChromeControls | undefined =
+    withPanelControls === "phone"
+      ? { active: true }
+      : withPanelControls
+        ? {
+            onClose: vi.fn(),
+            closeAction: "hide",
+            region: chatRegion(),
+          }
+        : undefined;
   const view = render(
     <ThreadHeader
       store={threadStore}
@@ -669,7 +673,7 @@ describe("ThreadHeader panel chrome", () => {
         removeEventListener: vi.fn(),
       })),
     );
-    renderHeader({ automation, withPanelControls: true });
+    renderHeader({ automation, withPanelControls: "phone" });
 
     const toolbar = screen.getByTestId("thread-controls");
     expect(
@@ -680,8 +684,9 @@ describe("ThreadHeader panel chrome", () => {
     const toggle = screen.getByRole("button", { name: "Show thread toolbar" });
     const bookmarks = screen.getByRole("button", { name: "Bookmarks" });
     const settings = screen.getByRole("button", { name: "Thread actions" });
-    // Phones have no Maximize: the panel's ✕ is its first common control.
-    const collapse = screen.getByRole("button", { name: "Hide Chat panel" });
+    // Chat is a phone's home: it has no Maximize and no ✕ there.
+    expect(screen.queryByRole("button", { name: "Maximize Chat panel" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Hide Chat panel" })).toBeNull();
     expect(toggle).toHaveAttribute("aria-expanded", "false");
     expect(toolbar).toHaveAttribute("hidden");
     expect(bookmarks).toBeVisible();
@@ -697,7 +702,7 @@ describe("ThreadHeader panel chrome", () => {
     } else {
       expect(screen.queryByRole("button", { name: "Automation" })).toBeNull();
     }
-    actions.push(settings, toggle, collapse);
+    actions.push(settings, toggle);
     for (let index = 1; index < actions.length; index += 1) {
       expect(actions[index - 1]!.compareDocumentPosition(actions[index]!)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
     }
@@ -725,15 +730,15 @@ describe("ThreadHeader panel chrome", () => {
       })),
     );
     const onFindOpenChange = vi.fn();
-    renderHeader({ automation: true, withPanelControls: true, onFindOpenChange });
+    renderHeader({ automation: true, withPanelControls: "phone", onFindOpenChange });
 
     const toolbar = screen.getByTestId("thread-controls");
     expect(screen.queryByRole("button", { name: "Show thread toolbar" })).toBeNull();
     expect(screen.getByRole("button", { name: "Bookmarks" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Automation" })).toBeVisible();
-    // Phones have no Maximize; Chat's ✕ stays.
+    // Chat is a phone's home: it has no Maximize and no ✕ there.
     expect(screen.queryByRole("button", { name: "Maximize Chat panel" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Hide Chat panel" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Hide Chat panel" })).toBeNull();
     expect(toolbar).toHaveAttribute("hidden");
 
     await userEvent.click(screen.getByRole("button", { name: "Thread actions" }));

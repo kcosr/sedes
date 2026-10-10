@@ -549,7 +549,9 @@ export const ThreadHeader = memo(function ThreadHeader({
 
   const sharedPanelControls: PanelChromeControls | undefined = panelControls
     ? {
-        onClose: panelControls.onClose,
+        ...(panelControls.onClose !== undefined
+          ? { onClose: panelControls.onClose }
+          : {}),
         ...(panelControls.closeAction !== undefined
           ? { closeAction: panelControls.closeAction }
           : {}),

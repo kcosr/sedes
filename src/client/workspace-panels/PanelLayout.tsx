@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { SHOW_CHAT_EVENT } from "../app/android-back.js";
 import { useChatAutofocus } from "../app/use-chat-autofocus.js";
 import {
   environmentTintStyle,
@@ -56,7 +57,7 @@ import {
   type RegionGeometry,
   type RegionResizeHandle,
 } from "./region-geometry.js";
-import { EmptyWorkbench, RegionStage } from "./RegionStage.js";
+import { RegionStage } from "./RegionStage.js";
 import { usePanelRegions, type PanelRegionStore } from "./region-store.js";
 import {
   PANEL_KINDS,
@@ -88,7 +89,8 @@ import { useThreadTerminals } from "./use-thread-terminals.js";
  *
  * On the desktop stage every panel shows in its region (see regions.ts and
  * region-geometry.ts). Phones (≤819px) show one foreground panel among the
- * shown ones, Tasks as a sheet and Terminals as a dismissible viewer.
+ * shown ones, Tasks as a sheet and Terminals as a dismissible viewer. Chat is
+ * a phone's home: closing or hiding the panel in front, or Back, shows it.
  *
  * Every loaded panel's content lives in a retained portal target, adopted by
  * its region's slot while it is on stage and parked otherwise, so drafts,
@@ -229,12 +231,13 @@ function PanelLayoutReady({
     tenants.has(tenantIdForKind(kind));
   const loaded = (kind: PanelKind): boolean => snapshot.loaded.includes(kind);
   // Phones show one foreground panel; Tasks is a sheet there, never on stage.
+  // Chat is their home, so with nothing else shown it is in front.
   const foreground = desktop
     ? undefined
-    : chooseForegroundPanel(view, {
+    : (chooseForegroundPanel(view, {
         ...(mobileKind ? { selected: mobileKind } : {}),
         ...(focusRequest ? { requested: focusRequest.kind } : {}),
-      });
+      }) ?? "chat");
   const onStage = (kind: PanelKind): boolean =>
     desktop ? snapshot.visible.includes(kind) : foreground === kind;
   // Before the stage is measured, lay out as if it filled the window.
@@ -380,18 +383,25 @@ function PanelLayoutReady({
     onFocusPanel: setMobileKind,
   });
 
-  /** After a panel hides, focus the next panel on stage, else ▾. */
+  /** Desktop: after a panel hides, focus the next panel on stage, else ▾. */
   const focusAfterHide = (hidden: PanelKind) => {
     requestAnimationFrame(() => {
-      const latest = store.getSnapshot();
-      const next = desktop
-        ? latest.visible.find((kind) => kind !== hidden)
-        : chooseForegroundPanel(latest.view, { exclude: ["tasks", hidden] });
+      const next = store.getSnapshot().visible.find((kind) => kind !== hidden);
       if (next) {
         setMobileKind(next);
-        focusInside(targets[next], desktop);
+        focusInside(targets[next]);
       } else panelsTriggerRef.current?.focus();
     });
+  };
+
+  /**
+   * Phones: Chat is home. Brings it in front, showing it in its region if
+   * another panel replaced it there, and moves focus into it. The panel that
+   * was in front stays loaded unless it was closed.
+   */
+  const showChat = () => {
+    store.open("chat");
+    setMobileKind("chat");
   };
 
   // ------------------------------------------------------------------------
@@ -440,8 +450,8 @@ function PanelLayoutReady({
   // Panel actions
 
   const closePanel = (kind: PanelKind, invoker?: HTMLElement) => {
-    if (kind === "terminals" && dismissMobileTerminalThroughHistory()) return;
     const title = PANEL_TITLES[kind];
+    const inFront = foreground === kind;
     const run = () => {
       if (!store.close(kind)) return;
       if (kind === "terminals") terminals.setSessionState(undefined);
@@ -452,6 +462,12 @@ function PanelLayoutReady({
             ? "Terminals panel closed. Its process was not terminated."
             : `${title} panel closed.`,
       );
+      // Phones: closing the panel in front shows Chat. Closing the Tasks
+      // sheet's panel leaves the panel in front alone.
+      if (!desktop) {
+        if (inFront) showChat();
+        return;
+      }
       // A header retained with its content (Chat's, Tasks') is parked, and
       // inert, while its panel is hidden.
       requestAnimationFrame(() => {
@@ -469,12 +485,29 @@ function PanelLayoutReady({
     } else run();
   };
 
-  const dismissMobileTerminalThroughHistory = useMobileTerminalHistory({
+  // Back from the phone Terminals viewer shows Chat; Terminals stays loaded.
+  const backFromMobileTerminals = useMobileTerminalHistory({
     active,
     enabled: !desktop && foreground === "terminals",
     threadId,
-    dismiss: () => closePanel("terminals"),
+    onBack: showChat,
   });
+
+  // Android Back on a phone: a panel other than Chat in front gives way to
+  // Chat and stays loaded (see android-back.ts for Back's order).
+  const backToChatRef = useRef(showChat);
+  backToChatRef.current =
+    foreground === "terminals" ? backFromMobileTerminals : showChat;
+  const backToChat = active && !desktop && foreground !== "chat";
+  useEffect(() => {
+    if (!backToChat) return undefined;
+    const onShowChat = (event: Event) => {
+      event.preventDefault();
+      backToChatRef.current();
+    };
+    window.addEventListener(SHOW_CHAT_EVENT, onShowChat);
+    return () => window.removeEventListener(SHOW_CHAT_EVENT, onShowChat);
+  }, [backToChat]);
 
   const regionControls = (kind: PanelKind): PanelRegionControls | undefined => {
     if (!desktop) return undefined;
@@ -502,6 +535,8 @@ function PanelLayoutReady({
 
   const controlsFor = (kind: PanelKind): PanelChromeControls => {
     const region = regionControls(kind);
+    // Chat is a phone's home, so it has no ✕ there.
+    if (kind === "chat" && !desktop) return { active };
     return {
       active,
       onClose: (invoker) => closePanel(kind, invoker),
@@ -541,12 +576,16 @@ function PanelLayoutReady({
   };
 
   const togglePanel = (kind: PanelKind) => {
-    if (kind === "tasks" && !desktop) {
-      showTasksSheet(!(tasksHost?.sheetOpen ?? false));
-      return;
-    }
-    if (!desktop && foreground !== kind) {
-      if (store.open(kind)) setMobileKind(kind);
+    if (!desktop) {
+      if (kind === "tasks") showTasksSheet(!(tasksHost?.sheetOpen ?? false));
+      else if (foreground !== kind) {
+        if (store.open(kind)) setMobileKind(kind);
+      }
+      // Hiding the panel in front shows Chat; Chat's own button does nothing.
+      else if (kind !== "chat" && store.toggle(kind)) {
+        setAnnouncement(`${PANEL_TITLES[kind]} panel hidden.`);
+        showChat();
+      }
       return;
     }
     const wasOnStage = onStage(kind);
@@ -673,6 +712,8 @@ function PanelLayoutReady({
       return {
         kind,
         state,
+        // Chat is a phone's home: its button doesn't hide it there.
+        ...(kind === "chat" && !desktop ? { hideable: false } : {}),
         placement: view.layout.placement[kind],
         ...(stateLabel ? { stateLabel } : {}),
         ...(badge ? { badge } : {}),
@@ -871,10 +912,8 @@ function PanelLayoutReady({
             }}
             resetSize={defaultHandleSize}
           />
-        ) : foreground ? (
-          renderMobilePanel(foreground)
         ) : (
-          <EmptyWorkbench />
+          renderMobilePanel(foreground ?? "chat")
         )}
       </div>
 

@@ -7,13 +7,15 @@ import { cn } from "@client/lib/utils";
  * the panel is visible; only outlined while it is loaded but hidden (hidden
  * by hand, replaced in its region, hidden to make room, or behind a
  * maximized panel). Pressing it hides a visible panel, which stays loaded,
- * or shows a hidden one in its region. An optional neutral badge shows a
- * count beside the icon; the icon itself is never tinted.
+ * or shows a hidden one in its region; Chat in front on a phone, their home,
+ * does not hide. An optional neutral badge shows a count beside the icon;
+ * the icon itself is never tinted.
  */
 export function WorkbenchPanelToggle({
   title,
   icon,
   visible,
+  hideable = true,
   onToggle,
   badge,
   controls,
@@ -25,6 +27,8 @@ export function WorkbenchPanelToggle({
   readonly icon: React.ReactNode;
   /** Whether the panel is visible: on stage, or its sheet open. */
   readonly visible: boolean;
+  /** Whether pressing it hides the visible panel; its name says so. */
+  readonly hideable?: boolean;
   readonly onToggle: (invoker: HTMLButtonElement) => void;
   /** A count beside the icon and its spoken label, such as "3 open tasks". */
   readonly badge?: { readonly count: number; readonly label: string };
@@ -33,7 +37,11 @@ export function WorkbenchPanelToggle({
   readonly className?: string;
   readonly testId?: string;
 }): React.JSX.Element {
-  const action = visible ? `Hide ${title} panel` : `Show ${title} panel`;
+  const action = !visible
+    ? `Show ${title} panel`
+    : hideable
+      ? `Hide ${title} panel`
+      : `${title} panel`;
   const shownBadge = badge && badge.count > 0 ? badge : undefined;
   return (
     <Button

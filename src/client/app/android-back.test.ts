@@ -5,11 +5,39 @@ import {
   CLOSE_TASK_DETAIL_EVENT,
   CLOSE_WORKPAD_EVENT,
   OPEN_OVERLAY_SELECTOR,
+  SHOW_CHAT_EVENT,
   closeExposedTaskDetail,
   closeExposedWorkpad,
+  handleExposedBack,
   hasOpenOverlayAboveDrawer,
+  installAndroidBackButton,
   resolveAndroidBackAction,
+  showChatInFront,
 } from "./android-back.js";
+
+const androidBack = vi.hoisted(() => ({
+  press: undefined as ((event: { canGoBack: boolean }) => void) | undefined,
+}));
+vi.mock("@capacitor/app", () => ({
+  App: {
+    addListener: vi.fn(
+      async (_event: string, listener: (event: { canGoBack: boolean }) => void) => {
+        androidBack.press = listener;
+        return { remove: vi.fn(async () => undefined) };
+      },
+    ),
+  },
+}));
+
+/** Listens for `type` on window while `run` runs. */
+function withListener(type: string, listener: (event: Event) => void, run: () => void): void {
+  window.addEventListener(type, listener);
+  try {
+    run();
+  } finally {
+    window.removeEventListener(type, listener);
+  }
+}
 
 const backInput = (
   overrides: Partial<Parameters<typeof resolveAndroidBackAction>[0]> = {},
@@ -101,6 +129,106 @@ describe("closeExposedWorkpad", () => {
     } finally {
       menu.remove();
       window.removeEventListener(CLOSE_WORKPAD_EVENT, close);
+    }
+  });
+});
+
+describe("showChatInFront", () => {
+  it("lets a phone layout with another panel in front show Chat", () => {
+    const show = vi.fn((event: Event) => event.preventDefault());
+    withListener(SHOW_CHAT_EVENT, show, () => {
+      expect(showChatInFront()).toBe(true);
+      expect(show).toHaveBeenCalledOnce();
+    });
+  });
+
+  it("leaves Back alone when Chat is in front", () => {
+    const ignore = vi.fn();
+    withListener(SHOW_CHAT_EVENT, ignore, () => {
+      expect(showChatInFront()).toBe(false);
+      expect(ignore).toHaveBeenCalledOnce();
+    });
+  });
+
+  it("leaves Back to an overlay, such as the Terminals viewer or the drawer", () => {
+    const show = vi.fn((event: Event) => event.preventDefault());
+    for (const className of ["", "mobile-drawer"]) {
+      const overlay = document.createElement("section");
+      overlay.className = className;
+      overlay.setAttribute("role", "dialog");
+      overlay.dataset.state = "open";
+      document.body.append(overlay);
+      withListener(SHOW_CHAT_EVENT, show, () => {
+        expect(showChatInFront()).toBe(false);
+      });
+      overlay.remove();
+    }
+    expect(show).not.toHaveBeenCalled();
+  });
+});
+
+describe("handleExposedBack", () => {
+  it("closes an open workpad before showing Chat", () => {
+    const steps: string[] = [];
+    let workpadOpen = true;
+    const closeWorkpad = (event: Event) => {
+      if (!workpadOpen) return;
+      workpadOpen = false;
+      steps.push("workpad");
+      event.preventDefault();
+    };
+    let chatInFront = false;
+    const showChat = (event: Event) => {
+      if (chatInFront) return;
+      chatInFront = true;
+      steps.push("chat");
+      event.preventDefault();
+    };
+    withListener(CLOSE_WORKPAD_EVENT, closeWorkpad, () =>
+      withListener(SHOW_CHAT_EVENT, showChat, () => {
+        expect(handleExposedBack()).toBe(true);
+        expect(steps).toEqual(["workpad"]);
+        expect(handleExposedBack()).toBe(true);
+        expect(steps).toEqual(["workpad", "chat"]);
+        // Chat in front: the drawer is next.
+        expect(handleExposedBack()).toBe(false);
+      }),
+    );
+  });
+});
+
+describe("installAndroidBackButton", () => {
+  it("dismisses an overlay with a cancelable Escape, so only the topmost layer takes it", async () => {
+    const remove = installAndroidBackButton({
+      onOpenDrawer: vi.fn(),
+      isOnDrawerRoute: () => true,
+      isDrawerOpen: () => false,
+      isSidebarSearchActive: () => false,
+      onClearSidebarSearch: vi.fn(),
+      isSidebarFiltersActive: () => false,
+      onClearSidebarFilters: vi.fn(),
+      drawerReturnsToThread: () => true,
+    });
+    await vi.waitFor(() => expect(androidBack.press).toBeDefined());
+    const menu = document.createElement("div");
+    menu.setAttribute("role", "menu");
+    menu.dataset.state = "open";
+    document.body.append(menu);
+    // The menu's dismissable layer takes Escape first (Radix listens in the
+    // capture phase); a layer beneath, like the Terminals viewer, checks.
+    const topmost = (event: KeyboardEvent) => event.preventDefault();
+    const beneath = vi.fn((event: KeyboardEvent) => event.defaultPrevented);
+    document.addEventListener("keydown", topmost, true);
+    document.addEventListener("keydown", beneath);
+    try {
+      androidBack.press!({ canGoBack: false });
+      expect(beneath).toHaveBeenCalledOnce();
+      expect(beneath.mock.results[0]!.value).toBe(true);
+    } finally {
+      document.removeEventListener("keydown", topmost, true);
+      document.removeEventListener("keydown", beneath);
+      menu.remove();
+      remove();
     }
   });
 });
