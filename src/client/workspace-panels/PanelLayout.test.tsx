@@ -680,6 +680,7 @@ describe("PanelLayout Tasks", () => {
       bodyTarget: document.createElement("div"),
       placement: undefined,
       sheetOpen: false,
+      dirty: false,
       toggleSheet: vi.fn(),
       publishDock: (dock) => docks.push(dock),
       docks,
@@ -759,6 +760,97 @@ describe("PanelLayout Tasks", () => {
     fireEvent.click(within(panel("Tasks")!).getByRole("button", { name: "Close Tasks panel" }));
     expect(store.isLoaded("tasks")).toBe(false);
     expect(document.querySelector(".tasks-content")).toBeNull();
+  });
+
+  const editTask = () => {
+    fireEvent.keyDown(
+      within(panel("Tasks")!).getByRole("button", { name: "Task open-1" }),
+      { key: "e" },
+    );
+    fireEvent.change(
+      within(screen.getByRole("dialog", { name: "Edit task" })).getByRole("textbox", {
+        name: "Notes",
+      }),
+      { target: { value: "Unsaved notes" } },
+    );
+  };
+  const editor = () => screen.queryByRole("dialog", { name: "Edit task" });
+  const notes = () =>
+    within(screen.getByRole("dialog", { name: "Edit task" })).getByRole("textbox", {
+      name: "Notes",
+    });
+
+  it("asks before Reset layout discards a hidden Tasks edit, and keeps it on Keep editing", async () => {
+    withTasks();
+    const store = setup({ extraTenants: [tasksTenant], withTasksPanel: true });
+    act(() => store.open("tasks", { focus: false }));
+    editTask();
+    // Hiding Tasks keeps the edit, out of sight.
+    act(() => {
+      store.toggle("tasks");
+    });
+    expect(store.isLoaded("tasks")).toBe(true);
+    expect(editor()).toBeNull();
+
+    await openPanelsMenu();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Reset layout" }));
+    const dialog = await screen.findByRole("dialog", { name: "Discard unsaved changes?" });
+    expect(dialog).toHaveTextContent(
+      "Resetting the layout will discard unsaved changes in Tasks.",
+    );
+    fireEvent.click(within(dialog).getByRole("button", { name: "Keep editing" }));
+    expect(store.isLoaded("tasks")).toBe(true);
+    fireEvent.click(quickButton("tasks"));
+    expect(notes()).toHaveValue("Unsaved notes");
+
+    // Confirmed, the reset unloads Tasks and discards the edit with it.
+    act(() => {
+      store.toggle("tasks");
+    });
+    await openPanelsMenu();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Reset layout" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Discard and reset" }));
+    expect(store.isLoaded("tasks")).toBe(false);
+    act(() => store.open("tasks", { focus: false }));
+    expect(regionOf("Tasks")).toBe("right");
+    expect(editor()).toBeNull();
+    expect(within(panel("Tasks")!).getByRole("button", { name: "Task open-1" })).toBeInTheDocument();
+  });
+
+  it("asks before ✕ closes a shown Tasks with an unsaved edit", async () => {
+    withTasks();
+    const store = setup({ extraTenants: [tasksTenant], withTasksPanel: true });
+    act(() => store.open("tasks", { focus: false }));
+    editTask();
+    expect(quickButton("tasks")).toHaveAttribute("data-state", "visible");
+    fireEvent.click(screen.getByRole("button", { name: "Close Tasks panel", hidden: true }));
+    const dialog = await screen.findByRole("dialog", { name: "Discard unsaved changes?" });
+    expect(dialog).toHaveTextContent("Closing Tasks will discard its unsaved changes.");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Keep editing" }));
+    expect(store.isLoaded("tasks")).toBe(true);
+    expect(notes()).toHaveValue("Unsaved notes");
+
+    fireEvent.click(screen.getByRole("button", { name: "Close Tasks panel", hidden: true }));
+    fireEvent.click(await screen.findByRole("button", { name: "Discard and close" }));
+    expect(store.isLoaded("tasks")).toBe(false);
+    expect(editor()).toBeNull();
+    act(() => store.open("tasks", { focus: false }));
+    expect(editor()).toBeNull();
+  });
+
+  it("keeps a Tasks edit across the phone breakpoint, in the sheet and back", async () => {
+    withTasks();
+    const store = setup({ extraTenants: [tasksTenant], withTasksPanel: true });
+    act(() => store.open("tasks", { focus: false }));
+    editTask();
+    act(() => setMobile(true));
+    const sheet = await screen.findByRole("dialog", { name: "Tasks" });
+    expect(sheet).toBeInTheDocument();
+    await waitFor(() => expect(notes()).toHaveValue("Unsaved notes"));
+    expect(store.isLoaded("tasks")).toBe(true);
+    act(() => setMobile(false));
+    await waitFor(() => expect(regionOf("Tasks")).toBe("right"));
+    await waitFor(() => expect(notes()).toHaveValue("Unsaved notes"));
   });
 
   it("publishes the panel and its controls to the Tasks host", () => {
@@ -867,6 +959,7 @@ describe("PanelLayout phones", () => {
       bodyTarget: document.createElement("div"),
       placement: undefined,
       sheetOpen: false,
+      dirty: false,
       toggleSheet: vi.fn(),
       publishDock: vi.fn(),
     } satisfies TasksHost;
@@ -888,6 +981,7 @@ describe("PanelLayout phones", () => {
       bodyTarget: document.createElement("div"),
       placement: "sheet" as const,
       sheetOpen: true,
+      dirty: false,
       toggleSheet: vi.fn(),
       publishDock: vi.fn(),
     } satisfies TasksHost;
