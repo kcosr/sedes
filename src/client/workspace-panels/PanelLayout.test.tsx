@@ -930,7 +930,8 @@ describe("PanelLayout focus", () => {
       publishThreadState({ ...initialThreadState, connection: "connected", authoritative: true }),
     );
     await waitFor(() => expect(composer).toHaveFocus());
-    expect(store.getSnapshot().focusRequest).toBeUndefined();
+    // Focus lands first; the request is consumed a frame later.
+    await waitFor(() => expect(store.getSnapshot().focusRequest).toBeUndefined());
   });
 
   it("defers desktop Chat focus until a cold thread mounts its composer", async () => {
@@ -952,7 +953,8 @@ describe("PanelLayout focus", () => {
     );
     const composer = await screen.findByRole("textbox", { name: "Chat draft" });
     await waitFor(() => expect(composer).toHaveFocus());
-    expect(store.getSnapshot().focusRequest).toBeUndefined();
+    // Focus lands first; the request is consumed a frame later.
+    await waitFor(() => expect(store.getSnapshot().focusRequest).toBeUndefined());
   });
 
   it.each(["phone", "touch tablet"])("does not carry cold-thread composer focus onto a %s", async (device) => {
@@ -1032,7 +1034,9 @@ describe("PanelLayout focus", () => {
     const destinationComposer = screen.getByRole("textbox", { name: "Chat draft" });
     expect(destinationComposer).not.toBe(oldComposer);
     await waitFor(() => expect(destinationComposer).toHaveFocus());
-    expect(store.forThread("thread-b").getSnapshot().focusRequest).toBeUndefined();
+    await waitFor(() =>
+      expect(store.forThread("thread-b").getSnapshot().focusRequest).toBeUndefined(),
+    );
   });
 
   it("abandons deferred Chat focus when the user interacts with another panel", async () => {
@@ -1047,6 +1051,7 @@ describe("PanelLayout focus", () => {
 
     fireEvent.pointerDown(fileDraft);
     fileDraft.focus();
+    // Pressing elsewhere abandons the request at once.
     expect(store.getSnapshot().focusRequest).toBeUndefined();
     act(() =>
       publishThreadState({ ...initialThreadState, connection: "connected", authoritative: true }),
