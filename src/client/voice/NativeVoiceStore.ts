@@ -17,7 +17,7 @@ export type VoiceSettingsPatch = Partial<NativeVoiceSettings> | ((current: Nativ
 const RETRY_BASE_MS = 2_000;
 const RETRY_MAX_MS = 60_000;
 /** Entering one of these phases means a new interaction is under way, so an earlier failure no longer describes the bar. */
-const PROGRESS_PHASES = new Set<NativeVoiceState["phase"]>(["starting", "synthesizing", "speaking", "validating", "arming", "listening", "recognizing", "submitting"]);
+const PROGRESS_PHASES = new Set<NativeVoiceState["phase"]>(["starting", "synthesizing", "speaking", "validating", "announcing", "arming", "listening", "recognizing", "submitting"]);
 
 /** Native snapshots are authoritative, including changes made while the WebView was suspended. */
 export class NativeVoiceStore {
@@ -224,10 +224,17 @@ export class NativeVoiceStore {
   }
   /** Cancel may stop capture while a durable Keep listening write is pending. Native fences both commands by identity. */
   stopInteraction(context: NativeVoiceInteractionCommandContext): Promise<void> {
-    const key = JSON.stringify([context.expectedConnectionGeneration, context.interactionId]);
+    return this.#stop("stopCurrentInteraction", context);
+  }
+  /** Explicit playback Stop clears the queue; recording Cancel and headset taps retain their own behavior. */
+  stopPlayback(context: NativeVoiceInteractionCommandContext): Promise<void> {
+    return this.#stop("stopPlayback", context);
+  }
+  #stop(command: "stopCurrentInteraction" | "stopPlayback", context: NativeVoiceInteractionCommandContext): Promise<void> {
+    const key = JSON.stringify([command, context.expectedConnectionGeneration, context.interactionId]);
     const pending = this.#stopping.get(key);
     if (pending) return pending;
-    const stopping = this.#perform(() => this.plugin.stopCurrentInteraction(context), true)
+    const stopping = this.#perform(() => this.plugin[command](context), true)
       .finally(() => { if (this.#stopping.get(key) === stopping) this.#stopping.delete(key); });
     this.#stopping.set(key, stopping);
     return stopping;

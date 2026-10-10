@@ -21,8 +21,8 @@ final class NativeVoiceProtocol {
         return result;
     }
     static void inputContext(JSONObject value) {
-        NativeVoiceJson.keys(value, "threadId", "activityToken", "authority", "runState", "sourceTurnId", "automaticListenEligible", "manualListenEligible", "steer");
-        uuid(value, "threadId"); NativeVoiceJson.string(value, "activityToken", 160);
+        NativeVoiceJson.keys(value, "threadId", "threadTitle", "activityToken", "authority", "runState", "sourceTurnId", "automaticListenEligible", "manualListenEligible", "steer");
+        uuid(value, "threadId"); text(value, "threadTitle", 4096); NativeVoiceJson.string(value, "activityToken", 160);
         choice(value, "authority", "current", "unbound", "unavailable");
         if (!value.has("runState")) throw new IllegalArgumentException("invalid_runState");
         if (!value.isNull("runState")) choice(value, "runState", "idle", "starting", "running", "waiting_for_approval", "waiting_for_input", "stopping", "failed", "disconnected", "reconciling");

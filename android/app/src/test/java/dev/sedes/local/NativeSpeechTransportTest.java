@@ -181,7 +181,7 @@ public class NativeSpeechTransportTest {
         String expected = "Answer\n\nRead the guide.\n\nfoo_bar * 2";
         for (boolean cleanup : new boolean[] { true, false }) {
             NativeVoiceSettings settings = NativeVoiceSettings.defaults().patch(0,
-                NativeVoiceJson.object("audioMode", "response", "readNotificationContext", false, "cleanSpeechText", cleanup));
+                NativeVoiceJson.object("audioMode", "speak", "speechContent", "messages", "cleanSpeechText", cleanup));
             NativeVoiceQueue.Item item = new NativeVoiceQueue.Item(envelope, settings);
             StringBuilder received = new StringBuilder();
             for (String chunk : NativeVoiceQueue.chunks(item.speech, 24)) {

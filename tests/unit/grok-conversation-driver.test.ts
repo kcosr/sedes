@@ -1246,8 +1246,9 @@ describe("normalized Grok conversation driver", () => {
 
   it("accepts correlated 256 KiB text before completion, streams incrementally, and replays durably", async () => {
     const sessionId = "44444444-4444-4444-8444-444444444444";
+    const completionGate = ".fake-grok-completion-release";
     const fixtureState = await openDriver([
-      { ...session(sessionId, "Submit"), promptDelayMs: 150 },
+      { ...session(sessionId, "Submit"), promptCompletionGate: completionGate },
     ]);
     const binding = conversationBinding(sessionId);
     const detail = fixtureState.bindingDetail(sessionId);
@@ -1300,6 +1301,7 @@ describe("normalized Grok conversation driver", () => {
         }),
       ).toBe(true);
 
+      await writeFile(path.join(fixtureState.workspace.canonicalPath, completionGate), "", { flag: "wx" });
       await waitFor(async () => {
         const state = await readState(fixtureState.workspace.canonicalPath);
         return state.sessions[0]?.submissions?.[0]?.completed === true;

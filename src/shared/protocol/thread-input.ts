@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { mutationIdSchema, threadIdSchema, applicationTurnIdSchema } from "./domain.js";
 import { steerTargetSchema, threadRunStateSchema } from "./conversation.js";
+import { boundedDisplayTextSchema } from "./payload.js";
 
 /** Server-stamped input attribution from the registered client connection. This ID is never authentication. */
 export const clientOriginSchema = z.strictObject({
@@ -57,6 +58,8 @@ export type DirectInputReceiptLookup = z.infer<typeof directInputReceiptLookupSc
 
 export const threadInputContextSchema = z.strictObject({
   threadId: threadIdSchema,
+  /** Current scoped display text; renames do not change activity authority. */
+  threadTitle: boundedDisplayTextSchema.shape.text,
   activityToken: z.string().min(1).max(160),
   authority: z.enum(["current", "unbound", "unavailable"]),
   runState: threadRunStateSchema.nullable(),

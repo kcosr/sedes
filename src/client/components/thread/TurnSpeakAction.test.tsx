@@ -18,7 +18,7 @@ vi.mock("../../voice/VoiceProvider.js", async (importOriginal) => ({
 import { TurnSpeakAction } from "./TurnSpeakAction.js";
 
 const ready = (patch: Partial<NativeVoiceState> = {}) => voiceSnapshot({ ready: true, readiness: "ready", phase: "idle",
-  settings: voiceSettings({ audioMode: "response" }), speech: { ...voiceSnapshot().speech, credentialConfigured: true },
+  settings: voiceSettings({ audioMode: "speak" }), speech: { ...voiceSnapshot().speech, credentialConfigured: true },
   actions: voiceActions({ canStart: true }), ...patch });
 const stored: TurnReplySpeech = { assistantResult: { final: { text: "Stored final answer." }, unclassified: null } };
 
@@ -69,12 +69,12 @@ describe("TurnSpeakAction", () => {
   it.each([
     ["while voice is Off", ready({ settings: voiceSettings({ audioMode: "off" }) })],
     ["without a speech credential", ready({ speech: { ...voiceSnapshot().speech, credentialConfigured: false } })],
-    ["without a speech voice", ready({ settings: voiceSettings({ audioMode: "manual", ttsVoice: "" }) })],
+    ["without a speech voice", ready({ settings: voiceSettings({ audioMode: "input", ttsVoice: "" }) })],
   ])("takes no space %s and appears once voice can speak", async (_name, native) => {
     const { fake } = await connect(native);
     const { container } = renderAction();
     expect(container).toBeEmptyDOMElement();
-    act(() => fake.emit("stateChanged", ready({ stateRevision: 5, settings: voiceSettings({ audioMode: "manual" }) })));
+    act(() => fake.emit("stateChanged", ready({ stateRevision: 5, settings: voiceSettings({ audioMode: "input" }) })));
     expect(button()).not.toHaveAttribute("aria-disabled");
     act(() => fake.emit("stateChanged", ready({ stateRevision: 6, settings: voiceSettings({ audioMode: "off" }) })));
     expect(container).toBeEmptyDOMElement();

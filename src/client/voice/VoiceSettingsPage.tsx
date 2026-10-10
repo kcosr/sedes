@@ -20,16 +20,17 @@ import { VoiceThreadPicker } from "./VoiceThreadPicker.js";
 import { useShowVoiceBarWhenOff } from "./voice-bar-preference.js";
 import { canEnableVoice, resumeVoice, voiceThreadFilterWarning } from "./voice-session.js";
 import { savedRecording, VoiceRecordingRecovery } from "./VoiceRecordingRecovery.js";
+import { VoiceSpeechContent } from "./VoiceSpeechContent.js";
 
 const toggles = [
   ["pinDefaultVoiceThread", "Pin default voice thread", "Use this as the initial recording target while viewing other threads."],
   ["autoListen", "Auto-listen", "Eligible notifications reopen the microphone."],
   ["keepListeningByDefault", "Keep listening by default", "Use Keep listening for new manual and auto-listen recordings. The ∞ control changes only the current recording."],
   ["ignoreOtherDevices", "Ignore voice started on other devices", "Automations are still included."],
-  ["readNotificationContext", "Read notification title and context", "Speak the notice, project and thread before the response."],
   ["onlyVoiceThread", "Only play from default voice thread", "Limit automatic playback to the default voice thread above."],
   ["followComposerMode", "Follow composer's selected mode", "Use its Steer or Queue choice. Otherwise queue while a thread is running."],
   ["recognizeStopCommand", "Recognize stop command", "Say “stop” or “stop listening” to cancel."],
+  ["announceRecordingThread", "Announce recording thread", "Read the destination before a new headset or notification recording. Skip in-app starts, playback interruptions to reply, and automatic follow-up recording."],
   ["recognitionCues", "Recognition cues", "Play tones for recording and recognition results."],
   ["headsetControls", "Headset controls", "Use headset buttons to record, skip speech, or stop recording."],
 ] as const;
@@ -90,14 +91,16 @@ export function VoiceSettingsPage({ store, applicationStore }: { store: NativeVo
       {errors.length === 1 ? errors[0] : <ul className="grid gap-1">{errors.map(error => <li key={error}>{error}</li>)}</ul>}
     </Callout> : null}
     <SettingsSection title="Voice session" card>
-      <SettingsField label="Audio mode" description={blocked ? setupHelp : "Manual keeps completions silent; Response reads them aloud. Both can auto-listen."}>
+      <SettingsField label="Audio mode" description={blocked ? setupHelp : "Input keeps automatic speech silent; Speak reads selected notifications aloud. Both can auto-listen."}>
         <NativeSelect value={settings.audioMode} disabled={state.pending} onChange={event => {
           const audioMode = event.target.value as NativeVoiceSettings["audioMode"];
           if (audioMode === "off" || !blocked) update({ audioMode });
         }}>
-          <option value="off">Off</option><option value="manual" disabled={blocked}>Manual</option><option value="response" disabled={blocked}>Response</option>
+          <option value="off">Off</option><option value="input" disabled={blocked}>Input</option><option value="speak" disabled={blocked}>Speak</option>
         </NativeSelect>
       </SettingsField>
+      {settings.audioMode === "speak" ? <VoiceSpeechContent value={settings.speechContent} pending={state.pending}
+        onChange={speechContent => update({ speechContent })} /> : null}
       <SwitchField label="Show voice bar when off" description="Keep a dimmed bar under the composer."
         checked={showBarWhenOff} onCheckedChange={setShowBarWhenOff} />
       {settings.audioMode !== "off" && native.actions.canResume ? <Button disabled={state.pending} onClick={() => { void resumeVoice(store).catch(() => undefined); }}>Resume voice</Button> : null}

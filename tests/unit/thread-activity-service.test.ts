@@ -5,6 +5,7 @@ import { ThreadActivityService } from "../../src/server/conversations/thread-act
 import { DirectInputRepository } from "../../src/server/db/repositories/direct-input-repository.js";
 import { QueuedInputRepository } from "../../src/server/db/repositories/queued-input-repository.js";
 import { threadInputContextSchema } from "../../src/shared/protocol/thread-input.js";
+import { PAYLOAD_LIMITS } from "../../src/shared/protocol/payload.js";
 import { createInMemoryThreadRuntimeHarness } from "../support/in-memory-thread-runtime-harness.js";
 
 type Harness = Awaited<ReturnType<typeof createInMemoryThreadRuntimeHarness>>;
@@ -56,7 +57,7 @@ describe("thread activity authority", { timeout: 30_000 }, () => {
     const catalog = vi.spyOn(h.driver, "catalog");
     try {
       const context = await activity.capture(h.scope, threadId);
-      expect(context).toMatchObject({ authority: "unavailable", runState: null,
+      expect(context).toMatchObject({ threadTitle: "Activity authority", authority: "unavailable", runState: null,
         automaticListenEligible: false, manualListenEligible: true });
       expect(threadInputContextSchema.parse(context)).toEqual(context);
       const { manualListenEligible: _eligibility, ...missingManual } = context;
@@ -71,6 +72,80 @@ describe("thread activity authority", { timeout: 30_000 }, () => {
       activity.close();
       expect(await activity.capture(h.scope, threadId)).toMatchObject({ manualListenEligible: false });
     } finally { acquire.mockRestore(); catalog.mockRestore(); activity.close(); }
+  });
+
+  it("requires current title text with the same bounds and empty-text semantics as thread summaries", async () => {
+    const { activity } = service(() => undefined);
+    try {
+      const context = await activity.capture(h.scope, threadId);
+      const { threadTitle: _title, ...missingTitle } = context;
+      expect(threadInputContextSchema.safeParse(missingTitle).success).toBe(false);
+      for (const threadTitle of [null, 7, {}, "x".repeat(PAYLOAD_LIMITS.displayTextCharacters + 1)]) {
+        expect(threadInputContextSchema.safeParse({ ...context, threadTitle }).success).toBe(false);
+      }
+      for (const threadTitle of ["", " \t\u2003 ", "🐙 thread", "x".repeat(PAYLOAD_LIMITS.displayTextCharacters)]) {
+        expect(threadInputContextSchema.parse({ ...context, threadTitle }).threadTitle).toBe(threadTitle);
+      }
+    } finally { activity.close(); }
+  });
+
+  it.each(["unbound", "dormant", "current", "refused"] as const)("refreshes the scoped %s thread title without changing input authority or attaching a provider", async state => {
+    const id = state === "unbound" ? (await h.lifecycle.createServerDraft(h.scope, {
+      workspaceId: h.workspaceRecord.id, connectionProfileId: h.connection.id,
+      title: "Unbound title", initialText: "",
+    })).applicationThreadId : threadId;
+    const observation = state === "current" ? settled : state === "refused"
+      ? { ...settled, authoritative: false, reestablishing: false, runState: "disconnected" as const } : undefined;
+    const { activity } = service(() => observation);
+    const acquire = vi.spyOn(h.actors, "acquire"), catalog = vi.spyOn(h.driver, "catalog");
+    h.database.exec("SAVEPOINT input_context_title");
+    try {
+      const before = await activity.capture(h.scope, id);
+      expect(before).toMatchObject({ threadTitle: h.inventoryRepository.getThread(h.scope, id).thread.title,
+        authority: state === "unbound" ? "unbound" : state === "current" ? "current" : "unavailable",
+        manualListenEligible: state !== "refused" });
+      for (const title of ["Renamed source 🐙", " \t\u2003 "]) {
+        h.inventoryRepository.renameThread(h.scope, id, {
+          title, expectedRevision: h.inventoryRepository.getThread(h.scope, id).thread.revision,
+          mutationId: randomUUID(), now: Date.now(),
+        });
+        // No title-only change may invalidate an otherwise identical recording preflight.
+        expect(await activity.capture(h.scope, id)).toEqual({ ...before, threadTitle: title });
+      }
+      expect(acquire).not.toHaveBeenCalled();
+      expect(catalog).not.toHaveBeenCalled();
+    } finally {
+      h.database.exec("ROLLBACK TO input_context_title; RELEASE input_context_title");
+      acquire.mockRestore(); catalog.mockRestore(); activity.close();
+    }
+  });
+
+  it("returns the fresh title when a rename happens during an awaited cached-policy read", async () => {
+    const { activity } = service(() => settled);
+    const before = await activity.capture(h.scope, threadId);
+    const presentation = h.mutations.input.presentation;
+    const current = await presentation.readCached(h.scope, threadId);
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const cached = vi.spyOn(presentation, "readCached").mockImplementationOnce(async () => {
+      await gate;
+      return current;
+    });
+    h.database.exec("SAVEPOINT input_context_title_race");
+    try {
+      const pending = activity.capture(h.scope, threadId);
+      expect(cached).toHaveBeenCalledOnce();
+      h.inventoryRepository.renameThread(h.scope, threadId, {
+        title: "Renamed while reading policy", expectedRevision: h.inventoryRepository.getThread(h.scope, threadId).thread.revision,
+        mutationId: randomUUID(), now: Date.now(),
+      });
+      release();
+      expect(await pending).toEqual({ ...before, threadTitle: "Renamed while reading policy" });
+    } finally {
+      release(); cached.mockRestore();
+      h.database.exec("ROLLBACK TO input_context_title_race; RELEASE input_context_title_race");
+      activity.close();
+    }
   });
 
   it("refuses capture throughout retirement of a loaded runtime and permits a fresh dormant attempt afterward", async () => {

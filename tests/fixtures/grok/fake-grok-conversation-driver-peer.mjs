@@ -1,7 +1,8 @@
 #!/usr/bin/env node
-import { readFile, rename, writeFile } from "node:fs/promises";
+import { access, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import readline from "node:readline";
+import { setTimeout as sleep } from "node:timers/promises";
 
 if (process.argv[2] === "version" && process.argv[3] === "--json") {
   process.stdout.write(
@@ -24,6 +25,11 @@ await mutate((state) => {
 });
 const input = readline.createInterface({ input: process.stdin });
 const activePrompts = new Map();
+let inputClosed = false;
+input.on("close", () => {
+  inputClosed = true;
+  for (const active of activePrompts.values()) active.completionWait.abort();
+});
 
 function send(message) {
   process.stdout.write(`${JSON.stringify(message)}\n`);
@@ -710,24 +716,30 @@ input.on("line", async (line) => {
     const cancellation = new Promise((resolve) => {
       resolveCancellation = resolve;
     });
+    if (inputClosed) return;
+    const completionWait = new AbortController();
     const activePrompt = {
       promptId,
       cancelled: false,
       resolve: resolveCancellation,
+      completionWait,
     };
     activePrompts.set(session.sessionId, activePrompt);
-    let timer;
-    const delay = new Promise((resolve) => {
-      timer = setTimeout(
-        resolve,
-        session.promptDelayMs ?? state.promptDelayMs ?? 25,
-      );
-    });
-    await Promise.race([delay, cancellation]);
-    clearTimeout(timer);
-    if (activePrompts.get(session.sessionId) === activePrompt) {
-      activePrompts.delete(session.sessionId);
+    try {
+      const completion = typeof session.promptCompletionGate === "string"
+        ? waitForCompletionGate(session.promptCompletionGate, completionWait.signal)
+        : sleep(session.promptDelayMs ?? state.promptDelayMs ?? 25, undefined, { signal: completionWait.signal });
+      await Promise.race([completion, cancellation]);
+    } catch (error) {
+      if (!inputClosed || error?.name !== "AbortError") throw error;
+      return;
+    } finally {
+      completionWait.abort();
+      if (activePrompts.get(session.sessionId) === activePrompt) {
+        activePrompts.delete(session.sessionId);
+      }
     }
+    if (inputClosed) return;
     if (activePrompt.cancelled) {
       terminal(
         session.sessionId,
@@ -855,6 +867,18 @@ input.on("line", async (line) => {
     send({ jsonrpc: "2.0", id: message.id, result: {} });
   }
 });
+
+async function waitForCompletionGate(filename, signal) {
+  while (!signal.aborted) {
+    try {
+      await access(path.resolve(filename));
+      return;
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+    }
+    await sleep(10, undefined, { signal });
+  }
+}
 
 async function readState() {
   try {

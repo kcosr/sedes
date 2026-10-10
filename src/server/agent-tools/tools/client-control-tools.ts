@@ -17,7 +17,7 @@ type Id = typeof ids[number];
 const str = (maxLength = 128) => Type.String({ minLength: 1, maxLength });
 const object = (properties: TProperties) => Type.Object(properties, { additionalProperties: false, maxProperties: Object.keys(properties).length });
 const voice = {
-  audioMode: Type.String({ enum: ["off", "manual", "response"], maxLength: 8 }),
+  audioMode: Type.String({ enum: ["off", "input", "speak"], maxLength: 5 }),
   voiceThreadId: Type.Union([str(), Type.Null()]), pinDefaultVoiceThread: Type.Boolean(),
   autoListen: Type.Boolean(), onlyVoiceThread: Type.Boolean(), ignoreOtherDevices: Type.Boolean(), followComposerMode: Type.Boolean(),
 };

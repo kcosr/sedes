@@ -8,6 +8,7 @@ import type { ConversationInputRuntimeObservation, ConversationActorManager } fr
 import type { ThreadApplicationPresentationReader } from "./thread-application-service.js";
 import { directInputRuntimeReady, initialThreadSettingsReady, threadInputDeliveryAvailability } from "./thread-input-readiness.js";
 import { DomainError } from "../domain/errors.js";
+import { boundDisplayText } from "./payload-policy.js";
 
 type RecognitionTarget = { readonly threadId: string; readonly activityToken: string; readonly sourceTurnId?: string };
 type ActivityRecord = {
@@ -18,6 +19,7 @@ type ActivityRecord = {
   observation?: ConversationInputRuntimeObservation;
 };
 type DurableObservation = {
+  threadTitle: string;
   backingState: string;
   availability: string;
   activityRevision: number;
@@ -139,7 +141,7 @@ export class ThreadActivityService {
 
   #capture(scope: RequestScope, threadId: string): Captured {
     const stored = this.input.database.prepare(`SELECT
-      thread.backing_state AS backingState, thread.availability,
+      thread.title AS threadTitle, thread.backing_state AS backingState, thread.availability,
       thread.input_activity_revision AS activityRevision, inventory.inventory_state AS inventoryState,
       workspace.availability AS workspaceAvailable, workspace.removed_at AS workspaceRemovedAt,
       project.removed_at AS projectRemovedAt,
@@ -172,6 +174,7 @@ export class ThreadActivityService {
     if (!stored) throw new DomainError("not_found", "The input target is unavailable.");
     const observation = this.input.actors.observeInputRuntime(scope, threadId);
     const dormant = !observation && this.input.actors.isInputRuntimeDormant(scope, threadId);
+    // Refresh the canonical display title on every read without making a rename an input-activity boundary.
     const durable = JSON.stringify([
       stored.activityRevision, stored.backingState, stored.availability,
       stored.inventoryState, stored.workspaceAvailable, stored.workspaceRemovedAt, stored.projectRemovedAt,
@@ -221,7 +224,7 @@ export class ThreadActivityService {
       observation,
       pending: stored.backingState === "bound" && observation?.reestablishing === true,
       context: {
-        threadId, activityToken: token, authority,
+        threadId, threadTitle: boundDisplayText(stored.threadTitle).text, activityToken: token, authority,
         runState: observation?.runState ?? null,
         ...(observation?.sourceTurnId ? { sourceTurnId: observation.sourceTurnId } : {}),
         automaticListenEligible: !this.#closed && targetAvailable && authority === "current" &&

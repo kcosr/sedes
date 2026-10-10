@@ -13,38 +13,49 @@ running, queued, completed, and forked work.
 
 After configuring [Android voice](../operator/clients/voice.md), use the
 microphone on the voice card under the composer to send spoken text. The card
-appears once voice is connected and set to Manual or Response. If voice cannot
+appears once voice is connected and set to Input or Speak. If voice cannot
 connect, **Settings → Voice** shows the problem and a retry button; the rest of
-the app keeps working. By default, the microphone targets the visible thread,
-then your saved default voice thread, or asks you to choose one. Voice sends a separate
-message and preserves the unsent composer draft. It can also make the first send to an
-empty thread.
+the app keeps working. The microphone targets the thread shown on the card.
+Voice sends a separate message and preserves the unsent composer draft. It can
+also make the first send to an empty thread.
 
 Enable **Pin default voice thread** to use your default thread as the initial
 recording target while browsing elsewhere. The row picker can override it for
-one recording. If the initial target is missing or unavailable, Start asks you
-to choose a target without changing the saved default.
+one recording. If no initial target is available, Start asks you to choose one
+without changing the saved default. An unavailable retained voice thread reports
+an error and stays selected until you release it or choose another target.
 
 The card's first line always names its thread, using its title or **Untitled
 thread**: the thread being spoken or recorded to, or, when idle, the thread a
 recording would use. An explicit choice takes priority. Otherwise, pinning uses
-the default thread; without pinning, the visible available thread leads, then
-the default. With no available target,
-the card asks you to choose a thread.
-The second line is the state, such as **Ready · Response · Auto-listen on**,
+the default thread; without pinning, it follows the visible available thread.
+With no thread visible, it uses the retained voice thread, then the default.
+An unavailable visible thread or no available target makes the card ask you
+to choose a thread.
+The second line is the state, such as **Ready · Speak · Auto-listen on**,
 **Speaking** with the notice kind and queued count, or **Listening**. If voice
 needs to resume, the card offers **Resume**.
 
+Voice retains its last active thread after playback or recording ends in the
+background, including Stop or Cancel. While idle in the app, browsing updates
+the destination for in-app, headset, and notification recording. That destination
+stays selected when you background the app. While idle and showing the retained fallback,
+**Next** releases it and restores the default selection. Next stays hidden
+when the card follows a visible or explicitly chosen thread. Releasing does
+not record, send, navigate, or change the draft.
+Off, a connection change, an ended voice session, or enabling pinning clears
+retention. Turning pinning off during an interaction retains its current thread.
+
 Tap the title and status area to open the voice target thread. Its separate
 chevron opens **Choose target thread**, a popup available with pinning on or off.
-While idle, it chooses the next recording started in the app; while listening,
+While idle, it chooses the next manual recording; while listening,
 it changes the current recording target.
 The choice leaves the viewed thread and saved default unchanged, and navigation
-does not redirect it. The choice is consumed when a new in-app recording
+does not redirect it. The choice is consumed when a new manual recording
 starts, and clears when voice is turned Off or the connection changes.
-Headset and notification Start always use the saved default voice thread,
-regardless of pinning or the viewed thread, and preserve your pending in-app
-choice. Automatic notification replies keep their own targets.
+Headset and notification Start use that same choice, followed by the pinned
+default, visible thread, retained destination, or saved default. Idle headset or notification **Next** releases
+the retained destination. Automatic notification replies keep their own targets.
 The popup lists the visible thread first. On mobile, search stays visible and
 the keyboard stays closed until you tap it. **Default voice thread** in quick
 or full settings uses the same search and rows inside a modal or mobile sheet.
@@ -60,6 +71,12 @@ menu to start new manual and auto-listen recordings in infinity mode. The infini
 button changes only the current recording; changing the saved preference takes
 effect on the next recording. The idle Start button shows infinity when that
 default is on and a microphone when it is off.
+The compact voice bar keeps its title and status beside the controls. Playback
+shows Next, Stop, Record, hiding Next when nothing is queued and Auto-listen
+is off; recording shows Keep listening, Cancel, Send. Send
+works with or without Keep listening. Idle hides unavailable Next and Stop,
+while Record/Send stays at the right edge. The outline is blue while speaking
+and red while recording.
 
 Spoken input queues while a thread is running. Enable **Follow composer's
 selected mode** to use the client's Queue/Steer preference instead. When
@@ -68,18 +85,22 @@ is no longer available at admission, or other queued messages must deliver
 first, the message queues. An unavailable thread produces an error rather than
 redirecting the message elsewhere.
 
-Response mode speaks selected notifications and may listen afterward. Manual
-mode keeps completion speech silent but can still listen after a completion;
-other selected notices remain spoken without listening. Automatic listening
+Speak mode reads selected notifications and may listen afterward. Its **Read aloud**
+selector chooses Announcements, Messages without preambles, or Both. Input
+mode keeps all automatic notification speech silent but can still listen after
+an eligible completion. Automatic listening
 requires both the event's **Speak then listen** setting and **Auto-listen**,
 plus a current, idle target with no blocking input or unresolved admission. It
 never types an answer into an approval or question form.
 
 **Record** ends speech and starts a reply to the spoken thread, even with
-Auto-listen off. **Next** skips both the speech and its follow-up recording.
-**Stop** cancels the current voice interaction without stopping the agent;
-other queued notices may continue. While voice is recording or recognizing,
-Stop becomes **Cancel**, which discards the recording unsent. **Off** clears
+Auto-listen off. During speech, **Next** skips both the speech and its follow-up
+recording; while idle and showing a retained fallback, it releases that thread.
+Playback **Stop** in the app or notification cancels the interaction and clears
+queued speech and pending agent-requested voice actions. It leaves voice enabled
+and does not stop the agent. Headset Play/Pause and Next preserve queued speech.
+While voice is recording or recognizing, Stop becomes **Cancel**, which discards
+the recording unsent and preserves queued playback. **Off** clears
 the voice queue and hides the card unless **Show voice bar when off** is on in
 **Settings → Voice**; then a dimmed card stays, and its status icon opens the Voice
 sheet to turn voice back on. The notification silence bell suppresses
@@ -89,7 +110,7 @@ or the next interaction.
 
 To hear a reply again, tap **Play response aloud**, the speaker after **Copy
 response** in a finished turn's footer. It appears only while voice is set to
-Manual or Response with speech configured. The reply joins the voice queue
+Input or Speak with speech configured. The reply joins the voice queue
 behind anything already playing. With **Auto-listen** on, it can then record a
 new message to that reply's thread when the thread currently accepts input. It reads the
 response text that a spoken completion would. When the phases selected under

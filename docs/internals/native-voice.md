@@ -2,15 +2,25 @@
 
 The Android `NativeVoice` Capacitor plugin exposes settings, snapshots, and
 actions. `NativeVoiceRuntime` owns the state machine on one handler thread.
-Native snapshot version 10 includes `active.recording` (ID, Keep listening and
+Settings version 9 uses `audioMode: off | input | speak` and
+`speechContent: announcements | messages | both`, replacing the notification
+context boolean. Input suppresses all automatic speech while preserving eligible
+completion follow-up listening. Speech content is device-owned presentation over
+the existing normalized notification envelope; explicit replays always read the
+requested reply. Queued items rebuild from their original envelope after a content
+change, while active playback finishes normally. Obsolete settings records reset
+without an alias or migration. Client protocol 149 and client-control tool schema
+version 2 carry the new audio-mode values.
+Native snapshot version 14 includes `active.recording` (ID, Keep listening and
 Reconnecting), native-authoritative `canSetKeepListening`/`canSend` actions, the
 Keep listening blocked reason, and an independent `recordingRecovery` item.
 Recovery exposes identity, revision, target, stage, incomplete/unrecognized
 flags, eligible actions, and optional admission identity; it carries no PCM or
 transcript. It remains visible when Off and across restart. Commands use the
 expected connection generation plus recording ID and, for recovery, expected
-recovery revision. Retarget takes the recording ID; Stop, `skipCurrentPlayback`
-(Next), and `recordDuringPlayback` take the interaction ID. The required
+recovery revision. Retarget takes the recording ID; `stopPlayback`,
+`stopCurrentInteraction`, `skipCurrentPlayback` (Next), and
+`recordDuringPlayback` take the interaction ID. The required
 `canRecordDuringPlayback` action combines speech-phase and local recording
 readiness. The strict bridge accepts only this version. The snapshot also includes
 `cleanSpeechText` and registered `clientConnectionToken` alongside `originClientId`.
@@ -19,18 +29,62 @@ an Android connection-local device ID. The device-owned `pinDefaultVoiceThread`
 setting defaults to false; its selected default thread is scoped to the exact
 Sedes profile, origin, and authenticated identity.
 Pinning supplies the initial in-app target from the saved default without
-falling back to the foreground. The nullable native `nextRecordingTarget`
+falling back to another thread. The nullable native `nextRecordingTarget`
 contains a thread ID/title chosen through generation-fenced
 `setNextRecordingTarget`. This transient state is independent of navigation and
 saved settings. Explicit start arguments take priority, then this pending
-choice, then the pin/foreground/default policy. In-app starts consume it when
-the interaction is admitted, before asynchronous target validation. Headset and
-notification Start always use the saved default, regardless of pinning or the
-foreground thread, and preserve the pending in-app choice. Their idle notification
-label uses the same default target. A missing default cannot fall back to the
-foreground or pending choice. Local readiness rejection preserves it; Off and
+choice, then the pin/foreground/retained/default policy. In-app, headset, and
+notification starts share this policy and consume the pending choice when the
+interaction is admitted, before asynchronous target validation. The idle
+notification label and open action use the same resolver. An unpinned retained
+target works without a saved default; a missing
+pinned default cannot fall back to another thread. Local readiness rejection
+preserves the pending choice; Off and
 connection changes clear it. The setter rejects an active interaction or Off.
 Automatic notification replies preserve it and retain their own targets.
+The in-app card follows a visible available thread before using retention.
+An unavailable visible thread opens the chooser; retention and the saved default
+are fallbacks only when no thread is visible. While idle, native retains the
+visible destination, so clearing foreground context on backgrounding does not
+revert to an older voice thread. Explicit pending choices and pinning still take
+priority. Navigation never retargets an active interaction; when it ends with
+the app visible, native reconciles retention to the idle card's destination.
+Remembering a visible thread does not turn its ordinary in-app Start into a
+retained-fallback start. The extra pre/post-cue authority checks apply when
+retention supplies the fallback, or when a background start adds an announcement.
+
+`retainedVoiceTarget` is nullable session state containing a thread ID, a bounded
+nullable title, and a revision. Every new interaction advances its revision,
+including another interaction for the same thread. Playback retains the spoken
+thread; accepted follow-up validation replaces it with the actual recording
+destination. Silent automatic follow-ups preserve the previous destination until
+their validation is accepted. Manual and recovery activations retain their
+destination, and successful retargets update it after durable acknowledgement.
+Current input-context titles refresh this metadata independently of announcements. Pure
+threadless notices preserve the previous ID/title while advancing the revision.
+Completion, Stop, cancellation, and a drained queue preserve retention while
+backgrounded; an idle visible thread replaces it when the app is open. Off,
+disconnect or connection-identity changes, session teardown, service detach, and
+pinning clear it. Pinning suppresses retention; unpinning during an interaction
+seeds its spoken thread or accepted recording destination. Nothing is persisted to settings,
+the default-thread selection, or the input journal.
+
+Idle `releaseRetainedVoiceTarget` takes the expected connection generation and
+`expectedRetainedRevision`. Native `canReleaseRetainedTarget` is independent of
+capture readiness; unavailable targets remain releasable. A stale revision or
+an active interaction makes release a no-op, preserving queued work, settings,
+and the explicit pending app selection. An idle headset Next or notification Next
+performs the same release. The notification exposes Next only while displaying
+the retained fallback. `idleTargetRevision` also advances on default/pin edits,
+pending choices, idle foreground changes, and session teardown.
+Notification identities and extras, and headset dispatch,
+capture both revisions alongside generation and interaction/recording IDs, so an
+old idle Start or Next cannot act on a later idle session, even after an
+idle/active/idle or same-target transition. Ordinary manual/headset starts that
+match retention use fresh manual-input eligibility and activity-token validation
+before and after the cue, even with announcements off. They fail on that exact
+unavailable target without selecting a fallback, and preserve ordinary capture
+and deferred-admission behavior while client controls reconnect.
 During speech, Record cancels the current playback and reserves a new manual
 recording for the spoken source thread before queued work can drain. It clears
 deferred client switch actions and consumes the pending in-app choice, while
@@ -44,17 +98,63 @@ It signals normal reply drain, including when the skipped item was a mid-turn
 progress notice. A Next captured during speech still discards that interaction's
 unsent follow-up if validation, cues, recording preparation, or capture begins
 before the command arrives, including a held default. It cannot cancel a new
-manual Record interaction or undo an admitted input. The UI offers Next only
-during speech. Notification and headset Next require the null recording ID
-captured before recording starts. A fresh headset Next carrying the current
-recording ID leaves capture unchanged; other recording commands retain exact
-recording-ID equality.
-Both bridge commands reject stale
+manual Record interaction or undo an admitted input. The card offers playback
+Next during speech and enables idle Next only when retention determines the
+displayed target. Notification and headset playback Next, and notification
+`stop_playback`, require the null recording ID captured before recording starts.
+This lets a delayed playback action cancel its own unsent follow-up without
+affecting a new manual recording or admitted input. A fresh headset Next
+carrying the current recording ID leaves capture unchanged; recording commands
+retain exact recording-ID equality.
+These bridge commands reject stale
 connection generations or interaction IDs. The expanded notification exposes
 Record, Next, and Stop. Headset Play/Pause during speech invokes Record only
 while Auto-listen is on and recording is available; otherwise it invokes Next.
-Dedicated headset Next skips during speech, and active recording retains its
+Dedicated headset Next skips during speech or releases an idle retained target;
+active recording retains its
 existing Cancel/Stop behavior.
+Explicit app and notification playback Stop uses `stopPlayback`: it cancels the
+current playback and its unsent follow-up, clears queued automatic speech and
+manual replays, and clears pending client voice actions. It does not disable
+voice or discard a separately saved dictation. New work can play afterward.
+Recording Cancel and headset stop paths retain `stopCurrentInteraction`
+semantics, preserving queued playback. The normal headset Play/Pause and
+dedicated Next mappings do not clear the queue.
+The device preference `announceRecordingThread` defaults to false. A new
+recording start validates the exact target's normalized input context and projects
+its required canonical `threadTitle` (a string up to 4,096 UTF-16 units, including
+blank) into native nullable, trimmed, 512-unit target metadata without splitting
+a surrogate pair. It never substitutes the spoken source thread for a different
+automatic recognition destination. When enabled, only a new idle headset or
+notification start enters a separate `announcing` phase. The initiating control,
+not foreground visibility, selects this behavior. A separate start after speech
+ends announces again, without a recency timer. In-app manual starts,
+`recordDuringPlayback`, automatic follow-ups, and agent-directed recording skip
+the announcement. The phase
+speaks “Replying to {title}.” before the existing recognition start cue and capture
+sequence. Blank titles use “Untitled thread”; spoken titles compact whitespace
+and controls and are limited to 160 Unicode code points with an ellipsis.
+
+The announcement has its own request ID, shares the normal TTS transport and audio
+owner, and waits for physical audio drain. Its total synthesis/drain deadline is
+60 seconds. Failure, empty audio, Stop, Off, disconnect, provider changes, or audio
+focus loss end preparation without microphone capture. Dedicated headset Next
+can cancel this phase, including a manual start. A Next captured during a manual
+announcement still cancels that same unsent interaction if delivered after the
+cue, recording preparation, or capture begins; a fresh key carrying a recording
+ID remains a no-op. The UI offers Cancel during announcement, not Record or Next.
+All late speech/drain callbacks are fenced by interaction and request identity.
+Manual starts that add this asynchronous phase also revalidate fresh manual-input
+authority after the cue. This target revalidation is independent of client-control
+registration: ordinary manual/headset and automatic recording can still capture
+while client controls reconnect, with their durable input waiting for registration
+before submission. Explicit Record during playback, replay, and client-initiated
+starts retain their existing client-readiness checks. Announcements happen once
+per user-level start, never for internal empty-transcript retries, recognition
+segments, reconnects, adoption, retargeting, or saved-audio retries. Changing the
+preference affects future starts without cancelling an active recording. Titles
+remain display metadata and do not contribute to activity-token authority.
+
 `NativeVoiceRuntimeService` supplies Android foreground execution and controls;
 it does not run a WebView. `NativeSpeechTransport` connects directly to OpenAI
 or the OpenAI-Compatible Speech Server. `NativeVoiceHttp` owns authenticated
@@ -172,10 +272,13 @@ Agent `replay_turn` commands bypass that queue; see
 [Turn reply replay](#turn-reply-replay).
 
 The device preferences envelope has format version 1 and carries the strict
-settings `RECORD_VERSION` 7. Earlier per-binding settings and profile-bound speech
-credentials are not imported; upgrades require device voice setup and credential
-entry once. Native voice initialization deletes the obsolete `speech-credentials/`
-tree without decoding its records. A
+settings `RECORD_VERSION` 8. Older preference records reset to defaults, including
+scoped default-thread selections. Separately stored device speech credentials
+and version-2 dictation manifests remain readable. Restore the speech endpoint
+and model settings before retrying saved audio when the provider requires them.
+Earlier per-binding settings and profile-bound speech credentials are not imported;
+native initialization deletes the obsolete `speech-credentials/` tree without
+decoding its records. A
 record that exists but cannot be authenticated, decoded, or validated is moved
 aside as `<name>.corrupt` and replaced with defaults. Native reports
 `voice_settings_reset` or `voice_journal_reset`. Only a
@@ -316,18 +419,18 @@ returns the published snapshot.
 Native speaks the sections in notification order (provisional, unclassified,
 final) with the same per-part `NativeSpeechText` cleanup and truncation notice
 as a completion notice, but never a context line, whatever
-`readNotificationContext` says. Empty prepared text fails with
+`speechContent` selects. Empty prepared text fails with
 `voice_reply_empty`. The active item's title, shown on the voice card and the
 media notification, is display-only. It is the WebView's `threadTitle` when that
-is not blank. Otherwise it comes from the visible foreground thread or the saved
-default thread when either matches, and is otherwise null. The title is kept
+is not blank. Otherwise it comes from the visible foreground thread, retained
+voice target, or saved default thread when one matches, and is otherwise null. The title is kept
 with the stored request, so a settings rebuild keeps it.
 
 The replay is a local queue item with no server envelope. Its event, shown as
 `active.eventKind`, is `replay`. Its ID is a fresh UUID that never enters
 notification deduplication. Its playback is user-requested and independent of
 notification policy. At speech completion, current `autoListen` can authorize
-one new recording on the replay's thread in either Manual or Response mode.
+one new recording on the replay's thread in either Input or Speak mode.
 The runtime validates fresh `manualListenEligible` through `input-context`,
 captures that response's activity token, and rechecks both after the start cue.
 It never compares the historical replay turn with the current source turn or
@@ -351,10 +454,10 @@ the queue is left unchanged; no progress is evicted for a refused replay. Queue
 drop counts report automatic items only.
 
 A replay joins the queue behind current speech, recording, or saved-recording
-recovery, and plays in Manual and Response mode. Drain skips notification
+recovery, and plays in Input and Speak mode. Drain skips notification
 eligibility for it, so `onlyVoiceThread`, `ignoreOtherDevices`, notification
 enablement, silence, and policy generation do not apply. Stream loss, a policy
-change, and Manual/Response switches keep pending and active replays, and a pending
+change, and Input/Speak switches keep pending and active replays, and a pending
 replay starts once a cancelled automatic item has left; Off and connection changes
 clear them with the rest of the queue. When the foreground
 service stops, for example when Android destroys it while the process survives,
@@ -365,7 +468,8 @@ notification eligibility when drain resumes. A settings change rebuilds a
 pending replay from its stored request with the current cleanup setting, and the
 speech text limit chunks it when it starts. Next ends the replay's speech and
 skips its follow-up; Record starts an explicit reply to its thread regardless
-of Auto-listen. Stop cancels the interaction. Ending a replay never discards
+of Auto-listen. Playback Stop cancels the interaction and clears the queue.
+Completing or skipping a replay never discards
 client turn actions, completes a notification ID, or signals reply drain. Like
 any playback, a speech configuration change or focus loss ends it, and an
 explicit Stop still clears pending agent client actions.
@@ -640,31 +744,33 @@ The first adoption starts a `SystemClock.elapsedRealtime()` deadline, including
 suspend; no toggle resets it. Expiration drains recognition into a retained ready
 draft without admission. Recording settings edits apply to future recordings.
 
-The voice toolbar preserves its existing 60 px row at normal text scale, including
-320 px layouts. The left status icon opens the quick sheet and carries a small
-caret. The title/status area opens the voice target thread; a separate chevron
-opens an anchored **Choose target thread** popup for native retargeting or the
-next manual recording, regardless of pinning. Choosing a target does not navigate
-or save a default. Quick and full settings share its search/list presentation in
-a **Default voice thread** modal or mobile sheet. On mobile, initial picker focus
-stays outside its search input to avoid opening the keyboard. Infinity is a full-size button
-beside the title/status area, and the right-side Cancel and Send controls are separated.
-Touch regions remain distinct and at least 44 px. Reconnecting and error details
-use the existing status line. An older saved draft marks the quick-controls icon
-and opens the same recovery sheet without adding another row.
-The title and status retain the Ready state's left alignment and gap from the
-status icon when recording controls appear, including narrow layouts. The
-icon-to-text gap is 8 px in every state. Input preparation, capture, recognition,
-and admission reserve the Send button's space and preserve the action sizes
-and right inset. Neither toggling Keep listening nor a repeated Start/Send tap
-moves Cancel/Stop under the user's last tap. The extra right-gutter space is
-limited to docks at most 315 px wide; 360 px phones keep their normal inset and
-control gaps. Every saved-dictation stage reserves Retry and Send space so
-Discard never moves into their former hit regions, and an old Retry tap cannot
-navigate through the expanded title. At the narrowest width,
-Retry/Resume uses its icon and the saved-state label uses the standard control
-text size. Retry-to-Discard and Discard-to-Send gaps remain at least 4 px with
-distinct 44 px touch targets; 360 px phones keep their normal gaps.
+The voice toolbar is one 60 px row at every width, with a two-line text block
+beside 40 px action buttons. Playback uses Next, Stop, Record from left to right.
+Next hides during synthesis and playback when the queue count is zero and
+Auto-listen is off. Queue and settings updates restore it without moving Stop
+or Record.
+Recording uses Keep listening, Cancel, Send. Idle omits unavailable Next and Stop
+controls, reclaiming their width for status text. Record/Send remains at the
+right edge. Active preparation keeps its action slots and shows progress in the
+primary slot. Speaking adds a blue outline; recording uses the red outline.
+The existing animated status icon opens the quick sheet and carries a small
+caret. The title/status area opens the voice target thread. A separate 14 px
+chevron in a 24 px tap area sits immediately after the title and opens the
+anchored target picker. It shares the title line rather than reserving a full
+control column, and its tap area takes precedence over the thread overlay.
+Choosing a target does not navigate or save a default. Quick and full settings
+share the default-thread picker. Mobile pickers leave search unfocused to avoid
+opening the keyboard. Long text truncates without reducing the 15 px title or
+13 px status fonts. Reconnecting and error details use the existing status line.
+Idle Next releases retention only when the card displays that fallback. A
+visible thread or explicit choice takes priority and hides unavailable Next.
+Browsing changes the next in-app target without retargeting active work or the
+retained background destination. Keep listening changes automatic stopping;
+Send can explicitly finish either ordinary or held capture through the same
+recording identity, endpoint fences, recognition drain, and admission path.
+Saved-dictation stages retain three positions for Retry/Resume, Discard, and
+Send, with unavailable actions disabled. An older saved draft marks the
+quick-controls icon and opens recovery without adding another row.
 
 `NativeVoiceSegmenter` counts real 24 kHz samples and analyzes absolute 100 ms
 frames. RMS 0.012 identifies likely pauses, never disposable audio. A 1,200 ms

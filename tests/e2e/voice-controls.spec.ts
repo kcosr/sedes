@@ -24,27 +24,38 @@ test("native dictation keeps its controls reachable on narrow screens and retain
   const toolbar = page.getByRole("group", { name: "Voice controls", exact: true });
   const heights: Record<string, number> = {};
   const viewports: Record<string, number> = {};
-  const leftOffsets: Record<string, { tile: number; title: number; status: number; tileTextGap: number }> = {};
-  const measureRow = async (state: string) => {
+  const leftOffsets: Record<string, { tile: number; title: number; status: number }> = {};
+  const topOffsets: Record<string, { title: number; status: number }> = {};
+  const measureRow = async (state: string, actionCount = 3) => {
     viewports[state] = page.viewportSize()!.width;
     heights[state] = (await toolbar.boundingBox())!.height;
-    expect(heights[state], `${state} preserves the original 60px row`).toBe(60);
+    expect(heights[state], `${state} preserves the compact single-row card`).toBe(60);
     const [tile, title, status] = await Promise.all([
       toolbar.locator(".voice-card-tile").boundingBox(), toolbar.locator(".voice-card-title").boundingBox(), toolbar.locator(".voice-card-sub").boundingBox(),
     ]);
-    leftOffsets[state] = { tile: tile!.x, title: title!.x, status: status!.x, tileTextGap: title!.x - tile!.x - tile!.width };
+    leftOffsets[state] = { tile: tile!.x, title: title!.x, status: status!.x };
+    const row = (await toolbar.boundingBox())!;
+    topOffsets[state] = { title: title!.y - row.y, status: status!.y - row.y };
     expect(leftOffsets[state], `${state} preserves the Ready-state icon and text positions`).toEqual(leftOffsets.idleBeforeRecording);
-    expect(leftOffsets[state].tileTextGap, `${state} preserves the Ready-state icon/text gap`).toBe(8);
+    expect(topOffsets[state].title, `${state} preserves the title baseline`).toBeCloseTo(topOffsets.idleBeforeRecording!.title, 1);
+    expect(topOffsets[state].status, `${state} preserves the status baseline`).toBeCloseTo(topOffsets.idleBeforeRecording!.status, 1);
+    expect(title!.x - tile!.x - tile!.width, `${state} keeps settings before the thread`).toBe(8);
+    const actions = (await toolbar.locator(".voice-card-actions").boundingBox())!;
+    expect(status!.y, `${state} keeps text beside the actions`).toBeLessThan(actions.y + actions.height);
+    expect(status!.y + status!.height).toBeGreaterThan(actions.y);
+    expect(await toolbar.locator(".voice-card-title").evaluate(el => getComputedStyle(el).fontSize)).toBe("15px");
+    expect(await toolbar.locator(".voice-card-sub").evaluate(el => getComputedStyle(el).fontSize)).toBe("13px");
+    expect(await toolbar.locator(".voice-card-actions > button").count()).toBe(actionCount);
   };
   await page.setViewportSize({ width: 320, height: 780 });
   await expect(toolbar).toBeVisible();
-  await measureRow("idleBeforeRecording");
+  await measureRow("idleBeforeRecording", 1);
   await capture(page, testInfo, "voice-ready-spacing-narrow.png");
   const base = voiceFixtureState();
   await publishVoiceState(page, { settings: { ...base.settings, onlyVoiceThread: true } });
   await expect(toolbar.locator(".voice-card-sub")).toHaveText("Default thread needed");
   await expect(toolbar.getByRole("button", { name: "Start voice recording", exact: true })).toBeEnabled();
-  await measureRow("defaultThreadNeeded");
+  await measureRow("defaultThreadNeeded", 1);
   await capture(page, testInfo, "voice-default-thread-needed-narrow.png");
   await toolbar.getByRole("button", { name: "Open voice controls", exact: true }).click();
   const filterSheet = page.getByRole("dialog", { name: "Voice", exact: true });
@@ -83,7 +94,7 @@ test("native dictation keeps its controls reachable on narrow screens and retain
   const heldStart = toolbar.getByRole("button", { name: "Start recording with Keep listening", exact: true });
   await expect(heldStart.locator(".lucide-infinity")).toBeVisible();
   await expect(heldStart).not.toHaveAttribute("aria-pressed");
-  await measureRow("idleKeepListeningDefault");
+  await measureRow("idleKeepListeningDefault", 1);
   await expectNoPageOverflow(page);
   await capture(page, testInfo, "voice-idle-keep-listening-default-narrow.png");
   const title = "Dictation for the release checklist and the remaining deployment verification";
@@ -98,7 +109,7 @@ test("native dictation keeps its controls reachable on narrow screens and retain
     await measureRow(phase);
   }
   await publishVoiceState(page, { phase: "listening", settings: base.settings, active, actions: { ...base.actions, canStart: false, canStop: true,
-    canRetarget: true, canSetKeepListening: true, keepListeningBlockedReason: null } });
+    canRetarget: true, canSetKeepListening: true, canSend: true, keepListeningBlockedReason: null } });
   const change = toolbar.getByRole("button", { name: `Change recording thread: ${title}` });
   await expect(toolbar.locator(".voice-card-title")).toHaveText(title);
   await expect(change.locator(".lucide-chevron-down")).toBeVisible();
@@ -145,7 +156,7 @@ test("native dictation keeps its controls reachable on narrow screens and retain
   const cancel = toolbar.getByRole("button", { name: "Cancel voice recording" });
   const assertSafeKeepToggle = async () => {
     await expect(keep).toHaveAttribute("aria-pressed", "false");
-    await expect(send).toHaveCount(0);
+    await expect(send).toBeEnabled();
     const ordinaryKeep = (await keep.boundingBox())!;
     const ordinaryCancel = (await cancel.boundingBox())!;
     await keep.focus();
@@ -156,10 +167,10 @@ test("native dictation keeps its controls reachable on narrow screens and retain
     await expect.poll(() => keep.boundingBox()).toEqual(ordinaryKeep);
     await expect.poll(() => cancel.boundingBox()).toEqual(ordinaryCancel);
     // A second tap at the original infinity coordinates toggles it off;
-    // Cancel must never move into this hit region as Send appears.
+    // Cancel must never move into this hit region when the mode changes.
     await page.mouse.click(ordinaryKeep.x + ordinaryKeep.width / 2, ordinaryKeep.y + ordinaryKeep.height / 2);
     await expect(keep).toHaveAttribute("aria-pressed", "false");
-    await expect(send).toHaveCount(0);
+    await expect(send).toBeEnabled();
     await expect.poll(() => keep.boundingBox()).toEqual(ordinaryKeep);
     await expect.poll(() => cancel.boundingBox()).toEqual(ordinaryCancel);
     expect(await page.evaluate(() => window.__voiceFixture.calls.filter(call => call.method === "stopCurrentInteraction"))).toEqual([]);
@@ -174,51 +185,80 @@ test("native dictation keeps its controls reachable on narrow screens and retain
   await expect(tile.locator(".voice-card-menu-mark")).toBeVisible();
   await expect(tile.locator(".lucide-mic")).toBeVisible();
   const body = toolbar.getByRole("button", { name: `Open thread: ${title}` });
-  const controlGaps: Record<string, { bodyTarget: number | null; targetKeep: number | null; bodyKeep: number | null; keepCancel: number; cancelSend: number }> = {};
+  const assertVisualFocusOrder = async () => {
+    const controls = [tile, body, change, keep, cancel, send];
+    let previous: Awaited<ReturnType<typeof tile.boundingBox>> = null;
+    await tile.focus();
+    for (const [index, control] of controls.entries()) {
+      await expect(control).toBeFocused();
+      // The Open thread button overlays both text lines. Its visible title is
+      // before the separate inline picker, which owns its own hit region.
+      const current = (await (control === body ? toolbar.locator(".voice-card-title") : control).boundingBox())!;
+      if (previous) {
+        const sameRow = current.y < previous.y + previous.height && previous.y < current.y + current.height;
+        if (sameRow) expect(current.x, "Tab moves right across the row").toBeGreaterThanOrEqual(previous.x + previous.width);
+        else throw new Error("Voice controls unexpectedly wrapped to another row");
+      }
+      previous = current;
+      if (index < controls.length - 1) await page.keyboard.press("Tab");
+    }
+  };
+  await assertVisualFocusOrder();
+  const controlGaps: Record<string, { titleTarget: number | null; textActions: number; keepCancel: number; cancelSend: number }> = {};
   const measureControlGaps = async (state: string) => {
     const target = toolbar.locator(".voice-card-target");
-    const [bodyBox, targetBox, keepBox, cancelBox, sendBox] = await Promise.all([
-      body.boundingBox(), await target.count() ? target.boundingBox() : null, keep.boundingBox(), cancel.boundingBox(), send.boundingBox(),
+    const [bodyBox, titleBox, targetBox, keepBox, cancelBox, sendBox] = await Promise.all([
+      body.boundingBox(), toolbar.locator(".voice-card-title").boundingBox(), await target.count() ? target.boundingBox() : null,
+      keep.boundingBox(), cancel.boundingBox(), send.boundingBox(),
     ]);
     for (const box of [bodyBox, targetBox, keepBox, cancelBox, sendBox].filter(box => box !== null)) {
-      expect(box.width).toBeGreaterThanOrEqual(44);
-      expect(box.height).toBeGreaterThanOrEqual(44);
       expect(box.x).toBeGreaterThanOrEqual(0);
       expect(box.x + box.width).toBeLessThanOrEqual(page.viewportSize()!.width);
     }
+    for (const box of [keepBox!, cancelBox!, sendBox!]) {
+      expect(box.width).toBe(40);
+      expect(box.height).toBe(40);
+    }
+    if (targetBox) {
+      expect(targetBox.width).toBe(24);
+      expect(targetBox.height).toBe(24);
+      expect((await target.locator("svg").boundingBox())!.width).toBe(14);
+      expect(await target.evaluate(element => {
+        const rect = element.getBoundingClientRect();
+        return document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)?.closest("button") === element;
+      })).toBe(true);
+    }
     return controlGaps[state] = {
-      bodyTarget: targetBox ? targetBox.x - bodyBox!.x - bodyBox!.width : null,
-      targetKeep: targetBox ? keepBox!.x - targetBox.x - targetBox.width : null,
-      bodyKeep: targetBox ? null : keepBox!.x - bodyBox!.x - bodyBox!.width,
+      titleTarget: targetBox ? targetBox.x - titleBox!.x - titleBox!.width : null,
+      textActions: keepBox!.x - bodyBox!.x - bodyBox!.width,
       keepCancel: cancelBox!.x - keepBox!.x - keepBox!.width,
       cancelSend: sendBox!.x - cancelBox!.x - cancelBox!.width,
     };
   };
   const [tileBox, bodyBox, changeBox, keepBox, cancelBox, sendBox] = await Promise.all([tile.boundingBox(), body.boundingBox(), change.boundingBox(), keep.boundingBox(), cancel.boundingBox(), send.boundingBox()]);
+  expect(tileBox!.y + tileBox!.height / 2).toBeCloseTo(bodyBox!.y + bodyBox!.height / 2, 1);
   expect(tileBox!.x + tileBox!.width + 8).toBe(bodyBox!.x);
-  expect(bodyBox!.x + bodyBox!.width + 1).toBeLessThanOrEqual(changeBox!.x);
-  expect(changeBox!.x + changeBox!.width + 1).toBeLessThanOrEqual(keepBox!.x);
+  expect(bodyBox!.x + bodyBox!.width + 4).toBe(keepBox!.x);
+  expect(changeBox!.x).toBeGreaterThan(bodyBox!.x);
+  expect(changeBox!.x + changeBox!.width).toBeLessThanOrEqual(bodyBox!.x + bodyBox!.width);
   expect(keepBox!.x + keepBox!.width + 4).toBeLessThanOrEqual(cancelBox!.x);
-  expect(sendBox!.x - cancelBox!.x - cancelBox!.width).toBeGreaterThanOrEqual(6);
-  expect(sendBox!.x - cancelBox!.x - cancelBox!.width).toBeLessThanOrEqual(12);
+  expect(sendBox!.x - cancelBox!.x - cancelBox!.width).toBe(4);
   const phaseBox = (await toolbar.locator(".voice-card-phase").boundingBox())!;
   const infinityBox = (await keep.locator("svg").boundingBox())!;
   expect(phaseBox.x + phaseBox.width).toBeLessThanOrEqual(bodyBox!.x + bodyBox!.width);
   expect(await toolbar.locator(".voice-card-sub").evaluate(status => status.scrollWidth <= status.clientWidth)).toBe(true);
-  expect(infinityBox.x - phaseBox.x - phaseBox.width).toBeGreaterThanOrEqual(6);
+  expect(infinityBox.y + infinityBox.height / 2).toBe(tileBox!.y + tileBox!.height / 2);
   expect(await toolbar.locator(".voice-card-title > span").evaluate(title => title.scrollWidth > title.clientWidth)).toBe(true);
   expect(keepBox!.height).toBe(cancelBox!.height);
   expect(keepBox!.width).toBe(cancelBox!.width);
   expect(keepBox!.y).toBe(cancelBox!.y);
   expect(await keep.evaluate(button => getComputedStyle(button).borderRadius)).toBe(await cancel.evaluate(button => getComputedStyle(button).borderRadius));
   for (const box of [tileBox!, bodyBox!, changeBox!, keepBox!, cancelBox!, sendBox!]) {
-    expect(box.width).toBeGreaterThanOrEqual(44);
-    expect(box.height).toBeGreaterThanOrEqual(44);
     expect(box.x).toBeGreaterThanOrEqual(0);
     expect(box.x + box.width).toBeLessThanOrEqual(320);
   }
   await measureRow("heldListening");
-  expect(await measureControlGaps("heldListening")).toEqual({ bodyTarget: 1, targetKeep: 1, bodyKeep: null, keepCancel: 4, cancelSend: 6 });
+  expect(await measureControlGaps("heldListening")).toEqual({ titleTarget: 2, textActions: 4, keepCancel: 4, cancelSend: 4 });
   await expectNoPageOverflow(page);
   await capture(page, testInfo, "voice-held-listening-narrow.png");
 
@@ -226,12 +266,13 @@ test("native dictation keeps its controls reachable on narrow screens and retain
     await page.setViewportSize({ width, height: 780 });
     await publishVoiceState(page, { active });
     await assertSafeKeepToggle();
+    await assertVisualFocusOrder();
     if (width === 360) {
       await measureRow("heldListening360");
       const cardBox = (await toolbar.boundingBox())!;
       expect(cardBox.x).toBe(9);
       expect(width - cardBox.x - cardBox.width).toBe(9);
-      expect(await measureControlGaps("heldListening360")).toEqual({ bodyTarget: 4, targetKeep: 4, bodyKeep: null, keepCancel: 4, cancelSend: 6 });
+      expect(await measureControlGaps("heldListening360")).toEqual({ titleTarget: 2, textActions: 4, keepCancel: 4, cancelSend: 4 });
       expect(await toolbar.locator(".voice-card-sub").evaluate(status => status.scrollWidth <= status.clientWidth)).toBe(true);
       await capture(page, testInfo, "voice-held-listening-360.png");
     }
@@ -247,7 +288,7 @@ test("native dictation keeps its controls reachable on narrow screens and retain
   await expect(cancel).toBeEnabled();
   await expect(send).toBeEnabled();
   await measureRow("heldListening480");
-  expect(await measureControlGaps("heldListening480")).toEqual({ bodyTarget: 4, targetKeep: 4, bodyKeep: null, keepCancel: 4, cancelSend: 6 });
+  expect(await measureControlGaps("heldListening480")).toEqual({ titleTarget: 2, textActions: 4, keepCancel: 4, cancelSend: 4 });
   await expectNoPageOverflow(page);
   await capture(page, testInfo, "voice-held-listening-wider.png");
   await page.setViewportSize({ width: 320, height: 780 });
@@ -264,7 +305,7 @@ test("native dictation keeps its controls reachable on narrow screens and retain
   await expect(send).toBeDisabled();
   await expect(toolbar).toContainText("Listening");
   await measureRow("heldListeningMutationPending");
-  expect(await measureControlGaps("heldListeningMutationPending")).toEqual({ bodyTarget: null, targetKeep: null, bodyKeep: 4, keepCancel: 4, cancelSend: 6 });
+  expect(await measureControlGaps("heldListeningMutationPending")).toEqual({ titleTarget: null, textActions: 4, keepCancel: 4, cancelSend: 4 });
   await expectNoPageOverflow(page);
   await capture(page, testInfo, "voice-held-listening-pending-narrow.png");
   await publishVoiceState(page, { actions: { ...base.actions, canStart: false, canStop: true,
@@ -274,7 +315,7 @@ test("native dictation keeps its controls reachable on narrow screens and retain
 
   await publishVoiceState(page, { active: { ...active, recording: { id: "recording", keepListening: true, reconnecting: true } } });
   await expect(toolbar.locator(".voice-card-reconnecting")).toHaveText("Reconnecting");
-  await expect(toolbar.locator(".voice-card-title-reconnecting")).toBeVisible();
+  await expect(toolbar.locator(".voice-card-reconnecting")).toBeVisible();
   await expect(toolbar).toContainText("Listening");
   await expect(send).toBeEnabled();
   await expect(cancel).toBeEnabled();
@@ -282,21 +323,21 @@ test("native dictation keeps its controls reachable on narrow screens and retain
   await measureRow("reconnecting");
   await capture(page, testInfo, "voice-reconnecting-narrow.png");
   await expect(composer).toHaveValue(draft);
-  for (const width of [320, 360, 1280]) {
+  for (const [width, held] of [[320, false], [320, true], [360, false], [360, true], [1280, false], [1280, true]] as const) {
     await page.setViewportSize({ width, height: 780 });
-    await publishVoiceState(page, { phase: "listening", active: { ...active, recording: { ...active.recording, keepListening: true } },
-      actions: { ...base.actions, canStart: false, canStop: true, canRetarget: true, canSetKeepListening: true, canSend: true } });
+    await publishVoiceState(page, { phase: "listening", active: { ...active, recording: { ...active.recording, keepListening: held } },
+      actions: { ...base.actions, canStart: false, canStop: true, canRetarget: true, canSetKeepListening: true, canSend: true, keepListeningBlockedReason: null } });
     const originalSend = (await send.boundingBox())!;
     const originalCancel = (await cancel.boundingBox())!;
     await send.click();
     await expect(toolbar).toContainText("Recognizing…");
-    await expect(keep).toHaveCount(0);
-    await expect(send).toHaveCount(0);
+    await expect(keep).toBeDisabled();
+    await expect(send).toBeDisabled();
     await expect.poll(() => cancel.boundingBox()).toEqual(originalCancel);
     await page.mouse.click(originalSend.x + originalSend.width / 2, originalSend.y + originalSend.height / 2);
     await expect(toolbar).toContainText("Recognizing…");
     expect(await page.evaluate(() => window.__voiceFixture.calls.filter(call => call.method === "stopCurrentInteraction"))).toEqual([]);
-    if (width === 320) await capture(page, testInfo, "voice-finishing-recording-narrow.png");
+    if (width === 320) await capture(page, testInfo, `voice-finishing-${held ? "held" : "ordinary"}-recording-narrow.png`);
     await publishVoiceState(page, { phase: "submitting", actions: { ...base.actions, canStart: false, canStop: true } });
     await expect.poll(() => toolbar.getByRole("button", { name: "Stop voice interaction" }).boundingBox()).toEqual(originalCancel);
     await page.mouse.click(originalSend.x + originalSend.width / 2, originalSend.y + originalSend.height / 2);
@@ -304,11 +345,9 @@ test("native dictation keeps its controls reachable on narrow screens and retain
     expect(await page.evaluate(() => window.__voiceFixture.calls.filter(call => call.method === "stopCurrentInteraction"))).toEqual([]);
   }
   await page.setViewportSize({ width: 320, height: 780 });
-  expect(await page.evaluate(() => window.__voiceFixture.calls.filter(call => call.method === "sendRecording"))).toEqual([
-    { method: "sendRecording", args: { expectedConnectionGeneration: 1, recordingId: "recording" } },
-    { method: "sendRecording", args: { expectedConnectionGeneration: 1, recordingId: "recording" } },
-    { method: "sendRecording", args: { expectedConnectionGeneration: 1, recordingId: "recording" } },
-  ]);
+  expect(await page.evaluate(() => window.__voiceFixture.calls.filter(call => call.method === "sendRecording"))).toEqual(
+    Array.from({ length: 6 }, () => ({ method: "sendRecording", args: { expectedConnectionGeneration: 1, recordingId: "recording" } })),
+  );
   // Native keeps ordinary live work out of recordingRecovery while its admission
   // POST is in flight. The original interaction remains independently stoppable.
   await publishVoiceState(page, { phase: "submitting",
@@ -338,13 +377,13 @@ test("native dictation keeps its controls reachable on narrow screens and retain
   const savedTargets = await Promise.all([
     toolbar.locator(".voice-card-tile").boundingBox(), toolbar.locator(".voice-card-body").boundingBox(),
     toolbar.getByRole("button", { name: "Retry saved dictation" }).boundingBox(),
-    toolbar.getByRole("button", { name: "Discard saved dictation" }).boundingBox(), toolbar.locator(".voice-card-send-slot").boundingBox(),
+    toolbar.getByRole("button", { name: "Discard saved dictation" }).boundingBox(), toolbar.getByRole("button", { name: "Send saved dictation" }).boundingBox(),
   ]);
   for (const [index, target] of savedTargets.entries()) {
-    expect(target!.width).toBeGreaterThanOrEqual(44);
-    expect(target!.height).toBeGreaterThanOrEqual(44);
+    expect(target!.width).toBeGreaterThanOrEqual(40);
+    expect(target!.height).toBeGreaterThanOrEqual(40);
     expect(target!.x + target!.width).toBeLessThanOrEqual(320);
-    if (index) expect(target!.x).toBeGreaterThanOrEqual(savedTargets[index - 1]!.x + savedTargets[index - 1]!.width);
+    if (index > 2) expect(target!.x).toBeGreaterThanOrEqual(savedTargets[index - 1]!.x + savedTargets[index - 1]!.width);
   }
   expect(savedTargets[3]!.x - savedTargets[2]!.x - savedTargets[2]!.width).toBeGreaterThanOrEqual(4);
   expect(savedTargets[4]!.x - savedTargets[3]!.x - savedTargets[3]!.width).toBeGreaterThanOrEqual(4);
@@ -362,7 +401,7 @@ test("native dictation keeps its controls reachable on narrow screens and retain
     expect(bounds.right, `Saved label fits beside Resume at ${width}px`).toBeLessThanOrEqual(bounds.parentRight);
     const [resume, discard, slot] = await Promise.all([
       toolbar.getByRole("button", { name: "Resume voice", exact: true }).boundingBox(),
-      toolbar.getByRole("button", { name: "Discard saved dictation" }).boundingBox(), toolbar.locator(".voice-card-send-slot").boundingBox(),
+      toolbar.getByRole("button", { name: "Discard saved dictation" }).boundingBox(), toolbar.getByRole("button", { name: "Send saved dictation" }).boundingBox(),
     ]);
     expect(discard!.x - resume!.x - resume!.width, `Resume/Discard gap at ${width}px`).toBeGreaterThanOrEqual(4);
     expect(slot!.x - discard!.x - discard!.width, `Discard/Send gap at ${width}px`).toBeGreaterThanOrEqual(4);
@@ -460,8 +499,8 @@ test("native dictation keeps its controls reachable on narrow screens and retain
   const savedAccess = toolbar.getByRole("button", { name: "Saved dictation", exact: true });
   await expect(savedAccess).toBeVisible();
   const savedAccessBox = await savedAccess.boundingBox();
-  expect(savedAccessBox!.height).toBeGreaterThanOrEqual(44);
-  expect(savedAccessBox!.width).toBeGreaterThanOrEqual(44);
+  expect(savedAccessBox!.height).toBe(40);
+  expect(savedAccessBox!.width).toBe(40);
   await expect(keep).toHaveAttribute("title", "Resolve saved dictation first");
   await expect(savedAccess).toHaveAttribute("title", "Saved dictation");
   await expect(savedAccess.locator(".voice-card-saved-indicator")).toBeVisible();
@@ -470,8 +509,37 @@ test("native dictation keeps its controls reachable on narrow screens and retain
   await capture(page, testInfo, "voice-saved-access-during-recording-narrow.png");
   await expect(composer).toHaveValue(draft);
   await testInfo.attach("voice-row-heights", { body: JSON.stringify({ viewports, originalRowHeight: 60, heights }, null, 2), contentType: "application/json" });
-  await testInfo.attach("voice-row-left-offsets", { body: JSON.stringify({ viewports, leftOffsets }, null, 2), contentType: "application/json" });
+  await testInfo.attach("voice-row-text-offsets", { body: JSON.stringify({ viewports, leftOffsets, topOffsets }, null, 2), contentType: "application/json" });
   await testInfo.attach("voice-recording-control-gaps", { body: JSON.stringify({ viewports, controlGaps }, null, 2), contentType: "application/json" });
+
+  // Keep the existing three-segment width; content choices live in a separate menu.
+  await publishVoiceState(page, { phase: "idle", active: null, recordingRecovery: null, settings: base.settings, actions: base.actions });
+  await toolbar.getByRole("button", { name: "Open voice controls", exact: true }).click();
+  const voiceSheet = page.getByRole("dialog", { name: "Voice", exact: true });
+  for (const width of [320, 360]) {
+    await page.setViewportSize({ width, height: 780 });
+    await expect(voiceSheet.getByRole("radio")).toHaveCount(3);
+    for (const mode of ["Off", "Input", "Speak"]) {
+      const box = (await voiceSheet.getByRole("radio", { name: mode, exact: true }).boundingBox())!;
+      expect(box.width).toBeGreaterThan(80); expect(box.height).toBeGreaterThanOrEqual(44);
+    }
+    await voiceSheet.getByRole("combobox", { name: "Read aloud" }).click();
+    const choices = page.getByRole("listbox");
+    await expect(choices.getByRole("option")).toHaveCount(3);
+    const menu = (await choices.boundingBox())!;
+    expect(menu.x).toBeGreaterThanOrEqual(0); expect(menu.x + menu.width).toBeLessThanOrEqual(width);
+    await expectNoPageOverflow(page);
+    await capture(page, testInfo, `voice-speech-content-${width}.png`);
+    await choices.getByRole("option", { name: /^Messages/ }).click();
+    await expect(voiceSheet.getByRole("combobox", { name: "Read aloud" })).toContainText("Messages");
+    await voiceSheet.getByRole("radio", { name: "Input", exact: true }).click();
+    await expect(voiceSheet.getByRole("combobox", { name: "Read aloud" })).toHaveCount(0);
+    await expect(voiceSheet.getByRole("switch", { name: "Auto-listen", exact: true })).toBeChecked();
+    await capture(page, testInfo, `voice-input-mode-${width}.png`);
+    await voiceSheet.getByRole("radio", { name: "Speak", exact: true }).click();
+    await expect(voiceSheet.getByRole("combobox", { name: "Read aloud" })).toContainText("Messages");
+  }
+  await voiceSheet.press("Escape");
 });
 
 test("saved dictation appends to its original composer without losing drafts or truncating text", async ({ page }, testInfo) => {
@@ -602,8 +670,8 @@ test("a completed turn's footer replays its reply and stays reachable on touch w
   expect(await page.evaluate(() => window.__voiceFixture.state.queue.count)).toBe(0);
   await expect(cardStatus).not.toContainText("queued");
   await toolbar.getByRole("button", { name: "Stop voice interaction", exact: true }).click();
-  await expect.poll(() => page.evaluate(() => window.__voiceFixture.calls.filter(call => call.method === "stopCurrentInteraction"))).toEqual([
-    { method: "stopCurrentInteraction", args: { expectedConnectionGeneration: 1, interactionId: `replay:${turnId}` } },
+  await expect.poll(() => page.evaluate(() => window.__voiceFixture.calls.filter(call => call.method === "stopPlayback"))).toEqual([
+    { method: "stopPlayback", args: { expectedConnectionGeneration: 1, interactionId: `replay:${turnId}` } },
   ]);
 
   // Behind another notice a tap queues; with no stored result it reads the whole reply, as Copy response gives it.
@@ -616,7 +684,7 @@ test("a completed turn's footer replays its reply and stays reachable on touch w
     assistantResult: { unclassified: { text: "The measured response is complete." } } } });
   await publishVoiceState(page, { settings: { ...base.settings, audioMode: "off" } });
   await expect(speak).toHaveCount(0);
-  await publishVoiceState(page, { settings: { ...base.settings, audioMode: "manual" } });
+  await publishVoiceState(page, { settings: { ...base.settings, audioMode: "input" } });
   await expect(speak).toBeVisible();
   expect(reads).toHaveLength(3);
 

@@ -2,7 +2,7 @@ import { z } from "zod";
 import { selectedAssistantResultSchema } from "./notification.js";
 
 export const clientVoiceSettingsSchema = z.strictObject({
-  audioMode: z.enum(["off", "manual", "response"]),
+  audioMode: z.enum(["off", "input", "speak"]),
   voiceThreadId: z.string().uuid().nullable(),
   pinDefaultVoiceThread: z.boolean(),
   autoListen: z.boolean(),

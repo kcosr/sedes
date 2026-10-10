@@ -42,6 +42,24 @@ afterEach(() => {
 });
 
 describe("voice settings page", () => {
+  it("shows the same Read aloud selector only in Speak mode", async () => {
+    const native = voiceSnapshot({ settings: voiceSettings({ audioMode: "speak", speechContent: "messages" }) });
+    const { fake, store } = await renderPage(native, fake => fake.plugin.updateSettings.mockResolvedValue({ ...native,
+      stateRevision: 2, settingsRevision: 1, settings: { ...native.settings, speechContent: "announcements" } }));
+    const select = screen.getByRole("combobox", { name: "Read aloud" });
+    expect(select).toHaveTextContent("Messages");
+    expect(screen.queryByRole("switch", { name: "Read notification title and context" })).toBeNull();
+    fireEvent.keyDown(select, { key: "ArrowDown" });
+    fireEvent.click(await screen.findByRole("option", { name: /^Announcements/ }));
+    await waitFor(() => expect(fake.plugin.updateSettings).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1,
+      expectedRevision: 0, patch: { speechContent: "announcements" } }));
+    for (const audioMode of ["input", "off"] as const) {
+      act(() => fake.emit("stateChanged", { ...native, stateRevision: audioMode === "input" ? 3 : 4,
+        settings: { ...native.settings, audioMode } }));
+      expect(screen.queryByRole("combobox", { name: "Read aloud" })).toBeNull();
+    }
+    store.dispose();
+  });
   it("saves the long dictation limit in whole minutes and rejects values outside one minute through one day", async () => {
     const native = voiceSnapshot();
     const { fake, store } = await renderPage(native, fake => fake.plugin.updateSettings.mockResolvedValue({ ...native,
@@ -67,7 +85,7 @@ describe("voice settings page", () => {
     const active = { id: "interaction", threadId: "named", threadTitle: "Release review", eventKind: "manual", automatic: false,
       recognitionThreadId: "named", recognitionThreadTitle: "Release review", recording: { id: "recording", keepListening: true, reconnecting: false } };
     const { store } = await renderPage(voiceSnapshot({ phase: work === "capture" ? "listening" : "recognizing",
-      settings: voiceSettings({ audioMode: "response", speechProvider: "server", speechEndpoint: "https://voice.test/v1" }), active: work === "capture" ? active : null,
+      settings: voiceSettings({ audioMode: "speak", speechProvider: "server", speechEndpoint: "https://voice.test/v1" }), active: work === "capture" ? active : null,
       recordingRecovery: work === "saved-recognition" ? recordingRecovery({ stage: "recognizing", canRetryRecognition: false }) : null }));
     expect(screen.getByRole("combobox", { name: "Provider" })).toBeDisabled();
     expect(screen.getByRole("textbox", { name: "Speech API endpoint" })).toBeDisabled();
@@ -139,11 +157,11 @@ describe("voice settings page", () => {
     await waitFor(() => expect(fake.plugin.resumeInput).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, mutationId: resumed }));
     store.dispose();
   });
-  it.each(["manual", "response"])("enables voice through Audio mode in %s only once speech setup is complete", async audioMode => {
+  it.each(["input", "speak"])("enables voice through Audio mode in %s only once speech setup is complete", async audioMode => {
     const { fake, store } = await renderPage(voiceSnapshot({ settings: voiceSettings({ sttModel: "" }) }));
     expect(screen.queryByRole("button", { name: "Enable voice" })).toBeNull();
-    expect(screen.getByRole("option", { name: "Manual" })).toBeDisabled();
-    expect(screen.getByRole("option", { name: "Response" })).toBeDisabled();
+    expect(screen.getByRole("option", { name: "Input" })).toBeDisabled();
+    expect(screen.getByRole("option", { name: "Speak" })).toBeDisabled();
     expect(screen.getByRole("combobox", { name: "Audio mode" })).toHaveAccessibleDescription("Add a speech credential below.");
     fireEvent.change(screen.getByRole("combobox", { name: "Audio mode" }), { target: { value: audioMode } });
     expect(fake.plugin.updateSettings).not.toHaveBeenCalled();
@@ -153,8 +171,8 @@ describe("voice settings page", () => {
     fake.plugin.refreshSpeechCatalog.mockResolvedValue(configured);
     act(() => fake.emit("settingsChanged", configured));
     await waitFor(() => expect(screen.getByRole("combobox", { name: "Audio mode" })).toBeEnabled());
-    expect(screen.getByRole("option", { name: "Manual" })).toBeEnabled();
-    expect(screen.getByRole("option", { name: "Response" })).toBeEnabled();
+    expect(screen.getByRole("option", { name: "Input" })).toBeEnabled();
+    expect(screen.getByRole("option", { name: "Speak" })).toBeEnabled();
     fireEvent.change(screen.getByRole("combobox", { name: "Audio mode" }), { target: { value: audioMode } });
     await waitFor(() => expect(fake.plugin.updateSettings).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, expectedRevision: 1, patch: { audioMode } }));
     store.dispose();
@@ -163,12 +181,12 @@ describe("voice settings page", () => {
     const native = voiceSnapshot({ settings: voiceSettings({ speechProvider: "server", speechEndpoint: "", ttsVoice: "" }),
       speech: { credentialConfigured: true, catalogStatus: "idle", catalog: null, error: null } });
     const { fake, store } = await renderPage(native);
-    expect(screen.getByRole("option", { name: "Manual" })).toBeDisabled();
+    expect(screen.getByRole("option", { name: "Input" })).toBeDisabled();
     expect(screen.getByRole("combobox", { name: "Audio mode" })).toHaveAccessibleDescription("Add a speech endpoint below.");
     expect(fake.plugin.refreshSpeechCatalog).not.toHaveBeenCalled();
     act(() => fake.emit("settingsChanged", { ...native, stateRevision: 2, settings: { ...native.settings, speechEndpoint: "https://voice.test/v1" } }));
     await waitFor(() => expect(screen.getByRole("combobox", { name: "Audio mode" })).toBeEnabled());
-    expect(screen.getByRole("option", { name: "Response" })).toBeDisabled();
+    expect(screen.getByRole("option", { name: "Speak" })).toBeDisabled();
     expect(screen.getByRole("combobox", { name: "Audio mode" })).toHaveAccessibleDescription("Choose speech models and a voice below.");
     store.dispose();
   });
@@ -184,10 +202,10 @@ describe("voice settings page", () => {
     store.dispose();
   });
   it("resumes voice with the refreshed native audio mode rather than the rendered one", async () => {
-    const { fake, store } = await renderPage(voiceSnapshot({ settings: voiceSettings({ audioMode: "response", speechProvider: "server", speechEndpoint: "https://voice.test/v1" }), actions: { ...actions, canResume: true } }));
-    fake.plugin.getState.mockResolvedValue(voiceSnapshot({ stateRevision: 2, settingsRevision: 4, settings: voiceSettings({ audioMode: "manual", speechProvider: "server", speechEndpoint: "https://voice.test/v1" }), actions: { ...actions, canResume: true } }));
+    const { fake, store } = await renderPage(voiceSnapshot({ settings: voiceSettings({ audioMode: "speak", speechProvider: "server", speechEndpoint: "https://voice.test/v1" }), actions: { ...actions, canResume: true } }));
+    fake.plugin.getState.mockResolvedValue(voiceSnapshot({ stateRevision: 2, settingsRevision: 4, settings: voiceSettings({ audioMode: "input", speechProvider: "server", speechEndpoint: "https://voice.test/v1" }), actions: { ...actions, canResume: true } }));
     fireEvent.click(screen.getByRole("button", { name: "Resume voice" }));
-    await waitFor(() => expect(fake.plugin.updateSettings).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, expectedRevision: 4, patch: { audioMode: "manual" } }));
+    await waitFor(() => expect(fake.plugin.updateSettings).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, expectedRevision: 4, patch: { audioMode: "input" } }));
     store.dispose();
   });
   it("lists recent distinct native errors and clears them on this device", async () => {
@@ -242,7 +260,7 @@ describe("voice settings page", () => {
     store.dispose();
   });
   it("explains that the carried playback filter needs a default thread on this connection", async () => {
-    const settings = voiceSettings({ audioMode: "response", onlyVoiceThread: true });
+    const settings = voiceSettings({ audioMode: "speak", onlyVoiceThread: true });
     const native = voiceSnapshot({ settings, ready: true, readiness: "ready", phase: "idle" });
     const { fake, store } = await renderPage(native);
     expect(screen.getByRole("status")).toHaveTextContent("Automatic playback and listening are paused. Choose a default voice thread for this connection");
@@ -266,8 +284,32 @@ describe("voice settings page", () => {
     expect(fake.plugin.updateSettings).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, expectedRevision: 0, patch: { cleanSpeechText: false } });
     store.dispose();
   });
+  it("opts into recording announcements independently of Auto-listen and recording cues", async () => {
+    let native = voiceSnapshot({ settings: voiceSettings({ audioMode: "input", autoListen: false, recognitionCues: false }) });
+    const { fake, store } = await renderPage(native, fake => {
+      fake.plugin.getState.mockImplementation(async () => native);
+      vi.mocked(fake.asPlugin.updateSettings).mockImplementation(async ({ patch }) => (native = { ...native,
+        stateRevision: native.stateRevision + 1, settingsRevision: native.settingsRevision + 1, settings: { ...native.settings, ...patch } }));
+    });
+    const toggle = screen.getByRole("switch", { name: "Announce recording thread" });
+    expect(toggle).not.toBeChecked();
+    expect(toggle).toHaveAccessibleDescription("Read the destination before a new headset or notification recording. Skip in-app starts, playback interruptions to reply, and automatic follow-up recording.");
+    fireEvent.click(toggle);
+    await waitFor(() => expect(toggle).toBeChecked());
+    await waitFor(() => expect(toggle).toBeEnabled());
+    fireEvent.click(toggle);
+    await waitFor(() => expect(toggle).not.toBeChecked());
+    expect(vi.mocked(fake.asPlugin.updateSettings).mock.calls.map(([input]) => input)).toEqual([
+      { expectedConnectionGeneration: 1, expectedRevision: 0, patch: { announceRecordingThread: true } },
+      { expectedConnectionGeneration: 1, expectedRevision: 1, patch: { announceRecordingThread: false } },
+    ]);
+    expect(screen.getByRole("switch", { name: "Auto-listen" })).not.toBeChecked();
+    expect(screen.getByRole("switch", { name: "Recognition cues" })).not.toBeChecked();
+    expect(fake.plugin.startManualListen).not.toHaveBeenCalled();
+    store.dispose();
+  });
   it.each([false, true])("round-trips the future Keep listening preference while the current recording stays %s", async keepListening => {
-    let native = voiceSnapshot({ phase: "listening", settings: voiceSettings({ audioMode: "response" }), active: {
+    let native = voiceSnapshot({ phase: "listening", settings: voiceSettings({ audioMode: "speak" }), active: {
       id: "interaction", threadId: "named", threadTitle: "Release review", eventKind: "manual", automatic: false,
       recognitionThreadId: "named", recognitionThreadTitle: "Release review", recording: { id: "recording", keepListening, reconnecting: false },
     } });

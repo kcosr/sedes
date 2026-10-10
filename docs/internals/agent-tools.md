@@ -316,10 +316,11 @@ stay queued, in order, for the next poll; the first pending command is always
 delivered.
 
 Settings reads identify the client and return capabilities, readiness, and a
-revision. Updates require `expectedRevision` and `patch.voice`, limited to
+revision. `audioMode` accepts `off`, `input`, or `speak`; client-control tool
+contracts use schema version 2. Updates require `expectedRevision` and `patch.voice`, limited to
 `audioMode`, `voiceThreadId`, `pinDefaultVoiceThread`, `autoListen`,
 `onlyVoiceThread`, `ignoreOtherDevices`, and `followComposerMode`. Credentials,
-providers, models, hardware selection, timing, and notification policy are outside
+providers, models, speech-content selection, hardware selection, timing, and notification policy are outside
 this API. Destination/default threads pass normal environment authority checks,
 including nested default-thread patches. Android persists through its existing
 profile/identity settings store. An enabling edit can persist while foreground,

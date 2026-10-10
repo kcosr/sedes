@@ -4,13 +4,14 @@
 
 ### Breaking Changes
 
-- Browser and packaged clients require client protocol 147, which adds
+- Browser and packaged clients require client protocol 149, which adds
   automation schedule details and run turn outcomes to thread summaries and
   runs, drops the Remind now inventory action, adds turn reply replay, and adds
   workpad list sorting, counts, and deletion. Input contexts include current
-  manual-input eligibility for replay Auto-listen. Upgrade clients together
-  with the server.
-  ([#58](https://github.com/kcosr/sedes/pull/58), [#59](https://github.com/kcosr/sedes/pull/59), [#61](https://github.com/kcosr/sedes/pull/61), [#62](https://github.com/kcosr/sedes/pull/62), [#65](https://github.com/kcosr/sedes/pull/65), [#67](https://github.com/kcosr/sedes/pull/67))
+  manual-input eligibility for replay Auto-listen and the canonical thread title.
+  Client voice modes are now `off`, `input`, and `speak`; client-control tools
+  use schema version 2. Upgrade clients together with the server.
+  ([#58](https://github.com/kcosr/sedes/pull/58), [#59](https://github.com/kcosr/sedes/pull/59), [#61](https://github.com/kcosr/sedes/pull/61), [#62](https://github.com/kcosr/sedes/pull/62), [#65](https://github.com/kcosr/sedes/pull/65), [#67](https://github.com/kcosr/sedes/pull/67), [#68](https://github.com/kcosr/sedes/pull/68))
 
 - `PATCH /api/threads/:threadId/inventory` no longer accepts the `remind`
   action. ([#61](https://github.com/kcosr/sedes/pull/61))
@@ -25,12 +26,13 @@
   and its WebView. Upgrade clients together with the server.
   ([#50](https://github.com/kcosr/sedes/pull/50), [#53](https://github.com/kcosr/sedes/pull/53), [#56](https://github.com/kcosr/sedes/pull/56))
 
-- Android voice uses snapshot version 10, settings version 7, and dictation
-  manifest version 2. Reconfigure voice and re-enter speech credentials after
-  upgrading: previous per-connection preferences are not imported and their
-  speech keys are removed. Finish or copy saved dictation first; older recordings
-  remain on disk until discarded but cannot be resumed.
-  ([#49](https://github.com/kcosr/sedes/pull/49), [#51](https://github.com/kcosr/sedes/pull/51), [#53](https://github.com/kcosr/sedes/pull/53), [#55](https://github.com/kcosr/sedes/pull/55), [#67](https://github.com/kcosr/sedes/pull/67))
+- Android voice uses snapshot version 14, settings version 9, and dictation
+  manifest version 2. Reconfigure voice after upgrading: older preferences and
+  default-thread selections reset, while separately stored device speech keys
+  and version-2 saved dictation remain available. Earlier per-connection
+  preferences are not imported and their profile-bound speech keys are removed.
+  Older recording manifests remain on disk until discarded but cannot be resumed.
+  ([#49](https://github.com/kcosr/sedes/pull/49), [#51](https://github.com/kcosr/sedes/pull/51), [#53](https://github.com/kcosr/sedes/pull/53), [#55](https://github.com/kcosr/sedes/pull/55), [#67](https://github.com/kcosr/sedes/pull/67), [#68](https://github.com/kcosr/sedes/pull/68))
 
 - Self-hosted speech servers must advertise per-model `realtime` capabilities.
   Hosted recognition accepts only the supported base model IDs, excluding dated
@@ -228,6 +230,10 @@
   Migration preserves old Claude totals separately with unknown coverage. (#8)
 
 ### Added
+
+- Android voice can optionally announce the destination before a new headset
+  or notification recording. The setting defaults off.
+  ([#68](https://github.com/kcosr/sedes/pull/68))
 
 - **Delete…** in a workpad's **⋯** permanently deletes it, with its history and
   draft, after you confirm; agents can still only archive. ([#65](https://github.com/kcosr/sedes/pull/65))
@@ -492,6 +498,23 @@
 
 ### Changed
 
+- Android voice uses Off, Input, and Speak modes. Input keeps eligible
+  completion auto-listen without automatic speech; Speak adds a remembered
+  Read aloud choice of announcements, messages, or both.
+  ([#68](https://github.com/kcosr/sedes/pull/68))
+
+- In-app, headset, and notification recordings share the destination shown by
+  the idle voice bar, including explicit target choices. Unpinned voice retains
+  its destination after backgrounding; idle Next releases that fallback.
+  ([#68](https://github.com/kcosr/sedes/pull/68))
+
+- The compact Android voice bar keeps Record/Send and Stop/Cancel in fixed
+  positions and hides unavailable actions. Playback Stop clears queued speech;
+  Send can finish ordinary recordings, including alongside saved dictation.
+  Expanded notifications keep recording controls accessible, and repeated taps
+  on disappearing controls no longer trigger the action underneath.
+  ([#68](https://github.com/kcosr/sedes/pull/68))
+
 - Android playback offers **Record** to reply to the spoken thread and **Next**
   to skip speech and its follow-up recording. Headset Play/Pause records during
   speech when Auto-listen is on and recording is available; otherwise it skips.
@@ -590,8 +613,8 @@
 
 - Voice settings offer searchable models, voices, and threads, with separate
   default recording targets and playback filters. The voice card can choose a
-  current or next target without changing the default; headset and notification
-  Start use the saved default, while automatic replies keep their source thread.
+  current or next target without changing the default; manual starts share the
+  selected destination, while automatic replies keep their source thread.
   ([#49](https://github.com/kcosr/sedes/pull/49), [#53](https://github.com/kcosr/sedes/pull/53))
 
 - Mobile Prompts supports search, and voice thread pickers open without raising

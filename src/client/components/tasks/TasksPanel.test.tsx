@@ -587,8 +587,8 @@ describe("TasksPanel scope", () => {
     expect(getTasksViewOptions("project").includeThreadTasks).toBe(false);
     expect(screen.queryByRole("group", { name: "View filters" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "View options" })).not.toHaveAttribute("data-filtering");
-    // Removing the last chip leaves focus on the selected view.
-    expect(segment("Project")).toHaveFocus();
+    // Removing the last chip restores focus on the next animation frame.
+    await waitFor(() => expect(segment("Project")).toHaveFocus());
   });
 
   it("keeps the thread-tasks chip out of the empty list's reset offer", () => {

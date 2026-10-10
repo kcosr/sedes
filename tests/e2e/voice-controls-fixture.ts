@@ -4,18 +4,18 @@ import type { NativeVoiceInputSubmitted, NativeVoiceState } from "../../src/clie
 const profileId = "c61b5d8b-4a77-43c6-bd72-12e23fe42e38";
 export function voiceFixtureState(): NativeVoiceState {
   return {
-    version: 10, stateRevision: 1, connectionGeneration: 1, profileId, serverOrigin: null, identity: null,
+    version: 14, stateRevision: 1, connectionGeneration: 1, profileId, serverOrigin: null, identity: null,
     originClientId: "34612c41-0bbb-455f-a5af-725bfc7ae768", clientConnectionToken: null, settingsRevision: 0,
-    settings: { audioMode: "response", autoListen: true, keepListeningByDefault: false, ignoreOtherDevices: true, readNotificationContext: true, cleanSpeechText: true,
+    settings: { audioMode: "speak", autoListen: true, keepListeningByDefault: false, announceRecordingThread: false, ignoreOtherDevices: true, speechContent: "both", cleanSpeechText: true,
       speechProvider: "openai", speechEndpoint: "https://api.openai.com/v1", sttModel: "gpt-live-transcribe", ttsModel: "gpt-4o-mini-tts",
       ttsVoice: "coral", ttsSpeed: 1, speechTextLimit: 4096, voiceThreadId: null, voiceThreadTitle: null, pinDefaultVoiceThread: false,
       onlyVoiceThread: false, followComposerMode: false, inputDevice: null, recognitionStartTimeoutMs: 30000, recognitionCompletionTimeoutMs: 60000,
       recognitionResultTimeoutMs: 60000, longDictationTimeoutMs: 3_600_000, recognitionEndSilenceMs: 1200, recognizeStopCommand: true,
       recognitionCues: true, cueGain: 100, startupPreRollMs: 512, ttsGain: 100, headsetControls: true },
     speech: { credentialConfigured: true, catalogStatus: "idle", catalog: null, error: null }, phase: "idle", ready: true, readiness: "ready",
-    foreground: { visible: false, threadId: null, threadTitle: null }, nextRecordingTarget: null, active: null,
+    foreground: { visible: false, threadId: null, threadTitle: null }, nextRecordingTarget: null, retainedVoiceTarget: null, idleTargetRevision: 0, active: null,
     queue: { count: 0, bytes: 0, droppedCount: 0, droppedReasons: {} },
-    actions: { canStart: true, canStop: false, canSkip: false, canRecordDuringPlayback: false, canRetarget: false, canResume: false,
+    actions: { canStart: true, canStop: false, canSkip: false, canRecordDuringPlayback: false, canReleaseRetainedTarget: false, canRetarget: false, canResume: false,
       canSetKeepListening: false, canSend: false, keepListeningBlockedReason: "not_capturing" }, recordingRecovery: null, recovery: [], errors: [],
   };
 }
@@ -51,6 +51,16 @@ export async function installVoiceFixture(page: Page): Promise<void> {
       recoveredText: "Recovered dictation text.",
       publish(patch) {
         fixture.state = { ...fixture.state, ...patch, stateRevision: fixture.state.stateRevision + 1 };
+        const state = fixture.state;
+        if (state.phase === "idle" && !state.active && !state.nextRecordingTarget && !state.settings.pinDefaultVoiceThread &&
+            state.foreground.visible && state.foreground.threadId) {
+          const { threadId, threadTitle } = state.foreground;
+          if (state.retainedVoiceTarget?.threadId !== threadId || state.retainedVoiceTarget.threadTitle !== threadTitle) {
+            state.idleTargetRevision += 1;
+            state.retainedVoiceTarget = { threadId, threadTitle, revision: state.idleTargetRevision };
+          }
+          state.actions = { ...state.actions, canReleaseRetainedTarget: true };
+        }
         sessionStorage.setItem(retainedKey, JSON.stringify(fixture.state));
         emit("stateChanged", fixture.state);
       },
@@ -67,8 +77,8 @@ export async function installVoiceFixture(page: Page): Promise<void> {
         PluginHeaders: [
           header("Preferences", ["get", "set", "remove"]), header("ClientCredentials", ["getCredential", "setCredential", "removeCredential", "removeProfileCredentials"]),
           header("App", ["exitApp"], true),
-          header("NativeVoice", ["setConnection", "getState", "disconnect", "setForegroundContext", "updateSettings", "startManualListen", "setNextRecordingTarget",
-            "retargetActiveRecognition", "setKeepListening", "sendRecording", "stopCurrentInteraction", "skipCurrentPlayback", "recordDuringPlayback", "retryRecordingRecognition",
+          header("NativeVoice", ["setConnection", "getState", "disconnect", "setForegroundContext", "updateSettings", "startManualListen", "setNextRecordingTarget", "releaseRetainedVoiceTarget",
+            "retargetActiveRecognition", "setKeepListening", "sendRecording", "stopCurrentInteraction", "stopPlayback", "skipCurrentPlayback", "recordDuringPlayback", "retryRecordingRecognition",
             "sendRecoveredRecording", "copyRecognizedRecordingText", "readRecognizedRecordingText", "discardRecording", "resumeInput", "discardInput", "listInputDevices",
             "refreshSpeechCatalog", "openSpeechCredentialDialog", "speakReply"], true),
         ],
@@ -100,11 +110,16 @@ export async function installVoiceFixture(page: Page): Promise<void> {
             if (current.active || current.settings.audioMode === "off" || args.expectedConnectionGeneration !== current.connectionGeneration)
               throw new Error("Voice interaction changed.");
             fixture.publish({ nextRecordingTarget: { threadId: String(args.threadId), threadTitle: typeof args.threadTitle === "string" ? args.threadTitle : null } });
+          } else if (method === "releaseRetainedVoiceTarget") {
+            if (args.expectedConnectionGeneration !== current.connectionGeneration) throw new Error("Voice connection changed.");
+            if (current.actions.canReleaseRetainedTarget && !current.active && args.expectedRetainedRevision === current.retainedVoiceTarget?.revision)
+              fixture.publish({ retainedVoiceTarget: null, idleTargetRevision: current.idleTargetRevision + 1,
+                actions: { ...current.actions, canReleaseRetainedTarget: false } });
           } else if (method === "setKeepListening" || method === "sendRecording" || method === "retargetActiveRecognition") {
             if (!current.active?.recording || args.recordingId !== current.active.recording.id || args.expectedConnectionGeneration !== current.connectionGeneration)
               throw new Error("The recording changed.");
             if (method === "setKeepListening") fixture.publish({ active: { ...current.active, automatic: false,
-              recording: { ...current.active.recording, keepListening: args.enabled === true } }, actions: { ...current.actions, canSend: args.enabled === true } });
+              recording: { ...current.active.recording, keepListening: args.enabled === true } } });
             if (method === "sendRecording") fixture.publish({ phase: "recognizing", actions: { ...current.actions,
               canSetKeepListening: false, canSend: false, canRetarget: false, keepListeningBlockedReason: "not_capturing" } });
             if (method === "retargetActiveRecognition") fixture.publish({ active: { ...current.active,
@@ -132,10 +147,18 @@ export async function installVoiceFixture(page: Page): Promise<void> {
               recognitionThreadId: current.active.threadId, recognitionThreadTitle: current.active.threadTitle,
               recording: { id: `recording:${current.active.id}`, keepListening: current.settings.keepListeningByDefault, reconnecting: false } },
               actions: { ...initial.actions, canStart: false, canStop: true, canRetarget: true, canSetKeepListening: true,
-                canSend: current.settings.keepListeningByDefault, keepListeningBlockedReason: null } });
+                canSend: true, keepListeningBlockedReason: null } });
+          } else if (method === "stopPlayback") {
+            if (args.interactionId !== current.active?.id || args.expectedConnectionGeneration !== current.connectionGeneration ||
+                !["synthesizing", "speaking"].includes(current.phase)) throw new Error("The playback changed.");
+            queuedReplays.clear();
+            fixture.publish({ phase: "idle", active: null,
+              actions: { ...initial.actions, canReleaseRetainedTarget: current.retainedVoiceTarget !== null && !current.settings.pinDefaultVoiceThread },
+              queue: { ...current.queue, count: 0, bytes: 0 } });
           } else if (method === "stopCurrentInteraction" || method === "skipCurrentPlayback") {
             if (args.interactionId !== current.active?.id || args.expectedConnectionGeneration !== current.connectionGeneration) throw new Error("The interaction changed.");
-            fixture.publish({ phase: "idle", active: null, actions: { ...initial.actions } });
+            fixture.publish({ phase: "idle", active: null,
+              actions: { ...initial.actions, canReleaseRetainedTarget: current.retainedVoiceTarget !== null && !current.settings.pinDefaultVoiceThread } });
           } else if (["retryRecordingRecognition", "sendRecoveredRecording", "discardRecording", "copyRecognizedRecordingText", "readRecognizedRecordingText"].includes(method)) {
             const saved = current.recordingRecovery;
             if (!saved || args.recordingId !== saved.recordingId || args.expectedRecoveryRevision !== saved.revision || args.expectedConnectionGeneration !== current.connectionGeneration)
