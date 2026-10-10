@@ -4,7 +4,7 @@ import type { NativeVoiceInputSubmitted, NativeVoiceState } from "../../src/clie
 const profileId = "c61b5d8b-4a77-43c6-bd72-12e23fe42e38";
 export function voiceFixtureState(): NativeVoiceState {
   return {
-    version: 12, stateRevision: 1, connectionGeneration: 1, profileId, serverOrigin: null, identity: null,
+    version: 13, stateRevision: 1, connectionGeneration: 1, profileId, serverOrigin: null, identity: null,
     originClientId: "34612c41-0bbb-455f-a5af-725bfc7ae768", clientConnectionToken: null, settingsRevision: 0,
     settings: { audioMode: "response", autoListen: true, keepListeningByDefault: false, announceRecordingThread: false, ignoreOtherDevices: true, readNotificationContext: true, cleanSpeechText: true,
       speechProvider: "openai", speechEndpoint: "https://api.openai.com/v1", sttModel: "gpt-live-transcribe", ttsModel: "gpt-4o-mini-tts",
@@ -68,7 +68,7 @@ export async function installVoiceFixture(page: Page): Promise<void> {
           header("Preferences", ["get", "set", "remove"]), header("ClientCredentials", ["getCredential", "setCredential", "removeCredential", "removeProfileCredentials"]),
           header("App", ["exitApp"], true),
           header("NativeVoice", ["setConnection", "getState", "disconnect", "setForegroundContext", "updateSettings", "startManualListen", "setNextRecordingTarget", "releaseRetainedVoiceTarget",
-            "retargetActiveRecognition", "setKeepListening", "sendRecording", "stopCurrentInteraction", "skipCurrentPlayback", "recordDuringPlayback", "retryRecordingRecognition",
+            "retargetActiveRecognition", "setKeepListening", "sendRecording", "stopCurrentInteraction", "stopPlayback", "skipCurrentPlayback", "recordDuringPlayback", "retryRecordingRecognition",
             "sendRecoveredRecording", "copyRecognizedRecordingText", "readRecognizedRecordingText", "discardRecording", "resumeInput", "discardInput", "listInputDevices",
             "refreshSpeechCatalog", "openSpeechCredentialDialog", "speakReply"], true),
         ],
@@ -138,6 +138,11 @@ export async function installVoiceFixture(page: Page): Promise<void> {
               recording: { id: `recording:${current.active.id}`, keepListening: current.settings.keepListeningByDefault, reconnecting: false } },
               actions: { ...initial.actions, canStart: false, canStop: true, canRetarget: true, canSetKeepListening: true,
                 canSend: current.settings.keepListeningByDefault, keepListeningBlockedReason: null } });
+          } else if (method === "stopPlayback") {
+            if (args.interactionId !== current.active?.id || args.expectedConnectionGeneration !== current.connectionGeneration ||
+                !["synthesizing", "speaking"].includes(current.phase)) throw new Error("The playback changed.");
+            queuedReplays.clear();
+            fixture.publish({ phase: "idle", active: null, actions: { ...initial.actions }, queue: { ...current.queue, count: 0, bytes: 0 } });
           } else if (method === "stopCurrentInteraction" || method === "skipCurrentPlayback") {
             if (args.interactionId !== current.active?.id || args.expectedConnectionGeneration !== current.connectionGeneration) throw new Error("The interaction changed.");
             fixture.publish({ phase: "idle", active: null, actions: { ...initial.actions } });

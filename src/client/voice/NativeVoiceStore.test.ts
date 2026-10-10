@@ -157,6 +157,28 @@ describe("local voice submission events", () => {
   });
 });
 describe("native voice state authority", () => {
+  it.each(["stopPlayback", "stopInteraction"] as const)("%s interrupts a pending action, deduplicates taps, and rejects its late state", async action => {
+    const { store, plugin } = fixture();
+    await store.initialize();
+    let releaseRecord!: (state: NativeVoiceState) => void;
+    let releaseStop!: (state: NativeVoiceState) => void;
+    plugin.recordDuringPlayback.mockImplementationOnce(() => new Promise(resolve => { releaseRecord = resolve; }));
+    const stop = action === "stopPlayback" ? plugin.stopPlayback : plugin.stopCurrentInteraction;
+    stop.mockImplementationOnce(() => new Promise(resolve => { releaseStop = resolve; }));
+    const recording = store.run(() => plugin.recordDuringPlayback());
+    const context = { expectedConnectionGeneration: 1, interactionId: "playing" };
+    const stopping = store[action](context);
+    expect(store[action](context)).toBe(stopping);
+    expect(stop).toHaveBeenCalledExactlyOnceWith(context);
+    const idle = snapshot({ stateRevision: 3, phase: "idle" });
+    releaseStop(idle);
+    await stopping;
+    expect(store.getSnapshot().pending).toBe(true);
+    releaseRecord(snapshot({ stateRevision: 2, phase: "listening" }));
+    await recording;
+    expect(store.getSnapshot()).toMatchObject({ native: idle, pending: false });
+    store.dispose();
+  });
   it("retains a notification open until native hydration and supports retry after transient startup failure", async () => {
     const { store, plugin, listeners, open } = fixture();
     plugin.setConnection.mockImplementationOnce(async () => {

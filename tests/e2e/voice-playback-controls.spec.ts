@@ -28,7 +28,7 @@ test("playback Record, Next and Stop stay separate on touch while replying to an
   const settings = { ...base.settings, autoListen: false, pinDefaultVoiceThread: true, voiceThreadId: defaultId, voiceThreadTitle: "Pinned thread C" };
   const queue = { count: 2, bytes: 80, droppedCount: 0, droppedReasons: {} };
   const calls = () => page.evaluate(() => window.__voiceFixture.calls.filter(call =>
-    ["recordDuringPlayback", "skipCurrentPlayback", "stopCurrentInteraction", "startManualListen"].includes(call.method)));
+    ["recordDuringPlayback", "skipCurrentPlayback", "stopCurrentInteraction", "stopPlayback", "startManualListen"].includes(call.method)));
   const expected: Awaited<ReturnType<typeof calls>> = [];
   const playback = async (id: string, phase: "synthesizing" | "speaking", automatic: boolean) => {
     await publishVoiceState(page, { phase, settings, queue,
@@ -40,7 +40,7 @@ test("playback Record, Next and Stop stay separate on touch while replying to an
   };
   const assertPlaybackTargets = async () => {
     const boxes = [];
-    for (const name of ["Record reply", "Next voice interaction", "Stop voice interaction"]) {
+    for (const name of ["Next voice interaction", "Stop voice interaction", "Record reply"]) {
       const button = toolbar.getByRole("button", { name, exact: true });
       await expect(button).toBeEnabled();
       const box = (await button.boundingBox())!;
@@ -56,12 +56,13 @@ test("playback Record, Next and Stop stay separate on touch while replying to an
     expect(boxes[0]!.x + boxes[0]!.width).toBeLessThan(boxes[1]!.x);
     expect(boxes[1]!.x + boxes[1]!.width).toBeLessThan(boxes[2]!.x);
     await expectNoPageOverflow(page);
+    return boxes;
   };
 
   for (const [phase, automatic] of [["synthesizing", true], ["speaking", false]] as const) {
     const id = `playback-${phase}`;
     await playback(id, phase, automatic);
-    await assertPlaybackTargets();
+    const playbackBoxes = await assertPlaybackTargets();
     await capture(page, testInfo, `voice-record-before-${phase}-320.png`);
     await toolbar.getByRole("button", { name: "Record reply", exact: true }).tap();
     expected.push({ method: "recordDuringPlayback", args: { expectedConnectionGeneration: 1, interactionId: id } });
@@ -69,6 +70,13 @@ test("playback Record, Next and Stop stay separate on touch while replying to an
     await expect(toolbar.locator(".voice-card-sub")).toHaveText("Listening");
     await expect(toolbar.locator(".voice-card-title")).toHaveText("Spoken thread B");
     await expect(toolbar.getByRole("button", { name: "Next voice interaction" })).toHaveCount(0);
+    for (const [index, name] of ["Keep listening", "Cancel voice recording", "Send voice recording"].entries()) {
+      await expect.poll(() => toolbar.getByRole("button", { name, exact: true }).boundingBox()).toEqual(playbackBoxes[index]);
+    }
+    await expect(toolbar.getByRole("button", { name: "Send voice recording" })).toBeDisabled();
+    const recordBox = playbackBoxes[2]!;
+    await page.touchscreen.tap(recordBox.x + recordBox.width / 2, recordBox.y + recordBox.height / 2);
+    expect(await calls()).toEqual(expected);
     await expect(page).toHaveURL(new RegExp(`${viewedPath}$`, "u"));
     await expect(composer).toHaveValue(draft);
     expect(await page.evaluate(() => ({ queue: window.__voiceFixture.state.queue,
@@ -89,14 +97,17 @@ test("playback Record, Next and Stop stay separate on touch while replying to an
   await expect(page).toHaveURL(new RegExp(`${viewedPath}$`, "u"));
   await playback("playback-stop", "speaking", false);
   await toolbar.getByRole("button", { name: "Stop voice interaction", exact: true }).tap();
-  expected.push({ method: "stopCurrentInteraction", args: { expectedConnectionGeneration: 1, interactionId: "playback-stop" } });
+  expected.push({ method: "stopPlayback", args: { expectedConnectionGeneration: 1, interactionId: "playback-stop" } });
   await expect.poll(calls).toEqual(expected);
   await expect(toolbar.locator(".voice-card-sub")).toContainText("Ready");
+  expect(await page.evaluate(() => window.__voiceFixture.state.queue)).toEqual({ ...queue, count: 0, bytes: 0 });
+  await expect(toolbar.getByRole("button", { name: "Next voice interaction" })).toBeDisabled();
+  await expect(toolbar.getByRole("button", { name: "Stop voice interaction" })).toBeDisabled();
   await expect(page).toHaveURL(new RegExp(`${viewedPath}$`, "u"));
   await expect(composer).toHaveValue(draft);
 });
 
-test("recording announcements are opt-in and their preparation can be cancelled on a narrow screen", async ({ page }, testInfo) => {
+test("background recording announcements are opt-in and their preparation can be cancelled on a narrow screen", async ({ page }, testInfo) => {
   const workspace = path.join(loadE2ERunContext().workspacesDirectory, "voice-announcement");
   await mkdir(workspace, { recursive: true });
   await installVoiceFixture(page);
@@ -111,7 +122,7 @@ test("recording announcements are opt-in and their preparation can be cancelled 
   await page.setViewportSize({ width: 320, height: 780 });
   const toggle = page.getByRole("switch", { name: "Announce recording thread", exact: true });
   await expect(toggle).not.toBeChecked();
-  await expect(toggle).toHaveAccessibleDescription("Read the destination thread before the recording cue.");
+  await expect(toggle).toHaveAccessibleDescription("Read the destination before a new headset or notification recording. Skip in-app starts, playback interruptions to reply, and automatic follow-up recording.");
   await toggle.tap();
   await expect(toggle).toBeChecked();
   expect(await page.evaluate(() => window.__voiceFixture.calls.filter(call => call.method === "updateSettings"))).toEqual([
@@ -149,13 +160,14 @@ test("recording announcements are opt-in and their preparation can be cancelled 
   await capture(page, testInfo, "voice-announcement-after-cancel-320.png");
 });
 
-test("idle Next releases the last voice thread without moving Mic or discarding a chosen target", async ({ page }, testInfo) => {
+test("idle navigation follows the viewed thread and only releases a displayed retained fallback", async ({ page }, testInfo) => {
   const workspace = path.join(loadE2ERunContext().workspacesDirectory, "voice-retained-target");
   await mkdir(workspace, { recursive: true });
   await installVoiceFixture(page);
   await page.setViewportSize({ width: 1280, height: 900 });
   await openWorkspaceDirectory(page, workspace);
   const viewedPath = await createDraftThread(page, "Viewed thread A");
+  const viewedId = viewedPath.split("/").at(-1)!;
   const draft = "Keep the current thread and its draft.";
   await fillAndPersistDraft(page, draft);
   const retainedPath = await createDraftThread(page, "Last voice thread B");
@@ -172,57 +184,77 @@ test("idle Next releases the last voice thread without moving Mic or discarding 
       settings: { ...base.settings, voiceThreadId: chosenId, voiceThreadTitle: "Chosen thread C" },
       retainedVoiceTarget: { threadId: retainedId, threadTitle: "Last voice thread B", revision }, idleTargetRevision: revision,
       actions: { ...base.actions, canReleaseRetainedTarget: true } });
-    await expect(toolbar.locator(".voice-card-title")).toHaveText("Last voice thread B");
   };
   const calls = () => page.evaluate(() => window.__voiceFixture.calls.filter(call =>
     ["releaseRetainedVoiceTarget", "startManualListen", "skipCurrentPlayback"].includes(call.method)));
-  await expect(toolbar.locator(".voice-card-title")).toHaveText("Viewed thread A");
-  await expect(toolbar.locator(".voice-card-next-slot")).toHaveCount(0);
-  const originalTextWidth = (await toolbar.locator(".voice-card-body").boundingBox())!.width;
-  await retain(7);
+  const expected: Awaited<ReturnType<typeof calls>> = [];
   const next = toolbar.getByRole("button", { name: "Next voice interaction", exact: true });
+  const stop = toolbar.getByRole("button", { name: "Stop voice interaction", exact: true });
   const mic = toolbar.getByRole("button", { name: "Start voice recording", exact: true });
+  await retain(7);
+  await expect(toolbar.locator(".voice-card-title")).toHaveText("Viewed thread A");
+  await expect(next).toBeDisabled();
+  await expect(stop).toBeDisabled();
+  await mic.tap();
+  expected.push({ method: "startManualListen", args: { expectedConnectionGeneration: 1, threadId: viewedId, threadTitle: "Viewed thread A" } });
+  await expect.poll(calls).toEqual(expected);
+  await expect(composer).toHaveValue(draft);
+  await capture(page, testInfo, "voice-retained-viewed-thread-320.png");
+  await page.goto(chosenPath);
+  await expect(toolbar.locator(".voice-card-title")).toHaveText("Chosen thread C");
+  await expect(next).toBeDisabled();
+  expect(await page.evaluate(() => window.__voiceFixture.state.retainedVoiceTarget?.threadId)).toBe(retainedId);
+  expect(await calls()).toEqual([]);
+
+  // With no viewed thread, retention is the displayed fallback and Next releases it.
+  await page.goto("/settings/voice");
+  // Reloads preserve the native fixture state, while its call log belongs to the new document.
+  expected.length = 0;
+  await expect(toolbar.locator(".voice-card-title")).toHaveText("Last voice thread B");
+  expect(await calls()).toEqual(expected);
   await expect(next).toBeEnabled();
   const nextBox = (await next.boundingBox())!;
+  const stopBox = (await stop.boundingBox())!;
   const micBox = (await mic.boundingBox())!;
-  expect(nextBox.width).toBeGreaterThanOrEqual(44);
-  expect(nextBox.height).toBeGreaterThanOrEqual(44);
-  expect(nextBox.x + nextBox.width).toBeLessThan(micBox.x);
-  expect(originalTextWidth - (await toolbar.locator(".voice-card-body").boundingBox())!.width).toBeGreaterThanOrEqual(44);
+  for (const box of [nextBox, stopBox, micBox]) {
+    expect(box.width).toBeGreaterThanOrEqual(44);
+    expect(box.height).toBeGreaterThanOrEqual(44);
+  }
+  expect(nextBox.x + nextBox.width).toBeLessThan(stopBox.x);
+  expect(stopBox.x + stopBox.width).toBeLessThan(micBox.x);
   await expectNoPageOverflow(page);
   await capture(page, testInfo, "voice-retained-before-release-320.png");
   await next.tap();
-  await expect.poll(calls).toEqual([{ method: "releaseRetainedVoiceTarget", args: { expectedConnectionGeneration: 1, expectedRetainedRevision: 7 } }]);
-  await expect(toolbar.locator(".voice-card-title")).toHaveText("Viewed thread A");
-  await expect(next).toHaveCount(0);
+  expected.push({ method: "releaseRetainedVoiceTarget", args: { expectedConnectionGeneration: 1, expectedRetainedRevision: 7 } });
+  await expect.poll(calls).toEqual(expected);
+  await expect(toolbar.locator(".voice-card-title")).toHaveText("Chosen thread C");
+  await expect(next).toBeDisabled();
+  await expect.poll(() => next.boundingBox()).toEqual(nextBox);
+  await expect.poll(() => stop.boundingBox()).toEqual(stopBox);
   await expect.poll(() => mic.boundingBox()).toEqual(micBox);
-  // A repeated tap at the old Next position reaches an empty slot, never Mic or the expanding thread-title link.
   await page.touchscreen.tap(nextBox.x + nextBox.width / 2, nextBox.y + nextBox.height / 2);
-  expect(await calls()).toHaveLength(1);
-  await expect(page).toHaveURL(new RegExp(`${viewedPath}$`, "u"));
-  await expect(composer).toHaveValue(draft);
-  await expectNoPageOverflow(page);
+  expect(await calls()).toEqual(expected);
+  await expect(page).toHaveURL(/\/settings\/voice$/u);
   await capture(page, testInfo, "voice-retained-after-release-320.png");
 
   await retain(9);
   await toolbar.getByRole("button", { name: "Choose target thread: Last voice thread B", exact: true }).tap();
   await page.getByRole("dialog", { name: "Choose target thread", exact: true }).getByRole("button", { name: "Chosen thread C", exact: true }).tap();
   await expect(toolbar.locator(".voice-card-title")).toHaveText("Chosen thread C");
-  await next.tap();
-  await expect.poll(calls).toEqual([
-    { method: "releaseRetainedVoiceTarget", args: { expectedConnectionGeneration: 1, expectedRetainedRevision: 7 } },
-    { method: "releaseRetainedVoiceTarget", args: { expectedConnectionGeneration: 1, expectedRetainedRevision: 9 } },
-  ]);
-  await expect(toolbar.locator(".voice-card-title")).toHaveText("Chosen thread C");
+  await expect(next).toBeDisabled();
+  await page.touchscreen.tap(nextBox.x + nextBox.width / 2, nextBox.y + nextBox.height / 2);
+  expect(await calls()).toEqual(expected);
   expect(await page.evaluate(() => window.__voiceFixture.state.nextRecordingTarget)).toEqual({ threadId: chosenId, threadTitle: "Chosen thread C" });
   await expect.poll(() => mic.boundingBox()).toEqual(micBox);
   await capture(page, testInfo, "voice-retained-explicit-choice-320.png");
+  await page.goto(viewedPath);
+  // The Settings-stage calls were asserted before this second reload boundary.
+  expected.length = 0;
+  await expect(toolbar.locator(".voice-card-title")).toHaveText("Chosen thread C");
+  expect(await calls()).toEqual(expected);
   await mic.tap();
-  await expect.poll(calls).toEqual([
-    { method: "releaseRetainedVoiceTarget", args: { expectedConnectionGeneration: 1, expectedRetainedRevision: 7 } },
-    { method: "releaseRetainedVoiceTarget", args: { expectedConnectionGeneration: 1, expectedRetainedRevision: 9 } },
-    { method: "startManualListen", args: { expectedConnectionGeneration: 1, threadId: chosenId, threadTitle: "Chosen thread C" } },
-  ]);
+  expected.push({ method: "startManualListen", args: { expectedConnectionGeneration: 1, threadId: chosenId, threadTitle: "Chosen thread C" } });
+  await expect.poll(calls).toEqual(expected);
   await expect(page).toHaveURL(new RegExp(`${viewedPath}$`, "u"));
   await expect(composer).toHaveValue(draft);
 });

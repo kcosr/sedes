@@ -243,9 +243,11 @@ describe("native voice production pipeline with loopback providers", () => {
 
   for (const [mode, scenario] of [["response", "cycle"], ["manual", "cycle"], ["response", "background"], ["response", "background-switch"],
     ["response", "startup"], ["manual", "startup"],
-    ["response", "record"], ["response", "next"], ["response", "stop"], ["response", "retarget"], ["response", "retained-target"],
+    ["response", "record"], ["response", "next"], ["response", "stop"], ["response", "playback-stop"], ["response", "playback-stop-notification"],
+    ["response", "retarget"], ["response", "retained-target"],
     ["response", "lost-ack"], ["response", "lost-send"], ["response", "cancel-uncertain"]] as const) {
     it.skipIf(!androidSerial)(`runs packaged Android ${mode}/${scenario} through the actual UI and media stack`, async () => {
+      const playbackStop = scenario === "playback-stop" || scenario === "playback-stop-notification";
       await adb(["shell", "pm", "clear", "dev.sedes.local"]);
       const threadTitle = `Voice ${mode} ${scenario}`;
       const threadId = await app.createThread(threadTitle);
@@ -276,7 +278,7 @@ describe("native voice production pipeline with loopback providers", () => {
       const text = `voice fixture reply ${mode} ${scenario}`;
       // Give the real playback action a usable window even on software emulators.
       // This case uses 100ms fixture speech (reply and announcements) so held announcement PCM fits the 200ms buffer.
-      const ttsDurationSeconds = scenario === "retained-target" ? 0.1 : scenario === "record" || scenario === "next" ? 12 : 1;
+      const ttsDurationSeconds = scenario === "retained-target" ? 0.1 : scenario === "record" || scenario === "next" || playbackStop ? 12 : 1;
       await speech.configure({ transcripts: [text, ""], asrDelayMs: 0, ttsDurationSeconds, reset: true });
       const before = app.model.requests.length;
       const ttsBefore = (await speech.observations()).speech.length;
@@ -315,9 +317,9 @@ describe("native voice production pipeline with loopback providers", () => {
         const rawResult = /^INSTRUMENTATION_STATUS: voiceResult=(.+)$/mu.exec(result.stdout)?.[1];
         expect(rawResult).toBeDefined();
         const evidence = JSON.parse(rawResult!);
-        // Next exercises speech playback without opening capture; every other scenario records after a start cue.
+        // Playback Next and Stop exercise speech without opening capture; other scenarios record after a start cue.
         expect(evidence).toMatchObject({ draftPreserved: true, composerDraftPreserved: true, serverDraftPreserved: true,
-          audioSource: scenario === "next" ? "none" : "deterministic-pcm", audioSink: "AudioTrack" });
+          audioSource: scenario === "next" || playbackStop ? "none" : "deterministic-pcm", audioSink: "AudioTrack" });
         if (mode === "response" && scenario !== "stop") expect(evidence.speechPlayback).toBe(true);
         expect(evidence.journalOutstanding).toBe(0);
         if (scenario === "record") {
@@ -330,12 +332,39 @@ describe("native voice production pipeline with loopback providers", () => {
           expect(evidence.phases).not.toContain("listening");
           expect(evidence.phases).not.toContain("submitting");
           expect((await speech.observations()).transcriptions).toHaveLength(0);
+        } else if (playbackStop) {
+          expect(evidence.playbackControl).toMatchObject({ action: "Stop", surface: scenario === "playback-stop-notification" ? "notification" : "card",
+            sourceThreadId: threadId, autoListen: true, queuedBeforeStop: 1,
+            afterStop: { phase: "idle", active: null, queue: { count: 0 }, settings: { audioMode: "response", autoListen: true } }, inputPresentationEvents: 0 });
+          if (scenario === "playback-stop-notification") {
+            expect(evidence.playbackControl.notification).toEqual({ title: threadTitle, status: "Speaking", stopLabel: "Stop", stopVisible: true, stopEnabled: true });
+            expect(evidence.playbackControl.serviceDelivery).toBeGreaterThan(0);
+          } else {
+            expect(evidence.playbackControl.notification).toBeNull();
+            expect(evidence.playbackControl.serviceDelivery).toBeNull();
+          }
+          expect(evidence.captureChunks).toBe(0);
+          expect(evidence.inputAttempts).toBe(0);
+          expect(evidence.mutationIds).toEqual([]);
+          expect(evidence.phases).not.toContain("listening");
+          expect(evidence.phases).not.toContain("announcing");
+          expect(evidence.phases).not.toContain("submitting");
+          const observations = await speech.observations();
+          expect(observations.transcriptions).toHaveLength(0);
+          expect(observations.speech).toHaveLength(1);
+        }
+        if (scenario === "cycle" || scenario === "record" || scenario === "background-switch") {
+          expect(evidence.announceRecordingThread).toBe(true);
+          expect(evidence.phases).not.toContain("announcing");
+          expect((await speech.observations()).speech.filter(request => request.text.startsWith("Replying to "))).toHaveLength(0);
         }
         if (scenario === "retained-target") {
           const canonical = threadInputContextSchema.parse(await app.json(`/api/threads/${threadId}/input-context`));
           const viewedCanonical = threadInputContextSchema.parse(await app.json(`/api/threads/${secondThreadId!}/input-context`));
           expect(evidence.retainedTarget).toMatchObject({
             retainedAfterPlayback: { threadId, threadTitle: canonical.threadTitle },
+            idleCardAfterNavigation: { foregroundThreadId: secondThreadId, path: `/threads/${secondThreadId}`, cardTitle: viewedCanonical.threadTitle,
+              cardNextEnabled: false, nativeCanReleaseRetainedTarget: true },
             replyPlayback: { sampleRate: 24_000, writtenFrames: 2400 },
             inputPresentationEvents: 0,
             notification: { title: canonical.threadTitle, startLabel: "Start", startEnabled: true,
@@ -343,25 +372,32 @@ describe("native voice production pipeline with loopback providers", () => {
           });
           const captures = evidence.retainedTarget.captures;
           expect(captures).toHaveLength(3);
-          for (const [index, surface, target, title] of [[0, "card", threadId, canonical.threadTitle],
-            [1, "notification", threadId, canonical.threadTitle], [2, "card", secondThreadId, viewedCanonical.threadTitle]] as const) {
+          for (const [index, surface, target, title, announces] of [[0, "notification", threadId, canonical.threadTitle, true],
+            [1, "card", secondThreadId, viewedCanonical.threadTitle, false], [2, "notification", secondThreadId, viewedCanonical.threadTitle, true]] as const) {
             const capture = captures[index];
-            expect(capture).toMatchObject({ surface, recognitionThreadId: target, recognitionThreadTitle: title, announcedTitle: title,
-              announcementPlayback: { requestId: capture.announcementRequestId, sampleRate: 24_000, writtenFrames: 2400 },
+            expect(capture).toMatchObject({ surface, recognitionThreadId: target, recognitionThreadTitle: title, announcedTitle: announces ? title : null,
               startCuePlayback: { sampleRate: 48_000, writtenFrames: 13_920 },
               afterCancel: { phase: "idle", active: null, recordingRecovery: null, retainedVoiceTarget: { threadId: target, threadTitle: title } } });
             expect(capture.captureChunks).toBeGreaterThan(0);
-            expect(capture.phases.indexOf("announcing")).toBeGreaterThanOrEqual(0);
-            expect(capture.phases.indexOf("arming")).toBeGreaterThan(capture.phases.indexOf("announcing"));
+            if (announces) {
+              expect(capture.announcementPlayback).toMatchObject({ requestId: capture.announcementRequestId, sampleRate: 24_000, writtenFrames: 2400 });
+              expect(capture.phases.indexOf("announcing")).toBeGreaterThanOrEqual(0);
+              expect(capture.phases.indexOf("arming")).toBeGreaterThan(capture.phases.indexOf("announcing"));
+            } else {
+              expect(capture.announcementRequestId).toBeNull();
+              expect(capture.announcementPlayback).toBeNull();
+              expect(capture.phases).not.toContain("announcing");
+            }
+            expect(capture.phases.indexOf("arming")).toBeGreaterThanOrEqual(0);
             expect(capture.phases.indexOf("listening")).toBeGreaterThan(capture.phases.indexOf("arming"));
           }
           expect(new Set(captures.map((capture: { recordingId: string }) => capture.recordingId)).size).toBe(3);
           type PlaybackDrain = { requestId: string; sampleRate: number; writtenFrames: number; playedFrames: number };
           const drains: PlaybackDrain[] = [evidence.retainedTarget.replyPlayback,
-            ...captures.flatMap((capture: { announcementPlayback: PlaybackDrain; startCuePlayback: PlaybackDrain }) =>
-              [capture.announcementPlayback, capture.startCuePlayback])];
-          expect(drains).toHaveLength(7);
-          expect(new Set(drains.map(drain => drain.requestId)).size).toBe(7);
+            ...captures.flatMap((capture: { announcementPlayback: PlaybackDrain | null; startCuePlayback: PlaybackDrain }) =>
+              capture.announcementPlayback ? [capture.announcementPlayback, capture.startCuePlayback] : [capture.startCuePlayback])];
+          expect(drains).toHaveLength(6);
+          expect(new Set(drains.map(drain => drain.requestId)).size).toBe(6);
           for (const drain of drains) {
             expect(drain.requestId).toMatch(/^[0-9a-f-]{36}$/u);
             expect(drain.writtenFrames).toBeGreaterThan(0);
@@ -373,7 +409,10 @@ describe("native voice production pipeline with loopback providers", () => {
             [1, "card", secondThreadId, viewedCanonical.threadTitle]] as const) {
             const release = releases[index];
             expect(release).toMatchObject({ surface, retainedBeforeRelease: { threadId: target, threadTitle: title }, retainedAfterRelease: null,
-              foregroundThreadId: secondThreadId, voiceThreadId: secondThreadId, pinDefaultVoiceThread: false,
+              foregroundThreadId: surface === "notification" ? secondThreadId : null,
+              path: surface === "notification" ? `/threads/${secondThreadId}` : "/settings/voice",
+              cardTitle: viewedCanonical.threadTitle, cardNextEnabled: false,
+              voiceThreadId: secondThreadId, pinDefaultVoiceThread: false,
               sourceDraftPreserved: true, secondDraftPreserved: true });
             expect(release.releasedIdleTargetRevision).toBeGreaterThan(release.cancelledIdleTargetRevision);
           }
@@ -382,7 +421,7 @@ describe("native voice production pipeline with loopback providers", () => {
               retainedVoiceTarget: captures[0].afterCancel.retainedVoiceTarget });
           }
           const deliveries: number[] = evidence.retainedTarget.notificationServiceDeliveries;
-          expect(deliveries).toHaveLength(4);
+          expect(deliveries).toHaveLength(5);
           for (let i = 1; i < deliveries.length; i += 1) expect(deliveries[i]).toBeGreaterThan(deliveries[i - 1]!);
           expect(evidence.inputAttempts).toBe(0);
           expect(evidence.mutationIds).toEqual([]);
@@ -391,7 +430,7 @@ describe("native voice production pipeline with loopback providers", () => {
           expect(evidence.phases.indexOf("listening")).toBeGreaterThan(evidence.phases.indexOf("arming"));
           expect(evidence.phases).not.toContain("submitting");
           const observations = await speech.observations();
-          expect(observations.speech.filter(request => request.text === `Replying to ${canonical.threadTitle}.`)).toHaveLength(2);
+          expect(observations.speech.filter(request => request.text === `Replying to ${canonical.threadTitle}.`)).toHaveLength(1);
           expect(observations.speech.filter(request => request.text === `Replying to ${viewedCanonical.threadTitle}.`)).toHaveLength(1);
           expect(observations.transcriptions).toHaveLength(0);
           const source = await app.thread(threadId), viewed = await app.thread(secondThreadId!);
@@ -425,7 +464,7 @@ describe("native voice production pipeline with loopback providers", () => {
         expect((await app.thread(threadId)).draft.text).toBe(args.draftText);
         const submissions = () => app.model.requests.slice(before).filter(request => request.lastRole === "user" && request.lastText === text);
         // A definitive admission receipt may precede asynchronous provider dispatch.
-        const submitsReply = scenario !== "stop" && scenario !== "next" && scenario !== "retained-target";
+        const submitsReply = scenario !== "stop" && scenario !== "next" && !playbackStop && scenario !== "retained-target";
         if (submitsReply) await waitForSpeech(() => submissions().length > 0);
         expect(submissions()).toHaveLength(submitsReply ? 1 : 0);
         if (mode === "manual") expect((await speech.observations()).speech.length).toBe(ttsBefore);

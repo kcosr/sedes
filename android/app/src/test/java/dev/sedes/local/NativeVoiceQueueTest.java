@@ -319,6 +319,19 @@ public class NativeVoiceQueueTest {
         assertEquals(2, automatic.size()); assertEquals(1, automatic.state().optJSONObject("droppedReasons").optInt("progress_evicted"));
         assertEquals(1, automatic.state().optJSONObject("droppedReasons").optInt("overflow"));
     }
+    @Test public void explicitPlaybackStopClearsMixedPendingItemsWithoutLosingDedupeOrReportingDrops() {
+        NativeVoiceSettings configured = settings("response"); NativeVoiceQueue queue = new NativeVoiceQueue();
+        NativeVoiceQueue.Item completed = new NativeVoiceQueue.Item(envelope("completed", "turn.completed", "Answer", null), configured);
+        NativeVoiceQueue.Item progress = new NativeVoiceQueue.Item(envelope("progress", "turn.progress", "Working", null), configured);
+        assertTrue(queue.add(completed)); assertTrue(queue.addReplay(replay("turn-1", "Replay", configured))); assertTrue(queue.add(progress));
+        queue.drop("existing_overflow"); assertEquals(3, queue.size()); assertTrue(queue.bytes() > 0);
+        queue.clearPending(); assertEquals(0, queue.size()); assertEquals(0, queue.bytes()); assertNull(queue.take());
+        assertEquals(1, queue.state().optInt("droppedCount")); assertEquals(1, queue.state().optJSONObject("droppedReasons").length());
+        assertFalse("A cleared automatic item cannot return through stream replay", queue.add(completed)); assertFalse(queue.add(progress));
+        assertTrue("A deliberate new replay remains allowed", queue.addReplay(replay("turn-1", "Replay", configured)));
+        assertTrue(queue.add(new NativeVoiceQueue.Item(envelope("new", "turn.completed", "New answer", null), configured)));
+        assertEquals(2, queue.size()); assertEquals(1, queue.state().optInt("droppedCount"));
+    }
     @Test public void stoppedServiceClearsPendingReplaysAndLeavesAutomaticItems() {
         NativeVoiceSettings configured = settings("response");
         NativeVoiceQueue queue = new NativeVoiceQueue();

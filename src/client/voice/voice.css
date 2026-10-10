@@ -1,5 +1,5 @@
 /* Voice card (voice/VoiceControls.tsx): a now-playing card under the
-   composer with a state tile, two lines and a round primary action. Tokens
+   composer with a state tile, two lines and three fixed action slots. Tokens
    only; radii from the ramp (--radius-lg card, --radius-ctl tile, 999px
    pills). Colour is reserved for the tile, the phase word and the card edge
    while recording. */
@@ -86,8 +86,7 @@
     background: var(--accent-soft);
   }
 
-  .voice-card-target:hover:not([aria-disabled="true"]),
-  .voice-card-button[data-variant="ghost"]:hover:not(:disabled) {
+  .voice-card-target:hover:not([aria-disabled="true"]) {
     background: var(--hover);
   }
 }
@@ -311,34 +310,12 @@
   transform: translateY(-9px);
 }
 
-.voice-card-keep {
-  display: grid;
-  width: 48px;
-  height: 48px;
-  flex: none;
-  place-items: center;
-  border: 1px solid var(--border-soft);
-  border-radius: 999px;
-  background: var(--accent);
-  color: var(--foreground);
-}
-
-.voice-card-keep svg {
-  width: var(--icon-lg);
-  height: var(--icon-lg);
-}
-
 .voice-card-keep[aria-pressed="true"] {
   border-color: var(--info-border);
   background: var(--info-soft);
   color: var(--info);
 }
 
-.voice-card-keep:active:not([aria-disabled="true"]) {
-  background: var(--accent);
-}
-
-.voice-card-keep[aria-disabled="true"],
 .voice-card-target[aria-disabled="true"] {
   opacity: var(--disabled-opacity);
   cursor: not-allowed;
@@ -372,19 +349,20 @@
   text-overflow: ellipsis;
 }
 
-/* Actions: a 48px round primary and a 44px ghost Skip, 8px apart. */
+/* The three action slots never change size: Next/Keep listening, Stop/Cancel,
+   and Record/Send. Unavailable actions remain visible and disabled. */
 .voice-card-actions {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(3, 48px);
   flex: none;
   align-items: center;
   gap: var(--space-2);
 }
 
-.voice-card-button,
-.voice-card-retry {
+.voice-card-button {
   display: inline-flex;
+  width: 48px;
   height: 48px;
-  flex: none;
   align-items: center;
   justify-content: center;
   border: 1px solid var(--border-soft);
@@ -394,41 +372,13 @@
   transition: transform 100ms ease;
 }
 
-.voice-card-button:active:not(:disabled, [aria-disabled="true"]),
-.voice-card-retry:active:not(:disabled, [aria-disabled="true"]) {
+.voice-card-button:active:not(:disabled, [aria-disabled="true"]) {
   transform: scale(0.94);
-}
-
-.voice-card-button {
-  width: 48px;
-}
-
-/* Reserve Send's space from input preparation through admission. Neither a
-   repeated Start/Send tap nor toggling Keep listening can land on Cancel. */
-.voice-card-send-slot {
-  width: 48px;
-  height: 48px;
-  flex: none;
-}
-
-/* Releasing the retained thread leaves Next's hit region empty. Mic stays
-   at the right edge, and a repeated Next tap cannot start or open a thread. */
-.voice-card-next-slot {
-  width: 44px;
-  height: 44px;
-  flex: none;
 }
 
 .voice-card-button svg {
   width: var(--icon-lg);
   height: var(--icon-lg);
-}
-
-.voice-card-button[data-variant="ghost"] {
-  width: 44px;
-  height: 44px;
-  border-color: transparent;
-  background: transparent;
 }
 
 /* A filled square reads as media Stop; neutral, so it is never confused
@@ -440,29 +390,8 @@
   background: currentColor;
 }
 
-/* Resume: a labelled pill, kept compact so "Voice needs to resume" fits
-   beside it and the status tile at phone width. */
-.voice-card-retry {
-  gap: var(--space-1-5);
-  padding: 0 var(--space-3) 0 11px;
-  font-size: var(--text-ui);
-  font-weight: var(--weight-medium);
-}
-
-.voice-card-retry-placeholder {
-  visibility: hidden;
-  pointer-events: none;
-}
-
-.voice-card-retry svg {
-  width: var(--icon-md);
-  height: var(--icon-md);
-}
-
 .voice-card-button:disabled,
-.voice-card-retry:disabled,
-.voice-card-button[aria-disabled="true"],
-.voice-card-retry[aria-disabled="true"] {
+.voice-card-button[aria-disabled="true"] {
   border-color: transparent;
   background: var(--accent-soft);
   color: var(--muted-foreground-2);
@@ -499,114 +428,41 @@
   }
 }
 
-/* Fit the controls to the dock's available width, including narrow desktop
-   panels. Titles yield before the original tile and 44px controls. */
+/* The top row follows DOM and focus order: settings, thread, then picker.
+   A compact second row preserves full-size actions on narrow cards. Their
+   coordinates stay fixed through idle, playback, capture and saved dictation. */
 @container voice-dock (max-width: 599px) {
   .voice-card {
-    gap: 6px;
+    display: grid;
+    grid-template-columns: 44px minmax(0, 1fr) 44px;
+    grid-template-rows: 44px 48px;
+    height: 110px;
+    gap: 4px var(--space-2);
+    padding: 6px 7px;
+  }
+
+  .voice-card-body {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .voice-card-target {
+    grid-column: 3;
+    grid-row: 1;
   }
 
   .voice-card-tile {
-    margin-inline-end: 2px;
+    grid-column: 1;
+    grid-row: 1;
   }
 
-  .voice-card[data-input-actions],
-  .voice-card[data-saved] {
-    gap: 4px;
-    padding-inline-end: 3px;
+  .voice-card-actions {
+    grid-column: 2 / 4;
+    grid-row: 2;
+    justify-self: end;
   }
 
-  /* Keep the tile and both text lines at their Ready-state positions. Only
-     the gaps between the controls yield as recording adds more actions. */
-  .voice-card[data-input-actions] .voice-card-tile,
-  .voice-card[data-saved] .voice-card-tile {
-    margin-inline-end: 4px;
+  .voice-card-open {
+    border-radius: var(--radius-ctl);
   }
-
-  .voice-card[data-input-actions] .voice-card-actions,
-  .voice-card[data-saved] .voice-card-actions {
-    gap: 6px;
-  }
-
-  .voice-card[data-input-actions] .voice-card-button,
-  .voice-card[data-input-actions] .voice-card-send-slot,
-  .voice-card[data-input-actions] .voice-card-keep,
-  .voice-card[data-saved] .voice-card-send-slot,
-  .voice-card[data-saved] .voice-card-button {
-    width: 44px;
-    height: 44px;
-  }
-
-  .voice-card[data-input-actions] .voice-card-sub > .voice-card-dot {
-    display: none;
-  }
-
-  .voice-card[data-input-actions] .voice-card-reconnecting {
-    display: none;
-  }
-
-  .voice-card-title[data-thread] .voice-card-title-reconnecting {
-    display: block;
-  }
-
-  .voice-card[data-saved] .voice-card-retry {
-    min-width: 44px;
-    height: 44px;
-    padding-inline: 7px;
-  }
-
-  .voice-card[data-saved] .voice-card-retry svg {
-    display: none;
-  }
-
-}
-
-/* Six distinct touch regions fit a 320px phone with full-size Listening
-   text. Use the right gutter only, so the Ready-state left inset stays fixed. */
-@container voice-dock (max-width: 315px) {
-  .voice-card[data-input-actions],
-  .voice-card[data-saved] {
-    width: calc(100% + 8px);
-    margin-inline: 0 -8px;
-  }
-
-  /* Reduce only the two 4px gaps beside the chooser to 1px. Keep listening
-     stays 4px from Cancel, including while the chooser is unavailable. */
-  .voice-card[data-input-actions] .voice-card-target {
-    margin-inline: -3px;
-  }
-
-  .voice-card[data-saved] .voice-card-actions {
-    gap: 4px;
-  }
-}
-
-@container voice-dock (max-width: 335px) {
-  .voice-card[data-saved] > .voice-card-retry {
-    margin-inline-start: -3px;
-  }
-
-  /* Keep the recovery status fully readable without taking space from the
-     gaps on either side of Discard. Thread titles still truncate first. */
-  .voice-card-saved-label {
-    font-size: var(--text-ui);
-  }
-}
-
-@container voice-dock (max-width: 359px) {
-  /* Preserve the complete saved-state label beside Retry and the two fixed
-     action slots without reducing any touch target. */
-  .voice-card[data-saved] > .voice-card-retry {
-    width: 44px;
-    padding-inline: 0;
-  }
-
-  .voice-card[data-saved] > .voice-card-retry span {
-    display: none;
-  }
-
-  .voice-card[data-saved] > .voice-card-retry svg {
-    display: block;
-  }
-
 }

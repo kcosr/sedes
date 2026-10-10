@@ -48,7 +48,7 @@ export const nativeRecordingTextSchema = z.strictObject({
 });
 export type NativeRecordingText = z.infer<typeof nativeRecordingTextSchema>;
 export const nativeVoiceStateSchema = z.strictObject({
-  version: z.literal(12), stateRevision: z.number().int().nonnegative(), connectionGeneration: z.number().int().nonnegative(),
+  version: z.literal(13), stateRevision: z.number().int().nonnegative(), connectionGeneration: z.number().int().nonnegative(),
   profileId: z.string().nullable(), serverOrigin: z.string().nullable(), identity: z.string().nullable(), originClientId: z.uuid().nullable(), clientConnectionToken: z.string().nullable(),
   settingsRevision: z.number().int().nonnegative(), settings: nativeVoiceSettingsSchema,
   speech: z.strictObject({ credentialConfigured: z.boolean(), catalogStatus: z.enum(["idle", "loading", "ready", "error"]),
@@ -102,6 +102,8 @@ export interface NativeVoicePlugin {
   recordDuringPlayback(input: NativeVoiceInteractionCommandContext): Promise<NativeVoiceState>;
   /** Skips this interaction, including its optional listening, and advances the remaining queue. */
   skipCurrentPlayback(input: NativeVoiceInteractionCommandContext): Promise<NativeVoiceState>;
+  /** Stops this playback and its follow-up, and clears pending playback and voice actions. */
+  stopPlayback(input: NativeVoiceInteractionCommandContext): Promise<NativeVoiceState>;
   /**
    * Queues one ended turn's reply behind current work, with current Auto-listen applying afterward. A pending or playing replay of the same turn is a
    * successful no-op. Rejects with `voice_not_ready`, `voice_reply_empty` or `voice_queue_full`.

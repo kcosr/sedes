@@ -26,7 +26,7 @@
   and its WebView. Upgrade clients together with the server.
   ([#50](https://github.com/kcosr/sedes/pull/50), [#53](https://github.com/kcosr/sedes/pull/53), [#56](https://github.com/kcosr/sedes/pull/56))
 
-- Android voice uses snapshot version 12, settings version 8, and dictation
+- Android voice uses snapshot version 13, settings version 8, and dictation
   manifest version 2. Reconfigure voice after upgrading: older preferences and
   default-thread selections reset, while separately stored device speech keys
   and version-2 saved dictation remain available. Earlier per-connection
@@ -231,9 +231,10 @@
 
 ### Added
 
-- Android voice can optionally announce the current recording thread title
-  before the start cue. The setting defaults off; cancellation or failed speech
-  prevents microphone capture, and internal recognition retries do not repeat it.
+- Android voice can optionally announce the recording thread before a new
+  headset or notification start. In-app starts, playback interruptions to reply,
+  and automatic follow-up recording skip it. The setting defaults off;
+  cancellation or failed speech prevents microphone capture.
   ([#68](https://github.com/kcosr/sedes/pull/68))
 
 - **Delete…** in a workpad's **⋯** permanently deletes it, with its history and
@@ -499,8 +500,15 @@
 
 ### Changed
 
-- Unpinned Android voice keeps the last voice thread after playback drains.
-  Idle **Next** releases it without navigating or changing a pending target.
+- Android voice keeps Record/Send and Stop/Cancel in fixed positions; Keep
+  listening replaces Next during recording. Playback **Stop** in the app and
+  notification clears queued speech; headset Play/Pause and Next preserve it.
+  ([#68](https://github.com/kcosr/sedes/pull/68))
+
+- Unpinned Android voice follows the visible thread for new in-app recordings
+  and keeps the last voice thread for headset and notification starts.
+  Without a visible thread, the card uses that retained fallback; idle **Next**
+  releases it without navigating or changing a pending target.
   ([#68](https://github.com/kcosr/sedes/pull/68))
 
 - Android playback offers **Record** to reply to the spoken thread and **Next**

@@ -33,6 +33,7 @@ describe("native voice bridge helpers", () => {
     expect(nativeVoiceStateSchema.safeParse({ ...state, version: 9 }).success).toBe(false);
     expect(nativeVoiceStateSchema.safeParse({ ...state, version: 10 }).success).toBe(false);
     expect(nativeVoiceStateSchema.safeParse({ ...state, version: 11 }).success).toBe(false);
+    expect(nativeVoiceStateSchema.safeParse({ ...state, version: 12 }).success).toBe(false);
     const { canRecordDuringPlayback: _record, ...missingRecord } = state.actions;
     expect(nativeVoiceStateSchema.safeParse({ ...state, actions: missingRecord }).success).toBe(false);
     expect(nativeVoiceStateSchema.safeParse({ ...state, actions: { ...state.actions, canRecordDuringPlayback: "true" } }).success).toBe(false);

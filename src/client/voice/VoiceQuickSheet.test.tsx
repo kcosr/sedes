@@ -393,8 +393,8 @@ describe("voice quick sheet", () => {
     expect(store.getSnapshot().native?.recordingRecovery).toEqual(saved);
     store.dispose();
   });
-  it("starts a new recording for the retained thread outside inventory while older dictation waits for admission", async () => {
-    navigate(threadPath("long"));
+  it("uses the retained fallback without a viewed thread while older dictation waits for admission", async () => {
+    navigate("/");
     const saved = recordingRecovery({ stage: "admitting", hasUnrecognizedAudio: false, admission: {
       mutationId: "50000000-0000-4000-8000-000000000001", status: "uncertain", cancelled: false } });
     const native = { ...ready({ voiceThreadId: "standup" }), recordingRecovery: saved,
@@ -405,7 +405,7 @@ describe("voice quick sheet", () => {
     await waitFor(() => expect(fake.plugin.startManualListen).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1,
       threadId: "outside-inventory", threadTitle: "Retained destination" }));
     await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
-    expect(window.location.pathname).toBe(threadPath("long"));
+    expect(window.location.pathname).toBe("/");
     expect(store.getSnapshot().native?.recordingRecovery).toEqual(saved);
     store.dispose();
   });

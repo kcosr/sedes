@@ -35,7 +35,7 @@ public class NativeVoiceRuntimePolicyTest {
             NativeVoiceJson.object("type", 7, "address", null, "name", "Another headset")))));
     }
 
-    @Test public void manualTargetPrefersExplicitThenPendingThenPinRetainedViewedAndDefault() {
+    @Test public void manualTargetPrefersExplicitThenPendingThenPinViewedRetainedAndDefault() {
         org.json.JSONObject settings = NativeVoiceSettings.defaults().patch(0, NativeVoiceJson.object("pinDefaultVoiceThread", true,
             "voiceThreadId", "default", "voiceThreadTitle", "Saved default")).value;
         org.json.JSONObject foreground = NativeVoiceJson.object("visible", true, "threadId", "foreground", "threadTitle", "Open thread");
@@ -50,7 +50,7 @@ public class NativeVoiceRuntimePolicyTest {
         assertEquals("explicit", NativeVoiceRuntime.manualTarget(explicit, pending, settings, retained, foreground).optString("threadId"));
         assertEquals("next", NativeVoiceRuntime.manualTarget(null, pending, settings, retained, foreground).optString("threadId"));
         selected = NativeVoiceRuntime.manualTarget(null, null, settings, retained, foreground);
-        assertEquals("retained", selected.optString("threadId")); assertEquals("Last voice thread", selected.optString("threadTitle"));
+        assertEquals("foreground", selected.optString("threadId")); assertEquals("Open thread", selected.optString("threadTitle"));
         assertFalse("Selection returns only a target, not its control revision", selected.has("revision"));
         assertEquals("foreground", NativeVoiceRuntime.manualTarget(null, null, settings, null, foreground).optString("threadId"));
         NativeVoiceJson.put(foreground, "visible", false);

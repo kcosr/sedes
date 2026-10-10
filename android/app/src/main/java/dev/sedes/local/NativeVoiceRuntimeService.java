@@ -193,7 +193,7 @@ public final class NativeVoiceRuntimeService extends Service {
                 ? actions.optBoolean("canStart") && threadId != null : actions.optBoolean("canRecordDuringPlayback"));
             controls.setOnClickPendingIntent(R.id.voice_notification_record, pending(retainedIdle ? "start" : "record", state));
             controls.setViewVisibility(R.id.voice_notification_stop, retainedIdle ? View.GONE : View.VISIBLE);
-            controls.setOnClickPendingIntent(R.id.voice_notification_stop, pending("stop", state));
+            controls.setOnClickPendingIntent(R.id.voice_notification_stop, pending("stop_playback", state));
             controls.setOnClickPendingIntent(R.id.voice_notification_next, pending(retainedIdle ? "release" : "skip", state));
             controls.setOnClickPendingIntent(R.id.voice_notification_mode, pending("mode", state));
             controls.setOnClickPendingIntent(R.id.voice_notification_rearm, pending("rearm", state));
@@ -201,7 +201,8 @@ public final class NativeVoiceRuntimeService extends Service {
         } else {
             if (Build.VERSION.SDK_INT >= 36) builder.setRequestPromotedOngoing(true);
             if (actions != null && actions.optBoolean("canStop")) builder.addAction(action(
-                phase.equals("listening") || phase.equals("recognizing") ? "Cancel" : "Stop", "stop", android.R.drawable.ic_media_pause, state));
+                phase.equals("validating") || phase.equals("announcing") || phase.equals("arming") || phase.equals("listening") || phase.equals("recognizing")
+                    ? "Cancel" : "Stop", "stop", android.R.drawable.ic_media_pause, state));
             if (actions != null && actions.optBoolean("canSend")) builder.addAction(action("Send", "send", android.R.drawable.ic_menu_send, state));
             if (actions != null && actions.optBoolean("canStart") && threadId != null) builder.addAction(action("Start", "start", android.R.drawable.ic_btn_speak_now, state));
             if (settings != null && !held) {

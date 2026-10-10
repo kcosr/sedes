@@ -28,17 +28,20 @@ an error and stays selected until you release it or choose another target.
 The card's first line always names its thread, using its title or **Untitled
 thread**: the thread being spoken or recorded to, or, when idle, the thread a
 recording would use. An explicit choice takes priority. Otherwise, pinning uses
-the default thread; without pinning, the retained voice thread leads, then the
-visible available thread, then the default. With no available target,
-the card asks you to choose a thread.
+the default thread; without pinning, it follows the visible available thread.
+With no thread visible, it uses the retained voice thread, then the default.
+An unavailable visible thread or no available target makes the card ask you
+to choose a thread.
 The second line is the state, such as **Ready · Response · Auto-listen on**,
 **Speaking** with the notice kind and queued count, or **Listening**. If voice
 needs to resume, the card offers **Resume**.
 
 Voice retains its last active thread after playback or recording ends, including
-Stop or Cancel. While idle, **Next** beside the microphone releases that thread
-and restores the viewed/default selection; an explicit pending choice still
-takes priority. Releasing does not record, send, navigate, or change the draft.
+Stop or Cancel. Browsing changes the next in-app recording target but preserves
+that background destination. While idle and showing the retained fallback,
+**Next** releases it and restores the default selection. Next stays disabled
+when the card follows a visible or explicitly chosen thread. Releasing does
+not record, send, navigate, or change the draft.
 Off, a connection change, an ended voice session, or enabling pinning clears
 retention. Turning pinning off during an interaction retains its current thread.
 
@@ -68,6 +71,9 @@ menu to start new manual and auto-listen recordings in infinity mode. The infini
 button changes only the current recording; changing the saved preference takes
 effect on the next recording. The idle Start button shows infinity when that
 default is on and a microphone when it is off.
+The three action positions stay fixed: Next, Stop, Record while idle or playing;
+Keep listening, Cancel, Send while recording. Unavailable actions stay disabled.
+On narrow screens the title and status appear above the buttons.
 
 Spoken input queues while a thread is running. Enable **Follow composer's
 selected mode** to use the client's Queue/Steer preference instead. When
@@ -85,10 +91,12 @@ never types an answer into an approval or question form.
 
 **Record** ends speech and starts a reply to the spoken thread, even with
 Auto-listen off. During speech, **Next** skips both the speech and its follow-up
-recording; while idle, it releases the retained voice thread.
-**Stop** cancels the current voice interaction without stopping the agent;
-other queued notices may continue. While voice is recording or recognizing,
-Stop becomes **Cancel**, which discards the recording unsent. **Off** clears
+recording; while idle and showing a retained fallback, it releases that thread.
+Playback **Stop** in the app or notification cancels the interaction and clears
+queued speech and pending agent-requested voice actions. It leaves voice enabled
+and does not stop the agent. Headset Play/Pause and Next preserve queued speech.
+While voice is recording or recognizing, Stop becomes **Cancel**, which discards
+the recording unsent and preserves queued playback. **Off** clears
 the voice queue and hides the card unless **Show voice bar when off** is on in
 **Settings → Voice**; then a dimmed card stays, and its status icon opens the Voice
 sheet to turn voice back on. The notification silence bell suppresses

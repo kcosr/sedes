@@ -180,6 +180,8 @@ final class NativeVoiceQueue {
     }
     Item take() { Item value = pending.pollFirst(); if (value != null) bytes -= value.bytes; return value; }
     void clear(String reason) { while (!pending.isEmpty()) drop(take(), reason); }
+    /** An explicit Stop removes pending playback without reporting loss or forgetting notification dedupe. */
+    void clearPending() { pending.clear(); bytes = 0; }
     /** Notification loss and policy changes clear automatic notices; user-requested replays stay queued. */
     void clearAutomatic(String reason) {
         Iterator<Item> iterator = pending.iterator();

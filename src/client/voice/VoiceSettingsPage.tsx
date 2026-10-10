@@ -30,7 +30,7 @@ const toggles = [
   ["onlyVoiceThread", "Only play from default voice thread", "Limit automatic playback to the default voice thread above."],
   ["followComposerMode", "Follow composer's selected mode", "Use its Steer or Queue choice. Otherwise queue while a thread is running."],
   ["recognizeStopCommand", "Recognize stop command", "Say “stop” or “stop listening” to cancel."],
-  ["announceRecordingThread", "Announce recording thread", "Read the destination thread before the recording cue."],
+  ["announceRecordingThread", "Announce recording thread", "Read the destination before a new headset or notification recording. Skip in-app starts, playback interruptions to reply, and automatic follow-up recording."],
   ["recognitionCues", "Recognition cues", "Play tones for recording and recognition results."],
   ["headsetControls", "Headset controls", "Use headset buttons to record, skip speech, or stop recording."],
 ] as const;

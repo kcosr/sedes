@@ -160,6 +160,18 @@ thread. The `Android response/next` scenario presses **Next** during observed
 speech playback with Auto-listen on, then requires the interaction to finish
 without audio capture, transcription, or input admission. Both use the actual
 foreground-service notification controls.
+The `Android response/playback-stop` and
+`Android response/playback-stop-notification` scenarios press the card and
+expanded-notification **Stop** controls during playback with Auto-listen on and
+a replay queued. Both require an empty queue, no capture or input admission,
+and voice remaining enabled. The notification case delivers its actual
+`PendingIntent` and waits for the service to handle it.
+The `Android response/retained-target` scenario compares the visible card's
+destination with the independently retained background destination. It checks
+that new notification recordings announce their destination, in-app recordings
+skip the announcement, and idle card **Next** releases retention only when
+the card displays that fallback. Card title, route, button state, native
+capabilities, and settings are observed separately.
 The `Android response/background-switch` scenario invokes the real
 `client.switch_thread` agent tool through stock OpenCode after backgrounding
 the paired client. With automatic listening disabled and the source thread
@@ -200,9 +212,11 @@ stops owned processes, removes owned adb reverse rules, and force-stops the
 test app; the caller owns the emulator lifecycle.
 
 Client tests cover the voice card across application screens and above the
-mobile drawer, its thread-title and phase labels, caret-only sheet opening,
-body taps opening its thread, the retarget chip, and current-thread-first
-pickers. The quick sheet covers mode changes with the speech credential gate,
+mobile drawer, its thread-title and phase labels, settings-tile sheet opening,
+body taps opening its thread, the target picker, and current-thread-first
+pickers. Browser checks cover the three fixed action positions, disabled idle
+controls, and visual and keyboard focus order in wide and narrow layouts.
+The quick sheet covers mode changes with the speech credential gate,
 Resume, switches, the default voice thread picker and playback filter, and its
 Settings link. Other coverage includes per-binding visibility preferences, recent
 errors, microphone labels, provider discovery, and the native credential bridge.

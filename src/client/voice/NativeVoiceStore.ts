@@ -224,10 +224,17 @@ export class NativeVoiceStore {
   }
   /** Cancel may stop capture while a durable Keep listening write is pending. Native fences both commands by identity. */
   stopInteraction(context: NativeVoiceInteractionCommandContext): Promise<void> {
-    const key = JSON.stringify([context.expectedConnectionGeneration, context.interactionId]);
+    return this.#stop("stopCurrentInteraction", context);
+  }
+  /** Explicit playback Stop clears the queue; recording Cancel and headset taps retain their own behavior. */
+  stopPlayback(context: NativeVoiceInteractionCommandContext): Promise<void> {
+    return this.#stop("stopPlayback", context);
+  }
+  #stop(command: "stopCurrentInteraction" | "stopPlayback", context: NativeVoiceInteractionCommandContext): Promise<void> {
+    const key = JSON.stringify([command, context.expectedConnectionGeneration, context.interactionId]);
     const pending = this.#stopping.get(key);
     if (pending) return pending;
-    const stopping = this.#perform(() => this.plugin.stopCurrentInteraction(context), true)
+    const stopping = this.#perform(() => this.plugin[command](context), true)
       .finally(() => { if (this.#stopping.get(key) === stopping) this.#stopping.delete(key); });
     this.#stopping.set(key, stopping);
     return stopping;

@@ -275,7 +275,7 @@ describe("voice settings page", () => {
     });
     const toggle = screen.getByRole("switch", { name: "Announce recording thread" });
     expect(toggle).not.toBeChecked();
-    expect(toggle).toHaveAccessibleDescription("Read the destination thread before the recording cue.");
+    expect(toggle).toHaveAccessibleDescription("Read the destination before a new headset or notification recording. Skip in-app starts, playback interruptions to reply, and automatic follow-up recording.");
     fireEvent.click(toggle);
     await waitFor(() => expect(toggle).toBeChecked());
     await waitFor(() => expect(toggle).toBeEnabled());
