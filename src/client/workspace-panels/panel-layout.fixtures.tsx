@@ -333,7 +333,6 @@ export function draftTenant(
       preferredWidth: 400,
       preferredHeight: 300,
     },
-    preferredPlacement: { edge: "right" },
     availability: () => ({ available: true }),
     render: (context) => <DraftFixture context={context} />,
   };

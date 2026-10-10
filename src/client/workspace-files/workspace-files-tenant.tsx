@@ -18,7 +18,6 @@ export const workspaceFilesTenant: WorkspacePanelTenant = {
     preferredWidth: 520,
     preferredHeight: 560,
   },
-  preferredPlacement: { edge: "right" },
   attachments: { sourceKinds: ["workspace_file", "workspace_diff"] },
   availability: ({ workspace }) =>
     workspace

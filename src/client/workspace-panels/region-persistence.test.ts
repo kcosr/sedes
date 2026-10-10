@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   LEGACY_PANEL_STORAGE_KEYS,
   PANEL_REGIONS_STORAGE_KEY,
-  legacyThreadCollapsedStorageKey,
   legacyThreadLayoutStorageKey,
   loadRegionLayout,
   loadThreadTerminals,
@@ -564,8 +563,5 @@ describe("storage keys", () => {
     expect(threadIdForPanelRegionsStorageKey(PANEL_REGIONS_STORAGE_KEY)).toBeUndefined();
     expect(threadIdForPanelRegionsStorageKey("sedes-thread-panel-regions@1:%E0")).toBeUndefined();
     expect(legacyThreadLayoutStorageKey("a b")).toBe("sedes-thread-panel-instance-layout@4:a%20b");
-    expect(legacyThreadCollapsedStorageKey("a b")).toBe(
-      "sedes-thread-panel-instance-collapsed@4:a%20b",
-    );
   });
 });

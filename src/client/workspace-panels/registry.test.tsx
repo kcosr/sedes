@@ -19,7 +19,6 @@ function tenant(id: string): WorkspacePanelTenant {
       preferredWidth: 360,
       preferredHeight: 320,
     },
-    preferredPlacement: { edge: "right" },
     availability: () => ({ available: true }),
     render: vi.fn(() => null),
   };
@@ -41,7 +40,6 @@ describe("WorkspacePanelTenantRegistry", () => {
     expect(compiled).toBe(registry.entries[0]);
     expect(Object.isFrozen(compiled)).toBe(true);
     expect(Object.isFrozen(compiled?.size)).toBe(true);
-    expect(Object.isFrozen(compiled?.preferredPlacement)).toBe(true);
     expect(Object.isFrozen(registry.entries)).toBe(true);
     expect(registry.tenant("missing")).toBeUndefined();
   });
@@ -53,11 +51,10 @@ describe("WorkspacePanelTenantRegistry", () => {
       "workpads",
       "tasks",
     ]);
-    expect(workspacePanelTenants.tenant("workpads")).toMatchObject({ scope: "global", title: "Workpads", preferredPlacement: { edge: "right" } });
+    expect(workspacePanelTenants.tenant("workpads")).toMatchObject({ scope: "global", title: "Workpads" });
     expect(files).toMatchObject({
       id: "workspace-files",
       scope: "workspace",
-      preferredPlacement: { edge: "right" },
     });
     expect(files?.availability({})).toEqual({
       available: false,
@@ -89,14 +86,13 @@ describe("WorkspacePanelTenantRegistry", () => {
     ).toEqual({ available: true });
   });
 
-  it("ships Tasks as a tenant that docks right and renders its own header", () => {
+  it("ships Tasks as a tenant that renders its own header", () => {
     const tasks = workspacePanelTenants.tenant("tasks");
     expect(tasks).toMatchObject({
       id: "tasks",
       title: "Tasks",
       scope: "thread",
       header: "tenant",
-      preferredPlacement: { edge: "right" },
       size: { minWidth: 300, preferredWidth: 380 },
     });
     expect(tasks?.availability({})).toEqual({ available: true });

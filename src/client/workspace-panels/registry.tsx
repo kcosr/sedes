@@ -79,13 +79,6 @@ export interface WorkspacePanelTenant {
      */
     readonly preferredShare?: number;
   };
-  /**
-   * Unused by panel regions, whose default placements are in regions.ts
-   * (`DEFAULT_PLACEMENT`).
-   */
-  readonly preferredPlacement: {
-    readonly edge: "right" | "bottom";
-  };
   availability(input: {
     readonly snapshot?: NormalizedThreadSnapshot;
     readonly workspace?: NormalizedWorkspaceSummary;
@@ -128,7 +121,6 @@ function freezeTenant(tenant: WorkspacePanelTenant): WorkspacePanelTenant {
   return Object.freeze({
     ...tenant,
     size: Object.freeze({ ...tenant.size }),
-    preferredPlacement: Object.freeze({ ...tenant.preferredPlacement }),
     ...(tenant.attachments
       ? {
           attachments: Object.freeze({

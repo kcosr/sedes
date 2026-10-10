@@ -26,7 +26,6 @@ function tenant(id: string, minWidth = 320): WorkspacePanelTenant {
     icon: () => null,
     scope: "global",
     size: { minWidth, minHeight: 240, preferredWidth: 480, preferredHeight: 480 },
-    preferredPlacement: { edge: "right" },
     availability: () => ({ available: true }),
     render: () => null,
   };

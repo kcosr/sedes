@@ -406,7 +406,6 @@ describe("geometry helpers", () => {
       icon: () => null,
       scope: "global",
       size: { minWidth, minHeight: 200, preferredWidth: 400, preferredHeight: 300 },
-      preferredPlacement: { edge: "right" },
       availability: () => ({ available: true }),
       render: () => null,
     });

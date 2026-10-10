@@ -25,7 +25,6 @@ export const tasksTenant: WorkspacePanelTenant = {
     preferredHeight: 480,
     preferredShare: 0.35,
   },
-  preferredPlacement: { edge: "right" },
   availability: () => ({ available: true }),
   render: (context) => <TasksDockSlot panelHost={context.host} />,
 };

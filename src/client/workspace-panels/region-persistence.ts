@@ -80,10 +80,6 @@ export function legacyThreadLayoutStorageKey(threadId: string): string {
   return `sedes-thread-panel-instance-layout@4:${encodeURIComponent(threadId)}`;
 }
 
-export function legacyThreadCollapsedStorageKey(threadId: string): string {
-  return `sedes-thread-panel-instance-collapsed@4:${encodeURIComponent(threadId)}`;
-}
-
 export interface RegionStorage {
   getItem(key: string): string | null;
   setItem(key: string, value: string): void;
