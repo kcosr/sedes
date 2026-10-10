@@ -318,7 +318,7 @@ test.describe("panel workbench", () => {
     await expect.poll(height).toBe(empty);
   });
 
-  test("phones show one foreground panel, switched from the bar, with Chat as home and Tasks as a sheet", async ({
+  test("phones show one foreground panel, switched from the bar, with Chat as home, Tasks included", async ({
     page,
   }, testInfo) => {
     await page.setViewportSize({ width: 1440, height: 900 });
@@ -430,16 +430,39 @@ test.describe("panel workbench", () => {
     await expect.poll(async () => (await savedLayout(page))?.shown.middle).toBe("chat");
     await expectNoPageOverflow(page);
 
-    // Tasks opens as a sheet over the foreground panel, never on stage.
+    // Tasks is a panel like the others: it comes in front, not as a dialog
+    // over the stage.
     await openPanel(page, "Tasks");
-    const sheet = page.getByRole("dialog", { name: "Tasks", exact: true });
-    await expect(sheet).toBeVisible();
-    await expect(stagePanel(page, "Tasks")).toHaveCount(0);
+    const tasksPanel = stagePanel(page, "Tasks");
+    await expect(tasksPanel).toBeVisible();
+    await expect(tasksPanel.locator('[data-slot="tasks-panel"]')).toHaveAttribute(
+      "data-presentation",
+      "sheet",
+    );
+    await expect(page.locator(".workspace-panel-stage [data-panel-kind]")).toHaveCount(1);
+    await expect(chat).toBeHidden();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect(quickButton(page, "Chat")).toHaveAttribute("data-state", "hidden");
     await expect(quickButton(page, "Tasks")).toHaveAttribute("data-state", "visible");
-    await expect(stagePanel(page, "Chat")).toBeAttached();
-    await capture(page, testInfo, "panels-phone-tasks-sheet.png");
-    await sheet.getByRole("button", { name: "Close Tasks panel" }).click();
-    await expect(sheet).toBeHidden();
+    await expect(
+      tasksPanel.getByRole("button", { name: "Maximize Tasks panel" }),
+    ).toHaveCount(0);
+    await expectNoPageOverflow(page);
+    await capture(page, testInfo, "panels-phone-tasks.png");
+
+    // Hiding it shows Chat and keeps it loaded; Ctrl+Shift+L brings it back.
+    await quickButton(page, "Tasks").click();
+    await expect(chat).toBeVisible();
+    await expect(tasksPanel).toHaveCount(0);
+    await expect(quickButton(page, "Tasks")).toHaveAttribute("data-state", "hidden");
+    await page.keyboard.press("Control+Shift+L");
+    await expect(tasksPanel).toBeVisible();
+    await expect(chat).toBeHidden();
+
+    // ✕ closes it, and Chat comes back.
+    await tasksPanel.getByRole("button", { name: "Close Tasks panel", exact: true }).click();
+    await expect(tasksPanel).toHaveCount(0);
+    await expect(quickButton(page, "Tasks")).toHaveCount(0);
     await expect(chat).toBeVisible();
     await expectNoPageOverflow(page);
   });
