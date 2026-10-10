@@ -213,6 +213,7 @@ public class NativeVoiceAudioTest {
             assertEquals("Held AudioTrack buffer was not full", 0,
                 track.write(new byte[2], 0, 2, AudioTrack.WRITE_NON_BLOCKING));
             assertTrue(probe.completed.isEmpty()); assertNull(probe.failure.get());
+            assertTrue("Undrained real PCM must not create completion evidence", audio.playbackDrainsForTest().isEmpty());
             audio.stop(); assertFalse(oldSpool.exists());
             assertEquals(AudioTrack.STATE_UNINITIALIZED, track.getState());
             audio.begin("replacement-short-pcm");
@@ -223,6 +224,11 @@ public class NativeVoiceAudioTest {
             probe.await("replacement-short-pcm");
             assertFalse(nextSpool.exists()); assertNull(audio.spoolForTest());
             assertTrue("Cancelled stream produced a late callback", probe.completed.isEmpty());
+            // Both pumps share one executor, so successor completion proves the cancelled pump has exited.
+            java.util.List<NativeVoiceAudio.PlaybackDrain> drains = audio.playbackDrainsForTest();
+            assertEquals("Only the replacement may report physically drained PCM", 1, drains.size());
+            assertEquals("replacement-short-pcm", drains.get(0).requestId);
+            assertPlaybackDrained(audio, "replacement-short-pcm", 24000 / 50);
         } finally { audio.stop(); InstrumentationRegistry.getInstrumentation().runOnMainSync(activity::finish); }
     }
     @Test public void oddChunksCarrySplitSamplesAndEmptyStreamsReportTheirCode() throws Exception {
@@ -272,10 +278,6 @@ public class NativeVoiceAudioTest {
                 assertEquals(24000 / 50, drain.writtenFrames); assertTrue(drain.playedFrames >= drain.writtenFrames);
             }
             history.clear(); assertEquals("Mutating a snapshot cannot clear recorded evidence", 32, audio.playbackDrainsForTest().size());
-            audio.begin("unfinished"); audio.stop();
-            assertNull(audio.playbackDrainForTest());
-            assertEquals("An unfinished request neither replaces nor adds completed drain evidence", 32, audio.playbackDrainsForTest().size());
-            assertEquals("history-33", audio.playbackDrainsForTest().get(31).requestId);
         } finally { audio.stop(); InstrumentationRegistry.getInstrumentation().runOnMainSync(activity::finish); }
     }
     @Test public void consecutivePlaybackHoldsOneFocusEntryUntilTheDelayedRelease() throws Exception {
