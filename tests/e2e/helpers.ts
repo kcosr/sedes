@@ -241,3 +241,21 @@ export async function selectDeliveryMode(page: Page, mode: "Steer" | "Queue"): P
   await page.getByRole("button", { name: "Delivery mode", exact: true }).click();
   await page.getByRole("menuitemradio", { name: mode, exact: true }).click();
 }
+
+/** A panel kind's title, as the workbench bar names it. */
+export type PanelTitle = "Chat" | "Files" | "Workpads" | "Tasks" | "Terminals";
+
+/**
+ * A panel's row in the open ▾ panels menu. Its name is the panel's title,
+ * then its state ("Files, On the right", "Files, Loaded, hidden"); a closed
+ * panel's row has no state.
+ */
+export function panelsMenuRow(page: Page, title: PanelTitle): Locator {
+  return page.getByRole("menuitem", { name: new RegExp(`^${title}(?:,|$)`, "u") });
+}
+
+/** Opens a panel in its place from its row in the ▾ panels menu. */
+export async function openPanelFromMenu(page: Page, title: PanelTitle): Promise<void> {
+  await page.getByRole("button", { name: "Panels", exact: true }).click();
+  await panelsMenuRow(page, title).click();
+}
