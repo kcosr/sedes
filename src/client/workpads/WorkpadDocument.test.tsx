@@ -131,6 +131,18 @@ describe("WorkpadDocument", () => {
     expect(screen.queryByRole("status")).toBeNull();
   });
 
+  it("shows typed lines as line breaks and attributes each line to its own author", () => {
+    const content = "Local - Rewrite: eval\nLocal - opencode: eval\n\nLocal - runner: eval\n";
+    const second = content.indexOf("Local - opencode");
+    const attribution = [span(0, second, 1), span(second, second + "Local - opencode: eval".length, 2), span(second + "Local - opencode: eval".length, content.length, 1)];
+    const { container } = render(<WorkpadDocument content={content} attribution={attribution} showAttribution />);
+    const paragraphs = container.querySelectorAll(".markdown p");
+    expect(paragraphs).toHaveLength(2);
+    expect(paragraphs[0]!.querySelectorAll("br")).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "Local - opencode: eval — last changed by You, revision 2" })).toBeInTheDocument();
+    expect(paragraphs[0]!.textContent).toBe("Local - Rewrite: eval\nLocal - opencode: eval");
+  });
+
   it("offers resolved names by hover, tap and keyboard and clears details on revision change", () => {
     const attribution = [span(0, 5, 1, "Renamed thread")];
     const { rerender } = render(<WorkpadDocument content="Hello" attribution={attribution} showAttribution />);

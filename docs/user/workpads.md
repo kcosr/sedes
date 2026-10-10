@@ -2,7 +2,9 @@
 
 Workpads are shared Markdown documents for working notes. You and agents edit
 the same saved document, with revision history and optional text attribution.
-They belong to your Sedes account and survive restarts.
+They belong to your Sedes account and survive restarts. Lines show as you type
+them: a single line break starts a new line, and a blank line starts a new
+paragraph.
 
 ## Open the Workpads panel
 

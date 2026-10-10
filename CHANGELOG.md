@@ -491,6 +491,10 @@
 
 ### Changed
 
+- Workpads show each typed line on its own line; a single line break no longer
+  joins lines into one paragraph. Chat and Markdown file previews are
+  unchanged. ([#65](https://github.com/kcosr/sedes/pull/65))
+
 - Workpads works like Tasks: Thread, Project, Global and All views with
   counts, a Sort option, a Project-only **Include thread workpads**, rows that
   name their thread or project, and a collapsed Archived section. An open workpad keeps the panel header and views, and Android Back
