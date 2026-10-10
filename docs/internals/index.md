@@ -50,6 +50,7 @@ native authority begins and ends.
 | Document | Scope |
 | --- | --- |
 | [Workspace Files](workspace-files.md) | File-root authority, browsing, edits, Compare, and remote behavior. |
+| [Workspace panels](workspace-panels.md) | Desktop panel regions, placement, make-room, the saved layout and its migration, and phone layout. |
 | [Composer attachments](composer-attachments.md) | Immutable input blobs, staging, delivery snapshots, and provider projection. |
 | [Agent tools](agent-tools.md) | Thread-agent and principal-client callers, policy, invocation, and provenance. |
 | [Workpads](workpads.md) | Shared documents, attributed revisions, scope authority, and synchronized human drafts. |

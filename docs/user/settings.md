@@ -62,7 +62,7 @@ Escape closes an open editor before it leaves the page.
 | Kind | Examples | Where it applies |
 | --- | --- | --- |
 | User library or policy | Saved prompts, Tool clients, OpenAI composer-skill visibility, notifications | Every client for the current Sedes user |
-| Browser presentation | Theme, activity detail, environment colors, animations, history page size, seek on send, mobile history seek control | This browser or packaged client |
+| Browser presentation | Theme, activity detail, environment colors, animations, history page size, seek on send, mobile history seek control, panel layout | This browser or packaged client |
 | Thread setting | Model, effort, permissions, tool policy, Codex execution settings | One thread |
 | Project catalog | Remembered directories, removal and restoration | Every client for the current Sedes user, in the server database |
 | Execution configuration | Environments, targets, model policy, allowed roots, provider paths | Every client for the current Sedes user, in the server database |
@@ -387,19 +387,6 @@ name and press Enter or Space. Back clears active sidebar filters as usual.
 Environment names, including Local, appear when there are multiple
 environments; they are hidden when there is only one or the current scope
 already identifies the environment.
-
-### Opening panels
-
-The **Panels** menu lists Chat, Files, and Terminals in a fixed order; Tasks
-and Workpads have their own buttons beside it.
-A checkmark means the panel is already open, including when it is collapsed.
-Select an open panel to focus or restore it, or a closed panel to open it.
-
-Choose whether opening Chat, Files, Workpads, or Terminals normally shows that panel by
-itself or alongside the panels already in the workspace. The choice belongs to
-this browser or packaged client. Hold Shift while opening a thread, file, or
-terminal to use the opposite presentation for that action. The descriptive
-caret menus continue to open the requested panels together.
 
 ### Activity detail
 

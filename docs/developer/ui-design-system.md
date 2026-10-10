@@ -13,6 +13,7 @@ section names the file to read for details. Paths below are relative to
 | Floating surface and menu row class recipes | `components/ui/floating.ts` |
 | Settings kit and its only stylesheet | `components/settings/`, `settings.css` |
 | Top-level page frame | `components/Workbench.tsx`, `components/automation/automations-view.css` |
+| Workspace panel regions, the workbench bar, panel headers | `workspace-panels/` |
 | Automation state words and glyphs | `automation/automation-health.ts`, `automation/automation-text.ts`, `components/automation/AutomationGlyph.tsx` |
 | Style guardrails | `styles.guardrails.test.ts`, `styles.guardrails.baseline.json` |
 
@@ -41,40 +42,55 @@ match them, not the reverse.
   header's action glyphs are one step quieter (`--bar-icon` − 2px) on the same
   hit areas.
 
-**Workspace panels** have minimum widths: Chat 360px, a tenant its
-`size.minWidth` (Tasks 300px, Files and Workpads 320px), and Terminals and
-panels without a declared minimum the divider's 160px floor. A split gives each
-pane its fraction but never less than its minimum; when it cannot hold both,
-the minimums shrink together in proportion. A panel that arrives on the desktop
-stage collapses the least recently used side panels when the visible minimums
-no longer fit; resizing the window or switching threads never collapses one.
-A tenant first opens at its `size.preferredWidth`; with `size.preferredShare`
-it takes that share of the stage instead, kept between its minimum and
-preferred width (Tasks takes 35%: 300px at 1024px, 380px at 1440px;
-Workpads 40%, 320–480px). The rules
-are in `workspace-panels/layout-fit.ts`; declare a new tenant's minimum in its
-`size`. From then on, each side panel keeps one share of the stage width (or
-height, docked above or below) in every thread layout: a resize records it,
-and each thread's splits are fitted to it, so Chat absorbs the difference
-(`workspace-panels/panel-sizes.ts`). Tasks and Workpads also share their
-place: every thread wraps its own panels in one companion arrangement, the
-edges and order the user last set (`workspace-panels/companion-layout.ts`).
+**Workspace panels** sit in five regions on the desktop stage (Middle, Left,
+Right, Top, Bottom), one panel per region; the model, geometry, make-room and
+saved layout are in [Workspace panels](../internals/workspace-panels.md).
+Minimum sizes are Chat 360px wide, a tenant its `size.minWidth` and
+`size.minHeight` (Tasks 300×240px, Files and Workpads 320×240px), and 160px
+for Chat's height and both Terminals sides. An edge region's panel takes its
+remembered share of the stage along the region's axis, or by default its
+tenant's `size.preferredWidth` or `preferredHeight`; with
+`size.preferredShare` it takes that share of the stage instead, kept between
+its minimum and preferred size (Tasks 35%, 300–380px wide; Workpads 40%,
+320–480px wide). Chat in an edge region defaults to 40% and Terminals to 30%,
+never below their minimums. The rules are in
+`workspace-panels/region-geometry.ts`; declare a new tenant's sizes in its
+`size`. A divider drag records the kind's share for that axis on the device,
+shared by every thread, and the Middle takes the rest; a double-click returns
+to the default. When the visible minimums can't fit, make-room hides the least
+recently used edge regions (never Chat's or the Middle); if they still can't
+fit, the remaining minimums shrink together in proportion.
+
+**Workbench bar.** `workspace-panels/PanelToolbar.tsx`: the sidebar trigger,
+then a `WorkbenchPanelToggle` for each loaded panel in the fixed order Chat,
+Files, Workpads, Tasks, Terminals (`secondary` while visible, an inset
+`--input` outline while loaded but hidden, an optional neutral `CountBadge`),
+then ▾, the **Panels** menu. Its rows list every available panel with its
+state as a `DropdownMenuValue`; on desktop each row ends in a square
+sub-trigger with the Middle/Left/Right/Top/Bottom radio list, and the menu
+ends with Reset layout. Under touch density the menu is a sheet.
 
 **Panel headers.** Every tenant except Tasks gets the shared `PanelChrome`:
-icon, title, subtitle, unsaved dot, busy spinner, then collapse, ⋯ (Dock) and
-close. A tenant puts its panel-level actions into the header by portaling
-ghost icon buttons into `context.chromeActionsTarget`, sized like the other
-bar controls (add its container to the `--bar-control` list in
-`styles.css`). Through its host it sets the subtitle, dirty and busy state.
-Its panel-level ⋯ items, after the Dock group, come from the tenant's
-`renderMenuItems` (rendered inside the layout's menu, so menu primitives work
-in it; a sheet under touch density). The header never changes into an open
-item's: an open document keeps the panel's title, icon and actions, and its
-title and actions sit in one hairline toolbar under the header, as in the
-Files editor and Workpads (the title, then the document's actions and its
-⋯). Workpads has no back button of its own: its scope control stays above the
-document, and choosing the selected view again (`ScopeSegments`'
-`onReselect`, announced by `reselectHint`) returns to the list.
+icon, title, subtitle, unsaved dot, busy spinner, then Maximize (Restore while
+maximized), ⋯ and ✕ (Close; Hide for Chat). Its ⋯ starts with Move to, a radio
+group of the five regions, and for an edge region a Full height (Left, Right)
+or Full width (Top, Bottom) checkbox. At phone widths (≤819px) the header
+leaves out Maximize and these items, and drops ⋯ when nothing else is in it.
+Chat's header is the thread header and Tasks draws its own header
+(`header: "tenant"`), both with the same controls. A tenant puts its
+panel-level actions into the header by portaling ghost icon buttons into
+`context.chromeActionsTarget`, sized like the other bar controls (add its
+container to the `--bar-control` list in `styles.css`). Through its host it
+sets the subtitle, dirty and busy state. Its panel-level ⋯ items, after the
+Move to group, come from the tenant's `renderMenuItems` (rendered inside the
+layout's menu, so menu primitives work in it; a sheet under touch density).
+The header never changes into an open item's: an open document keeps the
+panel's title, icon and actions, and its title and actions sit in one
+hairline toolbar under the header, as in the Files editor and Workpads (the
+title, then the document's actions and its ⋯). Workpads has no back button of
+its own: its scope control stays above the document, and choosing the
+selected view again (`ScopeSegments`' `onReselect`, announced by
+`reselectHint`) returns to the list.
 
 **Scoped lists.** Tasks and Workpads render the same pieces from
 `components/scope-view/`: `ScopeSegments` (Thread · Project · Global · All

@@ -20,17 +20,19 @@ attaches content to a message.
 
 ## Open and navigate Files
 
-Choose **Files** from the application header’s **Panels** menu. Files is
-available only when the thread's exact execution environment supports file
-operations. Local projects use the local engine. Supported SSH projects require
-the operator's managed sidecar; Sedes does not substitute server-host files
-when remote operations are unavailable.
+Choose **Files** from the **Panels** menu (▾) in the workbench bar. Files opens
+on the Right by default; see [Arrange panels](conversations.md#arrange-panels)
+to move or maximize it. While Files is loaded, its button in the bar shows or
+hides it. Files is available only when the thread's exact execution
+environment supports file operations. Local projects use the local engine.
+Supported SSH projects require the operator's managed sidecar; Sedes does not
+substitute server-host files when remote operations are unavailable.
 
-The panel retains its tree, open tabs, scroll, and editor drafts while
-collapsed. On a narrow screen it becomes a foreground sheet. Opening a file
-link or a file linked from a Task makes Files visible automatically. That
-opening follows the device's **Opening panels** preference; Shift-click
-temporarily uses the opposite presentation without changing the preference.
+The panel retains its tree, open tabs, scroll, and editor drafts while hidden
+or replaced in its region. Closing it with ✕ unloads it and asks first about
+unsaved edits. On a narrow screen it becomes a foreground sheet. Opening a
+file link or a file linked from a Task shows Files in its place, opening it if
+needed.
 
 The tree honors configured roots and Git ignore information when available.
 Git is optional for ordinary browsing, but required for Changes.

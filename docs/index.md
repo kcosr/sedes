@@ -138,6 +138,7 @@ Repository-level entry points include [Contributing](../CONTRIBUTING.md), the
 - [Blocking interactions](internals/blocking-interactions.md)
 - [Composer attachments](internals/composer-attachments.md)
 - [Workspace Files](internals/workspace-files.md)
+- [Workspace panels](internals/workspace-panels.md)
 - [Provider output artifacts](internals/output-artifacts.md)
 - [Native fork lineage](internals/native-fork-lineage.md)
 - [Thread templates](internals/thread-templates.md)

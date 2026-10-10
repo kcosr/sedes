@@ -45,18 +45,21 @@ not send a provider message or park its thread.
 
 ## Open Tasks
 
-Tasks appears beside a thread. In a thread, select the **Tasks** button (the
-checklist icon) or press Ctrl+Shift+L (Command+Shift+L on macOS) to open or
-close Tasks. Home, Archived, Usage, and the automation pages have no Tasks; to
+Tasks appears beside a thread. In a thread, choose **Tasks** from the
+**Panels** menu (▾) in the workbench bar, or press Ctrl+Shift+L
+(Command+Shift+L on macOS) to show or hide Tasks, opening it if needed. While
+Tasks is loaded, the **Tasks** button (the checklist icon) in the bar shows or
+hides it too. Home, Archived, Usage, and the automation pages have no Tasks; to
 see Global Tasks, open any thread and choose **Global**.
 
-On desktop, Tasks docks beside Chat as a workspace panel, on the right by
-default. Like Files and Workpads, you can resize it, collapse it, dock it on
-another edge from **Tasks panel actions**, or close it; the **Tasks** button
-opens it again. It stays open or collapsed, and in the same place, as you
-switch threads, and its content follows the current chat. When Tasks is
-collapsed, by you or to make room for another panel, the button keeps an
-outline; select it to show Tasks again, which makes room in turn.
+On desktop, Tasks is a workspace panel, on the Right by default, in place of
+whatever the Right showed. Like Files and Workpads, you can resize it,
+maximize it, move it to another region from **Tasks panel actions**, or close
+it (see [Arrange panels](conversations.md#arrange-panels)). It stays loaded,
+and in the same place, as you switch threads, and its content follows the
+current chat. While Tasks is hidden, by you, by another panel opened in its
+region, or to make room, the button keeps an outline; select it to show Tasks
+again.
 
 On phones and other narrow screens, Tasks opens as a bottom sheet. Resizing
 the window across that width closes the sheet, unless you are editing a Task:
