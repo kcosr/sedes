@@ -156,7 +156,7 @@ Pinning and Group membership are independent of these states.
 ## What is local to one browser
 
 Most working data is stored by the server and follows the user across clients.
-Presentation choices such as sidebar layout, panel sizes, activity detail,
+Presentation choices such as sidebar layout, panel layout, activity detail,
 mobile refocus, and whether the Prompts tab is shown are local to each browser
 installation.
 
