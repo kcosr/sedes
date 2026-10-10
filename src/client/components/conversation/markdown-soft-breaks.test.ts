@@ -49,14 +49,28 @@ describe("remarkSoftBreaks", () => {
     expect(inline(tree.children?.[2])).toEqual(["use ", "<inlineCode>", " then", "<break>", "next"]);
   });
 
-  it("keeps the whole text position for fragments that do not occur verbatim in the source", () => {
-    const source = "a &amp; b\nc";
-    const tree = transform(source);
-    const paragraph = tree.children?.[0];
-    expect(inline(paragraph)).toEqual(["a & b", "<break>", "c"]);
-    const decoded = paragraph!.children![0]!;
-    expect(decoded.position?.start.offset).toBe(0);
-    const c = paragraph!.children![2]!;
-    expect(source.slice(c.position!.start.offset, c.position!.end.offset)).toBe("c");
+  it("never maps a line to another line's source, even with repeated text or entities", () => {
+    const span = (node: Node) => [node.position!.start.offset, node.position!.end.offset];
+    // A decoded first line keeps its own line's span; the repeated "a" maps to line two.
+    let paragraph = transform("a &amp; b\na").children![0]!;
+    expect(inline(paragraph)).toEqual(["a & b", "<break>", "a"]);
+    expect(span(paragraph.children![0]!)).toEqual([0, 9]);
+    expect(span(paragraph.children![2]!)).toEqual([10, 11]);
+    // The second line's text never maps inside the first line's entity.
+    paragraph = transform("&amp;\namp").children![0]!;
+    expect(span(paragraph.children![0]!)).toEqual([0, 5]);
+    expect(span(paragraph.children![2]!)).toEqual([6, 9]);
+    // Repeated text in a quote, emphasis and a checklist continuation.
+    for (const [source, expected] of [
+      ["> same\n> same", [[2, 6], [9, 13]]],
+      ["*same\nsame*", [[1, 5], [6, 10]]],
+      ["- [ ] same\n  same", [[6, 10], [13, 17]]],
+    ] as const) {
+      const tree = transform(source);
+      const texts: Node[] = [];
+      const collect = (node: Node) => { if (node.type === "text") texts.push(node); node.children?.forEach(collect); };
+      collect(tree);
+      expect(texts.map(span), source).toEqual(expected);
+    }
   });
 });

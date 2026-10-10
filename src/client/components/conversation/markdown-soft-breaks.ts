@@ -1,15 +1,18 @@
 import type { Break, Parent, Root, Text } from "mdast";
 import type { Point, Position } from "unist";
 
-const LINE_ENDING = /\r\n|\r|\n/gu;
+const LINE_ENDING = /\r\n|\r|\n/u;
 
 /**
  * Render a soft line break (a single newline inside a paragraph, heading text,
  * list item or table cell) as a hard line break, so text reads as it was typed.
  * Blank lines still separate paragraphs, and code is untouched: only `text`
- * nodes are split. Each fragment keeps an exact source position where the
- * fragment occurs verbatim in the source; otherwise it keeps the whole text
- * node's position, which source mapping aligns by diffing.
+ * nodes are split. Each soft break is exactly one source line ending, so the
+ * Nth fragment comes from the Nth source line of the text node, where it ends
+ * the line (after any `> ` or indentation prefix, before trailing spaces).
+ * A fragment that differs from its source (entities, escapes) keeps that
+ * source line's position, which source mapping aligns by diffing; it never
+ * borrows a position from another line.
  */
 export function remarkSoftBreaks(): (tree: Root, file: { value?: unknown }) => void {
   return (tree, file) => {
@@ -27,41 +30,54 @@ function splitIn(parent: Parent, source: string, lines: readonly number[]): void
       if ("children" in child) splitIn(child as Parent, source, lines);
       children.push(child);
     }
-    LINE_ENDING.lastIndex = 0;
   }
   parent.children = children;
 }
 
 function split(node: Text, source: string, lines: readonly number[]): (Text | Break)[] {
-  LINE_ENDING.lastIndex = 0;
   const fragments = node.value.split(LINE_ENDING);
-  const start = node.position?.start.offset;
-  const end = node.position?.end.offset;
-  const raw = start !== undefined && end !== undefined ? source.slice(start, end) : undefined;
-  const located: (Position | undefined)[] = [];
-  let cursor = 0;
-  for (const fragment of fragments) {
-    const at = raw === undefined ? -1 : raw.indexOf(fragment, cursor);
-    if (raw === undefined || start === undefined || at < 0) {
-      located.push(undefined);
-      continue;
-    }
-    located.push({ start: point(start + at, lines), end: point(start + at + fragment.length, lines) });
-    cursor = at + fragment.length;
-  }
+  const located = locate(fragments, node, source, lines);
   const result: (Text | Break)[] = [];
   fragments.forEach((fragment, index) => {
-    const position = located[index] ?? node.position;
+    const position = located?.[index]?.text ?? node.position;
     if (fragment) result.push({ type: "text", value: fragment, ...(position ? { position } : {}) });
     if (index === fragments.length - 1) return;
-    const after = located[index];
-    const next = located[index + 1];
+    const before = located?.[index]?.text;
+    const after = located?.[index + 1]?.text;
     result.push({
       type: "break",
-      ...(after && next ? { position: { start: after.end, end: next.start } } : {}),
+      ...(before && after ? { position: { start: before.end, end: after.start } } : {}),
     });
   });
   return result;
+}
+
+/** One source line per fragment, or undefined when the node's source can't be read that way. */
+function locate(fragments: readonly string[], node: Text, source: string, lines: readonly number[]): { text: Position }[] | undefined {
+  const start = node.position?.start.offset;
+  const end = node.position?.end.offset;
+  if (start === undefined || end === undefined) return undefined;
+  const raw = source.slice(start, end);
+  const segments: { from: number; text: string }[] = [];
+  const endings = /\r\n|\r|\n/gu;
+  let from = 0;
+  for (let match = endings.exec(raw); match; match = endings.exec(raw)) {
+    segments.push({ from, text: raw.slice(from, match.index) });
+    from = match.index + match[0].length;
+  }
+  segments.push({ from, text: raw.slice(from) });
+  if (segments.length !== fragments.length) return undefined;
+  return fragments.map((fragment, index) => {
+    const segment = segments[index]!;
+    // Spaces before a line ending are not text; the last line's trailing spaces are.
+    const content = index < segments.length - 1 ? segment.text.replace(/[ \t]+$/u, "") : segment.text;
+    // Verbatim text ends its line; otherwise the whole line, never another line.
+    const verbatim = content.endsWith(fragment);
+    const lineStart = start + segment.from;
+    const textStart = verbatim ? lineStart + content.length - fragment.length : lineStart;
+    const textEnd = lineStart + content.length;
+    return { text: { start: point(textStart, lines), end: point(textEnd, lines) } };
+  });
 }
 
 function lineStarts(source: string): number[] {

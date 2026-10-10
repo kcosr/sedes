@@ -143,6 +143,20 @@ describe("WorkpadDocument", () => {
     expect(paragraphs[0]!.textContent).toBe("Local - Rewrite: eval\nLocal - opencode: eval");
   });
 
+  it("credits repeated text and entity lines to each line's own author", () => {
+    const content = "Same & more\nSame\n";
+    const second = content.indexOf("\nSame") + 1;
+    const attribution = [span(0, second, 1, "First agent"), span(second, content.length, 2)];
+    render(<WorkpadDocument content={content} attribution={attribution} showAttribution />);
+    expect(screen.getByRole("button", { name: "Same — last changed by You, revision 2" })).toBeInTheDocument();
+    const entityContent = "a &amp; b\na";
+    const entitySplit = entityContent.indexOf("\n") + 1;
+    cleanup();
+    render(<WorkpadDocument content={entityContent} attribution={[span(0, entitySplit, 1, "First agent"), span(entitySplit, entityContent.length, 2)]} showAttribution />);
+    expect(screen.getByRole("button", { name: "a — last changed by You, revision 2" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^a & b — last changed by You/u })).toBeNull();
+  });
+
   it("offers resolved names by hover, tap and keyboard and clears details on revision change", () => {
     const attribution = [span(0, 5, 1, "Renamed thread")];
     const { rerender } = render(<WorkpadDocument content="Hello" attribution={attribution} showAttribution />);
