@@ -78,6 +78,26 @@ describe("PanelLayout Terminals panel", () => {
     expect(terminal).toHaveAttribute("data-terminal-panel-instance", "1");
   });
 
+  it("keeps the terminal renderer connected while Settings makes the thread inactive", async () => {
+    setApi({
+      readTerminal: vi.fn().mockResolvedValue(terminalResource()),
+      createTerminalAdmission: vi.fn(),
+      terminalWebSocketUrl: vi.fn(),
+    });
+    const store = setup();
+    act(() => store.openTerminalTab(TERMINAL_ID, { focus: false }));
+    const terminal = await screen.findByRole("region", { name: "Remote shell terminal" });
+    expect(terminal).toHaveAttribute("data-visible", "true");
+
+    act(() => store.setActive(false));
+    expect(terminal).toBeInTheDocument();
+    expect(terminal).toHaveAttribute("data-visible", "true");
+
+    act(() => store.setActive(true));
+    expect(screen.getByRole("region", { name: "Remote shell terminal" })).toBe(terminal);
+    expect(terminal).toHaveAttribute("data-terminal-panel-instance", "1");
+  });
+
   it("reopens an existing terminal from the panel list without creating a shell", async () => {
     const resource = terminalResource();
     const listTerminals = vi.fn().mockResolvedValue({ terminals: [resource] });

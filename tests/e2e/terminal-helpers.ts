@@ -1,5 +1,6 @@
 import type { Locator, Page } from "@playwright/test";
 import { expect } from "./fixtures.js";
+import { openPanelFromMenu } from "./helpers.js";
 
 export interface TerminalFixtureState {
   readonly terminalId: string;
@@ -36,9 +37,12 @@ export async function openTerminalPanelAction(page: Page, action: string) {
   await page.getByRole("menuitem", { name: action, exact: true }).click();
 }
 
+/**
+ * Opens Terminals from its ▾ panels-menu row: it reveals a loaded Terminals
+ * panel, else attaches the thread's existing terminal or creates one.
+ */
 export async function revealTerminals(page: Page) {
-  await page.getByRole("button", { name: "Panels", exact: true }).click();
-  await page.getByRole("menuitem", { name: /^Terminals(?: —|$)/ }).click();
+  await openPanelFromMenu(page, "Terminals");
   await expect(terminalContainer(page)).toBeVisible();
 }
 

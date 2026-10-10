@@ -12,6 +12,7 @@ import { expect, test } from "./fixtures";
 import {
   capture,
   expectNoPageOverflow,
+  openPanelFromMenu,
   openSedesWorkspace,
   overlaySettled,
   repositoryLabel,
@@ -276,8 +277,7 @@ test("sidebar execution scope filters creation and persists responsively", async
     desktopSidebar.getByText(primaryTitle, { exact: true }),
   ).toBeVisible();
 
-  await page.getByRole("button", { name: "Panels", exact: true }).click();
-  await page.getByRole("menuitem", { name: /^Files(?: —|$)/ }).click();
+  await openPanelFromMenu(page, "Files");
   const filesPanel = page.getByRole("region", { name: "Workspace files" });
   await expect(filesPanel).toBeVisible({ timeout: 15_000 });
   await Promise.all([
@@ -326,7 +326,8 @@ test("sidebar execution scope filters creation and persists responsively", async
   await expect(
     filesPanel.getByRole("tab", { name: "Project docs" }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "Collapse Files panel" }).click();
+  await page.getByRole("button", { name: "Hide Files panel", exact: true }).click();
+  await expect(filesPanel).toBeHidden();
   await page.setViewportSize(desktopViewport ?? { width: 1280, height: 720 });
 
   const targetFilter = desktopSidebar.getByTestId("target-filter");

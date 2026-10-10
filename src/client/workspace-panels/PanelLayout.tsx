@@ -917,7 +917,10 @@ function PanelLayoutReady({
         ? createPortal(
             <TerminalsPanelBody
               active={active}
-              visible={active && onStage("terminals")}
+              // Settings keeps the thread mounted but inactive; the terminal
+              // keeps its renderer and connection there, so only leaving the
+              // stage disconnects it.
+              visible={onStage("terminals")}
               panel={terminalsPanel}
               terminals={terminals}
               applicationStore={applicationStore}

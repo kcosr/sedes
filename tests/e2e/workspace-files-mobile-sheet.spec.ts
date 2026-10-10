@@ -5,6 +5,9 @@ import { test, expect } from "./fixtures";
 import {
   capture,
   fillAndPersistDraft,
+  openPanelFromMenu,
+  overlaySettled,
+  panelsMenuRow,
   selectCustomNewThreadTarget,
   selectProjectIfNeeded,
   sendCurrentDraft,
@@ -17,8 +20,7 @@ import {
 test.use({ hasTouch: true });
 
 async function openMobileFilesPanel(page: Page) {
-  await page.getByRole("button", { name: "Panels", exact: true }).click();
-  await page.getByRole("menuitem", { name: /^Files(?: —|$)/ }).click();
+  await openPanelFromMenu(page, "Files");
 }
 
 test("mobile rendered Markdown selection actions open notes and attach to the composer", async ({
@@ -103,7 +105,10 @@ test("mobile rendered Markdown selection actions open notes and attach to the co
     0,
   );
 
-  await page.getByRole("button", { name: "Collapse Files panel" }).tap();
+  // Hiding Files keeps it loaded and brings Chat to the foreground.
+  await page.getByRole("button", { name: "Hide Files panel", exact: true }).tap();
+  await expect(page.getByRole("region", { name: "Files panel", exact: true })).toHaveCount(0);
+  await expect(page.getByTestId("files-panel-toggle")).toHaveAttribute("data-state", "hidden");
   await expect(page.getByRole("button", { name: "Panels" })).toBeVisible();
 
   // Regression: the mobile base sized itself to the viewport rather than to
@@ -415,12 +420,14 @@ test("mobile panel file list scrolls by touch and fallback ellipsis CSS applies"
   expect(overflowDisplay).toBe("none");
   await capture(page, testInfo, "workspace-files-mobile-sheet-scroll.png");
 
-  // Last, because selecting a panel moves focus into it. The menu must paint
-  // above the full-stage panel it drops over. Compare their stacking order.
+  // Last, because selecting a panel moves focus into it. The menu, a sheet
+  // on a phone, must paint above the full-stage panel it rises over.
+  // Compare their stacking order.
   await trigger.tap();
   await expect(page.getByRole("menu")).toBeVisible();
+  await overlaySettled(page.locator("[data-menu-sheet]"));
   const stacking = await page.evaluate(() => {
-    const menu = document.querySelector('[data-slot="dropdown-menu-content"]');
+    const menu = document.querySelector("[data-menu-sheet]");
     const openPanel = document.querySelector(".workspace-panel-mobile-base");
     if (!menu || !openPanel) return null;
     const menuRect = menu.getBoundingClientRect();
@@ -433,7 +440,7 @@ test("mobile panel file list scrolls by touch and fallback ellipsis CSS applies"
             menuRect.left + menuRect.width / 2,
             menuRect.top + menuRect.height / 2,
           )
-          ?.closest('[data-slot="dropdown-menu-content"]') === menu,
+          ?.closest("[data-menu-sheet]") === menu,
     };
   });
   expect(stacking?.overlaps).toBe(true);
@@ -441,13 +448,16 @@ test("mobile panel file list scrolls by touch and fallback ellipsis CSS applies"
 
   // Choosing Chat is only a client-local foreground switch on narrow screens,
   // so the open document and browser state survive when the menu restores Files.
-  await page.getByRole("menuitem", { name: /^Chat —/ }).tap();
+  await expect(panelsMenuRow(page, "Files")).toHaveAccessibleName("Files, Showing");
+  await expect(panelsMenuRow(page, "Chat")).toHaveAccessibleName("Chat, Loaded, hidden");
+  await panelsMenuRow(page, "Chat").tap();
   await expect(page.getByRole("menu")).toHaveCount(0);
   await expect(mobilePanel).toHaveCount(0);
   await expect(page.getByTestId("thread-view")).toBeVisible();
 
   await trigger.tap();
-  await page.getByRole("menuitem", { name: /^Files —/ }).tap();
+  await expect(panelsMenuRow(page, "Files")).toHaveAccessibleName("Files, Loaded, hidden");
+  await panelsMenuRow(page, "Files").tap();
   await expect(mobilePanel).toBeVisible();
   await expect(panel.locator("main")).toBeVisible();
   await expect(activeFileTab).toHaveAttribute(
