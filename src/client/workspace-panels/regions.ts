@@ -324,8 +324,10 @@ export function chooseForegroundPanel(
  * Loads a panel if needed and shows it in its region, replacing (hiding, not
  * unloading) what the region showed. With `region`, the panel first moves
  * there: that becomes its placement, and its old region, if it showed the
- * panel, becomes empty. Opening ends Maximize and marks the panel the most
- * recently shown.
+ * panel, becomes empty. Opening another panel (or moving the maximized one)
+ * ends Maximize; opening the maximized panel in place keeps it, so a new
+ * terminal tab or a file link inside it does not restore the layout.
+ * Opening marks the panel the most recently shown.
  */
 export function openPanel(
   view: RegionView,
@@ -335,6 +337,8 @@ export function openPanel(
   const { layout } = view;
   const target = region ?? layout.placement[kind];
   const from = layout.placement[kind];
+  const keepsMaximized =
+    layout.maximized === kind && from === target && isLoaded(view, kind);
   const shown: Record<RegionId, PanelKind | null> = { ...layout.shown };
   if (from !== target && shown[from] === kind) shown[from] = null;
   shown[target] = kind;
@@ -345,7 +349,7 @@ export function openPanel(
       shown,
       loaded:
         isSharedPanelKind(kind) ? withLoaded(layout.loaded, kind) : layout.loaded,
-      maximized: null,
+      maximized: keepsMaximized ? kind : null,
       recency: withRecent(layout.recency, kind),
     },
     terminals:

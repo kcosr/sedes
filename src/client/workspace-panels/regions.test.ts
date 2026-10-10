@@ -176,6 +176,19 @@ describe("openPanel", () => {
     expect(view.layout.recency).toEqual(["workpads", "files"]);
   });
 
+  it("keeps Maximize when the maximized panel opens in place, not when it moves", () => {
+    let view = maximizePanel(open(defaultRegionView(), "terminals"), "terminals");
+    // A new terminal tab, or the Terminals entry, inside the maximized panel.
+    view = openPanel(view, "terminals");
+    expect(view.layout.maximized).toBe("terminals");
+    const tabbed = openTerminalTab(view, "terminal-1", () => "producer-1");
+    expect(tabbed?.layout.maximized).toBe("terminals");
+    view = openPanel(view, "terminals", "bottom");
+    expect(view.layout.maximized).toBe("terminals");
+    // Moving it elsewhere is a layout change: Maximize ends.
+    expect(openPanel(view, "terminals", "right").layout.maximized).toBeNull();
+  });
+
   it("returns the same view when nothing changes", () => {
     const view = openPanel(defaultRegionView(), "chat");
     expect(openPanel(view, "chat")).toBe(view);
