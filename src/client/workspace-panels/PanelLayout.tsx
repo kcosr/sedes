@@ -38,10 +38,8 @@ import {
   domIdFragment,
   escapeBelongsElsewhere,
   focusInside,
-  focusRequestMatchesThread,
   objectSafeIntegerField,
   objectStringField,
-  preferredFocusTarget,
   withoutMapKey,
   type PanelTargets,
 } from "./panel-dom.js";
@@ -82,6 +80,7 @@ import {
   TerminalsPanelHeader,
 } from "./TerminalsPanel.js";
 import { useMobileTerminalHistory } from "./use-mobile-terminal-history.js";
+import { usePanelFocusRequests } from "./use-panel-focus-requests.js";
 import { useThreadTerminals } from "./use-thread-terminals.js";
 
 /**
@@ -360,101 +359,18 @@ function PanelLayoutReady({
   // A divider's live preview ends with any layout change.
   useEffect(() => setPreview(undefined), [view.layout]);
 
-  // ------------------------------------------------------------------------
-  // Focus requests
-
-  useEffect(() => {
-    if (!active || !focusRequest || !focusRequestMatchesThread(focusRequest, threadId))
-      return;
-    // A cold Chat route initially contains only ThreadLoading. Focusing the
-    // portal target at that point would consume the request before the
-    // preferred composer mounts. Keep an eligible autofocus request pending;
-    // the interaction listeners below still abandon it if the user chooses a
-    // different target while the thread loads.
-    if (
-      chatAutofocus &&
-      focusRequest.kind === "chat" &&
-      threadState.status === "loading" &&
-      preferredFocusTarget(targets.chat) === undefined
-    )
-      return;
-    let cancelled = false;
-    setMobileKind(focusRequest.kind);
-    const focusesTerminal =
-      focusRequest.kind === "terminals" &&
-      (focusRequest.terminalId !== undefined ||
-        Boolean(store.terminalPanel()?.activeTerminalId));
-    const attemptFocus = (remainingRetries: number) => {
-      if (cancelled) return;
-      if (focusesTerminal) {
-        const focused = !desktop || terminals.panelRef.current?.focus() === true;
-        if (focused) {
-          store.consumeFocusRequest(focusRequest.sequence);
-        } else if (remainingRetries > 0) {
-          requestAnimationFrame(() => attemptFocus(remainingRetries - 1));
-        }
-        return;
-      }
-      if (
-        !focusInside(
-          targets[focusRequest.kind],
-          focusRequest.kind === "chat" ? chatAutofocus : desktop,
-        )
-      )
-        return;
-      const focused = document.activeElement;
-      requestAnimationFrame(() => {
-        if (cancelled) return;
-        const pending =
-          store.getSnapshot().focusRequest?.sequence === focusRequest.sequence;
-        if (
-          focused instanceof HTMLElement &&
-          focused.isConnected &&
-          document.activeElement === focused &&
-          pending
-        ) {
-          store.consumeFocusRequest(focusRequest.sequence);
-        } else if (remainingRetries > 0 && pending) {
-          attemptFocus(remainingRetries - 1);
-        }
-      });
-    };
-    requestAnimationFrame(() => {
-      if (!cancelled) requestAnimationFrame(() => attemptFocus(2));
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [
+  usePanelFocusRequests({
     active,
-    chatAutofocus,
     desktop,
     focusRequest,
     store,
-    targets,
-    terminals.panelRef,
     threadId,
-    threadState.authoritative,
-    threadState.connection,
-    threadState.status,
-  ]);
-
-  useEffect(() => {
-    if (!active || !focusRequest || !focusRequestMatchesThread(focusRequest, threadId))
-      return;
-    const requestedTarget = targets[focusRequest.kind];
-    const abandonDeferredFocus = (event: Event) => {
-      if (event.target instanceof Node && requestedTarget.contains(event.target))
-        return;
-      store.consumeFocusRequest(focusRequest.sequence);
-    };
-    document.addEventListener("pointerdown", abandonDeferredFocus, true);
-    document.addEventListener("keydown", abandonDeferredFocus, true);
-    return () => {
-      document.removeEventListener("pointerdown", abandonDeferredFocus, true);
-      document.removeEventListener("keydown", abandonDeferredFocus, true);
-    };
-  }, [active, focusRequest, store, targets, threadId]);
+    targets,
+    terminalRef: terminals.panelRef,
+    chatAutofocus,
+    threadState,
+    onFocusPanel: setMobileKind,
+  });
 
   /** After a panel hides, focus the next panel on stage, else ▾. */
   const focusAfterHide = (hidden: PanelKind) => {
