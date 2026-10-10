@@ -346,18 +346,33 @@ test("mobile empty terminal panel lists detached tabs and touch scrolling never 
     .getByRole("button", { name: "Close transcript" })
     .click();
 
+  // Back returns to Chat without leaving the thread. Terminals stays loaded,
+  // and its button brings the same tab back on the same history entry.
+  const historyLength = await mobile.evaluate(() => window.history.length);
   await mobile.goBack();
   await expect(mobilePanelRoot).toHaveCount(0);
   await expect(panel).toHaveCount(0);
   await expect(mobile.getByTestId("thread-view")).toBeVisible();
+  expect(new URL(mobile.url()).pathname).toBe(threadPath);
+  const terminalsButton = mobile
+    .getByTestId("workspace-workbench-bar")
+    .getByTestId("terminals-panel-toggle");
+  await expect(terminalsButton).toHaveAttribute("data-state", "hidden");
+  await capture(mobile, testInfo, "terminal-mobile-back-to-chat.png");
+  await terminalsButton.click();
+  await expect(mobilePanelRoot).toHaveAttribute("data-state", "open");
   await expect(
-    mobile.getByText(
-      "Terminals panel closed. Its process was not terminated.",
-      {
-        exact: true,
-      },
-    ),
-  ).toBeAttached();
+    terminalContainer(mobile).getByRole("tab", { name: "Mobile shell" }),
+  ).toHaveAttribute("aria-selected", "true");
+  await expect(
+    panel.locator('.terminal-panel-emulator[data-restored="true"]'),
+  ).toBeAttached({ timeout: 15_000 });
+  expect(await mobile.evaluate(() => window.history.length)).toBe(historyLength);
+  await mobile.goBack();
+  await expect(mobilePanelRoot).toHaveCount(0);
+  await expect(mobile.getByTestId("thread-view")).toBeVisible();
+  expect(new URL(mobile.url()).pathname).toBe(threadPath);
+  await expect(terminalsButton).toHaveAttribute("data-state", "hidden");
   expect((await fixtureTerminalState(page, terminalId)).closed).toBe(false);
   expect((await fixtureTerminalState(page, secondTerminalId)).closed).toBe(false);
   await mobileContext.close();

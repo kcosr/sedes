@@ -10,6 +10,7 @@ import {
 } from "./helpers";
 import {
   openPanel,
+  openPanelIn,
   openPanelsMenu,
   panelAnnouncement,
   panelRow,
@@ -317,7 +318,7 @@ test.describe("panel workbench", () => {
     await expect.poll(height).toBe(empty);
   });
 
-  test("phones show one foreground panel, switched from the bar, with Tasks as a sheet", async ({
+  test("phones show one foreground panel, switched from the bar, with Chat as home and Tasks as a sheet", async ({
     page,
   }, testInfo) => {
     await page.setViewportSize({ width: 1440, height: 900 });
@@ -372,26 +373,50 @@ test.describe("panel workbench", () => {
     expect(await isRetained(files, "__phoneFiles")).toBe(true);
     await filesSettled(page);
 
-    // Files is the base surface with Chat hidden, and with nothing shown the
-    // stage says so.
+    // Chat is the phone's home: its header has no ✕, and its quick button
+    // keeps it in front.
     await quickButton(page, "Chat").click();
-    await stagePanel(page, "Chat")
-      .getByRole("button", { name: "Hide Chat panel", exact: true })
-      .click();
-    await expect(filesPanel).toBeVisible();
-    await expect(quickButton(page, "Chat")).toHaveAttribute("data-state", "hidden");
+    await expect(chat).toBeVisible();
+    await expect(
+      stagePanel(page, "Chat").getByRole("button", { name: /^(Hide|Close) Chat panel$/ }),
+    ).toHaveCount(0);
+    await expect(quickButton(page, "Chat")).toHaveAccessibleName("Chat panel");
+    await quickButton(page, "Chat").click();
+    await expect(chat).toBeVisible();
+    await expect(quickButton(page, "Chat")).toHaveAttribute("data-state", "visible");
+
+    // Hiding the panel in front shows Chat; Files stays loaded.
     await quickButton(page, "Files").click();
-    await expect(page.getByTestId("workspace-panel-empty")).toContainText("No panels are shown");
+    await expect(filesPanel).toBeVisible();
+    await quickButton(page, "Files").click();
+    await expect(chat).toBeVisible();
+    await expect(filesPanel).toHaveCount(0);
+    await expect(quickButton(page, "Files")).toHaveAttribute("data-state", "hidden");
+
+    // Placed in the Middle on a wider screen, Files replaces Chat there; on
+    // the phone, hiding it shows Chat in the Middle again.
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await openPanelIn(page, "Files", "Middle");
+    await expect(stagePanel(page, "Chat")).toHaveCount(0);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(filesPanel).toBeVisible();
+    await expect(chat).toBeHidden();
+    await expect(quickButton(page, "Chat")).toHaveAttribute("data-state", "hidden");
     await expectNoPageOverflow(page);
-    await capture(page, testInfo, "panels-phone-none-shown.png");
+    await capture(page, testInfo, "panels-phone-files-in-middle.png");
+    await quickButton(page, "Files").click();
+    await expect(chat).toBeVisible();
+    await expect(filesPanel).toHaveCount(0);
+    await expect.poll(async () => (await savedLayout(page))?.shown.middle).toBe("chat");
+    await expectNoPageOverflow(page);
+    await capture(page, testInfo, "panels-phone-chat-home.png");
+
+    // Its button brings Files back as it was, in the Middle again.
     await quickButton(page, "Files").click();
     await expect(filesPanel).toBeVisible();
     await expect(files.getByRole("tab", { name: /build\.gradle/ })).toBeVisible();
     expect(await isRetained(files, "__phoneFiles")).toBe(true);
-    await quickButton(page, "Chat").click();
-    await expect(chat).toBeVisible();
-    await quickButton(page, "Files").click();
-    await expect(filesPanel).toBeVisible();
+    await expect.poll(async () => (await savedLayout(page))?.shown.middle).toBe("files");
     await filesSettled(page);
 
     // ✕ closes Files, and Chat comes back without raising the keyboard.
@@ -402,6 +427,7 @@ test.describe("panel workbench", () => {
     await expect(
       page.getByRole("textbox", { name: "Message Scripted agent" }),
     ).not.toBeFocused();
+    await expect.poll(async () => (await savedLayout(page))?.shown.middle).toBe("chat");
     await expectNoPageOverflow(page);
 
     // Tasks opens as a sheet over the foreground panel, never on stage.

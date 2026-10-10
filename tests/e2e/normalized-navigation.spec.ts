@@ -333,13 +333,13 @@ test.describe.serial("normalized target and mobile navigation", () => {
     await expect(page.locator(".thread-project-name")).toBeVisible();
     const bookmarks = page.getByRole("button", { name: "Bookmarks", exact: true });
     const settings = page.getByRole("button", { name: "Thread actions" });
-    // Chat's ✕ hides it. Phones have no regions, so the header has no
-    // Maximize and no ⋯ with Move to.
+    // Chat is a phone's home, so its header has no ✕. Phones have no
+    // regions either, so it has no Maximize and no ⋯ with Move to.
     const chatHeader = page.locator(".thread-header");
-    const hideChat = chatHeader.getByRole("button", { name: "Hide Chat panel", exact: true });
+    await expect(chatHeader.getByRole("button", { name: "Hide Chat panel" })).toHaveCount(0);
     await expect(chatHeader.getByRole("button", { name: "Maximize Chat panel" })).toHaveCount(0);
     await expect(chatHeader.getByRole("button", { name: "Chat panel actions" })).toHaveCount(0);
-    const headerControls = [bookmarks, settings, threadToolbarToggle, hideChat];
+    const headerControls = [bookmarks, settings, threadToolbarToggle];
     const headerBoxes = [];
     for (const control of headerControls) {
       await expect(control).toBeVisible();
@@ -372,7 +372,7 @@ test.describe.serial("normalized target and mobile navigation", () => {
     // the title keeps its full width beside the remaining buttons.
     await page.setViewportSize({ width: 390, height: 844 });
     await expect(threadToolbarToggle).toHaveCount(0);
-    for (const control of [bookmarks, settings, hideChat]) {
+    for (const control of [bookmarks, settings]) {
       const box = await control.boundingBox();
       expect(box!.width).toBeGreaterThanOrEqual(36);
       expect(box!.height).toBeGreaterThanOrEqual(40);
