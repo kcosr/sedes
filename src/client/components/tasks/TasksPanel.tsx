@@ -160,7 +160,7 @@ export interface TasksPanelContentProps {
    */
   readonly onRequestClose: (announcement?: string) => void;
   /**
-   * Docked only: the layout's collapse, dock and close controls. The
+   * Docked only: the layout's Maximize, Move to and close controls. The
    * content then draws its header as the panel's `PanelChrome`, with its
    * own ⋯ items folded into the panel's actions menu.
    */
@@ -1305,8 +1305,8 @@ export function TasksPanelContent({
       </div>
     </header>
   ) : presentation === "panel" && panelControls ? (
-    // Docked: the panel family's header, with the layout's collapse, dock
-    // and close controls and one actions menu.
+    // Docked: the panel family's header, with the layout's Maximize, Move
+    // to and close controls and one actions menu.
     <PanelChrome
       className="tasks-header-chrome"
       panelTitle="Tasks"

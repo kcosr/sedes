@@ -2514,9 +2514,11 @@ textarea:disabled {
   outline: none;
 }
 
-/* Collapsed panels stay mounted in these detached targets so drafts, internal
-   file tabs, streaming state, and scroll positions survive. The parking lot
-   itself must never enter layout, paint, accessibility, or focus order. */
+/* Loaded panels off stage (hidden, replaced in their region, made room for,
+   or behind a maximized panel) stay mounted in this detached parking lot so
+   drafts, internal file tabs, streaming state, and scroll positions survive.
+   The parking lot itself must never enter layout, paint, accessibility, or
+   focus order. */
 .workspace-panel-parking {
   position: fixed;
   width: 0;
