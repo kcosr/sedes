@@ -172,6 +172,12 @@ function PanelMenuRow({
   readonly onOpen: (kind: PanelKind, region?: RegionId) => void;
 }): React.JSX.Element {
   const title = PANEL_TITLES[entry.kind];
+  const [placesOpen, setPlacesOpen] = useState(false);
+  // The place menu opens beside the panel, usually on its left, across this
+  // row's label: the label keeps it open rather than taking the highlight.
+  const keepPlacesOpen = (event: React.PointerEvent) => {
+    if (placesOpen) event.preventDefault();
+  };
   const row = (
     <DropdownMenuItem
       data-panel-row={entry.kind}
@@ -183,6 +189,8 @@ function PanelMenuRow({
       ]
         .filter(Boolean)
         .join(", ")}
+      onPointerMove={keepPlacesOpen}
+      onPointerLeave={keepPlacesOpen}
       onSelect={() => onOpen(entry.kind)}
     >
       <PanelGlyph kind={entry.kind} brand={brand} size={16} />
@@ -206,7 +214,7 @@ function PanelMenuRow({
       className="grid grid-cols-[minmax(0,1fr)_auto] gap-0.5"
     >
       {row}
-      <DropdownMenuSub>
+      <DropdownMenuSub open={placesOpen} onOpenChange={setPlacesOpen}>
         <DropdownMenuSubTrigger
           // A square trailing button: its chevron alone, centered.
           className="workspace-panel-place-trigger w-(--menu-row-height) justify-center px-0 [&>svg]:mx-0"
@@ -214,7 +222,8 @@ function PanelMenuRow({
           title={`Choose where to open ${title}`}
           textValue={`Open ${title} in`}
         />
-        <DropdownMenuSubContent>
+        {/* Beside the whole menu, clear of the rows it would cover. */}
+        <DropdownMenuSubContent besideParent>
           <DropdownMenuLabel>Open {title} in</DropdownMenuLabel>
           <DropdownMenuRadioGroup
             aria-label={`Open ${title} in`}

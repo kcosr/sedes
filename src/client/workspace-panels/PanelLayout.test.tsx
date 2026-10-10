@@ -592,6 +592,26 @@ describe("PanelLayout workbench bar", () => {
     expect(regionOf("Chat")).toBe("middle");
   });
 
+  it("keeps a row's place menu open while the pointer crosses that row toward it", async () => {
+    setup({ extraTenants: [tasksTenant] });
+    const menu = await openPanelsMenu();
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Choose where to open Tasks" }));
+    await screen.findByRole("group", { name: "Open Tasks in" });
+    // The place menu opens beside the panel, across the row's own label.
+    const row = within(menu).getByRole("menuitem", { name: "Tasks" });
+    fireEvent.pointerMove(row, { pointerType: "mouse" });
+    fireEvent.pointerLeave(row, { pointerType: "mouse" });
+    expect(row).not.toHaveFocus();
+    expect(screen.getByRole("group", { name: "Open Tasks in" })).toBeInTheDocument();
+    // Another row takes the highlight, and the place menu closes.
+    const files = within(menu).getByRole("menuitem", { name: "Files" });
+    fireEvent.pointerMove(files, { pointerType: "mouse" });
+    expect(files).toHaveFocus();
+    await waitFor(() =>
+      expect(screen.queryByRole("group", { name: "Open Tasks in" })).toBeNull(),
+    );
+  });
+
   it("opens Terminals in a chosen place through the terminal entry", async () => {
     const resource = terminalResource();
     Object.assign(applicationStore.api, {

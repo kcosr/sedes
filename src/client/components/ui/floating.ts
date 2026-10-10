@@ -24,6 +24,44 @@ export const FLOATING_SIDE_OFFSET = 4
 export const SUBMENU_SIDE_OFFSET = 10
 export const SUBMENU_ALIGN_OFFSET = -5
 
+/** A horizontal extent on the viewport, in pixels. */
+export interface HorizontalExtent {
+  readonly left: number
+  readonly right: number
+}
+
+/**
+ * The side offset that opens a submenu beside its parent menu panel, clear of
+ * the panel's rows, when its trigger does not span the row (a row's trailing
+ * button). A submenu opens beside its trigger, so one flipped to the left of a
+ * trailing trigger would cover the rows' labels. It opens on the right when it
+ * fits there, otherwise on the left, as the collision flip chooses; when
+ * neither side fits, it keeps the trigger's own offset.
+ */
+export function submenuOffsetBesideParent({
+  trigger,
+  rows,
+  submenuWidth,
+  viewportWidth,
+  sideOffset = SUBMENU_SIDE_OFFSET,
+  collisionPadding = FLOATING_COLLISION_PADDING,
+}: {
+  readonly trigger: HorizontalExtent
+  /** The parent panel's rows: its content box. */
+  readonly rows: HorizontalExtent
+  readonly submenuWidth: number
+  readonly viewportWidth: number
+  /** The offset from a row-wide trigger, which clears the panel's edge. */
+  readonly sideOffset?: number
+  readonly collisionPadding?: number
+}): number {
+  const right = sideOffset + Math.max(0, rows.right - trigger.right)
+  if (trigger.right + right + submenuWidth <= viewportWidth - collisionPadding) return right
+  const left = sideOffset + Math.max(0, trigger.left - rows.left)
+  if (trigger.left - left - submenuWidth >= collisionPadding) return left
+  return sideOffset
+}
+
 /**
  * A menu panel: the floating surface with the menu inset. Plain menus stay
  * within 320px; menus with description rows may grow to 420px. Menus whose
