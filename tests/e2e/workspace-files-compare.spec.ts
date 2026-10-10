@@ -4,7 +4,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "@playwright/test";
 import { expect, test } from "./fixtures";
-import { capture, overlaySettled, selectCustomNewThreadTarget } from "./helpers";
+import { capture, openPanelFromMenu, overlaySettled, selectCustomNewThreadTarget } from "./helpers";
 import {
   alphaWorkspace,
   resetWorkspaceFileFixtures,
@@ -50,10 +50,8 @@ async function createNamedThread(page: Page, name: string): Promise<void> {
 
 async function openFilesPanel(page: Page): Promise<Locator> {
   const panel = page.getByRole("region", { name: "Workspace files", exact: true });
-  if (!(await panel.isVisible().catch(() => false))) {
-    await page.getByRole("button", { name: "Panels", exact: true }).click();
-    await page.getByRole("menuitem", { name: /^Files(?: —|$)/ }).click();
-  }
+  if (!(await panel.isVisible().catch(() => false)))
+    await openPanelFromMenu(page, "Files");
   await expect(panel).toBeVisible({ timeout: 15_000 });
   return panel;
 }
@@ -149,7 +147,7 @@ test.describe.serial("workspace files compare", () => {
     const panel = await openFilesPanel(page);
     await expect(
       page.locator(
-        '[data-panel-id="workspace-files"] .workspace-panel-subtitle',
+        '[data-panel-kind="files"] .workspace-panel-subtitle',
       ),
     ).toHaveText("alpha");
     await selectFile(page, panel, "src/example.ts");
@@ -245,8 +243,13 @@ test.describe.serial("workspace files compare", () => {
     await expect(markReviewed).toHaveText("Mark reviewed");
     await markReviewed.click();
     await expect(markReviewed).toHaveText("Reviewed");
-    // Collapsing Chat gives Files the full reading width and exposes the persistent navigator.
-    await page.getByRole("button", { name: "Collapse Chat panel" }).click();
+    // Hiding Chat leaves the Middle empty, so Files takes the full reading
+    // width and exposes the persistent navigator.
+    await page
+      .getByRole("region", { name: "Chat panel", exact: true })
+      .getByRole("button", { name: "Hide Chat panel", exact: true })
+      .click();
+    await expect(page.getByRole("region", { name: "Chat panel", exact: true })).toHaveCount(0);
     const navigator = compareSurface.getByRole("complementary", { name: "Changed files" });
     await expect(navigator).toBeVisible();
     const viewToggle = compareSurface.getByRole("button", { name: "Diff view options", exact: true });
