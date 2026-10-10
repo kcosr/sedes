@@ -45,7 +45,7 @@ public class NativeVoiceE2eTest {
         Assume.assumeTrue("Requires the isolated native voice host harness", server != null && speechEndpoint != null && pairing != null);
         String speechToken = required(args, "speechToken");
         String thread = required(args, "threadId"), title = args.getString("threadTitle", "Voice fixture");
-        String mode = args.getString("mode", "response"), scenario = args.getString("scenario", "cycle");
+        String mode = args.getString("mode", "speak"), scenario = args.getString("scenario", "cycle");
         boolean playbackStop = scenario.equals("playback-stop") || scenario.equals("playback-stop-notification");
         boolean prepareStartup = scenario.equals("startup") && "prepare".equals(args.getString("startupStage"));
         boolean restoreStartup = scenario.equals("startup") && !prepareStartup;
@@ -202,7 +202,7 @@ public class NativeVoiceE2eTest {
             // Route through the actual bundled application so navigation and draft preservation use the real UI.
             js("(()=>{history.pushState({},''," + JSONObject.quote("/threads/" + thread) + ");window.dispatchEvent(new PopStateEvent('popstate'));return true})()");
             waitJs("document.querySelector('[data-testid=\"composer\"] textarea:not(:disabled)') !== null", 45000);
-            if (scenario.equals("cycle")) js("localStorage.setItem('sedes-seek-on-submit', '" + mode.equals("manual") + "')");
+            if (scenario.equals("cycle")) js("localStorage.setItem('sedes-seek-on-submit', '" + mode.equals("input") + "')");
             if (scenario.equals("cycle")) command("updateSettings", NativeVoiceJson.object("expectedRevision", runtime.snapshot().getLong("settingsRevision"),
                 "patch", NativeVoiceJson.object("announceRecordingThread", true)));
             if (scenario.equals("background-switch")) {
@@ -439,7 +439,7 @@ public class NativeVoiceE2eTest {
                 assertEquals("One local voice Send", 1, submittedInputs.size());
                 JSONObject submitted = submittedInputs.get(0);
                 assertEquals(thread, submitted.getString("threadId"));
-                inputUi = awaitSubmittedInputUi(submitted, mode.equals("manual"), 45000);
+                inputUi = awaitSubmittedInputUi(submitted, mode.equals("input"), 45000);
             }
             if (playbackStop) {
                 // Native idle precedes the WebView render; capture the settled controls only after it catches up.
@@ -464,7 +464,7 @@ public class NativeVoiceE2eTest {
                 assertTrue(runtime.snapshot().getJSONObject("settings").getBoolean("announceRecordingThread"));
                 assertFalse("Only idle notification or headset starts announce the target", phases.contains("announcing"));
             }
-            if (mode.equals("response") && !scenario.equals("stop")) assertTrue("No actual AudioTrack playback phase", phases.contains("speaking"));
+            if (mode.equals("speak") && !scenario.equals("stop")) assertTrue("No actual AudioTrack playback phase", phases.contains("speaking"));
             // Report observations, not expectations; the host harness asserts them.
             boolean composerDraft = "true".equals(js("document.querySelector('[data-testid=\"composer\"] textarea')?.value === " + JSONObject.quote(visibleDraft)));
             boolean serverDraft = awaitServerDraft(server, thread, draft, 15000);
@@ -1092,7 +1092,7 @@ public class NativeVoiceE2eTest {
                 assertNull("Visible-thread idle uses the standard template", notification.bigContentView);
                 assertEquals("Start, mode, and Rearm fit the standard template", 3, notification.actions.length);
                 assertNotNull(notification.actions[0].actionIntent);
-                assertTrue(List.of("Manual", "Response").contains(notification.actions[1].title.toString()));
+                assertTrue(List.of("Input", "Speak").contains(notification.actions[1].title.toString()));
                 assertTrue(List.of("Rearm on", "Rearm off").contains(notification.actions[2].title.toString()));
                 for (Notification.Action action : notification.actions) {
                     assertNotEquals("Next", action.title.toString()); assertNotEquals("Stop", action.title.toString());

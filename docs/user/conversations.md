@@ -13,7 +13,7 @@ running, queued, completed, and forked work.
 
 After configuring [Android voice](../operator/clients/voice.md), use the
 microphone on the voice card under the composer to send spoken text. The card
-appears once voice is connected and set to Manual or Response. If voice cannot
+appears once voice is connected and set to Input or Speak. If voice cannot
 connect, **Settings → Voice** shows the problem and a retry button; the rest of
 the app keeps working. The microphone targets the thread shown on the card.
 Voice sends a separate message and preserves the unsent composer draft. It can
@@ -32,7 +32,7 @@ the default thread; without pinning, it follows the visible available thread.
 With no thread visible, it uses the retained voice thread, then the default.
 An unavailable visible thread or no available target makes the card ask you
 to choose a thread.
-The second line is the state, such as **Ready · Response · Auto-listen on**,
+The second line is the state, such as **Ready · Speak · Auto-listen on**,
 **Speaking** with the notice kind and queued count, or **Listening**. If voice
 needs to resume, the card offers **Resume**.
 
@@ -85,9 +85,10 @@ is no longer available at admission, or other queued messages must deliver
 first, the message queues. An unavailable thread produces an error rather than
 redirecting the message elsewhere.
 
-Response mode speaks selected notifications and may listen afterward. Manual
-mode keeps completion speech silent but can still listen after a completion;
-other selected notices remain spoken without listening. Automatic listening
+Speak mode reads selected notifications and may listen afterward. Its **Read aloud**
+selector chooses Announcements, Messages without preambles, or Both. Input
+mode keeps all automatic notification speech silent but can still listen after
+an eligible completion. Automatic listening
 requires both the event's **Speak then listen** setting and **Auto-listen**,
 plus a current, idle target with no blocking input or unresolved admission. It
 never types an answer into an approval or question form.
@@ -109,7 +110,7 @@ or the next interaction.
 
 To hear a reply again, tap **Play response aloud**, the speaker after **Copy
 response** in a finished turn's footer. It appears only while voice is set to
-Manual or Response with speech configured. The reply joins the voice queue
+Input or Speak with speech configured. The reply joins the voice queue
 behind anything already playing. With **Auto-listen** on, it can then record a
 new message to that reply's thread when the thread currently accepts input. It reads the
 response text that a spoken completion would. When the phases selected under

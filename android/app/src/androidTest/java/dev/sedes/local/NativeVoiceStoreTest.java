@@ -240,7 +240,7 @@ public class NativeVoiceStoreTest {
         String binding = NativeVoiceStore.binding(profile, ORIGIN, IDENTITY_A);
         NativeVoiceStore store = new NativeVoiceStore(context);
         try {
-            store.settings(binding, NativeVoiceSettings.defaults().patch(0, NativeVoiceJson.object("audioMode", "response")));
+            store.settings(binding, NativeVoiceSettings.defaults().patch(0, NativeVoiceJson.object("audioMode", "speak")));
             store.saveEntry(binding, entry(UUID.randomUUID().toString(), "unreadable later"));
             byte[] garbage = new byte[64]; garbage[0] = 1;
             for (String name : new String[] { NativeVoiceStore.PREFERENCES_RECORD, "journal" }) {

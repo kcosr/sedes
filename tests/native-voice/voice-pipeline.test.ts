@@ -179,7 +179,7 @@ describe("native voice production pipeline with loopback providers", () => {
     try {
       await waitForSpeech(() => feed.frames.find(frame => frame.event === "notification_policy"));
       const marker = "Switch this client after the reply";
-      app.model.callToolNextStream(marker, nativeTool!, { toolId: "client.switch_thread", schemaVersion: 1,
+      app.model.callToolNextStream(marker, nativeTool!, { toolId: "client.switch_thread", schemaVersion: 2,
         input: { threadId: destination, listen: false } });
       const receipt = directInputReceiptSchema.parse(await app.json(`/api/threads/${threadId}/inputs`, "POST", {
         mutationId: randomUUID(), text: marker, runningPolicy: { mode: "queue" },
@@ -241,11 +241,11 @@ describe("native voice production pipeline with loopback providers", () => {
     if (errors.length) throw new AggregateError(errors, `Android native ${nativeClass} failed`);
   }, 250_000);
 
-  for (const [mode, scenario] of [["response", "cycle"], ["manual", "cycle"], ["response", "background"], ["response", "background-switch"],
-    ["response", "startup"], ["manual", "startup"],
-    ["response", "record"], ["response", "next"], ["response", "stop"], ["response", "playback-stop"], ["response", "playback-stop-notification"],
-    ["response", "retarget"], ["response", "retained-target"],
-    ["response", "lost-ack"], ["response", "lost-send"], ["response", "cancel-uncertain"]] as const) {
+  for (const [mode, scenario] of [["speak", "cycle"], ["input", "cycle"], ["speak", "background"], ["speak", "background-switch"],
+    ["speak", "startup"], ["input", "startup"],
+    ["speak", "record"], ["speak", "next"], ["speak", "stop"], ["speak", "playback-stop"], ["speak", "playback-stop-notification"],
+    ["speak", "retarget"], ["speak", "retained-target"],
+    ["speak", "lost-ack"], ["speak", "lost-send"], ["speak", "cancel-uncertain"]] as const) {
     it.skipIf(!androidSerial)(`runs packaged Android ${mode}/${scenario} through the actual UI and media stack`, async () => {
       const playbackStop = scenario === "playback-stop" || scenario === "playback-stop-notification";
       await adb(["shell", "pm", "clear", "dev.sedes.local"]);
@@ -271,7 +271,7 @@ describe("native voice production pipeline with loopback providers", () => {
           .flatMap(request => request.toolNames).find(name => name.endsWith("_sedes_act"));
         expect(nativeTool).toBeDefined();
         // The device submits this prompt only after its real activity is in the background.
-        app.model.callToolNextStream(initialText, nativeTool!, { toolId: "client.switch_thread", schemaVersion: 1,
+        app.model.callToolNextStream(initialText, nativeTool!, { toolId: "client.switch_thread", schemaVersion: 2,
           input: { threadId: secondThreadId, listen: true } });
       }
       const pairingCode = app.authentication.createPairing({ kind: "management" }).token;
@@ -320,7 +320,7 @@ describe("native voice production pipeline with loopback providers", () => {
         // Playback Next and Stop exercise speech without opening capture; other scenarios record after a start cue.
         expect(evidence).toMatchObject({ draftPreserved: true, composerDraftPreserved: true, serverDraftPreserved: true,
           audioSource: scenario === "next" || playbackStop ? "none" : "deterministic-pcm", audioSink: "AudioTrack" });
-        if (mode === "response" && scenario !== "stop") expect(evidence.speechPlayback).toBe(true);
+        if (mode === "speak" && scenario !== "stop") expect(evidence.speechPlayback).toBe(true);
         expect(evidence.journalOutstanding).toBe(0);
         if (scenario === "record") {
           expect(evidence.playbackControl).toMatchObject({ action: "Record", sourceThreadId: threadId, autoListen: false,
@@ -335,7 +335,7 @@ describe("native voice production pipeline with loopback providers", () => {
         } else if (playbackStop) {
           expect(evidence.playbackControl).toMatchObject({ action: "Stop", surface: scenario === "playback-stop-notification" ? "notification" : "card",
             sourceThreadId: threadId, autoListen: true, queuedBeforeStop: 1,
-            afterStop: { phase: "idle", active: null, queue: { count: 0 }, settings: { audioMode: "response", autoListen: true } }, inputPresentationEvents: 0 });
+            afterStop: { phase: "idle", active: null, queue: { count: 0 }, settings: { audioMode: "speak", autoListen: true } }, inputPresentationEvents: 0 });
           if (scenario === "playback-stop-notification") {
             expect(evidence.playbackControl.notification).toEqual({ title: threadTitle, status: "Speaking", stopLabel: "Stop", stopVisible: true, stopEnabled: true });
             expect(evidence.playbackControl.serviceDelivery).toBeGreaterThan(0);
@@ -439,12 +439,12 @@ describe("native voice production pipeline with loopback providers", () => {
         }
         if (scenario === "cycle") {
           expect(evidence.inputUi).toMatchObject({ rowCount: 1, provisional: false, routineLabelCount: 0,
-            seekEnabled: mode === "manual", submitted: { threadId } });
+            seekEnabled: mode === "input", submitted: { threadId } });
           expect(evidence.inputUi.operationId).toBe(evidence.inputUi.submitted.operationId);
           expect(evidence.inputUi.operationId).toMatch(/^[0-9a-f-]{36}$/u);
           expect(evidence.inputUi.text).toContain(text);
           expect(evidence.inputUi.viewportHeight).toBeGreaterThan(0);
-          if (mode === "manual") {
+          if (mode === "input") {
             expect(evidence.inputUi.spacerHeight).toBeGreaterThan(0);
             expect(Math.abs(evidence.inputUi.targetInset - 16)).toBeLessThanOrEqual(3);
           } else expect(evidence.inputUi.spacerHeight).toBe(0);
@@ -466,7 +466,7 @@ describe("native voice production pipeline with loopback providers", () => {
         const submitsReply = scenario !== "stop" && scenario !== "next" && !playbackStop && scenario !== "retained-target";
         if (submitsReply) await waitForSpeech(() => submissions().length > 0);
         expect(submissions()).toHaveLength(submitsReply ? 1 : 0);
-        if (mode === "manual") expect((await speech.observations()).speech.length).toBe(ttsBefore);
+        if (mode === "input") expect((await speech.observations()).speech.length).toBe(ttsBefore);
         if (secondThreadId && scenario !== "retained-target") {
           if (scenario === "background-switch") await app.waitFor(async () => Object.values((await app.thread(secondThreadId)).itemsById)
             .some(item => item.kind === "user_message" && item.deliveryOperationId === evidence.backgroundSwitch.receipt.operationId));

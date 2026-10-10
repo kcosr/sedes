@@ -178,7 +178,7 @@ public final class NativeVoiceRuntimeService extends Service {
             .setContentIntent(PendingIntent.getActivity(this, NOTIFICATION, open, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE))
             .setOngoing(true).setOnlyAlertOnce(true).setVisibility(NotificationCompat.VISIBILITY_PRIVATE).setCategory(NotificationCompat.CATEGORY_SERVICE);
         if (Build.VERSION.SDK_INT >= 31) builder.setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE);
-        String mode = settings != null && settings.optString("audioMode").equals("manual") ? "Manual" : "Response";
+        String mode = settings != null && settings.optString("audioMode").equals("input") ? "Input" : "Speak";
         String rearm = settings != null && settings.optBoolean("autoListen") ? "Rearm on" : "Rearm off";
         JSONObject active = state.optJSONObject("active"), recording = active == null ? null : active.optJSONObject("recording");
         boolean held = recording != null && recording.optBoolean("keepListening");

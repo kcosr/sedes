@@ -24,7 +24,7 @@ public class NativeVoiceQueueDeviceTest {
         return NativeVoiceJson.object("sourceEventId", "fitted", "generation", 1, "voice", "speak", "payload", new JSONObject(payload));
     }
     private static NativeVoiceSettings response() {
-        return NativeVoiceSettings.defaults().patch(0, NativeVoiceJson.object("audioMode", "response"));
+        return NativeVoiceSettings.defaults().patch(0, NativeVoiceJson.object("audioMode", "speak"));
     }
 
     @Test public void payloadSizeMatchesServerJsonStringifyMeasureWithPlatformJson() throws Exception {

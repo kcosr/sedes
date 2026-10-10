@@ -118,37 +118,37 @@ export const CANONICAL_AGENT_TOOL_GROUPS = Object.freeze([
 
 export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
   "client.list": threadOnlyManifestEntry({
-    id: "client.list", schemaVersion: 1, environmentAuthority: { kind: "source_only" },
+    id: "client.list", schemaVersion: 2, environmentAuthority: { kind: "source_only" },
     description: "List connected Sedes clients only when the user asks to list devices or explicitly target another device. Never automatically choose another client.",
     catalog: { groupId: "client", label: "List clients", order: 10 },
     effects: { application: "read", modelUsage: "none", external: "none" },
   }),
   "client.end_interaction": threadOnlyManifestEntry({
-    id: "client.end_interaction", schemaVersion: 1, environmentAuthority: { kind: "source_only" },
+    id: "client.end_interaction", schemaVersion: 2, environmentAuthority: { kind: "source_only" },
     description: "Finish this turn\u2019s spoken reply, then suppress its follow-up listening on the current client. Does not cancel the turn or change voice settings. Current client means the client that started this turn; later Steer input never changes it. Set clientId only when the user explicitly requests another client.",
     catalog: { groupId: "client", label: "End interaction", order: 20 },
     effects: { application: "write", modelUsage: "none", external: "none" },
   }),
   "client.switch_thread": threadOnlyManifestEntry({
-    id: "client.switch_thread", schemaVersion: 1, environmentAuthority: { kind: "direct_resource", resource: "thread" },
+    id: "client.switch_thread", schemaVersion: 2, environmentAuthority: { kind: "direct_resource", resource: "thread" },
     description: "After turn completion and reply playback, navigate the foreground client to the exact thread. listen defaults to false; true requests one listen even with autoListen off, without enabling voice or changing its default. Background Android requires ready native voice for listen=true and never navigates, including on resume; listen=false is a no-op. The current client started this turn; Steer never changes it. Set clientId only when the user explicitly requests another client.",
     catalog: { groupId: "client", label: "Switch thread", order: 30 },
     effects: { application: "write", modelUsage: "none", external: "none" },
   }),
   "client.settings.get": threadOnlyManifestEntry({
-    id: "client.settings.get", schemaVersion: 1, environmentAuthority: { kind: "source_only" },
+    id: "client.settings.get", schemaVersion: 2, environmentAuthority: { kind: "source_only" },
     description: "Read the current client\u2019s basic voice settings, revision, capabilities and readiness. Current client means the client that started this turn; later Steer input never changes it. Set clientId only when the user explicitly requests another client.",
     catalog: { groupId: "client", label: "Read client settings", order: 40 },
     effects: { application: "read", modelUsage: "none", external: "none" },
   }),
   "client.settings.update": threadOnlyManifestEntry({
-    id: "client.settings.update", schemaVersion: 1, environmentAuthority: { kind: "direct_resource", resource: "thread", inputField: "patch.voice.voiceThreadId", defaultToSource: true },
+    id: "client.settings.update", schemaVersion: 2, environmentAuthority: { kind: "direct_resource", resource: "thread", inputField: "patch.voice.voiceThreadId", defaultToSource: true },
     description: "Update the current client\u2019s basic voice settings using the revision from settings.get. Persists immediately; Off stops voice immediately. Setting the default thread does not navigate or listen. Current client means the client that started this turn; later Steer input never changes it. Set clientId only when the user explicitly requests another client.",
     catalog: { groupId: "client", label: "Update client settings", order: 50 },
     effects: { application: "write", modelUsage: "none", external: "none" },
   }),
   "client.replay_turn": threadOnlyManifestEntry({
-    id: "client.replay_turn", schemaVersion: 1, environmentAuthority: { kind: "direct_resource", resource: "thread", defaultToSource: true },
+    id: "client.replay_turn", schemaVersion: 2, environmentAuthority: { kind: "direct_resource", resource: "thread", defaultToSource: true },
     description: "Replay an ended turn\u2019s reply on the current client, queued behind voice work without navigation or automatic-playback filters. Auto-listen can record a new reply to that thread when input is available. threadId defaults to this thread; turnId to its latest ended turn with a stored reply. For an earlier turn, use turns[].id from thread.messages. Current client started this turn; Steer never changes it. Set clientId only when the user explicitly requests another client.",
     catalog: { groupId: "client", label: "Replay turn reply", order: 60 },
     effects: { application: "write", modelUsage: "none", external: "none" },

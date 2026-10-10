@@ -150,7 +150,7 @@ opens it, so the covered activity cannot be selected for credential entry.
 Focus a scenario through the same coordinator, for example
 `npm run test:voice -- -t 'Android response/cycle'`.
 
-Packaged cases cover Response and Manual cycles, background operation,
+Packaged cases cover Speak and Input cycles, background operation,
 restoration after process restart, Record, Next, Stop, recording retargeting, lost
 admission replies, lost sends, and cancellation of uncertain submissions.
 The `Android response/record` scenario presses **Record** during observed

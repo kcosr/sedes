@@ -2,7 +2,16 @@
 
 The Android `NativeVoice` Capacitor plugin exposes settings, snapshots, and
 actions. `NativeVoiceRuntime` owns the state machine on one handler thread.
-Native snapshot version 13 includes `active.recording` (ID, Keep listening and
+Settings version 9 uses `audioMode: off | input | speak` and
+`speechContent: announcements | messages | both`, replacing the notification
+context boolean. Input suppresses all automatic speech while preserving eligible
+completion follow-up listening. Speech content is device-owned presentation over
+the existing normalized notification envelope; explicit replays always read the
+requested reply. Queued items rebuild from their original envelope after a content
+change, while active playback finishes normally. Obsolete settings records reset
+without an alias or migration. Client protocol 149 and client-control tool schema
+version 2 carry the new audio-mode values.
+Native snapshot version 14 includes `active.recording` (ID, Keep listening and
 Reconnecting), native-authoritative `canSetKeepListening`/`canSend` actions, the
 Keep listening blocked reason, and an independent `recordingRecovery` item.
 Recovery exposes identity, revision, target, stage, incomplete/unrecognized
@@ -410,7 +419,7 @@ returns the published snapshot.
 Native speaks the sections in notification order (provisional, unclassified,
 final) with the same per-part `NativeSpeechText` cleanup and truncation notice
 as a completion notice, but never a context line, whatever
-`readNotificationContext` says. Empty prepared text fails with
+`speechContent` selects. Empty prepared text fails with
 `voice_reply_empty`. The active item's title, shown on the voice card and the
 media notification, is display-only. It is the WebView's `threadTitle` when that
 is not blank. Otherwise it comes from the visible foreground thread, retained
@@ -421,7 +430,7 @@ The replay is a local queue item with no server envelope. Its event, shown as
 `active.eventKind`, is `replay`. Its ID is a fresh UUID that never enters
 notification deduplication. Its playback is user-requested and independent of
 notification policy. At speech completion, current `autoListen` can authorize
-one new recording on the replay's thread in either Manual or Response mode.
+one new recording on the replay's thread in either Input or Speak mode.
 The runtime validates fresh `manualListenEligible` through `input-context`,
 captures that response's activity token, and rechecks both after the start cue.
 It never compares the historical replay turn with the current source turn or
@@ -445,10 +454,10 @@ the queue is left unchanged; no progress is evicted for a refused replay. Queue
 drop counts report automatic items only.
 
 A replay joins the queue behind current speech, recording, or saved-recording
-recovery, and plays in Manual and Response mode. Drain skips notification
+recovery, and plays in Input and Speak mode. Drain skips notification
 eligibility for it, so `onlyVoiceThread`, `ignoreOtherDevices`, notification
 enablement, silence, and policy generation do not apply. Stream loss, a policy
-change, and Manual/Response switches keep pending and active replays, and a pending
+change, and Input/Speak switches keep pending and active replays, and a pending
 replay starts once a cancelled automatic item has left; Off and connection changes
 clear them with the rest of the queue. When the foreground
 service stops, for example when Android destroys it while the process survives,

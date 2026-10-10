@@ -66,7 +66,7 @@ as unsupported.
    Sedes and is not inferred from the Sedes connection.
 3. Save the provider key or server token in the native credential dialog.
    Models and voices load automatically. Choose the models and voice, then
-   select **Manual** or **Response** and grant microphone access. Enable
+   select **Input** or **Speak** and grant microphone access. Enable
    notifications for visible service controls. The initial mode is Off.
 4. In **Settings → Notifications**, enable notifications and choose each event's
    Voice action. These are server-side settings for the current user. Voice
@@ -126,7 +126,7 @@ for that destination. Removing a Sedes server profile preserves device voice
 preferences and speech credentials. Remove a speech credential explicitly in
 the native credential dialog.
 
-The current preference format (version 8) resets older voice preferences and
+The current preference format (version 9) resets older voice preferences and
 default-thread selections. Configure voice again after upgrading; separately
 stored device speech keys remain available for their provider and endpoint.
 Current saved dictation (manifest version 2) also remains available. Restore the
@@ -153,14 +153,26 @@ of them.
 
 | Mode | Completion | Other selected events | Explicit microphone |
 | --- | --- | --- | --- |
-| Off | Disabled | Disabled | Select Manual or Response first |
-| Manual | Silent; may listen afterward | Speaks; does not listen afterward | Available |
-| Response | Speaks selected text and context; may listen afterward | Speaks | Available |
+| Off | Disabled | Disabled | Select Input or Speak first |
+| Input | Silent; may listen afterward | Silent; does not listen afterward | Available |
+| Speak | Reads the selected content; may listen afterward | Reads the selected content | Available |
+
+The quick sheet keeps three choices: **Off**, **Input**, and **Speak**. In Speak,
+**Read aloud** selects **Announcements** (event and thread description),
+**Messages** (progress or response text without a preamble), or **Both**.
+The same selector appears in **Settings → Voice**. Its choice is remembered while
+Input or Off hides it. Events without message text, such as approval notices,
+are silent with Messages selected; use Announcements or Both to hear them.
+Changing Read aloud applies to queued and future speech; it does not interrupt
+an item already playing. Switching to Input stops automatic notification speech.
 
 Automatic recognition requires **Speak then listen**, **Auto-listen**, and a
-still-current eligible target. In Manual mode only completions listen
+still-current eligible target. In Input mode only completions listen
 afterward. Progress, approvals, blocking input, and nonblocking questions are
-speak-only. They never answer a structured form with free text.
+speak-only when Speak is enabled. They never answer a structured form with free text.
+Input does not require hearing a response before an eligible completion opens
+the microphone. Explicit reply playback, optional recording-destination
+announcements, and recording cues remain available independently of automatic speech.
 
 Fresh completion settings select Final and Unclassified response text.
 Provisional is optional and can repeat live progress. Codex, Pi, and Claude
@@ -186,7 +198,7 @@ start an eligible follow-up listen without making a speech request.
 
 ## Replay a reply
 
-While voice is set to Manual or Response and speech is configured, each
+While voice is set to Input or Speak and speech is configured, each
 finished turn's footer shows **Play response aloud**, a speaker after **Copy
 response**. It is absent while voice is Off or speech setup is incomplete, and
 in browser and Electron clients. Read-only and archived threads show it too.
@@ -207,12 +219,12 @@ reading different text.
 
 A replay joins the voice queue behind current speech or recording, and starts at
 once when voice is idle. The card then shows **Speaking · Replay**. It plays in
-Manual and Response mode and ignores the filters for automatic playback:
+Input and Speak mode and ignores the filters for automatic playback:
 notification enablement, per-event Voice actions, the Silence bell, **Only play
 from default voice thread**, and **Ignore voice started on other devices**.
 **Clean up formatting for speech** and the speech text limit apply. A replay
-reads the reply only, without a context line whatever **Read notification
-context** says. After playback, the current **Auto-listen** setting controls
+reads the reply only, without a context line whatever **Read aloud** selects.
+After playback, the current **Auto-listen** setting controls
 whether it starts recording a new message to the replay's thread. This uses the
 thread's current ability to accept ordinary input, so it can reply to an older
 answer or queue a message behind a running turn. An unavailable, archived,
@@ -228,7 +240,7 @@ turn's speech is queued or playing adds nothing. Once speech finishes, you can
 queue it again behind the reply recording. A replay counts against the queue limits; when it does not fit, the
 button reports a full queue. Off and connection changes clear pending replays
 with the rest of the queue; losing the notification stream, a policy change, or
-switching between Manual and Response does not.
+switching between Input and Speak does not.
 
 An agent can queue the same replay; see [Agent controls](#agent-controls).
 
@@ -307,7 +319,7 @@ input delivery never edits or clears the composer draft. Saved dictation can be
 added to the composer explicitly through its recovery controls.
 
 The voice card under the composer appears while voice is connected and set to
-Manual or Response, and whenever the selected connection has saved dictation. Wherever no composer is shown, including read-only threads
+Input or Speak, and whenever the selected connection has saved dictation. Wherever no composer is shown, including read-only threads
 and pages without a thread, it sits on its own with a top margin and divider.
 A state tile and two lines show the card's thread and its state. The first
 line always names the thread: the one being spoken, the recording target, or,
@@ -390,7 +402,7 @@ voice** when a session needs it.
   **Settings → Voice**; then the card stays dimmed with its Start button disabled,
   and its status icon still opens the Voice sheet. That choice is saved only on this
   device.
-  Select Manual or Response in the Voice sheet or **Settings → Voice** to
+  Select Input or Speak in the Voice sheet or **Settings → Voice** to
   enable voice again. Configure the speech provider and credential first.
 - The navigation **Silence notifications** bell cancels automatic voice work
   and silences scripts across clients. Explicit recording remains available.
@@ -401,7 +413,7 @@ Tapping the service notification opens the thread of the current interaction.
 While idle, it uses the same destination as Start: explicit choice, pinned
 default, visible thread, retained destination, or saved default.
 Its actions are **Stop** during an interaction,
-**Start** when recording can begin and that target is available, a mode button labelled **Manual** or **Response**
+**Start** when recording can begin and that target is available, a mode button labelled **Input** or **Speak**
 that switches to the other mode, and **Rearm on** or **Rearm off**, which
 toggles Auto-listen. While speech plays, the expanded notification shows Record,
 Next, Stop, the mode button, and Rearm. During ordinary recording, the expanded
@@ -417,7 +429,7 @@ Neither the normal headset Play/Pause tap nor dedicated Next clears queued
 playback. The explicit Stop button in the app or playback notification does.
 Headset controls apply only during an active voice session. Android controls
 lock-screen visibility and any promoted presentation; these are not guaranteed.
-Opening the app restores the saved Manual or Response mode after its Sedes
+Opening the app restores the saved Input or Speak mode after its Sedes
 connection is authenticated, provided microphone permission and speech
 configuration are already available. This restores readiness; it does not start recording.
 An existing session continues when the app goes to the background. After a

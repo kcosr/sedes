@@ -41,7 +41,7 @@ public class NativeSpeechCatalogCacheTest {
             NativeVoiceJson.object("speechProvider", "server", "speechEndpoint", "https://speech.example/v1") })
             assertNotEquals(scope, NativeSpeechCatalogCache.scope(OWNER, settings.patch(0, patch), "account-a"));
         for (JSONObject patch : new JSONObject[] { NativeVoiceJson.object("ttsVoice", "alloy"), NativeVoiceJson.object("ttsSpeed", 1.5),
-            NativeVoiceJson.object("audioMode", "manual") })
+            NativeVoiceJson.object("audioMode", "input") })
             assertEquals(scope, NativeSpeechCatalogCache.scope(OWNER, settings.patch(0, patch), "account-a"));
     }
 

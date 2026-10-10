@@ -222,7 +222,7 @@ describe("native voice state authority", () => {
     const { store, plugin } = fixture();
     await store.initialize();
     plugin.getState.mockResolvedValue(snapshot({ profileId: "other", connectionGeneration: 2 }));
-    await expect(store.update({ audioMode: "response" })).rejects.toThrow("no longer active");
+    await expect(store.update({ audioMode: "speak" })).rejects.toThrow("no longer active");
     expect(plugin.updateSettings).not.toHaveBeenCalled();
     store.dispose();
   });
@@ -265,7 +265,7 @@ describe("native voice state authority", () => {
     listeners.get("stateChanged")!(snapshot({ connectionGeneration: 2, identity: "f".repeat(64) }));
     expect(store.getSnapshot().native).toBeUndefined();
     plugin.getState.mockResolvedValue(snapshot({ connectionGeneration: 2, identity: "f".repeat(64) }));
-    await expect(store.update({ audioMode: "response" })).rejects.toThrow("no longer active");
+    await expect(store.update({ audioMode: "speak" })).rejects.toThrow("no longer active");
     expect(plugin.updateSettings).not.toHaveBeenCalled();
     store.dispose();
   });
@@ -326,7 +326,7 @@ describe("native voice state authority", () => {
   });
   it.each(["speaking", "announcing"] as const)("keeps a runtime error until %s begins or the user acts", async phase => {
     const { store, plugin, listeners } = fixture();
-    const ready = (patch: Parameters<typeof snapshot>[0]) => snapshot({ ready: true, readiness: "ready", settings: voiceSettings({ audioMode: "response" }), ...patch });
+    const ready = (patch: Parameters<typeof snapshot>[0]) => snapshot({ ready: true, readiness: "ready", settings: voiceSettings({ audioMode: "speak" }), ...patch });
     plugin.setConnection.mockResolvedValue(ready({ phase: "recognizing" }));
     await store.initialize();
     const failure = { code: "voice_error", message: "Recognition failed." };
@@ -365,10 +365,10 @@ describe("native voice state authority", () => {
     const { store, plugin } = fixture();
     await store.initialize();
     const resume = (current: NativeVoiceState) => current.settings.audioMode !== "off" && current.actions.canResume ? { audioMode: current.settings.audioMode } : null;
-    plugin.getState.mockResolvedValue(snapshot({ stateRevision: 4, settingsRevision: 3, settings: voiceSettings({ audioMode: "manual" }),
+    plugin.getState.mockResolvedValue(snapshot({ stateRevision: 4, settingsRevision: 3, settings: voiceSettings({ audioMode: "input" }),
       actions: { ...snapshot().actions, canResume: true } }));
     await store.update(resume);
-    expect(plugin.updateSettings).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, expectedRevision: 3, patch: { audioMode: "manual" } });
+    expect(plugin.updateSettings).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, expectedRevision: 3, patch: { audioMode: "input" } });
     plugin.getState.mockResolvedValue(snapshot({ stateRevision: 5, settingsRevision: 4 }));
     await store.update(resume);
     expect(plugin.updateSettings).toHaveBeenCalledTimes(1);

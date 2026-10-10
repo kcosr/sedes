@@ -12,14 +12,14 @@ public class NativeVoicePreferencesTest {
 
     @Test public void ordinaryPreferencesFollowDeviceWhileThreadsBelongToTheExactConnectionAfterRestart() throws Exception {
         NativeVoicePreferences prefs = NativeVoicePreferences.defaults();
-        prefs = prefs.update(A, prefs.settings(A).patch(0, NativeVoiceJson.object("audioMode", "response", "autoListen", false,
+        prefs = prefs.update(A, prefs.settings(A).patch(0, NativeVoiceJson.object("audioMode", "speak", "autoListen", false,
             "speechProvider", "server", "speechEndpoint", "https://speech.example/v1", "sttModel", "local-stt",
             "ttsModel", "local-tts", "ttsVoice", "local-voice", "voiceThreadId", "thread-a", "voiceThreadTitle", "Private A",
             "inputDevice", NativeVoiceJson.object("type", 7, "address", "AA:BB:CC:DD:EE:FF", "name", "Headset"),
             "recognitionCues", false, "longDictationTimeoutMs", 120000, "pinDefaultVoiceThread", true, "onlyVoiceThread", true)));
         for (String other : new String[] { B, ACCOUNT, PROFILE }) {
             NativeVoiceSettings settings = prefs.settings(other);
-            assertEquals("response", settings.mode()); assertFalse(settings.flag("autoListen"));
+            assertEquals("speak", settings.mode()); assertFalse(settings.flag("autoListen"));
             assertEquals("https://speech.example/v1", settings.text("speechEndpoint"));
             assertEquals("local-stt", settings.text("sttModel")); assertEquals("local-tts", settings.text("ttsModel"));
             assertEquals("local-voice", settings.text("ttsVoice"));

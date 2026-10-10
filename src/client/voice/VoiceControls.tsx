@@ -131,7 +131,7 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
       // Readiness replaces the whole state line: with the mode beside it, it would truncate.
       status = !native.ready ? [cardReadiness(native.readiness)] : filterWarning
         ? [{ alert: "Default thread needed", tone: "warning" }]
-        : ["Ready", settings.audioMode === "manual" ? "Manual" : "Response", `Auto-listen ${settings.autoListen ? "on" : "off"}`];
+        : ["Ready", settings.audioMode === "input" ? "Input" : "Speak", `Auto-listen ${settings.autoListen ? "on" : "off"}`];
       if (native.ready && filterWarning) tone = "warning";
     } else {
       tile = phase === "speaking" ? <span className="voice-card-wave" aria-hidden="true"><i /><i /><i /><i /><i /></span>

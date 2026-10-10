@@ -511,6 +511,35 @@ test("native dictation keeps its controls reachable on narrow screens and retain
   await testInfo.attach("voice-row-heights", { body: JSON.stringify({ viewports, originalRowHeight: 60, heights }, null, 2), contentType: "application/json" });
   await testInfo.attach("voice-row-text-offsets", { body: JSON.stringify({ viewports, leftOffsets, topOffsets }, null, 2), contentType: "application/json" });
   await testInfo.attach("voice-recording-control-gaps", { body: JSON.stringify({ viewports, controlGaps }, null, 2), contentType: "application/json" });
+
+  // Keep the existing three-segment width; content choices live in a separate menu.
+  await publishVoiceState(page, { phase: "idle", active: null, recordingRecovery: null, settings: base.settings, actions: base.actions });
+  await toolbar.getByRole("button", { name: "Open voice controls", exact: true }).click();
+  const voiceSheet = page.getByRole("dialog", { name: "Voice", exact: true });
+  for (const width of [320, 360]) {
+    await page.setViewportSize({ width, height: 780 });
+    await expect(voiceSheet.getByRole("radio")).toHaveCount(3);
+    for (const mode of ["Off", "Input", "Speak"]) {
+      const box = (await voiceSheet.getByRole("radio", { name: mode, exact: true }).boundingBox())!;
+      expect(box.width).toBeGreaterThan(80); expect(box.height).toBeGreaterThanOrEqual(44);
+    }
+    await voiceSheet.getByRole("combobox", { name: "Read aloud" }).click();
+    const choices = page.getByRole("listbox");
+    await expect(choices.getByRole("option")).toHaveCount(3);
+    const menu = (await choices.boundingBox())!;
+    expect(menu.x).toBeGreaterThanOrEqual(0); expect(menu.x + menu.width).toBeLessThanOrEqual(width);
+    await expectNoPageOverflow(page);
+    await capture(page, testInfo, `voice-speech-content-${width}.png`);
+    await choices.getByRole("option", { name: /^Messages/ }).click();
+    await expect(voiceSheet.getByRole("combobox", { name: "Read aloud" })).toContainText("Messages");
+    await voiceSheet.getByRole("radio", { name: "Input", exact: true }).click();
+    await expect(voiceSheet.getByRole("combobox", { name: "Read aloud" })).toHaveCount(0);
+    await expect(voiceSheet.getByRole("switch", { name: "Auto-listen", exact: true })).toBeChecked();
+    await capture(page, testInfo, `voice-input-mode-${width}.png`);
+    await voiceSheet.getByRole("radio", { name: "Speak", exact: true }).click();
+    await expect(voiceSheet.getByRole("combobox", { name: "Read aloud" })).toContainText("Messages");
+  }
+  await voiceSheet.press("Escape");
 });
 
 test("saved dictation appends to its original composer without losing drafts or truncating text", async ({ page }, testInfo) => {
@@ -655,7 +684,7 @@ test("a completed turn's footer replays its reply and stays reachable on touch w
     assistantResult: { unclassified: { text: "The measured response is complete." } } } });
   await publishVoiceState(page, { settings: { ...base.settings, audioMode: "off" } });
   await expect(speak).toHaveCount(0);
-  await publishVoiceState(page, { settings: { ...base.settings, audioMode: "manual" } });
+  await publishVoiceState(page, { settings: { ...base.settings, audioMode: "input" } });
   await expect(speak).toBeVisible();
   expect(reads).toHaveLength(3);
 

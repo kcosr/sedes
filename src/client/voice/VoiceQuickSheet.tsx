@@ -19,11 +19,12 @@ import { nativeThreadTitle, type NativeVoiceSettings } from "./native-voice-plug
 import { VoiceThreadPicker } from "./VoiceThreadPicker.js";
 import { savedRecording, VoiceRecordingRecovery } from "./VoiceRecordingRecovery.js";
 import { voiceRecordingTarget } from "./voice-recording-target.js";
+import { VoiceSpeechContent } from "./VoiceSpeechContent.js";
 
 const modes = [
-  ["off", "Off", MicOff, "pauses voice. Pick Manual or Response to resume."],
-  ["manual", "Manual", Mic, "keeps completions silent; the mic can still open afterward."],
-  ["response", "Response", Volume2, "speaks selected notices and responses."],
+  ["off", "Off", MicOff, "pauses voice. Pick Input or Speak to resume."],
+  ["input", "Input", Mic, "keeps speech silent. Auto-listen can still reopen the mic."],
+  ["speak", "Speak", Volume2, "reads selected notifications aloud."],
 ] as const;
 // Sheet rows: the menu-sheet recipe at 56px with a description and 48px without; a two-line row's icon sits on its first line.
 const rowClass = cn(menuSheetRowClass, "min-h-14 has-[:focus-visible]:bg-(--hover) [&>svg:first-child]:mt-0.5 [&>svg:first-child]:self-start");
@@ -88,6 +89,8 @@ export function VoiceQuickSheet({ store, threads, open, onOpenChange }: {
               <Icon className="size-(--icon-md)" aria-hidden="true" />{label}</SegmentedControlItem>)}
           </SegmentedControl>
           <p className="voice-sheet-help"><strong>{mode[1]}</strong> {blocked ? "pauses voice. Set up speech in All voice settings first." : mode[3]}</p>
+          {settings.audioMode === "speak" ? <VoiceSpeechContent value={settings.speechContent} pending={state.pending}
+            onChange={speechContent => update({ speechContent })} /> : null}
           {settings.audioMode !== "off" && native?.actions.canResume ? <Button className={cn("h-(--control-touch) w-full", lockedClass)} aria-disabled={locked}
             onClick={() => { if (!state.pending) void resumeVoice(store).catch(() => undefined); }}>Resume voice</Button> : null}
           {native?.readiness === "storageUnavailable" ? <Button className={cn("h-(--control-touch) w-full", lockedClass)} aria-disabled={locked}

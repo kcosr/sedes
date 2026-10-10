@@ -576,7 +576,7 @@ describe("TurnForkDivider", () => {
   it("places Play response aloud directly after Copy response on every ended turn with reply text", async () => {
     const plugin = fakeVoicePlugin();
     plugin.plugin.setConnection.mockResolvedValue(voiceSnapshot({ ready: true, readiness: "ready", phase: "idle",
-      settings: voiceSettings({ audioMode: "response" }), speech: { ...voiceSnapshot().speech, credentialConfigured: true } }));
+      settings: voiceSettings({ audioMode: "speak" }), speech: { ...voiceSnapshot().speech, credentialConfigured: true } }));
     const voice = new NativeVoiceStore(plugin.asPlugin, VOICE_CONNECTION, vi.fn());
     await voice.initialize();
     voiceContext.store = voice;

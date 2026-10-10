@@ -73,10 +73,10 @@ final class NativeVoiceQueue {
             if (!action.equals("none") && !action.equals("speak") && !action.equals("speakThenListen")) throw new IllegalArgumentException("voice_action_invalid");
             if (action.equals("speakThenListen") && (event.equals("turn.progress") || event.endsWith(".requested")))
                 throw new IllegalArgumentException("voice_action_invalid");
-            boolean manual = settings.mode().equals("manual");
+            boolean inputOnly = settings.mode().equals("input");
             followUp = settings.flag("autoListen") && action.equals("speakThenListen") && target != null &&
-                (!manual || event.equals("turn.completed"));
-            speech = !settings.active() || action.equals("none") || (manual && event.equals("turn.completed")) ? "" : speech(payload, settings);
+                (!inputOnly || event.equals("turn.completed"));
+            speech = !settings.mode().equals("speak") || action.equals("none") ? "" : speech(payload, settings);
             bytes = NativeVoiceJson.bytes(speech);
         }
         private Item(String id, JSONObject request, String threadTitle, NativeVoiceSettings settings) {
@@ -209,16 +209,18 @@ final class NativeVoiceQueue {
     }
     private static String speech(JSONObject payload, NativeVoiceSettings settings) {
         ArrayList<String> parts = new ArrayList<>();
-        if (settings.flag("readNotificationContext")) {
+        String content = settings.text("speechContent");
+        if (!content.equals("messages")) {
             add(parts, payload.optString("title", ""));
             add(parts, payload.optString("message", ""));
         }
-        if (payload.optString("event").equals("turn.progress")) appendBounded(parts, payload.optJSONObject("progress"));
-        else if (payload.optString("event").equals("turn.completed")) appendResult(parts, payload.optJSONObject("assistantResult"));
-        else if (!settings.flag("readNotificationContext")) add(parts, payload.optString("message", ""));
+        if (!content.equals("announcements")) {
+            if (payload.optString("event").equals("turn.progress")) appendBounded(parts, payload.optJSONObject("progress"));
+            else if (payload.optString("event").equals("turn.completed")) appendResult(parts, payload.optJSONObject("assistantResult"));
+        }
         return assemble(parts, settings.flag("cleanSpeechText"));
     }
-    /** A replay speaks the reply alone, never notification context, whatever readNotificationContext says. */
+    /** A replay explicitly requests the reply alone, independently of automatic speech content. */
     private static String replaySpeech(JSONObject result, NativeVoiceSettings settings) {
         ArrayList<String> parts = new ArrayList<>();
         appendResult(parts, result);

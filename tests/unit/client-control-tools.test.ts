@@ -54,7 +54,7 @@ function fixture(backendKind: BackendKind = "pi", adapter: AgentToolAdapter = "c
   { acquireAgentToolApprovalAuthority: async () => ({ generation: "generation", signal: new AbortController().signal, isCurrent: () => true, release: () => {} }) },
   { requestApplicationDecision: approve }, controls);
   const invoke = (toolId = "client.settings.get", input = {}) => gate.invoke({ source, adapter,
-    request: { toolId, schemaVersion: 1, requestId: randomUUID(), input }, signal: new AbortController().signal,
+    request: { toolId, schemaVersion: 2, requestId: randomUUID(), input }, signal: new AbortController().signal,
     ...(backendKind === "opencode" ? { accessDecisionAuthority: { acquire } } : {}) });
   return { invoke, clients, starting, other, request, select, latestReplyTurnId, approve, acquire, release, canonical,
     changeTurn: () => { turn = "another-turn"; }, changeOwner: () => { owner = "another-owner"; }, loseAuthority: () => { current = false; } };

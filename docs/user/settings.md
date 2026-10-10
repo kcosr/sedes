@@ -534,11 +534,16 @@ voice cannot connect, it shows the error and **Retry voice connection**; the app
 also retries on its own and when it returns to the foreground. The rest of the
 app does not wait for voice.
 
-- **Audio mode** chooses Off, Manual, or Response. Selecting Manual or Response
+- **Audio mode** chooses Off, Input, or Speak. Selecting Input or Speak
   enables voice; **Resume voice** restarts a stopped voice session. The status
   line below reports what voice still needs, such as microphone permission,
   speech configuration and a key, or the Sedes notification connection. When
   notifications are unavailable, explicit recording still works.
+- In **Speak**, **Read aloud** selects Announcements, Messages, or Both. Messages
+  reads progress and response text without a preamble; Announcements reads only
+  the event and thread description. Input silences all automatic speech while
+  keeping voice input and eligible completion auto-listen available. The content
+  choice is remembered when switching to Input or Off.
 - **Speech provider** selects OpenAI or **Own speech server**.
   OpenAI connects directly to its hosted speech API. For local model setup, see
   [OpenAI-Compatible Speech Server](https://github.com/kcosr/openai-speech-server).

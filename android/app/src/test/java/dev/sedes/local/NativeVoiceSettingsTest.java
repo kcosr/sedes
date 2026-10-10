@@ -11,10 +11,28 @@ public class NativeVoiceSettingsTest {
     private static NativeVoiceSettings restore(org.json.JSONObject record) {
         return NativeVoicePreferences.fromRecord(record).settings(BINDING);
     }
+    @Test public void audioModesAndSpeechContentAreStrictDevicePreferences() {
+        NativeVoiceSettings defaults = NativeVoiceSettings.defaults();
+        assertEquals("both", defaults.text("speechContent"));
+        for (String mode : new String[] { "off", "input", "speak" }) for (String content : new String[] { "announcements", "messages", "both" }) {
+            NativeVoiceSettings selected = defaults.patch(0, NativeVoiceJson.object("audioMode", mode, "speechContent", content));
+            NativeVoiceSettings restored = restore(record(selected));
+            assertEquals(mode, restored.mode()); assertEquals(content, restored.text("speechContent"));
+            assertEquals(content, restored.patch(1, NativeVoiceJson.object("audioMode", "off")).text("speechContent"));
+            assertTrue(defaults.speechConfigurationEquals(selected));
+        }
+        for (String obsolete : new String[] { "manual", "response" })
+            assertThrows(IllegalArgumentException.class, () -> defaults.patch(0, NativeVoiceJson.object("audioMode", obsolete)));
+        for (Object invalid : new Object[] { "", "all", true, org.json.JSONObject.NULL })
+            assertThrows(IllegalArgumentException.class, () -> defaults.patch(0, NativeVoiceJson.object("speechContent", invalid)));
+        assertThrows(IllegalArgumentException.class, () -> defaults.patch(0, NativeVoiceJson.object("readNotificationContext", true)));
+        org.json.JSONObject old = record(defaults); NativeVoiceJson.put(old, "settingsVersion", 8);
+        assertThrows(IllegalArgumentException.class, () -> restore(old));
+    }
     @Test public void longDictationTimeoutIsAWholeMinuteSettingWithNoOldRecordFallback() {
         NativeVoiceSettings defaults = NativeVoiceSettings.defaults();
         assertEquals(3600000, defaults.number("longDictationTimeoutMs"));
-        assertEquals(8, NativeVoiceSettings.RECORD_VERSION);
+        assertEquals(9, NativeVoiceSettings.RECORD_VERSION);
         for (int duration : new int[] { 60000, 3600000, 86400000 }) {
             NativeVoiceSettings configured = defaults.patch(0, NativeVoiceJson.object("longDictationTimeoutMs", duration));
             assertEquals(duration, restore(record(configured)).number("longDictationTimeoutMs"));
@@ -72,7 +90,7 @@ public class NativeVoiceSettingsTest {
         NativeVoiceSettings defaults = NativeVoiceSettings.defaults();
         assertEquals("off", defaults.mode()); assertEquals(4096, defaults.number("speechTextLimit"));
         assertFalse(defaults.flag("pinDefaultVoiceThread"));
-        NativeVoiceSettings next = defaults.patch(0, NativeVoiceJson.object("audioMode", "response", "speechProvider", "server", "speechEndpoint", "https://EXAMPLE.com:443/"));
+        NativeVoiceSettings next = defaults.patch(0, NativeVoiceJson.object("audioMode", "speak", "speechProvider", "server", "speechEndpoint", "https://EXAMPLE.com:443/"));
         assertEquals(1, next.revision); assertEquals("https://example.com", next.text("speechEndpoint"));
         assertThrows(IllegalStateException.class, () -> next.patch(0, NativeVoiceJson.object("autoListen", false)));
         NativeVoiceSettings restored = restore(record(next));

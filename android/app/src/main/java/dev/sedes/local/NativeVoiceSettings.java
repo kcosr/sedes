@@ -7,7 +7,7 @@ import org.json.JSONObject;
 
 /** One canonical settings contract, owned by native code and updated by revision. */
 final class NativeVoiceSettings {
-    static final String[] FIELDS = { "audioMode", "autoListen", "keepListeningByDefault", "ignoreOtherDevices", "readNotificationContext", "cleanSpeechText", "announceRecordingThread",
+    static final String[] FIELDS = { "audioMode", "speechContent", "autoListen", "keepListeningByDefault", "ignoreOtherDevices", "cleanSpeechText", "announceRecordingThread",
         "speechProvider", "speechEndpoint", "sttModel", "ttsModel", "ttsVoice", "ttsSpeed", "speechTextLimit", "voiceThreadId", "voiceThreadTitle", "pinDefaultVoiceThread", "onlyVoiceThread", "followComposerMode",
         "inputDevice", "recognitionStartTimeoutMs", "recognitionCompletionTimeoutMs", "recognitionResultTimeoutMs", "recognitionEndSilenceMs", "longDictationTimeoutMs",
         "recognizeStopCommand", "recognitionCues", "cueGain", "startupPreRollMs", "ttsGain", "headsetControls" };
@@ -17,7 +17,7 @@ final class NativeVoiceSettings {
      * aliasing or tolerance of missing fields. A record that fails validation is quarantined by the runtime and replaced
      * with defaults, so an unreadable or newer record cannot block voice.
      */
-    static final int RECORD_VERSION = 8;
+    static final int RECORD_VERSION = 9;
     static final String OPENAI_ENDPOINT = "https://api.openai.com/v1";
     final long revision;
     final JSONObject value;
@@ -29,7 +29,7 @@ final class NativeVoiceSettings {
     }
     static NativeVoiceSettings defaults() {
         return new NativeVoiceSettings(0, NativeVoiceJson.object(
-            "audioMode", "off", "autoListen", true, "keepListeningByDefault", false, "ignoreOtherDevices", true, "readNotificationContext", true, "cleanSpeechText", true, "announceRecordingThread", false,
+            "audioMode", "off", "autoListen", true, "keepListeningByDefault", false, "ignoreOtherDevices", true, "speechContent", "both", "cleanSpeechText", true, "announceRecordingThread", false,
             "speechProvider", "openai", "speechEndpoint", OPENAI_ENDPOINT, "sttModel", "gpt-live-transcribe",
             "ttsModel", "gpt-4o-mini-tts", "ttsVoice", "coral", "ttsSpeed", 1.0, "speechTextLimit", 4096, "voiceThreadId", null, "voiceThreadTitle", null,
             "pinDefaultVoiceThread", false, "onlyVoiceThread", false, "followComposerMode", false, "inputDevice", null,
@@ -69,8 +69,10 @@ final class NativeVoiceSettings {
         NativeVoiceJson.keys(value, FIELDS);
         for (String key : FIELDS) if (!value.has(key)) throw new IllegalArgumentException("missing_" + key);
         String mode = NativeVoiceJson.string(value, "audioMode", 16);
-        if (!mode.equals("off") && !mode.equals("manual") && !mode.equals("response")) throw new NativeVoiceJson.InvalidFieldException("audioMode");
-        for (String key : new String[] { "autoListen", "keepListeningByDefault", "ignoreOtherDevices", "readNotificationContext", "cleanSpeechText", "announceRecordingThread", "pinDefaultVoiceThread", "onlyVoiceThread",
+        if (!mode.equals("off") && !mode.equals("input") && !mode.equals("speak")) throw new NativeVoiceJson.InvalidFieldException("audioMode");
+        String content = NativeVoiceJson.string(value, "speechContent", 16);
+        if (!content.equals("announcements") && !content.equals("messages") && !content.equals("both")) throw new NativeVoiceJson.InvalidFieldException("speechContent");
+        for (String key : new String[] { "autoListen", "keepListeningByDefault", "ignoreOtherDevices", "cleanSpeechText", "announceRecordingThread", "pinDefaultVoiceThread", "onlyVoiceThread",
             "followComposerMode", "recognizeStopCommand", "recognitionCues", "headsetControls" }) NativeVoiceJson.bool(value, key);
         String provider = NativeVoiceJson.string(value, "speechProvider", 16);
         if (!provider.equals("openai") && !provider.equals("server")) throw new NativeVoiceJson.InvalidFieldException("speechProvider");

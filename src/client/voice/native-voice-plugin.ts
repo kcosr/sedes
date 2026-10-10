@@ -12,8 +12,9 @@ export interface NativeVoiceInputDevice { id: string; label: string; type: numbe
 export interface NativeVoiceInputDevices { devices: NativeVoiceInputDevice[] }
 
 export const nativeVoiceSettingsSchema = z.strictObject({
-  audioMode: z.enum(["off", "manual", "response"]),
-  autoListen: z.boolean(), keepListeningByDefault: z.boolean(), announceRecordingThread: z.boolean(), ignoreOtherDevices: z.boolean(), readNotificationContext: z.boolean(), cleanSpeechText: z.boolean(),
+  audioMode: z.enum(["off", "input", "speak"]),
+  speechContent: z.enum(["announcements", "messages", "both"]),
+  autoListen: z.boolean(), keepListeningByDefault: z.boolean(), announceRecordingThread: z.boolean(), ignoreOtherDevices: z.boolean(), cleanSpeechText: z.boolean(),
   speechProvider: z.enum(["openai", "server"]), speechEndpoint: z.string(),
   sttModel: z.string().max(160), ttsModel: z.string().max(160), ttsVoice: z.string().max(160),
   ttsSpeed: z.number().min(0.25).max(4), speechTextLimit: z.number().int().min(2).max(4096),
@@ -48,7 +49,7 @@ export const nativeRecordingTextSchema = z.strictObject({
 });
 export type NativeRecordingText = z.infer<typeof nativeRecordingTextSchema>;
 export const nativeVoiceStateSchema = z.strictObject({
-  version: z.literal(13), stateRevision: z.number().int().nonnegative(), connectionGeneration: z.number().int().nonnegative(),
+  version: z.literal(14), stateRevision: z.number().int().nonnegative(), connectionGeneration: z.number().int().nonnegative(),
   profileId: z.string().nullable(), serverOrigin: z.string().nullable(), identity: z.string().nullable(), originClientId: z.uuid().nullable(), clientConnectionToken: z.string().nullable(),
   settingsRevision: z.number().int().nonnegative(), settings: nativeVoiceSettingsSchema,
   speech: z.strictObject({ credentialConfigured: z.boolean(), catalogStatus: z.enum(["idle", "loading", "ready", "error"]),

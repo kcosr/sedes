@@ -954,7 +954,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         }
         if (clientSuppressesFollowup(item.notification)) { finishItem(item); return; }
         if (!item.followUp || !settings.flag("autoListen") || item.notification == null || !eligible(item.notification) ||
-            (settings.mode().equals("manual") && !item.event.equals("turn.completed"))) { finishItem(item); return; }
+            (settings.mode().equals("input") && !item.event.equals("turn.completed"))) { finishItem(item); return; }
         validateTarget(item, true);
     }
     private void validateTarget(Active item, boolean automatic) {
@@ -2528,7 +2528,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
                     case "skip": skip(); break;
                     case "record": recordDuringPlayback(); break;
                     case "mode": updateSettings(NativeVoiceJson.object("expectedRevision", settings.revision,
-                        "patch", NativeVoiceJson.object("audioMode", settings.mode().equals("manual") ? "response" : "manual")), false); break;
+                        "patch", NativeVoiceJson.object("audioMode", settings.mode().equals("input") ? "speak" : "input")), false); break;
                     case "rearm": updateSettings(NativeVoiceJson.object("expectedRevision", settings.revision,
                         "patch", NativeVoiceJson.object("autoListen", !settings.flag("autoListen"))), false); break;
                     case "headset":
@@ -2689,7 +2689,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
             "recognitionThreadTitle", active.targetTitle, "automatic", active.automatic, "recording", recording);
         String readiness = readiness(), blocked = keepListeningBlockedReason();
         boolean ready = readiness.equals("ready");
-        JSONObject next = NativeVoiceJson.object("version", 13, "connectionGeneration", connectionGeneration, "idleTargetRevision", idleTargetRevision,
+        JSONObject next = NativeVoiceJson.object("version", 14, "connectionGeneration", connectionGeneration, "idleTargetRevision", idleTargetRevision,
             "profileId", profileId, "serverOrigin", origin, "identity", identity, "originClientId", originId, "clientConnectionToken", clientConnectionToken,
             "settingsRevision", settings.revision, "settings", settings.value, "phase", phase, "ready", ready,
             "speech", NativeVoiceJson.object("credentialConfigured", speechCredential != null, "catalogStatus", catalogStatus,

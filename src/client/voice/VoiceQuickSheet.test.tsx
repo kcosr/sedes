@@ -18,7 +18,7 @@ const longTitle = "L".repeat(600);
 const threads = [thread("long", longTitle), thread("untitled", "  "), thread("standup", "Daily standup notes"),
   { ...thread("archived", "Archived notes"), inventoryState: "archived" }, { ...thread("offline", "Offline review"), available: false }] as NormalizedApplicationThreadSummary[];
 const ready = (settings: Parameters<typeof voiceSettings>[0] = {}) => voiceSnapshot({ phase: "idle", ready: true, readiness: "ready", actions,
-  speech: configuredSpeech, settings: voiceSettings({ audioMode: "response", speechProvider: "server", speechEndpoint, ...settings }) });
+  speech: configuredSpeech, settings: voiceSettings({ audioMode: "speak", speechProvider: "server", speechEndpoint, ...settings }) });
 /** Native as the sheet sees it: refreshes return the current state and writes apply their patch. */
 async function renderSheet(state: NativeVoiceState, host?: (store: NativeVoiceStore) => ReactElement) {
   const fake = fakeVoicePlugin();
@@ -43,16 +43,24 @@ function holdNextWrite(fake: ReturnType<typeof fakeVoicePlugin>) {
   return () => act(async () => { release(); });
 }
 const patches = (fake: ReturnType<typeof fakeVoicePlugin>) => vi.mocked(fake.asPlugin.updateSettings).mock.calls.map(([input]) => input.patch);
-beforeEach(() => { navigate("/", { replace: true }); });
-afterEach(() => { cleanup(); });
+const scrollIntoViewDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollIntoView");
+beforeEach(() => {
+  navigate("/", { replace: true });
+  Object.assign(HTMLElement.prototype, { scrollIntoView: vi.fn() });
+});
+afterEach(() => {
+  cleanup();
+  if (scrollIntoViewDescriptor) Object.defineProperty(HTMLElement.prototype, "scrollIntoView", scrollIntoViewDescriptor);
+  else Reflect.deleteProperty(HTMLElement.prototype, "scrollIntoView");
+});
 
 describe("voice quick sheet", () => {
   it("names the mode control and every quick setting with their current values", async () => {
     const { store, sheet } = await renderSheet(ready({ voiceThreadId: "standup", voiceThreadTitle: "Daily standup notes", followComposerMode: true }));
     expect(within(sheet).getByRole("status")).toHaveTextContent("Ready");
     expect(within(sheet).getByRole("radiogroup", { name: "Audio mode" })).toBeInTheDocument();
-    expect(within(sheet).getByRole("radio", { name: "Response" })).toHaveAttribute("aria-checked", "true");
-    expect(sheet).toHaveTextContent("Response speaks selected notices and responses.");
+    expect(within(sheet).getByRole("radio", { name: "Speak" })).toHaveAttribute("aria-checked", "true");
+    expect(sheet).toHaveTextContent("Speak reads selected notifications aloud.");
     expect(within(sheet).getByRole("switch", { name: "Auto-listen" })).toHaveAccessibleDescription("Eligible notifications reopen the mic");
     expect(within(sheet).getByRole("switch", { name: "Auto-listen" })).toBeChecked();
     expect(within(sheet).getByRole("switch", { name: "Keep listening by default" })).toHaveAccessibleDescription("New manual and auto-listen recordings");
@@ -68,15 +76,39 @@ describe("voice quick sheet", () => {
     store.dispose();
   });
   it("reports readiness while a mode is on but voice is not ready", async () => {
-    const { store, sheet } = await renderSheet(voiceSnapshot({ phase: "starting", readiness: "starting", settings: voiceSettings({ audioMode: "manual", speechEndpoint }) }));
+    const { store, sheet } = await renderSheet(voiceSnapshot({ phase: "starting", readiness: "starting", settings: voiceSettings({ audioMode: "input", speechEndpoint }) }));
     expect(within(sheet).getByRole("status")).toHaveTextContent("Voice is starting…");
-    expect(sheet).toHaveTextContent("Manual keeps completions silent; the mic can still open afterward.");
+    expect(sheet).toHaveTextContent("Input keeps speech silent. Auto-listen can still reopen the mic.");
+    store.dispose();
+  });
+  it("remembers Read aloud across Input and Off while keeping auto-listen separate", async () => {
+    const { fake, store, sheet } = await renderSheet(ready());
+    const choose = async (label: string) => {
+      fireEvent.keyDown(within(sheet).getByRole("combobox", { name: "Read aloud" }), { key: "ArrowDown" });
+      fireEvent.click(await screen.findByRole("option", { name: new RegExp(`^${label}`) }));
+      await waitFor(() => expect(within(sheet).getByRole("combobox", { name: "Read aloud" })).toHaveTextContent(label));
+      await waitFor(() => expect(within(sheet).getByRole("combobox", { name: "Read aloud" })).not.toHaveAttribute("aria-disabled"));
+    };
+    await choose("Announcements");
+    await choose("Messages");
+    for (const mode of ["Input", "Off"]) {
+      fireEvent.click(within(sheet).getByRole("radio", { name: mode }));
+      await waitFor(() => expect(within(sheet).queryByRole("combobox", { name: "Read aloud" })).toBeNull());
+      await waitFor(() => expect(within(sheet).getByRole("radio", { name: "Speak" })).not.toHaveAttribute("aria-disabled"));
+      fireEvent.click(within(sheet).getByRole("radio", { name: "Speak" }));
+      await waitFor(() => expect(within(sheet).getByRole("combobox", { name: "Read aloud" })).toHaveTextContent("Messages"));
+      await waitFor(() => expect(within(sheet).getByRole("radio", { name: "Speak" })).not.toHaveAttribute("aria-disabled"));
+    }
+    await choose("Both");
+    expect(within(sheet).getByRole("switch", { name: "Auto-listen" })).toBeChecked();
+    expect(patches(fake)).toEqual([{ speechContent: "announcements" }, { speechContent: "messages" },
+      { audioMode: "input" }, { audioMode: "speak" }, { audioMode: "off" }, { audioMode: "speak" }, { speechContent: "both" }]);
     store.dispose();
   });
   it("switches modes through the store and locks the control, keeping focus, while a write is pending", async () => {
     const { fake, store, sheet } = await renderSheet(ready());
     const release = holdNextWrite(fake);
-    const manual = within(sheet).getByRole("radio", { name: "Manual" });
+    const manual = within(sheet).getByRole("radio", { name: "Input" });
     act(() => manual.focus());
     fireEvent.click(manual);
     expect(within(sheet).getByRole("radio", { name: "Off" })).toHaveAttribute("aria-disabled", "true");
@@ -84,43 +116,43 @@ describe("voice quick sheet", () => {
     expect(manual).toHaveFocus();
     fireEvent.click(within(sheet).getByRole("radio", { name: "Off" }));
     await release();
-    await waitFor(() => expect(within(sheet).getByRole("radio", { name: "Manual" })).toHaveAttribute("aria-checked", "true"));
+    await waitFor(() => expect(within(sheet).getByRole("radio", { name: "Input" })).toHaveAttribute("aria-checked", "true"));
     await waitFor(() => expect(within(sheet).getByRole("radio", { name: "Off" })).not.toHaveAttribute("aria-disabled"));
     fireEvent.click(within(sheet).getByRole("radio", { name: "Off" }));
     await waitFor(() => expect(within(sheet).getByRole("status")).toHaveTextContent("Voice off"));
-    expect(sheet).toHaveTextContent("Off pauses voice. Pick Manual or Response to resume.");
-    expect(patches(fake)).toEqual([{ audioMode: "manual" }, { audioMode: "off" }]);
+    expect(sheet).toHaveTextContent("Off pauses voice. Pick Input or Speak to resume.");
+    expect(patches(fake)).toEqual([{ audioMode: "input" }, { audioMode: "off" }]);
     store.dispose();
   });
   it("turns voice on from Off with the chosen mode, then offers Resume when native could not start a session", async () => {
     const { fake, store, sheet } = await renderSheet(voiceSnapshot({ speech: configuredSpeech, settings: voiceSettings({ speechProvider: "server", speechEndpoint }) }));
     expect(within(sheet).getByRole("status")).toHaveTextContent("Voice off");
     expect(within(sheet).queryByRole("button", { name: "Resume voice" })).toBeNull();
-    fireEvent.click(within(sheet).getByRole("radio", { name: "Manual" }));
-    await waitFor(() => expect(fake.plugin.updateSettings).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, expectedRevision: 0, patch: { audioMode: "manual" } }));
+    fireEvent.click(within(sheet).getByRole("radio", { name: "Input" }));
+    await waitFor(() => expect(fake.plugin.updateSettings).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, expectedRevision: 0, patch: { audioMode: "input" } }));
     // Native saved the mode but has no session; the refreshed mode is what Resume writes back.
-    const paused = voiceSnapshot({ stateRevision: 5, settingsRevision: 3, readiness: "needsResume", speech: configuredSpeech, settings: voiceSettings({ audioMode: "response", speechProvider: "server", speechEndpoint }), actions: { ...actions, canStart: false, canResume: true } });
+    const paused = voiceSnapshot({ stateRevision: 5, settingsRevision: 3, readiness: "needsResume", speech: configuredSpeech, settings: voiceSettings({ audioMode: "speak", speechProvider: "server", speechEndpoint }), actions: { ...actions, canStart: false, canResume: true } });
     fake.plugin.getState.mockResolvedValue(paused);
-    act(() => fake.emit("stateChanged", { ...paused, settings: voiceSettings({ audioMode: "manual", speechEndpoint }) }));
+    act(() => fake.emit("stateChanged", { ...paused, settings: voiceSettings({ audioMode: "input", speechEndpoint }) }));
     expect(within(sheet).getByRole("status")).toHaveTextContent("Resume voice from this screen to start a new session.");
     fireEvent.click(within(sheet).getByRole("button", { name: "Resume voice" }));
-    await waitFor(() => expect(fake.plugin.updateSettings).toHaveBeenLastCalledWith({ expectedConnectionGeneration: 1, expectedRevision: 3, patch: { audioMode: "response" } }));
+    await waitFor(() => expect(fake.plugin.updateSettings).toHaveBeenLastCalledWith({ expectedConnectionGeneration: 1, expectedRevision: 3, patch: { audioMode: "speak" } }));
     store.dispose();
   });
-  it("keeps Manual and Response unavailable from Off until the speech destination is configured", async () => {
+  it("keeps Input and Speak unavailable from Off until the speech destination is configured", async () => {
     const { fake, store, sheet } = await renderSheet(voiceSnapshot({ speech: configuredSpeech, settings: voiceSettings({ speechProvider: "server", speechEndpoint: "", sttModel: "", ttsModel: "", ttsVoice: "" }) }));
-    expect(within(sheet).getByRole("radio", { name: "Manual" })).toBeDisabled();
-    expect(within(sheet).getByRole("radio", { name: "Response" })).toBeDisabled();
+    expect(within(sheet).getByRole("radio", { name: "Input" })).toBeDisabled();
+    expect(within(sheet).getByRole("radio", { name: "Speak" })).toBeDisabled();
     expect(sheet).toHaveTextContent("Off pauses voice. Set up speech in All voice settings first.");
-    fireEvent.click(within(sheet).getByRole("radio", { name: "Response" }));
+    fireEvent.click(within(sheet).getByRole("radio", { name: "Speak" }));
     expect(fake.plugin.updateSettings).not.toHaveBeenCalled();
     store.dispose();
   });
   it("keeps configured speech disabled until its native credential is saved", async () => {
     const { fake, store, sheet } = await renderSheet(voiceSnapshot());
-    expect(within(sheet).getByRole("radio", { name: "Manual" })).toBeDisabled();
-    expect(within(sheet).getByRole("radio", { name: "Response" })).toBeDisabled();
-    fireEvent.click(within(sheet).getByRole("radio", { name: "Response" }));
+    expect(within(sheet).getByRole("radio", { name: "Input" })).toBeDisabled();
+    expect(within(sheet).getByRole("radio", { name: "Speak" })).toBeDisabled();
+    fireEvent.click(within(sheet).getByRole("radio", { name: "Speak" }));
     expect(fake.plugin.updateSettings).not.toHaveBeenCalled();
     store.dispose();
   });
