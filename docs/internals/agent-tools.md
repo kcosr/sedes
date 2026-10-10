@@ -368,15 +368,18 @@ the command carries the resolved turn ID and the thread's inventory title, or
 null when that is blank. Delivery is immediate, like the settings tools: a
 120-second expiry and a 25-second acknowledgement wait, never deferred to turn
 completion. Mid-turn, the replay plays before the agent's own completion
-notice. Native queues it behind current voice work as speak-only: it never
-navigates, starts listening, or touches the source turn's follow-up.
+notice. Native queues it behind current voice work without navigating or
+changing the source turn's follow-up. After replay, current Auto-listen can
+start a new recording on the replay's thread when fresh manual-input policy
+permits it. Once speech finishes, the same turn can be queued again behind
+that recording; deduplication covers only pending or playing speech.
 Non-failed results pass through unchanged; failed ones become errors:
 
 | Client | Situation | Result |
 | --- | --- | --- |
 | Android | Replay is active right after the call | `applied`, `replay_playing` |
 | Android | Replay added behind other voice work | `applied`, `replay_queued` |
-| Android | Same thread and turn already active or pending | `noop`, `replay_already_queued` |
+| Android | Same thread and turn's speech already playing or pending | `noop`, `replay_already_queued` |
 | Android | Audio mode Off | `noop`, `voice_off` |
 | Android | Session not started, speech not ready, or no binding | `noop`, `voice_not_ready` |
 | Android | Prepared text is empty | `failed`, `voice_reply_empty` |

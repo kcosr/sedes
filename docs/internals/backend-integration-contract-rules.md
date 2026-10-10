@@ -2050,6 +2050,40 @@ input/recovery, cached presentation settings, and normalized blocking
 interactions. This shared contract applies to all five backends; steering still
 uses each backend's declared target and delivery capabilities.
 
+The required normalized `manualListenEligible` field is local permission to
+capture **new input**, distinct from automatic notification follow-up readiness.
+It does not promise provider acceptance. Recompose cached presentation and
+current durable thread, workspace, project, environment, and target policy
+without provider attachment, health calls, or catalog refresh. An enabled,
+registered target with writable presentation and valid required settings may
+permit capture for an unbound or dormant thread; `authority` still truthfully
+reports `unbound` or `unavailable`. A retained runtime must support Submit and
+be settled or able to admit Queue while running/waiting. An absent current
+observation is not evidence of dormancy: only the scoped manager's explicit
+`isInputRuntimeDormant` check permits unattached input. Maintenance, retirement,
+startup, eviction, and retained cleanup failures remain unavailable. Publish
+maintenance entry and exit, including retained rejection, even without an
+actor entry so an entire maintenance interval cannot preserve an earlier
+dormant activity token. Share the ordinary
+Submit/Queue capability predicates and direct-input transition checks; refuse
+archived, snoozed, removed, unavailable, read-only, unsupported, transitional,
+recovery-blocked, or full-queue targets. A legacy draft Steer awaiting
+materialization blocks new input; queued Steers awaiting materialization do not
+invent that exclusive barrier. Ordinary input admission revalidates all policy
+and runtime authority before accepting the recording.
+
+Pi, Codex, Claude, Grok, and OpenCode all implement this shared capture preflight.
+All support application Queue wherever their current normalized Submit
+capability is present. Claude's capability remains conditional on its current
+submission readiness; Grok requires no native Steer to support Queue. A known
+runtime without Submit is unsupported, and read-only history never grants
+input permission. Historical replay must request this fresh manual context,
+then recheck its fresh activity token and eligibility after the start cue;
+the replay's original turn or activity token grants no new-input authority.
+Notification-driven listening keeps its existing automatic readiness and
+original activity-target checks. This normalized wire addition advances the
+browser/client protocol to 147; missing eligibility is not a compatible shape.
+
 Application thread summaries project this observation as optional
 `backgroundWork` category counts, without descriptions or provider identities.
 This is volatile thread/runtime-generation state delivered through the existing

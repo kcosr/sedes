@@ -2,11 +2,11 @@ import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
 import type { ClientOrigin, ThreadInputContext } from "../../shared/protocol/thread-input.js";
 import { DirectInputRepository } from "../db/repositories/direct-input-repository.js";
-import { QueuedInputRepository } from "../db/repositories/queued-input-repository.js";
+import { MAXIMUM_ACTIVE_QUEUED_INPUTS, QueuedInputRepository } from "../db/repositories/queued-input-repository.js";
 import type { RequestScope } from "../identity/identity-provider.js";
 import type { ConversationInputRuntimeObservation, ConversationActorManager } from "./conversation-actor-manager.js";
 import type { ThreadApplicationPresentationReader } from "./thread-application-service.js";
-import { initialThreadSettingsReady } from "./thread-input-readiness.js";
+import { directInputRuntimeReady, initialThreadSettingsReady, threadInputDeliveryAvailability } from "./thread-input-readiness.js";
 import { DomainError } from "../domain/errors.js";
 
 type RecognitionTarget = { readonly threadId: string; readonly activityToken: string; readonly sourceTurnId?: string };
@@ -27,6 +27,7 @@ type DurableObservation = {
   projectRemovedAt: number | null;
   pending: number;
   recovery: number;
+  manualRecovery: number;
 };
 type Captured = {
   readonly context: ThreadInputContext;
@@ -57,11 +58,11 @@ function settling(observation?: ConversationInputRuntimeObservation): boolean {
 // Semantic facts only. The owner generation fences eviction, restart, and owner
 // replacement; projection generation is excluded so an equivalent replacement
 // snapshot, and the retained facts observed while it is installed, keep the token.
-function runtimeKey(observation?: ConversationInputRuntimeObservation): string {
+function runtimeKey(observation: ConversationInputRuntimeObservation | undefined, dormant: boolean): string {
   return JSON.stringify(observation ? [
     observation.ownerGeneration, settling(observation), observation.runState, observation.settled,
     observation.sourceTurnId, observation.sourceTurnStatus, observation.blockingInteractionIds,
-  ] : null);
+  ] : dormant ? "dormant" : "unavailable");
 }
 
 /** Local, non-attaching activity authority. Tokens are never reused after eviction or restart. */
@@ -77,7 +78,7 @@ export class ThreadActivityService {
 
   constructor(readonly input: {
     readonly database: Database.Database;
-    readonly actors: Pick<ConversationActorManager, "observeInputRuntime" | "subscribeInputActivity">;
+    readonly actors: Pick<ConversationActorManager, "observeInputRuntime" | "isInputRuntimeDormant" | "subscribeInputActivity">;
     readonly presentation: Pick<ThreadApplicationPresentationReader, "readCached">;
     readonly now?: () => number;
   }) {
@@ -91,7 +92,8 @@ export class ThreadActivityService {
       // for every streamed token while still observing every readiness edge,
       // including the end of an equivalent in-place replacement.
       const observation = input.actors.observeInputRuntime(scope, threadId);
-      if (before.runtime === runtimeKey(observation) &&
+      const dormant = !observation && input.actors.isInputRuntimeDormant(scope, threadId);
+      if (before.runtime === runtimeKey(observation, dormant) &&
           (observation?.reestablishing ?? false) === (before.observation?.reestablishing ?? false)) return;
       try { this.#capture(before.scope, threadId); } catch { this.#states.delete(stateKey); }
       this.#drainWaiters();
@@ -107,17 +109,19 @@ export class ThreadActivityService {
     let observed = this.#capture(scope, threadId);
     if (observed.pending) observed = await this.#afterReplacement(observed, scope, threadId, deadline);
     const before = observed.context;
-    if (before.authority !== "current" || this.#closed) return before;
+    if (this.#closed || before.authority !== "current" && !before.manualListenEligible) return before;
     const presentation = await this.input.presentation.readCached(scope, threadId);
     observed = this.#capture(scope, threadId);
     if (observed.pending) observed = await this.#afterReplacement(observed, scope, threadId, deadline);
     const current = observed.context;
     if (before.activityToken !== current.activityToken) {
-      return { ...current, automaticListenEligible: false, steer: { availability: "unavailable" } };
+      return { ...current, automaticListenEligible: false, manualListenEligible: false, steer: { availability: "unavailable" } };
     }
     const interactive = presentation.interactionMode === "interactive";
     return { ...current,
       automaticListenEligible: current.automaticListenEligible && interactive && initialThreadSettingsReady(presentation),
+      manualListenEligible: current.manualListenEligible && presentation.inputTargetAvailable &&
+        interactive && initialThreadSettingsReady(presentation),
       steer: interactive ? current.steer : { availability: "unsupported" },
     };
   }
@@ -139,7 +143,7 @@ export class ThreadActivityService {
       thread.input_activity_revision AS activityRevision, inventory.inventory_state AS inventoryState,
       workspace.availability AS workspaceAvailable, workspace.removed_at AS workspaceRemovedAt,
       project.removed_at AS projectRemovedAt,
-      EXISTS (SELECT 1 FROM queued_inputs q WHERE q.tenant_id = thread.tenant_id
+      (SELECT COUNT(*) FROM queued_inputs q WHERE q.tenant_id = thread.tenant_id
         AND q.owner_principal_id = thread.owner_principal_id AND q.application_thread_id = thread.id
         AND (q.state IN ('pending','retry_wait','dispatching','uncertain')
           OR (q.state = 'failed' AND q.failure_acknowledged_at IS NULL))) AS pending,
@@ -148,7 +152,14 @@ export class ThreadActivityService {
         AND receipt.result_code IN ('prepared','uncertain','pending_materialization'))
         OR EXISTS (SELECT 1 FROM conversation_creation_attempts attempt WHERE attempt.tenant_id = thread.tenant_id
           AND attempt.owner_principal_id = thread.owner_principal_id AND attempt.application_thread_id = thread.id
-          AND attempt.force_reset_at IS NULL AND attempt.phase NOT IN ('bound','aborted_unpersisted'))) AS recovery
+          AND attempt.force_reset_at IS NULL AND attempt.phase NOT IN ('bound','aborted_unpersisted'))) AS recovery,
+      (EXISTS (SELECT 1 FROM mutation_receipts receipt WHERE receipt.tenant_id = thread.tenant_id
+        AND receipt.principal_id = thread.owner_principal_id AND receipt.thread_id = thread.id
+        AND (receipt.result_code = 'uncertain' OR (receipt.operation_kind = 'conversation_steer'
+          AND receipt.result_code = 'pending_materialization' AND json_extract(receipt.result_json, '$.source') = 'draft')))
+        OR EXISTS (SELECT 1 FROM conversation_creation_attempts attempt WHERE attempt.tenant_id = thread.tenant_id
+          AND attempt.owner_principal_id = thread.owner_principal_id AND attempt.application_thread_id = thread.id
+          AND attempt.force_reset_at IS NULL AND attempt.phase NOT IN ('bound','aborted_unpersisted'))) AS manualRecovery
       FROM application_threads thread
       JOIN thread_principal_state inventory ON inventory.tenant_id = thread.tenant_id
         AND inventory.principal_id = thread.owner_principal_id AND inventory.thread_id = thread.id
@@ -160,11 +171,12 @@ export class ThreadActivityService {
     `).get(scope.tenantId, scope.principalId, threadId) as DurableObservation | undefined;
     if (!stored) throw new DomainError("not_found", "The input target is unavailable.");
     const observation = this.input.actors.observeInputRuntime(scope, threadId);
+    const dormant = !observation && this.input.actors.isInputRuntimeDormant(scope, threadId);
     const durable = JSON.stringify([
       stored.activityRevision, stored.backingState, stored.availability,
       stored.inventoryState, stored.workspaceAvailable, stored.workspaceRemovedAt, stored.projectRemovedAt,
     ]);
-    const runtime = runtimeKey(observation);
+    const runtime = runtimeKey(observation, dormant);
     const stateKey = key(scope, threadId);
     const before = this.#states.get(stateKey);
     // A terminal bookend and its matching idle are one boundary, including when
@@ -194,6 +206,17 @@ export class ThreadActivityService {
       ? steerKind === "conversation" ? { kind: "conversation" as const }
         : steerKind === "turn" && observation.activeTurnId ? { kind: "turn" as const, turnId: observation.activeTurnId } : undefined
       : undefined;
+    // A dormant thread can be attached by ordinary input admission. Its cached
+    // presentation supplies local permission to attempt input, not live provider
+    // acceptance. A retained runtime, when present, must affirm its own support.
+    const inputDelivery = threadInputDeliveryAvailability({
+      backingState: stored.backingState, inventoryState: stored.inventoryState,
+      available: targetAvailable, interactive: true, settingsReady: true,
+      exclusivePendingSteer: stored.manualRecovery !== 0,
+      runState: observation?.runState ?? "idle",
+      submitSupported: observation ? observation.backendCapabilities.deliveryModes.includes("submit") : true,
+      queuedInputCount: stored.pending,
+    });
     return {
       observation,
       pending: stored.backingState === "bound" && observation?.reestablishing === true,
@@ -204,6 +227,9 @@ export class ThreadActivityService {
         automaticListenEligible: !this.#closed && targetAvailable && authority === "current" &&
           observation!.settled && observation!.backendCapabilities.deliveryModes.includes("submit") && observation!.blockingInteractionIds.length === 0 &&
           stored.pending === 0 && stored.recovery === 0,
+        manualListenEligible: !this.#closed && stored.pending < MAXIMUM_ACTIVE_QUEUED_INPUTS &&
+          (inputDelivery.submit || inputDelivery.queue) &&
+          (dormant || observation?.authoritative === true && directInputRuntimeReady(observation)),
         steer: authority !== "current" ? { availability: "unavailable" }
           : steerTarget ? { availability: "available", target: steerTarget }
           : steerSupported ? { availability: "unavailable" } : { availability: "unsupported" },

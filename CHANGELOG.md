@@ -4,11 +4,12 @@
 
 ### Breaking Changes
 
-- Browser and packaged clients require client protocol 146, which adds
+- Browser and packaged clients require client protocol 147, which adds
   automation schedule details and run turn outcomes to thread summaries and
   runs, drops the Remind now inventory action, adds turn reply replay, and adds
-  workpad list sorting, counts, and deletion. Upgrade clients together with the
-  server.
+  workpad list sorting, counts, and deletion. Input contexts include current
+  manual-input eligibility for replay Auto-listen. Upgrade clients together
+  with the server.
   ([#58](https://github.com/kcosr/sedes/pull/58), [#59](https://github.com/kcosr/sedes/pull/59), [#61](https://github.com/kcosr/sedes/pull/61), [#62](https://github.com/kcosr/sedes/pull/62), [#65](https://github.com/kcosr/sedes/pull/65))
 
 - `PATCH /api/threads/:threadId/inventory` no longer accepts the `remind`
@@ -490,6 +491,10 @@
   Session stats stays in the thread menu rather than flashing during loading. (#8)
 
 ### Changed
+
+- Android **Play response aloud** now follows **Auto-listen**: after replay,
+  record a new reply to that thread when its current input policy allows it.
+  Archived, read-only, and unavailable targets remain playback-only.
 
 - Panels open into five regions: Middle, Left, Right, Top, and Bottom. Each
   region shows one panel; opening a panel replaces what its region showed,

@@ -719,8 +719,13 @@ async function fixture(
   // Real durable activity authority; no conversation runtime is ever observed here.
   const inputActivity = new ThreadActivityService({
     database,
-    actors: { observeInputRuntime: () => undefined, subscribeInputActivity: () => () => undefined },
-    presentation: { readCached: async () => { throw new Error("input_presentation_not_used"); } },
+    actors: { observeInputRuntime: () => undefined, isInputRuntimeDormant: () => true, subscribeInputActivity: () => () => undefined },
+    presentation: { readCached: async () => ({
+      revision: "input-presentation", backend: { label: { text: "Input fixture" } },
+      interactionMode: "interactive", inputTargetAvailable: true,
+      settings: { revision: 0, values: [] }, settingDescriptors: [],
+      providerFeatureCapabilities: [], providerFeatureStates: [], composerCommands: [], skills: [],
+    }) },
   });
   const snapshots = {
     async skills(scope: RequestScope, threadId: string) {
@@ -4969,7 +4974,7 @@ describe("normalized HTTP application contract", () => {
       expect(context.headers["cache-control"]).toBe("no-store");
       expect(context.body).toEqual({
         threadId, activityToken: expect.any(String), authority: "unavailable", runState: null,
-        automaticListenEligible: false, steer: { availability: "unavailable" },
+        automaticListenEligible: false, manualListenEligible: true, steer: { availability: "unavailable" },
       });
       expect((await current
         .withHost(request(current.app).get(`/api/threads/${threadId}/input-context`))

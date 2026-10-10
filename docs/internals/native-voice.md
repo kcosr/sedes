@@ -299,9 +299,25 @@ with the stored request, so a settings rebuild keeps it.
 
 The replay is a local queue item with no server envelope. Its event, shown as
 `active.eventKind`, is `replay`. Its ID is a fresh UUID that never enters
-notification deduplication. It is not automatic and has no follow-up listen.
-Its identity is the thread and turn ID; a request for a turn already queued or
-playing returns the current snapshot without adding. It counts against the
+notification deduplication. Its playback is user-requested and independent of
+notification policy. At speech completion, current `autoListen` can authorize
+one new recording on the replay's thread in either Manual or Response mode.
+The runtime validates fresh `manualListenEligible` through `input-context`,
+captures that response's activity token, and rechecks both after the start cue.
+It never compares the historical replay turn with the current source turn or
+uses a notification's historical activity token. Dormant and running threads
+can accept a reply when current manual-input policy allows it; ordinary input
+admission and the existing Queue/Steer preference remain authoritative. Invalid
+current availability or changed activity before capture ends the replay without
+recording. Playback remains available for unwritable threads.
+The replay's target is independent of foreground/default/pinning and preserves
+`nextRecordingTarget`. Auto-listen Off during validation, arming, or ordinary
+capture cancels the continuation; explicit retargeting or Keep listening adopts
+it under the existing manual recording rules. Late callbacks cannot reopen it.
+Its identity is the thread and turn ID; a request for a turn whose speech is
+already queued or playing returns the current snapshot without adding. Once
+speech finishes, another replay can queue behind its follow-up recording.
+It counts against the
 64-item and 256 KiB queue limits after normal progress eviction. Before evicting
 anything, native checks whether the replay would fit once every pending progress
 item had yielded. If it would not, the request fails with `voice_queue_full` and
@@ -321,8 +337,8 @@ them as drops. Drain would not filter a replay later, so it would otherwise play
 whenever the service next started. Pending automatic items stay queued and face
 notification eligibility when drain resumes. A settings change rebuilds a
 pending replay from its stored request with the current cleanup setting, and the
-speech text limit chunks it when it starts. Skip ends a replay and Stop cancels
-it; neither listens afterwards. Ending a replay never discards
+speech text limit chunks it when it starts. Skip ends the replay's speech and
+applies current Auto-listen; Stop cancels the interaction. Ending a replay never discards
 client turn actions, completes a notification ID, or signals reply drain. Like
 any playback, a speech configuration change or focus loss ends it, and an
 explicit Stop still clears pending agent client actions.
@@ -342,7 +358,7 @@ command calls the bridge's queue function and publishes state before answering:
 | --- | --- |
 | The replay is the active item after queueing | `applied`, `replay_playing` |
 | The replay waits behind other voice work | `applied`, `replay_queued` |
-| That thread and turn's replay is already active or pending | `noop`, `replay_already_queued` |
+| That thread and turn's speech is already playing or pending | `noop`, `replay_already_queued` |
 | No started session, speech not ready, or no binding | `noop`, `voice_not_ready` |
 | Empty prepared text | `failed`, `voice_reply_empty` |
 | The replay does not fit the queue | `failed`, `voice_queue_full` |
@@ -357,7 +373,7 @@ queued it. The bridge still treats a duplicate as success.
 ## Activity authority and live progress
 
 `GET /api/threads/:threadId/input-context` returns current non-attaching runtime
-authority, activity token, run state, automatic-listen eligibility, and any
+authority, activity token, run state, automatic- and manual-listen eligibility, and any
 available normalized steering target. Reading it never attaches a backend.
 
 Activity tokens are independent of inventory revisions. Admission and lifecycle

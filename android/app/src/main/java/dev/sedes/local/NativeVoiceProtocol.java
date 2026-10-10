@@ -21,13 +21,14 @@ final class NativeVoiceProtocol {
         return result;
     }
     static void inputContext(JSONObject value) {
-        NativeVoiceJson.keys(value, "threadId", "activityToken", "authority", "runState", "sourceTurnId", "automaticListenEligible", "steer");
+        NativeVoiceJson.keys(value, "threadId", "activityToken", "authority", "runState", "sourceTurnId", "automaticListenEligible", "manualListenEligible", "steer");
         uuid(value, "threadId"); NativeVoiceJson.string(value, "activityToken", 160);
         choice(value, "authority", "current", "unbound", "unavailable");
         if (!value.has("runState")) throw new IllegalArgumentException("invalid_runState");
         if (!value.isNull("runState")) choice(value, "runState", "idle", "starting", "running", "waiting_for_approval", "waiting_for_input", "stopping", "failed", "disconnected", "reconciling");
         if (value.has("sourceTurnId")) NativeVoiceJson.string(value, "sourceTurnId", 160);
         NativeVoiceJson.bool(value, "automaticListenEligible");
+        NativeVoiceJson.bool(value, "manualListenEligible");
         JSONObject steer = NativeVoiceJson.requiredObject(value, "steer");
         String availability = choice(steer, "availability", "available", "unsupported", "unavailable");
         NativeVoiceJson.keys(steer, availability.equals("available") ? new String[] { "availability", "target" } : new String[] { "availability" });

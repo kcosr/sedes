@@ -5,6 +5,23 @@ import org.junit.Test;
 
 /** Pure runtime policy: blank input, definitive rejection, reconnect backoff and user-facing failure messages. */
 public class NativeVoiceRuntimePolicyTest {
+    @Test public void replayRepliesUseFreshManualAvailabilityRatherThanHistoricalTurnOrAutomaticAuthority() {
+        org.json.JSONObject current = NativeVoiceJson.object("threadId", "13b02f0b-3060-4d6f-a3e0-60b5fa757011",
+            "activityToken", "current-epoch", "authority", "unavailable", "runState", null,
+            "automaticListenEligible", false, "manualListenEligible", true,
+            "steer", NativeVoiceJson.object("availability", "unavailable"));
+        NativeVoiceProtocol.inputContext(current);
+        assertTrue("A dormant but writable thread can receive a fresh reply", NativeVoiceRuntime.replayTargetCurrent(current, null));
+        assertTrue(NativeVoiceRuntime.replayTargetCurrent(current, "current-epoch"));
+        NativeVoiceJson.put(current, "authority", "current"); NativeVoiceJson.put(current, "runState", "running");
+        NativeVoiceJson.put(current, "sourceTurnId", "newer-than-replayed-turn");
+        assertTrue("Current manual readiness can allow queued input on a running thread", NativeVoiceRuntime.replayTargetCurrent(current, null));
+        assertFalse("New activity during the start cue prevents capture", NativeVoiceRuntime.replayTargetCurrent(current, "older-epoch"));
+        NativeVoiceJson.put(current, "manualListenEligible", false);
+        NativeVoiceJson.put(current, "automaticListenEligible", true);
+        assertFalse("Replay requires manual readiness, regardless of notification eligibility", NativeVoiceRuntime.replayTargetCurrent(current, null));
+        assertFalse(NativeVoiceRuntime.replayTargetCurrent(current, "current-epoch"));
+    }
     @Test public void captureSettingsCompareMicrophoneIdentityByValue() throws Exception {
         java.lang.reflect.Method changed = NativeVoiceRuntime.class.getDeclaredMethod("captureSettingsChanged", NativeVoiceSettings.class, NativeVoiceSettings.class);
         changed.setAccessible(true);

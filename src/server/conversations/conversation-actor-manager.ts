@@ -375,10 +375,23 @@ export class ConversationActorManager {
     };
   }
 
+  /** Absence permits a fresh attach only when no live owner or retirement fence reserves this scoped thread. */
+  isInputRuntimeDormant(
+    scope: Pick<ExecutionScope, "tenantId" | "principalId">,
+    applicationThreadId: string,
+  ): boolean {
+    const key = scopedActorKey(scope, applicationThreadId);
+    return !this.#closing && !this.#maintenance.has(key) && !this.#entries.has(key);
+  }
+
   #publishInputActivity(entry: ActorEntry): void {
     const scope = { tenantId: entry.budgetScope.tenantId, principalId: entry.budgetScope.principalId };
+    this.#publishThreadInputActivity(scope, entry.applicationThreadId);
+  }
+
+  #publishThreadInputActivity(scope: Pick<ExecutionScope, "tenantId" | "principalId">, applicationThreadId: string): void {
     for (const listener of [...this.#inputActivityListeners]) {
-      try { listener(scope, entry.applicationThreadId); }
+      try { listener(scope, applicationThreadId); }
       catch { /* Input observation cannot affect actor ownership. */ }
     }
   }
@@ -651,8 +664,7 @@ export class ConversationActorManager {
       void completion.catch(() => undefined);
       const maintenance = { completion, resolve, reject };
       this.#maintenance.set(key, maintenance);
-      const observedEntry = this.#entries.get(key);
-      if (observedEntry) this.#publishInputActivity(observedEntry);
+      this.#publishThreadInputActivity(input.scope, input.applicationThreadId);
       let retirementUnproven:
         ConversationActorRetirementUnprovenError | undefined;
       try {
@@ -680,8 +692,8 @@ export class ConversationActorManager {
           } else {
             this.#maintenance.delete(key);
             maintenance.resolve();
-            if (observedEntry) this.#publishInputActivity(observedEntry);
           }
+          this.#publishThreadInputActivity(input.scope, input.applicationThreadId);
         }
       }
     }
@@ -707,8 +719,7 @@ export class ConversationActorManager {
       void completion.catch(() => undefined);
       const maintenance = { completion, resolve, reject };
       for (const key of keys) this.#maintenance.set(key, maintenance);
-      const observedEntries = keys.flatMap(key => this.#entries.get(key) ?? []);
-      for (const entry of observedEntries) this.#publishInputActivity(entry);
+      for (const threadId of new Set(input.applicationThreadIds)) this.#publishThreadInputActivity(input.scope, threadId);
       let retirementUnproven: ConversationActorRetirementUnprovenError | undefined;
       try {
         let releaseCleanup!: () => void;
@@ -763,8 +774,8 @@ export class ConversationActorManager {
         else {
           for (const key of keys) if (this.#maintenance.get(key) === maintenance) this.#maintenance.delete(key);
           maintenance.resolve();
-          for (const entry of observedEntries) this.#publishInputActivity(entry);
         }
+        for (const threadId of new Set(input.applicationThreadIds)) this.#publishThreadInputActivity(input.scope, threadId);
       }
     }
   }

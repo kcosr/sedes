@@ -3,6 +3,8 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { ConversationInputRuntimeObservation } from "../../src/server/conversations/conversation-actor-manager.js";
 import { ThreadActivityService } from "../../src/server/conversations/thread-activity-service.js";
 import { DirectInputRepository } from "../../src/server/db/repositories/direct-input-repository.js";
+import { QueuedInputRepository } from "../../src/server/db/repositories/queued-input-repository.js";
+import { threadInputContextSchema } from "../../src/shared/protocol/thread-input.js";
 import { createInMemoryThreadRuntimeHarness } from "../support/in-memory-thread-runtime-harness.js";
 
 type Harness = Awaited<ReturnType<typeof createInMemoryThreadRuntimeHarness>>;
@@ -33,7 +35,8 @@ describe("thread activity authority", { timeout: 30_000 }, () => {
     let listener: ((scope: { tenantId: string; principalId: string }, id: string) => void) | undefined;
     const activity = new ThreadActivityService({
       database: h.database,
-      actors: { observeInputRuntime: () => read(), subscribeInputActivity: next => { listener = next; return () => { listener = undefined; }; } },
+      actors: { observeInputRuntime: () => read(), isInputRuntimeDormant: () => read() === undefined,
+        subscribeInputActivity: next => { listener = next; return () => { listener = undefined; }; } },
       presentation: h.mutations.input.presentation,
       ...(now ? { now } : {}),
     });
@@ -46,6 +49,243 @@ describe("thread activity authority", { timeout: 30_000 }, () => {
     ({ ...from, authoritative: false, reestablishing: true });
   const replaced = (from: ConversationInputRuntimeObservation, generation: string): ConversationInputRuntimeObservation =>
     ({ ...from, authoritative: true, reestablishing: false, generation: `${from.ownerGeneration}:${generation}` });
+
+  it("allows fresh input to a dormant thread without treating it as current automatic-listen authority or attaching it", async () => {
+    const { activity } = service(() => undefined);
+    const acquire = vi.spyOn(h.actors, "acquire");
+    const catalog = vi.spyOn(h.driver, "catalog");
+    try {
+      const context = await activity.capture(h.scope, threadId);
+      expect(context).toMatchObject({ authority: "unavailable", runState: null,
+        automaticListenEligible: false, manualListenEligible: true });
+      expect(threadInputContextSchema.parse(context)).toEqual(context);
+      const { manualListenEligible: _eligibility, ...missingManual } = context;
+      expect(threadInputContextSchema.safeParse(missingManual).success).toBe(false);
+      expect(threadInputContextSchema.safeParse({ ...context, manualListenEligible: "true" }).success).toBe(false);
+      expect(acquire).not.toHaveBeenCalled();
+      expect(catalog).not.toHaveBeenCalled();
+      for (const scope of [{ ...h.scope, tenantId: randomUUID() }, { ...h.scope, principalId: randomUUID() }]) {
+        await expect(activity.capture(scope, threadId)).rejects.toMatchObject({ code: "not_found" });
+      }
+      await expect(activity.capture(h.scope, randomUUID())).rejects.toMatchObject({ code: "not_found" });
+      activity.close();
+      expect(await activity.capture(h.scope, threadId)).toMatchObject({ manualListenEligible: false });
+    } finally { acquire.mockRestore(); catalog.mockRestore(); activity.close(); }
+  });
+
+  it("refuses capture throughout retirement of a loaded runtime and permits a fresh dormant attempt afterward", async () => {
+    const current = await createInMemoryThreadRuntimeHarness({ retentionMilliseconds: 60_000 });
+    try {
+      const { applicationThreadId: id } = await current.lifecycle.createServerDraft(current.scope, {
+        workspaceId: current.workspaceRecord.id, connectionProfileId: current.connection.id,
+        title: "Retirement readiness", initialText: "",
+      });
+      await current.mutations.admitInput(current.scope, id, {
+        mutationId: randomUUID(), text: "Start", origin: { clientId: randomUUID() }, runningPolicy: { mode: "queue" },
+      });
+      await vi.waitFor(() => expect(current.actors.observeInputRuntime(current.scope, id)?.settled).toBe(true), { timeout: 15_000 });
+      await Promise.all(current.completionFollowUps.splice(0));
+      const before = await current.mutations.inputContext(current.scope, id);
+      expect(before).toMatchObject({ authority: "current", manualListenEligible: true });
+      const acquire = vi.spyOn(current.actors, "acquire");
+      const catalog = vi.spyOn(current.driver, "catalog");
+      const checkReserved = async () => {
+        expect(current.actors.observeInputRuntime(current.scope, id)).toBeUndefined();
+        expect(current.actors.isInputRuntimeDormant(current.scope, id)).toBe(false);
+        const context = await current.mutations.inputContext(current.scope, id);
+        expect(context).toMatchObject({ authority: "unavailable", manualListenEligible: false, automaticListenEligible: false });
+        expect(context.activityToken).not.toBe(before.activityToken);
+      };
+      await current.runtimes.runWithRuntimeRetired(current.scope, id, checkReserved);
+      expect(current.actors.isInputRuntimeDormant(current.scope, id)).toBe(true);
+      const after = await current.mutations.inputContext(current.scope, id);
+      expect(after).toMatchObject({ authority: "unavailable", manualListenEligible: true, automaticListenEligible: false });
+      expect(after.activityToken).not.toBe(before.activityToken);
+      expect(acquire).not.toHaveBeenCalled();
+      expect(catalog).not.toHaveBeenCalled();
+    } finally { vi.restoreAllMocks(); await current.close(); }
+  });
+
+  it.each(["retirement", "explicit stop"] as const)("publishes %s fences even without an actor, preventing dormant ABA", async kind => {
+    const current = await createInMemoryThreadRuntimeHarness();
+    try {
+      const { applicationThreadId: id } = await current.lifecycle.createServerDraft(current.scope, {
+        workspaceId: current.workspaceRecord.id, connectionProfileId: current.connection.id,
+        title: "Dormant maintenance", initialText: "",
+      });
+      const before = await current.mutations.inputContext(current.scope, id);
+      expect(before.manualListenEligible).toBe(true);
+      const notifications = vi.fn();
+      const unsubscribe = current.actors.subscribeInputActivity(notifications);
+      const maintain = (operation: () => Promise<void>) => kind === "retirement"
+        ? current.actors.runWithRuntimeRetired({ scope: current.scope, applicationThreadId: id,
+          disposition: { kind: "idle" }, detachCoordinatorRuntime: async () => {}, operation })
+        : current.actors.runWithRuntimesStopped({ scope: current.scope, applicationThreadIds: [id],
+          stopOwnedResources: async () => {}, detachCoordinatorRuntimes: async () => {}, retireLocalRuntime: operation });
+      await maintain(async () => {
+        expect(current.actors.isInputRuntimeDormant(current.scope, id)).toBe(false);
+        expect(await current.mutations.inputContext(current.scope, id)).toMatchObject({ manualListenEligible: false });
+        await expect(current.mutations.inputContext({ ...current.scope, principalId: randomUUID() }, id))
+          .rejects.toMatchObject({ code: "not_found" });
+      });
+      expect(notifications).toHaveBeenCalledTimes(2);
+      expect(notifications).toHaveBeenNthCalledWith(1, current.scope, id);
+      expect(notifications).toHaveBeenNthCalledWith(2, current.scope, id);
+      const after = await current.mutations.inputContext(current.scope, id);
+      expect(after.manualListenEligible).toBe(true);
+      expect(after.activityToken).not.toBe(before.activityToken);
+      // No read inside this next maintenance cycle: publication must still fence
+      // a voice cue spanning the complete dormant -> reserved -> dormant cycle.
+      await maintain(async () => {});
+      expect((await current.mutations.inputContext(current.scope, id)).activityToken).not.toBe(after.activityToken);
+      unsubscribe();
+    } finally { await current.close(); }
+  });
+
+  it.each(["retirement", "explicit stop"] as const)("keeps a rejected %s fence ineligible after the operation returns", async kind => {
+    const current = await createInMemoryThreadRuntimeHarness();
+    try {
+      const { applicationThreadId: id } = await current.lifecycle.createServerDraft(current.scope, {
+        workspaceId: current.workspaceRecord.id, connectionProfileId: current.connection.id,
+        title: "Unproven retirement", initialText: "",
+      });
+      expect((await current.mutations.inputContext(current.scope, id)).manualListenEligible).toBe(true);
+      const notifications = vi.fn();
+      const unsubscribe = current.actors.subscribeInputActivity(notifications);
+      const failedCleanup = async () => { throw new Error("test_cleanup_unproven"); };
+      const operation = vi.fn(async () => {});
+      const maintenance = kind === "retirement"
+        ? current.actors.runWithRuntimeRetired({ scope: current.scope, applicationThreadId: id,
+          disposition: { kind: "idle" }, detachCoordinatorRuntime: failedCleanup, operation })
+        : current.actors.runWithRuntimesStopped({ scope: current.scope, applicationThreadIds: [id],
+          stopOwnedResources: async () => {}, detachCoordinatorRuntimes: failedCleanup, retireLocalRuntime: operation });
+      await expect(maintenance).rejects.toMatchObject({ name: "ConversationActorRetirementUnprovenError" });
+      expect(operation).not.toHaveBeenCalled();
+      expect(notifications).toHaveBeenCalledTimes(2);
+      expect(current.actors.observeInputRuntime(current.scope, id)).toBeUndefined();
+      expect(current.actors.isInputRuntimeDormant(current.scope, id)).toBe(false);
+      expect(await current.mutations.inputContext(current.scope, id)).toMatchObject({ manualListenEligible: false });
+      expect(await current.mutations.inputContext(current.scope, id)).toMatchObject({ manualListenEligible: false });
+      unsubscribe();
+    } finally { await current.close(); }
+  });
+
+  // The five providers' normalized dispositions: Queue is shared application
+  // delivery wherever Submit is supported, and never requires native Steer.
+  it.each([
+    { backend: "Pi", steerTarget: "turn" },
+    { backend: "Codex", steerTarget: "turn" },
+    { backend: "Claude", steerTarget: "conversation" },
+    { backend: "Grok", steerTarget: null },
+    { backend: "OpenCode", steerTarget: "conversation" },
+  ] as const)("uses $backend's current Submit capability for fresh input, including running Queue", async ({ steerTarget }) => {
+    let observation: ConversationInputRuntimeObservation = { ...settled, backendCapabilities: { ...settled.backendCapabilities,
+      deliveryModes: steerTarget === null ? ["submit" as const] : ["submit" as const, "steer" as const], steerTarget } };
+    const { activity } = service(() => observation);
+    try {
+      expect(await activity.capture(h.scope, threadId)).toMatchObject({ automaticListenEligible: true, manualListenEligible: true });
+      for (const runState of ["running", "waiting_for_input", "waiting_for_approval"] as const) {
+        observation = { ...observation, settled: false, runState, sourceTurnStatus: "in_progress" };
+        expect(await activity.capture(h.scope, threadId)).toMatchObject({ automaticListenEligible: false, manualListenEligible: true });
+      }
+      observation = { ...observation, backendCapabilities: { ...observation.backendCapabilities, deliveryModes: [] } };
+      expect(await activity.capture(h.scope, threadId)).toMatchObject({ manualListenEligible: false });
+      observation = { ...settled, backendCapabilities: { ...observation.backendCapabilities, deliveryModes: [] } };
+      expect(await activity.capture(h.scope, threadId)).toMatchObject({ automaticListenEligible: false, manualListenEligible: false });
+    } finally { activity.close(); }
+  });
+
+  it.each(["starting", "stopping", "reconciling", "disconnected"] as const)("refuses fresh capture during a retained %s runtime", async runState => {
+    const { activity } = service(() => ({ ...settled, runState, settled: false }));
+    try { expect(await activity.capture(h.scope, threadId)).toMatchObject({ manualListenEligible: false }); }
+    finally { activity.close(); }
+  });
+
+  it("refuses stale cached target policy and read-only or incomplete settings for dormant input", async () => {
+    const { activity } = service(() => undefined);
+    const presentation = h.mutations.input.presentation;
+    const current = await presentation.readCached(h.scope, threadId);
+    const cached = vi.spyOn(presentation, "readCached");
+    try {
+      for (const policy of [
+        { ...current, inputTargetAvailable: false },
+        { ...current, interactionMode: "read_only" as const },
+        { ...current, settingDescriptors: [{ id: "model" as const, label: { text: "Model" },
+          requiredForFirstSubmission: true, available: true, options: [] }] },
+      ]) {
+        cached.mockResolvedValueOnce(policy);
+        expect(await activity.capture(h.scope, threadId)).toMatchObject({ manualListenEligible: false });
+      }
+      let release!: (value: typeof current) => void;
+      cached.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
+      const pending = activity.capture(h.scope, threadId);
+      h.database.prepare("UPDATE application_threads SET input_activity_revision = input_activity_revision + 1 WHERE id = ?").run(threadId);
+      release(current);
+      expect(await pending).toMatchObject({ manualListenEligible: false });
+      expect(await activity.capture(h.scope, threadId)).toMatchObject({ manualListenEligible: true });
+    } finally { cached.mockRestore(); activity.close(); }
+  });
+
+  it.each([
+    ["archived", "UPDATE thread_principal_state SET inventory_state = 'archived' WHERE thread_id = ?", "thread"],
+    ["snoozed", "UPDATE thread_principal_state SET inventory_state = 'snoozed', snoozed_at = 1, snoozed_until = 2 WHERE thread_id = ?", "thread"],
+    ["missing", "UPDATE application_threads SET availability = 'missing' WHERE id = ?", "thread"],
+    ["creating", "UPDATE application_threads SET backing_state = 'creating' WHERE id = ?", "thread"],
+    ["creation recovery", "UPDATE application_threads SET backing_state = 'creation_unknown' WHERE id = ?", "thread"],
+    ["workspace unavailable", "UPDATE workspaces SET availability = 'unavailable' WHERE id = ?", "workspace"],
+    ["workspace removed", "UPDATE workspaces SET removed_at = 1 WHERE id = ?", "workspace"],
+    ["project removed", "UPDATE projects SET removed_at = 1 WHERE id = (SELECT project_id FROM workspaces WHERE id = ?)", "workspace"],
+    ["backend disabled", "UPDATE agent_backend_instances SET enabled = 0 WHERE id = ?", "backend"],
+    ["backend configuration changed", "UPDATE agent_backend_instances SET configuration_revision = configuration_revision + 1 WHERE id = ?", "backend"],
+    ["connection disabled", "UPDATE agent_connection_profiles SET enabled = 0 WHERE id = ?", "connection"],
+    ["environment unavailable", "UPDATE execution_environments SET availability = 'unavailable', diagnostic_code = 'test_unavailable' WHERE id = ?", "environment"],
+  ] as const)("refuses dormant capture when %s", async (_name, sql, target) => {
+    const id = target === "thread" ? threadId : target === "workspace" ? h.workspaceRecord.id
+      : target === "backend" ? h.driver.instance.id : target === "connection" ? h.connection.id : h.connection.executionEnvironmentId;
+    const { activity } = service(() => undefined);
+    h.database.exec("SAVEPOINT manual_readiness");
+    try {
+      if (_name === "project removed") h.database.prepare("UPDATE workspaces SET removed_at = 1 WHERE id = ?").run(h.workspaceRecord.id);
+      h.database.prepare(sql).run(id);
+      expect(await activity.capture(h.scope, threadId)).toMatchObject({ manualListenEligible: false });
+    } finally { h.database.exec("ROLLBACK TO manual_readiness; RELEASE manual_readiness"); activity.close(); }
+  });
+
+  it("allows queue backlog but refuses the same capacity limit as admission", async () => {
+    const { activity } = service(() => ({ ...settled, runState: "running", settled: false }));
+    const queue = new QueuedInputRepository(h.database);
+    h.database.exec("SAVEPOINT manual_queue_capacity");
+    const enqueue = () => queue.enqueue(h.scope, threadId, { mutationId: randomUUID(), text: "Queued input",
+      contextExcerpts: [], attachmentIds: [], taskReferences: [], source: { kind: "direct_input",
+        expectedThreadRevision: h.inventoryRepository.getThread(h.scope, threadId).thread.revision,
+        resolvedDeliveryMode: "queue" }, now: Date.now() });
+    try {
+      h.database.transaction(() => { for (let index = 0; index < 499; index++) enqueue(); })();
+      expect(await activity.capture(h.scope, threadId)).toMatchObject({ automaticListenEligible: false, manualListenEligible: true });
+      enqueue();
+      expect(await activity.capture(h.scope, threadId)).toMatchObject({ manualListenEligible: false });
+      expect(enqueue).toThrow("active-item limit");
+    } finally { h.database.exec("ROLLBACK TO manual_queue_capacity; RELEASE manual_queue_capacity"); activity.close(); }
+  });
+
+  it.each([
+    { result: "uncertain", source: "queued_input", eligible: false },
+    { result: "pending_materialization", source: "draft", eligible: false },
+    { result: "pending_materialization", source: "queued_input", eligible: true },
+  ])("distinguishes $source $result from new-input admission recovery", async ({ result, source, eligible }) => {
+    const { activity } = service(() => ({ ...settled, runState: "running", settled: false }));
+    const mutationId = randomUUID();
+    try {
+      h.database.prepare(`INSERT INTO mutation_receipts
+        (tenant_id, principal_id, thread_id, mutation_id, operation_kind, request_fingerprint, result_code, result_json, replayable, created_at)
+        VALUES (?, ?, ?, ?, 'conversation_steer', ?, ?, ?, 0, ?)`)
+        .run(h.scope.tenantId, h.scope.principalId, threadId, mutationId, "a".repeat(64), result, JSON.stringify({ source }), Date.now());
+      expect(await activity.capture(h.scope, threadId)).toMatchObject({ manualListenEligible: eligible });
+    } finally {
+      h.database.prepare("DELETE FROM mutation_receipts WHERE mutation_id = ?").run(mutationId);
+      activity.close();
+    }
+  });
 
   it("keeps the completion target through a replacement snapshot between the terminal bookend and idle", async () => {
     let observation: Observation = terminalUnsettled();

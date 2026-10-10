@@ -112,7 +112,9 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         String completionCueId;
         boolean retryAfterCompletionCue;
         Runnable afterCompletionCue;
-        boolean automatic, followUp, stopped, recognitionFinalized, submissionNotified, clientVoiceOnly;
+        boolean automatic, followUp, replayListening, stopped, recognitionFinalized, submissionNotified, clientVoiceOnly;
+        /** Fresh current authority for a replay's optional listen, never the historical replay turn. */
+        String replayActivityToken;
         long clientVoiceExpiresAt;
         NativeSpeechTransport.Request speechRequest;
         volatile NativeVoiceRecording recording;
@@ -135,7 +137,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         NativeVoiceCapturePolicy.End endpoint;
         /** A server notification; null for manual work and replays, so notification-only paths skip them. */
         final NativeVoiceQueue.Item notification;
-        /** A local, user-requested replay: no envelope, follow-up, client turn action, or automatic policy. */
+        /** A local, user-requested replay: no envelope, client turn action, or notification policy. */
         final NativeVoiceQueue.Item replay;
         final List<String> chunks;
         int chunk;
@@ -548,7 +550,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
             if (!previous.mode().equals(next.mode()) && active != null && active.automatic && active.admission == null)
                 cancelActive(true, "audio_mode_changed");
             queue.reconfigure(next);
-            if (!next.flag("autoListen") && active != null && active.automatic && !phase.equals("submitting") &&
+            if (!next.flag("autoListen") && active != null && (active.automatic || active.replayListening) && !phase.equals("submitting") &&
                 (phase.equals("validating") || phase.equals("arming") || phase.equals("listening") || phase.equals("recognizing"))) cancelActive(true, "auto_listen_disabled");
             if (active != null && active.automatic && active.notification != null && !eligible(active.notification)) cancelActive(true, "voice_filter_changed");
             if (!sessionStarted && userInitiated) requestSessionStart();
@@ -899,6 +901,14 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
     private void afterSpeech(Active item) {
         if (active != item || item.stopped) return;
         item.ttsId = null;
+        if (item.replay != null) {
+            // Replay is an explicit request. Its optional listen uses current manual-input readiness,
+            // independently of notification policy and the ended turn whose text was read aloud.
+            if (!settings.flag("autoListen") || !canListen()) { finishItem(item); return; }
+            item.targetId = item.replay.threadId; item.targetTitle = item.replay.threadTitle;
+            item.replayListening = true;
+            validateTarget(item, false); return;
+        }
         if (clientSuppressesFollowup(item.notification)) { finishItem(item); return; }
         if (!item.followUp || !settings.flag("autoListen") || item.notification == null || !eligible(item.notification) ||
             (settings.mode().equals("manual") && !item.event.equals("turn.completed"))) { finishItem(item); return; }
@@ -916,7 +926,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         return true;
     }
     private void validateTarget(Active item, boolean automatic, boolean playCue) {
-        if (automatic && defaultHeldBlocked()) { finishItem(item); return; }
+        if ((automatic || item.replayListening) && defaultHeldBlocked()) { finishItem(item); return; }
         phase = "validating"; publish();
         long generation = connectionGeneration;
         http.request(origin, credential, null, "GET", "/api/threads/" + Uri.encode(item.targetId) + "/input-context", null,
@@ -933,13 +943,24 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
                         !value.optString("authority").equals("current") || !target.optString("activityToken").equals(value.optString("activityToken")) ||
                         (target.has("sourceTurnId") && !target.optString("sourceTurnId").equals(value.optString("sourceTurnId")))) { finishItem(item); return; }
                 }
+                if (item.replayListening) {
+                    if (!settings.flag("autoListen") || !canListen() ||
+                        !replayTargetCurrent(value, playCue ? null : item.replayActivityToken)) { finishItem(item); return; }
+                    if (playCue) item.replayActivityToken = value.optString("activityToken");
+                }
                 if (playCue) arm(item); else beginCapture(item);
             }));
     }
+    /** A replay may reply to a running or dormant thread; its current manual-input policy supplies authority. */
+    static boolean replayTargetCurrent(JSONObject context, String expectedActivityToken) {
+        return context.optBoolean("manualListenEligible") &&
+            (expectedActivityToken == null || expectedActivityToken.equals(context.optString("activityToken")));
+    }
     private void arm(Active item) {
         if (active != item || !sessionStarted || !speechReady() || !audio.hasPermission()) { failActive("voice_not_ready"); return; }
-        if (defaultHeldBlocked()) { if (item.automatic) finishItem(item); else failActive("saved_recording_pending"); return; }
+        if (defaultHeldBlocked()) { if (item.automatic || item.replayListening) finishItem(item); else failActive("saved_recording_pending"); return; }
         if (item.automatic && (!settings.flag("autoListen") || !eligible(item.notification))) { finishItem(item); return; }
+        if (item.replayListening && (!settings.flag("autoListen") || !canListen())) { finishItem(item); return; }
         phase = "arming"; item.cueId = UUID.randomUUID().toString(); publish();
         String cue = item.cueId;
         handler.postDelayed(() -> { if (active == item && cue.equals(item.cueId)) failActive("recognition_cue_timeout"); }, 15000);
@@ -950,19 +971,21 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
     private void capture(Active item) {
         if (active != item || item.stopped || !sessionStarted || !speechReady()) return;
         if (item.automatic && (!settings.flag("autoListen") || !eligible(item.notification))) { finishItem(item); return; }
+        if (item.replayListening && (!settings.flag("autoListen") || !canListen())) { finishItem(item); return; }
         item.cueId = null;
         // The cue is asynchronous. A newer server activity epoch during it must prevent recording.
-        if (item.automatic) validateTarget(item, true, false); else beginCapture(item);
+        if (item.automatic || item.replayListening) validateTarget(item, item.automatic, false); else beginCapture(item);
     }
     private void beginCapture(Active item) {
         if (active != item || item.stopped || !sessionStarted || !speechReady()) return;
         if (!clientVoiceStartCurrent(item)) return;
         if (item.automatic && (!settings.flag("autoListen") || !eligible(item.notification))) { finishItem(item); return; }
+        if (item.replayListening && (!settings.flag("autoListen") || !canListen())) { finishItem(item); return; }
         // This preference belongs to the new recording; later edits affect only the next capture.
         final boolean defaultHeld = settings.flag("keepListeningByDefault");
         if (defaultHeldBlocked()) { failActive("saved_recording_pending"); return; }
         item.defaultHeld = defaultHeld;
-        if (defaultHeld) { item.automatic = false; clientActions.clear(); inputSubmissionContext = new Object(); }
+        if (defaultHeld) { item.automatic = false; item.replayListening = false; clientActions.clear(); inputSubmissionContext = new Object(); }
         item.recordingId = UUID.randomUUID().toString(); item.captureId = UUID.randomUUID().toString();
         item.recordingBinding = binding; item.recordingSettings = settings; phase = "arming";
         item.adopted = false; item.keepListening = false; item.reconnecting = false; item.longDictationDeadline = 0;
@@ -1067,7 +1090,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         PLAYING("replay_playing"),
         /** The replay waits behind current speech, recording, or saved-recording recovery. */
         QUEUED("replay_queued"),
-        /** That thread and turn's replay was already active or pending; nothing was added. */
+        /** That thread and turn's speech was already playing or pending; nothing was added. */
         DUPLICATE("replay_already_queued");
         final String reason;
         ReplayDisposition(String reason) { this.reason = reason; }
@@ -1084,7 +1107,8 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
     private ReplayDisposition queueReplay(JSONObject request) {
         if (!sessionStarted || !settings.active() || !speechReady() || binding == null) throw new IllegalStateException("voice_not_ready");
         NativeVoiceQueue.Item item = NativeVoiceQueue.Item.replay(request, replayTitle(request), settings);
-        if (active != null && active.replay != null && active.replay.replayIdentity().equals(item.replayIdentity())) return ReplayDisposition.DUPLICATE;
+        if (active != null && active.replay != null && (phase.equals("synthesizing") || phase.equals("speaking")) &&
+            active.replay.replayIdentity().equals(item.replayIdentity())) return ReplayDisposition.DUPLICATE;
         if (!queue.addReplay(item)) return ReplayDisposition.DUPLICATE;
         drain();
         return active != null && active.replay == item ? ReplayDisposition.PLAYING : ReplayDisposition.QUEUED;
@@ -1167,7 +1191,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
                 item.recordingMutationPending = false;
                 if (error != null) { publish(); reply.failed(code(error), message(code(error))); return; }
                 // This edit was accepted before any finishing boundary, even if its durable acknowledgment arrived later.
-                item.targetId = target; item.targetTitle = title; item.automatic = false;
+                item.targetId = target; item.targetTitle = title; item.automatic = false; item.replayListening = false;
                 item.record = record; acceptDictation(record); publish(); reply.done(snapshot());
             });
         } finally {
@@ -1194,7 +1218,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         synchronized (item.captureLock) {
             if (item.captureStopping || item.endpointReached) throw new IllegalStateException("voice_not_listening");
             if (enabled) {
-                item.capturePolicy.setHeld(true); item.automatic = false; item.adopted = true;
+                item.capturePolicy.setHeld(true); item.automatic = false; item.replayListening = false; item.adopted = true;
                 if (item.longDictationDeadline == 0) item.longDictationDeadline = SystemClock.elapsedRealtime() + item.recordingSettings.number("longDictationTimeoutMs");
             }
             item.recordingMutationPending = true;

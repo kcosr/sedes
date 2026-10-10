@@ -89,7 +89,8 @@ or the next interaction.
 To hear a reply again, tap **Play response aloud**, the speaker after **Copy
 response** in a finished turn's footer. It appears only while voice is set to
 Manual or Response with speech configured. The reply joins the voice queue
-behind anything already playing and never listens afterward. It reads the
+behind anything already playing. With **Auto-listen** on, it can then record a
+new message to that reply's thread when the thread currently accepts input. It reads the
 response text that a spoken completion would. When the phases selected under
 **Response text** hold no text, it reads the whole reply instead. That happens
 when **Response text** selects no phases, or when the turn has text only in

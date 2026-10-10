@@ -1,4 +1,4 @@
-import { initialThreadSettingsReady } from "./thread-input-readiness.js";
+import { initialThreadSettingsReady, threadInputDeliveryAvailability } from "./thread-input-readiness.js";
 import type { UsageService } from "../usage/usage-service.js";
 import { createHash } from "node:crypto";
 import type { BackendCapabilityDocument } from "../../shared/protocol/backend.js";
@@ -208,7 +208,12 @@ export interface ThreadApplicationPresentationReader {
     scope: RequestScope,
     applicationThreadId: string,
     effectiveSettings?: BackendEffectiveSettings,
-  ): Promise<ThreadApplicationPresentation>;
+  ): Promise<CachedThreadApplicationPresentation>;
+}
+
+export interface CachedThreadApplicationPresentation extends ThreadApplicationPresentation {
+  /** Scoped local target policy allows attempting input without attaching a provider. */
+  readonly inputTargetAvailable: boolean;
 }
 
 export interface ThreadApplicationRecoveryReader {
@@ -1001,6 +1006,15 @@ function composeCapabilities(input: {
     !input.exclusivePendingSteer &&
     input.backendCapabilities.deliveryModes.includes("steer");
   const initialSettingsReady = initialThreadSettingsReady(input.presentation);
+  const inputDelivery = threadInputDeliveryAvailability({
+    backingState: input.inventory.thread.backingState,
+    inventoryState: input.inventory.thread.inventoryState,
+    available, interactive, settingsReady: initialSettingsReady,
+    exclusivePendingSteer: input.exclusivePendingSteer,
+    runState: input.runState,
+    submitSupported: input.backendCapabilities.deliveryModes.includes("submit"),
+    queuedInputCount: input.queue.length,
+  });
   const settingsMutationQueueBlocked = input.queue.some(
     ({ state }) => state !== "failed",
   );
@@ -1204,28 +1218,9 @@ function composeCapabilities(input: {
       id: "submit",
       steerTarget: null,
       label: { text: "Send" },
-      available:
-        interactive &&
-        available &&
-        !archived &&
-        !snoozed &&
-        !input.exclusivePendingSteer &&
-        initialSettingsReady &&
-        (input.inventory.thread.backingState === "unbound" ||
-          (bound &&
-            settled &&
-            input.backendCapabilities.deliveryModes.includes("submit"))),
+      available: inputDelivery.submit,
       ...reason(
-        interactive &&
-          available &&
-          !archived &&
-          !snoozed &&
-          !input.exclusivePendingSteer &&
-          initialSettingsReady &&
-          (input.inventory.thread.backingState === "unbound" ||
-            (bound &&
-              settled &&
-              input.backendCapabilities.deliveryModes.includes("submit"))),
+        inputDelivery.submit,
         input.exclusivePendingSteer
           ? "Wait for the previous steering input to appear before sending again."
           : !initialSettingsReady
@@ -1249,26 +1244,9 @@ function composeCapabilities(input: {
       id: "queue",
       steerTarget: null,
       label: { text: "Queue" },
-      available:
-        available &&
-        !archived &&
-        !snoozed &&
-        bound &&
-        inFlight &&
-        !input.exclusivePendingSteer &&
-        backendCanSubmit &&
-        initialSettingsReady &&
-        input.queue.length < 500,
+      available: inputDelivery.queue,
       ...reason(
-        available &&
-          !archived &&
-          !snoozed &&
-          bound &&
-          inFlight &&
-          !input.exclusivePendingSteer &&
-          backendCanSubmit &&
-          initialSettingsReady &&
-          input.queue.length < 500,
+        inputDelivery.queue,
         input.exclusivePendingSteer
           ? "Wait for the previous steering input to appear before queueing more input."
           : !initialSettingsReady

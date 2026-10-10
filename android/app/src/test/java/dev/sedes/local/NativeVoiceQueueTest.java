@@ -183,7 +183,7 @@ public class NativeVoiceQueueTest {
     private static NativeVoiceQueue.Item replay(String turn, String text, NativeVoiceSettings settings) {
         return replay("thread-a", turn, NativeVoiceJson.object("final", text(text)), settings);
     }
-    @Test public void replaySpeaksTheReplyInNotificationPhaseOrderWithoutContextOrFollowUp() {
+    @Test public void replaySpeaksTheReplyWithoutNotificationContextOrHistoricalListenAuthority() {
         JSONObject result = NativeVoiceJson.object("final", text("**Final answer.**"), "unclassified", text("Earlier text."),
             "provisional", text("Provisional note."));
         NativeVoiceSettings listening = settings("response").patch(1, NativeVoiceJson.object("autoListen", true, "readNotificationContext", true));

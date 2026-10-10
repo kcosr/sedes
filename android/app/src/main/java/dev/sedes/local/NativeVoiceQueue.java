@@ -83,7 +83,8 @@ final class NativeVoiceQueue {
             this.id = id; this.request = request; this.threadTitle = threadTitle;
             envelope = null; event = REPLAY; threadId = request.optString("threadId");
             subject = null; origin = null; target = null; policyGeneration = -1; automatic = false;
-            // Speak-only: a replay never starts listening afterwards.
+            // Notification follow-up authority does not apply to a replay. The runtime evaluates
+            // current Auto-listen and fresh manual-input readiness after replay playback ends.
             followUp = false;
             speech = replaySpeech(request.optJSONObject("assistantResult"), settings);
             bytes = NativeVoiceJson.bytes(speech);

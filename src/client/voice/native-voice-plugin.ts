@@ -97,7 +97,7 @@ export interface NativeVoicePlugin {
   sendRecording(input: NativeRecordingCommandContext): Promise<NativeVoiceState>;
   skipCurrentPlayback(input: NativeVoiceCommandContext): Promise<NativeVoiceState>;
   /**
-   * Queues one ended turn's reply for speech only, behind current work. A pending or playing replay of the same turn is a
+   * Queues one ended turn's reply behind current work, with current Auto-listen applying afterward. A pending or playing replay of the same turn is a
    * successful no-op. Rejects with `voice_not_ready`, `voice_reply_empty` or `voice_queue_full`.
    */
   speakReply(input: NativeVoiceCommandContext & NativeReplySpeech): Promise<NativeVoiceState>;

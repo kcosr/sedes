@@ -9,7 +9,7 @@ public class NativeVoiceProtocolTest {
     private static final String ID = "13b02f0b-3060-4d6f-a3e0-60b5fa757011";
     private JSONObject context() {
         return NativeVoiceJson.object("threadId", ID, "activityToken", "epoch", "authority", "current", "runState", "idle",
-            "automaticListenEligible", true, "steer", NativeVoiceJson.object("availability", "available", "target", NativeVoiceJson.object("kind", "turn", "turnId", "turn-1")));
+            "automaticListenEligible", true, "manualListenEligible", true, "steer", NativeVoiceJson.object("availability", "available", "target", NativeVoiceJson.object("kind", "turn", "turnId", "turn-1")));
     }
     private JSONObject receipt() {
         return NativeVoiceJson.object("mutationId", ID, "threadId", ID, "operationId", ID,
@@ -21,6 +21,10 @@ public class NativeVoiceProtocolTest {
         assertThrows(IllegalArgumentException.class, () -> NativeVoiceProtocol.inputContext(wrongState));
         JSONObject missingState = context(); missingState.remove("runState");
         assertThrows(IllegalArgumentException.class, () -> NativeVoiceProtocol.inputContext(missingState));
+        JSONObject missingManual = context(); missingManual.remove("manualListenEligible");
+        assertThrows(IllegalArgumentException.class, () -> NativeVoiceProtocol.inputContext(missingManual));
+        JSONObject invalidManual = context(); NativeVoiceJson.put(invalidManual, "manualListenEligible", "true");
+        assertThrows(IllegalArgumentException.class, () -> NativeVoiceProtocol.inputContext(invalidManual));
         JSONObject wrongSteer = context(); NativeVoiceJson.put(wrongSteer.optJSONObject("steer").optJSONObject("target"), "turnId", JSONObject.NULL);
         assertThrows(IllegalArgumentException.class, () -> NativeVoiceProtocol.inputContext(wrongSteer));
         JSONObject extraSteer = context(); NativeVoiceJson.put(extraSteer.optJSONObject("steer"), "legacyTarget", ID);
