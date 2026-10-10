@@ -4,8 +4,8 @@ import { App as CapacitorApp } from "@capacitor/app";
  * Android hardware-back policy for the Capacitor `backButton` event (which
  * replaces the WebView default once a listener is registered):
  *
- * 1. An exposed task detail inside the mobile Tasks sheet closes without
- *    dismissing the sheet.
+ * 1. With no overlay open, a task detail open in the Tasks panel in front on
+ *    a phone closes back to its list, as its ‹ Back to tasks does.
  * 2. With no overlay open, a workpad open in the shown Workpads panel closes
  *    back to its list, as the panel's ‹ Workpads does.
  * 3. With no overlay open, a phone thread whose panel in front is not Chat
@@ -42,6 +42,11 @@ export const OPEN_OVERLAY_SELECTORS = [
 ] as const;
 
 export const OPEN_OVERLAY_SELECTOR = OPEN_OVERLAY_SELECTORS.join(", ");
+/**
+ * Asks the Tasks panel in front on a phone to close its open task detail.
+ * The panel cancels the event when it has one open, which is how Back knows
+ * it was handled.
+ */
 export const CLOSE_TASK_DETAIL_EVENT = "sedes:close-task-detail";
 /**
  * Asks a shown Workpads panel to close its open workpad. The panel cancels
@@ -56,19 +61,24 @@ export const CLOSE_WORKPAD_EVENT = "sedes:close-workpad";
 export const SHOW_CHAT_EVENT = "sedes:show-chat";
 
 /**
- * Closes a task detail only when its Tasks sheet is the topmost overlay. A
- * popover or dialog opened from that detail keeps normal Back priority.
+ * One of Back's steps inside the page: dispatches the cancelable `type` when
+ * nothing is open above the page. True when a listener cancelled it, which
+ * is how it says it took Back.
+ */
+function claimBack(type: string): boolean {
+  if (document.querySelector(OPEN_OVERLAY_SELECTOR) !== null) return false;
+  const event = new Event(type, { cancelable: true });
+  window.dispatchEvent(event);
+  return event.defaultPrevented;
+}
+
+/**
+ * Closes the task detail open in the Tasks panel in front on a phone when
+ * nothing is open above the page: an overlay (the task's editor or menu),
+ * or the drawer takes Back first.
  */
 export function closeExposedTaskDetail(): boolean {
-  const detail = document.querySelector(
-    '.tasks-sheet[data-state="open"] [data-task-detail-open="true"]',
-  );
-  const sheet = detail?.closest('.tasks-sheet[data-state="open"]');
-  if (sheet === null || sheet === undefined) return false;
-  const overlays = document.querySelectorAll(OPEN_OVERLAY_SELECTOR);
-  if (overlays.item(overlays.length - 1) !== sheet) return false;
-  window.dispatchEvent(new Event(CLOSE_TASK_DETAIL_EVENT));
-  return true;
+  return claimBack(CLOSE_TASK_DETAIL_EVENT);
 }
 
 /**
@@ -77,10 +87,7 @@ export function closeExposedTaskDetail(): boolean {
  * Back first.
  */
 export function closeExposedWorkpad(): boolean {
-  if (document.querySelector(OPEN_OVERLAY_SELECTOR) !== null) return false;
-  const event = new Event(CLOSE_WORKPAD_EVENT, { cancelable: true });
-  window.dispatchEvent(event);
-  return event.defaultPrevented;
+  return claimBack(CLOSE_WORKPAD_EVENT);
 }
 
 /**
@@ -89,10 +96,7 @@ export function closeExposedWorkpad(): boolean {
  * drawer takes Back first.
  */
 export function showChatInFront(): boolean {
-  if (document.querySelector(OPEN_OVERLAY_SELECTOR) !== null) return false;
-  const event = new Event(SHOW_CHAT_EVENT, { cancelable: true });
-  window.dispatchEvent(event);
-  return event.defaultPrevented;
+  return claimBack(SHOW_CHAT_EVENT);
 }
 
 /**

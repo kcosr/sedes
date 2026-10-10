@@ -3,12 +3,12 @@ import { TasksDockSlot } from "../components/tasks/tasks-host.js";
 import type { WorkspacePanelTenant } from "../workspace-panels/registry.js";
 
 /**
- * Tasks in its region, beside Chat by default. Whether it is loaded, and
- * where, is shared across threads like Workpads, and its content follows
- * the current chat. The content renders the panel header itself (with the
- * layout's Maximize, Move to and close controls), so the layout adds no
- * `PanelChrome` of its own. The retained body lives in the Tasks host,
- * which also presents it as a phone sheet.
+ * Tasks in its region, beside Chat by default, or in front on a phone.
+ * Whether it is loaded, and where, is shared across threads like Workpads,
+ * and its content follows the current chat. The content renders the panel
+ * header itself (with the layout's close, Maximize and Move to controls), so
+ * the layout adds no `PanelChrome` of its own. The retained body lives in the
+ * Tasks host, which gives it the touch layout on phones.
  */
 export const tasksTenant: WorkspacePanelTenant = {
   id: "tasks",

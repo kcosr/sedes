@@ -1,5 +1,4 @@
 import { createPortal } from "react-dom";
-import { StablePaneSlot } from "../../workspace-panels/StablePaneSlot.js";
 import {
   Dialog,
   DialogBody,
@@ -51,7 +50,6 @@ import {
 } from "../../app/keyboard-shortcuts.js";
 import { navigate, threadPath, useRoute, type Route } from "../../app/router.js";
 import { useComposerDraftStaging } from "../../context-excerpts/coordinator.js";
-import { useMediaQuery } from "../../app/use-media-query.js";
 import { useTouchDensity } from "../../app/use-touch-density.js";
 import { CLOSE_TASK_DETAIL_EVENT } from "../../app/android-back.js";
 import {
@@ -127,9 +125,7 @@ import {
   viewUnavailableReason,
 } from "./task-view-model.js";
 import {
-  TASKS_SHEET_QUERY,
   TasksHostContext,
-  TasksSurface,
   type TasksDock,
   type TasksHost,
   type TasksPresentation,
@@ -141,31 +137,32 @@ import "./tasks-panel.css";
 // ───────────────────────────────────────────────────────────────────────────
 
 export interface TasksPanelContentProps {
-  /** Where the content is hosted: a docked workspace panel or a phone sheet. */
+  /** How the panel shows the content: docked on desktop, or on a phone. */
   readonly presentation: TasksPresentation;
   readonly store: ApplicationClientStore;
   readonly panelLayoutStore: Pick<PanelRegionStore, "open">;
   /** The route the panel follows (a retained surface keeps its own). */
   readonly route: Route;
   /**
-   * False while the surface is retained but hidden (Settings): its menus
-   * and dialogs close and come back, with unsaved edits, when shown again.
+   * False while the panel is retained but off stage (hidden, behind another
+   * panel, or under Settings): its menus and dialogs close and come back,
+   * with unsaved edits, when it is shown again.
    */
   readonly active: boolean;
   /**
-   * Closes the phone sheet: its ×, Escape, and the actions that continue
-   * elsewhere (Add to prompt, opening a file or a thread).
-   * An announcement is made by the host, since this content (and its live
-   * region) goes with the surface.
+   * Phones: brings Chat in front of Tasks, which stays loaded, for the
+   * actions that continue there (Add to prompt, following a thread link).
+   * The host makes the announcement, since this content (and its live
+   * region) is parked once Chat is in front.
    */
-  readonly onRequestClose: (announcement?: string) => void;
+  readonly onShowChat: (announcement?: string) => void;
   /**
-   * Docked only: the layout's Maximize, Move to and close controls. The
-   * content then draws its header as the panel's `PanelChrome`, with its
-   * own ⋯ items folded into the panel's actions menu.
+   * The layout's close control, and on desktop its Maximize and Move to.
+   * The content draws its header as the panel's `PanelChrome` with them,
+   * its own ⋯ items folded into the panel's actions menu.
    */
   readonly panelControls?: PanelChromeControls;
-  /** Docked only: the thread environment's tint for the panel header. */
+  /** The thread environment's tint for the panel header. */
   readonly panelEnvironmentTint?: EnvironmentTintStyle;
   /** Whether a task is open in the editor, whose unsaved edits the host keeps. */
   readonly onEditingChange?: (editing: boolean) => void;
@@ -257,8 +254,8 @@ const KEYBOARD_SHORTCUTS: readonly { key: string; action: string }[] = [
 ];
 
 /**
- * The Tasks header and body, for a docked panel or a phone sheet: count and
- * actions, one scope control that follows the current chat, the add row,
+ * The Tasks header and body, docked or on a phone: count and actions, one
+ * scope control that follows the current chat, the add row,
  * search, the list (one flat list in All) with inline detail, and the collapsed
  * Backlog and Completed sections. Pending state is per task and action, so
  * nothing else is ever disabled and focus is never dropped.
@@ -269,7 +266,7 @@ export function TasksPanelContent({
   panelLayoutStore,
   route,
   active,
-  onRequestClose,
+  onShowChat,
   panelControls,
   panelEnvironmentTint,
   onEditingChange,
@@ -317,7 +314,6 @@ export function TasksPanelContent({
   const [pasteCreating, setPasteCreating] = useState(false);
   const pastePinId = useId();
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
-  const [headerMenuOpen, setHeaderMenuOpen] = useState(false);
   const [viewMenuOpen, setViewMenuOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [announcement, setAnnouncement] = useState("");
@@ -461,7 +457,9 @@ export function TasksPanelContent({
   const expandedTask = expandedId
     ? tasks.find(({ id }) => id === expandedId)
     : undefined;
+  // On a phone, an expanded task is a detail view in place of the list.
   const sheetDetail = sheet && expandedTask !== undefined;
+  const detailId = sheetDetail ? expandedTask.id : null;
 
   // ── Effects ──────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -555,26 +553,24 @@ export function TasksPanelContent({
     setFocusRequest(null);
   });
 
-  // Android Back and Escape close the phone detail before the sheet.
+  // Android Back returns from the phone detail to the list before Tasks
+  // gives way to Chat. Cancelling the event tells Back it was handled.
   useEffect(() => {
-    if (!active || !sheet) return undefined;
-    const closeDetail = () => {
-      setExpandedId((current) => {
-        if (current !== null) setFocusRequest(current);
-        return null;
-      });
+    if (!active || detailId === null) return undefined;
+    const closeDetail = (event: Event) => {
+      event.preventDefault();
+      setFocusRequest(detailId);
+      setExpandedId(null);
     };
     window.addEventListener(CLOSE_TASK_DETAIL_EVENT, closeDetail);
     return () => window.removeEventListener(CLOSE_TASK_DETAIL_EVENT, closeDetail);
-  }, [active, sheet]);
+  }, [active, detailId]);
 
   // The phone detail replaces the list: focus starts on its back button.
   useEffect(() => {
     if (!sheetDetail) return;
     lastFocused.current = null;
-    rootRef.current
-      ?.querySelector<HTMLElement>(".tasks-header[data-detail] .tasks-back")
-      ?.focus();
+    rootRef.current?.querySelector<HTMLElement>(".tasks-back")?.focus();
   }, [sheetDetail]);
 
   // An expanded row scrolls into view so its detail is never off-screen.
@@ -660,11 +656,11 @@ export function TasksPanelContent({
       }
       setError(null);
       const message = `Added “${task.title}” to the prompt.`;
-      // On a phone the sheet closes, so the chip arriving is visible.
-      if (sheet) onRequestClose(message);
+      // On a phone Chat comes in front, so the chip arriving is visible.
+      if (sheet) onShowChat(message);
       else announce(message);
     },
-    [announce, composerDraft, onRequestClose, sheet],
+    [announce, composerDraft, onShowChat, sheet],
   );
 
   const openFile = useCallback(
@@ -684,7 +680,8 @@ export function TasksPanelContent({
           return;
         }
         setError(null);
-        const opened = panelLayoutStore.open("files", {
+        // Opening Files moves focus to it, which on a phone puts it in front.
+        panelLayoutStore.open("files", {
           intent: createWorkspaceFilesOpenIntent({
             workspaceId: workspace.id,
             rootId: resolved.rootId,
@@ -693,12 +690,11 @@ export function TasksPanelContent({
             target: { kind: "file" },
           }),
         });
-        if (sheet && opened) onRequestClose();
       } catch (cause) {
         setError(errorMessage(cause));
       }
     },
-    [onRequestClose, panelLayoutStore, sheet, store, workspace],
+    [panelLayoutStore, store, workspace],
   );
 
   // The server refuses to pin a completed task or put it in the backlog.
@@ -750,13 +746,14 @@ export function TasksPanelContent({
       openFile: (path) => void openFile(path),
       openThread: (id) => {
         navigate(threadPath(id));
-        if (sheet) onRequestClose();
+        // On a phone Chat comes in front, for a link to this thread too.
+        if (sheet) onShowChat();
       },
     }),
     [
       addToPrompt,
       moveTo,
-      onRequestClose,
+      onShowChat,
       openFile,
       setCompleted,
       sheet,
@@ -956,9 +953,8 @@ export function TasksPanelContent({
 
   /**
    * Escape inside the content closes one layer at a time: the expanded row
-   * (or the phone detail), then search, then the sheet. Fields that use
-   * Escape themselves (search, the add row) stop it first. The host leaves
-   * Escape from inside the content to this handler.
+   * (or the phone detail), then search; the panel itself stays. Fields that
+   * use Escape themselves (search, the add row) stop it first.
    */
   const onRootKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     // Menus and dialogs portal elsewhere but bubble here through React.
@@ -972,8 +968,6 @@ export function TasksPanelContent({
         setMoveMenuId(null);
       } else if (searchOpen) {
         closeSearch();
-      } else if (sheet) {
-        onRequestClose();
       }
       return;
     }
@@ -1140,16 +1134,13 @@ export function TasksPanelContent({
       unavailableReason={(candidate) => viewUnavailableReason(candidate, context)}
       count={viewCount}
       describeCount={(count) => `${count} open`}
-      segmentProps={(candidate) => ({
-        // A phone sheet opens on the view, not the add bar, so the soft
-        // keyboard does not cover the list on every open.
-        "data-autofocus": sheet && candidate === view ? "" : undefined,
-        ...scopeDrop.props(candidate, scopeDropTarget(candidate)),
-      })}
+      segmentProps={(candidate) =>
+        scopeDrop.props(candidate, scopeDropTarget(candidate))
+      }
     />
   );
 
-  // ⋯: the docked panel folds these into its actions menu instead.
+  // The panel's actions menu (⋯) carries these after its own items.
   const moreItems = (
     <>
       <DropdownMenuItem onSelect={() => focusAdd(true)}>
@@ -1195,8 +1186,8 @@ export function TasksPanelContent({
     </Button>
   );
 
-  // Docked only. Phones have no room for it: the sheet's ⋯ carries the
-  // View options.
+  // Docked only. Phones have no room for it: the panel's ⋯ carries the View
+  // options there.
   const viewOptionsMenu = (
     <DropdownMenu open={active && viewMenuOpen} onOpenChange={setViewMenuOpen}>
       <DropdownMenuTrigger asChild>
@@ -1215,19 +1206,6 @@ export function TasksPanelContent({
         <TaskViewOptionsItems view={view} options={options} onChange={setOptions} />
       </DropdownMenuContent>
     </DropdownMenu>
-  );
-
-  const closeButton = (
-    <Button
-      variant="ghost"
-      size="icon-sm"
-      className="tasks-header-button"
-      aria-label="Close Tasks panel"
-      title="Close"
-      onClick={() => onRequestClose()}
-    >
-      <X aria-hidden="true" />
-    </Button>
   );
 
   // The header counts the open tasks the list shows, the Backlog's
@@ -1274,22 +1252,32 @@ export function TasksPanelContent({
     <ViewFilterChips ref={filtersRef} chips={filters} onRemove={removeFilter} />
   );
 
+  // One header in either presentation: the panel family's, with the
+  // layout's controls. On a phone the task detail replaces the list, and
+  // its header leads back to it.
   const header = sheetDetail ? (
-    <header className="tasks-header" data-detail="true">
-      <Button
-        variant="ghost"
-        size="icon-sm"
-        className="tasks-header-button tasks-back"
-        aria-label="Back to tasks"
-        onClick={() => {
-          setFocusRequest(expandedTask.id);
-          setExpandedId(null);
-        }}
-      >
-        <ChevronLeft aria-hidden="true" />
-      </Button>
-      <h2 className="tasks-title">Task</h2>
-      <div className="tasks-header-actions">
+    <PanelChrome
+      className="tasks-header-chrome tasks-detail-chrome"
+      panelTitle="Tasks"
+      environmentTintStyle={panelEnvironmentTint}
+      leading={
+        <div className="workspace-panel-title tasks-detail-heading">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="tasks-header-button tasks-back"
+            aria-label="Back to tasks"
+            onClick={() => {
+              setFocusRequest(expandedTask.id);
+              setExpandedId(null);
+            }}
+          >
+            <ChevronLeft aria-hidden="true" />
+          </Button>
+          <h2 className="tasks-title">Task</h2>
+        </div>
+      }
+      panelActions={
         <TaskRowMenu
           task={expandedTask}
           focusable
@@ -1304,12 +1292,10 @@ export function TasksPanelContent({
             </Button>
           }
         />
-        {closeButton}
-      </div>
-    </header>
-  ) : presentation === "panel" && panelControls ? (
-    // Docked: the panel family's header, with the layout's Maximize, Move
-    // to and close controls and one actions menu.
+      }
+      controls={panelControls}
+    />
+  ) : (
     <PanelChrome
       className="tasks-header-chrome"
       panelTitle="Tasks"
@@ -1324,47 +1310,24 @@ export function TasksPanelContent({
         <>
           {searchButton}
           {pinnedOnlyButton}
-          {viewOptionsMenu}
+          {!sheet && viewOptionsMenu}
         </>
       }
-      controls={{ ...panelControls, renderMenuItems: moreItems }}
+      controls={
+        panelControls && {
+          ...panelControls,
+          renderMenuItems: sheet ? (
+            <>
+              <TaskViewOptionsItems view={view} options={options} onChange={setOptions} />
+              <DropdownMenuSeparator />
+              {moreItems}
+            </>
+          ) : (
+            moreItems
+          ),
+        }
+      }
     />
-  ) : (
-    // The sheet's header, whose ⋯ also carries the View options. A docked
-    // panel retained without a surface (an open editor) draws it unseen.
-    <header className="tasks-header">
-      <h2 className="tasks-title">
-        Tasks
-        {countBadge}
-      </h2>
-      <div className="tasks-header-actions">
-        {searchButton}
-        {pinnedOnlyButton}
-        <DropdownMenu
-          presentation={touch ? "sheet" : "menu"}
-          open={active && headerMenuOpen}
-          onOpenChange={setHeaderMenuOpen}
-        >
-          <DropdownMenuTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              className="tasks-header-button"
-              aria-label="Tasks panel options"
-              title="More"
-            >
-              <Ellipsis aria-hidden="true" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" sheetTitle="Tasks">
-            <TaskViewOptionsItems view={view} options={options} onChange={setOptions} />
-            <DropdownMenuSeparator />
-            {moreItems}
-          </DropdownMenuContent>
-        </DropdownMenu>
-        {closeButton}
-      </div>
-    </header>
   );
 
   const addRow = (
@@ -1564,7 +1527,6 @@ export function TasksPanelContent({
           key={editingId}
           task={editingTask}
           open={active}
-          surface={presentation}
           store={store}
           destinations={destinations}
           onClose={() => setEditingId(null)}
@@ -1720,13 +1682,13 @@ function createBodyTarget(): HTMLElement {
 }
 
 /**
- * The Tasks host: one retained body, shown beside a thread, docked beside
- * Chat on desktop and as a sheet on phones. Other pages (Home, Archived,
- * Usage, the automation pages) show no Tasks surface, and the Tasks shortcut
- * leaves them alone.
- * It wraps the workbench so the workbench bar's toggle and the `tasks`
- * panel tenant reach it through context. The application shell mounts a
- * fresh host when it moves between a thread and another page, so its state
+ * The Tasks host: one retained body, shown beside a thread in its workspace
+ * panel: in its region on desktop, and in front on phones with the touch
+ * layout. Other pages (Home, Archived, Usage, the automation pages) show no
+ * Tasks surface, and the Tasks shortcut leaves them alone.
+ * It wraps the workbench so the workbench layout and the `tasks` panel
+ * tenant reach it through context. The application shell mounts a fresh
+ * host when it moves between a thread and another page, so its state
  * carries over only from one thread to the next.
  */
 export function TasksPanel({
@@ -1742,12 +1704,9 @@ export function TasksPanel({
   route?: Route;
   children?: ReactNode;
 }): React.JSX.Element {
-  const mobile = useMediaQuery(TASKS_SHEET_QUERY);
   const currentRoute = useRoute();
   const route = retainedRoute ?? currentRoute;
   const threadWorkspace = route.name === "thread";
-  const routeKey = threadWorkspace ? `thread:${route.threadId}` : route.name;
-  const [sheetOpen, setSheetOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [dirty, setDirty] = useState(false);
   // A new body: what an unload discards (see below).
@@ -1755,56 +1714,29 @@ export function TasksPanel({
   const [announcement, setAnnouncement] = useState("");
   const [dock, publishDock] = useState<TasksDock>();
   const [bodyTarget] = useState(createBodyTarget);
-  const [sheetContent, setSheetContent] = useState<HTMLDivElement | null>(null);
-  // Settings unmounts the sheet; its focus restoration must not pull focus
-  // back into the hidden workspace.
-  const activeRef = useRef(active);
-  activeRef.current = active;
 
-  const placement: TasksPresentation | undefined = !threadWorkspace
-    ? undefined
-    : mobile
-      ? sheetOpen
-        ? "sheet"
-        : undefined
-      : dock?.present
-        ? "panel"
-        : undefined;
+  const presentation: TasksPresentation | undefined =
+    threadWorkspace && dock?.present ? dock.presentation : undefined;
 
-  const latest = useRef({ mobile, threadWorkspace, dock, editing });
-  latest.current = { mobile, threadWorkspace, dock, editing };
-  // The presentation the content keeps while it has no surface: an open
-  // editor stays mounted, hidden, when the sheet closes under it on a move
-  // to another thread, and while the breakpoint changes its surface.
-  const lastPlacement = useRef<TasksPresentation>("panel");
-  if (placement) lastPlacement.current = placement;
+  const latest = useRef({ threadWorkspace, dock, editing });
+  latest.current = { threadWorkspace, dock, editing };
 
-  // The sheet is transient: moving to another thread or crossing the phone
-  // breakpoint closes it. The docked panel's open state is the panel
-  // layout's. An open editor is the exception at the breakpoint: so its
-  // unsaved edits survive, Tasks shows in the new presentation instead (the
-  // sheet, or the dock opened for it). While no surface shows an open
-  // editor, the content stays mounted, hidden, until one does.
-  const crossed = useRef({ routeKey, mobile });
+  // Crossing the phone breakpoint keeps the body, and any edit in it, in the
+  // same panel. The new layout may not show Tasks (another panel in front on
+  // a phone, or make-room on desktop): with an editor open, Tasks is shown
+  // for it, so its unsaved edits stay in view.
+  const dockPresentation = dock?.presentation;
+  const crossed = useRef(dockPresentation);
   useEffect(() => {
     const before = crossed.current;
-    crossed.current = { routeKey, mobile };
-    if (before.routeKey === routeKey && before.mobile === mobile) return;
+    crossed.current = dockPresentation;
+    if (before === undefined || before === dockPresentation) return;
     const { editing, dock } = latest.current;
-    if (before.routeKey !== routeKey || !editing) {
-      setSheetOpen(false);
-      return;
-    }
-    if (mobile) {
-      setSheetOpen(true);
-    } else {
-      setSheetOpen(false);
-      if (dock && !dock.visible) dock.open({ focus: false });
-    }
-  }, [routeKey, mobile]);
+    if (editing && dock?.present && !dock.visible) dock.open({ focus: false });
+  }, [dockPresentation]);
 
-  // Hiding Tasks (its toggle, another panel replacing it, make-room,
-  // Maximize, Settings, the breakpoint) keeps the body and any edit in it.
+  // Hiding Tasks (its toggle, another panel replacing it or in front of it,
+  // make-room, Maximize, Settings) keeps the body and any edit in it.
   // Unloading it (✕, Reset layout) discards both: the layout asked first
   // when the edit had unsaved changes, which the body reports through the
   // tenant host (see TasksDockSlot). The layout reports an unload as the
@@ -1820,24 +1752,18 @@ export function TasksPanel({
     setBodyGeneration((generation) => generation + 1);
   }, [present]);
 
-  const toggleSheet = useCallback(() => setSheetOpen((open) => !open), []);
-  // Only the sheet asks to close: the docked panel has the layout's controls.
-  const requestClose = useCallback((message?: string) => {
-    setSheetOpen(false);
+  // Phones: Chat comes in front, Tasks staying loaded. The host announces
+  // what happened, since the content's live region is parked with it.
+  const showChat = useCallback((message?: string) => {
+    latest.current.dock?.showChat();
     if (message === undefined) return;
     setAnnouncement("");
     window.setTimeout(() => setAnnouncement(message), 0);
   }, []);
 
+  // The content switches view and expands the task itself.
   useEffect(
-    () =>
-      subscribeReveal(() => {
-        const { mobile, dock } = latest.current;
-        // The content switches view and expands the task itself. The phone
-        // sheet leaves the panel layout alone.
-        if (mobile) setSheetOpen(true);
-        else dock?.open({ focus: false });
-      }),
+    () => subscribeReveal(() => latest.current.dock?.open({ focus: false })),
     [],
   );
 
@@ -1848,92 +1774,31 @@ export function TasksPanel({
       if (!matchesKeyboardShortcut(event, TASKS_TOGGLE_COMMAND.defaultBinding))
         return;
       // Only a thread shows Tasks; elsewhere the key is not ours.
-      const { mobile, threadWorkspace, dock } = latest.current;
-      if (!threadWorkspace) return;
-      // A dialog above the workbench keeps its keys, unless it is Tasks.
-      const dialog =
-        event.target instanceof Element
-          ? event.target.closest('[role="dialog"], [role="alertdialog"]')
-          : null;
-      if (dialog && !dialog.querySelector('[data-slot="tasks-panel"]')) return;
+      const { threadWorkspace, dock } = latest.current;
+      if (!threadWorkspace || !dock) return;
+      // A dialog above the workbench keeps its keys.
+      if (
+        event.target instanceof Element &&
+        event.target.closest('[role="dialog"], [role="alertdialog"]')
+      )
+        return;
       event.preventDefault();
-      if (mobile) toggleSheet();
-      else dock?.toggle();
+      dock.toggle();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [active, toggleSheet]);
+  }, [active]);
 
   const host = useMemo<TasksHost>(
-    () => ({ bodyTarget, placement, sheetOpen, dirty, toggleSheet, publishDock }),
-    [bodyTarget, placement, sheetOpen, dirty, toggleSheet],
+    () => ({ bodyTarget, presentation, dirty, publishDock }),
+    [bodyTarget, presentation, dirty],
   );
-
-  const surface =
-    placement === "sheet" ? (
-      <Dialog
-        open
-        onOpenChange={(open) => {
-          if (!open) setSheetOpen(false);
-        }}
-      >
-        <DialogContent
-          ref={setSheetContent}
-          layout="sheet"
-          showClose={false}
-          className="tasks-sheet"
-          onCloseAutoFocus={(event) => {
-            if (!activeRef.current) event.preventDefault();
-          }}
-          onInteractOutside={(event) => {
-            // The retained body is portaled into this surface. Its React
-            // event ancestry differs from its physical DOM ancestry.
-            if (bodyTarget.contains(event.detail.originalEvent.target as Node))
-              event.preventDefault();
-          }}
-          aria-describedby={undefined}
-          onEscapeKeyDown={(event) => {
-            // Escape from inside the content closes one of its own layers
-            // first (the detail, search), then asks to close.
-            if (bodyTarget.contains(event.target as Node)) {
-              event.preventDefault();
-              return;
-            }
-            if (
-              document.querySelector(
-                '.tasks-sheet [data-task-detail-open="true"]',
-              ) !== null
-            ) {
-              // Android hardware Back dispatches this synthetic Escape.
-              // Keep the sheet mounted while its open detail closes; the
-              // next Back follows Radix's normal sheet dismissal path.
-              event.preventDefault();
-              window.dispatchEvent(new Event(CLOSE_TASK_DETAIL_EVENT));
-            }
-          }}
-        >
-          <DialogTitle className="sr-only">Tasks</DialogTitle>
-          <TasksSurface presentation="sheet" target={bodyTarget} />
-        </DialogContent>
-      </Dialog>
-    ) : null;
 
   return (
     <TasksHostContext.Provider value={host}>
       {children}
-      {/* Settings suspends the sheet but keeps the body (and any unsaved
-          edit in it) mounted; the docked panel stays in the retained
-          workbench. */}
-      {active ? (
-        surface
-      ) : surface ? (
-        <div hidden aria-hidden="true" inert>
-          <StablePaneSlot target={bodyTarget} />
-        </div>
-      ) : null}
-      {/* Outlives the sheet, for what is announced as it closes. Mounted
-          on every page, so it takes the status role only while it has
-          something to say. */}
+      {/* Mounted on every page, so it takes the status role only while it
+          has something to say. */}
       <div
         className="sr-only"
         role={announcement.length > 0 ? "status" : undefined}
@@ -1941,27 +1806,18 @@ export function TasksPanel({
       >
         {announcement}
       </div>
-      {placement || editing
+      {presentation
         ? createPortal(
             <TasksPanelContent
               key={bodyGeneration}
               store={store}
               panelLayoutStore={panelLayoutStore}
               route={route}
-              active={
-                active &&
-                placement !== undefined &&
-                // Restore the modal host before its retained body's dialogs;
-                // mounting the sheet later would hide their accessibility tree.
-                (placement !== "sheet" || sheetContent !== null) &&
-                (placement !== "panel" || dock?.visible === true)
-              }
-              presentation={placement ?? lastPlacement.current}
-              onRequestClose={requestClose}
-              panelControls={placement === "panel" ? dock?.controls : undefined}
-              panelEnvironmentTint={
-                placement === "panel" ? dock?.environmentTintStyle : undefined
-              }
+              active={active && dock?.visible === true}
+              presentation={presentation}
+              onShowChat={showChat}
+              panelControls={dock?.controls}
+              panelEnvironmentTint={dock?.environmentTintStyle}
               onEditingChange={setEditing}
               onDirtyChange={setDirty}
             />,

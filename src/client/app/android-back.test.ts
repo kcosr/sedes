@@ -53,43 +53,35 @@ const backInput = (
 });
 
 describe("closeExposedTaskDetail", () => {
-  it("closes an exposed task detail without dismissing its sheet", () => {
-    const sheet = document.createElement("div");
-    sheet.className = "tasks-sheet";
-    sheet.setAttribute("role", "dialog");
-    sheet.dataset.state = "open";
-    const panel = document.createElement("div");
-    panel.dataset.taskDetailOpen = "true";
-    sheet.append(panel);
-    document.body.append(sheet);
-    const closed = vi.fn();
-    window.addEventListener(CLOSE_TASK_DETAIL_EVENT, closed);
-
-    expect(closeExposedTaskDetail()).toBe(true);
-    expect(closed).toHaveBeenCalledOnce();
-
-    window.removeEventListener(CLOSE_TASK_DETAIL_EVENT, closed);
-    sheet.remove();
+  it("lets the Tasks panel in front close its open task detail", () => {
+    const close = vi.fn((event: Event) => event.preventDefault());
+    withListener(CLOSE_TASK_DETAIL_EVENT, close, () => {
+      expect(closeExposedTaskDetail()).toBe(true);
+      expect(close).toHaveBeenCalledOnce();
+    });
   });
 
-  it("leaves Back to a higher overlay opened from the task detail", () => {
-    const sheet = document.createElement("div");
-    sheet.className = "tasks-sheet";
-    sheet.setAttribute("role", "dialog");
-    sheet.dataset.state = "open";
-    const panel = document.createElement("div");
-    panel.dataset.taskDetailOpen = "true";
-    sheet.append(panel);
-    document.body.append(sheet);
-    const popover = document.createElement("div");
-    popover.dataset.slot = "popover-content";
-    popover.dataset.state = "open";
-    document.body.append(popover);
+  it("leaves Back alone when no task detail is open", () => {
+    const ignore = vi.fn();
+    withListener(CLOSE_TASK_DETAIL_EVENT, ignore, () => {
+      expect(closeExposedTaskDetail()).toBe(false);
+      expect(ignore).toHaveBeenCalledOnce();
+    });
+  });
 
-    expect(closeExposedTaskDetail()).toBe(false);
-
-    popover.remove();
-    sheet.remove();
+  it("leaves Back to an overlay above the detail, such as its editor, menu or the drawer", () => {
+    const close = vi.fn((event: Event) => event.preventDefault());
+    for (const role of ["dialog", "menu"]) {
+      const overlay = document.createElement("div");
+      overlay.setAttribute("role", role);
+      overlay.dataset.state = "open";
+      document.body.append(overlay);
+      withListener(CLOSE_TASK_DETAIL_EVENT, close, () => {
+        expect(closeExposedTaskDetail()).toBe(false);
+      });
+      overlay.remove();
+    }
+    expect(close).not.toHaveBeenCalled();
   });
 });
 
@@ -168,6 +160,34 @@ describe("showChatInFront", () => {
 });
 
 describe("handleExposedBack", () => {
+  it("closes an open task detail before showing Chat", () => {
+    const steps: string[] = [];
+    let detailOpen = true;
+    const closeDetail = (event: Event) => {
+      if (!detailOpen) return;
+      detailOpen = false;
+      steps.push("detail");
+      event.preventDefault();
+    };
+    let chatInFront = false;
+    const showChat = (event: Event) => {
+      if (chatInFront) return;
+      chatInFront = true;
+      steps.push("chat");
+      event.preventDefault();
+    };
+    withListener(CLOSE_TASK_DETAIL_EVENT, closeDetail, () =>
+      withListener(SHOW_CHAT_EVENT, showChat, () => {
+        expect(handleExposedBack()).toBe(true);
+        expect(steps).toEqual(["detail"]);
+        expect(handleExposedBack()).toBe(true);
+        expect(steps).toEqual(["detail", "chat"]);
+        // Chat in front: the drawer is next.
+        expect(handleExposedBack()).toBe(false);
+      }),
+    );
+  });
+
   it("closes an open workpad before showing Chat", () => {
     const steps: string[] = [];
     let workpadOpen = true;
@@ -251,26 +271,15 @@ describe("resolveAndroidBackAction", () => {
     contextMenu.remove();
   });
 
-  it("treats the Tasks sheet as an overlay but not the docked Tasks panel", () => {
-    const docked = document.createElement("section");
-    docked.dataset.slot = "tasks-panel";
-    docked.dataset.presentation = "panel";
-    document.body.append(docked);
-    expect(document.querySelector(OPEN_OVERLAY_SELECTOR)).toBeNull();
-
-    const sheet = document.createElement("div");
-    sheet.className = "tasks-sheet";
-    sheet.setAttribute("role", "dialog");
-    sheet.dataset.slot = "dialog-content";
-    sheet.dataset.state = "open";
-    const surface = document.createElement("section");
-    surface.dataset.slot = "tasks-panel";
-    surface.dataset.presentation = "sheet";
-    sheet.append(surface);
-    document.body.append(sheet);
-    expect(document.querySelector(OPEN_OVERLAY_SELECTOR)).toBe(sheet);
-    sheet.remove();
-    docked.remove();
+  it("does not treat the Tasks panel as an overlay, docked or on a phone", () => {
+    for (const presentation of ["panel", "sheet"]) {
+      const surface = document.createElement("section");
+      surface.dataset.slot = "tasks-panel";
+      surface.dataset.presentation = presentation;
+      document.body.append(surface);
+      expect(document.querySelector(OPEN_OVERLAY_SELECTOR)).toBeNull();
+      surface.remove();
+    }
   });
 
   it("recognizes selection actions as an overlay", () => {

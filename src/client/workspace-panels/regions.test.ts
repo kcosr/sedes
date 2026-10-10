@@ -556,14 +556,16 @@ describe("chooseForegroundPanel", () => {
     ).toBe("terminals");
   });
 
-  it("skips Tasks, hidden and closed panels", () => {
+  it("skips hidden and closed panels, and takes Tasks like any other", () => {
     let view = open(defaultRegionView(), "files", "tasks");
-    expect(chooseForegroundPanel(view, { requested: "tasks" })).toBe("chat");
+    // Tasks replaced Files on the Right.
+    expect(chooseForegroundPanel(view, { requested: "tasks" })).toBe("tasks");
     expect(chooseForegroundPanel(view, { selected: "files" })).toBe("chat");
     expect(chooseForegroundPanel(view, { selected: "workpads" })).toBe("chat");
     view = closePanel(view, "chat");
+    expect(chooseForegroundPanel(view)).toBe("tasks");
+    view = closePanel(view, "tasks");
     expect(chooseForegroundPanel(view)).toBeUndefined();
-    expect(chooseForegroundPanel(view, { exclude: [] })).toBe("tasks");
   });
 
   it("ignores make-room and Maximize, which do not apply on phones", () => {

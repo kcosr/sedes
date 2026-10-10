@@ -7,10 +7,7 @@ import {
   resolveEnvironmentPaletteTones,
 } from "../app/environment-palette.js";
 import { useEnvironmentPalette } from "../app/use-environment-palette.js";
-import {
-  usePublishTasksDock,
-  useTasksHost,
-} from "../components/tasks/tasks-host.js";
+import { usePublishTasksDock } from "../components/tasks/tasks-host.js";
 import { DiscardChangesDialog } from "../components/ui/discard-changes-dialog.js";
 import {
   useApplicationStore,
@@ -89,8 +86,8 @@ import { useThreadTerminals } from "./use-thread-terminals.js";
  *
  * On the desktop stage every panel shows in its region (see regions.ts and
  * region-geometry.ts). Phones (≤819px) show one foreground panel among the
- * shown ones, Tasks as a sheet and Terminals as a dismissible viewer. Chat is
- * a phone's home: closing or hiding the panel in front, or Back, shows it.
+ * shown ones, Terminals as a dismissible viewer. Chat is a phone's home:
+ * closing or hiding the panel in front, or Back, shows it.
  *
  * Every loaded panel's content lives in a retained portal target, adopted by
  * its region's slot while it is on stage and parked otherwise, so drafts,
@@ -152,7 +149,6 @@ function PanelLayoutReady({
   const threadState = useThreadStore(threadStore);
   const applicationState = useApplicationStore(applicationStore);
   const threadSnapshot = threadState.snapshot;
-  const tasksHost = useTasksHost();
   const chatAutofocus = useChatAutofocus();
   const hints = useMemo(() => panelSizeHints(tenants), [tenants]);
 
@@ -230,8 +226,8 @@ function PanelLayoutReady({
     kind === "terminals" ||
     tenants.has(tenantIdForKind(kind));
   const loaded = (kind: PanelKind): boolean => snapshot.loaded.includes(kind);
-  // Phones show one foreground panel; Tasks is a sheet there, never on stage.
-  // Chat is their home, so with nothing else shown it is in front.
+  // Phones show one foreground panel. Chat is their home, so with nothing
+  // else shown it is in front.
   const foreground = desktop
     ? undefined
     : (chooseForegroundPanel(view, {
@@ -462,8 +458,7 @@ function PanelLayoutReady({
             ? "Terminals panel closed. Its process was not terminated."
             : `${title} panel closed.`,
       );
-      // Phones: closing the panel in front shows Chat. Closing the Tasks
-      // sheet's panel leaves the panel in front alone.
+      // Phones: closing the panel in front shows Chat.
       if (!desktop) {
         if (inFront) showChat();
         return;
@@ -567,18 +562,9 @@ function PanelLayoutReady({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [active, desktop, snapshot.maximized, store]);
 
-  /**
-   * Phones: the Tasks sheet. It leaves the device layout alone, so opening
-   * it on a phone does not replace the panel the Right shows elsewhere.
-   */
-  const showTasksSheet = (show: boolean) => {
-    if (tasksHost && tasksHost.sheetOpen !== show) tasksHost.toggleSheet();
-  };
-
   const togglePanel = (kind: PanelKind) => {
     if (!desktop) {
-      if (kind === "tasks") showTasksSheet(!(tasksHost?.sheetOpen ?? false));
-      else if (foreground !== kind) {
+      if (foreground !== kind) {
         if (store.open(kind)) setMobileKind(kind);
       }
       // Hiding the panel in front shows Chat; Chat's own button does nothing.
@@ -606,10 +592,6 @@ function PanelLayoutReady({
     if (kind === "terminals") {
       terminalEntryRef.current?.open(region, panelsTriggerRef.current);
       return false;
-    }
-    if (kind === "tasks" && !desktop) {
-      showTasksSheet(true);
-      return true;
     }
     if (!store.open(kind, region ? { region } : {})) return false;
     setMobileKind(kind);
@@ -641,12 +623,17 @@ function PanelLayoutReady({
     tenants.has("tasks")
       ? {
           present: loaded("tasks"),
-          visible: active && desktop && onStage("tasks"),
+          visible: active && onStage("tasks"),
+          presentation: desktop ? "panel" : "sheet",
           controls: controlsFor("tasks"),
           ...(tint ? { environmentTintStyle: tint } : {}),
-          open: ({ focus }) => store.open("tasks", { focus }),
+          // A reveal opens Tasks without focus; on a phone it still comes in front.
+          open: ({ focus }) => {
+            if (store.open("tasks", { focus })) setMobileKind("tasks");
+          },
           toggle: () => togglePanel("tasks"),
           close: () => closePanel("tasks"),
+          showChat,
         }
       : undefined,
   );
@@ -679,9 +666,7 @@ function PanelLayoutReady({
 
   const toolbarEntries: PanelToolbarEntry[] = PANEL_KINDS.filter(available).map(
     (kind) => {
-      const sheetOpen =
-        kind === "tasks" && !desktop && (tasksHost?.sheetOpen ?? false);
-      const state = sheetOpen || onStage(kind)
+      const state = onStage(kind)
         ? "visible"
         : loaded(kind)
           ? "hidden"

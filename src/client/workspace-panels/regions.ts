@@ -296,21 +296,16 @@ export function isExtended(
 /**
  * The phone's foreground panel: the requested one (a focus request), else
  * the selected one, when it is shown; otherwise the first shown panel in the
- * fixed order. Regions, make-room and Maximize do not apply on phones, and
- * Tasks is a sheet there, so it is excluded by default.
+ * fixed order. Regions, make-room and Maximize do not apply on phones.
  */
 export function chooseForegroundPanel(
   view: RegionView,
   options: {
     readonly selected?: PanelKind;
     readonly requested?: PanelKind;
-    readonly exclude?: readonly PanelKind[];
   } = {},
 ): PanelKind | undefined {
-  const exclude = options.exclude ?? ["tasks"];
-  const candidates = PANEL_KINDS.filter(
-    (kind) => !exclude.includes(kind) && isShown(view, kind),
-  );
+  const candidates = PANEL_KINDS.filter((kind) => isShown(view, kind));
   const preferred = options.requested ?? options.selected;
   return preferred !== undefined && candidates.includes(preferred)
     ? preferred

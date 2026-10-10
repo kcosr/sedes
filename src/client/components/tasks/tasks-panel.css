@@ -1,26 +1,17 @@
-/* Tasks surfaces. One retained body is shown beside a thread, docked
-   beside Chat (a workspace panel) or as a phone sheet; `.tasks-surface` is
-   the element that adopts it in each. */
+/* The Tasks panel. One retained body is shown beside a thread in its
+   workspace panel, docked in its region or in front on a phone;
+   `.tasks-surface` is the element that adopts it. It fills its panel like
+   every other tenant, so on a phone it shrinks with the stage as the soft
+   keyboard opens, keeping the add bar above the keyboard. */
 
 .tasks-surface {
   display: flex;
+  height: 100%;
   min-width: 0;
   min-height: 0;
   flex: 1 1 auto;
   flex-direction: column;
-}
-
-/* Docked, the surface fills its panel like every other tenant. */
-.tasks-surface[data-presentation="panel"] {
-  height: 100%;
   background: var(--background);
-}
-
-/* Mobile bottom sheet (the Dialog sheet layout, which lifts itself above
-   the soft keyboard): the panel body owns the padding and the scroll. */
-[data-slot="dialog-content"].tasks-sheet {
-  gap: 0;
-  padding: 0;
 }
 
 /* ── Tasks content (TasksPanelContent): the header and body in every host ──
@@ -64,37 +55,21 @@
   }
 }
 
-/* ── Sheet header: title and open count, then ⌕, ⋯ (which carries the View
-   options) and × on the panel-header control steps. Docked, Tasks draws the
-   panel family's header instead. */
-.tasks-header {
-  display: flex;
-  flex: none;
-  align-items: center;
-  gap: var(--space-2);
-  min-height: var(--workbench-bar-height);
-  padding: var(--space-1-5) var(--space-1) var(--space-1-5) var(--space-4);
-  border-bottom: 1px solid var(--border-soft);
+/* ── Header: the panel family's (`PanelChrome`), with ⌕ and the Pinned
+   toggle on the panel-header control steps. On a phone the task detail's
+   header leads with ‹ Back to tasks, so it starts at the button inset. */
+.workspace-panel-chrome.tasks-detail-chrome {
+  padding-left: 5px;
+}
+
+.tasks-detail-heading {
+  gap: var(--space-1);
 }
 
 .tasks-title {
-  display: flex;
-  flex: 1 1 auto;
-  align-items: center;
-  gap: var(--space-1-5);
   min-width: 0;
   margin: 0;
-  font-size: var(--text-ui);
-  font-weight: var(--weight-semibold);
-  line-height: var(--leading-snug);
-}
-
-.tasks-header-actions {
-  display: flex;
-  flex: none;
-  align-items: center;
-  gap: 1px;
-  color: var(--muted-foreground);
+  font: inherit;
 }
 
 .tasks-header-button {
@@ -254,8 +229,8 @@
   margin-right: auto;
 }
 
-/* The phone sheet's add bar: pinned under the list, above the keyboard
-   (the sheet itself lifts by the shared keyboard inset). */
+/* The phone's add bar: pinned under the list, above the keyboard (the
+   panel shrinks with the stage as the keyboard opens). */
 .tasks-add[data-variant="bar"] {
   flex: none;
   padding:
@@ -757,37 +732,8 @@ button.tasks-file-chip:hover {
   gap: var(--space-1-5);
 }
 
-/* ── Phone sheet: the list with a pinned add bar, or one task's detail with
-   its actions pinned at the bottom. The sheet keeps one height while its
-   content changes. */
-.tasks-content[data-presentation="sheet"] {
-  flex: 1 1 85dvh;
-}
-
-.tasks-content[data-presentation="sheet"] .tasks-header {
-  min-height: calc(var(--control-touch) + var(--space-3));
-  padding:
-    var(--space-2) max(var(--space-2), env(safe-area-inset-right))
-    var(--space-1) max(var(--space-5), env(safe-area-inset-left));
-  border-bottom: 0;
-}
-
-.tasks-content[data-presentation="sheet"] .tasks-header[data-detail] {
-  padding-left: max(var(--space-2), env(safe-area-inset-left));
-}
-
-.tasks-content[data-presentation="sheet"] .tasks-title {
-  font-size: var(--text-sheet-title);
-}
-
-.tasks-content[data-presentation="sheet"] .tasks-search {
-  padding-left: var(--space-5);
-}
-
-.tasks-content[data-presentation="sheet"] .tasks-toolbar {
-  padding: var(--space-1) var(--space-4) var(--space-2);
-}
-
+/* ── Phone: the list with a pinned add bar, or one task's detail with its
+   actions pinned at the bottom, in place of the list. */
 .tasks-sheet-detail {
   display: flex;
   flex: 1 1 auto;

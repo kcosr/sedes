@@ -718,10 +718,8 @@ describe("PanelLayout Tasks", () => {
     const docks: (TasksDock | undefined)[] = [];
     return {
       bodyTarget: document.createElement("div"),
-      placement: undefined,
-      sheetOpen: false,
+      presentation: undefined,
       dirty: false,
-      toggleSheet: vi.fn(),
       publishDock: (dock) => docks.push(dock),
       docks,
       ...overrides,
@@ -878,18 +876,26 @@ describe("PanelLayout Tasks", () => {
     expect(editor()).toBeNull();
   });
 
-  it("keeps a Tasks edit across the phone breakpoint, in the sheet and back", async () => {
+  it("keeps a Tasks edit across the phone breakpoint, in front on the phone and back", async () => {
     withTasks();
     const store = setup({ extraTenants: [tasksTenant], withTasksPanel: true });
     act(() => store.open("tasks", { focus: false }));
     editTask();
+    const body = document.querySelector(".tasks-content");
+    // Focus is in the editor, outside the stage; Tasks comes in front for it.
     act(() => setMobile(true));
-    const sheet = await screen.findByRole("dialog", { name: "Tasks" });
-    expect(sheet).toBeInTheDocument();
+    await waitFor(() => expect(stageKinds()).toEqual(["tasks"]));
+    expect(panel("Tasks")!.querySelector('[data-slot="tasks-panel"]')).toHaveAttribute(
+      "data-presentation",
+      "sheet",
+    );
+    expect(document.querySelector(".tasks-content")).toBe(body);
     await waitFor(() => expect(notes()).toHaveValue("Unsaved notes"));
     expect(store.isLoaded("tasks")).toBe(true);
+
     act(() => setMobile(false));
     await waitFor(() => expect(regionOf("Tasks")).toBe("right"));
+    expect(document.querySelector(".tasks-content")).toBe(body);
     await waitFor(() => expect(notes()).toHaveValue("Unsaved notes"));
   });
 
@@ -902,6 +908,7 @@ describe("PanelLayout Tasks", () => {
     expect(dock).toMatchObject({
       present: true,
       visible: true,
+      presentation: "panel",
       controls: { active: true, region: { region: "right", maximized: false, extended: true } },
     });
     const published = host.docks.length;
@@ -924,6 +931,30 @@ describe("PanelLayout Tasks", () => {
 
     cleanup();
     expect(host.docks.at(-1)).toBeUndefined();
+  });
+
+  it("publishes the phone panel: in front when opened, without regions, giving way to Chat", () => {
+    harness.mobile = true;
+    const host = fakeTasksHost();
+    const store = setup({ extraTenants: [tasksTenant], tasksHost: host });
+    expect(host.docks.at(-1)).toMatchObject({ present: false, presentation: "sheet" });
+    // A reveal opens Tasks without focus; it still comes in front.
+    act(() => host.docks.at(-1)!.open({ focus: false }));
+    expect(stageKinds()).toEqual(["tasks"]);
+    const dock = host.docks.at(-1)!;
+    expect(dock).toMatchObject({ present: true, visible: true, presentation: "sheet" });
+    expect(dock.controls.region).toBeUndefined();
+    expect(dock.controls.onClose).toBeDefined();
+
+    // Add to prompt shows Chat; Tasks stays loaded, and shown in its region.
+    act(() => host.docks.at(-1)!.showChat());
+    expect(stageKinds()).toEqual(["chat"]);
+    expect(host.docks.at(-1)).toMatchObject({ present: true, visible: false });
+    expect(store.isShown("tasks")).toBe(true);
+    expect(quickButton("tasks")).toHaveAttribute("data-state", "hidden");
+
+    act(() => setMobile(false));
+    expect(host.docks.at(-1)).toMatchObject({ visible: true, presentation: "panel" });
   });
 });
 
@@ -1175,42 +1206,134 @@ describe("PanelLayout phones", () => {
     expect(store.maximized()).toBeNull();
   });
 
-  it("opens the Tasks sheet from Tasks' row without replacing the Right's panel", async () => {
+  const withPhoneTasks = () => {
     harness.mobile = true;
-    const host = {
-      bodyTarget: document.createElement("div"),
-      placement: undefined,
-      sheetOpen: false,
-      dirty: false,
-      toggleSheet: vi.fn(),
-      publishDock: vi.fn(),
-    } satisfies TasksHost;
-    const store = setup({ extraTenants: [tasksTenant], tasksHost: host });
+    harness.applicationState = {
+      ...harness.applicationState,
+      snapshot: {
+        threads: [{ id: "thread-1", workspaceId: "workspace-1", title: { text: "Thread" }, inventoryState: "active" }],
+        workspaces: [{ id: "workspace-1", label: { text: "Workspace" }, displayPath: { text: "/workspace" } }],
+        environments: [],
+        tasks: [makeThreadTask({ id: "open-1" })],
+      },
+    };
+  };
+
+  it("opens Tasks in front from its row like any panel, with its quick button", async () => {
+    withPhoneTasks();
+    const store = setup({ extraTenants: [tasksTenant], withTasksPanel: true });
+    expect(bar().queryByTestId("tasks-panel-toggle")).toBeNull();
     fireEvent.click((await openPanelsMenu()).querySelector('[data-panel-row="files"]')!);
     await waitFor(() => expect(stageKinds()).toEqual(["files"]));
+
     fireEvent.click((await openPanelsMenu()).querySelector('[data-panel-row="tasks"]')!);
-    expect(host.toggleSheet).toHaveBeenCalledOnce();
-    // The sheet is not a panel: Files stays the Right's panel, on stage.
-    expect(store.isLoaded("tasks")).toBe(false);
-    expect(store.regionPanel("right")).toBe("files");
-    expect(stageKinds()).toEqual(["files"]);
-    expect(panel("Tasks")).toBeNull();
+    await waitFor(() => expect(stageKinds()).toEqual(["tasks"]));
+    // Like any panel, it replaces Files on the Right.
+    expect(store.regionPanel("right")).toBe("tasks");
+    expect(quickButtons()).toEqual([
+      ["chat", "hidden"],
+      ["files", "hidden"],
+      ["tasks", "visible"],
+    ]);
+    expect(quickButton("tasks")).toHaveAccessibleName("Hide Tasks panel, 1 open task");
+    const leaf = panel("Tasks")!;
+    expect(within(leaf).getByRole("region", { name: "Tasks" })).toHaveAttribute(
+      "data-presentation",
+      "sheet",
+    );
+    expect(within(leaf).getByRole("button", { name: "Task open-1" })).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    // One header, without Maximize or Move to.
+    expect(leaf.querySelectorAll("header")).toHaveLength(1);
+    expect(within(leaf).queryByRole("button", { name: "Maximize Tasks panel" })).toBeNull();
+    // Opening it focuses the panel, not the add bar, so no keyboard rises.
+    await waitFor(() =>
+      expect(screen.getByRole("region", { name: "Tasks panel content" })).toHaveFocus(),
+    );
   });
 
-  it("shows Tasks' quick button while the phone sheet is open, and closes it", () => {
-    harness.mobile = true;
-    const host = {
-      bodyTarget: document.createElement("div"),
-      placement: "sheet" as const,
-      sheetOpen: true,
-      dirty: false,
-      toggleSheet: vi.fn(),
-      publishDock: vi.fn(),
-    } satisfies TasksHost;
-    setup({ extraTenants: [tasksTenant], tasksHost: host });
-    expect(quickButton("tasks")).toHaveAttribute("data-state", "visible");
+  it("hides Tasks with its quick button and closes it with ✕, each showing Chat", () => {
+    withPhoneTasks();
+    const store = setup({ extraTenants: [tasksTenant], withTasksPanel: true });
+    act(() => store.open("tasks", { focus: false }));
+    expect(stageKinds()).toEqual(["chat"]);
     fireEvent.click(quickButton("tasks"));
-    expect(host.toggleSheet).toHaveBeenCalledOnce();
+    expect(stageKinds()).toEqual(["tasks"]);
+    const body = document.querySelector(".tasks-content");
+
+    fireEvent.click(quickButton("tasks"));
+    expect(stageKinds()).toEqual(["chat"]);
+    expect(store.isLoaded("tasks")).toBe(true);
+    expect(quickButton("tasks")).toHaveAttribute("data-state", "hidden");
+    expect(statusText()).toBe("Tasks panel hidden.");
+    fireEvent.click(quickButton("tasks"));
+    expect(stageKinds()).toEqual(["tasks"]);
+    expect(document.querySelector(".tasks-content")).toBe(body);
+
+    fireEvent.click(within(panel("Tasks")!).getByRole("button", { name: "Close Tasks panel" }));
+    expect(stageKinds()).toEqual(["chat"]);
+    expect(store.isLoaded("tasks")).toBe(false);
+    expect(bar().queryByTestId("tasks-panel-toggle")).toBeNull();
+    expect(document.querySelector(".tasks-content")).toBeNull();
+  });
+
+  it("toggles Tasks in front with Ctrl+Shift+L", () => {
+    withPhoneTasks();
+    const store = setup({ extraTenants: [tasksTenant], withTasksPanel: true });
+    const press = () =>
+      fireEvent.keyDown(document.body, { key: "L", ctrlKey: true, shiftKey: true });
+    expect(press()).toBe(false);
+    expect(stageKinds()).toEqual(["tasks"]);
+    expect(quickButton("tasks")).toHaveAttribute("data-state", "visible");
+    press();
+    expect(stageKinds()).toEqual(["chat"]);
+    expect(store.isLoaded("tasks")).toBe(true);
+    expect(quickButton("tasks")).toHaveAttribute("data-state", "hidden");
+    press();
+    expect(stageKinds()).toEqual(["tasks"]);
+  });
+
+  it("unwinds Android Back from a task's menu to its detail, the list, Chat, then the drawer", async () => {
+    withPhoneTasks();
+    const store = setup({ extraTenants: [tasksTenant], withTasksPanel: true });
+    const openDrawer = vi.fn();
+    const uninstall = installAndroidBackButton({
+      onOpenDrawer: openDrawer,
+      isOnDrawerRoute: () => true,
+      isDrawerOpen: () => false,
+      isSidebarSearchActive: () => false,
+      onClearSidebarSearch: vi.fn(),
+      isSidebarFiltersActive: () => false,
+      onClearSidebarFilters: vi.fn(),
+      drawerReturnsToThread: () => true,
+    });
+    await waitFor(() => expect(androidBack.press).toBeDefined());
+    const back = () => act(() => androidBack.press!({ canGoBack: true }));
+    const content = () => document.querySelector(".tasks-content")!;
+
+    act(() => store.open("tasks"));
+    fireEvent.click(within(panel("Tasks")!).getByRole("button", { name: "Task open-1" }));
+    expect(content()).toHaveAttribute("data-task-detail-open", "true");
+    // The task's menu, an overlay above the detail, takes Back first.
+    fireEvent.click(
+      within(panel("Tasks")!).getByRole("button", { name: 'Actions for "Task open-1"' }),
+    );
+    const menu = await screen.findByRole("dialog", { name: "Task open-1" });
+    back();
+    await waitFor(() => expect(menu).not.toBeInTheDocument());
+    expect(content()).toHaveAttribute("data-task-detail-open", "true");
+
+    back();
+    expect(content()).not.toHaveAttribute("data-task-detail-open");
+    expect(stageKinds()).toEqual(["tasks"]);
+    back();
+    expect(stageKinds()).toEqual(["chat"]);
+    expect(store.isLoaded("tasks")).toBe(true);
+    expect(openDrawer).not.toHaveBeenCalled();
+    back();
+    expect(openDrawer).toHaveBeenCalledOnce();
+    expect(stageKinds()).toEqual(["chat"]);
+    uninstall();
   });
 });
 
