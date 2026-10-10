@@ -283,7 +283,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
   readonly #listeners = new Set<(event: BackendConversationEvent) => void>();
   readonly #sequencedSubscribers = new Set<SequencedSubscriber>();
   readonly #journal: SequencedBackendEvent[] = [];
-  #recoveryBaseline: BackendConversationSnapshot | undefined;
+  #recoveryBaseline: ReadonlyMap<string, BackendTurn["status"]> | undefined;
   readonly #recoveredCompletionTurnIds = new Map<string, true>();
   readonly #messages: SessionMessage[];
   readonly #projectionMessages: SessionMessage[];
@@ -538,7 +538,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
         // Retained remote output must follow native history hydration. Keep
         // delivery pending so the runtime only acknowledges applied output.
         if (this.#session.flushMessages) await this.#initialHistory;
-        this.#recoveryBaseline = evidence?.completionProvenance === "recovered" ? this.#snapshot(this.#projection.snapshot) : undefined;
+        this.#recoveryBaseline = evidence?.completionProvenance === "recovered" ? this.#captureTurnStatuses() : undefined;
         try {
           if (evidence?.consumedTurnRootUuid && message.type === "user" && message.uuid) {
             // The persistent owner places a steer where Claude started it.
@@ -2933,13 +2933,22 @@ export class ClaudeConversationHandle implements ConversationHandle {
     });
   }
 
+  #captureTurnStatuses(): ReadonlyMap<string, BackendTurn["status"]> {
+    const liveTurnId = this.#liveTurnId();
+    return new Map(Object.values(this.#projection.snapshot.turnsById).map(turn => [
+      turn.backendTurnId, turn.backendTurnId === liveTurnId ? "in_progress" : turn.status,
+    ]));
+  }
+
   #rememberRecoveredSnapshotCompletions(): void {
     const previous = this.#recoveryBaseline;
     if (!previous) return;
-    const next = this.#snapshot(this.#projection.snapshot);
-    for (const turn of Object.values(next.turnsById)) {
-      const prior = previous.turnsById[turn.backendTurnId];
-      if (turn.status !== "in_progress" && (!prior || prior.status === "in_progress")) {
+    // Match the snapshot's reopened active turn without copying its transcript.
+    const liveTurnId = this.#liveTurnId();
+    for (const turn of Object.values(this.#projection.snapshot.turnsById)) {
+      const status = turn.backendTurnId === liveTurnId ? "in_progress" : turn.status;
+      const prior = previous.get(turn.backendTurnId);
+      if (status !== "in_progress" && (prior === undefined || prior === "in_progress")) {
         rememberBounded(this.#recoveredCompletionTurnIds, turn.backendTurnId, true);
       }
     }

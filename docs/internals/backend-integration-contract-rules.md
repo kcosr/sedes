@@ -2246,7 +2246,11 @@ turn IDs on replacement projections; recovered evidence must survive projection
 retry. These annotations are server-private and never enter browser events.
 Pi and Grok do not recover a lost provider stream inside a handle. Codex and
 OpenCode declare that loss with `sequence_gap`; Claude marks retained messages
-per turn because its carrier can reconnect inside the same live handle.
+per turn because its carrier can reconnect inside the same live handle. Claude
+also marks a received message recovered when its application was still queued
+when that carrier was lost. This deliberately favors missing an automatic
+announcement over applying old queued output as fresh after reconnect; durable
+completion processing remains unchanged.
 Unmarked events do not by themselves establish live provenance. Journal overflow
 is a coherent refresh; an explicit resnapshot reason takes precedence over the
 sequence number of the resnapshot notice.

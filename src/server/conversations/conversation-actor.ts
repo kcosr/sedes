@@ -293,6 +293,7 @@ export class ConversationActor {
   #establishmentEpoch = 0;
   #completionObservationGapRevision = 0;
   #completionBaselineGapRevision = 0;
+  #completionGapRecoveryQueued = false;
   #projectionRecoveryFailureSequence = 0;
   #projectionRecoveryRequired = false;
   #handleReplacementRequired = false;
@@ -1413,6 +1414,32 @@ export class ConversationActor {
     this.#publish({ type: "projection_replaced", state });
     this.#publishSnapshotSubmissions();
     this.#publishSnapshotCompletions();
+    if (this.#completionBaselineGapRevision !== this.#completionObservationGapRevision) {
+      this.#queueCompletionGapRecovery();
+    }
+  }
+
+  #queueCompletionGapRecovery(): void {
+    if (this.#closing || this.#closed || this.#completionGapRecoveryQueued) return;
+    this.#completionGapRecoveryQueued = true;
+    // Let already queued events retain receipt order before taking a new
+    // baseline. A raw gap covered by capture may never be redelivered.
+    void this.#mailbox.enqueue(async () => {
+      try {
+        if (this.#closing || this.#closed || this.#handleReplacementRequired ||
+            this.#completionBaselineGapRevision === this.#completionObservationGapRevision) return;
+        await this.#recoverProjection();
+        if (this.#completionBaselineGapRevision !== this.#completionObservationGapRevision) {
+          // One automatic pass is enough to cover a stable gap. Repeated
+          // instability must surface as recovery failure, not a hot loop.
+          this.#failProjectionRecovery(new Error("conversation_actor_observation_continuity_unstable"));
+        }
+      } finally {
+        this.#completionGapRecoveryQueued = false;
+      }
+    }).catch(() => {
+      // Recovery failure is reported by the actor's existing authority state.
+    });
   }
 
   #subscribeEstablished(
@@ -1427,6 +1454,8 @@ export class ConversationActor {
         // gap reported only on the sequenced rail.
         this.#completionObservationGapRevision += 1;
       }
+      // A later gap must not retroactively reclassify an earlier queued event.
+      const completionGapRevision = this.#completionObservationGapRevision;
       void this.#mailbox
         .enqueue(async () => {
           if (epoch !== this.#establishmentEpoch) return;
@@ -1491,7 +1520,7 @@ export class ConversationActor {
             if (priorCompletionStatus === undefined || priorCompletionStatus === "in_progress") {
               this.#rememberCompletionProvenance(
                 completionIdentity,
-                this.#completionBaselineGapRevision === this.#completionObservationGapRevision ? "live" : "recovered",
+                this.#completionBaselineGapRevision === completionGapRevision ? "live" : "recovered",
               );
             }
             const completion = this.#completionResult(

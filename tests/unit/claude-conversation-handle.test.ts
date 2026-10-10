@@ -6212,6 +6212,11 @@ describe("Claude compaction, lost processes, and bounded Stop", () => {
     const unsubscribe = established.subscribeFromNext(({ event }) => events.push(event));
     await retained.replayRetained([
       nativeFrames.text("msg-recovered", "Completed during carrier loss", [PROMPT_ID]),
+    ]);
+    const awaitingResult = await handle.establishProjection({ signal: new AbortController().signal });
+    expect(awaitingResult.snapshot.turnsById[recoveredTurnId]).toMatchObject({ status: "in_progress" });
+    expect(awaitingResult.recoveredCompletionTurnIds).toEqual([]);
+    await retained.replayRetained([
       nativeFrames.result([PROMPT_ID]),
       nativeFrames.state("idle"),
     ]);
