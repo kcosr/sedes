@@ -16,6 +16,7 @@ import {
   layoutElement,
   noStorage,
   openPanelsMenu,
+  setApi,
   setup,
   terminalResource,
 } from "./panel-layout.fixtures.js";
@@ -30,6 +31,53 @@ vi.mock("../terminals/TerminalPanel.js", async () => ({
 installPanelLayoutHarness();
 
 describe("PanelLayout Terminals panel", () => {
+  it("keeps the terminal mounted while hidden, moved or behind a maximized panel", async () => {
+    setApi({
+      readTerminal: vi.fn().mockResolvedValue(terminalResource()),
+      createTerminalAdmission: vi.fn(),
+      terminalWebSocketUrl: vi.fn(),
+    });
+    const store = setup();
+    act(() => store.openTerminalTab(TERMINAL_ID, { focus: false }));
+    const terminal = await screen.findByRole("region", { name: "Remote shell terminal" });
+    expect(terminal).toHaveAttribute("data-visible", "true");
+    expect(screen.getByRole("region", { name: "Terminals panel" })).toHaveAttribute(
+      "data-region",
+      "bottom",
+    );
+    const toggle = within(screen.getByTestId("workspace-workbench-bar")).getByTestId(
+      "terminals-panel-toggle",
+    );
+
+    // Hidden by its quick button: still loaded, still mounted, not visible.
+    fireEvent.click(toggle);
+    expect(store.isLoaded("terminals")).toBe(true);
+    expect(screen.queryByRole("region", { name: "Terminals panel" })).toBeNull();
+    expect(terminal).toBeInTheDocument();
+    expect(terminal).toHaveAttribute("data-visible", "false");
+
+    fireEvent.click(toggle);
+    expect(terminal).toHaveAttribute("data-visible", "true");
+
+    // Moved to the Right, and behind a maximized Chat: the same renderer.
+    act(() => {
+      store.move("terminals", "right");
+    });
+    expect(screen.getByRole("region", { name: "Terminals panel" })).toHaveAttribute(
+      "data-region",
+      "right",
+    );
+    act(() => {
+      store.maximize("chat");
+    });
+    expect(terminal).toHaveAttribute("data-visible", "false");
+    act(() => {
+      store.restore();
+    });
+    expect(screen.getByRole("region", { name: "Remote shell terminal" })).toBe(terminal);
+    expect(terminal).toHaveAttribute("data-terminal-panel-instance", "1");
+  });
+
   it("reopens an existing terminal from the panel list without creating a shell", async () => {
     const resource = terminalResource();
     const listTerminals = vi.fn().mockResolvedValue({ terminals: [resource] });
