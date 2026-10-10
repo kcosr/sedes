@@ -491,6 +491,27 @@
 
 ### Changed
 
+- Panels open into five regions: Middle, Left, Right, Top, and Bottom. Each
+  region shows one panel; opening a panel replaces what its region showed,
+  which stays loaded but hidden. Each panel remembers its region on this
+  device for every thread (by default Chat in the Middle, Files, Workpads and
+  Tasks on the Right, Terminals at the Bottom). **Move to** in a panel's ⋯
+  menu changes it, and **Full height** or **Full width** gives a region the
+  corners. On first load, open panels, sizes, the Tasks and Workpads edges,
+  and each thread's terminal tabs carry over once; Chat, Files, and Terminals
+  start in their default regions.
+
+- Panel headers have **Maximize**, which fills the stage until **Restore** or
+  Escape. ✕ closes and unloads a panel; Chat's ✕ hides it.
+
+- The workbench bar has a button for each loaded panel, filled while visible
+  and outlined while hidden, which shows or hides it; Tasks and Workpads
+  buttons appear only while loaded. The **Panels** menu (▾) lists every panel
+  with its state and opens it in its place or in a region you choose.
+
+- When the window is too small, the least recently used regions are hidden,
+  never Chat, and return when there is room.
+
 - Workpads show each typed line on its own line; a single line break no longer
   joins lines into one paragraph. Chat and Markdown file previews are
   unchanged. ([#65](https://github.com/kcosr/sedes/pull/65))
@@ -1373,6 +1394,10 @@
   only the four most recent earlier daemon PIDs. Diagnostics remain opt-in.
 
 ### Removed
+
+- The **Opening panels** setting and Shift-click full screen; use **Maximize**.
+  Panel collapse, **Dock**, **Show all**, and the panel shortcut icons are
+  also gone; use the bar's buttons, **Move to**, and the **Panels** menu.
 
 - Workpads' **Include nested scopes**, **Archived** switch and **Browse
   another thread or project…**; use All, Include thread workpads and the
