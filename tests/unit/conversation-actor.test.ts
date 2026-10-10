@@ -304,6 +304,7 @@ function fixture(
   deliveryInputSnapshots?: DeliveryInputSnapshotRepository,
   runtimeBudget = 8,
   onLiveProgress?: LiveProgressObserver,
+  captureCompletionVoiceSubscriberWatermark?: () => number,
 ) {
   const closeOrder: string[] = [];
   const handle = new FakeHandle(closeOrder);
@@ -368,6 +369,7 @@ function fixture(
     ...(onAuthoritativeCompletion ? { onAuthoritativeCompletion } : {}),
     ...(onAuthoritativeSubmission ? { onAuthoritativeSubmission } : {}),
     ...(onLiveProgress ? { onLiveProgress } : {}),
+    ...(captureCompletionVoiceSubscriberWatermark ? { captureCompletionVoiceSubscriberWatermark } : {}),
   });
   const manager = {
     acquire: (
@@ -5318,7 +5320,8 @@ describe("ConversationActorManager", () => {
 
   it("classifies initial, subscriber, and explicit snapshot completion replays as recovered", async () => {
     const observed = vi.fn<AuthoritativeCompletionObserver>();
-    const { driver, handle, manager } = fixture(observed);
+    const captureWatermark = vi.fn(() => 10);
+    const { driver, handle, manager } = fixture(observed, undefined, 10, undefined, 8, undefined, captureWatermark);
     const terminal = snapshot();
     terminal.turnsById["turn-1"] = {
       ...terminal.turnsById["turn-1"]!,
@@ -5340,17 +5343,20 @@ describe("ConversationActorManager", () => {
     await vi.waitFor(() => expect(observed).toHaveBeenCalledTimes(2));
     expect(observed.mock.calls[1]?.[2].provenance).toBe("recovered");
     expect(completions).toHaveLength(2);
+    expect(captureWatermark).not.toHaveBeenCalled();
+    expect(observed.mock.calls.every((call) => call[2].voiceSubscriberWatermark === undefined)).toBe(true);
     acquired.release();
     await manager.close();
   });
 
-  it("retains live completion provenance when acceptance arrives before explicit replay", async () => {
+  it("retains live completion provenance and its first audience watermark when acceptance arrives before replay", async () => {
     let accepted = false;
     const matched: Parameters<AuthoritativeCompletionObserver>[2][] = [];
     const observed = vi.fn<AuthoritativeCompletionObserver>((_scope, _threadId, completion) => {
       if (accepted) matched.push(completion);
     });
-    const { driver, handle, manager } = fixture(observed);
+    const captureWatermark = vi.fn(() => 10);
+    const { driver, handle, manager } = fixture(observed, undefined, 10, undefined, 8, undefined, captureWatermark);
     handle.establishmentSnapshots[0] = { orderedBackendTurnIds: [], turnsById: {}, itemsById: {}, runState: "idle" };
     const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
     handle.emit(0, { type: "turn_started", turn: {
@@ -5363,11 +5369,14 @@ describe("ConversationActorManager", () => {
     } }, 1);
     await vi.waitFor(() => expect(observed).toHaveBeenCalledTimes(1));
     expect(observed.mock.calls[0]?.[2].provenance).toBe("live");
+    expect(observed.mock.calls[0]?.[2].voiceSubscriberWatermark).toBe(10);
+    expect(captureWatermark).toHaveBeenCalledTimes(1);
     expect(matched).toEqual([]);
 
     accepted = true;
+    captureWatermark.mockReturnValue(20);
     await acquired.actor.replayAuthoritativeCompletions();
-    await vi.waitFor(() => expect(matched).toEqual([expect.objectContaining({ provenance: "live" })]));
+    await vi.waitFor(() => expect(matched).toEqual([expect.objectContaining({ provenance: "live", voiceSubscriberWatermark: 10 })]));
     const subscribed: ConversationActorEvent[] = [];
     acquired.actor.subscribe((event) => {
       if (event.type === "authoritative_completion") subscribed.push(event);
@@ -5380,6 +5389,8 @@ describe("ConversationActorManager", () => {
     } }, 2);
     await vi.waitFor(() => expect(observed).toHaveBeenCalledTimes(3));
     expect(observed.mock.calls[2]?.[2].provenance).toBe("live");
+    expect(observed.mock.calls[2]?.[2].voiceSubscriberWatermark).toBe(10);
+    expect(captureWatermark).toHaveBeenCalledTimes(1);
     acquired.release();
     await manager.close();
   });
@@ -5715,10 +5726,15 @@ describe("ConversationActorManager", () => {
     await manager.close();
   });
 
-  it("bounds automatic captures when every replacement encounters another raw observation gap", async () => {
-    const { driver, handle, manager } = fixture();
+  it("bounds automatic captures without failing a current projection and restores live observation on natural refresh", async () => {
+    const observed = vi.fn<AuthoritativeCompletionObserver>();
+    const { driver, handle, manager } = fixture(observed);
     handle.establishmentSnapshots[0] = snapshot("running");
     const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+    const notices: ConversationActorEvent[] = [];
+    acquired.actor.subscribe((event) => {
+      if (event.type === "backend_event" && event.event.type === "notice") notices.push(event);
+    });
     const establish = handle.establishProjection.bind(handle);
     const replacement = vi.spyOn(handle, "establishProjection").mockImplementation(async (input) => {
       const result = await establish(input);
@@ -5726,11 +5742,34 @@ describe("ConversationActorManager", () => {
       return result;
     });
     handle.emit(0, { type: "resnapshot_required", reason: "history_changed" });
-    await vi.waitFor(() => expect(acquired.actor.projectionRecoveryRequired).toBe(true));
-    expect(replacement).toHaveBeenCalledTimes(2);
-    // The mailbox remains responsive after bounded recovery reports failure.
+    await vi.waitFor(() => expect(replacement).toHaveBeenCalledTimes(2));
+    // A successful projection stays usable while voice observation is fenced.
     await acquired.actor.usage();
     expect(replacement).toHaveBeenCalledTimes(2);
+    expect(acquired.actor.projectionRecoveryRequired).toBe(false);
+    expect(notices).toEqual([]);
+
+    const terminal = snapshot();
+    terminal.turnsById["turn-1"] = {
+      ...terminal.turnsById["turn-1"]!, completionCorrelations: ["recovered-operation"],
+    };
+    handle.emit(2, { type: "turn_completed", turn: terminal.turnsById["turn-1"]! }, 0);
+    await vi.waitFor(() => expect(observed).toHaveBeenCalledTimes(1));
+    expect(observed.mock.calls[0]?.[2].provenance).toBe("recovered");
+
+    replacement.mockRestore();
+    handle.establishmentSnapshots[3] = terminal;
+    handle.emit(2, { type: "resnapshot_required", reason: "history_changed" }, 1);
+    await vi.waitFor(() => expect(observed).toHaveBeenCalledTimes(2));
+    expect(handle.establishCount).toBe(4);
+    handle.emit(3, { type: "turn_completed", turn: {
+      backendTurnId: "turn-2", status: "completed", endedBy: "agent_settled", orderedBackendItemIds: [],
+      completionCorrelations: ["live-operation"],
+    } }, 0);
+    await vi.waitFor(() => expect(observed).toHaveBeenCalledTimes(3));
+    expect(observed.mock.calls[2]?.[2]).toMatchObject({ backendTurnId: "turn-2", provenance: "live" });
+    expect(acquired.actor.projectionRecoveryRequired).toBe(false);
+    expect(notices).toEqual([]);
     acquired.release();
     await manager.close();
   });
@@ -5835,24 +5874,57 @@ describe("ConversationActorManager", () => {
     await manager.close();
   });
 
-  it("bounds live provenance memory while preserving every completion publication", async () => {
+  it("retains 512 completion identities and audience watermarks, then evicts the oldest while preserving publications", async () => {
     const observed = vi.fn<AuthoritativeCompletionObserver>();
-    const { driver, handle, manager } = fixture(observed);
-    handle.establishmentSnapshots[0] = { orderedBackendTurnIds: [], turnsById: {}, itemsById: {}, runState: "idle" };
+    let watermark = 0;
+    const captureWatermark = vi.fn(() => ++watermark);
+    const { driver, handle, manager } = fixture(observed, undefined, 10, undefined, 8, undefined, captureWatermark);
+    const empty: BackendConversationSnapshot = { orderedBackendTurnIds: [], turnsById: {}, itemsById: {}, runState: "idle" };
+    handle.establishmentSnapshots[0] = empty;
     const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
-    for (let index = 0; index < 513; index += 1) {
-      handle.emit(0, { type: "turn_completed", turn: {
+    const completion = (index: number): BackendConversationEvent => ({ type: "turn_completed", turn: {
         backendTurnId: `turn-${index}`, status: "completed", endedBy: "agent_settled", orderedBackendItemIds: [],
         completionCorrelations: [`operation-${index}`],
-      } }, index);
+    } });
+    for (let index = 0; index < 512; index += 1) {
+      handle.emit(0, completion(index), index);
     }
+    await vi.waitFor(() => expect(observed).toHaveBeenCalledTimes(512));
+    expect(captureWatermark).toHaveBeenCalledTimes(512);
+    handle.emit(0, completion(0), 512);
     await vi.waitFor(() => expect(observed).toHaveBeenCalledTimes(513));
+    expect(observed.mock.calls[512]?.[2]).toMatchObject({
+      backendTurnId: "turn-0", provenance: "live", voiceSubscriberWatermark: 1,
+    });
+    expect(captureWatermark).toHaveBeenCalledTimes(512);
+
+    handle.emit(0, completion(512), 513);
+    await vi.waitFor(() => expect(observed).toHaveBeenCalledTimes(514));
+    expect(captureWatermark).toHaveBeenCalledTimes(513);
     expect(observed.mock.calls.every((call) => call[2].provenance === "live")).toBe(true);
     observed.mockClear();
     await acquired.actor.replayAuthoritativeCompletions();
     await vi.waitFor(() => expect(observed).toHaveBeenCalledTimes(513));
     expect(observed.mock.calls[0]?.[2]).toMatchObject({ backendTurnId: "turn-0", provenance: "recovered" });
+    expect(observed.mock.calls[0]?.[2].voiceSubscriberWatermark).toBeUndefined();
     expect(observed.mock.calls.slice(1).every((call) => call[2].provenance === "live")).toBe(true);
+    expect(observed.mock.calls.slice(1).map((call) => call[2].voiceSubscriberWatermark)).toEqual(
+      Array.from({ length: 512 }, (_, index) => index + 2),
+    );
+    expect(captureWatermark).toHaveBeenCalledTimes(513);
+
+    // A fresh live observation after the turn leaves retained history must
+    // capture again, proving the manager also evicted its oldest watermark.
+    handle.establishmentSnapshots[1] = empty;
+    handle.emit(0, { type: "resnapshot_required", reason: "history_changed" }, 514);
+    await acquired.actor.captureSnapshotState();
+    expect(handle.establishCount).toBe(2);
+    handle.emit(1, completion(0), 0);
+    await vi.waitFor(() => expect(observed).toHaveBeenCalledTimes(514));
+    expect(captureWatermark).toHaveBeenCalledTimes(514);
+    expect(observed.mock.calls[513]?.[2]).toMatchObject({
+      backendTurnId: "turn-0", provenance: "live", voiceSubscriberWatermark: 514,
+    });
     acquired.release();
     await manager.close();
   });

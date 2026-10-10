@@ -1429,11 +1429,9 @@ export class ConversationActor {
         if (this.#closing || this.#closed || this.#handleReplacementRequired ||
             this.#completionBaselineGapRevision === this.#completionObservationGapRevision) return;
         await this.#recoverProjection();
-        if (this.#completionBaselineGapRevision !== this.#completionObservationGapRevision) {
-          // One automatic pass is enough to cover a stable gap. Repeated
-          // instability must surface as recovery failure, not a hot loop.
-          this.#failProjectionRecovery(new Error("conversation_actor_observation_continuity_unstable"));
-        }
+        // Bound automatic work to one pass. Another voice-observation gap
+        // keeps completions recovered until the next natural establishment;
+        // it does not invalidate a successfully established projection.
       } finally {
         this.#completionGapRecoveryQueued = false;
       }

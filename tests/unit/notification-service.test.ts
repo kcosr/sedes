@@ -248,6 +248,67 @@ describe("notification settings and passive hooks", () => {
     expect(executor).not.toHaveBeenCalled();
   });
 
+  it("restricts completion speech to the captured audience while publishing policy to later streams", async () => {
+    const { service } = fixture();
+    service.update(scope, { ...config, delivery: scriptDelivery([]) });
+    const earlier: string[] = [], later: string[] = [];
+    service.subscribe(scope, frame => earlier.push(frame));
+    const watermark = service.captureSubscriberWatermark();
+    service.subscribe(scope, frame => later.push(frame));
+
+    await service.emit(scope, event(), "captured-audience", "live", undefined, undefined, watermark);
+    expect(voiceFrames(earlier)).toHaveLength(1);
+    expect(voiceFrames(later)).toHaveLength(0);
+    expect(later).toHaveLength(1);
+    expect(later[0]).toContain("event: notification_policy\n");
+
+    service.setSilenced(scope, true);
+    expect(later).toHaveLength(2);
+    expect(later[1]).toContain("event: notification_policy\n");
+    expect(later[1]).toContain('"silenced":true');
+  });
+
+  it("delivers unwatermarked progress to every current same-scope stream", async () => {
+    const { service } = fixture();
+    service.update(scope, { ...config, delivery: scriptDelivery([]) });
+    const earlier: string[] = [], later: string[] = [], unrelated: string[] = [];
+    service.subscribe(scope, frame => earlier.push(frame));
+    service.captureSubscriberWatermark();
+    service.subscribe(scope, frame => later.push(frame));
+    service.subscribe(other, frame => unrelated.push(frame));
+
+    await service.emit(scope, progress(), "unwatermarked-progress", "live");
+    expect(voiceFrames(earlier)).toHaveLength(1);
+    expect(voiceFrames(later)).toHaveLength(1);
+    expect(voiceFrames(unrelated)).toHaveLength(0);
+  });
+
+  it("treats a zero audience watermark as no recipients and diagnoses the suppression", async () => {
+    vi.stubEnv("SEDES_DEBUG_DELIVERY", "1");
+    const output = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const { service } = fixture();
+      service.update(scope, { ...config, delivery: scriptDelivery([]) });
+      const watermark = service.captureSubscriberWatermark();
+      expect(watermark).toBe(0);
+      const frames: string[] = [];
+      service.subscribe(scope, frame => frames.push(frame));
+      const context = vi.fn(() => ({}));
+
+      await service.emit(scope, event(), "empty-audience", "live", undefined, context, watermark);
+      expect(voiceFrames(frames)).toHaveLength(0);
+      expect(context).not.toHaveBeenCalled();
+      const records = output.mock.calls.map(([line]) => JSON.parse(String(line).slice("[delivery-voice] ".length)));
+      expect(records).toContainEqual(expect.objectContaining({
+        event: "voice_decision", provenance: "live", claimed: true,
+        applicationStreamCount: 1, recipientCount: 0, suppressionReason: "no_recipients",
+      }));
+    } finally {
+      output.mockRestore();
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("diagnoses recovered suppression and listener delivery without exporting content", async () => {
     vi.stubEnv("SEDES_DEBUG_DELIVERY", "1");
     const output = vi.spyOn(console, "error").mockImplementation(() => {});
