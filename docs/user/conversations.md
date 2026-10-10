@@ -724,9 +724,9 @@ don't apply. Returning to Chat uses the same retained state rather than
 rebuilding the file view.
 
 Chat is home on a phone. Closing or hiding another panel returns to Chat, and
-so does Back; a panel you hide or go back from stays loaded, and its button
-brings it back as you left it. On Android, Back from Chat opens the navigation
-drawer.
+so does Android Back, or browser Back from Terminals. A panel you hide or go
+back from stays loaded, and its button brings it back as you left it. On
+Android, Back from Chat opens the navigation drawer.
 
 Previous: [Core concepts](concepts.md) · Next:
 [Organize and reuse work](organize-work.md)

@@ -516,8 +516,8 @@
   never Chat, and return when there is room.
   ([#66](https://github.com/kcosr/sedes/pull/66))
 
-- On phones, Chat is home: closing or hiding another panel, or Back, returns
-  to Chat, and Android Back from Chat opens the sidebar. Chat has no ✕ on
+- On phones, Chat is home: closing or hiding another panel, or Android Back,
+  returns to Chat, and Back from Chat opens the sidebar. Chat has no ✕ on
   phones. ([#66](https://github.com/kcosr/sedes/pull/66))
 
 - Workpads show each typed line on its own line; a single line break no longer

@@ -241,11 +241,11 @@ presentation. Panel headers drop Maximize and Move to, and the **Panels** menu
 drops its place buttons.
 
 Chat is the phone's home. Its header has no ✕, and its quick button does
-nothing while Chat is in front. Closing or hiding the panel in front, or Back,
-shows Chat by opening it, which shows it in its region again when another
-panel replaced it there and writes the device layout. A hidden panel, or one
-Back left, stays loaded, and Back leaves its region showing it. The other panel
-that shared the closed panel's region does not come back.
+nothing while Chat is in front. Closing or hiding the panel in front, or
+Android Back, shows Chat by opening it: when another panel replaced Chat in
+its region, Chat shows there again, which writes the device layout. A hidden
+panel, or one Back left, stays loaded, and Back leaves its region showing it.
+A panel the closed one had replaced in its region does not come back.
 
 Android Back first runs `handleExposedBack` (`app/android-back.ts`): an
 exposed task detail closes, then an open workpad returns to its list, then a
