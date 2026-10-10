@@ -4210,16 +4210,16 @@ async function main(): Promise<void> {
   const inventoryRepository = new InventoryRepository(database);
   const notificationLifecycle = new NotificationLifecycleObserver(
     inventoryRepository,
-    (eventScope, payload, eventKey, assistantResult, recognitionThreadId) => {
+    (eventScope, payload, eventKey, provenance, assistantResult, recognitionThreadId, subscriberWatermark) => {
       // Same wiring as production: voice context is captured only after dedup,
       // policy and recipient checks admit voice delivery.
-      const publication = notifications.emit(eventScope, payload, eventKey, assistantResult, () => {
+      const publication = notifications.emit(eventScope, payload, eventKey, provenance, assistantResult, () => {
         const target = recognitionThreadId === undefined ? payload.thread?.id : recognitionThreadId;
         const context = target ? mutationsForSubmissions?.activity.notificationContext(eventScope, target, payload.turn?.id) : undefined;
         const subjectId = payload.interaction?.id ?? payload.question?.id ??
           (payload.event === "thread.woke" ? payload.occurredAt : undefined);
         return { ...context, ...(subjectId ? { subjectId } : {}) };
-      });
+      }, subscriberWatermark);
       if (payload.turn && payload.thread && ["turn.completed", "turn.failed", "turn.interrupted"].includes(payload.event)) {
         clientControls.observeNotification(eventScope, payload.thread.id, payload.turn.id, publication);
       }
@@ -4468,6 +4468,7 @@ async function main(): Promise<void> {
         applicationThreadId,
         input.backendCorrelation,
       ),
+    captureCompletionVoiceSubscriberWatermark: () => notifications.captureSubscriberWatermark(),
     onAuthoritativeCompletion: (eventScope, applicationThreadId, input) =>
       observeAuthoritativeCompletion?.(eventScope, applicationThreadId, input),
   });
@@ -4926,7 +4927,7 @@ async function main(): Promise<void> {
     } catch {
       // As in production, run history never breaks completion.
     }
-    notificationLifecycle.completion(eventScope, observed);
+    notificationLifecycle.completion(eventScope, observed, input.provenance, input.voiceSubscriberWatermark);
     if (observed.applicationTurnId) void clientControls.complete(eventScope, applicationThreadId, observed.applicationTurnId, observed.completionOutcome ?? "interrupted");
     authoritativeCompletionFollowUp.defer(async () => {
       const failures: unknown[] = [];

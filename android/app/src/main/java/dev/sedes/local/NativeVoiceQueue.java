@@ -109,6 +109,13 @@ final class NativeVoiceQueue {
         }
         boolean progress() { return event.equals("turn.progress"); }
     }
+    interface Observer { void event(NativeVoiceDiagnostics.Event event, Item item, String reason); }
+    private final Observer observer;
+    NativeVoiceQueue() { this((event, item, reason) -> {}); }
+    NativeVoiceQueue(Observer observer) { this.observer = observer; }
+    private void trace(NativeVoiceDiagnostics.Event event, Item item, String reason) {
+        try { observer.event(event, item, reason); } catch (RuntimeException ignored) {}
+    }
     private final ArrayDeque<Item> pending = new ArrayDeque<>();
     private final ArrayDeque<String> remembered = new ArrayDeque<>();
     private final Set<String> seen = new HashSet<>();
@@ -128,15 +135,19 @@ final class NativeVoiceQueue {
         remember(id);
     }
     boolean add(Item item) {
-        if (!remember(item.id)) return false;
-        for (Item old : pending) if (old.id.equals(item.id)) return false;
+        if (!remember(item.id)) { trace(NativeVoiceDiagnostics.Event.DROPPED, item, "duplicate"); return false; }
+        for (Item old : pending) if (old.id.equals(item.id)) { trace(NativeVoiceDiagnostics.Event.DROPPED, item, "duplicate"); return false; }
         return enqueue(item);
     }
     /** Queues a replay outside notification dedupe. False when the same turn's replay is already pending. */
     boolean addReplay(Item item) {
-        for (Item old : pending) if (item.replayIdentity().equals(old.replayIdentity())) return false;
+        for (Item old : pending) if (item.replayIdentity().equals(old.replayIdentity())) { trace(NativeVoiceDiagnostics.Event.DROPPED, item, "duplicate"); return false; }
         // A user request is refused explicitly rather than silently dropped, and a refusal evicts nothing.
-        if (!fitsAfterProgressEviction(item) || !enqueue(item)) throw new IllegalStateException("voice_queue_full");
+        if (!fitsAfterProgressEviction(item)) {
+            trace(NativeVoiceDiagnostics.Event.DROPPED, item, "overflow");
+            throw new IllegalStateException("voice_queue_full");
+        }
+        if (!enqueue(item)) throw new IllegalStateException("voice_queue_full");
         return true;
     }
     /** Whether a non-progress item fits once every pending progress item, the only evictable kind, has yielded. */
@@ -157,17 +168,17 @@ final class NativeVoiceQueue {
         String key = item.coalesceKey();
         if (key != null) {
             Iterator<Item> iterator = pending.iterator();
-            while (iterator.hasNext()) { Item old = iterator.next(); if (key.equals(old.coalesceKey())) { bytes -= old.bytes; iterator.remove(); } }
+            while (iterator.hasNext()) { Item old = iterator.next(); if (key.equals(old.coalesceKey())) { bytes -= old.bytes; iterator.remove(); trace(NativeVoiceDiagnostics.Event.DROPPED, old, "coalesced"); } }
         }
         if (!item.progress()) {
             Iterator<Item> iterator = pending.iterator();
             while ((pending.size() >= MAX_ITEMS || bytes + item.bytes > MAX_BYTES) && iterator.hasNext()) {
                 Item old = iterator.next();
-                if (old.progress()) { bytes -= old.bytes; iterator.remove(); drop("progress_evicted"); }
+                if (old.progress()) { bytes -= old.bytes; iterator.remove(); drop(old, "progress_evicted"); }
             }
         }
         if (pending.size() >= MAX_ITEMS || bytes + item.bytes > MAX_BYTES) { drop(item, "overflow"); return false; }
-        pending.addLast(item); bytes += item.bytes; return true;
+        pending.addLast(item); bytes += item.bytes; trace(NativeVoiceDiagnostics.Event.QUEUED, item, null); return true;
     }
     void cancelFollowups() { for (Item item : pending) { item.followUp = false; item.followUpCancelled = true; } }
     void reconfigure(NativeVoiceSettings settings) {
@@ -181,13 +192,13 @@ final class NativeVoiceQueue {
     Item take() { Item value = pending.pollFirst(); if (value != null) bytes -= value.bytes; return value; }
     void clear(String reason) { while (!pending.isEmpty()) drop(take(), reason); }
     /** An explicit Stop removes pending playback without reporting loss or forgetting notification dedupe. */
-    void clearPending() { pending.clear(); bytes = 0; }
+    void clearPending() { while (!pending.isEmpty()) trace(NativeVoiceDiagnostics.Event.DROPPED, take(), "stopped"); }
     /** Notification loss and policy changes clear automatic notices; user-requested replays stay queued. */
     void clearAutomatic(String reason) {
         Iterator<Item> iterator = pending.iterator();
         while (iterator.hasNext()) {
             Item item = iterator.next();
-            if (item.automatic) { bytes -= item.bytes; iterator.remove(); drop(reason); }
+            if (item.automatic) { bytes -= item.bytes; iterator.remove(); drop(item, reason); }
         }
     }
     /** A stopped voice service ends pending replays. Automatic items stay for drain to judge; replays never count as drops. */
@@ -195,13 +206,16 @@ final class NativeVoiceQueue {
         Iterator<Item> iterator = pending.iterator();
         while (iterator.hasNext()) {
             Item item = iterator.next();
-            if (item.isReplay()) { bytes -= item.bytes; iterator.remove(); }
+            if (item.isReplay()) { bytes -= item.bytes; iterator.remove(); trace(NativeVoiceDiagnostics.Event.DROPPED, item, "service_stopped"); }
         }
     }
-    void reset() { pending.clear(); remembered.clear(); seen.clear(); dropped.clear(); bytes = 0; }
+    void reset() {
+        while (!pending.isEmpty()) trace(NativeVoiceDiagnostics.Event.DROPPED, take(), "disconnected");
+        remembered.clear(); seen.clear(); dropped.clear(); bytes = 0;
+    }
     void drop(String reason) { dropped.put(reason, dropped.getOrDefault(reason, 0) + 1); }
     /** Drop counts report automatic voice items only; a replay is the user's own request. */
-    private void drop(Item item, String reason) { if (item.automatic) drop(reason); }
+    private void drop(Item item, String reason) { if (item.automatic) drop(reason); trace(NativeVoiceDiagnostics.Event.DROPPED, item, reason); }
     JSONObject state() {
         JSONObject reasons = new JSONObject(); int count = 0;
         for (Map.Entry<String, Integer> entry : dropped.entrySet()) { NativeVoiceJson.put(reasons, entry.getKey(), entry.getValue()); count += entry.getValue(); }

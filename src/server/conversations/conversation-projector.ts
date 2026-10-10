@@ -389,12 +389,14 @@ export class ConversationProjector {
         reason: "projector_invalidated",
       };
     }
-    if (input.handleSequence !== this.#lastHandleSequence + 1) {
-      return this.#invalidate("backend_sequence_gap");
-    }
     const event = input.event;
     if (event.type === "resnapshot_required") {
+      // A backend's explicit cause remains authoritative even when its bounded
+      // journal can no longer provide the immediately next sequence.
       return this.#invalidate(event.reason);
+    }
+    if (input.handleSequence !== this.#lastHandleSequence + 1) {
+      return this.#invalidate("backend_sequence_gap");
     }
     let result: ProjectionApplication;
     if (event.type === "background_activity_changed") {

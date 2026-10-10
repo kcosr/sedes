@@ -19,8 +19,10 @@ export class NotificationLifecycleObserver {
       scope: RequestScope,
       payload: NotificationEventPayload,
       eventKey: string,
+      provenance: "live" | "recovered",
       assistantResult?: ClassifiedAssistantResult,
       recognitionThreadId?: string | null,
+      subscriberWatermark?: number,
     ) => void,
   ) {}
 
@@ -33,7 +35,7 @@ export class NotificationLifecycleObserver {
         event: "turn.progress", occurredAt: new Date().toISOString(), title: "Agent progress",
         message: context.thread.title, ...context, turn: { id: input.applicationTurnId },
         progress: { itemId: input.applicationItemId, ...input.text },
-      }, JSON.stringify(["progress", threadId, input.applicationTurnId, input.applicationItemId]));
+      }, JSON.stringify(["progress", threadId, input.applicationTurnId, input.applicationItemId]), "live");
     } catch { /* Passive progress cannot affect provider work. */ }
   }
 
@@ -56,6 +58,7 @@ export class NotificationLifecycleObserver {
           interaction: { id: interaction.id, kind: interaction.kind },
         },
         JSON.stringify(["interaction", interaction.threadId, interaction.id]),
+        "live",
       );
     } catch {
       // Never export prompt contents, or affect the pending interaction.
@@ -84,6 +87,7 @@ export class NotificationLifecycleObserver {
           question: { id: request.id, questionCount: request.questionCount },
         },
         JSON.stringify(["question", request.threadId, request.id]),
+        "live",
       );
     } catch {
       // Passive notifications never export question contents or affect the inbox.
@@ -93,6 +97,8 @@ export class NotificationLifecycleObserver {
   completion(
     scope: RequestScope,
     observation: SubmissionCompletionObservationRecord,
+    provenance: "live" | "recovered",
+    subscriberWatermark?: number,
   ): void {
     if (
       observation.tenantId !== scope.tenantId ||
@@ -126,7 +132,10 @@ export class NotificationLifecycleObserver {
           observation.applicationThreadId,
           observation.applicationTurnId,
         ]),
+        provenance,
         observation.classifiedResult ?? undefined,
+        undefined,
+        subscriberWatermark,
       );
     } catch {
       // Notifications are best effort and must never disrupt conversation work.
@@ -167,6 +176,7 @@ export class NotificationLifecycleObserver {
           state.wokeAt,
           state.inventoryRevision,
         ]),
+        "live",
       );
     } catch {
       // A failed observer never prevents the inventory transition/publication.
@@ -226,6 +236,7 @@ export class NotificationLifecycleObserver {
           },
         },
         JSON.stringify(["automation", run.id, event]),
+        "live",
         undefined,
         run.childThreadId,
       );

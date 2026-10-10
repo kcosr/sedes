@@ -1215,7 +1215,7 @@ describe("ConversationProjector", () => {
     expect(
       projector.apply({
         handleSequence: 2,
-        event: { type: "resnapshot_required", reason: "sequence_gap" },
+        event: { type: "run_state_changed", state: "idle" },
       }),
     ).toEqual({
       kind: "resnapshot_required",
@@ -1231,6 +1231,16 @@ describe("ConversationProjector", () => {
       reason: "projector_invalidated",
     });
   });
+
+  it.each(["buffer_overflow", "history_changed", "sequence_gap"] as const)(
+    "preserves an explicit %s resnapshot cause across a noncontiguous sequence",
+    (reason) => {
+      const projector = new ConversationProjector({ backendInstanceId: "local-pi", bindingIdentity: "binding-1" });
+      projector.replace(snapshot(), -1);
+      expect(projector.apply({ handleSequence: 9, event: { type: "resnapshot_required", reason } }))
+        .toEqual({ kind: "resnapshot_required", reason });
+    },
+  );
 
   it("leaves the prior generation intact when replacement validation fails", () => {
     const projector = new ConversationProjector({

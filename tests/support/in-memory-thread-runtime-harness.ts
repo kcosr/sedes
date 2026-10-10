@@ -57,7 +57,10 @@ import { ConversationDraftRepository } from "../../src/server/db/repositories/co
 import { ConversationOperationRepository } from "../../src/server/db/repositories/conversation-operation-repository.js";
 import { InventoryRepository } from "../../src/server/db/repositories/inventory-repository.js";
 import { QueuedInputRepository } from "../../src/server/db/repositories/queued-input-repository.js";
-import { SubmissionCompletionRepository } from "../../src/server/db/repositories/submission-completion-repository.js";
+import {
+  SubmissionCompletionRepository,
+  type SubmissionCompletionObservationRecord,
+} from "../../src/server/db/repositories/submission-completion-repository.js";
 import { InventoryService } from "../../src/server/domain/inventory-service.js";
 import { ConversationEventBridge } from "../../src/server/events/conversation-event-bridge.js";
 import { ThreadEventPresentation } from "../../src/server/events/thread-event-presentation.js";
@@ -214,6 +217,13 @@ export async function createInMemoryThreadRuntimeHarness(options: {
   readonly retentionMilliseconds?: number;
   readonly persistDeliveryInputSnapshots?: boolean;
   readonly onCompletion?: (scope: RequestScope, threadId: string, turnId: string) => void;
+  readonly captureCompletionVoiceSubscriberWatermark?: () => number;
+  readonly onObservedCompletion?: (
+    scope: RequestScope,
+    observation: SubmissionCompletionObservationRecord,
+    provenance: "live" | "recovered",
+    subscriberWatermark?: number,
+  ) => void;
 } = {}) {
   const database = openOverlayDatabase(":memory:");
   const scope = new SingleUserIdentityProvider(database).getScope();
@@ -357,6 +367,7 @@ export async function createInMemoryThreadRuntimeHarness(options: {
     runtimeBudget: 8,
     onAuthoritativeSubmission: (eventScope, applicationThreadId, input) =>
       observeSubmission?.(eventScope, applicationThreadId, input),
+    captureCompletionVoiceSubscriberWatermark: options.captureCompletionVoiceSubscriberWatermark,
     onAuthoritativeCompletion: (eventScope, applicationThreadId, input) =>
       observeCompletion?.(eventScope, applicationThreadId, input),
   });
@@ -506,6 +517,7 @@ export async function createInMemoryThreadRuntimeHarness(options: {
       input,
     );
     if (!observed) return;
+    options.onObservedCompletion?.(eventScope, observed, input.provenance, input.voiceSubscriberWatermark);
     if (observed.applicationTurnId) options.onCompletion?.(eventScope, applicationThreadId, observed.applicationTurnId);
     // Match the production observer boundary: recovery and inventory wake
     // re-enter the loaded actor and must not be awaited from the actor's

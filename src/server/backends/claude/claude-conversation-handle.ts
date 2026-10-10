@@ -283,6 +283,8 @@ export class ClaudeConversationHandle implements ConversationHandle {
   readonly #listeners = new Set<(event: BackendConversationEvent) => void>();
   readonly #sequencedSubscribers = new Set<SequencedSubscriber>();
   readonly #journal: SequencedBackendEvent[] = [];
+  #recoveryBaseline: BackendConversationSnapshot | undefined;
+  readonly #recoveredCompletionTurnIds = new Map<string, true>();
   readonly #messages: SessionMessage[];
   readonly #projectionMessages: SessionMessage[];
   readonly #submissions = new Map<string, PendingSubmission>();
@@ -328,8 +330,6 @@ export class ClaudeConversationHandle implements ConversationHandle {
    * query's startup message belongs to an earlier attachment.
    */
   #startupSettled = false;
-  /** A fresh launch's trailing unfinished turn, until Claude shows it is not running it. */
-  #processLostTurnId: string | undefined;
   /** A live compact boundary; its summary is the next main-thread synthetic user row. */
   #liveCompaction: LiveCompaction | undefined;
   /** A live turn Claude started itself; it carries no Sedes input identity. */
@@ -538,22 +538,28 @@ export class ClaudeConversationHandle implements ConversationHandle {
         // Retained remote output must follow native history hydration. Keep
         // delivery pending so the runtime only acknowledges applied output.
         if (this.#session.flushMessages) await this.#initialHistory;
-        if (evidence && message.type === "user" && message.uuid) {
-          // The persistent owner places a steer where Claude started it.
-          const associated = this.#settings.associateSteerOperation(this.#scope, this.binding.applicationThreadId, message.uuid, evidence.consumedTurnRootUuid);
-          const recorded = this.#settings.listSteerOperations(this.#scope, this.binding.applicationThreadId).get(message.uuid);
-          if (typeof recorded === "string" && recorded !== evidence.consumedTurnRootUuid) {
-            steerPlacementConflict({ misplaced: [message.uuid] });
+        this.#recoveryBaseline = evidence?.completionProvenance === "recovered" ? this.#snapshot(this.#projection.snapshot) : undefined;
+        try {
+          if (evidence?.consumedTurnRootUuid && message.type === "user" && message.uuid) {
+            // The persistent owner places a steer where Claude started it.
+            const associated = this.#settings.associateSteerOperation(this.#scope, this.binding.applicationThreadId, message.uuid, evidence.consumedTurnRootUuid);
+            const recorded = this.#settings.listSteerOperations(this.#scope, this.binding.applicationThreadId).get(message.uuid);
+            if (typeof recorded === "string" && recorded !== evidence.consumedTurnRootUuid) {
+              steerPlacementConflict({ misplaced: [message.uuid] });
+            }
+            rememberBounded(this.#steerStartsAwaitingResult, message.uuid, evidence.consumedTurnRootUuid);
+            if (associated && this.#messages.some(({ uuid }) => uuid === message.uuid)) {
+              const previous = this.#projection.snapshot;
+              this.#refreshProjection(true);
+              this.#emitProjectionDelta(previous, this.#projection.snapshot);
+            }
           }
-          rememberBounded(this.#steerStartsAwaitingResult, message.uuid, evidence.consumedTurnRootUuid);
-          if (associated && this.#messages.some(({ uuid }) => uuid === message.uuid)) {
-            const previous = this.#projection.snapshot;
-            this.#refreshProjection(true);
-            this.#emitProjectionDelta(previous, this.#projection.snapshot);
-          }
+          this.#usageAccounting?.beginDelivery();
+          await this.#consume(message);
+          this.#rememberRecoveredSnapshotCompletions();
+        } finally {
+          this.#recoveryBaseline = undefined;
         }
-        this.#usageAccounting?.beginDelivery();
-        await this.#consume(message);
         // A message can move the window over a read whose image is not yet
         // published, for example a retraction or a relinked compaction.
         if (!this.#closed && !this.#projectionInvalidated) {
@@ -616,11 +622,15 @@ export class ClaudeConversationHandle implements ConversationHandle {
       const initialMessages = await input.loadInitialMessages();
       this.#assertOpen();
       this.#installInitialMessages(initialMessages);
+      // Retained startup output from this fresh query may open another turn.
+      // Only the unfinished historical turn is evidence of the lost process.
+      const processLostTurnId = this.#session.reattached !== true && (input.launch === "resume" || input.resumeSession === true)
+        ? this.#projection.snapshot.activeBackendTurnId : undefined;
       await this.#publishWindowViewedImages();
       this.#resolveInitialHistory();
       await this.#session.flushMessages?.();
       this.#assertOpen();
-      if (this.#session.reattached !== true) this.#watchProcessLostTurn();
+      this.#closeProcessLostTurn(processLostTurnId);
       this.#initialProjectionReady = true;
       this.#refreshContextUsage();
     };
@@ -712,6 +722,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
       handleSequence: after,
       snapshot: this.#snapshot(projection.snapshot),
       history: this.#historyWindow(projection),
+      recoveredCompletionTurnIds: projection.snapshot.orderedBackendTurnIds.filter(id => this.#recoveredCompletionTurnIds.has(id)),
       subscribeFromNext: (listener) =>
         this.#subscribeFrom(epoch, after, listener),
     };
@@ -1824,23 +1835,14 @@ export class ClaudeConversationHandle implements ConversationHandle {
    * A fresh launch proves that the process which ran a trailing unfinished
    * turn is gone: no result will settle it. Claude Code may close it with a
    * synthetic row when it resumes, but not necessarily before this read. The
-   * new process reports `running` while it handles Sedes' startup message, so
-   * the turn is closed once Claude reports idle, or once it starts an input
-   * of this attachment. A reattached query may still be running its turn and
-   * is never watched.
+   * new process can report `running` while handling Sedes' startup message;
+   * that does not revive the old turn. Close it in the initial baseline so
+   * a later idle or input event cannot announce old process loss as a new
+   * completion. A reattached query may still be running its turn and never
+   * enters this path.
    */
-  #watchProcessLostTurn(): void {
-    const { snapshot } = this.#projection;
-    if (snapshot.runState !== "running") return;
-    this.#processLostTurnId = snapshot.activeBackendTurnId;
-    this.#closeProcessLostTurn(false);
-  }
-
-  #closeProcessLostTurn(startedOther: boolean): void {
-    const backendTurnId = this.#processLostTurnId;
+  #closeProcessLostTurn(backendTurnId: string | undefined): void {
     if (backendTurnId === undefined || this.#closed || this.#projectionInvalidated) return;
-    if (!startedOther && this.#providerState !== "idle") return;
-    this.#processLostTurnId = undefined;
     const previous = this.#projection.snapshot;
     if (previous.turnsById[backendTurnId]?.status !== "in_progress" ||
         this.#settings.findTerminalReceipt(this.#scope, { applicationThreadId: this.binding.applicationThreadId, backendTurnId })) return;
@@ -2206,8 +2208,6 @@ export class ClaudeConversationHandle implements ConversationHandle {
   #beginSedesTurn(rootUuid: string): void {
     // Until its result, a steer Claude starts joins this turn.
     this.#nativeTurnRoot = rootUuid;
-    // Claude runs this input, not the turn a lost process left unfinished.
-    this.#closeProcessLostTurn(true);
     // A Sedes input can take over a turn Claude started, for example a steer
     // folded into a notification turn. Publish the new active turn either way.
     this.#providerTurn = undefined;
@@ -2312,7 +2312,6 @@ export class ClaudeConversationHandle implements ConversationHandle {
     const previous = this.#providerState;
     this.#providerState = state;
     this.#providerStateReported = true;
-    if (state === "idle") this.#closeProcessLostTurn(false);
     if (this.#initialHistoryLoaded) {
       if (state !== "idle") {
         // Claude began work while no Sedes input is awaiting its turn: a task
@@ -2570,6 +2569,11 @@ export class ClaudeConversationHandle implements ConversationHandle {
     const liveTurnId = this.#liveTurnId();
     const liveTurn = (turn: BackendTurn): BackendTurn =>
       turn.status === "completed" ? reopenedTurn(turn) : turn;
+    // Record explicit terminal evidence before an item correction can require
+    // a replacement snapshot and prevent the terminal delta from being sent.
+    if (this.#recoveryBaseline && terminalTurnId && next.turnsById[terminalTurnId] && next.turnsById[terminalTurnId].status !== "in_progress") {
+      rememberBounded(this.#recoveredCompletionTurnIds, terminalTurnId, true);
+    }
     // A published outcome never changes in place. Claude Code's tool-use
     // interruption marker arrives after the stop results it reclassifies
     // from failed to interrupted, so replace the snapshot instead.
@@ -2591,7 +2595,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
       for (const itemId of turn.orderedBackendItemIds) {
         const priorItem = previous.itemsById[itemId];
         const item = next.itemsById[itemId]!;
-        const progress = liveToolUse && turnId === liveTurnId && turn.status === "in_progress" &&
+        const progress = !this.#recoveryBaseline && liveToolUse && turnId === liveTurnId && turn.status === "in_progress" &&
           item.semanticKind === "assistant_message" && item.status === "completed" &&
           item.responsePhase === "provisional" && item.markdown.text.trim()
           ? { liveProgress: true as const } : {};
@@ -2929,8 +2933,25 @@ export class ClaudeConversationHandle implements ConversationHandle {
     });
   }
 
+  #rememberRecoveredSnapshotCompletions(): void {
+    const previous = this.#recoveryBaseline;
+    if (!previous) return;
+    const next = this.#snapshot(this.#projection.snapshot);
+    for (const turn of Object.values(next.turnsById)) {
+      const prior = previous.turnsById[turn.backendTurnId];
+      if (turn.status !== "in_progress" && (!prior || prior.status === "in_progress")) {
+        rememberBounded(this.#recoveredCompletionTurnIds, turn.backendTurnId, true);
+      }
+    }
+  }
+
   #emit(event: BackendConversationEvent): void {
     if (this.#closed) return;
+    if (event.type === "resnapshot_required") this.#rememberRecoveredSnapshotCompletions();
+    if (event.type === "turn_completed" && this.#recoveryBaseline) {
+      rememberBounded(this.#recoveredCompletionTurnIds, event.turn.backendTurnId, true);
+      event = { ...event, completionProvenance: "recovered" };
+    }
     const sequenced = {
       handleSequence: this.#nextSequence,
       event,

@@ -15,6 +15,7 @@ import {
 } from "../../shared/protocol/notification.js";
 import type { NotificationDispatchSettings, NotificationRepository } from "../db/repositories/notification-repository.js";
 import type { RequestScope } from "../identity/identity-provider.js";
+import { recordVoiceDiagnostic, type VoiceDiagnosticSuppressionReason } from "../diagnostics/voice-diagnostics.js";
 import { executeNotificationScript } from "../runtime/notification-script-executor.js";
 import {
   fitBoundedText,
@@ -37,7 +38,7 @@ export type VoiceNotificationContext = {
   /** The epoch and recipients are captured before waiting for terminal settlement. */
   readonly settlement?: Promise<VoiceRecognitionTarget | undefined>;
 };
-type Subscriber = { readonly scope: RequestScope; readonly listener: (frame: string) => void };
+type Subscriber = { readonly scope: RequestScope; readonly listener: (frame: string) => void; readonly sequence: number };
 const sameScope = (left: RequestScope, right: RequestScope) =>
   left.tenantId === right.tenantId && left.principalId === right.principalId;
 
@@ -51,6 +52,7 @@ export class NotificationService {
   readonly #cwd = process.cwd();
   readonly #subscribers = new Set<Subscriber>();
   readonly #deferred = new Map<object, RequestScope>();
+  #subscriberSequence = 0;
   #closed = false;
   #scheduled = false;
 
@@ -67,6 +69,11 @@ export class NotificationService {
     return this.input.repository.read(scope);
   }
 
+  /** Captured at completion observation; reconnecting streams cannot join later. */
+  captureSubscriberWatermark(): number {
+    return this.#subscriberSequence;
+  }
+
   /** Subscribe and deliver policy synchronously; this lane has no replay or inventory cursor. */
   subscribe(scope: RequestScope, listener: (frame: string) => void): () => void {
     let policy: NotificationDispatchSettings;
@@ -76,10 +83,11 @@ export class NotificationService {
       return () => {};
     }
     if (this.#closed) return () => {};
-    const subscriber = { scope: { ...scope }, listener };
+    const subscriber = { scope: { ...scope }, listener, sequence: ++this.#subscriberSequence };
     this.#subscribers.add(subscriber);
+    recordVoiceDiagnostic("voice_lane_subscribed", { applicationStreamCount: this.#subscriberCount(scope) });
     this.#deliver(subscriber, "notification_policy", policy);
-    return () => { this.#subscribers.delete(subscriber); };
+    return () => { this.#removeSubscriber(subscriber, "unsubscribed"); };
   }
 
   update(
@@ -140,40 +148,56 @@ export class NotificationService {
     scope: RequestScope,
     event: NotificationEventPayload,
     eventKey: string,
+    provenance: "live" | "recovered",
     assistantResult?: ClassifiedAssistantResult,
     voiceContext?: () => VoiceNotificationContext,
+    subscriberWatermark?: number,
   ): Promise<string | undefined> {
-    if (this.#closed) return;
+    const sourceEventId = createHash("sha256").update(eventKey).digest("hex");
+    let claimed = false;
+    let scriptQueued = false;
+    const decision = (suppressionReason?: VoiceDiagnosticSuppressionReason, recipientCount = 0, action?: VoiceAction) => {
+      recordVoiceDiagnostic("voice_decision", {
+        sourceEventId, provenance, threadId: event.thread?.id, turnId: event.turn?.id,
+        claimed, scriptQueued, applicationStreamCount: this.#subscriberCount(scope),
+        recipientCount, ...(action ? { action } : {}), ...(suppressionReason ? { suppressionReason } : {}),
+      });
+    };
+    if (this.#closed) { decision("service_closed"); return; }
     try {
       const occurredAt = Date.parse(event.occurredAt);
-      if (!Number.isSafeInteger(occurredAt) || occurredAt < 0) return;
+      if (!Number.isSafeInteger(occurredAt) || occurredAt < 0) { decision("invalid_event"); return; }
       const dispatch = this.input.repository.consume(
         scope,
         eventKey,
         occurredAt,
       );
-      if (
-        !dispatch ||
-        !dispatch.settings.enabled ||
-        dispatch.settings.silenced
-      )
-        return;
+      if (!dispatch) { decision("not_claimed"); return; }
+      claimed = true;
+      if (!dispatch.settings.enabled) { decision("disabled"); return; }
+      if (dispatch.settings.silenced) { decision("silenced"); return; }
       const channels = dispatch.settings.delivery[event.event];
       const script = channels.script && this.#pending.length < MAX_PENDING;
-      // Recipients are fixed at emission; later subscribers never join.
-      const recipients = channels.voice === "none" ? []
-        : [...this.#subscribers].filter((subscriber) => sameScope(scope, subscriber.scope));
-      if (!script && !recipients.length) return;
+      // Completion recipients must also predate the first live observation.
+      const recipients = provenance !== "live" || channels.voice === "none" ? []
+        : [...this.#subscribers].filter((subscriber) => sameScope(scope, subscriber.scope) &&
+          (subscriberWatermark === undefined || subscriber.sequence <= subscriberWatermark));
+      const suppressionReason = provenance !== "live" ? "recovered"
+        : channels.voice === "none" ? "voice_disabled" : !recipients.length ? "no_recipients" : undefined;
+      if (!script && !recipients.length) { decision(suppressionReason, 0, channels.voice); return; }
       const payload = notificationPayload(event, dispatch.settings, assistantResult);
-      if (!payload) return;
+      if (!payload) { decision("payload_unavailable", recipients.length, channels.voice); return; }
       if (script) {
         this.#pending.push({ scope: { ...scope }, payload, generation: dispatch.generation });
+        scriptQueued = true;
         this.#schedule();
       }
+      decision(suppressionReason, recipients.length, channels.voice);
       if (recipients.length) {
-        return this.#voice(scope, eventKey, payload, channels.voice, dispatch.generation, recipients, voiceContext);
+        return this.#voice(scope, sourceEventId, payload, channels.voice, dispatch.generation, recipients, voiceContext);
       }
     } catch {
+      decision("processing_failed");
       this.#report("Notification event could not be processed.");
     }
   }
@@ -182,7 +206,7 @@ export class NotificationService {
     this.#closed = true;
     this.#pending.length = 0;
     this.#deferred.clear();
-    this.#subscribers.clear();
+    for (const subscriber of this.#subscribers) this.#removeSubscriber(subscriber, "service_closed");
     for (const controller of this.#active.keys()) controller.abort();
     await Promise.allSettled(this.#active.values());
   }
@@ -190,7 +214,7 @@ export class NotificationService {
   /** Context capture and the strict envelope parse are voice-only; failures never reach the script lane. */
   async #voice(
     scope: RequestScope,
-    eventKey: string,
+    sourceEventId: string,
     payload: NotificationPayload,
     voice: VoiceAction,
     generation: number,
@@ -200,13 +224,25 @@ export class NotificationService {
     try {
       const { settlement, ...context } = voiceContext?.() ?? {};
       const envelope = {
-        payload, sourceEventId: createHash("sha256").update(eventKey).digest("hex"),
+        payload, sourceEventId,
         voice, generation, ...context,
       };
       const publish = (recognitionTarget: VoiceRecognitionTarget | undefined) => {
-        if (this.#closed || this.input.repository.readDispatch(scope).generation !== generation) return;
+        const staleGeneration = !this.#closed && this.input.repository.readDispatch(scope).generation !== generation;
+        if (this.#closed || staleGeneration) {
+          recordVoiceDiagnostic("voice_published", { sourceEventId, recipientCount: recipients.length, attemptedCount: 0, deliveredCount: 0, staleGeneration,
+            suppressionReason: this.#closed ? "service_closed" : "policy_changed" });
+          return;
+        }
         const value = voiceNotificationSchema.parse({ ...envelope, recognitionTarget });
-        for (const recipient of recipients) this.#deliver(recipient, "notification", value);
+        let attemptedCount = 0;
+        let deliveredCount = 0;
+        for (const recipient of recipients) {
+          if (!this.#subscribers.has(recipient)) continue;
+          attemptedCount++;
+          if (this.#deliver(recipient, "notification", value)) deliveredCount++;
+        }
+        recordVoiceDiagnostic("voice_published", { sourceEventId, recipientCount: recipients.length, attemptedCount, deliveredCount, staleGeneration: false });
         return envelope.sourceEventId;
       };
       if (!settlement) return publish(context.recognitionTarget);
@@ -217,7 +253,10 @@ export class NotificationService {
       let target: VoiceRecognitionTarget | undefined;
       try { target = await settlement; } catch { /* Announce without recognition authority. */ }
       if (this.#deferred.delete(key)) return publish(target);
+      recordVoiceDiagnostic("voice_published", { sourceEventId, recipientCount: recipients.length, attemptedCount: 0, deliveredCount: 0,
+        suppressionReason: this.#closed ? "service_closed" : "policy_changed" });
     } catch {
+      recordVoiceDiagnostic("voice_published", { sourceEventId, recipientCount: recipients.length, attemptedCount: 0, deliveredCount: 0, suppressionReason: "processing_failed" });
       this.#report("Voice notification could not be processed.");
     }
   }
@@ -312,10 +351,19 @@ export class NotificationService {
     }
   }
 
-  #deliver(subscriber: Subscriber, event: string, data: unknown): void {
-    if (!this.#subscribers.has(subscriber)) return;
-    try { subscriber.listener(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); }
-    catch { this.#subscribers.delete(subscriber); }
+  #subscriberCount(scope: RequestScope): number {
+    return [...this.#subscribers].filter(subscriber => sameScope(scope, subscriber.scope)).length;
+  }
+
+  #removeSubscriber(subscriber: Subscriber, reason: "unsubscribed" | "listener_failed" | "service_closed"): void {
+    if (!this.#subscribers.delete(subscriber)) return;
+    recordVoiceDiagnostic("voice_lane_unsubscribed", { reason, applicationStreamCount: this.#subscriberCount(subscriber.scope) });
+  }
+
+  #deliver(subscriber: Subscriber, event: string, data: unknown): boolean {
+    if (!this.#subscribers.has(subscriber)) return false;
+    try { subscriber.listener(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); return true; }
+    catch { this.#removeSubscriber(subscriber, "listener_failed"); return false; }
   }
 
   #now(): number {

@@ -72,7 +72,8 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
     private Reply credentialTestReply;
     private long speechGeneration, catalogGeneration;
     private final NativeVoiceAudio audio;
-    private final NativeVoiceQueue queue = new NativeVoiceQueue();
+    private final NativeVoiceDiagnostics diagnostics = new NativeVoiceDiagnostics(System::currentTimeMillis, SystemClock::elapsedRealtime);
+    private final NativeVoiceQueue queue = new NativeVoiceQueue(this::traceItem);
     private final CopyOnWriteArrayList<Observer> observers = new CopyOnWriteArrayList<>();
     private final ArrayDeque<JSONObject> errors = new ArrayDeque<>();
     private final Map<String, Call> admissions = new HashMap<>();
@@ -196,6 +197,27 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
             try { new SpeechCredentialStore(context); }
             catch (Exception error) { speechCredentialError = true; report("speech_credential_cleanup_failed"); }
         });
+    }
+    // These device-owned diagnostic controls neither require a connection nor mutate voice state.
+    void setDiagnosticsEnabled(boolean enabled) { diagnostics.enabled(enabled); }
+    JSONObject readDiagnostics() { return diagnostics.read(); }
+    void clearDiagnostics() { diagnostics.clear(); }
+    private void trace(NativeVoiceDiagnostics.Event event, String id, String kind, int chunk, String reason) {
+        diagnostics.record(event, id, kind, connectionGeneration, streamGeneration, policyGeneration,
+            queue.size(), queue.bytes(), chunk, reason);
+    }
+    private void traceFrame(NativeVoiceDiagnostics.Event event, JSONObject value, String reason) {
+        try {
+            JSONObject payload = value == null ? null : value.optJSONObject("payload");
+            trace(event, value == null ? null : value.optString("sourceEventId", null),
+                payload == null ? null : payload.optString("event", null), -1, reason);
+        } catch (RuntimeException ignored) {}
+    }
+    private void traceItem(NativeVoiceDiagnostics.Event event, NativeVoiceQueue.Item item, String reason) {
+        trace(event, item.isReplay() ? null : item.id, item.event, -1, reason);
+    }
+    private void traceActive(NativeVoiceDiagnostics.Event event, Active item, String reason) {
+        trace(event, item.notification == null ? null : item.id, item.event, item.chunk, reason);
     }
     JSONObject snapshot() { return NativeVoiceJson.copy(state); }
     void observe(Observer observer) { observers.add(observer); audio.monitorDevices(true); handler.post(this::deliverPendingOpen); }
@@ -541,6 +563,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         }));
     }
     private void disconnect(boolean cancelIntended) {
+        trace(NativeVoiceDiagnostics.Event.DISCONNECTED, null, null, -1, null);
         clientControls.disconnect();
         waitingClientAdmissions.clear(); preparingAdmissions.clear();
         inputSubmissionContext = new Object();
@@ -838,6 +861,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
     private void connectEvents() {
         if (!sessionStarted || binding == null) return;
         closeEvents(); final long generation = ++streamGeneration;
+        trace(NativeVoiceDiagnostics.Event.STREAM_CONNECTING, null, null, -1, null);
         stream = http.events(origin, credential, new NativeVoiceHttp.Stream() {
             public void live() { handler.post(() -> streamLive(generation)); }
             public void frame(String event, JSONObject value) { handler.post(() -> { if (generation == streamGeneration && sessionStarted) receive(event, value); }); }
@@ -845,10 +869,13 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         });
     }
     private void streamLive(long generation) {
-        if (generation != streamGeneration || !sessionStarted || policyKnown) return;
+        if (generation != streamGeneration || !sessionStarted) return;
+        trace(NativeVoiceDiagnostics.Event.STREAM_LIVE, null, null, -1, null);
+        if (policyKnown) return;
         handler.postDelayed(() -> { if (generation == streamGeneration && sessionStarted && !policyKnown) streamFailed("notification_policy_missing"); }, POLICY_AFTER_LIVE_MS);
     }
     private void streamFailed(String code) {
+        trace(NativeVoiceDiagnostics.Event.STREAM_LOST, null, null, -1, code);
         Call old = stream;
         stream = null; policyKnown = false; policy = null; policyGeneration = -1; streamGeneration++;
         if (old != null) old.cancel();
@@ -874,18 +901,25 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
                 boolean established = !policyKnown;
                 if (!policyKnown || generation != policyGeneration) cancelAutomatic("notification_policy_changed");
                 policy = NativeVoiceJson.copy(next); policyGeneration = generation; policyKnown = true;
-                streamFailures = 0; streamFailureReported = false; publish();
+                streamFailures = 0; streamFailureReported = false;
+                trace(NativeVoiceDiagnostics.Event.POLICY_RECEIVED, null, null, -1, null); publish();
                 // Re-established Sedes connectivity is the moment an uncertain receipt may have become readable.
                 if (established) recoverOutstanding();
                 return;
             }
+            traceFrame(NativeVoiceDiagnostics.Event.RECEIVED, value, null);
             NativeVoiceQueue.Item item = new NativeVoiceQueue.Item(value, settings);
-            if (active != null && active.id.equals(item.id)) return;
+            if (active != null && active.id.equals(item.id)) { traceItem(NativeVoiceDiagnostics.Event.DROPPED, item, "duplicate"); return; }
             if (clientSuppressesFollowup(item)) item.followUp = false;
-            if (!eligible(item) || (item.speech.isEmpty() && !item.followUp)) { if (queue.remember(item.id)) queue.drop("ineligible"); clientReplyDrained(item.id); publish(); return; }
+            if (!eligible(item) || (item.speech.isEmpty() && !item.followUp)) {
+                if (queue.remember(item.id)) queue.drop("ineligible");
+                traceItem(NativeVoiceDiagnostics.Event.DROPPED, item, "ineligible");
+                clientReplyDrained(item.id); publish(); return;
+            }
             queue.add(item); publish(); drain();
         } catch (Exception error) {
             if (event.equals("notification_policy")) { policyKnown = false; policy = null; cancelAutomatic("invalid_notification_policy"); }
+            traceFrame(NativeVoiceDiagnostics.Event.DROPPED, value, "invalid_notification_frame");
             report("invalid_notification_frame");
         }
     }
@@ -912,7 +946,8 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         NativeVoiceQueue.Item item;
         while ((item = queue.take()) != null) {
             // Notification filters and policy govern automatic items only; a replay is the user's explicit request.
-            if (item.automatic && !eligible(item)) { queue.drop("ineligible"); continue; }
+            if (item.automatic && !eligible(item)) { queue.drop("ineligible"); traceItem(NativeVoiceDiagnostics.Event.DROPPED, item, "ineligible"); continue; }
+            traceItem(NativeVoiceDiagnostics.Event.DEQUEUED, item, null);
             activate(new Active(item, settings.number("speechTextLimit")));
             if (active.chunks.isEmpty()) afterSpeech(active); else speakChunk(active);
             publish(); return;
@@ -926,7 +961,9 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         if (item.chunk >= item.chunks.size()) { afterSpeech(item); return; }
         if (!speechReady()) { failActive("speech_configuration_required"); return; }
         item.ttsId = UUID.randomUUID().toString(); String request = item.ttsId;
-        phase = "synthesizing"; item.lastAudioId = request; audio.begin(request); publish();
+        phase = "synthesizing"; item.lastAudioId = request;
+        traceActive(NativeVoiceDiagnostics.Event.SYNTHESIS_STARTED, item, null);
+        audio.begin(request); publish();
         item.speechRequest = speechTransport().speak(request, item.chunks.get(item.chunk), new NativeSpeechTransport.SpeechListener() {
             public void started(String id) {}
             public void pcm(String id, int sampleRate, byte[] bytes) { handler.post(() -> {
@@ -1237,7 +1274,9 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         if (!sessionStarted || !settings.active() || !speechReady() || binding == null) throw new IllegalStateException("voice_not_ready");
         NativeVoiceQueue.Item item = NativeVoiceQueue.Item.replay(request, replayTitle(request), settings);
         if (active != null && active.replay != null && (phase.equals("synthesizing") || phase.equals("speaking")) &&
-            active.replay.replayIdentity().equals(item.replayIdentity())) return ReplayDisposition.DUPLICATE;
+            active.replay.replayIdentity().equals(item.replayIdentity())) {
+            traceItem(NativeVoiceDiagnostics.Event.DROPPED, item, "duplicate"); return ReplayDisposition.DUPLICATE;
+        }
         if (!queue.addReplay(item)) return ReplayDisposition.DUPLICATE;
         drain();
         return active != null && active.replay == item ? ReplayDisposition.PLAYING : ReplayDisposition.QUEUED;
@@ -1416,6 +1455,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         // A speech control may arrive after its follow-up has begun. The immutable
         // interaction still owns that unsent capture, including a held default.
         if (item == null || !item.playbackOrigin || item.admission != null) throw new IllegalStateException("voice_not_speaking");
+        traceActive(NativeVoiceDiagnostics.Event.PLAYBACK_STOPPED, item, "skipped");
         item.followUp = false; item.replayListening = false; item.manualInputValidation = false; item.manualClientRequired = false;
         if (item.recordingStart != null) { cancelRecordingStart(item, "skipped", false, true); return; }
         item.stopped = true; item.ttsId = null; item.announcementId = null; item.cueId = null; item.completionCueId = null; item.afterCompletionCue = null;
@@ -1460,6 +1500,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
     }
     private void cancelActive(boolean cancelAdmission, String reason, boolean publishState) {
         Active old = active; if (old == null) return;
+        if (old.playbackOrigin) traceActive(NativeVoiceDiagnostics.Event.PLAYBACK_STOPPED, old, reason);
         if (old.recordingStart != null) { cancelRecordingStart(old, reason, false); return; }
         if (old.recoveryRecognition || old.recoverySend) {
             if (old.admission != null && cancelAdmission) cancelEntry(old.recordingBinding, old.admission.optString("mutationId"), true);
@@ -1485,6 +1526,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
     }
     private void finishItem(Active item) {
         if (active != item) return;
+        traceActive(NativeVoiceDiagnostics.Event.INTERACTION_FINISHED, item, null);
         if (item.notification != null) queue.completed(item.id);
         if (captureOwner == item) captureOwner = null;
         active = null; audio.stop(); closeRecordingTransport(item);
@@ -1664,12 +1706,19 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
             } else finalizeRecognition(item, text, item.frozenSteer);
         });
     }
+    public void playbackStarted(String requestId) { handler.post(() -> {
+        if (active != null && !active.stopped && requestId.equals(active.ttsId))
+            traceActive(NativeVoiceDiagnostics.Event.PLAYBACK_STARTED, active, null);
+    }); }
     public void drained(String requestId) { handler.post(() -> {
         if (active == null) return;
         if (requestId.equals(active.announcementId)) { Active item = active; item.announcementId = null; arm(item); }
         else if (requestId.equals(active.completionCueId)) finishCompletionCue(active, requestId);
         else if (requestId.equals(active.cueId)) capture(active);
-        else if (requestId.equals(active.ttsId)) { active.ttsId = null; active.chunk++; speakChunk(active); }
+        else if (requestId.equals(active.ttsId)) {
+            traceActive(NativeVoiceDiagnostics.Event.PLAYBACK_DRAINED, active, null);
+            active.ttsId = null; active.chunk++; speakChunk(active);
+        }
     }); }
     public void captureStarted(String requestId) { handler.post(() -> {
         if (active == null || !requestId.equals(active.captureId) || !phase.equals("arming")) return;
@@ -1791,6 +1840,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
     }); }
     private void skipEmptySpeech(Active item) {
         if (item.speechRequest != null) item.speechRequest.cancel();
+        traceActive(NativeVoiceDiagnostics.Event.PLAYBACK_STOPPED, item, "empty_pcm_stream");
         item.speechRequest = null; item.ttsId = null; audio.stop(); item.chunk++; speakChunk(item);
     }
     private void finalizeRecognition(Active item, String text, boolean steer) {

@@ -1,3 +1,4 @@
+import { clearNativeVoiceDiagnostics, readNativeVoiceDiagnostics, type NativeVoiceDiagnosticsExport } from "../voice/native-voice-diagnostics.js";
 import {
   getDiagnosticCategoryEnabled,
   type ClientDiagnosticCategory,
@@ -282,13 +283,13 @@ export function readDiagnostics(): readonly DiagnosticEntry[] {
   }));
 }
 
-export function exportDiagnostics(): string {
+export function exportDiagnostics(nativeVoice?: NativeVoiceDiagnosticsExport): string {
   return JSON.stringify(
     {
       format: "sedes-client-diagnostics-v1",
       capturedAt: new Date().toISOString(),
       enabledCategories: (
-        ["thread_load", "seek", "streaming", "composer_input"] as const
+        ["thread_load", "seek", "streaming", "composer_input", "voice"] as const
       ).filter(getDiagnosticCategoryEnabled),
       browser: navigator.userAgent,
       devicePixelRatio: window.devicePixelRatio,
@@ -300,6 +301,7 @@ export function exportDiagnostics(): string {
         typeof window.matchMedia === "function" &&
         window.matchMedia("(prefers-reduced-motion: reduce)").matches,
       entries: readDiagnostics(),
+      ...(nativeVoice ? { nativeVoice } : {}),
     },
     null,
     2,
@@ -307,5 +309,11 @@ export function exportDiagnostics(): string {
 }
 
 export async function copyDiagnostics(): Promise<void> {
-  await navigator.clipboard.writeText(exportDiagnostics());
+  await navigator.clipboard.writeText(exportDiagnostics(await readNativeVoiceDiagnostics()));
+}
+
+/** Clear both bounded copy buffers without changing their independent recording gates. */
+export async function clearCopyDiagnostics(): Promise<void> {
+  clearDiagnostics();
+  await clearNativeVoiceDiagnostics();
 }

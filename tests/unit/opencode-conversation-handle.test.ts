@@ -42,6 +42,25 @@ function textOf(events: SequencedBackendEvent[], kind: "assistant_message" | "re
 }
 
 describe("OpenCode conversation authority and finite discovery", () => {
+  it("republishes terminal enrichment so durable completion consumers receive late materialized items", async () => {
+    const current = await attached([user(), { ...assistant([{ type: "text", text: "Done" }]), time: { created: 2, completed: 3 } }, idle()]);
+    const baseline = await current.handle.establishProjection({ signal: signal() });
+    const turnId = baseline.snapshot.orderedBackendTurnIds[0]!;
+    expect(baseline.snapshot.turnsById[turnId]?.status).toBe("completed");
+    const events: BackendConversationEvent[] = [];
+    baseline.subscribeFromNext(({ event: value }) => events.push(value));
+    current.wire.messages[1] = { ...assistant([{ type: "text", text: "Done" }, { type: "reasoning", text: "Retained reasoning" }]),
+      time: { created: 2, completed: 3 } };
+    current.wire.send(event("session.step.ended", { assistantMessageID: "msg_assistant", finish: "stop", cost: 0,
+      tokens: { input: 1, output: 1, reasoning: 1, cache: { read: 0, write: 0 } } }, true));
+    await vi.waitFor(() => expect(events).toContainEqual({ type: "turn_completed", turn: expect.objectContaining({
+      backendTurnId: turnId, status: "completed", orderedBackendItemIds: expect.arrayContaining([
+        openCodeHistoryItemId("msg_assistant", 1),
+      ]),
+    }) }));
+    expect(events.filter(value => value.type === "turn_completed")).toHaveLength(1);
+  });
+
   it("publishes current context and full-session counters independently of recorded accounting", async () => {
     const tokens = { input: 100, output: 20, reasoning: 30, cache: { read: 200, write: 50 } };
     const messages = Array.from({ length: 12 }, (_, index) => [user(`msg_user_${index}`),

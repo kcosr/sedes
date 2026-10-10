@@ -181,6 +181,18 @@ history and text classified only at settlement do not produce progress. Grok
 and OpenCode do not advertise this live signal; their unclassified completion
 text remains available.
 
+Automatic completion voice follows live completion changes. Loading completed
+history or replaying retained provider events does not announce old replies or
+start Auto-listen for them. Notifications missed while the
+phone is disconnected are not replayed when it reconnects. Reconnecting while
+the server is still processing a completion does not join that notification's
+audience. Use **Play response aloud** to hear a stored reply explicitly.
+
+For delivery problems, enable **Settings → Diagnostics → Voice diagnostics**,
+clear the log, reproduce once, then **Copy log**. The bounded native log records
+stream connectivity, receipt, queue decisions, and playback without recording
+message text. See [Voice delivery diagnostics](../../developer/diagnostics.md#voice-delivery).
+
 ## Speech text
 
 **Settings → Voice → Clean up formatting for speech** is on by default. It reads

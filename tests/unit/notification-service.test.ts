@@ -189,7 +189,7 @@ describe("notification settings and passive hooks", () => {
     service.subscribe(scope, frame => first.push(frame));
     expect(first[0]).toContain("event: notification_policy\n");
     service.update(scope, { ...config, scriptPath: "", delivery: scriptDelivery([]) });
-    service.emit(scope, event(), "voice-only");
+    service.emit(scope, event(), "voice-only", "live");
     expect(first.map(frame => frame.split("\n")[0])).toEqual([
       "event: notification_policy", "event: notification_policy", "event: notification",
     ]);
@@ -200,10 +200,76 @@ describe("notification settings and passive hooks", () => {
     expect(later.mock.calls[0]![0]).toContain("event: notification_policy");
     expect(executor).not.toHaveBeenCalled();
     service.setSilenced(scope, true);
-    service.emit(scope, event(1002), "muted");
+    service.emit(scope, event(1002), "muted", "live");
     service.setSilenced(scope, false);
-    service.emit(scope, event(1002), "muted");
+    service.emit(scope, event(1002), "muted", "live");
     expect(first.filter(frame => frame.startsWith("event: notification\n"))).toHaveLength(1);
+  });
+
+  it.each(["completed", "failed", "interrupted"] as const)(
+    "claims recovered %s for scripts without speaking it or a later duplicate",
+    async outcome => {
+      const { service, executor } = fixture();
+      const frames: string[] = [];
+      service.subscribe(scope, frame => frames.push(frame));
+      service.update(scope, { ...config, delivery: scriptDelivery([`turn.${outcome}`]) });
+      const recovered: NotificationEventPayload = {
+        ...event(), event: `turn.${outcome}`, turn: { id: "turn", outcome },
+      };
+      const context = vi.fn(() => ({}));
+      await service.emit(scope, recovered, "recovered", "recovered", undefined, context);
+      await flush();
+      expect(executor).toHaveBeenCalledOnce();
+      expect(voiceFrames(frames)).toHaveLength(0);
+      expect(context).not.toHaveBeenCalled();
+      await service.emit(scope, recovered, "recovered", "live", undefined, context);
+      await flush();
+      expect(executor).toHaveBeenCalledOnce();
+      expect(voiceFrames(frames)).toHaveLength(0);
+      expect(context).not.toHaveBeenCalled();
+      await service.emit(scope, recovered, "new-live", "live", undefined, context);
+      expect(voiceFrames(frames)).toHaveLength(1);
+      expect(context).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("does not defer offline live notifications for a reconnect", async () => {
+    const { service, executor } = fixture();
+    service.update(scope, { ...config, delivery: scriptDelivery([]) });
+    const context = vi.fn(() => ({}));
+    await service.emit(scope, event(), "offline", "live", undefined, context);
+    const frames: string[] = [];
+    service.subscribe(scope, frame => frames.push(frame));
+    await service.emit(scope, event(), "offline", "live", undefined, context);
+    expect(voiceFrames(frames)).toHaveLength(0);
+    expect(context).not.toHaveBeenCalled();
+    await service.emit(scope, event(), "online", "live", undefined, context);
+    expect(voiceFrames(frames)).toHaveLength(1);
+    expect(executor).not.toHaveBeenCalled();
+  });
+
+  it("diagnoses recovered suppression and listener delivery without exporting content", async () => {
+    vi.stubEnv("SEDES_DEBUG_DELIVERY", "1");
+    const output = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const { service } = fixture();
+      service.update(scope, { ...config, delivery: scriptDelivery([]) });
+      service.subscribe(scope, () => {});
+      await service.emit(scope, { ...event(), message: "private text" }, "private event key", "recovered");
+      await service.emit(scope, event(), "live event key", "live");
+      const records = output.mock.calls.map(([line]) => JSON.parse(String(line).slice("[delivery-voice] ".length)));
+      expect(records).toContainEqual(expect.objectContaining({
+        event: "voice_decision", provenance: "recovered", claimed: true,
+        suppressionReason: "recovered", applicationStreamCount: 1, recipientCount: 0,
+      }));
+      expect(records).toContainEqual(expect.objectContaining({
+        event: "voice_published", attemptedCount: 1, deliveredCount: 1,
+      }));
+      expect(JSON.stringify(records)).not.toMatch(/private text|private event key|live event key/);
+    } finally {
+      output.mockRestore();
+      vi.unstubAllEnvs();
+    }
   });
 
   it("delivers voice independently of script saturation and isolates subscribers by principal", async () => {
@@ -214,7 +280,7 @@ describe("notification settings and passive hooks", () => {
     const speech = vi.fn(), wrongScope = vi.fn();
     service.subscribe(scope, speech);
     service.subscribe(other, wrongScope);
-    for (let index = 0; index < 100; index++) service.emit(scope, event(1001 + index), `burst-${index}`);
+    for (let index = 0; index < 100; index++) service.emit(scope, event(1001 + index), `burst-${index}`, "live");
     await flush();
     expect(speech).toHaveBeenCalledTimes(101);
     expect(wrongScope).toHaveBeenCalledOnce();
@@ -232,7 +298,7 @@ describe("notification settings and passive hooks", () => {
     const disconnect = service.subscribe(scope, departed);
     let settle!: (target: VoiceRecognitionTarget | undefined) => void;
     const settlement = new Promise<VoiceRecognitionTarget | undefined>(resolve => { settle = resolve; });
-    service.emit(scope, event(), "deferred", undefined, () => ({ settlement }));
+    service.emit(scope, event(), "deferred", "live", undefined, () => ({ settlement }));
     disconnect();
     service.subscribe(scope, later);
     settle({ threadId: "thread", activityToken: "original-token", sourceTurnId: "turn" });
@@ -242,7 +308,7 @@ describe("notification settings and passive hooks", () => {
     expect(departed).toHaveBeenCalledOnce();
     expect(later).toHaveBeenCalledOnce();
     let settleOld!: (target: VoiceRecognitionTarget | undefined) => void;
-    service.emit(scope, event(1003), "obsolete", undefined, () => ({ settlement: new Promise(resolve => { settleOld = resolve; }) }));
+    service.emit(scope, event(1003), "obsolete", "live", undefined, () => ({ settlement: new Promise(resolve => { settleOld = resolve; }) }));
     service.setSilenced(scope, true);
     settleOld({ threadId: "thread", activityToken: "obsolete" });
     await flush();
@@ -261,7 +327,7 @@ describe("notification settings and passive hooks", () => {
     expect(onError.mock.calls).toEqual([["Notification policy could not be read; voice notifications are unavailable on this stream."]]);
     expect(() => unsubscribe()).not.toThrow();
     database.prepare("UPDATE principal_notification_settings SET config_json = ?").run(saved);
-    service.emit(scope, event(), "after-repair");
+    service.emit(scope, event(), "after-repair", "live");
     await flush();
     expect(executor).toHaveBeenCalledOnce();
     expect(listener).not.toHaveBeenCalled();
@@ -273,7 +339,7 @@ describe("notification settings and passive hooks", () => {
     const frames: string[] = [];
     service.subscribe(scope, frame => frames.push(frame));
     const context = vi.fn(() => ({ origin: { clientId: "phone" } }));
-    service.emit(scope, progress(), "progress-key", undefined, context);
+    service.emit(scope, progress(), "progress-key", "live", undefined, context);
     await flush();
     expect(executor).toHaveBeenCalledOnce();
     const payload = executor.mock.calls[0]![0].payload;
@@ -294,7 +360,7 @@ describe("notification settings and passive hooks", () => {
     service.update(scope, { ...config, delivery: scriptDelivery(["turn.progress"]) });
     const frames: string[] = [];
     service.subscribe(scope, frame => frames.push(frame));
-    service.emit(scope, { ...progress(source), message: "m".repeat(50_000) }, "large-progress");
+    service.emit(scope, { ...progress(source), message: "m".repeat(50_000) }, "large-progress", "live");
     await flush();
     const payload = executor.mock.calls[0]![0].payload;
     const text = payload.progress!.text;
@@ -314,7 +380,7 @@ describe("notification settings and passive hooks", () => {
     service.update(scope, { ...config, delivery: scriptDelivery(["turn.progress"]) });
     const frames: string[] = [];
     service.subscribe(scope, frame => frames.push(frame));
-    service.emit(scope, { ...progress(), message: "m".repeat(65_536) }, "oversized-metadata");
+    service.emit(scope, { ...progress(), message: "m".repeat(65_536) }, "oversized-metadata", "live");
     await flush();
     expect(executor).not.toHaveBeenCalled();
     expect(voiceFrames(frames)).toEqual([]);
@@ -330,7 +396,7 @@ describe("notification settings and passive hooks", () => {
     service.update(scope, { ...config, delivery: scriptDelivery(["turn.progress"]) });
     const frames: string[] = [];
     service.subscribe(scope, frame => frames.push(frame));
-    service.emit(scope, payload, "voice-failure", undefined, context);
+    service.emit(scope, payload, "voice-failure", "live", undefined, context);
     await flush();
     expect(executor).toHaveBeenCalledOnce();
     expect(executor.mock.calls[0]![0].payload.progress).toEqual(payload.progress);
@@ -349,23 +415,23 @@ describe("notification settings and passive hooks", () => {
     };
     const voiceOnly = { ...config, scriptPath: "", assistantResultPhases: ["final"] as NotificationAssistantResultPhase[], delivery: scriptDelivery([]) };
     service.update(scope, { ...voiceOnly, enabled: false });
-    service.emit(scope, event(1001), "disabled", unread, context);
+    service.emit(scope, event(1001), "disabled", "live", unread, context);
     service.update(scope, { ...voiceOnly, expectedRevision: 1 });
-    service.emit(scope, event(1002), "no-recipient", unread, context);
+    service.emit(scope, event(1002), "no-recipient", "live", unread, context);
     const frames: string[] = [];
     service.subscribe(scope, frame => frames.push(frame));
     service.update(scope, { ...voiceOnly, expectedRevision: 2, delivery: { ...scriptDelivery([]), "turn.completed": { script: false, voice: "none" } } });
-    service.emit(scope, event(1003), "voice-none", unread, context);
+    service.emit(scope, event(1003), "voice-none", "live", unread, context);
     service.update(scope, { ...voiceOnly, expectedRevision: 3 });
     service.setSilenced(scope, true);
-    service.emit(scope, event(1004), "silenced", unread, context);
+    service.emit(scope, event(1004), "silenced", "live", unread, context);
     service.setSilenced(scope, false);
-    service.emit(scope, event(1004), "silenced", unread, context);
+    service.emit(scope, event(1004), "silenced", "live", unread, context);
     expect(context).not.toHaveBeenCalled();
     expect(onError).not.toHaveBeenCalled();
     service.update(scope, { ...voiceOnly, expectedRevision: 4, assistantResultPhases: [] });
-    service.emit(scope, event(1005), "admitted", unread, context);
-    service.emit(scope, event(1005), "admitted", unread, context);
+    service.emit(scope, event(1005), "admitted", "live", unread, context);
+    service.emit(scope, event(1005), "admitted", "live", unread, context);
     await flush();
     expect(context).toHaveBeenCalledOnce();
     expect(voiceFrames(frames).map(frame => frame.voice)).toEqual(["speakThenListen"]);
@@ -472,7 +538,7 @@ describe("notification settings and passive hooks", () => {
         throw new Error("must not inspect response");
       },
     };
-    service.emit(scope, event(), "opt-out", result);
+    service.emit(scope, event(), "opt-out", "live", result);
     await flush();
     expect(executor).toHaveBeenCalledOnce();
     expect(executor.mock.calls[0]![0].payload).not.toHaveProperty(
@@ -500,7 +566,7 @@ describe("notification settings and passive hooks", () => {
       assistantResultPhases: ["final"],
     });
     const classified = { provisional: null, final: result, unclassified: null };
-    service.emit(scope, event(), "included", classified);
+    service.emit(scope, event(), "included", "live", classified);
     await flush();
     expect(executor.mock.calls[0]![0].payload.assistantResult).toEqual(
       { final: result },
@@ -521,7 +587,7 @@ describe("notification settings and passive hooks", () => {
       assistantResultPhases,
     });
     const result = { provisional: { text: "Progress" }, final: null, unclassified: { text: "Unknown" } };
-    service.emit(scope, event(), "selection", result);
+    service.emit(scope, event(), "selection", "live", result);
     await flush();
     const payload = executor.mock.calls[0]![0].payload;
     if (assistantResultPhases.length === 0) {
@@ -542,7 +608,7 @@ describe("notification settings and passive hooks", () => {
       final,
       get unclassified(): BoundedText { throw new Error("must not read unclassified"); },
     };
-    service.emit(scope, event(), "selected-only", result);
+    service.emit(scope, event(), "selected-only", "live", result);
     final.text = "Changed after completion";
     await flush();
     expect(executor).toHaveBeenCalledOnce();
@@ -559,7 +625,7 @@ describe("notification settings and passive hooks", () => {
       get final(): BoundedText { throw new Error("must not inspect"); },
       get unclassified(): BoundedText { throw new Error("must not inspect"); },
     };
-    service.emit(scope, event(), "empty-selection", result);
+    service.emit(scope, event(), "empty-selection", "live", result);
     await flush();
     expect(executor).toHaveBeenCalledOnce();
     expect(executor.mock.calls[0]![0].payload).not.toHaveProperty("assistantResult");
@@ -574,7 +640,7 @@ describe("notification settings and passive hooks", () => {
         delivery: scriptDelivery([kind]),
         assistantResultPhases: ["final"],
       });
-      service.emit(scope, { ...event(), event: kind }, "other-kind", {
+      service.emit(scope, { ...event(), event: kind }, "other-kind", "live", {
         provisional: null, final: { text: "Private response" }, unclassified: null,
       });
       await flush();
@@ -609,7 +675,7 @@ describe("notification settings and passive hooks", () => {
       service.emit(
         scope,
         { ...event(), message: "m".repeat(45_000) },
-        "large-response",
+        "large-response", "live",
         { provisional: null, final: source, unclassified: null },
       );
       await flush();
@@ -643,7 +709,7 @@ describe("notification settings and passive hooks", () => {
     service.update(scope, {
       ...config, delivery: config.delivery, assistantResultPhases: ["provisional", "final", "unclassified"],
     });
-    service.emit(scope, { ...event(), message: "m".repeat(60_000) }, "priority", {
+    service.emit(scope, { ...event(), message: "m".repeat(60_000) }, "priority", "live", {
       final: { text: "Final answer" }, provisional: { text: "p".repeat(10_000) }, unclassified: { text: "u".repeat(10_000) },
     });
     await flush();
@@ -673,7 +739,7 @@ describe("notification settings and passive hooks", () => {
     service.emit(
       scope,
       { ...metadata, message: "m".repeat(65_536 - overhead) },
-      "full-metadata",
+      "full-metadata", "live",
       { provisional: null, final: { text: "Response" }, unclassified: null },
     );
     await flush();
@@ -690,7 +756,7 @@ describe("notification settings and passive hooks", () => {
       delivery: config.delivery,
       assistantResultPhases: ["final"],
     });
-    service.emit(scope, event(), "pending", { provisional: null, final: { text: "Private response" }, unclassified: null });
+    service.emit(scope, event(), "pending", "live", { provisional: null, final: { text: "Private response" }, unclassified: null });
     service.update(scope, {
       ...config,
       delivery: config.delivery,
@@ -698,7 +764,7 @@ describe("notification settings and passive hooks", () => {
     });
     await flush();
     expect(executor).not.toHaveBeenCalled();
-    service.emit(scope, event(1002), "new", { provisional: null, final: { text: "Private response" }, unclassified: null });
+    service.emit(scope, event(1002), "new", "live", { provisional: null, final: { text: "Private response" }, unclassified: null });
     await flush();
     expect(executor).toHaveBeenCalledOnce();
     expect(executor.mock.calls[0]![0].payload).not.toHaveProperty(
@@ -714,7 +780,7 @@ describe("notification settings and passive hooks", () => {
     const result = {
       provisional: { text: "Progress" }, final: { text: "Done" }, unclassified: null,
     };
-    service.emit(scope, event(), "queued-selection", result);
+    service.emit(scope, event(), "queued-selection", "live", result);
     // A repository-level update also invalidates pending work in the service.
     repository.update(scope, {
       ...config, expectedRevision: 1, delivery: config.delivery,
@@ -722,8 +788,8 @@ describe("notification settings and passive hooks", () => {
     }, 1000);
     await flush();
     expect(executor).not.toHaveBeenCalled();
-    service.emit(scope, event(), "queued-selection", result);
-    service.emit(scope, event(1002), "new-selection", result);
+    service.emit(scope, event(), "queued-selection", "live", result);
+    service.emit(scope, event(1002), "new-selection", "live", result);
     await flush();
     expect(executor).toHaveBeenCalledOnce();
     expect(executor.mock.calls[0]![0].payload.assistantResult).toEqual({
@@ -832,8 +898,8 @@ describe("notification settings and passive hooks", () => {
       .mockResolvedValue({ ...success, success: false, exitCode: 1 });
     const { service } = fixture(executor);
     enable(service);
-    service.emit(scope, event(), "one");
-    service.emit(scope, event(), "one");
+    service.emit(scope, event(), "one", "live");
+    service.emit(scope, event(), "one", "live");
     await flush();
     expect(executor).toHaveBeenCalledTimes(1);
     expect(executor.mock.calls[0]![0]).toMatchObject({
@@ -845,7 +911,7 @@ describe("notification settings and passive hooks", () => {
         notificationId: expect.any(String),
       },
     });
-    service.emit(scope, event(), "one");
+    service.emit(scope, event(), "one", "live");
     await flush();
     expect(executor).toHaveBeenCalledTimes(1);
   });
@@ -853,18 +919,18 @@ describe("notification settings and passive hooks", () => {
   it("suppresses historical events, muted events and pending work without a resume backlog", async () => {
     const { service, executor, setNow } = fixture();
     enable(service);
-    service.emit(scope, event(999), "historical");
-    service.emit(scope, event(1001), "pending");
+    service.emit(scope, event(999), "historical", "live");
+    service.emit(scope, event(1001), "pending", "live");
     service.setSilenced(scope, true);
-    service.emit(scope, event(1002), "muted");
+    service.emit(scope, event(1002), "muted", "live");
     setNow(1003);
     service.setSilenced(scope, false);
     await flush();
-    service.emit(scope, event(1002), "muted");
-    service.emit(scope, event(1001), "pending");
+    service.emit(scope, event(1002), "muted", "live");
+    service.emit(scope, event(1001), "pending", "live");
     await flush();
     expect(executor).not.toHaveBeenCalled();
-    service.emit(scope, event(1004), "new");
+    service.emit(scope, event(1004), "new", "live");
     await flush();
     expect(executor).toHaveBeenCalledTimes(1);
   });
@@ -872,7 +938,7 @@ describe("notification settings and passive hooks", () => {
   it("discards pending work on config edits and never sends events to a replacement script", async () => {
     const { service, executor } = fixture();
     enable(service);
-    service.emit(scope, event(), "old");
+    service.emit(scope, event(), "old", "live");
     service.update(scope, {
       ...config,
       delivery: config.delivery,
@@ -881,7 +947,7 @@ describe("notification settings and passive hooks", () => {
     });
     await flush();
     expect(executor).not.toHaveBeenCalled();
-    service.emit(scope, event(), "old");
+    service.emit(scope, event(), "old", "live");
     await flush();
     expect(executor).not.toHaveBeenCalled();
   });
@@ -902,7 +968,7 @@ describe("notification settings and passive hooks", () => {
     const { service } = fixture(executor);
     enable(service);
     for (let index = 0; index < 100; index += 1)
-      service.emit(scope, event(), String(index));
+      service.emit(scope, event(), String(index), "live");
     await flush();
     expect(executor).toHaveBeenCalledTimes(4);
     service.setSilenced(scope, true);
@@ -966,10 +1032,10 @@ describe("notification settings and passive hooks", () => {
       service.emit(
         { tenantId: "missing", principalId: "missing" },
         event(),
-        "wrong-scope",
+        "wrong-scope", "live",
       ),
     ).not.toThrow();
-    service.emit(scope, event(), "failed");
+    service.emit(scope, event(), "failed", "live");
     await flush();
     expect(executor).toHaveBeenCalledTimes(1);
     expect(onError).toHaveBeenCalledTimes(2);

@@ -1,0 +1,263 @@
+import { randomUUID } from "node:crypto";
+import { describe, expect, it, vi } from "vitest";
+import type { ConversationActorEvent } from "../../src/server/conversations/conversation-actor.js";
+import { NotificationRepository } from "../../src/server/db/repositories/notification-repository.js";
+import {
+  SubmissionCompletionRepository,
+  type SubmissionCompletionObservationRecord,
+} from "../../src/server/db/repositories/submission-completion-repository.js";
+import { NotificationLifecycleObserver } from "../../src/server/domain/notification-lifecycle-observer.js";
+import { NotificationService } from "../../src/server/domain/notification-service.js";
+import { TurnReplySpeechService } from "../../src/server/domain/turn-reply-speech-service.js";
+import type { executeNotificationScript } from "../../src/server/runtime/notification-script-executor.js";
+import { voiceNotificationSchema } from "../../src/shared/protocol/notification.js";
+import { createInMemoryThreadRuntimeHarness } from "../support/in-memory-thread-runtime-harness.js";
+import { scriptDelivery } from "../support/notification-settings.js";
+
+const voiceFrames = (frames: readonly string[]) => frames
+  .filter((frame) => frame.startsWith("event: notification\n"))
+  .map((frame) => voiceNotificationSchema.parse(JSON.parse(frame.split("\n")[1]!.slice("data: ".length))));
+
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>(done => { resolve = done; });
+  return { promise, resolve };
+}
+
+async function fixture(observeNotifications = true) {
+  const observations: Array<{
+    observation: SubmissionCompletionObservationRecord;
+    provenance: "live" | "recovered";
+  }> = [];
+  let observer: NotificationLifecycleObserver | undefined;
+  let notifications: NotificationService;
+  const harness = await createInMemoryThreadRuntimeHarness({
+    retentionMilliseconds: 60_000,
+    captureCompletionVoiceSubscriberWatermark: () => notifications.captureSubscriberWatermark(),
+    onObservedCompletion(scope, observation, provenance, subscriberWatermark) {
+      observations.push({ observation, provenance });
+      if (observeNotifications) observer?.completion(scope, observation, provenance, subscriberWatermark);
+    },
+  });
+  const executor = vi.fn<typeof executeNotificationScript>().mockResolvedValue({
+    success: true, exitCode: 0, timedOut: false, stdout: "", stderr: "", error: null,
+  });
+  notifications = new NotificationService({
+    repository: new NotificationRepository(harness.database), executor,
+  });
+  const publications: Promise<string | undefined>[] = [];
+  observer = new NotificationLifecycleObserver(harness.inventoryRepository, (scope, payload, key, provenance, result, _recognitionThreadId, subscriberWatermark) => {
+    publications.push(notifications.emit(scope, payload, key, provenance, result, () =>
+      harness.mutations.activity.notificationContext(scope, payload.thread!.id, payload.turn!.id), subscriberWatermark));
+  });
+  notifications.update(harness.scope, {
+    enabled: true, scriptPath: "/test/notification-script", arguments: [], timeoutSeconds: 1,
+    assistantResultPhases: ["unclassified"], delivery: scriptDelivery(["turn.completed"]), expectedRevision: 0,
+  });
+  const completions = new SubmissionCompletionRepository(harness.database);
+  return {
+    harness, notifications, executor, observations, publications, completions,
+    enableObservation() { observeNotifications = true; },
+    async send() {
+      const created = await harness.lifecycle.createServerDraft(harness.scope, {
+        workspaceId: harness.workspaceRecord.id, connectionProfileId: harness.connection.id,
+        title: "Completion notifications", initialText: "Complete one observed turn",
+      });
+      const threadId = created.applicationThreadId;
+      await expect(harness.mutations.mutate(harness.scope, threadId, {
+        kind: "deliver", mode: "submit", mutationId: randomUUID(), origin: { clientId: randomUUID() },
+        expectedThreadRevision: harness.inventoryRepository.getThread(harness.scope, threadId).thread.revision,
+        expectedDraftRevision: created.draft.revision,
+      })).resolves.toMatchObject({ status: "delivery_accepted" });
+      await vi.waitFor(() => {
+        expect(observations.length).toBeGreaterThan(0);
+        expect(harness.actors.observeInputRuntime(harness.scope, threadId)?.settled).toBe(true);
+      }, { timeout: 15_000 });
+      await Promise.all(harness.completionFollowUps.splice(0));
+      await Promise.all(publications);
+      return threadId;
+    },
+    async close() {
+      await notifications.close();
+      await harness.close();
+    },
+  };
+}
+
+describe("live completion notification provenance", { timeout: 30_000 }, () => {
+  it("excludes streams joining while the durable completion observer is delayed", async () => {
+    const current = await fixture();
+    const { harness, notifications } = current;
+    const before: string[] = [], after: string[] = [];
+    const disconnectBefore = notifications.subscribe(harness.scope, frame => before.push(frame));
+    let disconnectAfter = () => {};
+    const entered = deferred();
+    const release = deferred();
+    const original = harness.queueDispatcher.onAuthoritativeCompletion.bind(harness.queueDispatcher);
+    const observe = vi.spyOn(harness.queueDispatcher, "onAuthoritativeCompletion").mockImplementation(async (...args) => {
+      entered.resolve();
+      await release.promise;
+      return original(...args);
+    });
+    try {
+      const sending = current.send();
+      await entered.promise;
+      disconnectAfter = notifications.subscribe(harness.scope, frame => after.push(frame));
+      release.resolve();
+      await sending;
+      expect(voiceFrames(before)).toHaveLength(1);
+      expect(voiceFrames(after)).toEqual([]);
+      await vi.waitFor(() => expect(current.executor).toHaveBeenCalledOnce());
+    } finally {
+      release.resolve();
+      observe.mockRestore();
+      disconnectBefore(); disconnectAfter();
+      await current.close();
+    }
+  });
+
+  it("reuses the first live audience when an unconsumed completion is published again", async () => {
+    const current = await fixture(false);
+    const { harness, notifications, observations, publications } = current;
+    const before: string[] = [], after: string[] = [];
+    const disconnectBefore = notifications.subscribe(harness.scope, frame => before.push(frame));
+    let disconnectAfter = () => {};
+    try {
+      const threadId = await current.send();
+      expect(voiceFrames(before)).toEqual([]);
+      disconnectAfter = notifications.subscribe(harness.scope, frame => after.push(frame));
+      current.enableObservation();
+      const runtime = await harness.runtimes.acquire(harness.scope, threadId);
+      try {
+        const previous = observations.length;
+        await runtime.actor.replayAuthoritativeCompletions();
+        await vi.waitFor(() => expect(observations.length).toBeGreaterThan(previous));
+        await Promise.all(publications);
+        expect(voiceFrames(before)).toHaveLength(1);
+        expect(voiceFrames(after)).toEqual([]);
+        await vi.waitFor(() => expect(current.executor).toHaveBeenCalledOnce());
+      } finally { runtime.release(); }
+    } finally {
+      disconnectBefore(); disconnectAfter();
+      await current.close();
+    }
+  });
+
+  it("speaks and scripts a live completion once without replaying it to reopened subscribers", async () => {
+    const current = await fixture();
+    const { harness, notifications, observations, executor, publications } = current;
+    const frames: string[] = [];
+    const unsubscribe = notifications.subscribe(harness.scope, (frame) => frames.push(frame));
+    try {
+      const threadId = await current.send();
+      await vi.waitFor(() => expect(executor).toHaveBeenCalledOnce());
+      expect(voiceFrames(frames)).toHaveLength(1);
+      expect(observations.every(({ provenance }) => provenance === "live")).toBe(true);
+      const observed = observations[0]!.observation;
+      expect(current.completions.get(harness.scope, threadId, observed.operationId)).toMatchObject({
+        completionOutcome: "completed", applicationTurnId: observed.applicationTurnId,
+        assistantResult: { text: expect.stringContaining("Complete one observed turn") },
+      });
+      expect(executor.mock.calls[0]?.[0].payload).toMatchObject({
+        event: "turn.completed", turn: { id: observed.applicationTurnId },
+        assistantResult: { unclassified: observed.assistantResult },
+      });
+      expect(voiceFrames(frames)[0]).toMatchObject({
+        voice: "speakThenListen", payload: { event: "turn.completed", thread: { id: threadId } },
+        recognitionTarget: { threadId, sourceTurnId: observed.applicationTurnId },
+      });
+
+      unsubscribe();
+      const reconnected: string[] = [];
+      const disconnect = notifications.subscribe(harness.scope, (frame) => reconnected.push(frame));
+      const runtime = await harness.runtimes.acquire(harness.scope, threadId);
+      try {
+        const reopened: ConversationActorEvent[] = [];
+        const stopObserving = runtime.actor.subscribe((event) => reopened.push(event));
+        expect(reopened).toContainEqual(expect.objectContaining({ type: "authoritative_completion", provenance: "live" }));
+        const previousObservations = observations.length;
+        await runtime.actor.replayAuthoritativeCompletions();
+        await vi.waitFor(() => expect(observations.length).toBeGreaterThan(previousObservations));
+        await Promise.all(publications);
+        expect(reconnected).toHaveLength(1);
+        expect(reconnected[0]).toContain("event: notification_policy\n");
+        expect(voiceFrames(frames)).toHaveLength(1);
+        expect(executor).toHaveBeenCalledOnce();
+        stopObserving();
+      } finally {
+        runtime.release();
+        disconnect();
+      }
+    } finally {
+      unsubscribe();
+      await current.close();
+    }
+  });
+
+  it("commits and scripts an unconsumed recovered completion without voice, retaining explicit reply playback", async () => {
+    const current = await fixture(false);
+    const { harness, notifications, observations, executor, publications } = current;
+    try {
+      const threadId = await current.send();
+      const original = observations[0]!.observation;
+      expect(executor).not.toHaveBeenCalled();
+      // Restore the crash boundary: acceptance committed, native history ended,
+      // but the server has neither observed nor consumed the completion.
+      await harness.runtimes.runWithRuntimeRetired(harness.scope, threadId, async () => {
+        harness.database.transaction(() => {
+          harness.database.prepare(`DELETE FROM submission_completion_observations
+            WHERE tenant_id = ? AND owner_principal_id = ? AND application_thread_id = ? AND operation_id = ?`)
+            .run(harness.scope.tenantId, harness.scope.principalId, threadId, original.operationId);
+          current.completions.recordAccepted(harness.scope, threadId, {
+            operationId: original.operationId, acceptedAt: original.acceptedAt,
+            ...(original.backendCorrelation ? { backendCorrelation: original.backendCorrelation } : {}),
+          });
+        })();
+      });
+      expect(current.completions.get(harness.scope, threadId, original.operationId).assistantResult).toBeNull();
+      expect(harness.database.prepare("SELECT count(*) AS count FROM notification_event_consumption").get()).toEqual({ count: 0 });
+      observations.length = 0;
+      current.enableObservation();
+      const frames: string[] = [];
+      const disconnect = notifications.subscribe(harness.scope, (frame) => frames.push(frame));
+      const runtime = await harness.runtimes.acquire(harness.scope, threadId);
+      try {
+        await vi.waitFor(() => expect(executor).toHaveBeenCalledOnce());
+        await Promise.all(publications);
+        expect(observations.length).toBeGreaterThan(0);
+        expect(observations.every(({ provenance }) => provenance === "recovered")).toBe(true);
+        expect(current.completions.get(harness.scope, threadId, original.operationId)).toMatchObject({
+          applicationTurnId: original.applicationTurnId, completionOutcome: "completed",
+          completionObservedAt: expect.any(Number), assistantResult: original.assistantResult,
+        });
+        expect(executor.mock.calls[0]?.[0].payload).toMatchObject({
+          event: "turn.completed", turn: { id: original.applicationTurnId },
+          assistantResult: { unclassified: original.assistantResult },
+        });
+        expect(voiceFrames(frames)).toEqual([]);
+        expect(harness.database.prepare("SELECT count(*) AS count FROM notification_event_consumption").get()).toEqual({ count: 1 });
+        const previousObservations = observations.length;
+        await runtime.actor.replayAuthoritativeCompletions();
+        await vi.waitFor(() => expect(observations.length).toBeGreaterThan(previousObservations));
+        await Promise.all(publications);
+        expect(executor).toHaveBeenCalledOnce();
+        expect(voiceFrames(frames)).toEqual([]);
+
+        const replies = new TurnReplySpeechService({
+          inventory: harness.inventoryRepository, completions: current.completions, notifications,
+        });
+        expect(replies.latestReplyTurnId(harness.scope, threadId)).toBe(original.applicationTurnId);
+        expect(replies.read(harness.scope, threadId, original.applicationTurnId!)).toEqual({
+          assistantResult: { unclassified: original.assistantResult },
+        });
+        expect(executor).toHaveBeenCalledOnce();
+        expect(voiceFrames(frames)).toEqual([]);
+      } finally {
+        runtime.release();
+        disconnect();
+      }
+    } finally {
+      await current.close();
+    }
+  });
+});

@@ -485,6 +485,8 @@ export type SubmissionReconciliation =
 export interface EstablishedBackendProjection {
   readonly handleSequence: number;
   readonly snapshot: BackendConversationSnapshot;
+  /** Terminal turns recovered from an earlier observation gap, never newly live. */
+  readonly recoveredCompletionTurnIds?: readonly string[];
   /**
    * History boundary captured atomically with `snapshot`. The cursor remains
    * backend-private and names the page immediately older than this exact

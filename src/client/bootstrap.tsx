@@ -1,6 +1,7 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./app/App";
+import { installNativeVoiceDiagnostics } from "./voice/native-voice-diagnostics.js";
 import { installAppearance } from "./app/appearance";
 import { installEnvironmentColors } from "./app/environment-palette";
 import { installSidebarCollapsed } from "./app/sidebar-collapsed";
@@ -11,12 +12,14 @@ import "./styles.css";
 export function startApplication(
   panelTenants: WorkspacePanelTenantRegistry,
 ): void {
+  const removeVoiceDiagnostics = installNativeVoiceDiagnostics();
   const removeAppearanceListener = installAppearance();
   const removeEnvironmentColorListener = installEnvironmentColors();
   installSidebarWidth();
   installSidebarCollapsed();
   if (import.meta.hot) {
     import.meta.hot.dispose(() => {
+      removeVoiceDiagnostics();
       removeAppearanceListener();
       removeEnvironmentColorListener();
     });

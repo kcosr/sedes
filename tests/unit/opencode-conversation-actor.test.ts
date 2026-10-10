@@ -25,6 +25,27 @@ function completedMessages(turns: number): SessionMessageInfo[] {
 }
 
 describe("OpenCode driver through the shared conversation actor", () => {
+  it("keeps terminal enrichment available to durable consumers without classifying it as a live completion", async () => {
+    const current = fixture({ messages: completedMessages(1) });
+    const acquired = await current.acquire();
+    try {
+      const events: ConversationActorEvent[] = [];
+      acquired.actor.subscribe(event => events.push(event));
+      events.length = 0;
+      const answer = current.wire.messages[1]!;
+      if (answer.type !== "assistant") throw new Error("assistant_fixture_required");
+      current.wire.messages[1] = { ...answer, content: [...answer.content, { type: "text", text: "Late complete response" }] };
+      current.wire.send({ id: "evt_terminal_enrichment", type: "session.step.ended", created: 4,
+        durable: { aggregateID: current.wire.sessionID, seq: 1, version: 1 },
+        data: { sessionID: current.wire.sessionID, assistantMessageID: answer.id, finish: "stop", cost: 0,
+          tokens: { input: 1, output: 1, reasoning: 0, cache: { read: 0, write: 0 } } } });
+      await vi.waitFor(() => expect(events.filter(event => event.type === "authoritative_completion")).toHaveLength(1));
+      const completion = events.find(event => event.type === "authoritative_completion");
+      expect(completion).toMatchObject({ provenance: "recovered", outcome: "completed" });
+      expect(JSON.stringify(completion)).toContain("Late complete response");
+    } finally { acquired.release(); }
+  });
+
   it("releases next-Send admission when one finite refresh observes an entire fast turn", async () => {
     const current = createOpenCodeExecutionFixture(); cleanup.push(current.dispose);
     current.wire.messages.push(...completedMessages(1));
