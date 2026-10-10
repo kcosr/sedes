@@ -399,26 +399,65 @@ describe("PanelRegionStore make-room", () => {
     expect(listener).toHaveBeenCalledTimes(1);
   });
 
-  it("records use, publishing only when make-room changes", () => {
-    const store = createStore();
+  it("records use, publishing each recency change", () => {
+    const { storage } = memoryStorage();
+    const store = createStore(storage);
     store.open("workpads", { region: "left" });
     store.open("files", { region: "top" });
     store.open("tasks");
     store.setStageSize({ width: 900, height: 2000 });
     expect(store.getSnapshot().hiddenByMakeRoom).toEqual(["workpads"]);
+    storage.setItem.mockClear();
     const listener = vi.fn();
     store.subscribe(listener);
     // Using visible panels leaves Workpads the least recently used.
     store.touch("files");
     store.touch("tasks");
     store.touch("chat");
-    store.touch("chat");
-    expect(listener).not.toHaveBeenCalled();
+    expect(listener).toHaveBeenCalledTimes(3);
+    expect(store.getSnapshot().view.layout.recency).toEqual([
+      "workpads",
+      "files",
+      "tasks",
+      "chat",
+    ]);
     expect(store.getSnapshot().hiddenByMakeRoom).toEqual(["workpads"]);
-    // Workpads becomes the most recently used panel other than Chat.
+    // Using the panel used last changes nothing.
+    store.touch("chat");
+    expect(listener).toHaveBeenCalledTimes(3);
     store.touch("workpads");
-    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenCalledTimes(4);
     expect(store.getSnapshot().hiddenByMakeRoom).toEqual(["tasks"]);
+    // Recency is never saved.
+    expect(storage.setItem).not.toHaveBeenCalled();
+  });
+
+  it("does not save a fresh layout when only recency changes", () => {
+    const { storage } = memoryStorage();
+    const store = createStore(storage);
+    store.touch("chat");
+    store.touch("files");
+    expect(store.getSnapshot().view.layout.recency).toEqual(["chat", "files"]);
+    expect(storage.setItem).not.toHaveBeenCalled();
+  });
+
+  it("updates every thread's make-room when another thread records use", () => {
+    const root = createStore(memoryStorage().storage, { threadId: null });
+    const one = root.forThread("thread-1");
+    const two = root.forThread("thread-2");
+    one.open("workpads");
+    two.openTerminalTab("terminal-1", { region: "left" });
+    root.setStageSize({ width: 800, height: 800 });
+    // Thread 2: 160 + 5 + 320 + 5 + 360 = 850 > 800.
+    expect(two.getSnapshot().hiddenByMakeRoom).toEqual(["workpads"]);
+    expect(one.getSnapshot().hiddenByMakeRoom).toEqual([]);
+    const listener = vi.fn();
+    two.subscribe(listener);
+    one.touch("workpads");
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(two.getSnapshot().hiddenByMakeRoom).toEqual(["terminals"]);
+    expect(two.getSnapshot().visible).toEqual(["chat", "workpads"]);
+    expect(two.getSnapshot().view.layout.recency).toEqual(["terminals", "workpads"]);
   });
 });
 

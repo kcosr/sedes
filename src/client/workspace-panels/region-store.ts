@@ -420,17 +420,16 @@ export class PanelRegionStore {
 
   /**
    * Records that a panel was used (focused or pressed). Make-room hides the
-   * least recently used edge region first. Only publishes when that changes
-   * what make-room hides.
+   * least recently used edge region first. Recency is shared by every
+   * thread, so a change publishes to every thread view; using the panel
+   * already used last changes nothing.
    */
   touch(kind: PanelKind): void {
     if (!isPanelKind(kind)) return;
-    const layout = notePanelUsed(this.#shared.layout, kind);
-    if (layout === this.#shared.layout) return;
-    const before = this.#hiddenByMakeRoom(this.#currentView());
-    this.#shared.layout = layout;
-    const after = this.#hiddenByMakeRoom(this.#currentView());
-    if (before.join() !== after.join()) this.#publishShared();
+    const view = this.#currentView();
+    const next = notePanelUsed(view.layout, kind);
+    if (next === view.layout) return;
+    this.#commit({ ...view, layout: next });
   }
 
   /**
@@ -798,8 +797,10 @@ function createSharedState(
     stage: undefined,
     revision: 0,
     focusSequence: 0,
+    // What storage holds, or would hold: only a real change is written.
+    // A layout narrowed to the registered tenants is written on its next change.
     persistedLayout:
-      source === "stored" && layout === loaded
+      source !== "migrated" && layout === loaded
         ? serializeRegionLayout(layout)
         : undefined,
     storage,
