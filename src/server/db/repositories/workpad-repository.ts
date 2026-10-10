@@ -4,12 +4,12 @@ import { diffChars, diffLines, diffWordsWithSpace } from "diff";
 import {
   createWorkpadRequestSchema, updateWorkpadRequestSchema, listWorkpadsRequestSchema,
   saveWorkpadDraftRequestSchema, commitWorkpadDraftRequestSchema, workpadSchema, workpadSummarySchema, workpadRevisionSummarySchema,
-  workpadRevisionSchema, workpadDraftSchema, workpadScopeSchema,
+  workpadRevisionSchema, workpadDraftSchema, workpadScopeSchema, workpadCountsRequestSchema,
   type Workpad, type WorkpadScope, type WorkpadAuthor, type WorkpadAttributionSpan,
   type WorkpadChange, type WorkpadRevision, type WorkpadRevisionPage,
   type CreateWorkpadRequest, type UpdateWorkpadRequest, type ListWorkpadsRequest,
   type WorkpadListPage, type WorkpadDraft, type SaveWorkpadDraftRequest,
-  type CommitWorkpadDraftRequest,
+  type CommitWorkpadDraftRequest, type WorkpadCounts, type WorkpadCountsRequest,
 } from "../../../shared/protocol/workpads.js";
 import { DomainError } from "../../domain/errors.js";
 import type { RequestScope } from "../../identity/identity-provider.js";
@@ -51,6 +51,35 @@ const visibleWorkpad = `(p.scope_kind = 'global'
       AND project.id = p.project_id AND project.removed_at IS NULL))
   OR (p.scope_kind = 'thread' AND t.id IS NOT NULL AND ${activeLocationOf("t")}))`;
 function sameScope(a: WorkpadScope, b: WorkpadScope) { return JSON.stringify(a) === JSON.stringify(b); }
+
+/** The list request's cursor bound. */
+const LIST_CURSOR_MAX_LENGTH = 256;
+const threadJoin = "LEFT JOIN application_threads t ON t.tenant_id=p.tenant_id AND t.owner_principal_id=p.owner_principal_id AND t.id=p.thread_id";
+const threadLocationJoin = `LEFT JOIN workspaces AS threadLocation ON threadLocation.tenant_id=t.tenant_id
+  AND threadLocation.owner_principal_id=t.owner_principal_id AND threadLocation.id=t.workspace_id`;
+/**
+ * Each sort's key, then workpad ID ascending. Titles compare as SQLite
+ * `lower()` values by code point; `lower()` folds ASCII letters only.
+ */
+const listSorts = {
+  updated: { expression: "p.updated_at", descending: true },
+  newest: { expression: "p.created_at", descending: true },
+  title: { expression: "lower(p.title)", descending: false },
+} as const;
+const titleDigest = (title: string) => createHash("sha256").update(title).digest("base64url").slice(0, 16);
+/**
+ * A cursor is `[fingerprint, key, id]`. A title key too long to fit travels
+ * as `[prefix, digest]`, its prefix shrinking until the cursor fits.
+ */
+function encodeListCursor(fingerprint: string, key: string, id: string, title: boolean): string {
+  const points = Array.from(key);
+  for (const budget of title ? [Number.POSITIVE_INFINITY, 64, 32, 16, 8, 0] : [Number.POSITIVE_INFINITY]) {
+    const carried = points.length <= budget ? key : [points.slice(0, budget).join(""), titleDigest(key)];
+    const cursor = Buffer.from(JSON.stringify([fingerprint, carried, id])).toString("base64url");
+    if (cursor.length <= LIST_CURSOR_MAX_LENGTH) return cursor;
+  }
+  throw new Error("A workpad list cursor exceeds its bound.");
+}
 
 /** Pure text provenance transformation. Offsets are UTF-16, as in browser selection APIs. */
 type TextOperation = { value: string; added?: boolean; removed?: boolean };
@@ -272,19 +301,51 @@ export class WorkpadRepository {
       return this.#present(scope, pad);
     })();
   }
+  /**
+   * Permanently deletes an owned workpad, active or archived. Its revisions
+   * and draft cascade by foreign key. Returns its last revision and, when it
+   * counted toward a thread's non-archived workpads, that thread.
+   */
+  remove(scope: RequestScope, id: string): { revision: number; nonArchivedThreadId: string | null } {
+    return this.database.transaction(() => {
+      const row = this.database.prepare(`SELECT revision, CASE
+        WHEN scope_kind = 'thread' AND archived_at IS NULL THEN thread_id
+        ELSE NULL END AS threadId
+        FROM workpads WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?`)
+        .get(scope.tenantId, scope.principalId, id) as { revision: number; threadId: string | null } | undefined;
+      if (!row) throw notFound();
+      this.database.prepare("DELETE FROM workpads WHERE tenant_id=? AND owner_principal_id=? AND id=?").run(scope.tenantId, scope.principalId, id);
+      return { revision: row.revision, nonArchivedThreadId: row.threadId };
+    })();
+  }
 
+  /**
+   * Resumes after a cursor's row. A title carried as a prefix resumes at the
+   * row's current title only when that matches the carried digest, so it is
+   * unchanged. Otherwise it resumes at the prefix: a prefix sorts before every
+   * title extending it, so continuation may repeat rows but never skips one
+   * whose own title held.
+   */
+  #listCursorPosition(scope: RequestScope, cursor: string, fingerprint: string, title: boolean): { key: string; id: string } {
+    const invalid = () => new DomainError("cursor_invalid", "The workpad cursor does not match this query.");
+    let parsed: unknown;
+    try { parsed = JSON.parse(Buffer.from(cursor, "base64url").toString()); } catch { throw invalid(); }
+    if (!Array.isArray(parsed) || parsed.length !== 3 || parsed[0] !== fingerprint || typeof parsed[2] !== "string") throw invalid();
+    const [, key, id] = parsed as [string, unknown, string];
+    if (typeof key === "string") return { key, id };
+    if (!title || !Array.isArray(key) || key.length !== 2 || typeof key[0] !== "string" || typeof key[1] !== "string") throw invalid();
+    const row = this.database.prepare("SELECT lower(title) AS title FROM workpads WHERE tenant_id=? AND owner_principal_id=? AND id=?")
+      .get(scope.tenantId, scope.principalId, id) as { title: string } | undefined;
+    return { key: row && titleDigest(row.title) === key[1] ? row.title : key[0], id };
+  }
   list(scope: RequestScope, input: ListWorkpadsRequest, authority?: WorkpadListAuthority): WorkpadListPage {
     const request = parse(listWorkpadsRequestSchema, input);
     this.#assertScope(scope, request.scope);
-    const fingerprint = createHash("sha256").update(JSON.stringify({ ...request, cursor: undefined, authority, tenantId: scope.tenantId, principalId: scope.principalId })).digest("hex");
-    let after: { updatedAt: string; id: string } | undefined;
-    if (request.cursor) {
-      try {
-        const cursor = JSON.parse(Buffer.from(request.cursor, "base64url").toString()) as { key: string; updatedAt: string; id: string };
-        if (cursor.key !== fingerprint || typeof cursor.updatedAt !== "string" || typeof cursor.id !== "string") throw new Error();
-        after = cursor;
-      } catch { throw new DomainError("cursor_invalid", "The workpad cursor does not match this query."); }
-    }
+    const fingerprint = createHash("sha256").update(JSON.stringify({
+      version: 2, ...request, cursor: undefined, authority, tenantId: scope.tenantId, principalId: scope.principalId,
+    })).digest("base64url").slice(0, 22);
+    const sort = listSorts[request.sort];
+    const after = request.cursor ? this.#listCursorPosition(scope, request.cursor, fingerprint, request.sort === "title") : undefined;
     const conditions = ["p.tenant_id=?", "p.owner_principal_id=?", request.archived ? "p.archived_at IS NOT NULL" : "p.archived_at IS NULL", visibleWorkpad];
     const params: (string | number)[] = [scope.tenantId, scope.principalId];
     if (request.scope.kind === "thread") { conditions.push("p.scope_kind='thread' AND p.thread_id=?"); params.push(request.scope.threadId); }
@@ -306,13 +367,48 @@ export class WorkpadRepository {
       params.push(...ids, ...(request.scope.kind === "project" ? [request.scope.projectId] : ids));
     }
     if (request.query) { conditions.push("(instr(lower(p.title), lower(?)) > 0 OR instr(lower(json_extract(p.document_json,'$.content')), lower(?)) > 0)"); params.push(request.query, request.query); }
-    if (after) { conditions.push("(p.updated_at < ? OR (p.updated_at=? AND p.id>?))"); params.push(after.updatedAt, after.updatedAt, after.id); }
-    const rows = this.database.prepare(`SELECT json_remove(p.document_json,'$.content','$.attribution') AS json FROM workpads p
-      LEFT JOIN application_threads t ON t.tenant_id=p.tenant_id AND t.owner_principal_id=p.owner_principal_id AND t.id=p.thread_id
-      WHERE ${conditions.map(c => `(${c})`).join(" AND ")} ORDER BY p.updated_at DESC,p.id ASC LIMIT ?`).all(...params, request.limit + 1) as { json: string }[];
+    if (after) {
+      conditions.push(`(${sort.expression}${sort.descending ? "<" : ">"}? OR (${sort.expression}=? AND p.id>?))`);
+      params.push(after.key, after.key, after.id);
+    }
+    const rows = this.database.prepare(`SELECT json_remove(p.document_json,'$.content','$.attribution') AS json, ${sort.expression} AS sortKey, p.id AS id
+      FROM workpads p ${threadJoin}
+      WHERE ${conditions.map(c => `(${c})`).join(" AND ")}
+      ORDER BY ${sort.expression} ${sort.descending ? "DESC" : "ASC"}, p.id ASC LIMIT ?`)
+      .all(...params, request.limit + 1) as { json: string; sortKey: string; id: string }[];
     const items = rows.slice(0, request.limit).map(row => this.#present(scope, workpadSummarySchema.parse(JSON.parse(row.json))));
-    const last = items.at(-1);
-    return { items, ...(rows.length > request.limit && last ? { nextCursor: Buffer.from(JSON.stringify({ key: fingerprint, updatedAt: last.updatedAt, id: last.id })).toString("base64url") } : {}) };
+    const last = rows.length > request.limit ? rows[request.limit - 1] : undefined;
+    return { items, ...(last ? { nextCursor: encodeListCursor(fingerprint, last.sortKey, last.id, request.sort === "title") } : {}) };
+  }
+  /**
+   * Visible workpad counts for each panel view, under the list's visibility
+   * rules, in one aggregate read. A named thread or project must be in scope.
+   */
+  counts(scope: RequestScope, input: WorkpadCountsRequest): WorkpadCounts {
+    const request = parse(workpadCountsRequestSchema, input);
+    if (request.threadId !== undefined) this.#assertScope(scope, { kind: "thread", threadId: request.threadId });
+    if (request.projectId !== undefined) this.#assertScope(scope, { kind: "project", projectId: request.projectId });
+    const views = {
+      thread: "p.scope_kind='thread' AND p.thread_id=@threadId",
+      project: "p.scope_kind='project' AND p.project_id=@projectId",
+      projectWithThreads: "(p.scope_kind='project' AND p.project_id=@projectId) OR (p.scope_kind='thread' AND threadLocation.project_id=@projectId)",
+      global: "p.scope_kind='global'",
+      all: "1",
+    } as const;
+    const states = { active: "p.archived_at IS NULL", archived: "p.archived_at IS NOT NULL" } as const;
+    const columns = Object.entries(states).flatMap(([state, archived]) => Object.entries(views)
+      .map(([view, condition]) => `count(CASE WHEN ${archived} AND (${condition}) THEN 1 END) AS ${state}_${view}`));
+    const row = this.database.prepare(`SELECT ${columns.join(", ")} FROM workpads p ${threadJoin} ${threadLocationJoin}
+      WHERE p.tenant_id=@tenantId AND p.owner_principal_id=@principalId AND ${visibleWorkpad}`)
+      .get({ tenantId: scope.tenantId, principalId: scope.principalId, threadId: request.threadId ?? null, projectId: request.projectId ?? null }) as Record<string, number>;
+    const counts = (state: keyof typeof states) => ({
+      thread: request.threadId === undefined ? null : row[`${state}_thread`]!,
+      project: request.projectId === undefined ? null : row[`${state}_project`]!,
+      projectWithThreads: request.projectId === undefined ? null : row[`${state}_projectWithThreads`]!,
+      global: row[`${state}_global`]!,
+      all: row[`${state}_all`]!,
+    });
+    return { active: counts("active"), archived: counts("archived") };
   }
   revision(scope: RequestScope, id: string, revision: number): WorkpadRevision {
     validRevision(revision);

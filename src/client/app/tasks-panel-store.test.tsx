@@ -64,7 +64,6 @@ describe("tasks panel preferences", () => {
       onlyBacklog: false,
       onlyWithNotes: false,
       onlyWithFiles: false,
-      groupByProject: true,
       includeThreadTasks: false,
       searchNotes: false,
     });
@@ -73,7 +72,7 @@ describe("tasks panel preferences", () => {
   it("remembers the last view and each view's options independently", () => {
     setTasksLastView("project");
     setTasksViewOptions("project", { includeThreadTasks: true, sort: "title" });
-    setTasksViewOptions("all", { groupByProject: false });
+    setTasksViewOptions("all", { sort: "updated" });
     setTasksViewOptions("thread", { onlyPinned: true, onlyBacklog: true, searchNotes: true });
 
     expect(getTasksPanelPreferences().lastView).toBe("project");
@@ -84,7 +83,7 @@ describe("tasks panel preferences", () => {
     });
     expect(getTasksViewOptions("all")).toEqual({
       ...TASKS_VIEW_OPTIONS_DEFAULTS.all,
-      groupByProject: false,
+      sort: "updated",
     });
     expect(getTasksViewOptions("thread")).toEqual({
       ...TASKS_VIEW_OPTIONS_DEFAULTS.thread,
@@ -142,6 +141,33 @@ describe("tasks panel preferences", () => {
         all: { ...TASKS_VIEW_OPTIONS_DEFAULTS.all, onlyBacklog: true },
       },
     });
+  });
+
+  it("reads options saved while All could be grouped, dropping only Group by project", () => {
+    seed(
+      JSON.stringify({
+        version: 2,
+        lastView: "all",
+        views: {
+          all: { sort: "title", groupByProject: false, onlyPinned: true, searchNotes: true },
+          project: { groupByProject: true, includeThreadTasks: true },
+        },
+      }),
+    );
+    expect(getTasksPanelPreferences()).toEqual({
+      version: 2,
+      lastView: "all",
+      views: {
+        ...TASKS_VIEW_OPTIONS_DEFAULTS,
+        all: { ...TASKS_VIEW_OPTIONS_DEFAULTS.all, sort: "title", onlyPinned: true, searchNotes: true },
+        project: { ...TASKS_VIEW_OPTIONS_DEFAULTS.project, includeThreadTasks: true },
+      },
+    });
+    expect(getTasksViewOptions("all")).not.toHaveProperty("groupByProject");
+    // The next change rewrites the blob without it.
+    setTasksViewOptions("global", { sort: "updated" });
+    expect(JSON.stringify(stored())).not.toContain("groupByProject");
+    expect(getTasksViewOptions("all").sort).toBe("title");
   });
 
   it("reads options saved before Backlog: the pin sort and Show are retired", () => {

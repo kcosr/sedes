@@ -21,7 +21,8 @@ import { listProjectsResultSchema, locationConflictErrorSchema, mergeProjectRequ
 import { authenticatedFetch } from "../authentication/auth-transport.js";
 import {
   workpadSchema, workpadRevisionSchema, workpadDraftSchema, workpadListPageSchema, workpadRevisionPageSchema,
-  type CreateWorkpadRequest, type UpdateWorkpadRequest, type ListWorkpadsRequest,
+  workpadCountsSchema,
+  type CreateWorkpadRequest, type UpdateWorkpadRequest, type ListWorkpadsRequest, type WorkpadCountsRequest,
   type SaveWorkpadDraftRequest, type CommitWorkpadDraftRequest,
 } from "../../shared/protocol/workpads.js";
 import {
@@ -2098,7 +2099,19 @@ export class ApiClient {
     for (const key of ["scopeMode", "query", "archived", "limit", "cursor"] as const) {
       if (request[key] !== undefined) query.set(key, String(request[key]));
     }
+    // The server's default (most recently updated first) needs no parameter,
+    // so a default list request reads as it always has.
+    if (request.sort !== undefined && request.sort !== "updated") query.set("sort", request.sort);
     return this.#request(`/api/workpads?${query}`, {}, workpadListPageSchema);
+  }
+
+  /** Active and archived counts for each Workpads view of a thread and its project. */
+  getWorkpadCounts(request: WorkpadCountsRequest) {
+    const query = new URLSearchParams();
+    if (request.threadId !== undefined) query.set("threadId", request.threadId);
+    if (request.projectId !== undefined) query.set("projectId", request.projectId);
+    const search = query.toString();
+    return this.#request(`/api/workpads/counts${search ? `?${search}` : ""}`, {}, workpadCountsSchema);
   }
 
   async getWorkpad(id: string) {
@@ -2111,6 +2124,11 @@ export class ApiClient {
 
   async updateWorkpad(id: string, request: UpdateWorkpadRequest) {
     return (await this.#mutation(`/api/workpads/${encodeURIComponent(id)}`, z.object({ workpad: workpadSchema }), { method: "PATCH", body: JSON.stringify(request) })).workpad;
+  }
+
+  /** Permanently deletes a workpad with its revisions and draft. */
+  async deleteWorkpad(id: string): Promise<void> {
+    await this.#mutation(`/api/workpads/${encodeURIComponent(id)}`, z.unknown(), { method: "DELETE" });
   }
 
   listWorkpadRevisions(id: string, cursor?: string) {

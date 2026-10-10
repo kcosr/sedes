@@ -4,11 +4,12 @@
 
 ### Breaking Changes
 
-- Browser and packaged clients require client protocol 145, which adds
+- Browser and packaged clients require client protocol 146, which adds
   automation schedule details and run turn outcomes to thread summaries and
-  runs, drops the Remind now inventory action, and adds turn reply replay.
-  Upgrade clients together with the server.
-  ([#58](https://github.com/kcosr/sedes/pull/58), [#59](https://github.com/kcosr/sedes/pull/59), [#61](https://github.com/kcosr/sedes/pull/61), [#62](https://github.com/kcosr/sedes/pull/62))
+  runs, drops the Remind now inventory action, adds turn reply replay, and adds
+  workpad list sorting, counts, and deletion. Upgrade clients together with the
+  server.
+  ([#58](https://github.com/kcosr/sedes/pull/58), [#59](https://github.com/kcosr/sedes/pull/59), [#61](https://github.com/kcosr/sedes/pull/61), [#62](https://github.com/kcosr/sedes/pull/62), [#65](https://github.com/kcosr/sedes/pull/65))
 
 - `PATCH /api/threads/:threadId/inventory` no longer accepts the `remind`
   action. ([#61](https://github.com/kcosr/sedes/pull/61))
@@ -226,6 +227,9 @@
   Migration preserves old Claude totals separately with unknown coverage. (#8)
 
 ### Added
+
+- **Delete…** in a workpad's **⋯** permanently deletes it, with its history and
+  draft, after you confirm; agents can still only archive. ([#65](https://github.com/kcosr/sedes/pull/65))
 
 - Android: a speaker button in each ended turn's footer queues the turn's
   reply for voice playback, as completion speech would read it. It appears
@@ -486,6 +490,21 @@
   Session stats stays in the thread menu rather than flashing during loading. (#8)
 
 ### Changed
+
+- Workpads show each typed line on its own line; a single line break no longer
+  joins lines into one paragraph. Chat and Markdown file previews are
+  unchanged. ([#65](https://github.com/kcosr/sedes/pull/65))
+
+- Workpads works like Tasks: Thread, Project, Global and All views with
+  counts, a Sort option, a Project-only **Include thread workpads**, rows that
+  name their thread or project, and a collapsed Archived section. An open workpad keeps the panel header and views, and Android Back
+  closes it. The view is remembered on the device. ([#65](https://github.com/kcosr/sedes/pull/65))
+
+- Tasks shows **Include thread tasks** as a filter chip while it's on.
+  ([#65](https://github.com/kcosr/sedes/pull/65))
+
+- Tasks' All view lists every task as a flat list with its thread or project;
+  Group by project is removed. ([#65](https://github.com/kcosr/sedes/pull/65))
 
 - Ctrl+Shift+F (Command+Shift+F) focuses and selects sidebar search instead
   of opening Find in thread, which keeps Ctrl+F. Escape in an empty search
@@ -869,6 +888,13 @@
   sidecar runtime protocol 14 now also carries the queued-input marker.
 
 ### Fixed
+
+- Opening a submenu, such as **Move to**, no longer widens the menu it came
+  from. ([#65](https://github.com/kcosr/sedes/pull/65))
+
+- The composer's Steer/Queue menu, and the stash popover, stay just above the
+  composer when a pending row leaves while they're open, instead of floating
+  where the row was. ([#65](https://github.com/kcosr/sedes/pull/65))
 
 - A failed automation run, or one with an unknown outcome, returns its parked
   thread to Active. ([#61](https://github.com/kcosr/sedes/pull/61))
@@ -1347,6 +1373,10 @@
   only the four most recent earlier daemon PIDs. Diagnostics remain opt-in.
 
 ### Removed
+
+- Workpads' **Include nested scopes**, **Archived** switch and **Browse
+  another thread or project…**; use All, Include thread workpads and the
+  Archived section instead. ([#65](https://github.com/kcosr/sedes/pull/65))
 
 - The Ctrl+Shift+Arrow (Command+Shift+Arrow) panel docking shortcut; dock from
   the panel menu. Ctrl+Shift+Up/Down now always moves between sidebar threads.

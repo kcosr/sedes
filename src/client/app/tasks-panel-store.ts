@@ -1,4 +1,10 @@
 import { useCallback, useEffect, useRef, useSyncExternalStore } from "react";
+import {
+  SCOPE_LIST_SORTS,
+  SCOPE_VIEWS,
+  type ScopeListSort,
+  type ScopeView,
+} from "../components/scope-view/scope-views.js";
 
 /**
  * Viewer-local Tasks preferences. Task data itself is server-owned
@@ -8,25 +14,21 @@ import { useCallback, useEffect, useRef, useSyncExternalStore } from "react";
  * Whether Tasks is open is not a preference: the panel layout store owns the
  * docked panel, and the phone sheet keeps a local open state in its host.
  */
-export type TasksView = "thread" | "project" | "global" | "all";
+export type TasksView = ScopeView;
 
-export const TASKS_VIEWS: readonly TasksView[] = [
-  "thread",
-  "project",
-  "global",
-  "all",
-];
+export const TASKS_VIEWS: readonly TasksView[] = SCOPE_VIEWS;
 
 /**
  * The order within each section: newest (the default), most recently
  * updated, or by title. Pinned tasks lead every section in every sort.
  */
-export type TasksSort = "newest" | "updated" | "title";
+export type TasksSort = ScopeListSort;
 
 /**
  * The View options of one view, remembered per view. The list always ends
  * with the collapsed Backlog and Completed sections; the Only options
- * combine.
+ * combine. All is one flat list; a retired `groupByProject` is dropped as
+ * it is read.
  */
 export interface TasksViewOptions {
   readonly sort: TasksSort;
@@ -35,8 +37,6 @@ export interface TasksViewOptions {
   readonly onlyBacklog: boolean;
   readonly onlyWithNotes: boolean;
   readonly onlyWithFiles: boolean;
-  /** Applies to All. */
-  readonly groupByProject: boolean;
   /** Applies to Project: its threads' tasks join the project's own. */
   readonly includeThreadTasks: boolean;
   /** Search matches notes as well as titles. */
@@ -57,8 +57,8 @@ const RETIRED_WIDTH_STORAGE_KEY = "sedes.tasks.panel.width";
 
 // A retired sort ("pinned-newest", from when pins were a sort) reads as the
 // default, and a retired `show` choice is dropped: Completed is always the
-// collapsed section now.
-const TASKS_SORTS: readonly TasksSort[] = ["newest", "updated", "title"];
+// collapsed section now. So is a retired `groupByProject`: All is flat.
+const TASKS_SORTS: readonly TasksSort[] = SCOPE_LIST_SORTS;
 
 const BASE_VIEW_OPTIONS: TasksViewOptions = Object.freeze({
   sort: "newest",
@@ -66,7 +66,6 @@ const BASE_VIEW_OPTIONS: TasksViewOptions = Object.freeze({
   onlyBacklog: false,
   onlyWithNotes: false,
   onlyWithFiles: false,
-  groupByProject: true,
   includeThreadTasks: false,
   searchNotes: false,
 });
@@ -126,7 +125,6 @@ function parseViewOptions(
     onlyBacklog: flag(value.onlyBacklog, fallback.onlyBacklog),
     onlyWithNotes: flag(value.onlyWithNotes, fallback.onlyWithNotes),
     onlyWithFiles: flag(value.onlyWithFiles, fallback.onlyWithFiles),
-    groupByProject: flag(value.groupByProject, fallback.groupByProject),
     includeThreadTasks: flag(
       value.includeThreadTasks,
       fallback.includeThreadTasks,

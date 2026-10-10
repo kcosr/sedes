@@ -37,6 +37,10 @@
   --tasks-row-text: var(--text-ui);
   --tasks-row-icon: var(--icon-sm);
   --tasks-more-width: var(--control-sm);
+  /* Section headings start at the completion circle, in either density. */
+  --list-heading-inset: calc(
+    (var(--tasks-check-target) - var(--tasks-check-icon)) / 2
+  );
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
@@ -111,18 +115,6 @@
   color: var(--foreground);
 }
 
-/* View options narrow the list: a dot says so while the menu is closed. */
-.tasks-header-button[data-filtering]::after {
-  content: "";
-  position: absolute;
-  top: var(--space-1);
-  right: var(--space-1);
-  width: var(--space-1-5);
-  height: var(--space-1-5);
-  border-radius: 50%;
-  background: var(--info);
-}
-
 /* ── Search row (⌕): filters the view; Escape clears and closes it. */
 .tasks-search {
   display: flex;
@@ -171,64 +163,6 @@
   flex-direction: column;
   gap: var(--space-2);
   padding: var(--space-3) var(--space-3) var(--space-1-5);
-}
-
-.tasks-scope {
-  width: 100%;
-}
-
-/* A disabled segment takes no pointer events itself, so its slot shows the
-   reason (UnavailableScopeSlot): a tooltip on hover, a tap or a click. */
-.tasks-scope-slot {
-  display: flex;
-  flex: 1 1 0;
-  min-width: 0;
-}
-
-.tasks-scope-item {
-  gap: var(--space-1);
-}
-
-.tasks-scope-count {
-  color: var(--muted-foreground-2);
-  font-size: var(--text-label);
-  font-weight: var(--weight-semibold);
-  font-variant-numeric: tabular-nums;
-}
-
-.tasks-scope-item[data-state="on"] .tasks-scope-count {
-  color: var(--muted-foreground);
-}
-
-@container tasks-content (max-width: 339px) {
-  .tasks-scope-item {
-    padding-inline: var(--space-1);
-    font-size: var(--text-meta);
-  }
-}
-
-/* Active View option filters, under the scope control: one removable chip
-   each ("Pinned only ×"). */
-.tasks-filters {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-1);
-}
-
-.tasks-filter-chip {
-  border-radius: 999px;
-  color: var(--muted-foreground);
-  font-weight: var(--weight-medium);
-}
-
-.tasks-filter-chip:hover {
-  color: var(--foreground);
-}
-
-@media (max-width: 819px), (pointer: coarse) {
-  .tasks-filter-chip {
-    height: var(--control-md);
-  }
 }
 
 /* ── Add row: a dashed slot that becomes a focused field. */
@@ -509,9 +443,10 @@
   outline: none;
 }
 
-/* Lists that mix scopes without group headings put where a task belongs on
-   a quiet second line, so it never takes room from the title. The two
-   lines get their own padding rather than sharing the one-line height. */
+/* Lists that mix scopes (All, and Project with its threads' tasks) put
+   where a task belongs on a quiet second line, so it never takes room from
+   the title. The two lines get their own padding rather than sharing the
+   one-line height. */
 .tasks-row-title[data-location] {
   display: flex;
   flex-direction: column;
@@ -526,37 +461,14 @@
   white-space: nowrap;
 }
 
-.tasks-row-location {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-  min-width: 0;
-  color: var(--muted-foreground-2);
-  font-size: var(--text-meta);
-  line-height: var(--leading-snug);
-}
-
-.tasks-row-location svg {
-  flex: none;
-  width: var(--icon-xs);
-  height: var(--icon-xs);
-}
-
-.tasks-row-location-label {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 /* Under touch density the indicators end the second line, so the title
    has the row's whole width. */
-.tasks-row-location > .tasks-row-meta {
+.scope-location > .tasks-row-meta {
   margin-left: auto;
   padding-left: var(--space-1);
 }
 
-.tasks-row-location > .tasks-row-meta svg {
+.scope-location > .tasks-row-meta svg {
   width: var(--icon-sm);
   height: var(--icon-sm);
 }
@@ -843,99 +755,6 @@ button.tasks-file-chip:hover {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-1-5);
-}
-
-/* ── All: collapsible groups (Global, each project, its threads), and the
-   Backlog and Completed sections at the end of every view. */
-.tasks-group {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-
-.tasks-group-heading,
-.tasks-section-heading {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1-5);
-  width: 100%;
-  min-width: 0;
-  min-height: var(--control-md);
-  padding: var(--space-2) var(--space-2) var(--space-1);
-  border: 0;
-  border-radius: var(--radius-ctl);
-  background: transparent;
-  color: var(--muted-foreground);
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-  outline: none;
-}
-
-.tasks-group-heading {
-  font-size: var(--text-meta);
-  font-weight: var(--weight-semibold);
-}
-
-.tasks-section-heading {
-  margin-top: var(--space-1);
-  color: var(--muted-foreground-2);
-  font-size: var(--text-label);
-  font-weight: var(--weight-semibold);
-  letter-spacing: var(--tracking-label);
-  text-transform: uppercase;
-}
-
-.tasks-group-heading:hover,
-.tasks-section-heading:hover {
-  color: var(--foreground);
-}
-
-.tasks-group-heading:focus-visible,
-.tasks-section-heading:focus-visible {
-  box-shadow: var(--focus-ring);
-}
-
-.tasks-heading-chevron {
-  flex: none;
-  width: var(--icon-xs);
-  height: var(--icon-xs);
-  transition: transform var(--motion-fast);
-}
-
-[aria-expanded="true"] > .tasks-heading-chevron {
-  transform: rotate(90deg);
-}
-
-.tasks-heading-icon {
-  flex: none;
-  width: var(--icon-sm);
-  height: var(--icon-sm);
-  color: var(--muted-foreground-2);
-}
-
-.tasks-heading-label {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.tasks-heading-count {
-  flex: none;
-  color: var(--muted-foreground-2);
-  font-weight: var(--weight-medium);
-  letter-spacing: 0;
-  font-variant-numeric: tabular-nums;
-}
-
-.tasks-group[data-kind="thread"] > .tasks-group-heading {
-  padding-left: var(--space-5);
-  font-weight: var(--weight-medium);
-}
-
-.tasks-group[data-kind="thread"] > .tasks-list {
-  padding-left: var(--space-3);
 }
 
 /* ── Phone sheet: the list with a pinned add bar, or one task's detail with

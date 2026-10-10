@@ -1,5 +1,4 @@
 import { createPortal } from "react-dom";
-import { Tooltip } from "radix-ui";
 import { StablePaneSlot } from "../../workspace-panels/StablePaneSlot.js";
 import {
   Dialog,
@@ -23,8 +22,6 @@ import {
 import {
   AlignLeft,
   ChevronLeft,
-  ChevronsDownUp,
-  ChevronsUpDown,
   CornerDownLeft,
   Ellipsis,
   Keyboard,
@@ -40,7 +37,6 @@ import {
   type TaskScope,
 } from "../../../shared/index.js";
 import {
-  TASKS_VIEWS,
   setTasksLastView,
   setTasksViewOptions,
   subscribeReveal,
@@ -80,10 +76,8 @@ import {
 import { EmptyState } from "@client/components/ui/empty-state";
 import { KeyValueList } from "@client/components/ui/key-value-list";
 import { SearchableSelectList } from "@client/components/ui/searchable-select";
-import {
-  SegmentedControl,
-  SegmentedControlItem,
-} from "@client/components/ui/segmented-control";
+import { ScopeSegments } from "../scope-view/ScopeSegments.js";
+import { ViewFilterChips } from "../scope-view/scope-list.js";
 import type { PanelLayoutStore } from "../../workspace-panels/panel-state.js";
 import {
   PanelChrome,
@@ -116,11 +110,10 @@ import {
   type TaskListEnvironment,
 } from "./TaskList.js";
 import { TaskViewOptionsItems } from "./TaskViewOptions.js";
-import { ScopeIcon, useTaskDestinations } from "./task-destinations.js";
+import { useTaskDestinations } from "./task-destinations.js";
 import {
   clampView,
   destinationScope,
-  groupTasks,
   inViewScope,
   matchesOnly,
   matchesQuery,
@@ -135,7 +128,6 @@ import {
   taskSections,
   viewFilters,
   viewUnavailableReason,
-  type TaskGroup,
 } from "./task-view-model.js";
 import {
   TASKS_SHEET_QUERY,
@@ -268,7 +260,7 @@ const KEYBOARD_SHORTCUTS: readonly { key: string; action: string }[] = [
 /**
  * The Tasks header and body, for a docked panel or a phone sheet: count and
  * actions, one scope control that follows the current chat, the add row,
- * search, the list (grouped in All) with inline detail, and the collapsed
+ * search, the list (one flat list in All) with inline detail, and the collapsed
  * Backlog and Completed sections. Pending state is per task and action, so
  * nothing else is ever disabled and focus is never dropped.
  */
@@ -316,9 +308,6 @@ export function TasksPanelContent({
   const [activeNavKey, setActiveNavKey] = useState<string | null>(null);
   const [backlogOpen, setBacklogOpen] = useState(false);
   const [completedOpen, setCompletedOpen] = useState(false);
-  const [collapsedGroups, setCollapsedGroups] = useState<ReadonlySet<string>>(
-    () => new Set(),
-  );
   const [editingId, setEditingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [choosingMoveId, setChoosingMoveId] = useState<string | null>(null);
@@ -345,7 +334,6 @@ export function TasksPanelContent({
   const searchButtonRef = useRef<HTMLButtonElement>(null);
   const lastFocused = useRef<{ key: string; element: HTMLElement } | null>(null);
   const lastNavOrder = useRef<readonly string[]>([]);
-  const scopeHintId = useId();
 
   const announce = useCallback((message: string) => {
     setAnnouncement("");
@@ -426,26 +414,6 @@ export function TasksPanelContent({
       ),
     [tasks, view, context, options, query, revealedId],
   );
-  const groups = useMemo(
-    () =>
-      view === "all" && options.groupByProject
-        ? groupTasks(
-            mainTasks,
-            {
-              projects: destinations.projectLabels,
-              // A thread in a project with several locations says where it runs.
-              threads: new Map(
-                [...destinations.threadTitles].map(([threadId, title]) => {
-                  const location = destinations.threadLocation(threadId);
-                  return [threadId, location ? `${title} · ${location}` : title];
-                }),
-              ),
-            },
-            context,
-          )
-        : undefined,
-    [view, options.groupByProject, mainTasks, destinations, context],
-  );
   const viewCount = (candidate: TasksView) =>
     openCount(
       tasks,
@@ -465,14 +433,7 @@ export function TasksPanelContent({
   // The focusable items of the list, in order: the roving tab stop is one of them.
   const navKeys = useMemo(() => {
     const keys: string[] = [];
-    const pushGroup = (group: TaskGroup) => {
-      keys.push(`group:${group.key}`);
-      if (collapsedGroups.has(group.key)) return;
-      for (const task of group.tasks) keys.push(taskNavKey(task.id));
-      for (const child of group.children) pushGroup(child);
-    };
-    if (groups) groups.forEach(pushGroup);
-    else for (const task of mainTasks) keys.push(taskNavKey(task.id));
+    for (const task of mainTasks) keys.push(taskNavKey(task.id));
     const pushSection = (
       key: string,
       tasks: readonly AssociatedTask[],
@@ -486,13 +447,11 @@ export function TasksPanelContent({
     pushSection("completed", completedSection, completedOpen);
     return keys;
   }, [
-    groups,
     mainTasks,
     backlogSection,
     backlogOpen,
     completedSection,
     completedOpen,
-    collapsedGroups,
   ]);
   const rovingKey =
     activeNavKey !== null && navKeys.includes(activeNavKey)
@@ -578,20 +537,6 @@ export function TasksPanelContent({
     );
     if (task.completedAt !== null) setCompletedOpen(true);
     else if (task.backlog && !options.onlyBacklog) setBacklogOpen(true);
-    const scope = scopeKey(task.scope);
-    const parent =
-      task.scope.kind === "thread" && task.associatedProjectId
-        ? `project:${task.associatedProjectId}`
-        : undefined;
-    setCollapsedGroups((current) => {
-      if (!current.has(scope) && (!parent || !current.has(parent))) {
-        return current;
-      }
-      const next = new Set(current);
-      next.delete(scope);
-      if (parent) next.delete(parent);
-      return next;
-    });
     setExpandedId(task.id);
     setActiveNavKey(taskNavKey(task.id));
     setRevealId(null);
@@ -1074,28 +1019,20 @@ export function TasksPanelContent({
 
   // ── Rendering ────────────────────────────────────────────────────────────
   const searchFiltering = query.length > 0;
-  // Lists that mix scopes without group headings say where each task
-  // belongs: All ungrouped, and Project with its threads' tasks.
+  // Lists that mix scopes say where each task belongs: All, and Project
+  // with its threads' tasks.
   const showLocation =
-    (view === "all" && !options.groupByProject) ||
-    (view === "project" && options.includeThreadTasks);
-  const locationOf = (task: AssociatedTask) => {
-    const label = destinations.label(task.scope);
-    if (task.scope.kind !== "thread") return { kind: task.scope.kind, label };
-    // A thread task names its thread, its project in All, and where the
-    // thread runs when the project has several locations.
-    const project =
-      view === "all" && task.associatedProjectId !== null
-        ? destinations.projectLabels.get(task.associatedProjectId)
-        : undefined;
-    const location = destinations.threadLocation(task.scope.threadId);
-    return {
-      kind: task.scope.kind,
-      label: [label, project, location].filter(Boolean).join(" · "),
-    };
-  };
-  const filters = viewFilters(options);
-  const filtering = filters.length > 0;
+    view === "all" || (view === "project" && options.includeThreadTasks);
+  // A thread task names its thread, its project in All, and where the
+  // thread runs when the project has several locations.
+  const locationOf = (task: AssociatedTask) =>
+    destinations.location(task.scope, {
+      withProject: view === "all",
+      projectId: task.associatedProjectId,
+    });
+  // Chips for every option in effect; only the Only options narrow the list.
+  const filters = viewFilters(options, view);
+  const filtering = filters.some(({ narrows }) => narrows);
   const renderRow = (task: AssociatedTask) => (
     <TaskRow
       key={task.id}
@@ -1110,39 +1047,6 @@ export function TasksPanelContent({
       onTitleKeyDown={onTitleKeyDown}
     />
   );
-  const toggleGroup = (key: string) =>
-    setCollapsedGroups((current) => {
-      const next = new Set(current);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
-  const renderGroup = (group: TaskGroup): React.JSX.Element => {
-    const collapsed = collapsedGroups.has(group.key);
-    const navKey = `group:${group.key}`;
-    return (
-      <li key={group.key} className="tasks-group" data-kind={group.kind}>
-        <TaskListHeading
-          variant="group"
-          navKey={navKey}
-          focusable={rovingKey === navKey}
-          expanded={!collapsed}
-          onToggle={() => toggleGroup(group.key)}
-          onKeyDown={onHeadingKeyDown}
-          icon={<ScopeIcon kind={group.kind} className="tasks-heading-icon" />}
-          label={group.label}
-          count={group.count}
-        />
-        {!collapsed && (
-          <ul className="tasks-list" aria-label={group.label}>
-            {group.tasks.map(renderRow)}
-            {group.children.map(renderGroup)}
-          </ul>
-        )}
-      </li>
-    );
-  };
-
   const emptyState = (() => {
     if (mainTasks.length > 0 || visibleCreating.length > 0) return null;
     // Matches in a collapsed section are still matches: say where they are
@@ -1234,62 +1138,21 @@ export function TasksPanelContent({
   })();
 
   const scopeControl = (
-    <SegmentedControl
+    <ScopeSegments
       aria-label="Task scope view"
-      aria-describedby={scopeHintId}
-      className="tasks-scope"
       value={view}
-      onValueChange={(value) => {
-        const next = TASKS_VIEWS.find((candidate) => candidate === value);
-        if (next) changeView(next);
-      }}
-    >
-      {TASKS_VIEWS.map((candidate) => {
-        const reason = viewUnavailableReason(candidate, context);
-        const segment = (
-          <SegmentedControlItem
-            value={candidate}
-            disabled={reason !== undefined}
-            className="tasks-scope-item"
-            // A phone sheet opens on the view, not the add bar, so the
-            // soft keyboard does not cover the list on every open.
-            data-autofocus={sheet && candidate === view ? "" : undefined}
-            aria-describedby={`${scopeHintId}-${candidate}`}
-            {...scopeDrop.props(candidate, scopeDropTarget(candidate))}
-          >
-            {TASKS_VIEW_LABEL[candidate]}
-            {reason === undefined && (
-              <span className="tasks-scope-count" aria-hidden="true">
-                {viewCount(candidate)}
-              </span>
-            )}
-          </SegmentedControlItem>
-        );
-        const description = (
-          <span id={`${scopeHintId}-${candidate}`} className="sr-only">
-            {reason ?? `${viewCount(candidate)} open`}
-          </span>
-        );
-        return reason === undefined ? (
-          <span key={candidate} className="tasks-scope-slot">
-            {segment}
-            {description}
-          </span>
-        ) : (
-          <UnavailableScopeSlot key={candidate} reason={reason}>
-            {segment}
-            {description}
-          </UnavailableScopeSlot>
-        );
+      onValueChange={changeView}
+      unavailableReason={(candidate) => viewUnavailableReason(candidate, context)}
+      count={viewCount}
+      describeCount={(count) => `${count} open`}
+      segmentProps={(candidate) => ({
+        // A phone sheet opens on the view, not the add bar, so the soft
+        // keyboard does not cover the list on every open.
+        "data-autofocus": sheet && candidate === view ? "" : undefined,
+        ...scopeDrop.props(candidate, scopeDropTarget(candidate)),
       })}
-    </SegmentedControl>
+    />
   );
-  const scopeHint = TASKS_VIEWS.map((candidate) => {
-    const reason = viewUnavailableReason(candidate, context);
-    return reason ? `${TASKS_VIEW_LABEL[candidate]}: ${reason}` : undefined;
-  })
-    .filter(Boolean)
-    .join(" ");
 
   // ⋯: the docked panel folds these into its actions menu instead.
   const moreItems = (
@@ -1298,27 +1161,6 @@ export function TasksPanelContent({
         <AlignLeft />
         <span>Add a task with notes</span>
       </DropdownMenuItem>
-      {groups && groups.length > 0 && (
-        <DropdownMenuItem
-          onSelect={() =>
-            setCollapsedGroups(
-              collapsedGroups.size > 0
-                ? new Set()
-                : new Set(
-                    groups.flatMap((group) => [
-                      group.key,
-                      ...group.children.map(({ key }) => key),
-                    ]),
-                  ),
-            )
-          }
-        >
-          {collapsedGroups.size > 0 ? <ChevronsUpDown /> : <ChevronsDownUp />}
-          <span>
-            {collapsedGroups.size > 0 ? "Expand all groups" : "Collapse all groups"}
-          </span>
-        </DropdownMenuItem>
-      )}
       {!touch && (
         <DropdownMenuItem onSelect={() => setShortcutsOpen(true)}>
           <Keyboard />
@@ -1366,10 +1208,10 @@ export function TasksPanelContent({
         <Button
           variant="ghost"
           size="icon-sm"
-          className="tasks-header-button"
+          className="tasks-header-button view-options-trigger"
           aria-label="View options"
           title="View options"
-          data-filtering={filtering || undefined}
+          data-filtering={filters.length > 0 || undefined}
         >
           <ListFilter aria-hidden="true" />
         </Button>
@@ -1428,33 +1270,13 @@ export function TasksPanelContent({
       const target = next
         ? filtersRef.current?.querySelector<HTMLElement>(`[data-filter="${next}"]`)
         : rootRef.current?.querySelector<HTMLElement>(
-            '.tasks-scope-item[data-state="on"]',
+            '.scope-segments-item[data-state="on"]',
           );
       target?.focus();
     });
   };
-  const filterChips = filtering && (
-    <div
-      ref={filtersRef}
-      className="tasks-filters"
-      role="group"
-      aria-label="View filters"
-    >
-      {filters.map((filter, index) => (
-        <Button
-          key={filter.key}
-          variant="outline"
-          size="sm"
-          className="tasks-filter-chip"
-          data-filter={filter.key}
-          aria-label={`Remove filter: ${filter.label}`}
-          onClick={() => removeFilter(index)}
-        >
-          {filter.label}
-          <X data-icon="inline-end" aria-hidden="true" />
-        </Button>
-      ))}
-    </div>
+  const filterChips = (
+    <ViewFilterChips ref={filtersRef} chips={filters} onRemove={removeFilter} />
   );
 
   const header = sheetDetail ? (
@@ -1575,26 +1397,16 @@ export function TasksPanelContent({
       onFocus={onListFocus}
       onBlur={onListBlur}
     >
-      {groups ? (
-        <ul className="tasks-list" aria-label={`${TASKS_VIEW_LABEL[view]} tasks`}>
-          {visibleCreating.map((entry) => (
-            <PendingTaskRow key={entry.key} title={entry.title} />
-          ))}
-          {groups.map(renderGroup)}
-        </ul>
-      ) : (
-        <ul className="tasks-list" aria-label={`${TASKS_VIEW_LABEL[view]} tasks`}>
-          {visibleCreating.map((entry) => (
-            <PendingTaskRow key={entry.key} title={entry.title} />
-          ))}
-          {mainTasks.map(renderRow)}
-        </ul>
-      )}
+      <ul className="tasks-list" aria-label={`${TASKS_VIEW_LABEL[view]} tasks`}>
+        {visibleCreating.map((entry) => (
+          <PendingTaskRow key={entry.key} title={entry.title} />
+        ))}
+        {mainTasks.map(renderRow)}
+      </ul>
       {emptyState}
       {backlogSection.length > 0 && (
         <section className="tasks-section" aria-label="Backlog tasks">
           <TaskListHeading
-            variant="section"
             navKey="backlog"
             focusable={rovingKey === "backlog"}
             expanded={backlogOpen}
@@ -1613,7 +1425,6 @@ export function TasksPanelContent({
       {completedSection.length > 0 && (
         <section className="tasks-section" aria-label="Completed tasks">
           <TaskListHeading
-            variant="section"
             navKey="completed"
             focusable={rovingKey === "completed"}
             expanded={completedOpen}
@@ -1740,9 +1551,6 @@ export function TasksPanelContent({
             {searchRow}
             <div className="tasks-toolbar">
               {scopeControl}
-              <span id={scopeHintId} className="sr-only">
-                {scopeHint}
-              </span>
               {filterChips}
               {!sheet && addRow}
             </div>
@@ -1906,52 +1714,6 @@ export function TasksPanelContent({
         </DialogContent>
       </Dialog>
     </TaskListProvider>
-  );
-}
-
-/**
- * The slot of a scope segment that does not apply. A disabled segment takes
- * neither focus nor pointer events, so its slot shows the reason: a tooltip
- * on hover, and on a tap or click, which is all touch has. Keyboard and
- * screen-reader users have it in the control's description.
- */
-function UnavailableScopeSlot({
-  reason,
-  children,
-}: {
-  readonly reason: string;
-  readonly children: ReactNode;
-}): React.JSX.Element {
-  const [open, setOpen] = useState(false);
-  return (
-    <Tooltip.Provider delayDuration={300}>
-      <Tooltip.Root open={open} onOpenChange={setOpen}>
-        <Tooltip.Trigger asChild>
-          <span
-            className="tasks-scope-slot"
-            data-unavailable=""
-            onClick={(event) => {
-              // The trigger would close the tooltip on a click.
-              event.preventDefault();
-              setOpen(true);
-            }}
-          >
-            {children}
-          </span>
-        </Tooltip.Trigger>
-        <Tooltip.Portal>
-          <Tooltip.Content
-            className="lineage-tooltip"
-            side="bottom"
-            sideOffset={6}
-            collisionPadding={8}
-          >
-            {reason}
-            <Tooltip.Arrow className="lineage-tooltip-arrow" />
-          </Tooltip.Content>
-        </Tooltip.Portal>
-      </Tooltip.Root>
-    </Tooltip.Provider>
   );
 }
 

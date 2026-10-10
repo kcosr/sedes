@@ -399,20 +399,40 @@ test.describe.serial("Tasks panel", () => {
     await expect(tasks.getByRole("button", { name: /^Completed/ })).toHaveText("Completed1");
     await capture(page, testInfo, "tasks-panel-project-after-move.png");
 
-    // Global shows only the global task; All shows every task, grouped.
+    // Global shows only the global task; All lists every task in one flat
+    // list, each row naming its scope on a second line.
     await selectScope(tasks, "Global");
     await expect(taskRow(tasks, "Global errand")).toBeVisible();
     await expect(taskRow(tasks, "Verify endpoint")).toHaveCount(0);
     await selectScope(tasks, "All");
-    await expect(tasks.getByRole("button", { name: /^Global\s*1$/ })).toBeVisible();
-    await expect(tasks.getByRole("button", { name: /^Completed\s*2$/ })).toHaveAttribute("aria-expanded", "true");
-    await expect(taskRow(tasks, "Verify endpoint")).toBeVisible();
-    await expect(taskRow(tasks, "Unpinned follow-up")).toBeVisible();
-    await tasks.getByRole("button", { name: "View options" }).click();
-    await page.getByRole("menuitemcheckbox", { name: "Group by project" }).click();
-    await page.keyboard.press("Escape");
-    await expect(tasks.locator(".tasks-group-heading")).toHaveCount(0);
+    const completedHeading = tasks.getByRole("button", { name: /^Completed\s*2$/ });
+    await expect(completedHeading).toHaveAttribute("aria-expanded", "true");
+    // Completed is the only heading: nothing groups the rows.
+    await expect(tasks.locator(".list-heading")).toHaveCount(1);
+    const rowTitle = (title: string) =>
+      taskRow(tasks, title).getByRole("button", { name: title, exact: true });
+    await expect(rowTitle("Global errand")).toHaveAccessibleDescription("In Global");
+    await expect(rowTitle("Verify endpoint")).toHaveAccessibleDescription("In task-workspace");
+    await expect(rowTitle("Unpinned follow-up")).toHaveAccessibleDescription(
+      /^In .+ · task-workspace$/u,
+    );
+    await expect(taskRow(tasks, "Global errand").locator(".scope-location .lucide-globe")).toBeVisible();
+    await expect(taskRow(tasks, "Verify endpoint").locator(".scope-location .lucide-folder")).toBeVisible();
+    await expect(
+      taskRow(tasks, "Unpinned follow-up").locator(".scope-location .lucide-message-square"),
+    ).toBeVisible();
+    // The section heading starts where its rows do, at the completion circle.
+    const headingLabel = (await completedHeading.locator(".list-heading-label").boundingBox())!;
+    const circle = (await taskRow(tasks, "Verify endpoint").locator(".tasks-check svg").boundingBox())!;
+    expect(Math.abs(headingLabel.x - circle.x)).toBeLessThanOrEqual(1);
     await capture(page, testInfo, "tasks-panel-all.png");
+    // View options offer no grouping; All's sort is its own.
+    await tasks.getByRole("button", { name: "View options" }).click();
+    await expect(page.getByRole("menuitemcheckbox", { name: "Group by project" })).toHaveCount(0);
+    await page.getByRole("menuitemradio", { name: "Title" }).click();
+    await expect(page.getByRole("menuitemradio", { name: "Title" })).toBeChecked();
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("menu")).toHaveCount(0);
 
     // The docked panel, its width, the last view and its View options
     // survive a reload.
@@ -423,12 +443,10 @@ test.describe.serial("Tasks panel", () => {
       .poll(async () => (await tasksLeaf.boundingBox())?.width ?? 0)
       .toBeCloseTo(widenedWidth, 0);
     await expect(scopes.getByRole("radio", { name: "All" })).toHaveAttribute("aria-checked", "true");
-    await expect(tasks.locator(".tasks-group-heading")).toHaveCount(0);
+    await expect(rowTitle("Global errand")).toHaveAccessibleDescription("In Global");
     await tasks.getByRole("button", { name: "View options" }).click();
-    await expect(
-      page.getByRole("menuitemcheckbox", { name: "Group by project" }),
-    ).not.toBeChecked();
-    await page.getByRole("menuitemcheckbox", { name: "Group by project" }).click();
+    await expect(page.getByRole("menuitemradio", { name: "Title" })).toBeChecked();
+    await page.getByRole("menuitemradio", { name: "Newest" }).click();
     await page.keyboard.press("Escape");
     await expect(page.getByRole("menu")).toHaveCount(0);
 
@@ -444,6 +462,12 @@ test.describe.serial("Tasks panel", () => {
     await expect(page.locator('[data-panel-id="tasks"]')).toHaveCount(0);
     // The sheet opens on the last view chosen, whatever presented it.
     await expect(sheet.getByRole("radio", { name: "All" })).toHaveAttribute("aria-checked", "true");
+    await expect(rowTitle("Global errand")).toHaveAccessibleDescription("In Global");
+    // Touch density widens the completion circle; the heading follows it.
+    const sheetHeadingLabel = (await sheet.getByRole("button", { name: /^Completed/ }).locator(".list-heading-label").boundingBox())!;
+    const sheetCircle = (await taskRow(tasks, "Global errand").locator(".tasks-check svg").boundingBox())!;
+    expect(Math.abs(sheetHeadingLabel.x - sheetCircle.x)).toBeLessThanOrEqual(1);
+    await capture(page, testInfo, "tasks-mobile-all.png");
     await selectScope(tasks, "Global");
     await expect(sheet.getByRole("radio", { name: "Global" })).toHaveAttribute("aria-checked", "true");
     await sheet.getByRole("button", { name: "Global errand", exact: true }).click();
@@ -666,15 +690,16 @@ test("a project's tasks are shared by every location of the project", async ({ p
   ).toHaveAccessibleDescription("In Alpha work · alpha");
   await capture(page, testInfo, "tasks-project-shared-across-locations.png");
 
-  // All groups the project once, with both locations' threads under it.
+  // All names the project once, whichever location a thread runs in, and
+  // says where each thread runs.
   await selectScope(betaTasks, "All");
-  const projectGroups = betaTasks
-    .locator('.tasks-group[data-kind="project"]')
-    .filter({ has: page.locator(".tasks-group-heading", { hasText: /^Shared app\d+$/u }) });
-  await expect(projectGroups).toHaveCount(1);
-  await expect(projectGroups.getByRole("button", { name: /^Alpha work · alpha/u })).toBeVisible();
-  await expect(taskRow(projectGroups, "Shared release checklist")).toBeVisible();
-  await capture(page, testInfo, "tasks-project-shared-all-grouped.png");
+  await expect(
+    taskRow(betaTasks, "Shared release checklist").getByRole("button", { name: "Shared release checklist", exact: true }),
+  ).toHaveAccessibleDescription(/^In Shared app[^·]*$/u);
+  await expect(
+    taskRow(betaTasks, "Alpha follow-up").getByRole("button", { name: "Alpha follow-up", exact: true }),
+  ).toHaveAccessibleDescription(/^In Alpha work · Shared app[^·]* · alpha$/u);
+  await capture(page, testInfo, "tasks-project-shared-all.png");
 });
 
 test("mobile task destinations remain usable with long lists and short viewports", async ({ page }, testInfo) => {

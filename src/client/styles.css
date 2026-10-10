@@ -2403,27 +2403,6 @@ textarea:disabled {
   white-space: nowrap;
 }
 
-/* A tenant's back step stands where its icon would, glyph aligned with it.
-   Inside a view it leads back from, the view's own name (the subtitle)
-   takes the title's place and style, so a narrow header keeps it. */
-.workspace-panel-back {
-  flex: none;
-  width: var(--bar-control-width);
-  height: var(--bar-control);
-  margin-left: calc((var(--bar-icon) - 2px - var(--bar-control-width)) / 2);
-  margin-right: calc((var(--bar-icon) - 2px - var(--bar-control-width)) / 2 + var(--space-0-5));
-  color: var(--muted-foreground);
-}
-
-.workspace-panel-back ~ .workspace-panel-name:has(~ .workspace-panel-subtitle) {
-  display: none;
-}
-
-.workspace-panel-back ~ .workspace-panel-subtitle {
-  color: var(--foreground);
-  font-size: inherit;
-}
-
 .workspace-panel-dirty {
   width: 6px;
   height: 6px;
@@ -4322,7 +4301,6 @@ textarea:disabled {
 .workspace-panel-chrome .tasks-header-button svg,
 .workspace-panel-chrome .workspace-files-toolbar-actions > button svg,
 .workspace-panel-chrome .workpads-chrome-actions > button svg,
-.workspace-panel-chrome .workspace-panel-back svg,
 .workspace-panel-chrome .terminal-panel-chrome-actions > button svg,
 .workspace-panel-chrome .terminal-tab-add svg {
   width: calc(var(--bar-icon) - 2px);

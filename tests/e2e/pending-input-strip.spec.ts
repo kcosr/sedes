@@ -394,6 +394,17 @@ test.afterEach(async ({ page, request }) => {
   expect(piPendingSteerReset.ok()).toBe(true);
 });
 
+/** The open delivery menu sits just above the composer stack: clear of it, never floating away. */
+async function expectDeliveryMenuAboveStack(page: Page): Promise<void> {
+  const gap = () => page.evaluate(() => {
+    const menu = document.querySelector('[role="menu"]')!.getBoundingClientRect();
+    const stack = document.querySelector(".composer-stack")!.getBoundingClientRect();
+    return stack.top - menu.bottom;
+  });
+  await expect.poll(gap).toBeLessThanOrEqual(12);
+  expect(await gap()).toBeGreaterThanOrEqual(0);
+}
+
 test("idle Send clears immediately and reconciles one final-looking bubble for first and bound delivery", async ({
   page,
 }, testInfo) => {
@@ -712,6 +723,13 @@ test("Queue clears before its request and ambiguous Steer remains until exact ma
   await sendCurrentDraft(page);
   await expect(page.getByRole("button", { name: "Stop" })).toBeVisible();
 
+  // The delivery menu opens just above the whole composer stack, Prompts tab included.
+  await page.getByRole("button", { name: "Delivery mode", exact: true }).click();
+  await expect(page.getByRole("menu")).toBeVisible();
+  await expectDeliveryMenuAboveStack(page);
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("menu")).toBeHidden();
+
   const composer = page.getByRole("textbox", { name: "Message Codex" });
   await selectDeliveryMode(page, "Queue");
   const queueText = "Stage this Queue row before the request begins";
@@ -801,11 +819,19 @@ test("Queue clears before its request and ambiguous Steer remains until exact ma
   await expect(steerRow).toContainText(/Pending steer|Steering|Steer unconfirmed/);
   await expect(steerRow.getByRole("button")).toHaveCount(0);
 
+  // Opened above the pending Steer row, the delivery menu follows the stack
+  // down once that row leaves for the transcript.
+  await page.getByRole("button", { name: "Delivery mode", exact: true }).click();
+  await expect(page.getByRole("menu")).toBeVisible();
+  await expectDeliveryMenuAboveStack(page);
   const materializationReleased = await page.request.post(
     "/__e2e/codex/steer-materialization/release",
   );
   expect(materializationReleased.status()).toBe(204);
   await expect(steerRow).toHaveCount(0);
+  await expectDeliveryMenuAboveStack(page);
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("menu")).toBeHidden();
   await expect(composer).toHaveValue(postClearDraft);
   await expect(
     page.locator(

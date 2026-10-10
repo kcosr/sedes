@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ChevronLeft, Minus, MoreVertical, X } from "lucide-react";
+import { Minus, MoreVertical, X } from "lucide-react";
 import { Button } from "../components/ui/button.js";
 import {
   DropdownMenu,
@@ -14,7 +14,7 @@ import { useMediaQuery } from "../app/use-media-query.js";
 import { useTouchDensity } from "../app/use-touch-density.js";
 import type { EnvironmentTintStyle } from "../app/environment-palette.js";
 import type { PanelPlacementEdge } from "./layout-tree.js";
-import type { WorkspacePanelBack, WorkspacePanelTenant } from "./registry.js";
+import type { WorkspacePanelTenant } from "./registry.js";
 
 /** Matches PanelLayout's narrow layout: exactly one pane is ever on stage. */
 const SINGLE_PANE_QUERY = "(max-width: 819px)";
@@ -31,10 +31,7 @@ export interface PanelChromeStatus {
   readonly busy?: boolean;
   readonly dirty?: boolean;
   readonly subtitle?: string;
-  /** A back step in place of the tenant icon. */
-  readonly back?: WorkspacePanelBack;
   /** The tenant's own ⋯ items, published through its host. */
-  readonly menuItems?: React.ReactNode;
 }
 
 export interface PanelChromeControls {
@@ -82,21 +79,7 @@ export function PanelChrome({
       <div className="workspace-panel-heading">
         {leading ?? (
           <div className="workspace-panel-title">
-            {status?.back ? (
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                className="workspace-panel-back"
-                aria-label={status.back.label}
-                title={status.back.label}
-                disabled={status.back.disabled}
-                onClick={status.back.onBack}
-              >
-                <ChevronLeft aria-hidden="true" />
-              </Button>
-            ) : (
-              Icon && <Icon size={16} />
-            )}
+            {Icon && <Icon size={16} />}
             <span className="workspace-panel-name">{title}</span>
             {status?.subtitle && (
               <span className="workspace-panel-subtitle" title={status.subtitle}>

@@ -4,44 +4,53 @@ import type {
   TasksView,
   TasksViewOptions,
 } from "../../app/tasks-panel-store.js";
+import { SCOPE_VIEW_LABEL } from "../scope-view/scope-views.js";
 
 /**
  * Pure presentation logic for the Tasks panel: which tasks a view shows, in
- * what order and grouping, and how many are open. Task data is server-owned
+ * what order, and how many are open. Task data is server-owned
  * and the application snapshot carries every task the principal owns, so
- * filtering, grouping and counting happen here on the client.
+ * filtering, ordering and counting happen here on the client.
  */
 
-export const TASKS_VIEW_LABEL: Record<TasksView, string> = {
-  thread: "Thread",
-  project: "Project",
-  global: "Global",
-  all: "All",
-};
+export const TASKS_VIEW_LABEL: Readonly<Record<TasksView, string>> = SCOPE_VIEW_LABEL;
 
 export const TASK_TITLE_MAX_CHARACTERS = 240;
 /** A multi-line paste creates at most this many tasks at once. */
 export const TASK_PASTE_MAX_TITLES = 50;
 
-/** A View option that narrows the list, shown as a removable chip. */
+/** A View option in effect beyond the view's default, shown as a removable chip. */
 export interface TasksViewFilter {
-  readonly key: "pinned" | "backlog" | "notes" | "files";
+  readonly key: "pinned" | "backlog" | "notes" | "files" | "threads";
   readonly label: string;
   /** The change that removes it. */
   readonly clear: Partial<TasksViewOptions>;
+  /**
+   * Whether it hides tasks (the Only options). Project's thread tasks add
+   * tasks instead, so the list never offers to reset them when empty.
+   */
+  readonly narrows: boolean;
 }
 
-/** The options that narrow the list beyond the view's default, in menu order. */
-export function viewFilters(options: TasksViewOptions): readonly TasksViewFilter[] {
+/**
+ * The View options in effect beyond the view's default, in menu order: the
+ * Only options, which narrow the list, and Project's Include thread tasks.
+ */
+export function viewFilters(
+  options: TasksViewOptions,
+  view: TasksView,
+): readonly TasksViewFilter[] {
   const filters: TasksViewFilter[] = [];
   if (options.onlyPinned)
-    filters.push({ key: "pinned", label: "Pinned only", clear: { onlyPinned: false } });
+    filters.push({ key: "pinned", label: "Pinned only", clear: { onlyPinned: false }, narrows: true });
   if (options.onlyBacklog)
-    filters.push({ key: "backlog", label: "Backlog only", clear: { onlyBacklog: false } });
+    filters.push({ key: "backlog", label: "Backlog only", clear: { onlyBacklog: false }, narrows: true });
   if (options.onlyWithNotes)
-    filters.push({ key: "notes", label: "With notes", clear: { onlyWithNotes: false } });
+    filters.push({ key: "notes", label: "With notes", clear: { onlyWithNotes: false }, narrows: true });
   if (options.onlyWithFiles)
-    filters.push({ key: "files", label: "With files", clear: { onlyWithFiles: false } });
+    filters.push({ key: "files", label: "With files", clear: { onlyWithFiles: false }, narrows: true });
+  if (view === "project" && options.includeThreadTasks)
+    filters.push({ key: "threads", label: "Thread tasks", clear: { includeThreadTasks: false }, narrows: false });
   return filters;
 }
 
@@ -58,13 +67,15 @@ export interface TasksContext {
   readonly project?: { readonly id: string; readonly label: string };
 }
 
+/** Why a view does not apply to the chat the panel follows; `items` names what it lists. */
 export function viewUnavailableReason(
   view: TasksView,
   context: TasksContext,
+  items = "tasks",
 ): string | undefined {
   if (view === "thread" && !context.thread) {
     return context.threadArchived
-      ? "This thread is archived. Restore it to see its tasks."
+      ? `This thread is archived. Restore it to see its ${items}.`
       : "This thread isn't available.";
   }
   if (view === "project" && !context.project) {
@@ -269,116 +280,6 @@ export function taskSections(
     backlog: backlog.sort(compareOpen(options.sort)),
     completed: completed.sort(compareCompleted(options.sort)),
   };
-}
-
-export type TaskGroupKind = "global" | "project" | "thread";
-
-export interface TaskGroup {
-  /** The scope key ("global", "project:…", "thread:…"); collapse state keys on it. */
-  readonly key: string;
-  readonly kind: TaskGroupKind;
-  readonly label: string;
-  readonly tasks: readonly AssociatedTask[];
-  /** A project's thread groups. */
-  readonly children: readonly TaskGroup[];
-  /** Tasks in the group and its children. */
-  readonly count: number;
-}
-
-export interface TaskGroupLabels {
-  readonly projects: ReadonlyMap<string, string>;
-  readonly threads: ReadonlyMap<string, string>;
-}
-
-const NO_PROJECT = "none";
-
-/**
- * Groups for All: Global first, then each project (the current one first,
- * then by name) with its threads' groups nested under it. Tasks keep the
- * order they arrive in.
- */
-export function groupTasks(
-  tasks: readonly AssociatedTask[],
-  labels: TaskGroupLabels,
-  context: TasksContext,
-): TaskGroup[] {
-  const global: AssociatedTask[] = [];
-  const projects = new Map<
-    string,
-    { own: AssociatedTask[]; threads: Map<string, AssociatedTask[]> }
-  >();
-  const project = (projectId: string) => {
-    let entry = projects.get(projectId);
-    if (!entry) {
-      entry = { own: [], threads: new Map() };
-      projects.set(projectId, entry);
-    }
-    return entry;
-  };
-  for (const task of tasks) {
-    if (task.scope.kind === "global") global.push(task);
-    else if (task.scope.kind === "project") {
-      project(task.scope.projectId).own.push(task);
-    } else {
-      const threads = project(task.associatedProjectId ?? NO_PROJECT).threads;
-      const list = threads.get(task.scope.threadId) ?? [];
-      list.push(task);
-      threads.set(task.scope.threadId, list);
-    }
-  }
-  const projectLabel = (id: string) =>
-    id === NO_PROJECT ? "No project" : (labels.projects.get(id) ?? "Project");
-  const threadLabel = (id: string) => labels.threads.get(id) ?? "Thread";
-  const byLabel =
-    (label: (id: string) => string, current: string | undefined) =>
-    (left: string, right: string) =>
-      Number(right === current) - Number(left === current) ||
-      label(left).localeCompare(label(right), undefined, {
-        sensitivity: "base",
-        numeric: true,
-      }) ||
-      left.localeCompare(right);
-
-  const groups: TaskGroup[] = [];
-  if (global.length > 0) {
-    groups.push({
-      key: "global",
-      kind: "global",
-      label: "Global",
-      tasks: global,
-      children: [],
-      count: global.length,
-    });
-  }
-  for (const projectId of [...projects.keys()].sort(
-    byLabel(projectLabel, context.project?.id),
-  )) {
-    const entry = projects.get(projectId)!;
-    const children = [...entry.threads.keys()]
-      .sort(byLabel(threadLabel, context.thread?.id))
-      .map((threadId): TaskGroup => {
-        const threadTasks = entry.threads.get(threadId)!;
-        return {
-          key: `thread:${threadId}`,
-          kind: "thread",
-          label: threadLabel(threadId),
-          tasks: threadTasks,
-          children: [],
-          count: threadTasks.length,
-        };
-      });
-    groups.push({
-      key: `project:${projectId}`,
-      kind: "project",
-      label: projectLabel(projectId),
-      tasks: entry.own,
-      children,
-      count:
-        entry.own.length +
-        children.reduce((total, child) => total + child.count, 0),
-    });
-  }
-  return groups;
 }
 
 /** The view a revealed task opens in: its own scope when the chat follows it, else All. */

@@ -44,6 +44,60 @@ active locations is on an admitted environment, and a thread workpad only when
 its thread's environment is admitted. A removed project is not found to agent
 tools, as a source or as a destination.
 
+## List order and counts
+
+`GET /api/workpads` takes the scope (`scopeKind`, with `projectId` or
+`threadId`, and `scopeMode`), `query`, `archived`, `limit`, `cursor`, and
+`sort`. Lists are flat; the server does not group them. Visibility, the
+archived filter, search, and an agent's authority filter apply before
+ordering.
+
+`sort` orders a list:
+
+- `updated`, the default: most recently updated first;
+- `newest`: most recently created first;
+- `title`: by title, ascending.
+
+Ties break by workpad ID, ascending. The agent `workpad.list` tool has no sort
+input, so it always lists by `updated`.
+
+Titles compare as SQLite `lower()` values in code point order. ASCII letters
+ignore case; other characters, accents, and digits compare as written. Tasks
+sorts in the browser with locale collation and numeric order, so the two
+panels can differ for non-ASCII letters and numbers: here "Plan 10" sorts
+before "Plan 9".
+
+Lists page by keyset. A cursor is opaque and at most 256 characters, like the
+history route's. It is `[fingerprint, key, id]`: a fingerprint of its owner and
+query, including the sort, page size, and agent authority, then the last row's
+sort key and ID. A cursor from any other query or owner fails with
+`cursor_invalid` (409). A title travels whole when it fits. Otherwise the
+cursor carries a prefix of it and a digest of the whole lowercased title.
+Continuation re-reads the row's current title and resumes there only if its
+digest matches, meaning the title is unchanged. Otherwise it resumes at the
+prefix. A prefix sorts before every title that extends it, so this can repeat
+rows but never skips a row whose own title held.
+
+A row whose order changes between pages may be skipped or listed again, as in
+any keyset list. That covers an edit under `updated` and a retitle under
+`title`. A client that appends pages should deduplicate them by workpad ID.
+
+`GET /api/workpads/counts` takes an optional `threadId` and `projectId` and
+returns `{ active, archived }`, split by `archived_at`. Each half holds:
+
+- `thread`: the thread's own workpads;
+- `project`: the project's own workpads;
+- `projectWithThreads`: the project's subtree, as in `{project, subtree}`;
+- `global`: global workpads;
+- `all`: the global subtree, every visible workpad.
+
+`thread` is null when the request names no thread; `project` and
+`projectWithThreads` are null when it names no project. Counts use the list's
+visibility rules in one aggregate query, so each count equals its full list's
+length. A malformed ID is a 400. An ID the caller does not own, or a removed
+project, is a 404, as in a list. Like every workpad route, the response is
+`Cache-Control: no-store`.
+
 ## Committed state and attribution
 
 The repository stores a current document and immutable revision snapshots.
@@ -67,6 +121,12 @@ rejected rather than resetting existing provenance. Content and attribution size
 oversized updates atomically.
 
 The client renders Markdown, optionally mapping visible text to source spans.
+Unlike chat and Markdown file previews, a workpad renders each soft line break
+(a single newline inside a paragraph) as a line break, through the
+`remarkSoftBreaks` step behind `MarkdownContent`'s `lineBreaks` option. Each
+rendered line maps to its own source line for attribution: verbatim text to its
+exact span, and a line with a backslash or ampersand (escapes, entities) to that
+whole line, so each decoded character is credited to its latest editor.
 Attribution is last-change provenance, not semantic authorship or move tracking.
 Revision navigation renders complete snapshots. Revision details separately
 exposes removed and added text without changing the selected document.
@@ -107,6 +167,16 @@ input defaults to the caller's project. Agents access committed state, not human
 Listing and history are paginated. Caller-supplied filesystem paths are not
 interpreted as server-side content authority.
 
+## Deletion
+
+`DELETE /api/workpads/:workpadId` permanently deletes an owned workpad, active
+or archived, and answers 204 with no body. Its `workpad_revisions` and
+`workpad_drafts` rows cascade by foreign key; no other table references a
+workpad. Like Task deletion it takes no `expectedRevision`. An unknown ID or
+another owner's workpad is a 404, as on every workpad route, and a malformed
+ID is a 400. Deletion is a browser action only: agents and Tool clients can
+archive a workpad through `workpad.update` but have no delete tool.
+
 ## Human drafts
 
 Each owner/workpad has one synchronized working draft with two independent
@@ -125,24 +195,26 @@ or overwrite another client's draft or an intervening committed revision.
 Committed mutations publish a small `workpad_changed` invalidation through the
 existing principal-scoped application SSE stream. Each event identifies the
 workpad, revision, and whether the document or human draft changed; document
-bodies remain separate authorized reads. Publication follows the application's
-serialized boundary, with failed publications retried by the durable scheduler.
-Rejected writes publish nothing.
+bodies remain separate authorized reads. Deletion publishes a document change
+with the deleted workpad's last revision; reading it then finds no workpad.
+Publication follows the application's serialized boundary, with failed
+publications retried by the durable scheduler. Rejected writes publish nothing.
 
 Application thread summaries include `nonArchivedWorkpadCount`, derived with
 the other grouped summary counts from rows owned by that tenant and principal,
 scoped directly to the thread, and not archived. The count is not persisted
 separately and does not require a Workpad list fetch in the browser. Creation,
-archive, restore, and scope moves hand off affected thread summaries to the
-application publication boundary after commit. A move retains both the old
-and new counted thread IDs, so publication coalescing or retry cannot leave
-the source badge stale. Draft, title, and content changes—including checklist
+archive, restore, scope moves, and deletion of a counted workpad hand off
+affected thread summaries to the application publication boundary after
+commit. A move retains both the old and new counted thread IDs, so publication
+coalescing or retry cannot leave the source badge stale. Draft, title, and content changes—including checklist
 toggles—do not schedule count updates. Snapshot and thread-upsert publication
 carry the same count, including after reconnect.
 
 The open Workpads panel subscribes to these events and fetches affected lists,
-documents, or drafts without periodic polling. Events arriving during a fetch
-or mutation queue a follow-up read. Replayed events and authoritative stream
+documents, or drafts without periodic polling. An open document whose read
+finds it deleted closes, unless its editor is open, which keeps its text.
+Events arriving during a fetch or mutation queue a follow-up read. Replayed events and authoritative stream
 replacements recover missed updates after reconnects. Historical revision
 selection and unsaved working text survive these refreshes.
 
@@ -160,8 +232,9 @@ stable portal retains the panel across docking, collapse, viewport changes,
 and thread switches. Its open and collapsed state, size, and place are shared
 across this client's thread layouts (`workspace-panels/companion-layout.ts`);
 Thread view follows the active thread and Project view follows its project;
-Global view is independent of navigation. Manual thread/project targets last
-until the next thread navigation. A changed effective scope clears the selected
+Global and All views are independent of navigation. The selected view and its
+options are remembered on the device (`workpads-panel-store.ts`, key
+`sedes.workpads.panel`). A changed effective scope clears the selected
 document, editor, history, and pending form state and invalidates reads from
 the previous scope. The selection and editor survive navigation when the
 effective scope stays the same. Navigation or a project catalog update that

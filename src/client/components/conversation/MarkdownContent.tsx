@@ -30,6 +30,7 @@ import { getPanelPresentation } from "../../app/settings.js";
 import { resolvePanelPresentation } from "../../workspace-panels/panel-presentation.js";
 import { rehypeMarkdownSourcePositions } from "./markdown-source-positions.js";
 import { remarkChecklistPositions, rehypeChecklistInputs, markdownChecklistState, type MarkdownChecklistControls } from "./markdown-checklists.js";
+import { remarkSoftBreaks } from "./markdown-soft-breaks.js";
 import { MermaidDiagram } from "./MermaidDiagram.js";
 import {
   cachedMarkdownHighlight,
@@ -80,6 +81,8 @@ const CHECKLIST_INPUT_COMPONENT: NonNullable<MarkdownComponents["input"]> = ({ n
 
 const CHECKLIST_REMARK_PLUGINS = [remarkGfm, remarkChecklistPositions];
 const DEFAULT_REMARK_PLUGINS = [remarkGfm];
+const CHECKLIST_LINE_BREAK_REMARK_PLUGINS = [remarkGfm, remarkChecklistPositions, remarkSoftBreaks];
+const LINE_BREAK_REMARK_PLUGINS = [remarkGfm, remarkSoftBreaks];
 
 // Keep the pre component identity stable across MarkdownContent renders.
 // react-markdown treats a new component function as a new subtree, which
@@ -158,6 +161,7 @@ export const MarkdownContent = memo(function MarkdownContent({
   sourcePositionMetadata = false,
   rehypePlugins = NO_REHYPE_PLUGINS,
   checklist,
+  lineBreaks = false,
 }: {
   children: string;
   /** Enables fenced Mermaid recognition. */
@@ -172,6 +176,11 @@ export const MarkdownContent = memo(function MarkdownContent({
   sourcePositionMetadata?: boolean;
   /** Optional document-specific transforms, applied after source metadata. */
   rehypePlugins?: NonNullable<React.ComponentProps<typeof ReactMarkdown>["rehypePlugins"]>;
+  /**
+   * Show each single newline inside a paragraph as a line break, as typed,
+   * instead of Markdown's default soft break (a space). For hand-typed notes.
+   */
+  lineBreaks?: boolean;
   /** Opt-in mutations supplied by an editable document owner. */
   checklist?: MarkdownChecklistControls;
 }): React.JSX.Element {
@@ -204,7 +213,9 @@ export const MarkdownContent = memo(function MarkdownContent({
     <div className="markdown">
       <MarkdownRenderContext.Provider value={renderState}>
         <ReactMarkdown
-          remarkPlugins={checklistEnabled ? CHECKLIST_REMARK_PLUGINS : DEFAULT_REMARK_PLUGINS}
+          remarkPlugins={lineBreaks
+            ? checklistEnabled ? CHECKLIST_LINE_BREAK_REMARK_PLUGINS : LINE_BREAK_REMARK_PLUGINS
+            : checklistEnabled ? CHECKLIST_REMARK_PLUGINS : DEFAULT_REMARK_PLUGINS}
           rehypePlugins={documentPlugins}
           skipHtml
           urlTransform={(url, key) =>

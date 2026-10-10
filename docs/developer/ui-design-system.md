@@ -65,14 +65,29 @@ icon, title, subtitle, unsaved dot, busy spinner, then collapse, ⋯ (Dock) and
 close. A tenant puts its panel-level actions into the header by portaling
 ghost icon buttons into `context.chromeActionsTarget`, sized like the other
 bar controls (add its container to the `--bar-control` list in
-`styles.css`). Through its host it sets the subtitle, dirty and busy state,
-a back step drawn in place of the icon (`host.setBack`; behind it the
-subtitle, the open view's name, takes the title's place), and its own ⋯ items
-after the Dock group (`host.setMenuItems`, a memoized node that renders inside
-the layout's menu, so menu primitives work in it; a sheet under touch
-density). Document actions belong in
-one hairline toolbar under the header, as in the Files editor and Workpads,
-not in the header.
+`styles.css`). Through its host it sets the subtitle, dirty and busy state.
+Its panel-level ⋯ items, after the Dock group, come from the tenant's
+`renderMenuItems` (rendered inside the layout's menu, so menu primitives work
+in it; a sheet under touch density). The header never changes into an open
+item's: an open document keeps the panel's title, icon and actions, and its
+title and actions sit in one hairline toolbar under the header, as in the
+Files editor and Workpads (the title, then the document's actions and its
+⋯). Workpads has no back button of its own: its scope control stays above the
+document, and choosing the selected view again (`ScopeSegments`'
+`onReselect`, announced by `reselectHint`) returns to the list.
+
+**Scoped lists.** Tasks and Workpads render the same pieces from
+`components/scope-view/`: `ScopeSegments` (Thread · Project · Global · All
+with counts; an unavailable view is disabled and its slot shows the reason on
+hover or tap, and in the control's description), `ScopeLocation` (the quiet
+icon-and-name line under a row's title in lists that mix scopes: All, and
+Project with its threads' items), `ListHeading` (the collapsible Backlog,
+Completed and Archived sections that end a list; its label starts at the
+rows' leading inset, `--list-heading-inset`, and its chevron follows the
+count), `ViewFilterChips` with the `view-options-trigger` dot, and the View options
+rows `SortOptionItems` and `ScopeOptionItem`. Their styles are in
+`scope-view.css`; the panels are size containers, so its narrow rules follow
+the panel.
 
 ## Tokens
 

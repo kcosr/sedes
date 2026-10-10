@@ -3718,14 +3718,24 @@ function useOffsetAboveStack(
 ): number {
   const [offset, setOffset] = useState(gap);
   useLayoutEffect(() => {
-    if (!open) return;
-    const stackTop = stack.current?.getBoundingClientRect().top;
-    const anchorTop = anchor.current?.getBoundingClientRect().top;
-    setOffset(
-      stackTop === undefined || anchorTop === undefined
-        ? gap
-        : gap + Math.max(0, anchorTop - stackTop),
-    );
+    if (!open) return undefined;
+    const measure = () => {
+      const stackTop = stack.current?.getBoundingClientRect().top;
+      const anchorTop = anchor.current?.getBoundingClientRect().top;
+      setOffset(
+        stackTop === undefined || anchorTop === undefined
+          ? gap
+          : gap + Math.max(0, anchorTop - stackTop),
+      );
+    };
+    measure();
+    // Pending rows, the Prompts tab and the draft resize the stack while the
+    // surface is open; follow them instead of keeping the opening height.
+    const element = stack.current;
+    if (!element || typeof ResizeObserver === "undefined") return undefined;
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
   }, [anchor, gap, open, stack]);
   return offset;
 }

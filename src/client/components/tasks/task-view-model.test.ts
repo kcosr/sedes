@@ -5,7 +5,6 @@ import {
   compareCompleted,
   compareOpen,
   destinationScope,
-  groupTasks,
   inViewScope,
   matchesOnly,
   matchesQuery,
@@ -80,6 +79,10 @@ describe("views", () => {
       viewUnavailableReason("project", { threadArchived: true, project: context.project! }),
     ).toBeUndefined();
     expect(viewUnavailableReason("all", {})).toBeUndefined();
+    // Workpads names its own items.
+    expect(viewUnavailableReason("thread", { threadArchived: true }, "workpads")).toBe(
+      "This thread is archived. Restore it to see its workpads.",
+    );
     expect(clampView("thread", {})).toBe("global");
     expect(clampView("thread", { project: context.project! })).toBe("project");
     expect(clampView("all", {})).toBe("all");
@@ -146,16 +149,26 @@ describe("search, filters and order", () => {
     expect(matchesOnly(task({ backlog: true, pinned: true }), both)).toBe(true);
     expect(matchesOnly(task({ backlog: true }), both)).toBe(false);
     expect(matchesOnly(task({ pinned: true }), both)).toBe(false);
-    expect(viewFilters(TASKS_VIEW_OPTIONS_DEFAULTS.thread)).toEqual([]);
+    expect(viewFilters(TASKS_VIEW_OPTIONS_DEFAULTS.thread, "thread")).toEqual([]);
     // Sorting and search scope do not narrow the list.
-    expect(viewFilters({ ...TASKS_VIEW_OPTIONS_DEFAULTS.thread, sort: "title", searchNotes: true })).toEqual([]);
+    expect(viewFilters({ ...TASKS_VIEW_OPTIONS_DEFAULTS.thread, sort: "title", searchNotes: true }, "thread")).toEqual([]);
     expect(
-      viewFilters({ ...TASKS_VIEW_OPTIONS_DEFAULTS.thread, onlyPinned: true, onlyBacklog: true, onlyWithNotes: true }),
+      viewFilters({ ...TASKS_VIEW_OPTIONS_DEFAULTS.thread, onlyPinned: true, onlyBacklog: true, onlyWithNotes: true }, "thread"),
     ).toEqual([
-      { key: "pinned", label: "Pinned only", clear: { onlyPinned: false } },
-      { key: "backlog", label: "Backlog only", clear: { onlyBacklog: false } },
-      { key: "notes", label: "With notes", clear: { onlyWithNotes: false } },
+      { key: "pinned", label: "Pinned only", clear: { onlyPinned: false }, narrows: true },
+      { key: "backlog", label: "Backlog only", clear: { onlyBacklog: false }, narrows: true },
+      { key: "notes", label: "With notes", clear: { onlyWithNotes: false }, narrows: true },
     ]);
+  });
+
+  it("chips Project's thread tasks, which add to the list rather than narrow it", () => {
+    const withThreads = { ...TASKS_VIEW_OPTIONS_DEFAULTS.project, includeThreadTasks: true };
+    expect(viewFilters(withThreads, "project")).toEqual([
+      { key: "threads", label: "Thread tasks", clear: { includeThreadTasks: false }, narrows: false },
+    ]);
+    // The option belongs to Project; other views ignore a stored value.
+    expect(viewFilters(withThreads, "all")).toEqual([]);
+    expect(viewFilters({ ...withThreads, onlyPinned: true }, "project").map(({ key }) => key)).toEqual(["pinned", "threads"]);
   });
 
   it("puts pinned tasks first in every sort, and never reorders on edit", () => {
@@ -205,50 +218,6 @@ describe("search, filters and order", () => {
     // Only › Backlog: the backlog is the list, with no Backlog section.
     expect(ids({ onlyBacklog: true })).toEqual({ main: ["pinned-later", "later"], backlog: [], completed: [] });
     expect(ids({ onlyBacklog: true, onlyPinned: true })).toEqual({ main: ["pinned-later"], backlog: [], completed: [] });
-  });
-});
-
-describe("grouping", () => {
-  it("puts Global first, then the current project, then others by name, with threads nested", () => {
-    const groups = groupTasks(
-      [otherTask, siblingTask, threadTask, projectTask, task({ id: "global" }), task({ id: "zed", scope: { kind: "project", projectId: "project-0" }, associatedProjectId: "project-0" })],
-      {
-        projects: new Map([
-          ["project-0", "zeta"],
-          ["project-1", "acme-web"],
-          ["project-2", "billing"],
-        ]),
-        threads: new Map([
-          ["thread-1", "Current"],
-          ["thread-2", "Another"],
-        ]),
-      },
-      context,
-    );
-    expect(
-      groups.map((group) => [
-        group.label,
-        group.count,
-        group.tasks.map(({ id }) => id),
-        group.children.map((child) => [child.label, child.tasks.map(({ id }) => id)]),
-      ]),
-    ).toEqual([
-      ["Global", 1, ["global"], []],
-      ["acme-web", 3, ["project"], [["Current", ["thread"]], ["Another", ["sibling"]]]],
-      ["billing", 1, [], [["Thread", ["other"]]]],
-      ["zeta", 1, ["zed"], []],
-    ]);
-    expect(groups.map(({ key }) => key)).toEqual(["global", "project:project-1", "project:project-2", "project:project-0"]);
-    expect(groups[1]!.children[0]!.key).toBe("thread:thread-1");
-  });
-
-  it("names unknown projects and keeps project-less thread tasks together", () => {
-    const groups = groupTasks(
-      [task({ id: "orphan", scope: { kind: "thread", threadId: "gone" } })],
-      { projects: new Map(), threads: new Map() },
-      {},
-    );
-    expect(groups.map(({ label, kind }) => [label, kind])).toEqual([["No project", "project"]]);
   });
 });
 

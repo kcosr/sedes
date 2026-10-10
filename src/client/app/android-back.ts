@@ -6,15 +6,17 @@ import { App as CapacitorApp } from "@capacitor/app";
  *
  * 1. An exposed task detail inside the mobile Tasks sheet closes without
  *    dismissing the sheet.
- * 2. Thread find or any overlay above the mobile navigation drawer closes via
+ * 2. With no overlay open, a workpad open in the shown Workpads panel closes
+ *    back to its list, as the panel's ‹ Workpads does.
+ * 3. Thread find or any overlay above the mobile navigation drawer closes via
  *    a synthetic Escape, the same dismissal path a physical keyboard takes
  *    through Radix dismissable layers.
- * 3. In the drawer, Back clears search, then all active sidebar filters, then
+ * 4. In the drawer, Back clears search, then all active sidebar filters, then
  *    closes the drawer to reveal the last thread.
- * 4. Otherwise, on a thread or home route the mobile navigation drawer
+ * 5. Otherwise, on a thread or home route the mobile navigation drawer
  *    opens — back from the landing page must not fall into WebView history
  *    (which resurfaces the previously viewed session).
- * 5. Otherwise the WebView history default is preserved.
+ * 6. Otherwise the WebView history default is preserved.
  */
 export const OPEN_OVERLAY_SELECTORS = [
   // Raw Radix primitives do not carry the data-slot markers added by our UI
@@ -38,6 +40,11 @@ export const OPEN_OVERLAY_SELECTORS = [
 
 export const OPEN_OVERLAY_SELECTOR = OPEN_OVERLAY_SELECTORS.join(", ");
 export const CLOSE_TASK_DETAIL_EVENT = "sedes:close-task-detail";
+/**
+ * Asks a shown Workpads panel to close its open workpad. The panel cancels
+ * the event when it has one open, which is how Back knows it was handled.
+ */
+export const CLOSE_WORKPAD_EVENT = "sedes:close-workpad";
 
 /**
  * Closes a task detail only when its Tasks sheet is the topmost overlay. A
@@ -53,6 +60,18 @@ export function closeExposedTaskDetail(): boolean {
   if (overlays.item(overlays.length - 1) !== sheet) return false;
   window.dispatchEvent(new Event(CLOSE_TASK_DETAIL_EVENT));
   return true;
+}
+
+/**
+ * Closes the workpad open in the shown Workpads panel when nothing is open
+ * above the page: an overlay, a menu from the workpad, or the drawer takes
+ * Back first.
+ */
+export function closeExposedWorkpad(): boolean {
+  if (document.querySelector(OPEN_OVERLAY_SELECTOR) !== null) return false;
+  const event = new Event(CLOSE_WORKPAD_EVENT, { cancelable: true });
+  window.dispatchEvent(event);
+  return event.defaultPrevented;
 }
 
 export type AndroidBackAction =
@@ -109,7 +128,7 @@ export function installAndroidBackButton(handlers: {
   let remove: (() => void) | undefined;
   let disposed = false;
   void CapacitorApp.addListener("backButton", (event) => {
-    if (closeExposedTaskDetail()) return;
+    if (closeExposedTaskDetail() || closeExposedWorkpad()) return;
     const drawerOpen = handlers.isDrawerOpen();
     const action = resolveAndroidBackAction({
       overlayOpen: hasOpenOverlayAboveDrawer(drawerOpen),

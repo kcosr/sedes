@@ -2,7 +2,7 @@ import type { RequestScope } from "../identity/identity-provider.js";
 import { WorkpadRepository, type WorkpadActor, type WorkpadListAuthority } from "../db/repositories/workpad-repository.js";
 import type {
   CreateWorkpadRequest, UpdateWorkpadRequest, ListWorkpadsRequest,
-  SaveWorkpadDraftRequest, CommitWorkpadDraftRequest,
+  SaveWorkpadDraftRequest, CommitWorkpadDraftRequest, WorkpadCountsRequest,
 } from "../../shared/protocol/workpads.js";
 
 export interface WorkpadChangePublisher {
@@ -29,6 +29,7 @@ export class WorkpadService {
     readonly onRetryPending?: () => void,
   ) {}
   list(scope: RequestScope, request: ListWorkpadsRequest, authority?: WorkpadListAuthority) { return this.repository.list(scope, request, authority); }
+  counts(scope: RequestScope, request: WorkpadCountsRequest) { return this.repository.counts(scope, request); }
   get(scope: RequestScope, id: string) { return this.repository.get(scope, id); }
   revisions(scope: RequestScope, id: string, options?: { limit?: number; cursor?: string }) { return this.repository.revisions(scope, id, options); }
   revision(scope: RequestScope, id: string, revision: number) { return this.repository.revision(scope, id, revision); }
@@ -60,6 +61,17 @@ export class WorkpadService {
       void this.publishWorkpadChange(scope, id, pad.revision, "document", now);
     }
     return pad;
+  }
+  /**
+   * Permanent deletion, for people only: no agent tool reaches it. Like
+   * Task deletion it takes no expected revision. A thread that counted the
+   * workpad updates its count, and the document invalidation makes open
+   * panels drop it.
+   */
+  async remove(scope: RequestScope, id: string, now = Date.now()): Promise<void> {
+    const { revision, nonArchivedThreadId } = this.repository.remove(scope, id);
+    if (nonArchivedThreadId !== null) this.publications.handoffThreadChange(scope, nonArchivedThreadId);
+    void this.publishWorkpadChange(scope, id, revision, "document", now);
   }
   async saveDraft(scope: RequestScope, id: string, request: SaveWorkpadDraftRequest, now = Date.now()) {
     const draft = this.repository.saveDraft(scope, id, request, now);

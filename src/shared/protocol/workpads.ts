@@ -51,14 +51,34 @@ export const updateWorkpadRequestSchema = z.strictObject({
   archived: z.boolean().optional(), edit: workpadContentEditSchema.optional(),
 }).refine(value => value.title !== undefined || value.scope !== undefined || value.archived !== undefined || value.edit !== undefined, "An update must specify a change.");
 export type UpdateWorkpadRequest = z.infer<typeof updateWorkpadRequestSchema>;
+/** Newest created first, most recently updated first, or by title. */
+export const workpadListSortSchema = z.enum(["newest", "updated", "title"]);
+export type WorkpadListSort = z.infer<typeof workpadListSortSchema>;
 export const listWorkpadsRequestSchema = z.strictObject({
   scope: workpadScopeSchema, scopeMode: z.enum(["exact", "subtree"]).default("exact"),
   query: z.string().trim().min(1).max(240).optional(), archived: z.boolean().default(false),
   limit: z.number().int().min(1).max(100).default(50), cursor: z.string().max(256).optional(),
+  sort: workpadListSortSchema.default("updated"),
 });
 export type ListWorkpadsRequest = z.input<typeof listWorkpadsRequestSchema>;
 export const workpadListPageSchema = z.strictObject({ items: z.array(workpadSummarySchema), nextCursor: z.string().optional() });
 export type WorkpadListPage = z.infer<typeof workpadListPageSchema>;
+/** Workpad counts per panel view; null when the request names no such thread or project. */
+const workpadViewCountsSchema = z.strictObject({
+  thread: z.number().int().nonnegative().nullable(),
+  project: z.number().int().nonnegative().nullable(),
+  /** The project's own workpads plus those of threads in its active locations. */
+  projectWithThreads: z.number().int().nonnegative().nullable(),
+  global: z.number().int().nonnegative(),
+  all: z.number().int().nonnegative(),
+});
+export const workpadCountsRequestSchema = z.strictObject({
+  threadId: z.string().min(1).max(128).optional(),
+  projectId: z.string().min(1).max(128).optional(),
+});
+export type WorkpadCountsRequest = z.infer<typeof workpadCountsRequestSchema>;
+export const workpadCountsSchema = z.strictObject({ active: workpadViewCountsSchema, archived: workpadViewCountsSchema });
+export type WorkpadCounts = z.infer<typeof workpadCountsSchema>;
 export const workpadRevisionSummarySchema = workpadRevisionSchema.omit({ content: true, attribution: true, changes: true });
 export type WorkpadRevisionSummary = z.infer<typeof workpadRevisionSummarySchema>;
 export const workpadRevisionPageSchema = z.strictObject({ items: z.array(workpadRevisionSummarySchema), nextCursor: z.string().optional() });

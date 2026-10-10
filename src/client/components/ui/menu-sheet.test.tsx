@@ -833,3 +833,36 @@ describe("dropdown sheets opened without a trigger click", () => {
     expect(document.body).toHaveFocus();
   });
 });
+
+describe("floating submenus", () => {
+  it("portals a submenu outside its parent panel, so its rows never resize the parent", async () => {
+    const user = userEvent.setup();
+    render(
+      <DropdownMenu>
+        <DropdownMenuTrigger>Workpad actions</DropdownMenuTrigger>
+        <DropdownMenuContent>
+          <DropdownMenuItem>Rename…</DropdownMenuItem>
+          <DropdownMenuSub>
+            <DropdownMenuSubTrigger>Move to</DropdownMenuSubTrigger>
+            <DropdownMenuSubContent>
+              <DropdownMenuItem>This thread</DropdownMenuItem>
+              <DropdownMenuItem disabled>
+                Global
+                <DropdownMenuValue>Current</DropdownMenuValue>
+              </DropdownMenuItem>
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
+        </DropdownMenuContent>
+      </DropdownMenu>,
+    );
+    await user.click(screen.getByRole("button", { name: "Workpad actions" }));
+    await user.hover(await screen.findByRole("menuitem", { name: "Move to" }));
+    const submenuRow = await screen.findByRole("menuitem", { name: "This thread" });
+    const parent = document.querySelector('[data-slot="dropdown-menu-content"]')!;
+    const submenu = submenuRow.closest('[data-slot="dropdown-menu-sub-content"]')!;
+    expect(submenu).toBeTruthy();
+    // The parent's width rules use :has(); a nested submenu's value row would match them.
+    expect(parent.contains(submenu)).toBe(false);
+    expect(parent.querySelector('[data-slot$="item-value"]')).toBeNull();
+  });
+});

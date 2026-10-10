@@ -13,7 +13,6 @@ import {
   ArrowDownToLine,
   ArrowRightLeft,
   ArrowUpFromLine,
-  ChevronRight,
   Circle,
   CircleCheck,
   CornerDownLeft,
@@ -45,10 +44,14 @@ import {
 } from "../ui/dropdown-menu.js";
 import { ScopeIcon, type TaskDestinations } from "./task-destinations.js";
 import {
+  ListHeading,
+  ScopeLocation,
+  type ScopeLocationLabel,
+} from "../scope-view/scope-list.js";
+import {
   sameScope,
   taskFileName,
   taskFileParent,
-  type TaskGroup,
 } from "./task-view-model.js";
 
 export type TaskAction = "complete" | "pin" | "backlog" | "move" | "delete";
@@ -502,11 +505,8 @@ function InlineDetail({
   );
 }
 
-/** Where a task belongs, for lists that mix scopes without group headings. */
-export interface TaskRowLocation {
-  readonly kind: TaskScope["kind"];
-  readonly label: string;
-}
+/** Where a task belongs, for lists that mix scopes. */
+export type TaskRowLocation = ScopeLocationLabel;
 
 export interface TaskRowProps {
   readonly task: AssociatedTask;
@@ -595,11 +595,9 @@ export function TaskRow({
           {location ? (
             <>
               <span className="tasks-row-title-text">{task.title}</span>
-              <span className="tasks-row-location" aria-hidden="true">
-                <ScopeIcon kind={location.kind} />
-                <span className="tasks-row-location-label">{location.label}</span>
+              <ScopeLocation location={location}>
                 {indicatorsOnLocation && <TaskIndicators task={task} />}
-              </span>
+              </ScopeLocation>
             </>
           ) : (
             task.title
@@ -644,44 +642,34 @@ export function PendingTaskRow({ title }: { readonly title: string }): React.JSX
   );
 }
 
-/** A collapsible heading (an All group, Backlog or Completed) that takes part in list navigation. */
+/** A collapsible section heading (Backlog, Completed) that takes part in list navigation. */
 export function TaskListHeading({
   navKey,
   focusable,
   expanded,
   onToggle,
-  icon,
   label,
   count,
-  variant,
   onKeyDown,
 }: {
   readonly navKey: string;
   readonly focusable: boolean;
   readonly expanded: boolean;
   readonly onToggle: () => void;
-  readonly icon?: ReactNode;
   readonly label: string;
   readonly count: number;
-  readonly variant: "group" | "section";
   readonly onKeyDown: (event: ReactKeyboardEvent<HTMLButtonElement>) => void;
 }): React.JSX.Element {
   return (
-    <button
-      type="button"
-      className={variant === "group" ? "tasks-group-heading" : "tasks-section-heading"}
+    <ListHeading
       data-tasks-nav={navKey}
       tabIndex={focusable ? 0 : -1}
-      aria-expanded={expanded}
-      onClick={onToggle}
+      expanded={expanded}
+      onToggle={onToggle}
       onKeyDown={onKeyDown}
-    >
-      <ChevronRight className="tasks-heading-chevron" aria-hidden="true" />
-      {icon}
-      <span className="tasks-heading-label">{label}</span>
-      <span className="tasks-heading-count">{count}</span>
-    </button>
+      label={label}
+      count={count}
+    />
   );
 }
 
-export type { TaskGroup };

@@ -2,9 +2,11 @@
 
 Workpads are shared Markdown documents for working notes. You and agents edit
 the same saved document, with revision history and optional text attribution.
-They belong to your Sedes account and survive restarts.
+They belong to your Sedes account and survive restarts. Lines show as you type
+them: a single line break starts a new line, and a blank line starts a new
+paragraph.
 
-## Find and organize workpads
+## Open the Workpads panel
 
 In a thread, select the **Workpads** button (the notepad icon, beside
 **Tasks**) to open or close Workpads. It shares the workspace layout with
@@ -21,41 +23,95 @@ is shown. Navigation changes the view, never a document's stored scope.
 Sidebar thread rows show the same notepad icon when the thread has active
 workpads. The sidebar icon has no visible count, like the Tasks icon.
 
-Choose **Thread**, **Project**, or **Global** above the list. **Thread**
-follows the current thread, and **Project** follows its project. To look at
-another thread's or project's workpads, open **View options** (the filter icon
-in the panel header) and choose **Browse another thread or project…**; a chip
-under the scope names it until you remove the chip or switch threads. When
-navigation changes the viewed scope, Workpads returns to that scope's list. A
-selected document stays open when the scope stays the same, including
-**Global** and switching threads within the same project in **Project** view.
-If the editor has unsynced changes or a workpad change is still in progress,
-confirm before leaving or choose **Keep editing** to see its result.
-Synchronized drafts remain available by reopening the workpad and choosing
-**Edit workpad**.
+## Choose a view
+
+The scope control at the top of Workpads has the same four views as Tasks,
+each with its count of active workpads:
+
+- **Thread**: workpads of the current thread.
+- **Project**: workpads of the current thread's project, shared by all of its
+  locations and hosts. Turn on **Include thread workpads** in **View options**
+  to add the workpads of threads in the project's locations; the count then
+  includes them.
+- **Global**: workpads not tied to a project or thread.
+- **All**: every workpad.
+
+The views always follow the current chat. A view that does not apply, such as
+Thread in an archived thread, is unavailable; point at it, or tap it on a
+phone, to see why. Workpads opens on the view you last chose; when that view
+is unavailable, it falls back to Project, then Global. To find another
+thread's or project's workpads, use **All** and search.
+
+**All** is one list of every workpad, in the view's sort, as in Tasks. In
+All, and in Project with **Include thread workpads**, each row shows where its
+workpad belongs on a quiet line under the title: **Global**, the project's
+name, or the thread's title, followed in All by its project. In a project with
+several locations, a thread also says where it runs, such as its host or
+folder.
+
+When navigation changes the viewed thread or project, Workpads returns to that
+view's list. A selected document stays open when the view's scope stays the
+same, including **Global** and **All**, and switching threads within the same
+project in **Project** view. If the editor has unsynced changes or a workpad
+change is still in progress, confirm before leaving or choose **Keep
+editing** to see its result. Synchronized drafts remain available by reopening
+the workpad and choosing **Edit workpad**.
+
+## Find, add, archive, and delete workpads
 
 Select **Search workpads** (the magnifier in the panel header) to search the
-listed scope; Escape clears and closes the search. **View options** also has
-**Include nested scopes**, which adds a scope's descendants, such as the
-workpads of a project's threads, and **Archived**, which lists archived
-workpads instead. Each active option shows as a chip you can remove. Type a
-title in the **New workpad** row under the scope and press Enter to create a
-workpad there; it opens ready for editing.
+view's titles and text; Escape clears and closes the search. **View options**
+(the filter icon) controls the view:
+
+| Option | Choices |
+| --- | --- |
+| **Sort** | **Newest**, **Recently updated** (the default), or **Title** |
+| **Include thread workpads** | Project only; off by default |
+
+Each view remembers its own options on this device. While **Include thread
+workpads** is on, a **Thread workpads** chip sits under the scope control and
+the filter icon shows a dot; select the chip's **×** to turn it off.
+
+Type a title in the **New workpad** row under the scope and press Enter to
+create a workpad there; it opens ready for editing. Its placeholder names
+where the workpad goes. In All, new workpads are Global.
 
 A Project workpad belongs to the whole project, so every
 [location](concepts.md#project-and-location) of the project shares it, on
 every host. It stays with the project when you move or remove a location, and
 is hidden while the project is removed. A Thread workpad follows its thread.
-An open workpad's toolbar names its scope, such as **Project · sedes**; with
-nested scopes included, list rows name theirs too.
 
-Each row's **⋯** menu, and the panel header's **⋯** while a workpad is open,
-offers **Rename…**, **Move to** (this thread, this project, Global, or
-**Choose…** for any other), and **Archive**. Archiving removes a workpad from
-the active list without losing its content or history; find it with
-**Archived** and choose **Unarchive** to resume editing. Archiving a thread
-preserves its workpads in their current scope. The back arrow in the panel
-header returns to the list.
+Each row's **⋯** menu offers **Rename…**, **Move to** (this thread, this
+project, Global, or **Choose…** for any other), **Archive**, and **Delete…**.
+Archiving removes a workpad from the active list without losing its content or
+history. The list ends with a collapsed **Archived** section, shown while the
+view has archived workpads, with their count. Expand it to list them, in the
+same sort, and choose **Unarchive** from a row's **⋯** or the open workpad to
+resume editing. Archiving a thread preserves its workpads in their current
+scope.
+
+**Delete…** removes a workpad for good, active or archived, after you
+confirm: its content, revision history, and any draft are gone, on every
+client, and can't be restored. Archive a workpad instead to keep it out of
+the way. Agents can archive workpads but never delete them.
+
+## Open a workpad
+
+Selecting a row opens the workpad in the panel. The header stays **Workpads**,
+with search and View options, and the scope control stays above the
+document. The workpad's own toolbar shows its title over its revision line
+(which names the workpad's thread, project, or **Global**), then its actions:
+**Show attribution**, **Revision history**, **Edit workpad**, and **⋯** with
+**Rename…**, **Move to**, **Archive** or **Unarchive**, and **Delete…**.
+Deleting the open workpad returns to the list.
+
+To return to the list, choose the selected view again (its tooltip says
+**Back to workpads**); with the keyboard, press Enter or Space on it.
+Searching or changing a View option also returns to the list. These, and
+Android Back, sync an open editor's text before the workpad closes; on
+Android, Back closes the workpad before it opens the navigation drawer.
+Choosing another view leaves the workpad instead: if its text hasn't synced,
+Sedes asks first, and **Leave anyway** discards those changes.
 
 ## Edit and save
 
@@ -71,8 +127,8 @@ working draft. Typing autosaves the draft to Sedes and syncs it across your
 clients; the toolbar shows whether it has synced. Draft sync does not publish
 the text or create document revisions. **Save workpad** (or Ctrl+S, ⌘S on a
 Mac) commits your changes as one revision; **Done editing** (the check) leaves
-the synced draft available for later. **Discard draft…** in the panel
-header's **⋯** resets it to the saved document after you confirm.
+the synced draft available for later. **Discard draft…** in the workpad's
+**⋯** resets it to the saved document after you confirm.
 
 Agents continue reading and editing the saved document while your draft is
 open. If that document changes, choose **Review changes** to compare your
@@ -106,8 +162,9 @@ records the last edit, not a claim of original authorship.
 ## Agent access
 
 Enable the relevant Workpad tools for a thread to let its agent list, read,
-create, or update workpads. Agents can address other threads' workpads by scope
-and thread ID, then use a workpad ID for individual reads and updates.
+create, or update workpads, including archiving them. No tool deletes a
+workpad. Agents can address other threads' workpads by scope and thread ID,
+then use a workpad ID for individual reads and updates.
 
 The thread's **Access boundary** controls which access requires approval.
 **Ask outside this thread** requires approval for other threads, project

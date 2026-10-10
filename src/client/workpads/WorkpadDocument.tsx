@@ -88,7 +88,8 @@ export const WorkpadDocument = memo(function WorkpadDocument({ content, attribut
   return (
     <div className="workpad-document" onClick={click} onKeyDown={keyDown}
       onMouseOver={event => { select(event.target); }} onFocus={event => { select(event.target); }}>
-      <MarkdownContent rehypePlugins={plugins} enableMermaid={!showAttribution}
+      {/* Workpads are typed line by line: single newlines read as line breaks. */}
+      <MarkdownContent rehypePlugins={plugins} enableMermaid={!showAttribution} lineBreaks
         checklist={checklistControls}>{content}</MarkdownContent>
       {detail && selected && createPortal(<aside className="workpad-attribution-detail" style={{ top: selected.top, left: selected.left }} aria-label="Attribution details" data-selection-action-overlay="" role="status">
         <span><strong>{authorName(detail)}</strong><span className="workpad-attribution-meta"> · Revision {detail.revision} · <time dateTime={detail.createdAt}>{new Date(detail.createdAt).toLocaleString()}</time></span></span>

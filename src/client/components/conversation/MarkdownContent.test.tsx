@@ -45,6 +45,21 @@ const fileRequest = (reference: WorkspaceFileLinkReference) => ({
   presentation: "split" as const,
 });
 
+describe("MarkdownContent line breaks", () => {
+  it("joins single newlines by default and shows them as line breaks when lineBreaks is on", () => {
+    const source = "First line\nSecond line\n\nNext paragraph";
+    const { container, rerender } = render(<MarkdownContent>{source}</MarkdownContent>);
+    expect(container.querySelectorAll("p")).toHaveLength(2);
+    expect(container.querySelector("br")).toBeNull();
+    rerender(<MarkdownContent lineBreaks>{source}</MarkdownContent>);
+    const paragraphs = container.querySelectorAll("p");
+    expect(paragraphs).toHaveLength(2);
+    expect(paragraphs[0]!.querySelectorAll("br")).toHaveLength(1);
+    expect(paragraphs[0]!.textContent).toBe("First line\nSecond line");
+    expect(paragraphs[1]!.querySelector("br")).toBeNull();
+  });
+});
+
 describe("MarkdownContent source-position metadata", () => {
   it("disables an opted-in checkbox whose source marker metadata is invalid", () => {
     interface Node { tagName?: string; properties?: Record<string, unknown>; children?: Node[] }

@@ -6,9 +6,12 @@ import {
   listWorkpadsRequestSchema,
   saveWorkpadDraftRequestSchema,
   updateWorkpadRequestSchema,
+  workpadCountsRequestSchema,
+  workpadCountsSchema,
   workpadDraftSchema,
   workpadIdSchema,
   workpadListPageSchema,
+  workpadListSortSchema,
   workpadRevisionPageSchema,
   workpadRevisionSchema,
   workpadSchema,
@@ -37,6 +40,7 @@ const listQuerySchema = pageQuerySchema.extend({
   scopeMode: z.enum(["exact", "subtree"]).optional(),
   query: z.string().optional(),
   archived: z.enum(["true", "false"]).transform(value => value === "true").optional(),
+  sort: workpadListSortSchema.optional(),
 }).superRefine((query, context) => {
   if ((query.scopeKind !== "project" && query.projectId !== undefined) ||
       (query.scopeKind !== "thread" && query.threadId !== undefined)) {
@@ -61,8 +65,15 @@ export function registerWorkpadRoutes(
     const input = listWorkpadsRequestSchema.parse({
       scope: selectedScope, scopeMode: query.scopeMode, query: query.query,
       archived: query.archived, limit: query.limit, cursor: query.cursor,
+      sort: query.sort,
     });
     response.json(workpadListPageSchema.parse(await service.list(owner, input)));
+  });
+  // Registered before the workpad routes, so "counts" is never read as a workpad ID.
+  routes.get("/api/workpads/counts", async (request, response) => {
+    const owner = await scope(request);
+    const input = workpadCountsRequestSchema.parse(request.query);
+    response.json(workpadCountsSchema.parse(await service.counts(owner, input)));
   });
   routes.post("/api/workpads", async (request, response) => {
     const owner = await scope(request);
@@ -79,6 +90,12 @@ export function registerWorkpadRoutes(
     const { workpadId } = pathSchema.parse(request.params);
     const workpad = await service.update(owner, workpadId, updateWorkpadRequestSchema.parse(request.body));
     response.json({ workpad: workpadSchema.parse(workpad) });
+  });
+  routes.delete("/api/workpads/:workpadId", async (request, response) => {
+    const owner = await scope(request);
+    const { workpadId } = pathSchema.parse(request.params);
+    await service.remove(owner, workpadId);
+    response.status(204).end();
   });
   routes.get("/api/workpads/:workpadId/revisions", async (request, response) => {
     const owner = await scope(request);

@@ -143,6 +143,14 @@ function GroupPicker({
       // The desktop submenu is wide enough to search in, with the search row
       // flush at its top; the sheet's drill-in keeps the sheet's width.
       className={sheet ? undefined : "w-64 pt-0"}
+      // Opened by keyboard, the portaled submenu focuses its own panel after the
+      // search row mounted, and entering the panel would move focus to the first
+      // row. Hand that entry to the search instead; rows still take focus normally.
+      onFocusCapture={(event) => {
+        if (sheet || event.target !== event.currentTarget) return;
+        event.stopPropagation();
+        search.current?.focus({ preventScroll: true });
+      }}
       onKeyDown={(event) => {
         if (event.target === search.current) return;
         // Typing on a row (or the panel) goes to the search, not typeahead.
@@ -232,7 +240,13 @@ function GroupSearch({
   readonly onKeyDown: (event: KeyboardEvent<HTMLInputElement>) => void;
 }): React.JSX.Element {
   useLayoutEffect(() => {
-    if (!sheet) inputRef.current?.focus({ preventScroll: true });
+    if (sheet) return undefined;
+    inputRef.current?.focus({ preventScroll: true });
+    // The submenu is portaled outside its parent menu, whose focus trap only
+    // pauses once the submenu's own focus scope has mounted, after this effect.
+    // Focus again on the next frame so the parent trap doesn't take it back.
+    const frame = requestAnimationFrame(() => inputRef.current?.focus({ preventScroll: true }));
+    return () => cancelAnimationFrame(frame);
   }, [inputRef, sheet]);
   return (
     <div className="thread-group-picker-search" data-sheet={sheet || undefined}>
