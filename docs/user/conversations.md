@@ -71,9 +71,11 @@ menu to start new manual and auto-listen recordings in infinity mode. The infini
 button changes only the current recording; changing the saved preference takes
 effect on the next recording. The idle Start button shows infinity when that
 default is on and a microphone when it is off.
-The three action positions stay fixed: Next, Stop, Record while idle or playing;
-Keep listening, Cancel, Send while recording. Unavailable actions stay disabled.
-On narrow screens the title and status appear above the buttons.
+The compact voice bar keeps its title and status beside the controls. Playback
+shows Next, Stop, Record; recording shows Keep listening, Cancel, Send. Send
+works with or without Keep listening. Idle hides unavailable Next and Stop,
+while Record/Send stays at the right edge. The outline is blue while speaking
+and red while recording.
 
 Spoken input queues while a thread is running. Enable **Follow composer's
 selected mode** to use the client's Queue/Steer preference instead. When

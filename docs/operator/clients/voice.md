@@ -325,16 +325,18 @@ offers **Resume**, which works like **Resume voice** in Settings. A failed
 connection hides the card; **Settings → Voice** then shows the error and
 **Retry voice connection**.
 
-Tap the title and status area to open the voice target thread. The separate
-chevron opens its target picker when changes are allowed. While listening,
+Tap the title and status area to open the voice target thread. The small chevron beside the title
+opens its target picker when changes are allowed. While listening,
 choosing another recording target leaves the viewed thread unchanged. When idle,
 the chevron chooses the next recording target without changing the saved default;
 it does not navigate or start recording. A finishing recording keeps its destination fixed.
 On mobile, the picker does not focus its search field automatically.
-The action buttons keep fixed positions: **Next**, **Stop**, **Record** while
-idle or playing, and **Keep listening**, **Cancel**, **Send** while recording.
-Unavailable actions stay visible but disabled; microphone preparation shows
-progress. Narrow screens put the thread and status above the buttons.
+The compact bar keeps its title and status beside 40 px action buttons on all
+screen widths. Playback shows **Next**, **Stop**, **Record**; recording shows
+**Keep listening**, **Cancel**, **Send**. Idle hides unavailable Next and Stop
+actions so the text can use their space. Record/Send stays at the right edge,
+and microphone preparation shows progress there. The outline is blue while
+speaking and red while recording.
 During **Listening**, the infinity button toggles **Keep listening** for the current
 recording. **Keep listening by default**, available in the quick sheet and
 **Settings → Voice**, starts new manual and automatic recordings with it enabled.
@@ -344,9 +346,9 @@ The idle Start button shows infinity when that default is enabled, and a
 microphone otherwise, so its icon indicates how the next recording will start.
 Turn it on to keep recording through pauses;
 turn it off to restore ordinary silence and completion limits with fresh clocks.
-All audio and text already collected remain part of the same message. While
-selected, the right-side **Send** arrow stops capture, finishes recognition, and
-sends one message. The X **Cancel** discards the unsent recording. Explicit Send
+All audio and text already collected remain part of the same message. With or
+without Keep listening, the right-side **Send** arrow stops capture, finishes
+recognition, and sends one message. The X **Cancel** discards the unsent recording. Explicit Send
 is literal, including “stop”; it does not open a review step or change the composer.
 Ordinary navigation never retargets an active recording; its chevron picker does,
 until finishing.

@@ -162,30 +162,30 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
       (picker === "retarget" ? !retargets || capture?.id !== pickerRecording.current?.recordingId : active !== null))) setPicker(null);
   const opens = cardThread != null && cardThread !== threadId;
   const keepBlocked = state.pending ? "A voice action is in progress" : keepListeningBlockedReason(native.actions.keepListeningBlockedReason);
+  const targetControl = targetPicker ? <button ref={pickerAnchor} type="button" className="voice-card-target" aria-haspopup="dialog" aria-expanded={picker !== null}
+    aria-label={cardTitle ? `${targetLabel}: ${cardTitle}` : targetLabel} aria-disabled={state.pending || undefined} onClick={() => {
+      if (state.pending) return;
+      pickerRecording.current = targetPicker === "retarget" && capture
+        ? { expectedConnectionGeneration: native.connectionGeneration, recordingId: capture.id } : null;
+      pickerGeneration.current = native.connectionGeneration;
+      setPicker(current => current === targetPicker ? null : targetPicker);
+    }}><ChevronDown aria-hidden="true" /></button> : null;
   const text = <span className="voice-card-text">
-    {renderLine(line1, "voice-card-title")}
+    {opens ? <button type="button" className="voice-card-open" aria-label={`Open thread: ${cardTitle ?? "Untitled thread"}`} onClick={() => openThreadRoute(cardThread)} /> : null}
+    <span className="voice-card-heading">{renderLine(line1, "voice-card-title")}{targetControl}</span>
     {renderLine(line2, "voice-card-sub")}
   </span>;
   return <>
     {!off || showWhenOff || showingRecovery || needsStorageRetry ? <div className="voice-dock">
-      <div className="voice-card" role="group" aria-label="Voice controls" data-tone={recording ? "destructive" : undefined}
+      <div className="voice-card" role="group" aria-label="Voice controls" data-tone={recording ? "destructive" : phase === "speaking" ? "info" : undefined}
         data-off={off && !showingRecovery ? "" : undefined} data-input-actions={inputActions ? "" : undefined} data-saved={showingRecovery ? "" : undefined}>
         <button type="button" className="voice-card-tile" data-tone={tone} aria-haspopup="dialog" aria-describedby={describedBy}
           aria-label={savedElsewhere ? "Saved dictation" : "Open voice controls"} title={savedElsewhere ? "Saved dictation" : "Open voice controls"}
           data-saved-access={savedElsewhere ? "" : undefined} onClick={() => setSheet(true)}>{tile}<ChevronDown className="voice-card-menu-mark" aria-hidden="true" />
           {savedElsewhere ? <span className="voice-card-saved-indicator" aria-hidden="true" /> : null}</button>
         <div className="voice-card-body">
-          {opens ? <button type="button" className="voice-card-open" aria-label={`Open thread: ${cardTitle ?? "Untitled thread"}`} onClick={() => openThreadRoute(cardThread)} /> : null}
           {text}
         </div>
-        {targetPicker ? <button ref={pickerAnchor} type="button" className="voice-card-target" aria-haspopup="dialog" aria-expanded={picker !== null}
-          aria-label={cardTitle ? `${targetLabel}: ${cardTitle}` : targetLabel} aria-disabled={state.pending || undefined} onClick={() => {
-            if (state.pending) return;
-            pickerGeneration.current = native.connectionGeneration;
-            pickerRecording.current = targetPicker === "retarget" && capture
-              ? { expectedConnectionGeneration: native.connectionGeneration, recordingId: capture.id } : null;
-            setPicker(current => current === targetPicker ? null : targetPicker);
-          }}><ChevronDown aria-hidden="true" /></button> : null}
         <div className="voice-card-actions">
           {showingRecovery ? <>
             {resumable && (saved.hasUnrecognizedAudio || saved.canRetryRecognition) ? <button type="button" className="voice-card-button" aria-label="Resume voice" title="Resume voice"
@@ -217,7 +217,7 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
                 const command = { expectedConnectionGeneration: native.connectionGeneration, recordingId: capture.id, enabled: !capture.keepListening };
                 act(() => store.plugin.setKeepListening(command));
               }}><InfinityIcon strokeWidth={1.8} aria-hidden="true" /></button>
-              : <button type="button" className="voice-card-button" aria-label="Next voice interaction" title="Next"
+              : active !== null || idleNavigation ? <button type="button" className="voice-card-button" aria-label="Next voice interaction" title="Next"
                 disabled={state.pending || !(native.actions.canSkip && active || idleNavigation)} onClick={() => {
                   if (native.actions.canSkip && active) {
                     const command = { expectedConnectionGeneration: native.connectionGeneration, interactionId: active.id };
@@ -226,16 +226,16 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
                     const command = { expectedConnectionGeneration: native.connectionGeneration, expectedRetainedRevision: native.retainedVoiceTarget.revision };
                     act(() => store.plugin.releaseRetainedVoiceTarget(command));
                   }
-                }}><SkipForward strokeWidth={1.8} aria-hidden="true" /></button>}
-            <button type="button" className="voice-card-button" aria-label={cancels ? "Cancel voice recording" : "Stop voice interaction"}
+                }}><SkipForward strokeWidth={1.8} aria-hidden="true" /></button> : null}
+            {active !== null ? <button type="button" className="voice-card-button" aria-label={cancels ? "Cancel voice recording" : "Stop voice interaction"}
               title={cancels ? "Cancel" : "Stop"} disabled={!native.actions.canStop || !active} onClick={() => {
                 if (!active || !native.actions.canStop) return;
                 const command = { expectedConnectionGeneration: native.connectionGeneration, interactionId: active.id };
                 void (speaking ? store.stopPlayback(command) : store.stopInteraction(command)).catch(() => undefined);
-              }}>{cancels ? <X strokeWidth={1.8} aria-hidden="true" /> : <span className="voice-card-stop" aria-hidden="true" />}</button>
+              }}>{cancels ? <X strokeWidth={1.8} aria-hidden="true" /> : <span className="voice-card-stop" aria-hidden="true" />}</button> : null}
             {inputActions ? <button type="button" className="voice-card-button" aria-label="Send voice recording" title="Send"
-              disabled={state.pending || !recordingTools || !capture.keepListening || !native.actions.canSend} onClick={() => {
-                if (!recordingTools || !capture.keepListening || !native.actions.canSend) return;
+              disabled={state.pending || !recordingTools || !native.actions.canSend} onClick={() => {
+                if (!recordingTools || !native.actions.canSend) return;
                 const command = { expectedConnectionGeneration: native.connectionGeneration, recordingId: capture.id };
                 act(() => store.plugin.sendRecording(command));
               }}>{recordingTools ? <ArrowUp strokeWidth={1.8} aria-hidden="true" /> : <LoaderCircle className="motion-safe:animate-spin" aria-hidden="true" />}</button>

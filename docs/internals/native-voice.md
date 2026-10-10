@@ -727,36 +727,30 @@ The first adoption starts a `SystemClock.elapsedRealtime()` deadline, including
 suspend; no toggle resets it. Expiration drains recognition into a retained ready
 draft without admission. Recording settings edits apply to future recordings.
 
-The voice toolbar gives Record/Send and Stop/Cancel fixed action positions.
-Idle and playback use Next, Stop, Record from left to right; recording replaces
-Next with Keep listening and uses Cancel, Send. Unavailable actions remain
-visible but disabled, and preparation shows progress in the primary slot.
-On narrow screens, the title/status row sits above the action row.
-The left status icon opens the quick sheet and carries a small caret.
-The title/status area opens the voice target thread; a separate chevron
-opens an anchored **Choose target thread** popup for native retargeting or the
-next manual recording, regardless of pinning. Choosing a target does not navigate
-or save a default. Quick and full settings share its search/list presentation in
-a **Default voice thread** modal or mobile sheet. On mobile, initial picker focus
-stays outside its search input to avoid opening the keyboard. Infinity occupies
-the left action slot during recording, separate from Cancel and Send.
-Touch regions remain distinct and at least 44 px. Reconnecting and error details
-use the existing status line. An older saved draft marks the quick-controls icon
-and opens the same recovery sheet without adding another row.
-Idle Next releases retention only when the card uses that fallback. A visible
-thread or explicit choice takes priority and leaves Next disabled. The same
-control remains when release is unavailable, so Record never moves as the
-target changes. Browsing changes the next in-app target, without retargeting
-active playback/capture or changing the retained background destination.
-The card uses a 60 px row in wide docks and a 110 px two-row layout in docks
-under 600 px. The narrow layout keeps the title and target picker above the
-three action buttons. Title alignment, 48 px action targets,
-and button gaps remain fixed through input preparation, capture, recognition,
-and admission. Neither toggling Keep listening nor a repeated Record/Send tap
-moves Cancel/Stop under the user's last tap. Saved-dictation stages use the same
-three positions for Retry/Resume, Discard, and Send, keeping unavailable actions
-visible but disabled. An old Retry tap cannot fall through to Discard or the
-thread title.
+The voice toolbar is one 60 px row at every width, with a two-line text block
+beside 40 px action buttons. Playback uses Next, Stop, Record from left to right;
+recording uses Keep listening, Cancel, Send. Idle omits unavailable Next and Stop
+controls, reclaiming their width for status text. Record/Send remains at the
+right edge. Active preparation keeps its action slots and shows progress in the
+primary slot. Speaking adds a blue outline; recording uses the red outline.
+The existing animated status icon opens the quick sheet and carries a small
+caret. The title/status area opens the voice target thread. A separate 14 px
+chevron in a 24 px tap area sits immediately after the title and opens the
+anchored target picker. It shares the title line rather than reserving a full
+control column, and its tap area takes precedence over the thread overlay.
+Choosing a target does not navigate or save a default. Quick and full settings
+share the default-thread picker. Mobile pickers leave search unfocused to avoid
+opening the keyboard. Long text truncates without reducing the 15 px title or
+13 px status fonts. Reconnecting and error details use the existing status line.
+Idle Next releases retention only when the card displays that fallback. A
+visible thread or explicit choice takes priority and hides unavailable Next.
+Browsing changes the next in-app target without retargeting active work or the
+retained background destination. Keep listening changes automatic stopping;
+Send can explicitly finish either ordinary or held capture through the same
+recording identity, endpoint fences, recognition drain, and admission path.
+Saved-dictation stages retain three positions for Retry/Resume, Discard, and
+Send, with unavailable actions disabled. An older saved draft marks the
+quick-controls icon and opens recovery without adding another row.
 
 `NativeVoiceSegmenter` counts real 24 kHz samples and analyzes absolute 100 ms
 frames. RMS 0.012 identifies likely pauses, never disposable audio. A 1,200 ms

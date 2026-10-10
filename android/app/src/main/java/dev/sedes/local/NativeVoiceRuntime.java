@@ -1383,7 +1383,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         NativeVoiceJson.keys(args, "recordingId");
         Active item = requireRecording(NativeVoiceJson.string(args, "recordingId", 160));
         if (item.finishReason == NativeVoiceRecording.FinishReason.SEND) return;
-        if (!phase.equals("listening") || !item.keepListening || item.captureStopping || item.endpointReached) throw new IllegalStateException("voice_not_listening");
+        if (!phase.equals("listening") || item.captureStopping || item.endpointReached) throw new IllegalStateException("voice_not_listening");
         if (item.recordingMutationPending) throw new IllegalStateException("recording_operation_pending");
         finishCapture(item, NativeVoiceRecording.FinishReason.SEND);
     }
@@ -2674,7 +2674,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
                 "canRecordDuringPlayback", canRecordDuringPlayback(),
                 "canRetarget", active != null && phase.equals("listening") && !active.captureStopping && !active.endpointReached && !active.recordingMutationPending,
                 "canSetKeepListening", blocked == null, "keepListeningBlockedReason", blocked,
-                "canSend", active != null && active.keepListening && blocked == null,
+                "canSend", active != null && blocked == null,
                 "canResume", binding != null && csrf != null && settings.active() && speechReady() && !sessionStarted && sessionStartId == null),
             "recordingRecovery", recordingRecoveryState(), "recovery", recoveryState(), "errors", NativeVoiceJson.array(errors));
         // Unchanged state is not republished: no bridge event, notification update or media session churn per PCM chunk.
