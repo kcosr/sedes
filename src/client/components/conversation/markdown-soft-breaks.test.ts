@@ -60,6 +60,10 @@ describe("remarkSoftBreaks", () => {
     paragraph = transform("&amp;\namp").children![0]!;
     expect(span(paragraph.children![0]!)).toEqual([0, 5]);
     expect(span(paragraph.children![2]!)).toEqual([6, 9]);
+    // An escaped line keeps its whole line, backslash included.
+    paragraph = transform("first\n\\*").children![0]!;
+    expect(inline(paragraph)).toEqual(["first", "<break>", "*"]);
+    expect(span(paragraph.children![2]!)).toEqual([6, 8]);
     // Repeated text in a quote, emphasis and a checklist continuation.
     for (const [source, expected] of [
       ["> same\n> same", [[2, 6], [9, 13]]],

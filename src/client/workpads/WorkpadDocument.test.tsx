@@ -223,6 +223,14 @@ describe("WorkpadDocument", () => {
     expect(screen.getByRole("button", { name: "& — last changed by You, revision 2" })).toBeInTheDocument();
   });
 
+  it("credits an escaped character on a later line to the latest editor of its escape", () => {
+    const content = "first\n\\*";
+    const backslash = content.indexOf("\\");
+    const attribution = [span(0, backslash, 1), span(backslash, backslash + 1, 2), span(backslash + 1, content.length, 1)];
+    render(<WorkpadDocument content={content} attribution={attribution} showAttribution />);
+    expect(screen.getByRole("button", { name: "* — last changed by You, revision 2" })).toBeInTheDocument();
+  });
+
   it("never renders untrusted HTML or deleted passages from another revision", () => {
     const content = 'Current text\n\n<script>alert(1)</script>';
     const { container } = render(<WorkpadDocument content={content} attribution={[span(0, content.length, 1)]} showAttribution />);

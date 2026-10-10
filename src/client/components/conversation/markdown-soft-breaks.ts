@@ -71,8 +71,11 @@ function locate(fragments: readonly string[], node: Text, source: string, lines:
     const segment = segments[index]!;
     // Spaces before a line ending are not text; the last line's trailing spaces are.
     const content = index < segments.length - 1 ? segment.text.replace(/[ \t]+$/u, "") : segment.text;
-    // Verbatim text ends its line; otherwise the whole line, never another line.
-    const verbatim = content.endsWith(fragment);
+    // Verbatim text ends its line. A line with a backslash or ampersand may hold
+    // an escape or entity whose source sits outside the matched text, so it keeps
+    // the whole line, where source mapping credits the latest editor of each
+    // encoded character. Never another line.
+    const verbatim = !/[\\&]/u.test(content) && content.endsWith(fragment);
     const lineStart = start + segment.from;
     const textStart = verbatim ? lineStart + content.length - fragment.length : lineStart;
     const textEnd = lineStart + content.length;

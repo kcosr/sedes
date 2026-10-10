@@ -125,7 +125,8 @@ Unlike chat and Markdown file previews, a workpad renders each soft line break
 (a single newline inside a paragraph) as a line break, through the
 `remarkSoftBreaks` step behind `MarkdownContent`'s `lineBreaks` option. Each
 rendered line maps to its own source line for attribution: verbatim text to its
-exact span, and decoded text (entities, escapes) to that line's span only.
+exact span, and a line with a backslash or ampersand (escapes, entities) to that
+whole line, so each decoded character is credited to its latest editor.
 Attribution is last-change provenance, not semantic authorship or move tracking.
 Revision navigation renders complete snapshots. Revision details separately
 exposes removed and added text without changing the selected document.
