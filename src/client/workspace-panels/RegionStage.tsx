@@ -83,7 +83,7 @@ function boxStyle(box: RegionBox, stage: RegionStageSize): React.CSSProperties {
   };
 }
 
-export function EmptyWorkbench(): React.JSX.Element {
+function EmptyWorkbench(): React.JSX.Element {
   return (
     <section className="workspace-panel-empty" data-testid="workspace-panel-empty">
       <PanelTop className="workspace-panel-empty-icon" aria-hidden size={28} />
