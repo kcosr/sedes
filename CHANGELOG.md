@@ -500,17 +500,21 @@
   corners. On first load, open panels, sizes, the Tasks and Workpads edges,
   and each thread's terminal tabs carry over once; Chat, Files, and Terminals
   start in their default regions.
+  ([#66](https://github.com/kcosr/sedes/pull/66))
 
 - Panel headers have **Maximize**, which fills the stage until **Restore** or
   Escape. ✕ closes and unloads a panel; Chat's ✕ hides it.
+  ([#66](https://github.com/kcosr/sedes/pull/66))
 
 - The workbench bar has a button for each loaded panel, filled while visible
   and outlined while hidden, which shows or hides it; Tasks and Workpads
   buttons appear only while loaded. The **Panels** menu (▾) lists every panel
   with its state and opens it in its place or in a region you choose.
+  ([#66](https://github.com/kcosr/sedes/pull/66))
 
 - When the window is too small, the least recently used regions are hidden,
   never Chat, and return when there is room.
+  ([#66](https://github.com/kcosr/sedes/pull/66))
 
 - Workpads show each typed line on its own line; a single line break no longer
   joins lines into one paragraph. Chat and Markdown file previews are
@@ -1379,6 +1383,7 @@
 - The **Opening panels** setting and Shift-click full screen; use **Maximize**.
   Panel collapse, **Dock**, **Show all**, and the panel shortcut icons are
   also gone; use the bar's buttons, **Move to**, and the **Panels** menu.
+  ([#66](https://github.com/kcosr/sedes/pull/66))
 
 - Workpads' **Include nested scopes**, **Archived** switch and **Browse
   another thread or project…**; use All, Include thread workpads and the
