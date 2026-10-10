@@ -32,12 +32,15 @@ function viewport(...matching: string[]): void {
 }
 
 beforeEach(() => {
+  // Keep the fixed schedule preview in the future without replacing real timers.
+  vi.useFakeTimers({ toFake: ["Date"], now: Date.parse("2026-10-06T03:40:00.000Z") });
   viewport();
   navigate(`/automations/${THREAD_ID}`, { replace: true });
 });
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 function page(items: ReturnType<typeof run>[], nextCursor: string | null = null) {
