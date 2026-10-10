@@ -37,7 +37,6 @@ import {
 import { setClickNamesToFilter } from "../app/settings.js";
 import { InventorySidebar } from "./InventorySidebar.js";
 import { futureTimeLabel } from "../lib/time.js";
-import type { PanelPresentation } from "../workspace-panels/panel-presentation.js";
 import {
   TASK_DRAG_MIME,
   TaskDragProvider,
@@ -329,7 +328,7 @@ function renderSidebar(
   threads: readonly ThreadSummary[],
   options: StateOptions = {},
   peekEnabled = true,
-  onSelectThread?: (threadId: string, presentation: PanelPresentation) => void,
+  onSelectThread?: (threadId: string) => void,
   withTaskDragProvider = false,
   threadRegistry?: ThreadStoreRegistry,
 ) {
@@ -613,11 +612,11 @@ describe("InventorySidebar view modes", () => {
     stackLink.focus();
     expect(screen.queryByTestId("thread-group-roster")).toBeNull();
     await user.keyboard("{Enter}");
-    expect(onSelectThread).toHaveBeenCalledWith(newer.id, "split");
+    expect(onSelectThread).toHaveBeenCalledWith(newer.id);
     expect(screen.queryByTestId("thread-group-roster")).toBeNull();
     onSelectThread.mockClear();
     fireEvent.click(stackLink, { shiftKey: true });
-    expect(onSelectThread).toHaveBeenCalledWith(newer.id, "single");
+    expect(onSelectThread).toHaveBeenCalledWith(newer.id);
 
     fireEvent.pointerEnter(stack, { pointerType: "mouse" });
     const roster = await screen.findByTestId("thread-group-roster");
@@ -653,7 +652,7 @@ describe("InventorySidebar view modes", () => {
     expect(await screen.findByTestId("thread-peek")).toBeVisible();
     await user.click(within(newerMember).getByTestId("thread-row-link"));
     expect(screen.queryByTestId("thread-peek")).toBeNull();
-    expect(onSelectThread).toHaveBeenCalledWith(newer.id, "split");
+    expect(onSelectThread).toHaveBeenCalledWith(newer.id);
   });
 
   it.each(["pointerleave", "blur"])("keeps the roster through a closing dialog's portaled %s, then closes on a real roster leave", async (eventType) => {
@@ -1236,7 +1235,7 @@ describe("InventorySidebar view modes", () => {
       "data-representative-thread-id",
     );
     fireEvent.click(within(stack).getByTestId("thread-row-link"));
-    expect(onSelectThread).toHaveBeenCalledWith(representativeId, "split");
+    expect(onSelectThread).toHaveBeenCalledWith(representativeId);
     expect(screen.queryByTestId("thread-group-sheet")).toBeNull();
 
     fireEvent.contextMenu(within(stack).getByTestId("thread-row-link"));
@@ -1263,7 +1262,7 @@ describe("InventorySidebar view modes", () => {
       "data-representative-thread-id",
     );
     fireEvent.click(within(stack).getByTestId("thread-row-link"));
-    expect(onSelectThread).toHaveBeenCalledWith(representativeId, "split");
+    expect(onSelectThread).toHaveBeenCalledWith(representativeId);
     expect(screen.queryByTestId("thread-group-sheet")).toBeNull();
 
     fireEvent.contextMenu(within(stack).getByTestId("thread-row-link"));
@@ -1796,13 +1795,12 @@ describe("InventorySidebar view modes", () => {
   });
 
   it.each(["project", "none"] as const)(
-    "resolves normal and Shift-click presentation before selecting threads in %s view",
+    "selects threads before navigating, Shift-click included, in %s view",
     async (groupBy) => {
       seedViewPreferences({ groupBy });
       const user = userEvent.setup();
       const selections: {
         threadId: string;
-        presentation: string;
         path: string;
       }[] = [];
       window.history.replaceState({}, "", "/threads/thread-current");
@@ -1813,10 +1811,9 @@ describe("InventorySidebar view modes", () => {
         ],
         { selectedThreadId: "thread-current" },
         true,
-        (threadId, presentation) =>
+        (threadId) =>
           selections.push({
             threadId,
-            presentation,
             path: window.location.pathname,
           }),
       );
@@ -1839,12 +1836,10 @@ describe("InventorySidebar view modes", () => {
       expect(selections).toEqual([
         {
           threadId: "thread-current",
-          presentation: "split",
           path: "/threads/thread-current",
         },
         {
           threadId: "thread-other",
-          presentation: "single",
           path: "/threads/thread-current",
         },
       ]);
@@ -1885,7 +1880,7 @@ describe("InventorySidebar view modes", () => {
           shiftKey: true,
         }),
       ).toBe(false);
-      expect(onSelectThread).toHaveBeenLastCalledWith("thread-3", "split");
+      expect(onSelectThread).toHaveBeenLastCalledWith("thread-3");
       expect(window.location.pathname).toBe("/threads/thread-3");
 
       expect(
@@ -1895,7 +1890,7 @@ describe("InventorySidebar view modes", () => {
           shiftKey: true,
         }),
       ).toBe(false);
-      expect(onSelectThread).toHaveBeenLastCalledWith("thread-2", "split");
+      expect(onSelectThread).toHaveBeenLastCalledWith("thread-2");
       expect(window.location.pathname).toBe("/threads/thread-2");
       expect(onSelectThread).toHaveBeenCalledTimes(2);
     },
@@ -1969,7 +1964,7 @@ describe("InventorySidebar view modes", () => {
         shiftKey: true,
       }),
     ).toBe(false);
-    expect(onSelectThread).toHaveBeenLastCalledWith("thread-2", "split");
+    expect(onSelectThread).toHaveBeenLastCalledWith("thread-2");
     expect(window.location.pathname).toBe("/threads/thread-2");
 
     composer.value = "preserve this draft";
@@ -2071,7 +2066,6 @@ describe("InventorySidebar view modes", () => {
 
         expect(onSelectThread).toHaveBeenCalledWith(
           rows[2]!.dataset.threadId,
-          "split",
         );
         expect(window.location.pathname).toBe(
           `/threads/${rows[2]!.dataset.threadId}`,
@@ -2126,7 +2120,7 @@ describe("InventorySidebar view modes", () => {
       // Quick-switching does not have to wait for the visual hint delay.
       fireEvent.keyDown(window, { key: "Meta", metaKey: true });
       fireEvent.keyDown(window, { key: "1", metaKey: true });
-      expect(onSelectThread).toHaveBeenCalledWith("thread-1", "split");
+      expect(onSelectThread).toHaveBeenCalledWith("thread-1");
       expect(row.querySelector("[data-shortcut]")).toHaveTextContent("⌘1");
       expect(row.querySelector("[data-shortcut]")).toHaveAttribute(
         "data-shortcut",
@@ -2253,7 +2247,7 @@ describe("InventorySidebar view modes", () => {
       expect(row.querySelector("[data-shortcut]")).not.toBeNull();
       fireEvent.keyDown(window, { key: "1", metaKey: true });
       expect(initialSelectThread).not.toHaveBeenCalled();
-      expect(latestSelectThread).toHaveBeenCalledWith("thread-1", "split");
+      expect(latestSelectThread).toHaveBeenCalledWith("thread-1");
       expect(latestNavigate).toHaveBeenCalledOnce();
     } finally {
       vi.useRealTimers();
@@ -3131,7 +3125,7 @@ describe("InventorySidebar view modes", () => {
     expect(screen.getAllByRole("button", { name: "2 unanswered questions" })).toHaveLength(1);
     await user.click(screen.getByTestId("thread-row-question-indicator"));
     expect(requestQuestionInboxOpen).toHaveBeenCalledTimes(1);
-    expect(onSelectThread).toHaveBeenCalledWith("thread-a", "split");
+    expect(onSelectThread).toHaveBeenCalledWith("thread-a");
     await user.click(screen.getByTestId("view-quick-toggle"));
     await user.click(screen.getByTestId("flat-row-question-indicator"));
     expect(requestQuestionInboxOpen).toHaveBeenCalledTimes(2);

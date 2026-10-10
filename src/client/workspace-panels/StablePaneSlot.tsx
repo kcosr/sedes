@@ -11,10 +11,11 @@ export interface StablePaneSlotProps
 }
 
 /**
- * Places a stable portal target at a leaf in the current layout topology.
+ * Places a stable portal target where its panel currently shows: in its
+ * region on stage, or in the parking lot while hidden.
  *
- * The target is deliberately not created or owned here: this component may
- * unmount when a split is introduced, flattened, or collapsed. Its cleanup
+ * The target is deliberately not created or owned here: this component
+ * unmounts whenever its panel hides, shows or changes layout. Its cleanup
  * removes the target only while this exact slot still owns it, so an old
  * slot cannot detach a target that a newer slot has already adopted.
  */

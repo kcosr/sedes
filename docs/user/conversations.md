@@ -272,8 +272,8 @@ when you need history.
 
 When you open a thread, its known title and project context appear while the
 conversation loads. A loading message remains below the header until the backend
-is ready. You can close or collapse the chat panel during loading; conversation
-actions become available after the thread connects.
+is ready. You can hide the Chat panel during loading; conversation actions
+become available after the thread connects.
 
 With focus in the chat or an empty composer, press **Command+Up/Down** or
 **Ctrl+Up/Down** to jump to the previous or next loaded prompt relative to the
@@ -664,32 +664,70 @@ Sedes imposes no interaction timeout. An attended approval mode remains
 attended, including during automations. For exact behavior, see
 [Blocking interactions](../internals/blocking-interactions.md).
 
-## Navigate Chat and Files
+## Arrange panels
 
-Chat and Files are the main workbench surfaces; Tasks, Workpads, and Terminals
-dock beside them as panels. **Collapse** keeps a surface mounted, preserving
-scroll, selections, and unsaved editor content. **Close** removes it and asks
-before discarding dirty Files content. The **Panels** menu restores or focuses
-Chat, Files, or Terminals and offers **Show all** on desktop; Tasks and
-Workpads have their own buttons beside it.
+A thread's workbench has five panels: Chat, Files, Workpads, Tasks, and
+Terminals. On desktop, the stage has five regions: the Middle, and Left,
+Right, Top, and Bottom around it. Each region shows one panel. By default Chat
+is in the Middle; Files, Workpads, and Tasks are on the Right; and Terminals is
+at the Bottom.
 
-On desktop, each panel keeps a minimum width. When you open or restore a panel
-and the visible panels no longer fit, Sedes collapses the side panels you used
-least recently to make room and announces which. Chat and the panel you opened
-stay; restore the others from the **Panels** menu or their buttons. Resizing
-the window or switching threads never collapses a panel.
+Opening a panel shows it in its region. The panel that region showed is
+hidden but stays loaded, so its drafts, scroll, and editor content survive; it
+returns only when you open it again. Hiding a panel or moving it away leaves
+its region empty, and the rest of the stage grows to fill the space. Selecting
+a thread shows its Chat wherever Chat is.
 
-Each side panel keeps one size in every thread. Tasks and Workpads also keep
-one place: they are the outer columns, on the edges and in the order you last
-set by opening, closing, or docking either one, and Chat, Files, and Terminals
-arrange inside them per thread. Resize Tasks in one thread and it is that wide
-in every thread; opening, collapsing, or closing another panel does not change
-it, and Chat takes the remaining space. Where a panel is docked stays with each
-thread.
+The workbench bar above the panels has a button for each loaded panel, in the
+order Chat, Files, Workpads, Tasks, Terminals. A filled button means the panel
+is visible; an outlined one means it is loaded but hidden. Select a button to
+hide a visible panel or show a hidden one in its region. The **Panels** menu
+(▾) lists every panel with its state, such as **On the right** or **Loaded,
+hidden**:
 
-On narrow screens, Files becomes a foreground sheet and Tasks a bottom sheet.
-Returning to Chat uses the same retained state rather than rebuilding the file
-view.
+- Select a row to open that panel in its place.
+- Use the button at the end of a row to open the panel in another region,
+  which becomes its place.
+- **Reset layout** leaves Chat alone in the Middle, closes the other panels,
+  and restores the default places, asking first if unsaved changes would be
+  lost. Panel sizes are kept.
+
+Each panel header has these controls:
+
+- **Maximize** fills the stage with the panel; the others stay loaded behind
+  it. **Restore**, Escape, or opening another panel returns the layout as it
+  was. Escape is left to a focused text field or terminal, or an open menu or
+  dialog. Maximize isn't saved.
+- **✕** closes the panel and unloads it, and asks first if unsaved changes
+  would be lost. Chat's ✕ only hides it; on phones Chat has none.
+- **⋯ → Move to** puts the panel in the Middle, Left, Right, Top, or Bottom.
+  For a panel on the Left or Right, **Full height** lets its region take the
+  corners it shares with Top and Bottom; for Top or Bottom, **Full width**
+  does the same with Left and Right. When two regions want the same corner,
+  the most recent choice wins. By default the sides run full height and Top
+  and Bottom span the Middle only.
+
+Drag the divider beside a panel to resize it, or double-click the divider to
+return it to its default size. Chat keeps a 360px minimum width. Where each
+panel opens, which panels are loaded, the corner choices, and sizes are saved
+on this device and shared by every thread. The Terminals panel and its tabs
+belong to each thread; see [Terminal panes](terminals.md).
+
+When the window is too small for the visible panels' minimum sizes, Sedes
+hides the regions you used least recently and announces which. It never hides
+Chat or the Middle. Hidden panels stay loaded and come back when there is room.
+
+On phones and other narrow screens, the workbench shows one panel at a time:
+use the bar's buttons or the **Panels** menu to switch. Files, Workpads, and
+Tasks each take the whole stage while in front. Regions, Maximize, and Move to
+don't apply. Returning to Chat uses the same retained state rather than
+rebuilding the file view.
+
+Chat is home on a phone. Closing or hiding another panel returns to Chat, and
+so does Android Back, or browser Back from Terminals. A panel you hide or go
+back from stays loaded, and its button brings it back as you left it. In Tasks
+and Workpads, Android Back first returns from an open task or workpad to the
+list. On Android, Back from Chat opens the navigation drawer.
 
 Previous: [Core concepts](concepts.md) · Next:
 [Organize and reuse work](organize-work.md)

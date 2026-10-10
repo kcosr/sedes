@@ -1,6 +1,5 @@
 import type { ForkThreadResult } from "../../shared/index.js";
 import { ApiError } from "../api/ApiClient.js";
-import type { PanelPresentation } from "../workspace-panels/panel-presentation.js";
 import { openThreadRoute } from "../workspace-panels/thread-panel-navigation.js";
 import { runBlockingOperation } from "./blocking-operation.js";
 import { waitForOperationThreadReady } from "./thread-readiness.js";
@@ -16,7 +15,6 @@ class ForkOutcomeError extends Error {
 export function runThreadCreation(options: {
   message: string;
   create: () => Promise<string>;
-  presentation: PanelPresentation;
   onNavigate?: () => void;
 }): Promise<void> {
   let createdThreadId: string | undefined;
@@ -28,7 +26,7 @@ export function runThreadCreation(options: {
     onSuccess: async (threadId, context) => {
       await waitForOperationThreadReady(threadId, context);
       if (!context.isActive()) return;
-      openThreadRoute(threadId, options.presentation);
+      openThreadRoute(threadId);
       options.onNavigate?.();
     },
   });
@@ -37,7 +35,6 @@ export function runThreadCreation(options: {
 export function runThreadFork(options: {
   fork: (restart: boolean) => Promise<ForkThreadResult>;
   retainSource?: () => () => void;
-  presentation: PanelPresentation;
   restart?: boolean;
   onNavigate?: () => void;
 }): Promise<void> {
@@ -76,7 +73,7 @@ export function runThreadFork(options: {
           {
             label: "Open recovery thread",
             onClick: () => {
-              openThreadRoute(result.childThreadId, options.presentation);
+              openThreadRoute(result.childThreadId);
               options.onNavigate?.();
             },
           },
@@ -93,7 +90,7 @@ export function runThreadFork(options: {
     onSuccess: async (threadId, context) => {
       await waitForOperationThreadReady(threadId, context);
       if (!context.isActive()) return;
-      openThreadRoute(threadId, options.presentation);
+      openThreadRoute(threadId);
       options.onNavigate?.();
     },
   }).finally(() => releaseSource?.());

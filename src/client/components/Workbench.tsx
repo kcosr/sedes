@@ -14,7 +14,7 @@ import { NewThreadControl } from "./NewThreadControl";
 import { SidebarNavTrigger } from "./SidebarNavTrigger";
 import { ThreadView } from "./ThreadView";
 import { PanelLayout } from "../workspace-panels/PanelLayout";
-import type { PanelLayoutStore } from "../workspace-panels/panel-state";
+import type { PanelRegionStore } from "../workspace-panels/region-store";
 import type { WorkspacePanelTenantRegistry } from "../workspace-panels/registry";
 import {
   createWorkspaceFileLinkHandler,
@@ -23,11 +23,7 @@ import {
 import { UsageView } from "../usage/UsageView";
 import { useSidebarInventoryScope } from "../app/use-sidebar-inventory-scope";
 import { useEnvironmentColorsEnabled } from "../app/use-environment-colors-enabled";
-import {
-  configuredPanelPresentation,
-  openThreadRoute,
-  pointerPanelPresentation,
-} from "../workspace-panels/thread-panel-navigation.js";
+import { openThreadRoute } from "../workspace-panels/thread-panel-navigation.js";
 
 export function Workbench({
   route,
@@ -41,7 +37,7 @@ export function Workbench({
   active?: boolean;
   applicationStore: ApplicationClientStore;
   threadRegistry: ThreadStoreRegistry;
-  panelLayoutStore: PanelLayoutStore;
+  panelLayoutStore: PanelRegionStore;
   panelTenants: WorkspacePanelTenantRegistry;
 }): React.JSX.Element {
   const application = useApplicationStore(applicationStore);
@@ -95,11 +91,8 @@ export function Workbench({
                 reference,
                 signal,
               ),
-            open: (intent, presentation) => {
-              panelLayoutStore.openPanel("workspace-files", {
-                intent,
-                presentation,
-              });
+            open: (intent) => {
+              panelLayoutStore.open("files", { intent });
             },
           }),
     [applicationStore, panelLayoutStore, selectedThreadId, threadWorkspaceId],
@@ -114,7 +107,7 @@ export function Workbench({
     const changed = threadId !== previousThreadId;
     lastThreadRoute.current = threadId;
     if (changed && threadId) {
-      panelLayoutStore.openPanel("chat", {
+      panelLayoutStore.open("chat", {
         focus: true,
         focusScope: { kind: "thread", threadId },
       });
@@ -240,7 +233,7 @@ export function Workbench({
                 projectId: sidebarScope.projectId,
               }}
               onCreated={(threadId) => {
-                openThreadRoute(threadId, configuredPanelPresentation());
+                openThreadRoute(threadId);
               }}
             >
               <Plus size={18} strokeWidth={1.8} /> New thread
@@ -248,8 +241,8 @@ export function Workbench({
             {recent && (
               <Button
                 variant="outline"
-                onClick={(event) => {
-                  openThreadRoute(recent.id, pointerPanelPresentation(event));
+                onClick={() => {
+                  openThreadRoute(recent.id);
                 }}
               >
                 Continue recent

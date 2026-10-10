@@ -10,9 +10,18 @@ test("fresh production workbench starts with the Chat panel instance", async ({
 
   await expect(page.getByTestId("thread-view")).toBeVisible();
   await expect(page.getByTestId("workspace-panel-layout")).toBeVisible();
-  await expect(page.getByTestId("workspace-panel-split")).toHaveCount(0);
-  // The workbench always offers its panel menu; Chat alone is open here.
-  await expect(page.getByRole("button", { name: "Panels" })).toBeVisible();
+  // Chat alone, in the Middle region filling the stage.
+  const regions = page.locator(".workspace-panel-stage > .workspace-region");
+  await expect(regions).toHaveCount(1);
+  await expect(regions).toHaveAttribute("data-region", "middle");
+  await expect(regions).toHaveAttribute("data-region-kind", "chat");
+  // The workbench always offers ▾, and a quick button for Chat alone.
+  const bar = page.getByTestId("workspace-workbench-bar");
+  await expect(bar.getByRole("button", { name: "Panels", exact: true })).toBeVisible();
+  await expect(
+    bar.getByRole("group", { name: "Loaded panels" }).getByRole("button"),
+  ).toHaveCount(1);
+  await expect(bar.getByTestId("chat-panel-toggle")).toHaveAttribute("data-state", "visible");
   await expect(
     page.getByRole("region", { name: "Workspace files" }),
   ).toHaveCount(0);

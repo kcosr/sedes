@@ -69,15 +69,24 @@ function panelContext(store: ApplicationClientStore) {
 /**
  * The panel under the real shared header, wired as PanelLayout wires a
  * tenant: the header's actions slot adopts the panel's chrome actions, and
- * its ⋯ shows the Dock group and then the items the panel publishes.
+ * its ⋯ shows Move to and then the items the panel publishes.
  */
+const panelRegion = {
+  region: "right" as const,
+  maximized: false,
+  extended: true,
+  onMaximize: () => undefined,
+  onRestore: () => undefined,
+  onMove: () => undefined,
+  onExtend: () => undefined,
+};
 function Panel({ context }: { context: WorkspacePanelContext }) {
   const source = published.get(context.host)!;
   const status = useSyncExternalStore(source.subscribe, source.get);
   return <>
     <PanelChrome tenant={workpadsTenant} status={status}
       panelActions={<StablePaneSlot className="workspace-panel-chrome-actions-slot" target={context.chromeActionsTarget} />}
-      controls={{ onCollapse: () => undefined, onClose: () => undefined, onDock: () => undefined }} />
+      controls={{ onClose: () => undefined, region: panelRegion }} />
     <WorkpadsPanel context={context} />
   </>;
 }
@@ -1118,8 +1127,8 @@ describe("WorkpadsPanel", () => {
       render(<Panel context={panelContext(store)} />);
       await openRow();
       await screen.findByRole("button", { name: "Edit workpad" });
-      // The panel's ⋯ is the panel's: Dock alone.
-      expect(menuLabels(headerMenu())).toEqual(["Left", "Right", "Top", "Bottom"]);
+      // The panel's ⋯ is the panel's: Move to and Full height alone.
+      expect(menuLabels(headerMenu())).toEqual(["Middle", "Left", "Right", "Top", "Bottom", "Full height"]);
       closeMenu();
       expect(menuLabels(documentMenu())).toEqual(["Rename…", "Move to", "Archive", "Delete…"]);
       // Delete… ends the menu, destructive and apart.
@@ -1583,8 +1592,8 @@ describe("WorkpadsPanel", () => {
       // A workpad the next page repeats is listed once, where it came first.
       await waitFor(() => expect(names()).toEqual(["Web notes", "Global notes", "Build log", "Build plan", "Docs notes"]));
       expect(screen.getByRole("button", { name: "Docs notes" })).toHaveAccessibleDescription("In docs");
-      // The panel's ⋯ has nothing to collapse.
-      expect(menuLabels(headerMenu())).toEqual(["Left", "Right", "Top", "Bottom"]);
+      // The panel's ⋯ holds only Move to and Full height.
+      expect(menuLabels(headerMenu())).toEqual(["Middle", "Left", "Right", "Top", "Bottom", "Full height"]);
     });
 
     it("keeps the sort chosen for All, with no grouping to offer", async () => {

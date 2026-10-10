@@ -10,10 +10,7 @@ import { Button } from "@client/components/ui/button";
 import { Callout } from "@client/components/ui/callout";
 import type { ArchivedThreadRow as ArchivedThreadRowModel } from "../archive/archived-threads.js";
 import type { ApplicationClientStore } from "../stores/ApplicationClientStore.js";
-import {
-  openThreadRoute,
-  pointerPanelPresentation,
-} from "../workspace-panels/thread-panel-navigation.js";
+import { openThreadRoute } from "../workspace-panels/thread-panel-navigation.js";
 import { BackendBrandIcon } from "./brand-icons.js";
 import { ForkProvenanceButton } from "./lineage/ForkProvenanceButton.js";
 import { ThreadContextMenu } from "./ThreadContextMenu.js";
@@ -142,7 +139,7 @@ export const ArchivedThreadRow = memo(function ArchivedThreadRow({
             aria-labelledby={titleId}
             aria-describedby={hasMeta ? `${metaId} ${detailsId}` : detailsId}
             onClick={(event) =>
-              openThreadRoute(row.id, pointerPanelPresentation(event))
+              openThreadRoute(row.id)
             }
           >
             <span

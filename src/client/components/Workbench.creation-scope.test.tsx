@@ -172,8 +172,7 @@ describe("Workbench new-thread creation scope", () => {
     const openPanel = vi.fn();
     const removeOpenListener = installThreadPanelOpenRequestListener(
       window,
-      ({ threadId, presentation }) =>
-        openPanel(threadId, { focus: true, presentation }),
+      ({ threadId }) => openPanel(threadId, { focus: true }),
     );
 
     render(
@@ -191,10 +190,7 @@ describe("Workbench new-thread creation scope", () => {
     };
     props.onCreated("thread-new");
 
-    expect(openPanel).toHaveBeenCalledWith("thread-new", {
-      focus: true,
-      presentation: "split",
-    });
+    expect(openPanel).toHaveBeenCalledWith("thread-new", { focus: true });
     expect(window.location.pathname).toBe("/threads/thread-new");
     removeOpenListener();
   });
@@ -213,8 +209,7 @@ describe("Workbench new-thread creation scope", () => {
     const openPanel = vi.fn();
     const removeOpenListener = installThreadPanelOpenRequestListener(
       window,
-      ({ threadId, presentation }) =>
-        openPanel(threadId, { focus: true, presentation }),
+      ({ threadId }) => openPanel(threadId, { focus: true }),
     );
 
     render(
@@ -227,14 +222,9 @@ describe("Workbench new-thread creation scope", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Continue recent" }), {
-      shiftKey: true,
-    });
+    fireEvent.click(screen.getByRole("button", { name: "Continue recent" }));
 
-    expect(openPanel).toHaveBeenCalledWith("thread-recent", {
-      focus: true,
-      presentation: "single",
-    });
+    expect(openPanel).toHaveBeenCalledWith("thread-recent", { focus: true });
     expect(window.location.pathname).toBe("/threads/thread-recent");
     removeOpenListener();
   });
@@ -264,7 +254,7 @@ describe("Workbench new-thread creation scope", () => {
         }}
         applicationStore={applicationStore as never}
         threadRegistry={threadRegistry as never}
-        panelLayoutStore={{ isVisible: () => false, openPanel } as never}
+        panelLayoutStore={{ isVisible: () => false, open: openPanel } as never}
         panelTenants={{} as never}
       />,
     );
@@ -281,7 +271,7 @@ describe("Workbench new-thread creation scope", () => {
     const props = {
       applicationStore: applicationStore as never,
       threadRegistry: { retain: vi.fn(), release: vi.fn() } as never,
-      panelLayoutStore: { openPanel: vi.fn() } as never,
+      panelLayoutStore: { open: vi.fn() } as never,
       panelTenants: {} as never,
     };
     const { rerender } = render(<Workbench {...props} route={{ name: "thread", threadId: "first" }} />);
@@ -308,7 +298,7 @@ describe("Workbench new-thread creation scope", () => {
     const openPanel = vi.fn();
     const panelLayoutStore = {
       isVisible: () => true,
-      openPanel,
+      open: openPanel,
     } as never;
     const threadRegistry = {
       retain: vi.fn(),

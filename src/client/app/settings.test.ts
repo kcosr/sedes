@@ -12,7 +12,6 @@ import {
   getPromptsPlacement,
   getMobileComposerRefocusAfterSend,
   getMobileHistorySeekControl,
-  getPanelPresentation,
   getRightOptionFocusesComposer,
   getSeekOnSubmit,
   getSmoothStreamingEnabled,
@@ -28,7 +27,6 @@ import {
   setPromptsPlacement,
   setMobileComposerRefocusAfterSend,
   setMobileHistorySeekControl,
-  setPanelPresentation,
   setRightOptionFocusesComposer,
   setSeekOnSubmit,
   setSmoothStreamingEnabled,
@@ -39,7 +37,6 @@ import {
   subscribePromptsPlacement,
   subscribeMobileComposerRefocusAfterSend,
   subscribeMobileHistorySeekControl,
-  subscribePanelPresentation,
   subscribeRightOptionFocusesComposer,
   subscribeSeekOnSubmit,
   subscribeSmoothStreamingEnabled,
@@ -48,32 +45,6 @@ import {
   subscribeTerminalPreferences,
   subscribeActivityDetail,
 } from "./settings";
-
-describe("panel presentation setting", () => {
-  it("defaults to split and rejects noncanonical stored values", () => {
-    expect(getPanelPresentation()).toBe("split");
-    localStorage.setItem("sedes-panel-presentation", "single");
-    expect(getPanelPresentation()).toBe("single");
-    localStorage.setItem("sedes-panel-presentation", "replace");
-    expect(getPanelPresentation()).toBe("split");
-  });
-
-  it("persists and notifies same-window and cross-window consumers", () => {
-    const seen: string[] = [];
-    const unsubscribe = subscribePanelPresentation((value) => seen.push(value));
-
-    setPanelPresentation("single");
-    expect(localStorage.getItem("sedes-panel-presentation")).toBe("single");
-    expect(seen).toEqual(["single"]);
-
-    localStorage.setItem("sedes-panel-presentation", "split");
-    window.dispatchEvent(
-      new StorageEvent("storage", { key: "sedes-panel-presentation" }),
-    );
-    expect(seen).toEqual(["single", "split"]);
-    unsubscribe();
-  });
-});
 
 afterEach(() => {
   localStorage.clear();

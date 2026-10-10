@@ -233,7 +233,7 @@ const rowTitles = () =>
     .map((row) => row.querySelector(".archive-row-title")?.textContent);
 
 describe("ArchivedView rows", () => {
-  it("marks historical identities and Shift-opens the archived thread in single-panel mode", () => {
+  it("marks historical identities and opens the archived thread's Chat", () => {
     const thread = makeThread("thread-1", "Archived work", {
       workspaceId: "workspace-1",
       targetId: "target-1",
@@ -308,13 +308,8 @@ describe("ArchivedView rows", () => {
     expect(open).toHaveAccessibleDescription(
       /sedes.*Location and environment.*Unavailable.*Codex SSH.*Target.*Unavailable.*Codex\. Archived .+ · Last active/u,
     );
-    fireEvent.click(open, {
-      shiftKey: true,
-    });
-    expect(onOpen).toHaveBeenCalledWith({
-      threadId: "thread-1",
-      presentation: "single",
-    });
+    fireEvent.click(open);
+    expect(onOpen).toHaveBeenCalledWith({ threadId: "thread-1" });
     expect(window.location.pathname).toBe("/threads/thread-1");
     removeOpenListener();
   });

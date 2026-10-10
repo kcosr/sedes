@@ -100,8 +100,6 @@ import {
 import { ExecutionWorkspaceMenu } from "./ExecutionWorkspaceMenu.js";
 import { dropdownMenuParts } from "./menu-parts.js";
 import { useMediaQuery } from "../../app/use-media-query.js";
-import { pointerPanelPresentation } from "../../workspace-panels/thread-panel-navigation.js";
-import type { PanelPresentation } from "../../workspace-panels/panel-presentation.js";
 import { NavigationControlsContext } from "../../app/navigation-controls.js";
 import { SIDEBAR_NAV_MEDIA_QUERY } from "../SidebarNavTrigger.js";
 
@@ -246,15 +244,6 @@ export const ThreadHeader = memo(function ThreadHeader({
   const titleTrigger = useRef<HTMLButtonElement>(null);
   const restoreTitleFocus = useRef(false);
   const afterActionsClose = useRef<(() => void) | undefined>(undefined);
-  // Shift-selecting a creating row opens its thread in the other presentation.
-  const shiftSelect = useRef(false);
-  const selectedPresentation = (): PanelPresentation => {
-    const presentation = pointerPanelPresentation({
-      shiftKey: shiftSelect.current,
-    });
-    shiftSelect.current = false;
-    return presentation;
-  };
   const disabled =
     connection !== "connected" ||
     !snapshot.thread.available ||
@@ -545,7 +534,7 @@ export const ThreadHeader = memo(function ThreadHeader({
     }
   };
 
-  const createFromSettings = (presentation: PanelPresentation) => {
+  const createFromSettings = () => {
     if (configurationCopyPending || !snapshot.thread.available) return;
     setConfigurationCopyPending(true);
     closeActionsBefore(() => {
@@ -554,18 +543,20 @@ export const ThreadHeader = memo(function ThreadHeader({
         create: async () => (await applicationStore.createThreadFromSettings(
           snapshot.thread.id, { title: DEFAULT_THREAD_TITLE },
         )).threadId,
-        presentation,
       }).finally(() => setConfigurationCopyPending(false));
     });
   };
 
   const sharedPanelControls: PanelChromeControls | undefined = panelControls
     ? {
-        onCollapse: panelControls.onCollapse,
-        onClose: panelControls.onClose,
-        onDock: panelControls.onDock,
-        ...(panelControls.dockEdge !== undefined
-          ? { dockEdge: panelControls.dockEdge }
+        ...(panelControls.onClose !== undefined
+          ? { onClose: panelControls.onClose }
+          : {}),
+        ...(panelControls.closeAction !== undefined
+          ? { closeAction: panelControls.closeAction }
+          : {}),
+        ...(panelControls.region !== undefined
+          ? { region: panelControls.region }
           : {}),
         ...(panelControls.renderMenuItems !== undefined
           ? { renderMenuItems: panelControls.renderMenuItems }
@@ -961,10 +952,7 @@ export const ThreadHeader = memo(function ThreadHeader({
                         : undefined
                     }
                     title={THREAD_CONFIGURATION_COPY_TITLE}
-                    onClick={(event) => {
-                      shiftSelect.current = event.shiftKey;
-                    }}
-                    onSelect={() => createFromSettings(selectedPresentation())}
+                    onSelect={createFromSettings}
                   >
                     <CopyPlus aria-hidden="true" />
                     {configurationCopyPending
@@ -982,12 +970,8 @@ export const ThreadHeader = memo(function ThreadHeader({
                         : undefined
                     }
                     title={latestForkUnavailableReason}
-                    onClick={(event) => {
-                      shiftSelect.current = event.shiftKey;
-                    }}
                     onSelect={() => {
                       if (!latestFork.selection || !latestFork.available) return;
-                      const presentation = selectedPresentation();
                       const selection = latestFork.selection;
                       closeActionsBefore(() => {
                         void runThreadFork({
@@ -995,7 +979,6 @@ export const ThreadHeader = memo(function ThreadHeader({
                             ? store.forkLatestProviderSnapshot({ restart })
                             : store.forkTurn(selection.capability, { restart }),
                           restart: latestFork.restart,
-                          presentation,
                         });
                       });
                     }}
@@ -1126,7 +1109,6 @@ export const ThreadHeader = memo(function ThreadHeader({
               ? store.forkLatestProviderSnapshot({ restart, environmentVariables })
               : store.forkTurn(selection.capability, { restart, environmentVariables }),
             restart: latestFork.restart,
-            presentation: "single",
           });
         }} />}
       <AgentToolSettingsDialog

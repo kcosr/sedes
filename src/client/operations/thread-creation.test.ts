@@ -15,8 +15,6 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-const presentation = "single" as const;
-
 describe("thread creation operations", () => {
   it("suppresses navigation when creation completes after the overlay host unmounts", async () => {
     let finish!: (id: string) => void;
@@ -26,7 +24,6 @@ describe("thread creation operations", () => {
     const operation = runThreadCreation({
       message: "Creating thread…",
       create: () => pending,
-      presentation,
     });
     expect(getBlockingOperation()?.allowDismiss).toBe(false);
     getBlockingOperation()!.dismiss();
@@ -53,7 +50,6 @@ describe("thread creation operations", () => {
     const operation = runThreadFork({
       fork: () => pending,
       retainSource,
-      presentation,
     });
     expect(releases).toHaveLength(2);
     expect(getBlockingOperation()?.allowDismiss).toBe(false);
@@ -78,7 +74,7 @@ describe("thread creation operations", () => {
         retryable: true,
       })
       .mockResolvedValueOnce({ status: "created", childThreadId: "child" });
-    const operation = runThreadFork({ fork, restart: true, presentation });
+    const operation = runThreadFork({ fork, restart: true });
     await vi.waitFor(() =>
       expect(getBlockingOperation()?.error).toBe("Provider binding uncertain"),
     );
@@ -89,7 +85,7 @@ describe("thread creation operations", () => {
     getBlockingOperation()!.retry!();
     await operation;
     expect(fork.mock.calls).toEqual([[true], [false]]);
-    expect(openThreadRoute).toHaveBeenCalledWith("child", presentation);
+    expect(openThreadRoute).toHaveBeenCalledWith("child");
   });
 
   it("does not offer retry for non-retryable recovery or report it as success", async () => {
@@ -102,7 +98,6 @@ describe("thread creation operations", () => {
           diagnostic: "Recover in child",
           retryable: false,
         }),
-      presentation,
     });
     await vi.waitFor(() =>
       expect(getBlockingOperation()?.error).toBe("Recover in child"),
@@ -124,7 +119,6 @@ describe("thread creation operations", () => {
           diagnostic: "Fork aborted",
           restartable: true,
         }),
-      presentation,
     });
     await vi.waitFor(() =>
       expect(getBlockingOperation()?.error).toBe("Fork aborted"),
@@ -145,7 +139,6 @@ describe("thread creation operations", () => {
         diagnostic: "Claude did not start the fork: this Claude Code version is not supported.",
         restartable: false,
       }),
-      presentation,
     });
     await vi.waitFor(() =>
       expect(getBlockingOperation()?.error).toBe(

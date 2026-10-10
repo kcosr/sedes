@@ -121,6 +121,9 @@
   --bar-control: var(--control-md);
   --bar-control-width: var(--bar-control);
   --bar-icon: 18px;
+  --bar-toggle-gap: var(--space-1);
+  /* Between the bar's groups: navigation, the quick buttons, and ▾. */
+  --bar-group-gap: var(--space-2);
 
   /* motion */
   --duration-fast: 120ms;
@@ -322,6 +325,12 @@
     --bar-control: 40px;
     --bar-control-width: var(--control-lg);
     --bar-icon: var(--icon-lg);
+    /* With every panel loaded, and counts on Tasks and Workpads, the bar's
+       fixed controls take 339px. Its gaps shrink with the viewport so it
+       fits down to 355px (8px gaps from about 390px); narrower still, the
+       quick buttons scroll (see .workspace-workbench-toggles). */
+    --bar-toggle-gap: clamp(var(--space-0-5), calc((100vw - 357px) / 4), var(--space-2));
+    --bar-group-gap: clamp(var(--space-1), calc((100vw - 349px) / 2), var(--space-2));
   }
 }
 
@@ -2200,8 +2209,7 @@ textarea:disabled {
 /* ── Workspace panel composition ─────────────────────────────────────── */
 
 .workspace-panel-layout,
-.workspace-panel-grid,
-.workspace-panel-split,
+.workspace-region,
 .workspace-panel-leaf,
 .workspace-panel-surface,
 .workspace-panel-body,
@@ -2233,7 +2241,7 @@ textarea:disabled {
   flex: 0 0 auto;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: var(--bar-group-gap);
   /* Matches .workspace-panel-chrome, minus its text-only left inset: this row
      leads with an icon button, so both ends carry the button inset. */
   padding: var(--space-1-5) 5px;
@@ -2250,22 +2258,19 @@ textarea:disabled {
   overflow: hidden;
 }
 
-.workspace-panel-grid,
-.workspace-panel-split {
-  display: grid;
-  width: 100%;
-  height: 100%;
+/* Each visible region is placed in its share of the stage (see
+   RegionStage.tsx); panels are siblings, so moving one never remounts it. */
+.workspace-region,
+.workspace-region-divider {
+  position: absolute;
+}
+
+.workspace-region {
   overflow: hidden;
 }
 
-.workspace-panel-grid[data-orientation="row"],
-.workspace-panel-split[data-orientation="row"] {
-  grid-template-rows: minmax(0, 1fr);
-}
-
-.workspace-panel-grid[data-orientation="column"],
-.workspace-panel-split[data-orientation="column"] {
-  grid-template-columns: minmax(0, 1fr);
+.workspace-region-divider {
+  z-index: calc(var(--z-sticky) + 4);
 }
 
 .workspace-panel-leaf,
@@ -2286,9 +2291,11 @@ textarea:disabled {
   box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--ring) 36%, transparent);
 }
 
-/* A focus cue is useful only while both singletons share the workbench; a
-   lone full-size surface does not need to announce itself as selected. */
-.workspace-panel-grid > .workspace-panel-leaf:focus-within {
+/* A focus cue is useful only while panels share the stage; a lone
+   full-size surface does not need to announce itself as selected. */
+.workspace-panel-stage:not([data-panels="1"])
+  > .workspace-region
+  > .workspace-panel-leaf:focus-within {
   box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--ring) 36%, transparent);
 }
 
@@ -2450,7 +2457,6 @@ textarea:disabled {
 .sidebar-nav-trigger,
 .notification-silence-button,
 .workbench-panel-toggle,
-.workspace-panel-open-icon,
 .workspace-panel-open-trigger,
 .thread-find-trigger,
 .thread-tools-shell > button,
@@ -2463,16 +2469,9 @@ textarea:disabled {
   height: var(--bar-control);
 }
 
-/* Inside its border, the panels group is as tall as its neighbours. */
-.workspace-panel-open-icon,
-.workspace-panel-open-trigger {
-  height: calc(var(--bar-control) - 2px);
-}
-
 .sidebar-nav-trigger svg,
 .notification-silence-button svg,
 .workbench-panel-toggle svg,
-.workspace-panel-open-icon svg,
 .thread-find-trigger svg,
 .thread-tools-shell > button svg,
 .workspace-panel-actions > button svg,
@@ -2524,12 +2523,12 @@ textarea:disabled {
   outline: none;
 }
 
-/* Collapsed panels stay mounted in these detached targets so drafts, internal
-   file tabs, streaming state, and scroll positions survive. The parking lot
-   itself must never enter layout, paint, accessibility, or focus order. */
-.workspace-panel-parking-lot,
-.workspace-panel-parking,
-.workspace-panel-parked {
+/* Loaded panels off stage (hidden, replaced in their region, made room for,
+   or behind a maximized panel) stay mounted in this detached parking lot so
+   drafts, internal file tabs, streaming state, and scroll positions survive.
+   The parking lot itself must never enter layout, paint, accessibility, or
+   focus order. */
+.workspace-panel-parking {
   position: fixed;
   width: 0;
   height: 0;
@@ -2538,7 +2537,6 @@ textarea:disabled {
   visibility: hidden;
 }
 
-.workspace-panel-parking-lot,
 .workspace-panel-parking {
   inset: 0 auto auto 0;
 }
@@ -2547,58 +2545,37 @@ textarea:disabled {
   display: flex;
   min-width: 0;
   align-items: center;
-  gap: 8px;
+  gap: var(--bar-group-gap);
 }
 
-/* The panel toggles sit together, like the panels group's icons. */
+/* The panel toggles sit as a group, spaced so neighbouring chips and their
+   tap targets stay apart. Where they can't all fit beside ☰, the bell and
+   ▾ (the narrowest phones), only the group gives way: it scrolls sideways,
+   without a scrollbar, and a focused button scrolls into view. Its padding,
+   given back by the margin, keeps the buttons' 3px focus rings inside the
+   scroller. */
 .workspace-workbench-toggles {
   display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-}
-
-.workspace-panel-open-menu {
-  display: flex;
   min-width: 0;
+  flex: 0 1 auto;
   align-items: center;
-  overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-ctl);
-  background: color-mix(in oklch, var(--background) 88%, var(--sidebar));
+  gap: var(--bar-toggle-gap);
+  margin: -3px;
+  padding: 3px;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scroll-padding-inline: 3px;
+  scrollbar-width: none;
 }
 
+.workspace-workbench-toggles::-webkit-scrollbar {
+  display: none;
+}
+
+/* ▾, the panels menu, after the loaded panels' quick buttons. */
 .workspace-panel-open-trigger {
   flex: 0 0 auto;
-  border-radius: 0;
-  border-left: 1px solid var(--border-soft);
   color: var(--muted-foreground);
-}
-
-.workspace-panel-open-icons {
-  display: inline-flex;
-  min-width: 0;
-  align-items: center;
-  color: var(--foreground);
-}
-
-.workspace-panel-open-icon {
-  flex: 0 0 auto;
-  border-radius: 0;
-}
-
-.workspace-panel-open-icon + .workspace-panel-open-icon {
-  border-left: 1px solid var(--border-soft);
-}
-
-/* A collapsed surface is still open, so it keeps its place in the glyph row
-   and reads as inactive instead of vanishing from the bar. */
-.workspace-panel-open-icon[data-collapsed="true"] {
-  opacity: 0.45;
-}
-
-.workspace-panel-open-icon[data-visible="true"] {
-  color: var(--foreground);
-  background: color-mix(in oklch, var(--accent) 72%, transparent);
 }
 
 .workspace-panel-empty {
@@ -3195,10 +3172,12 @@ textarea:disabled {
   outline: none;
 }
 
-.workspace-panel-grid[data-orientation="column"]
-  > .workspace-panel-resize-handle,
-.workspace-panel-split[data-orientation="column"]
-  > .workspace-panel-resize-handle {
+.workspace-region-divider > .workspace-panel-resize-handle {
+  position: absolute;
+  inset: 0;
+}
+
+.workspace-region-divider[data-axis="height"] > .workspace-panel-resize-handle {
   cursor: row-resize;
 }
 
@@ -3216,57 +3195,14 @@ textarea:disabled {
   background: var(--muted-foreground-2);
 }
 
-/* ── Panel instances and remote terminals ───────────────────────────── */
-.workspace-panel-tablist {
-  display: flex;
-  min-height: 32px;
-  gap: 2px;
-  padding: 3px 5px 0;
-  overflow-x: auto;
-  border-bottom: 1px solid var(--border);
-  background: color-mix(in srgb, var(--background) 94%, var(--muted));
-}
-
-.workspace-panel-tab {
-  display: inline-flex;
-  align-items: center;
-  flex: 0 0 auto;
-  max-width: 220px;
-  border: 1px solid transparent;
-  border-radius: 5px 5px 0 0;
-}
-
-.workspace-panel-tab[data-active="true"] {
-  border-color: var(--border);
-  border-bottom-color: var(--background);
-  background: var(--background);
-}
-
-.workspace-panel-tab > button {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 27px;
-  padding: 0 8px;
-  color: var(--muted-foreground);
-}
-
-.workspace-panel-tab > button:first-child span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.workspace-panel-tab[data-active="true"] > button:first-child {
-  color: var(--foreground);
-}
-
-.workspace-panel-tab > button:last-child {
-  padding: 0 5px;
-}
-
+/* ── Remote terminals ───────────────────────────────────────────────── */
 .terminal-panel {
   min-width: 0;
+}
+
+/* The retained terminal body fills its panel below the header. */
+.terminal-panel-body {
+  height: 100%;
 }
 
 .terminal-transcript > header {
@@ -4594,9 +4530,10 @@ textarea:disabled {
   padding-inline: var(--space-1-5);
 }
 
-/* A docked panel open but off stage (collapsed, or to make room): the
-   pressed chip's outline without its fill. */
-.workbench-panel-toggle[data-state="collapsed"] {
+/* A loaded panel off stage (hidden, replaced in its region, hidden to make
+   room, or behind a maximized panel): the pressed chip's outline without
+   its fill. */
+.workbench-panel-toggle[data-state="hidden"] {
   box-shadow: inset 0 0 0 1px var(--input);
 }
 
@@ -10446,8 +10383,7 @@ tr.diff-hunk td {
     display: flex;
   }
 
-  .workspace-panel-grid,
-  .workspace-panel-split,
+  .workspace-region-divider,
   .workspace-panel-resize-handle,
   .workspace-panel-desktop-only {
     display: none;

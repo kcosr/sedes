@@ -12,7 +12,6 @@ import {
   type ThreadHistoryPageSize,
 } from "../../shared/protocol/api.js";
 import type { ActivityDetailMode } from "../../shared/protocol/conversation.js";
-import type { PanelPresentation } from "../workspace-panels/panel-presentation.js";
 
 const seekOnSubmitKey = "sedes-seek-on-submit";
 const diagnosticCategoryKeys = {
@@ -38,7 +37,6 @@ const diffLineWrapKey = "sedes-diff-line-wrap";
 const activityDetailKey = "sedes-activity-detail";
 const showPromptsTabKey = "sedes-show-prompts-tab";
 const promptsPlacementKey = "sedes-prompts-placement";
-const panelPresentationKey = "sedes-panel-presentation";
 // Keep this preference’s storage identity when extending it to environments.
 const clickNamesToFilterKey = "sedes-filter-by-project-name";
 
@@ -48,46 +46,6 @@ export const DEFAULT_MOBILE_HISTORY_SEEK_CONTROL = true;
 export const DEFAULT_SHOW_PROMPTS_TAB = true;
 export type PromptsPlacement = "above_composer" | "toolbar";
 export const DEFAULT_PROMPTS_PLACEMENT: PromptsPlacement = "above_composer";
-export const DEFAULT_PANEL_PRESENTATION: PanelPresentation = "split";
-
-export function getPanelPresentation(): PanelPresentation {
-  const value = localStorage.getItem(panelPresentationKey);
-  return value === "single" || value === "split"
-    ? value
-    : DEFAULT_PANEL_PRESENTATION;
-}
-
-export function setPanelPresentation(value: PanelPresentation): void {
-  if (value !== "single" && value !== "split") {
-    throw new Error("Panel presentation is not supported.");
-  }
-  localStorage.setItem(panelPresentationKey, value);
-  window.dispatchEvent(
-    new CustomEvent(settingsChangeEvent, {
-      detail: { key: panelPresentationKey },
-    }),
-  );
-}
-
-export function subscribePanelPresentation(
-  listener: (value: PanelPresentation) => void,
-): () => void {
-  const onLocalChange = (event: Event) => {
-    const detail = (event as CustomEvent<{ key?: string }>).detail;
-    if (detail?.key === panelPresentationKey) listener(getPanelPresentation());
-  };
-  const onStorage = (event: StorageEvent) => {
-    if (event.key === null || event.key === panelPresentationKey) {
-      listener(getPanelPresentation());
-    }
-  };
-  window.addEventListener(settingsChangeEvent, onLocalChange);
-  window.addEventListener("storage", onStorage);
-  return () => {
-    window.removeEventListener(settingsChangeEvent, onLocalChange);
-    window.removeEventListener("storage", onStorage);
-  };
-}
 
 export type ActivityDetailChangeSource =
   "inline_activity" | "settings" | "storage";

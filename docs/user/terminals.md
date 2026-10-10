@@ -12,26 +12,27 @@ thread without opening a connection to each one.
 
 ## Open and control a terminal
 
-Choose **Terminals** from the application header’s **Panels** menu to reveal an
-existing Terminals panel without changing its selected tab. If no panel is
-open, it opens an existing usable terminal, or creates a terminal when none
-can be opened. Older retained records remain available in the panel’s **+**
-menu for removal.
+Choose **Terminals** from the **Panels** menu (▾) in the workbench bar to show
+the thread's Terminals panel without changing its selected tab. If the panel
+isn't loaded, this opens an existing usable terminal, or creates a terminal
+when none can be opened. Older retained records remain available in the
+panel’s **+** menu for removal. The button at the end of the menu row opens
+Terminals in another region, which becomes its place.
 
 The **+** menu creates a **New terminal**, reopens a closed tab, or ends and
 removes a terminal with the X beside its entry. Closing the last tab leaves an
 empty panel with a **New terminal** button. Revealing that empty panel keeps it
 empty until you create a terminal or reopen one from **+**.
 
-Opening **Terminals** from **Panels** uses the split layout. Once a Terminals
-panel exists, its application-header shortcut follows the device's **Opening
-panels** preference; Shift-click temporarily uses the opposite presentation.
-
-Opening the first terminal creates one client-local **Terminals** panel in that
-thread's workspace, split below the chat by default. Opening another terminal
-adds a tab inside that panel. The panel's **+** menu greys terminals that
-already have a tab, preventing duplicate connections. The panel
-itself can still be docked beside Chat or Files with the normal panel controls.
+Opening the first terminal loads one client-local **Terminals** panel for that
+thread, at the Bottom by default. Opening another terminal adds a tab inside
+that panel. The panel's **+** menu greys terminals that already have a tab,
+preventing duplicate connections. While the panel is loaded, its **Terminals**
+button in the workbench bar shows or hides it. Like any panel, it can be
+maximized or moved to another region; see
+[Arrange panels](conversations.md#arrange-panels). Where Terminals opens and
+its size are shared by every thread on this device. Hiding the panel keeps its
+tabs; the selected terminal detaches while hidden and reattaches when shown.
 
 Terminal tabs, their order, and the selected tab belong only to this client.
 Switching threads restores that client's terminal tabs for the selected thread
@@ -71,7 +72,7 @@ These actions are intentionally different:
 | --- | --- |
 | **Tab X** | Removes an exited, failed, or interrupted terminal and its history. For an active terminal, offers **Close tab** or **End terminal** by default. |
 | **Close tab** in the confirmation | Detaches this client's view of one terminal. The shell keeps running. |
-| **Close panel** | Closes every local tab in this Terminals panel. All shells keep running. |
+| **Close panel** (the panel's ✕) | Closes every local tab in this Terminals panel. All shells keep running. |
 | **End terminal** | Ends the shell for every connected client, then removes its resource and retained history once process termination is confirmed. |
 | **Disconnect and remove** (older transport-only records) | Closes the old owned connection before removing that record and history. It does not prove remote process cleanup. |
 | **Remove terminal** | Removes a terminal and its retained history after it exited, failed, or was interrupted on its own. |
@@ -159,8 +160,9 @@ keystroke is awaiting its own acknowledgement.
 
 ## Mobile and accessibility
 
-On a narrow screen, opening a terminal uses the available full stage or sheet.
-Back closes the Terminals panel without terminating any shell. Touch scrolling
+On a narrow screen, the Terminals panel fills the screen. Back or Escape
+returns to Chat and keeps the panel loaded, so its button brings the same tabs
+back; ✕ closes it. Neither terminates any shell. Touch scrolling
 never injects input, and observer state remains visibly read-only. On
 touch-primary devices, a compact TUI-style key strip and native command field
 appear at the bottom; fine-pointer desktop layouts do not show that dock.

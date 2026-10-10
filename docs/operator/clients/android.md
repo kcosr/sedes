@@ -257,6 +257,11 @@ network path and at least the following:
 9. Permissions: inspect the merged manifest and installed-app permission screen;
    microphone and notification prompts should accompany voice enablement. The
    voice service and output-image provider must remain non-exported.
+10. Panels: with Tasks in front, Back closes an open task's detail, then
+    returns to Chat with Tasks still loaded, then opens the drawer; an open
+    task menu or editor takes Back first. **Add to prompt** shows Chat with
+    the Task's pill, and with the keyboard up Tasks' add bar and search stay
+    above it.
 
 For native voice, test Keep listening beyond 95 seconds and ten minutes on built-in
 and Bluetooth microphones, including screen off, planned session renewal, Send,
@@ -286,7 +291,8 @@ tab's renderer; confirmed observers show the active-tab lock and are read-only;
 **Take control** in the panel menu on a second client immediately changes input
 and resize authority without requiring release on the first; touch scroll injects
 no input; the chat-style Find control searches in both directions; and Android
-Back closes only the local panel.
+Back returns to Chat, leaving the Terminals panel loaded and its shell
+running.
 Verify that healthy application, chat, and terminal connections show no green
 status indicator, while restoring, reconnecting, and terminal lifecycle states
 remain visible. After terminal output sends `CSI 3 J`, close and reopen the

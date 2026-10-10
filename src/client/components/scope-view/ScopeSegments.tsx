@@ -11,7 +11,7 @@ import "./scope-view.css";
 type SegmentProps = Omit<
   ComponentProps<typeof SegmentedControlItem>,
   "value" | "disabled" | "children"
-> & { readonly "data-autofocus"?: string };
+>;
 
 export interface ScopeSegmentsProps {
   readonly "aria-label": string;
@@ -25,7 +25,7 @@ export interface ScopeSegmentsProps {
   readonly describeCount: (count: number) => string;
   /** The whole control, while the panel cannot change what it shows. */
   readonly disabled?: boolean;
-  /** Extra props of one segment: drop targets, autofocus. */
+  /** Extra props of one segment, such as a drop target's. */
   readonly segmentProps?: (view: ScopeView) => SegmentProps;
   /** Choosing the selected segment again, which otherwise does nothing. */
   readonly onReselect?: (view: ScopeView) => void;

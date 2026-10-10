@@ -8,17 +8,18 @@ paragraph.
 
 ## Open the Workpads panel
 
-In a thread, select the **Workpads** button (the notepad icon, beside
-**Tasks**) to open or close Workpads. It shares the workspace layout with
-**Chat** and **Files**. Its badge counts the current thread's non-archived
-workpads, independently of the panel's filters or selected scope. Zero is
-hidden, and counts above 99 display **99+**. Resize the split, use **Workpads panel
-actions** to dock it on another edge, or collapse it; when it is collapsed, the button keeps
-an outline, and selecting it shows Workpads again. Its open state and place
-stay with you when you switch threads. On narrow screens,
-switch between full-stage panels using the buttons, the panel shortcuts, or the
-menu. Draft text stays mounted while the panel is collapsed or another panel
-is shown. Navigation changes the view, never a document's stored scope.
+In a thread, choose **Workpads** from the **Panels** menu (▾) in the workbench
+bar. Workpads opens on the Right by default, in place of whatever the Right
+showed; move, maximize, resize, or close it like any panel (see
+[Arrange panels](conversations.md#arrange-panels)). While Workpads is loaded,
+the **Workpads** button (the notepad icon) shows or hides it; when it is
+hidden, the button keeps an outline. The button's badge counts the current
+thread's non-archived workpads, independently of the panel's filters or
+selected scope. Zero is hidden, and counts above 99 display **99+**. Whether
+Workpads is loaded, and where, stays the same when you switch threads. On
+narrow screens, Workpads fills the screen; switch panels with the buttons or
+the menu. Draft text stays mounted while the panel is hidden or another panel
+replaces it. Navigation changes the view, never a document's stored scope.
 
 Sidebar thread rows show the same notepad icon when the thread has active
 workpads. The sidebar icon has no visible count, like the Tasks icon.
@@ -109,7 +110,8 @@ To return to the list, choose the selected view again (its tooltip says
 **Back to workpads**); with the keyboard, press Enter or Space on it.
 Searching or changing a View option also returns to the list. These, and
 Android Back, sync an open editor's text before the workpad closes; on
-Android, Back closes the workpad before it opens the navigation drawer.
+Android, Back closes the workpad, then returns to Chat, then opens the
+navigation drawer.
 Choosing another view leaves the workpad instead: if its text hasn't synced,
 Sedes asks first, and **Leave anyway** discards those changes.
 

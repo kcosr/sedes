@@ -303,9 +303,9 @@ let pendingReveal: TasksRevealRequest | undefined;
 const revealListeners = new Set<(request: TasksRevealRequest) => void>();
 
 /**
- * Opens Tasks beside the current thread (the docked panel, or the sheet on
- * phones), then has the content switch to a view containing the task and
- * expand it. Pages without a thread have no Tasks to open.
+ * Opens the Tasks panel beside the current thread (in front on phones), then
+ * has the content switch to a view containing the task and expand it. Pages
+ * without a thread have no Tasks to open.
  *
  * The request stays pending until the content consumes it, so content that
  * mounts because of this reveal still receives it.

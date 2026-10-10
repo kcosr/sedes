@@ -9,7 +9,7 @@ import { ThreadTerminalMenu, type ThreadTerminalMenuHandle, type ThreadTerminalM
 function TerminalMenuFixture(props: Omit<ThreadTerminalMenuProps, "onRename"> & Partial<Pick<ThreadTerminalMenuProps, "onRename">>) {
   const menu = useRef<ThreadTerminalMenuHandle>(null);
   return <>
-    <button onClick={event => menu.current?.open(event.shiftKey ? "single" : "split", event.currentTarget)}>Open Terminals panel</button>
+    <button onClick={event => menu.current?.open(event.shiftKey ? "left" : undefined, event.currentTarget)}>Open Terminals panel</button>
     <button onClick={event => menu.current?.create(event.currentTarget)}>Create terminal directly</button>
     <ThreadTerminalMenu onRename={vi.fn().mockResolvedValue(undefined)} {...props} ref={menu} />
   </>;
@@ -103,7 +103,7 @@ describe("ThreadTerminalMenu", () => {
 
     onOpen.mockClear();
     fireEvent.click(trigger, { shiftKey: true });
-    await waitFor(() => expect(onOpen).toHaveBeenCalledWith(terminal, "single"));
+    await waitFor(() => expect(onOpen).toHaveBeenCalledWith(terminal, "left"));
   });
 
   it("reveals an existing terminal panel without changing its active tab", () => {
@@ -125,7 +125,7 @@ describe("ThreadTerminalMenu", () => {
       }),
     );
 
-    expect(onReveal).toHaveBeenCalledWith("split");
+    expect(onReveal).toHaveBeenCalledWith(undefined);
     expect(client.listTerminals).not.toHaveBeenCalled();
     expect(onOpen).not.toHaveBeenCalled();
   });
@@ -148,7 +148,7 @@ describe("ThreadTerminalMenu", () => {
     fireEvent.click(trigger, { shiftKey: true });
     fireEvent.click(trigger, { shiftKey: true });
 
-    await waitFor(() => expect(onOpen).toHaveBeenCalledWith(terminal, "single"));
+    await waitFor(() => expect(onOpen).toHaveBeenCalledWith(terminal, "left"));
     expect(client.listTerminals).toHaveBeenCalledOnce();
     expect(client.createTerminal).toHaveBeenCalledOnce();
 
@@ -185,7 +185,7 @@ describe("ThreadTerminalMenu", () => {
     expect(client.listTerminals).toHaveBeenCalledOnce();
 
     resolveList({ terminals: [] });
-    await waitFor(() => expect(onOpen).toHaveBeenCalledWith(terminal, "split"));
+    await waitFor(() => expect(onOpen).toHaveBeenCalledWith(terminal));
     expect(client.listTerminals).toHaveBeenCalledOnce();
     expect(client.createTerminal).toHaveBeenCalledOnce();
   });
@@ -213,7 +213,7 @@ describe("ThreadTerminalMenu", () => {
     }));
 
     await waitFor(() => expect(client.createTerminal).toHaveBeenCalledOnce());
-    expect(onOpen).toHaveBeenCalledWith(terminal, "split");
+    expect(onOpen).toHaveBeenCalledWith(terminal);
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
@@ -245,7 +245,7 @@ describe("ThreadTerminalMenu", () => {
     expect(screen.getByRole("menuitem", { name: "Retry" }).querySelector(".lucide-rotate-cw")).not.toBeNull();
     fireEvent.click(screen.getByRole("menuitem", { name: "Retry" }));
 
-    await waitFor(() => expect(onOpen).toHaveBeenCalledWith(terminal, "split"));
+    await waitFor(() => expect(onOpen).toHaveBeenCalledWith(terminal));
     expect(client.listTerminals).toHaveBeenCalledTimes(2);
     expect(client.createTerminal).toHaveBeenCalledOnce();
   });
@@ -298,7 +298,7 @@ describe("ThreadTerminalMenu", () => {
     );
     fireEvent.click(screen.getByRole("menuitem", { name: "Retry" }));
 
-    await waitFor(() => expect(onOpen).toHaveBeenCalledWith(terminal, "split"));
+    await waitFor(() => expect(onOpen).toHaveBeenCalledWith(terminal));
     expect(client.createTerminal).toHaveBeenCalledTimes(2);
     const firstRequest = client.createTerminal.mock.calls[0]?.[1];
     const secondRequest = client.createTerminal.mock.calls[1]?.[1];
@@ -340,67 +340,6 @@ describe("ThreadTerminalMenu", () => {
       terminal.threadId,
       expect.objectContaining({ displayName: "Terminal", rows: 24, columns: 80 }),
     );
-  });
-
-  it("keeps tab creation within the current presentation even with Shift", async () => {
-    let resolveCreate!: (value: { terminal: TerminalResource }) => void;
-    const client = api([]);
-    client.createTerminal.mockReturnValue(
-      new Promise((resolve) => {
-        resolveCreate = resolve;
-      }) as never,
-    );
-    const onOpen = vi.fn();
-    render(
-      <TerminalMenuFixture
-        threadId={terminal.threadId}
-        api={client as never}
-        onOpen={onOpen}
-      />,
-    );
-
-    fireEvent.pointerDown(screen.getByRole("button", { name: "Open terminal tab" }), {
-      button: 0,
-      ctrlKey: false,
-    });
-    const create = await screen.findByRole("menuitem", { name: "New terminal" });
-    fireEvent.pointerDown(create, { button: 0, shiftKey: true });
-    fireEvent.click(create);
-    localStorage.setItem("sedes-panel-presentation", "single");
-    resolveCreate({ terminal });
-
-    await waitFor(() =>
-      expect(onOpen).toHaveBeenCalledWith(terminal),
-    );
-  });
-
-  it("does not leak a canceled Shift gesture into a later keyboard selection", async () => {
-    const client = api();
-    const onOpen = vi.fn();
-    render(
-      <TerminalMenuFixture
-        threadId={terminal.threadId}
-        api={client as never}
-        onOpen={onOpen}
-      />,
-    );
-
-    const trigger = screen.getByRole("button", { name: "Open terminal tab" });
-    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
-    const firstEntry = await screen.findByRole("menuitem", {
-      name: /Build shell.*Running/u,
-    });
-    fireEvent.pointerDown(firstEntry, { button: 0, shiftKey: true });
-    fireEvent.keyDown(firstEntry, { key: "Escape" });
-    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
-
-    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
-    const reopenedEntry = await screen.findByRole("menuitem", {
-      name: /Build shell.*Running/u,
-    });
-    fireEvent.keyDown(reopenedEntry, { key: "Enter" });
-
-    expect(onOpen).toHaveBeenCalledWith(terminal);
   });
 
   it("uses the same new-or-existing menu from a terminal tab add button", async () => {

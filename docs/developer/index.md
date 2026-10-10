@@ -26,7 +26,8 @@ the system contracts under [Internals](../internals/). In particular:
   before any backend-facing or cross-cutting provider change;
 - use the subsystem references under [Internals](../internals/) when changing
   attachments, agent tools, blocking interactions, forks, output artifacts,
-  workspace files, remote workspace tools, or managed Codex TUI behavior; and
+  workspace files, workspace panels, remote workspace tools, or managed Codex
+  TUI behavior; and
 - use [Operations](../operator/operations.md) and
   [Configuration](../operator/configuration.md) for operator-visible runtime
   behavior.

@@ -1,8 +1,9 @@
 import { useState } from "react";
-import { Minus, MoreVertical, X } from "lucide-react";
+import { Maximize2, Minimize2, MoreVertical, X } from "lucide-react";
 import { Button } from "../components/ui/button.js";
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuLabel,
   DropdownMenuRadioGroup,
@@ -13,34 +14,47 @@ import {
 import { useMediaQuery } from "../app/use-media-query.js";
 import { useTouchDensity } from "../app/use-touch-density.js";
 import type { EnvironmentTintStyle } from "../app/environment-palette.js";
-import type { PanelPlacementEdge } from "./layout-tree.js";
+import { REGION_IDS, isEdgeRegion, regionAxis, type RegionId } from "./regions.js";
+import { REGION_TITLES } from "./panel-kinds.js";
 import type { WorkspacePanelTenant } from "./registry.js";
 
 /** Matches PanelLayout's narrow layout: exactly one pane is ever on stage. */
 const SINGLE_PANE_QUERY = "(max-width: 819px)";
 
-const DOCK_EDGES: readonly PanelPlacementEdge[] = ["left", "right", "top", "bottom"];
-const DOCK_LABEL: Record<PanelPlacementEdge, string> = {
-  left: "Left",
-  right: "Right",
-  top: "Top",
-  bottom: "Bottom",
-};
-
 export interface PanelChromeStatus {
   readonly busy?: boolean;
   readonly dirty?: boolean;
   readonly subtitle?: string;
-  /** The tenant's own ⋯ items, published through its host. */
+}
+
+/**
+ * Where the panel sits on the desktop stage, and the header's controls for
+ * it: Maximize or Restore, ⋯ → Move to, and for an edge region the Full
+ * height or Full width toggle. Phones have no regions, so the header leaves
+ * these out there.
+ */
+export interface PanelRegionControls {
+  readonly region: RegionId;
+  readonly maximized: boolean;
+  /** Edge regions only: whether the region takes its shared corners. */
+  readonly extended?: boolean;
+  readonly onMaximize: () => void;
+  readonly onRestore: () => void;
+  readonly onMove: (region: RegionId) => void;
+  readonly onExtend: (on: boolean) => void;
 }
 
 export interface PanelChromeControls {
   readonly active?: boolean;
-  readonly onCollapse: () => void;
-  readonly onClose: (invoker: HTMLElement) => void;
-  readonly onDock: (edge: PanelPlacementEdge) => void;
-  /** The edge the panel is docked at now, if any; the Dock group checks it. */
-  readonly dockEdge?: PanelPlacementEdge;
+  /**
+   * ✕: closes (unloads) the panel; with `closeAction: "hide"` it hides it.
+   * Without it there is no ✕, as for Chat on phones, which is their home.
+   */
+  readonly onClose?: (invoker: HTMLElement) => void;
+  /** Chat's ✕ hides it and keeps it loaded; every other panel's closes. */
+  readonly closeAction?: "close" | "hide";
+  readonly region?: PanelRegionControls;
+  /** The tenant's own ⋯ items, after Move to. */
   readonly renderMenuItems?: React.ReactNode;
 }
 
@@ -119,27 +133,34 @@ function PanelChromeActions({
 }: {
   readonly title: string;
   readonly controls: PanelChromeControls;
-}): React.JSX.Element {
-  // Docking places a surface relative to another one, which a single-pane
-  // layout has none of. The menu then holds nothing at all unless a tenant
-  // contributes items, so it stops being rendered rather than opening empty.
+}): React.JSX.Element | null {
   const [menuOpen, setMenuOpen] = useState(false);
-  const docking = !useMediaQuery(SINGLE_PANE_QUERY);
-  const hasMenu = docking || Boolean(controls.renderMenuItems);
-  // A tenant's own items (with the Dock group, or nested choices such as
-  // Move to ›) are a sheet under touch density.
+  // Regions place a surface beside others, which a single-pane layout has
+  // none of. The menu then holds nothing at all unless a tenant contributes
+  // items, so it stops being rendered rather than opening empty.
+  const singlePane = useMediaQuery(SINGLE_PANE_QUERY);
+  const region = singlePane ? undefined : controls.region;
+  const hasMenu = region !== undefined || Boolean(controls.renderMenuItems);
+  // A tenant's own items (with Move to, or nested choices of their own) are
+  // a sheet under touch density; Move to alone stays a menu.
   const sheet = useTouchDensity() && Boolean(controls.renderMenuItems);
+  const closeVerb = controls.closeAction === "hide" ? "Hide" : "Close";
+  const onClose = controls.onClose;
+  if (!region && !hasMenu && !onClose) return null;
   return (
     <div className="workspace-panel-actions">
-      <Button
-        variant="ghost"
-        size="icon-sm"
-        aria-label={`Collapse ${title} panel`}
-        title={`Collapse ${title} panel`}
-        onClick={controls.onCollapse}
-      >
-        <Minus size={16} />
-      </Button>
+      {region ? (
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label={`${region.maximized ? "Restore" : "Maximize"} ${title} panel`}
+          title={`${region.maximized ? "Restore" : "Maximize"} ${title} panel`}
+          data-maximized={region.maximized || undefined}
+          onClick={region.maximized ? region.onRestore : region.onMaximize}
+        >
+          {region.maximized ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+        </Button>
+      ) : null}
 
       {hasMenu ? (
         <DropdownMenu
@@ -158,30 +179,10 @@ function PanelChromeActions({
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" sheetTitle={`${title} panel`}>
-            {docking ? (
-              <>
-                <DropdownMenuLabel>Dock</DropdownMenuLabel>
-                <DropdownMenuRadioGroup
-                  aria-label="Dock"
-                  value={controls.dockEdge ?? ""}
-                  onValueChange={(value) => {
-                    // Docking again at the current edge would only reset
-                    // the panel's size.
-                    const edge = DOCK_EDGES.find((candidate) => candidate === value);
-                    if (edge && edge !== controls.dockEdge) controls.onDock(edge);
-                  }}
-                >
-                  {DOCK_EDGES.map((edge) => (
-                    <DropdownMenuRadioItem key={edge} value={edge}>
-                      {DOCK_LABEL[edge]}
-                    </DropdownMenuRadioItem>
-                  ))}
-                </DropdownMenuRadioGroup>
-              </>
-            ) : null}
+            {region ? <PanelRegionMenuItems region={region} /> : null}
             {controls.renderMenuItems && (
               <>
-                {docking ? <DropdownMenuSeparator /> : null}
+                {region ? <DropdownMenuSeparator /> : null}
                 {controls.renderMenuItems}
               </>
             )}
@@ -189,16 +190,58 @@ function PanelChromeActions({
         </DropdownMenu>
       ) : null}
 
-      <Button
-        variant="ghost"
-        size="icon-sm"
-        aria-label={`Close ${title} panel`}
-        title={`Close ${title} panel`}
-        onClick={(event) => controls.onClose(event.currentTarget)}
-      >
-        <X size={16} />
-      </Button>
+      {onClose ? (
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label={`${closeVerb} ${title} panel`}
+          title={`${closeVerb} ${title} panel`}
+          onClick={(event) => onClose(event.currentTarget)}
+        >
+          <X size={16} />
+        </Button>
+      ) : null}
     </div>
+  );
+}
+
+/** ⋯ → Move to (the current region checked), and Full height or width. */
+function PanelRegionMenuItems({
+  region,
+}: {
+  readonly region: PanelRegionControls;
+}): React.JSX.Element {
+  const edge = isEdgeRegion(region.region) ? region.region : undefined;
+  return (
+    <>
+      <DropdownMenuLabel>Move to</DropdownMenuLabel>
+      <DropdownMenuRadioGroup
+        aria-label="Move to"
+        value={region.region}
+        onValueChange={(value) => {
+          // Choosing the current region changes nothing.
+          const target = REGION_IDS.find((candidate) => candidate === value);
+          if (target && target !== region.region) region.onMove(target);
+        }}
+      >
+        {REGION_IDS.map((candidate) => (
+          <DropdownMenuRadioItem key={candidate} value={candidate}>
+            {REGION_TITLES[candidate]}
+          </DropdownMenuRadioItem>
+        ))}
+      </DropdownMenuRadioGroup>
+      {edge ? (
+        <>
+          <DropdownMenuSeparator />
+          <DropdownMenuCheckboxItem
+            checked={region.extended === true}
+            onCheckedChange={(checked) => region.onExtend(checked === true)}
+          >
+            {regionAxis(edge) === "width" ? "Full height" : "Full width"}
+          </DropdownMenuCheckboxItem>
+        </>
+      ) : null}
+    </>
   );
 }
 

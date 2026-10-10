@@ -6,7 +6,9 @@ import { expect, test } from "./fixtures";
 import {
   capture,
   expectNoPageOverflow,
+  openPanelFromMenu,
   overlaySettled,
+  panelsMenuRow,
   selectCustomNewThreadTarget,
 } from "./helpers";
 import {
@@ -78,10 +80,8 @@ async function navigateToThread(page: Page, pathname: string): Promise<void> {
 
 async function openFilesPanel(page: Page): Promise<Locator> {
   const existing = page.getByRole("region", { name: "Workspace files" });
-  if (!(await existing.isVisible().catch(() => false))) {
-    await page.getByRole("button", { name: "Panels", exact: true }).click();
-    await page.getByRole("menuitem", { name: /^Files(?: —|$)/ }).click();
-  }
+  if (!(await existing.isVisible().catch(() => false)))
+    await openPanelFromMenu(page, "Files");
   await expect(existing).toBeVisible({ timeout: 15_000 });
   return existing;
 }
@@ -672,15 +672,21 @@ test.describe.serial("workspace file browser and editor", () => {
     await closeGuard.getByRole("button", { name: "Keep editing" }).click();
     await expect(editable).toContainText("45");
 
-    await page.getByRole("button", { name: "Collapse Files panel" }).click();
+    // Hiding keeps Files loaded, so its unsaved edit needs no confirmation.
+    await page.getByRole("button", { name: "Hide Files panel", exact: true }).click();
     await expect(panel).toBeHidden();
     await expect(
       page.getByRole("dialog", { name: "Discard unsaved changes?" }),
     ).toHaveCount(0);
-    await page.getByRole("button", { name: "Panels" }).click();
-    const restoreFiles = page.getByRole("menuitem", {
-      name: /^Files —.*Collapsed$/,
-    });
+    await expect(page.getByTestId("files-panel-toggle")).toHaveAttribute(
+      "data-state",
+      "hidden",
+    );
+    await page.getByRole("button", { name: "Panels", exact: true }).click();
+    const restoreFiles = panelsMenuRow(page, "Files");
+    await expect(restoreFiles).toHaveAccessibleName(
+      "Files, Loaded, hidden, unsaved changes",
+    );
     await expect(restoreFiles.getByLabel("Unsaved changes")).toBeVisible();
     await restoreFiles.click();
     await expect(panel).toBeVisible();

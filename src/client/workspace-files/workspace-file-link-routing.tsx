@@ -11,16 +11,10 @@ import {
   type WorkspaceFilesOpenTarget,
   type WorkspaceFilesOpenIntent,
 } from "./open-intent.js";
-import type { PanelPresentation } from "../workspace-panels/panel-presentation.js";
 
 export interface WorkspaceFileLinkRequest {
   readonly reference: WorkspaceFileLinkReference;
   readonly target: WorkspaceFilesOpenTarget;
-}
-
-export interface WorkspaceFileLinkOpenRequest extends WorkspaceFileLinkRequest {
-  /** The click-time presentation decision must survive asynchronous resolution. */
-  readonly presentation: PanelPresentation;
 }
 
 export interface WorkspaceFileLinkHandler {
@@ -30,7 +24,7 @@ export interface WorkspaceFileLinkHandler {
    * file authority; the server maps it to an opaque rootId + relative path.
    */
   openReference(
-    request: WorkspaceFileLinkOpenRequest,
+    request: WorkspaceFileLinkRequest,
   ): boolean | undefined | Promise<boolean | undefined>;
   /** Prevent a pending resolution from opening a panel after scope changes. */
   dispose?(): void;
@@ -120,10 +114,8 @@ export function createWorkspaceFileLinkHandler({
     reference: WorkspaceFileLinkReference,
     signal?: AbortSignal,
   ) => Promise<WorkspaceFileLinkResolveResult>;
-  readonly open: (
-    intent: WorkspaceFilesOpenIntent,
-    presentation: PanelPresentation,
-  ) => void;
+  /** Opens Files in its place with the resolved file. */
+  readonly open: (intent: WorkspaceFilesOpenIntent) => void;
 }): WorkspaceFileLinkHandler {
   const controllers = new Set<AbortController>();
   let latestRequest = 0;
@@ -149,7 +141,6 @@ export function createWorkspaceFileLinkHandler({
             rootVisibility: result.rootVisibility,
             target: requestInput.target,
           }),
-          requestInput.presentation,
         );
         return true;
       } catch (error) {

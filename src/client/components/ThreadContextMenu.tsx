@@ -71,10 +71,7 @@ import {
   parkNeedsConfirmation,
 } from "./thread/ParkImpactDialog.js";
 import { MoveToGroupSubmenu, NewGroupDialog } from "./MoveToGroupMenu.js";
-import {
-  configuredPanelPresentation,
-  openThreadRoute,
-} from "../workspace-panels/thread-panel-navigation.js";
+import { openThreadRoute } from "../workspace-panels/thread-panel-navigation.js";
 import { initialFocusTarget } from "@client/components/ui/dialog";
 import {
   ContextMenu,
@@ -504,7 +501,6 @@ export function ThreadContextMenu({
           : retained.forkTurn(selection.capability, { restart });
       },
       restart: latestFork.restart,
-      presentation: configuredPanelPresentation(),
       onNavigate,
     });
   };
@@ -516,7 +512,6 @@ export function ThreadContextMenu({
       create: async () => (await store.createThreadFromSettings(thread.id, {
         title: DEFAULT_THREAD_TITLE,
       })).threadId,
-      presentation: configuredPanelPresentation(),
       onNavigate,
     }).finally(() => setConfigurationCopyPending(false));
   };
@@ -773,10 +768,7 @@ export function ThreadContextMenu({
       {lineage?.sourceThreadId && (
         <ContextMenuItem
           onSelect={() => {
-            openThreadRoute(
-              lineage.sourceThreadId!,
-              configuredPanelPresentation(),
-            );
+            openThreadRoute(lineage.sourceThreadId!);
             onNavigate?.();
           }}
         >
@@ -796,7 +788,6 @@ export function ThreadContextMenu({
           onSelect={() => {
             openThreadRoute(
               lineage.sourceThreadId!,
-              configuredPanelPresentation(),
               lineage.sourceTurnId!,
             );
             onNavigate?.();

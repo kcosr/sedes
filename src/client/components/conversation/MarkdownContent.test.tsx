@@ -17,7 +17,6 @@ import {
   createWorkspaceFileLinkHandler,
   WorkspaceFileLinkProvider,
 } from "../../workspace-files/workspace-file-link-routing.js";
-import { setPanelPresentation } from "../../app/settings.js";
 import { MarkdownContent } from "./MarkdownContent.js";
 
 vi.mock("./MermaidDiagram.js", () => ({
@@ -36,13 +35,11 @@ vi.mock("./MermaidDiagram.js", () => ({
 
 afterEach(() => {
   cleanup();
-  setPanelPresentation("split");
 });
 
 const fileRequest = (reference: WorkspaceFileLinkReference) => ({
   reference,
   target: { kind: "file" as const },
-  presentation: "split" as const,
 });
 
 describe("MarkdownContent line breaks", () => {
@@ -428,33 +425,6 @@ describe("MarkdownContent workspace file links", () => {
     );
   });
 
-  it("uses the stored presentation normally and inverts it for Shift-click", () => {
-    const openReference = vi.fn();
-    setPanelPresentation("single");
-    render(
-      <WorkspaceFileLinkProvider handler={{ openReference }}>
-        <MarkdownContent>
-          [Normal](file:///work/project/normal.md)
-          [Shifted](file:///work/project/shifted.md)
-        </MarkdownContent>
-      </WorkspaceFileLinkProvider>,
-    );
-
-    fireEvent.click(screen.getByRole("link", { name: "Normal" }));
-    fireEvent.click(screen.getByRole("link", { name: "Shifted" }), {
-      shiftKey: true,
-    });
-
-    expect(openReference).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({ presentation: "single" }),
-    );
-    expect(openReference).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({ presentation: "split" }),
-    );
-  });
-
   it.each([
     [
       "/home/user/project/README.md",
@@ -502,8 +472,7 @@ describe("MarkdownContent workspace file links", () => {
       expect(openReference).toHaveBeenCalledExactlyOnceWith({
         reference: { kind, path },
         target,
-        presentation: "split",
-      });
+        });
     },
   );
 
@@ -540,7 +509,6 @@ describe("MarkdownContent workspace file links", () => {
         path: "docs/guides/next.md",
       },
       target: { kind: "file" },
-      presentation: "split",
     });
     expect(openReference).toHaveBeenNthCalledWith(2, {
       reference: {
@@ -549,7 +517,6 @@ describe("MarkdownContent workspace file links", () => {
         path: "docs/guides/other.md",
       },
       target: { kind: "source_line", lineNumber: 27 },
-      presentation: "split",
     });
 
     fireEvent.click(parent);
@@ -560,7 +527,6 @@ describe("MarkdownContent workspace file links", () => {
         path: "docs/escape.md",
       },
       target: { kind: "file" },
-      presentation: "split",
     });
     expect(screen.queryByRole("link", { name: "Above root" })).toBeNull();
     expect(screen.getByText("Above root")).toBeInTheDocument();
@@ -817,7 +783,6 @@ describe("MarkdownContent workspace file links", () => {
     await handler.openReference({
       reference,
       target: { kind: "source_line", lineNumber: 27 },
-      presentation: "single",
     });
 
     expect(resolve).toHaveBeenCalledExactlyOnceWith(
@@ -834,7 +799,6 @@ describe("MarkdownContent workspace file links", () => {
         rootVisibility: "link_only",
         target: { kind: "source_line", lineNumber: 27 },
       }),
-      "single",
     );
   });
 
@@ -909,13 +873,12 @@ describe("MarkdownContent workspace file links", () => {
       open,
     });
 
-    const first = handler.openReference({
-      ...fileRequest({
+    const first = handler.openReference(
+      fileRequest({
         kind: "absolute",
         path: "/work/project/first.md",
       }),
-      presentation: "single",
-    });
+    );
     const second = handler.openReference(
       fileRequest({ kind: "absolute", path: "/work/project/second.md" }),
     );
@@ -939,7 +902,6 @@ describe("MarkdownContent workspace file links", () => {
         rootId: "primary",
         path: "second.md",
       }),
-      "split",
     );
   });
 

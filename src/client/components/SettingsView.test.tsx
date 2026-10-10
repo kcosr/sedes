@@ -27,7 +27,6 @@ import {
   getHistoryPageSize,
   getMobileComposerRefocusAfterSend,
   getMobileHistorySeekControl,
-  getPanelPresentation,
   getRightOptionFocusesComposer,
   getSeekOnSubmit,
   getSmoothStreamingEnabled,
@@ -836,18 +835,6 @@ describe("SettingsView", () => {
 
     fireEvent.click(toggle);
     expect(getSeekOnSubmit()).toBe(false);
-  });
-
-  it("chooses the device-local panel opening presentation", () => {
-    renderSettings();
-
-    const setting = screen.getByTestId("panel-presentation-setting");
-    expect(setting).toHaveValue("split");
-    expect(getPanelPresentation()).toBe("split");
-
-    fireEvent.change(setting, { target: { value: "single" } });
-    expect(setting).toHaveValue("single");
-    expect(getPanelPresentation()).toBe("single");
   });
 
   it("selects server-projected activity summaries for this browser", () => {

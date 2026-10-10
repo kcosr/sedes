@@ -419,9 +419,17 @@ describe("ThreadView loading header", () => {
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
   });
 
-  it("keeps panel collapse, close, and docking controls available during loading", () => {
+  it("keeps panel Maximize, hide, and Move to controls available during loading", () => {
     const state = loadingFixture();
-    const panelControls = { onCollapse: vi.fn(), onClose: vi.fn(), onDock: vi.fn() };
+    const region = {
+      region: "middle" as const,
+      maximized: false,
+      onMaximize: vi.fn(),
+      onRestore: vi.fn(),
+      onMove: vi.fn(),
+      onExtend: vi.fn(),
+    };
+    const panelControls = { onClose: vi.fn(), closeAction: "hide" as const, region };
     render(
       <ThreadView
         threadId={state.snapshot.thread.id}
@@ -431,16 +439,16 @@ describe("ThreadView loading header", () => {
         panelControls={panelControls}
       />,
     );
-    fireEvent.click(screen.getByRole("button", { name: "Collapse Chat panel" }));
-    expect(panelControls.onCollapse).toHaveBeenCalledOnce();
-    const close = screen.getByRole("button", { name: "Close Chat panel" });
+    fireEvent.click(screen.getByRole("button", { name: "Maximize Chat panel" }));
+    expect(region.onMaximize).toHaveBeenCalledOnce();
+    const close = screen.getByRole("button", { name: "Hide Chat panel" });
     fireEvent.click(close);
     expect(panelControls.onClose).toHaveBeenCalledWith(close);
     const menu = screen.getByRole("button", { name: "Chat panel actions" });
     expect(menu).toBeEnabled();
     fireEvent.keyDown(menu, { key: "Enter" });
     fireEvent.click(screen.getByRole("menuitemradio", { name: "Right" }));
-    expect(panelControls.onDock).toHaveBeenCalledWith("right");
+    expect(region.onMove).toHaveBeenCalledWith("right");
   });
 
   it("hands off to the real snapshot while preserving connection authority for the composer", () => {

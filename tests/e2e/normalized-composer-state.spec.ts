@@ -5,6 +5,7 @@ import {
   createDraftThread,
   expectNoPageOverflow,
   fillAndPersistDraft,
+  openPanelFromMenu,
   openSedesWorkspace,
   overlaySettled,
   selectCustomNewThreadTarget,
@@ -483,7 +484,8 @@ test.describe.serial("normalized composer state", () => {
     await openSedesWorkspace(page);
     await createDraftThread(page);
 
-    await page.getByTestId("tasks-panel-toggle").click();
+    // Tasks has no quick button until it is loaded; ▾ opens it.
+    await openPanelFromMenu(page, "Tasks");
     const tasksPanel = page.locator('[data-slot="tasks-panel"]');
     await expect(tasksPanel).toHaveAttribute("data-presentation", "panel");
     const taskEditor = page.getByRole("dialog", { name: "Edit task" });
@@ -655,12 +657,13 @@ test.describe.serial("normalized composer state", () => {
       .click();
     await taskDeleted;
     await expect(taskEditor).toHaveCount(0);
-    // Close docked Tasks: Escape leaves a docked panel open.
-    await page
+    // Hide docked Tasks (Escape leaves a docked panel open); it stays loaded.
+    const tasksToggle = page
       .getByTestId("workspace-workbench-bar")
-      .getByTestId("tasks-panel-toggle")
-      .click();
-    await expect(tasksPanel).toHaveCount(0);
+      .getByTestId("tasks-panel-toggle");
+    await tasksToggle.click();
+    await expect(tasksPanel).toBeHidden();
+    await expect(tasksToggle).toHaveAttribute("data-state", "hidden");
 
     const missingTaskChip = page
       .getByTestId("composer")
@@ -723,7 +726,9 @@ test.describe.serial("normalized composer state", () => {
     await expect(deliveredTask).toContainText(
       "This is the body captured at send time.",
     );
-    await page.getByTestId("tasks-panel-toggle").click();
+    // Tasks stayed loaded through the reload, so its quick button shows it.
+    await expect(tasksToggle).toHaveAttribute("data-state", "hidden");
+    await tasksToggle.click();
     await tasksPanel.getByRole("radio", { name: "Thread" }).click();
     // Completed earlier, the task waits in the collapsed Completed section.
     await tasksPanel.getByRole("button", { name: /^Completed/ }).click();
@@ -745,6 +750,8 @@ test.describe.serial("normalized composer state", () => {
     await deliveredTaskDeleted;
     await expect(taskEditor).toHaveCount(0);
     await tasksPanel.getByRole("button", { name: "Close Tasks panel" }).click();
+    await expect(tasksPanel).toHaveCount(0);
+    await expect(tasksToggle).toHaveCount(0);
 
     await expect(deliveredTask).toContainText("Ship durable task context");
     await expect(deliveredTask).toContainText(

@@ -22,7 +22,7 @@ import {
   resolveComposerWorkspaceId,
   toolClientResources,
 } from "./ApplicationShell.js";
-import { PanelLayoutStore } from "../workspace-panels/panel-state.js";
+import { PanelRegionStore } from "../workspace-panels/region-store.js";
 import { WorkspacePanelTenantRegistry } from "../workspace-panels/registry.js";
 import type { Route } from "../app/router.js";
 import type { ApplicationClientState } from "../stores/ApplicationClientStore.js";
@@ -41,22 +41,18 @@ const workspaceResolver =
     threads.find(({ id }) => id === threadId)?.workspaceId;
 
 describe("thread panel selection", () => {
-  it("opens the destination thread Chat panel with the resolved presentation", () => {
-    const openPanel = vi.fn(() => true);
-    const forThread = vi.fn(() => ({ openPanel }));
+  it("opens the destination thread's Chat panel with focus", () => {
+    const open = vi.fn(() => true);
+    const forThread = vi.fn(() => ({ open }));
 
     expect(
       openThreadChatPanel(
-        { forThread } as unknown as Pick<PanelLayoutStore, "forThread">,
+        { forThread } as unknown as Pick<PanelRegionStore, "forThread">,
         "thread-destination",
-        "single",
       ),
     ).toBe(true);
     expect(forThread).toHaveBeenCalledWith("thread-destination");
-    expect(openPanel).toHaveBeenCalledWith("chat", {
-      focus: true,
-      presentation: "single",
-    });
+    expect(open).toHaveBeenCalledWith("chat", { focus: true });
   });
 });
 
@@ -294,7 +290,7 @@ describe("workspace panel navigation policy", () => {
 
 describe("workspace panel beforeunload policy", () => {
   it("installs only while dirty and removes the listener when cleaned or unmounted", () => {
-    const store = new PanelLayoutStore(new WorkspacePanelTenantRegistry([]), {
+    const store = new PanelRegionStore(new WorkspacePanelTenantRegistry([]), {
       storage: { getItem: () => null, setItem: () => undefined },
     });
     const remove = installWorkspacePanelBeforeUnloadGuard(store, window);

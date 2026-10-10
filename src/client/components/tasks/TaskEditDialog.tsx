@@ -96,36 +96,34 @@ function useContentMounted(): [(node: HTMLDivElement | null) => void, boolean] {
  * whether it is in the backlog, with Delete… on the footer's leading edge.
  * A completed task is never pinned or in the backlog, so both switches are
  * off and disabled for one. Its state outlives `open`, so an edit survives
- * the Tasks surface being suspended (Settings) and comes back when it is
+ * Tasks being hidden or suspended (Settings) and comes back when it is
  * shown again. Unsaved changes are guarded on every way out.
- *
- * When the surface Tasks is shown on changes under it (crossing the phone
- * breakpoint), the new surface mounts over the dialog and takes focus. The
- * dialog, with a confirmation open over it, then closes until their old
- * content has gone, and opens again on top, with its edits.
  *
  * Each dialog hides the rest of the page from assistive technology, and
  * traps focus, as its content mounts: mounted together, the editor and its
- * confirmation would hide each other. So when they open again after a move
- * or Settings, the editor waits for a confirmation still closing from
- * before, and the confirmation waits for the editor's content to mount.
+ * confirmation would hide each other. So when they open again, the editor
+ * waits for a confirmation still closing from before, and the confirmation
+ * waits for the editor's content to mount.
  */
 export function TaskEditDialog({
   task,
   open,
-  surface,
   store,
   destinations,
   onClose,
+  onDirtyChange,
 }: {
   /** The live task; undefined once it has been deleted elsewhere. */
   readonly task: AssociatedTask | undefined;
   readonly open: boolean;
-  /** The surface Tasks is shown on: the panel or the sheet. */
-  readonly surface: string;
   readonly store: ApplicationClientStore;
   readonly destinations: TaskDestinations;
   readonly onClose: () => void;
+  /**
+   * Whether the edit has unsaved changes, so whatever would discard the
+   * editor (closing or unloading Tasks) can ask first. False on unmount.
+   */
+  readonly onDirtyChange?: (dirty: boolean) => void;
 }): React.JSX.Element {
   const touch = useTouchDensity();
   // The task as it was when editing began: the baseline for "dirty" and the
@@ -143,16 +141,11 @@ export function TaskEditDialog({
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [shownSurface, setShownSurface] = useState(surface);
   const [editorRef, editorMounted] = useContentMounted();
   const [discardRef, discardMounted] = useContentMounted();
   const [deleteRef, deleteMounted] = useContentMounted();
   const confirmationMounted = discardMounted || deleteMounted;
-  const moving = shownSurface !== surface;
-  useEffect(() => {
-    if (moving && !editorMounted && !confirmationMounted) setShownSurface(surface);
-  }, [moving, editorMounted, confirmationMounted, surface]);
-  const shown = open && !moving && (editorMounted || !confirmationMounted);
+  const shown = open && (editorMounted || !confirmationMounted);
   const confirmable = shown && editorMounted;
 
   const dirty =
@@ -165,6 +158,11 @@ export function TaskEditDialog({
       draft.backlog !== initial.backlog ||
       !sameFiles(draft.files, initial.files) ||
       newFilePath.trim().length > 0);
+
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
+  useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
 
   const requestClose = () => {
     if (saving) return;

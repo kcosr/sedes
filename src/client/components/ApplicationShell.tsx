@@ -53,9 +53,8 @@ import {
   ServerSettingsForm,
   type ServerSettingsControls,
 } from "./ServerSettingsForm";
-import type { PanelLayoutStore } from "../workspace-panels/panel-state";
+import type { PanelRegionStore } from "../workspace-panels/region-store";
 import type { WorkspacePanelTenantRegistry } from "../workspace-panels/registry";
-import type { PanelPresentation } from "../workspace-panels/panel-presentation.js";
 import { installThreadPanelOpenRequestListener } from "../workspace-panels/thread-panel-navigation.js";
 import { ComposerDraftProvider } from "../context-excerpts/coordinator.js";
 import { TaskDragProvider } from "../tasks/task-drag.js";
@@ -82,7 +81,7 @@ export function ApplicationShell({
   threadRegistry: ThreadStoreRegistry;
   serverSettings?: ServerSettingsControls;
   electronConnectionSettings?: ElectronConnectionSettingsControls;
-  panelLayoutStore: PanelLayoutStore;
+  panelLayoutStore: PanelRegionStore;
   panelTenants: WorkspacePanelTenantRegistry;
   toolClientEndpoint: string;
 }): React.JSX.Element {
@@ -287,11 +286,7 @@ export function ApplicationShell({
   useEffect(
     () =>
       installThreadPanelOpenRequestListener(window, (request) => {
-        openThreadChatPanel(
-          panelLayoutStore,
-          request.threadId,
-          request.presentation,
-        );
+        openThreadChatPanel(panelLayoutStore, request.threadId);
       }),
     [panelLayoutStore],
   );
@@ -320,8 +315,8 @@ export function ApplicationShell({
       store={applicationStore}
       threadRegistry={threadRegistry}
       selectedThreadId={route.name === "thread" || route.name === "automation" ? route.threadId : undefined}
-      onSelectThread={(threadId, presentation) => {
-        openThreadChatPanel(panelLayoutStore, threadId, presentation);
+      onSelectThread={(threadId) => {
+        openThreadChatPanel(panelLayoutStore, threadId);
       }}
       onNavigate={(options) => {
         if (!options?.keepDrawerOpen) setDrawerOpen(false);
@@ -343,7 +338,7 @@ export function ApplicationShell({
     workbenchRoute,
     applicationStore.workspaceIdForThread,
   );
-  const routedPanelLayoutStore =
+  const routedPanelRegionStore =
     workbenchRoute.name === "thread"
       ? panelLayoutStore.forThread(workbenchRoute.threadId)
       : panelLayoutStore;
@@ -355,14 +350,14 @@ export function ApplicationShell({
       active={!settingsActive}
       route={workbenchRoute}
       store={applicationStore}
-      panelLayoutStore={routedPanelLayoutStore}
+      panelLayoutStore={routedPanelRegionStore}
     >
       <Workbench
         route={workbenchRoute}
         active={!settingsActive}
         applicationStore={applicationStore}
         threadRegistry={threadRegistry}
-        panelLayoutStore={routedPanelLayoutStore}
+        panelLayoutStore={routedPanelRegionStore}
         panelTenants={panelTenants}
       />
     </TasksPanel>
@@ -549,13 +544,10 @@ export function toolClientResources(
 }
 
 export function openThreadChatPanel(
-  panelLayoutStore: Pick<PanelLayoutStore, "forThread">,
+  panelLayoutStore: Pick<PanelRegionStore, "forThread">,
   threadId: string,
-  presentation: PanelPresentation,
 ): boolean {
-  return panelLayoutStore
-    .forThread(threadId)
-    .openPanel("chat", { focus: true, presentation });
+  return panelLayoutStore.forThread(threadId).open("chat", { focus: true });
 }
 
 export function installPromptSettingsRequestListener(
@@ -588,7 +580,7 @@ export interface WorkspacePanelNavigationBlockHandlers {
 export function createWorkspacePanelNavigationBlocker(
   workspaceForThread: (threadId: string) => string | undefined,
   panelLayoutStore: Pick<
-    PanelLayoutStore,
+    PanelRegionStore,
     "hasDirtyWorkspacePanels" | "discardWorkspacePanelChanges"
   >,
   handlers: WorkspacePanelNavigationBlockHandlers,
@@ -618,7 +610,7 @@ export function createWorkspacePanelNavigationBlocker(
 
 export function installWorkspacePanelBeforeUnloadGuard(
   panelLayoutStore: Pick<
-    PanelLayoutStore,
+    PanelRegionStore,
     "hasAnyDirtyWorkspacePanels" | "subscribeWorkspaceDirty"
   >,
   target: Pick<Window, "addEventListener" | "removeEventListener">,

@@ -26,7 +26,11 @@ import type {
 } from "../../stores/ApplicationClientStore.js";
 import type { ThreadClientStore } from "../../stores/ThreadClientStore.js";
 import { UsageQueryCache } from "../../stores/UsageQueryCache.js";
-import type { PanelChromeControls } from "../../workspace-panels/PanelChrome.js";
+import type {
+  PanelChromeControls,
+  PanelRegionControls,
+} from "../../workspace-panels/PanelChrome.js";
+import type { RegionId } from "../../workspace-panels/regions.js";
 import { setEnvironmentColorsEnabled } from "../../app/environment-palette.js";
 import { ThreadHeader } from "./ThreadHeader.js";
 import {
@@ -410,7 +414,8 @@ function renderHeader({
   readonly renameAvailable?: boolean;
   readonly connection?: "connected" | "reconnecting" | "disconnected";
   readonly brand?: "pi" | "codex" | "claude";
-  readonly withPanelControls?: boolean;
+  /** "phone": what a phone layout passes Chat, which has no ✕ there. */
+  readonly withPanelControls?: boolean | "phone";
   readonly available?: boolean;
   readonly forkOrigins?: readonly {
     readonly childThreadId: string;
@@ -425,13 +430,16 @@ function renderHeader({
     ...(projects === undefined ? {} : { projects }),
     ...(workspaces === undefined ? {} : { workspaces }),
   });
-  const panelControls: PanelChromeControls | undefined = withPanelControls
-    ? {
-        onCollapse: vi.fn(),
-        onClose: vi.fn(),
-        onDock: vi.fn(),
-      }
-    : undefined;
+  const panelControls: PanelChromeControls | undefined =
+    withPanelControls === "phone"
+      ? { active: true }
+      : withPanelControls
+        ? {
+            onClose: vi.fn(),
+            closeAction: "hide",
+            region: chatRegion(),
+          }
+        : undefined;
   const view = render(
     <ThreadHeader
       store={threadStore}
@@ -486,6 +494,20 @@ function rowLabels(menu: HTMLElement): string[] {
     );
 }
 
+
+/** The Chat panel's region controls, as PanelLayout passes them. */
+function chatRegion(region: RegionId = "middle"): PanelRegionControls {
+  return {
+    region,
+    maximized: false,
+    ...(region === "middle" ? {} : { extended: false }),
+    onMaximize: vi.fn(),
+    onRestore: vi.fn(),
+    onMove: vi.fn(),
+    onExtend: vi.fn(),
+  };
+}
+
 describe("ThreadHeader panel chrome", () => {
   it("colors Chat by its environment only when environments are distinguishable", () => {
     renderHeader({ environmentCount: 2 });
@@ -518,13 +540,13 @@ describe("ThreadHeader panel chrome", () => {
     const header = screen.getByRole("banner", { name: "Chat panel header" });
     expect(header).toHaveClass("workspace-panel-chrome", "thread-header");
     expect(
-      screen.getByRole("button", { name: "Collapse Chat panel" }),
+      screen.getByRole("button", { name: "Maximize Chat panel" }),
     ).toBeVisible();
     expect(
       screen.getByRole("button", { name: "Chat panel actions" }),
     ).toBeVisible();
     expect(
-      screen.getByRole("button", { name: "Close Chat panel" }),
+      screen.getByRole("button", { name: "Hide Chat panel" }),
     ).toBeVisible();
 
     const threadActions = screen.getByRole("button", {
@@ -534,7 +556,7 @@ describe("ThreadHeader panel chrome", () => {
     expect(threadActions.querySelector(".lucide-ellipsis")).toBeNull();
     expect(
       threadActions.compareDocumentPosition(
-        screen.getByRole("button", { name: "Collapse Chat panel" }),
+        screen.getByRole("button", { name: "Maximize Chat panel" }),
       ),
     ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
     expect(header.querySelector(".thread-panel-identity")).toBeNull();
@@ -550,7 +572,7 @@ describe("ThreadHeader panel chrome", () => {
     );
   });
 
-  it("passes the chat panel's dock edge to its Dock menu", async () => {
+  it("passes the chat panel's region to its Move to menu", async () => {
     const { applicationStore, threadStore } = fixture(0);
     render(
       <ThreadHeader
@@ -567,10 +589,9 @@ describe("ThreadHeader panel chrome", () => {
         pendingBookmarkTurnIds={[]}
         onSelectBookmarkTurn={vi.fn()}
         panelControls={{
-          onCollapse: vi.fn(),
           onClose: vi.fn(),
-          onDock: vi.fn(),
-          dockEdge: "right",
+          closeAction: "hide",
+          region: chatRegion("right"),
         }}
         findOpen={false}
         findButtonRef={{ current: null }}
@@ -580,7 +601,7 @@ describe("ThreadHeader panel chrome", () => {
     await userEvent.click(
       screen.getByRole("button", { name: "Chat panel actions" }),
     );
-    const dock = await screen.findByRole("group", { name: "Dock" });
+    const dock = await screen.findByRole("group", { name: "Move to" });
     expect(
       within(dock).getByRole("menuitemradio", { name: "Right" }),
     ).toHaveAttribute("aria-checked", "true");
@@ -652,7 +673,7 @@ describe("ThreadHeader panel chrome", () => {
         removeEventListener: vi.fn(),
       })),
     );
-    renderHeader({ automation, withPanelControls: true });
+    renderHeader({ automation, withPanelControls: "phone" });
 
     const toolbar = screen.getByTestId("thread-controls");
     expect(
@@ -663,7 +684,9 @@ describe("ThreadHeader panel chrome", () => {
     const toggle = screen.getByRole("button", { name: "Show thread toolbar" });
     const bookmarks = screen.getByRole("button", { name: "Bookmarks" });
     const settings = screen.getByRole("button", { name: "Thread actions" });
-    const collapse = screen.getByRole("button", { name: "Collapse Chat panel" });
+    // Chat is a phone's home: it has no Maximize and no ✕ there.
+    expect(screen.queryByRole("button", { name: "Maximize Chat panel" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Hide Chat panel" })).toBeNull();
     expect(toggle).toHaveAttribute("aria-expanded", "false");
     expect(toolbar).toHaveAttribute("hidden");
     expect(bookmarks).toBeVisible();
@@ -679,7 +702,7 @@ describe("ThreadHeader panel chrome", () => {
     } else {
       expect(screen.queryByRole("button", { name: "Automation" })).toBeNull();
     }
-    actions.push(settings, toggle, collapse);
+    actions.push(settings, toggle);
     for (let index = 1; index < actions.length; index += 1) {
       expect(actions[index - 1]!.compareDocumentPosition(actions[index]!)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
     }
@@ -707,13 +730,15 @@ describe("ThreadHeader panel chrome", () => {
       })),
     );
     const onFindOpenChange = vi.fn();
-    renderHeader({ automation: true, withPanelControls: true, onFindOpenChange });
+    renderHeader({ automation: true, withPanelControls: "phone", onFindOpenChange });
 
     const toolbar = screen.getByTestId("thread-controls");
     expect(screen.queryByRole("button", { name: "Show thread toolbar" })).toBeNull();
     expect(screen.getByRole("button", { name: "Bookmarks" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Automation" })).toBeVisible();
-    expect(screen.getByRole("button", { name: "Collapse Chat panel" })).toBeVisible();
+    // Chat is a phone's home: it has no Maximize and no ✕ there.
+    expect(screen.queryByRole("button", { name: "Maximize Chat panel" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Hide Chat panel" })).toBeNull();
     expect(toolbar).toHaveAttribute("hidden");
 
     await userEvent.click(screen.getByRole("button", { name: "Thread actions" }));

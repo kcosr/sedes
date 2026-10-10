@@ -9,7 +9,6 @@ import {
 } from "lucide-react";
 import type { TerminalResource } from "../../shared/index.js";
 import type { ApiClient } from "../api/ApiClient.js";
-import { getPanelPresentation } from "../app/settings.js";
 import { Input } from "../components/ui/input.js";
 import { Button } from "../components/ui/button.js";
 import { ConfirmDialog } from "../components/ui/confirm-dialog.js";
@@ -36,10 +35,7 @@ import {
   DropdownMenuTrigger,
 } from "../components/ui/dropdown-menu.js";
 import { isTerminalProcessLive, terminalStatusLabel, terminalTerminationLabel, terminalTerminationDescription, terminalTerminationPendingLabel } from "./domain.js";
-import {
-  resolvePanelPresentation,
-  type PanelPresentation,
-} from "../workspace-panels/panel-presentation.js";
+import type { RegionId } from "../workspace-panels/regions.js";
 import { cn } from "../lib/utils.js";
 
 /** A row's square icon action (rename, tear down) beside the terminal entry. */
@@ -51,7 +47,12 @@ interface LifecycleConfirmation {
 }
 
 export interface ThreadTerminalMenuHandle {
-  open(presentation: PanelPresentation, invoker: HTMLElement | null): void;
+  /**
+   * The Terminals entry: shows the loaded panel, else attaches to a running
+   * terminal, else creates one. With `region`, Terminals opens there and
+   * that becomes its place.
+   */
+  open(region: RegionId | undefined, invoker: HTMLElement | null): void;
   create(invoker: HTMLElement | null): void;
 }
 
@@ -65,12 +66,11 @@ export interface ThreadTerminalMenuProps {
     ApiClient,
     "listTerminals" | "createTerminal" | "endTerminal" | "deleteTerminal"
   >;
-  readonly onOpen: (
-    terminal: TerminalResource,
-    presentation?: PanelPresentation,
-  ) => void;
+  /** Shows the terminal's tab, in `region` when the entry chose one. */
+  readonly onOpen: (terminal: TerminalResource, region?: RegionId) => void;
   readonly onRename: (terminalId: string, displayName: string) => Promise<void>;
-  readonly onReveal?: (presentation: PanelPresentation) => boolean;
+  /** Shows an already loaded Terminals panel; false when none is loaded. */
+  readonly onReveal?: (region?: RegionId) => boolean;
   readonly onResourceChange?: (terminal: TerminalResource) => void;
   readonly onDelete?: (terminalId: string) => void;
 }
@@ -106,14 +106,14 @@ export function ThreadTerminalMenu({
   const [loading, setLoading] = useState(false);
   const [creating, setCreating] = useState(false);
   const [entryPending, setEntryPending] = useState(false);
-  const [entryRetryPresentation, setEntryRetryPresentation] =
-    useState<PanelPresentation>();
+  // The entry to repeat after an inventory or creation failure.
+  const [entryRetry, setEntryRetry] =
+    useState<{ readonly region?: RegionId }>();
   const entryFailureId = useId();
   const [lifecycleConfirmation, setLifecycleConfirmation] =
     useState<LifecycleConfirmation>();
   const [message, setMessage] = useState<string>();
   const createMutationId = useRef<string | null>(null);
-  const selectedPresentation = useRef<PanelPresentation | undefined>(undefined);
   const lifecycleMutationAttempts = useRef(
     new Map<string, { readonly mutationId: string; readonly revision: number }>(),
   );
@@ -167,13 +167,12 @@ export function ThreadTerminalMenu({
     setLoading(false);
     setCreating(false);
     setEntryPending(false);
-    setEntryRetryPresentation(undefined);
+    setEntryRetry(undefined);
     setMessage(undefined);
     refreshRequestId.current += 1;
     createMutationId.current = null;
     creatingRef.current = false;
     entryPendingRef.current = false;
-    selectedPresentation.current = undefined;
     lifecycleMutationAttempts.current.clear();
     suppressCloseAutoFocus.current = false;
     skipNextOpenRefresh.current = false;
@@ -185,16 +184,11 @@ export function ThreadTerminalMenu({
       skipNextOpenRefresh.current = false;
       return;
     }
-    setEntryRetryPresentation(undefined);
+    setEntryRetry(undefined);
     const controller = new AbortController();
     void refresh(controller.signal);
     return () => controller.abort();
   }, [open, refresh]);
-
-  const presentationForEntry = (shiftKey = false): PanelPresentation | undefined =>
-    triggerVariant === "tab"
-      ? undefined
-      : resolvePanelPresentation(getPanelPresentation(), shiftKey);
 
   const showMenuWithoutRefresh = () => {
     if (triggerVariant === "panel") {
@@ -209,7 +203,7 @@ export function ThreadTerminalMenu({
     setOpen(true);
   };
 
-  const create = async (presentation?: PanelPresentation): Promise<boolean> => {
+  const create = async (region?: RegionId): Promise<boolean> => {
     if (creatingRef.current) return false;
     const actionThreadId = threadId;
     const menuWasOpen = open;
@@ -237,8 +231,8 @@ export function ThreadTerminalMenu({
       suppressCloseAutoFocus.current = menuWasOpen;
       setOpen(false);
       entryPanelOpenedRef.current = true;
-      if (presentation === undefined) onOpen(result.terminal);
-      else onOpen(result.terminal, presentation);
+      if (region === undefined) onOpen(result.terminal);
+      else onOpen(result.terminal, region);
       return true;
     } catch (error: unknown) {
       if (currentThreadIdRef.current === actionThreadId) {
@@ -253,29 +247,30 @@ export function ThreadTerminalMenu({
     }
   };
 
-  const openFromPrimaryTrigger = async (presentation: PanelPresentation) => {
+  const openFromPrimaryTrigger = async (region?: RegionId) => {
     if (entryPendingRef.current || creatingRef.current) return;
     const actionThreadId = threadId;
     entryPendingRef.current = true;
     setEntryPending(true);
-    setEntryRetryPresentation(undefined);
+    setEntryRetry(undefined);
     try {
       const owned = await refresh();
       if (currentThreadIdRef.current !== actionThreadId) return;
       if (!owned) {
-        setEntryRetryPresentation(presentation);
+        setEntryRetry({ region });
         showMenuWithoutRefresh();
         return;
       }
       const terminal = owned.find(({ incarnationId }) => incarnationId !== null);
       if (terminal) {
         entryPanelOpenedRef.current = true;
-        onOpen(terminal, presentation);
+        if (region === undefined) onOpen(terminal);
+        else onOpen(terminal, region);
         return;
       }
-      if (!await create(presentation)) {
+      if (!await create(region)) {
         if (currentThreadIdRef.current !== actionThreadId) return;
-        setEntryRetryPresentation(presentation);
+        setEntryRetry({ region });
         showMenuWithoutRefresh();
       }
     } finally {
@@ -286,9 +281,9 @@ export function ThreadTerminalMenu({
     }
   };
 
-  const activatePrimaryTrigger = (presentation: PanelPresentation) => {
-    if (onReveal?.(presentation)) return;
-    void openFromPrimaryTrigger(presentation);
+  const activatePrimaryTrigger = (region?: RegionId) => {
+    if (onReveal?.(region)) return;
+    void openFromPrimaryTrigger(region);
   };
 
   useImperativeHandle(ref, () => ({
@@ -297,15 +292,15 @@ export function ThreadTerminalMenu({
       entryInvokerRef.current = invoker;
       entryPanelOpenedRef.current = false;
       const actionThreadId = threadId;
-      void create(presentationForEntry()).then((created) => {
+      void create().then((created) => {
         if (!created && currentThreadIdRef.current === actionThreadId)
           showMenuWithoutRefresh();
       });
     },
-    open: (presentation, invoker) => {
+    open: (region, invoker) => {
       entryInvokerRef.current = invoker;
       entryPanelOpenedRef.current = false;
-      activatePrimaryTrigger(presentation);
+      activatePrimaryTrigger(region);
     },
   }));
 
@@ -377,7 +372,6 @@ export function ThreadTerminalMenu({
           open={active && open}
           onOpenChange={(nextOpen) => {
             if (nextOpen && entryPendingRef.current) return;
-            selectedPresentation.current = undefined;
             setOpen(nextOpen);
           }}
         >
@@ -405,18 +399,9 @@ export function ThreadTerminalMenu({
           <DropdownMenuLabel>Terminals</DropdownMenuLabel>
           <DropdownMenuItem
             disabled={creating}
-            onPointerDown={(event) => {
-              selectedPresentation.current = presentationForEntry(event.shiftKey);
-            }}
-            onPointerCancel={() => {
-              selectedPresentation.current = undefined;
-            }}
             onSelect={(event) => {
               event.preventDefault();
-              const presentation =
-                selectedPresentation.current ?? presentationForEntry();
-              selectedPresentation.current = undefined;
-              void create(presentation);
+              void create();
             }}
           >
             <Plus aria-hidden="true" />
@@ -453,20 +438,8 @@ export function ThreadTerminalMenu({
                         : undefined
                     }
                     onSelect={() => {
-                      const presentation =
-                        selectedPresentation.current ?? presentationForEntry();
-                      selectedPresentation.current = undefined;
                       suppressCloseAutoFocus.current = true;
-                      if (presentation === undefined) onOpen(terminal);
-                      else onOpen(terminal, presentation);
-                    }}
-                    onPointerDown={(event) => {
-                      selectedPresentation.current = presentationForEntry(
-                        event.shiftKey,
-                      );
-                    }}
-                    onPointerCancel={() => {
-                      selectedPresentation.current = undefined;
+                      onOpen(terminal);
                     }}
                   >
                     <TerminalIcon aria-hidden="true" />
@@ -517,10 +490,10 @@ export function ThreadTerminalMenu({
             })
           )}
           {message ? <DropdownMenuEmpty role="alert">{message}</DropdownMenuEmpty> : null}
-          {entryRetryPresentation ? (
+          {entryRetry ? (
             <DropdownMenuItem
               onSelect={() => {
-                activatePrimaryTrigger(entryRetryPresentation);
+                activatePrimaryTrigger(entryRetry.region);
               }}
             >
               <RotateCw aria-hidden="true" />
@@ -540,7 +513,7 @@ export function ThreadTerminalMenu({
         confirmLabel="Retry"
         cancelLabel="Close"
         onConfirm={() => {
-          if (entryRetryPresentation) activatePrimaryTrigger(entryRetryPresentation);
+          if (entryRetry) activatePrimaryTrigger(entryRetry.region);
         }}
       >
         <DialogAlert id={entryFailureId} tone="danger">{message}</DialogAlert>

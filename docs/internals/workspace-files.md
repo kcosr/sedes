@@ -77,7 +77,7 @@ Discovery is lazy and its admitted topology is cached. Application startup does
 no Git work. Opening the thread worktree selector, opening or returning to a
 visible Files panel in a foreground document, manual refresh, relative-link
 resolution, or the source-thread agent helper can refresh topology. Neither
-Browse nor Compare subscribes to filesystem events. Collapsed, inactive, and
+Browse nor Compare subscribes to filesystem events. Hidden, inactive, and
 background panels retain editor state and defer Browse loading. Returning
 refreshes root topology; loaded directories and clean editor contents are
 refreshed explicitly. The Files events API remains available for explicit

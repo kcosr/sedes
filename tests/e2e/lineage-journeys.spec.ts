@@ -9,9 +9,15 @@ import {
   createDraftThread,
   expectNoPageOverflow,
   fillAndPersistDraft,
+  openPanelFromMenu,
   openSedesWorkspace,
   sendCurrentDraft,
 } from "./helpers.js";
+
+/** The device panel layout every thread shares, as persisted. */
+async function devicePanelLayout(page: Page): Promise<string | null> {
+  return page.evaluate(() => localStorage.getItem("sedes-panel-regions@1"));
+}
 
 async function applicationSession(page: Page) {
   const response = await page.request.get("/api/application/session");
@@ -362,38 +368,34 @@ test.describe.serial("normalized lineage browser journeys", () => {
       localStorage.getItem("sedes.sidebar.groupForks"),
     );
 
-    await page.getByRole("button", { name: "Panels", exact: true }).click();
-    await page.getByRole("menuitem", { name: /^Files(?: —|$)/ }).click();
+    await openPanelFromMenu(page, "Files");
     await expect(
       page.getByRole("region", { name: "Workspace files" }),
     ).toBeVisible({ timeout: 15_000 });
     const rowHandle = page.getByRole("separator", {
-      name: "Resize Chat and Files panels",
+      name: "Resize Files panel",
     });
-    const layoutBeforeResize = await page.evaluate(() =>
-      localStorage.getItem(`sedes-thread-panel-instance-layout@4:${encodeURIComponent(location.pathname.split("/")[2] ?? "")}`),
-    );
+    const layoutBeforeResize = await devicePanelLayout(page);
     const rowBox = await rowHandle.boundingBox();
     expect(rowBox).not.toBeNull();
     await page.mouse.move(rowBox!.x + 2, rowBox!.y + rowBox!.height / 2);
     await page.mouse.down();
     await page.mouse.move(rowBox!.x + 36, rowBox!.y + rowBox!.height / 2);
     await page.mouse.up();
-    expect(
-      await page.evaluate(() =>
-        localStorage.getItem(`sedes-thread-panel-instance-layout@4:${encodeURIComponent(location.pathname.split("/")[2] ?? "")}`),
-      ),
-    ).not.toBe(layoutBeforeResize);
+    expect(await devicePanelLayout(page)).not.toBe(layoutBeforeResize);
 
-    await page.getByRole("button", { name: "Collapse Chat panel" }).click();
+    // Chat's ✕ hides it and keeps it loaded.
+    await page
+      .getByRole("region", { name: "Chat panel", exact: true })
+      .getByRole("button", { name: "Hide Chat panel", exact: true })
+      .click();
     await expect(page.getByTestId("thread-view")).toBeHidden();
     await expect(
       page.getByRole("region", { name: "Workspace files" }),
     ).toBeVisible();
     expect(page.url()).toBe(historicalUrl);
     await capture(page, testInfo, "lineage-historical-chat-collapsed.png");
-    await page.getByRole("button", { name: "Panels" }).click();
-    await page.getByRole("menuitem", { name: /^Chat —/ }).click();
+    await openPanelFromMenu(page, "Chat");
     await expect(composer).toBeDisabled();
     expect(
       await page
@@ -543,9 +545,7 @@ test.describe.serial("normalized lineage browser journeys", () => {
     await capture(page, testInfo, "lineage-lifecycle-promoted-desktop.png");
 
     // Fork grouping now lives in the view-options popover.
-    const panelsBeforeGrouping = await page.evaluate(() =>
-      localStorage.getItem(`sedes-thread-panel-instance-layout@4:${encodeURIComponent(location.pathname.split("/")[2] ?? "")}`),
-    );
+    const panelsBeforeGrouping = await devicePanelLayout(page);
     await capture(page, testInfo, "lineage-grouped-panels.png");
     await page.getByRole("button", { name: "View options" }).click();
     await page.getByRole("menuitemcheckbox", { name: /Group fork families/ }).click();
@@ -555,17 +555,14 @@ test.describe.serial("normalized lineage browser journeys", () => {
       childRow(page).getByRole("button", { name: /Forked from/ }),
     ).toHaveCount(1);
     // Grouping preferences and panel layout persistence are independent.
-    expect(
-      await page.evaluate(() =>
-        localStorage.getItem(`sedes-thread-panel-instance-layout@4:${encodeURIComponent(location.pathname.split("/")[2] ?? "")}`),
-      ),
-    ).toBe(panelsBeforeGrouping);
+    expect(await devicePanelLayout(page)).toBe(panelsBeforeGrouping);
     await capture(page, testInfo, "lineage-flat-desktop.png");
     const flatGrouping = await page.evaluate(() =>
       localStorage.getItem("sedes.sidebar.groupForks"),
     );
-    // Singleton panel presentation must not disturb the sidebar view prefs.
-    await page.getByRole("button", { name: "Collapse Chat panel" }).click();
+    // Hiding Chat from the bar must not disturb the sidebar view prefs.
+    await page.getByTestId("chat-panel-toggle").click();
+    await expect(page.getByTestId("chat-panel-toggle")).toHaveAttribute("data-state", "hidden");
     await expect(page.getByTestId("thread-view")).toBeHidden();
     await expect(
       page.getByRole("button", { name: "Panels" }),
@@ -580,8 +577,8 @@ test.describe.serial("normalized lineage browser journeys", () => {
         localStorage.getItem("sedes.sidebar.groupForks"),
       ),
     ).toBe(flatGrouping);
-    await page.getByRole("button", { name: "Panels" }).click();
-    await page.getByRole("menuitem", { name: /^Chat —/ }).click();
+    await page.getByRole("button", { name: "Show Chat panel", exact: true }).click();
+    await expect(page.getByTestId("thread-view")).toBeVisible();
     await capture(page, testInfo, "lineage-flat-panels.png");
     await page.reload();
     await page.getByRole("button", { name: "View options" }).click();

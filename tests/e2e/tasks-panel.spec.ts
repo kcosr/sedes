@@ -7,10 +7,12 @@ import { test, expect } from "./fixtures";
 import {
   capture,
   createDraftThread,
+  expectNoPageOverflow,
   overlaySettled,
   selectCustomNewThreadTarget,
   selectRadixOption,
 } from "./helpers";
+import { openPanel, openPanelIn, quickButton, stagePanel } from "./workspace-panel-helpers";
 import {
   normalizedApplicationSnapshotSchema,
   taskMutationResultSchema,
@@ -100,30 +102,31 @@ test.describe.serial("Tasks panel", () => {
     await page.keyboard.press("Control+Shift+L");
     await expect(panel).toHaveCount(0);
 
-    // Thread route: Tasks docks beside Chat; every view applies and Thread
+    // Thread route: ▾ opens Tasks on the Right beside Chat, and its quick
+    // button appears once it is loaded; every view applies and Thread
     // follows the chat.
     const threadPath = await createDraftThread(page);
     const threadId = threadPath.split("/").at(-1)!;
-    const threadTasksToggle = page
-      .getByTestId("workspace-workbench-bar")
-      .getByTestId("tasks-panel-toggle");
-    await expect(threadTasksToggle).toBeVisible();
+    const threadTasksToggle = quickButton(page, "Tasks");
+    await expect(threadTasksToggle).toHaveCount(0);
     await expect(panel).toHaveCount(0);
-    await threadTasksToggle.click();
+    await openPanel(page, "Tasks");
     await expect(panel).toHaveAttribute("data-presentation", "panel");
     await expect(threadTasksToggle).toHaveAttribute("aria-expanded", "true");
-    const tasksLeaf = page.locator('[data-panel-id="tasks"]');
-    const chatLeaf = page.locator('[data-panel-id="chat"]');
+    const tasksLeaf = stagePanel(page, "Tasks");
+    const chatLeaf = stagePanel(page, "Chat");
+    await expect(tasksLeaf).toHaveAttribute("data-region", "right");
     const dockedBox = await tasksLeaf.boundingBox();
     const chatBox = await chatLeaf.boundingBox();
-    // Docked right of Chat, reflowing it rather than covering it.
+    // On the right of Chat, reflowing it rather than covering it.
     expect(dockedBox!.x).toBeGreaterThanOrEqual(chatBox!.x + chatBox!.width);
     expect(dockedBox!.y).toBeCloseTo(chatBox!.y, 0);
     expect(dockedBox!.height).toBeCloseTo(chatBox!.height, 0);
     // One header: the content's panel chrome with the layout's controls.
     await expect(tasksLeaf.locator("header")).toHaveCount(1);
-    await expect(tasksLeaf.getByRole("button", { name: "Collapse Tasks panel" })).toBeVisible();
-    const resize = page.getByRole("separator", { name: "Resize Chat and Files panels" });
+    await expect(tasksLeaf.getByRole("button", { name: "Maximize Tasks panel" })).toBeVisible();
+    await expect(tasksLeaf.getByRole("button", { name: "Close Tasks panel" })).toBeVisible();
+    const resize = page.getByRole("separator", { name: "Resize Tasks panel" });
     const resizeBox = await resize.boundingBox();
     await page.mouse.move(
       resizeBox!.x + resizeBox!.width / 2,
@@ -186,14 +189,14 @@ test.describe.serial("Tasks panel", () => {
       sidebarThread.getByRole("img", { name: "1 open task" }),
     ).toBeVisible();
     await expect(threadTasksToggle).toHaveAccessibleName(
-      "Close Tasks panel, 1 open task",
+      "Hide Tasks panel, 1 open task",
     );
     await expect(
       threadTasksToggle.locator('[data-slot="count-badge"]'),
     ).toHaveText("1");
 
-    // Archived has no Tasks either; returning to the thread finds its docked
-    // Tasks as it was left.
+    // Archived has no Tasks either; returning to the thread finds Tasks as it
+    // was left.
     await page
       .getByTestId("desktop-sidebar")
       .getByRole("button", { name: "More" })
@@ -214,18 +217,21 @@ test.describe.serial("Tasks panel", () => {
     await expect(scopes.getByRole("radio", { name: "Thread" })).toHaveAttribute("aria-checked", "true");
     await expect(threadTask).toBeVisible();
 
-    // Docked Tasks is a panel of its own and stays on stage when Chat collapses.
-    await page.getByRole("button", { name: "Collapse Chat panel" }).click();
+    // Tasks is a panel of its own and stays on stage when Chat is hidden; its
+    // quick button hides and shows it, still loaded.
+    await chatLeaf.getByRole("button", { name: "Hide Chat panel", exact: true }).click();
+    await expect(chatLeaf).toHaveCount(0);
     await expect(panel).toBeVisible();
     await expect(threadTasksToggle).toBeVisible();
     await expect(scopes.getByRole("radio", { name: "Thread" })).toHaveAttribute("aria-checked", "true");
     await threadTasksToggle.click();
-    await expect(panel).toHaveCount(0);
+    await expect(panel).toBeHidden();
+    await expect(threadTasksToggle).toHaveAttribute("data-state", "hidden");
     await threadTasksToggle.click();
     await expect(threadTask).toBeVisible();
-    await capture(page, testInfo, "tasks-chat-collapsed.png");
-    await page.getByRole("button", { name: "Open Chat panel", exact: true }).click();
-    // Reopening Chat requests composer focus after its retained panel mounts.
+    await capture(page, testInfo, "tasks-chat-hidden.png");
+    await quickButton(page, "Chat").click();
+    // Showing Chat requests composer focus after its retained panel mounts.
     // Let that transition finish before typing into another panel's input.
     await expect(page.getByRole("textbox", { name: "Message Scripted agent", exact: true })).toBeFocused();
 
@@ -235,7 +241,7 @@ test.describe.serial("Tasks panel", () => {
       sidebarThread.getByRole("img", { name: "2 open tasks" }),
     ).toBeVisible();
     await expect(threadTasksToggle).toHaveAccessibleName(
-      "Close Tasks panel, 2 open tasks",
+      "Hide Tasks panel, 2 open tasks",
     );
     await expect(
       threadTasksToggle.locator('[data-slot="count-badge"]'),
@@ -269,11 +275,12 @@ test.describe.serial("Tasks panel", () => {
       .toEqual(["Verify endpoint", "Unpinned follow-up"]);
 
     // The singleton Files surface consumes the task intent and keeps its
-    // ordinary markdown preview/edit controls.
-    await page.getByRole("button", { name: "Panels", exact: true }).click();
-    await page.getByRole("menuitem", { name: /^Files(?: —|$)/ }).click();
+    // ordinary markdown preview/edit controls. Placed on the Left, Files
+    // opens beside Tasks rather than in its place on the Right.
+    await openPanelIn(page, "Files", "Left");
     const filesPanel = page.getByRole("region", { name: "Workspace files" });
     await expect(filesPanel).toBeVisible();
+    await expect(stagePanel(page, "Files")).toHaveAttribute("data-region", "left");
     await expect(
       page.getByRole("button", { name: "Refresh workspace files" }),
     ).toBeEnabled({ timeout: TASK_MUTATION_TIMEOUT_MS });
@@ -304,6 +311,29 @@ test.describe.serial("Tasks panel", () => {
     await expect(doneEditing).toBeEnabled();
     await doneEditing.click();
     await capture(page, testInfo, "tasks-file-open-existing-pane.png");
+    await page.getByRole("button", { name: "Close Files panel" }).click();
+    await expect(filesPanel).toHaveCount(0);
+    // A file link opens closed Files in its place: still the Left.
+    const reopenedFileResolved = page.waitForResponse(
+      (response) =>
+        response.request().method() === "POST" &&
+        response.url().includes("/file-links/resolve") &&
+        response.ok(),
+    );
+    await tasks
+      .getByRole("button", {
+        name: `Open ${taskReadme} in Files`,
+      })
+      .click();
+    await reopenedFileResolved;
+    await expect(
+      filesPanel.getByRole("tab", { name: /README\.md/ }),
+    ).toBeVisible({ timeout: TASK_MUTATION_TIMEOUT_MS });
+    await expect(stagePanel(page, "Files")).toHaveAttribute("data-region", "left");
+    await expect(tasksLeaf).toHaveAttribute("data-region", "right");
+    await expect(
+      page.getByRole("button", { name: "Refresh workspace files" }),
+    ).toBeEnabled({ timeout: TASK_MUTATION_TIMEOUT_MS });
     await page.getByRole("button", { name: "Close Files panel" }).click();
     await expect(filesPanel).toHaveCount(0);
 
@@ -374,7 +404,7 @@ test.describe.serial("Tasks panel", () => {
       sidebarThread.getByRole("img", { name: "1 open task" }),
     ).toBeVisible();
     await expect(threadTasksToggle).toHaveAccessibleName(
-      "Close Tasks panel, 1 open task",
+      "Hide Tasks panel, 1 open task",
     );
     await expect(
       threadTasksToggle.locator('[data-slot="count-badge"]'),
@@ -391,7 +421,7 @@ test.describe.serial("Tasks panel", () => {
       0,
       { timeout: TASK_MUTATION_TIMEOUT_MS },
     );
-    await expect(threadTasksToggle).toHaveAccessibleName("Close Tasks panel");
+    await expect(threadTasksToggle).toHaveAccessibleName("Hide Tasks panel");
     await expect(
       threadTasksToggle.locator('[data-slot="count-badge"]'),
     ).toHaveCount(0);
@@ -434,8 +464,8 @@ test.describe.serial("Tasks panel", () => {
     await page.keyboard.press("Escape");
     await expect(page.getByRole("menu")).toHaveCount(0);
 
-    // The docked panel, its width, the last view and its View options
-    // survive a reload.
+    // The panel, its width, the last view and its View options survive a
+    // reload.
     await page.reload();
     await expect(page.locator('[data-slot="tasks-panel"]')).toBeVisible();
     await expect(panel).toHaveAttribute("data-presentation", "panel");
@@ -450,49 +480,129 @@ test.describe.serial("Tasks panel", () => {
     await page.keyboard.press("Escape");
     await expect(page.getByRole("menu")).toHaveCount(0);
 
-    // On mobile, Tasks is a sheet with a detail view inside it.
-    await tasks.getByRole("button", { name: "Close Tasks panel" }).click();
+    // On a phone, Tasks is a panel like Files and Workpads, in front of the
+    // stage, with a detail view inside it. Hidden but loaded, its quick
+    // button brings it in front.
+    await threadTasksToggle.click();
+    await expect(panel).toBeHidden();
     await page.setViewportSize({ width: 412, height: 915 });
     await expect(page.getByTestId("thread-controls")).toBeHidden();
     await expect(threadTasksToggle).toBeVisible();
+    await expect(threadTasksToggle).toHaveAttribute("data-state", "hidden");
     await threadTasksToggle.click();
-    const sheet = page.getByRole("dialog", { name: "Tasks", exact: true });
-    await expect(sheet).toBeVisible();
+    await expect(panel).toBeVisible();
     await expect(panel).toHaveAttribute("data-presentation", "sheet");
-    await expect(page.locator('[data-panel-id="tasks"]')).toHaveCount(0);
-    // The sheet opens on the last view chosen, whatever presented it.
-    await expect(sheet.getByRole("radio", { name: "All" })).toHaveAttribute("aria-checked", "true");
+    await expect(page.locator(".workspace-panel-stage [data-panel-kind]")).toHaveCount(1);
+    await expect(tasksLeaf).toBeVisible();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect(threadTasksToggle).toHaveAttribute("data-state", "visible");
+    // One header, the panel's, without Maximize; its ⋯ carries View options.
+    await expect(tasksLeaf.locator("header")).toHaveCount(1);
+    await expect(tasksLeaf.getByRole("button", { name: "Maximize Tasks panel" })).toHaveCount(0);
+    await expect(tasksLeaf.getByRole("button", { name: "View options" })).toHaveCount(0);
+    // It opens on the last view chosen, whatever presented it.
+    await expect(scopes.getByRole("radio", { name: "All" })).toHaveAttribute("aria-checked", "true");
     await expect(rowTitle("Global errand")).toHaveAccessibleDescription("In Global");
     // Touch density widens the completion circle; the heading follows it.
-    const sheetHeadingLabel = (await sheet.getByRole("button", { name: /^Completed/ }).locator(".list-heading-label").boundingBox())!;
-    const sheetCircle = (await taskRow(tasks, "Global errand").locator(".tasks-check svg").boundingBox())!;
-    expect(Math.abs(sheetHeadingLabel.x - sheetCircle.x)).toBeLessThanOrEqual(1);
+    const phoneHeadingLabel = (await tasks.getByRole("button", { name: /^Completed/ }).locator(".list-heading-label").boundingBox())!;
+    const phoneCircle = (await taskRow(tasks, "Global errand").locator(".tasks-check svg").boundingBox())!;
+    expect(Math.abs(phoneHeadingLabel.x - phoneCircle.x)).toBeLessThanOrEqual(1);
+    await expectNoPageOverflow(page);
     await capture(page, testInfo, "tasks-mobile-all.png");
+    await tasksLeaf.getByRole("button", { name: "Tasks panel actions" }).click();
+    const phoneActions = page.getByRole("dialog", { name: "Tasks panel", exact: true });
+    await expect(phoneActions.getByRole("menuitemradio", { name: "Newest" })).toBeChecked();
+    await expect(phoneActions.getByRole("menuitemcheckbox", { name: "Search notes" })).toBeVisible();
+    await capture(page, testInfo, "tasks-mobile-actions.png");
+    await page.keyboard.press("Escape");
+    await expect(phoneActions).toHaveCount(0);
+
     await selectScope(tasks, "Global");
-    await expect(sheet.getByRole("radio", { name: "Global" })).toHaveAttribute("aria-checked", "true");
-    await sheet.getByRole("button", { name: "Global errand", exact: true }).click();
-    await expect(sheet.getByRole("heading", { name: "Global errand" })).toBeVisible();
-    await expect(sheet.getByRole("button", { name: "Back to tasks" })).toBeFocused();
+    await expect(scopes.getByRole("radio", { name: "Global" })).toHaveAttribute("aria-checked", "true");
+    await tasks.getByRole("button", { name: "Global errand", exact: true }).click();
+    await expect(tasks.getByRole("heading", { name: "Global errand" })).toBeVisible();
+    await expect(tasks.getByRole("button", { name: "Back to tasks" })).toBeFocused();
+    await expect(tasksLeaf.locator("header")).toHaveCount(1);
     await capture(page, testInfo, "tasks-mobile-detail.png");
-    await sheet.getByRole("button", { name: "Back to tasks" }).click();
-    await expect(sheet.getByRole("textbox", { name: "Add a task" })).toBeVisible();
+
+    // Add to prompt shows Chat, with the Task in its composer; Tasks stays
+    // loaded, on its detail.
+    const composer = page.getByTestId("composer");
+    const attached = composer.getByLabel("Attached tasks");
+    await tasks.getByRole("button", { name: "Add to prompt" }).click();
+    await expect(chatLeaf).toBeVisible();
+    await expect(tasksLeaf).toHaveCount(0);
+    await expect(attached).toContainText("Global errand");
+    await expect(composer.getByRole("textbox", { name: "Message Scripted agent" })).not.toBeFocused();
+    await expect(threadTasksToggle).toHaveAttribute("data-state", "hidden");
+    await capture(page, testInfo, "tasks-mobile-added-to-prompt.png");
+    await attached.getByRole("button", { name: "Remove task: Global errand" }).click();
+    await expect(attached).toHaveCount(0);
+    await threadTasksToggle.click();
+    await expect(tasks.getByRole("heading", { name: "Global errand" })).toBeVisible();
+    await tasks.getByRole("button", { name: "Back to tasks" }).click();
+    const phoneAdd = tasks.getByRole("textbox", { name: "Add a task" });
+    await expect(phoneAdd).toBeVisible();
     await capture(page, testInfo, "tasks-mobile-header.png");
-    await sheet.getByRole("button", { name: "Close Tasks panel" }).click();
+
+    // With the soft keyboard up the stage shrinks; the add bar, search and
+    // the editor stay usable above it.
+    await phoneAdd.click();
+    await page.setViewportSize({ width: 412, height: 560 });
+    await expect(phoneAdd).toBeFocused();
+    await expect(phoneAdd).toBeInViewport();
+    await expect(page.getByTestId("workspace-workbench-bar")).toBeInViewport();
+    await expectNoPageOverflow(page);
+    await capture(page, testInfo, "tasks-mobile-keyboard.png");
+    await tasks.getByRole("button", { name: "Search tasks" }).click();
+    const phoneSearch = tasks.getByRole("textbox", { name: "Search tasks" });
+    await expect(phoneSearch).toBeFocused();
+    await expect(phoneSearch).toBeInViewport();
+    await phoneSearch.press("Escape");
+    await expect(phoneSearch).toHaveCount(0);
+    await taskRow(tasks, "Global errand").getByRole("button", { name: "Global errand", exact: true }).click();
+    await tasks.getByRole("button", { name: "Edit", exact: true }).click();
+    const phoneEditor = page.getByRole("dialog", { name: "Edit task", exact: true });
+    await phoneEditor.getByRole("textbox", { name: "Notes" }).click();
+    await overlaySettled(phoneEditor);
+    await expect(phoneEditor.getByRole("textbox", { name: "Notes" })).toBeInViewport();
+    await expect(phoneEditor.getByRole("button", { name: "Save", exact: true })).toBeInViewport();
+    await capture(page, testInfo, "tasks-mobile-keyboard-editor.png");
+    await phoneEditor.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(phoneEditor).toHaveCount(0);
+    await tasks.getByRole("button", { name: "Back to tasks" }).click();
+    await page.setViewportSize({ width: 412, height: 915 });
+
+    // Hiding Tasks shows Chat, Tasks staying loaded.
+    await threadTasksToggle.click();
+    await expect(chatLeaf).toBeVisible();
+    await expect(tasksLeaf).toHaveCount(0);
+    await expect(threadTasksToggle).toHaveAttribute("data-state", "hidden");
     await expect(page.getByRole("button", { name: "Thread actions" })).toBeVisible();
     await page.setViewportSize({ width: 1440, height: 900 });
     await threadTasksToggle.click();
     await expect(panel).toHaveAttribute("data-presentation", "panel");
 
-    // Escape leaves the docked panel alone; Ctrl+Shift+L toggles it from
-    // anywhere, including the composer.
+    // Escape leaves the panel alone; Ctrl+Shift+L toggles it from anywhere,
+    // including the composer.
     await page.keyboard.press("Escape");
     await expect(panel).toBeVisible();
     await page.getByRole("textbox", { name: "Message Scripted agent", exact: true }).click();
     await page.keyboard.press("Control+Shift+L");
-    await expect(page.locator('[data-slot="tasks-panel"]')).toHaveCount(0);
+    await expect(panel).toBeHidden();
     await expect(threadTasksToggle).toHaveAttribute("aria-expanded", "false");
     await page.keyboard.press("Control+Shift+L");
     await expect(panel).toHaveAttribute("data-presentation", "panel");
+    await expect(panel).toBeVisible();
+
+    // ✕ closes Tasks, unloading it; the shortcut opens it again in its place.
+    await tasksLeaf.getByRole("button", { name: "Close Tasks panel" }).click();
+    await expect(panel).toHaveCount(0);
+    await expect(threadTasksToggle).toHaveCount(0);
+    await page.keyboard.press("Control+Shift+L");
+    await expect(panel).toHaveAttribute("data-presentation", "panel");
+    await expect(tasksLeaf).toHaveAttribute("data-region", "right");
+    await expect(threadTasksToggle).toHaveAttribute("aria-expanded", "true");
   });
 
   test("archiving a thread with open tasks routes through the disposition modal and moves them to the project", async ({
@@ -504,7 +614,7 @@ test.describe.serial("Tasks panel", () => {
     const archivedThreadPath = await createDraftThread(page);
 
     // Create one open thread task on the second draft.
-    await page.getByTestId("tasks-panel-toggle").click();
+    await openPanel(page, "Tasks");
     const panel = page.locator('[data-slot="tasks-panel"]');
     const tasks = tasksContent(page);
     await selectScope(tasks, "Thread");
@@ -654,8 +764,8 @@ test("a project's tasks are shared by every location of the project", async ({ p
 
   // A project task and a thread task created in the alpha location.
   await createThreadAt(page, /^Shared app/u, /alpha$/u, "Alpha work");
-  const toggle = page.getByTestId("workspace-workbench-bar").getByTestId("tasks-panel-toggle");
-  await toggle.click();
+  const toggle = quickButton(page, "Tasks");
+  await openPanel(page, "Tasks");
   const tasks = tasksContent(page);
   await selectScope(tasks, "Thread");
   await addTask(tasks, "Alpha follow-up");
@@ -732,16 +842,16 @@ test("mobile task destinations remain usable with long lists and short viewports
   }
   await page.reload();
   await page.setViewportSize({ width: 412, height: 915 });
-  await page
-    .getByTestId("workspace-workbench-bar")
-    .getByTestId("tasks-panel-toggle")
-    .click();
-  const sheet = page.getByRole("dialog", { name: "Tasks", exact: true });
-  await sheet.getByRole("radio", { name: "Global", exact: true }).click();
+  // Tasks comes in front on the phone; the editor and move choosers are
+  // sheets above it.
+  await openPanel(page, "Tasks");
+  const tasks = stagePanel(page, "Tasks");
+  await expect(tasks.locator('[data-slot="tasks-panel"]')).toHaveAttribute("data-presentation", "sheet");
+  await tasks.getByRole("radio", { name: "Global", exact: true }).click();
 
   // Belongs to in the edit sheet: a long, searchable chooser.
-  await sheet.getByRole("button", { name: "Chooser task 0", exact: true }).click();
-  await sheet.getByRole("button", { name: "Edit", exact: true }).click();
+  await tasks.getByRole("button", { name: "Chooser task 0", exact: true }).click();
+  await tasks.getByRole("button", { name: "Edit", exact: true }).click();
   const editor = page.getByRole("dialog", { name: "Edit task", exact: true });
   await editor.getByRole("combobox", { name: "Belongs to", exact: true }).click();
   const chooser = page.getByRole("dialog", { name: "Choose belongs to", exact: true });
@@ -764,7 +874,7 @@ test("mobile task destinations remain usable with long lists and short viewports
   await expect(editor).toHaveCount(0);
 
   // Move to › Choose… stays inside a short viewport.
-  await sheet.getByRole("button", { name: 'Actions for "Chooser task 0"' }).click();
+  await tasks.getByRole("button", { name: 'Actions for "Chooser task 0"' }).click();
   const actions = page.getByRole("dialog", { name: "Chooser task 0" });
   await actions.getByRole("menuitem", { name: "Move to" }).click();
   await actions.getByRole("menuitem", { name: "Choose…" }).click();
@@ -787,5 +897,5 @@ test("mobile task destinations remain usable with long lists and short viewports
   await move.getByRole("group", { name: "Projects" }).getByRole("option").filter({ hasText: "Chooser project 10" }).click();
   await expect(move).toHaveCount(0);
   await moved;
-  await expect(sheet.getByRole("button", { name: "Chooser task 0", exact: true })).toHaveCount(0);
+  await expect(tasks.getByRole("button", { name: "Chooser task 0", exact: true })).toHaveCount(0);
 });

@@ -26,8 +26,6 @@ import {
   type MarkdownFileLinkSource,
   useWorkspaceFileLinkHandler,
 } from "../../workspace-files/workspace-file-link-routing.js";
-import { getPanelPresentation } from "../../app/settings.js";
-import { resolvePanelPresentation } from "../../workspace-panels/panel-presentation.js";
 import { rehypeMarkdownSourcePositions } from "./markdown-source-positions.js";
 import { remarkChecklistPositions, rehypeChecklistInputs, markdownChecklistState, type MarkdownChecklistControls } from "./markdown-checklists.js";
 import { remarkSoftBreaks } from "./markdown-soft-breaks.js";
@@ -271,17 +269,10 @@ export const MarkdownContent = memo(function MarkdownContent({
                     href={fallbackHref ?? "#"}
                     onClick={(event) => {
                       event.preventDefault();
-                      const presentation = resolvePanelPresentation(
-                        getPanelPresentation(),
-                        event.shiftKey,
-                      );
                       setFileLinkNotice(undefined);
                       void Promise.resolve(
                         workspaceFileLinks.openReference(
-                          {
-                            ...classification.request,
-                            presentation,
-                          },
+                          classification.request,
                         ),
                       )
                         .then((opened) => {
