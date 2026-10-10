@@ -116,6 +116,8 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         boolean retryAfterCompletionCue;
         Runnable afterCompletionCue;
         boolean automatic, followUp, replayListening, manualInputValidation, stopped, recognitionFinalized, submissionNotified, clientVoiceOnly;
+        /** Explicit playback replies retain their live-client gate independently of target revalidation. */
+        boolean manualClientRequired;
         /** Fresh current manual-input authority, independent of historical playback or notification turns. */
         String manualActivityToken;
         long clientVoiceExpiresAt;
@@ -959,7 +961,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
                 }
                 if (item.replayListening && (!settings.flag("autoListen") || !canListen())) { finishItem(item); return; }
                 if (item.replayListening || item.manualInputValidation) {
-                    if (!canListen()) { failActive("voice_not_ready"); return; }
+                    if (item.manualClientRequired && !canListen()) { failActive("voice_not_ready"); return; }
                     if (!manualTargetCurrent(value, playCue ? null : item.manualActivityToken)) {
                         if (item.replayListening) finishItem(item); else failActive("target_unavailable");
                         return;
@@ -977,7 +979,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
     }
     /** A separate request prevents reply playback callbacks from advancing recording preparation. */
     private void announceTarget(Active item) {
-        if (active != item || item.stopped || !canListen()) { failActive("voice_not_ready"); return; }
+        if (active != item || item.stopped || !sessionStarted || !speechReady() || !audio.hasPermission()) { failActive("voice_not_ready"); return; }
         item.announcementStarted = true;
         item.announcementId = UUID.randomUUID().toString();
         String request = item.announcementId;
@@ -1024,8 +1026,8 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         if (!clientVoiceStartCurrent(item)) return;
         if (item.automatic && (!settings.flag("autoListen") || !eligible(item.notification))) { finishItem(item); return; }
         if (item.replayListening && (!settings.flag("autoListen") || !canListen())) { finishItem(item); return; }
-        if (item.manualInputValidation && !canListen()) { failActive("voice_not_ready"); return; }
-        item.manualInputValidation = false;
+        if (item.manualClientRequired && !canListen()) { failActive("voice_not_ready"); return; }
+        item.manualInputValidation = false; item.manualClientRequired = false;
         // This preference belongs to the new recording; later edits affect only the next capture.
         final boolean defaultHeld = settings.flag("keepListeningByDefault");
         if (defaultHeldBlocked()) { failActive("saved_recording_pending"); return; }
@@ -1309,7 +1311,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         // A speech control may arrive after its follow-up has begun. The immutable
         // interaction still owns that unsent capture, including a held default.
         if (item == null || !item.playbackOrigin || item.admission != null) throw new IllegalStateException("voice_not_speaking");
-        item.followUp = false; item.replayListening = false; item.manualInputValidation = false;
+        item.followUp = false; item.replayListening = false; item.manualInputValidation = false; item.manualClientRequired = false;
         if (item.recordingStart != null) { cancelRecordingStart(item, "skipped", false, true); return; }
         item.stopped = true; item.ttsId = null; item.announcementId = null; item.cueId = null; item.completionCueId = null; item.afterCompletionCue = null;
         if (item.speechRequest != null) item.speechRequest.cancel();
@@ -1337,7 +1339,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         clientActions.clear(); inputSubmissionContext = new Object();
         cancelActive(true, "record_during_playback", false);
         nextRecordingTarget = null;
-        active = new Active(target, title); active.manualInputValidation = true;
+        active = new Active(target, title); active.manualInputValidation = true; active.manualClientRequired = true;
         validateTarget(active, false);
     }
     private void cancelActive(boolean cancelAdmission, String reason) {

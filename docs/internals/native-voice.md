@@ -73,9 +73,13 @@ can cancel this phase, including a manual start. A Next captured during a manual
 announcement still cancels that same unsent interaction if delivered after the
 cue, recording preparation, or capture begins; a fresh key carrying a recording
 ID remains a no-op. The UI offers Cancel during announcement, not Record or Next.
-All late speech/drain callbacks are fenced by interaction and request identity. Manual starts that add this asynchronous phase
-also revalidate fresh manual-input authority after the cue. Replay and automatic
-follow-ups retain their existing eligibility checks. Announcements happen once
+All late speech/drain callbacks are fenced by interaction and request identity.
+Manual starts that add this asynchronous phase also revalidate fresh manual-input
+authority after the cue. This target revalidation is independent of client-control
+registration: ordinary manual/headset and automatic recording can still capture
+while client controls reconnect, with their durable input waiting for registration
+before submission. Explicit Record during playback, replay, and client-initiated
+starts retain their existing client-readiness checks. Announcements happen once
 per user-level start, never for internal empty-transcript retries, recognition
 segments, reconnects, adoption, retargeting, or saved-audio retries. Changing the
 preference affects future starts without cancelling an active recording. Titles

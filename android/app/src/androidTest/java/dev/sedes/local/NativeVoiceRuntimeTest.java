@@ -2805,6 +2805,77 @@ public class NativeVoiceRuntimeTest {
     }
 
 
+
+    @Test public void announcementDoesNotRequireClientRegistrationForHeadsetOrAutomaticCapture() throws Exception {
+        for (String source : new String[] { "headset", "automatic" }) for (boolean announce : new boolean[] { false, true }) {
+            try (Fixture f = new Fixture(false, false)) {
+                f.readyClientVoice("response"); f.settings(NativeVoiceJson.object("announceRecordingThread", announce, "autoListen", true));
+                f.onOwner(f.runtime::clientDisconnected);
+                JSONObject current = Fixture.inputContext(f.target);
+                if (source.equals("automatic")) {
+                    f.policy(true, false, "speakThenListen"); f.receiveFollowupNotice(f.target, f.target);
+                    SpeechJob reply = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(reply);
+                    f.runtime.drained(reply.id); f.flush();
+                    NativeVoiceJson.put(current, "automaticListenEligible", true); NativeVoiceJson.put(current, "activityToken", "historical-notice-epoch");
+                    NativeVoiceJson.put(current, "sourceTurnId", "notice-turn");
+                } else { f.runtime.notificationAction("headset"); f.flush(); }
+                f.takeClientTarget(f.target).done(200, current, null); f.flush();
+                if (announce) {
+                    SpeechJob announcement = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(source, announcement);
+                    assertEquals("Replying to Current server title.", announcement.text);
+                    f.runtime.drained(announcement.id); f.flush();
+                }
+                if (announce || source.equals("automatic")) { f.takeClientTarget(f.target).done(200, current, null); f.flush(); }
+                f.synthetic = f.speech.transcriptions.poll(10, TimeUnit.SECONDS); assertNotNull(source + "/" + announce, f.synthetic);
+                assertTrue(f.runtime.snapshot().isNull("clientConnectionToken"));
+                assertTrue(f.speech.speechRequests.isEmpty()); assertTrue(f.contexts.isEmpty());
+                f.result(f.synthetic.captureId, true, "Recorded while client controls reconnect");
+                assertEquals("submitting", f.runtime.snapshot().getString("phase"));
+                assertEquals(0, f.inputAttempts.get()); assertEquals(0, f.receiptReads.get());
+                JSONArray journal = f.store.journal(f.binding); assertEquals(1, journal.length());
+                JSONObject pending = journal.getJSONObject(0), request = pending.getJSONObject("request");
+                assertEquals("prepared", pending.getString("stage"));
+                assertEquals(f.target, pending.getString("threadId")); assertEquals("Recorded while client controls reconnect", request.getString("text"));
+                assertEquals(1, ((java.util.Set<?>) field(f.runtime, "waitingClientAdmissions")).size());
+                assertEquals(0, f.runtime.snapshot().getJSONArray("errors").length());
+                // Submission still waits for current client registration and resumes the same durable input once.
+                f.onOwner(() -> f.runtime.clientRegistered(f.request.getJSONObject("origin").getString("clientId"), "renewed-client-token")); f.flush();
+                NativeVoiceHttp.Result input = f.inputs.poll(10, TimeUnit.SECONDS); assertNotNull(input);
+                assertEquals(1, f.inputAttempts.get()); assertEquals(request.getString("mutationId"), f.lastRequest.get().getString("mutationId"));
+                JSONObject receipt = f.receipt("queued"); NativeVoiceJson.put(receipt, "mutationId", request.getString("mutationId"));
+                input.done(200, receipt, null); f.flush();
+                assertEquals(1, f.inputAttempts.get()); assertTrue(f.runtime.snapshot().isNull("active"));
+                assertEquals(0, f.store.journal(f.binding).length()); assertEquals(0, f.runtime.snapshot().getJSONArray("errors").length());
+            }
+        }
+    }
+
+    @Test public void announcementKeepsPlaybackReplyAndClientActionConnectionRequirements() throws Exception {
+        for (String source : new String[] { "record", "client" }) {
+            try (Fixture f = new Fixture(false, false)) {
+                f.readyClientVoice("response"); f.settings(NativeVoiceJson.object("announceRecordingThread", true));
+                if (source.equals("record")) {
+                    f.replay(false, f.target, "historical-turn", "First reply");
+                    assertNotNull(f.speech.speechRequests.poll(10, TimeUnit.SECONDS));
+                    assertNull(f.command("recordDuringPlayback", new JSONObject()));
+                } else {
+                    f.runtime.unobserve(f.submissionObserver); JSONObject command = f.clientSwitch(f.target, true);
+                    assertEquals("accepted", f.clientCommand(command).getString("status"));
+                    assertEquals("accepted", f.settleClientSwitch(command, null).getString("status"));
+                }
+                JSONObject current = Fixture.inputContext(f.target); f.takeClientTarget(f.target).done(200, current, null); f.flush();
+                SpeechJob announcement = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(announcement);
+                f.onOwner(f.runtime::clientDisconnected); f.runtime.drained(announcement.id); f.flush();
+                if (source.equals("record")) {
+                    f.takeClientTarget(f.target).done(200, current, null); f.flush();
+                    assertEquals("voice_not_ready", f.lastError().getString("code"));
+                } else assertTrue("Pending client-only work cancels on client disconnect", announcement.cancelled);
+                assertTrue(source, f.runtime.snapshot().isNull("active")); assertTrue(f.speech.transcriptions.isEmpty());
+                assertTrue(f.contexts.isEmpty()); assertEquals(0, f.inputAttempts.get());
+            }
+        }
+    }
+
     @Test public void announcementWaitsForPhysicalDrainThenExistingCueAndFreshValidationBeforeCapture() throws Exception {
         for (boolean cues : new boolean[] { false, true }) {
             try (Fixture f = new Fixture(false, false)) {
