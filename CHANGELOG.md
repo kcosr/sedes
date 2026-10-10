@@ -11,7 +11,7 @@
   manual-input eligibility for replay Auto-listen and the canonical thread title.
   Upgrade clients together
   with the server.
-  ([#58](https://github.com/kcosr/sedes/pull/58), [#59](https://github.com/kcosr/sedes/pull/59), [#61](https://github.com/kcosr/sedes/pull/61), [#62](https://github.com/kcosr/sedes/pull/62), [#65](https://github.com/kcosr/sedes/pull/65), [#67](https://github.com/kcosr/sedes/pull/67))
+  ([#58](https://github.com/kcosr/sedes/pull/58), [#59](https://github.com/kcosr/sedes/pull/59), [#61](https://github.com/kcosr/sedes/pull/61), [#62](https://github.com/kcosr/sedes/pull/62), [#65](https://github.com/kcosr/sedes/pull/65), [#67](https://github.com/kcosr/sedes/pull/67), [#68](https://github.com/kcosr/sedes/pull/68))
 
 - `PATCH /api/threads/:threadId/inventory` no longer accepts the `remind`
   action. ([#61](https://github.com/kcosr/sedes/pull/61))
@@ -32,7 +32,7 @@
   and version-2 saved dictation remain available. Earlier per-connection
   preferences are not imported and their profile-bound speech keys are removed.
   Older recording manifests remain on disk until discarded but cannot be resumed.
-  ([#49](https://github.com/kcosr/sedes/pull/49), [#51](https://github.com/kcosr/sedes/pull/51), [#53](https://github.com/kcosr/sedes/pull/53), [#55](https://github.com/kcosr/sedes/pull/55), [#67](https://github.com/kcosr/sedes/pull/67))
+  ([#49](https://github.com/kcosr/sedes/pull/49), [#51](https://github.com/kcosr/sedes/pull/51), [#53](https://github.com/kcosr/sedes/pull/53), [#55](https://github.com/kcosr/sedes/pull/55), [#67](https://github.com/kcosr/sedes/pull/67), [#68](https://github.com/kcosr/sedes/pull/68))
 
 - Self-hosted speech servers must advertise per-model `realtime` capabilities.
   Hosted recognition accepts only the supported base model IDs, excluding dated
@@ -234,6 +234,7 @@
 - Android voice can optionally announce the current recording thread title
   before the start cue. The setting defaults off; cancellation or failed speech
   prevents microphone capture, and internal recognition retries do not repeat it.
+  ([#68](https://github.com/kcosr/sedes/pull/68))
 
 - **Delete…** in a workpad's **⋯** permanently deletes it, with its history and
   draft, after you confirm; agents can still only archive. ([#65](https://github.com/kcosr/sedes/pull/65))
@@ -500,6 +501,7 @@
 
 - Unpinned Android voice keeps the last voice thread after playback drains.
   Idle **Next** releases it without navigating or changing a pending target.
+  ([#68](https://github.com/kcosr/sedes/pull/68))
 
 - Android playback offers **Record** to reply to the spoken thread and **Next**
   to skip speech and its follow-up recording. Headset Play/Pause records during
