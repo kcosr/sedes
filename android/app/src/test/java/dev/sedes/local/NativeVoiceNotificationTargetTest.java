@@ -5,6 +5,24 @@ import org.json.JSONObject;
 import org.junit.Test;
 
 public class NativeVoiceNotificationTargetTest {
+    @Test public void retainedIdleControlsStayHiddenWhileASavedRecordingOwnsTheNotification() {
+        JSONObject state = idle(false, false);
+        NativeVoiceJson.put(state, "retainedVoiceTarget", NativeVoiceJson.object("threadId", "retained", "threadTitle", "Last voice thread", "revision", 7));
+        NativeVoiceJson.put(state, "actions", NativeVoiceJson.object("canReleaseRetainedTarget", true, "canStart", false));
+        assertTrue("An unavailable retained target can still be released while idle", NativeVoiceRuntimeService.retainedIdleControls(state));
+        NativeVoiceJson.put(state, "recordingRecovery", NativeVoiceJson.object("threadId", "saved", "threadTitle", "Saved thread"));
+        NativeVoiceJson.put(state, "phase", "recordingRecovery");
+        assertEquals("saved", NativeVoiceRuntimeService.notificationTarget(state).optString("threadId"));
+        assertFalse("Recovery must not show Next for a different retained destination", NativeVoiceRuntimeService.retainedIdleControls(state));
+        NativeVoiceJson.put(state, "phase", "idle");
+        assertEquals("retained", NativeVoiceRuntimeService.notificationTarget(state).optString("threadId"));
+        assertTrue(NativeVoiceRuntimeService.retainedIdleControls(state));
+        NativeVoiceJson.put(state, "active", NativeVoiceJson.object("threadId", "active"));
+        assertFalse(NativeVoiceRuntimeService.retainedIdleControls(state));
+        NativeVoiceJson.put(state, "active", null);
+        NativeVoiceJson.put(state.optJSONObject("actions"), "canReleaseRetainedTarget", false);
+        assertFalse(NativeVoiceRuntimeService.retainedIdleControls(state));
+    }
     @Test public void unpinnedIdleNotificationUsesRetentionRegardlessOfAppNavigationPendingSelectionOrDefault() {
         JSONObject state = idle(false, false);
         NativeVoiceJson.put(state, "retainedVoiceTarget", NativeVoiceJson.object("threadId", "retained", "threadTitle", "Last voice thread", "revision", 7));

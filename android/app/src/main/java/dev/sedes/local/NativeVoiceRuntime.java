@@ -114,6 +114,8 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         final boolean playbackOrigin;
         String targetId, targetTitle, ttsId, announcementId, recordingId, cueId;
         boolean announcementStarted;
+        /** A notification's proposed follow-up destination cannot replace its spoken thread before validation. */
+        boolean recordingTargetAccepted;
         volatile String captureId;
         String lastAudioId;
         String completionCueId;
@@ -989,6 +991,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
                     if (playCue) item.manualActivityToken = value.optString("activityToken");
                 }
                 // The accepted recording destination can differ from the thread whose notice was spoken.
+                item.recordingTargetAccepted = true;
                 retainVoiceTarget(item.targetId, item.targetTitle);
                 if (announce) announceTarget(item);
                 else if (playCue) arm(item); else beginCapture(item);
@@ -1169,6 +1172,8 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
     private void activate(Active item) {
         active = item;
         invalidateIdleTarget();
+        // A silent automatic follow-up has neither spoken nor accepted its recording destination yet.
+        if (item.notification != null && !item.playbackOrigin) return;
         if (item.playbackOrigin) retainVoiceTarget(item.noticeThread, item.noticeTitle);
         else if (item.targetId != null) retainVoiceTarget(item.targetId, item.targetTitle);
         else retainVoiceTarget(item.noticeThread, item.noticeTitle);
@@ -1176,6 +1181,10 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
     /** Unpinning during an interaction restores that interaction's current voice destination. */
     private void retainCurrentVoiceTarget() {
         if (active == null) return;
+        if (active.notification != null && !active.recordingTargetAccepted) {
+            if (active.playbackOrigin) retainVoiceTarget(active.noticeThread, active.noticeTitle);
+            return;
+        }
         if (playingSpeech()) retainVoiceTarget(active.noticeThread, active.noticeTitle);
         else if (active.targetId != null) retainVoiceTarget(active.targetId, active.targetTitle);
         else retainVoiceTarget(active.noticeThread, active.noticeTitle);

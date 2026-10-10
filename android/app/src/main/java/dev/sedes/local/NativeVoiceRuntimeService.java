@@ -157,6 +157,12 @@ public final class NativeVoiceRuntimeService extends Service {
         }
         return NativeVoiceJson.object("threadId", threadId, "threadTitle", threadTitle);
     }
+    /** Recovery names the saved recording, so its notification must not release a different idle target. */
+    static boolean retainedIdleControls(JSONObject state) {
+        JSONObject actions = state.optJSONObject("actions");
+        return state.optString("phase").equals("idle") && state.optJSONObject("active") == null &&
+            actions != null && actions.optBoolean("canReleaseRetainedTarget");
+    }
     private Notification build(JSONObject state) {
         NotificationCompat.Builder builder = new NotificationCompat.Builder(this, CHANNEL);
         JSONObject settings = state.optJSONObject("settings"), actions = state.optJSONObject("actions"), target = notificationTarget(state);
@@ -173,7 +179,7 @@ public final class NativeVoiceRuntimeService extends Service {
         String rearm = settings != null && settings.optBoolean("autoListen") ? "Rearm on" : "Rearm off";
         JSONObject active = state.optJSONObject("active"), recording = active == null ? null : active.optJSONObject("recording");
         boolean held = recording != null && recording.optBoolean("keepListening");
-        boolean retainedIdle = actions != null && actions.optBoolean("canReleaseRetainedTarget");
+        boolean retainedIdle = retainedIdleControls(state);
         if (actions != null && settings != null && (retainedIdle || actions.optBoolean("canStop") && actions.optBoolean("canSkip"))) {
             // Standard templates show at most three actions. The expanded ordinary notification
             // keeps playback and retained-idle controls accessible; custom content is ineligible for promotion.

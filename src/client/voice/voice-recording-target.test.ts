@@ -17,6 +17,18 @@ describe("recording target precedence", () => {
     expect(voiceRecordingTarget(threads, { ...native, retainedVoiceTarget: null }, "viewed")).toEqual({ threadId: "viewed", threadTitle: "Viewed thread" });
     expect(voiceRecordingTarget(threads, { ...native, retainedVoiceTarget: null }, null)).toEqual({ threadId: "default", threadTitle: "Default thread" });
   });
+  it.each(["Original title", null])("refreshes the retained title from inventory without changing its destination (native title %s)", threadTitle => {
+    const native = voiceSnapshot({ retainedVoiceTarget: { threadId: "retained", threadTitle, revision: 2 },
+      settings: voiceSettings({ voiceThreadId: "default" }) });
+    const currentThreads = [...threads, thread("retained", "Original title")];
+    expect(voiceRecordingTarget(currentThreads, native, "viewed")).toEqual({ threadId: "retained", threadTitle: "Original title" });
+    const renamedThreads = currentThreads.map(item => item.id === "retained" ? thread(item.id, "Renamed title") : item);
+    expect(voiceRecordingTarget(renamedThreads, native, "viewed")).toEqual({ threadId: "retained", threadTitle: "Renamed title" });
+  });
+  it.each([["offline", "Unavailable"], ["archived", "Archived"]])("keeps the retained destination and its inventory title pending native validation (%s)", (threadId, threadTitle) => {
+    const native = voiceSnapshot({ retainedVoiceTarget: { threadId, threadTitle: "Old title", revision: 2 } });
+    expect(voiceRecordingTarget(threads, native, "viewed")).toEqual({ threadId, threadTitle });
+  });
   it("gives the explicit next choice precedence over the pin, and the pin precedence over retention", () => {
     const native = voiceSnapshot({ retainedVoiceTarget, settings: voiceSettings({ voiceThreadId: "default", pinDefaultVoiceThread: true }) });
     expect(voiceRecordingTarget(threads, native, "viewed")).toEqual({ threadId: "default", threadTitle: "Default thread" });

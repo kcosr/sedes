@@ -13,6 +13,9 @@ export function voiceRecordingTarget(threads: readonly NormalizedApplicationThre
   };
   if (nextRecordingTarget) return available(nextRecordingTarget.threadId);
   if (settings.pinDefaultVoiceThread) return available(settings.voiceThreadId);
-  if (retainedVoiceTarget) return { threadId: retainedVoiceTarget.threadId, threadTitle: retainedVoiceTarget.threadTitle };
+  if (retainedVoiceTarget) {
+    const thread = threads.find(thread => thread.id === retainedVoiceTarget.threadId);
+    return { threadId: retainedVoiceTarget.threadId, threadTitle: thread ? thread.title.text : retainedVoiceTarget.threadTitle };
+  }
   return available(visibleThreadId) ?? available(settings.voiceThreadId);
 }

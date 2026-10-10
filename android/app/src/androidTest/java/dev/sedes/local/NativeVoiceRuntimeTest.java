@@ -432,6 +432,89 @@ public class NativeVoiceRuntimeTest {
         }
     }
 
+    @Test public void silentFollowupRetainsItsDestinationOnlyAfterValidationAcceptsIt() throws Exception {
+        for (boolean accepted : new boolean[] { false, true }) {
+            try (Fixture f = new Fixture(false, false)) {
+                f.readyClientVoice("manual"); f.settings(NativeVoiceJson.object("pinDefaultVoiceThread", false));
+                f.idleReplay(f.target, "retained-turn");
+                JSONObject retained = f.runtime.snapshot().getJSONObject("retainedVoiceTarget");
+                f.settings(NativeVoiceJson.object("autoListen", true)); f.policy(true, false, "speakThenListen");
+                String spoken = UUID.randomUUID().toString(), destination = UUID.randomUUID().toString();
+                f.receiveFollowupNotice(spoken, destination);
+                JSONObject pending = f.runtime.snapshot();
+                assertEquals("validating", pending.getString("phase"));
+                assertEquals(retained.getString("threadId"), pending.getJSONObject("retainedVoiceTarget").getString("threadId"));
+                assertEquals(retained.getString("threadTitle"), pending.getJSONObject("retainedVoiceTarget").getString("threadTitle"));
+                assertEquals(retained.getLong("revision") + 1, retainedRevision(pending));
+                assertTrue("Manual-mode completion notices do not speak", f.speech.speechRequests.isEmpty());
+                JSONObject current = Fixture.inputContext(destination);
+                NativeVoiceJson.put(current, "automaticListenEligible", accepted);
+                NativeVoiceJson.put(current, "activityToken", "historical-notice-epoch");
+                NativeVoiceJson.put(current, "sourceTurnId", "notice-turn");
+                f.takeClientTarget(destination).done(200, current, null); f.flush();
+                JSONObject validated = f.runtime.snapshot();
+                if (accepted) {
+                    assertEquals(destination, validated.getJSONObject("retainedVoiceTarget").getString("threadId"));
+                    assertEquals("Current server title", validated.getJSONObject("retainedVoiceTarget").getString("threadTitle"));
+                    f.takeClientTarget(destination).done(200, current, null); f.flush();
+                    assertNotNull(f.speech.transcriptions.poll(10, TimeUnit.SECONDS));
+                } else {
+                    assertEquals("idle", validated.getString("phase")); assertTrue(validated.isNull("active"));
+                    assertEquals(pending.getJSONObject("retainedVoiceTarget").toString(), validated.getJSONObject("retainedVoiceTarget").toString());
+                    assertTrue(f.speech.transcriptions.isEmpty()); assertTrue(f.contexts.isEmpty());
+                }
+                assertEquals(0, f.inputAttempts.get());
+            }
+        }
+    }
+
+    @Test public void unpinningFollowupsRetainsOnlySpokenOrAcceptedDestinations() throws Exception {
+        for (boolean spoken : new boolean[] { false, true }) for (String transition : new String[] {
+            "unpin_before_reject", "unpin_before_accept", "unpin_after_accept"
+        }) {
+            try (Fixture f = new Fixture(false, false)) {
+                f.readyClientVoice(spoken ? "response" : "manual"); f.settings(NativeVoiceJson.object("autoListen", true));
+                f.policy(true, false, "speakThenListen");
+                String noticeThread = UUID.randomUUID().toString(), destination = UUID.randomUUID().toString();
+                f.receiveFollowupNotice(noticeThread, destination);
+                if (spoken) {
+                    SpeechJob reply = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(reply);
+                    f.runtime.drained(reply.id); f.flush();
+                } else assertTrue(f.speech.speechRequests.isEmpty());
+                assertEquals("validating", f.runtime.snapshot().getString("phase"));
+                assertTrue("Pinning suppresses retention", f.runtime.snapshot().isNull("retainedVoiceTarget"));
+                boolean unpinBefore = !transition.equals("unpin_after_accept"), accepted = !transition.equals("unpin_before_reject");
+                if (unpinBefore) {
+                    f.settings(NativeVoiceJson.object("pinDefaultVoiceThread", false));
+                    JSONObject pending = f.runtime.snapshot().optJSONObject("retainedVoiceTarget");
+                    if (spoken) { assertNotNull(pending); assertEquals(noticeThread, pending.getString("threadId")); }
+                    else assertNull("A silent proposed destination has not been accepted", pending);
+                }
+                JSONObject current = Fixture.inputContext(destination);
+                NativeVoiceJson.put(current, "automaticListenEligible", accepted);
+                NativeVoiceJson.put(current, "activityToken", "historical-notice-epoch");
+                NativeVoiceJson.put(current, "sourceTurnId", "notice-turn");
+                f.takeClientTarget(destination).done(200, current, null); f.flush();
+                if (!unpinBefore) {
+                    assertTrue(f.runtime.snapshot().isNull("retainedVoiceTarget"));
+                    f.settings(NativeVoiceJson.object("pinDefaultVoiceThread", false));
+                }
+                JSONObject retained = f.runtime.snapshot().optJSONObject("retainedVoiceTarget");
+                if (accepted) {
+                    assertNotNull(retained); assertEquals(destination, retained.getString("threadId"));
+                    assertEquals("Current server title", retained.getString("threadTitle"));
+                    f.takeClientTarget(destination).done(200, current, null); f.flush();
+                    assertNotNull(f.speech.transcriptions.poll(10, TimeUnit.SECONDS));
+                } else {
+                    assertTrue(f.runtime.snapshot().isNull("active")); assertTrue(f.speech.transcriptions.isEmpty());
+                    if (spoken) { assertNotNull(retained); assertEquals(noticeThread, retained.getString("threadId")); }
+                    else assertNull(retained);
+                }
+                assertEquals(0, f.inputAttempts.get());
+            }
+        }
+    }
+
     @Test public void retainedVoiceTargetFollowsValidatedAutomaticDestinationRetargetAndCurrentServerTitle() throws Exception {
         try (Fixture f = new Fixture(false, false)) {
             f.readyClientVoice("response"); f.settings(NativeVoiceJson.object("pinDefaultVoiceThread", false, "autoListen", true));

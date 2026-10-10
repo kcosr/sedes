@@ -38,14 +38,15 @@ Automatic notification replies preserve it and retain their own targets.
 nullable title, and a revision. Every new interaction advances its revision,
 including another interaction for the same thread. Playback retains the spoken
 thread; accepted follow-up validation replaces it with the actual recording
-destination. Manual and recovery activations retain their destination, and a
-successful recording retarget updates it after durable acknowledgement. Current
-input-context titles refresh this metadata independently of announcements. Pure
+destination. Silent automatic follow-ups preserve the previous destination until
+their validation is accepted. Manual and recovery activations retain their
+destination, and successful retargets update it after durable acknowledgement.
+Current input-context titles refresh this metadata independently of announcements. Pure
 threadless notices preserve the previous ID/title while advancing the revision.
 Completion, Stop, cancellation, and a drained queue preserve retention. Off,
 disconnect or connection-identity changes, session teardown, service detach, and
 pinning clear it. Pinning suppresses retention; unpinning during an interaction
-seeds that interaction's current destination. Nothing is persisted to settings,
+seeds its spoken thread or accepted recording destination. Nothing is persisted to settings,
 the default-thread selection, or the input journal.
 
 Idle `releaseRetainedVoiceTarget` takes the expected connection generation and

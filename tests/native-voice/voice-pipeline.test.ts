@@ -338,8 +338,17 @@ describe("native voice production pipeline with loopback providers", () => {
             announcementPlayback: true, startCuePlayback: true, retainedAfterRelease: null,
             foregroundThreadId: secondThreadId, voiceThreadId: secondThreadId, pinDefaultVoiceThread: false,
             secondDraftPreserved: true, inputPresentationEvents: 0,
+            notification: { title: canonical.threadTitle, startLabel: "Start", startEnabled: true,
+              stopVisible: false, nextLabel: "Next", nextEnabled: true },
           });
           expect(evidence.retainedTarget.releasedIdleTargetRevision).toBeGreaterThan(evidence.retainedTarget.cancelledIdleTargetRevision);
+          for (const stale of [evidence.retainedTarget.afterStaleStart, evidence.retainedTarget.afterStaleNext]) {
+            expect(stale).toMatchObject({ phase: "idle", active: null, idleTargetRevision: evidence.retainedTarget.cancelledIdleTargetRevision,
+              retainedVoiceTarget: evidence.retainedTarget.retainedAfterCancel });
+          }
+          const deliveries: number[] = evidence.retainedTarget.notificationServiceDeliveries;
+          expect(deliveries).toHaveLength(4);
+          for (let i = 1; i < deliveries.length; i += 1) expect(deliveries[i]).toBeGreaterThan(deliveries[i - 1]!);
           expect(evidence.inputAttempts).toBe(0);
           expect(evidence.mutationIds).toEqual([]);
           expect(evidence.phases.indexOf("announcing")).toBeGreaterThanOrEqual(0);
