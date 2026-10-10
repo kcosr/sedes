@@ -108,7 +108,8 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         final String id, event, noticeThread, noticeTitle;
         /** Remains true through playback's optional capture, even after manual adoption. */
         final boolean playbackOrigin;
-        String targetId, targetTitle, ttsId, recordingId, cueId;
+        String targetId, targetTitle, ttsId, announcementId, recordingId, cueId;
+        boolean announcementStarted;
         volatile String captureId;
         String lastAudioId;
         String completionCueId;
@@ -443,7 +444,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
     }
     /** Explicit user controls supersede a pending agent start, including its asynchronous target validation. */
     private boolean cancelPreparingClientVoice() {
-        if (active == null || !active.clientVoiceOnly || !(phase.equals("validating") || phase.equals("arming"))) return false;
+        if (active == null || !active.clientVoiceOnly || !(phase.equals("validating") || phase.equals("announcing") || phase.equals("arming"))) return false;
         cancelActive(false, "client_action_superseded"); return true;
     }
     private void clientReplyDrained(String id) { clientActions.drained(id); applyClientActions(); }
@@ -560,7 +561,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
                 cancelActive(true, "audio_mode_changed");
             queue.reconfigure(next);
             if (!next.flag("autoListen") && active != null && (active.automatic || active.replayListening) && !phase.equals("submitting") &&
-                (phase.equals("validating") || phase.equals("arming") || phase.equals("listening") || phase.equals("recognizing"))) cancelActive(true, "auto_listen_disabled");
+                (phase.equals("validating") || phase.equals("announcing") || phase.equals("arming") || phase.equals("listening") || phase.equals("recognizing"))) cancelActive(true, "auto_listen_disabled");
             if (active != null && active.automatic && active.notification != null && !eligible(active.notification)) cancelActive(true, "voice_filter_changed");
             if (!sessionStarted && userInitiated) requestSessionStart();
         }
@@ -946,6 +947,10 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
                 if (status != 200 || value == null || !item.targetId.equals(value.optString("threadId"))) { failActive("target_unavailable"); return; }
                 try { NativeVoiceProtocol.inputContext(value); }
                 catch (IllegalArgumentException error) { failActive("invalid_input_context"); return; }
+                // Wire titles are canonical display text; native target metadata has its own smaller bound.
+                item.targetTitle = NativeVoiceTitle.target(value.optString("threadTitle"));
+                boolean announce = playCue && !item.announcementStarted && settings.flag("announceRecordingThread");
+                if (announce && !automatic && !item.replayListening) item.manualInputValidation = true;
                 if (automatic) {
                     JSONObject target = item.notification.target;
                     if (!eligible(item.notification) || !settings.flag("autoListen") || !value.optBoolean("automaticListenEligible") ||
@@ -961,13 +966,38 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
                     }
                     if (playCue) item.manualActivityToken = value.optString("activityToken");
                 }
-                if (playCue) arm(item); else beginCapture(item);
+                if (announce) announceTarget(item);
+                else if (playCue) arm(item); else beginCapture(item);
             }));
     }
     /** Playback replies may target running or dormant threads under their current manual-input policy. */
     static boolean manualTargetCurrent(JSONObject context, String expectedActivityToken) {
         return context.optBoolean("manualListenEligible") &&
             (expectedActivityToken == null || expectedActivityToken.equals(context.optString("activityToken")));
+    }
+    /** A separate request prevents reply playback callbacks from advancing recording preparation. */
+    private void announceTarget(Active item) {
+        if (active != item || item.stopped || !canListen()) { failActive("voice_not_ready"); return; }
+        item.announcementStarted = true;
+        item.announcementId = UUID.randomUUID().toString();
+        String request = item.announcementId;
+        phase = "announcing"; item.lastAudioId = request; audio.begin(request); publish();
+        item.speechRequest = speechTransport().speak(request, NativeVoiceTitle.announcement(item.targetTitle), new NativeSpeechTransport.SpeechListener() {
+            public void started(String id) {}
+            public void pcm(String id, int sampleRate, byte[] bytes) { handler.post(() -> {
+                if (active != item || item.stopped || !id.equals(item.announcementId)) return;
+                audio.pcm(id, sampleRate, bytes);
+            }); }
+            public void completed(String id) { handler.post(() -> {
+                if (active != item || item.stopped || !id.equals(item.announcementId)) return;
+                item.speechRequest = null; audio.end(id);
+            }); }
+            public void failed(String id, NativeSpeechTransport.Failure failure) { speechFailed(id, failure.code); }
+        });
+        // Covers both synthesis and physical playback drain; internal capture retries do not repeat it.
+        handler.postDelayed(() -> {
+            if (active == item && !item.stopped && request.equals(item.announcementId)) failActive("recording_announcement_timeout");
+        }, 60000);
     }
     private void arm(Active item) {
         if (active != item || !sessionStarted || !speechReady() || !audio.hasPermission()) { failActive("voice_not_ready"); return; }
@@ -1281,7 +1311,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         if (item == null || !item.playbackOrigin || item.admission != null) throw new IllegalStateException("voice_not_speaking");
         item.followUp = false; item.replayListening = false; item.manualInputValidation = false;
         if (item.recordingStart != null) { cancelRecordingStart(item, "skipped", false, true); return; }
-        item.stopped = true; item.ttsId = null; item.cueId = null; item.completionCueId = null; item.afterCompletionCue = null;
+        item.stopped = true; item.ttsId = null; item.announcementId = null; item.cueId = null; item.completionCueId = null; item.afterCompletionCue = null;
         if (item.speechRequest != null) item.speechRequest.cancel();
         if (item.preflight != null) item.preflight.cancel();
         item.speechRequest = null; item.preflight = null;
@@ -1488,7 +1518,8 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
     private void speechFailed(String requestId, String code) { handler.post(() -> {
         Active item = active;
         if (item == null) return;
-        if (requestId.equals(item.ttsId)) {
+        if (requestId.equals(item.announcementId)) failActive(code);
+        else if (requestId.equals(item.ttsId)) {
             if (code.equals("empty_pcm_stream")) skipEmptySpeech(item); else failActive(code);
         }
         else if (requestId.equals(item.captureId)) failActive(code);
@@ -1520,7 +1551,8 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
     }
     public void drained(String requestId) { handler.post(() -> {
         if (active == null) return;
-        if (requestId.equals(active.completionCueId)) finishCompletionCue(active, requestId);
+        if (requestId.equals(active.announcementId)) { Active item = active; item.announcementId = null; arm(item); }
+        else if (requestId.equals(active.completionCueId)) finishCompletionCue(active, requestId);
         else if (requestId.equals(active.cueId)) capture(active);
         else if (requestId.equals(active.ttsId)) { active.ttsId = null; active.chunk++; speakChunk(active); }
     }); }
@@ -1624,7 +1656,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
             if (requestId.equals(item.completionCueId) && !item.retryAfterCompletionCue) {
                 // Feedback cannot discard already captured text or an unrelated error awaiting reporting.
                 finishCompletionCue(item, requestId);
-            } else if (requestId.equals(item.completionCueId) || requestId.equals(item.ttsId) ||
+            } else if (requestId.equals(item.completionCueId) || requestId.equals(item.ttsId) || requestId.equals(item.announcementId) ||
                        requestId.equals(item.captureId) || requestId.equals(item.cueId) ||
                        (requestId.equals(item.lastAudioId) && !speechIndependent(item))) {
                 if (item.adopted && item.recordingId != null) {
@@ -1634,6 +1666,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
             return;
         }
         if (requestId.equals(item.completionCueId)) { finishCompletionCue(item, requestId); return; }
+        if (requestId.equals(item.announcementId)) { failActive(reason); return; }
         // A chunk that produced no audio is a no-op; continue with the next chunk or the item's follow-up.
         if (requestId.equals(item.ttsId) && reason.equals("empty_pcm_stream")) { skipEmptySpeech(item); return; }
         if (requestId.equals(item.ttsId) || requestId.equals(item.captureId) || requestId.equals(item.cueId)) failActive(reason);
@@ -2383,7 +2416,11 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
                         headsetStop(); break;
                     case "headset_skip":
                         if (!settings.flag("headsetControls")) return;
-                        skip(); break;
+                        // A key captured during the announcement still owns this unsent start after
+                        // drain, cue, or capture begins. Fresh recording keys carry an ID and return above.
+                        if (active != null && active.announcementStarted && !active.playbackOrigin && active.admission == null) stopInteraction();
+                        else skip();
+                        break;
                 }
                 publish();
             } catch (Exception error) { report(code(error)); }
@@ -2516,7 +2553,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
             "recognitionThreadTitle", active.targetTitle, "automatic", active.automatic, "recording", recording);
         String readiness = readiness(), blocked = keepListeningBlockedReason();
         boolean ready = readiness.equals("ready");
-        JSONObject next = NativeVoiceJson.object("version", 10, "connectionGeneration", connectionGeneration,
+        JSONObject next = NativeVoiceJson.object("version", 11, "connectionGeneration", connectionGeneration,
             "profileId", profileId, "serverOrigin", origin, "identity", identity, "originClientId", originId, "clientConnectionToken", clientConnectionToken,
             "settingsRevision", settings.revision, "settings", settings.value, "phase", phase, "ready", ready,
             "speech", NativeVoiceJson.object("credentialConfigured", speechCredential != null, "catalogStatus", catalogStatus,
@@ -2696,6 +2733,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
             case "recognition_provider_error": return "The speech service could not transcribe this recording.";
             case "speech_invalid_content_type": return "The speech service returned an unsupported audio format.";
             case "speech_timeout": return "Speech did not finish in time.";
+            case "recording_announcement_timeout": return "The recording thread announcement did not finish in time.";
             case "speech_duration_limit": return "This speech request exceeded the ten-minute audio limit. Reduce the speech text limit to split it into smaller requests.";
             case "speech_storage_limit": return "This speech request exceeded the bounded audio storage limit.";
             case "speech_storage_unavailable": return "Speech could not be buffered in this device's private cache.";

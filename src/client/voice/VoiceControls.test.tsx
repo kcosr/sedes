@@ -572,7 +572,7 @@ describe("voice controls card", () => {
     renderControls();
     await screen.findByRole("button", { name: "Start voice recording" });
     const busy = voiceActions({ canStop: true });
-    const phases = [["synthesizing", "Stop voice interaction", "Preparing speech…"], ["arming", "Cancel voice recording", "Preparing microphone…"],
+    const phases = [["synthesizing", "Stop voice interaction", "Preparing speech…"], ["announcing", "Cancel voice recording", "Announcing thread…"], ["arming", "Cancel voice recording", "Preparing microphone…"],
       ["recognizing", "Cancel voice recording", "Recognizing…"], ["submitting", "Stop voice interaction", "Sending…"],
       ["recovering", "Stop voice interaction", "Checking submission…"]] as const;
     for (const [index, [phase, primary, label]] of phases.entries()) {
@@ -581,6 +581,26 @@ describe("voice controls card", () => {
       expect(lines()).toEqual(["Release review", label]);
       expect(card().querySelector(".voice-card-target")).toBeNull();
     }
+  });
+  it("announces the recording destination and cancels its preparation without opening another thread", async () => {
+    voice.fake.plugin.setConnection.mockResolvedValue(ready({ phase: "announcing", settings: voiceSettings({ audioMode: "response", announceRecordingThread: true }),
+      actions: voiceActions({ canStop: true }), active: item({ id: "announcement", threadId: "untitled", threadTitle: "Previous speech",
+        recognitionThreadId: "named", recognitionThreadTitle: "Renamed destination" }) }));
+    voice.fake.plugin.stopCurrentInteraction.mockResolvedValue(ready({ stateRevision: 2 }));
+    navigate(threadPath("long"), { replace: true });
+    renderControls();
+    const cancel = await screen.findByRole("button", { name: "Cancel voice recording" });
+    expect(lines()).toEqual(["Renamed destination", "Announcing thread…"]);
+    expect(buttons()).toEqual(["Open voice controls", "Open thread: Renamed destination", "Cancel voice recording"]);
+    expect(card()).toHaveAttribute("data-input-actions");
+    expect(card()).not.toHaveAttribute("data-tone", "destructive");
+    expect(within(card()).getByRole("status")).toHaveTextContent("Renamed destination. Announcing thread…");
+    fireEvent.click(cancel);
+    await waitFor(() => expect(voice.fake.plugin.stopCurrentInteraction).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, interactionId: "announcement" }));
+    expect(window.location.pathname).toBe(threadPath("long"));
+    expect(voice.fake.plugin.startManualListen).not.toHaveBeenCalled();
+    expect(voice.fake.plugin.recordDuringPlayback).not.toHaveBeenCalled();
+    expect(voice.fake.plugin.skipCurrentPlayback).not.toHaveBeenCalled();
   });
   it("asks for a thread when listening has no target, and leads with the phase for speech without a thread", async () => {
     voice.fake.plugin.setConnection.mockResolvedValue(listening({}));

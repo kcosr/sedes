@@ -14,7 +14,7 @@ public class NativeVoiceSettingsTest {
     @Test public void longDictationTimeoutIsAWholeMinuteSettingWithNoOldRecordFallback() {
         NativeVoiceSettings defaults = NativeVoiceSettings.defaults();
         assertEquals(3600000, defaults.number("longDictationTimeoutMs"));
-        assertEquals(7, NativeVoiceSettings.RECORD_VERSION);
+        assertEquals(8, NativeVoiceSettings.RECORD_VERSION);
         for (int duration : new int[] { 60000, 3600000, 86400000 }) {
             NativeVoiceSettings configured = defaults.patch(0, NativeVoiceJson.object("longDictationTimeoutMs", duration));
             assertEquals(duration, restore(record(configured)).number("longDictationTimeoutMs"));
@@ -24,6 +24,25 @@ public class NativeVoiceSettingsTest {
         org.json.JSONObject old = record(defaults); NativeVoiceJson.put(old, "settingsVersion", 5);
         assertThrows(IllegalArgumentException.class, () -> restore(old));
         org.json.JSONObject missing = record(defaults); missing.optJSONObject("preferences").remove("longDictationTimeoutMs");
+        assertThrows(IllegalArgumentException.class, () -> restore(missing));
+    }
+    @Test public void recordingThreadAnnouncementIsOptionalDeviceStateWithoutChangingRecordedAudioConfiguration() throws Exception {
+        NativeVoiceSettings defaults = NativeVoiceSettings.defaults();
+        assertFalse(defaults.flag("announceRecordingThread"));
+        NativeVoiceSettings enabled = defaults.patch(0, NativeVoiceJson.object("announceRecordingThread", true));
+        assertTrue(restore(record(enabled)).flag("announceRecordingThread"));
+        assertTrue(defaults.speechConfigurationEquals(enabled));
+        NativeVoicePreferences preferences = NativeVoicePreferences.defaults().update(BINDING, enabled);
+        assertTrue(preferences.settings(NativeVoiceStore.binding("other", "https://other.example", "b".repeat(64))).flag("announceRecordingThread"));
+        java.lang.reflect.Method config = NativeVoiceRuntime.class.getDeclaredMethod("recordingConfig", NativeVoiceSettings.class);
+        config.setAccessible(true);
+        assertEquals(config.invoke(null, defaults).toString(), config.invoke(null, enabled).toString());
+        for (Object invalid : new Object[] { "true", 1, org.json.JSONObject.NULL })
+            assertThrows(IllegalArgumentException.class, () -> defaults.patch(0, NativeVoiceJson.object("announceRecordingThread", invalid)));
+        org.json.JSONObject old = record(enabled); NativeVoiceJson.put(old, "settingsVersion", 7);
+        old.optJSONObject("preferences").remove("announceRecordingThread");
+        assertThrows(IllegalArgumentException.class, () -> restore(old));
+        org.json.JSONObject missing = record(enabled); missing.optJSONObject("preferences").remove("announceRecordingThread");
         assertThrows(IllegalArgumentException.class, () -> restore(missing));
     }
     @Test public void keepListeningDefaultIsFalseAndStrictlyPersisted() {

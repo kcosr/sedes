@@ -302,7 +302,7 @@ describe("native voice state authority", () => {
     await vi.advanceTimersByTimeAsync(600_000);
     expect(plugin.setConnection).toHaveBeenCalledTimes(1);
   });
-  it("keeps a runtime error through following snapshots until voice makes progress or the user acts", async () => {
+  it.each(["speaking", "announcing"] as const)("keeps a runtime error until %s begins or the user acts", async phase => {
     const { store, plugin, listeners } = fixture();
     const ready = (patch: Parameters<typeof snapshot>[0]) => snapshot({ ready: true, readiness: "ready", settings: voiceSettings({ audioMode: "response" }), ...patch });
     plugin.setConnection.mockResolvedValue(ready({ phase: "recognizing" }));
@@ -312,7 +312,7 @@ describe("native voice state authority", () => {
     listeners.get("runtimeError")!(runtimeError(failure.message));
     listeners.get("stateChanged")!(ready({ stateRevision: 3, phase: "idle", errors: [failure] }));
     expect(store.getSnapshot().error).toBe("Recognition failed.");
-    listeners.get("stateChanged")!(ready({ stateRevision: 4, phase: "speaking", errors: [failure] }));
+    listeners.get("stateChanged")!(ready({ stateRevision: 4, phase, errors: [failure] }));
     expect(store.getSnapshot().error).toBeUndefined();
     listeners.get("runtimeError")!(runtimeError("Playback failed."));
     listeners.get("stateChanged")!(ready({ stateRevision: 5, phase: "idle" }));

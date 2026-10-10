@@ -266,6 +266,30 @@ describe("voice settings page", () => {
     expect(fake.plugin.updateSettings).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, expectedRevision: 0, patch: { cleanSpeechText: false } });
     store.dispose();
   });
+  it("opts into recording announcements independently of Auto-listen and recording cues", async () => {
+    let native = voiceSnapshot({ settings: voiceSettings({ audioMode: "manual", autoListen: false, recognitionCues: false }) });
+    const { fake, store } = await renderPage(native, fake => {
+      fake.plugin.getState.mockImplementation(async () => native);
+      vi.mocked(fake.asPlugin.updateSettings).mockImplementation(async ({ patch }) => (native = { ...native,
+        stateRevision: native.stateRevision + 1, settingsRevision: native.settingsRevision + 1, settings: { ...native.settings, ...patch } }));
+    });
+    const toggle = screen.getByRole("switch", { name: "Announce recording thread" });
+    expect(toggle).not.toBeChecked();
+    expect(toggle).toHaveAccessibleDescription("Read the destination thread before the recording cue.");
+    fireEvent.click(toggle);
+    await waitFor(() => expect(toggle).toBeChecked());
+    await waitFor(() => expect(toggle).toBeEnabled());
+    fireEvent.click(toggle);
+    await waitFor(() => expect(toggle).not.toBeChecked());
+    expect(vi.mocked(fake.asPlugin.updateSettings).mock.calls.map(([input]) => input)).toEqual([
+      { expectedConnectionGeneration: 1, expectedRevision: 0, patch: { announceRecordingThread: true } },
+      { expectedConnectionGeneration: 1, expectedRevision: 1, patch: { announceRecordingThread: false } },
+    ]);
+    expect(screen.getByRole("switch", { name: "Auto-listen" })).not.toBeChecked();
+    expect(screen.getByRole("switch", { name: "Recognition cues" })).not.toBeChecked();
+    expect(fake.plugin.startManualListen).not.toHaveBeenCalled();
+    store.dispose();
+  });
   it.each([false, true])("round-trips the future Keep listening preference while the current recording stays %s", async keepListening => {
     let native = voiceSnapshot({ phase: "listening", settings: voiceSettings({ audioMode: "response" }), active: {
       id: "interaction", threadId: "named", threadTitle: "Release review", eventKind: "manual", automatic: false,

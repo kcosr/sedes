@@ -31,6 +31,7 @@ describe("native voice bridge helpers", () => {
     expect(nativeVoiceStateSchema.safeParse({ ...state, version: 7 }).success).toBe(false);
     expect(nativeVoiceStateSchema.safeParse({ ...state, version: 8 }).success).toBe(false);
     expect(nativeVoiceStateSchema.safeParse({ ...state, version: 9 }).success).toBe(false);
+    expect(nativeVoiceStateSchema.safeParse({ ...state, version: 10 }).success).toBe(false);
     const { canRecordDuringPlayback: _record, ...missingRecord } = state.actions;
     expect(nativeVoiceStateSchema.safeParse({ ...state, actions: missingRecord }).success).toBe(false);
     expect(nativeVoiceStateSchema.safeParse({ ...state, actions: { ...state.actions, canRecordDuringPlayback: "true" } }).success).toBe(false);
@@ -53,7 +54,7 @@ describe("native voice bridge helpers", () => {
       expect(nativeVoiceStateSchema.safeParse({ ...state, settings: { ...state.settings, inputDevice } }).success).toBe(false);
     expect(nativeVoiceStateSchema.safeParse({ ...state, settings: { ...state.settings, inputDeviceId: null } }).success).toBe(false);
   });
-  it("requires the strict v10 recording and recovery identities without exposing audio or transcript text", () => {
+  it("requires the strict v11 recording and recovery identities without exposing audio or transcript text", () => {
     const state = voiceSnapshot({ phase: "listening", active: { id: "interaction", eventKind: "manual", threadId: "thread", threadTitle: "Thread",
       recognitionThreadId: "thread", recognitionThreadTitle: "Thread", automatic: false,
       recording: { id: "recording", keepListening: true, reconnecting: true } },
@@ -83,6 +84,14 @@ describe("native voice bridge helpers", () => {
     const { keepListeningByDefault: _default, ...missing } = state.settings;
     expect(nativeVoiceStateSchema.safeParse({ ...state, settings: missing }).success).toBe(false);
     expect(nativeVoiceStateSchema.safeParse({ ...state, settings: { ...state.settings, keepListeningByDefault: "true" } }).success).toBe(false);
+  });
+  it("requires the opt-in recording announcement preference and accepts its preparation phase", () => {
+    const state = voiceSnapshot();
+    expect(state.settings.announceRecordingThread).toBe(false);
+    expect(nativeVoiceStateSchema.parse({ ...state, phase: "announcing", settings: { ...state.settings, announceRecordingThread: true } }).phase).toBe("announcing");
+    const { announceRecordingThread: _announce, ...missing } = state.settings;
+    expect(nativeVoiceStateSchema.safeParse({ ...state, settings: missing }).success).toBe(false);
+    expect(nativeVoiceStateSchema.safeParse({ ...state, settings: { ...state.settings, announceRecordingThread: "true" } }).success).toBe(false);
   });
   it("accepts a long dictation limit only in whole minutes from one minute through one day", () => {
     const state = voiceSnapshot();

@@ -72,6 +72,27 @@ public class NativeDictationStoreTest {
         journal.complete(ordinal, text);
     }
 
+    @Test public void recordingAnnouncementPreferenceDoesNotInvalidateCurrentSavedDictation() throws Exception {
+        String title = NativeVoiceTitle.target("x".repeat(511) + "\ud83d\ude80");
+        try (NativeDictationStore store = open()) {
+            NativeDictationStore.Journal journal = store.create(BINDING, "announcement", "target", title, config());
+            journal.adopt(true); completedSegment(journal, 0, "Saved words"); journal.finish("send", 1);
+            java.lang.reflect.Method read = NativeDictationStore.class.getDeclaredMethod("readJson", String.class, String.class, String.class, int.class);
+            read.setAccessible(true);
+            JSONObject manifest = (JSONObject) read.invoke(store, BINDING, "announcement", "manifest", 2 * 1024 * 1024);
+            assertEquals(2, manifest.getInt("version"));
+            assertFalse(manifest.getJSONObject("config").has("announceRecordingThread"));
+        }
+        NativeVoiceSettings settings = NativeVoiceSettings.defaults().patch(0, NativeVoiceJson.object("announceRecordingThread", true));
+        assertTrue(settings.flag("announceRecordingThread"));
+        try (NativeDictationStore store = open()) {
+            NativeDictationStore.Recording recording = store.recover(BINDING);
+            assertNotEquals("unavailable", recording.stage); assertTrue(recording.adopted);
+            assertEquals("Saved words", recording.text); assertEquals(title, recording.threadTitle);
+            assertFalse(recording.config.has("announceRecordingThread"));
+        }
+    }
+
     @Test public void obsoleteManifestKeepsEncryptedFilesButCannotBeRetriedOrSent() throws Exception {
         String id = "obsolete";
         try (NativeDictationStore store = open()) {

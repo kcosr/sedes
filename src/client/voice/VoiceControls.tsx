@@ -86,8 +86,8 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
   // Voice is on without a session (Android stopped or refused the service): only a user-initiated mode write resumes it.
   const resumable = !off && native.actions.canResume;
   // Native Stop discards a recording that has not been sent yet.
-  const cancels = ["validating", "arming", "listening", "recognizing"].includes(phase);
-  const showingInput = ["validating", "arming", "listening", "recognizing", "submitting", "recovering"].includes(phase);
+  const cancels = ["validating", "announcing", "arming", "listening", "recognizing"].includes(phase);
+  const showingInput = ["validating", "announcing", "arming", "listening", "recognizing", "submitting", "recovering"].includes(phase);
   const inputActions = showingInput && active !== null && !showingRecovery;
   const [targetId, targetTitle] = showingInput ? [active?.recognitionThreadId, active?.recognitionThreadTitle]
     : [active?.threadId ?? active?.recognitionThreadId, active?.threadTitle ?? active?.recognitionThreadTitle];
@@ -304,7 +304,7 @@ const eventLabels = new Map([["turn.completed", "Response"], ["turn.progress", "
   ["thread.woke", "Snooze wake"], ["automation.started", "Automation"], ["automation.failed", "Automation"], ["approval.requested", "Approval"],
   ["input.requested", "Input request"], ["question.requested", "Question"], ["replay", "Replay"]]);
 function phaseLabel(phase: string): string {
-  return ({ starting: "Starting…", synthesizing: "Preparing speech…", speaking: "Speaking", validating: "Checking thread…", arming: "Preparing microphone…", listening: "Listening", recognizing: "Recognizing…", submitting: "Sending…", cancelling: "Stopping…", recovering: "Checking submission…", recordingRecovery: "Needs attention", error: "Needs attention" } as Record<string, string>)[phase] ?? phase;
+  return ({ starting: "Starting…", synthesizing: "Preparing speech…", speaking: "Speaking", validating: "Checking thread…", announcing: "Announcing thread…", arming: "Preparing microphone…", listening: "Listening", recognizing: "Recognizing…", submitting: "Sending…", cancelling: "Stopping…", recovering: "Checking submission…", recordingRecovery: "Needs attention", error: "Needs attention" } as Record<string, string>)[phase] ?? phase;
 }
 function keepListeningBlockedReason(reason: NativeVoiceState["actions"]["keepListeningBlockedReason"]): string | undefined {
   if (reason === null) return undefined;

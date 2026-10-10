@@ -142,7 +142,7 @@ public final class NativeVoiceRuntimeService extends Service {
         JSONObject active = state.optJSONObject("active"), settings = state.optJSONObject("settings");
         String phase = state.optString("phase", "starting"), threadId = null, threadTitle = null;
         if (active != null) {
-            boolean recording = phase.equals("validating") || phase.equals("arming") || phase.equals("listening") || phase.equals("recognizing") || phase.equals("submitting") || phase.equals("recovering");
+            boolean recording = phase.equals("validating") || phase.equals("announcing") || phase.equals("arming") || phase.equals("listening") || phase.equals("recognizing") || phase.equals("submitting") || phase.equals("recovering");
             threadId = nullable(active, recording ? "recognitionThreadId" : "threadId");
             threadTitle = nullable(active, recording ? "recognitionThreadTitle" : "threadTitle");
         } else if (phase.equals("recordingRecovery") && state.optJSONObject("recordingRecovery") != null) {
@@ -220,6 +220,7 @@ public final class NativeVoiceRuntimeService extends Service {
             case "synthesizing": return "Preparing speech";
             case "speaking": return "Speaking";
             case "validating": return "Checking the target thread";
+            case "announcing": return "Announcing the recording thread";
             case "arming": return "Preparing microphone";
             case "listening": return "Listening";
             case "recognizing": return "Recognizing speech";

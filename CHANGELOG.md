@@ -4,11 +4,12 @@
 
 ### Breaking Changes
 
-- Browser and packaged clients require client protocol 147, which adds
+- Browser and packaged clients require client protocol 148, which adds
   automation schedule details and run turn outcomes to thread summaries and
   runs, drops the Remind now inventory action, adds turn reply replay, and adds
   workpad list sorting, counts, and deletion. Input contexts include current
-  manual-input eligibility for replay Auto-listen. Upgrade clients together
+  manual-input eligibility for replay Auto-listen and the canonical thread title.
+  Upgrade clients together
   with the server.
   ([#58](https://github.com/kcosr/sedes/pull/58), [#59](https://github.com/kcosr/sedes/pull/59), [#61](https://github.com/kcosr/sedes/pull/61), [#62](https://github.com/kcosr/sedes/pull/62), [#65](https://github.com/kcosr/sedes/pull/65), [#67](https://github.com/kcosr/sedes/pull/67))
 
@@ -25,11 +26,12 @@
   and its WebView. Upgrade clients together with the server.
   ([#50](https://github.com/kcosr/sedes/pull/50), [#53](https://github.com/kcosr/sedes/pull/53), [#56](https://github.com/kcosr/sedes/pull/56))
 
-- Android voice uses snapshot version 10, settings version 7, and dictation
-  manifest version 2. Reconfigure voice and re-enter speech credentials after
-  upgrading: previous per-connection preferences are not imported and their
-  speech keys are removed. Finish or copy saved dictation first; older recordings
-  remain on disk until discarded but cannot be resumed.
+- Android voice uses snapshot version 11, settings version 8, and dictation
+  manifest version 2. Reconfigure voice after upgrading: older preferences and
+  default-thread selections reset, while separately stored device speech keys
+  and version-2 saved dictation remain available. Earlier per-connection
+  preferences are not imported and their profile-bound speech keys are removed.
+  Older recording manifests remain on disk until discarded but cannot be resumed.
   ([#49](https://github.com/kcosr/sedes/pull/49), [#51](https://github.com/kcosr/sedes/pull/51), [#53](https://github.com/kcosr/sedes/pull/53), [#55](https://github.com/kcosr/sedes/pull/55), [#67](https://github.com/kcosr/sedes/pull/67))
 
 - Self-hosted speech servers must advertise per-model `realtime` capabilities.
@@ -228,6 +230,10 @@
   Migration preserves old Claude totals separately with unknown coverage. (#8)
 
 ### Added
+
+- Android voice can optionally announce the current recording thread title
+  before the start cue. The setting defaults off; cancellation or failed speech
+  prevents microphone capture, and internal recognition retries do not repeat it.
 
 - **Delete…** in a workpad's **⋯** permanently deletes it, with its history and
   draft, after you confirm; agents can still only archive. ([#65](https://github.com/kcosr/sedes/pull/65))

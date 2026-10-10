@@ -7,7 +7,7 @@ import org.junit.Test;
 public class NativeVoiceRuntimePolicyTest {
     @Test public void replayRepliesUseFreshManualAvailabilityRatherThanHistoricalTurnOrAutomaticAuthority() {
         org.json.JSONObject current = NativeVoiceJson.object("threadId", "13b02f0b-3060-4d6f-a3e0-60b5fa757011",
-            "activityToken", "current-epoch", "authority", "unavailable", "runState", null,
+            "threadTitle", "Current server title", "activityToken", "current-epoch", "authority", "unavailable", "runState", null,
             "automaticListenEligible", false, "manualListenEligible", true,
             "steer", NativeVoiceJson.object("availability", "unavailable"));
         NativeVoiceProtocol.inputContext(current);
@@ -120,7 +120,7 @@ public class NativeVoiceRuntimePolicyTest {
         assertNotEquals(NativeVoiceRuntime.message("authentication_required"), NativeVoiceRuntime.message("connection_unavailable"));
     }
     @Test public void specificAudioAndRecoveryFailuresHaveUsefulMessages() {
-        for (String code : new String[] { "speech_timeout", "audio_focus_unavailable", "empty_pcm_stream", "playback_drain_timeout",
+        for (String code : new String[] { "speech_timeout", "recording_announcement_timeout", "audio_focus_unavailable", "empty_pcm_stream", "playback_drain_timeout",
             "microphone_permission_required", "microphone_device_unavailable", "microphone_route_failed", "microphone_limit_reached",
             "input_rejected", "input_outcome_uncertain", "input_recovery_not_found", "voice_journal_capacity",
             "notification_stream_rejected", "notification_policy_unavailable", "recognition_message_limit",

@@ -95,3 +95,56 @@ test("playback Record, Next and Stop stay separate on touch while replying to an
   await expect(page).toHaveURL(new RegExp(`${viewedPath}$`, "u"));
   await expect(composer).toHaveValue(draft);
 });
+
+test("recording announcements are opt-in and their preparation can be cancelled on a narrow screen", async ({ page }, testInfo) => {
+  const workspace = path.join(loadE2ERunContext().workspacesDirectory, "voice-announcement");
+  await mkdir(workspace, { recursive: true });
+  await installVoiceFixture(page);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await openWorkspaceDirectory(page, workspace);
+  const viewedPath = await createDraftThread(page, "Viewed while announcing");
+  const draft = "Keep this draft while announcing another thread.";
+  await fillAndPersistDraft(page, draft);
+  const targetPath = await createDraftThread(page, "Recording destination");
+  const targetId = targetPath.split("/").at(-1)!;
+  await page.goto("/settings/voice");
+  await page.setViewportSize({ width: 320, height: 780 });
+  const toggle = page.getByRole("switch", { name: "Announce recording thread", exact: true });
+  await expect(toggle).not.toBeChecked();
+  await expect(toggle).toHaveAccessibleDescription("Read the destination thread before the recording cue.");
+  await toggle.tap();
+  await expect(toggle).toBeChecked();
+  expect(await page.evaluate(() => window.__voiceFixture.calls.filter(call => call.method === "updateSettings"))).toEqual([
+    { method: "updateSettings", args: { expectedConnectionGeneration: 1, expectedRevision: 0, patch: { announceRecordingThread: true } } },
+  ]);
+  await expectNoPageOverflow(page);
+  await capture(page, testInfo, "voice-announcement-setting-320.png");
+  await page.goto(viewedPath);
+  const toolbar = page.getByRole("group", { name: "Voice controls", exact: true });
+  const base = voiceFixtureState();
+  // Native publishes the validated destination's current title, even if the browser's inventory has an older one.
+  await publishVoiceState(page, { phase: "announcing", active: { id: "announcement", eventKind: "manual", threadId: viewedPath.split("/").at(-1)!,
+    threadTitle: "Earlier speech", recognitionThreadId: targetId, recognitionThreadTitle: "Renamed recording destination", automatic: false, recording: null },
+    actions: { ...base.actions, canStart: false, canStop: true } });
+  await expect(toolbar.locator(".voice-card-title")).toHaveText("Renamed recording destination");
+  await expect(toolbar.locator(".voice-card-sub")).toHaveText("Announcing thread…");
+  await expect(toolbar.getByRole("button", { name: "Record reply" })).toHaveCount(0);
+  await expect(toolbar.getByRole("button", { name: "Next voice interaction" })).toHaveCount(0);
+  const cancel = toolbar.getByRole("button", { name: "Cancel voice recording", exact: true });
+  await expect(cancel).toBeEnabled();
+  const box = (await cancel.boundingBox())!;
+  expect(box.width).toBeGreaterThanOrEqual(44);
+  expect(box.height).toBeGreaterThanOrEqual(44);
+  await expectNoPageOverflow(page);
+  await capture(page, testInfo, "voice-announcement-before-cancel-320.png");
+  await cancel.tap();
+  await expect.poll(() => page.evaluate(() => window.__voiceFixture.calls.filter(call =>
+    ["stopCurrentInteraction", "recordDuringPlayback", "skipCurrentPlayback", "startManualListen"].includes(call.method)))).toEqual([
+    { method: "stopCurrentInteraction", args: { expectedConnectionGeneration: 1, interactionId: "announcement" } },
+  ]);
+  await expect(toolbar.locator(".voice-card-sub")).toContainText("Ready");
+  await expect(page).toHaveURL(new RegExp(`${viewedPath}$`, "u"));
+  await expect(page.getByRole("textbox", { name: "Message Scripted agent", exact: true })).toHaveValue(draft);
+  expect(await page.evaluate(() => window.__voiceFixture.state.settings.announceRecordingThread)).toBe(true);
+  await capture(page, testInfo, "voice-announcement-after-cancel-320.png");
+});

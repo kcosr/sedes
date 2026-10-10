@@ -17,7 +17,7 @@ export type VoiceSettingsPatch = Partial<NativeVoiceSettings> | ((current: Nativ
 const RETRY_BASE_MS = 2_000;
 const RETRY_MAX_MS = 60_000;
 /** Entering one of these phases means a new interaction is under way, so an earlier failure no longer describes the bar. */
-const PROGRESS_PHASES = new Set<NativeVoiceState["phase"]>(["starting", "synthesizing", "speaking", "validating", "arming", "listening", "recognizing", "submitting"]);
+const PROGRESS_PHASES = new Set<NativeVoiceState["phase"]>(["starting", "synthesizing", "speaking", "validating", "announcing", "arming", "listening", "recognizing", "submitting"]);
 
 /** Native snapshots are authoritative, including changes made while the WebView was suspended. */
 export class NativeVoiceStore {

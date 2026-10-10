@@ -126,12 +126,14 @@ for that destination. Removing a Sedes server profile preserves device voice
 preferences and speech credentials. Remove a speech credential explicitly in
 the native credential dialog.
 
-The device preference format does not import earlier per-connection settings or
-speech credentials. Obsolete profile-bound speech credential files are deleted
-when native voice initializes. After upgrading, configure voice and enter the speech key or
-token once. Finish, send, or copy any saved dictation before upgrading: older
-recording manifests are unsupported and remain unavailable until explicitly
-discarded. Their files are retained; the upgrade does not convert them.
+The current preference format (version 8) resets older voice preferences and
+default-thread selections. Configure voice again after upgrading; separately
+stored device speech keys remain available for their provider and endpoint.
+Current saved dictation (manifest version 2) also remains available. Restore the
+matching speech endpoint and model before retrying saved audio when needed.
+Earlier per-connection preferences and profile-bound speech credentials are not
+imported; obsolete profile-bound keys are deleted during initialization. Older
+recording manifests remain unavailable until discarded, with their files retained.
 
 The app opens without waiting for voice. While voice connects, **Settings →
 Voice** shows "Connecting voice to this server…". If voice cannot connect, the
@@ -429,6 +431,15 @@ still submits if only its success tone is interrupted. A Bluetooth
 headset microphone is used once Android connects its voice link; recording
 waits up to 5 seconds for that route and otherwise reports that the microphone
 could not be routed.
+
+**Announce recording thread** in **Settings → Voice** is off by default. When
+on, each new recording begins with “Replying to {thread title}.” using the current
+title of the thread that will receive it. Long titles are shortened and blank
+titles are announced as “Untitled thread”. The title finishes playing before the
+usual start cue and microphone preparation. The input shows **Announcing thread…**
+with **Cancel**; headset Stop or Next can cancel it too. If the announcement fails,
+recording does not start. Internal recognition retries, reconnects, Keep listening,
+and retargeting an existing recording do not repeat it.
 
 **Recognition cues** plays a rising start tone, a single success tone for
 recognized speech, and a descending tone for failed or empty recognition,

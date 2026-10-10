@@ -2,7 +2,7 @@
 
 The Android `NativeVoice` Capacitor plugin exposes settings, snapshots, and
 actions. `NativeVoiceRuntime` owns the state machine on one handler thread.
-Native snapshot version 10 includes `active.recording` (ID, Keep listening and
+Native snapshot version 11 includes `active.recording` (ID, Keep listening and
 Reconnecting), native-authoritative `canSetKeepListening`/`canSend` actions, the
 Keep listening blocked reason, and an independent `recordingRecovery` item.
 Recovery exposes identity, revision, target, stage, incomplete/unrecognized
@@ -55,6 +55,32 @@ Record, Next, and Stop. Headset Play/Pause during speech invokes Record only
 while Auto-listen is on and recording is available; otherwise it invokes Next.
 Dedicated headset Next skips during speech, and active recording retains its
 existing Cancel/Stop behavior.
+The device preference `announceRecordingThread` defaults to false. A new
+recording start validates the exact target's normalized input context and projects
+its required canonical `threadTitle` (a string up to 4,096 UTF-16 units, including
+blank) into native nullable, trimmed, 512-unit target metadata without splitting
+a surrogate pair. It never substitutes the spoken source thread for a different
+automatic recognition destination. When enabled, a separate `announcing` phase
+speaks “Replying to {title}.” before the existing recognition start cue and capture
+sequence. Blank titles use “Untitled thread”; spoken titles compact whitespace
+and controls and are limited to 160 Unicode code points with an ellipsis.
+
+The announcement has its own request ID, shares the normal TTS transport and audio
+owner, and waits for physical audio drain. Its total synthesis/drain deadline is
+60 seconds. Failure, empty audio, Stop, Off, disconnect, provider changes, or audio
+focus loss end preparation without microphone capture. Dedicated headset Next
+can cancel this phase, including a manual start. A Next captured during a manual
+announcement still cancels that same unsent interaction if delivered after the
+cue, recording preparation, or capture begins; a fresh key carrying a recording
+ID remains a no-op. The UI offers Cancel during announcement, not Record or Next.
+All late speech/drain callbacks are fenced by interaction and request identity. Manual starts that add this asynchronous phase
+also revalidate fresh manual-input authority after the cue. Replay and automatic
+follow-ups retain their existing eligibility checks. Announcements happen once
+per user-level start, never for internal empty-transcript retries, recognition
+segments, reconnects, adoption, retargeting, or saved-audio retries. Changing the
+preference affects future starts without cancelling an active recording. Titles
+remain display metadata and do not contribute to activity-token authority.
+
 `NativeVoiceRuntimeService` supplies Android foreground execution and controls;
 it does not run a WebView. `NativeSpeechTransport` connects directly to OpenAI
 or the OpenAI-Compatible Speech Server. `NativeVoiceHttp` owns authenticated
@@ -172,10 +198,13 @@ Agent `replay_turn` commands bypass that queue; see
 [Turn reply replay](#turn-reply-replay).
 
 The device preferences envelope has format version 1 and carries the strict
-settings `RECORD_VERSION` 7. Earlier per-binding settings and profile-bound speech
-credentials are not imported; upgrades require device voice setup and credential
-entry once. Native voice initialization deletes the obsolete `speech-credentials/`
-tree without decoding its records. A
+settings `RECORD_VERSION` 8. Older preference records reset to defaults, including
+scoped default-thread selections. Separately stored device speech credentials
+and version-2 dictation manifests remain readable. Restore the speech endpoint
+and model settings before retrying saved audio when the provider requires them.
+Earlier per-binding settings and profile-bound speech credentials are not imported;
+native initialization deletes the obsolete `speech-credentials/` tree without
+decoding its records. A
 record that exists but cannot be authenticated, decoded, or validated is moved
 aside as `<name>.corrupt` and replaced with defaults. Native reports
 `voice_settings_reset` or `voice_journal_reset`. Only a

@@ -2050,6 +2050,18 @@ input/recovery, cached presentation settings, and normalized blocking
 interactions. This shared contract applies to all five backends; steering still
 uses each backend's declared target and delivery capabilities.
 
+The required input-context `threadTitle` is current principal-scoped display
+text from the application title overlay, normalized by the same
+`boundDisplayText` projection as thread summaries. Preserve its empty-text
+semantics; clients apply their own untitled presentation. Read it again after
+any awaited cached policy or runtime-replacement read so a rename returns the
+current title. Titles and ordinary thread revisions are not input-activity
+facts: a rename alone must preserve the activity token and capture eligibility.
+Pi, Codex, Claude, Grok, and OpenCode implement this through the shared scoped
+application projection, without provider attachment or title lookup. This
+required field advances the browser/client protocol to 148; missing titles are
+not a compatible input-context shape.
+
 The required normalized `manualListenEligible` field is local permission to
 capture **new input**, distinct from automatic notification follow-up readiness.
 It does not promise provider acceptance. Recompose cached presentation and
@@ -2081,8 +2093,8 @@ input permission. Historical replay must request this fresh manual context,
 then recheck its fresh activity token and eligibility after the start cue;
 the replay's original turn or activity token grants no new-input authority.
 Notification-driven listening keeps its existing automatic readiness and
-original activity-target checks. This normalized wire addition advances the
-browser/client protocol to 147; missing eligibility is not a compatible shape.
+original activity-target checks. Missing eligibility is not a compatible
+input-context shape.
 
 Application thread summaries project this observation as optional
 `backgroundWork` category counts, without descriptions or provider identities.
