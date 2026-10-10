@@ -3,6 +3,7 @@ import type { Page } from "@playwright/test";
 import { test, expect } from "./fixtures";
 import { capture, createDraftThread, expectNoPageOverflow, openWorkspaceDirectory } from "./helpers";
 import { workpadSchema } from "../../src/shared/protocol/workpads.js";
+import { openPanel, quickButton } from "./workspace-panel-helpers";
 
 const workspace = path.resolve(import.meta.dirname, "fixtures/workpad-workspace");
 const original = "# Authentication integration\n\nUse a 30-minute timeout.\n\n## Open questions\n\nKeep the legacy endpoint during rollout.\n";
@@ -40,9 +41,11 @@ test("Workpads retain attributed history, reconcile shared drafts, and move betw
   await openWorkspaceDirectory(page, workspace);
   const threadPath = await createDraftThread(page);
   const threadId = threadPath.split("/").at(-1)!;
-  const workpadsToggle = page.getByTestId("workpads-panel-toggle");
-  await expect(workpadsToggle).toHaveAccessibleName("Open Workpads panel");
-  await workpadsToggle.click();
+  // Workpads has no quick button until ▾ opens (loads) it.
+  const workpadsToggle = quickButton(page, "Workpads");
+  await expect(workpadsToggle).toHaveCount(0);
+  await openPanel(page, "Workpads");
+  await expect(workpadsToggle).toHaveAccessibleName("Hide Workpads panel");
   const panel = page.getByRole("region", { name: "Workpads", exact: true });
   const pane = page.locator('[data-panel-instance-id="workpads"]');
   await expect(pane).toBeVisible();
@@ -63,7 +66,7 @@ test("Workpads retain attributed history, reconcile shared drafts, and move betw
   const created = page.waitForResponse(response => response.request().method() === "POST" && new URL(response.url()).pathname === "/api/workpads" && response.ok());
   await addRow.press("Enter");
   const workpad = workpadSchema.parse((await (await created).json()).workpad);
-  await expect(workpadsToggle).toHaveAccessibleName("Close Workpads panel, 1 workpad in this thread");
+  await expect(workpadsToggle).toHaveAccessibleName("Hide Workpads panel, 1 workpad in this thread");
   // A new workpad opens ready for its first text; leave the editor to watch
   // the viewer. The header stays the panel's; the workpad's toolbar names it.
   const editor = panel.getByRole("textbox", { name: "Workpad content", exact: true });
@@ -112,11 +115,11 @@ test("Workpads retain attributed history, reconcile shared drafts, and move betw
   await expect(panel.getByText("No workpads in this thread yet", { exact: true })).toBeVisible();
   await expect(panel.locator(".workpad-document")).toHaveCount(0);
   expect(await panel.evaluate(node => (window as typeof window & { __retainedWorkpad?: Element }).__retainedWorkpad === node)).toBe(true);
-  await expect(page.getByTestId("workspace-workbench-bar").getByRole("button", { name: "Close Workpads panel", exact: true })).toBeVisible();
+  await expect(page.getByTestId("workspace-workbench-bar").getByRole("button", { name: "Hide Workpads panel", exact: true })).toBeVisible();
   await capture(page, testInfo, "workpads-follow-thread.png");
   await page.goBack();
   await expect(page).toHaveURL(threadPath);
-  await expect(workpadsToggle).toHaveAccessibleName("Close Workpads panel, 1 workpad in this thread");
+  await expect(workpadsToggle).toHaveAccessibleName("Hide Workpads panel, 1 workpad in this thread");
   await expect.poll(listedScope).toEqual({ kind: "thread", threadId, projectId: null });
   await panel.getByRole("button", { name: "Authentication integration", exact: true }).click();
   await expect(panel.locator(".workpad-document")).toContainText("15-minute timeout");
@@ -128,9 +131,11 @@ test("Workpads retain attributed history, reconcile shared drafts, and move betw
   }).toBe(true);
   await page.getByRole("button", { name: "Workpads panel actions", exact: true }).click();
   await page.getByRole("menuitemradio", { name: "Right", exact: true }).click();
-  await page.getByRole("button", { name: "Collapse Workpads panel", exact: true }).click();
+  await expect(pane).toHaveAttribute("data-region", "right");
+  // Its quick button hides it, still loaded, with its document open.
+  await workpadsToggle.click();
   await expect(panel).toBeHidden();
-  await page.getByTestId("workspace-workbench-bar").getByRole("button", { name: "Show collapsed Workpads panel, 1 workpad in this thread", exact: true }).click();
+  await page.getByTestId("workspace-workbench-bar").getByRole("button", { name: "Show Workpads panel, 1 workpad in this thread", exact: true }).click();
   await expect(panel.locator(".workpad-document")).toContainText("15-minute timeout");
   await panel.getByRole("button", { name: "Show attribution", exact: true }).click();
   const marks = panel.locator("[data-workpad-attribution]");
@@ -181,7 +186,7 @@ test("Workpads retain attributed history, reconcile shared drafts, and move betw
   const other = await otherContext.newPage();
   try {
     await other.goto(page.url());
-    await other.getByTestId("workpads-panel-toggle").click();
+    await openPanel(other, "Workpads");
     const otherPanel = other.getByRole("region", { name: "Workpads", exact: true });
     await otherPanel.getByRole("radio", { name: "Thread", exact: true }).click();
     await otherPanel.getByRole("button", { name: "Authentication integration", exact: true }).click();
@@ -281,7 +286,7 @@ test("Workpads retain attributed history, reconcile shared drafts, and move betw
   await expect(page.getByRole("menuitem", { name: /^This thread/ })).toBeDisabled();
   await page.getByRole("menuitem", { name: "This project", exact: true }).click();
   await expect.poll(async () => (await readWorkpad(page, workpad.id)).scope).toEqual({ kind: "project", projectId });
-  await expect(workpadsToggle).toHaveAccessibleName("Close Workpads panel");
+  await expect(workpadsToggle).toHaveAccessibleName("Hide Workpads panel");
   // The revision line names the place, as rows do: the project's label.
   await expect(panel.locator(".workpads-doc-meta")).toContainText("workpad-workspace");
   await expect(panel.locator(".workpads-doc-scope .lucide-folder")).toHaveCount(1);
@@ -462,7 +467,7 @@ test("Workpads retain attributed history, reconcile shared drafts, and move betw
   await expect(allRow("Shared team notes").locator(".scope-location .lucide-globe")).toBeVisible();
   await expect(allRow("Authentication integration").locator(".scope-location .lucide-folder")).toBeVisible();
   await expect(allRow("Second thread notes").locator(".scope-location .lucide-message-square")).toBeVisible();
-  // Sort is All's only View option, and the panel's ⋯ has nothing to collapse.
+  // Sort is All's only View option, and the panel's ⋯ has no groups to collapse.
   await pane.getByRole("button", { name: "View options", exact: true }).click();
   await expect(page.getByRole("menuitemradio", { name: "Recently updated", exact: true })).toBeChecked();
   await expect(page.getByRole("menuitemcheckbox")).toHaveCount(0);
@@ -499,7 +504,7 @@ test("Workpads retain attributed history, reconcile shared drafts, and move betw
   await expect(segment("All")).toHaveText("All2");
   await expect(panel.locator(".workpads-list .workpads-row-name")).toHaveText(["Second thread notes", "Authentication integration"]);
   // And from the open workpad's ⋯, which closes it; the thread's badge follows.
-  await expect(workpadsToggle).toHaveAccessibleName("Close Workpads panel, 1 workpad in this thread");
+  await expect(workpadsToggle).toHaveAccessibleName("Hide Workpads panel, 1 workpad in this thread");
   await allRow("Second thread notes").click();
   await expect(documentTitle).toHaveText("Second thread notes");
   await panel.getByRole("button", { name: "Workpad actions", exact: true }).click();
@@ -511,9 +516,11 @@ test("Workpads retain attributed history, reconcile shared drafts, and move betw
   await expect(panel.locator(".workpads-doc-toolbar")).toHaveCount(0);
   await expect(panel.locator(".workpads-list .workpads-row-name")).toHaveText(["Authentication integration"]);
   await expect(segment("All")).toHaveText("All1");
-  await expect(workpadsToggle).toHaveAccessibleName("Close Workpads panel");
+  await expect(workpadsToggle).toHaveAccessibleName("Hide Workpads panel");
   for (const read of ["", "/revisions", "/draft"]) expect((await page.request.get(`/api/workpads/${deletedId}${read}`)).status()).toBe(404);
 
+  // ✕ closes Workpads: it unloads, and its quick button goes with it.
   await pane.getByRole("button", { name: "Close Workpads panel", exact: true }).click();
   await expect(panel).toHaveCount(0);
+  await expect(workpadsToggle).toHaveCount(0);
 });
