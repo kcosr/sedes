@@ -148,31 +148,31 @@ fixture token is never entered into a WebView form.
 Espresso targets the native dialog root explicitly while the asynchronous bridge
 opens it, so the covered activity cannot be selected for credential entry.
 Focus a scenario through the same coordinator, for example
-`npm run test:voice -- -t 'Android response/cycle'`.
+`npm run test:voice -- -t 'Android speak/cycle'`.
 
 Packaged cases cover Speak and Input cycles, background operation,
 restoration after process restart, Record, Next, Stop, recording retargeting, lost
 admission replies, lost sends, and cancellation of uncertain submissions.
-The `Android response/record` scenario presses **Record** during observed
+The `Android speak/record` scenario presses **Record** during observed
 AudioTrack speech playback with Auto-listen off and a different pinned default
 thread. It requires a fresh manual recording and admission on the spoken source
-thread. The `Android response/next` scenario presses **Next** during observed
+thread. The `Android speak/next` scenario presses **Next** during observed
 speech playback with Auto-listen on, then requires the interaction to finish
 without audio capture, transcription, or input admission. Both use the actual
 foreground-service notification controls.
-The `Android response/playback-stop` and
-`Android response/playback-stop-notification` scenarios press the card and
+The `Android speak/playback-stop` and
+`Android speak/playback-stop-notification` scenarios press the card and
 expanded-notification **Stop** controls during playback with Auto-listen on and
 a replay queued. Both require an empty queue, no capture or input admission,
 and voice remaining enabled. The notification case delivers its actual
 `PendingIntent` and waits for the service to handle it.
-The `Android response/retained-target` scenario checks that the visible card and
+The `Android speak/retained-target` scenario checks that the visible card and
 notification use the same destination and retain it after leaving the thread. It checks
 that new notification recordings announce their destination, in-app recordings
 skip the announcement, and idle card **Next** releases retention only when
 the card displays that fallback. Card title, route, button state, native
 capabilities, and settings are observed separately.
-The `Android response/background-switch` scenario invokes the real
+The `Android speak/background-switch` scenario invokes the real
 `client.switch_thread` agent tool through stock OpenCode after backgrounding
 the paired client. With automatic listening disabled and the source thread
 pinned as the default, it verifies reply playback followed by recognition and
