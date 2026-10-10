@@ -10,9 +10,7 @@
   workpad list sorting, counts, and deletion. Input contexts include current
   manual-input eligibility for replay Auto-listen and the canonical thread title.
   Client voice modes are now `off`, `input`, and `speak`; client-control tools
-  use schema version 2.
-  Upgrade clients together
-  with the server.
+  use schema version 2. Upgrade clients together with the server.
   ([#58](https://github.com/kcosr/sedes/pull/58), [#59](https://github.com/kcosr/sedes/pull/59), [#61](https://github.com/kcosr/sedes/pull/61), [#62](https://github.com/kcosr/sedes/pull/62), [#65](https://github.com/kcosr/sedes/pull/65), [#67](https://github.com/kcosr/sedes/pull/67), [#68](https://github.com/kcosr/sedes/pull/68))
 
 - `PATCH /api/threads/:threadId/inventory` no longer accepts the `remind`
@@ -233,10 +231,8 @@
 
 ### Added
 
-- Android voice can optionally announce the recording thread before a new
-  headset or notification start. In-app starts, playback interruptions to reply,
-  and automatic follow-up recording skip it. The setting defaults off;
-  cancellation or failed speech prevents microphone capture.
+- Android voice can optionally announce the destination before a new headset
+  or notification recording. The setting defaults off.
   ([#68](https://github.com/kcosr/sedes/pull/68))
 
 - **Delete…** in a workpad's **⋯** permanently deletes it, with its history and
@@ -502,36 +498,21 @@
 
 ### Changed
 
-- Android voice uses a compact single-row bar with composer-sized controls,
-  more space between the status icon and text, an inline destination caret,
-  and a blue speaking outline. Idle hides unavailable Next/Stop actions;
-  playback hides Next when the queue is empty and Auto-listen is off.
-  Send also finishes ordinary recordings, including alongside older saved
-  dictation, and tolerates an automatic speech ending already in progress.
-  The expanded recording notification keeps Send, Cancel, mode, and Rearm accessible.
-  Saved-dictation labels truncate within the compact card on narrow screens.
-  Text stays vertically aligned as the destination caret appears, and rapid
-  repeat taps on disappearing actions do not open a thread or release its destination.
+- Android voice uses Off, Input, and Speak modes. Input keeps eligible
+  completion auto-listen without automatic speech; Speak adds a remembered
+  Read aloud choice of announcements, messages, or both.
   ([#68](https://github.com/kcosr/sedes/pull/68))
 
-- Android voice uses Off, Input, and Speak modes. Input silences all automatic
-  notification speech while retaining eligible completion auto-listen. Speak adds
-  a remembered Read aloud choice for announcements, messages without preambles,
-  or both, replacing the notification-context toggle. Requires matching client
-  protocol 149 / Android snapshot 14; settings version 9 resets older voice
-  preferences while preserving speech credentials and saved recordings.
+- In-app, headset, and notification recordings share the destination shown by
+  the idle voice bar, including explicit target choices. Unpinned voice retains
+  its destination after backgrounding; idle Next releases that fallback.
   ([#68](https://github.com/kcosr/sedes/pull/68))
 
-- Android voice keeps Record/Send and Stop/Cancel in fixed positions; Keep
-  listening replaces Next during recording. Playback **Stop** in the app and
-  notification clears queued speech; headset Play/Pause and Next preserve it.
-  ([#68](https://github.com/kcosr/sedes/pull/68))
-
-- Unpinned Android voice follows the idle bar's visible destination for in-app,
-  headset, and notification recordings, and keeps it selected after backgrounding.
-  All manual starts honor and consume an explicit choice from the target picker.
-  Without a visible thread, the card uses that retained fallback; idle **Next**
-  releases it without navigating or changing a pending target.
+- The compact Android voice bar keeps Record/Send and Stop/Cancel in fixed
+  positions and hides unavailable actions. Playback Stop clears queued speech;
+  Send can finish ordinary recordings, including alongside saved dictation.
+  Expanded notifications keep recording controls accessible, and repeated taps
+  on disappearing controls no longer trigger the action underneath.
   ([#68](https://github.com/kcosr/sedes/pull/68))
 
 - Android playback offers **Record** to reply to the spoken thread and **Next**
