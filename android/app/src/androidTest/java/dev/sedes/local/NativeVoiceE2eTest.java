@@ -363,7 +363,7 @@ public class NativeVoiceE2eTest {
                 assertFalse(settings.getBoolean("autoListen"));
                 assertEquals(thread, settings.getString("voiceThreadId"));
                 assertTrue(settings.getBoolean("pinDefaultVoiceThread"));
-                assertEquals("Resuming must preserve the source screen", JSONObject.quote("/threads/" + thread), js("location.pathname"));
+                assertEquals("Resuming must preserve the source screen", "true", js("location.pathname === " + JSONObject.quote("/threads/" + thread)));
                 assertEquals("Resuming must not replay navigation", 0, navigationEvents.get());
                 NativeVoiceJson.put(backgroundSwitch, "navigationEvents", navigationEvents.get());
                 NativeVoiceJson.put(backgroundSwitch, "resumedPath", "/threads/" + thread);
