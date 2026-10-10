@@ -245,6 +245,39 @@ public class NativeVoiceAudioTest {
             assertEquals("empty_pcm_stream", probe.failure.getAndSet(null));
         } finally { audio.stop(); InstrumentationRegistry.getInstrumentation().runOnMainSync(activity::finish); }
     }
+    @Test public void playbackDrainHistoryPreservesCompletedRequestsAcrossStartsAndBoundsItsSnapshots() throws Exception {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        MainActivity activity = (MainActivity) InstrumentationRegistry.getInstrumentation().startActivitySync(
+            new Intent(context, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        PlaybackProbe probe = new PlaybackProbe();
+        NativeVoiceAudio audio = new NativeVoiceAudio(context, probe);
+        try {
+            audio.configure(NativeVoiceSettings.defaults().patch(0, NativeVoiceJson.object("startupPreRollMs", 0)));
+            java.util.List<NativeVoiceAudio.PlaybackDrain> firstSnapshot = null;
+            for (int index = 0; index < 34; index++) {
+                String request = "history-" + index;
+                audio.begin(request);
+                assertNull("Beginning a request still clears the last-record accessor", audio.playbackDrainForTest());
+                audio.pcm(request, 24000, new byte[24000 * 2 / 50]); audio.end(request);
+                probe.await(request); assertPlaybackDrained(audio, request, 24000 / 50);
+                if (index == 0) firstSnapshot = audio.playbackDrainsForTest();
+            }
+            assertNotNull(firstSnapshot); assertEquals(1, firstSnapshot.size());
+            assertEquals("Snapshots are independent of later drains and eviction", "history-0", firstSnapshot.get(0).requestId);
+            java.util.List<NativeVoiceAudio.PlaybackDrain> history = audio.playbackDrainsForTest();
+            assertEquals(32, history.size());
+            for (int index = 0; index < history.size(); index++) {
+                NativeVoiceAudio.PlaybackDrain drain = history.get(index);
+                assertEquals("history-" + (index + 2), drain.requestId); assertEquals(24000, drain.sampleRate);
+                assertEquals(24000 / 50, drain.writtenFrames); assertTrue(drain.playedFrames >= drain.writtenFrames);
+            }
+            history.clear(); assertEquals("Mutating a snapshot cannot clear recorded evidence", 32, audio.playbackDrainsForTest().size());
+            audio.begin("unfinished"); audio.stop();
+            assertNull(audio.playbackDrainForTest());
+            assertEquals("An unfinished request neither replaces nor adds completed drain evidence", 32, audio.playbackDrainsForTest().size());
+            assertEquals("history-33", audio.playbackDrainsForTest().get(31).requestId);
+        } finally { audio.stop(); InstrumentationRegistry.getInstrumentation().runOnMainSync(activity::finish); }
+    }
     @Test public void consecutivePlaybackHoldsOneFocusEntryUntilTheDelayedRelease() throws Exception {
         Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
         MainActivity activity = (MainActivity) InstrumentationRegistry.getInstrumentation().startActivitySync(

@@ -336,6 +336,7 @@ describe("native voice production pipeline with loopback providers", () => {
           const viewedCanonical = threadInputContextSchema.parse(await app.json(`/api/threads/${secondThreadId!}/input-context`));
           expect(evidence.retainedTarget).toMatchObject({
             retainedAfterPlayback: { threadId, threadTitle: canonical.threadTitle },
+            replyPlayback: { sampleRate: 24_000, writtenFrames: 2400 },
             inputPresentationEvents: 0,
             notification: { title: canonical.threadTitle, startLabel: "Start", startEnabled: true,
               stopVisible: false, nextLabel: "Next", nextEnabled: true },
@@ -346,7 +347,8 @@ describe("native voice production pipeline with loopback providers", () => {
             [1, "notification", threadId, canonical.threadTitle], [2, "card", secondThreadId, viewedCanonical.threadTitle]] as const) {
             const capture = captures[index];
             expect(capture).toMatchObject({ surface, recognitionThreadId: target, recognitionThreadTitle: title, announcedTitle: title,
-              announcementPlayback: true, startCuePlayback: true,
+              announcementPlayback: { requestId: capture.announcementRequestId, sampleRate: 24_000, writtenFrames: 2400 },
+              startCuePlayback: { sampleRate: 48_000, writtenFrames: 13_920 },
               afterCancel: { phase: "idle", active: null, recordingRecovery: null, retainedVoiceTarget: { threadId: target, threadTitle: title } } });
             expect(capture.captureChunks).toBeGreaterThan(0);
             expect(capture.phases.indexOf("announcing")).toBeGreaterThanOrEqual(0);
@@ -354,6 +356,17 @@ describe("native voice production pipeline with loopback providers", () => {
             expect(capture.phases.indexOf("listening")).toBeGreaterThan(capture.phases.indexOf("arming"));
           }
           expect(new Set(captures.map((capture: { recordingId: string }) => capture.recordingId)).size).toBe(3);
+          type PlaybackDrain = { requestId: string; sampleRate: number; writtenFrames: number; playedFrames: number };
+          const drains: PlaybackDrain[] = [evidence.retainedTarget.replyPlayback,
+            ...captures.flatMap((capture: { announcementPlayback: PlaybackDrain; startCuePlayback: PlaybackDrain }) =>
+              [capture.announcementPlayback, capture.startCuePlayback])];
+          expect(drains).toHaveLength(7);
+          expect(new Set(drains.map(drain => drain.requestId)).size).toBe(7);
+          for (const drain of drains) {
+            expect(drain.requestId).toMatch(/^[0-9a-f-]{36}$/u);
+            expect(drain.writtenFrames).toBeGreaterThan(0);
+            expect(drain.playedFrames).toBeGreaterThanOrEqual(drain.writtenFrames);
+          }
           const releases = evidence.retainedTarget.releases;
           expect(releases).toHaveLength(2);
           for (const [index, surface, target, title] of [[0, "notification", threadId, canonical.threadTitle],

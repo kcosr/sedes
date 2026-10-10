@@ -26,6 +26,7 @@ import androidx.core.content.ContextCompat;
 import java.io.File;
 import java.io.RandomAccessFile;
 import java.util.Arrays;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
@@ -81,6 +82,7 @@ final class NativeVoiceAudio {
     private AudioTrack track;
     private CountDownLatch nextPlaybackHoldForTest, playbackHoldForTest;
     private PlaybackDrain lastPlaybackDrainForTest;
+    private final ArrayDeque<PlaybackDrain> playbackDrainsForTest = BuildConfig.DEBUG ? new ArrayDeque<>() : null;
     private AudioRecord recorder;
     private Focus focus;
     private long generation, focusRelease, warmUntil;
@@ -271,7 +273,11 @@ final class NativeVoiceAudio {
             synchronized (lock) {
                 if (current != generation) return;
                 // Preserve hardware evidence before release resets the playback head; no PCM is retained.
-                if (BuildConfig.DEBUG) lastPlaybackDrainForTest = new PlaybackDrain(id, rate, frames, track.getPlaybackHeadPosition() & 0xffffffffL);
+                if (BuildConfig.DEBUG) {
+                    lastPlaybackDrainForTest = new PlaybackDrain(id, rate, frames, track.getPlaybackHeadPosition() & 0xffffffffL);
+                    if (playbackDrainsForTest.size() == 32) playbackDrainsForTest.removeFirst();
+                    playbackDrainsForTest.addLast(lastPlaybackDrainForTest);
+                }
                 releaseTrack(); releaseSpool(); request = null; releaseFocusLater();
             }
             listener.drained(id);
@@ -291,6 +297,11 @@ final class NativeVoiceAudio {
         }
     }
     PlaybackDrain playbackDrainForTest() { if (!BuildConfig.DEBUG) throw new IllegalStateException("test_audio_unavailable"); synchronized (lock) { return lastPlaybackDrainForTest; } }
+    /** Completed request evidence survives the following cue; never stores PCM or grows with session length. */
+    List<PlaybackDrain> playbackDrainsForTest() {
+        if (!BuildConfig.DEBUG) throw new IllegalStateException("test_audio_unavailable");
+        synchronized (lock) { return new ArrayList<>(playbackDrainsForTest); }
+    }
     AudioRecord recorderForTest() { if (!BuildConfig.DEBUG) throw new IllegalStateException("test_audio_unavailable"); synchronized (lock) { return recorder; } }
     Object focusForTest() { if (!BuildConfig.DEBUG) throw new IllegalStateException("test_audio_unavailable"); synchronized (lock) { return focus; } }
     // Hold one real track before play(); signal only when its full buffer blocks drain priming.
