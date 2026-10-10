@@ -121,6 +121,7 @@
   --bar-control: var(--control-md);
   --bar-control-width: var(--bar-control);
   --bar-icon: 18px;
+  --bar-toggle-gap: var(--space-1);
 
   /* motion */
   --duration-fast: 120ms;
@@ -322,6 +323,7 @@
     --bar-control: 40px;
     --bar-control-width: var(--control-lg);
     --bar-icon: var(--icon-lg);
+    --bar-toggle-gap: var(--space-2);
   }
 }
 
@@ -2539,11 +2541,13 @@ textarea:disabled {
   gap: 8px;
 }
 
-/* The panel toggles sit together, like the panels group's icons. */
+/* The panel toggles sit as a group, spaced so neighbouring chips and their
+   tap targets stay apart. */
 .workspace-workbench-toggles {
   display: flex;
   flex: 0 0 auto;
   align-items: center;
+  gap: var(--bar-toggle-gap);
 }
 
 /* ▾, the panels menu, after the loaded panels' quick buttons. */
