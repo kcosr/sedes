@@ -441,6 +441,22 @@ public class NativeVoiceE2eTest {
                 assertEquals(thread, submitted.getString("threadId"));
                 inputUi = awaitSubmittedInputUi(submitted, mode.equals("manual"), 45000);
             }
+            if (playbackStop) {
+                // Native idle precedes the WebView render; capture the settled controls only after it catches up.
+                String settledCard = "(()=>{const card=document.querySelector('[aria-label=\"Voice controls\"]');"
+                    + "const status=card?.querySelector('.voice-card-sub')?.textContent.trim()??'';"
+                    + "const stop=card?.querySelector('button[aria-label=\"Stop voice interaction\"]');"
+                    + "const start=card?.querySelector('button[aria-label=\"Start voice recording\"]');"
+                    + "return status.startsWith('Ready')&&!status.includes('queued')&&stop instanceof HTMLButtonElement&&stop.disabled"
+                    + "&&start instanceof HTMLButtonElement&&!start.disabled})()";
+                waitJs(settledCard, 15000);
+                // A committed DOM can precede paint; let it cross a frame before capturing the display.
+                String frameMarker = JSONObject.quote("__sedesVoiceStopFrame_" + java.util.UUID.randomUUID());
+                assertEquals("true", js("(()=>{window[" + frameMarker + "]=false;"
+                    + "requestAnimationFrame(()=>requestAnimationFrame(()=>{window[" + frameMarker + "]=true}));return true})()"));
+                waitJs("window[" + frameMarker + "]===true&&(" + settledCard + ")", 15000);
+                js("delete window[" + frameMarker + "]");
+            }
             screenshot("settled");
             if (scenario.equals("next") || playbackStop) assertEquals("Playback release must leave capture unused", 0, supplied.get());
             else assertTrue("Capture did not traverse the deterministic audio source", supplied.get() > 0);
