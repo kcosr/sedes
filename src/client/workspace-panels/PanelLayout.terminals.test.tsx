@@ -30,6 +30,15 @@ vi.mock("../terminals/TerminalPanel.js", async () => ({
 
 installPanelLayoutHarness();
 
+const quickButton = (kind: string) =>
+  within(screen.getByTestId("workspace-workbench-bar")).getByTestId(`${kind}-panel-toggle`);
+const stageKinds = () =>
+  [...document.querySelectorAll<HTMLElement>(".workspace-panel-stage [data-panel-kind]")]
+    .map((section) => section.dataset.panelKind);
+/** The phone Terminals viewer's marker on the current history entry. */
+const historyMarker = () =>
+  (window.history.state as Record<string, unknown> | null)?.sedesMobileTerminalPanel;
+
 describe("PanelLayout Terminals panel", () => {
   it("keeps the terminal mounted while hidden, moved or behind a maximized panel", async () => {
     setApi({
@@ -1232,7 +1241,7 @@ describe("PanelLayout mobile terminal dismissal", () => {
     expect(store.terminalTab(TERMINAL_ID)).toBeDefined();
   });
 
-  it("uses Escape to close only the local terminal panel", async () => {
+  it("returns to Chat on Escape, keeping Terminals loaded", async () => {
     harness.mobile = true;
     const store = setup();
     act(() => {
@@ -1257,38 +1266,104 @@ describe("PanelLayout mobile terminal dismissal", () => {
     expect(terminalPanel).toHaveAccessibleDescription(
       "Closing this panel detaches this client. It does not terminate the terminal process.",
     );
+    expect(historyMarker()).toBeDefined();
 
     fireEvent.keyDown(terminalPanel, { key: "Escape" });
 
-    await waitFor(() => expect(store.terminalPanel()).toBeUndefined());
-    expect(store.terminalTab(TERMINAL_ID)).toBeUndefined();
-    expect(screen.getByRole("status")).toHaveTextContent(
-      "Terminals panel closed. Its process was not terminated.",
-    );
+    await waitFor(() => expect(stageKinds()).toEqual(["chat"]));
+    expect(store.terminalTab(TERMINAL_ID)).toBeDefined();
+    expect(quickButton("terminals")).toHaveAttribute("data-state", "hidden");
+    // Escape went back through the viewer's entry.
+    expect(historyMarker()).toBeUndefined();
+    expect(window.location.pathname).toBe("/threads/thread-1");
   });
 
-  it("consumes browser Back before leaving the thread and detaches the viewer", async () => {
+  it("returns to Chat on browser Back without leaving the thread, and shows Terminals again intact", async () => {
     harness.mobile = true;
     const store = setup();
     act(() => {
       store.openTerminalTab(TERMINAL_ID, { focus: true });
     });
-    const terminalPanel = await screen.findByRole("dialog", {
-      name: "Terminals panel",
-    });
-    expect(terminalPanel).toContainElement(
-      screen.getByRole("tablist", { name: "Terminal tabs" }),
-    );
-    expect(screen.getByRole("tab", { name: "Terminal" })).toHaveAttribute(
-      "aria-selected",
-      "true",
-    );
+    await screen.findByRole("dialog", { name: "Terminals panel" });
     expect(window.location.pathname).toBe("/threads/thread-1");
+    const entries = window.history.length;
 
     act(() => window.history.back());
 
-    await waitFor(() => expect(store.terminalPanel()).toBeUndefined());
-    expect(store.terminalTab(TERMINAL_ID)).toBeUndefined();
+    await waitFor(() => expect(stageKinds()).toEqual(["chat"]));
+    expect(store.terminalTab(TERMINAL_ID)).toBeDefined();
+    expect(window.location.pathname).toBe("/threads/thread-1");
+    expect(quickButton("chat")).toHaveAttribute("data-state", "visible");
+    expect(quickButton("terminals")).toHaveAttribute("data-state", "hidden");
+
+    // Its quick button brings it back with its tab, on one entry again.
+    fireEvent.click(quickButton("terminals"));
+    const viewer = await screen.findByRole("dialog", { name: "Terminals panel" });
+    expect(within(viewer).getByRole("tab", { name: "Terminal" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    expect(window.history.length).toBe(entries);
+    act(() => window.history.back());
+    await waitFor(() => expect(stageKinds()).toEqual(["chat"]));
+    expect(store.terminalTab(TERMINAL_ID)).toBeDefined();
+  });
+
+  it("keeps one history entry when switching away from Terminals and back", async () => {
+    harness.mobile = true;
+    const store = setup();
+    act(() => {
+      store.openTerminalTab(TERMINAL_ID, { focus: true });
+    });
+    await screen.findByRole("dialog", { name: "Terminals panel" });
+    const entries = window.history.length;
+    const token = historyMarker();
+
+    // Leaving the viewer pops its entry, so Back would leave the thread.
+    fireEvent.click(quickButton("chat"));
+    expect(stageKinds()).toEqual(["chat"]);
+    await waitFor(() => expect(historyMarker()).toBeUndefined());
+    fireEvent.click(quickButton("terminals"));
+    await screen.findByRole("dialog", { name: "Terminals panel" });
+    expect(window.history.length).toBe(entries);
+
+    // Shown again before that pop lands, it keeps its entry.
+    const landed = new Promise((resolve) =>
+      window.addEventListener("popstate", resolve, { once: true }),
+    );
+    const again = historyMarker();
+    fireEvent.click(quickButton("chat"));
+    fireEvent.click(quickButton("terminals"));
+    await act(async () => {
+      await landed;
+    });
+    expect(screen.getByRole("dialog", { name: "Terminals panel" })).toBeVisible();
+    expect(historyMarker()).toBe(again);
+    expect(again).not.toBe(token);
+    expect(window.history.length).toBe(entries);
+
+    act(() => window.history.back());
+    await waitFor(() => expect(stageKinds()).toEqual(["chat"]));
+    expect(historyMarker()).toBeUndefined();
+    expect(store.terminalTab(TERMINAL_ID)).toBeDefined();
+  });
+
+  it("closes Terminals with its ✕, shows Chat and drops the viewer's entry", async () => {
+    harness.mobile = true;
+    const store = setup();
+    act(() => {
+      store.openTerminalTab(TERMINAL_ID, { focus: true });
+    });
+    const viewer = await screen.findByRole("dialog", { name: "Terminals panel" });
+
+    fireEvent.click(within(viewer).getByRole("button", { name: "Close Terminals panel" }));
+
+    expect(store.terminalPanel()).toBeUndefined();
+    expect(stageKinds()).toEqual(["chat"]);
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Terminals panel closed. Its process was not terminated.",
+    );
+    await waitFor(() => expect(historyMarker()).toBeUndefined());
     expect(window.location.pathname).toBe("/threads/thread-1");
   });
 });

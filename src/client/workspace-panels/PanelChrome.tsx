@@ -46,8 +46,11 @@ export interface PanelRegionControls {
 
 export interface PanelChromeControls {
   readonly active?: boolean;
-  /** ✕: closes (unloads) the panel; with `closeAction: "hide"` it hides it. */
-  readonly onClose: (invoker: HTMLElement) => void;
+  /**
+   * ✕: closes (unloads) the panel; with `closeAction: "hide"` it hides it.
+   * Without it there is no ✕, as for Chat on phones, which is their home.
+   */
+  readonly onClose?: (invoker: HTMLElement) => void;
   /** Chat's ✕ hides it and keeps it loaded; every other panel's closes. */
   readonly closeAction?: "close" | "hide";
   readonly region?: PanelRegionControls;
@@ -130,7 +133,7 @@ function PanelChromeActions({
 }: {
   readonly title: string;
   readonly controls: PanelChromeControls;
-}): React.JSX.Element {
+}): React.JSX.Element | null {
   const [menuOpen, setMenuOpen] = useState(false);
   // Regions place a surface beside others, which a single-pane layout has
   // none of. The menu then holds nothing at all unless a tenant contributes
@@ -142,6 +145,8 @@ function PanelChromeActions({
   // a sheet under touch density; Move to alone stays a menu.
   const sheet = useTouchDensity() && Boolean(controls.renderMenuItems);
   const closeVerb = controls.closeAction === "hide" ? "Hide" : "Close";
+  const onClose = controls.onClose;
+  if (!region && !hasMenu && !onClose) return null;
   return (
     <div className="workspace-panel-actions">
       {region ? (
@@ -185,15 +190,17 @@ function PanelChromeActions({
         </DropdownMenu>
       ) : null}
 
-      <Button
-        variant="ghost"
-        size="icon-sm"
-        aria-label={`${closeVerb} ${title} panel`}
-        title={`${closeVerb} ${title} panel`}
-        onClick={(event) => controls.onClose(event.currentTarget)}
-      >
-        <X size={16} />
-      </Button>
+      {onClose ? (
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label={`${closeVerb} ${title} panel`}
+          title={`${closeVerb} ${title} panel`}
+          onClick={(event) => onClose(event.currentTarget)}
+        >
+          <X size={16} />
+        </Button>
+      ) : null}
     </div>
   );
 }

@@ -160,8 +160,9 @@ keystroke is awaiting its own acknowledgement.
 
 ## Mobile and accessibility
 
-On a narrow screen, the Terminals panel fills the screen.
-Back closes the Terminals panel without terminating any shell. Touch scrolling
+On a narrow screen, the Terminals panel fills the screen. Back or Escape
+returns to Chat and keeps the panel loaded, so its button brings the same tabs
+back; ✕ closes it. Neither terminates any shell. Touch scrolling
 never injects input, and observer state remains visibly read-only. On
 touch-primary devices, a compact TUI-style key strip and native command field
 appear at the bottom; fine-pointer desktop layouts do not show that dock.

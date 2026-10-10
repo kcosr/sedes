@@ -113,7 +113,7 @@ export function usePublishTasksDock(dock: TasksDock | undefined): void {
       controls: {
         ...(active === undefined ? {} : { active }),
         ...(closeAction === undefined ? {} : { closeAction }),
-        onClose: (invoker) => latest.current?.controls.onClose(invoker),
+        onClose: (invoker) => latest.current?.controls.onClose?.(invoker),
         ...(state === undefined
           ? {}
           : {

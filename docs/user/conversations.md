@@ -699,7 +699,7 @@ Each panel header has these controls:
   was. Escape is left to a focused text field or terminal, or an open menu or
   dialog. Maximize isn't saved.
 - **✕** closes the panel and unloads it, and asks first if unsaved changes
-  would be lost. Chat's ✕ only hides it.
+  would be lost. Chat's ✕ only hides it; on phones Chat has none.
 - **⋯ → Move to** puts the panel in the Middle, Left, Right, Top, or Bottom.
   For a panel on the Left or Right, **Full height** lets its region take the
   corners it shares with Top and Bottom; for Top or Bottom, **Full width**
@@ -722,6 +722,11 @@ use the bar's buttons or the **Panels** menu to switch. Files becomes a
 foreground sheet and Tasks a bottom sheet. Regions, Maximize, and Move to
 don't apply. Returning to Chat uses the same retained state rather than
 rebuilding the file view.
+
+Chat is home on a phone. Closing or hiding another panel returns to Chat, and
+so does Android Back, or browser Back from Terminals. A panel you hide or go
+back from stays loaded, and its button brings it back as you left it. On
+Android, Back from Chat opens the navigation drawer.
 
 Previous: [Core concepts](concepts.md) · Next:
 [Organize and reuse work](organize-work.md)

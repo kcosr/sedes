@@ -231,12 +231,34 @@ composer, or terminal, or to an open dialog, menu, or listbox.
 At `(max-width: 819px)` there is no stage geometry, make-room, Maximize, or
 Move to; a maximized layout is restored on crossing the width. One foreground
 panel is chosen among the shown panels: the panel a focus request names, else
-the one last selected, else the first in the fixed order. Switching panels
-opens them in the device layout, so a panel that shares its placement with
-another replaces it there, as on desktop, and closing it leaves that region
-empty rather than bringing the other back. Tasks is excluded:
-the Tasks host shows it as a bottom sheet that leaves the device layout
-alone. Files and Workpads render their `sheet` presentation. Terminals is a
-dismissible viewer with a same-URL history entry, so Back or Escape closes
-it. Panel headers drop Maximize and Move to, and the **Panels** menu drops its
-place buttons.
+the one last selected, else the first in the fixed order, and Chat when none
+is shown, so a thread never shows an empty stage. Switching panels opens them
+in the device layout, so a panel that shares its placement with another
+replaces it there, as on desktop. Tasks is excluded: the Tasks host shows it
+as a bottom sheet that leaves the device layout alone, and closing the sheet
+reveals whatever was in front. Files and Workpads render their `sheet`
+presentation. Panel headers drop Maximize and Move to, and the **Panels** menu
+drops its place buttons.
+
+Chat is the phone's home. Its header has no ✕, and its quick button does
+nothing while Chat is in front. Closing or hiding the panel in front, or
+Android Back, shows Chat by opening it: when another panel replaced Chat in
+its region, Chat shows there again, which writes the device layout. A hidden
+panel, or one Back left, stays loaded, and Back leaves its region showing it.
+A panel the closed one had replaced in its region does not come back.
+
+Android Back first runs `handleExposedBack` (`app/android-back.ts`): an
+exposed task detail closes, then an open workpad returns to its list, then a
+cancelable `sedes:show-chat` event, which the active phone layout claims while
+a panel other than Chat is in front. Each step yields to an open overlay,
+menu, or the drawer. Only then does Back dismiss overlays and open the
+drawer, so the drawer opens once Chat is in front.
+
+Terminals is a viewer, an open `dialog` that Android Back dismisses with a
+cancelable Escape, with a same-URL history entry. Browser Back, Android Back,
+and Escape go back through the entry to Chat; Terminals stays loaded and its
+quick button brings it back. The entry exists only while the viewer is in
+front: leaving it another way (✕, another panel, a wider window) pops it, so
+switching away and back never adds entries, and browser Back from Chat, Files,
+or Workpads stays a route traversal. Settings suspends the viewer and keeps
+its entry.

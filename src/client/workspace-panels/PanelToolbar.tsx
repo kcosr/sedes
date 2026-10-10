@@ -37,6 +37,8 @@ import {
 export interface PanelToolbarEntry {
   readonly kind: PanelKind;
   readonly state: PanelLoadState;
+  /** False when the quick button cannot hide it: Chat in front on a phone. */
+  readonly hideable?: boolean;
   /** The row's state: "On the right", "Loaded, hidden"; none when closed. */
   readonly stateLabel?: string;
   /** The region the panel opens in, checked in its place menu. */
@@ -103,6 +105,7 @@ export function PanelToolbar({
                   <PanelGlyph kind={entry.kind} brand={brand} size={20} strokeWidth={1.8} />
                 }
                 visible={entry.state === "visible"}
+                hideable={entry.hideable ?? true}
                 onToggle={(invoker) => onToggle(entry.kind, invoker)}
                 badge={entry.badge}
                 controls={entry.controls}

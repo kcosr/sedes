@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   act,
   cleanup,
@@ -11,6 +11,11 @@ import {
   within,
 } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import {
+  CLOSE_WORKPAD_EVENT,
+  installAndroidBackButton,
+  showChatInFront,
+} from "../app/android-back.js";
 import type { TasksDock, TasksHost } from "../components/tasks/tasks-host.js";
 import { tasksTenant } from "../tasks/tasks-tenant.js";
 import type { PanelChromeControls } from "./PanelChrome.js";
@@ -44,6 +49,21 @@ import {
 vi.mock("../terminals/TerminalPanel.js", async () => ({
   TerminalPanel: (await import("./panel-layout.terminal-fixture.js"))
     .TerminalPanelFixture,
+}));
+
+/** Android's hardware Back: the listener installAndroidBackButton registers. */
+const androidBack = vi.hoisted(() => ({
+  press: undefined as ((event: { canGoBack: boolean }) => void) | undefined,
+}));
+vi.mock("@capacitor/app", () => ({
+  App: {
+    addListener: vi.fn(
+      async (_event: string, listener: (event: { canGoBack: boolean }) => void) => {
+        androidBack.press = listener;
+        return { remove: vi.fn(async () => undefined) };
+      },
+    ),
+  },
 }));
 
 installPanelLayoutHarness();
@@ -945,10 +965,192 @@ describe("PanelLayout phones", () => {
     expect(screen.queryByRole("button", { name: "Maximize Files panel" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Files panel actions" })).toBeNull();
 
-    // Hiding the foreground panel brings the next one forward.
+    // Hiding the panel in front shows Chat, the phone's home.
     fireEvent.click(quickButton("files"));
     await waitFor(() => expect(stageKinds()).toEqual(["chat"]));
     expect(store.isLoaded("files")).toBe(true);
+  });
+
+  it("makes Chat home: no ✕ in its header, and its quick button keeps it in front", () => {
+    harness.mobile = true;
+    const store = setup();
+    expect(stageKinds()).toEqual(["chat"]);
+    expect(
+      within(screen.getByRole("banner", { name: "Chat panel header" })).queryByRole("button"),
+    ).toBeNull();
+    expect(quickButton("chat")).toHaveAccessibleName("Chat panel");
+    fireEvent.click(quickButton("chat"));
+    expect(stageKinds()).toEqual(["chat"]);
+    expect(store.isShown("chat")).toBe(true);
+
+    // On desktop Chat's ✕ and quick button still hide it.
+    act(() => setMobile(false));
+    expect(headerButton("Chat", "Hide Chat panel")).toBeInTheDocument();
+    expect(quickButton("chat")).toHaveAccessibleName("Hide Chat panel");
+  });
+
+  it("shows Chat when the panel in front closes or hides, not the panel it replaced", () => {
+    harness.mobile = true;
+    const store = setup({ extraTenants: [workpadsTenant()] });
+    act(() => store.open("files"));
+    expect(stageKinds()).toEqual(["files"]);
+    fireEvent.click(headerButton("Files", "Close Files panel"));
+    expect(stageKinds()).toEqual(["chat"]);
+    expect(store.isLoaded("files")).toBe(false);
+    expect(statusText()).toBe("Files panel closed.");
+
+    // Workpads replaces Files on the Right; hiding it shows Chat, not Files.
+    act(() => {
+      store.open("files");
+      store.open("workpads");
+    });
+    expect(stageKinds()).toEqual(["workpads"]);
+    fireEvent.click(quickButton("workpads"));
+    expect(stageKinds()).toEqual(["chat"]);
+    expect(quickButtons()).toEqual([
+      ["chat", "visible"],
+      ["files", "hidden"],
+      ["workpads", "hidden"],
+    ]);
+    expect(statusText()).toBe("Workpads panel hidden.");
+  });
+
+  it("shows Chat in its region again when the panel in front replaced it there", () => {
+    const store = setup();
+    // Files placed in the Middle, as a desktop Move to leaves it, replaces Chat.
+    act(() => store.open("files", { region: "middle", focus: false }));
+    expect(store.isShown("chat")).toBe(false);
+    act(() => setMobile(true));
+    expect(stageKinds()).toEqual(["files"]);
+
+    // Hiding Files shows Chat in the Middle; Files stays loaded.
+    fireEvent.click(quickButton("files"));
+    expect(stageKinds()).toEqual(["chat"]);
+    expect(store.regionPanel("middle")).toBe("chat");
+    expect(store.isLoaded("files")).toBe(true);
+
+    // Files' button replaces Chat there again; its ✕ shows Chat.
+    fireEvent.click(quickButton("files"));
+    expect(stageKinds()).toEqual(["files"]);
+    expect(store.regionPanel("middle")).toBe("files");
+    fireEvent.click(headerButton("Files", "Close Files panel"));
+    expect(stageKinds()).toEqual(["chat"]);
+    expect(store.regionPanel("middle")).toBe("chat");
+
+    // So does Back, keeping Files loaded.
+    act(() => store.open("files"));
+    expect(stageKinds()).toEqual(["files"]);
+    act(() => expect(showChatInFront()).toBe(true));
+    expect(stageKinds()).toEqual(["chat"]);
+    expect(store.regionPanel("middle")).toBe("chat");
+    expect(store.isLoaded("files")).toBe(true);
+  });
+
+  it("puts Chat in front when nothing is shown, never an empty stage", () => {
+    const store = setup();
+    act(() => store.close("chat"));
+    expect(screen.getByTestId("workspace-panel-empty")).toBeInTheDocument();
+    act(() => setMobile(true));
+    expect(stageKinds()).toEqual(["chat"]);
+    expect(screen.queryByTestId("workspace-panel-empty")).toBeNull();
+    expect(quickButton("chat")).toHaveAttribute("data-state", "visible");
+  });
+
+  it("brings Chat in front on Android Back, keeping the panel loaded", async () => {
+    harness.mobile = true;
+    const store = setup({ extraTenants: [workpadsTenant()] });
+    // With Chat in front, Back is left to the drawer.
+    act(() => expect(showChatInFront()).toBe(false));
+
+    fireEvent.click((await openPanelsMenu()).querySelector('[data-panel-row="files"]')!);
+    await waitFor(() => expect(stageKinds()).toEqual(["files"]));
+    fireEvent.change(screen.getByRole("textbox", { name: "File draft" }), {
+      target: { value: "kept through Back" },
+    });
+    act(() => expect(showChatInFront()).toBe(true));
+    expect(stageKinds()).toEqual(["chat"]);
+    // Back leaves the layout alone: Files is still the Right's panel.
+    expect(store.regionPanel("right")).toBe("files");
+    act(() => expect(showChatInFront()).toBe(false));
+    fireEvent.click(quickButton("files"));
+    expect(stageKinds()).toEqual(["files"]);
+    expect(screen.getByRole("textbox", { name: "File draft" })).toHaveValue(
+      "kept through Back",
+    );
+
+    // An open overlay, such as the Panels sheet, takes Back first.
+    await openPanelsMenu();
+    act(() => expect(showChatInFront()).toBe(false));
+    expect(stageKinds()).toEqual(["files"]);
+    fireEvent.keyDown(screen.getByRole("dialog", { name: "Panels" }), { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Panels" })).toBeNull());
+
+    act(() => store.open("workpads"));
+    expect(stageKinds()).toEqual(["workpads"]);
+    act(() => expect(showChatInFront()).toBe(true));
+    expect(stageKinds()).toEqual(["chat"]);
+    expect(store.isLoaded("workpads")).toBe(true);
+
+    // Desktop leaves Back alone.
+    act(() => setMobile(false));
+    act(() => expect(showChatInFront()).toBe(false));
+  });
+
+  it("unwinds Android Back from an open workpad to its list, then Chat, then the drawer", async () => {
+    harness.mobile = true;
+    function WorkpadDocument({ visible }: { readonly visible: boolean }) {
+      const [title, setTitle] = useState<string>();
+      useEffect(() => {
+        if (!visible || title === undefined) return undefined;
+        const close = (event: Event) => {
+          event.preventDefault();
+          setTitle(undefined);
+        };
+        window.addEventListener(CLOSE_WORKPAD_EVENT, close);
+        return () => window.removeEventListener(CLOSE_WORKPAD_EVENT, close);
+      }, [title, visible]);
+      return title === undefined ? (
+        <button type="button" onClick={() => setTitle("Release notes")}>
+          Open Release notes
+        </button>
+      ) : (
+        <h2>{title}</h2>
+      );
+    }
+    const workpads: WorkspacePanelTenant = {
+      ...workpadsTenant(),
+      render: (context) => <WorkpadDocument visible={context.visible} />,
+    };
+    const store = setup({ extraTenants: [workpads] });
+    const openDrawer = vi.fn();
+    const uninstall = installAndroidBackButton({
+      onOpenDrawer: openDrawer,
+      isOnDrawerRoute: () => true,
+      isDrawerOpen: () => false,
+      isSidebarSearchActive: () => false,
+      onClearSidebarSearch: vi.fn(),
+      isSidebarFiltersActive: () => false,
+      onClearSidebarFilters: vi.fn(),
+      drawerReturnsToThread: () => true,
+    });
+    await waitFor(() => expect(androidBack.press).toBeDefined());
+    const back = () => act(() => androidBack.press!({ canGoBack: true }));
+
+    act(() => store.open("workpads"));
+    fireEvent.click(screen.getByRole("button", { name: "Open Release notes" }));
+    expect(screen.getByRole("heading", { name: "Release notes" })).toBeInTheDocument();
+
+    back();
+    expect(stageKinds()).toEqual(["workpads"]);
+    expect(screen.getByRole("button", { name: "Open Release notes" })).toBeInTheDocument();
+    back();
+    expect(stageKinds()).toEqual(["chat"]);
+    expect(store.isLoaded("workpads")).toBe(true);
+    expect(openDrawer).not.toHaveBeenCalled();
+    back();
+    expect(openDrawer).toHaveBeenCalledOnce();
+    expect(stageKinds()).toEqual(["chat"]);
+    uninstall();
   });
 
   it("keeps the focused Files surface foregrounded when narrowing", () => {
