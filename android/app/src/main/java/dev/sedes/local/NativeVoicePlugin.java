@@ -46,6 +46,7 @@ public final class NativeVoicePlugin extends Plugin {
     @PluginMethod public void copyRecognizedRecordingText(PluginCall call) { run("copyRecognizedRecordingText", call, true); }
     @PluginMethod public void discardRecording(PluginCall call) { run("discardRecording", call, true); }
     @PluginMethod public void skipCurrentPlayback(PluginCall call) { run("skipCurrentPlayback", call, false); }
+    @PluginMethod public void recordDuringPlayback(PluginCall call) { run("recordDuringPlayback", call, true); }
     @PluginMethod public void stopCurrentInteraction(PluginCall call) { run("stopCurrentInteraction", call, false); }
     @PluginMethod public void resumeInput(PluginCall call) { run("resumeInput", call, true); }
     @PluginMethod public void discardInput(PluginCall call) { run("discardInput", call, true); }

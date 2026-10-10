@@ -57,7 +57,7 @@ public class NativeVoiceE2eTest {
         MainActivity activity = (MainActivity) instrumentation.startActivitySync(new Intent(context, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
         instrumentation.runOnMainSync(() -> web = activity.getBridge().getWebView()); runtime = NativeVoiceRuntime.get(context);
         AtomicReference<String> currentPhase = new AtomicReference<>("");
-        AtomicBoolean stopRequested = new AtomicBoolean(), stoppedItemReleased = new AtomicBoolean();
+        AtomicBoolean releaseRequested = new AtomicBoolean(), itemReleased = new AtomicBoolean();
         AtomicInteger navigationEvents = new AtomicInteger();
         List<JSONObject> submittedInputs = new CopyOnWriteArrayList<>();
         NativeVoiceRuntime.Observer observer = (event, value) -> {
@@ -67,7 +67,7 @@ public class NativeVoiceE2eTest {
                 String phase = value.optString("phase"); currentPhase.set(phase);
                 if (phases.isEmpty() || !phase.equals(phases.get(phases.size() - 1))) phases.add(phase);
                 // Every published state reaches observers, so even a brief release before the next queued item is seen.
-                if (stopRequested.get() && value.isNull("active")) stoppedItemReleased.set(true);
+                if (releaseRequested.get() && value.isNull("active")) itemReleased.set(true);
             }
         };
         runtime.observe(observer);
@@ -126,7 +126,7 @@ public class NativeVoiceE2eTest {
             return pcm;
         });
         long began = SystemClock.elapsedRealtime();
-        JSONObject backgroundSwitch = null;
+        JSONObject backgroundSwitch = null, playbackControl = null;
         try {
             if (!restoreStartup) {
                 waitJs("document.querySelector('#setting-sedes-name') !== null", 45000);
@@ -197,12 +197,21 @@ public class NativeVoiceE2eTest {
                 command("updateSettings", NativeVoiceJson.object("expectedRevision", runtime.snapshot().getLong("settingsRevision"),
                     "patch", NativeVoiceJson.object("autoListen", false, "voiceThreadId", thread, "pinDefaultVoiceThread", true)));
             } else {
+                if (scenario.equals("record")) {
+                    // An explicit reply belongs to the spoken thread, even when automatic listening is off
+                    // and another thread is pinned for ordinary manual recording.
+                    command("updateSettings", NativeVoiceJson.object("expectedRevision", runtime.snapshot().getLong("settingsRevision"),
+                        "patch", NativeVoiceJson.object("autoListen", false, "voiceThreadId", required(args, "secondThreadId"), "pinDefaultVoiceThread", true)));
+                } else if (scenario.equals("next")) {
+                    command("updateSettings", NativeVoiceJson.object("expectedRevision", runtime.snapshot().getLong("settingsRevision"),
+                        "patch", NativeVoiceJson.object("autoListen", true)));
+                }
                 input("[data-testid=\"composer\"] textarea", initial);
                 waitJs("!!document.querySelector('[aria-label=\"Send message\"]:not(:disabled)')", 15000); click("[aria-label=\"Send message\"]");
                 waitJs("document.querySelector('[data-testid=\"composer\"] textarea')?.value === ''", 15000);
             }
             input("[data-testid=\"composer\"] textarea", draft);
-            if (!scenario.equals("background") && !scenario.equals("background-switch") && !scenario.equals("skip") && !scenario.equals("stop") && !scenario.equals("retarget")) screenshot("active");
+            if (!scenario.equals("background") && !scenario.equals("background-switch") && !scenario.equals("record") && !scenario.equals("next") && !scenario.equals("stop") && !scenario.equals("retarget")) screenshot("active");
             if (scenario.equals("background") || scenario.equals("background-switch")) {
                 if (scenario.equals("background-switch")) {
                     assertTrue("Save the source draft before backgrounding", awaitServerDraft(server, thread, draft, 15000));
@@ -226,20 +235,55 @@ public class NativeVoiceE2eTest {
                         "replyPlayedBeforeRecognition", speechPlayed.get());
                 }
             }
-            if (scenario.equals("skip")) {
+            if (scenario.equals("record") || scenario.equals("next")) {
+                boolean record = scenario.equals("record");
+                String action = record ? "Record" : "Next";
                 await(() -> {
                     JSONObject state = runtime.snapshot();
-                    return state.optString("phase").equals("speaking") && state.optJSONObject("actions").optBoolean("canSkip");
-                }, 45000, "AudioTrack playback before Skip");
-                notificationAction(context, "Skip");
+                    return speechPlayed.get() && state.optString("phase").equals("speaking") &&
+                        state.optJSONObject("actions").optBoolean(record ? "canRecordDuringPlayback" : "canSkip");
+                }, 45000, "AudioTrack playback before " + action);
+                JSONObject beforeAction = runtime.snapshot();
+                assertEquals(thread, beforeAction.getJSONObject("active").getString("threadId"));
+                assertEquals("Playback must precede recording", 0, supplied.get());
+                playbackControl = NativeVoiceJson.object("action", action, "sourceThreadId", thread,
+                    "autoListen", beforeAction.getJSONObject("settings").getBoolean("autoListen"));
+                if (!record) releaseRequested.set(true);
+                notificationAction(context, action);
+                if (record) {
+                    await(() -> runtime.snapshot().optString("phase").equals("listening"), 45000, "explicit reply after Record");
+                    JSONObject state = runtime.snapshot(), active = state.getJSONObject("active"), settings = state.getJSONObject("settings");
+                    assertEquals(thread, active.getString("recognitionThreadId"));
+                    assertFalse("Record starts a fresh manual interaction", active.getBoolean("automatic"));
+                    assertNotEquals(beforeAction.getJSONObject("active").getString("id"), active.getString("id"));
+                    assertFalse(settings.getBoolean("autoListen"));
+                    assertEquals(required(args, "secondThreadId"), settings.getString("voiceThreadId"));
+                    assertTrue(settings.getBoolean("pinDefaultVoiceThread"));
+                    NativeVoiceJson.put(playbackControl, "recognitionThreadId", active.getString("recognitionThreadId"));
+                    NativeVoiceJson.put(playbackControl, "automatic", active.getBoolean("automatic"));
+                    NativeVoiceJson.put(playbackControl, "voiceThreadId", settings.getString("voiceThreadId"));
+                    NativeVoiceJson.put(playbackControl, "pinDefaultVoiceThread", settings.getBoolean("pinDefaultVoiceThread"));
+                    screenshot("recording-reply");
+                } else {
+                    await(() -> {
+                        JSONObject state = runtime.snapshot();
+                        return itemReleased.get() && state.isNull("active") && state.optString("phase").equals("idle") &&
+                            state.optJSONObject("queue").optInt("count") == 0;
+                    }, 15000, "Next released playback and drained the interaction");
+                    assertFalse("Next must skip automatic listening", phases.contains("listening"));
+                    assertFalse("Next must not submit input", phases.contains("submitting"));
+                    assertTrue(submittedInputs.isEmpty());
+                    assertEquals("Next must not start audio capture", 0, supplied.get());
+                    NativeVoiceJson.put(playbackControl, "released", itemReleased.get());
+                }
             }
             if (scenario.equals("stop")) {
                 await(() -> runtime.snapshot().optString("phase").equals("listening"), 45000, "recognition before Stop");
-                stopRequested.set(true); notificationAction(context, "Cancel");
+                releaseRequested.set(true); notificationAction(context, "Cancel");
                 // A released item can no longer submit; wait for that terminal state instead of a fixed delay.
-                await(stoppedItemReleased::get, 15000, "stopped recognition released its item");
+                await(itemReleased::get, 15000, "stopped recognition released its item");
                 assertFalse(phases.contains("submitting"));
-            } else {
+            } else if (!scenario.equals("next")) {
                 if (scenario.equals("retarget")) {
                     String second = required(args, "secondThreadId");
                     await(() -> runtime.snapshot().optString("phase").equals("listening"), 45000, "recognition before retarget");
@@ -338,7 +382,8 @@ public class NativeVoiceE2eTest {
                 inputUi = awaitSubmittedInputUi(submitted, mode.equals("manual"), 45000);
             }
             screenshot("settled");
-            assertTrue("Capture did not traverse the deterministic audio source", supplied.get() > 0);
+            if (scenario.equals("next")) assertEquals("Next must leave capture unused", 0, supplied.get());
+            else assertTrue("Capture did not traverse the deterministic audio source", supplied.get() > 0);
             if (mode.equals("response") && !scenario.equals("stop")) assertTrue("No actual AudioTrack playback phase", phases.contains("speaking"));
             // Report observations, not expectations; the host harness asserts them.
             boolean composerDraft = "true".equals(js("document.querySelector('[data-testid=\"composer\"] textarea')?.value === " + JSONObject.quote(draft)));
@@ -352,6 +397,7 @@ public class NativeVoiceE2eTest {
                 "screenshots", new JSONArray(screenshots));
             if (inputUi != null) NativeVoiceJson.put(result, "inputUi", inputUi);
             if (backgroundSwitch != null) NativeVoiceJson.put(result, "backgroundSwitch", backgroundSwitch);
+            if (playbackControl != null) NativeVoiceJson.put(result, "playbackControl", playbackControl);
             Bundle resultBundle = new Bundle(); resultBundle.putString("voiceResult", result.toString()); instrumentation.sendStatus(0, resultBundle);
         } catch (Exception | AssertionError failure) {
             // Capture before cleanup turns voice Off and removes the state that explains the failure.
@@ -598,12 +644,14 @@ public class NativeVoiceE2eTest {
             for (StatusBarNotification notification : context.getSystemService(NotificationManager.class).getActiveNotifications()) {
                 if (notification.getNotification().actions != null) for (Notification.Action action : notification.getNotification().actions)
                     if (title.contentEquals(action.title)) { action.actionIntent.send(); return; }
-                if (notification.getNotification().bigContentView != null && (title.equals("Stop") || title.equals("Skip"))) {
+                if (notification.getNotification().bigContentView != null && (title.equals("Stop") || title.equals("Record") || title.equals("Next"))) {
                     AtomicBoolean clicked = new AtomicBoolean();
                     InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
                         View view = notification.getNotification().bigContentView.apply(context, null);
-                        View button = view.findViewById(title.equals("Stop") ? R.id.voice_notification_stop : R.id.voice_notification_skip);
-                        if (button != null) clicked.set(button.performClick());
+                        View button = view.findViewById(title.equals("Stop") ? R.id.voice_notification_stop :
+                            title.equals("Record") ? R.id.voice_notification_record : R.id.voice_notification_next);
+                        if (button instanceof android.widget.TextView && button.getVisibility() == View.VISIBLE && button.isEnabled() &&
+                            title.contentEquals(((android.widget.TextView) button).getText())) clicked.set(button.performClick());
                     });
                     if (clicked.get()) return;
                 }

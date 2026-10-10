@@ -25,7 +25,7 @@
   and its WebView. Upgrade clients together with the server.
   ([#50](https://github.com/kcosr/sedes/pull/50), [#53](https://github.com/kcosr/sedes/pull/53), [#56](https://github.com/kcosr/sedes/pull/56))
 
-- Android voice uses snapshot version 9, settings version 7, and dictation
+- Android voice uses snapshot version 10, settings version 7, and dictation
   manifest version 2. Reconfigure voice and re-enter speech credentials after
   upgrading: previous per-connection preferences are not imported and their
   speech keys are removed. Finish or copy saved dictation first; older recordings
@@ -491,6 +491,11 @@
   Session stats stays in the thread menu rather than flashing during loading. (#8)
 
 ### Changed
+
+- Android playback offers **Record** to reply to the spoken thread and **Next**
+  to skip speech and its follow-up recording. Headset Play/Pause records during
+  speech when Auto-listen is on and recording is available; otherwise it skips. Headset Next always
+  skips. Record takes priority over queued speech and works with Auto-listen off.
 
 - Android **Play response aloud** now follows **Auto-listen**: after replay,
   record a new reply to that thread when its current input policy allows it.

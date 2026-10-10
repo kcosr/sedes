@@ -171,14 +171,16 @@ public final class NativeVoiceRuntimeService extends Service {
         boolean held = recording != null && recording.optBoolean("keepListening");
         if (actions != null && actions.optBoolean("canStop") && actions.optBoolean("canSkip") && settings != null) {
             // Standard templates show at most three actions. The expanded ordinary notification
-            // keeps all four playback controls accessible; custom content is ineligible for promotion.
+            // keeps all playback controls accessible; custom content is ineligible for promotion.
             RemoteViews controls = new RemoteViews(getPackageName(), R.layout.notification_voice_controls);
             controls.setTextViewText(R.id.voice_notification_title, title);
             controls.setTextViewText(R.id.voice_notification_status, label(phase));
             controls.setTextViewText(R.id.voice_notification_mode, mode);
             controls.setTextViewText(R.id.voice_notification_rearm, rearm);
+            controls.setBoolean(R.id.voice_notification_record, "setEnabled", actions.optBoolean("canRecordDuringPlayback"));
+            controls.setOnClickPendingIntent(R.id.voice_notification_record, pending("record", state));
             controls.setOnClickPendingIntent(R.id.voice_notification_stop, pending("stop", state));
-            controls.setOnClickPendingIntent(R.id.voice_notification_skip, pending("skip", state));
+            controls.setOnClickPendingIntent(R.id.voice_notification_next, pending("skip", state));
             controls.setOnClickPendingIntent(R.id.voice_notification_mode, pending("mode", state));
             controls.setOnClickPendingIntent(R.id.voice_notification_rearm, pending("rearm", state));
             builder.setCustomBigContentView(controls).setStyle(new NotificationCompat.DecoratedCustomViewStyle());

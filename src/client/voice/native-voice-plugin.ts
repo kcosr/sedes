@@ -48,7 +48,7 @@ export const nativeRecordingTextSchema = z.strictObject({
 });
 export type NativeRecordingText = z.infer<typeof nativeRecordingTextSchema>;
 export const nativeVoiceStateSchema = z.strictObject({
-  version: z.literal(9), stateRevision: z.number().int().nonnegative(), connectionGeneration: z.number().int().nonnegative(),
+  version: z.literal(10), stateRevision: z.number().int().nonnegative(), connectionGeneration: z.number().int().nonnegative(),
   profileId: z.string().nullable(), serverOrigin: z.string().nullable(), identity: z.string().nullable(), originClientId: z.uuid().nullable(), clientConnectionToken: z.string().nullable(),
   settingsRevision: z.number().int().nonnegative(), settings: nativeVoiceSettingsSchema,
   speech: z.strictObject({ credentialConfigured: z.boolean(), catalogStatus: z.enum(["idle", "loading", "ready", "error"]),
@@ -62,7 +62,7 @@ export const nativeVoiceStateSchema = z.strictObject({
     recording: z.strictObject({ id: z.string().min(1), keepListening: z.boolean(), reconnecting: z.boolean() }).nullable() }).nullable(),
   queue: z.strictObject({ count: z.number().int().nonnegative(), bytes: z.number().int().nonnegative(), droppedCount: z.number().int().nonnegative(),
     droppedReasons: z.record(z.string(), z.number().int().nonnegative()) }),
-  actions: z.strictObject({ canStart: z.boolean(), canStop: z.boolean(), canSkip: z.boolean(), canRetarget: z.boolean(), canResume: z.boolean(),
+  actions: z.strictObject({ canStart: z.boolean(), canStop: z.boolean(), canSkip: z.boolean(), canRecordDuringPlayback: z.boolean(), canRetarget: z.boolean(), canResume: z.boolean(),
     canSetKeepListening: z.boolean(), canSend: z.boolean(),
     keepListeningBlockedReason: z.enum(["not_capturing", "operation_pending", "saved_recording_pending", "configuration_unavailable", "storage_unavailable"]).nullable() }),
   recordingRecovery: nativeRecordingRecoverySchema.nullable(),
@@ -95,7 +95,10 @@ export interface NativeVoicePlugin {
   retargetActiveRecognition(input: NativeRecordingCommandContext & { threadId: string; threadTitle?: string }): Promise<NativeVoiceState>;
   setKeepListening(input: NativeRecordingCommandContext & { enabled: boolean }): Promise<NativeVoiceState>;
   sendRecording(input: NativeRecordingCommandContext): Promise<NativeVoiceState>;
-  skipCurrentPlayback(input: NativeVoiceCommandContext): Promise<NativeVoiceState>;
+  /** Interrupts this playback and records an explicit reply to its thread, independent of Auto-listen. */
+  recordDuringPlayback(input: NativeVoiceInteractionCommandContext): Promise<NativeVoiceState>;
+  /** Skips this interaction, including its optional listening, and advances the remaining queue. */
+  skipCurrentPlayback(input: NativeVoiceInteractionCommandContext): Promise<NativeVoiceState>;
   /**
    * Queues one ended turn's reply behind current work, with current Auto-listen applying afterward. A pending or playing replay of the same turn is a
    * successful no-op. Rejects with `voice_not_ready`, `voice_reply_empty` or `voice_queue_full`.

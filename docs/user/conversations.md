@@ -75,7 +75,8 @@ requires both the event's **Speak then listen** setting and **Auto-listen**,
 plus a current, idle target with no blocking input or unresolved admission. It
 never types an answer into an approval or question form.
 
-**Skip** ends the current speech and retains an eligible follow-up recording.
+**Record** ends speech and starts a reply to the spoken thread, even with
+Auto-listen off. **Next** skips both the speech and its follow-up recording.
 **Stop** cancels the current voice interaction without stopping the agent;
 other queued notices may continue. While voice is recording or recognizing,
 Stop becomes **Cancel**, which discards the recording unsent. **Off** clears
@@ -95,7 +96,7 @@ response text that a spoken completion would. When the phases selected under
 **Response text** hold no text, it reads the whole reply instead. That happens
 when **Response text** selects no phases, or when the turn has text only in
 unselected phases, such as Provisional commentary.
-**Skip** and **Stop** work as for any notice. See
+**Record**, **Next**, and **Stop** work as for any notice. See
 [Replay a reply](../operator/clients/voice.md#replay-a-reply).
 
 If Sedes rejects a spoken message, voice reports that it was not delivered. If

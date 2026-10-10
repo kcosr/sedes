@@ -11,16 +11,16 @@ public class NativeVoiceRuntimePolicyTest {
             "automaticListenEligible", false, "manualListenEligible", true,
             "steer", NativeVoiceJson.object("availability", "unavailable"));
         NativeVoiceProtocol.inputContext(current);
-        assertTrue("A dormant but writable thread can receive a fresh reply", NativeVoiceRuntime.replayTargetCurrent(current, null));
-        assertTrue(NativeVoiceRuntime.replayTargetCurrent(current, "current-epoch"));
+        assertTrue("A dormant but writable thread can receive a fresh reply", NativeVoiceRuntime.manualTargetCurrent(current, null));
+        assertTrue(NativeVoiceRuntime.manualTargetCurrent(current, "current-epoch"));
         NativeVoiceJson.put(current, "authority", "current"); NativeVoiceJson.put(current, "runState", "running");
         NativeVoiceJson.put(current, "sourceTurnId", "newer-than-replayed-turn");
-        assertTrue("Current manual readiness can allow queued input on a running thread", NativeVoiceRuntime.replayTargetCurrent(current, null));
-        assertFalse("New activity during the start cue prevents capture", NativeVoiceRuntime.replayTargetCurrent(current, "older-epoch"));
+        assertTrue("Current manual readiness can allow queued input on a running thread", NativeVoiceRuntime.manualTargetCurrent(current, null));
+        assertFalse("New activity during the start cue prevents capture", NativeVoiceRuntime.manualTargetCurrent(current, "older-epoch"));
         NativeVoiceJson.put(current, "manualListenEligible", false);
         NativeVoiceJson.put(current, "automaticListenEligible", true);
-        assertFalse("Replay requires manual readiness, regardless of notification eligibility", NativeVoiceRuntime.replayTargetCurrent(current, null));
-        assertFalse(NativeVoiceRuntime.replayTargetCurrent(current, "current-epoch"));
+        assertFalse("Replay requires manual readiness, regardless of notification eligibility", NativeVoiceRuntime.manualTargetCurrent(current, null));
+        assertFalse(NativeVoiceRuntime.manualTargetCurrent(current, "current-epoch"));
     }
     @Test public void captureSettingsCompareMicrophoneIdentityByValue() throws Exception {
         java.lang.reflect.Method changed = NativeVoiceRuntime.class.getDeclaredMethod("captureSettingsChanged", NativeVoiceSettings.class, NativeVoiceSettings.class);

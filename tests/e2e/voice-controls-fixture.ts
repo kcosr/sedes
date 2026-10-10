@@ -4,7 +4,7 @@ import type { NativeVoiceInputSubmitted, NativeVoiceState } from "../../src/clie
 const profileId = "c61b5d8b-4a77-43c6-bd72-12e23fe42e38";
 export function voiceFixtureState(): NativeVoiceState {
   return {
-    version: 9, stateRevision: 1, connectionGeneration: 1, profileId, serverOrigin: null, identity: null,
+    version: 10, stateRevision: 1, connectionGeneration: 1, profileId, serverOrigin: null, identity: null,
     originClientId: "34612c41-0bbb-455f-a5af-725bfc7ae768", clientConnectionToken: null, settingsRevision: 0,
     settings: { audioMode: "response", autoListen: true, keepListeningByDefault: false, ignoreOtherDevices: true, readNotificationContext: true, cleanSpeechText: true,
       speechProvider: "openai", speechEndpoint: "https://api.openai.com/v1", sttModel: "gpt-live-transcribe", ttsModel: "gpt-4o-mini-tts",
@@ -15,7 +15,7 @@ export function voiceFixtureState(): NativeVoiceState {
     speech: { credentialConfigured: true, catalogStatus: "idle", catalog: null, error: null }, phase: "idle", ready: true, readiness: "ready",
     foreground: { visible: false, threadId: null, threadTitle: null }, nextRecordingTarget: null, active: null,
     queue: { count: 0, bytes: 0, droppedCount: 0, droppedReasons: {} },
-    actions: { canStart: true, canStop: false, canSkip: false, canRetarget: false, canResume: false,
+    actions: { canStart: true, canStop: false, canSkip: false, canRecordDuringPlayback: false, canRetarget: false, canResume: false,
       canSetKeepListening: false, canSend: false, keepListeningBlockedReason: "not_capturing" }, recordingRecovery: null, recovery: [], errors: [],
   };
 }
@@ -68,7 +68,7 @@ export async function installVoiceFixture(page: Page): Promise<void> {
           header("Preferences", ["get", "set", "remove"]), header("ClientCredentials", ["getCredential", "setCredential", "removeCredential", "removeProfileCredentials"]),
           header("App", ["exitApp"], true),
           header("NativeVoice", ["setConnection", "getState", "disconnect", "setForegroundContext", "updateSettings", "startManualListen", "setNextRecordingTarget",
-            "retargetActiveRecognition", "setKeepListening", "sendRecording", "stopCurrentInteraction", "skipCurrentPlayback", "retryRecordingRecognition",
+            "retargetActiveRecognition", "setKeepListening", "sendRecording", "stopCurrentInteraction", "skipCurrentPlayback", "recordDuringPlayback", "retryRecordingRecognition",
             "sendRecoveredRecording", "copyRecognizedRecordingText", "readRecognizedRecordingText", "discardRecording", "resumeInput", "discardInput", "listInputDevices",
             "refreshSpeechCatalog", "openSpeechCredentialDialog", "speakReply"], true),
         ],
@@ -124,9 +124,17 @@ export async function installVoiceFixture(page: Page): Promise<void> {
             } else fixture.publish({ phase: "speaking", active: { id: `replay:${String(args.turnId)}`, eventKind: "replay", threadId: String(args.threadId),
               threadTitle: typeof args.threadTitle === "string" ? args.threadTitle : null, recognitionThreadId: null, recognitionThreadTitle: null,
               automatic: false, recording: null },
-              actions: { ...current.actions, canStart: false, canStop: true, canSkip: true } });
-          } else if (method === "stopCurrentInteraction") {
-            if (args.interactionId !== current.active?.id) throw new Error("The interaction changed.");
+              actions: { ...current.actions, canStart: false, canStop: true, canSkip: true, canRecordDuringPlayback: true } });
+          } else if (method === "recordDuringPlayback") {
+            if (!current.actions.canRecordDuringPlayback || !current.active || args.interactionId !== current.active.id || args.expectedConnectionGeneration !== current.connectionGeneration)
+              throw new Error("The interaction changed.");
+            fixture.publish({ phase: "listening", nextRecordingTarget: null, active: { ...current.active, id: `reply:${current.active.id}`, automatic: false,
+              recognitionThreadId: current.active.threadId, recognitionThreadTitle: current.active.threadTitle,
+              recording: { id: `recording:${current.active.id}`, keepListening: current.settings.keepListeningByDefault, reconnecting: false } },
+              actions: { ...initial.actions, canStart: false, canStop: true, canRetarget: true, canSetKeepListening: true,
+                canSend: current.settings.keepListeningByDefault, keepListeningBlockedReason: null } });
+          } else if (method === "stopCurrentInteraction" || method === "skipCurrentPlayback") {
+            if (args.interactionId !== current.active?.id || args.expectedConnectionGeneration !== current.connectionGeneration) throw new Error("The interaction changed.");
             fixture.publish({ phase: "idle", active: null, actions: { ...initial.actions } });
           } else if (["retryRecordingRecognition", "sendRecoveredRecording", "discardRecording", "copyRecognizedRecordingText", "readRecognizedRecordingText"].includes(method)) {
             const saved = current.recordingRecovery;

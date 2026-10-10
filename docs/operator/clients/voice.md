@@ -218,8 +218,9 @@ snoozed, read-only, or recovering target is still playable but does not start
 recording. New thread activity during the start cue also prevents recording.
 The default thread, pin, and viewed thread do not redirect this reply. Existing
 Queue/Steer and Keep listening preferences still apply. With Auto-listen off,
-replay remains speak-only. **Skip** ends its speech and applies the same
-follow-up policy; **Stop** cancels the interaction. Tapping again while that
+replay remains speak-only. **Record** ends speech and starts an explicit reply
+to that thread even with Auto-listen off; **Next** skips the speech and its
+follow-up recording. **Stop** cancels the interaction. Tapping again while that
 turn's speech is queued or playing adds nothing. Once speech finishes, you can
 queue it again behind the reply recording. A replay counts against the queue limits; when it does not fit, the
 button reports a full queue. Off and connection changes clear pending replays
@@ -337,7 +338,14 @@ thread**, **Only play from default voice thread**, **Default voice thread**, and
 Its status line reports readiness or the latest error, and it offers **Resume
 voice** when a session needs it.
 
-- **Skip** ends current speech and retains an eligible listen afterward.
+- **Record** ends current speech and starts a new reply to the spoken thread,
+  even with Auto-listen off. It takes priority over queued speech and uses the
+  thread's current input availability. The viewed thread, default, pin, and
+  pending selection cannot redirect it. Starting consumes a pending selection.
+- **Next** skips current speech and its optional follow-up recording, then
+  advances to the next queued item. It preserves a separately requested agent
+  thread switch or listen. A tap made during speech still cancels that reply's
+  unsent recording if the microphone starts before the tap arrives.
 - **Stop** cancels the current interaction and its automatic listen. It leaves
   other queued notices in place. While the microphone is preparing, listening,
   or recognizing, Stop becomes **Cancel** and discards the recording unsent.
@@ -355,14 +363,16 @@ voice** when a session needs it.
   “stop listening” are consumed locally. “Stop the server” is ordinary input.
 
 Tapping the service notification opens the thread of the current interaction.
-While idle, it uses the default thread when pinned; otherwise it uses the visible
-thread, then the default. Its actions are **Stop** during an interaction,
+While idle, it uses the saved default thread. Its actions are **Stop** during an interaction,
 **Start** when recording can begin and that target is available, a mode button labelled **Manual** or **Response**
 that switches to the other mode, and **Rearm on** or **Rearm off**, which
-toggles Auto-listen. While speech plays, the expanded notification shows Stop,
-Skip, the mode button, and Rearm. During Keep listening, it offers **Cancel** and
+toggles Auto-listen. While speech plays, the expanded notification shows Record,
+Next, Stop, the mode button, and Rearm. During Keep listening, it offers **Cancel** and
 **Send**. Headset pause/stop interrupts and saves an adopted recording; it never
-sends it. Explicit Cancel still discards it.
+sends it. Explicit Cancel still discards it. During speech, headset Play/Pause
+starts a reply to the spoken thread when Auto-listen is on and recording is
+available; otherwise it skips the speech and follow-up. Dedicated headset Next
+skips both during speech and leaves an active recording unchanged.
 Headset controls apply only during an active voice session. Android controls
 lock-screen visibility and any promoted presentation; these are not guaranteed.
 Opening the app restores the saved Manual or Response mode after its Sedes

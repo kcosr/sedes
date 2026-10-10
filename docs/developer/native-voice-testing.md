@@ -151,8 +151,15 @@ Focus a scenario through the same coordinator, for example
 `npm run test:voice -- -t 'Android response/cycle'`.
 
 Packaged cases cover Response and Manual cycles, background operation,
-restoration after process restart, Skip, Stop, recording retargeting, lost
+restoration after process restart, Record, Next, Stop, recording retargeting, lost
 admission replies, lost sends, and cancellation of uncertain submissions.
+The `Android response/record` scenario presses **Record** during observed
+AudioTrack speech playback with Auto-listen off and a different pinned default
+thread. It requires a fresh manual recording and admission on the spoken source
+thread. The `Android response/next` scenario presses **Next** during observed
+speech playback with Auto-listen on, then requires the interaction to finish
+without audio capture, transcription, or input admission. Both use the actual
+foreground-service notification controls.
 The `Android response/background-switch` scenario invokes the real
 `client.switch_thread` agent tool through stock OpenCode after backgrounding
 the paired client. With automatic listening disabled and the source thread
