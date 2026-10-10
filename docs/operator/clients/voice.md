@@ -332,7 +332,8 @@ the chevron chooses the next recording target without changing the saved default
 it does not navigate or start recording. A finishing recording keeps its destination fixed.
 On mobile, the picker does not focus its search field automatically.
 The compact bar keeps its title and status beside 40 px action buttons on all
-screen widths. Playback shows **Next**, **Stop**, **Record**; recording shows
+screen widths. Playback shows **Next**, **Stop**, **Record**, hiding Next when
+the queue is empty and Auto-listen is off; recording shows
 **Keep listening**, **Cancel**, **Send**. Idle hides unavailable Next and Stop
 actions so the text can use their space. Record/Send stays at the right edge,
 and microphone preparation shows progress there. The outline is blue while

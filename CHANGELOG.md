@@ -503,6 +503,7 @@
 - Android voice uses a compact single-row bar with composer-sized controls,
   more space between the status icon and text, an inline destination caret,
   and a blue speaking outline. Idle hides unavailable Next/Stop actions;
+  playback hides Next when the queue is empty and Auto-listen is off.
   Send also finishes ordinary recordings.
   ([#68](https://github.com/kcosr/sedes/pull/68))
 

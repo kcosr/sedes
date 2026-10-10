@@ -92,6 +92,7 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
   const inputActions = (showingInput || capture != null) && active !== null && !showingRecovery;
   const idleNavigation = !off && active === null && !showingRecovery && startTarget?.source === "retained" &&
     native.actions.canReleaseRetainedTarget && native.retainedVoiceTarget !== null;
+  const showNext = idleNavigation || (active !== null && (!speaking || native.queue.count > 0 || settings.autoListen));
   const [targetId, targetTitle] = showingInput ? [active?.recognitionThreadId, active?.recognitionThreadTitle]
     : [active?.threadId ?? active?.recognitionThreadId, active?.threadTitle ?? active?.recognitionThreadTitle];
   const activeTitle = targetTitle ?? (targetId ? threads.find(thread => thread.id === targetId)?.title.text.trim() || "Untitled thread" : undefined);
@@ -217,7 +218,7 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
                 const command = { expectedConnectionGeneration: native.connectionGeneration, recordingId: capture.id, enabled: !capture.keepListening };
                 act(() => store.plugin.setKeepListening(command));
               }}><InfinityIcon strokeWidth={1.8} aria-hidden="true" /></button>
-              : active !== null || idleNavigation ? <button type="button" className="voice-card-button" aria-label="Next voice interaction" title="Next"
+              : showNext ? <button type="button" className="voice-card-button" aria-label="Next voice interaction" title="Next"
                 disabled={state.pending || !(native.actions.canSkip && active || idleNavigation)} onClick={() => {
                   if (native.actions.canSkip && active) {
                     const command = { expectedConnectionGeneration: native.connectionGeneration, interactionId: active.id };

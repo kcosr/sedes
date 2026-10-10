@@ -525,6 +525,36 @@ describe("voice controls card", () => {
     await waitFor(() => expect(voice.fake.plugin.stopPlayback).toHaveBeenCalledWith({ expectedConnectionGeneration: 1, interactionId: "item" }));
     expect(await within(card()).findByRole("button", { name: "Start voice recording" })).toBeInTheDocument();
   });
+  it.each(["synthesizing", "speaking"] as const)("updates Next during %s as queued playback and Auto-listen change", async phase => {
+    const initial = speaking({ threadId: "named" }, {
+      phase, settings: voiceSettings({ audioMode: "response", autoListen: false }),
+    });
+    voice.fake.plugin.setConnection.mockResolvedValue(initial);
+    voice.fake.plugin.stopPlayback.mockResolvedValue(ready({ stateRevision: 6 }));
+    renderControls();
+    const stop = await screen.findByRole("button", { name: "Stop voice interaction" });
+    const record = screen.getByRole("button", { name: "Record reply" });
+    const next = () => screen.queryByRole("button", { name: "Next voice interaction" });
+    expect(next()).toBeNull();
+    expect(stop).toBeEnabled();
+    expect(record).toBeEnabled();
+
+    act(() => voice.fake.emit("stateChanged", { ...initial, stateRevision: 2, queue: { ...initial.queue, count: 1 } }));
+    expect(next()).toBeEnabled();
+    act(() => voice.fake.emit("stateChanged", { ...initial, stateRevision: 3 }));
+    expect(next()).toBeNull();
+    act(() => voice.fake.emit("stateChanged", { ...initial, stateRevision: 4, settings: { ...initial.settings, autoListen: true } }));
+    expect(next()).toBeEnabled();
+    act(() => voice.fake.emit("stateChanged", { ...initial, stateRevision: 5 }));
+    expect(next()).toBeNull();
+    expect(screen.getByRole("button", { name: "Stop voice interaction" })).toBe(stop);
+    expect(screen.getByRole("button", { name: "Record reply" })).toBe(record);
+    fireEvent.click(stop);
+    await waitFor(() => expect(voice.fake.plugin.stopPlayback).toHaveBeenCalledExactlyOnceWith({
+      expectedConnectionGeneration: 1, interactionId: "item",
+    }));
+    expect(voice.fake.plugin.skipCurrentPlayback).not.toHaveBeenCalled();
+  });
   it("names another thread's speech and labels the native event kind", async () => {
     voice.fake.plugin.setConnection.mockResolvedValue(speaking({ threadId: "named", threadTitle: "Release review", eventKind: "turn.completed" }));
     navigate(threadPath("long"), { replace: true });

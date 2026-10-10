@@ -728,8 +728,11 @@ suspend; no toggle resets it. Expiration drains recognition into a retained read
 draft without admission. Recording settings edits apply to future recordings.
 
 The voice toolbar is one 60 px row at every width, with a two-line text block
-beside 40 px action buttons. Playback uses Next, Stop, Record from left to right;
-recording uses Keep listening, Cancel, Send. Idle omits unavailable Next and Stop
+beside 40 px action buttons. Playback uses Next, Stop, Record from left to right.
+Next hides during synthesis and playback when the queue count is zero and
+Auto-listen is off. Queue and settings updates restore it without moving Stop
+or Record.
+Recording uses Keep listening, Cancel, Send. Idle omits unavailable Next and Stop
 controls, reclaiming their width for status text. Record/Send remains at the
 right edge. Active preparation keeps its action slots and shows progress in the
 primary slot. Speaking adds a blue outline; recording uses the red outline.

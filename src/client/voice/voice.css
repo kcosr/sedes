@@ -369,8 +369,8 @@
   text-overflow: ellipsis;
 }
 
-/* Record/Send stays at the right edge. Idle hides unavailable Next and Stop
-   so the status can use their space; active controls retain their slots. */
+/* Record/Send stays at the right edge. Idle hides unavailable Next and Stop;
+   playback can hide Next while Stop and Record keep their positions. */
 .voice-card-actions {
   display: flex;
   flex: none;

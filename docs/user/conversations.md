@@ -72,7 +72,8 @@ button changes only the current recording; changing the saved preference takes
 effect on the next recording. The idle Start button shows infinity when that
 default is on and a microphone when it is off.
 The compact voice bar keeps its title and status beside the controls. Playback
-shows Next, Stop, Record; recording shows Keep listening, Cancel, Send. Send
+shows Next, Stop, Record, hiding Next when nothing is queued and Auto-listen
+is off; recording shows Keep listening, Cancel, Send. Send
 works with or without Keep listening. Idle hides unavailable Next and Stop,
 while Record/Send stays at the right edge. The outline is blue while speaking
 and red while recording.
