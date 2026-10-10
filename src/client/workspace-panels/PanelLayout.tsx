@@ -356,6 +356,14 @@ function PanelLayoutReady({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [madeRoomKey, threadId]);
 
+  // A terminal off stage disconnects its renderer; its session state goes
+  // with it, so showing it again does not show a stale connection.
+  const terminalsOnStage = onStage("terminals");
+  const setTerminalSessionState = terminals.setSessionState;
+  useEffect(() => {
+    if (!terminalsOnStage) setTerminalSessionState(undefined);
+  }, [setTerminalSessionState, terminalsOnStage]);
+
   // A divider's live preview ends with any layout change.
   useEffect(() => setPreview(undefined), [view.layout]);
 
@@ -524,11 +532,12 @@ function PanelLayoutReady({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [active, desktop, snapshot.maximized, store]);
 
-  /** Phones: the Tasks sheet, which loads Tasks when it first opens. */
+  /**
+   * Phones: the Tasks sheet. It leaves the device layout alone, so opening
+   * it on a phone does not replace the panel the Right shows elsewhere.
+   */
   const showTasksSheet = (show: boolean) => {
-    if (!tasksHost) return;
-    if (show && !loaded("tasks")) store.open("tasks", { focus: false });
-    if (tasksHost.sheetOpen !== show) tasksHost.toggleSheet();
+    if (tasksHost && tasksHost.sheetOpen !== show) tasksHost.toggleSheet();
   };
 
   const togglePanel = (kind: PanelKind) => {
@@ -541,9 +550,17 @@ function PanelLayoutReady({
       return;
     }
     const wasOnStage = onStage(kind);
+    // A keyboard toggle (Ctrl+Shift+L) hides the panel holding focus.
+    const focused = document.activeElement;
+    const focusWasInside =
+      focused instanceof Element &&
+      (targets[kind].contains(focused) ||
+        focused.closest<HTMLElement>("[data-panel-kind]")?.dataset.panelKind === kind);
     if (!store.toggle(kind)) return;
-    if (wasOnStage) setAnnouncement(`${PANEL_TITLES[kind]} panel hidden.`);
-    else setMobileKind(kind);
+    if (wasOnStage) {
+      setAnnouncement(`${PANEL_TITLES[kind]} panel hidden.`);
+      if (focusWasInside) focusAfterHide(kind);
+    } else setMobileKind(kind);
   };
 
   const openFromMenu = (kind: PanelKind, region: RegionId | undefined): boolean => {

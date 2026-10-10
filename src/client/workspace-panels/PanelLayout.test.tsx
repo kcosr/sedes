@@ -714,6 +714,19 @@ describe("PanelLayout Tasks", () => {
     expect(regionOf("Tasks")).toBe("right");
   });
 
+  it("moves focus on when Ctrl+Shift+L hides the focused Tasks panel", async () => {
+    withTasks();
+    const store = setup({ extraTenants: [tasksTenant], withTasksPanel: true });
+    act(() => store.open("tasks"));
+    const add = within(panel("Tasks")!).getByRole("textbox", { name: "Add a task" });
+    await waitFor(() => expect(add).toHaveFocus());
+    fireEvent.keyDown(add, { key: "L", ctrlKey: true, shiftKey: true });
+    expect(panel("Tasks")).toBeNull();
+    await waitFor(() =>
+      expect(screen.getByRole("textbox", { name: "Chat draft" })).toHaveFocus(),
+    );
+  });
+
   it("hosts the retained Tasks body in its region with one header and region controls", async () => {
     withTasks();
     const store = setup({ extraTenants: [tasksTenant], withTasksPanel: true });
@@ -848,7 +861,7 @@ describe("PanelLayout phones", () => {
     expect(store.maximized()).toBeNull();
   });
 
-  it("toggles the Tasks sheet from Tasks' row and quick button, loading Tasks for it", async () => {
+  it("opens the Tasks sheet from Tasks' row without replacing the Right's panel", async () => {
     harness.mobile = true;
     const host = {
       bodyTarget: document.createElement("div"),
@@ -858,14 +871,30 @@ describe("PanelLayout phones", () => {
       publishDock: vi.fn(),
     } satisfies TasksHost;
     const store = setup({ extraTenants: [tasksTenant], tasksHost: host });
+    fireEvent.click((await openPanelsMenu()).querySelector('[data-panel-row="files"]')!);
+    await waitFor(() => expect(stageKinds()).toEqual(["files"]));
     fireEvent.click((await openPanelsMenu()).querySelector('[data-panel-row="tasks"]')!);
     expect(host.toggleSheet).toHaveBeenCalledOnce();
-    expect(store.isLoaded("tasks")).toBe(true);
-    // Tasks is a sheet on phones, never the stage's panel.
+    // The sheet is not a panel: Files stays the Right's panel, on stage.
+    expect(store.isLoaded("tasks")).toBe(false);
+    expect(store.regionPanel("right")).toBe("files");
+    expect(stageKinds()).toEqual(["files"]);
     expect(panel("Tasks")).toBeNull();
-    expect(quickButton("tasks")).toHaveAttribute("data-state", "hidden");
+  });
+
+  it("shows Tasks' quick button while the phone sheet is open, and closes it", () => {
+    harness.mobile = true;
+    const host = {
+      bodyTarget: document.createElement("div"),
+      placement: "sheet" as const,
+      sheetOpen: true,
+      toggleSheet: vi.fn(),
+      publishDock: vi.fn(),
+    } satisfies TasksHost;
+    setup({ extraTenants: [tasksTenant], tasksHost: host });
+    expect(quickButton("tasks")).toHaveAttribute("data-state", "visible");
     fireEvent.click(quickButton("tasks"));
-    expect(host.toggleSheet).toHaveBeenCalledTimes(2);
+    expect(host.toggleSheet).toHaveBeenCalledOnce();
   });
 });
 

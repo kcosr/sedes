@@ -1809,12 +1809,10 @@ export function TasksPanel({
     () =>
       subscribeReveal(() => {
         const { mobile, dock } = latest.current;
-        // The content switches view and expands the task itself. On phones
-        // the sheet shows Tasks, which it loads when it is not loaded yet.
-        if (mobile) {
-          if (dock && !dock.present) dock.open({ focus: false });
-          setSheetOpen(true);
-        } else dock?.open({ focus: false });
+        // The content switches view and expands the task itself. The phone
+        // sheet leaves the panel layout alone.
+        if (mobile) setSheetOpen(true);
+        else dock?.open({ focus: false });
       }),
     [],
   );
@@ -1835,10 +1833,8 @@ export function TasksPanel({
           : null;
       if (dialog && !dialog.querySelector('[data-slot="tasks-panel"]')) return;
       event.preventDefault();
-      if (mobile) {
-        if (dock && !dock.present) dock.open({ focus: false });
-        toggleSheet();
-      } else dock?.toggle();
+      if (mobile) toggleSheet();
+      else dock?.toggle();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);

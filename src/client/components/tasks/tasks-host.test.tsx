@@ -696,15 +696,16 @@ describe("toggle Tasks shortcut", () => {
     expect(tasksSurface()).not.toBeNull();
   });
 
-  it("loads Tasks for the phone sheet when the layout has not loaded it", () => {
+  it("opens the phone sheet without touching the panel layout", () => {
     phone = true;
     const { spy } = renderHost({ thread: true, loaded: false });
     press();
-    expect(spy.open).toHaveBeenCalledExactlyOnceWith({ focus: false });
     expect(screen.getByRole("dialog", { name: "Tasks" })).toBeInTheDocument();
-    // Loaded now, closing the sheet leaves Tasks loaded.
     press();
-    expect(spy.open).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("dialog", { name: "Tasks" })).toBeNull();
+    // The layout's Right keeps what it showed: the sheet is not a panel.
+    expect(spy.open).not.toHaveBeenCalled();
+    expect(spy.toggle).not.toHaveBeenCalled();
     expect(spy.close).not.toHaveBeenCalled();
   });
 
