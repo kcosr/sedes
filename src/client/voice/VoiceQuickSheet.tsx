@@ -67,8 +67,8 @@ export function VoiceQuickSheet({ store, threads, open, onOpenChange }: {
     if (state.pending || !native?.actions.canStart) return;
     const target = voiceRecordingTarget(threads, native, visibleThreadId);
     if (!target) { pickerGeneration.current = native.connectionGeneration; setPicker("start"); return; }
-    const context = store.commandContext();
-    void store.run(() => store.plugin.startManualListen({ ...context, threadId: target.id, threadTitle: nativeThreadTitle(target.title.text) ?? undefined }))
+    const context = { expectedConnectionGeneration: native.connectionGeneration };
+    void store.run(() => store.plugin.startManualListen({ ...context, threadId: target.threadId, threadTitle: nativeThreadTitle(target.threadTitle ?? "") ?? undefined }))
       .then(() => onOpenChange(false)).catch(() => undefined);
   };
   return <Dialog open={open} onOpenChange={onOpenChange}>

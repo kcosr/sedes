@@ -245,8 +245,11 @@ turn is still in progress, and the turn's completion makes the target stale.
 Readiness follows the server's current conversation owner even when no thread
 view is open. Reading readiness does not start or reconnect a conversation.
 
-With pinning off, explicit recording uses the visible foreground thread, then the saved
-**Default voice thread**, then a picker. It can target a running thread. While
+With pinning off, voice keeps the last active voice thread when playback or
+recording ends, including after Stop or Cancel. Ordinary navigation leaves this
+destination unchanged. The next recording uses that retained thread, then the
+visible foreground thread, then the saved **Default voice thread**, then a
+picker. It can target a running thread. While
 voice is listening, the target picker on the voice card changes the target before
 finishing starts. Pickers list the visible thread first as **This thread**;
 when choosing a default, the saved thread comes first as **Current default
@@ -261,10 +264,12 @@ and completion from another initiating client. Steering an existing turn does
 not take over its origin.
 
 **Pin default voice thread** supplies the initial target for new in-app
-recordings. Headset and service-notification Start always use the saved default,
-regardless of pinning, the viewed thread, or a pending row selection. Those
-controls preserve the pending in-app selection. With no saved default, they
-cannot start on a different thread.
+recordings and clears the retained destination. Turning pinning off during an
+interaction retains its current voice thread. Headset and service-notification
+Start use the pinned default, otherwise the retained voice thread, otherwise the
+saved default. They ignore the viewed thread and preserve a pending in-app
+selection. A retained target works without a saved default; a missing pinned
+default cannot redirect recording to another thread.
 The row's **Choose target thread** popup overrides that initial choice for the
 next recording without editing the saved default. It remains available with
 pinning off and survives ordinary navigation. The pending choice clears when a
@@ -274,6 +279,16 @@ picker without saving a replacement default. Only **Default voice thread** in
 quick or full settings edits the saved preference. Those selectors share the
 popup's search and row styling in a modal/mobile sheet, with no mobile search
 autofocus. Pinning does not redirect an active interaction.
+
+While idle with a retained voice thread, **Next** beside the microphone releases
+that destination and returns the card to its ordinary viewed/default selection.
+An explicit pending choice still takes priority. Idle notification Next and
+headset Next release the same destination. They do not record, send a message,
+navigate, or edit the composer. If the retained thread becomes unavailable,
+Start reports the failure and keeps that target until you release it or choose
+another; it never silently records into a different thread. Retention lasts only
+for the current voice session and connection. Off, a connection change, or an
+ended service session clears it.
 
 By default, recognized input queues behind a running turn. **Follow composer's
 selected mode** instead captures the client-wide Queue/Steer preference when
@@ -289,8 +304,8 @@ Manual or Response, and whenever the selected connection has saved dictation. Wh
 and pages without a thread, it sits on its own with a top margin and divider.
 A state tile and two lines show the card's thread and its state. The first
 line always names the thread: the one being spoken, the recording target, or,
-when idle, the thread a recording would use. Pinning uses the default thread;
-otherwise this is the visible thread when it can record, then the default.
+when idle, the thread a recording would use. An explicit pending selection comes
+first, then the pinned default, retained voice thread, visible thread, or default.
 With neither, the card asks you to choose a thread. The second line is the state: **Ready** with the mode and
 Auto-listen, or the readiness text while voice is not ready; **Speaking** with
 the notice kind and queued count, where a narrow card drops the kind first;
@@ -306,7 +321,7 @@ connection hides the card; **Settings → Voice** then shows the error and
 Tap the title and status area to open the voice target thread. The separate
 chevron opens its target picker when changes are allowed. While listening,
 choosing another recording target leaves the viewed thread unchanged. When idle,
-the chevron can change the saved default when pinned or no thread is open;
+the chevron chooses the next recording target without changing the saved default;
 it does not navigate or start recording. A finishing recording keeps its destination fixed.
 On mobile, the picker does not focus its search field automatically.
 Beside **Listening**, the infinity button toggles **Keep listening** for the current
@@ -347,7 +362,8 @@ voice** when a session needs it.
 - **Next** skips current speech and its optional follow-up recording, then
   advances to the next queued item. It preserves a separately requested agent
   thread switch or listen. A tap made during speech still cancels that reply's
-  unsent recording if the microphone starts before the tap arrives.
+  unsent recording if the microphone starts before the tap arrives. While idle,
+  Next releases the retained voice destination.
 - **Stop** cancels the current interaction and its automatic listen. It leaves
   other queued notices in place. While the microphone is preparing, listening,
   or recognizing, Stop becomes **Cancel** and discards the recording unsent.
@@ -365,16 +381,19 @@ voice** when a session needs it.
   “stop listening” are consumed locally. “Stop the server” is ordinary input.
 
 Tapping the service notification opens the thread of the current interaction.
-While idle, it uses the saved default thread. Its actions are **Stop** during an interaction,
+While idle, it uses the pinned default, retained voice thread, or saved default.
+Its actions are **Stop** during an interaction,
 **Start** when recording can begin and that target is available, a mode button labelled **Manual** or **Response**
 that switches to the other mode, and **Rearm on** or **Rearm off**, which
 toggles Auto-listen. While speech plays, the expanded notification shows Record,
-Next, Stop, the mode button, and Rearm. During Keep listening, it offers **Cancel** and
+Next, Stop, the mode button, and Rearm. With an idle retained destination, it
+shows Start, Next, the mode button, and Rearm. During Keep listening, it offers **Cancel** and
 **Send**. Headset pause/stop interrupts and saves an adopted recording; it never
 sends it. Explicit Cancel still discards it. During speech, headset Play/Pause
 starts a reply to the spoken thread when Auto-listen is on and recording is
 available; otherwise it skips the speech and follow-up. Dedicated headset Next
-skips both during speech and leaves an active recording unchanged.
+skips both during speech, releases an idle retained destination, and leaves an
+active recording unchanged.
 Headset controls apply only during an active voice session. Android controls
 lock-screen visibility and any promoted presentation; these are not guaranteed.
 Opening the app restores the saved Manual or Response mode after its Sedes

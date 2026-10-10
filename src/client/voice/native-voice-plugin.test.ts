@@ -32,6 +32,7 @@ describe("native voice bridge helpers", () => {
     expect(nativeVoiceStateSchema.safeParse({ ...state, version: 8 }).success).toBe(false);
     expect(nativeVoiceStateSchema.safeParse({ ...state, version: 9 }).success).toBe(false);
     expect(nativeVoiceStateSchema.safeParse({ ...state, version: 10 }).success).toBe(false);
+    expect(nativeVoiceStateSchema.safeParse({ ...state, version: 11 }).success).toBe(false);
     const { canRecordDuringPlayback: _record, ...missingRecord } = state.actions;
     expect(nativeVoiceStateSchema.safeParse({ ...state, actions: missingRecord }).success).toBe(false);
     expect(nativeVoiceStateSchema.safeParse({ ...state, actions: { ...state.actions, canRecordDuringPlayback: "true" } }).success).toBe(false);
@@ -54,7 +55,7 @@ describe("native voice bridge helpers", () => {
       expect(nativeVoiceStateSchema.safeParse({ ...state, settings: { ...state.settings, inputDevice } }).success).toBe(false);
     expect(nativeVoiceStateSchema.safeParse({ ...state, settings: { ...state.settings, inputDeviceId: null } }).success).toBe(false);
   });
-  it("requires the strict v11 recording and recovery identities without exposing audio or transcript text", () => {
+  it("requires the strict v12 recording and recovery identities without exposing audio or transcript text", () => {
     const state = voiceSnapshot({ phase: "listening", active: { id: "interaction", eventKind: "manual", threadId: "thread", threadTitle: "Thread",
       recognitionThreadId: "thread", recognitionThreadTitle: "Thread", automatic: false,
       recording: { id: "recording", keepListening: true, reconnecting: true } },
@@ -92,6 +93,22 @@ describe("native voice bridge helpers", () => {
     const { announceRecordingThread: _announce, ...missing } = state.settings;
     expect(nativeVoiceStateSchema.safeParse({ ...state, settings: missing }).success).toBe(false);
     expect(nativeVoiceStateSchema.safeParse({ ...state, settings: { ...state.settings, announceRecordingThread: "true" } }).success).toBe(false);
+  });
+  it("requires retained target and idle revisions so stale releases cannot target a newer interaction", () => {
+    const state = voiceSnapshot({ retainedVoiceTarget: { threadId: "thread", threadTitle: null, revision: 3 }, idleTargetRevision: 4,
+      actions: voiceActions({ canReleaseRetainedTarget: true }) });
+    expect(nativeVoiceStateSchema.parse(state)).toEqual(state);
+    const { retainedVoiceTarget: _retained, ...missingRetained } = state;
+    const { idleTargetRevision: _idleRevision, ...missingIdleRevision } = state;
+    const { canReleaseRetainedTarget: _release, ...missingRelease } = state.actions;
+    expect(nativeVoiceStateSchema.safeParse(missingRetained).success).toBe(false);
+    expect(nativeVoiceStateSchema.safeParse(missingIdleRevision).success).toBe(false);
+    expect(nativeVoiceStateSchema.safeParse({ ...state, actions: missingRelease }).success).toBe(false);
+    for (const retainedVoiceTarget of [{ threadId: "thread", threadTitle: null }, { threadId: "", threadTitle: null, revision: 1 },
+      { threadId: "thread", threadTitle: null, revision: -1 }, { threadId: "thread", threadTitle: null, revision: 1.5 }])
+      expect(nativeVoiceStateSchema.safeParse({ ...state, retainedVoiceTarget }).success).toBe(false);
+    expect(nativeVoiceStateSchema.safeParse({ ...state, idleTargetRevision: -1 }).success).toBe(false);
+    expect(nativeVoiceStateSchema.safeParse({ ...state, idleTargetRevision: 1.5 }).success).toBe(false);
   });
   it("accepts a long dictation limit only in whole minutes from one minute through one day", () => {
     const state = voiceSnapshot();

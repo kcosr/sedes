@@ -243,6 +243,97 @@ describe("voice controls card", () => {
     expect(voice.fake.plugin.setNextRecordingTarget).not.toHaveBeenCalled();
     expect(voice.fake.plugin.startManualListen).not.toHaveBeenCalled();
   });
+  it("keeps and records the last voice thread when it is outside the visible inventory", async () => {
+    const native = ready({ retainedVoiceTarget: { threadId: "outside-inventory", threadTitle: "Last voice thread", revision: 7 },
+      actions: voiceActions({ canStart: true, canReleaseRetainedTarget: true }),
+      settings: voiceSettings({ audioMode: "response", voiceThreadId: "untitled", voiceThreadTitle: null }) });
+    voice.fake.plugin.setConnection.mockResolvedValue(native);
+    voice.fake.plugin.startManualListen.mockResolvedValue(native);
+    navigate(threadPath("long"), { replace: true });
+    renderControls();
+    const start = await screen.findByRole("button", { name: "Start voice recording" });
+    expect(lines()[0]).toBe("Last voice thread");
+    expect(screen.getByRole("button", { name: "Next voice interaction" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Choose target thread: Last voice thread" })).toBeEnabled();
+    fireEvent.click(start);
+    await waitFor(() => expect(voice.fake.plugin.startManualListen).toHaveBeenCalledExactlyOnceWith({
+      expectedConnectionGeneration: 1, threadId: "outside-inventory", threadTitle: "Last voice thread" }));
+    expect(window.location.pathname).toBe(threadPath("long"));
+    expect(voice.fake.plugin.updateSettings).not.toHaveBeenCalled();
+  });
+  it.each([false, true])("idle Next releases the retained thread and preserves an explicit next choice=%s", async explicit => {
+    const native = ready({ retainedVoiceTarget: { threadId: "named", threadTitle: "Release review", revision: 7 },
+      actions: voiceActions({ canStart: true, canReleaseRetainedTarget: true }),
+      nextRecordingTarget: explicit ? { threadId: "untitled", threadTitle: null } : null });
+    voice.fake.plugin.setConnection.mockResolvedValue(native);
+    voice.fake.plugin.releaseRetainedVoiceTarget.mockResolvedValue({ ...native, stateRevision: 2, retainedVoiceTarget: null, actions: idleActions });
+    navigate(threadPath("long"), { replace: true });
+    renderControls();
+    const next = await screen.findByRole("button", { name: "Next voice interaction" });
+    expect(lines()[0]).toBe(explicit ? "Untitled thread" : "Release review");
+    fireEvent.click(next);
+    await waitFor(() => expect(voice.fake.plugin.releaseRetainedVoiceTarget).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, expectedRetainedRevision: 7 }));
+    await waitFor(() => expect(lines()[0]).toBe(explicit ? "Untitled thread" : longTitle));
+    expect(screen.queryByRole("button", { name: "Next voice interaction" })).toBeNull();
+    expect(card().querySelector(".voice-card-next-slot")).toBeInTheDocument();
+    expect(window.location.pathname).toBe(threadPath("long"));
+    expect(voice.fake.plugin.startManualListen).not.toHaveBeenCalled();
+    expect(voice.fake.plugin.skipCurrentPlayback).not.toHaveBeenCalled();
+    expect(voice.fake.plugin.updateSettings).not.toHaveBeenCalled();
+  });
+  it.each([1, 2])("fences a stale idle Next click when the same thread is retained again on connection %s", async connectionGeneration => {
+    const initial = ready({ retainedVoiceTarget: { threadId: "named", threadTitle: "Release review", revision: 7 },
+      actions: voiceActions({ canStart: true, canReleaseRetainedTarget: true }) });
+    const newer = { ...initial, stateRevision: 3, connectionGeneration, retainedVoiceTarget: { ...initial.retainedVoiceTarget!, revision: 9 } };
+    voice.fake.plugin.setConnection.mockResolvedValue(initial);
+    voice.fake.plugin.releaseRetainedVoiceTarget.mockResolvedValue(newer);
+    navigate(threadPath("long"), { replace: true });
+    renderControls();
+    const next = await screen.findByRole("button", { name: "Next voice interaction" });
+    act(() => {
+      voice.fake.emit("stateChanged", newer);
+      fireEvent.click(next);
+    });
+    await waitFor(() => expect(voice.fake.plugin.releaseRetainedVoiceTarget).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, expectedRetainedRevision: 7 }));
+    expect(lines()[0]).toBe("Release review");
+    expect(window.location.pathname).toBe(threadPath("long"));
+  });
+  it("locks both idle actions during release so repeated Next cannot also start recording", async () => {
+    const native = ready({ retainedVoiceTarget: { threadId: "named", threadTitle: "Release review", revision: 7 },
+      actions: voiceActions({ canStart: true, canReleaseRetainedTarget: true }) });
+    voice.fake.plugin.setConnection.mockResolvedValue(native);
+    let release!: (value: NativeVoiceState) => void;
+    voice.fake.plugin.releaseRetainedVoiceTarget.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
+    renderControls();
+    const next = await screen.findByRole("button", { name: "Next voice interaction" });
+    fireEvent.click(next);
+    expect(next).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Start voice recording" })).toBeDisabled();
+    fireEvent.click(next);
+    expect(voice.fake.plugin.releaseRetainedVoiceTarget).toHaveBeenCalledOnce();
+    await act(async () => release(ready({ stateRevision: 2 })));
+    expect(voice.fake.plugin.startManualListen).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Start voice recording" })).toBeEnabled();
+  });
+  it.each(["interaction", "connection", "off", "pin"])("reserves Next only after retention, until the %s changes", async change => {
+    const initial = ready();
+    voice.fake.plugin.setConnection.mockResolvedValue(initial);
+    renderControls(true);
+    await screen.findByRole("button", { name: "Start voice recording" });
+    expect(card().querySelector(".voice-card-next-slot")).toBeNull();
+    act(() => voice.fake.emit("stateChanged", { ...initial, stateRevision: 2,
+      retainedVoiceTarget: { threadId: "named", threadTitle: "Release review", revision: 7 },
+      actions: voiceActions({ canStart: true, canReleaseRetainedTarget: true }) }));
+    expect(screen.getByRole("button", { name: "Next voice interaction" })).toBeEnabled();
+    act(() => voice.fake.emit("stateChanged", { ...initial, stateRevision: 3 }));
+    expect(card().querySelector(".voice-card-next-slot")).toBeInTheDocument();
+    const changed = change === "interaction" ? ready({ phase: "validating", active: item({ threadId: "named", recognitionThreadId: "named" }) })
+      : change === "connection" ? ready({ connectionGeneration: 2 })
+      : change === "off" ? voiceSnapshot()
+      : ready({ settings: voiceSettings({ audioMode: "response", pinDefaultVoiceThread: true, voiceThreadId: "named" }) });
+    act(() => voice.fake.emit("stateChanged", { ...changed, stateRevision: 4 }));
+    expect(card().querySelector(".voice-card-next-slot")).toBeNull();
+  });
   it.each([null, "offline", "archived", "deleted"])("chooses a recording target without saving the unavailable pinned default %s", async voiceThreadId => {
     const native = ready({ settings: voiceSettings({ audioMode: "response", pinDefaultVoiceThread: true, voiceThreadId }) });
     voice.fake.plugin.setConnection.mockResolvedValue(native);

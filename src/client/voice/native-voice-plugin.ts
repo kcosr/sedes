@@ -48,7 +48,7 @@ export const nativeRecordingTextSchema = z.strictObject({
 });
 export type NativeRecordingText = z.infer<typeof nativeRecordingTextSchema>;
 export const nativeVoiceStateSchema = z.strictObject({
-  version: z.literal(11), stateRevision: z.number().int().nonnegative(), connectionGeneration: z.number().int().nonnegative(),
+  version: z.literal(12), stateRevision: z.number().int().nonnegative(), connectionGeneration: z.number().int().nonnegative(),
   profileId: z.string().nullable(), serverOrigin: z.string().nullable(), identity: z.string().nullable(), originClientId: z.uuid().nullable(), clientConnectionToken: z.string().nullable(),
   settingsRevision: z.number().int().nonnegative(), settings: nativeVoiceSettingsSchema,
   speech: z.strictObject({ credentialConfigured: z.boolean(), catalogStatus: z.enum(["idle", "loading", "ready", "error"]),
@@ -57,12 +57,14 @@ export const nativeVoiceStateSchema = z.strictObject({
   ready: z.boolean(), readiness: z.string(),
   foreground: z.strictObject({ visible: z.boolean(), threadId: z.string().nullable(), threadTitle: z.string().nullable() }),
   nextRecordingTarget: z.strictObject({ threadId: z.string().min(1), threadTitle: z.string().nullable() }).nullable(),
+  retainedVoiceTarget: z.strictObject({ threadId: z.string().min(1), threadTitle: z.string().nullable(), revision: z.number().int().nonnegative() }).nullable(),
+  idleTargetRevision: z.number().int().nonnegative(),
   active: z.strictObject({ id: z.string(), eventKind: z.string().nullable(), threadId: z.string().nullable(), threadTitle: z.string().nullable(),
     recognitionThreadId: z.string().nullable(), recognitionThreadTitle: z.string().nullable(), automatic: z.boolean(),
     recording: z.strictObject({ id: z.string().min(1), keepListening: z.boolean(), reconnecting: z.boolean() }).nullable() }).nullable(),
   queue: z.strictObject({ count: z.number().int().nonnegative(), bytes: z.number().int().nonnegative(), droppedCount: z.number().int().nonnegative(),
     droppedReasons: z.record(z.string(), z.number().int().nonnegative()) }),
-  actions: z.strictObject({ canStart: z.boolean(), canStop: z.boolean(), canSkip: z.boolean(), canRecordDuringPlayback: z.boolean(), canRetarget: z.boolean(), canResume: z.boolean(),
+  actions: z.strictObject({ canStart: z.boolean(), canStop: z.boolean(), canSkip: z.boolean(), canRecordDuringPlayback: z.boolean(), canReleaseRetainedTarget: z.boolean(), canRetarget: z.boolean(), canResume: z.boolean(),
     canSetKeepListening: z.boolean(), canSend: z.boolean(),
     keepListeningBlockedReason: z.enum(["not_capturing", "operation_pending", "saved_recording_pending", "configuration_unavailable", "storage_unavailable"]).nullable() }),
   recordingRecovery: nativeRecordingRecoverySchema.nullable(),
@@ -92,6 +94,7 @@ export interface NativeVoicePlugin {
   setForegroundContext(input: NativeVoiceCommandContext & { visible: boolean; threadId?: string | null; threadTitle?: string | null; composerMode?: "queue" | "steer" }): Promise<NativeVoiceState>;
   startManualListen(input: NativeVoiceCommandContext & { threadId?: string; threadTitle?: string }): Promise<NativeVoiceState>;
   setNextRecordingTarget(input: NativeVoiceCommandContext & { threadId: string; threadTitle?: string }): Promise<NativeVoiceState>;
+  releaseRetainedVoiceTarget(input: NativeVoiceCommandContext & { expectedRetainedRevision: number }): Promise<NativeVoiceState>;
   retargetActiveRecognition(input: NativeRecordingCommandContext & { threadId: string; threadTitle?: string }): Promise<NativeVoiceState>;
   setKeepListening(input: NativeRecordingCommandContext & { enabled: boolean }): Promise<NativeVoiceState>;
   sendRecording(input: NativeRecordingCommandContext): Promise<NativeVoiceState>;

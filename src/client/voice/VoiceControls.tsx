@@ -35,6 +35,7 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
   const pickerRecording = useRef<NativeRecordingCommandContext | null>(null);
   const pickerGeneration = useRef<number | null>(null);
   const [sheet, setSheet] = useState(false);
+  const [reservedNextGeneration, setReservedNextGeneration] = useState<number | null>(null);
   const statusId = useId();
   const threadId = route.name === "thread" ? route.threadId : null;
   const threadTitle = nativeThreadTitle(threads.find(thread => thread.id === threadId)?.title.text ?? "");
@@ -56,6 +57,7 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
   const native = state.native;
   // A lost connection closes the sheet and picker, so neither reopens by itself when voice reconnects.
   if (!native && (sheet || picker)) { setSheet(false); setPicker(null); }
+  if (!native && reservedNextGeneration !== null) setReservedNextGeneration(null);
   // Unavailable voice is reported and retried in Settings → Voice; the card appears only for a connected session.
   if (!native) return null;
   const { phase, active, settings } = native;
@@ -63,13 +65,14 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
   const showingRecovery = saved !== null && (active === null || saved.recordingId === active.recording?.id);
   const savedElsewhere = saved !== null && !showingRecovery && saved.recordingId !== active?.recording?.id;
   const act = (action: () => ReturnType<typeof store.plugin.getState>) => { void store.run(action).catch(() => undefined); };
-  // A chosen next target survives navigation; the saved preference supplies only the initial target.
+  // A chosen next target and native retention survive navigation; an explicit pin takes precedence.
   const startTarget = voiceRecordingTarget(threads, native, threadId);
   const start = () => {
     // Native decides when explicit recording can start; it does not need the notification stream that `ready` includes.
     if (!native.actions.canStart) { navigate(settingsPath("voice")); return; }
     if (!startTarget) { pickerGeneration.current = native.connectionGeneration; setPicker("start"); return; }
-    act(() => store.plugin.startManualListen({ ...store.commandContext(), threadId: startTarget.id, threadTitle: nativeThreadTitle(startTarget.title.text) ?? undefined }));
+    act(() => store.plugin.startManualListen({ expectedConnectionGeneration: native.connectionGeneration,
+      threadId: startTarget.threadId, threadTitle: nativeThreadTitle(startTarget.threadTitle ?? "") ?? undefined }));
   };
   const off = settings.audioMode === "off";
   const filterWarning = voiceThreadFilterWarning(settings);
@@ -89,6 +92,12 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
   const cancels = ["validating", "announcing", "arming", "listening", "recognizing"].includes(phase);
   const showingInput = ["validating", "announcing", "arming", "listening", "recognizing", "submitting", "recovering"].includes(phase);
   const inputActions = showingInput && active !== null && !showingRecovery;
+  // Reserve Next only once this idle interval has shown it. Release keeps the
+  // hit region empty, while a fresh idle card retains its full text width.
+  const idleNavigation = !off && active === null && !showingRecovery && !settings.pinDefaultVoiceThread &&
+    ((native.actions.canReleaseRetainedTarget && native.retainedVoiceTarget !== null) || reservedNextGeneration === native.connectionGeneration);
+  const nextGeneration = idleNavigation ? native.connectionGeneration : null;
+  if (reservedNextGeneration !== nextGeneration) setReservedNextGeneration(nextGeneration);
   const [targetId, targetTitle] = showingInput ? [active?.recognitionThreadId, active?.recognitionThreadTitle]
     : [active?.threadId ?? active?.recognitionThreadId, active?.threadTitle ?? active?.recognitionThreadTitle];
   const activeTitle = targetTitle ?? (targetId ? threads.find(thread => thread.id === targetId)?.title.text.trim() || "Untitled thread" : undefined);
@@ -102,7 +111,7 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
   const errorLook = (!off || needsStorageRetry) && (failed || (!busy && message !== undefined));
   // The card's thread: the idle start target, the spoken notice's thread, or the recording target; Off and an error have none.
   const [cardThread, cardTitle] = showingRecovery ? [saved.threadId, recordingRecoveryTitle(saved, threads)]
-    : off || errorLook ? [] : busy ? [targetId ?? undefined, activeTitle] : [startTarget?.id, startTarget && (startTarget.title.text.trim() || "Untitled thread")];
+    : off || errorLook ? [] : busy ? [targetId ?? undefined, activeTitle] : [startTarget?.threadId, startTarget && (startTarget.threadTitle?.trim() || "Untitled thread")];
   if (showingRecovery) {
     const working = saved.stage === "recognizing" || saved.stage === "admitting";
     const failureReason = ["interrupted", "rejected", "overflow", "unavailable"].includes(saved.stage) ? saved.reason : null;
@@ -215,6 +224,12 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
               }}><ArrowUp strokeWidth={1.8} aria-hidden="true" /></button>
               : <span className="voice-card-send-slot" aria-hidden="true" />}
           </> : <>
+          {idleNavigation ? native.actions.canReleaseRetainedTarget && native.retainedVoiceTarget ? <button type="button" className="voice-card-button" data-variant="ghost"
+            aria-label="Next voice interaction" title="Next" disabled={state.pending} onClick={() => {
+              const command = { expectedConnectionGeneration: native.connectionGeneration, expectedRetainedRevision: native.retainedVoiceTarget!.revision };
+              act(() => store.plugin.releaseRetainedVoiceTarget(command));
+            }}><SkipForward strokeWidth={1.8} aria-hidden="true" /></button>
+            : <span className="voice-card-next-slot" aria-hidden="true" /> : null}
           {needsStorageRetry ? <button type="button" className="voice-card-retry" aria-label="Retry voice connection" aria-disabled={state.pending || undefined}
             onClick={() => { if (!state.pending) void store.reconnect().catch(() => undefined); }}><RotateCcw aria-hidden="true" /><span>Retry</span></button>
             : missingRecovery ? <button type="button" className="voice-card-button" aria-label="Open voice settings" onClick={() => navigate(settingsPath("voice"))}><Settings2 aria-hidden="true" /></button>
@@ -255,7 +270,7 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
     </div> : null}
     <VoiceThreadPicker threads={threads} open={picker !== null} onOpenChange={open => { if (!open) setPicker(null); }}
       presentation="popover" anchorRef={pickerAnchor} title="Choose target thread"
-      selectedThreadId={picker === "retarget" ? targetId : startTarget?.id}
+      selectedThreadId={picker === "retarget" ? targetId : startTarget?.threadId}
       description={picker === "start" ? "Choose a thread and start recording." : "Recognized text will be sent to the thread you select."}
       pinned={{ threadId, label: "This thread" }} onSelect={thread => {
         const target = { threadId: thread.id, threadTitle: nativeThreadTitle(thread.title.text) ?? undefined };

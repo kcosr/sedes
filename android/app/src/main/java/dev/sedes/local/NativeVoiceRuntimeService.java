@@ -16,6 +16,7 @@ import android.os.IBinder;
 import android.os.Looper;
 import android.os.PowerManager;
 import android.view.KeyEvent;
+import android.view.View;
 import android.widget.RemoteViews;
 import androidx.core.app.NotificationCompat;
 import org.json.JSONObject;
@@ -96,7 +97,8 @@ public final class NativeVoiceRuntimeService extends Service {
             runtime.attached(this, expectedGeneration, startId);
         } else if (sessionStartId != null && sessionStartId.equals(startId)) {
             runtime.notificationAction(intent.getAction(), expectedGeneration,
-                intent.getStringExtra("voiceInteractionId"), intent.getStringExtra("voiceRecordingId"));
+                intent.getStringExtra("voiceInteractionId"), intent.getStringExtra("voiceRecordingId"),
+                intent.getLongExtra("voiceIdleTargetRevision", -1), intent.getLongExtra("voiceRetainedRevision", -1));
         }
         return START_NOT_STICKY;
     }
@@ -134,8 +136,10 @@ public final class NativeVoiceRuntimeService extends Service {
         if (!foreground) return;
         JSONObject state = runtime.snapshot(), active = state.optJSONObject("active");
         JSONObject recording = active == null ? null : active.optJSONObject("recording");
+        JSONObject retained = state.optJSONObject("retainedVoiceTarget");
         runtime.notificationAction(action, state.optLong("connectionGeneration"),
-            active == null ? null : nullable(active, "id"), recording == null ? null : nullable(recording, "id"));
+            active == null ? null : nullable(active, "id"), recording == null ? null : nullable(recording, "id"),
+            state.optLong("idleTargetRevision"), retained == null ? -1 : retained.optLong("revision"));
     }
     /** The notification's label, open action and Start eligibility share one target decision. */
     static JSONObject notificationTarget(JSONObject state) {
@@ -149,7 +153,7 @@ public final class NativeVoiceRuntimeService extends Service {
             JSONObject recovery = state.optJSONObject("recordingRecovery");
             threadId = nullable(recovery, "threadId"); threadTitle = nullable(recovery, "threadTitle");
         } else if (settings != null) {
-            return NativeVoiceRuntime.defaultRecordingTarget(settings);
+            return NativeVoiceRuntime.backgroundRecordingTarget(settings, state.optJSONObject("retainedVoiceTarget"));
         }
         return NativeVoiceJson.object("threadId", threadId, "threadTitle", threadTitle);
     }
@@ -169,18 +173,22 @@ public final class NativeVoiceRuntimeService extends Service {
         String rearm = settings != null && settings.optBoolean("autoListen") ? "Rearm on" : "Rearm off";
         JSONObject active = state.optJSONObject("active"), recording = active == null ? null : active.optJSONObject("recording");
         boolean held = recording != null && recording.optBoolean("keepListening");
-        if (actions != null && actions.optBoolean("canStop") && actions.optBoolean("canSkip") && settings != null) {
+        boolean retainedIdle = actions != null && actions.optBoolean("canReleaseRetainedTarget");
+        if (actions != null && settings != null && (retainedIdle || actions.optBoolean("canStop") && actions.optBoolean("canSkip"))) {
             // Standard templates show at most three actions. The expanded ordinary notification
-            // keeps all playback controls accessible; custom content is ineligible for promotion.
+            // keeps playback and retained-idle controls accessible; custom content is ineligible for promotion.
             RemoteViews controls = new RemoteViews(getPackageName(), R.layout.notification_voice_controls);
             controls.setTextViewText(R.id.voice_notification_title, title);
             controls.setTextViewText(R.id.voice_notification_status, label(phase));
             controls.setTextViewText(R.id.voice_notification_mode, mode);
             controls.setTextViewText(R.id.voice_notification_rearm, rearm);
-            controls.setBoolean(R.id.voice_notification_record, "setEnabled", actions.optBoolean("canRecordDuringPlayback"));
-            controls.setOnClickPendingIntent(R.id.voice_notification_record, pending("record", state));
+            controls.setTextViewText(R.id.voice_notification_record, retainedIdle ? "Start" : "Record");
+            controls.setBoolean(R.id.voice_notification_record, "setEnabled", retainedIdle
+                ? actions.optBoolean("canStart") && threadId != null : actions.optBoolean("canRecordDuringPlayback"));
+            controls.setOnClickPendingIntent(R.id.voice_notification_record, pending(retainedIdle ? "start" : "record", state));
+            controls.setViewVisibility(R.id.voice_notification_stop, retainedIdle ? View.GONE : View.VISIBLE);
             controls.setOnClickPendingIntent(R.id.voice_notification_stop, pending("stop", state));
-            controls.setOnClickPendingIntent(R.id.voice_notification_next, pending("skip", state));
+            controls.setOnClickPendingIntent(R.id.voice_notification_next, pending(retainedIdle ? "release" : "skip", state));
             controls.setOnClickPendingIntent(R.id.voice_notification_mode, pending("mode", state));
             controls.setOnClickPendingIntent(R.id.voice_notification_rearm, pending("rearm", state));
             builder.setCustomBigContentView(controls).setStyle(new NotificationCompat.DecoratedCustomViewStyle());
@@ -203,14 +211,18 @@ public final class NativeVoiceRuntimeService extends Service {
     private PendingIntent pending(String action, JSONObject state) {
         long generation = state.optLong("connectionGeneration");
         JSONObject active = state.optJSONObject("active"), recording = active == null ? null : active.optJSONObject("recording");
+        JSONObject retained = state.optJSONObject("retainedVoiceTarget");
+        long idleRevision = state.optLong("idleTargetRevision"), retainedRevision = retained == null ? -1 : retained.optLong("revision");
         String interactionId = active == null ? null : nullable(active, "id"), recordingId = recording == null ? null : nullable(recording, "id");
         Uri identity = new Uri.Builder().scheme("sedes-voice").authority("control").appendPath(Long.toString(generation))
             .appendPath(sessionStartId == null ? "starting" : sessionStartId).appendPath(action)
-            .appendPath(interactionId == null ? "idle" : interactionId).appendPath(recordingId == null ? "none" : recordingId).build();
+            .appendPath(interactionId == null ? "idle" : interactionId).appendPath(recordingId == null ? "none" : recordingId)
+            .appendPath(Long.toString(idleRevision)).appendPath(Long.toString(retainedRevision)).build();
         return PendingIntent.getService(this, action.hashCode() ^ Long.hashCode(generation),
             new Intent(this, NativeVoiceRuntimeService.class).setAction(action).setData(identity)
                 .putExtra("voiceGeneration", generation).putExtra("voiceStartId", sessionStartId)
-                .putExtra("voiceInteractionId", interactionId).putExtra("voiceRecordingId", recordingId),
+                .putExtra("voiceInteractionId", interactionId).putExtra("voiceRecordingId", recordingId)
+                .putExtra("voiceIdleTargetRevision", idleRevision).putExtra("voiceRetainedRevision", retainedRevision),
             PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
     }
     private static String nullable(JSONObject object, String key) { return object.isNull(key) ? null : object.optString(key, null); }

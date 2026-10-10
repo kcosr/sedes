@@ -2,7 +2,7 @@
 
 The Android `NativeVoice` Capacitor plugin exposes settings, snapshots, and
 actions. `NativeVoiceRuntime` owns the state machine on one handler thread.
-Native snapshot version 11 includes `active.recording` (ID, Keep listening and
+Native snapshot version 12 includes `active.recording` (ID, Keep listening and
 Reconnecting), native-authoritative `canSetKeepListening`/`canSend` actions, the
 Keep listening blocked reason, and an independent `recordingRecovery` item.
 Recovery exposes identity, revision, target, stage, incomplete/unrecognized
@@ -19,18 +19,49 @@ an Android connection-local device ID. The device-owned `pinDefaultVoiceThread`
 setting defaults to false; its selected default thread is scoped to the exact
 Sedes profile, origin, and authenticated identity.
 Pinning supplies the initial in-app target from the saved default without
-falling back to the foreground. The nullable native `nextRecordingTarget`
+falling back to another thread. The nullable native `nextRecordingTarget`
 contains a thread ID/title chosen through generation-fenced
 `setNextRecordingTarget`. This transient state is independent of navigation and
 saved settings. Explicit start arguments take priority, then this pending
-choice, then the pin/foreground/default policy. In-app starts consume it when
-the interaction is admitted, before asynchronous target validation. Headset and
-notification Start always use the saved default, regardless of pinning or the
-foreground thread, and preserve the pending in-app choice. Their idle notification
-label uses the same default target. A missing default cannot fall back to the
-foreground or pending choice. Local readiness rejection preserves it; Off and
+choice, then the pin/retained/foreground/default policy. In-app starts consume it
+when the interaction is admitted, before asynchronous target validation. Headset
+and notification Start use the pinned default, otherwise the retained voice
+destination, otherwise the saved default. They ignore the foreground and preserve
+the pending in-app choice. The idle notification label and open action use that
+same resolver. An unpinned retained target works without a saved default; a missing
+pinned default cannot fall back to another thread. Local readiness rejection
+preserves the pending choice; Off and
 connection changes clear it. The setter rejects an active interaction or Off.
 Automatic notification replies preserve it and retain their own targets.
+
+`retainedVoiceTarget` is nullable session state containing a thread ID, a bounded
+nullable title, and a revision. Every new interaction advances its revision,
+including another interaction for the same thread. Playback retains the spoken
+thread; accepted follow-up validation replaces it with the actual recording
+destination. Manual and recovery activations retain their destination, and a
+successful recording retarget updates it after durable acknowledgement. Current
+input-context titles refresh this metadata independently of announcements. Pure
+threadless notices preserve the previous ID/title while advancing the revision.
+Completion, Stop, cancellation, and a drained queue preserve retention. Off,
+disconnect or connection-identity changes, session teardown, service detach, and
+pinning clear it. Pinning suppresses retention; unpinning during an interaction
+seeds that interaction's current destination. Nothing is persisted to settings,
+the default-thread selection, or the input journal.
+
+Idle `releaseRetainedVoiceTarget` takes the expected connection generation and
+`expectedRetainedRevision`. Native `canReleaseRetainedTarget` is independent of
+capture readiness; unavailable targets remain releasable. A stale revision or
+an active interaction makes release a no-op, preserving queued work, settings,
+and the explicit pending app selection. An idle headset Next or notification Next
+performs the same release. `idleTargetRevision` also advances on default/pin edits
+and session teardown. Notification identities and extras, and headset dispatch,
+capture both revisions alongside generation and interaction/recording IDs, so an
+old idle Start or Next cannot act on a later idle session, even after an
+idle/active/idle or same-target transition. Ordinary manual/headset starts that
+match retention use fresh manual-input eligibility and activity-token validation
+before and after the cue, even with announcements off. They fail on that exact
+unavailable target without selecting a fallback, and preserve ordinary capture
+and deferred-admission behavior while client controls reconnect.
 During speech, Record cancels the current playback and reserves a new manual
 recording for the spoken source thread before queued work can drain. It clears
 deferred client switch actions and consumes the pending in-app choice, while
@@ -44,8 +75,9 @@ It signals normal reply drain, including when the skipped item was a mid-turn
 progress notice. A Next captured during speech still discards that interaction's
 unsent follow-up if validation, cues, recording preparation, or capture begins
 before the command arrives, including a held default. It cannot cancel a new
-manual Record interaction or undo an admitted input. The UI offers Next only
-during speech. Notification and headset Next require the null recording ID
+manual Record interaction or undo an admitted input. The UI offers playback Next
+during speech and a separate release Next while idle with a retained target.
+Notification and headset playback Next require the null recording ID
 captured before recording starts. A fresh headset Next carrying the current
 recording ID leaves capture unchanged; other recording commands retain exact
 recording-ID equality.
@@ -53,7 +85,8 @@ Both bridge commands reject stale
 connection generations or interaction IDs. The expanded notification exposes
 Record, Next, and Stop. Headset Play/Pause during speech invokes Record only
 while Auto-listen is on and recording is available; otherwise it invokes Next.
-Dedicated headset Next skips during speech, and active recording retains its
+Dedicated headset Next skips during speech or releases an idle retained target;
+active recording retains its
 existing Cancel/Stop behavior.
 The device preference `announceRecordingThread` defaults to false. A new
 recording start validates the exact target's normalized input context and projects
@@ -352,8 +385,8 @@ as a completion notice, but never a context line, whatever
 `readNotificationContext` says. Empty prepared text fails with
 `voice_reply_empty`. The active item's title, shown on the voice card and the
 media notification, is display-only. It is the WebView's `threadTitle` when that
-is not blank. Otherwise it comes from the visible foreground thread or the saved
-default thread when either matches, and is otherwise null. The title is kept
+is not blank. Otherwise it comes from the visible foreground thread, retained
+voice target, or saved default thread when one matches, and is otherwise null. The title is kept
 with the stored request, so a settings rebuild keeps it.
 
 The replay is a local queue item with no server envelope. Its event, shown as
@@ -685,6 +718,9 @@ beside the title/status area, and the right-side Cancel and Send controls are se
 Touch regions remain distinct and at least 44 px. Reconnecting and error details
 use the existing status line. An older saved draft marks the quick-controls icon
 and opens the same recovery sheet without adding another row.
+Idle retention adds Next before the right-aligned Start control. Releasing it
+keeps that action space for the remainder of the idle interval, so Start does
+not move while the target label returns to ordinary selection policy.
 The title and status retain the Ready state's left alignment and gap from the
 status icon when recording controls appear, including narrow layouts. The
 icon-to-text gap is 8 px in every state. Input preparation, capture, recognition,

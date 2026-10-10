@@ -393,6 +393,22 @@ describe("voice quick sheet", () => {
     expect(store.getSnapshot().native?.recordingRecovery).toEqual(saved);
     store.dispose();
   });
+  it("starts a new recording for the retained thread outside inventory while older dictation waits for admission", async () => {
+    navigate(threadPath("long"));
+    const saved = recordingRecovery({ stage: "admitting", hasUnrecognizedAudio: false, admission: {
+      mutationId: "50000000-0000-4000-8000-000000000001", status: "uncertain", cancelled: false } });
+    const native = { ...ready({ voiceThreadId: "standup" }), recordingRecovery: saved,
+      retainedVoiceTarget: { threadId: "outside-inventory", threadTitle: "Retained destination", revision: 3 } };
+    const { fake, store, sheet, onOpenChange } = await renderSheet(native);
+    fake.plugin.startManualListen.mockResolvedValue({ ...native, stateRevision: 2 });
+    fireEvent.click(within(sheet).getByRole("button", { name: "Start new recording" }));
+    await waitFor(() => expect(fake.plugin.startManualListen).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1,
+      threadId: "outside-inventory", threadTitle: "Retained destination" }));
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    expect(window.location.pathname).toBe(threadPath("long"));
+    expect(store.getSnapshot().native?.recordingRecovery).toEqual(saved);
+    store.dispose();
+  });
   it("explains a retained dictation blocking default Keep listening and updates when the default changes", async () => {
     const saved = recordingRecovery({ stage: "admitting", hasUnrecognizedAudio: false, admission: {
       mutationId: "50000000-0000-4000-8000-000000000001", status: "uncertain", cancelled: false } });

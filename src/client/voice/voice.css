@@ -411,6 +411,14 @@
   flex: none;
 }
 
+/* Releasing the retained thread leaves Next's hit region empty. Mic stays
+   at the right edge, and a repeated Next tap cannot start or open a thread. */
+.voice-card-next-slot {
+  width: 44px;
+  height: 44px;
+  flex: none;
+}
+
 .voice-card-button svg {
   width: var(--icon-lg);
   height: var(--icon-lg);

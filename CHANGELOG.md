@@ -26,7 +26,7 @@
   and its WebView. Upgrade clients together with the server.
   ([#50](https://github.com/kcosr/sedes/pull/50), [#53](https://github.com/kcosr/sedes/pull/53), [#56](https://github.com/kcosr/sedes/pull/56))
 
-- Android voice uses snapshot version 11, settings version 8, and dictation
+- Android voice uses snapshot version 12, settings version 8, and dictation
   manifest version 2. Reconfigure voice after upgrading: older preferences and
   default-thread selections reset, while separately stored device speech keys
   and version-2 saved dictation remain available. Earlier per-connection
@@ -497,6 +497,9 @@
   Session stats stays in the thread menu rather than flashing during loading. (#8)
 
 ### Changed
+
+- Unpinned Android voice keeps the last voice thread after playback drains.
+  Idle **Next** releases it without navigating or changing a pending target.
 
 - Android playback offers **Record** to reply to the spoken thread and **Next**
   to skip speech and its follow-up recording. Headset Play/Pause records during

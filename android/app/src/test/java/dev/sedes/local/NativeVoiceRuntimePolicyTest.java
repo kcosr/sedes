@@ -35,36 +35,49 @@ public class NativeVoiceRuntimePolicyTest {
             NativeVoiceJson.object("type", 7, "address", null, "name", "Another headset")))));
     }
 
-    @Test public void manualTargetPrefersExplicitThenPendingBeforePinnedOrForegroundDefaults() {
+    @Test public void manualTargetPrefersExplicitThenPendingThenPinRetainedViewedAndDefault() {
         org.json.JSONObject settings = NativeVoiceSettings.defaults().patch(0, NativeVoiceJson.object("pinDefaultVoiceThread", true,
             "voiceThreadId", "default", "voiceThreadTitle", "Saved default")).value;
         org.json.JSONObject foreground = NativeVoiceJson.object("visible", true, "threadId", "foreground", "threadTitle", "Open thread");
         org.json.JSONObject pending = NativeVoiceJson.object("threadId", "next", "threadTitle", "Chosen next");
         org.json.JSONObject explicit = NativeVoiceJson.object("threadId", "explicit", "threadTitle", null);
-        org.json.JSONObject selected = NativeVoiceRuntime.manualTarget(explicit, pending, settings, foreground);
+        org.json.JSONObject retained = NativeVoiceJson.object("threadId", "retained", "threadTitle", "Last voice thread", "revision", 7);
+        org.json.JSONObject selected = NativeVoiceRuntime.manualTarget(explicit, pending, settings, retained, foreground);
         assertEquals("explicit", selected.optString("threadId")); assertTrue(selected.isNull("threadTitle"));
-        assertEquals("next", NativeVoiceRuntime.manualTarget(null, pending, settings, foreground).optString("threadId"));
-        assertEquals("default", NativeVoiceRuntime.manualTarget(null, null, settings, foreground).optString("threadId"));
+        assertEquals("next", NativeVoiceRuntime.manualTarget(null, pending, settings, retained, foreground).optString("threadId"));
+        assertEquals("default", NativeVoiceRuntime.manualTarget(null, null, settings, retained, foreground).optString("threadId"));
         NativeVoiceJson.put(settings, "pinDefaultVoiceThread", false);
-        assertEquals("next", NativeVoiceRuntime.manualTarget(null, pending, settings, foreground).optString("threadId"));
-        assertEquals("foreground", NativeVoiceRuntime.manualTarget(null, null, settings, foreground).optString("threadId"));
+        assertEquals("explicit", NativeVoiceRuntime.manualTarget(explicit, pending, settings, retained, foreground).optString("threadId"));
+        assertEquals("next", NativeVoiceRuntime.manualTarget(null, pending, settings, retained, foreground).optString("threadId"));
+        selected = NativeVoiceRuntime.manualTarget(null, null, settings, retained, foreground);
+        assertEquals("retained", selected.optString("threadId")); assertEquals("Last voice thread", selected.optString("threadTitle"));
+        assertFalse("Selection returns only a target, not its control revision", selected.has("revision"));
+        assertEquals("foreground", NativeVoiceRuntime.manualTarget(null, null, settings, null, foreground).optString("threadId"));
         NativeVoiceJson.put(foreground, "visible", false);
-        assertEquals("default", NativeVoiceRuntime.manualTarget(null, null, settings, foreground).optString("threadId"));
+        assertEquals("retained", NativeVoiceRuntime.manualTarget(null, null, settings, retained, foreground).optString("threadId"));
+        assertEquals("default", NativeVoiceRuntime.manualTarget(null, null, settings, null, foreground).optString("threadId"));
         NativeVoiceJson.put(settings, "pinDefaultVoiceThread", true); NativeVoiceJson.put(settings, "voiceThreadId", null);
-        assertEquals("explicit", NativeVoiceRuntime.manualTarget(explicit, pending, settings, foreground).optString("threadId"));
-        assertEquals("next", NativeVoiceRuntime.manualTarget(null, pending, settings, foreground).optString("threadId"));
-        assertTrue(NativeVoiceRuntime.manualTarget(null, null, settings, foreground).isNull("threadId"));
+        assertEquals("explicit", NativeVoiceRuntime.manualTarget(explicit, pending, settings, retained, foreground).optString("threadId"));
+        assertEquals("next", NativeVoiceRuntime.manualTarget(null, pending, settings, retained, foreground).optString("threadId"));
+        assertTrue(NativeVoiceRuntime.manualTarget(null, null, settings, retained, foreground).isNull("threadId"));
         assertEquals("Chosen next", pending.optString("threadTitle"));
     }
-    @Test public void backgroundStartUsesOnlySavedDefaultRegardlessOfPin() {
+    @Test public void backgroundStartUsesPinThenRetainedThenDefaultWithoutRequiringADefaultForRetention() {
         for (boolean pinned : new boolean[] { false, true }) {
             org.json.JSONObject settings = NativeVoiceSettings.defaults().patch(0, NativeVoiceJson.object("pinDefaultVoiceThread", pinned,
                 "voiceThreadId", "default", "voiceThreadTitle", "Saved default")).value;
-            org.json.JSONObject target = NativeVoiceRuntime.defaultRecordingTarget(settings);
+            org.json.JSONObject retained = NativeVoiceJson.object("threadId", "retained", "threadTitle", "Last voice thread", "revision", 7);
+            org.json.JSONObject target = NativeVoiceRuntime.backgroundRecordingTarget(settings, null);
             assertEquals("default", target.optString("threadId")); assertEquals("Saved default", target.optString("threadTitle"));
+            target = NativeVoiceRuntime.backgroundRecordingTarget(settings, retained);
+            assertEquals(pinned ? "default" : "retained", target.optString("threadId"));
+            assertEquals(pinned ? "Saved default" : "Last voice thread", target.optString("threadTitle"));
             NativeVoiceJson.put(settings, "voiceThreadId", null);
-            target = NativeVoiceRuntime.defaultRecordingTarget(settings);
+            target = NativeVoiceRuntime.backgroundRecordingTarget(settings, null);
             assertTrue(target.isNull("threadId")); assertTrue(target.isNull("threadTitle"));
+            target = NativeVoiceRuntime.backgroundRecordingTarget(settings, retained);
+            if (pinned) { assertTrue(target.isNull("threadId")); assertTrue(target.isNull("threadTitle")); }
+            else assertEquals("retained", target.optString("threadId"));
         }
     }
     @Test public void fieldValidationPreservesSchemaNamesWithoutExposingExceptionText() {
