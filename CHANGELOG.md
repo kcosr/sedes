@@ -950,7 +950,7 @@
 
 ### Fixed
 
-- Mobile Tasks stays open and confirms Add to prompt; mobile thread settings
+- Mobile Tasks stays open after Add to prompt; mobile thread settings
   stay open after changing options so further selections can be made.
 - Escape in Tasks and Workpads search/add inputs clears the focused field
   first, then removes focus when pressed again while empty.
