@@ -159,7 +159,7 @@ export class SidecarClientSession implements SidecarRuntimeSession {
       transportKind: input.transportKind, carrierGeneration: input.carrierGeneration };
     void input.stream.closed.then(
       closure => attachmentDiagnostic("sidecar_byte_stream_closed", { ...diagnosticContext, reason: closure.reason,
-        exitCode: closure.exitCode, signal: closure.signal }, closure.cause),
+        exitCode: closure.exitCode, signal: closure.signal, diagnosticCode: closure.diagnosticCode }, closure.cause),
       error => attachmentDiagnostic("sidecar_byte_stream_close_failed", diagnosticContext, error),
     );
     const transport = new LengthPrefixedSidecarFrameTransport({

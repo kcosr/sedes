@@ -85,6 +85,8 @@ export interface SidecarFrameTransport {
 export interface SidecarByteStreamClosure {
   readonly reason: string;
   readonly cause?: Error;
+  /** Bounded machine token from a process carrier; never raw stderr. */
+  readonly diagnosticCode?: string;
   /** Present for installation-owned process carriers. */
   readonly exitCode?: number | null;
   /** Present for installation-owned process carriers. */

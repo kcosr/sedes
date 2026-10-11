@@ -24,6 +24,7 @@ export interface AttachmentDiagnosticFields {
   readonly outcome?: string;
   readonly transportKind?: string;
   readonly reason?: string;
+  readonly diagnosticCode?: string;
   readonly exitCode?: number | null;
   readonly signal?: string | null;
   readonly pendingOperationRequests?: number;
@@ -38,6 +39,8 @@ export interface AttachmentDiagnosticFields {
   readonly queuedWriteFrames?: number;
   readonly activeWriteBytes?: number;
   readonly frameBytes?: number;
+  readonly queuedEventBytes?: number;
+  readonly queuedEventCount?: number;
 }
 
 const names = new Set(["Error", "TypeError", "RangeError", "SyntaxError", "AggregateError", "AbortError", "TimeoutError",
@@ -47,8 +50,8 @@ const names = new Set(["Error", "TypeError", "RangeError", "SyntaxError", "Aggre
 const token = /^[a-zA-Z0-9][a-zA-Z0-9_./:-]{0,159}$/u;
 const machineCode = /^(?:(?:codex|claude|sidecar|ssh|execution|provider|transport|runtime|managed_worker)_[a-z0-9_]+|SQLITE_[A-Z_]+|ERR_[A-Z0-9_]+|E(?:CONNRESET|CONNREFUSED|PIPE|TIMEDOUT|NOENT|ACCES|IO|NOMEM|NOSPC))$/u;
 const closureReasons = new Set(["exit", "spawn_error", "stderr_overflow", "end", "closed", "lease_closed", "lease_rejected", "idle_release", "operator_restart", "supervisor_close", "connection_failed", "receipt_record", "receipt_acknowledge", "thread_evict"]);
-const textFields = ["backendInstanceId", "executionEnvironmentId", "attachmentId", "role", "requestId", "operationId", "method", "stage", "outcome", "transportKind", "reason", "signal"] as const;
-const numberFields = ["pid", "parentPid", "sessionCount", "generation", "controllerEpoch", "carrierGeneration", "attachmentAttempt", "durationMs", "exitCode", "pendingOperationRequests", "pendingOperationSends", "inboundIdleMs", "outboundIdleMs", "outcomeCount", "pendingRequestCount", "queuedWriteBytes", "queuedWriteFrames", "activeWriteBytes", "frameBytes"] as const;
+const textFields = ["backendInstanceId", "executionEnvironmentId", "attachmentId", "role", "requestId", "operationId", "method", "stage", "outcome", "transportKind", "reason", "signal", "diagnosticCode"] as const;
+const numberFields = ["pid", "parentPid", "sessionCount", "generation", "controllerEpoch", "carrierGeneration", "attachmentAttempt", "durationMs", "exitCode", "pendingOperationRequests", "pendingOperationSends", "inboundIdleMs", "outboundIdleMs", "outcomeCount", "pendingRequestCount", "queuedWriteBytes", "queuedWriteFrames", "activeWriteBytes", "frameBytes", "queuedEventBytes", "queuedEventCount"] as const;
 
 /** Bounded classes/codes only; even arbitrary exception names/messages, paths,
  * stacks, custom properties and toJSON methods are never serialized. */
@@ -86,6 +89,7 @@ export function attachmentDiagnostic(event: string, fields: AttachmentDiagnostic
       const value = fields[key];
       if (value !== undefined) {
         const safe = value === null || (key === "reason" ? value.length <= 120 && (machineCode.test(value) || closureReasons.has(value))
+          : key === "diagnosticCode" ? value.length <= 120 && machineCode.test(value)
           : key === "signal" ? /^SIG[A-Z0-9]{1,16}$/u.test(value) : token.test(value));
         record[key] = safe ? value : "redacted";
       }

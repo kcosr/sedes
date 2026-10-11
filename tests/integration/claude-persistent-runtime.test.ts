@@ -28,7 +28,7 @@ const scope = { tenantId: "tenant", principalId: "principal", executionEnvironme
 const configuration = { ...scope, executablePath: "/provider/claude", configDirectory: "/provider/.claude", initializationTimeoutMs: 5_000 };
 const serviceConfiguration = { environmentRevision: 1, operationsRevision: 1 };
 const cleanups: (() => Promise<void>)[] = [];
-afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
+afterEach(async () => { vi.restoreAllMocks(); vi.unstubAllEnvs(); for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
 
 async function fixture(options: {
   readonly validateAgentToolMcp?: (agentToolMcp: NonNullable<ClaudeRuntimeSessionOptions["agentToolMcp"]>) => void;
@@ -179,6 +179,28 @@ function acceptedInput(sessionId: string, operation: { operationId: string; cont
 }
 
 describe("Claude persistent runtime through framed replacement carriers", () => {
+  it.each(["encodeBody", "sendEvent"] as const)("captures host %s failure before detaching and retains native work", async method => {
+    const f = await fixture(); const carrier = await f.attach();
+    const sessionId = randomUUID();
+    await f.client().createSession(sessionOptions(sessionId)).start();
+    vi.stubEnv("SEDES_DEBUG_DELIVERY", "1");
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const failure = new Error("sidecar_runtime_body_capacity_exceeded", { cause: new Error("private-payload") });
+    if (method === "encodeBody") vi.spyOn(carrier.hostChannel, "encodeBody").mockRejectedValueOnce(failure);
+    else vi.spyOn(carrier.hostChannel.peer, "sendEvent").mockRejectedValueOnce(failure);
+    await f.sessions[0]!.emit(delta(sessionId, "private-payload"));
+    await vi.waitFor(() => expect(f.services.status().attached).toBe(false));
+    const records = log.mock.calls.map(([line]) => String(line)).filter(line => line.startsWith("[delivery-attachment] "))
+      .map(line => JSON.parse(line.slice("[delivery-attachment] ".length)));
+    expect(records).toEqual([expect.objectContaining({ event: "claude_runtime_host_event_failed",
+      stage: method === "encodeBody" ? "event_body_encode" : "event_send", controllerEpoch: carrier.lease.controllerEpoch,
+      frameBytes: expect.any(Number), queuedEventBytes: expect.any(Number), queuedEventCount: 1, requestedClose: true,
+      errors: [{ name: "Error", code: "sidecar_runtime_body_capacity_exceeded" }, { name: "Error" }] })]);
+    expect(JSON.stringify(records)).not.toMatch(/private-|sessionId|sessionNonce/u);
+    expect(f.sessions[0]!.closed).toBe(false);
+    await carrier.close();
+  });
+
   it("round-trips bounded context telemetry and refuses a stale query generation", async () => {
     const f = await fixture(); const carrier = await f.attach(); const client = f.client();
     const id = randomUUID(); const session = client.createSession(sessionOptions(id));

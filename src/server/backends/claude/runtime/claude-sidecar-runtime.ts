@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { attachmentDiagnostic } from "../../../diagnostics/attachment-diagnostics.js";
 import { sidecarUpgradeBlockerSchema } from "../../../../internal/sidecar-protocol/service-management-v1.js";
 import { SidecarOperationError, type SidecarOperationDefinition, type SidecarOperationRegistry } from "../../../../internal/sidecar-protocol/operation-registry.js";
 import { BackendRuntimeControlRejectedError } from "../../runtime-control.js";
@@ -98,13 +99,25 @@ export function registerClaudePersistentRuntimeHost(input: {
     const result = await host.execute(command, event => {
       if (detached) return;
       const bytes = Buffer.byteLength(JSON.stringify(event), "utf8");
-      if (eventCount >= 1024 || eventBytes + bytes > 64 * 1024 * 1024) { detach(); return; }
+      if (eventCount >= 1024 || eventBytes + bytes > 64 * 1024 * 1024) {
+        attachmentDiagnostic("claude_runtime_host_event_failed", { controllerEpoch: input.controllerEpoch,
+          stage: "event_admission", reason: "claude_runtime_event_backlog_limit", frameBytes: bytes,
+          queuedEventBytes: eventBytes, queuedEventCount: eventCount, requestedClose: true });
+        detach(); return;
+      }
       eventCount++; eventBytes += bytes;
+      let stage = "event_order_wait";
       chain = chain.then(async () => {
         if (detached) return;
+        stage = "event_body_encode";
         const encoded = await input.channel.encodeBody(event);
+        stage = "event_send";
         await input.channel.peer.sendEvent({ ...eventDefinition, payload: { runtimeId: host.runtimeId, body: encoded } });
-      }).catch(detach).finally(() => { eventCount--; eventBytes -= bytes; });
+      }).catch(error => {
+        if (!detached) attachmentDiagnostic("claude_runtime_host_event_failed", { controllerEpoch: input.controllerEpoch,
+          stage, frameBytes: bytes, queuedEventBytes: eventBytes, queuedEventCount: eventCount, requestedClose: true }, error);
+        detach();
+      }).finally(() => { eventCount--; eventBytes -= bytes; });
     });
     return await input.channel.encodeBody(result);
   });

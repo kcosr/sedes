@@ -827,6 +827,14 @@ capture. Shared managed-worker launch/exit records apply to all callers; Pi,
 Codex, Grok, and OpenCode retain their existing provider-specific behavior and
 introduce no new session diagnostics or capability changes here.
 
+Shared carrier diagnostics must retain process exit evidence and capture the
+first bounded forwarding failure before detaching an attachment. Log only
+code-owned stages, machine codes, and queue sizes; never provider payloads or
+raw stderr. Capture remains operator-gated and observational. Codex and Claude
+implement persistent runtime event forwarding capture. Pi and OpenCode use the
+shared carrier exit evidence without new provider event diagnostics; Grok has
+no remote runtime and is intentionally unsupported on this surface.
+
 Runtime diagnostics may declare the server-only `recoveryAction: "stop"` when
 proved cleanup is a prerequisite to another Connect/Start. The shared lifecycle
 gate consumes this normalized action without inspecting provider error codes;
