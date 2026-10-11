@@ -614,37 +614,42 @@ public class NativeVoiceRuntimeTest {
             f.onOwner(() -> f.invoke("stopSession", new Class<?>[0]));
             String startId = UUID.randomUUID().toString();
             // Android has resumed and attached the service before the WebView sends its context.
-            NativeVoiceRuntimeService service = new NativeVoiceRuntimeService() {
-                @Override void render(JSONObject state) {}
-                @Override void finish() {}
-            };
+            // An unstarted concrete service ignores render calls; detach it before fixture teardown.
+            NativeVoiceRuntimeService service = new NativeVoiceRuntimeService();
             f.onOwner(() -> {
                 set(f.runtime, "nativeVisible", true); set(f.runtime, "sessionStartId", startId);
                 set(f.runtime, "phase", "starting"); set(f.runtime, "speech", f.speech);
                 f.invoke("publish", new Class<?>[0]);
             });
-            f.runtime.attached(service, f.runtime.snapshot().getLong("connectionGeneration"), startId);
-            f.onOwner(() -> f.invoke("closeEvents", new Class<?>[0])); f.flush();
-            assertTrue(f.runtime.snapshot().isNull("retainedVoiceTarget"));
-            assertFalse(f.runtime.snapshot().getJSONObject("foreground").getBoolean("visible"));
-            if (!preceding.equals("initial_context")) {
-                f.idleReplay(f.target, "new-session-reply");
-                if (preceding.equals("released")) assertNull(f.command("releaseRetainedVoiceTarget",
-                    NativeVoiceJson.object("expectedRetainedRevision", retainedRevision(f.runtime.snapshot()))));
+            try {
+                f.runtime.attached(service, f.runtime.snapshot().getLong("connectionGeneration"), startId);
+                f.onOwner(() -> f.invoke("closeEvents", new Class<?>[0])); f.flush();
+                assertSame(service, field(f.runtime, "service"));
+                assertTrue((boolean) field(f.runtime, "sessionStarted"));
+                assertTrue(f.runtime.snapshot().isNull("retainedVoiceTarget"));
+                assertFalse(f.runtime.snapshot().getJSONObject("foreground").getBoolean("visible"));
+                if (!preceding.equals("initial_context")) {
+                    f.idleReplay(f.target, "new-session-reply");
+                    if (preceding.equals("released")) assertNull(f.command("releaseRetainedVoiceTarget",
+                        NativeVoiceJson.object("expectedRetainedRevision", retainedRevision(f.runtime.snapshot()))));
+                }
+                f.foreground(viewed);
+                JSONObject current = f.runtime.snapshot();
+                if (preceding.equals("released")) {
+                    assertTrue("A delayed initial context cannot undo idle Next", current.isNull("retainedVoiceTarget"));
+                    assertEquals(viewed, NativeVoiceRuntimeService.notificationTarget(current).getString("threadId"));
+                } else {
+                    String expected = preceding.equals("playback") ? f.target : viewed;
+                    assertEquals(expected, current.getJSONObject("retainedVoiceTarget").getString("threadId"));
+                    f.runtime.nativeVisibility(false); f.flush();
+                    assertEquals("The background destination survives service/context ordering", expected,
+                        NativeVoiceRuntimeService.notificationTarget(f.runtime.snapshot()).getString("threadId"));
+                }
+                assertTrue(f.runtime.snapshot().isNull("active")); assertTrue(f.contexts.isEmpty()); assertEquals(0, f.inputAttempts.get());
+            } finally {
+                f.runtime.detached(service); f.flush();
+                assertNull("Fixture teardown must not finish an unbound Android service", field(f.runtime, "service"));
             }
-            f.foreground(viewed);
-            JSONObject current = f.runtime.snapshot();
-            if (preceding.equals("released")) {
-                assertTrue("A delayed initial context cannot undo idle Next", current.isNull("retainedVoiceTarget"));
-                assertEquals(viewed, NativeVoiceRuntimeService.notificationTarget(current).getString("threadId"));
-            } else {
-                String expected = preceding.equals("playback") ? f.target : viewed;
-                assertEquals(expected, current.getJSONObject("retainedVoiceTarget").getString("threadId"));
-                f.runtime.nativeVisibility(false); f.flush();
-                assertEquals("The background destination survives service/context ordering", expected,
-                    NativeVoiceRuntimeService.notificationTarget(f.runtime.snapshot()).getString("threadId"));
-            }
-            assertTrue(f.runtime.snapshot().isNull("active")); assertTrue(f.contexts.isEmpty()); assertEquals(0, f.inputAttempts.get());
         }
     }
 
