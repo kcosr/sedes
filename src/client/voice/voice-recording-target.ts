@@ -17,6 +17,9 @@ export function voiceRecordingTarget(threads: readonly NormalizedApplicationThre
   };
   if (nextRecordingTarget) return available(nextRecordingTarget.threadId, "explicit");
   if (settings.pinDefaultVoiceThread) return available(settings.voiceThreadId, "pinned");
+  // The route changes before its foreground bridge reply arrives. Start must already follow that navigation.
+  if (visibleThreadId !== null && native.foreground.visible && native.foreground.threadId !== null &&
+      native.foreground.threadId !== visibleThreadId) return available(visibleThreadId, "visible");
   if (retainedVoiceTarget) {
     // Remembering the viewed thread does not add a redundant idle Next action.
     if (retainedVoiceTarget.threadId === visibleThreadId) return available(visibleThreadId, "visible");

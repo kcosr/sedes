@@ -71,7 +71,12 @@ export async function installVoiceFixture(page: Page): Promise<void> {
             state.retainedVoiceTarget = { threadId, threadTitle, revision: state.idleTargetRevision };
           }
         }
-        // Publishing idle does not replace voice continuity with the unchanged viewed route.
+        // Idle release restores the viewed destination for background starts; existing continuity is preserved.
+        if (state.phase === "idle" && !state.active && !state.nextRecordingTarget && !state.retainedVoiceTarget &&
+            state.foreground.visible && state.foreground.threadId && state.settings.audioMode !== "off" && !state.settings.pinDefaultVoiceThread) {
+          state.idleTargetRevision += 1;
+          state.retainedVoiceTarget = { threadId: state.foreground.threadId, threadTitle: state.foreground.threadTitle, revision: state.idleTargetRevision };
+        }
         state.actions = { ...state.actions, canReleaseRetainedTarget: state.active === null && state.retainedVoiceTarget !== null &&
           state.settings.audioMode !== "off" && !state.settings.pinDefaultVoiceThread };
         sessionStorage.setItem(retainedKey, JSON.stringify(fixture.state));

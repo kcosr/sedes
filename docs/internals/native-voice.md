@@ -49,8 +49,12 @@ playback or recording ends, even when another thread is visible. Idle Next relea
 that destination so the visible thread can supply the next target. An actual idle
 route change selects the newly viewed thread; repeated foreground updates, title
 changes, and resuming on the same route preserve continuity. Native remembers the
-last viewed route across foreground hiding, and retains a newly viewed idle
-destination for background starts. Explicit pending choices and pinning still take
+last viewed route across foreground hiding. Idle publication remembers the visible
+destination only when no retained destination or pending choice exists, including
+after Next or idle unpinning, so background starts keep that destination.
+The WebView follows a new route immediately while native still reports a different
+visible foreground thread; same-route and hidden foreground snapshots preserve
+voice continuity. Explicit pending choices and pinning still take
 priority. Navigation never retargets an active interaction or replaces its retained
 destination. When retention matches the visible thread, the card treats it as the
 ordinary visible destination and hides redundant Next. An unavailable visible
@@ -79,7 +83,9 @@ Idle `releaseRetainedVoiceTarget` takes the expected connection generation and
 capture readiness; unavailable targets remain releasable. A stale revision or
 an active interaction makes release a no-op, preserving queued work, settings,
 and the explicit pending app selection. An idle headset Next or notification Next
-performs the same release. The notification exposes Next only while displaying
+performs the same release. When a thread is visible, idle publication remembers
+that thread after release; without one, retention stays clear.
+The notification exposes Next only while displaying
 the retained destination when it differs from the visible thread and no explicit
 choice overrides it. `idleTargetRevision` also advances on default/pin edits,
 pending choices, idle foreground changes, and session teardown.

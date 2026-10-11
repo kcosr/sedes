@@ -409,14 +409,58 @@ describe("voice controls card", () => {
     await waitFor(() => expect(voice.fake.plugin.startManualListen).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1,
       threadId: target, threadTitle: ending === "speech" ? "L".repeat(512) : undefined }));
     await waitFor(() => expect(screen.getByRole("button", { name: "Next voice interaction" })).toBeEnabled());
-    voice.fake.plugin.releaseRetainedVoiceTarget.mockResolvedValue(ready({ stateRevision: 3 }));
+    voice.fake.plugin.releaseRetainedVoiceTarget.mockResolvedValue(ready({ stateRevision: 3,
+      foreground: { visible: true, threadId: "named", threadTitle: "Release review" },
+      retainedVoiceTarget: { threadId: "named", threadTitle: "Release review", revision: 8 },
+      actions: voiceActions({ canStart: true, canReleaseRetainedTarget: true }) }));
     fireEvent.click(screen.getByRole("button", { name: "Next voice interaction" }));
     await waitFor(() => expect(lines()[0]).toBe("Release review"));
     expect(screen.queryByRole("button", { name: "Next voice interaction" })).toBeNull();
     expect(voice.fake.plugin.releaseRetainedVoiceTarget).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, expectedRetainedRevision: 7 });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Start voice recording" })).toBeEnabled());
+    voice.fake.plugin.startManualListen.mockResolvedValue(ready({ stateRevision: 4,
+      retainedVoiceTarget: { threadId: "named", threadTitle: "Release review", revision: 8 } }));
+    fireEvent.click(screen.getByRole("button", { name: "Start voice recording" }));
+    await waitFor(() => expect(voice.fake.plugin.startManualListen).toHaveBeenNthCalledWith(2, {
+      expectedConnectionGeneration: 1, threadId: "named", threadTitle: "Release review" }));
     expect(voice.fake.plugin.skipCurrentPlayback).not.toHaveBeenCalled();
     expect(voice.fake.plugin.updateSettings).not.toHaveBeenCalled();
     expect(window.location.pathname).toBe(threadPath("named"));
+  });
+  it("starts in the newly viewed thread while its foreground bridge reply is delayed", async () => {
+    const initial = ready({ foreground: { visible: true, threadId: "named", threadTitle: "Release review" },
+      retainedVoiceTarget: { threadId: "untitled", threadTitle: null, revision: 7 },
+      actions: voiceActions({ canStart: true, canReleaseRetainedTarget: true }) });
+    let release!: () => void;
+    voice.fake.plugin.setConnection.mockResolvedValue(initial);
+    voice.fake.plugin.startManualListen.mockResolvedValue(initial);
+    vi.mocked(voice.fake.asPlugin.setForegroundContext).mockImplementation(async context => {
+      if (context.threadId !== "long") return initial;
+      return new Promise(resolve => {
+        release = () => {
+          const updated = { ...initial, stateRevision: 2, foreground: { visible: true, threadId: "long", threadTitle: "L".repeat(512) },
+            retainedVoiceTarget: { threadId: "long", threadTitle: "L".repeat(512), revision: 8 } };
+          voice.fake.emit("stateChanged", updated);
+          resolve(updated);
+        };
+      });
+    });
+    navigate(threadPath("named"), { replace: true });
+    renderControls();
+    await screen.findByRole("button", { name: "Start voice recording" });
+    expect(lines()[0]).toBe("Untitled thread");
+    act(() => navigate(threadPath("long")));
+    await waitFor(() => expect(release).toBeTypeOf("function"));
+    expect(lines()[0]).toBe(longTitle);
+    expect(screen.queryByRole("button", { name: "Next voice interaction" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Start voice recording" }));
+    await waitFor(() => expect(voice.fake.plugin.startManualListen).toHaveBeenCalledExactlyOnceWith({
+      expectedConnectionGeneration: 1, threadId: "long", threadTitle: "L".repeat(512) }));
+    expect(lines()[0]).toBe(longTitle);
+    await act(async () => release());
+    expect(lines()[0]).toBe(longTitle);
+    expect(screen.queryByRole("button", { name: "Next voice interaction" })).toBeNull();
+    expect(voice.fake.plugin.releaseRetainedVoiceTarget).not.toHaveBeenCalled();
   });
   it("preserves continuity on same-route foreground updates and follows a deliberate new route", async () => {
     let native = ready({ retainedVoiceTarget: { threadId: "outside-inventory", threadTitle: "Background voice thread", revision: 7 },

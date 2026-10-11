@@ -284,8 +284,9 @@ selects that thread; backgrounding and resuming on the same thread keep the voic
 destination. An explicit choice in the voice target picker takes priority.
 In-app, headset, and notification starts use the same destination. With no retained
 destination, starts use the visible thread, then the saved **Default voice thread**
-or a picker when no thread is visible. A newly viewed idle destination also remains
-selected when you leave the app. An unavailable visible destination opens the
+or a picker when no thread is visible. The ordinary idle viewed destination remains
+selected when you leave the app, including after Next or idle unpinning.
+An unavailable visible destination opens the
 chooser rather than redirecting to the default thread.
 Recording can target a running thread. While
 voice is listening, the target picker on the voice card changes the target before
@@ -580,7 +581,7 @@ preserves saved recovery data.
 An older input whose admission is uncertain stays accessible while ordinary
 recording continues, but must be resolved before adopting another recording.
 Use **Start new recording** in the Voice sheet when that older item permits it;
-the new recording uses the normal visible/default thread selection.
+the new recording uses the normal voice-target selection.
 With **Keep listening by default** enabled, resolve the older saved dictation
 first; new manual and automatic recordings cannot start, and no start cue plays.
 An interruption that leaves no saved audio or text reports its cause without

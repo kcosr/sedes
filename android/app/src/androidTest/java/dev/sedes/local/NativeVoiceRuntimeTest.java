@@ -591,11 +591,12 @@ public class NativeVoiceRuntimeTest {
             JSONObject before = f.runtime.snapshot();
             if (source.equals("app")) assertNull(f.command("releaseRetainedVoiceTarget", NativeVoiceJson.object("expectedRetainedRevision", retainedRevision(before))));
             else { f.capturedAction(source, before); f.flush(); }
-            assertTrue(f.runtime.snapshot().isNull("retainedVoiceTarget"));
+            assertEquals(viewed, f.runtime.snapshot().getJSONObject("retainedVoiceTarget").getString("threadId"));
             assertTrue(f.runtime.snapshot().isNull("active")); assertTrue(f.contexts.isEmpty()); assertEquals(0, f.inputAttempts.get());
             f.foreground(viewed); f.runtime.nativeVisibility(false); f.flush(); f.foreground(viewed);
             JSONObject released = f.runtime.snapshot();
-            assertTrue("Republishing the same route cannot resurrect retention", released.isNull("retainedVoiceTarget"));
+            assertEquals("Republishing the same route cannot resurrect the prior reply", viewed,
+                released.getJSONObject("retainedVoiceTarget").getString("threadId"));
             assertEquals(viewed, NativeVoiceRuntimeService.notificationTarget(released).getString("threadId"));
             assertFalse(NativeVoiceRuntimeService.retainedIdleControls(released));
             assertNull(f.command("startManualListen", new JSONObject()));
@@ -606,7 +607,7 @@ public class NativeVoiceRuntimeTest {
         }
     }
 
-    @Test public void newSessionSeedsADelayedSameRouteContextWithoutOverwritingPlaybackOrRelease() throws Exception {
+    @Test public void newSessionRemembersADelayedSameRouteContextWithoutOverwritingPlayback() throws Exception {
         for (String preceding : new String[] { "initial_context", "playback", "released" }) try (Fixture f = new Fixture(false, false)) {
             f.readyClientVoice("speak"); f.settings(NativeVoiceJson.object("pinDefaultVoiceThread", false));
             String viewed = UUID.randomUUID().toString(); f.foreground(viewed);
@@ -636,7 +637,8 @@ public class NativeVoiceRuntimeTest {
                 f.foreground(viewed);
                 JSONObject current = f.runtime.snapshot();
                 if (preceding.equals("released")) {
-                    assertTrue("A delayed initial context cannot undo idle Next", current.isNull("retainedVoiceTarget"));
+                    assertEquals("A delayed initial context remembers the ordinary viewed destination after Next", viewed,
+                        current.getJSONObject("retainedVoiceTarget").getString("threadId"));
                     assertEquals(viewed, NativeVoiceRuntimeService.notificationTarget(current).getString("threadId"));
                 } else {
                     String expected = preceding.equals("playback") ? f.target : viewed;
@@ -649,6 +651,49 @@ public class NativeVoiceRuntimeTest {
             } finally {
                 f.runtime.detached(service); f.flush();
                 assertNull("Fixture teardown must not finish an unbound Android service", field(f.runtime, "service"));
+            }
+        }
+    }
+
+    @Test public void restoringTheViewedDestinationPreservesBackgroundStartsAfterNextAndUnpinning() throws Exception {
+        for (String restore : new String[] { "visible_next", "idle_unpin", "no_thread_next" }) for (String source : new String[] { "headset", "start" }) {
+            try (Fixture f = new Fixture(false, false)) {
+                f.readyClientVoice("speak"); f.settings(NativeVoiceJson.object("pinDefaultVoiceThread", false));
+                String viewed = UUID.randomUUID().toString(), spoken = UUID.randomUUID().toString();
+                f.foreground(viewed); f.idleReplay(spoken, "retained-turn");
+                JSONObject reply = f.runtime.snapshot();
+                if (restore.equals("idle_unpin")) {
+                    f.settings(NativeVoiceJson.object("pinDefaultVoiceThread", true));
+                    assertTrue(f.runtime.snapshot().isNull("retainedVoiceTarget"));
+                    f.settings(NativeVoiceJson.object("pinDefaultVoiceThread", false));
+                } else {
+                    if (restore.equals("no_thread_next")) f.foreground(null);
+                    assertNull(f.command("releaseRetainedVoiceTarget",
+                        NativeVoiceJson.object("expectedRetainedRevision", retainedRevision(f.runtime.snapshot()))));
+                    if (restore.equals("no_thread_next")) {
+                        assertTrue("No-thread release remains empty until a viewed destination returns", f.runtime.snapshot().isNull("retainedVoiceTarget"));
+                        f.foreground(viewed);
+                    }
+                }
+                JSONObject restored = f.runtime.snapshot();
+                assertEquals(viewed, restored.getJSONObject("retainedVoiceTarget").getString("threadId"));
+                assertEquals(viewed, NativeVoiceRuntimeService.notificationTarget(restored).getString("threadId"));
+                assertFalse("An ordinary viewed destination has no redundant Next", NativeVoiceRuntimeService.retainedIdleControls(restored));
+                assertEquals(f.target, restored.getJSONObject("settings").getString("voiceThreadId"));
+                // Controls captured for B cannot release or start the remembered A destination.
+                for (String stale : new String[] { "start", "headset", "release", "headset_skip" }) f.capturedAction(stale, reply);
+                f.flush(); assertTrue(f.runtime.snapshot().isNull("active")); assertTrue(f.contexts.isEmpty());
+                f.runtime.nativeVisibility(false); f.flush();
+                assertEquals(viewed, NativeVoiceRuntimeService.notificationTarget(f.runtime.snapshot()).getString("threadId"));
+                f.runtime.notificationAction(source); f.flush();
+                assertEquals("Background Start must use the remembered viewed thread, not the saved default", viewed,
+                    f.runtime.snapshot().getJSONObject("active").getString("recognitionThreadId"));
+                JSONObject current = Fixture.inputContext(viewed);
+                f.takeClientTarget(viewed).done(200, current, null); f.flush();
+                assertTrue(f.speech.transcriptions.isEmpty());
+                f.takeClientTarget(viewed).done(200, current, null); f.flush();
+                assertNotNull(f.speech.transcriptions.poll(10, TimeUnit.SECONDS));
+                assertTrue(f.contexts.isEmpty()); assertEquals(0, f.inputAttempts.get());
             }
         }
     }
@@ -867,7 +912,8 @@ public class NativeVoiceRuntimeTest {
                 assertEquals("target_unavailable", f.lastError().getString("code"));
                 assertTrue(f.speech.transcriptions.isEmpty()); assertTrue(f.contexts.isEmpty()); assertEquals(0, f.inputAttempts.get());
                 assertNull(f.command("releaseRetainedVoiceTarget", NativeVoiceJson.object("expectedRetainedRevision", retainedRevision(idle))));
-                assertTrue(f.runtime.snapshot().isNull("retainedVoiceTarget"));
+                if (background) assertTrue(f.runtime.snapshot().isNull("retainedVoiceTarget"));
+                else assertEquals(viewed, f.runtime.snapshot().getJSONObject("retainedVoiceTarget").getString("threadId"));
                 if (source.equals("app")) assertNull(f.command("startManualListen", new JSONObject()));
                 else { f.runtime.notificationAction(source); f.flush(); }
                 String destination = background ? f.target : viewed;

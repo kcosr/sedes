@@ -320,6 +320,11 @@ test("idle voice retains the reply destination until Next or deliberate thread n
   await expect.poll(calls).toEqual(expected);
   await expect(toolbar.locator(".voice-card-title")).toHaveText("Viewed thread A");
   await expect(next).toHaveCount(0);
+  expect(await page.evaluate(() => window.__voiceFixture.state.retainedVoiceTarget?.threadId)).toBe(viewedId);
+  await page.evaluate(() => window.__voiceFixture.setForeground({ visible: false, threadId: null, threadTitle: null }));
+  expect(await page.evaluate(() => window.__voiceFixture.state.retainedVoiceTarget?.threadId)).toBe(viewedId);
+  await page.evaluate(viewedId => window.__voiceFixture.setForeground({ visible: true, threadId: viewedId, threadTitle: "Viewed thread A" }), viewedId);
+  await expect(next).toHaveCount(0);
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect.poll(() => mic.boundingBox()).toEqual(replyMicBox);
   await expect(composer).toHaveValue(draft);
