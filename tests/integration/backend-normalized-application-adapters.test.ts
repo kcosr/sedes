@@ -3169,7 +3169,7 @@ describe("nonblocking question notifications", () => {
       await flush();
       expect(executor).toHaveBeenCalledTimes(1);
       expect(executor.mock.calls[0]![0].payload).toEqual({
-        schemaVersion: 4,
+        schemaVersion: 5,
         notificationId: expect.any(String),
         event: "question.requested",
         occurredAt: request.createdAt,
@@ -3474,7 +3474,7 @@ describe("passive lifecycle notification sources", () => {
           applicationTurnId: "normalized-turn",
           outcome,
           result: { text: "Private assistant transcript" },
-          classifiedResult: { provisional: null, final: { text: "Private assistant transcript" }, unclassified: null },
+          classifiedResult: { partial: null, provisional: null, final: { text: "Private assistant transcript" }, unclassified: null },
         };
         const finalized = completion.observeBackendCompletion(
           current.scope,
@@ -3547,7 +3547,7 @@ describe("passive lifecycle notification sources", () => {
       const finalized = {
         applicationTurnId: "turn", outcome: "completed" as const,
         result: { text: "Checking\n\nDone" },
-        classifiedResult: { provisional: { text: "Checking" }, final: { text: "Done" }, unclassified: null },
+        classifiedResult: { provisional: { text: "Checking" }, partial: null, final: { text: "Done" }, unclassified: null },
       };
       const input = { completionIdentity: "complete", observedAt: 600, createAttention: false, finalized };
       const observe = () => completion.observeCompletion(current.scope, current.threadId, "classified", input);

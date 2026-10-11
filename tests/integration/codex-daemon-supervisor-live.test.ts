@@ -87,7 +87,7 @@ function liveExecutionSettings(
     assertExecutionPolicyAllowed: () => undefined,
     subscribeDesiredSettingsChanged: () => () => undefined,
     desiredSettings: () => selected(),
-    resolveFastModeDisabled: () => selected(),
+    resolveUnavailableServiceTier: () => selected(),
     forkSettingsEligibility: () => ({
       availability: "available",
       settingsRevision: 1,
@@ -733,7 +733,7 @@ plugins = false
     }
   }, 30_000);
 
-  it("returns steers Codex never drained on Stop as not sent, keeps drained ones with their turn, and resolves several pending steers individually", async () => {
+  it.each(["pending", "instant"] as const)("reconciles consumed and interrupted steers with %s native input handling", async (inputMode) => {
     const temporaryRoot = await mkdtemp(
       path.join(os.homedir(), ".sedes-codex-steer-stop-live-"),
     );
@@ -767,6 +767,7 @@ requires_openai_auth = false
 [features]
 apps = false
 plugins = false
+${inputMode === "pending" ? "# Exercise undrained pending inputs explicitly; 0.162.1 enables instant interrupts by default.\ninstant_interrupt = false" : ""}
 `,
         { encoding: "utf8", mode: 0o600 },
       );
@@ -1023,6 +1024,26 @@ plugins = false
         expect(snapshot.turnsById[turnId]?.status).toBe("interrupted");
         return snapshot;
       };
+
+      if (inputMode === "instant") {
+        // With the native 0.162.1 default, a Steer preempts the held response
+        // and materializes before that response is released by the fixture.
+        const turnId = await holdTurn("Hold this turn for an instant steer.");
+        const input = steerInput("instant", turnId, `INSTANT_STEER_${randomUUID()}`);
+        const requestsBeforeSteer = provider.requestCount();
+        provider.holdNextResponse();
+        const admitted = await handle.steer(input);
+        expect(["pending_materialization", "accepted"]).toContain(admitted.status);
+        await waitUntil(() => provider.requestCount() > requestsBeforeSteer, 10_000);
+        expect(provider.requestBodies().at(-1)).toContain(input.text);
+        await waitUntil(async () => (await reconcileSteer(input)).status === "accepted", 10_000);
+        const afterStop = await stop(turnId);
+        expect(afterStop.turnsById[turnId]?.completionCorrelations).toContain(input.applicationOperationId);
+        await expect(reconcileSteer(input)).resolves.toMatchObject({ status: "accepted" });
+        unsubscribe();
+        await handle.close();
+        return;
+      }
 
       // 1. Codex admits the steer to the held turn's pending input but has
       // not drained it when Stop lands: the interrupt clears it.

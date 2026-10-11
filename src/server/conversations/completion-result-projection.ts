@@ -56,11 +56,12 @@ export function projectClassifiedAssistantResult(
 ): ClassifiedAssistantResult {
   const result: ClassifiedAssistantResult = {
     provisional: null,
+    partial: null,
     final: null,
     unclassified: null,
   };
   let remaining = 16_384;
-  for (const phase of ["final", "provisional", "unclassified"] as const) {
+  for (const phase of ["final", "partial", "provisional", "unclassified"] as const) {
     const messages = items.filter(
       (item) => (item.responsePhase ?? "unclassified") === phase,
     );

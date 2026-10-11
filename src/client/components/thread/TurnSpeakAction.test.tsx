@@ -144,7 +144,7 @@ describe("TurnSpeakAction", () => {
 
   it.each([
     ["no stored result", null],
-    ["only blank stored sections", { provisional: { text: " \n" }, unclassified: null, final: { text: "" } }],
+    ["only blank stored sections", { provisional: { text: " \n" }, partial: { text: " " }, unclassified: null, final: { text: "" } }],
     ["no selected phases", {}],
   ])("falls back to the whole reply with %s", async (_name, assistantResult) => {
     const { fake } = await connect();
@@ -152,6 +152,15 @@ describe("TurnSpeakAction", () => {
     fireEvent.click(button());
     await waitFor(() => expect(status()).toHaveTextContent("Queued to play"));
     expect(fake.plugin.speakReply.mock.lastCall?.[0].assistantResult).toEqual({ unclassified: { text: "Whole reply text." } });
+  });
+
+  it("replays selected partial text without replacing it with the whole response", async () => {
+    const { fake } = await connect();
+    const assistantResult = { partial: { text: "The first finding is confirmed." }, final: null };
+    renderAction(async () => ({ assistantResult }));
+    fireEvent.click(button());
+    await waitFor(() => expect(status()).toHaveTextContent("Queued to play"));
+    expect(fake.plugin.speakReply.mock.lastCall?.[0].assistantResult).toEqual(assistantResult);
   });
 
   it("bounds a long fallback reply like bounded text without splitting a code point", async () => {

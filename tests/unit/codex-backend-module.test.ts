@@ -308,7 +308,7 @@ function resolvedConfiguration(
         },
         executable: {
           path: "/usr/bin/false",
-          version: "0.160.0",
+          version: "0.162.1",
           newerThanTested: false,
         },
         workingDirectory: input.connection.channel.workingDirectory,
@@ -484,7 +484,7 @@ describe("CodexBackendModule", () => {
     expect(fakes.createTransportFactory).toHaveBeenCalledOnce();
     expect(fakes.starts[0]).toHaveBeenCalledOnce();
     expect(fakes.supervisorInputs[0]!.expectedRuntimeVersion?.()).toBe(
-      "0.160.0",
+      "0.162.1",
     );
     expect(runtime.installationAdvisories.active()).toEqual([]);
     const advisoryListener = vi.fn();

@@ -97,13 +97,13 @@ can apply. The detailed authority rules are in
 
 ## Version compatibility
 
-Sedes supplies the exact generated `0.160.0` app-server protocol profile from
+Sedes supplies the exact generated `0.162.1` app-server protocol profile from
 its compiled Codex backend. Operators do not select that profile in Settings. Sedes independently probes and admits stable Codex app-server
-executables at or above 0.160.0. Build metadata is allowed and does not affect
+executables at or above 0.162.1. Build metadata is allowed and does not affect
 version precedence. Prereleases, malformed versions, versions below the floor,
 and explicitly excluded known-bad releases are rejected.
 
-Releases newer than the 0.160.0 tested-through threshold are admitted with an
+Releases newer than the 0.162.1 tested-through threshold are admitted with an
 installation advisory. They do not gain capabilities merely because of their
 version. Managed TUI uses `moduleConfiguration.tuiExecutablePath` when present;
 otherwise it resolves the first `codex` on the execution environment account's `PATH`. This is
@@ -226,6 +226,21 @@ When Codex temporarily recovers model-provider authentication during a turn,
 Sedes shows a warning notice followed by a success notice for that thread.
 Those notices do not mean the app-server transport restarted and are not used
 as account identity or authorization evidence.
+
+Subagent activity stays inline in the conversation. When Codex supplies the
+child's resolved model or reasoning effort, Sedes appends both to that activity
+line using the supplied identifiers, for example
+`Started /root/reviewer · gpt-6.1-sol · ultra`. A missing
+value is labeled unknown; when neither value is supplied, the line has no
+settings suffix. The suffix is hidden only when both values match the spawning
+agent's running-turn settings confirmed by Sedes's own accepted turn start.
+Imported or externally started turns have no such comparison evidence. A
+midturn model or reasoning change clears that evidence for later child starts;
+settings echoes and policy-only changes preserve it. Each child's creation
+comparison is retained within the active Sedes runtime; history without that
+evidence shows the supplied settings and never compares them with the parent's
+current settings.
+These are creation settings, not later model changes or usage attribution.
 
 Async follow-up questions raise a notice above the conversation and a
 **Questions** tab beside **Prompts**. Both appear only while questions are open

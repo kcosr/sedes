@@ -18,13 +18,17 @@ type GoalGetResponse = OfficialCodexClientRequestResult<"thread/goal/get">;
 type OfficialGoalSetParams =
   OfficialCodexClientRequestParams<"thread/goal/set">;
 type GoalSetResponse = OfficialCodexClientRequestResult<"thread/goal/set">;
-type GoalClearParams = OfficialCodexClientRequestParams<"thread/goal/clear">;
+type GoalClearParams = OfficialCodexClientRequestParams<"thread/goal/clear"> & {
+  origin: CodexGoalMutationOrigin;
+};
 type GoalClearResponse = OfficialCodexClientRequestResult<"thread/goal/clear">;
 
 export type CodexNativeThreadGoal = GoalSetResponse["goal"];
 export type CodexNativeGoalStatus = CodexNativeThreadGoal["status"];
+export type CodexGoalMutationOrigin = NonNullable<OfficialGoalSetParams["origin"]>;
 export type CodexThreadGoalSetParams = {
   threadId: string;
+  origin: CodexGoalMutationOrigin;
   objective?: string | null;
   status?: CodexNativeGoalStatus | null;
 };
@@ -102,6 +106,7 @@ function refineGoalSetParams(
     value,
     [
       "threadId",
+      "origin",
       ...(value.objective === undefined ? [] : ["objective"]),
       ...(value.status === undefined ? [] : ["status"]),
     ],
@@ -122,7 +127,7 @@ function refineGoalSetParams(
 function refineGoalClearParams(value: GoalClearParams): GoalClearParams {
   assertExactKeys(
     value,
-    ["threadId"],
+    ["threadId", "origin"],
     "codex_goal_clear_params_fields_invalid",
   );
   assertNativeThreadId(value.threadId);
@@ -299,11 +304,13 @@ export function projectCodexGoalGetResponse(input: {
 
 export function encodeCodexGoalSetParams(input: {
   readonly threadId: string;
+  readonly origin: CodexGoalMutationOrigin;
   readonly objective?: string;
   readonly status?: Extract<CodexGoalStatusV1, "active" | "paused">;
 }): CodexThreadGoalSetParams {
   const params: CodexThreadGoalSetParams = {
     threadId: input.threadId,
+    origin: input.origin,
   };
   if (input.objective !== undefined) {
     const validated = validateNormalizedCodexGoalObjective(input.objective);

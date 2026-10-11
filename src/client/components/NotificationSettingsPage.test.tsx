@@ -102,7 +102,7 @@ describe("notification settings", () => {
     render(<NotificationSettingsPage store={store} />);
     await screen.findByRole("group", { name: "Response text" });
     expect(screen.queryByLabelText("Include assistant response text")).toBeNull();
-    const phases = ["Provisional", "Unclassified", "Final"].map(label =>
+    const phases = ["Provisional", "Partial", "Unclassified", "Final"].map(label =>
       screen.getByRole("checkbox", { name: label }) as HTMLButtonElement);
     expect(phases.every(phase => phase.getAttribute("aria-checked") === "false")).toBe(true);
     expect(phases.every(phase => !phase.disabled)).toBe(true);
@@ -124,7 +124,7 @@ describe("notification settings", () => {
     await expectSaved();
     expect(api.updateNotificationSettings).toHaveBeenLastCalledWith(
       expect.objectContaining({ delivery: scriptDelivery([]),
-        assistantResultPhases: ["provisional", "unclassified", "final"] }),
+        assistantResultPhases: ["provisional", "partial", "unclassified", "final"] }),
     );
     fireEvent.click(screen.getByLabelText("Script: Turn completed"));
     expect(phases.every(phase => !phase.disabled)).toBe(true);
@@ -134,6 +134,22 @@ describe("notification settings", () => {
     await waitFor(() => expect(phases.every(phase => phase.getAttribute("aria-checked") === "true")).toBe(true));
     expect(screen.getByLabelText("Script: Turn completed")).toHaveAttribute("aria-checked", "false");
   });
+  it("saves Partial delivery independently of progress and completion response phases", async () => {
+    const { api, store } = fixture();
+    render(<NotificationSettingsPage store={store} />);
+    const partial = await screen.findByRole("switch", { name: "Script: Partial" });
+    const progress = screen.getByRole("switch", { name: "Script: Turn progress" });
+    expect(partial).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByRole("combobox", { name: "Voice: Partial" })).toHaveTextContent("Off");
+    fireEvent.click(partial);
+    fireEvent.click(screen.getByRole("button", { name: "Save notifications" }));
+    await expectSaved();
+    expect(api.updateNotificationSettings).toHaveBeenLastCalledWith(expect.objectContaining({
+      delivery: scriptDelivery(["turn.completed", "turn.partial"]),
+      assistantResultPhases: [],
+    }));
+    expect(progress).toHaveAttribute("aria-checked", "false");
+  });
   it("saves selected response phases and disables them while saving", async () => {
     const { api, store } = fixture();
     let finishSave!: (settings: NotificationSettings) => void;
@@ -141,16 +157,16 @@ describe("notification settings", () => {
     render(<NotificationSettingsPage store={store} />);
     await screen.findByRole("group", { name: "Response text" });
     const final = screen.getByRole("checkbox", { name: "Final" }) as HTMLButtonElement;
-    const provisional = screen.getByRole("checkbox", { name: "Provisional" }) as HTMLButtonElement;
-    fireEvent.click(provisional);
+    const partial = screen.getByRole("checkbox", { name: "Partial" }) as HTMLButtonElement;
+    fireEvent.click(partial);
     fireEvent.click(screen.getByText("Save notifications"));
-    expect(api.updateNotificationSettings).toHaveBeenCalledWith(expect.objectContaining({ assistantResultPhases: ["provisional"] }));
+    expect(api.updateNotificationSettings).toHaveBeenCalledWith(expect.objectContaining({ assistantResultPhases: ["partial"] }));
     expect(final.disabled).toBe(true);
-    expect(provisional.disabled).toBe(true);
-    finishSave({ ...initial, assistantResultPhases: ["provisional"], revision: 1 });
+    expect(partial.disabled).toBe(true);
+    finishSave({ ...initial, assistantResultPhases: ["partial"], revision: 1 });
     await expectSaved();
-    expect(provisional.disabled).toBe(false);
-    expect(provisional.getAttribute("aria-checked")).toBe("true");
+    expect(partial.disabled).toBe(false);
+    expect(partial.getAttribute("aria-checked")).toBe("true");
     expect(final.getAttribute("aria-checked")).toBe("false");
   });
   it("keeps interaction and nonblocking question events opt-in and saves their selections", async () => {

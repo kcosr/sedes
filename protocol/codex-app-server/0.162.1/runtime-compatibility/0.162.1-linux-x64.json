@@ -1,0 +1,54 @@
+{
+  "release": "0.162.1",
+  "parserRelease": "0.162.1",
+  "platform": "linux/x64",
+  "executableSha256": "628e35487d888a28f0427fc37501da529dd3d81fcbad7a2c3421c1e8670d92e1",
+  "reviewedOfficialArtifactInventories": {
+    "stable/typescript": 743,
+    "stable/json-schema": 317,
+    "experimental/typescript": 888,
+    "experimental/json-schema": 447
+  },
+  "schemaDeltaVerified": true,
+  "experimentalGateRejected": true,
+  "notificationsValidated": [
+    "thread/started",
+    "thread/settings/updated",
+    "turn/started",
+    "turn/completed",
+    "item/started",
+    "item/completed",
+    "item/agentMessage/delta"
+  ],
+  "methodsValidated": [
+    "model/list",
+    "thread/fork",
+    "thread/items/list",
+    "thread/list",
+    "thread/read",
+    "thread/resume",
+    "thread/settings/update",
+    "thread/start",
+    "thread/turns/list",
+    "turn/start"
+  ],
+  "modelIds": [
+    "gpt-6.1-sol",
+    "gpt-6-astra",
+    "gpt-6-sol",
+    "gpt-6-luna",
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
+    "gpt-daybreak-blue-latest",
+    "gpt-daybreak-red-latest",
+    "gpt-5.5",
+    "codex-auto-review"
+  ],
+  "deterministicProviderRequests": 1,
+  "persistentTurnResumedAfterRestart": true,
+  "executionSettingsPreservedOnResumeAndFork": true,
+  "forkHistoryPreserved": true,
+  "rootTurnLineagePreserved": true,
+  "liveProviderVerified": false
+}

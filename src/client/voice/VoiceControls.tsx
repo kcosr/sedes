@@ -327,7 +327,7 @@ function cardReadiness(readiness: string): string {
   return readiness === "needsResume" ? "Voice needs to resume" : voiceReadiness(readiness);
 }
 /** Native `active.eventKind` values that speak; explicit recording ("manual") and unknown kinds get no label. */
-const eventLabels = new Map([["turn.completed", "Response"], ["turn.progress", "Progress"], ["turn.failed", "Turn failed"], ["turn.interrupted", "Interrupted"],
+const eventLabels = new Map([["turn.completed", "Response"], ["turn.progress", "Progress"], ["turn.partial", "Partial"], ["turn.failed", "Turn failed"], ["turn.interrupted", "Interrupted"],
   ["thread.woke", "Snooze wake"], ["automation.started", "Automation"], ["automation.failed", "Automation"], ["approval.requested", "Approval"],
   ["input.requested", "Input request"], ["question.requested", "Question"], ["replay", "Replay"]]);
 function phaseLabel(phase: string): string {

@@ -118,6 +118,7 @@ import {
   type CodexServerRequestMethod,
 } from "../../src/server/provider-protocol/bindings/codex-app-server/codex-app-server-binding.js";
 import { createInMemoryOutputArtifactPublisher } from "../helpers/output-artifact-publisher.js";
+import * as codexBindingModule from "../../src/server/provider-protocol/bindings/codex-app-server/codex-app-server-binding.js";
 
 const scope = { tenantId: "tenant-1", principalId: "principal-1" };
 const instance: AgentBackendInstance = {
@@ -127,7 +128,7 @@ const instance: AgentBackendInstance = {
   label: "Codex",
   enabled: true,
   configurationRevision: 1,
-  protocolRelease: "0.160.0",
+  protocolRelease: "0.162.1",
 };
 const toolProvenanceKey = new Uint8Array(32).fill(0x43);
 const agentToolSourceCapability =
@@ -219,6 +220,7 @@ function nativeTurn(index: number) {
         ],
       },
     ],
+    rootTurnId: null,
     itemsView: "full" as const,
     status: "completed" as const,
     error: null,
@@ -296,7 +298,7 @@ function nativeThread(
       status: { type: "idle" },
       path: "/private/rollout.jsonl",
       cwd: "/workspace",
-      cliVersion: "0.160.0",
+      cliVersion: "0.162.1",
       source: "appServer",
       canAcceptDirectInput: true,
       threadSource: null,
@@ -554,9 +556,11 @@ function nativeModel(overrides: Readonly<Record<string, unknown>> = {}) {
   };
 }
 
-function fastModeFeatures(enabled: boolean) {
+function fastModeFeatures(enabled: boolean, ultrafastEnabled = enabled) {
   return {
     data: [{
+      name: "ultrafast_mode", stage: "stable", displayName: "Ultrafast mode", description: null, announcement: null, enabled: ultrafastEnabled, defaultEnabled: false,
+    }, {
       name: "fast_mode",
       stage: "stable",
       displayName: "Fast mode",
@@ -807,8 +811,8 @@ function executionSettingsProvider(
 ): CodexExecutionSettingsProvider {
   const desiredSettings =
     overrides.desiredSettings ?? (() => executionSettingsTuple());
-  const resolveFastModeDisabled =
-    overrides.resolveFastModeDisabled ??
+  const resolveUnavailableServiceTier =
+    overrides.resolveUnavailableServiceTier ??
     ((providerScope, input) => {
       const desired = desiredSettings(providerScope, input.applicationThreadId);
       return desired && desired.serviceTier !== "standard"
@@ -830,7 +834,7 @@ function executionSettingsProvider(
     markEffectiveUnknown: () => undefined,
     ...overrides,
     desiredSettings,
-    resolveFastModeDisabled,
+    resolveUnavailableServiceTier,
   };
 }
 
@@ -1042,7 +1046,229 @@ async function establish(
   });
 }
 
+async function startSubagentParentTurn(harness: RpcHarness, handle: ConversationHandle): Promise<void> {
+  harness.enqueue("turn/start", { turn: { ...nativeTurn(1), items: [], itemsView: "notLoaded",
+    status: "inProgress", completedAt: null } });
+  await handle.submit({ applicationOperationId: "subagent-parent-start", source: { kind: "user" },
+    mutationId: "subagent-parent-start", reconciliationToken: "subagent-parent-start-token",
+    taskContexts: [], contextExcerpts: [], attachments: [], text: "continue" });
+}
+
 describe("CodexConversationBackendDriver", () => {
+  it.each([
+    { model: "gpt-5.6", reasoningEffort: "low", suffix: "" },
+    { model: "gpt-5.6", reasoningEffort: "ultra", suffix: " · gpt-5.6 · ultra" },
+    { model: "gpt-6.1-sol", reasoningEffort: "low", suffix: " · gpt-6.1-sol · low" },
+  ])("compares live subagent creation settings with the confirmed spawning tuple: $model/$reasoningEffort", async ({ model, reasoningEffort, suffix }) => {
+    const harness = new RpcHarness();
+    const handle = await attachIdle(harness);
+    await establish(harness, handle);
+    await startSubagentParentTurn(harness, handle);
+    harness.notify("item/completed", { threadId: "thread-1", turnId: "turn-1", completedAtMs: 1_700_000_002_000,
+      item: { type: "subAgentActivity", id: "child-started", kind: "started",
+        agentThreadId: "private-child", agentPath: "/root/reviewer", model, reasoningEffort } });
+    const marker = Object.values((await handle.readCurrent()).snapshot.itemsById)
+      .find(item => item.semanticKind === "collaboration");
+    expect(marker).toMatchObject({ summary: { text: `Started \`/root/reviewer\`${suffix}` } });
+    expect(JSON.stringify(marker)).not.toContain("private-child");
+    harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+    await handle.close();
+  });
+
+  it("retains the creation comparison after the spawning agent changes reasoning", async () => {
+    const harness = new RpcHarness();
+    const handle = await attachIdle(harness);
+    await establish(harness, handle);
+    await startSubagentParentTurn(harness, handle);
+    const child = { type: "subAgentActivity", id: "child-started", kind: "started",
+      agentThreadId: "private-child", agentPath: "/root/reviewer", model: "gpt-5.6", reasoningEffort: "low" };
+    harness.notify("item/completed", { threadId: "thread-1", turnId: "turn-1", item: child, completedAtMs: 1_700_000_002_000 });
+    await new Promise<void>(resolve => setImmediate(resolve));
+    harness.notify("thread/settings/updated", { threadId: "thread-1", threadSettings: {
+      cwd: workspace.canonicalPath, approvalPolicy: "never", approvalsReviewer: "user",
+      sandboxPolicy: { type: "readOnly", networkAccess: false }, activePermissionProfile: null,
+      model: "gpt-5.6", modelProvider: "openai", serviceTier: "default", effort: "high", summary: null,
+      collaborationMode: { mode: "default", settings: {
+        model: "gpt-5.6", reasoning_effort: "high", developer_instructions: null,
+      } }, multiAgentMode: "explicitRequestOnly", personality: null,
+    } });
+    await new Promise<void>(resolve => setImmediate(resolve));
+    harness.notify("item/completed", { threadId: "thread-1", turnId: "turn-1", completedAtMs: 1_700_000_003_000,
+      item: { ...child, id: "child-completed", kind: "completed" } });
+    const markers = Object.values((await handle.readCurrent()).snapshot.itemsById)
+      .filter(item => item.semanticKind === "collaboration");
+    expect(markers.map(item => item.summary?.text)).toEqual([
+      "Started `/root/reviewer`", "Completed `/root/reviewer`",
+    ]);
+    harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+    await handle.close();
+  });
+
+  it.each([
+    { effort: "low", approvalPolicy: "never", suffix: "" },
+    { effort: "low", approvalPolicy: "on-request", suffix: "" },
+    { effort: "high", approvalPolicy: "never", suffix: " · gpt-5.6 · high" },
+  ])("uses running-turn evidence after a midturn settings observation: $effort/$approvalPolicy", async ({ effort, approvalPolicy, suffix }) => {
+    const harness = new RpcHarness();
+    const handle = await attachIdle(harness);
+    await establish(harness, handle);
+    await startSubagentParentTurn(harness, handle);
+    harness.notify("thread/settings/updated", { threadId: "thread-1", threadSettings: {
+      cwd: workspace.canonicalPath, approvalPolicy, approvalsReviewer: "user",
+      sandboxPolicy: { type: "readOnly", networkAccess: false }, activePermissionProfile: null,
+      model: "gpt-5.6", modelProvider: "openai", serviceTier: "default", effort, summary: null,
+      collaborationMode: { mode: "default", settings: {
+        model: "gpt-5.6", reasoning_effort: effort, developer_instructions: null,
+      } }, multiAgentMode: "explicitRequestOnly", personality: null,
+    } });
+    await new Promise<void>(resolve => setImmediate(resolve));
+    harness.notify("item/completed", { threadId: "thread-1", turnId: "turn-1", completedAtMs: 1_700_000_002_000,
+      item: { type: "subAgentActivity", id: "child-after-settings", kind: "started",
+        agentThreadId: "private-child", agentPath: "/root/reviewer", model: "gpt-5.6", reasoningEffort: effort } });
+    const marker = Object.values((await handle.readCurrent()).snapshot.itemsById)
+      .find(item => item.semanticKind === "collaboration");
+    expect(marker).toMatchObject({ summary: { text: `Started \`/root/reviewer\`${suffix}` } });
+    harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+    await handle.close();
+  });
+
+  it("keeps subagent settings visible while a changed spawning tuple awaits its start receipt", async () => {
+    const harness = new RpcHarness();
+    const settings = executionSettingsProvider({ freezeOperationSnapshot: () => ({
+      settings: executionSettingsTuple({ reasoningEffort: "high" }),
+    }) });
+    const handle = await attachIdle(harness, driver(harness, connection, undefined, undefined, settings));
+    await establish(harness, handle);
+    const startedTurn = { ...nativeTurn(1), items: [], itemsView: "notLoaded",
+      status: "inProgress", completedAt: null };
+    harness.enqueue("turn/start", async () => {
+      harness.notify("turn/started", { threadId: "thread-1", turn: startedTurn });
+      await new Promise<void>(resolve => setImmediate(resolve));
+      harness.notify("item/completed", { threadId: "thread-1", turnId: "turn-1", completedAtMs: 1_700_000_002_000,
+        item: { type: "subAgentActivity", id: "child-before-receipt", kind: "started",
+          agentThreadId: "private-child", agentPath: "/root/reviewer", model: "gpt-5.6", reasoningEffort: "low" } });
+      await new Promise<void>(resolve => setImmediate(resolve));
+      return { turn: startedTurn };
+    });
+    await handle.submit({ applicationOperationId: "subagent-tuple-change", source: { kind: "user" },
+      mutationId: "subagent-tuple-change", reconciliationToken: "subagent-tuple-comparison-token",
+      taskContexts: [], contextExcerpts: [], attachments: [], text: "continue" });
+    const marker = Object.values((await handle.readCurrent()).snapshot.itemsById)
+      .find(item => item.semanticKind === "collaboration");
+    expect(marker).toMatchObject({ summary: { text: "Started `/root/reviewer` · gpt-5.6 · low" } });
+    harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+    await handle.close();
+  });
+
+  it("shows historical child settings when matching current parent settings lack creation evidence", async () => {
+    const harness = new RpcHarness();
+    const handle = await attachIdle(harness);
+    const history = nativeThread({ turns: [{ ...nativeTurn(1), items: [{
+      type: "subAgentActivity", id: "historic-child", kind: "started",
+      agentThreadId: "private-child", agentPath: "/root/reviewer", model: "gpt-5.6", reasoningEffort: "low",
+    }] }] });
+    const established = await establish(harness, handle, history);
+    expect(Object.values(established.snapshot.itemsById)).toEqual([
+      expect.objectContaining({ summary: { text: "Started `/root/reviewer` · gpt-5.6 · low" } }),
+    ]);
+    harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+    await handle.close();
+  });
+
+  it.each([false, true])("keeps imported active turn settings unknown for a child (already in history: %s)", async alreadyPresent => {
+    const harness = new RpcHarness();
+    const handle = await attachIdle(harness);
+    const item = { type: "subAgentActivity", id: "historic-child", kind: "started",
+      agentThreadId: "private-child", agentPath: "/root/reviewer", model: "gpt-5.6", reasoningEffort: "low" };
+    await establish(harness, handle, nativeThread({ status: { type: "active", activeFlags: [] },
+      turns: [{ ...nativeTurn(1), status: "inProgress", completedAt: null, items: alreadyPresent ? [item] : [] }] }));
+    harness.notify("item/completed", { threadId: "thread-1", turnId: "turn-1", item,
+      completedAtMs: 1_700_000_002_000 });
+    expect(Object.values((await handle.readCurrent()).snapshot.itemsById)).toEqual([
+      expect.objectContaining({ summary: { text: "Started `/root/reviewer` · gpt-5.6 · low" } }),
+    ]);
+    harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+    await handle.close();
+  });
+
+  it("does not retain spawning-turn authority across a generation change", async () => {
+    const harness = new RpcHarness();
+    const handle = await attachIdle(harness);
+    await establish(harness, handle);
+    await startSubagentParentTurn(harness, handle);
+    harness.lifecycle("unavailable", 1);
+    harness.lifecycle("ready", 2);
+    await establish(harness, handle, nativeThread({ status: { type: "active", activeFlags: [] },
+      turns: [{ ...nativeTurn(1), status: "inProgress", completedAt: null, items: [] }] }));
+    harness.notify("item/completed", { threadId: "thread-1", turnId: "turn-1", completedAtMs: 1_700_000_002_000,
+      item: { type: "subAgentActivity", id: "child-new-generation", kind: "started",
+        agentThreadId: "private-child", agentPath: "/root/reviewer", model: "gpt-5.6", reasoningEffort: "low" } });
+    expect(Object.values((await handle.readCurrent()).snapshot.itemsById)).toEqual([
+      expect.objectContaining({ summary: { text: "Started `/root/reviewer` · gpt-5.6 · low" } }),
+    ]);
+    harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+    await handle.close();
+  });
+
+  it("does not reuse spawning-turn settings for a later externally started turn", async () => {
+    const harness = new RpcHarness();
+    const handle = await attachIdle(harness);
+    await establish(harness, handle);
+    await startSubagentParentTurn(harness, handle);
+    harness.notify("turn/completed", { threadId: "thread-1", turn: { ...nativeTurn(1), items: [] } });
+    await new Promise<void>(resolve => setImmediate(resolve));
+    harness.notify("turn/started", { threadId: "thread-1", turn: { ...nativeTurn(2), items: [],
+      status: "inProgress", completedAt: null } });
+    await new Promise<void>(resolve => setImmediate(resolve));
+    harness.notify("item/completed", { threadId: "thread-1", turnId: "turn-2", completedAtMs: 1_700_000_003_000,
+      item: { type: "subAgentActivity", id: "external-turn-child", kind: "started",
+        agentThreadId: "private-child", agentPath: "/root/reviewer", model: "gpt-5.6", reasoningEffort: "low" } });
+    const marker = Object.values((await handle.readCurrent()).snapshot.itemsById)
+      .find(item => item.semanticKind === "collaboration");
+    expect(marker).toMatchObject({ summary: { text: "Started `/root/reviewer` · gpt-5.6 · low" } });
+    harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+    await handle.close();
+  });
+
+  it("does not extra-parse foreign, large unrelated, or cached subagent notifications", async () => {
+    const harness = new RpcHarness();
+    const target = driver(harness);
+    const handle = await attachIdle(harness, target);
+    const other = await target.attach(attachInput(connection, "other-thread"));
+    await establish(harness, handle, nativeThread({ status: { type: "active", activeFlags: [] },
+      turns: [{ ...nativeTurn(1), status: "inProgress", completedAt: null, items: [] }] }));
+    await establish(harness, other, nativeThread({ id: "other-thread" }));
+    const parse = vi.spyOn(codexBindingModule, "assertCodexAttestedServerNotificationParams");
+    const item = { type: "agentMessage", id: "large-message", text: "x".repeat(128 * 1_024),
+      phase: "commentary", memoryCitation: null, delivery: null, questions: null };
+    const countItemParses = () => parse.mock.calls.filter(([method]) => method === "item/completed").length;
+    try {
+      harness.notify("item/completed", { threadId: "foreign-thread", turnId: "turn-1", item,
+        completedAtMs: 1_700_000_002_000 });
+      expect(countItemParses()).toBe(0);
+      harness.notify("item/completed", { threadId: "thread-1", turnId: "turn-1", item,
+        completedAtMs: 1_700_000_002_000 });
+      expect(countItemParses()).toBe(1);
+      await new Promise<void>(resolve => setImmediate(resolve));
+      parse.mockClear();
+      const child = { type: "subAgentActivity", id: "cached-child", kind: "started",
+        agentThreadId: "private-child", agentPath: "/root/reviewer", model: "gpt-5.6", reasoningEffort: "low" };
+      harness.notify("item/completed", { threadId: "thread-1", turnId: "turn-1", item: child,
+        completedAtMs: 1_700_000_003_000 });
+      expect(countItemParses()).toBe(2);
+      await new Promise<void>(resolve => setImmediate(resolve));
+      parse.mockClear();
+      harness.notify("item/completed", { threadId: "thread-1", turnId: "turn-1", item: child,
+        completedAtMs: 1_700_000_003_000 });
+      expect(countItemParses()).toBe(1);
+    } finally {
+      parse.mockRestore();
+      harness.enqueue("thread/unsubscribe", { status: "unsubscribed" }, { status: "unsubscribed" });
+      await handle.close();
+      await other.close();
+    }
+  });
+
   it("gracefully interrupts only the cached active turn during owned runtime Stop without rereading inventory", async () => {
     const harness = new RpcHarness();
     const ownership = new CodexConversationOwnershipRegistry();
@@ -1240,7 +1466,7 @@ describe("CodexConversationBackendDriver", () => {
     ).resolves.toEqual(expect.objectContaining({ models: expect.any(Array) }));
   });
 
-  it("normalizes Fast and Ultrafast from the Codex 0.160 service-tier catalog", async () => {
+  it("normalizes Fast and Ultrafast from the Codex service-tier catalog", async () => {
     const harness = new RpcHarness();
     harness.enqueue("model/list", {
       data: [
@@ -4218,7 +4444,7 @@ describe("CodexConversationBackendDriver", () => {
     const ultrafastSettings = executionSettingsTuple({
       serviceTier: "ultrafast",
     });
-    const resolveFastModeDisabled = vi.fn(() => ultrafastSettings);
+    const resolveUnavailableServiceTier = vi.fn(() => ultrafastSettings);
     const target = driver(
       harness,
       connection,
@@ -4227,7 +4453,7 @@ describe("CodexConversationBackendDriver", () => {
       executionSettingsProvider({
         desiredSettings: () => ultrafastSettings,
         freezeOperationSnapshot: () => ({ settings: ultrafastSettings }),
-        resolveFastModeDisabled,
+        resolveUnavailableServiceTier,
       }),
     );
     harness.enqueue("thread/read", { thread: paginatedThread() });
@@ -4295,6 +4521,14 @@ describe("CodexConversationBackendDriver", () => {
           announcement: null,
           enabled: true,
           defaultEnabled: false,
+        }, {
+          name: "ultrafast_mode",
+          stage: "stable",
+          displayName: "Ultrafast mode",
+          description: null,
+          announcement: null,
+          enabled: true,
+          defaultEnabled: false,
         },
       ],
       nextCursor: null,
@@ -4316,7 +4550,7 @@ describe("CodexConversationBackendDriver", () => {
     expect(
       harness.calls.find(({ method }) => method === "thread/fork")?.params,
     ).toMatchObject({ serviceTier: "ultrafast" });
-    expect(resolveFastModeDisabled).not.toHaveBeenCalled();
+    expect(resolveUnavailableServiceTier).not.toHaveBeenCalled();
   });
 
   it.each(["interrupted", "inProgress"] as const)(
@@ -9300,6 +9534,7 @@ describe("CodexConversationHandle", () => {
       turn: {
         ...nativeTurn(1),
         items: [],
+        rootTurnId: null,
         itemsView: "notLoaded",
         status: "inProgress",
         completedAt: null,
@@ -9363,6 +9598,14 @@ describe("CodexConversationHandle", () => {
           announcement: null,
           enabled: true,
           defaultEnabled: false,
+        }, {
+          name: "ultrafast_mode",
+          stage: "stable",
+          displayName: "Ultrafast mode",
+          description: null,
+          announcement: null,
+          enabled: true,
+          defaultEnabled: false,
         },
       ],
       nextCursor: null,
@@ -9402,6 +9645,7 @@ describe("CodexConversationHandle", () => {
       turn: {
         ...nativeTurn(1),
         items: [],
+        rootTurnId: null,
         itemsView: "notLoaded",
         status: "inProgress",
         completedAt: null,
@@ -9446,14 +9690,14 @@ describe("CodexConversationHandle", () => {
           description: id,
         })),
       };
-      const resolveFastModeDisabled = vi.fn(() => ({
+      const resolveUnavailableServiceTier = vi.fn(() => ({
         ...ultrafastSettings,
         serviceTier: "standard" as const,
       }));
       const settings = executionSettingsProvider({
         desiredSettings: () => ultrafastSettings,
         freezeOperationSnapshot: () => ({ settings: ultrafastSettings }),
-        resolveFastModeDisabled,
+        resolveUnavailableServiceTier,
       });
       const handle = await attachIdle(
         harness,
@@ -9468,14 +9712,14 @@ describe("CodexConversationHandle", () => {
       harness.enqueue("thread/read", { thread: nativeThread() });
       harness.enqueue("thread/resume", resumeResult());
       harness.enqueue("experimentalFeature/list", {
-        data: [fastModeFeature],
+        data: [fastModeFeature, { ...fastModeFeature, name: "ultrafast_mode" }],
         nextCursor: null,
       });
       harness.enqueue("thread/settings/update", {});
       await handle.establishProjection({
         signal: new AbortController().signal,
       });
-      return { harness, handle, resolveFastModeDisabled };
+      return { harness, handle, resolveUnavailableServiceTier };
     };
     const submitInput = (id: string) => ({
       applicationOperationId: `${id}-submit`,
@@ -9505,6 +9749,7 @@ describe("CodexConversationHandle", () => {
       turn: {
         ...nativeTurn(1),
         items: [],
+        rootTurnId: null,
         itemsView: "notLoaded",
         status: "inProgress",
         completedAt: null,
@@ -9516,14 +9761,14 @@ describe("CodexConversationHandle", () => {
       ["thread/settings/update", "ultrafast"],
       ["turn/start", "ultrafast"],
     ]);
-    expect(offered.resolveFastModeDisabled).not.toHaveBeenCalled();
+    expect(offered.resolveUnavailableServiceTier).not.toHaveBeenCalled();
     offered.harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
     await offered.handle.close();
 
     // A catalog that withdrew Ultrafast resolves the thread to Standard
     // before resume, so no unsupported tier is ever written natively.
     const withdrawn = await establishUltrafast(["priority"]);
-    expect(withdrawn.resolveFastModeDisabled).toHaveBeenCalled();
+    expect(withdrawn.resolveUnavailableServiceTier).toHaveBeenCalled();
     expect(nativeTiers(withdrawn.harness)).toEqual([
       ["thread/resume", "default"],
     ]);
@@ -9538,6 +9783,40 @@ describe("CodexConversationHandle", () => {
     ).toBe(false);
     withdrawn.harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
     await withdrawn.handle.close();
+  });
+
+  it.each([
+    [false, false, "fast"], [false, true, "fast"], [true, false, "fast"], [true, true, "fast"],
+    [false, false, "ultrafast"], [false, true, "ultrafast"], [true, false, "ultrafast"], [true, true, "ultrafast"],
+  ] as const)("reconciles and submits saved %s/%s flags with %s speed independently", async (fast, ultrafast, selection) => {
+    const harness = new RpcHarness();
+    harness.defaultModelOverrides = { serviceTiers: ["priority", "ultrafast"].map(id => ({ id, name: id, description: id })) };
+    let desired = executionSettingsTuple({ serviceTier: selection });
+    const resolveUnavailableServiceTier = vi.fn<CodexExecutionSettingsProvider["resolveUnavailableServiceTier"]>((_scope, input) => {
+      if (input.unavailableServiceTiers.includes(desired.serviceTier)) desired = { ...desired, serviceTier: "standard" };
+      return desired;
+    });
+    const settings = executionSettingsProvider({ desiredSettings: () => desired,
+      freezeOperationSnapshot: () => ({ settings: desired }), resolveUnavailableServiceTier });
+    const handle = await attachIdle(harness, driver(harness, connection, new CodexConversationOwnershipRegistry(), { type: "catalog" }, settings));
+    harness.enqueue("thread/read", { thread: nativeThread() });
+    harness.enqueue("thread/resume", resumeResult());
+    harness.enqueue("experimentalFeature/list", fastModeFeatures(fast, ultrafast));
+    harness.enqueue("thread/settings/update", {});
+    try {
+      await handle.establishProjection({ signal: new AbortController().signal });
+      const allowed = selection === "fast" ? fast : ultrafast;
+      expect(desired.serviceTier).toBe(allowed ? selection : "standard");
+      expect(resolveUnavailableServiceTier).toHaveBeenCalledTimes(allowed ? 0 : 1);
+      const replay = harness.calls.filter(({ method }) => method === "thread/settings/update");
+      expect(replay).toEqual(allowed ? [{ method: "thread/settings/update", params: { threadId: "thread-1", serviceTier: selection === "fast" ? "priority" : "ultrafast" } }] : []);
+      harness.enqueue("turn/start", { turn: { ...nativeTurn(1), items: [], itemsView: "notLoaded", status: "inProgress", completedAt: null } });
+      await handle.submit({ applicationOperationId: "speed-policy-submit", source: { kind: "user" }, mutationId: "speed-policy-submit", reconciliationToken: "speed-policy-token", taskContexts: [], contextExcerpts: [], attachments: [], text: "continue" });
+      expect(harness.calls.find(({ method }) => method === "turn/start")?.params).toMatchObject({ serviceTier: allowed ? selection === "fast" ? "priority" : "ultrafast" : "default" });
+    } finally {
+      harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+      await handle.close();
+    }
   });
 
   it("does not replay a durable Fast tier when the loaded thread disables fast_mode", async () => {
@@ -9578,6 +9857,14 @@ describe("CodexConversationHandle", () => {
           announcement: null,
           enabled: false,
           defaultEnabled: true,
+        }, {
+          name: "ultrafast_mode",
+          stage: "stable",
+          displayName: "Ultrafast mode",
+          description: null,
+          announcement: null,
+          enabled: false,
+          defaultEnabled: true,
         },
       ],
       nextCursor: null,
@@ -9605,8 +9892,8 @@ describe("CodexConversationHandle", () => {
       serviceTiers: [{ id: "priority", name: "Fast", description: "Fast" }],
     };
     let desired = executionSettingsTuple({ serviceTier: "fast" });
-    const resolveFastModeDisabled = vi.fn(() => {
-      if (resolveFastModeDisabled.mock.calls.length === 1) {
+    const resolveUnavailableServiceTier = vi.fn(() => {
+      if (resolveUnavailableServiceTier.mock.calls.length === 1) {
         throw new Error("simulated settings revision conflict");
       }
       desired = { ...desired, serviceTier: "standard" };
@@ -9631,7 +9918,7 @@ describe("CodexConversationHandle", () => {
         { type: "catalog" },
         executionSettingsProvider({
           desiredSettings: () => desired,
-          resolveFastModeDisabled,
+          resolveUnavailableServiceTier,
         }),
         undefined,
         managedTui,
@@ -9657,6 +9944,14 @@ describe("CodexConversationHandle", () => {
           announcement: null,
           enabled: false,
           defaultEnabled: true,
+        }, {
+          name: "ultrafast_mode",
+          stage: "stable",
+          displayName: "Ultrafast mode",
+          description: null,
+          announcement: null,
+          enabled: false,
+          defaultEnabled: true,
         },
       ],
       nextCursor: null,
@@ -9677,7 +9972,7 @@ describe("CodexConversationHandle", () => {
       "application-profile-1",
       expect.objectContaining({ serviceTier: "standard" }),
     );
-    expect(resolveFastModeDisabled).toHaveBeenCalledTimes(2);
+    expect(resolveUnavailableServiceTier).toHaveBeenCalledTimes(2);
     expect(syncSettings).toHaveBeenLastCalledWith(
       scope,
       "application-profile-1",
@@ -9709,7 +10004,7 @@ describe("CodexConversationHandle", () => {
     }) => {
       const harness = new RpcHarness();
       input.prepare(harness);
-      const resolveFastModeDisabled = vi.fn(() => ({
+      const resolveUnavailableServiceTier = vi.fn(() => ({
         ...input.desired(),
         serviceTier: "standard" as const,
       }));
@@ -9723,7 +10018,7 @@ describe("CodexConversationHandle", () => {
           { type: "catalog" },
           executionSettingsProvider({
             desiredSettings: () => input.desired(),
-            resolveFastModeDisabled,
+            resolveUnavailableServiceTier,
             observeEffective,
           }),
         ),
@@ -9734,7 +10029,7 @@ describe("CodexConversationHandle", () => {
         ...(input.resumedModel ? { model: input.resumedModel } : {}),
       });
       harness.enqueue("experimentalFeature/list", {
-        data: [fastModeFeature],
+        data: [fastModeFeature, { ...fastModeFeature, name: "ultrafast_mode" }],
         nextCursor: null,
       });
       harness.enqueue("thread/settings/update", {});
@@ -9757,7 +10052,7 @@ describe("CodexConversationHandle", () => {
         .map(([, observation]) => observation.initializeDesired)
         .filter(Boolean)
         .at(-1);
-      return { writes, resolveFastModeDisabled, imported };
+      return { writes, resolveUnavailableServiceTier, imported };
     };
     const ultrafast = executionSettingsTuple({ serviceTier: "ultrafast" });
 
@@ -9768,7 +10063,7 @@ describe("CodexConversationHandle", () => {
         harness.enqueue("model/list", new Error("catalog unavailable")),
     });
     expect(unreadable.writes).toEqual([["thread/resume", undefined]]);
-    expect(unreadable.resolveFastModeDisabled).not.toHaveBeenCalled();
+    expect(unreadable.resolveUnavailableServiceTier).not.toHaveBeenCalled();
     expect(unreadable.imported).toMatchObject({
       model: "gpt-5.6",
       serviceTier: "ultrafast",
@@ -9797,7 +10092,7 @@ describe("CodexConversationHandle", () => {
       },
     });
     expect(otherModel.writes).toEqual([["thread/resume", "ultrafast"]]);
-    expect(otherModel.resolveFastModeDisabled).not.toHaveBeenCalled();
+    expect(otherModel.resolveUnavailableServiceTier).not.toHaveBeenCalled();
     // Importing the resumed model is a model change: its missing tier is
     // retained as Standard, never kept as Ultrafast.
     expect(otherModel.imported).toMatchObject({
@@ -9817,7 +10112,7 @@ describe("CodexConversationHandle", () => {
         });
       },
     });
-    expect(superseded.resolveFastModeDisabled).not.toHaveBeenCalled();
+    expect(superseded.resolveUnavailableServiceTier).not.toHaveBeenCalled();
     expect(superseded.writes).toEqual([
       ["thread/resume", "priority"],
       ["thread/settings/update", "priority"],
@@ -9833,7 +10128,7 @@ describe("CodexConversationHandle", () => {
       ],
     };
     let desired = executionSettingsTuple({ serviceTier: "ultrafast" });
-    const resolveFastModeDisabled = vi.fn(() => {
+    const resolveUnavailableServiceTier = vi.fn(() => {
       desired = { ...desired, serviceTier: "standard" };
       return desired;
     });
@@ -9852,7 +10147,7 @@ describe("CodexConversationHandle", () => {
         { type: "catalog" },
         executionSettingsProvider({
           desiredSettings: () => desired,
-          resolveFastModeDisabled,
+          resolveUnavailableServiceTier,
         }),
         undefined,
         managedTui,
@@ -9867,7 +10162,7 @@ describe("CodexConversationHandle", () => {
     await handle.establishProjection({
       signal: new AbortController().signal,
     });
-    expect(resolveFastModeDisabled).not.toHaveBeenCalled();
+    expect(resolveUnavailableServiceTier).not.toHaveBeenCalled();
 
     harness.defaultModelOverrides = {
       serviceTiers: [{ id: "priority", name: "Fast", description: "Fast" }],
@@ -9878,6 +10173,14 @@ describe("CodexConversationHandle", () => {
           name: "fast_mode",
           stage: "stable",
           displayName: "Fast mode",
+          description: null,
+          announcement: null,
+          enabled: true,
+          defaultEnabled: true,
+        }, {
+          name: "ultrafast_mode",
+          stage: "stable",
+          displayName: "Ultrafast mode",
           description: null,
           announcement: null,
           enabled: true,
@@ -9897,7 +10200,7 @@ describe("CodexConversationHandle", () => {
         ).toEqual({ threadId: "thread-1", serviceTier: "default" }),
       { timeout: 1_000 },
     );
-    expect(resolveFastModeDisabled).toHaveBeenCalledOnce();
+    expect(resolveUnavailableServiceTier).toHaveBeenCalledOnce();
     expect(syncSettings).toHaveBeenCalledWith(
       scope,
       "application-profile-1",
@@ -9923,6 +10226,14 @@ describe("CodexConversationHandle", () => {
           name: "fast_mode",
           stage: "stable",
           displayName: "Fast mode",
+          description: null,
+          announcement: null,
+          enabled: true,
+          defaultEnabled: true,
+        }, {
+          name: "ultrafast_mode",
+          stage: "stable",
+          displayName: "Ultrafast mode",
           description: null,
           announcement: null,
           enabled: true,
@@ -10066,7 +10377,7 @@ describe("CodexConversationHandle", () => {
         { type: "catalog" },
         executionSettingsProvider({
           desiredSettings: () => desired,
-          resolveFastModeDisabled: () => {
+          resolveUnavailableServiceTier: () => {
             desired = { ...desired, serviceTier: "standard" };
             return desired;
           },
@@ -10097,6 +10408,14 @@ describe("CodexConversationHandle", () => {
             announcement: null,
             enabled: false,
             defaultEnabled: true,
+          }, {
+            name: "ultrafast_mode",
+            stage: "stable",
+            displayName: "Ultrafast mode",
+            description: null,
+            announcement: null,
+            enabled: false,
+            defaultEnabled: true,
           },
         ],
         nextCursor: null,
@@ -10115,6 +10434,14 @@ describe("CodexConversationHandle", () => {
           name: "fast_mode",
           stage: "stable",
           displayName: "Fast mode",
+          description: null,
+          announcement: null,
+          enabled: true,
+          defaultEnabled: false,
+        }, {
+          name: "ultrafast_mode",
+          stage: "stable",
+          displayName: "Ultrafast mode",
           description: null,
           announcement: null,
           enabled: true,
@@ -10183,7 +10510,7 @@ describe("CodexConversationHandle", () => {
         { type: "catalog" },
         executionSettingsProvider({
           desiredSettings: () => desired,
-          resolveFastModeDisabled: () => {
+          resolveUnavailableServiceTier: () => {
             desired = { ...desired, serviceTier: "standard" };
             return desired;
           },
@@ -10212,6 +10539,14 @@ describe("CodexConversationHandle", () => {
             name: "fast_mode",
             stage: "stable",
             displayName: "Fast mode",
+            description: null,
+            announcement: null,
+            enabled: false,
+            defaultEnabled: true,
+          }, {
+            name: "ultrafast_mode",
+            stage: "stable",
+            displayName: "Ultrafast mode",
             description: null,
             announcement: null,
             enabled: false,
@@ -10264,6 +10599,14 @@ describe("CodexConversationHandle", () => {
           name: "fast_mode",
           stage: "stable",
           displayName: "Fast mode",
+          description: null,
+          announcement: null,
+          enabled: true,
+          defaultEnabled: false,
+        }, {
+          name: "ultrafast_mode",
+          stage: "stable",
+          displayName: "Ultrafast mode",
           description: null,
           announcement: null,
           enabled: true,
@@ -11203,7 +11546,7 @@ describe("CodexConversationHandle", () => {
     await handle.close();
   });
 
-  it("projects stable turn, item, and delta notifications without duplicate authoritative state", async () => {
+  it.each([["commentary", "provisional"], ["partial_answer", "partial"]] as const)("projects stable %s turn, item, and delta notifications without duplicate authoritative state", async (phase, responsePhase) => {
     const harness = new RpcHarness();
     const handle = await attachIdle(harness);
     const established = await establish(harness, handle);
@@ -11222,7 +11565,7 @@ describe("CodexConversationHandle", () => {
       type: "agentMessage" as const,
       id: "agent-1",
       text: "hello",
-      phase: "commentary" as const,
+      phase,
       memoryCitation: null,
       delivery: null,
       questions: null,
@@ -11301,7 +11644,7 @@ describe("CodexConversationHandle", () => {
         event.item.semanticKind === "assistant_message",
     );
     expect(assistantLifecycle.filter(event => "liveProgress" in event && event.liveProgress)).toEqual([
-      expect.objectContaining({ type: "item_completed", item: expect.objectContaining({ responsePhase: "provisional" }) }),
+      expect.objectContaining({ type: "item_completed", item: expect.objectContaining({ responsePhase }) }),
     ]);
     expect(assistantLifecycle).toEqual([
       expect.objectContaining({
@@ -11724,6 +12067,7 @@ describe("CodexConversationHandle", () => {
         status: "completed",
         completedAt: 1_700_000_003,
         items: [completedImage],
+        rootTurnId: null,
         itemsView: "summary",
       },
     });
@@ -12005,6 +12349,7 @@ describe("CodexConversationHandle", () => {
         status: "interrupted",
         completedAt: 1_700_000_003,
         items: [cancelledImage],
+        rootTurnId: null,
         itemsView: "full",
       },
     });
@@ -12256,6 +12601,7 @@ describe("CodexConversationHandle", () => {
     const startedTurn = {
       ...nativeTurn(1),
       items: [],
+      rootTurnId: null,
       itemsView: "notLoaded" as const,
       status: "inProgress" as const,
       completedAt: null,
@@ -12342,6 +12688,7 @@ describe("CodexConversationHandle", () => {
       const startedTurn = {
         ...nativeTurn(1),
         items: [],
+        rootTurnId: null,
         itemsView: "notLoaded" as const,
         status: "inProgress" as const,
         completedAt: null,
@@ -12489,6 +12836,7 @@ describe("CodexConversationHandle", () => {
     const startedTurn = {
       ...nativeTurn(1),
       items: [],
+      rootTurnId: null,
       itemsView: "notLoaded" as const,
       status: "inProgress" as const,
       completedAt: null,
@@ -12548,6 +12896,7 @@ describe("CodexConversationHandle", () => {
         status: "completed",
         completedAt: 1_700_000_003,
         items: [],
+        rootTurnId: null,
         itemsView: "summary",
       },
     });
@@ -12582,6 +12931,7 @@ describe("CodexConversationHandle", () => {
     const startedTurn = {
       ...nativeTurn(1),
       items: [],
+      rootTurnId: null,
       itemsView: "notLoaded" as const,
       status: "inProgress" as const,
       completedAt: null,
@@ -12833,6 +13183,7 @@ describe("CodexConversationHandle", () => {
           terminalItems[0],
           terminalOnlyAssistant,
         ],
+        rootTurnId: null,
         itemsView: "full",
       },
     });
@@ -12905,6 +13256,7 @@ describe("CodexConversationHandle", () => {
       turn: {
         ...nativeTurn(1),
         items: [],
+        rootTurnId: null,
         itemsView: "notLoaded",
         status: "inProgress",
         completedAt: null,
@@ -12963,6 +13315,7 @@ describe("CodexConversationHandle", () => {
       turn: {
         ...nativeTurn(1),
         items: [],
+        rootTurnId: null,
         itemsView: "notLoaded",
         status: "inProgress",
         completedAt: null,
@@ -13080,6 +13433,7 @@ describe("CodexConversationHandle", () => {
       const activeTurn = {
         ...nativeTurn(1),
         items: [],
+        rootTurnId: null,
         itemsView: "notLoaded" as const,
         status: "inProgress" as const,
         completedAt: null,
@@ -13181,6 +13535,7 @@ describe("CodexConversationHandle", () => {
     const activeTurn = {
       ...nativeTurn(1),
       items: [],
+      rootTurnId: null,
       itemsView: "notLoaded" as const,
       status: "inProgress" as const,
       completedAt: null,
@@ -13443,6 +13798,7 @@ describe("CodexConversationHandle", () => {
         status: "interrupted",
         completedAt: 1_700_000_003,
         items: [startedTurn.items[0]],
+        rootTurnId: null,
         itemsView: "summary",
       },
     });
@@ -13474,6 +13830,7 @@ describe("CodexConversationHandle", () => {
     const startedTurn = {
       ...nativeTurn(1),
       items: [],
+      rootTurnId: null,
       itemsView: "notLoaded" as const,
       status: "inProgress" as const,
       completedAt: null,
@@ -13508,6 +13865,7 @@ describe("CodexConversationHandle", () => {
         status: "interrupted",
         completedAt: 1_700_000_003,
         items: [],
+        rootTurnId: null,
         itemsView: "summary",
       },
     });
@@ -13856,6 +14214,7 @@ describe("CodexConversationHandle", () => {
       turn: {
         ...nativeTurn(1_001),
         items: [],
+        rootTurnId: null,
         itemsView: "notLoaded",
         status: "inProgress",
         completedAt: null,
@@ -14014,6 +14373,7 @@ describe("CodexConversationHandle", () => {
         turn: {
           ...nativeTurn(1),
           items: [],
+          rootTurnId: null,
           itemsView: "notLoaded",
           status: "inProgress",
           completedAt: null,
@@ -14572,6 +14932,7 @@ describe("CodexConversationHandle", () => {
       turn: {
         ...nativeTurn(1),
         items: [],
+        rootTurnId: null,
         itemsView: "notLoaded",
         status: "inProgress",
         completedAt: null,
@@ -14697,6 +15058,7 @@ describe("CodexConversationHandle", () => {
         turn: {
           ...nativeTurn(1),
           items: [],
+          rootTurnId: null,
           itemsView: "notLoaded",
           status: "inProgress",
           completedAt: null,
@@ -14830,6 +15192,7 @@ describe("CodexConversationHandle", () => {
       turn: {
         ...nativeTurn(1),
         items: [],
+        rootTurnId: null,
         itemsView: "notLoaded",
         status: "inProgress",
         completedAt: null,
@@ -14893,6 +15256,7 @@ describe("CodexConversationHandle", () => {
       turn: {
         ...nativeTurn(1),
         items: [],
+        rootTurnId: null,
         itemsView: "notLoaded",
         status: "inProgress",
         completedAt: null,
@@ -14970,6 +15334,7 @@ describe("CodexConversationHandle", () => {
       turn: {
         ...nativeTurn(1),
         items: [],
+        rootTurnId: null,
         itemsView: "notLoaded",
         status: "inProgress",
         completedAt: null,
@@ -15120,6 +15485,7 @@ describe("CodexConversationHandle", () => {
       turn: {
         ...nativeTurn(1),
         items: [],
+        rootTurnId: null,
         itemsView: "notLoaded",
         status: "inProgress",
         completedAt: null,
@@ -15205,6 +15571,7 @@ describe("CodexConversationHandle", () => {
       turn: {
         ...nativeTurn(1),
         items: [],
+        rootTurnId: null,
         itemsView: "notLoaded",
         status: "inProgress",
         completedAt: null,
@@ -15307,6 +15674,7 @@ describe("CodexConversationHandle", () => {
       turn: {
         ...nativeTurn(1),
         items: [],
+        rootTurnId: null,
         itemsView: "notLoaded",
         status: "inProgress",
         completedAt: null,
@@ -15396,6 +15764,7 @@ describe("CodexConversationHandle", () => {
           turn: {
             ...nativeTurn(1),
             items: [],
+            rootTurnId: null,
             itemsView: "notLoaded",
             status: "inProgress",
             completedAt: null,
@@ -15473,6 +15842,7 @@ describe("CodexConversationHandle", () => {
       turn: {
         ...nativeTurn(1),
         items: [],
+        rootTurnId: null,
         itemsView: "notLoaded",
         status: "inProgress",
         completedAt: null,
@@ -15938,6 +16308,7 @@ describe("CodexConversationHandle", () => {
       turn: {
         ...nativeTurn(2),
         items: [],
+        rootTurnId: null,
         itemsView: "notLoaded",
         status: "inProgress",
         completedAt: null,
@@ -16852,7 +17223,7 @@ describe("CodexConversationHandle", () => {
   it("resolves a Fast catalog default to Standard when the created thread disables fast_mode", async () => {
     const harness = new RpcHarness();
     let desired = executionSettingsTuple({ serviceTier: "fast" });
-    const resolveFastModeDisabled = vi.fn(() => {
+    const resolveUnavailableServiceTier = vi.fn(() => {
       desired = { ...desired, serviceTier: "standard" };
       return desired;
     });
@@ -16864,7 +17235,7 @@ describe("CodexConversationHandle", () => {
       executionSettingsProvider({
         desiredSettings: () => desired,
         freezeOperationSnapshot: () => ({ settings: desired }),
-        resolveFastModeDisabled,
+        resolveUnavailableServiceTier,
       }),
     );
     harness.enqueue("model/list", {
@@ -16895,6 +17266,14 @@ describe("CodexConversationHandle", () => {
           announcement: null,
           enabled: false,
           defaultEnabled: true,
+        }, {
+          name: "ultrafast_mode",
+          stage: "stable",
+          displayName: "Ultrafast mode",
+          description: null,
+          announcement: null,
+          enabled: false,
+          defaultEnabled: true,
         },
       ],
       nextCursor: null,
@@ -16913,8 +17292,9 @@ describe("CodexConversationHandle", () => {
     expect(
       harness.calls.find(({ method }) => method === "thread/start")?.params,
     ).toMatchObject({ serviceTier: "priority" });
-    expect(resolveFastModeDisabled).toHaveBeenCalledWith(scope, {
+    expect(resolveUnavailableServiceTier).toHaveBeenCalledWith(scope, {
       applicationThreadId: "application-create-fast-disabled",
+      unavailableServiceTiers: ["fast", "ultrafast"],
       now: expect.any(Number),
     });
     expect(desired.serviceTier).toBe("standard");
@@ -17468,6 +17848,7 @@ describe("CodexConversationHandle", () => {
           turn: {
             ...nativeTurn(1),
             items: [],
+            rootTurnId: null,
             itemsView: "notLoaded",
             status: "inProgress",
             completedAt: null,
@@ -17780,7 +18161,7 @@ describe("CodexConversationHandle", () => {
         unavailableReason: "generation_changed",
       });
       let desired = executionSettingsTuple({ serviceTier: "fast" });
-      const resolveFastModeDisabled = vi.fn(() => {
+      const resolveUnavailableServiceTier = vi.fn(() => {
         desired = { ...desired, serviceTier: "standard" };
         return desired;
       });
@@ -17793,7 +18174,7 @@ describe("CodexConversationHandle", () => {
         executionSettingsProvider({
           desiredSettings: () => desired,
           freezeOperationSnapshot: () => ({ settings: desired }),
-          resolveFastModeDisabled,
+          resolveUnavailableServiceTier,
           observeEffective,
         }),
         undefined,
@@ -17820,16 +18201,17 @@ describe("CodexConversationHandle", () => {
         expect(harness.calls.filter(({ method }) => method === "experimentalFeature/list")).toHaveLength(2);
         expect(observeEffective).not.toHaveBeenCalled();
         expect(fastModeSessions.projection(scope, applicationThreadId)).toMatchObject({
-          enabled: featureState !== "disabled",
+          fastEnabled: featureState !== "disabled",
+          ultrafastEnabled: featureState !== "disabled",
           availability: featureState === "enabled" ? "available" : "unavailable",
           ...(featureState === "disabled" ? { unavailableReason: "feature_disabled" } : {}),
           ...(featureState === "unavailable" ? { unavailableReason: "feature_unavailable" } : {}),
         });
         if (featureState === "disabled") {
-          expect(resolveFastModeDisabled).toHaveBeenCalledWith(scope, { applicationThreadId, now: expect.any(Number) });
+          expect(resolveUnavailableServiceTier).toHaveBeenCalledWith(scope, { applicationThreadId, unavailableServiceTiers: ["fast", "ultrafast"], now: expect.any(Number) });
           expect(desired.serviceTier).toBe("standard");
         } else {
-          expect(resolveFastModeDisabled).not.toHaveBeenCalled();
+          expect(resolveUnavailableServiceTier).not.toHaveBeenCalled();
           expect(desired.serviceTier).toBe("fast");
         }
         const submission = {
@@ -17874,14 +18256,14 @@ describe("CodexConversationHandle", () => {
         serviceTiers: [{ id: "priority", name: "Fast", description: "Fast" }],
       };
       const desired = executionSettingsTuple({ serviceTier: "fast" });
-      const resolveFastModeDisabled = vi.fn(() => ({ ...desired, serviceTier: "standard" as const }));
+      const resolveUnavailableServiceTier = vi.fn(() => ({ ...desired, serviceTier: "standard" as const }));
       const fastModeSessions = new CodexFastModeSessionRegistry();
       const handle = await driver(
         harness, connection, new CodexConversationOwnershipRegistry(), { type: "catalog" },
         executionSettingsProvider({
           desiredSettings: () => desired,
           freezeOperationSnapshot: () => ({ settings: desired }),
-          resolveFastModeDisabled,
+          resolveUnavailableServiceTier,
         }),
         undefined, undefined, unavailableCodexAgentToolCliEnvironmentProvider, fastModeSessions,
       ).attach(attachInput(connection, empty.id));
@@ -17899,8 +18281,8 @@ describe("CodexConversationHandle", () => {
         await expect(handle.establishProjection({ signal: new AbortController().signal })).resolves.toMatchObject({ snapshot: { orderedBackendTurnIds: [], runState: "idle" } });
         expect(harness.calls.filter(({ method }) => method === "thread/read")).toHaveLength(historyMode === "legacy" ? 4 : 2);
         expect(harness.calls.filter(({ method }) => method === "experimentalFeature/list")).toHaveLength(2);
-        expect(fastModeSessions.projection(scope, binding(connection, empty.id).applicationThreadId)).toMatchObject({ enabled: true, availability: "available" });
-        expect(resolveFastModeDisabled).not.toHaveBeenCalled();
+        expect(fastModeSessions.projection(scope, binding(connection, empty.id).applicationThreadId)).toMatchObject({ fastEnabled: true, ultrafastEnabled: true, availability: "available" });
+        expect(resolveUnavailableServiceTier).not.toHaveBeenCalled();
       } finally {
         await handle.close();
       }
@@ -18112,6 +18494,7 @@ describe("CodexConversationHandle", () => {
       turn: {
         ...nativeTurn(1),
         items: [],
+        rootTurnId: null,
         itemsView: "notLoaded",
         status: "inProgress",
         completedAt: null,
@@ -18220,6 +18603,7 @@ describe("CodexConversationHandle", () => {
       turn: {
         ...nativeTurn(1),
         items: [],
+        rootTurnId: null,
         itemsView: "notLoaded",
         status: "inProgress",
         completedAt: null,
@@ -18339,6 +18723,7 @@ describe("CodexConversationHandle", () => {
       turn: {
         ...nativeTurn(1),
         items: [],
+        rootTurnId: null,
         itemsView: "notLoaded",
         status: "inProgress",
         completedAt: null,
@@ -19436,6 +19821,7 @@ it("Codex publishes a confirmed Goal pause even when the Stop budget ends just a
     harness.enqueue("thread/goal/get", { goal });
     harness.enqueue("thread/goal/set", () => { vi.setSystemTime(input.deadlineAt + 1); return { goal: { ...goal, status: "paused", updatedAt: 2 } }; });
     await expect(control!.mutateProviderFeature!({ featureId: "codex.goal", schemaVersion: 1, actionId: "pause", arguments: {} })).resolves.toMatchObject({ outcome: "accepted", projectedState: { status: "paused" } });
+    expect(harness.calls.find(call => call.method === "thread/goal/set")?.params).toMatchObject({ origin: "automatic" });
     const identity = binding();
     expect(goals.projection({ tenantId: identity.tenantId, principalId: identity.ownerPrincipalId }, identity.applicationThreadId)?.state).toMatchObject({ status: "paused" });
   } finally { vi.useRealTimers(); harness.enqueue("thread/unsubscribe", { status: "unsubscribed" }); await handle.close(); }

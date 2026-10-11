@@ -18,8 +18,7 @@ final class NativeVoiceQueue {
     static final int MAX_ITEMS = 64, MAX_BYTES = 256 * 1024, RETAINED_IDS = 4096;
     // The server fits payloads to this JSON.stringify UTF-8 size; measuring the same way accepts every such payload.
     static final long MAX_PAYLOAD_BYTES = 65536;
-    private static final Set<String> EVENTS = new HashSet<>(java.util.Arrays.asList("turn.progress", "turn.completed", "turn.failed",
-        "turn.interrupted", "thread.woke", "automation.started", "automation.failed", "approval.requested", "input.requested", "question.requested"));
+    private static final Set<String> EVENTS = new HashSet<>(java.util.Arrays.asList(NativeVoiceProtocol.EVENTS));
     /** Event kind of a local, user-requested turn reply replay. */
     static final String REPLAY = "replay";
     static final class Item {
@@ -42,7 +41,7 @@ final class NativeVoiceQueue {
             JSONObject payload = NativeVoiceJson.requiredObject(envelope, "payload");
             NativeVoiceJson.keys(payload, "schemaVersion", "notificationId", "event", "occurredAt", "title", "message", "thread", "workspace",
                 "turn", "progress", "interaction", "question", "wake", "automation", "assistantResult");
-            NativeVoiceJson.integer(payload, "schemaVersion", 4, 4);
+            NativeVoiceJson.integer(payload, "schemaVersion", 5, 5);
             if (NativeVoiceJson.serializedBytes(payload) > MAX_PAYLOAD_BYTES) throw new IllegalArgumentException("voice_payload_too_large");
             NativeVoiceJson.string(payload, "notificationId", 512);
             NativeVoiceJson.string(payload, "occurredAt", 80);
@@ -66,12 +65,19 @@ final class NativeVoiceQueue {
             target = recognition == null ? null : NativeVoiceJson.copy(recognition);
             JSONObject progress = NativeVoiceProtocol.optionalObject(payload, "progress");
             if (progress != null) NativeVoiceProtocol.bounded(progress, true);
+            if (event.equals("turn.progress") || event.equals("turn.partial")) {
+                String expectedPhase = event.equals("turn.partial") ? "partial" : "provisional";
+                if (progress == null || !progress.optString("phase").equals(expectedPhase))
+                    throw new IllegalArgumentException("voice_progress_phase_invalid");
+            } else if (progress != null) {
+                throw new IllegalArgumentException("voice_progress_event_invalid");
+            }
             JSONObject result = NativeVoiceProtocol.optionalObject(payload, "assistantResult");
             if (result != null) NativeVoiceProtocol.assistantResult(result);
             subject = envelope.has("subjectId") ? NativeVoiceJson.string(envelope, "subjectId", 512) : null;
             String action = NativeVoiceJson.string(envelope, "voice", 32);
             if (!action.equals("none") && !action.equals("speak") && !action.equals("speakThenListen")) throw new IllegalArgumentException("voice_action_invalid");
-            if (action.equals("speakThenListen") && (event.equals("turn.progress") || event.endsWith(".requested")))
+            if (action.equals("speakThenListen") && (event.equals("turn.progress") || event.equals("turn.partial") || event.endsWith(".requested")))
                 throw new IllegalArgumentException("voice_action_invalid");
             boolean inputOnly = settings.mode().equals("input");
             followUp = settings.flag("autoListen") && action.equals("speakThenListen") && target != null &&
@@ -107,6 +113,7 @@ final class NativeVoiceQueue {
             if (subject == null || threadId == null || !(event.equals("thread.woke") || event.endsWith(".requested"))) return null;
             return threadId + "\n" + event + "\n" + subject;
         }
+        /** Only provisional updates yield under pressure; partial answers retain ordinary answer priority. */
         boolean progress() { return event.equals("turn.progress"); }
     }
     interface Observer { void event(NativeVoiceDiagnostics.Event event, Item item, String reason); }
@@ -229,7 +236,7 @@ final class NativeVoiceQueue {
             add(parts, payload.optString("message", ""));
         }
         if (!content.equals("announcements")) {
-            if (payload.optString("event").equals("turn.progress")) appendBounded(parts, payload.optJSONObject("progress"));
+            if (payload.optString("event").equals("turn.progress") || payload.optString("event").equals("turn.partial")) appendBounded(parts, payload.optJSONObject("progress"));
             else if (payload.optString("event").equals("turn.completed")) appendResult(parts, payload.optJSONObject("assistantResult"));
         }
         return assemble(parts, settings.flag("cleanSpeechText"));

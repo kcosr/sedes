@@ -74,13 +74,16 @@ public class NativeVoiceProtocolTest {
     }
     @Test public void policyAcceptsServerShapeAndRejectsInvalidDeliveryScriptAndPhases() throws Exception {
         NativeVoiceProtocol.validatePolicy(policy());
+        JSONObject allPhases = policy();
+        NativeVoiceJson.put(allPhases, "assistantResultPhases", new JSONArray().put("provisional").put("partial").put("unclassified").put("final"));
+        NativeVoiceProtocol.validatePolicy(allPhases);
         JSONObject script = policy(); NativeVoiceJson.put(script.optJSONObject("delivery").optJSONObject("turn.failed"), "script", true);
         NativeVoiceJson.put(script, "scriptPath", "/usr/local/bin/notify"); NativeVoiceJson.put(script, "arguments", new JSONArray().put("--quiet"));
         NativeVoiceProtocol.validatePolicy(script);
         JSONObject disabled = policy(); NativeVoiceJson.put(disabled, "enabled", false); NativeVoiceJson.put(disabled, "scriptPath", "relative");
         NativeVoiceJson.put(disabled.optJSONObject("delivery").optJSONObject("turn.failed"), "script", true);
         NativeVoiceProtocol.validatePolicy(disabled);
-        for (String event : new String[] { "turn.progress", "approval.requested", "input.requested", "question.requested" })
+        for (String event : new String[] { "turn.progress", "turn.partial", "approval.requested", "input.requested", "question.requested" })
             assertInvalidPolicy(value -> NativeVoiceJson.put(value.optJSONObject("delivery").optJSONObject(event), "voice", "speakThenListen"));
         assertInvalidPolicy(value -> value.optJSONObject("delivery").remove("thread.woke"));
         assertInvalidPolicy(value -> NativeVoiceJson.put(value.optJSONObject("delivery"), "notification.test", NativeVoiceJson.object("script", false, "voice", "speak")));
@@ -95,6 +98,17 @@ public class NativeVoiceProtocolTest {
         assertInvalidPolicy(value -> NativeVoiceJson.put(value, "timeoutSeconds", 301));
         assertInvalidPolicy(value -> NativeVoiceJson.put(value, "revision", -1));
         assertInvalidPolicy(value -> NativeVoiceJson.put(value, "legacyVoice", true));
+    }
+    @Test public void progressRequiresAnExplicitNonterminalPhase() {
+        for (String phase : new String[] { "provisional", "partial" }) {
+            NativeVoiceProtocol.bounded(NativeVoiceJson.object("itemId", "item-1", "phase", phase, "text", "Still working."), true);
+        }
+        JSONObject missing = NativeVoiceJson.object("itemId", "item-1", "text", "Still working.");
+        assertThrows(IllegalArgumentException.class, () -> NativeVoiceProtocol.bounded(missing, true));
+        for (String phase : new String[] { "final", "unclassified", "partial_answer" }) {
+            JSONObject invalid = NativeVoiceJson.object("itemId", "item-1", "phase", phase, "text", "Still working.");
+            assertThrows(IllegalArgumentException.class, () -> NativeVoiceProtocol.bounded(invalid, true));
+        }
     }
     private JSONObject details() {
         return NativeVoiceJson.object("workspace", NativeVoiceJson.object("id", "workspace-1", "name", "Work"),

@@ -52,6 +52,7 @@ function turn(item: CodexThreadItem): CodexTurn {
   return {
     id: "native-turn",
     items: [item],
+    rootTurnId: null,
     itemsView: "full",
     status: "completed",
     error: null,

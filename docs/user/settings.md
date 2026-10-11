@@ -320,27 +320,31 @@ Configure **Settings → Notifications** to choose Script and Voice delivery for
 each event. Each event has a **Script** switch and a **Voice** choice. Script
 delivery invokes one executable on the Sedes server. Enter its absolute
 **Server script path**, optional **Arguments (one per line)**, and **Timeout
-(seconds)** when using that channel. Voice delivery chooses **None**, **Speak**,
+(seconds)** when using that channel. Voice delivery chooses **Off**, **Speak**,
 or **Speak then listen** on Android. Turn on **Enable notifications** and save.
 These settings follow the current Sedes user across clients and server restarts.
 
-Fresh settings select no script events, speak every event, and choose **Speak
-then listen** for **Turn completed**. They include Final and Unclassified
-completion text. Provisional text can repeat progress already spoken; select it
-only if that repetition is useful. **Turn progress**, **Approval requested**,
-**Input requested**, and **Nonblocking questions** offer only None or Speak, so
+Fresh settings select no script events, leave **Partial** voice Off, speak the
+other events, and choose **Speak then listen** for **Turn completed**. Partial
+has its own Script and Voice controls for answers delivered while the agent
+continues working. Turn progress controls provisional updates separately.
+Completion notifications include Final and Unclassified text by default; their
+optional Partial and Provisional selections can repeat text already spoken
+through the corresponding live notification. **Turn progress**, **Partial**, **Approval requested**,
+**Input requested**, and **Nonblocking questions** offer only Off or Speak, so
 they never open the microphone automatically. **Automation started** offers
 Speak then listen, but it behaves as Speak: the notice targets the automation's
 thread while its turn is running, and that turn finishing makes the target out
 of date. See [Voice](#voice) and [Android voice](../operator/clients/voice.md)
 for local audio modes, microphone settings, and target selection.
 
-Available events are **Turn progress**, **Turn completed**, **Turn failed**,
+Available events are **Turn progress**, **Partial**, **Turn completed**, **Turn failed**,
 **Turn interrupted**, **Snooze wake**, **Automation started**, **Automation
 failed before starting**, **Approval requested**, **Input requested**, and
-**Nonblocking questions**. Turn progress is a completed live assistant update
-before the turn finishes, from Codex, Pi, or Claude. A turn event
-requires an authoritative terminal outcome; a pause in output or a disconnected
+**Nonblocking questions**. Turn progress is a completed provisional update from
+Codex, Pi, or Claude. Partial is a completed substantive answer from Codex while
+the turn continues. Completion, failure, and interruption notifications
+require an authoritative terminal outcome; a pause in output or a disconnected
 backend does not count. Snooze wake means its deadline was reached. A completion
 that wakes a snoozed thread produces the selected turn event, not an additional
 wake notification. Manual wake does not emit a notification.

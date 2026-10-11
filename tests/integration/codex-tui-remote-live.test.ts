@@ -80,7 +80,7 @@ afterEach(async () => {
 });
 
 describe("Codex managed TUI config parser compatibility", () => {
-  it("accepts the exact process-local Codex 0.160 override profile", async () => {
+  it("accepts the exact process-local Codex override profile", async () => {
     await access(codexBinary);
     const root = await mkdtemp(
       path.join(os.tmpdir(), "sedes-codex-tui-config-parser-"),
@@ -1620,7 +1620,7 @@ const normalizedLiveExecutionSettings: CodexExecutionSettingsProvider = {
     approvalPolicy: "never",
     approvalReviewer: "user",
   }),
-  resolveFastModeDisabled: () => ({
+  resolveUnavailableServiceTier: () => ({
     model: "gpt-5.6-luna",
     reasoningEffort: "low",
     serviceTier: "standard",

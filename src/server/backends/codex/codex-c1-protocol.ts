@@ -249,7 +249,7 @@ function assertThreadItemClosed(item: OfficialThreadItem): void {
     userMessage: ["type", "id", "clientId", "content"], hookPrompt: ["type", "id", "fragments"], agentMessage: ["type", "id", "text", "phase", "memoryCitation", "delivery", "questions"], functionCallOutput: ["type", "id", "name", "namespace", "output"], plan: ["type", "id", "text"], reasoning: ["type", "id", "summary", "content"],
     commandExecution: ["type", "id", "pluginId", "scriptPath", "command", "cwd", "processId", "source", "status", "commandActions", "aggregatedOutput", "exitCode", "durationMs"], fileChange: ["type", "id", "changes", "status"],
     mcpToolCall: ["type", "id", "server", "tool", "status", "arguments", "appContext", "mcpAppResourceUri", "mcpAppUi", "pluginId", "readOnlyHint", "result", "error", "durationMs"], dynamicToolCall: ["type", "id", "namespace", "tool", "arguments", "status", "contentItems", "success", "durationMs"],
-    collabAgentToolCall: ["type", "id", "tool", "status", "senderThreadId", "receiverThreadIds", "prompt", "model", "reasoningEffort", "agentsStates"], subAgentActivity: ["type", "id", "kind", "agentThreadId", "agentPath"], webSearch: ["type", "id", "query", "action", "results"], imageView: ["type", "id", "path"], sleep: ["type", "id", "durationMs"], imageGeneration: ["type", "id", "status", "revisedPrompt", "result", "transparentBackground", "failure", "savedPath"], enteredReviewMode: ["type", "id", "review"], exitedReviewMode: ["type", "id", "review"], contextCompaction: ["type", "id"],
+    collabAgentToolCall: ["type", "id", "tool", "status", "senderThreadId", "receiverThreadIds", "prompt", "model", "reasoningEffort", "agentsStates"], subAgentActivity: ["type", "id", "kind", "agentThreadId", "agentPath", "model", "reasoningEffort"], webSearch: ["type", "id", "query", "action", "results"], imageView: ["type", "id", "path"], sleep: ["type", "id", "durationMs"], imageGeneration: ["type", "id", "status", "revisedPrompt", "result", "transparentBackground", "failure", "savedPath"], enteredReviewMode: ["type", "id", "review"], exitedReviewMode: ["type", "id", "review"], contextCompaction: ["type", "id"],
   } as const satisfies Record<OfficialThreadItem["type"], readonly string[]>;
   assertExactKeys(item, keysByType[item.type], "thread_item");
   switch (item.type) {
@@ -447,6 +447,8 @@ function assertThreadItem(item: OfficialThreadItem): void {
       break;
     case "subAgentActivity":
       assertNativeId(item.agentThreadId, "agent_thread_id");
+      if (item.model != null) assertNativeId(item.model, "agent_model");
+      if (item.reasoningEffort != null) assertNativeId(item.reasoningEffort, "agent_reasoning_effort");
       break;
     case "sleep":
       assertSafeCount(item.durationMs, "sleep_duration");
@@ -485,9 +487,38 @@ function assertThreadItem(item: OfficialThreadItem): void {
   }
 }
 
+/** The official error contract deliberately admits unknown string/object variants. */
+export function refineCodexErrorInfo(info: unknown): void {
+  assertNativeValueBounds(info, "codex_error_info");
+  if (info === null || typeof info === "string") return;
+  assertRecord(info, "codex_error_info");
+  const keys = Object.keys(info);
+  // Only the known, single-discriminator variants carry reviewed semantics.
+  // Other bounded records remain opaque provider data.
+  if (keys.length !== 1) return;
+  const key = keys[0]!;
+  const detail = info[key];
+  if (["httpConnectionFailed", "responseStreamConnectionFailed", "responseStreamDisconnected", "responseTooManyFailedAttempts"].includes(key)) {
+    assertExactKeys(detail, ["httpStatusCode"], "http_status");
+    assertRecord(detail, "http_status");
+    // HTTP status is historical provider metadata, not a count or authority.
+    // Keep the existing integer contract; the official schema has no range bound.
+    if (detail.httpStatusCode != null && !Number.isInteger(detail.httpStatusCode)) {
+      throw new Error("http_status_invalid");
+    }
+  } else if (key === "activeTurnNotSteerable") {
+    assertExactKeys(detail, ["turnKind"], "active_turn_not_steerable");
+    assertRecord(detail, "active_turn_not_steerable");
+    if (detail.turnKind !== "review" && detail.turnKind !== "compact") {
+      throw new Error("active_turn_not_steerable_invalid");
+    }
+  }
+}
+
 function assertTurn(turn: OfficialTurn): void {
-  assertExactKeys(turn, ["id", "items", "itemsView", "status", "error", "startedAt", "completedAt", "durationMs"], "turn");
+  assertExactKeys(turn, ["id", "rootTurnId", "items", "itemsView", "status", "error", "startedAt", "completedAt", "durationMs"], "turn");
   assertNativeId(turn.id, "turn_id");
+  if (turn.rootTurnId != null) assertNativeId(turn.rootTurnId, "root_turn_id");
   if (turn.items.length > CODEX_C1_MAX_ITEMS_PER_TURN) {
     throw new Error("turn_item_count_exceeded");
   }
@@ -503,26 +534,12 @@ function assertTurn(turn: OfficialTurn): void {
     const error = turn.error;
     assertExactKeys(error, ["message", "codexErrorInfo", "additionalDetails", "misalignment"], "turn_error");
     if (error.misalignment != null) {
-      assertExactKeys(error.misalignment, ["errorType", "detailedExplanation", "steer"], "turn_error_misalignment");
+      assertExactKeys(error.misalignment, ["errorType", "detailedExplanation", "steer", "reviewTarget"], "turn_error_misalignment");
       if (error.misalignment.steer != null) {
         assertExactKeys(error.misalignment.steer, ["message"], "turn_error_misalignment_steer");
       }
     }
-    const info = error.codexErrorInfo;
-    if (info !== null && typeof info === "object") {
-      const keys = Object.keys(info);
-      const allowed = new Set(["httpConnectionFailed", "responseStreamConnectionFailed", "responseStreamDisconnected", "responseTooManyFailedAttempts", "activeTurnNotSteerable"]);
-      if (keys.length !== 1 || !allowed.has(keys[0]!)) throw new Error("codex_error_info_invalid");
-      for (const detail of Object.values(info)) {
-        if (typeof detail === "object" && detail !== null) {
-          if ("httpStatusCode" in detail) {
-            assertExactKeys(detail, ["httpStatusCode"], "http_status");
-            if (detail.httpStatusCode !== null && !Number.isInteger(detail.httpStatusCode)) throw new Error("http_status_invalid");
-          }
-          if ("turnKind" in detail) assertExactKeys(detail, ["turnKind"], "active_turn_not_steerable");
-        }
-      }
-    }
+    refineCodexErrorInfo(error.codexErrorInfo);
   }
   turn.items.forEach(assertThreadItem);
 }

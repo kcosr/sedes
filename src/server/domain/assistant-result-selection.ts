@@ -48,7 +48,7 @@ export function fitBoundedText(
  * and fit them, as `assistantResult` beside `envelope`'s other fields, into the
  * notification budget. Unselected sections are never read or cloned; omitted
  * keys mean excluded, and a selected `null` stays null. Unclassified, then
- * provisional, then final text shortens first. Returns undefined only when even
+ * provisional, then partial, then final text shortens first. Returns undefined only when even
  * empty sections cannot fit beside the envelope.
  */
 export function selectAssistantResult(
@@ -58,7 +58,7 @@ export function selectAssistantResult(
 ): SelectedAssistantResult | undefined {
   const sections: SelectedAssistantResult = {};
   // Select before reading or cloning: omitted response phases need no work.
-  for (const phase of ["provisional", "final", "unclassified"] as const) {
+  for (const phase of ["provisional", "partial", "final", "unclassified"] as const) {
     if (phases.includes(phase)) {
       sections[phase] = structuredClone(result[phase]);
     }
@@ -66,7 +66,7 @@ export function selectAssistantResult(
   const measured = { ...envelope, assistantResult: sections };
   const fits = () => fitsNotificationBudget(measured);
   if (fits()) return sections;
-  for (const phase of ["unclassified", "provisional", "final"] as const) {
+  for (const phase of ["unclassified", "provisional", "partial", "final"] as const) {
     const original = sections[phase];
     if (original == null || original.text.length === 0) continue;
     if (fitBoundedText(original, fits, (text) => { sections[phase] = text; })) return sections;

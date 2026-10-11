@@ -123,6 +123,7 @@ export type ConversationActorEvent =
       readonly type: "live_progress";
       readonly applicationTurnId: string;
       readonly applicationItemId: string;
+      readonly phase: "provisional" | "partial";
       readonly backendCorrelations: readonly string[];
       readonly text: BoundedText;
     }
@@ -1488,14 +1489,14 @@ export class ConversationActor {
           }
           if ((nativeEvent.type === "item_completed" || nativeEvent.type === "item_updated") && nativeEvent.liveProgress &&
               nativeEvent.item.semanticKind === "assistant_message" && nativeEvent.item.status === "completed" &&
-              nativeEvent.item.responsePhase === "provisional" && nativeEvent.item.markdown.text.trim()) {
+              (nativeEvent.item.responsePhase === "provisional" || nativeEvent.item.responsePhase === "partial") && nativeEvent.item.markdown.text.trim()) {
             const timeline = this.#projector.timeline();
             const item = this.#projector.itemForBackendId(nativeEvent.item.backendItemId);
             const backendTurn = this.#projector.backendTurns().find(turn => turn.backendTurnId === nativeEvent.item.backendTurnId);
             if (item && backendTurn?.status === "in_progress" && backendTurn.completionCorrelations?.length &&
                 timeline.activeTurnId === item.turnId && timeline.runState === "running") {
               this.#publish({ type: "live_progress", applicationTurnId: item.turnId, applicationItemId: item.id,
-                backendCorrelations: backendTurn.completionCorrelations, text: boundText(nativeEvent.item.markdown.text, 8_192) });
+                backendCorrelations: backendTurn.completionCorrelations, phase: nativeEvent.item.responsePhase, text: boundText(nativeEvent.item.markdown.text, 8_192) });
             }
           }
           if (

@@ -5,6 +5,7 @@ import {
   refineCodexThreadStatus,
   refineCodexThreadTokenUsage,
   refineCodexTurn,
+  refineCodexErrorInfo,
 } from "./codex-c1-protocol.js";
 import {
   refineCodexThreadGoalClearedNotification,
@@ -220,18 +221,10 @@ function refineSandboxPolicy(value: unknown, allowExternal = true): void {
 function refineTurnError(value: unknown): void {
   const error = exactKeys(value, ["message", "codexErrorInfo", "additionalDetails", "misalignment"]);
   if (error.misalignment != null) {
-    const misalignment = exactKeys(error.misalignment, ["errorType", "detailedExplanation", "steer"]);
+    const misalignment = exactKeys(error.misalignment, ["errorType", "detailedExplanation", "steer", "reviewTarget"]);
     if (misalignment.steer != null) exactKeys(misalignment.steer, ["message"]);
   }
-  if (error.codexErrorInfo != null && typeof error.codexErrorInfo === "object") {
-    const info = asRecord(error.codexErrorInfo);
-    if (Object.keys(info).length !== 1) throw new Error("codex_error_info_invalid");
-    const detail = Object.values(info)[0];
-    if (detail !== null && typeof detail === "object") {
-      if ("httpStatusCode" in detail) exactKeys(detail, ["httpStatusCode"]);
-      else exactKeys(detail, ["turnKind"]);
-    }
-  }
+  if (error.codexErrorInfo != null) refineCodexErrorInfo(error.codexErrorInfo);
 }
 
 function refineUserInput(value: unknown): void {

@@ -9,10 +9,20 @@ types.
 
 Record user- and operator-visible changes in `CHANGELOG.md` under `Unreleased`.
 Use Breaking Changes, Added, Changed, Fixed, and Removed as needed; do not
-create duplicate subsections. Keep notes concise, explain compatibility or
-upgrade effects, and add the PR number or link after opening the PR and before
-merging. The initial release entry is only `Initial release`; do not restore a
-catalogue of pre-release development history.
+create duplicate subsections. Usually one to three short bullets per PR is
+enough: describe the resulting behavior and required upgrade actions, not the
+implementation diary. Consolidate related Unreleased notes as a feature evolves;
+retain relevant PR links and only the current compatibility requirements.
+Link the operator guide for detailed contracts. Add the PR number or link after
+opening the PR and before merging. Leave dated release sections unchanged;
+record corrections under Unreleased.
+
+During `0.x`, use a minor release for features or breaking changes and a patch
+release for fixes and maintenance. From `1.0`, use major for breaking changes,
+minor for compatible features, and patch for fixes. Do not bump the product
+version in ordinary feature PRs; release preparation sets it once for the
+reviewed release scope. Typecheck and build run `check:version` and
+`check:changelog`; run `test:release` after changing release helpers.
 
 Follow [Release process](docs/developer/release-process.md). Use
 `npm run release:prepare -- X.Y.Z` (or `patch`, `minor`, `major`) on a clean

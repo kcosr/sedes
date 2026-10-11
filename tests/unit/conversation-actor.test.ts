@@ -5232,13 +5232,15 @@ describe("ConversationActorManager", () => {
     await manager.close();
   });
 
-  it("publishes qualified live progress after projection, including late phase evidence, but not snapshots or terminal backfill", async () => {
+  it.each(["provisional", "partial"] as const)("publishes qualified live %s progress after projection, including late phase evidence, but not snapshots or terminal backfill", async (phase) => {
     const observed = vi.fn<LiveProgressObserver>();
     const { driver, handle, manager } = fixture(undefined, undefined, 10, undefined, 8, observed);
     const base = snapshot("running", "Inspecting the files");
     const initial = { ...base, turnsById: { "turn-1": { ...base.turnsById["turn-1"]!, completionCorrelations: ["accepted-input"] } } };
     handle.establishmentSnapshots[0] = initial;
     const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+    const completions: ConversationActorEvent[] = [];
+    acquired.actor.subscribe(event => { if (event.type === "authoritative_completion") completions.push(event); });
     try {
       expect(observed).not.toHaveBeenCalled();
       const item = { ...initial.itemsById["item-1"]!, semanticKind: "assistant_message" as const,
@@ -5246,22 +5248,28 @@ describe("ConversationActorManager", () => {
       handle.emit(0, { type: "item_completed", item }, 0);
       await acquired.actor.captureSnapshotState();
       expect(observed).not.toHaveBeenCalled();
-      handle.emit(0, { type: "item_updated", item: { ...item, responsePhase: "provisional" }, liveProgress: true }, 1);
+      handle.emit(0, { type: "item_updated", item: { ...item, responsePhase: phase }, liveProgress: true }, 1);
       await vi.waitFor(() => expect(observed).toHaveBeenCalledTimes(1));
       const progress = observed.mock.calls[0]![2];
-      expect(progress).toMatchObject({ applicationTurnId: projectedTurnId, backendCorrelations: ["accepted-input"], text: { text: "Inspecting the files" } });
+      expect(progress).toMatchObject({ phase, applicationTurnId: projectedTurnId, backendCorrelations: ["accepted-input"], text: { text: "Inspecting the files" } });
       expect(progress.applicationItemId).not.toBe("item-1");
       expect(acquired.actor.timeline.itemsById[progress.applicationItemId]).toMatchObject({ status: "completed" });
+      expect(acquired.actor.timeline.runState).toBe("running");
+      expect(completions).toEqual([]);
       handle.emit(0, { type: "turn_completed", turn: { ...initial.turnsById["turn-1"]!, status: "completed", endedBy: "agent_settled" } }, 2);
       await acquired.actor.captureSnapshotState();
       expect(acquired.actor.timeline.turnsById[progress.applicationTurnId]?.status).toBe("completed");
-      handle.emit(0, { type: "item_updated", item: { ...item, responsePhase: "provisional" }, liveProgress: true }, 3);
+      expect(completions).toEqual([expect.objectContaining({
+        outcome: "completed", result: { text: "Inspecting the files" },
+        classifiedResult: expect.objectContaining({ [phase]: { text: "Inspecting the files" } }),
+      })]);
+      handle.emit(0, { type: "item_updated", item: { ...item, responsePhase: phase }, liveProgress: true }, 3);
       await acquired.actor.captureSnapshotState();
       expect(observed).toHaveBeenCalledTimes(1);
     } finally { acquired.release(); await manager.close(); }
   });
 
-  it("rejects progress from a sequence-gap replacement or a provider-only turn", async () => {
+  it.each(["provisional", "partial"] as const)("rejects %s progress from a sequence-gap replacement or a provider-only turn", async (phase) => {
     const observed = vi.fn<LiveProgressObserver>();
     const { driver, handle, manager } = fixture(undefined, undefined, 10, undefined, 8, observed);
     const initial = snapshot("running", "Progress");
@@ -5270,7 +5278,7 @@ describe("ConversationActorManager", () => {
     const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
     try {
       const item = { ...initial.itemsById["item-1"]!, semanticKind: "assistant_message" as const,
-        status: "completed" as const, markdown: { text: "Progress" }, responsePhase: "provisional" as const };
+        status: "completed" as const, markdown: { text: "Progress" }, responsePhase: phase };
       handle.emit(0, { type: "item_completed", item, liveProgress: true }, 0);
       await acquired.actor.captureSnapshotState();
       expect(observed).not.toHaveBeenCalled();
@@ -6076,7 +6084,7 @@ describe("ConversationActorManager", () => {
           provenance: "live",
           outcome: "completed",
           result: { text: "a" },
-          classifiedResult: { provisional: null, final: null, unclassified: { text: "a" } },
+          classifiedResult: { partial: null, provisional: null, final: null, unclassified: { text: "a" } },
           startedAt: "2026-07-30T11:58:00.000Z",
           completedAt: "2026-07-30T12:00:00.000Z",
         },
@@ -6090,7 +6098,7 @@ describe("ConversationActorManager", () => {
       provenance: "live",
       outcome: "completed",
       result: { text: "a" },
-      classifiedResult: { provisional: null, final: null, unclassified: { text: "a" } },
+      classifiedResult: { partial: null, provisional: null, final: null, unclassified: { text: "a" } },
       startedAt: "2026-07-30T11:58:00.000Z",
       completedAt: "2026-07-30T12:00:00.000Z",
     });
@@ -6132,7 +6140,7 @@ describe("ConversationActorManager", () => {
           provenance: "recovered",
           outcome: "completed",
           result: { text: "hello" },
-          classifiedResult: { provisional: null, final: null, unclassified: { text: "hello" } },
+          classifiedResult: { partial: null, provisional: null, final: null, unclassified: { text: "hello" } },
           startedAt: "2026-07-30T11:58:00.000Z",
           completedAt: "2026-07-30T12:00:01.000Z",
         },
@@ -6146,7 +6154,7 @@ describe("ConversationActorManager", () => {
       provenance: "recovered",
       outcome: "completed",
       result: { text: "hello" },
-      classifiedResult: { provisional: null, final: null, unclassified: { text: "hello" } },
+      classifiedResult: { partial: null, provisional: null, final: null, unclassified: { text: "hello" } },
       startedAt: "2026-07-30T11:58:00.000Z",
       completedAt: "2026-07-30T12:00:01.000Z",
     });

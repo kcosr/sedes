@@ -57,6 +57,7 @@ export const serverNotifications = [
   ["thread/name/updated", "ThreadNameUpdatedNotification"],
   ["thread/goal/updated", "ThreadGoalUpdatedNotification"],
   ["thread/goal/cleared", "ThreadGoalClearedNotification"],
+  ["thread/prediction/updated", "ThreadPredictionUpdatedNotification", "live_turns", "ignored_informational", ["none_beyond_official_structure"]],
   ["thread/settings/updated", "ThreadSettingsUpdatedNotification", "live_turns", "decoded", undefined, "experimental"],
   ["thread/tokenUsage/updated", "ThreadTokenUsageUpdatedNotification"],
   ["thread/compacted", "ContextCompactedNotification"],

@@ -1762,6 +1762,36 @@ class CodexE2eRpcFixture {
     }
   }
 
+  emitPartialAnswerWithSubagent(nativeThreadId: string): void {
+    const thread = this.#threads.get(nativeThreadId);
+    const turn = thread?.turns.findLast(candidate => candidate.status === "inProgress");
+    if (!thread || !turn) throw new Error("e2e_partial_answer_turn_not_active");
+    const items: CodexThread["turns"][number]["items"] = [
+      {
+        type: "agentMessage", id: `${turn.id}-progress`,
+        text: "Checking the remaining compatibility paths.",
+        phase: "commentary", memoryCitation: null, delivery: null, questions: null,
+      },
+      {
+        type: "subAgentActivity", id: `${turn.id}-reviewer-started`, kind: "started",
+        agentThreadId: `${nativeThreadId}-reviewer`, agentPath: "/root/reviewer",
+        model: this.#modelByThread.get(nativeThreadId) ?? E2E_CODEX_DEFAULT_MODEL,
+        reasoningEffort: "ultra",
+      },
+      {
+        type: "agentMessage", id: `${turn.id}-partial-answer`,
+        text: "The first compatibility finding is confirmed. I am checking the remaining paths.",
+        phase: "partial_answer", memoryCitation: null, delivery: null, questions: null,
+      },
+    ];
+    this.#replaceThread({ ...thread, turns: thread.turns.map(candidate => candidate.id === turn.id
+      ? { ...turn, items: [...turn.items, ...items] } : candidate) });
+    for (const item of items) {
+      this.#notify(this.#generation, "item/started", { threadId: nativeThreadId, turnId: turn.id, item, startedAtMs: Date.now() });
+      this.#notify(this.#generation, "item/completed", { threadId: nativeThreadId, turnId: turn.id, item, completedAtMs: Date.now() });
+    }
+  }
+
   async seedBrowserBenchmark(nativeThreadId: string): Promise<void> {
     const thread = this.#threads.get(nativeThreadId);
     if (!thread || thread.status.type !== "idle")
@@ -1780,6 +1810,7 @@ class CodexE2eRpcFixture {
     const turn: CodexThread["turns"][number] = {
       id: "benchmark-stream-turn",
       items: [],
+      rootTurnId: null,
       itemsView: "full",
       status: "inProgress",
       error: null,
@@ -1895,6 +1926,7 @@ class CodexE2eRpcFixture {
             ],
           },
         ],
+        rootTurnId: null,
         itemsView: "full" as const,
         status,
         error: null,
@@ -2477,6 +2509,7 @@ class CodexE2eRpcFixture {
                   ],
                 },
               ],
+              rootTurnId: null,
               itemsView: "full",
               status: "completed",
               error: null,
@@ -2837,6 +2870,15 @@ class CodexE2eRpcFixture {
             enabled: true,
             defaultEnabled: false,
           },
+          {
+            name: "ultrafast_mode",
+            stage: "stable",
+            displayName: "Ultrafast mode",
+            description: "The fastest available responses with higher usage",
+            announcement: null,
+            enabled: true,
+            defaultEnabled: true,
+          },
         ],
         nextCursor: null,
       };
@@ -3145,6 +3187,7 @@ class CodexE2eRpcFixture {
         const turn = {
           id: turnId,
           items: holdUserMaterialization ? [] : [userItem],
+          rootTurnId: null,
           itemsView: "full" as const,
           status: "inProgress" as const,
           error: null,
@@ -3970,12 +4013,13 @@ async function main(): Promise<void> {
     desiredSettings: (providerScope, applicationThreadId) =>
       codexExecutionSettings.find(providerScope, applicationThreadId)
         ?.desired ?? null,
-    resolveFastModeDisabled(providerScope, input) {
+    resolveUnavailableServiceTier(providerScope, input) {
       const current = codexExecutionSettings.find(
         providerScope,
         input.applicationThreadId,
       );
-      if (!current?.desired || current.desired.serviceTier === "standard") {
+      if (!current?.desired || current.desired.serviceTier === "standard" ||
+        !input.unavailableServiceTiers.includes(current.desired.serviceTier)) {
         return current?.desired ?? null;
       }
       return codexExecutionSettings.updateDesired(
@@ -5425,6 +5469,19 @@ async function main(): Promise<void> {
           error:
             error instanceof Error ? error.message : "e2e_question_emit_failed",
         });
+    }
+  });
+  app.post("/__e2e/codex/partial-answer/:threadId", (request, response) => {
+    const binding = bindings.getBinding(scope, request.params.threadId);
+    if (!binding || binding.backendInstanceId !== codexBackend.id) {
+      response.status(409).json({ error: "e2e_partial_answer_thread_invalid" });
+      return;
+    }
+    try {
+      codexRpc.emitPartialAnswerWithSubagent(binding.backendConversationId);
+      response.status(204).end();
+    } catch (error) {
+      response.status(409).json({ error: error instanceof Error ? error.message : "e2e_partial_answer_emit_failed" });
     }
   });
   app.post("/__e2e/codex/turn-completion/arm", (_request, response) => {

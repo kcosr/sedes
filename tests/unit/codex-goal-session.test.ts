@@ -80,6 +80,21 @@ function mockClient(handlers: {
 }
 
 describe("CodexGoalSessionRegistry", () => {
+  it.each(["user", "automatic"] as const)("preserves %s origin for each native Goal mutation", async (origin) => {
+    const sessions = new CodexGoalSessionRegistry();
+    for (const actionId of ["create", "pause", "resume", "clear"] as const) {
+      const currentState = actionId === "create" ? { state: "unset" as const } : {
+        state: "set" as const, objective: "Finish migration", status: actionId === "resume" ? "paused" as const : "active" as const,
+      };
+      const argumentsValue = actionId === "create" ? { objective: "Finish migration" } : {};
+      const desired = desiredPostconditionForCodexGoalAction({ actionId, arguments: argumentsValue, currentState });
+      const client = mockClient({ set: { goal: nativeGoal({ status: actionId === "pause" ? "paused" : "active" }) } });
+      expect((await sessions.mutateNative({ client, nativeThreadId: "native-1", actionId, desired, arguments: argumentsValue, currentState, origin })).kind).toBe("accepted");
+      expect(client.request).toHaveBeenCalledWith(expect.objectContaining({ method: actionId === "clear" ? "thread/goal/clear" : "thread/goal/set" }),
+        expect.objectContaining({ threadId: "native-1", origin }), expect.any(Object));
+    }
+  });
+
   it("publishes authoritative get state and withdraws on malformed payloads", async () => {
     const sessions = new CodexGoalSessionRegistry({ now: () => 1000 });
     const client = mockClient({
@@ -204,6 +219,7 @@ describe("CodexGoalSessionRegistry", () => {
       currentState: { state: "unset" },
     });
     const accepted = await sessions.mutateNative({
+      origin: "user",
       client: mockClient({
         set: { goal: nativeGoal({ objective: "Ship Goal", status: "active" }) },
       }),
@@ -224,6 +240,7 @@ describe("CodexGoalSessionRegistry", () => {
 
     // Concurrent external change after boundary → uncertain (never auto-retry).
     const uncertain = await sessions.mutateNative({
+      origin: "user",
       client: mockClient({
         set: new CodexRpcDeliveryError({
           code: "timeout",
@@ -259,6 +276,7 @@ describe("CodexGoalSessionRegistry", () => {
     const sessions = new CodexGoalSessionRegistry();
     const currentState = { state: "set", objective: "Finish migration", status: "blocked" } as const;
     const result = await sessions.mutateNative({
+      origin: "user",
       client: mockClient({ set: { goal: nativeGoal() } }),
       nativeThreadId: "native-1",
       actionId: "resume",
@@ -272,6 +290,7 @@ describe("CodexGoalSessionRegistry", () => {
   it("rejects unavailable actions and proven pre-boundary failures", async () => {
     const sessions = new CodexGoalSessionRegistry();
     const rejected = await sessions.mutateNative({
+      origin: "user",
       client: mockClient({}),
       nativeThreadId: "native-1",
       actionId: "pause",
@@ -286,6 +305,7 @@ describe("CodexGoalSessionRegistry", () => {
     expect(rejected.kind).toBe("rejected");
 
     const preBoundary = await sessions.mutateNative({
+      origin: "user",
       client: mockClient({
         set: new CodexRpcRemoteError({
           code: -32001,
@@ -326,6 +346,7 @@ describe("CodexGoalSessionRegistry", () => {
     expect(
       (
         await sessions.mutateNative({
+      origin: "user",
           client: mockClient({
             set: lost,
             get: {
@@ -356,6 +377,7 @@ describe("CodexGoalSessionRegistry", () => {
     expect(
       (
         await sessions.mutateNative({
+      origin: "user",
           client: mockClient({
             set: lost,
             get: {
@@ -390,6 +412,7 @@ describe("CodexGoalSessionRegistry", () => {
     expect(
       (
         await sessions.mutateNative({
+      origin: "user",
           client: mockClient({
             set: lost,
             get: {
@@ -424,6 +447,7 @@ describe("CodexGoalSessionRegistry", () => {
     expect(
       (
         await sessions.mutateNative({
+      origin: "user",
           client: mockClient({
             clear: lost,
             get: { goal: null },

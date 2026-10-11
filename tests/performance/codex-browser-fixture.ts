@@ -12,6 +12,7 @@ export function benchmarkHistory(thread: CodexThread): CodexThread {
     status: { type: "idle" },
     turns: Array.from({ length: benchmarkTurns }, (_, index) => ({
       id: `benchmark-turn-${index}`,
+      rootTurnId: null,
       itemsView: "full",
       status: "completed",
       error: null,

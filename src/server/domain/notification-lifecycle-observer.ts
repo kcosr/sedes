@@ -32,9 +32,10 @@ export class NotificationLifecycleObserver {
         .hasActiveAcceptedCorrelation(scope, threadId, input.backendCorrelations)) return;
       const context = this.#context(scope, threadId);
       this.emit(scope, {
-        event: "turn.progress", occurredAt: new Date().toISOString(), title: "Agent progress",
+        event: input.phase === "partial" ? "turn.partial" : "turn.progress",
+        occurredAt: new Date().toISOString(), title: input.phase === "partial" ? "Partial answer" : "Agent progress",
         message: context.thread.title, ...context, turn: { id: input.applicationTurnId },
-        progress: { itemId: input.applicationItemId, ...input.text },
+        progress: { phase: input.phase, itemId: input.applicationItemId, ...input.text },
       }, JSON.stringify(["progress", threadId, input.applicationTurnId, input.applicationItemId]), "live");
     } catch { /* Passive progress cannot affect provider work. */ }
   }

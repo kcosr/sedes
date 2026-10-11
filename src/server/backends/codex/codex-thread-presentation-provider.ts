@@ -45,6 +45,7 @@ import {
   CODEX_TUI_FEATURE_REF,
 } from "./codex-tui-feature.js";
 import type { CompiledBackendModelPolicy } from "../model-policy.js";
+import { reasoningLabel } from "./codex-reasoning-label.js";
 
 type ThreadState = {
   readonly backingState: "unbound" | "creating" | "bound" | "creation_unknown";
@@ -68,7 +69,8 @@ export class CodexThreadPresentationProvider implements ThreadBackendPresentatio
         ):
           | {
               readonly revision: number;
-              readonly enabled: boolean;
+              readonly fastEnabled: boolean;
+              readonly ultrafastEnabled: boolean;
               readonly availability: "available" | "unavailable";
               readonly unavailableReason?: string;
             }
@@ -620,7 +622,13 @@ function fastModeFeaturePresentation(input: {
       >;
     }
   | undefined {
-  const offered = input.desiredModel?.serviceTiers?.offered;
+  const projection = input.backingState === "bound"
+    ? input.runtime?.projection(input.scope, input.applicationThreadId)
+    : undefined;
+  const offered = input.desiredModel?.serviceTiers?.offered.filter(({ selection }) =>
+    input.backingState === "unbound" ||
+    (selection === "fast" ? projection?.fastEnabled : projection?.ultrafastEnabled),
+  );
   if (!input.settings.desired || !offered?.length) {
     return undefined;
   }
@@ -653,11 +661,7 @@ function fastModeFeaturePresentation(input: {
     };
   } else {
     if (input.backingState !== "bound") return undefined;
-    const projection = input.runtime?.projection(
-      input.scope,
-      input.applicationThreadId,
-    );
-    if (!projection?.enabled) return undefined;
+    if (!projection) return undefined;
     availability =
       input.enabledAutomation === 0 && projection.availability === "available"
         ? "available"
@@ -805,16 +809,6 @@ function allowedExecutionActionIds(
     actions.push("set_reviewer_auto_review");
   }
   return actions;
-}
-
-function reasoningLabel(value: string): string {
-  if (value === "xhigh") return "Extra High";
-  if (value === "max") return "Maximum";
-  return value
-    .split(/[-_]/u)
-    .filter(Boolean)
-    .map((part) => part[0]!.toUpperCase() + part.slice(1))
-    .join(" ");
 }
 
 function goalFeaturePresentation(

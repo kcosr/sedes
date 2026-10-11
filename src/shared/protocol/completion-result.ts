@@ -3,6 +3,7 @@ import { boundedTextSchema } from "./payload.js";
 
 /** A missing section means no message could be assigned to that phase. */
 export const classifiedAssistantResultSchema = z.strictObject({
+  partial: boundedTextSchema.nullable(),
   provisional: boundedTextSchema.nullable(),
   final: boundedTextSchema.nullable(),
   unclassified: boundedTextSchema.nullable(),

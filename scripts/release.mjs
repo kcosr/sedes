@@ -4,13 +4,12 @@ import { readFileSync, writeFileSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { checkChangelog, cleanNotes, parseChangelog, unreleasedTemplate } from "./changelog.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const env = { ...process.env };
 delete env.NODE_ENV;
 env.GH_HOST = "github.com";
-const sections = ["Breaking Changes", "Added", "Changed", "Fixed", "Removed"];
-const template = `## [Unreleased]\n\n${sections.map((name) => `### ${name}\n`).join("\n")}`;
 const repository = "kcosr/sedes";
 
 function run(command, args, input) {
@@ -45,20 +44,6 @@ function targetVersion(argument, current) {
   if (compare(version, current) < 0) fail("The release version cannot go backwards.");
   return version;
 }
-function changelogSections(text) {
-  const headings = [...text.matchAll(/^## \[([^\]]+)\]([^\n]*)\n/gm)];
-  if (headings[0]?.[1] !== "Unreleased") fail("CHANGELOG.md must start with an Unreleased section.");
-  if (new Set(headings.map((heading) => heading[1])).size !== headings.length) fail("Duplicate changelog version headings.");
-  return headings.map((heading, i) => ({
-    name: heading[1], suffix: heading[2], start: heading.index,
-    end: headings[i + 1]?.index ?? text.length,
-    body: text.slice(heading.index + heading[0].length, headings[i + 1]?.index ?? text.length).trim(),
-  }));
-}
-function cleanNotes(body) {
-  const chunks = body.split(/(?=^### )/m);
-  return chunks.filter((chunk) => !/^### [^\n]+\s*$/.test(chunk)).join("").trim();
-}
 function remoteRefs() {
   return new Map(git("ls-remote", "origin", "refs/heads/main", "refs/tags/v*", "refs/tags/v*^{}")
     .split("\n").filter(Boolean).map((line) => { const [sha, ref] = line.split(/\s+/); return [ref, sha]; }));
@@ -82,7 +67,7 @@ function assertNewVersion(version, refs) {
 function prepare(argument, dryRun, current, text) {
   if (!git("branch", "--show-current")) fail("Prepare on a branch, not a detached HEAD.");
   const version = targetVersion(argument, current);
-  const entries = changelogSections(text);
+  const entries = parseChangelog(text);
   if (entries.some((entry) => entry.name === version)) fail(`${version} is already prepared in CHANGELOG.md.`);
   assertNewVersion(version, remoteRefs());
   const notes = cleanNotes(entries[0].body);
@@ -91,7 +76,9 @@ function prepare(argument, dryRun, current, text) {
     if (compare(version, entry.name) <= 0) fail(`Version must be newer than changelog entry ${entry.name}.`);
   }
   const date = new Date().toISOString().slice(0, 10);
-  const next = `${text.slice(0, entries[0].start)}${template}\n## [${version}] - ${date}\n\n${notes}\n\n${text.slice(entries[0].end)}`.trimEnd() + "\n";
+  const history = text.slice(entries[0].end);
+  const next = `${text.slice(0, entries[0].start)}${unreleasedTemplate}\n## [${version}] - ${date}\n\n${notes}\n${history ? `\n${history}` : ""}`;
+  parseChangelog(next);
   console.log(`${dryRun ? "Would prepare" : "Preparing"} v${version} (${current} → ${version})\n\n${notes}`);
   if (dryRun) return;
   run(process.execPath, ["scripts/version.mjs", "set", version]);
@@ -107,7 +94,7 @@ function publish(argument, dryRun, current, text) {
   const head = git("rev-parse", "HEAD");
   const refs = remoteRefs();
   if (refs.get("refs/heads/main") !== head) fail("main must match origin/main; fetch and fast-forward first.");
-  const entry = changelogSections(text)[1];
+  const entry = parseChangelog(text)[1];
   if (entry?.name !== version || !/^ - \d{4}-\d{2}-\d{2}$/.test(entry.suffix)) fail(`The latest changelog release must be dated ${version}. Run release:prepare first.`);
   const notes = cleanNotes(entry.body);
   if (!notes) fail(`No release notes for ${version}.`);
@@ -155,6 +142,7 @@ try {
   run(process.execPath, ["scripts/version.mjs", "check"]);
   const current = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8")).version;
   const text = readFileSync(path.join(root, "CHANGELOG.md"), "utf8");
+  checkChangelog(root, text);
   (command === "prepare" ? prepare : publish)(argument, options.includes("--dry-run"), current, text);
 } catch (error) {
   console.error(error.stderr?.toString().trim() || error.message);

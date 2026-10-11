@@ -637,7 +637,7 @@ test("a completed turn's footer replays its reply and stays reachable on touch w
   await expect(turn).toHaveAttribute("data-turn-status", "completed");
   const turnId = (await turn.getAttribute("data-turn-id"))!;
   // The route is mocked so the text choice is deterministic: a stored completion result for two taps, then none.
-  const storedReply = { assistantResult: { final: { text: "Stored final answer." }, unclassified: null } };
+  const storedReply = { assistantResult: { partial: { text: "Stored partial answer." }, final: null } };
   const replies = [storedReply, storedReply, { assistantResult: null }];
   const reads: string[] = [];
   await page.route("**/api/threads/*/turns/*/reply-speech", async route => {

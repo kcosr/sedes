@@ -129,37 +129,42 @@ describe("codex goal native protocol", () => {
   });
 
   it("encodes set/clear params without tokenBudget and with browser-safe status", () => {
+    expect(() => codexThreadGoalSetMethod.encodeParams({ threadId: "thr_123", status: "paused" } as never)).toThrow();
+    expect(() => codexThreadGoalClearMethod.encodeParams({ threadId: "thr_123" } as never)).toThrow();
+    expect(() => codexThreadGoalSetMethod.encodeParams({ threadId: "thr_123", status: "paused", origin: "agent" } as never)).toThrow();
     expect(
-      encodeCodexGoalSetParams({
+      encodeCodexGoalSetParams({ origin: "user",
         threadId: "thr_123",
         objective: "Ship goal",
         status: "active",
       }),
     ).toEqual({
+      origin: "user",
       threadId: "thr_123",
       objective: "Ship goal",
       status: "active",
     });
 
     expect(
-      encodeCodexGoalSetParams({
+      encodeCodexGoalSetParams({ origin: "user",
         threadId: "thr_123",
         status: "paused",
       }),
     ).toEqual({
+      origin: "user",
       threadId: "thr_123",
       status: "paused",
     });
 
     expect(
-      codexThreadGoalSetMethod.encodeParams({
+      codexThreadGoalSetMethod.encodeParams({ origin: "user",
         threadId: "thr_123",
         status: "paused",
       }),
-    ).toEqual({ threadId: "thr_123", status: "paused" });
+    ).toEqual({ origin: "user", threadId: "thr_123", status: "paused" });
 
     expect(() =>
-      codexThreadGoalSetMethod.encodeParams({
+      codexThreadGoalSetMethod.encodeParams({ origin: "user",
         threadId: "thr_123",
         tokenBudget: 20,
       } as never),
@@ -173,26 +178,26 @@ describe("codex goal native protocol", () => {
       "complete",
     ] as const) {
       expect(
-        codexThreadGoalSetMethod.encodeParams({
+        codexThreadGoalSetMethod.encodeParams({ origin: "user",
           threadId: "thr_123",
           status,
         }),
-      ).toEqual({ threadId: "thr_123", status });
+      ).toEqual({ origin: "user", threadId: "thr_123", status });
     }
     expect(
-      codexThreadGoalSetMethod.encodeParams({
+      codexThreadGoalSetMethod.encodeParams({ origin: "user",
         threadId: "thr_123",
         objective: null,
         status: null,
       }),
-    ).toEqual({ threadId: "thr_123", objective: null, status: null });
+    ).toEqual({ origin: "user", threadId: "thr_123", objective: null, status: null });
 
     expect(
       codexThreadGoalGetMethod.encodeParams({ threadId: "thr_123" }),
     ).toEqual({ threadId: "thr_123" });
     expect(
-      codexThreadGoalClearMethod.encodeParams({ threadId: "thr_123" }),
-    ).toEqual({ threadId: "thr_123" });
+      codexThreadGoalClearMethod.encodeParams({ origin: "user", threadId: "thr_123" }),
+    ).toEqual({ origin: "user", threadId: "thr_123" });
 
     expect(
       codexThreadGoalSetMethod.decodeResult({ goal: validNativeGoal }),
@@ -208,14 +213,14 @@ describe("codex goal native protocol", () => {
       } as never),
     ).toThrow();
     expect(() =>
-      codexThreadGoalSetMethod.encodeParams({
+      codexThreadGoalSetMethod.encodeParams({ origin: "user",
         threadId: "thr_123",
         status: "active",
         extra: true,
       } as never),
     ).toThrow();
     expect(() =>
-      codexThreadGoalClearMethod.encodeParams({
+      codexThreadGoalClearMethod.encodeParams({ origin: "user",
         threadId: "thr_123",
         extra: true,
       } as never),

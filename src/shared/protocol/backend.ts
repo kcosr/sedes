@@ -232,7 +232,7 @@ const schemas = [
   z.strictObject({
     ...backendItemBaseShape,
     semanticKind: z.literal("assistant_message"),
-    responsePhase: z.enum(["provisional", "final", "unclassified"]).optional(),
+    responsePhase: z.enum(["provisional", "partial", "final", "unclassified"]).optional(),
     nonblockingQuestions: nonblockingQuestionsPayloadSchema.optional(),
     markdown: messageTextSchema,
   }),
@@ -910,8 +910,8 @@ export const backendConversationEventSchema = z
   .superRefine((event, context) => {
     if ((event.type === "item_updated" || event.type === "item_completed") && event.liveProgress &&
         (event.item.semanticKind !== "assistant_message" || event.item.status !== "completed" ||
-         event.item.responsePhase !== "provisional" || event.item.markdown.text.trim().length === 0)) {
-      context.addIssue({ code: "custom", message: "Live progress requires a completed provisional assistant message.", path: ["liveProgress"] });
+         (event.item.responsePhase !== "provisional" && event.item.responsePhase !== "partial") || event.item.markdown.text.trim().length === 0)) {
+      context.addIssue({ code: "custom", message: "Live progress requires a completed provisional or partial assistant message.", path: ["liveProgress"] });
     }
     if (event.type === "item_started" && event.item.status !== "streaming") {
       context.addIssue({

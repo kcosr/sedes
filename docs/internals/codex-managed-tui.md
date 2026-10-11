@@ -31,7 +31,7 @@ and execution environment can prove all launch requirements:
   persistent sidecar, whose runtime channel must have negotiated the
   `codex_managed_tui@2` `tui.control` and `tui.execute` operations; the sidecar
   advertises that capability only when its optional native PTY binding loaded;
-- the command reports a stable release at or above the supported `0.160.0`
+- the command reports a stable release at or above the supported `0.162.1`
   floor; and
 - the desired seven-axis execution tuple is complete, currently allowed, and
   exactly representable by the provider policy contract.
@@ -41,9 +41,10 @@ disable managed TUI because the interactive client can select and invoke a
 model before Sedes has a per-turn authorization hook. Immediately before every
 launch, Sedes checks the selected model, reasoning effort, and speed against an
 uncached live daemon catalog: Fast or Ultrafast must be a tier the model still
-advertises. Synchronizing a Fast or Ultrafast selection into a running TUI
+advertises and its corresponding thread flag (`fast_mode` or `ultrafast_mode`)
+must be enabled. Synchronizing a Fast or Ultrafast selection into a running TUI
 repeats the speed check and fails the TUI, keeping the new settings, if the
-model no longer offers it.
+model no longer offers it or native policy disables that tier.
 
 The TUI is intentionally unavailable for empty drafts, owned-stdio targets on
 every topology, runtimes whose sidecar did not negotiate the managed-TUI
@@ -118,7 +119,7 @@ must produce a matching settings observation before another readback; an
 unchanged tuple needs no notification. A failed, stale, or mismatched
 confirmation prevents the PTY from opening. This preserves an active turn.
 
-Codex 0.160 remote resume restores the daemon's saved permissions and rejects
+Codex 0.162.1 remote resume restores the daemon's saved permissions and rejects
 CLI permission overrides. Sedes therefore passes only model, reasoning,
 service tier, workspace, and TUI presentation options to the client under
 strict configuration. Sedes does not write global `config.toml`.
@@ -127,7 +128,7 @@ The same process-local profile disables automatic recaps, binds composer
 submission to Enter, starts outside Vim mode, keeps alternate-screen support
 enabled for Codex's full-screen overlays, and disables raw-output mode. Codex's
 main surface remains an inline viewport through the explicit
-`tui.fullscreen_transcript=false` override, including on Codex 0.160.0. The profile also sets
+`tui.fullscreen_transcript=false` override, including on Codex 0.162.1. The profile also sets
 `tui.disable_paste_burst=false`, which keeps Codex's burst detector enabled for
 unframed rapid terminal input; Sedes Stage and Send use native bracketed-paste
 boundaries and send the submission Enter outside those boundaries. These

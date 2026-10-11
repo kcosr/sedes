@@ -431,6 +431,7 @@ export class CodexManagedTuiController implements ManagedTerminalResourceAuthori
         await assertCodexLiveModelSelection({
           client: this.#client,
           expectedGeneration: authority.appServerGeneration,
+          nativeThreadId: authority.backendConversationId,
           model: settings.model,
           reasoningEffort: settings.reasoningEffort,
           serviceTier: settings.serviceTier,
@@ -439,7 +440,7 @@ export class CodexManagedTuiController implements ManagedTerminalResourceAuthori
       } catch {
         await this.registry.fail(
           authority,
-          "Sedes kept the new settings, but this model no longer offers the selected speed. Choose another speed and start a new TUI.",
+          "Sedes kept the new settings, but the selected speed is unavailable for this model or disabled by Codex. Choose another speed and start a new TUI.",
         );
         return;
       }

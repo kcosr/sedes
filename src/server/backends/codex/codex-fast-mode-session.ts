@@ -1,30 +1,52 @@
 import type { RequestScope } from "../../identity/identity-provider.js";
 import type { CodexSharedClientFacade } from "./codex-client-facade.js";
-import {
-  CODEX_C2_MAX_CATALOG_ITEMS,
-  codexExperimentalFeatureListMethod,
-  codexThreadSettingsUpdateMethod,
-  type CodexExperimentalFeatureListResponse,
-} from "./codex-c2-protocol.js";
+import { codexThreadSettingsUpdateMethod } from "./codex-c2-protocol.js";
+import { readCodexSpeedEnablement } from "./codex-speed-policy.js";
 import {
   encodeCodexServiceTier,
   type CodexServiceTierSelection,
 } from "./codex-service-tier.js";
 
 const REQUEST_TIMEOUT_MILLISECONDS = 10_000;
-const MAXIMUM_FEATURE_PAGES = 32;
-const MAXIMUM_CURSOR_BYTES = 4_096;
-const FAST_MODE_FEATURE_NAME = "fast_mode";
 const DEFAULT_RECOVERY_DELAYS_MILLISECONDS = [
   250, 1_000, 5_000, 15_000, 30_000,
 ];
 
 export type CodexFastModeProjection = Readonly<{
   revision: number;
-  enabled: boolean;
+  fastEnabled: boolean;
+  ultrafastEnabled: boolean;
   availability: "available" | "unavailable";
   unavailableReason?: string;
 }>;
+
+/** A fresh, thread-scoped policy must authorize each accelerated tier. */
+export function codexSpeedPolicyAllows(
+  projection: CodexFastModeProjection | undefined,
+  selection: CodexServiceTierSelection,
+): boolean {
+  return (
+    selection === "standard" ||
+    (projection?.availability === "available" &&
+      (selection === "fast"
+        ? projection.fastEnabled
+        : projection.ultrafastEnabled))
+  );
+}
+
+/** Missing/stale discovery is not evidence that a saved preference is disabled. */
+export function codexSpeedPolicyDisables(
+  projection: CodexFastModeProjection | undefined,
+  selection: CodexServiceTierSelection | undefined,
+): boolean {
+  return (
+    selection !== undefined &&
+    selection !== "standard" &&
+    (projection?.availability === "available" ||
+      projection?.unavailableReason === "feature_disabled") &&
+    !(selection === "fast" ? projection.fastEnabled : projection.ultrafastEnabled)
+  );
+}
 
 type SessionRecord = Readonly<{
   projection: CodexFastModeProjection;
@@ -55,7 +77,7 @@ type RefreshAuthority = Readonly<{
 }>;
 
 /**
- * Principal/thread-scoped native Fast-mode availability and mutation
+ * Principal/thread-scoped native speed policy and mutation
  * authority. Only a successfully loaded native thread installs a usable
  * session, and every native write is fenced to that daemon generation.
  */
@@ -94,7 +116,8 @@ export class CodexFastModeSessionRegistry {
       ? record.projection
       : {
           revision: record.projection.revision,
-          enabled: record.projection.enabled,
+          fastEnabled: record.projection.fastEnabled,
+          ultrafastEnabled: record.projection.ultrafastEnabled,
           availability: "unavailable",
           unavailableReason: "generation_changed",
         };
@@ -113,7 +136,8 @@ export class CodexFastModeSessionRegistry {
     ) {
       return Object.freeze({
         revision: prior?.projection.revision ?? 0,
-        enabled: prior?.projection.enabled ?? false,
+        fastEnabled: prior?.projection.fastEnabled ?? false,
+        ultrafastEnabled: prior?.projection.ultrafastEnabled ?? false,
         availability: "unavailable",
         unavailableReason: "generation_changed",
       });
@@ -125,17 +149,19 @@ export class CodexFastModeSessionRegistry {
     });
     let projection: CodexFastModeProjection;
     try {
-      const enabled = await readFastModeEnablement(input);
+      const policy = await readCodexSpeedEnablement(input);
+      const enabled = policy.fastEnabled || policy.ultrafastEnabled;
       projection = Object.freeze({
         revision: (prior?.projection.revision ?? 0) + 1,
-        enabled,
+        ...policy,
         availability: enabled ? "available" : "unavailable",
         ...(enabled ? {} : { unavailableReason: "feature_disabled" }),
       });
     } catch {
       projection = Object.freeze({
         revision: (prior?.projection.revision ?? 0) + 1,
-        enabled: prior?.projection.enabled ?? false,
+        fastEnabled: prior?.projection.fastEnabled ?? false,
+        ultrafastEnabled: prior?.projection.ultrafastEnabled ?? false,
         availability: "unavailable",
         unavailableReason: "feature_unavailable",
       });
@@ -151,10 +177,12 @@ export class CodexFastModeSessionRegistry {
     ) {
       return Object.freeze({
         revision: latest?.projection.revision ?? projection.revision,
-        enabled:
-          latest?.projection.enabled ??
-          prior?.projection.enabled ??
-          projection.enabled,
+        fastEnabled:
+          latest?.projection.fastEnabled ??
+          prior?.projection.fastEnabled ?? projection.fastEnabled,
+        ultrafastEnabled:
+          latest?.projection.ultrafastEnabled ??
+          prior?.projection.ultrafastEnabled ?? projection.ultrafastEnabled,
         availability: "unavailable",
         unavailableReason: "generation_changed",
       });
@@ -180,7 +208,12 @@ export class CodexFastModeSessionRegistry {
     selection: CodexServiceTierSelection,
   ): Promise<void> {
     const record = this.#records.get(key(scope, applicationThreadId));
-    if (!record || record.projection.availability !== "available") {
+    if (
+      !record ||
+      (record.projection.availability !== "available" &&
+        record.projection.unavailableReason !== "feature_disabled") ||
+      !codexSpeedPolicyAllows(record.projection, selection)
+    ) {
       throw new Error("codex_fast_mode_session_unavailable");
     }
     const lifecycle = record.client.lifecycleSnapshot();
@@ -282,60 +315,6 @@ export class CodexFastModeSessionRegistry {
   }
 }
 
-async function readFastModeEnablement(input: {
-  readonly nativeThreadId: string;
-  readonly connectionGeneration: number;
-  readonly client: CodexSharedClientFacade;
-  readonly signal?: AbortSignal;
-}): Promise<boolean> {
-  let cursor: string | null = null;
-  const names = new Set<string>();
-  const cursors = new Set<string>();
-  let fastModeEnabled: boolean | undefined;
-  for (let page = 0; page < MAXIMUM_FEATURE_PAGES; page += 1) {
-    const response: {
-      readonly generation: number;
-      readonly result: CodexExperimentalFeatureListResponse;
-    } = await input.client.requestWithReceipt(
-      codexExperimentalFeatureListMethod,
-      {
-        threadId: input.nativeThreadId,
-        limit: CODEX_C2_MAX_CATALOG_ITEMS,
-        ...(cursor ? { cursor } : {}),
-      },
-      {
-        timeoutMilliseconds: REQUEST_TIMEOUT_MILLISECONDS,
-        ...(input.signal ? { signal: input.signal } : {}),
-      },
-    );
-    if (response.generation !== input.connectionGeneration) {
-      throw new Error("codex_fast_mode_generation_changed");
-    }
-    for (const feature of response.result.data) {
-      if (names.has(feature.name)) {
-        throw new Error("codex_feature_catalog_duplicate");
-      }
-      names.add(feature.name);
-      if (feature.name === FAST_MODE_FEATURE_NAME) {
-        if (feature.stage !== "stable") {
-          throw new Error("codex_fast_mode_stage_invalid");
-        }
-        fastModeEnabled = feature.enabled;
-      }
-    }
-    cursor = response.result.nextCursor;
-    if (cursor === null) return fastModeEnabled ?? false;
-    if (
-      cursor.length === 0 ||
-      Buffer.byteLength(cursor, "utf8") > MAXIMUM_CURSOR_BYTES ||
-      cursors.has(cursor)
-    ) {
-      throw new Error("codex_feature_catalog_cursor_invalid");
-    }
-    cursors.add(cursor);
-  }
-  throw new Error("codex_feature_catalog_page_limit_exceeded");
-}
 
 function key(scope: RequestScope, applicationThreadId: string): string {
   return `${scope.tenantId}\0${scope.principalId}\0${applicationThreadId}`;

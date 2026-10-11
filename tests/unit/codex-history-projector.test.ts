@@ -90,7 +90,7 @@ const baseThread = {
   status: { type: "idle" },
   path: "/native/rollout/secret.jsonl",
   cwd: "/workspace",
-  cliVersion: "0.160.0",
+  cliVersion: "0.162.1",
   source: "appServer",
   canAcceptDirectInput: true,
   threadSource: null,
@@ -448,6 +448,7 @@ function turn(
   return {
     id,
     items,
+    rootTurnId: null,
     itemsView: "full",
     status: "completed",
     error: null,
@@ -803,7 +804,7 @@ function decodeThreadItem(item: unknown): CodexThreadItem {
   }).item;
 }
 
-describe("Codex 0.160.0 C1 protocol codecs", () => {
+describe("Codex 0.162.1 C1 protocol codecs", () => {
   it.each([
     { type: "image", fileId: "file-private-image", detail: "high" },
     { type: "image", url: "https://private.invalid/image.png", detail: "high" },
@@ -905,7 +906,7 @@ describe("Codex 0.160.0 C1 protocol codecs", () => {
     const generated = readFileSync(
       path.join(
         repositoryRoot,
-        "protocol/codex-app-server/0.160.0/official/stable/typescript/v2/ThreadItem.ts",
+        "protocol/codex-app-server/0.162.1/official/stable/typescript/v2/ThreadItem.ts",
       ),
       "utf8",
     );
@@ -1090,6 +1091,7 @@ describe("Codex 0.160.0 C1 protocol codecs", () => {
     const failedTurn = {
       id: "failed-turn",
       items: [],
+      rootTurnId: null,
       itemsView: "full",
       status: "failed",
       error: {
@@ -1516,7 +1518,7 @@ describe("Codex 0.160.0 C1 protocol codecs", () => {
     })).toThrow();
   });
 
-  it("decodes the authoritative Codex 0.160 completed subagent activity kind", () => {
+  it("decodes the authoritative Codex completed subagent activity kind", () => {
     const completedActivity = {
       type: "subAgentActivity",
       id: "subagent-completed",
@@ -1552,8 +1554,9 @@ describe("Codex 0.160.0 C1 protocol codecs", () => {
     ).toThrow();
   });
 
-  it("admits closed and bounded Codex 0.160 misalignment details without projecting them", () => {
+  it("admits closed and bounded Codex misalignment details without projecting them", () => {
     const failedTurn = turn("failed-turn", [], {
+      rootTurnId: null,
       itemsView: "notLoaded",
       status: "failed",
       error: {
@@ -1786,7 +1789,7 @@ describe("Codex 0.160.0 C1 protocol codecs", () => {
   });
 });
 
-describe("Codex 0.160.0 C1 history projector", () => {
+describe("Codex 0.162.1 C1 history projector", () => {
   it.each([
     "userMessage", "hookPrompt", "collabAgentToolCall", "subAgentActivity",
     "webSearch", "imageView", "sleep", "enteredReviewMode", "exitedReviewMode",
@@ -1873,6 +1876,7 @@ describe("Codex 0.160.0 C1 history projector", () => {
 
   it.each([
     ["commentary", "provisional"],
+    ["partial_answer", "partial"],
     ["final_answer", "final"],
     [null, "unclassified"],
   ])("preserves native assistant response phase %s", (phase, responsePhase) => {

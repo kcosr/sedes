@@ -10,7 +10,7 @@ const entrySchema = z.object({
   event: z.enum(["received", "queued", "dropped", "dequeued", "synthesis_started", "playback_started", "playback_drained",
     "playback_stopped", "interaction_finished", "stream_connecting", "stream_live", "stream_lost", "policy_received", "disconnected"]),
   sourceEventId: z.string().regex(/^[a-f0-9]{64}$/u).optional(),
-  eventKind: z.enum(["turn.progress", "turn.completed", "turn.failed", "turn.interrupted", "thread.woke",
+  eventKind: z.enum(["turn.progress", "turn.partial", "turn.completed", "turn.failed", "turn.interrupted", "thread.woke",
     "automation.started", "automation.failed", "approval.requested", "input.requested", "question.requested", "replay", "manual"]).optional(),
   connectionGeneration: counter,
   streamGeneration: counter,

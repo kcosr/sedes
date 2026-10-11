@@ -21,7 +21,7 @@ import {
   SingleUserIdentityProvider,
   type RequestScope,
 } from "../../src/server/identity/identity-provider.js";
-import type { ClassifiedAssistantResult } from "../../src/shared/protocol/completion-result.js";
+import { classifiedAssistantResultSchema, type ClassifiedAssistantResult } from "../../src/shared/protocol/completion-result.js";
 import type { NotificationAssistantResultPhase } from "../../src/shared/protocol/notification.js";
 import { importLegacyDatabaseConfigurationFixture } from "../support/database-configuration-fixture.js";
 import { parseResolvedBackendConfiguration } from "../support/resolved-backend-configuration.js";
@@ -154,6 +154,7 @@ function observe(
 }
 
 const classified = (final: string): ClassifiedAssistantResult => ({
+  partial: { text: `Part of ${final}` },
   provisional: { text: `Before ${final}` },
   final: { text: final },
   unclassified: null,
@@ -165,6 +166,94 @@ function selectPhases(current: Fixture, assistantResultPhases: NotificationAssis
 }
 
 describe("turn reply speech lookup", () => {
+  it("migrates exact pre-upgrade classifications without changing frozen text, unrelated state or prior checksums", () => {
+    const current = fixture(137);
+    try {
+      const operationId = observe(current, { acceptedAt: 1_000, turnId: "old-turn", classifiedResult: null });
+      observe(current, { acceptedAt: 2_000, turnId: "unclassified-turn", classifiedResult: null });
+      const oldClassification = {
+        provisional: { text: "Checking the files.\n\nFound an issue." },
+        final: { text: "Repaired the issue. 雪🙂" },
+        unclassified: { text: "Older output…", truncation: {
+          truncated: true, reason: "byte_limit", retainedBytes: 15, originalBytes: 500,
+        } },
+      };
+      // Seed the exact persisted v137 contract, without passing through today's parser.
+      current.database.prepare("UPDATE submission_completion_observations SET classified_result_json = ? WHERE operation_id = ?")
+        .run(JSON.stringify(oldClassification), operationId);
+      selectPhases(current, ["provisional", "unclassified"]);
+      const settings = current.notifications.read(current.scope);
+      const migrationRows = () => current.database.prepare("SELECT * FROM schema_migrations WHERE version <= 137 ORDER BY version").all();
+      const priorMigrations = migrationRows();
+      const readObservations = () => current.database.prepare("SELECT * FROM submission_completion_observations ORDER BY operation_id")
+        .all() as Array<Record<string, unknown>>;
+      const observations = readObservations();
+      const withoutClassification = (rows: Array<Record<string, unknown>>) => rows.map(({ classified_result_json: _classification, ...row }) => row);
+      expect(current.database.prepare("SELECT max(version) AS version FROM schema_migrations").get()).toEqual({ version: 137 });
+      expect(classifiedAssistantResultSchema.safeParse(oldClassification).success).toBe(false);
+
+      applyDatabaseMigrations(current.database, backendNormalizedMigrations.filter(({ version }) => version <= 138));
+
+      const migrated = current.completions.latestClassifiedResult(current.scope, current.threadId, "old-turn");
+      expect(classifiedAssistantResultSchema.parse(migrated)).toEqual({ ...oldClassification, partial: null });
+      expect(current.completions.latestClassifiedResult(current.scope, current.threadId, "unclassified-turn")).toBeNull();
+      expect(withoutClassification(readObservations())).toEqual(withoutClassification(observations));
+      expect(readObservations().filter(row => row.classified_result_json === null))
+        .toEqual(observations.filter(row => row.classified_result_json === null));
+      expect(migrationRows()).toEqual(priorMigrations);
+      expect(current.database.prepare("SELECT max(version) AS version FROM schema_migrations").get()).toEqual({ version: 138 });
+      expect(current.notifications.read(current.scope)).toEqual(settings);
+      selectPhases(current, ["partial", "final"]);
+      expect(current.replies.read(current.scope, current.threadId, "old-turn"))
+        .toEqual({ assistantResult: { partial: null, final: oldClassification.final } });
+    } finally { current.database.close(); }
+  });
+
+  it("adds an independent disabled Partial delivery choice while preserving existing scoped policy and consumption", () => {
+    const current = fixture(138);
+    try {
+      observe(current, { acceptedAt: 1_000, turnId: "completed-turn", classifiedResult: classified("Done") });
+      const { silenced: _silenced, revision, ...initial } = current.notifications.read(current.scope);
+      current.notifications.update(current.scope, { ...initial, enabled: true, scriptPath: "/test/notify",
+        assistantResultPhases: ["provisional", "unclassified"],
+        delivery: { ...initial.delivery, "turn.progress": { script: true, voice: "speak" } }, expectedRevision: revision });
+      current.notifications.setSilenced(current.scope, true);
+      const repository = new NotificationRepository(current.database);
+      const occurredAt = Date.now() + 100;
+      repository.consume(current.scope, "existing-progress", occurredAt);
+      current.database.prepare(`UPDATE principal_notification_settings
+        SET config_json = json_remove(config_json, '$.delivery."turn.partial"')`).run();
+      const readSettings = () => current.database.prepare("SELECT * FROM principal_notification_settings ORDER BY tenant_id, owner_principal_id")
+        .all() as Array<Record<string, unknown>>;
+      const before = readSettings();
+      const priorConfig = JSON.parse(before[0]!.config_json as string) as Record<string, unknown>;
+      const priorMigrations = current.database.prepare("SELECT * FROM schema_migrations WHERE version <= 138 ORDER BY version").all();
+      const observations = current.database.prepare("SELECT * FROM submission_completion_observations").all();
+      const consumption = current.database.prepare("SELECT * FROM notification_event_consumption").all();
+      expect(() => current.notifications.read(current.scope)).toThrow();
+
+      applyDatabaseMigrations(current.database, backendNormalizedMigrations.filter(({ version }) => version <= 139));
+
+      const settings = current.notifications.read(current.scope);
+      expect(settings.delivery["turn.partial"]).toEqual({ script: false, voice: "none" });
+      expect(settings.delivery["turn.progress"]).toEqual({ script: true, voice: "speak" });
+      expect(settings).toMatchObject({ enabled: true, silenced: true, assistantResultPhases: ["provisional", "unclassified"] });
+      expect(readSettings()).toEqual(before.map(row => ({ ...row,
+        revision: (row.revision as number) + 1, dispatch_generation: (row.dispatch_generation as number) + 1,
+        config_json: expect.any(String),
+      })));
+      const nextConfig = JSON.parse(readSettings()[0]!.config_json as string) as typeof priorConfig;
+      expect(nextConfig).toEqual({ ...priorConfig,
+        delivery: { ...priorConfig.delivery as object, "turn.partial": { script: false, voice: "none" } },
+      });
+      expect(current.database.prepare("SELECT * FROM schema_migrations WHERE version <= 138 ORDER BY version").all()).toEqual(priorMigrations);
+      expect(current.database.prepare("SELECT * FROM submission_completion_observations").all()).toEqual(observations);
+      expect(current.database.prepare("SELECT * FROM notification_event_consumption").all()).toEqual(consumption);
+      expect(repository.consume(current.scope, "existing-progress", occurredAt)).toBeNull();
+      expect(current.notifications.read(current.foreign).delivery["turn.partial"]).toEqual({ script: false, voice: "none" });
+    } finally { current.database.close(); }
+  });
+
   it("returns the latest accepted classification of a steered turn and nothing outside its scope", () => {
     const current = fixture();
     try {
@@ -316,6 +405,9 @@ describe("turn reply speech service", () => {
       expect(current.notifications.read(current.scope)).toMatchObject({ enabled: false });
       expect(current.replies.read(current.scope, current.threadId, "turn-1"))
         .toEqual({ assistantResult: { final: { text: "Done" }, unclassified: null } });
+      selectPhases(current, ["partial"]);
+      expect(current.replies.read(current.scope, current.threadId, "turn-1"))
+        .toEqual({ assistantResult: { partial: { text: "Part of Done" } } });
       selectPhases(current, ["provisional"]);
       expect(current.replies.read(current.scope, current.threadId, "turn-1"))
         .toEqual({ assistantResult: { provisional: { text: "Before Done" } } });
@@ -330,10 +422,10 @@ describe("turn reply speech service", () => {
     try {
       const whole = { assistantResult: { unclassified: { text: "Whole reply" } } };
       observe(current, { acceptedAt: 1_000, turnId: "turn-1", classifiedResult: classified("Done") });
-      observe(current, { acceptedAt: 2_000, turnId: "turn-blank", classifiedResult: { provisional: { text: "Working." }, final: { text: " \n " }, unclassified: null } });
+      observe(current, { acceptedAt: 2_000, turnId: "turn-blank", classifiedResult: { partial: null, provisional: { text: "Working." }, final: { text: " \n " }, unclassified: null } });
       // Turns completed before classification existed stored only the whole reply.
       observe(current, { acceptedAt: 3_000, turnId: "turn-legacy", classifiedResult: null });
-      observe(current, { acceptedAt: 4_000, turnId: "turn-silent", result: "  ", classifiedResult: { provisional: null, final: { text: "" }, unclassified: null } });
+      observe(current, { acceptedAt: 4_000, turnId: "turn-silent", result: "  ", classifiedResult: { partial: null, provisional: null, final: { text: "" }, unclassified: null } });
       observe(current, { acceptedAt: 5_000, turnId: "turn-silent-legacy", result: "", classifiedResult: null });
 
       expect(current.replies.read(current.scope, current.threadId, "turn-blank")).toEqual(whole);

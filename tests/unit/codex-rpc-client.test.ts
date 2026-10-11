@@ -1235,7 +1235,7 @@ describe("Codex RPC client", () => {
     ["account/gatewayOAuth/changed", { authUrl: null, providerId: "provider-1", status: "succeeded", error: null }],
     ["thread/attachment/updated", { threadId: "thread-1", attachmentType: "file", identityKey: "identity-1", attachmentId: "attachment-1", operation: "created" }],
     ["account/updated", { authMode: "chatgpt", planType: "promax" }],
-  ])("recognizes the 0.160 %s notification without disrupting RPC", async (method, params) => {
+  ])("recognizes the official %s notification without disrupting RPC", async (method, params) => {
     const { client, transport } = createClient();
     const notifications: unknown[] = [];
     client.subscribeNotifications((notification) => notifications.push(notification));

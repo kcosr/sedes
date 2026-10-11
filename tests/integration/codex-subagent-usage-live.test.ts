@@ -129,7 +129,7 @@ describe.skipIf(!enabled)("live Codex subagent durable accounting", () => {
         agentToolCliEnvironment: unavailableCodexAgentToolCliEnvironmentProvider, onError: error => diagnostics.push(error), executionSettings: {
           assertExecutionPolicyAllowed: () => undefined,
           subscribeDesiredSettingsChanged: () => () => undefined,
-          desiredSettings: () => settings, resolveFastModeDisabled: () => settings, forkSettingsEligibility: () => ({ availability: "available", settingsRevision: 1, settings }),
+          desiredSettings: () => settings, resolveUnavailableServiceTier: () => settings, forkSettingsEligibility: () => ({ availability: "available", settingsRevision: 1, settings }),
           freezeOperationSnapshot: () => ({ settings }), observeEffective: () => undefined, markEffectiveUnknown: () => undefined,
         } });
       handle = await driver.attach({ scope, binding, workspace, opaqueBindingDetail: serializeCodexBindingDetail({ threadId: nativeRoot,

@@ -30,7 +30,7 @@ const adoptionManifest = JSON.parse(
   readFileSync(
     path.join(
       repositoryRoot,
-      "protocol/codex-app-server/0.160.0/adoption-manifest.json",
+      "protocol/codex-app-server/0.162.1/adoption-manifest.json",
     ),
     "utf8",
   ),
@@ -49,7 +49,7 @@ const stableProtocolManifest = JSON.parse(
   readFileSync(
     path.join(
       repositoryRoot,
-      "protocol/codex-app-server/0.160.0/protocol-manifest.json",
+      "protocol/codex-app-server/0.162.1/protocol-manifest.json",
     ),
     "utf8",
   ),
@@ -58,7 +58,7 @@ const experimentalProtocolManifest = JSON.parse(
   readFileSync(
     path.join(
       repositoryRoot,
-      "protocol/codex-app-server/0.160.0/protocol-manifest-experimental.json",
+      "protocol/codex-app-server/0.162.1/protocol-manifest-experimental.json",
     ),
     "utf8",
   ),
@@ -90,7 +90,7 @@ const officialServerNotificationDefinitions = new Map(
   [...readFileSync(
     path.join(
       repositoryRoot,
-      "protocol/codex-app-server/0.160.0/official/stable/typescript/ServerNotification.ts",
+      "protocol/codex-app-server/0.162.1/official/stable/typescript/ServerNotification.ts",
     ),
     "utf8",
   ).matchAll(/\{ "method": "([^"]+)", "params": ([A-Za-z0-9_]+) \}/gu)].map(
@@ -103,7 +103,7 @@ function readSchema(profile: "generated" | "generated-experimental") {
     readFileSync(
       path.join(
         repositoryRoot,
-        `protocol/codex-app-server/0.160.0/${profile}/json-schema/codex_app_server_protocol.v2.schemas.json`,
+        `protocol/codex-app-server/0.162.1/${profile}/json-schema/codex_app_server_protocol.v2.schemas.json`,
       ),
       "utf8",
     ),
@@ -222,12 +222,12 @@ describe("Codex D3 production app-server binding", () => {
   });
 
   it("keeps the manifest and generated production registries exactly aligned", () => {
-    expect(CODEX_APP_SERVER_RELEASE).toBe("0.160.0");
-    expect(adoptionManifest.productionRelease).toBe("0.160.0");
+    expect(CODEX_APP_SERVER_RELEASE).toBe("0.162.1");
+    expect(adoptionManifest.productionRelease).toBe("0.162.1");
     expect(adoptionManifest.productionRuntimeCompatibility.currentPolicy).toBe(
-      "stable releases admitted by the runtime policy using exactly the 0.160.0 parser profile",
+      "stable releases admitted by the runtime policy using exactly the 0.162.1 parser profile",
     );
-    expect(adoptionManifest.routes).toHaveLength(66);
+    expect(adoptionManifest.routes).toHaveLength(67);
 
     const byDirection = adoptionManifest.routes.reduce<
       Record<string, typeof adoptionManifest.routes>
@@ -238,7 +238,7 @@ describe("Codex D3 production app-server binding", () => {
     expect(byDirection.client_request).toHaveLength(24);
     expect(byDirection.client_notification).toHaveLength(1);
     expect(byDirection.server_request).toHaveLength(10);
-    expect(byDirection.server_notification).toHaveLength(31);
+    expect(byDirection.server_notification).toHaveLength(32);
 
     expect(
       byDirection.client_request!
@@ -264,7 +264,7 @@ describe("Codex D3 production app-server binding", () => {
     expect([...CODEX_SERVER_NOTIFICATION_METHODS].sort()).toEqual(
       [...stableProtocolManifest.methods.serverNotifications].sort(),
     );
-    expect(CODEX_SERVER_NOTIFICATION_METHODS).toHaveLength(85);
+    expect(CODEX_SERVER_NOTIFICATION_METHODS).toHaveLength(86);
   });
 
   it("separates method stability from the ten selected experimental artifacts", () => {
@@ -311,7 +311,7 @@ describe("Codex D3 production app-server binding", () => {
   });
 
   it("admits an official-valid fixture through every exact notification route", () => {
-    expect(officialServerNotificationDefinitions.size).toBe(85);
+    expect(officialServerNotificationDefinitions.size).toBe(86);
     const artifactProfileByMethod = new Map(
       adoptionManifest.routes
         .filter((route) => route.direction === "server_notification")
@@ -369,7 +369,7 @@ describe("Codex D3 production app-server binding", () => {
       }),
     );
 
-    expect(Object.keys(derivedRoutes)).toHaveLength(64);
+    expect(Object.keys(derivedRoutes)).toHaveLength(65);
     expect(CODEX_NOTIFICATION_THREAD_ROUTE_REGISTRY).toEqual(derivedRoutes);
   });
 

@@ -247,6 +247,7 @@ export class CodexGoalSessionRegistry {
     readonly desired: CodexGoalDesiredPostcondition;
     readonly arguments: unknown;
     readonly currentState: CodexGoalStateV1;
+    readonly origin: import("./codex-goal-protocol.js").CodexGoalMutationOrigin;
     readonly deadlineAt?: number;
     readonly signal?: AbortSignal;
   }): Promise<CodexGoalNativeOutcome> {
@@ -276,7 +277,7 @@ export class CodexGoalSessionRegistry {
       if (input.actionId === "clear") {
         const response = await input.client.request(
           codexThreadGoalClearMethod,
-          { threadId: input.nativeThreadId },
+          { threadId: input.nativeThreadId, origin: input.origin },
           goalRequestOptions(input),
         );
         if (response.cleared !== true) {
@@ -296,6 +297,7 @@ export class CodexGoalSessionRegistry {
         input.actionId,
         input.desired,
         input.arguments,
+        input.origin,
       );
       const response = await input.client.request(
         codexThreadGoalSetMethod,
@@ -382,6 +384,7 @@ function encodeNativeSetParams(
   actionId: Exclude<CodexGoalActionId, "clear">,
   desired: CodexGoalDesiredPostcondition,
   argumentsValue: unknown,
+  origin: import("./codex-goal-protocol.js").CodexGoalMutationOrigin,
 ) {
   switch (actionId) {
     case "create": {
@@ -392,6 +395,7 @@ function encodeNativeSetParams(
       // never in the durable receipt postcondition (8 KiB JSON cap).
       return encodeCodexGoalSetParams({
         threadId,
+        origin,
         objective: parseCodexGoalCreateObjective(argumentsValue),
         status: "active",
       });
@@ -399,11 +403,13 @@ function encodeNativeSetParams(
     case "pause":
       return encodeCodexGoalSetParams({
         threadId,
+        origin,
         status: "paused",
       });
     case "resume":
       return encodeCodexGoalSetParams({
         threadId,
+        origin,
         status: "active",
       });
   }

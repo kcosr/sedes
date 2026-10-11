@@ -14,7 +14,7 @@ public class NativeVoiceQueueDeviceTest {
     // Server JSON.stringify text, kept identical to NativeVoiceQueueTest.
     private static final String ESCAPED_PREFIX = "a/b </c> d—e \\\"q\\\" \\\\ \\n\\t\\u0001 é\u0085 €    🦦 lone\\ud800 ";
     private static String payloadJson(String escapedText) {
-        return "{\"schemaVersion\":4,\"notificationId\":\"notice-1\",\"event\":\"turn.completed\",\"occurredAt\":\"2026-10-03T00:00:00.000Z\"," +
+        return "{\"schemaVersion\":5,\"notificationId\":\"notice-1\",\"event\":\"turn.completed\",\"occurredAt\":\"2026-10-03T00:00:00.000Z\"," +
             "\"title\":\"Completed\",\"message\":\"Workspace: a/b\",\"thread\":{\"id\":\"thread-a\",\"title\":\"Thread A\"}," +
             "\"assistantResult\":{\"final\":{\"text\":\"" + escapedText + "\",\"truncation\":{\"truncated\":true,\"originalBytes\":200000," +
             "\"retainedBytes\":65000,\"reason\":\"byte_limit\"}}}}";

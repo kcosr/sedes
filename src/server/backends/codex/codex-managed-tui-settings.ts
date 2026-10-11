@@ -38,6 +38,7 @@ export async function prepareCodexManagedTuiThreadSettings(input: {
   const modelSelection = await assertCodexLiveModelSelection({
     client,
     expectedGeneration: authority.appServerGeneration,
+    nativeThreadId: authority.backendConversationId,
     model: settings.model,
     reasoningEffort: settings.reasoningEffort,
     serviceTier: settings.serviceTier,

@@ -64,7 +64,7 @@ export class TurnReplySpeechService {
     }
     const whole = this.input.completions.latestAssistantResult(scope, threadId, turnId);
     if (!hasText(whole)) return null;
-    return fit({ provisional: null, final: null, unclassified: whole }, WHOLE_REPLY_PHASES, envelope);
+    return fit({ provisional: null, partial: null, final: null, unclassified: whole }, WHOLE_REPLY_PHASES, envelope);
   }
 }
 

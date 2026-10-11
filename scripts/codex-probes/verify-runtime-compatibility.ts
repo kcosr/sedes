@@ -291,8 +291,13 @@ try {
       { type: "text", text: "Return the fixture response.", text_elements: [] },
     ],
   });
+  assert.equal(turn.turn.rootTurnId, turn.turn.id);
+  const turnStarted = await client.nextNotification("turn/started");
+  decodeCodexC2Notification("turn/started", turnStarted.params);
+  assert.equal(turnStarted.params.turn.rootTurnId, turn.turn.id);
   const completed = await client.nextNotification("turn/completed");
   decodeCodexC2Notification("turn/completed", completed.params);
+  assert.equal(completed.params.turn.rootTurnId, turn.turn.id);
   for (const method of ["item/started", "item/completed"] as const) {
     let assistantSeen = false;
     for (let index = 0; index < 2; index++) {
@@ -320,6 +325,7 @@ try {
     includeTurns: true,
   });
   assert.equal(read.thread.turns.length, 1);
+  assert.equal(read.thread.turns[0].rootTurnId, turn.turn.id);
   assert(
     read.thread.turns[0].items.some(
       (item) =>
@@ -332,12 +338,17 @@ try {
   });
   assert.equal(resumed.thread.id, threadId);
   assert.equal(resumed.reasoningEffort, "high");
+  const resumedWithTurns = await call(resumedClient, codexThreadResumeMethod, {
+    threadId,
+  });
+  assert.equal(resumedWithTurns.thread.turns[0]?.rootTurnId, turn.turn.id);
   const turns = await call(resumedClient, codexThreadTurnsListMethod, {
     threadId,
     limit: 10,
     itemsView: "notLoaded",
   });
   assert.equal(turns.data.length, 1);
+  assert.equal(turns.data[0].rootTurnId, turn.turn.id);
   const items = await call(resumedClient, codexThreadItemsListMethod, {
     threadId,
     turnId: turn.turn.id,
@@ -354,6 +365,7 @@ try {
     includeTurns: true,
   });
   assert.equal(forkRead.thread.turns.length, 1);
+  assert.equal(forkRead.thread.turns[0].rootTurnId, turn.turn.id);
   assert(
     forkRead.thread.turns[0].items.some(
       (item) =>
@@ -373,6 +385,7 @@ try {
         notificationsValidated: [
           "thread/started",
           "thread/settings/updated",
+          "turn/started",
           "turn/completed",
           "item/started",
           "item/completed",
@@ -384,6 +397,7 @@ try {
         persistentTurnResumedAfterRestart: true,
         executionSettingsPreservedOnResumeAndFork: true,
         forkHistoryPreserved: true,
+        rootTurnLineagePreserved: true,
         liveProviderVerified: false,
       },
       null,

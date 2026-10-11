@@ -469,7 +469,7 @@ class CodexBackendModuleRuntime implements BackendModuleRuntime {
             return current;
           },
           validateModelSelection: async ({ authority, settings, signal }) => {
-            await assertCodexLiveModelSelection({ client: this.#supervisor.client, expectedGeneration: authority.appServerGeneration, model: settings.model, reasoningEffort: settings.reasoningEffort, serviceTier: settings.serviceTier, signal });
+            await assertCodexLiveModelSelection({ client: this.#supervisor.client, expectedGeneration: authority.appServerGeneration, nativeThreadId: authority.backendConversationId, model: settings.model, reasoningEffort: settings.reasoningEffort, serviceTier: settings.serviceTier, signal });
           },
         }));
       } else {
@@ -807,12 +807,13 @@ export class CodexExecutionSettingsRepositoryAdapter implements CodexExecutionSe
     }
   }
 
-  resolveFastModeDisabled(
+  resolveUnavailableServiceTier(
     scope: BackendModuleRuntimeContext["scope"],
-    input: { readonly applicationThreadId: string; readonly now: number },
+    input: { readonly applicationThreadId: string; readonly unavailableServiceTiers: readonly CodexServiceTierSelection[]; readonly now: number },
   ): CodexExecutionSettingsTuple | null {
     const current = this.repository.find(scope, input.applicationThreadId);
-    if (!current?.desired || current.desired.serviceTier === "standard") {
+    if (!current?.desired || current.desired.serviceTier === "standard" ||
+      !input.unavailableServiceTiers.includes(current.desired.serviceTier)) {
       return current?.desired ?? null;
     }
     return this.repository.updateDesired(scope, input.applicationThreadId, {
