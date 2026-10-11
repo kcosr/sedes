@@ -942,7 +942,7 @@
 
 - Preserve SSH carrier exit evidence and capture the first remote Codex/Claude
   event-forwarding failure in gated delivery diagnostics. Upgrade the execution
-  sidecar to capture remote failures.
+  sidecar to capture remote failures. ([#71](https://github.com/kcosr/sedes/pull/71))
 
 - Empty Codex threads whose paginated source rollout is missing can reconnect
   after native full-history confirmation, without replaying an abandoned send. (#70)
