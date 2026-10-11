@@ -320,8 +320,8 @@ Ctrl+Enter (Command+Enter on macOS) on its row, or drag it onto the composer.
 Sedes adds the Task to the current thread's composer as a compact pill with
 the Task's title and a remove button. A completed Task's pill is muted and a
 deleted Task's pill shows a warning; hover over the pill to see why. On phones,
-Add to prompt keeps Tasks open so you can add more Tasks. Switch to Chat when
-you are ready to review the pills and send the prompt.
+Add to prompt keeps Tasks open and shows a confirmation so you can add more
+Tasks. Switch to Chat when you are ready to review the pills and send the prompt.
 
 Before delivery, the pill follows live Task renames and completion state. At
 Send, Queue, or Steer acceptance, Sedes records an immutable snapshot so the

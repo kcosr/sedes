@@ -534,8 +534,17 @@ test.describe.serial("Tasks panel", () => {
     await expect(chatLeaf).toHaveCount(0);
     await expect(tasks.getByRole("heading", { name: "Global errand" })).toBeVisible();
     await expect(tasks.getByRole("status")).toHaveText("Added “Global errand” to the prompt.");
+    await expect(tasks.getByRole("status").locator('[data-slot="callout"][data-tone="success"]')).toBeVisible();
+    await capture(page, testInfo, "tasks-mobile-add-confirmation-detail.png");
+    await tasks.getByRole("button", { name: "Add to prompt" }).click();
+    await expect(tasks.getByRole("alert")).toHaveText("That task is already attached.");
+    await expect(tasks.getByRole("status")).toBeEmpty();
+    await expect(tasks.getByRole("heading", { name: "Global errand" })).toBeVisible();
+    await tasks.getByRole("button", { name: "Dismiss error" }).click();
+    await expect(tasks.getByRole("status")).toBeEmpty();
     await expect(threadTasksToggle).toHaveAttribute("data-state", "visible");
     await tasks.getByRole("button", { name: "Back to tasks" }).click();
+    await expect(tasks.getByRole("status")).toBeEmpty();
     await expect(scopes.getByRole("radio", { name: "Global" })).toHaveAttribute("aria-checked", "true");
     await selectScope(tasks, "All");
     // The earlier reload reset the Completed section to closed. Reveal the
@@ -554,6 +563,8 @@ test.describe.serial("Tasks panel", () => {
     await expect(scopes.getByRole("radio", { name: "All" })).toHaveAttribute("aria-checked", "true");
     await expect(tasks).not.toHaveAttribute("data-task-detail-open");
     await expect(tasks.getByRole("status")).toHaveText("Added “Unpinned follow-up” to the prompt.");
+    await expect(tasks.getByRole("status").locator('[data-slot="callout"][data-tone="success"]')).toBeVisible();
+    await capture(page, testInfo, "tasks-mobile-add-confirmation-list.png");
     await quickButton(page, "Chat").click();
     await expect(chatLeaf).toBeVisible();
     await expect(tasksLeaf).toHaveCount(0);
@@ -567,6 +578,7 @@ test.describe.serial("Tasks panel", () => {
     await expect(attached).toHaveCount(0);
     await threadTasksToggle.click();
     await expect(taskRow(tasks, "Unpinned follow-up")).toBeVisible();
+    await expect(tasks.getByRole("status")).toBeEmpty();
     await expect(followUpTask).toHaveAttribute("data-completed", "true");
     await expect(completedHeading).toHaveAttribute("aria-expanded", "true");
     await selectScope(tasks, "Global");

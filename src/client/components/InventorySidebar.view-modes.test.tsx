@@ -3307,6 +3307,126 @@ describe("InventorySidebar view modes", () => {
     }
   });
 
+  it.each(["project", "time", "state", "none"] as const)(
+    "discovers unloaded task-bearing descendants in %s without displaying nonmatching rows",
+    async (groupBy) => {
+      const user = userEvent.setup();
+      seedViewPreferences({ groupBy, hasOpenTasks: true });
+      const root = makeThread("root", "Task source");
+      const child = makeThread("child", "Paged open-task child");
+      const plain = makeThread("plain", "Paged plain child");
+      const options: StateOptions = {
+        tasks: [root, child].map(({ id }) => makeTask(`task-${id}`, { kind: "thread", threadId: id })),
+        lineageFamilies: [{ sourceThreadId: root.id, descendantCount: 2 }],
+      };
+      const view = renderSidebar([root], options);
+      const pageFor = (threads: readonly ThreadSummary[], paging: { nextCursor?: string; loading?: boolean } = {}) => ({
+        descendants: threads.map((thread) => ({
+          thread,
+          origin: forkOrigin(thread.id, root.id),
+          placement: nestedPlacement(thread.id),
+        })),
+        loaded: true,
+        loading: paging.loading ?? false,
+        ...(paging.nextCursor ? { nextCursor: paging.nextCursor } : {}),
+      });
+      await user.click(screen.getByRole("button", { name: "Show all runs/forks" }));
+      expect(view.store.loadMoreDescendants).toHaveBeenCalledExactlyOnceWith(root.id);
+      view.rerenderSidebar(makeState([root], {
+        ...options,
+        descendantPages: { root: pageFor([plain], { nextCursor: "next-page" }) },
+      }));
+      expect(screen.queryByText("Paged plain child")).toBeNull();
+      expect(screen.queryByText("Paged open-task child")).toBeNull();
+      if (groupBy !== "project") expect(screen.queryByTestId("flat-row-fork-indicator")).toBeNull();
+      await user.click(screen.getByRole("button", { name: "Show all runs/forks" }));
+      expect(view.store.loadMoreDescendants).toHaveBeenCalledTimes(2);
+      view.rerenderSidebar(makeState([root], {
+        ...options,
+        descendantPages: { root: pageFor([plain], { nextCursor: "next-page", loading: true }) },
+      }));
+      expect(screen.getByRole("button", { name: "Loading runs/forks…" })).toBeDisabled();
+      view.rerenderSidebar(makeState([root], {
+        ...options,
+        descendantPages: { root: pageFor([plain, child]) },
+      }));
+      expect(screen.getByText("Paged open-task child")).toBeInTheDocument();
+      expect(screen.queryByText("Paged plain child")).toBeNull();
+      expect(screen.queryByRole("button", { name: "Show all runs/forks" })).toBeNull();
+      if (groupBy !== "project") expect(screen.getByRole("img", { name: "1 fork" })).toBeInTheDocument();
+    },
+  );
+
+  it.each(["project", "time", "state", "none"] as const)(
+    "keeps global descendant paging disabled under scope filters in the %s task view",
+    (groupBy) => {
+      seedViewPreferences({ groupBy, hasOpenTasks: true, groupFilterId: "group-1" });
+      const root = makeThread("root", "Scoped task source", { groupId: "group-1" });
+      renderSidebar([root], {
+        groups: [{ id: "group-1", name: "Scoped group", revision: 0, memberCount: 1, activeMemberCount: 1 }],
+        tasks: [makeTask("root-task", { kind: "thread", threadId: root.id })],
+        lineageFamilies: [{ sourceThreadId: root.id, descendantCount: 2 }],
+        descendantPages: { root: { descendants: [], loaded: false, loading: false, nextCursor: "next-page" } },
+      });
+      expect(screen.getByText("Scoped task source")).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Show all runs/forks" })).toBeNull();
+    },
+  );
+
+  it.each(["project", "time", "state", "none"] as const)(
+    "does not offer to reload already-known nonmatching descendants in the %s task view",
+    (groupBy) => {
+      seedViewPreferences({ groupBy, hasOpenTasks: true });
+      const root = makeThread("root", "Task source");
+      const child = makeThread("child", "Known plain child");
+      renderSidebar([root, child], {
+        tasks: [makeTask("root-task", { kind: "thread", threadId: root.id })],
+        forkOrigins: [forkOrigin(child.id, root.id)],
+        lineagePlacements: [nestedPlacement(child.id)],
+        lineageFamilies: [{ sourceThreadId: root.id, descendantCount: 1 }],
+      });
+      expect(screen.getByText("Task source")).toBeInTheDocument();
+      expect(screen.queryByText("Known plain child")).toBeNull();
+      expect(screen.queryByRole("button", { name: "Show all runs/forks" })).toBeNull();
+    },
+  );
+
+  it.each(["project", "time", "state", "none"] as const)(
+    "explains and clears an empty open-task filter in the %s view",
+    async (groupBy) => {
+      const user = userEvent.setup();
+      seedViewPreferences({ groupBy, hasOpenTasks: true });
+      renderSidebar([makeThread("plain", "Existing plain thread")]);
+      expect(screen.getByText("No threads with open tasks match the current filters")).toBeInTheDocument();
+      expect(screen.queryByText("Start a thread when an idea is ready.")).toBeNull();
+      await user.click(screen.getByRole("button", { name: "Clear filters" }));
+      expect(screen.getByText("Existing plain thread")).toBeInTheDocument();
+      expect(screen.getByTestId("view-tasks-toggle")).toHaveAttribute("aria-pressed", "false");
+      expect(hasActiveSidebarFilters()).toBe(false);
+    },
+  );
+
+  it("explains an empty active section while open-task matches remain in project shelves", () => {
+    seedViewPreferences({ groupBy: "project", hasOpenTasks: true });
+    const parked = makeThread("parked", "Parked task work", { inventoryState: "settled" });
+    renderSidebar([parked], {
+      tasks: [makeTask("parked-task", { kind: "thread", threadId: parked.id })],
+    });
+    expect(screen.getByText("No active threads with open tasks")).toBeInTheDocument();
+    expect(screen.queryByText("No threads with open tasks match the current filters")).toBeNull();
+    expect(screen.getByText("Parked task work")).toBeInTheDocument();
+  });
+
+  it("explains an empty open-task search without clearing the search text", async () => {
+    const user = userEvent.setup();
+    seedViewPreferences({ groupBy: "project", hasOpenTasks: true });
+    renderSidebar([makeThread("plain", "Matching plain thread")], { search: "Matching" });
+    expect(screen.getByText("No threads with open tasks match the current filters")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Clear filters" }));
+    expect(screen.getByRole("searchbox", { name: "Search threads" })).toHaveValue("Matching");
+    expect(screen.getByText("Matching plain thread")).toBeInTheDocument();
+  });
+
   it("shows only open direct thread tasks in project and flat rows", async () => {
     const user = userEvent.setup();
     const completedAt = isoAtNoon(0);

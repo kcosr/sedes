@@ -708,9 +708,9 @@ export const ThreadHeader = memo(function ThreadHeader({
                 aria-label={applicationThreadSummary.pinned ? "Unpin thread" : "Pin thread"}
                 aria-pressed={applicationThreadSummary.pinned}
                 aria-busy={pinPending || undefined}
+                aria-disabled={pinPending || undefined}
                 aria-describedby={pinError ? `thread-pin-error-${snapshot.thread.id}` : undefined}
                 title={applicationThreadSummary.pinned ? "Unpin thread" : "Pin thread"}
-                disabled={pinPending}
                 onClick={togglePin}
               >
                 <Pin size={16} strokeWidth={1.8} />

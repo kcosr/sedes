@@ -328,11 +328,30 @@ export function TasksPanelContent({
   const searchButtonRef = useRef<HTMLButtonElement>(null);
   const lastFocused = useRef<{ key: string; element: HTMLElement } | null>(null);
   const lastNavOrder = useRef<readonly string[]>([]);
+  const announcementTimeout = useRef<number | undefined>(undefined);
 
-  const announce = useCallback((message: string) => {
+  const clearAnnouncement = useCallback(() => {
+    window.clearTimeout(announcementTimeout.current);
+    announcementTimeout.current = undefined;
     setAnnouncement("");
-    window.setTimeout(() => setAnnouncement(message), 0);
   }, []);
+  const announce = useCallback((message: string) => {
+    clearAnnouncement();
+    announcementTimeout.current = window.setTimeout(() => {
+      announcementTimeout.current = undefined;
+      setAnnouncement(message);
+    }, 0);
+  }, [clearAnnouncement]);
+
+  // A confirmation belongs to the current panel and thread. Clear pending
+  // announcements too, so a parked surface cannot bring old success back.
+  useEffect(() => {
+    clearAnnouncement();
+    return () => window.clearTimeout(announcementTimeout.current);
+  }, [active, clearAnnouncement, threadId]);
+  useEffect(() => {
+    if (error !== null) clearAnnouncement();
+  }, [clearAnnouncement, error]);
 
   // ── Per-task, per-action pending state ──────────────────────────────────
   const markPending = useCallback(
@@ -516,6 +535,7 @@ export function TasksPanelContent({
   useTaskReveal(({ taskId }) => {
     const task = store.getTasks().find(({ id }) => id === taskId);
     if (!task) return;
+    clearAnnouncement();
     setTasksLastView(revealView(task, context));
     setRevealId(taskId);
   });
@@ -557,12 +577,13 @@ export function TasksPanelContent({
     if (!active || detailId === null) return undefined;
     const closeDetail = (event: Event) => {
       event.preventDefault();
+      clearAnnouncement();
       setFocusRequest(detailId);
       setExpandedId(null);
     };
     window.addEventListener(CLOSE_TASK_DETAIL_EVENT, closeDetail);
     return () => window.removeEventListener(CLOSE_TASK_DETAIL_EVENT, closeDetail);
-  }, [active, detailId]);
+  }, [active, clearAnnouncement, detailId]);
 
   // The phone detail replaces the list: focus starts on its back button.
   useEffect(() => {
@@ -799,6 +820,7 @@ export function TasksPanelContent({
   };
 
   const toggleExpanded = (task: AssociatedTask) => {
+    clearAnnouncement();
     setActiveNavKey(taskNavKey(task.id));
     setMoveMenuId(null);
     setExpandedId((current) => (current === task.id ? null : task.id));
@@ -806,6 +828,7 @@ export function TasksPanelContent({
 
   const changeView = (next: TasksView) => {
     if (viewUnavailableReason(next, context) !== undefined) return;
+    clearAnnouncement();
     setTasksLastView(next);
     setRevealed(null);
     setError(null);
@@ -829,6 +852,7 @@ export function TasksPanelContent({
       return;
     }
     // The phone detail hides the add bar until the list is back.
+    clearAnnouncement();
     setExpandedId(null);
     requestAnimationFrame(() => addInputRef.current?.focus());
   };
@@ -957,6 +981,7 @@ export function TasksPanelContent({
     if (event.nativeEvent.isComposing) return;
     if (event.key === "Escape") {
       event.preventDefault();
+      clearAnnouncement();
       if (expandedId !== null) {
         setFocusRequest(expandedId);
         setExpandedId(null);
@@ -1263,6 +1288,7 @@ export function TasksPanelContent({
             className="tasks-header-button tasks-back"
             aria-label="Back to tasks"
             onClick={() => {
+              clearAnnouncement();
               setFocusRequest(expandedTask.id);
               setExpandedId(null);
             }}
@@ -1462,6 +1488,7 @@ export function TasksPanelContent({
         )
       : addInputRef.current;
   };
+  const visibleAnnouncement = sheet && announcement.length > 0 && error === null;
 
   return (
     <TaskListProvider value={environment}>
@@ -1474,6 +1501,15 @@ export function TasksPanelContent({
         onKeyDown={onRootKeyDown}
       >
         {header}
+        <div
+          className={visibleAnnouncement ? "mx-3 mb-2 shrink-0" : "sr-only"}
+          role="status"
+          aria-live="polite"
+        >
+          {visibleAnnouncement ? (
+            <Callout tone="success">{announcement}</Callout>
+          ) : error === null ? announcement : ""}
+        </div>
         {sheetDetail ? (
           <>
             <div className="tasks-sheet-detail">
@@ -1514,9 +1550,6 @@ export function TasksPanelContent({
             {sheet && addRow}
           </>
         )}
-        <div className="sr-only" role="status" aria-live="polite">
-          {announcement}
-        </div>
       </div>
 
       {editingId !== null && (

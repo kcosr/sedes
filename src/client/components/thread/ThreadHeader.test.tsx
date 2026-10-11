@@ -551,23 +551,62 @@ describe("ThreadHeader thread pin", () => {
     expect(screen.getByRole("button", { name: "Pin thread" })).toHaveAttribute("aria-pressed", "false");
   });
 
+  it("retains keyboard focus through pending and successful pin changes while blocking duplicate activations", async () => {
+    const { applicationStore, publishPin } = renderHeader();
+    const user = userEvent.setup();
+    let resolvePin!: () => void;
+    applicationStore.setThreadPinned.mockReturnValueOnce(new Promise<void>((resolve) => { resolvePin = resolve; }));
+    const pin = screen.getByRole("button", { name: "Pin thread" });
+    pin.focus();
+    await user.keyboard("{Enter}");
+    expect(pin).toHaveFocus();
+    expect(pin).toBeEnabled();
+    expect(pin).toHaveAttribute("aria-disabled", "true");
+    expect(pin).toHaveAttribute("aria-busy", "true");
+    await user.keyboard("{Enter} ");
+    await user.click(pin);
+    expect(applicationStore.setThreadPinned).toHaveBeenCalledOnce();
+    expect(pin).toHaveFocus();
+
+    act(() => publishPin(true, 4));
+    expect(screen.getByRole("button", { name: "Unpin thread" })).toBe(pin);
+    expect(pin).toHaveAttribute("aria-pressed", "true");
+    expect(pin).toHaveFocus();
+    await act(async () => resolvePin());
+    expect(pin).not.toHaveAttribute("aria-disabled");
+    expect(pin).not.toHaveAttribute("aria-busy");
+    expect(pin).toHaveFocus();
+
+    await user.keyboard(" ");
+    expect(applicationStore.setThreadPinned).toHaveBeenCalledTimes(2);
+    expect(applicationStore.setThreadPinned).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: "thread-1", pinned: true, pinRevision: 4 }), false,
+    );
+    expect(pin).toHaveFocus();
+  });
+
   it("guards pending requests and lets a failed pin be retried without changing its saved state", async () => {
     const { applicationStore } = renderHeader();
     let rejectPin!: (error: Error) => void;
     applicationStore.setThreadPinned.mockReturnValueOnce(new Promise<void>((_resolve, reject) => { rejectPin = reject; }));
     const pin = screen.getByRole("button", { name: "Pin thread" });
-    fireEvent.click(pin);
-    expect(pin).toBeDisabled();
+    pin.focus();
+    await userEvent.keyboard("{Enter}");
+    expect(pin).toHaveFocus();
+    expect(pin).toHaveAttribute("aria-disabled", "true");
     expect(pin).toHaveAttribute("aria-busy", "true");
     fireEvent.click(pin);
     expect(applicationStore.setThreadPinned).toHaveBeenCalledOnce();
     await act(async () => rejectPin(new Error("Pin update failed")));
     expect(screen.getByRole("alert")).toHaveTextContent("Pin update failed");
     expect(pin).toBeEnabled();
+    expect(pin).not.toHaveAttribute("aria-disabled");
+    expect(pin).toHaveFocus();
     expect(pin).toHaveAttribute("aria-pressed", "false");
     await userEvent.click(pin);
     expect(applicationStore.setThreadPinned).toHaveBeenCalledTimes(2);
     expect(screen.queryByRole("alert")).toBeNull();
+    expect(pin).toHaveFocus();
   });
 });
 
