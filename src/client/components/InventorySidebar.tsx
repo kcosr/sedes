@@ -46,6 +46,7 @@ import {
   resetSidebarMode,
   setSidebarGroupBy,
   setSidebarGroupForks,
+  setSidebarHasOpenTasks,
   setSidebarInventoryScope,
   setSidebarScopeCollapsed,
   setSidebarShowBackendIcons,
@@ -580,30 +581,66 @@ export function InventorySidebar({
       ),
     [state.descendantPages],
   );
+  const taskSummaryByThreadId = useMemo(() => {
+    const summaries = new Map<string, FlatThreadRowTaskSummary>();
+    for (const task of snapshot?.tasks ?? []) {
+      if (task.scope.kind !== "thread" || task.completedAt !== null) continue;
+      const current = summaries.get(task.scope.threadId) ?? {
+        openCount: 0,
+      };
+      summaries.set(task.scope.threadId, {
+        openCount: current.openCount + 1,
+      });
+    }
+    return summaries;
+  }, [snapshot?.tasks]);
   const threads = useMemo(
-    () => filterThreadsBySidebarScope(state.visibleThreads, workspaces, scope),
-    [scope, state.visibleThreads, workspaces],
+    () =>
+      filterThreadsBySidebarScope(state.visibleThreads, workspaces, scope).filter(
+        (thread) =>
+          !viewPreferences.hasOpenTasks || taskSummaryByThreadId.has(thread.id),
+      ),
+    [
+      scope,
+      state.visibleThreads,
+      workspaces,
+      viewPreferences.hasOpenTasks,
+      taskSummaryByThreadId,
+    ],
   );
   const descendants = useMemo(
     () =>
       allDescendants.filter(
         ({ thread }) =>
-          filterThreadsBySidebarScope([thread], workspaces, scope).length > 0,
+          filterThreadsBySidebarScope([thread], workspaces, scope).length > 0 &&
+          (!viewPreferences.hasOpenTasks || taskSummaryByThreadId.has(thread.id)),
       ),
-    [allDescendants, scope, workspaces],
+    [
+      allDescendants,
+      scope,
+      workspaces,
+      viewPreferences.hasOpenTasks,
+      taskSummaryByThreadId,
+    ],
   );
   const scopedSnapshot = useMemo(() => {
-    if (!snapshot || scope.activeFilterCount === 0) return snapshot;
+    if (
+      !snapshot ||
+      (scope.activeFilterCount === 0 && !viewPreferences.hasOpenTasks)
+    ) return snapshot;
     const scopedThreads = filterThreadsBySidebarScope(
       snapshot.threads,
       workspaces,
       scope,
+    ).filter(
+      (thread) =>
+        !viewPreferences.hasOpenTasks || taskSummaryByThreadId.has(thread.id),
     );
     return {
       ...snapshot,
       threads: [...scopedThreads],
-      // Protocol lineage-family totals are global. Under a project filter,
-      // expose only counts proven by loaded rows in this workspace; global
+      // Protocol lineage-family totals are global. Under scope or task filters,
+      // expose only counts proven by loaded matching rows; global
       // totals remain available separately for archive impact.
       lineageFamilies: loadedScopedLineageFamilies(
         scopedThreads.map(({ id }) => id),
@@ -611,7 +648,14 @@ export function InventorySidebar({
         descendants,
       ),
     };
-  }, [descendants, scope, snapshot, workspaces]);
+  }, [
+    descendants,
+    scope,
+    snapshot,
+    workspaces,
+    viewPreferences.hasOpenTasks,
+    taskSummaryByThreadId,
+  ]);
   const globalLineageFamilyCounts = useMemo(
     () =>
       new Map(
@@ -634,19 +678,6 @@ export function InventorySidebar({
       ),
     [scopedSnapshot?.lineageFamilies],
   );
-  const taskSummaryByThreadId = useMemo(() => {
-    const summaries = new Map<string, FlatThreadRowTaskSummary>();
-    for (const task of snapshot?.tasks ?? []) {
-      if (task.scope.kind !== "thread" || task.completedAt !== null) continue;
-      const current = summaries.get(task.scope.threadId) ?? {
-        openCount: 0,
-      };
-      summaries.set(task.scope.threadId, {
-        openCount: current.openCount + 1,
-      });
-    }
-    return summaries;
-  }, [snapshot?.tasks]);
   const keepShownThread = (thread: NormalizedApplicationThreadSummary) =>
     (viewPreferences.show.snoozed || thread.inventoryState !== "snoozed") &&
     (viewPreferences.show.settled || thread.inventoryState !== "settled") &&
@@ -1672,6 +1703,9 @@ export function InventorySidebar({
                   });
                 }
               }}
+              onHasOpenTasksToggle={() =>
+                setSidebarHasOpenTasks(!viewPreferences.hasOpenTasks)
+              }
               onShowToggle={(key) =>
                 setSidebarShowFilter(key, !viewPreferences.show[key])
               }

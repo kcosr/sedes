@@ -735,6 +735,23 @@ test.describe.serial("normalized Codex thread state", () => {
     for (const reviewer of await approvalReviewer.all()) {
       await expect(reviewer).toBeDisabled();
     }
+    // Re-selecting a current value and changing several axes keeps this pane open.
+    await executionChoice("Sandbox", "Unrestricted").click();
+    await expect(execution).toBeVisible();
+    for (const [group, choice] of [
+      ["Sandbox", "Workspace"],
+      ["Network", "Disabled"],
+      ["Approval policy", "On request"],
+      ["Approval reviewer", "Auto-review"],
+    ]) {
+      await executionChoice(group!, choice!).click();
+      await expect(executionChoice(group!, choice!)).toBeChecked();
+      await expect(execution).toBeVisible();
+    }
+    await execution.getByRole("menuitem", { name: "Codex execution", exact: true }).click();
+    await expect(actions.getByRole("menuitem", { name: "Reasoning" })).toBeVisible();
+    await actions.getByRole("menuitem", { name: "Codex execution" }).click();
+    await expect(executionChoice("Approval reviewer", "Auto-review")).toBeChecked();
     await expectNoPageOverflow(page);
     await capture(page, testInfo, "codex-thread-mobile.png");
   });

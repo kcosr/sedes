@@ -479,6 +479,10 @@ available through **Thread actions**, which lists the thread's settings on
 every device. When the composer's controls do not fit, the reasoning selector
 steps aside until there is room again.
 
+On phones, changing settings within **Thread actions**, including execution
+mode, keeps the sheet open so you can make further selections. Use **Back**
+to return from a settings submenu and close the sheet when you have finished.
+
 **Refocus composer after sending** returns focus to the message field after
 Send, Queue, or Steer in a mobile layout so the on-screen keyboard remains
 available. Turn it off when you prefer the keyboard to dismiss. It does not

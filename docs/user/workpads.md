@@ -61,8 +61,10 @@ the workpad and choosing **Edit workpad**.
 ## Find, add, archive, and delete workpads
 
 Select **Search workpads** (the magnifier in the panel header) to search the
-view's titles and text; Escape clears and closes the search. **View options**
-(the filter icon) controls the view:
+view's titles and text. In search and **New workpad** inputs, Escape clears the
+focused field while keeping focus; Escape again when empty leaves the field.
+The search stays open until you close it. **View options** (the filter icon)
+controls the view:
 
 | Option | Choices |
 | --- | --- |

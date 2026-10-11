@@ -858,10 +858,11 @@ test.describe.serial("normalized composer state", () => {
         response.url().endsWith(`/api/threads/${movedThreadId}/pin`) &&
         response.ok(),
     );
-    await movedThreadRow
-      .getByRole("button", { name: "Pin New thread" })
-      .click();
+    const headerPin = page.getByRole("button", { name: "Pin thread", exact: true });
+    await expect(headerPin).toHaveAttribute("aria-pressed", "false");
+    await headerPin.click();
     await pinned;
+    await expect(page.getByRole("button", { name: "Unpin thread", exact: true })).toHaveAttribute("aria-pressed", "true");
 
     // Non-Project views extract a pinned thread into one collapsible group
     // rather than duplicating it in its ordinary Timeline group.
@@ -885,6 +886,7 @@ test.describe.serial("normalized composer state", () => {
     await page.keyboard.press("Escape");
     await page.reload();
     await expect(pinnedGroup).toContainText("New thread");
+    await expect(page.getByRole("button", { name: "Unpin thread", exact: true })).toHaveAttribute("aria-pressed", "true");
     await desktopSidebar.getByRole("button", { name: "View options" }).click();
     await expect(
       page.getByRole("menuitemcheckbox", { name: "Pinned only" }),
@@ -904,6 +906,7 @@ test.describe.serial("normalized composer state", () => {
     await page.getByRole("menuitem", { name: "Unpin" }).click();
     await unpinned;
     await expect(pinnedGroup).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Pin thread", exact: true })).toHaveAttribute("aria-pressed", "false");
 
     await desktopSidebar.getByRole("button", { name: "View options" }).click();
     await page.getByRole("menuitemcheckbox", { name: "Pinned only" }).click();

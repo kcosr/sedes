@@ -47,6 +47,7 @@ function renderControls(overrides?: Partial<SidebarViewPreferences>) {
     onDensityChange: vi.fn(),
     onPeekToggle: vi.fn(),
     onPinnedOnlyToggle: vi.fn(),
+    onHasOpenTasksToggle: vi.fn(),
     onShowToggle: vi.fn(),
     onGroupForksToggle: vi.fn(),
     onBackendIconsToggle: vi.fn(),
@@ -74,6 +75,30 @@ async function openOptions(user: ReturnType<typeof userEvent.setup>) {
 }
 
 describe("SidebarViewControls", () => {
+  it("places the Tasks toggle after both view controls and shares its checked state with the menu", async () => {
+    const user = userEvent.setup();
+    const { handlers, rerender, view } = renderControls();
+    const toggle = screen.getByRole("button", { name: "Has open tasks" });
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    expect(toggle.querySelector(".lucide-list-checks")).toHaveAttribute("aria-hidden", "true");
+    expect([...view.container.querySelectorAll("button")].map((button) => button.dataset.testid)).toEqual([
+      "view-quick-toggle", "view-options-trigger", "view-tasks-toggle",
+    ]);
+    await user.click(toggle);
+    expect(handlers.onHasOpenTasksToggle).toHaveBeenCalledOnce();
+    rerender({ hasOpenTasks: true });
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByTestId("view-options-dirty-dot")).toBeInTheDocument();
+    await openOptions(user);
+    const item = screen.getByRole("menuitemcheckbox", { name: "Has open tasks" });
+    expect(item).toHaveAttribute("aria-checked", "true");
+    await user.click(item);
+    expect(handlers.onHasOpenTasksToggle).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole("menu", { name: "View options" })).toBeVisible();
+    rerender({ hasOpenTasks: false });
+    expect(item).toHaveAttribute("aria-checked", "false");
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+  });
   it("quick toggle flips from Projects to the remembered alt view", async () => {
     const user = userEvent.setup();
     const { handlers } = renderControls({ lastAltGroupBy: "time" });
@@ -419,6 +444,10 @@ describe("SidebarViewControls", () => {
     );
     expect(handlers.onShowToggle).toHaveBeenCalledExactlyOnceWith("snoozed");
     expect(screen.getByRole("dialog", { name: "View options" })).toBeVisible();
+
+    await user.click(within(sheet).getByRole("menuitemcheckbox", { name: "Has open tasks" }));
+    expect(handlers.onHasOpenTasksToggle).toHaveBeenCalledOnce();
+    expect(sheet).toBeVisible();
 
     await user.click(
       within(sheet).getByRole("menuitemradio", { name: "Flat list" }),

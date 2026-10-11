@@ -150,12 +150,10 @@ export interface TasksPanelContentProps {
    */
   readonly active: boolean;
   /**
-   * Phones: brings Chat in front of Tasks, which stays loaded, for the
-   * actions that continue there (Add to prompt, following a thread link).
-   * The host makes the announcement, since this content (and its live
-   * region) is parked once Chat is in front.
+   * Phones: brings Chat in front of Tasks, which stays loaded, when
+   * following a task's thread link.
    */
-  readonly onShowChat: (announcement?: string) => void;
+  readonly onShowChat: () => void;
   /**
    * The layout's close control, and on desktop its Maximize and Move to.
    * The content draws its header as the panel's `PanelChrome` with them,
@@ -655,12 +653,9 @@ export function TasksPanelContent({
         return;
       }
       setError(null);
-      const message = `Added “${task.title}” to the prompt.`;
-      // On a phone Chat comes in front, so the chip arriving is visible.
-      if (sheet) onShowChat(message);
-      else announce(message);
+      announce(`Added “${task.title}” to the prompt.`);
     },
-    [announce, composerDraft, onShowChat, sheet],
+    [announce, composerDraft],
   );
 
   const openFile = useCallback(
@@ -1433,10 +1428,12 @@ export function TasksPanelContent({
         value={searchText}
         onChange={(event) => setSearchText(event.target.value)}
         onKeyDown={(event) => {
+          if (event.nativeEvent.isComposing) return;
           if (event.key === "Escape") {
             event.preventDefault();
             event.stopPropagation();
-            closeSearch();
+            if (searchText.length > 0) setSearchText("");
+            else event.currentTarget.blur();
           }
         }}
       />
@@ -1711,7 +1708,6 @@ export function TasksPanel({
   const [dirty, setDirty] = useState(false);
   // A new body: what an unload discards (see below).
   const [bodyGeneration, setBodyGeneration] = useState(0);
-  const [announcement, setAnnouncement] = useState("");
   const [dock, publishDock] = useState<TasksDock>();
   const [bodyTarget] = useState(createBodyTarget);
 
@@ -1752,13 +1748,9 @@ export function TasksPanel({
     setBodyGeneration((generation) => generation + 1);
   }, [present]);
 
-  // Phones: Chat comes in front, Tasks staying loaded. The host announces
-  // what happened, since the content's live region is parked with it.
-  const showChat = useCallback((message?: string) => {
+  // Phones: thread links bring Chat in front, Tasks staying loaded.
+  const showChat = useCallback(() => {
     latest.current.dock?.showChat();
-    if (message === undefined) return;
-    setAnnouncement("");
-    window.setTimeout(() => setAnnouncement(message), 0);
   }, []);
 
   // The content switches view and expands the task itself.
@@ -1797,15 +1789,6 @@ export function TasksPanel({
   return (
     <TasksHostContext.Provider value={host}>
       {children}
-      {/* Mounted on every page, so it takes the status role only while it
-          has something to say. */}
-      <div
-        className="sr-only"
-        role={announcement.length > 0 ? "status" : undefined}
-        aria-live="polite"
-      >
-        {announcement}
-      </div>
       {presentation
         ? createPortal(
             <TasksPanelContent

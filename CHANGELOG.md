@@ -231,6 +231,13 @@
 
 ### Added
 
+- Pin or unpin the current thread directly from the chat header, beside
+  Bookmarks, with a blue selected state.
+- Filter the sidebar to threads with open Tasks using **Has open tasks** in
+  View options or the matching toolbar toggle.
+- `SEDES_SKIP_SANDBOX_TESTS=1` skips real Bubblewrap test execution on
+  restricted hosts while retaining sandbox policy and validation coverage.
+
 - Opt-in voice delivery diagnostics show server dispatch, Android receipt and
   queue decisions, and speech playback progress without recording message text.
   ([#69](https://github.com/kcosr/sedes/pull/69))
@@ -501,6 +508,9 @@
   Session stats stays in the thread menu rather than flashing during loading. (#8)
 
 ### Changed
+
+- State organization groups threads with an unacknowledged completion under
+  Needs attention until the completion is acknowledged.
 
 - Android voice uses Off, Input, and Speak modes. Input keeps eligible
   completion auto-listen without automatic speech; Speak adds a remembered
@@ -939,6 +949,11 @@
   sidecar runtime protocol 14 now also carries the queued-input marker.
 
 ### Fixed
+
+- Mobile Tasks stays open after Add to prompt, and mobile thread settings
+  stays open after changing options so further selections can be made.
+- Escape in Tasks and Workpads search/add inputs clears the focused field
+  first, then removes focus when pressed again while empty.
 
 - Empty Codex threads whose paginated source rollout is missing can reconnect
   after native full-history confirmation, without replaying an abandoned send. (#70)

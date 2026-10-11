@@ -102,10 +102,11 @@ export function TaskAddRow({
             } else if (event.key === "Enter") {
               event.preventDefault();
               submit();
-            } else if (event.key === "Escape" && (draft.title || draft.notesOpen)) {
+            } else if (event.key === "Escape") {
               event.preventDefault();
               event.stopPropagation();
-              onDraftChange(EMPTY_TASK_ADD_DRAFT);
+              if (draft.title.length > 0) onDraftChange({ ...draft, title: "" });
+              else event.currentTarget.blur();
             }
           }}
           onPaste={(event) => {
@@ -181,8 +182,8 @@ export function TaskAddRow({
               } else if (event.key === "Escape") {
                 event.preventDefault();
                 event.stopPropagation();
-                onDraftChange({ ...draft, notes: "", notesOpen: false });
-                titleRef.current?.focus();
+                if (draft.notes.length > 0) onDraftChange({ ...draft, notes: "" });
+                else event.currentTarget.blur();
               }
             }}
           />

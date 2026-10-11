@@ -55,6 +55,8 @@ import {
 } from "@client/components/ui/menu-sheet"
 import { cn } from "@client/lib/utils"
 
+const PersistSheetCheckableSelectionsContext = React.createContext(false)
+
 /**
  * `presentation="sheet"` renders the same parts as the shared bottom Sheet
  * (see ui/menu-sheet.tsx); give DropdownMenuContent a `sheetTitle` and
@@ -66,9 +68,12 @@ function DropdownMenu({
   open: openProp,
   defaultOpen,
   onOpenChange,
+  persistSheetCheckableSelections = false,
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Root> & {
   presentation?: MenuPresentation
+  /** This sheet's settings can be adjusted repeatedly without dismissing it. */
+  persistSheetCheckableSelections?: boolean
 }) {
   const { open, setOpen, value } = useFloatingOpening({
     open: openProp,
@@ -77,20 +82,22 @@ function DropdownMenu({
   })
   return (
     <FloatingOpeningProvider value={value}>
-      {presentation === "sheet" ? (
-        <MenuSheetRoot open={open} onOpenChange={setOpen}>
-          {props.children}
-        </MenuSheetRoot>
-      ) : (
-        <MenuScope>
-          <DropdownMenuPrimitive.Root
-            data-slot="dropdown-menu"
-            {...props}
-            open={open}
-            onOpenChange={setOpen}
-          />
-        </MenuScope>
-      )}
+      <PersistSheetCheckableSelectionsContext.Provider value={persistSheetCheckableSelections}>
+        {presentation === "sheet" ? (
+          <MenuSheetRoot open={open} onOpenChange={setOpen}>
+            {props.children}
+          </MenuSheetRoot>
+        ) : (
+          <MenuScope>
+            <DropdownMenuPrimitive.Root
+              data-slot="dropdown-menu"
+              {...props}
+              open={open}
+              onOpenChange={setOpen}
+            />
+          </MenuScope>
+        )}
+      </PersistSheetCheckableSelectionsContext.Provider>
     </FloatingOpeningProvider>
   )
 }
@@ -247,6 +254,7 @@ function DropdownMenuCheckboxItem({
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.CheckboxItem>) {
   const sheet = useMenuSheet()
+  const persist = React.useContext(PersistSheetCheckableSelectionsContext)
   if (sheet) {
     return (
       <MenuSheetCheckboxItem
@@ -254,6 +262,10 @@ function DropdownMenuCheckboxItem({
         checked={checked}
         className={className}
         {...(props as Omit<React.ComponentProps<typeof MenuSheetCheckboxItem>, "dataSlot">)}
+        onSelect={(event) => {
+          props.onSelect?.(event)
+          if (persist) event.preventDefault()
+        }}
       >
         {children}
       </MenuSheetCheckboxItem>
@@ -302,12 +314,17 @@ function DropdownMenuRadioItem({
   ...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.RadioItem>) {
   const sheet = useMenuSheet()
+  const persist = React.useContext(PersistSheetCheckableSelectionsContext)
   if (sheet) {
     return (
       <MenuSheetRadioItem
         dataSlot="dropdown-menu-radio-item"
         className={className}
         {...(props as Omit<React.ComponentProps<typeof MenuSheetRadioItem>, "dataSlot">)}
+        onSelect={(event) => {
+          props.onSelect?.(event)
+          if (persist) event.preventDefault()
+        }}
       >
         {children}
       </MenuSheetRadioItem>

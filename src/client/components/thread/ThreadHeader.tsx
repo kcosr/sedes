@@ -47,6 +47,7 @@ import {
   CopyPlus,
   FolderInput,
   PanelTop,
+  Pin,
   Repeat,
   RotateCcw,
   Search,
@@ -228,6 +229,9 @@ export const ThreadHeader = memo(function ThreadHeader({
   const [workspaceDeleteError, setWorkspaceDeleteError] = useState("");
   const [inventoryPending, setInventoryPending] = useState(false);
   const [inventoryError, setInventoryError] = useState("");
+  const [pinPending, setPinPending] = useState(false);
+  const [pinError, setPinError] = useState("");
+  const pinRequestPending = useRef(false);
   const [localConfigurationCopyPending, setConfigurationCopyPending] =
     useState(false);
   const configurationCopyPending =
@@ -380,6 +384,25 @@ export const ThreadHeader = memo(function ThreadHeader({
     },
   };
   const automationNow = new Date();
+  const togglePin = () => {
+    if (pinRequestPending.current) return;
+    pinRequestPending.current = true;
+    setPinPending(true);
+    setPinError("");
+    void applicationStore
+      .setThreadPinned(applicationThreadSummary, !applicationThreadSummary.pinned)
+      .catch((error: unknown) => {
+        setPinError(
+          error instanceof Error
+            ? error.message
+            : "The thread pin could not be updated.",
+        );
+      })
+      .finally(() => {
+        pinRequestPending.current = false;
+        setPinPending(false);
+      });
+  };
   const automationState = automationHealth(
     applicationThreadSummary,
     automationNow,
@@ -678,6 +701,20 @@ export const ThreadHeader = memo(function ThreadHeader({
                 />
               )}
             </div>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                className="thread-pin-trigger"
+                aria-label={applicationThreadSummary.pinned ? "Unpin thread" : "Pin thread"}
+                aria-pressed={applicationThreadSummary.pinned}
+                aria-busy={pinPending || undefined}
+                aria-describedby={pinError ? `thread-pin-error-${snapshot.thread.id}` : undefined}
+                title={applicationThreadSummary.pinned ? "Unpin thread" : "Pin thread"}
+                disabled={pinPending}
+                onClick={togglePin}
+              >
+                <Pin size={16} strokeWidth={1.8} />
+              </Button>
               <TurnBookmarksMenu
                 bookmarks={bookmarks}
                 status={bookmarkStatus}
@@ -711,6 +748,7 @@ export const ThreadHeader = memo(function ThreadHeader({
                 )}
               <DropdownMenu
                 presentation={sheet ? "sheet" : "menu"}
+                persistSheetCheckableSelections={sheet}
                 open={active && actionsOpen}
                 onOpenChange={setActionsOpen}
               >
@@ -1097,6 +1135,11 @@ export const ThreadHeader = memo(function ThreadHeader({
           </div>
         }
       />
+      {pinError && (
+        <p className="thread-pin-error" role="alert" id={`thread-pin-error-${snapshot.thread.id}`}>
+          {pinError}
+        </p>
+      )}
       {active && environmentVariablesOpen && <ThreadEnvironmentVariables key={snapshot.thread.id} api={applicationStore.api} threadId={snapshot.thread.id}
         title={snapshot.thread.title.text || "Untitled thread"} onClose={() => setEnvironmentVariablesOpen(false)} returnFocusRef={actionsTrigger}
         forkUnavailableReason={variableForkNeedsRecovery ? "Resolve the existing fork attempt before forking with changed variables." : disabled ? "The thread must be connected and available to fork." : !latestFork.available ? latestForkUnavailableReason ?? "This thread cannot be forked right now." : undefined}

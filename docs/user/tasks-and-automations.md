@@ -128,8 +128,9 @@ title to the add row unless you have started typing another.
 ## Find Tasks
 
 Select **Search tasks** (or press `/`) to filter the current view by title.
-Turn on **Search notes** in **View options** to match notes as well. Escape
-clears the search and closes it.
+Turn on **Search notes** in **View options** to match notes as well. In search
+and add inputs, Escape clears the focused field while keeping focus; Escape
+again when empty leaves the field. The search stays open until you close it.
 
 **View options** (the filter icon) controls what the current view shows:
 
@@ -290,7 +291,7 @@ shortcuts** in the Tasks menu lists them.
 | M | Move to… |
 | Delete | Delete, after confirmation |
 | Ctrl+Enter (Command+Enter on macOS) | Add to prompt |
-| Escape | Close the details, then the search |
+| Escape | In search/add inputs, clear the field, then leave it; elsewhere, close the details, then the search |
 
 P and B do nothing on a completed Task. The Right arrow moves from a row to its
 **⋯** button. On a group, **Backlog**, or **Completed** heading, the Right and
@@ -319,8 +320,8 @@ Ctrl+Enter (Command+Enter on macOS) on its row, or drag it onto the composer.
 Sedes adds the Task to the current thread's composer as a compact pill with
 the Task's title and a remove button. A completed Task's pill is muted and a
 deleted Task's pill shows a warning; hover over the pill to see why. On phones,
-Add to prompt shows Chat so you can see the pill arrive; Tasks stays loaded
-behind it.
+Add to prompt keeps Tasks open so you can add more Tasks. Switch to Chat when
+you are ready to review the pills and send the prompt.
 
 Before delivery, the pill follows live Task renames and completion state. At
 Send, Queue, or Steer acceptance, Sedes records an immutable snapshot so the

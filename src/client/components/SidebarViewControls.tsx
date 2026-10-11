@@ -6,6 +6,7 @@ import {
   ArrowUpWideNarrow,
   FolderTree,
   History,
+  ListChecks,
   Rows3,
   SlidersHorizontal,
   type LucideIcon,
@@ -107,6 +108,7 @@ export interface SidebarViewControlsProps {
   readonly onDensityChange: (density: SidebarDensity) => void;
   readonly onPeekToggle: () => void;
   readonly onPinnedOnlyToggle: () => void;
+  readonly onHasOpenTasksToggle: () => void;
   readonly onShowToggle: (key: keyof SidebarShowFilters) => void;
   readonly onGroupForksToggle: () => void;
   readonly onBackendIconsToggle: () => void;
@@ -123,6 +125,7 @@ export function SidebarViewControls({
   onDensityChange,
   onPeekToggle,
   onPinnedOnlyToggle,
+  onHasOpenTasksToggle,
   onShowToggle,
   onGroupForksToggle,
   onBackendIconsToggle,
@@ -152,6 +155,7 @@ export function SidebarViewControls({
       (flatMode.density !== flatDefaults.density ||
         flatMode.peek !== flatDefaults.peek)) ||
     (flatMode !== undefined && flatMode.pinnedOnly) ||
+    preferences.hasOpenTasks ||
     !show.snoozed ||
     !show.settled ||
     !show.drafts ||
@@ -335,6 +339,13 @@ export function SidebarViewControls({
 
           <DropdownMenuSeparator />
           <DropdownMenuLabel>Show</DropdownMenuLabel>
+          <DropdownMenuCheckboxItem
+            checked={preferences.hasOpenTasks}
+            onCheckedChange={onHasOpenTasksToggle}
+            onSelect={keepOpen()}
+          >
+            Has open tasks
+          </DropdownMenuCheckboxItem>
           {flatMode && (
             <DropdownMenuCheckboxItem
               checked={flatMode.pinnedOnly}
@@ -393,6 +404,28 @@ export function SidebarViewControls({
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
+
+      <Tooltip.Root>
+        <Tooltip.Trigger asChild>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="view-controls-button view-controls-task-toggle"
+            data-testid="view-tasks-toggle"
+            aria-label="Has open tasks"
+            aria-pressed={preferences.hasOpenTasks}
+            onClick={onHasOpenTasksToggle}
+          >
+            <ListChecks aria-hidden="true" />
+          </Button>
+        </Tooltip.Trigger>
+        <Tooltip.Portal>
+          <Tooltip.Content className="lineage-tooltip" sideOffset={6}>
+            Has open tasks
+            <Tooltip.Arrow className="lineage-tooltip-arrow" />
+          </Tooltip.Content>
+        </Tooltip.Portal>
+      </Tooltip.Root>
     </Tooltip.Provider>
   );
 }
