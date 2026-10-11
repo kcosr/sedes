@@ -86,6 +86,10 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
     private NativeVoiceSettings settings = NativeVoiceSettings.defaults();
     private String profileId, origin, identity, binding, credential, csrf, originId;
     private String phase = "off", foregroundThread, foregroundTitle, composerMode = "queue";
+    /** Last viewed thread survives activity hiding so resuming the same route is not navigation. */
+    private String lastViewedThread;
+    /** A new session may attach before its first WebView foreground context arrives. */
+    private boolean seedForegroundTarget;
     private JSONObject nextRecordingTarget;
     /** Transient destination for this authenticated voice session, independent of the active audio item. */
     private JSONObject retainedVoiceTarget;
@@ -580,7 +584,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         profileId = null; origin = null; settings = NativeVoiceSettings.defaults(); phase = "off";
         retainedDictation = null; dictationLoading = false; dictationOperationPending = false; dictationStorageError = false; dictationOperationRevision++;
         policyGeneration = -1;
-        foregroundVisible = false; foregroundThread = null; foregroundTitle = null;
+        foregroundVisible = false; foregroundThread = null; foregroundTitle = null; lastViewedThread = null;
         publish();
     }
     private void updateSettings(JSONObject args, boolean userInitiated) throws Exception {
@@ -673,7 +677,10 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
             sessionStartId = null;
             this.service = service;
             if (binding == null || !settings.active() || !audio.hasPermission()) { stopSession(); publish(); return; }
-            sessionStarted = true; phase = "idle"; connectEvents(); drain(); publish();
+            sessionStarted = true; phase = "idle";
+            seedForegroundTarget = !foregroundVisible || foregroundThread == null;
+            if (foregroundVisible) retainVoiceTarget(foregroundThread, foregroundTitle);
+            connectEvents(); drain(); publish();
             // Snapshots are published only on change; the new owner still needs its first controls and media session state.
             JSONObject snapshot = snapshot(); main.post(() -> service.render(snapshot));
         });
@@ -709,6 +716,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         if (mode != null && !mode.equals("queue") && !mode.equals("steer")) throw new NativeVoiceJson.InvalidFieldException("composerMode");
         boolean nextVisible = visible && nativeVisible;
         String nextThread = nextVisible ? thread : null;
+        boolean viewedThreadChanged = nextThread != null && !Objects.equals(lastViewedThread, nextThread);
         boolean cancelledVoice = false;
         if (foregroundVisible && nextVisible && !Objects.equals(foregroundThread, nextThread)) {
             clientActions.discardVoiceOnly(); cancelledVoice = cancelPreparingClientVoice();
@@ -720,6 +728,18 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         foregroundVisible = nextVisible;
         foregroundThread = nextThread;
         foregroundTitle = foregroundVisible ? title : null;
+        if (nextThread != null) lastViewedThread = nextThread;
+        boolean seedViewedTarget = seedForegroundTarget && nextThread != null && sessionStarted;
+        if (seedViewedTarget) seedForegroundTarget = false;
+        if (active == null && viewedThreadChanged) {
+            clearRetainedVoiceTarget();
+            retainVoiceTarget(nextThread, foregroundTitle);
+        } else if (active == null && seedViewedTarget && retainedVoiceTarget == null) {
+            retainVoiceTarget(nextThread, foregroundTitle);
+        } else if (retainedVoiceTarget != null && nextThread != null &&
+            nextThread.equals(retainedVoiceTarget.optString("threadId"))) {
+            retainVoiceTarget(nextThread, foregroundTitle);
+        }
         if (mode != null) composerMode = mode;
         if (cancelledVoice) drain();
     }
@@ -1205,11 +1225,13 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
             "revision", idleTargetRevision);
     }
     private void clearRetainedVoiceTarget() {
+        seedForegroundTarget = false;
         retainedVoiceTarget = null;
         invalidateIdleTarget();
     }
     private void retainVoiceTarget(String threadId, String threadTitle) {
         if (threadId == null || binding == null || !sessionStarted || !settings.active() || settings.flag("pinDefaultVoiceThread")) return;
+        seedForegroundTarget = false;
         String title = NativeVoiceTitle.target(threadTitle);
         if (retainedVoiceTarget != null && threadId.equals(retainedVoiceTarget.optString("threadId")) &&
             Objects.equals(title, NativeVoiceJson.nullableString(retainedVoiceTarget, "threadTitle", 512))) return;
@@ -1304,10 +1326,10 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
             if (active != null || blockingDictation()) throw new IllegalStateException("voice_busy");
             String target = NativeVoiceJson.nullableString(selected, "threadId", 512), title = NativeVoiceJson.nullableString(selected, "threadTitle", 512);
             if (target == null) throw new IllegalStateException("voice_target_required");
-            // Retention requires revalidation only when it supplies the fallback, not when
-            // publish() merely remembered the visible or explicitly selected destination.
+            // Retained replies need fresh manual authority even while another thread is viewed.
+            // Remembering the viewed destination still preserves its ordinary Start behavior.
             boolean retained = nextRecordingTarget == null && !settings.flag("pinDefaultVoiceThread") &&
-                !(foregroundVisible && foregroundThread != null) && retainedVoiceTarget != null && target.equals(retainedVoiceTarget.optString("threadId"));
+                !(foregroundVisible && target.equals(foregroundThread)) && retainedVoiceTarget != null && target.equals(retainedVoiceTarget.optString("threadId"));
             nextRecordingTarget = null;
             Active item = new Active(target, title); item.manualInputValidation = retained;
             item.backgroundControlStart = source == ManualStartOrigin.BACKGROUND_CONTROL;
@@ -1341,11 +1363,12 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
                 return NativeVoiceJson.object("threadId", target, "threadTitle",
                     target == null ? null : NativeVoiceJson.nullableString(settings, "voiceThreadTitle", 512));
             }
-            if (foreground != null && foreground.optBoolean("visible")) {
-                target = NativeVoiceJson.nullableString(foreground, "threadId", 512); title = NativeVoiceJson.nullableString(foreground, "threadTitle", 512);
-            }
-            if (target == null && retained != null) {
+            String visible = foreground != null && foreground.optBoolean("visible") ? NativeVoiceJson.nullableString(foreground, "threadId", 512) : null;
+            if (retained != null && !Objects.equals(visible, NativeVoiceJson.nullableString(retained, "threadId", 512))) {
                 target = NativeVoiceJson.nullableString(retained, "threadId", 512); title = NativeVoiceJson.nullableString(retained, "threadTitle", 512);
+            }
+            if (target == null && visible != null) {
+                target = visible; title = NativeVoiceJson.nullableString(foreground, "threadTitle", 512);
             }
             if (target == null) {
                 target = NativeVoiceJson.nullableString(settings, "voiceThreadId", 512); title = NativeVoiceJson.nullableString(settings, "voiceThreadTitle", 512);
@@ -2728,10 +2751,6 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         if (active == null && dictationStorageError && !savedDictationBlocks()) phase = "error";
         if (active == null && binding != null && !dictationLoading && !phase.equals("starting") && !phase.equals("error"))
             phase = !settings.active() || !sessionStarted ? "off" : savedDictationBlocks() ? "recordingRecovery" : "idle";
-        // Remember the idle card's visible destination before Android clears foreground context.
-        // Also reconcile after active work ends; browsing never retargets that work itself.
-        if (active == null && phase.equals("idle") && nativeVisible && foregroundVisible && nextRecordingTarget == null)
-            retainVoiceTarget(foregroundThread, foregroundTitle);
         JSONObject recording = active == null || active.recordingId == null ? null : NativeVoiceJson.object("id", active.recordingId,
             "keepListening", active.keepListening, "reconnecting", active.reconnecting);
         JSONObject current = active == null ? null : NativeVoiceJson.object("id", active.id, "eventKind", active.event,

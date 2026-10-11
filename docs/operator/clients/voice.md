@@ -275,16 +275,18 @@ turn is still in progress, and the turn's completion makes the target stale.
 Readiness follows the server's current conversation owner even when no thread
 view is open. Reading readiness does not start or reconnect a conversation.
 
-With pinning off, the idle voice bar and the next manual recording follow the
-visible thread as you browse. An explicit choice in the voice target picker
-takes priority. Voice also keeps the last active voice thread when playback or
-recording ends in the background, including after Stop or Cancel. In-app,
-headset, and notification starts use the same destination. When you leave the
-app, its last idle visible destination remains selected. With no visible thread,
-starts use this retained destination before the saved **Default voice thread**
-or a picker.
-An unavailable visible thread opens the chooser rather than redirecting to
-the retained or default thread.
+With pinning off, voice keeps its last active thread after playback or recording
+ends, including after Stop or Cancel. For example, if you are viewing A and a
+message from B speaks, the idle card continues to show B and **Start** replies to
+B even with Auto-listen off. Idle **Next**, immediately left of Start, releases B
+and returns the card to A. Deliberately navigating to another thread while idle
+selects that thread; backgrounding and resuming on the same thread keep the voice
+destination. An explicit choice in the voice target picker takes priority.
+In-app, headset, and notification starts use the same destination. With no retained
+destination, starts use the visible thread, then the saved **Default voice thread**
+or a picker when no thread is visible. A newly viewed idle destination also remains
+selected when you leave the app. An unavailable visible destination opens the
+chooser rather than redirecting to the default thread.
 Recording can target a running thread. While
 voice is listening, the target picker on the voice card changes the target before
 finishing starts. Pickers list the visible thread first as **This thread**;
@@ -302,7 +304,7 @@ not take over its origin.
 **Pin default voice thread** supplies the initial target for new manual
 recordings and clears the retained destination. Turning pinning off during an
 interaction retains its current voice thread. Every manual Start uses an explicit
-pending choice first, then the pinned default, visible thread, retained destination,
+pending choice first, then the pinned default, retained destination, visible thread,
 or saved default. A retained target works without a saved default; a missing pinned
 default cannot redirect recording to another thread.
 The row's **Choose target thread** popup overrides that initial choice for the
@@ -315,10 +317,11 @@ quick or full settings edits the saved preference. Those selectors share the
 popup's search and row styling in a modal/mobile sheet, with no mobile search
 autofocus. Pinning does not redirect an active interaction.
 
-While idle and using the retained fallback, **Next**
-releases that destination and returns the card to its default selection.
-Next is hidden when the card already follows a visible or explicitly chosen
-thread. Idle notification Next and
+While idle and showing a retained destination, **Next**
+releases it and returns the card to the viewed thread, or the saved default or
+chooser when no thread is visible.
+Next is hidden when the retained destination matches the visible thread or the
+card follows an explicitly chosen thread. Idle notification Next and
 headset Next release the same destination. They do not record, send a message,
 navigate, or edit the composer. If the retained thread becomes unavailable,
 Start reports the failure and keeps that target until you release it or choose
@@ -341,7 +344,7 @@ and pages without a thread, it sits on its own with a top margin and divider.
 A state tile and two lines show the card's thread and its state. The first
 line always names the thread: the one being spoken, the recording target, or,
 when idle, the thread a recording would use. An explicit pending selection comes
-first, then the pinned default, visible thread, retained voice thread, or default.
+first, then the pinned default, retained voice thread, visible thread, or default.
 With neither, the card asks you to choose a thread. The second line is the state: **Ready** with the mode and
 Auto-listen, or the readiness text while voice is not ready; **Speaking** with
 the notice kind and queued count, where a narrow card drops the kind first;
@@ -428,7 +431,7 @@ voice** when a session needs it.
 
 Tapping the service notification opens the thread of the current interaction.
 While idle, it uses the same destination as Start: explicit choice, pinned
-default, visible thread, retained destination, or saved default.
+default, retained destination, visible thread, or saved default.
 Its actions are **Stop** during an interaction,
 **Start** when recording can begin and that target is available, a mode button labelled **Input** or **Speak**
 that switches to the other mode, and **Rearm on** or **Rearm off**, which

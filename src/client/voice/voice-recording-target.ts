@@ -7,7 +7,7 @@ export interface VoiceRecordingTarget {
   source: "explicit" | "pinned" | "visible" | "retained" | "default";
 }
 
-/** Explicit choice and pin lead; browsing follows the visible thread before native retention. */
+/** Explicit choice and pin lead; native continuity lasts until release or deliberate navigation. */
 export function voiceRecordingTarget(threads: readonly NormalizedApplicationThreadSummary[], native: NativeVoiceState, visibleThreadId: string | null): VoiceRecordingTarget | undefined {
   const { settings, nextRecordingTarget, retainedVoiceTarget } = native;
   const available = (id: string | null, source: VoiceRecordingTarget["source"]): VoiceRecordingTarget | undefined => {
@@ -17,10 +17,12 @@ export function voiceRecordingTarget(threads: readonly NormalizedApplicationThre
   };
   if (nextRecordingTarget) return available(nextRecordingTarget.threadId, "explicit");
   if (settings.pinDefaultVoiceThread) return available(settings.voiceThreadId, "pinned");
-  if (visibleThreadId !== null) return available(visibleThreadId, "visible");
   if (retainedVoiceTarget) {
+    // Remembering the viewed thread does not add a redundant idle Next action.
+    if (retainedVoiceTarget.threadId === visibleThreadId) return available(visibleThreadId, "visible");
     const thread = threads.find(thread => thread.id === retainedVoiceTarget.threadId);
     return { threadId: retainedVoiceTarget.threadId, threadTitle: thread ? thread.title.text : retainedVoiceTarget.threadTitle, source: "retained" };
   }
+  if (visibleThreadId !== null) return available(visibleThreadId, "visible");
   return available(settings.voiceThreadId, "default");
 }

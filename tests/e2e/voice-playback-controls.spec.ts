@@ -250,7 +250,7 @@ test("background recording announcements are opt-in and their preparation can be
   await capture(page, testInfo, "voice-announcement-after-cancel-320.png");
 });
 
-test("idle navigation follows the viewed thread and only releases a displayed retained fallback", async ({ page }, testInfo) => {
+test("idle voice retains the reply destination until Next or deliberate thread navigation", async ({ page }, testInfo) => {
   const workspace = path.join(loadE2ERunContext().workspacesDirectory, "voice-retained-target");
   await mkdir(workspace, { recursive: true });
   await installVoiceFixture(page);
@@ -281,20 +281,67 @@ test("idle navigation follows the viewed thread and only releases a displayed re
   const next = toolbar.getByRole("button", { name: "Next voice interaction", exact: true });
   const stop = toolbar.getByRole("button", { name: "Stop voice interaction", exact: true });
   const mic = toolbar.getByRole("button", { name: "Start voice recording", exact: true });
-  await retain(7);
+  await publishVoiceState(page, { phase: "speaking", active: { id: "spoken-B", eventKind: "turn.completed", threadId: retainedId,
+    threadTitle: "Last voice thread B", recognitionThreadId: retainedId, recognitionThreadTitle: "Last voice thread B", automatic: true, recording: null },
+    actions: { ...base.actions, canStart: false, canStop: true, canSkip: true, canRecordDuringPlayback: true } });
+  await expect(toolbar.locator(".voice-card-title")).toHaveText("Last voice thread B");
+  await expect(toolbar.locator(".voice-card-sub")).toContainText("Speaking");
+  await expect(composer).toHaveValue(draft);
+  await capture(page, testInfo, "voice-retained-speaking-320.png");
+  await publishVoiceState(page, { phase: "idle", active: null,
+    settings: { ...base.settings, voiceThreadId: chosenId, voiceThreadTitle: "Chosen thread C" }, actions: base.actions });
+  await expect(toolbar.locator(".voice-card-title")).toHaveText("Last voice thread B");
+  await expect(next).toBeEnabled();
+  await expect(stop).toHaveCount(0);
+  await mic.tap();
+  expected.push({ method: "startManualListen", args: { expectedConnectionGeneration: 1, threadId: retainedId, threadTitle: "Last voice thread B" } });
+  await expect.poll(calls).toEqual(expected);
+  await expect(composer).toHaveValue(draft);
+  await expect(page).toHaveURL(new RegExp(`${viewedPath}$`, "u"));
+
+  // Native foreground context disappears in the background; the unchanged route on resume preserves B.
+  await page.evaluate(({ viewedId }) => {
+    window.__voiceFixture.setForeground({ visible: false, threadId: null, threadTitle: null });
+    window.__voiceFixture.setForeground({ visible: true, threadId: viewedId, threadTitle: "Viewed thread A" });
+  }, { viewedId });
+  await expect(toolbar.locator(".voice-card-title")).toHaveText("Last voice thread B");
+  const replyRevision = await page.evaluate(() => window.__voiceFixture.state.retainedVoiceTarget!.revision);
+  const replyNextBox = (await next.boundingBox())!;
+  const replyMicBox = (await mic.boundingBox())!;
+  for (const box of [replyNextBox, replyMicBox]) {
+    expect(box.width).toBe(40);
+    expect(box.height).toBe(40);
+  }
+  expect(replyNextBox.x + replyNextBox.width + 4).toBe(replyMicBox.x);
+  await expectNoPageOverflow(page);
+  await capture(page, testInfo, "voice-retained-viewed-thread-320.png");
+  await tapAndRepeatAfterRemoval(page, next);
+  expected.push({ method: "releaseRetainedVoiceTarget", args: { expectedConnectionGeneration: 1, expectedRetainedRevision: replyRevision } });
+  await expect.poll(calls).toEqual(expected);
   await expect(toolbar.locator(".voice-card-title")).toHaveText("Viewed thread A");
   await expect(next).toHaveCount(0);
-  await expect(stop).toHaveCount(0);
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect.poll(() => mic.boundingBox()).toEqual(replyMicBox);
+  await expect(composer).toHaveValue(draft);
+  await expect(page).toHaveURL(new RegExp(`${viewedPath}$`, "u"));
   await mic.tap();
   expected.push({ method: "startManualListen", args: { expectedConnectionGeneration: 1, threadId: viewedId, threadTitle: "Viewed thread A" } });
   await expect.poll(calls).toEqual(expected);
-  await expect(composer).toHaveValue(draft);
-  await capture(page, testInfo, "voice-retained-viewed-thread-320.png");
+
+  await retain(9);
+  await page.goto(viewedPath);
+  expected.length = 0;
+  await expect(toolbar.locator(".voice-card-title")).toHaveText("Last voice thread B");
+  await expect(next).toBeEnabled();
+  expect(await calls()).toEqual(expected);
   await page.goto(chosenPath);
   await expect(toolbar.locator(".voice-card-title")).toHaveText("Chosen thread C");
   await expect(next).toHaveCount(0);
   expect(await page.evaluate(() => window.__voiceFixture.state.retainedVoiceTarget?.threadId)).toBe(chosenId);
-  expect(await calls()).toEqual([]);
+  expect(await calls()).toEqual(expected);
+  await mic.tap();
+  expected.push({ method: "startManualListen", args: { expectedConnectionGeneration: 1, threadId: chosenId, threadTitle: "Chosen thread C" } });
+  await expect.poll(calls).toEqual(expected);
 
   // With no viewed thread, retention is the displayed fallback and Next releases it.
   await page.goto("/settings/voice");

@@ -11,13 +11,17 @@ const threads = [thread("viewed", "Viewed thread"), thread("default", "Default t
 const retainedVoiceTarget = { threadId: "outside-inventory", threadTitle: "Last voice thread", revision: 2 };
 
 describe("recording target precedence", () => {
-  it("follows browsing before retention and keeps retention as the no-visible-thread fallback", () => {
+  it("keeps voice continuity ahead of the viewed thread until native releases it", () => {
     const native = voiceSnapshot({ retainedVoiceTarget, settings: voiceSettings({ voiceThreadId: "default" }) });
-    expect(voiceRecordingTarget(threads, native, "viewed")).toEqual({ threadId: "viewed", threadTitle: "Viewed thread", source: "visible" });
-    expect(voiceRecordingTarget(threads, native, "next")).toEqual({ threadId: "next", threadTitle: "Explicit choice", source: "visible" });
+    expect(voiceRecordingTarget(threads, native, "viewed")).toEqual({ threadId: "outside-inventory", threadTitle: "Last voice thread", source: "retained" });
+    expect(voiceRecordingTarget(threads, native, "next")).toEqual({ threadId: "outside-inventory", threadTitle: "Last voice thread", source: "retained" });
     expect(voiceRecordingTarget(threads, native, null)).toEqual({ threadId: "outside-inventory", threadTitle: "Last voice thread", source: "retained" });
     expect(voiceRecordingTarget(threads, { ...native, retainedVoiceTarget: null }, "viewed")).toEqual({ threadId: "viewed", threadTitle: "Viewed thread", source: "visible" });
     expect(voiceRecordingTarget(threads, { ...native, retainedVoiceTarget: null }, null)).toEqual({ threadId: "default", threadTitle: "Default thread", source: "default" });
+  });
+  it("uses the visible source when continuity already names the viewed thread", () => {
+    const native = voiceSnapshot({ retainedVoiceTarget: { threadId: "viewed", threadTitle: "Old title", revision: 2 } });
+    expect(voiceRecordingTarget(threads, native, "viewed")).toEqual({ threadId: "viewed", threadTitle: "Viewed thread", source: "visible" });
   });
   it.each(["Original title", null])("refreshes the retained title from inventory without changing its destination (native title %s)", threadTitle => {
     const native = voiceSnapshot({ retainedVoiceTarget: { threadId: "retained", threadTitle, revision: 2 },
@@ -42,9 +46,9 @@ describe("recording target precedence", () => {
     expect(voiceRecordingTarget(threads, { ...native, nextRecordingTarget: { threadId, threadTitle: null } }, "viewed")).toBeUndefined();
     expect(voiceRecordingTarget(threads, { ...native, settings: voiceSettings({ pinDefaultVoiceThread: true, voiceThreadId: threadId }) }, "viewed")).toBeUndefined();
   });
-  it.each(["offline", "archived", "missing"])("does not redirect an unavailable visible thread (%s) to retained or default", threadId => {
-    const native = voiceSnapshot({ retainedVoiceTarget, settings: voiceSettings({ voiceThreadId: "default" }) });
+  it.each(["offline", "archived", "missing"])("does not redirect an unavailable visible thread (%s) after continuity is released", threadId => {
+    const native = voiceSnapshot({ settings: voiceSettings({ voiceThreadId: "default" }) });
     expect(voiceRecordingTarget(threads, native, threadId)).toBeUndefined();
-    expect(voiceRecordingTarget(threads, { ...native, retainedVoiceTarget: null }, threadId)).toBeUndefined();
+    expect(voiceRecordingTarget(threads, { ...native, retainedVoiceTarget: { threadId, threadTitle: "Old title", revision: 2 } }, threadId)).toBeUndefined();
   });
 });

@@ -25,6 +25,7 @@ type VoiceFixture = {
   calls: { method: string; args: Record<string, unknown> }[];
   recoveredText: string;
   publish(patch: Partial<NativeVoiceState>): void;
+  setForeground(context: NativeVoiceState["foreground"]): void;
   emitInputSubmitted(event: NativeVoiceInputSubmitted): void;
 };
 declare global { interface Window { __voiceFixture: VoiceFixture } }
@@ -39,6 +40,8 @@ export async function installVoiceFixture(page: Page): Promise<void> {
   });
   await page.addInitScript(({ initial, profileId }) => {
     const retainedKey = "sedes-e2e-native-voice";
+    const viewedKey = "sedes-e2e-native-voice-viewed-thread";
+    let lastViewedThread = sessionStorage.getItem(viewedKey);
     const listeners = new Map<string, { plugin: string; event: string; callback: (value: unknown) => void }>();
     let listenerId = 0;
     const emit = (event: string, value: unknown) => {
@@ -50,19 +53,51 @@ export async function installVoiceFixture(page: Page): Promise<void> {
       calls: [],
       recoveredText: "Recovered dictation text.",
       publish(patch) {
+        const previous = fixture.state;
         fixture.state = { ...fixture.state, ...patch, stateRevision: fixture.state.stateRevision + 1 };
         const state = fixture.state;
-        if (state.phase === "idle" && !state.active && !state.nextRecordingTarget && !state.settings.pinDefaultVoiceThread &&
-            state.foreground.visible && state.foreground.threadId) {
-          const { threadId, threadTitle } = state.foreground;
-          if (state.retainedVoiceTarget?.threadId !== threadId || state.retainedVoiceTarget.threadTitle !== threadTitle) {
+        // Native activation remembers speech, then accepted input preparation remembers the reply destination.
+        if (!Object.hasOwn(patch, "retainedVoiceTarget") && state.active) {
+          if (state.active.id !== previous.active?.id) {
+            state.idleTargetRevision += 1;
+            if (state.retainedVoiceTarget) state.retainedVoiceTarget = { ...state.retainedVoiceTarget, revision: state.idleTargetRevision };
+          }
+          const recording = ["announcing", "arming", "listening", "recognizing", "submitting", "recovering"].includes(state.phase);
+          const threadId = recording ? state.active.recognitionThreadId : ["synthesizing", "speaking"].includes(state.phase) ? state.active.threadId : null;
+          const threadTitle = recording ? state.active.recognitionThreadTitle : state.active.threadTitle;
+          if (threadId && state.settings.audioMode !== "off" && !state.settings.pinDefaultVoiceThread &&
+              (state.retainedVoiceTarget?.threadId !== threadId || state.retainedVoiceTarget.threadTitle !== threadTitle)) {
             state.idleTargetRevision += 1;
             state.retainedVoiceTarget = { threadId, threadTitle, revision: state.idleTargetRevision };
           }
-          state.actions = { ...state.actions, canReleaseRetainedTarget: true };
         }
+        // Publishing idle does not replace voice continuity with the unchanged viewed route.
+        state.actions = { ...state.actions, canReleaseRetainedTarget: state.active === null && state.retainedVoiceTarget !== null &&
+          state.settings.audioMode !== "off" && !state.settings.pinDefaultVoiceThread };
         sessionStorage.setItem(retainedKey, JSON.stringify(fixture.state));
         emit("stateChanged", fixture.state);
+      },
+      setForeground({ visible, threadId, threadTitle }) {
+        const current = fixture.state;
+        let retainedVoiceTarget = current.retainedVoiceTarget;
+        let idleTargetRevision = current.idleTargetRevision;
+        const invalidate = () => {
+          idleTargetRevision += 1;
+          if (retainedVoiceTarget) retainedVoiceTarget = { ...retainedVoiceTarget, revision: idleTargetRevision };
+        };
+        if (!current.active && (visible !== current.foreground.visible || threadId !== current.foreground.threadId)) invalidate();
+        if (visible && threadId) {
+          const navigated = threadId !== lastViewedThread;
+          lastViewedThread = threadId;
+          sessionStorage.setItem(viewedKey, threadId);
+          if (!current.active && navigated) { retainedVoiceTarget = null; invalidate(); }
+          if ((!current.active && navigated || retainedVoiceTarget?.threadId === threadId && retainedVoiceTarget.threadTitle !== threadTitle) &&
+              current.settings.audioMode !== "off" && !current.settings.pinDefaultVoiceThread) {
+            invalidate();
+            retainedVoiceTarget = { threadId, threadTitle, revision: idleTargetRevision };
+          }
+        }
+        fixture.publish({ foreground: { visible, threadId, threadTitle }, retainedVoiceTarget, idleTargetRevision });
       },
       emitInputSubmitted(event) { emit("inputSubmitted", event); },
     };
@@ -102,8 +137,10 @@ export async function installVoiceFixture(page: Page): Promise<void> {
           if (method === "setConnection") {
             fixture.publish({ profileId: String(args.profileId), serverOrigin: String(args.serverOrigin), identity: String(args.identity) });
           } else if (method === "setForegroundContext") {
-            fixture.publish({ foreground: { visible: args.visible === true, threadId: typeof args.threadId === "string" ? args.threadId : null,
-              threadTitle: typeof args.threadTitle === "string" ? args.threadTitle : null } });
+            const visible = args.visible === true;
+            const threadId = visible && typeof args.threadId === "string" ? args.threadId : null;
+            const threadTitle = visible && typeof args.threadTitle === "string" ? args.threadTitle : null;
+            fixture.setForeground({ visible, threadId, threadTitle });
           } else if (method === "updateSettings") {
             fixture.publish({ settingsRevision: current.settingsRevision + 1, settings: { ...current.settings, ...args.patch as object } });
           } else if (method === "setNextRecordingTarget") {

@@ -104,6 +104,10 @@ User-facing changes are collected here before release. See the
 
 ### Changed
 
+- Voice keeps the last reply target after playback ends, even while another thread
+  is open. Idle **Next** returns to the viewed thread; navigating to a different
+  thread while idle selects it. See [voice controls](docs/operator/clients/voice.md).
+
 - Codex Speed offers Standard, Fast, and Ultrafast according to the model
   catalog and independent Fast/Ultrafast enablement. Explicit user goal edits
   are recorded with their user origin. The managed TUI keeps its inline
