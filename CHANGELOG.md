@@ -147,6 +147,9 @@ User-facing changes are collected here before release. See the
 
 ### Fixed
 
+- Automation details link consistently to the Automations list and expose
+  **Open thread** beside it. Queue/Steer choices open directly above their button.
+
 - Headset Play/Pause and Stop cancel unsent recordings, including Keep listening,
   and continue queued speech without leaving a recording failure to dismiss.
 

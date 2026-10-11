@@ -383,6 +383,9 @@ A thread with an automation opens it from:
 - **Open automation** on a thread notice about an automation run; and
 - its row on the [Automations page](#see-all-automations).
 
+At the top of the automation page, **Automations** opens the full list and
+**Open thread** opens its thread, regardless of where you opened the page.
+
 For a thread without one, **Thread actions** and the sidebar menu offer
 **Automate…**, which opens the editor for a new automation. When the thread
 can't take an automation, **Automate…** is unavailable; point at it to see

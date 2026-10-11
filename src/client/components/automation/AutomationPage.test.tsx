@@ -690,13 +690,30 @@ describe("AutomationPage", () => {
     expect(await screen.findByText("Second prompt")).toBeInTheDocument();
   });
 
-  it("goes back where the user came from", async () => {
-    navigate(`/threads/${THREAD_ID}`, { replace: true });
-    navigate(`/automations/${THREAD_ID}`);
-    renderPage([{ automation: automationSummary() }]);
-    await userEvent.click(screen.getByRole("link", { name: "Automations" }));
-    await waitFor(() => expect(window.location.pathname).toBe(`/threads/${THREAD_ID}`));
-  });
+  it.each([`/threads/${THREAD_ID}`, "/automations", "/settings/general"])(
+    "opens the Automations list after arriving from %s",
+    async (origin) => {
+      navigate(origin, { replace: true });
+      navigate(`/automations/${THREAD_ID}`);
+      renderPage([{ automation: automationSummary() }]);
+      await userEvent.click(screen.getByRole("link", { name: "Automations" }));
+      await waitFor(() => expect(window.location.pathname).toBe("/automations"));
+    },
+  );
+
+  it.each(["/automations", "/settings/general"])(
+    "opens the thread directly after arriving from %s",
+    async (origin) => {
+      navigate(origin, { replace: true });
+      navigate(`/automations/${THREAD_ID}`);
+      renderPage([{ automation: automationSummary() }]);
+      const navigation = screen.getByRole("navigation", { name: "Automation navigation" });
+      const openThread = within(navigation).getByRole("link", { name: "Open thread" });
+      expect(openThread).toHaveAttribute("href", `/threads/${THREAD_ID}`);
+      await userEvent.click(openThread);
+      await waitFor(() => expect(window.location.pathname).toBe(`/threads/${THREAD_ID}`));
+    },
+  );
 });
 
 describe("AutomationPage: agent turns", () => {

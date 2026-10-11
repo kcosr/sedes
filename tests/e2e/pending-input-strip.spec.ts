@@ -394,14 +394,14 @@ test.afterEach(async ({ page, request }) => {
   expect(piPendingSteerReset.ok()).toBe(true);
 });
 
-/** The open delivery menu sits just above the composer stack: clear of it, never floating away. */
-async function expectDeliveryMenuAboveStack(page: Page): Promise<void> {
+/** The delivery menu stays directly above the button, even when the composer stack changes. */
+async function expectDeliveryMenuAboveTrigger(page: Page): Promise<void> {
   const gap = () => page.evaluate(() => {
     const menu = document.querySelector('[role="menu"]')!.getBoundingClientRect();
-    const stack = document.querySelector(".composer-stack")!.getBoundingClientRect();
-    return stack.top - menu.bottom;
+    const trigger = document.querySelector('.delivery-split-menu')!.getBoundingClientRect();
+    return trigger.top - menu.bottom;
   });
-  await expect.poll(gap).toBeLessThanOrEqual(12);
+  await expect.poll(gap).toBeLessThanOrEqual(8);
   expect(await gap()).toBeGreaterThanOrEqual(0);
 }
 
@@ -723,14 +723,27 @@ test("Queue clears before its request and ambiguous Steer remains until exact ma
   await sendCurrentDraft(page);
   await expect(page.getByRole("button", { name: "Stop" })).toBeVisible();
 
-  // The delivery menu opens just above the whole composer stack, Prompts tab included.
+  // A tall draft must not lift the delivery menu away from its button.
+  const composer = page.getByRole("textbox", { name: "Message Codex" });
+  const menuDraft = "Keep the menu close to its button.\nThe draft may be several lines tall.\nIt can overlap this text while choosing a mode.";
+  await fillAndPersistDraft(page, menuDraft, "Message Codex");
   await page.getByRole("button", { name: "Delivery mode", exact: true }).click();
   await expect(page.getByRole("menu")).toBeVisible();
-  await expectDeliveryMenuAboveStack(page);
+  await expectDeliveryMenuAboveTrigger(page);
+  await capture(page, testInfo, "delivery-menu-over-composer-desktop.png");
   await page.keyboard.press("Escape");
   await expect(page.getByRole("menu")).toBeHidden();
+  await expect(page.getByRole("button", { name: "Delivery mode", exact: true })).toBeFocused();
 
-  const composer = page.getByRole("textbox", { name: "Message Codex" });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole("button", { name: "Delivery mode", exact: true }).click();
+  await expect(page.getByRole("menu")).toBeVisible();
+  await expectDeliveryMenuAboveTrigger(page);
+  await capture(page, testInfo, "delivery-menu-over-composer-mobile.png");
+  await page.keyboard.press("Escape");
+  await expect(composer).toHaveValue(menuDraft);
+  await page.setViewportSize({ width: 1280, height: 800 });
+
   await selectDeliveryMode(page, "Queue");
   const queueText = "Stage this Queue row before the request begins";
   await fillAndPersistDraft(page, queueText, "Message Codex");
@@ -819,17 +832,16 @@ test("Queue clears before its request and ambiguous Steer remains until exact ma
   await expect(steerRow).toContainText(/Pending steer|Steering|Steer unconfirmed/);
   await expect(steerRow.getByRole("button")).toHaveCount(0);
 
-  // Opened above the pending Steer row, the delivery menu follows the stack
-  // down once that row leaves for the transcript.
+  // Removing a pending Steer row preserves the menu's gap from its button.
   await page.getByRole("button", { name: "Delivery mode", exact: true }).click();
   await expect(page.getByRole("menu")).toBeVisible();
-  await expectDeliveryMenuAboveStack(page);
+  await expectDeliveryMenuAboveTrigger(page);
   const materializationReleased = await page.request.post(
     "/__e2e/codex/steer-materialization/release",
   );
   expect(materializationReleased.status()).toBe(204);
   await expect(steerRow).toHaveCount(0);
-  await expectDeliveryMenuAboveStack(page);
+  await expectDeliveryMenuAboveTrigger(page);
   await page.keyboard.press("Escape");
   await expect(page.getByRole("menu")).toBeHidden();
   await expect(composer).toHaveValue(postClearDraft);
