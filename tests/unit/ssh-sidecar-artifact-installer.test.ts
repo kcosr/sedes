@@ -409,7 +409,7 @@ describe("SshSidecarArtifactInstaller", () => {
     });
   });
 
-  it("uses an older service's exact artifact in its recovery request without starting it", async () => {
+  it.each([0, 255])("retains exit evidence when attaching an older service (exit %s)", async exitCode => {
     const artifact = await artifactFixture(Buffer.from("new bundle"));
     const child = fakeChild();
     const installChild = fakeChild();
@@ -443,6 +443,11 @@ describe("SshSidecarArtifactInstaller", () => {
     expect(requests).toEqual([expect.objectContaining({ operation: "attach", mode: "recovery", expectedBuildId: "old-build", expectedArtifactSha256: "c".repeat(64) })]);
     expect(stream.serviceStatus).toEqual(status);
     expect(stream.installation.executablePath).toBe(`/home/test/.local/state/sedes/sidecar/artifacts/sha256/${status.artifactSha256}/sedes`);
+    child.stderr.write("private provider text\nsidecar_upstream_detached\n");
+    complete(child, exitCode);
+    await expect(stream.closed).resolves.toMatchObject({ reason: "ssh_sidecar_exited", exitCode, signal: null,
+      diagnosticCode: "sidecar_upstream_detached" });
+    expect((await stream.closed).cause).toBeUndefined();
     await stream.close("test_complete");
   });
 

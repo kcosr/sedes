@@ -92,14 +92,26 @@ export function registerCodexRuntimeHost(input: {
   const sendEvent = (runtimeId: string, event: CodexRuntimeEvent) => {
     if (detached) return;
     const size = Buffer.byteLength(JSON.stringify(event), "utf8");
-    if (eventBytes + size > 256 * 1024 * 1024 || eventCount >= 1024) { detach(); return; }
+    if (eventBytes + size > 256 * 1024 * 1024 || eventCount >= 1024) {
+      attachmentDiagnostic("codex_runtime_host_event_failed", { controllerEpoch: input.controllerEpoch,
+        stage: "event_admission", reason: "codex_runtime_event_backlog_limit", frameBytes: size,
+        queuedEventBytes: eventBytes, queuedEventCount: eventCount, requestedClose: true });
+      detach(); return;
+    }
     eventBytes += size; eventCount++;
     const order = eventOrder(runtimeId);
+    let stage = "event_order_wait";
     void order.enqueue(event, async () => {
       if (detached) return;
+      stage = "event_body_encode";
       const body = await input.channel.encodeBody(event);
+      stage = "event_send";
       await input.channel.peer.sendEvent({ ...eventDefinition, payload: { runtimeId, body } });
-    }).catch(detach).finally(() => {
+    }).catch(error => {
+      if (!detached) attachmentDiagnostic("codex_runtime_host_event_failed", { controllerEpoch: input.controllerEpoch,
+        stage, frameBytes: size, queuedEventBytes: eventBytes, queuedEventCount: eventCount, requestedClose: true }, error);
+      detach();
+    }).finally(() => {
       eventBytes -= size; eventCount--;
       if (!attached.has(runtimeId) && order.idle && events.get(runtimeId) === order) events.delete(runtimeId);
     });

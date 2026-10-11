@@ -578,6 +578,52 @@ it.each(["encodeBody", "call", "decodeBody"] as const)("retains a command failur
   } finally { vi.restoreAllMocks(); vi.unstubAllEnvs(); await f.close(); f.host.dispose(); }
 });
 
+it.each(["encodeBody", "sendEvent"] as const)("diagnoses the first host %s failure before detaching without retiring native work", async method => {
+  const f = await diagnosticAttachment();
+  const authority = { scope, runtimeId: f.host.runtimeId, controllerId: String(f.epoch) };
+  try {
+    await f.connection.attach(authority, () => {});
+    vi.stubEnv("SEDES_DEBUG_DELIVERY", "1");
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const detach = vi.spyOn(f.host, "detach");
+    const failure = new Error("sidecar_runtime_body_capacity_exceeded", { cause: new Error("private-payload") });
+    if (method === "encodeBody") vi.spyOn(f.hostChannel, "encodeBody").mockRejectedValueOnce(failure);
+    else vi.spyOn(f.hostChannel.peer, "sendEvent").mockRejectedValueOnce(failure);
+    f.native.updateLifecycle({ state: "ready", generation: 2 });
+    await vi.waitFor(() => expect(detach).toHaveBeenCalledOnce());
+    const records = log.mock.calls.map(([line]) => String(line)).filter(line => line.startsWith("[delivery-attachment] "))
+      .map(line => JSON.parse(line.slice("[delivery-attachment] ".length)));
+    expect(records).toEqual([expect.objectContaining({ event: "codex_runtime_host_event_failed",
+      stage: method === "encodeBody" ? "event_body_encode" : "event_send", controllerEpoch: f.epoch,
+      frameBytes: expect.any(Number), queuedEventBytes: expect.any(Number), queuedEventCount: 1, requestedClose: true,
+      errors: [{ name: "Error", code: "sidecar_runtime_body_capacity_exceeded" }, { name: "Error" }] })]);
+    expect(JSON.stringify(records)).not.toMatch(/private-|runtimeId|sessionNonce/u);
+    expect(f.native.lifecycleSnapshot()).toMatchObject({ state: "ready", generation: 2 });
+  } finally { vi.restoreAllMocks(); vi.unstubAllEnvs(); await f.close(); f.host.dispose(); }
+});
+
+it("records queue pressure before rejecting an event backlog", async () => {
+  const f = await diagnosticAttachment();
+  const authority = { scope, runtimeId: f.host.runtimeId, controllerId: String(f.epoch) };
+  let release!: () => void;
+  const blocked = new Promise<void>(resolve => { release = resolve; });
+  try {
+    await f.connection.attach(authority, () => {});
+    vi.stubEnv("SEDES_DEBUG_DELIVERY", "1");
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const encode = f.hostChannel.encodeBody.bind(f.hostChannel);
+    vi.spyOn(f.hostChannel, "encodeBody").mockImplementationOnce(async value => { await blocked; return encode(value); });
+    const detach = vi.spyOn(f.host, "detach");
+    for (let generation = 2; generation <= 1026; generation++) f.native.updateLifecycle({ state: "ready", generation });
+    await vi.waitFor(() => expect(detach).toHaveBeenCalledOnce());
+    const records = log.mock.calls.map(([line]) => String(line)).filter(line => line.startsWith("[delivery-attachment] "))
+      .map(line => JSON.parse(line.slice("[delivery-attachment] ".length)));
+    expect(records).toEqual([expect.objectContaining({ event: "codex_runtime_host_event_failed", stage: "event_admission",
+      reason: "codex_runtime_event_backlog_limit", queuedEventCount: 1024, queuedEventBytes: expect.any(Number), requestedClose: true })]);
+    expect(f.native.lifecycleSnapshot()).toMatchObject({ state: "ready", generation: 1026 });
+  } finally { release(); vi.restoreAllMocks(); vi.unstubAllEnvs(); await f.close(); f.host.dispose(); }
+});
+
 it("separates slow response-body decoding from the command RPC wait", async () => {
   const f = await diagnosticAttachment();
   const authority = { scope, runtimeId: f.host.runtimeId, controllerId: String(f.epoch) };
