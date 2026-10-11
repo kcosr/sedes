@@ -1368,6 +1368,23 @@ inherit the behavior.
 
 ## Normalize history and live events
 
+Establishing an unmaterialized conversation from metadata must refresh any
+scoped, generation-bound capability needed to admit its first input. An empty
+transcript does not refresh feature authority or confirm native execution
+settings. Codex refreshes Fast-mode capability for both legacy and paginated
+empty threads, resolves explicitly disabled Fast mode to durable Standard
+intent, and keeps unknown capability fail-closed without replaying native or
+managed-TUI settings. Cancellation and generation changes must prevent stale
+projection installation. Pi, Claude, Grok, and OpenCode do not consume this
+Codex-private feature; their existing establishment paths remain unchanged.
+
+An empty metadata shell is not proof that a missing history source is safe to
+ignore. Codex accepts its exact missing-source-rollout rejection only for an
+idle paginated root with no preview or known turns, after a same-generation
+full-history read confirms that the native conversation is empty. Nonempty
+history, forks, subagents, other errors, and changed binding evidence fail
+closed. This recovery never confirms acceptance of an abandoned first input.
+
 Equality checks that suppress redundant projection work must include
 server-private authority metadata such as turn completion correlations. Retain
 metadata-only changes before deciding whether the browser needs a delta; an

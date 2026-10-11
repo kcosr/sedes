@@ -554,6 +554,21 @@ function nativeModel(overrides: Readonly<Record<string, unknown>> = {}) {
   };
 }
 
+function fastModeFeatures(enabled: boolean) {
+  return {
+    data: [{
+      name: "fast_mode",
+      stage: "stable",
+      displayName: "Fast mode",
+      description: null,
+      announcement: null,
+      enabled,
+      defaultEnabled: false,
+    }],
+    nextCursor: null,
+  };
+}
+
 function binding(
   profile = connection,
   threadId = "thread-1",
@@ -17485,6 +17500,436 @@ describe("CodexConversationHandle", () => {
         await handle.close();
       }
       expect(detachThread).toHaveBeenCalledExactlyOnceWith(empty.id, 7, false);
+    },
+  );
+
+  it("recovers an empty paginated root with missing source rollout and sends its first Fast turn", async () => {
+    const empty = paginatedThread({ id: "empty-missing-source", preview: "" });
+    const reattachThread = vi.fn(async () => {
+      throw new CodexRpcRemoteError({
+        code: -32600,
+        message: `invalid paginated history lineage for ${empty.id}: missing source rollout`,
+        generation: 7,
+        method: "thread/turns/list",
+      });
+    });
+    const harness = new RpcHarness({ reattachThread, detachThread: vi.fn(async () => undefined) });
+    harness.lifecycle("ready", 7);
+    harness.defaultModelOverrides = {
+      serviceTiers: [{ id: "priority", name: "Fast", description: "Fast" }],
+    };
+    const desired = executionSettingsTuple({ serviceTier: "fast" });
+    const observeEffective = vi.fn();
+    const handle = await driver(
+      harness, connection, new CodexConversationOwnershipRegistry(), { type: "catalog" },
+      executionSettingsProvider({
+        desiredSettings: () => desired,
+        freezeOperationSnapshot: () => ({ settings: desired }),
+        observeEffective,
+      }),
+    ).attach(attachInput(connection, empty.id));
+    harness.enqueue("thread/read", { thread: empty }, { thread: empty });
+    harness.enqueue("experimentalFeature/list", fastModeFeatures(true));
+    try {
+      const established = await handle.establishProjection({ signal: new AbortController().signal });
+      expect(established.snapshot).toMatchObject({ orderedBackendTurnIds: [], runState: "idle" });
+      expect(established.history.previousCursor).toBeUndefined();
+      expect(harness.calls.filter(({ method }) => method === "thread/read")).toEqual([
+        { method: "thread/read", params: { threadId: empty.id, includeTurns: false } },
+        { method: "thread/read", params: { threadId: empty.id, includeTurns: true } },
+      ]);
+      expect(reattachThread).toHaveBeenCalledExactlyOnceWith(empty.id, {
+        timeoutMilliseconds: 60_000,
+        signal: expect.any(AbortSignal),
+      });
+      expect(observeEffective).not.toHaveBeenCalled();
+      harness.enqueue("turn/start", {
+        turn: { ...nativeTurn(1), items: [], itemsView: "notLoaded", status: "inProgress", completedAt: null },
+      });
+      await expect(handle.submit({
+        applicationOperationId: "missing-source-first-send",
+        source: { kind: "user" },
+        mutationId: "missing-source-first-send",
+        reconciliationToken: "missing-source-first-send",
+        taskContexts: [], contextExcerpts: [], attachments: [], text: "Start the work.",
+      })).resolves.toMatchObject({ accepted: true });
+      expect(harness.calls.filter(({ method }) => method === "turn/start")).toEqual([{
+        method: "turn/start",
+        params: expect.objectContaining({ threadId: empty.id, serviceTier: "priority", model: desired.model, effort: desired.reasoningEffort }),
+      }]);
+      expect(harness.calls.filter(({ method }) => method === "thread/resume" || method === "thread/settings/update")).toEqual([]);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it("denies missing source rollout recovery after reconnect when earlier history contained turns", async () => {
+    const thread = paginatedThread({ id: "lost-history-missing-source" });
+    const reattachThread = vi.fn(async () => undefined);
+    const harness = new RpcHarness({
+      reattachThread,
+      detachThread: vi.fn(async () => undefined),
+    });
+    const handle = await driver(harness).attach(attachInput(connection, thread.id));
+    harness.enqueue("thread/read", { thread });
+    harness.enqueue("thread/resume", paginatedResumeResult({
+      thread,
+      shells: [notLoadedTurn(0)],
+    }));
+    harness.enqueue("thread/items/list", paginatedItems(0));
+    try {
+      const established = await handle.establishProjection({
+        signal: new AbortController().signal,
+      });
+      expect(established.snapshot.orderedBackendTurnIds).toEqual([
+        codexBackendTurnId(thread.id, "turn-0"),
+      ]);
+
+      harness.lifecycle("unavailable", 1);
+      harness.lifecycle("ready", 2);
+      harness.calls.length = 0;
+      reattachThread.mockImplementation(async () => {
+        throw new CodexRpcRemoteError({
+          code: -32600,
+          message: `invalid paginated history lineage for ${thread.id}: missing source rollout`,
+          generation: 2,
+          method: "thread/turns/list",
+        });
+      });
+      const empty = paginatedThread({ id: thread.id, preview: "" });
+      harness.enqueue("thread/read", { thread: empty }, { thread: empty });
+
+      await expect(handle.establishProjection({
+        signal: new AbortController().signal,
+      })).rejects.toMatchObject({ backendCode: "codex_remote_-32600" });
+      await expect(handle.history({ limit: 1 })).rejects.toMatchObject({
+        backendCode: "codex_history_reconciliation_required",
+      });
+      expect(reattachThread).toHaveBeenLastCalledWith(thread.id, {
+        timeoutMilliseconds: 60_000,
+        signal: expect.any(AbortSignal),
+      });
+      expect(harness.calls).toEqual([{
+        method: "thread/read",
+        params: { threadId: thread.id, includeTurns: false },
+      }]);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it.each([
+    { condition: "nonempty preview", overrides: { preview: "Existing conversation" } },
+    { condition: "active status", overrides: { status: { type: "active", activeFlags: [] } } },
+    { condition: "fork ancestry", overrides: { forkedFromId: "source-thread" } },
+    { condition: "parent ancestry", overrides: { parentThreadId: "parent-thread" } },
+    { condition: "subagent source", overrides: { source: { subAgent: "review" } } },
+    { condition: "existing turns", overrides: { turns: [nativeTurn(0)] } },
+  ])("denies missing source rollout recovery for metadata with $condition", async ({ overrides }) => {
+    const thread = paginatedThread({ id: "unsafe-missing-source", preview: "", ...overrides });
+    const harness = new RpcHarness({
+      reattachThread: async () => {
+        throw new CodexRpcRemoteError({ code: -32600, message: `invalid paginated history lineage for ${thread.id}: missing source rollout`, generation: 1, method: "thread/turns/list" });
+      },
+      detachThread: vi.fn(async () => undefined),
+    });
+    const handle = await driver(harness).attach(attachInput(connection, thread.id));
+    harness.enqueue("thread/read", { thread });
+    try {
+      await expect(handle.establishProjection({ signal: new AbortController().signal })).rejects.toBeInstanceOf(BackendError);
+      await expect(handle.history({ limit: 1 })).rejects.toMatchObject({ backendCode: "codex_history_not_established" });
+      expect(harness.calls).toEqual([{ method: "thread/read", params: { threadId: thread.id, includeTurns: false } }]);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it.each([
+    { condition: "existing turns", overrides: { turns: [nativeTurn(0)] } },
+    { condition: "nonempty preview", overrides: { preview: "Existing conversation" } },
+    { condition: "active status", overrides: { status: { type: "active", activeFlags: [] } } },
+    { condition: "different native identity", overrides: { id: "different-missing-source-thread" } },
+  ])("denies missing source rollout recovery when full history proves $condition", async ({ overrides }) => {
+    const empty = paginatedThread({ id: "contradicted-missing-source", preview: "" });
+    const harness = new RpcHarness({
+      reattachThread: async () => {
+        throw new CodexRpcRemoteError({ code: -32600, message: `invalid paginated history lineage for ${empty.id}: missing source rollout`, generation: 1, method: "thread/turns/list" });
+      },
+      detachThread: vi.fn(async () => undefined),
+    });
+    const handle = await driver(harness).attach(attachInput(connection, empty.id));
+    harness.enqueue("thread/read", { thread: empty }, { thread: paginatedThread({ ...empty, ...overrides }) });
+    try {
+      await expect(handle.establishProjection({ signal: new AbortController().signal })).rejects.toBeInstanceOf(BackendError);
+      await expect(handle.history({ limit: 1 })).rejects.toMatchObject({ backendCode: "codex_history_not_established" });
+      expect(harness.calls).toEqual([
+        { method: "thread/read", params: { threadId: empty.id, includeTurns: false } },
+        { method: "thread/read", params: { threadId: empty.id, includeTurns: true } },
+      ]);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it("denies missing source rollout recovery when the error names another native thread", async () => {
+    const empty = paginatedThread({ id: "wrong-error-missing-source", preview: "" });
+    const harness = new RpcHarness({
+      reattachThread: async () => {
+        throw new CodexRpcRemoteError({ code: -32600, message: "invalid paginated history lineage for another-thread: missing source rollout", generation: 1, method: "thread/turns/list" });
+      },
+      detachThread: vi.fn(async () => undefined),
+    });
+    const handle = await driver(harness).attach(attachInput(connection, empty.id));
+    harness.enqueue("thread/read", { thread: empty });
+    try {
+      await expect(handle.establishProjection({ signal: new AbortController().signal })).rejects.toMatchObject({ backendCode: "codex_remote_-32600" });
+      expect(harness.calls).toEqual([{ method: "thread/read", params: { threadId: empty.id, includeTurns: false } }]);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it("rechecks missing source rollout proof after the full-history read changes generation", async () => {
+    const empty = paginatedThread({ id: "generation-missing-source", preview: "" });
+    const harness = new RpcHarness({
+      reattachThread: async () => {
+        throw new CodexRpcRemoteError({ code: -32600, message: `invalid paginated history lineage for ${empty.id}: missing source rollout`, generation: harness.generation, method: "thread/turns/list" });
+      },
+      detachThread: vi.fn(async () => undefined),
+    });
+    const handle = await driver(harness).attach(attachInput(connection, empty.id));
+    harness.enqueue("thread/read", { thread: empty }, () => {
+      harness.lifecycle("ready", 2);
+      return { thread: empty };
+    }, { thread: empty }, { thread: empty });
+    harness.enqueue("experimentalFeature/list", fastModeFeatures(true));
+    try {
+      await expect(handle.establishProjection({ signal: new AbortController().signal })).resolves.toMatchObject({ snapshot: { orderedBackendTurnIds: [], runState: "idle" } });
+      expect(harness.calls.filter(({ method }) => method === "thread/read")).toEqual([
+        { method: "thread/read", params: { threadId: empty.id, includeTurns: false } },
+        { method: "thread/read", params: { threadId: empty.id, includeTurns: true } },
+        { method: "thread/read", params: { threadId: empty.id, includeTurns: false } },
+        { method: "thread/read", params: { threadId: empty.id, includeTurns: true } },
+      ]);
+      expect(harness.calls.filter(({ method }) => method === "experimentalFeature/list")).toHaveLength(1);
+      expect(harness.calls.filter(({ method }) => method === "thread/resume" || method === "thread/settings/update")).toEqual([]);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it("does not install missing source rollout recovery cancelled during its full-history proof", async () => {
+    const empty = paginatedThread({ id: "cancelled-missing-source", preview: "" });
+    const harness = new RpcHarness({
+      reattachThread: async () => {
+        throw new CodexRpcRemoteError({ code: -32600, message: `invalid paginated history lineage for ${empty.id}: missing source rollout`, generation: 1, method: "thread/turns/list" });
+      },
+      detachThread: vi.fn(async () => undefined),
+    });
+    const handle = await driver(harness).attach(attachInput(connection, empty.id));
+    const controller = new AbortController();
+    harness.enqueue("thread/read", { thread: empty }, () => {
+      controller.abort(new Error("test_missing_source_proof_cancelled"));
+      return { thread: empty };
+    });
+    try {
+      await expect(handle.establishProjection({ signal: controller.signal })).rejects.toMatchObject({ backendCode: "codex_projection_cancelled" });
+      await expect(handle.history({ limit: 1 })).rejects.toMatchObject({ backendCode: "codex_history_not_established" });
+      expect(harness.calls.filter(({ method }) => method === "experimentalFeature/list" || method === "thread/resume" || method === "thread/settings/update" || method === "turn/start")).toEqual([]);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it.each([
+    ["legacy", "enabled"],
+    ["paginated", "enabled"],
+    ["legacy", "disabled"],
+    ["paginated", "disabled"],
+    ["legacy", "unavailable"],
+    ["paginated", "unavailable"],
+  ] as const)(
+    "refreshes %s empty-thread Fast capability after reconnect when it is %s",
+    async (historyMode, featureState) => {
+      const reattachThread = vi.fn(async () => {
+        throw new CodexRpcRemoteError({
+          code: -32600,
+          message: "thread not materialized yet",
+          generation: 7,
+          method: historyMode === "paginated" ? "thread/turns/list" : "thread/read",
+        });
+      });
+      const harness = new RpcHarness({ reattachThread, detachThread: vi.fn(async () => undefined) });
+      harness.defaultModelOverrides = {
+        serviceTiers: [{ id: "priority", name: "Fast", description: "Fast" }],
+      };
+      const empty = nativeThread({ id: "empty-fast-recovery", historyMode, turns: [] });
+      const applicationThreadId = binding(connection, empty.id).applicationThreadId;
+      const fastModeSessions = new CodexFastModeSessionRegistry();
+      harness.enqueue("experimentalFeature/list", fastModeFeatures(true));
+      await fastModeSessions.refresh({
+        scope,
+        applicationThreadId,
+        nativeThreadId: empty.id,
+        connectionGeneration: 1,
+        client: harness.facade,
+      });
+      harness.lifecycle("ready", 7);
+      expect(fastModeSessions.projection(scope, applicationThreadId)).toMatchObject({
+        availability: "unavailable",
+        unavailableReason: "generation_changed",
+      });
+      let desired = executionSettingsTuple({ serviceTier: "fast" });
+      const resolveFastModeDisabled = vi.fn(() => {
+        desired = { ...desired, serviceTier: "standard" };
+        return desired;
+      });
+      const observeEffective = vi.fn();
+      const handle = await driver(
+        harness,
+        connection,
+        new CodexConversationOwnershipRegistry(),
+        { type: "catalog" },
+        executionSettingsProvider({
+          desiredSettings: () => desired,
+          freezeOperationSnapshot: () => ({ settings: desired }),
+          resolveFastModeDisabled,
+          observeEffective,
+        }),
+        undefined,
+        undefined,
+        unavailableCodexAgentToolCliEnvironmentProvider,
+        fastModeSessions,
+      ).attach(attachInput(connection, empty.id));
+      harness.enqueue("thread/read", { thread: empty });
+      if (historyMode === "legacy") {
+        harness.enqueue("thread/read", new CodexRpcRemoteError({
+          code: -32600,
+          message: "thread not materialized yet",
+          generation: 7,
+          method: "thread/read",
+        }));
+      }
+      harness.enqueue("experimentalFeature/list", featureState === "unavailable"
+        ? new CodexRpcRemoteError({ code: -32001, message: "feature catalog unavailable", generation: 7, method: "experimentalFeature/list" })
+        : fastModeFeatures(featureState === "enabled"));
+
+      try {
+        const established = await handle.establishProjection({ signal: new AbortController().signal });
+        expect(established.snapshot).toMatchObject({ orderedBackendTurnIds: [], runState: "idle" });
+        expect(harness.calls.filter(({ method }) => method === "experimentalFeature/list")).toHaveLength(2);
+        expect(observeEffective).not.toHaveBeenCalled();
+        expect(fastModeSessions.projection(scope, applicationThreadId)).toMatchObject({
+          enabled: featureState !== "disabled",
+          availability: featureState === "enabled" ? "available" : "unavailable",
+          ...(featureState === "disabled" ? { unavailableReason: "feature_disabled" } : {}),
+          ...(featureState === "unavailable" ? { unavailableReason: "feature_unavailable" } : {}),
+        });
+        if (featureState === "disabled") {
+          expect(resolveFastModeDisabled).toHaveBeenCalledWith(scope, { applicationThreadId, now: expect.any(Number) });
+          expect(desired.serviceTier).toBe("standard");
+        } else {
+          expect(resolveFastModeDisabled).not.toHaveBeenCalled();
+          expect(desired.serviceTier).toBe("fast");
+        }
+        const submission = {
+          applicationOperationId: "empty-fast-first-submit",
+          source: { kind: "user" as const },
+          mutationId: "empty-fast-first-submit",
+          reconciliationToken: "empty-fast-first-submit",
+          taskContexts: [],
+          contextExcerpts: [],
+          attachments: [],
+          text: "Start the work.",
+        };
+        if (featureState === "unavailable") {
+          await expect(handle.submit(submission)).rejects.toMatchObject({ backendCode: "codex_execution_settings_catalog_rejected" });
+          expect(harness.calls.filter(({ method }) => method === "turn/start")).toEqual([]);
+        } else {
+          harness.enqueue("turn/start", {
+            turn: { ...nativeTurn(1), items: [], itemsView: "notLoaded", status: "inProgress", completedAt: null },
+          });
+          await expect(handle.submit(submission)).resolves.toMatchObject({ accepted: true });
+          expect(harness.calls.filter(({ method }) => method === "turn/start")).toEqual([{
+            method: "turn/start",
+            params: expect.objectContaining({ threadId: empty.id, model: desired.model, effort: "low", serviceTier: featureState === "enabled" ? "priority" : "default" }),
+          }]);
+        }
+        expect(harness.calls.filter(({ method }) => method === "thread/resume" || method === "thread/settings/update")).toEqual([]);
+      } finally {
+        await handle.close();
+      }
+    },
+  );
+
+  it.each(["legacy", "paginated"] as const)(
+    "retries %s empty-thread recovery when its generation changes during Fast refresh",
+    async (historyMode) => {
+      const empty = nativeThread({ id: "empty-fast-generation-race", historyMode, turns: [] });
+      const harness = new RpcHarness({
+        reattachThread: async () => { throw new CodexRpcRemoteError({ code: -32600, message: "thread not materialized yet", generation: harness.generation, method: "thread/read" }); },
+        detachThread: vi.fn(async () => undefined),
+      });
+      harness.defaultModelOverrides = {
+        serviceTiers: [{ id: "priority", name: "Fast", description: "Fast" }],
+      };
+      const desired = executionSettingsTuple({ serviceTier: "fast" });
+      const resolveFastModeDisabled = vi.fn(() => ({ ...desired, serviceTier: "standard" as const }));
+      const fastModeSessions = new CodexFastModeSessionRegistry();
+      const handle = await driver(
+        harness, connection, new CodexConversationOwnershipRegistry(), { type: "catalog" },
+        executionSettingsProvider({
+          desiredSettings: () => desired,
+          freezeOperationSnapshot: () => ({ settings: desired }),
+          resolveFastModeDisabled,
+        }),
+        undefined, undefined, unavailableCodexAgentToolCliEnvironmentProvider, fastModeSessions,
+      ).attach(attachInput(connection, empty.id));
+      const readAttempt = () => {
+        harness.enqueue("thread/read", { thread: empty });
+        if (historyMode === "legacy") harness.enqueue("thread/read", () => { throw new CodexRpcRemoteError({ code: -32600, message: "thread not materialized yet", generation: harness.generation, method: "thread/read" }); });
+      };
+      readAttempt();
+      readAttempt();
+      harness.enqueue("experimentalFeature/list", () => {
+        harness.lifecycle("ready", 2);
+        return fastModeFeatures(false);
+      }, fastModeFeatures(true));
+      try {
+        await expect(handle.establishProjection({ signal: new AbortController().signal })).resolves.toMatchObject({ snapshot: { orderedBackendTurnIds: [], runState: "idle" } });
+        expect(harness.calls.filter(({ method }) => method === "thread/read")).toHaveLength(historyMode === "legacy" ? 4 : 2);
+        expect(harness.calls.filter(({ method }) => method === "experimentalFeature/list")).toHaveLength(2);
+        expect(fastModeSessions.projection(scope, binding(connection, empty.id).applicationThreadId)).toMatchObject({ enabled: true, availability: "available" });
+        expect(resolveFastModeDisabled).not.toHaveBeenCalled();
+      } finally {
+        await handle.close();
+      }
+    },
+  );
+
+  it.each(["legacy", "paginated"] as const)(
+    "does not install %s empty-thread recovery cancelled during Fast refresh",
+    async (historyMode) => {
+      const empty = nativeThread({ id: "empty-fast-cancelled", historyMode, turns: [] });
+      const harness = new RpcHarness({
+        reattachThread: async () => { throw new CodexRpcRemoteError({ code: -32600, message: "thread not materialized yet", generation: 1, method: "thread/read" }); },
+        detachThread: vi.fn(async () => undefined),
+      });
+      const handle = await driver(harness).attach(attachInput(connection, empty.id));
+      harness.enqueue("thread/read", { thread: empty });
+      if (historyMode === "legacy") harness.enqueue("thread/read", new CodexRpcRemoteError({ code: -32600, message: "thread not materialized yet", generation: 1, method: "thread/read" }));
+      const controller = new AbortController();
+      harness.enqueue("experimentalFeature/list", () => {
+        controller.abort(new Error("test_empty_recovery_cancelled"));
+        return fastModeFeatures(true);
+      });
+      try {
+        await expect(handle.establishProjection({ signal: controller.signal })).rejects.toMatchObject({ backendCode: "codex_projection_cancelled" });
+        await expect(handle.history({ limit: 1 })).rejects.toMatchObject({ backendCode: "codex_history_not_established" });
+        expect(harness.calls.filter(({ method }) => method === "turn/start")).toEqual([]);
+      } finally {
+        await handle.close();
+      }
     },
   );
 

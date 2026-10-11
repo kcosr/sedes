@@ -2498,6 +2498,31 @@ export class CodexConversationHandle implements ConversationHandle {
     }
   }
 
+  async #refreshEmptyThreadFastMode(
+    generation: number,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const projection = await this.#fastModeSessions.refresh({
+      scope: this.#scope(),
+      applicationThreadId: this.binding.applicationThreadId,
+      nativeThreadId: this.binding.backendConversationId,
+      connectionGeneration: generation,
+      client: this.#client,
+      signal,
+    });
+    this.#assertEstablishmentMayContinue(signal);
+    const lifecycle = this.#client.lifecycleSnapshot();
+    if (lifecycle.state !== "ready" || lifecycle.generation !== generation) {
+      return;
+    }
+    if (projection.unavailableReason === "feature_disabled") {
+      // Empty history confirms no native execution tuple. Resolve durable
+      // intent without replaying native or managed-TUI settings.
+      await this.#reconcileDisabledFastMode(projection, false);
+    }
+    this.#assertEstablishmentMayContinue(signal);
+  }
+
   /**
    * The account-scoped catalog decides whether an accelerated tier exists. A
    * durable Fast or Ultrafast selection the desired model no longer offers
@@ -3094,7 +3119,40 @@ export class CodexConversationHandle implements ConversationHandle {
           }
         } catch (resumeError) {
           if (!isUnmaterializedThreadError(resumeError)) {
-            throw resumeError;
+            if (
+              !isMissingPaginatedSourceRolloutError(
+                resumeError,
+                inspected.result.thread,
+              ) ||
+              (this.#snapshotWindow?.orderedBackendTurnIds.length ?? 0) !== 0
+            ) {
+              throw resumeError;
+            }
+            if (resumeError.generation !== inspected.generation) {
+              continue;
+            }
+            // A newly created paginated root can have a live empty session
+            // before its source rollout exists. Confirm full native history;
+            // metadata alone cannot distinguish it from lost history.
+            const confirmation = await this.#client.requestWithReceipt(
+              codexThreadReadMethod,
+              {
+                threadId: this.binding.backendConversationId,
+                includeTurns: true,
+              },
+              {
+                timeoutMilliseconds: CODEX_HISTORY_TIMEOUT_MILLISECONDS,
+                signal,
+              },
+            );
+            this.#assertEstablishmentMayContinue(signal);
+            if (confirmation.generation !== inspected.generation) {
+              continue;
+            }
+            this.#validateThread(confirmation.result.thread);
+            if (!isEmptyPaginatedRoot(confirmation.result.thread)) {
+              throw resumeError;
+            }
           }
           if (resumeError.generation !== inspected.generation) {
             continue;
@@ -3132,6 +3190,7 @@ export class CodexConversationHandle implements ConversationHandle {
             };
             const projection =
               await this.#projectThreadHistoryDurably(projectionThread);
+            await this.#refreshEmptyThreadFastMode(inspected.generation, signal);
             const current = this.#client.lifecycleSnapshot();
             if (
               current.state !== "ready" ||
@@ -3193,6 +3252,7 @@ export class CodexConversationHandle implements ConversationHandle {
           const projection = await this.#projectThreadHistoryDurably(
             inspected.result.thread,
           );
+          await this.#refreshEmptyThreadFastMode(inspected.generation, signal);
           const current = this.#client.lifecycleSnapshot();
           if (
             current.state !== "ready" ||
@@ -6875,6 +6935,30 @@ function isUnmaterializedThreadError(
   return (
     error instanceof CodexRpcRemoteError &&
     /(?:not materialized yet|no rollout found)/iu.test(error.message)
+  );
+}
+
+function isEmptyPaginatedRoot(thread: CodexThread): boolean {
+  return (
+    thread.historyMode === "paginated" &&
+    thread.status.type === "idle" &&
+    thread.preview === "" &&
+    thread.turns.length === 0 &&
+    thread.forkedFromId === null &&
+    thread.parentThreadId === null
+  );
+}
+
+function isMissingPaginatedSourceRolloutError(
+  error: unknown,
+  thread: CodexThread,
+): error is CodexRpcRemoteError {
+  return (
+    error instanceof CodexRpcRemoteError &&
+    error.code === -32600 &&
+    error.message ===
+      `invalid paginated history lineage for ${thread.id}: missing source rollout` &&
+    isEmptyPaginatedRoot(thread)
   );
 }
 
