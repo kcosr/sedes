@@ -147,6 +147,9 @@ User-facing changes are collected here before release. See the
 
 ### Fixed
 
+- Headset Play/Pause and Stop cancel unsent recordings, including Keep listening,
+  and continue queued speech without leaving a recording failure to dismiss.
+
 - Codex live/history parsing, empty-thread recovery, saved security policy,
   settings updates, speed changes, and forks survive reconnects and races.
   ([#18](https://github.com/kcosr/sedes/pull/18), [#26](https://github.com/kcosr/sedes/pull/26), [#27](https://github.com/kcosr/sedes/pull/27), [#38](https://github.com/kcosr/sedes/pull/38), [#44](https://github.com/kcosr/sedes/pull/44), [#70](https://github.com/kcosr/sedes/pull/70))

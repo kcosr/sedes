@@ -440,8 +440,9 @@ toggles Auto-listen. While speech plays, the expanded notification shows Record,
 Next, Stop, the mode button, and Rearm. During ordinary recording, the expanded
 notification shows Send, Cancel, the mode button, and Rearm. With an idle retained
 destination, it shows Start, Next, the mode button, and Rearm. During Keep listening, it offers **Cancel** and
-**Send**. Headset pause/stop interrupts and saves an adopted recording; it never
-sends it. Explicit Cancel still discards it. During speech, headset Play/Pause
+**Send**. During recording, headset Play/Pause or Stop cancels and discards the
+unsent recording, including Keep listening. Queued speech continues; with no
+queued work, voice returns to idle. During speech, headset Play/Pause
 starts a reply to the spoken thread when Auto-listen is on and recording is
 available; otherwise it skips the speech and follow-up. Dedicated headset Next
 skips both during speech, releases an idle retained destination, and leaves an

@@ -104,7 +104,9 @@ Playback **Stop** in the app or notification cancels the interaction and clears
 queued speech and pending agent-requested voice actions. It leaves voice enabled
 and does not stop the agent. Headset Play/Pause and Next preserve queued speech.
 While voice is recording or recognizing, Stop becomes **Cancel**, which discards
-the recording unsent and preserves queued playback. **Off** clears
+the recording unsent and preserves queued playback. Headset Play/Pause or Stop
+does the same during recording, including **Keep listening**: queued speech
+continues, or voice returns to idle if the queue is empty. **Off** clears
 the voice queue and hides the card unless **Show voice bar when off** is on in
 **Settings → Voice**; then a dimmed card stays, and its status icon opens the Voice
 sheet to turn voice back on. The notification silence bell suppresses

@@ -130,7 +130,10 @@ current playback and its unsent follow-up, clears queued automatic speech and
 manual replays, and clears pending client voice actions. It does not disable
 voice or discard a separately saved dictation. New work can play afterward.
 Recording Cancel and headset stop paths retain `stopCurrentInteraction`
-semantics, preserving queued playback. The normal headset Play/Pause and
+semantics: discard unsent capture, including adopted Keep listening recordings,
+then drain queued playback or return to idle. Cancelling capture from the headset
+does not itself report a recording failure or leave saved-dictation recovery.
+The normal headset Play/Pause and
 dedicated Next mappings do not clear the queue.
 The device preference `announceRecordingThread` defaults to false. A new
 recording start validates the exact target's normalized input context and projects

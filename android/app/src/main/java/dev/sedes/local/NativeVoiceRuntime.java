@@ -1200,7 +1200,15 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         if (retry) item.recording.retry(); else item.recording.start(item.adopted);
     }
     private boolean ownsRecording(Active item, String id) {
-        return active == item && !item.stopped && id != null && id.equals(item.recordingId);
+        // Cancellation feedback keeps Active alive, but discarded capture callbacks have no authority.
+        return active == item && !item.stopped && id != null && id.equals(item.recordingId) &&
+            !discardedDictations.contains(item.recordingBinding + "\n" + id);
+    }
+    private void replyToChangedRecording(Reply reply, String owner, String id, long generation) {
+        // Same-session Cancel supersedes an accepted mutation; acknowledge the current state.
+        if (generation == connectionGeneration && Objects.equals(owner, binding) &&
+            discardedDictations.contains(owner + "\n" + id)) reply.done(snapshot());
+        else reply.failed("recording_changed", message("recording_changed"));
     }
     private static JSONObject recordingConfig(NativeVoiceSettings settings) {
         JSONObject config = new JSONObject();
@@ -1379,8 +1387,10 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
                 item.recordingMutationPending = true;
             }
             publish();
-            dictationWork(() -> dictations.retarget(item.recordingBinding, item.recordingId, target, title), (record, error) -> {
-                if (active != item || item.stopped) { reply.failed("recording_changed", message("recording_changed")); return; }
+            final String recordingId = item.recordingId, recordingBinding = item.recordingBinding;
+            final long generation = connectionGeneration;
+            dictationWork(() -> dictations.retarget(recordingBinding, recordingId, target, title), (record, error) -> {
+                if (!ownsRecording(item, recordingId)) { replyToChangedRecording(reply, recordingBinding, recordingId, generation); return; }
                 item.recordingMutationPending = false;
                 if (error != null) { publish(); reply.failed(code(error), message(code(error))); return; }
                 // This edit was accepted before any finishing boundary, even if its durable acknowledgment arrived later.
@@ -1422,8 +1432,13 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
             scheduleLongDictationTimeout(item);
         }
         publish();
+        final String recordingId = item.recordingId;
+        final String recordingBinding = item.recordingBinding;
+        final long generation = connectionGeneration;
         item.recording.setKeepListening(enabled, error -> handler.post(() -> {
-            if (active != item || item.stopped) { reply.failed("recording_changed", message("recording_changed")); return; }
+            if (!ownsRecording(item, recordingId)) {
+                replyToChangedRecording(reply, recordingBinding, recordingId, generation); return;
+            }
             item.recordingMutationPending = false;
             if (error != null) {
                 interruptRecording(item, error); reply.failed(error, message(error)); return;
@@ -1514,11 +1529,11 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         Active old = active; if (old == null) return;
         if (old.playbackOrigin) traceActive(NativeVoiceDiagnostics.Event.PLAYBACK_STOPPED, old, reason);
         if (old.recordingStart != null) { cancelRecordingStart(old, reason, false); return; }
-        if (old.recoveryRecognition || old.recoverySend) {
+        if ((old.recoveryRecognition || old.recoverySend) && ownsRecording(old, old.recordingId)) {
             if (old.admission != null && cancelAdmission) cancelEntry(old.recordingBinding, old.admission.optString("mutationId"), true);
             interruptRecording(old, reason); return;
         }
-        if (old.adopted && old.recordingId != null && old.admission == null && !reason.equals("stopped") && !reason.equals("discarded")) {
+        if (old.adopted && ownsRecording(old, old.recordingId) && old.admission == null && !reason.equals("stopped") && !reason.equals("discarded")) {
             interruptRecording(old, reason);
             if (old.admission != null && cancelAdmission) cancelEntry(old.recordingBinding, old.admission.optString("mutationId"), true);
             return;
@@ -1631,6 +1646,9 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
     /** Stops physical work immediately; the serialized writer publishes the preserved draft when durable. */
     private void interruptRecording(Active item, String reason) {
         if (active != item || item.stopped) return;
+        if (discardedDictations.contains(item.recordingBinding + "\n" + item.recordingId)) {
+            cancelActive(false, "stopped"); drain(); return;
+        }
         final String owner = item.recordingBinding, id = item.recordingId;
         final long generation = connectionGeneration;
         item.completedMaySubmit = false; item.longDictationDeadline = 0;
@@ -2597,11 +2615,11 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
                         if (!settings.flag("headsetControls")) return;
                         if (active == null) startBackgroundRecording();
                         else if (playingSpeech()) { if (settings.flag("autoListen") && canRecordDuringPlayback()) recordDuringPlayback(); else skip(); }
-                        else headsetStop();
+                        else stopInteraction();
                         break;
                     case "headset_stop":
                         if (!settings.flag("headsetControls")) return;
-                        headsetStop(); break;
+                        stopInteraction(); break;
                     case "headset_skip":
                         if (!settings.flag("headsetControls")) return;
                         if (active == null) { releaseRetainedVoiceTarget(expectedRetainedRevision); break; }
@@ -2614,12 +2632,6 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
                 publish();
             } catch (Exception error) { report(code(error)); }
         });
-    }
-    private void headsetStop() {
-        Active item = active;
-        if (item != null && item.adopted && item.recordingId != null && item.admission == null)
-            interruptRecording(item, "headset_interrupted");
-        else stopInteraction();
     }
     void openThread(String threadId, String profileId, String serverOrigin, String expectedIdentity) {
         handler.post(() -> { pendingOpenThread = threadId; pendingOpenProfile = profileId; pendingOpenOrigin = serverOrigin; pendingOpenIdentity = expectedIdentity; deliverPendingOpen(); });
