@@ -361,7 +361,7 @@ public class NativeVoiceE2eTest {
                     await(() -> {
                         JSONObject state = runtime.snapshot(); JSONArray recovery = state.optJSONArray("recovery");
                         return state.isNull("active") && receiptReads.get() >= 1 && recovery.length() == 1 &&
-                            recovery.optJSONObject(0).optString("status").equals("uncertain");
+                            recovery.optJSONObject(0).optString("status").equals("uncertain") && phases.contains("recovering");
                     }, 15000, "uncertain input released into recovery after transport loss");
                     assertTrue("Checking submission precedes release", phases.contains("recovering"));
                     assertTrue("Released recovery leaves voice available", runtime.snapshot().optJSONObject("actions").optBoolean("canStart"));

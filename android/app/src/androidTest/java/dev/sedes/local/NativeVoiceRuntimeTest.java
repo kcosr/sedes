@@ -2777,6 +2777,8 @@ public class NativeVoiceRuntimeTest {
                 });
                 NativeSpeechCatalog.PreflightResult preflight = f.preflights.poll(10, TimeUnit.SECONDS); assertNotNull(preflight);
                 Object active = field(f.runtime, "active"); String id = (String) field(active, "recordingId");
+                // Replay waits for both executors, so queue it before blocking the journal worker.
+                if (queued) f.replay(false, UUID.randomUUID().toString(), "waiting-turn", "Continue after arming cancel");
                 RecognitionJob starting = null;
                 try (WorkerBlock writing = new WorkerBlock(f)) {
                     preflight.done(NativeSpeechCapabilities.hosted("gpt-live-transcribe"), null); f.onOwner(() -> {});
@@ -2789,7 +2791,6 @@ public class NativeVoiceRuntimeTest {
                         assertFalse((boolean) field(active, "keepListening")); assertTrue(f.speech.transcriptions.isEmpty());
                     }
                     assertEquals("arming", f.runtime.snapshot().getString("phase")); assertNull(field(f.runtime, "captureOwner"));
-                    if (queued) f.replay(false, UUID.randomUUID().toString(), "waiting-turn", "Continue after arming cancel");
                     f.runtime.notificationAction("headset"); f.onOwner(() -> {});
                     assertNotSame("Arming Play must cancel on either side of adoption acknowledgement", active, field(f.runtime, "active"));
                     assertTrue((boolean) field(active, "stopped")); assertNull(field(active, "finishReason"));
