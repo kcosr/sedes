@@ -1721,6 +1721,10 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
             finishItem(item); return;
         }
         boolean explicit = item.finishReason == NativeVoiceRecording.FinishReason.SEND;
+        if (explicit && blank(text)) {
+            // An explicit finish with no recognized speech is a normal discard, without failure feedback.
+            discardStoredRecording(item.recordingBinding, item.recordingId); finishItem(item); return;
+        }
         boolean retryEmptyTranscript = !explicit && item.endpoint != NativeVoiceCapturePolicy.End.NO_SPEECH && blank(text);
         boolean usable = !blank(text) &&
             !(item.recordingSettings.flag("recognizeStopCommand") && !explicit && NativeVoiceQueue.isStopCommand(text));
@@ -2613,9 +2617,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
                         "patch", NativeVoiceJson.object("autoListen", !settings.flag("autoListen"))), false); break;
                     case "headset":
                         if (!settings.flag("headsetControls")) return;
-                        if (active == null) startBackgroundRecording();
-                        else if (playingSpeech()) { if (settings.flag("autoListen") && canRecordDuringPlayback()) recordDuringPlayback(); else skip(); }
-                        else stopInteraction();
+                        headsetPlayPause();
                         break;
                     case "headset_stop":
                         if (!settings.flag("headsetControls")) return;
@@ -2632,6 +2634,17 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
                 publish();
             } catch (Exception error) { report(code(error)); }
         });
+    }
+    private void headsetPlayPause() {
+        if (active == null) { startBackgroundRecording(); return; }
+        // Send owns capture drain, transcription, feedback and admission until the interaction finishes.
+        // A pending keep/target edit also makes Send unavailable; this key must not discard its audio.
+        if (active.finishReason == NativeVoiceRecording.FinishReason.SEND || active.recordingMutationPending) return;
+        if (playingSpeech()) {
+            if (settings.flag("autoListen") && canRecordDuringPlayback()) recordDuringPlayback(); else skip();
+        } else if (active.keepListening && active.recordingId != null) {
+            if (sendRecordingBlockedReason() == null) sendRecording(NativeVoiceJson.object("recordingId", active.recordingId));
+        } else stopInteraction();
     }
     void openThread(String threadId, String profileId, String serverOrigin, String expectedIdentity) {
         handler.post(() -> { pendingOpenThread = threadId; pendingOpenProfile = profileId; pendingOpenOrigin = serverOrigin; pendingOpenIdentity = expectedIdentity; deliverPendingOpen(); });

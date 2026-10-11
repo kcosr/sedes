@@ -129,12 +129,19 @@ Explicit app and notification playback Stop uses `stopPlayback`: it cancels the
 current playback and its unsent follow-up, clears queued automatic speech and
 manual replays, and clears pending client voice actions. It does not disable
 voice or discard a separately saved dictation. New work can play afterward.
-Recording Cancel and headset stop paths retain `stopCurrentInteraction`
+Headset Play/Pause on a current Keep listening recording uses `sendRecording`:
+capture stops, all outstanding transcription finishes, and one nonblank transcript
+is submitted. Repeated presses during this Send are idempotent. A pending Keep
+listening or retarget mutation makes Play/Pause a no-op, preserving capture until
+the mutation resolves. The current acknowledged Keep listening flag selects this
+behavior; durable adoption alone does not. An empty explicit Send ends normally
+without a failure cue, re-arming, or submitting input, then drains queued playback.
+Recording Cancel and dedicated headset Stop retain `stopCurrentInteraction`
 semantics: discard unsent capture, including adopted Keep listening recordings,
 then drain queued playback or return to idle. Cancelling capture from the headset
 does not itself report a recording failure or leave saved-dictation recovery.
-The normal headset Play/Pause and
-dedicated Next mappings do not clear the queue.
+Ordinary recording Play/Pause also cancels and discards. The normal headset
+Play/Pause and dedicated Next mappings do not clear the queue.
 The device preference `announceRecordingThread` defaults to false. A new
 recording start validates the exact target's normalized input context and projects
 its required canonical `threadTitle` (a string up to 4,096 UTF-16 units, including
@@ -208,7 +215,7 @@ result once, stops capture, and retains its active slot until completion feedbac
 drains. Cue callbacks are tied to that active item and a unique cue ID; cancellation
 invalidates them. Cue failure or a bounded drain timeout continues the recognized
 input path, while a late provider result cannot replay feedback or input. A
-blank final transcript after locally detected speech re-arms the same item
+blank automatic final transcript after locally detected speech re-arms the same item
 after its failure cue; that pending retry remains dependent on the original
 provider and current voice policy. A no-speech timeout cancels without commit
 and ends the item after the failure cue, with no retry. External focus loss

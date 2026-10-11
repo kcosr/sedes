@@ -2764,10 +2764,117 @@ public class NativeVoiceRuntimeTest {
         }
     }
 
+    @Test public void headsetPlaySendsHeldCaptureOnceThroughRecognitionFeedbackAndAdmission() throws Exception {
+        for (boolean defaultHeld : new boolean[] { false, true }) for (boolean cues : new boolean[] { false, true }) {
+            try (Fixture f = new Fixture(false, false)) {
+                String capture = f.recognizing(cues, defaultHeld); Object active = field(f.runtime, "active");
+                f.onOwner(() -> { set(f.runtime, "phase", "listening"); f.invoke("publish", new Class<?>[0]); });
+                String id = (String) field(active, "recordingId");
+                if (!defaultHeld) assertNull(f.command("setKeepListening", NativeVoiceJson.object("recordingId", id, "enabled", true)));
+                f.onOwner(() -> assertTrue(((NativeVoiceRecording) field(active, "recording")).accept(captureFrame(1000))));
+                JSONObject controls = f.runtime.snapshot();
+                f.capturedAction("headset", controls); f.flush();
+                assertEquals(NativeVoiceRecording.FinishReason.SEND, field(active, "finishReason"));
+                assertTrue((boolean) field(active, "captureStopping")); assertEquals(0, f.inputAttempts.get());
+                f.capturedAction("headset", controls); f.flush();
+                f.runtime.captureEnded(capture); f.synthetic.ready(); awaitCommit(f, f.synthetic);
+                assertEquals(0, f.inputAttempts.get()); assertTrue(f.cues.isEmpty());
+                f.capturedAction("headset", controls); f.flush();
+                f.synthetic.complete("The full held utterance, including its ending."); f.flush();
+                if (cues) {
+                    Cue success = f.cue(NativeVoiceCue.Kind.SUCCESS);
+                    f.capturedAction("headset", controls); f.flush();
+                    assertEquals(0, f.inputAttempts.get()); assertTrue(f.cues.isEmpty());
+                    f.runtime.drained(success.id); f.flush();
+                }
+                assertNotNull(f.inputs.poll(10, TimeUnit.SECONDS));
+                assertEquals("The full held utterance, including its ending.", f.lastRequest.get().getString("text"));
+                f.capturedAction("headset", controls); f.synthetic.complete("Duplicate callback must not replace the text"); f.flush();
+                assertEquals(1, f.inputAttempts.get()); assertEquals(1, f.synthetic.commits);
+                assertFalse("Repeated Play must not cancel admission", f.store.journal(f.binding).getJSONObject(0).getBoolean("cancelled"));
+                assertEquals(0, f.runtime.snapshot().getJSONArray("errors").length()); assertTrue(f.cues.isEmpty());
+            }
+        }
+    }
+
+    @Test public void emptyHeadsetSendDiscardsSilentlyAndContinuesQueuedPlaybackOrIdle() throws Exception {
+        for (String text : new String[] { "", " \t\n\u00a0\u3000\ufeff" }) for (boolean queued : new boolean[] { false, true }) for (boolean captured : new boolean[] { false, true }) {
+            try (Fixture f = new Fixture(false, false)) {
+                String capture = f.recognizing(true, true); Object active = field(f.runtime, "active");
+                f.settings(NativeVoiceJson.object("autoListen", false));
+                f.onOwner(() -> {
+                    set(f.runtime, "phase", "listening");
+                    if (captured) assertTrue(((NativeVoiceRecording) field(active, "recording")).accept(captureFrame(0)));
+                    f.invoke("publish", new Class<?>[0]);
+                });
+                String id = (String) field(active, "recordingId");
+                if (queued) f.replay(false, UUID.randomUUID().toString(), "waiting-turn", "Continue after empty send");
+                f.runtime.notificationAction("headset"); f.flush();
+                f.runtime.captureEnded(capture);
+                if (captured) { f.synthetic.ready(); awaitCommit(f, f.synthetic); f.synthetic.complete(text); }
+                f.flush();
+                assertEquals(0, f.inputAttempts.get()); assertTrue("Empty Send has no success or failure tone", f.cues.isEmpty());
+                assertEquals(0, f.runtime.snapshot().getJSONArray("errors").length()); assertTrue(f.runtime.snapshot().isNull("recordingRecovery"));
+                assertTrue("Empty Send must not retry capture", f.speech.transcriptions.isEmpty()); f.assertRecordingDiscarded(id);
+                if (queued) {
+                    SpeechJob next = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(next);
+                    assertEquals("Continue after empty send", next.text); assertEquals(0, f.queued()); f.runtime.drained(next.id); f.flush();
+                }
+                assertTrue(f.runtime.snapshot().isNull("active")); assertEquals("idle", f.runtime.snapshot().getString("phase"));
+                f.synthetic.complete("Late text after empty send"); f.runtime.captureEnded(capture); f.flush();
+                assertEquals(0, f.inputAttempts.get()); assertTrue(f.cues.isEmpty()); assertTrue(f.speech.transcriptions.isEmpty());
+            }
+        }
+    }
+
+    @Test public void headsetPlayDuringRecordingEditsDoesNothingUntilAFreshPressUsesTheAcknowledgedState() throws Exception {
+        for (String mutation : new String[] { "enable", "disable", "retarget" }) {
+            try (Fixture f = new Fixture(false, false)) {
+                String capture = f.recognizing(false, !mutation.equals("enable")); Object active = field(f.runtime, "active");
+                f.onOwner(() -> {
+                    set(f.runtime, "phase", "listening");
+                    assertTrue(((NativeVoiceRecording) field(active, "recording")).accept(captureFrame(1000)));
+                    f.invoke("publish", new Class<?>[0]);
+                });
+                String id = (String) field(active, "recordingId"), destination = UUID.randomUUID().toString();
+                AsyncCommand edit;
+                try (WorkerBlock writing = new WorkerBlock(f)) {
+                    edit = mutation.equals("retarget") ? f.beginCommand("retargetActiveRecognition", NativeVoiceJson.object("recordingId", id,
+                        "threadId", destination, "threadTitle", "Edited destination")) :
+                        f.beginCommand("setKeepListening", NativeVoiceJson.object("recordingId", id, "enabled", mutation.equals("enable")));
+                    f.onOwner(() -> {}); assertTrue((boolean) field(active, "recordingMutationPending"));
+                    f.runtime.notificationAction("headset"); f.runtime.notificationAction("headset"); f.onOwner(() -> {});
+                    assertSame(active, field(f.runtime, "active")); assertFalse((boolean) field(active, "captureStopping"));
+                    assertFalse(f.synthetic.cancelled); assertNull(field(active, "finishReason")); assertTrue(f.cues.isEmpty());
+                    // The busy key must leave both previously accepted and newly arriving audio intact.
+                    f.onOwner(() -> assertTrue(((NativeVoiceRecording) field(active, "recording")).accept(captureFrame(2000))));
+                }
+                assertNull(edit.await()); f.flush();
+                assertFalse((boolean) field(active, "recordingMutationPending")); assertNull("Busy presses must not leave deferred Send", field(active, "finishReason"));
+                assertFalse((boolean) field(active, "captureStopping")); assertEquals(0, f.inputAttempts.get());
+                assertEquals(0, f.runtime.snapshot().getJSONArray("errors").length());
+                f.onStore(() -> assertEquals(4800, f.dictations.get(f.binding, id).acceptedSamples));
+                f.runtime.notificationAction("headset"); f.flush();
+                if (mutation.equals("disable")) {
+                    assertTrue("Released adoption remains a normal cancel", (boolean) field(active, "adopted"));
+                    assertFalse((boolean) field(active, "keepListening")); f.assertRecordingDiscarded(id);
+                    assertTrue(f.runtime.snapshot().isNull("active")); assertEquals(0, f.inputAttempts.get());
+                } else {
+                    assertEquals(NativeVoiceRecording.FinishReason.SEND, field(active, "finishReason"));
+                    f.runtime.captureEnded(capture); f.synthetic.ready(); awaitCommit(f, f.synthetic); f.synthetic.complete("Audio preserved across the edit"); f.flush();
+                    assertEquals(1, f.inputAttempts.get()); assertEquals("Audio preserved across the edit", f.lastRequest.get().getString("text"));
+                    if (mutation.equals("retarget")) assertEquals(destination, field(active, "targetId"));
+                }
+                assertEquals(0, f.runtime.snapshot().getJSONArray("errors").length()); assertTrue(f.cues.isEmpty());
+            }
+        }
+    }
+
     @Test public void headsetStopsDiscardUnsentCapturesAndContinueQueuedPlaybackOrIdle() throws Exception {
-        for (String action : new String[] { "headset", "headset_stop" }) {
+        for (String action : new String[] { "headset", "stop", "headset_stop" }) {
             for (String stage : new String[] { "held", "released", "send", "ordinary" })
             for (boolean cues : new boolean[] { false, true }) for (boolean queued : new boolean[] { false, true }) {
+                if (action.equals("headset") && (stage.equals("held") || stage.equals("send"))) continue;
                 try (Fixture f = new Fixture(false, false)) {
                     String captureId = f.recognizing(cues); Object active = field(f.runtime, "active");
                     f.settings(NativeVoiceJson.object("autoListen", false));
@@ -2817,7 +2924,7 @@ public class NativeVoiceRuntimeTest {
     }
 
     @Test public void headsetCancellationFencesCompletionAlreadyPostedBehindTheStop() throws Exception {
-        for (String action : new String[] { "headset", "headset_stop" }) {
+        for (String action : new String[] { "stop", "headset_stop" }) {
             try (Fixture f = new Fixture(false, false)) {
                 String capture = f.recognizing(true); Object active = field(f.runtime, "active");
                 f.onOwner(() -> { set(f.runtime, "phase", "listening"); f.invoke("publish", new Class<?>[0]); });
@@ -2863,7 +2970,7 @@ public class NativeVoiceRuntimeTest {
     }
 
     @Test public void headsetStopDuringSuccessFeedbackDiscardsTextAndContinuesQueuedPlayback() throws Exception {
-        for (String action : new String[] { "headset", "headset_stop" }) {
+        for (String action : new String[] { "stop", "headset_stop" }) {
             try (Fixture f = new Fixture(false, false)) {
                 String capture = f.recognizing(true); Object active = field(f.runtime, "active");
                 f.settings(NativeVoiceJson.object("autoListen", false));
@@ -2886,7 +2993,7 @@ public class NativeVoiceRuntimeTest {
     }
 
     @Test public void headsetCancellationRejectsPendingAdoptionWithoutInterruptingFeedbackOrQueue() throws Exception {
-        for (String action : new String[] { "headset", "headset_stop" }) {
+        for (String action : new String[] { "stop", "headset_stop" }) {
             try (Fixture f = new Fixture(false, false)) {
                 f.recognizing(true); Object active = field(f.runtime, "active");
                 f.settings(NativeVoiceJson.object("autoListen", false));
@@ -2921,7 +3028,7 @@ public class NativeVoiceRuntimeTest {
     }
 
     @Test public void pendingRecordingMutationAfterHeadsetCancellationRejectsAChangedConnection() throws Exception {
-        for (String action : new String[] { "headset", "headset_stop" }) for (String mutation : new String[] { "adoption", "retarget" }) {
+        for (String action : new String[] { "stop", "headset_stop" }) for (String mutation : new String[] { "adoption", "retarget" }) {
             try (Fixture f = new Fixture(false, false)) {
                 f.recognizing(true); Object active = field(f.runtime, "active");
                 f.onOwner(() -> { set(f.runtime, "phase", "listening"); f.invoke("publish", new Class<?>[0]); });
@@ -2945,7 +3052,7 @@ public class NativeVoiceRuntimeTest {
     }
 
     @Test public void headsetCancellationAcknowledgesPendingRetargetWithoutChangingVoiceContinuity() throws Exception {
-        for (String action : new String[] { "headset", "headset_stop" }) for (boolean cues : new boolean[] { false, true })
+        for (String action : new String[] { "stop", "headset_stop" }) for (boolean cues : new boolean[] { false, true })
         for (boolean held : new boolean[] { false, true }) for (boolean queued : new boolean[] { false, true }) {
             try (Fixture f = new Fixture(false, false)) {
                 String capture = f.recognizing(cues, held); Object active = field(f.runtime, "active");
@@ -3033,7 +3140,7 @@ public class NativeVoiceRuntimeTest {
     }
 
     @Test public void shutdownDuringHeadsetCancellationFeedbackNeverRecoversDiscardedAudio() throws Exception {
-        for (String action : new String[] { "headset", "headset_stop" })
+        for (String action : new String[] { "stop", "headset_stop" })
         for (String shutdown : new String[] { "off", "disconnect", "service" }) for (boolean blocked : new boolean[] { false, true }) {
             try (Fixture f = new Fixture(false, false)) {
                 String capture = f.recognizing(true, true); Object active = field(f.runtime, "active");
@@ -3072,7 +3179,7 @@ public class NativeVoiceRuntimeTest {
     }
 
     @Test public void captureTimeoutDuringHeadsetCancellationFeedbackFinishesWithoutRecoveryOrErrors() throws Exception {
-        for (String action : new String[] { "headset", "headset_stop" }) {
+        for (String action : new String[] { "stop", "headset_stop" }) {
             try (Fixture f = new Fixture(false, false)) {
                 f.recognizing(true, true); Object active = field(f.runtime, "active");
                 f.settings(NativeVoiceJson.object("autoListen", false));
@@ -3307,7 +3414,7 @@ public class NativeVoiceRuntimeTest {
             JSONObject ready = f.runtime.snapshot().getJSONObject("recordingRecovery");
             assertEquals("ready", ready.getString("stage")); assertTrue(ready.isNull("reason"));
         }
-        for (boolean held : new boolean[] { false, true }) for (String stop : new String[] { "app", "headset", "headset_stop" }) {
+        for (boolean held : new boolean[] { false, true }) for (String stop : new String[] { "app", "stop", "headset_stop" }) {
             try (Fixture f = new Fixture(false, false)) {
                 String capture = f.recognizing(false); Object active = field(f.runtime, "active");
                 f.onOwner(() -> { set(f.runtime, "phase", "listening"); f.invoke("publish", new Class<?>[0]); });

@@ -382,7 +382,11 @@ Turn it on to keep recording through pauses;
 turn it off to restore ordinary silence and completion limits with fresh clocks.
 All audio and text already collected remain part of the same message. With or
 without Keep listening, the right-side **Send** arrow stops capture, finishes
-recognition, and sends one message. The X **Cancel** discards the unsent recording. Explicit Send
+recognition, and sends one message. In Keep listening, headset Play/Pause does
+the same, including finishing speech that has not yet been transcribed. If the
+finished transcript is empty, voice ends the recording normally and continues
+queued speech without sending a message. The X **Cancel** discards the unsent
+recording. Explicit Send
 is literal, including “stop”; it does not open a review step or change the composer.
 Ordinary navigation never retargets an active recording; its chevron picker does,
 until finishing.
@@ -440,9 +444,13 @@ toggles Auto-listen. While speech plays, the expanded notification shows Record,
 Next, Stop, the mode button, and Rearm. During ordinary recording, the expanded
 notification shows Send, Cancel, the mode button, and Rearm. With an idle retained
 destination, it shows Start, Next, the mode button, and Rearm. During Keep listening, it offers **Cancel** and
-**Send**. During recording, headset Play/Pause or Stop cancels and discards the
-unsent recording, including Keep listening. Queued speech continues; with no
-queued work, voice returns to idle. During speech, headset Play/Pause
+**Send**. During Keep listening, headset Play/Pause finishes recognition and
+sends any transcribed speech. Repeated presses while finishing or sending leave
+that send in progress. During ordinary recording, Play/Pause cancels and discards
+the unsent recording. Headset Stop always cancels and discards unsent recording,
+including Keep listening. After cancellation or an empty transcript, queued
+speech continues; with no queued work, voice returns to idle. During speech,
+headset Play/Pause
 starts a reply to the spoken thread when Auto-listen is on and recording is
 available; otherwise it skips the speech and follow-up. Dedicated headset Next
 skips both during speech, releases an idle retained destination, and leaves an

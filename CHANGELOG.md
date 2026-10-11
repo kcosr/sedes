@@ -150,8 +150,10 @@ User-facing changes are collected here before release. See the
 - Automation details link consistently to the Automations list and expose
   **Open thread** beside it. Queue/Steer choices open directly above their button.
 
-- Headset Play/Pause and Stop cancel unsent recordings, including Keep listening,
-  and continue queued speech without leaving a recording failure to dismiss.
+- Headset Play/Pause finishes transcription and sends speech in Keep listening;
+  an empty transcript ends normally and continues queued speech. Ordinary
+  recording Play/Pause and headset Stop discard unsent recordings without leaving
+  a recording failure to dismiss.
 
 - Codex live/history parsing, empty-thread recovery, saved security policy,
   settings updates, speed changes, and forks survive reconnects and races.
