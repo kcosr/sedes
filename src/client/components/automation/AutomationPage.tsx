@@ -21,6 +21,7 @@ import {
 import {
   automationEditPath,
   automationsPath,
+  historyStepsBackTo,
   navigate,
   navigateUp,
   threadPath,
@@ -125,7 +126,10 @@ export function AutomationPage({
           onClick={(event) => {
             if (!isPlainClick(event)) return;
             event.preventDefault();
-            navigate(threadPath(threadId));
+            const path = threadPath(threadId);
+            const steps = historyStepsBackTo(path);
+            if (steps === undefined) navigate(path);
+            else window.history.go(steps);
           }}
         >
           <MessageSquare aria-hidden="true" />
@@ -200,20 +204,11 @@ function LoadedAutomation({
                 "This thread can't take an automation right now.")
           }
           action={
-            <>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => navigate(threadPath(thread.id))}
-              >
-                Open thread
+            canAttach ? (
+              <Button type="button" onClick={() => navigate(automationEditPath(thread.id))}>
+                Automate…
               </Button>
-              {canAttach ? (
-                <Button type="button" onClick={() => navigate(automationEditPath(thread.id))}>
-                  Automate…
-                </Button>
-              ) : null}
-            </>
+            ) : undefined
           }
         />
       </>
@@ -498,9 +493,9 @@ function AutomationDetails({
                       <DropdownMenuValue aria-hidden="true">{actions.edit.hint}</DropdownMenuValue>
                     ) : null}
                   </DropdownMenuItem>
+                  <DropdownMenuSeparator />
                 </>
               ) : null}
-              <DropdownMenuSeparator />
               <DropdownMenuItem
                 variant="destructive"
                 disabled={!actions.remove.available}

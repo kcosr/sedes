@@ -510,7 +510,8 @@ the menu shows a short hint, and pointing at the action says what to do.
 ## Open an automation
 
 An automation's page shows its state, definition, and runs in one scroll.
-**‹ Automations** returns to where you came from, or to the Automations page.
+**‹ Automations** opens the Automations page. **Open thread**, beside it,
+opens the associated thread.
 The sidebar keeps the thread selected.
 
 The header shows the thread title, a [state](#automation-states) chip, and a
@@ -525,7 +526,7 @@ it does not change the automation's state. Its actions are:
 - **Pause** or **Enable** (the pause and play buttons) stops or resumes
   scheduled runs. Pausing does not stop a run that has already started.
 - **Edit** (the pencil) opens the editor.
-- **⋯** has **Open thread** and **Delete automation…**. On phones, **Pause**
+- **⋯** has **Delete automation…**. On phones, **Pause**
   or **Enable** and **Edit** move into this menu.
 
 Some actions wait for the automation or its thread. Point at an action to see
