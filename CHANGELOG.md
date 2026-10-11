@@ -940,6 +940,12 @@
 
 ### Fixed
 
+- Empty Codex threads whose paginated source rollout is missing can reconnect
+  after native full-history confirmation, without replaying an abandoned send.
+- Recovering an empty Codex thread refreshes its Speed capability after
+  reconnecting, so a saved Fast selection no longer blocks the first message
+  with an unavailable-model error.
+
 - Automatic completion voice notifications come from live completion changes;
   reopening threads and recovering provider history no longer announces old
   replies. Notifications missed while disconnected are not replayed.
