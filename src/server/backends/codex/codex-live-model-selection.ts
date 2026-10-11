@@ -1,4 +1,5 @@
 import type { CodexSharedClientFacade } from "./codex-client-facade.js";
+import { readCodexSpeedEnablement } from "./codex-speed-policy.js";
 import {
   encodeCodexServiceTier,
   type CodexServiceTierSelection,
@@ -27,6 +28,7 @@ export interface CodexLiveModelSelection {
 export async function assertCodexLiveModelSelection(input: {
   readonly client: CodexSharedClientFacade;
   readonly expectedGeneration: number;
+  readonly nativeThreadId: string;
   readonly model: string;
   readonly reasoningEffort: string;
   readonly serviceTier: CodexServiceTierSelection;
@@ -69,6 +71,17 @@ export async function assertCodexLiveModelSelection(input: {
           candidate.serviceTiers.some(({ id }) => id === nativeServiceTier)),
     );
     if (selected) {
+      if (input.serviceTier !== "standard") {
+        const policy = await readCodexSpeedEnablement({
+          client: input.client,
+          connectionGeneration: input.expectedGeneration,
+          nativeThreadId: input.nativeThreadId,
+          signal: input.signal,
+        });
+        if (!(input.serviceTier === "fast" ? policy.fastEnabled : policy.ultrafastEnabled)) {
+          throw new Error("codex_tui_live_speed_policy_disabled");
+        }
+      }
       assertGeneration(
         input.client,
         input.expectedGeneration,

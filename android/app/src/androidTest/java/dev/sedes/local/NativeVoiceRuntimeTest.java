@@ -4665,7 +4665,7 @@ public class NativeVoiceRuntimeTest {
                 NativeVoiceQueue.Item notification = new NativeVoiceQueue.Item(NativeVoiceJson.object("sourceEventId", id,
                     "generation", 1, "voice", "speakThenListen",
                     "recognitionTarget", NativeVoiceJson.object("threadId", target, "activityToken", "source-epoch", "sourceTurnId", "client-source-turn"),
-                    "payload", NativeVoiceJson.object("schemaVersion", 4, "notificationId", id, "event", "turn.completed",
+                    "payload", NativeVoiceJson.object("schemaVersion", 5, "notificationId", id, "event", "turn.completed",
                         "occurredAt", "2026-10-06T00:00:00Z", "title", "Completed", "message", "Ready for the next thread",
                         "thread", NativeVoiceJson.object("id", target, "title", "Source"),
                         "turn", NativeVoiceJson.object("id", "client-source-turn", "outcome", "completed"))), configured);
@@ -4679,7 +4679,7 @@ public class NativeVoiceRuntimeTest {
         String receiveReply() throws Exception { return receiveReply(null, false); }
         String receiveReply(String text, boolean followUp) throws Exception {
             String id = UUID.randomUUID().toString();
-            JSONObject payload = NativeVoiceJson.object("schemaVersion", 4, "notificationId", id, "event", "turn.completed",
+            JSONObject payload = NativeVoiceJson.object("schemaVersion", 5, "notificationId", id, "event", "turn.completed",
                 "occurredAt", "2026-10-06T00:00:00Z", "title", "Queued reply", "message", "Speak after the current interaction",
                 "thread", NativeVoiceJson.object("id", target, "title", "Other thread"),
                 "turn", NativeVoiceJson.object("id", "unrelated-turn", "outcome", "completed"));
@@ -4694,7 +4694,7 @@ public class NativeVoiceRuntimeTest {
         void receiveNotice(String threadId, String originClientId) throws Exception {
             String id = UUID.randomUUID().toString();
             JSONObject frame = NativeVoiceJson.object("sourceEventId", id, "generation", policyGeneration, "voice", "speak",
-                "payload", NativeVoiceJson.object("schemaVersion", 4, "notificationId", id, "event", "turn.completed",
+                "payload", NativeVoiceJson.object("schemaVersion", 5, "notificationId", id, "event", "turn.completed",
                     "occurredAt", "2026-10-08T00:00:00Z", "title", "Automatic notice", "message", "Filtered by automatic voice",
                     "thread", NativeVoiceJson.object("id", threadId, "title", "Notice thread"),
                     "turn", NativeVoiceJson.object("id", "notice-turn", "outcome", "completed")));
@@ -4704,7 +4704,7 @@ public class NativeVoiceRuntimeTest {
         void receiveThreadlessNotice() throws Exception {
             String id = UUID.randomUUID().toString();
             JSONObject frame = NativeVoiceJson.object("sourceEventId", id, "generation", policyGeneration, "voice", "speak",
-                "payload", NativeVoiceJson.object("schemaVersion", 4, "notificationId", id, "event", "turn.completed",
+                "payload", NativeVoiceJson.object("schemaVersion", 5, "notificationId", id, "event", "turn.completed",
                     "occurredAt", "2026-10-10T00:00:00Z", "title", "Threadless notice", "message", "General update"));
             onOwner(() -> invoke("receive", new Class<?>[] { String.class, JSONObject.class }, "notification", frame)); flush();
         }
@@ -4715,7 +4715,7 @@ public class NativeVoiceRuntimeTest {
             JSONObject frame = NativeVoiceJson.object("sourceEventId", id, "generation", policyGeneration,
                 "voice", event.equals("turn.completed") ? "speakThenListen" : "speak",
                 "recognitionTarget", NativeVoiceJson.object("threadId", target, "activityToken", "source-epoch", "sourceTurnId", "client-source-turn"),
-                "payload", NativeVoiceJson.object("schemaVersion", 4, "notificationId", id, "event", event,
+                "payload", NativeVoiceJson.object("schemaVersion", 5, "notificationId", id, "event", event,
                     "occurredAt", "2026-10-10T00:00:00Z", "title", "Turn update", "message", "Agent reply",
                     "thread", NativeVoiceJson.object("id", target, "title", "Source thread"), "turn", turn));
             onOwner(() -> invoke("receive", new Class<?>[] { String.class, JSONObject.class }, "notification", frame)); flush();
@@ -4725,7 +4725,7 @@ public class NativeVoiceRuntimeTest {
             String id = UUID.randomUUID().toString();
             JSONObject frame = NativeVoiceJson.object("sourceEventId", id, "generation", policyGeneration, "voice", "speakThenListen",
                 "recognitionTarget", NativeVoiceJson.object("threadId", automaticTarget, "activityToken", "historical-notice-epoch", "sourceTurnId", "notice-turn"),
-                "payload", NativeVoiceJson.object("schemaVersion", 4, "notificationId", id, "event", "turn.completed",
+                "payload", NativeVoiceJson.object("schemaVersion", 5, "notificationId", id, "event", "turn.completed",
                     "occurredAt", "2026-10-10T00:00:00Z", "title", "Completed", "message", "Spoken answer",
                     "thread", NativeVoiceJson.object("id", spokenThread, "title", "Spoken thread"),
                     "turn", NativeVoiceJson.object("id", "notice-turn", "outcome", "completed")));
@@ -4821,7 +4821,7 @@ public class NativeVoiceRuntimeTest {
                 NativeVoiceQueue.Item notification = new NativeVoiceQueue.Item(NativeVoiceJson.object(
                     "sourceEventId", id, "generation", policyGeneration, "voice", "speakThenListen",
                     "recognitionTarget", NativeVoiceJson.object("threadId", target, "activityToken", "automatic-retry-epoch"),
-                    "payload", NativeVoiceJson.object("schemaVersion", 4, "notificationId", id, "event", "turn.completed",
+                    "payload", NativeVoiceJson.object("schemaVersion", 5, "notificationId", id, "event", "turn.completed",
                         "occurredAt", "2026-10-04T00:00:00Z", "title", "Completed", "message", "Ready for a reply",
                         "thread", NativeVoiceJson.object("id", target, "title", "Target"))), settings);
                 Constructor<?> constructor = Class.forName("dev.sedes.local.NativeVoiceRuntime$Active")

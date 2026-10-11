@@ -105,7 +105,7 @@ function progress(text: BoundedText = { text: "Checking the build." }, at = 1001
   return {
     event: "turn.progress", occurredAt: new Date(at).toISOString(), title: "Agent progress", message: "Example",
     thread: { id: "thread", title: "Example" }, workspace: { id: "workspace", name: "Workspace" },
-    turn: { id: "turn" }, progress: { itemId: "item", ...text },
+    turn: { id: "turn" }, progress: { phase: "provisional", itemId: "item", ...text },
   };
 }
 const voiceFrames = (frames: readonly string[]) => frames
@@ -404,13 +404,44 @@ describe("notification settings and passive hooks", () => {
     await flush();
     expect(executor).toHaveBeenCalledOnce();
     const payload = executor.mock.calls[0]![0].payload;
-    expect(payload).toEqual({ ...progress(), schemaVersion: 4, notificationId: expect.any(String) });
+    expect(payload).toEqual({ ...progress(), schemaVersion: 5, notificationId: expect.any(String) });
     expect(notificationPayloadSchema.parse(payload)).toEqual(payload);
     expect(voiceFrames(frames)).toEqual([{
       payload, voice: "speak", generation: expect.any(Number), origin: { clientId: "phone" },
       sourceEventId: createHash("sha256").update("progress-key").digest("hex"),
     }]);
     expect(context).toHaveBeenCalledOnce();
+  });
+
+  it("delivers a partial answer once while completion and automatic listening remain separate", async () => {
+    const { service, executor } = fixture();
+    service.update(scope, { ...config, delivery: scriptDelivery(["turn.progress", "turn.completed"]),
+      assistantResultPhases: ["partial", "final"] });
+    const frames: string[] = [];
+    service.subscribe(scope, frame => frames.push(frame));
+    const partial: NotificationEventPayload = { ...progress(),
+      progress: { phase: "partial", itemId: "partial-1", text: "First substantive answer." } };
+    service.emit(scope, partial, "partial-item", "live");
+    service.emit(scope, partial, "partial-item", "live");
+    await flush();
+    expect(executor).toHaveBeenCalledOnce();
+    expect(voiceFrames(frames)).toEqual([expect.objectContaining({ voice: "speak",
+      payload: expect.objectContaining({ event: "turn.progress", progress: partial.progress }) })]);
+    expect(voiceFrames(frames)[0]).not.toHaveProperty("recognitionTarget");
+    expect(executor.mock.calls[0]![0].payload).not.toHaveProperty("assistantResult");
+    const result = { provisional: null, partial: { text: "First substantive answer." }, final: { text: "Finished." }, unclassified: null };
+    service.emit(scope, event(1002), "completion", "live", result);
+    await flush();
+    expect(executor).toHaveBeenCalledTimes(2);
+    expect(voiceFrames(frames).map(frame => frame.payload.event)).toEqual(["turn.progress", "turn.completed"]);
+    expect(executor.mock.calls[1]![0].payload.assistantResult).toEqual({ partial: result.partial, final: result.final });
+    const reconnected: string[] = [];
+    service.subscribe(scope, frame => reconnected.push(frame));
+    service.emit(scope, partial, "partial-item", "live");
+    service.emit(scope, event(1002), "completion", "recovered", result);
+    await flush();
+    expect(executor).toHaveBeenCalledTimes(2);
+    expect(voiceFrames(reconnected)).toEqual([]);
   });
 
   it.each([
@@ -429,7 +460,7 @@ describe("notification settings and passive hooks", () => {
     expect(text.endsWith("…")).toBe(true);
     expect(text.length).toBeGreaterThan(1);
     expect(source.text.startsWith(text.slice(0, -1))).toBe(true);
-    expect(payload.progress).toEqual({ itemId: "item", text, truncation: {
+    expect(payload.progress).toEqual({ phase: "provisional", itemId: "item", text, truncation: {
       ...source.truncation, truncated: true, reason: "byte_limit", retainedBytes: Buffer.byteLength(text),
     } });
     expect(voiceFrames(frames).map(frame => frame.payload)).toEqual([payload]);
@@ -449,7 +480,7 @@ describe("notification settings and passive hooks", () => {
   });
 
   it.each([
-    { name: "an invalid voice envelope", payload: { ...progress(), progress: { itemId: "i".repeat(513), text: "Update" } }, context: undefined },
+    { name: "an invalid voice envelope", payload: { ...progress(), progress: { phase: "provisional" as const, itemId: "i".repeat(513), text: "Update" } }, context: undefined },
     { name: "a failed context capture", payload: progress(), context: () => { throw new Error("activity unavailable"); } },
   ])("keeps script delivery when voice fails on $name", async ({ payload, context }) => {
     const onError = vi.fn();
@@ -470,6 +501,7 @@ describe("notification settings and passive hooks", () => {
     const { service, executor } = fixture(undefined, onError);
     const context = vi.fn(() => ({}));
     const unread = {
+      get partial(): BoundedText { throw new Error("must not read partial"); },
       get provisional(): BoundedText { throw new Error("must not read provisional"); },
       get final(): BoundedText { throw new Error("must not read final"); },
       get unclassified(): BoundedText { throw new Error("must not read unclassified"); },
@@ -540,7 +572,7 @@ describe("notification settings and passive hooks", () => {
   });
 
   it("accepts any unique phase selection including none and rejects obsolete or invalid shapes", () => {
-    for (const assistantResultPhases of [[], ["final"], ["provisional", "final", "unclassified"]]) {
+    for (const assistantResultPhases of [[], ["final"], ["partial"], ["provisional", "partial", "final", "unclassified"]]) {
       expect(updateNotificationSettingsRequestSchema.safeParse({ ...config, assistantResultPhases }).success).toBe(true);
     }
     for (const assistantResultPhases of [["final", "final"], ["other"], "final", ["provisional", "final", "unclassified", "final"]]) {
@@ -594,7 +626,7 @@ describe("notification settings and passive hooks", () => {
     const { service, executor } = fixture();
     enable(service);
     const result = {
-      provisional: null, unclassified: null,
+      partial: null, provisional: null, unclassified: null,
       get final(): BoundedText {
         throw new Error("must not inspect response");
       },
@@ -626,7 +658,7 @@ describe("notification settings and passive hooks", () => {
       delivery: config.delivery,
       assistantResultPhases: ["final"],
     });
-    const classified = { provisional: null, final: result, unclassified: null };
+    const classified = { partial: null, provisional: null, final: result, unclassified: null };
     service.emit(scope, event(), "included", "live", classified);
     await flush();
     expect(executor.mock.calls[0]![0].payload.assistantResult).toEqual(
@@ -638,16 +670,16 @@ describe("notification settings and passive hooks", () => {
   });
 
   it.each<NotificationAssistantResultPhase[]>([
-    ["provisional"], ["final"], ["unclassified"],
+    ["provisional"], ["partial"], ["final"], ["unclassified"],
     ["provisional", "final"], ["final", "unclassified"],
-    ["provisional", "final", "unclassified"], [],
+    ["provisional", "partial", "final", "unclassified"], [],
   ])("sends only selected phase keys %j, preserving selected null", async (...assistantResultPhases) => {
     const { service, executor } = fixture();
     service.update(scope, {
       ...config, delivery: config.delivery,
       assistantResultPhases,
     });
-    const result = { provisional: { text: "Progress" }, final: null, unclassified: { text: "Unknown" } };
+    const result = { partial: { text: "Partial answer" }, provisional: { text: "Progress" }, final: null, unclassified: { text: "Unknown" } };
     service.emit(scope, event(), "selection", "live", result);
     await flush();
     const payload = executor.mock.calls[0]![0].payload;
@@ -665,6 +697,7 @@ describe("notification settings and passive hooks", () => {
     service.update(scope, { ...config, delivery: config.delivery, assistantResultPhases: ["final"] });
     const final = { text: "Final answer" };
     const result = {
+      get partial(): BoundedText { throw new Error("must not read partial"); },
       get provisional(): BoundedText { throw new Error("must not read provisional"); },
       final,
       get unclassified(): BoundedText { throw new Error("must not read unclassified"); },
@@ -682,6 +715,7 @@ describe("notification settings and passive hooks", () => {
       ...config, delivery: config.delivery, assistantResultPhases: [],
     });
     const result = {
+      get partial(): BoundedText { throw new Error("must not read partial"); },
       get provisional(): BoundedText { throw new Error("must not inspect"); },
       get final(): BoundedText { throw new Error("must not inspect"); },
       get unclassified(): BoundedText { throw new Error("must not inspect"); },
@@ -702,7 +736,7 @@ describe("notification settings and passive hooks", () => {
         assistantResultPhases: ["final"],
       });
       service.emit(scope, { ...event(), event: kind }, "other-kind", "live", {
-        provisional: null, final: { text: "Private response" }, unclassified: null,
+        partial: null, provisional: null, final: { text: "Private response" }, unclassified: null,
       });
       await flush();
       expect(executor.mock.calls[0]![0].payload).not.toHaveProperty(
@@ -737,7 +771,7 @@ describe("notification settings and passive hooks", () => {
         scope,
         { ...event(), message: "m".repeat(45_000) },
         "large-response", "live",
-        { provisional: null, final: source, unclassified: null },
+        { partial: null, provisional: null, final: source, unclassified: null },
       );
       await flush();
       expect(executor).toHaveBeenCalledOnce();
@@ -771,7 +805,7 @@ describe("notification settings and passive hooks", () => {
       ...config, delivery: config.delivery, assistantResultPhases: ["provisional", "final", "unclassified"],
     });
     service.emit(scope, { ...event(), message: "m".repeat(60_000) }, "priority", "live", {
-      final: { text: "Final answer" }, provisional: { text: "p".repeat(10_000) }, unclassified: { text: "u".repeat(10_000) },
+      partial: { text: "Substantive answer" }, final: { text: "Final answer" }, provisional: { text: "p".repeat(10_000) }, unclassified: { text: "u".repeat(10_000) },
     });
     await flush();
     const payload = executor.mock.calls[0]![0].payload;
@@ -793,7 +827,7 @@ describe("notification settings and passive hooks", () => {
       JSON.stringify({
         ...metadata,
         message: "",
-        schemaVersion: 4,
+        schemaVersion: 5,
         notificationId: "0".repeat(36),
       }),
     );
@@ -801,7 +835,7 @@ describe("notification settings and passive hooks", () => {
       scope,
       { ...metadata, message: "m".repeat(65_536 - overhead) },
       "full-metadata", "live",
-      { provisional: null, final: { text: "Response" }, unclassified: null },
+      { partial: null, provisional: null, final: { text: "Response" }, unclassified: null },
     );
     await flush();
     expect(executor).toHaveBeenCalledOnce();
@@ -817,7 +851,7 @@ describe("notification settings and passive hooks", () => {
       delivery: config.delivery,
       assistantResultPhases: ["final"],
     });
-    service.emit(scope, event(), "pending", "live", { provisional: null, final: { text: "Private response" }, unclassified: null });
+    service.emit(scope, event(), "pending", "live", { partial: null, provisional: null, final: { text: "Private response" }, unclassified: null });
     service.update(scope, {
       ...config,
       delivery: config.delivery,
@@ -825,7 +859,7 @@ describe("notification settings and passive hooks", () => {
     });
     await flush();
     expect(executor).not.toHaveBeenCalled();
-    service.emit(scope, event(1002), "new", "live", { provisional: null, final: { text: "Private response" }, unclassified: null });
+    service.emit(scope, event(1002), "new", "live", { partial: null, provisional: null, final: { text: "Private response" }, unclassified: null });
     await flush();
     expect(executor).toHaveBeenCalledOnce();
     expect(executor.mock.calls[0]![0].payload).not.toHaveProperty(
@@ -839,7 +873,7 @@ describe("notification settings and passive hooks", () => {
       ...config, delivery: config.delivery, assistantResultPhases: ["final"],
     });
     const result = {
-      provisional: { text: "Progress" }, final: { text: "Done" }, unclassified: null,
+      partial: null, provisional: { text: "Progress" }, final: { text: "Done" }, unclassified: null,
     };
     service.emit(scope, event(), "queued-selection", "live", result);
     // A repository-level update also invalidates pending work in the service.
@@ -968,7 +1002,7 @@ describe("notification settings and passive hooks", () => {
       cwd: process.cwd(),
       payload: {
         ...event(),
-        schemaVersion: 4,
+        schemaVersion: 5,
         notificationId: expect.any(String),
       },
     });

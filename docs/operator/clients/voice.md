@@ -175,11 +175,14 @@ the microphone. Explicit reply playback, optional recording-destination
 announcements, and recording cues remain available independently of automatic speech.
 
 Fresh completion settings select Final and Unclassified response text.
-Provisional is optional and can repeat live progress. Codex, Pi, and Claude
-emit progress only for completed live provisional assistant items. Hydrated
-history and text classified only at settlement do not produce progress. Grok
-and OpenCode do not advertise this live signal; their unclassified completion
-text remains available.
+Provisional and Partial are optional and can repeat live progress. Partial
+contains a substantive answer while the agent continues working; it does not
+complete the turn or trigger Auto-listen. Codex emits live progress for completed
+Provisional and Partial assistant items. Pi and Claude emit it for completed
+Provisional items. Hydrated history and text classified only at settlement do
+not produce progress. Grok and OpenCode do not advertise this live signal;
+their unclassified completion text remains available. Selected Partial text is
+also available in completion notifications and explicit reply playback.
 
 Automatic completion voice follows live completion changes. Loading completed
 history or replaying retained provider events does not announce old replies or
@@ -222,7 +225,8 @@ whether it completed, failed or was interrupted. When none of the selected
 phases holds text, the replay reads the turn's stored whole reply: every agent
 message, bounded to 16 KiB. That happens when **Response text** selects no
 phases, or when the turn has text only in unselected phases, such as only
-Provisional commentary under the default Final and Unclassified selection.
+Partial replies or Provisional commentary under the default Final and
+Unclassified selection.
 A turn Sedes didn't submit has no stored text, so the button reads the same
 text as **Copy response**.
 

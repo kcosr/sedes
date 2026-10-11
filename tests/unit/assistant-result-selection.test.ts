@@ -12,6 +12,7 @@ import type { BoundedText } from "../../src/shared/protocol/payload.js";
 
 const bytes = (value: unknown) => Buffer.byteLength(JSON.stringify(value), "utf8");
 const result: ClassifiedAssistantResult = {
+  partial: { text: "A useful answer." },
   provisional: { text: "Checking the build." },
   final: null,
   unclassified: { text: "Unlabelled text." },
@@ -19,15 +20,15 @@ const result: ClassifiedAssistantResult = {
 
 describe("assistant result phase selection", () => {
   it.each<NotificationAssistantResultPhase[]>([
-    ["provisional"], ["final"], ["unclassified"],
+    ["provisional"], ["partial"], ["final"], ["unclassified"],
     ["unclassified", "provisional"], ["final", "unclassified"],
-    ["provisional", "final", "unclassified"], [],
+    ["provisional", "partial", "final", "unclassified"], [],
   ])("keeps only selected keys %j, preserving a selected null", (...phases) => {
     const selected = selectAssistantResult(result, phases);
     expect(selected).toEqual(Object.fromEntries(phases.map((phase) => [phase, result[phase]])));
     // Keys follow one fixed order whatever the selection order.
     expect(Object.keys(selected!)).toEqual(
-      ["provisional", "final", "unclassified"].filter((phase) => phases.includes(phase as NotificationAssistantResultPhase)),
+      ["provisional", "partial", "final", "unclassified"].filter((phase) => phases.includes(phase as NotificationAssistantResultPhase)),
     );
     expect(selectedAssistantResultSchema.parse(selected)).toEqual(selected);
   });
@@ -35,6 +36,7 @@ describe("assistant result phase selection", () => {
   it("never reads unselected sections and detaches the selected text", () => {
     const final = { text: "Final answer" };
     const source = {
+      get partial(): BoundedText { throw new Error("must not read partial"); },
       get provisional(): BoundedText { throw new Error("must not read provisional"); },
       final,
       get unclassified(): BoundedText { throw new Error("must not read unclassified"); },
@@ -47,7 +49,7 @@ describe("assistant result phase selection", () => {
 
   it("measures the result together with its envelope", () => {
     const text = "r".repeat(30_000);
-    const source = { provisional: null, final: { text }, unclassified: null };
+    const source = { partial: null, provisional: null, final: { text }, unclassified: null };
     expect(selectAssistantResult(source, ["final"])).toEqual({ final: { text } });
 
     const envelope = { message: "m".repeat(45_000) };
@@ -65,11 +67,12 @@ describe("assistant result phase selection", () => {
 
   it("shortens unclassified, then provisional, text before final text", () => {
     const source = {
+      partial: null,
       provisional: { text: "p".repeat(40_000) },
       final: { text: "f".repeat(30_000) },
       unclassified: { text: "u".repeat(10_000) },
     };
-    const all = ["provisional", "final", "unclassified"] as const;
+    const all = ["provisional", "partial", "final", "unclassified"] as const;
     const selected = selectAssistantResult(source, all)!;
     expect(bytes({ assistantResult: selected })).toBeLessThanOrEqual(NOTIFICATION_PAYLOAD_BYTES);
     expect(selected.final).toEqual(source.final);
@@ -83,6 +86,20 @@ describe("assistant result phase selection", () => {
     expect(smaller.final).toEqual(source.final);
     expect(smaller.unclassified!.truncation).toMatchObject({ truncated: true });
     expect(smaller.unclassified!.text.length).toBeGreaterThan(10_000);
+  });
+
+  it("retains partial answer text ahead of commentary, shortening partial before final", () => {
+    const source = {
+      partial: { text: "a".repeat(40_000) }, provisional: { text: "p".repeat(10_000) },
+      final: { text: "f".repeat(30_000) }, unclassified: { text: "u".repeat(10_000) },
+    };
+    const selected = selectAssistantResult(source, ["partial", "provisional", "final", "unclassified"])!;
+    expect(selected.final).toEqual(source.final);
+    expect(selected.provisional?.text).toBe("");
+    expect(selected.unclassified?.text).toBe("");
+    expect(selected.partial?.text.length).toBeGreaterThan(30_000);
+    expect(selected.partial?.truncation?.truncated).toBe(true);
+    expect(bytes({ assistantResult: selected })).toBeLessThanOrEqual(NOTIFICATION_PAYLOAD_BYTES);
   });
 
   it("returns nothing when even empty sections cannot fit beside the envelope", () => {

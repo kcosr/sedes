@@ -263,7 +263,7 @@ describe("client.replay_turn", () => {
     const replies = new TurnReplySpeechService({
       inventory: { getThread: () => ({}) as never },
       completions: {
-        latestClassifiedResult: () => ({ provisional: { text: large }, final: { text: large }, unclassified: null }),
+        latestClassifiedResult: () => ({ partial: null, provisional: { text: large }, final: { text: large }, unclassified: null }),
         latestAssistantResult: () => ({ text: large }),
         latestReplyTurnId: () => "ended-turn",
       },

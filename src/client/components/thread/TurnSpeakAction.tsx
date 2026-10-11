@@ -123,7 +123,7 @@ function speakFailure(error: unknown): string {
 const hasText = (section: BoundedText | null | undefined) => Boolean(section?.text.trim());
 /** The stored completion text voice would have read; without any, the whole reply as Copy response gives it. */
 export function replySpeechText(stored: SelectedAssistantResult | null, copyText: string): SelectedAssistantResult {
-  return stored && (hasText(stored.provisional) || hasText(stored.unclassified) || hasText(stored.final))
+  return stored && (hasText(stored.provisional) || hasText(stored.partial) || hasText(stored.unclassified) || hasText(stored.final))
     ? stored
     : { unclassified: boundedReplyText(copyText) };
 }

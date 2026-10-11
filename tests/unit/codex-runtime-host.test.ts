@@ -20,7 +20,7 @@ function resumed(): OfficialCodexClientRequestResult<"thread/resume"> {
       projectId: null, historyMode: "legacy", modelProvider: "openai", model: null,
       reasoningEffort: null, createdAt: 1_700_000_000, updatedAt: 1_700_000_100,
       recencyAt: 1_700_000_100, status: { type: "idle" }, path: "/provider/rollout.jsonl",
-      cwd: "/workspace", cliVersion: "0.160.0", source: "appServer", canAcceptDirectInput: true,
+      cwd: "/workspace", cliVersion: "0.162.1", source: "appServer", canAcceptDirectInput: true,
       threadSource: null, agentNickname: null, agentRole: null, gitInfo: null, name: "Fixture", turns: [],
     },
     model: "gpt-5.6", modelProvider: "openai", serviceTier: "default", cwd: "/workspace",

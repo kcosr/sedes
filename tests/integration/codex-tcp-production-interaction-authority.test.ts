@@ -473,7 +473,7 @@ class ScriptedInteractionAppServer {
       state.role = clientName === "sedes_web" ? "controller" : "observer";
       await this.#respond(state, envelope.id, {
         userAgent:
-          `sedes_web/0.160.0 (Linux 6.8; x86_64) unknown (sedes_web; ${SEDES_VERSION})`,
+          `sedes_web/0.162.1 (Linux 6.8; x86_64) unknown (sedes_web; ${SEDES_VERSION})`,
         codexHome: CODEX_HOME,
         platformFamily: "unix",
         platformOs: "linux",
@@ -662,7 +662,7 @@ const executionSettings: CodexExecutionSettingsProvider = {
     approvalPolicy: "never",
     approvalReviewer: "user",
   }),
-  resolveFastModeDisabled: () => ({
+  resolveUnavailableServiceTier: () => ({
     model: "gpt-5.6",
     reasoningEffort: "low",
     serviceTier: "standard",
@@ -766,7 +766,7 @@ function nativeThread() {
     status: { type: "active", activeFlags: ["waitingOnApproval"] },
     path: "/private/rollout.jsonl",
     cwd: "/workspace",
-    cliVersion: "0.160.0",
+    cliVersion: "0.162.1",
     source: "appServer",
     canAcceptDirectInput: true,
     threadSource: null,

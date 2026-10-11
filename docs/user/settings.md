@@ -326,8 +326,10 @@ These settings follow the current Sedes user across clients and server restarts.
 
 Fresh settings select no script events, speak every event, and choose **Speak
 then listen** for **Turn completed**. They include Final and Unclassified
-completion text. Provisional text can repeat progress already spoken; select it
-only if that repetition is useful. **Turn progress**, **Approval requested**,
+completion text. You can also select Partial and Provisional. Partial replies
+contain an answer while the agent continues working. Both optional phases can
+repeat text already spoken through **Turn progress**; select them if that
+repetition is useful. **Turn progress**, **Approval requested**,
 **Input requested**, and **Nonblocking questions** offer only None or Speak, so
 they never open the microphone automatically. **Automation started** offers
 Speak then listen, but it behaves as Speak: the notice targets the automation's

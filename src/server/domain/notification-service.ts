@@ -131,7 +131,7 @@ export class NotificationService {
       );
     }
     return this.#execute(script, {
-      schemaVersion: 4,
+      schemaVersion: 5,
       notificationId: randomUUID(),
       event: "notification.test",
       occurredAt: new Date(this.#now()).toISOString(),
@@ -387,13 +387,13 @@ function notificationPayload(
 ): NotificationPayload | undefined {
   let payload: NotificationPayload = {
     ...structuredClone(event),
-    schemaVersion: 4,
+    schemaVersion: 5,
     notificationId: randomUUID(),
   };
   if (!fitsNotificationBudget(payload)) {
     const progress = payload.progress;
     if (!progress?.text || !fitBoundedText(progress, () => fitsNotificationBudget(payload), (text) => {
-      payload = { ...payload, progress: { itemId: progress.itemId, ...text } };
+      payload = { ...payload, progress: { phase: progress.phase, itemId: progress.itemId, ...text } };
     })) return undefined;
   }
   if (

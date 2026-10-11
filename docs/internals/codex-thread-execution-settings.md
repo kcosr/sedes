@@ -185,18 +185,19 @@ Standard, Fast, and Ultrafast; the native identifiers (`default`, `priority`,
 and `ultrafast`) remain private to the Codex backend. Standard is always sent
 explicitly as `default`, so a catalog default never overrides it.
 
-The account-scoped live catalog is the only availability authority. Codex
+The account-scoped live catalog and native thread policy jointly determine availability. Codex
 fetches `model/list` for the signed-in provider and auth identity, and each
 model lists its tiers in `serviceTiers`. Sedes projects `priority` as Fast and
 `ultrafast` as Ultrafast, in that order, with each tier's bounded catalog
 description. Any other native tier ID, or a duplicate, fails the catalog
-closed. Ultrafast has no separate Codex feature flag: Codex gates both tiers
-behind `fast_mode`. Sedes caches the catalog for each daemon generation, so a
+closed. Codex gates Fast with `fast_mode` and Ultrafast independently with
+`ultrafast_mode`; a disabled or absent flag never enables the other tier.
+Sedes caches the catalog for each daemon generation, so a
 tier newly granted to the account appears after the next Codex daemon restart.
 
 The feature state carries `desired`, `effective`, `applicationState`, and
 `offered`, the non-empty list of accelerated speeds the desired model
-advertises. Its three operations are `set_standard`, `set_fast`, and
+advertises and, for bound threads, native policy enables. Its three operations are `set_standard`, `set_fast`, and
 `set_ultrafast`. The capability allows every offered speed except the current
 one, and the mutation gateway admits only those operations, so the handler
 never needs its own catalog lookup.
@@ -212,18 +213,19 @@ first submission; the frozen create snapshot carries the tier through
 `thread/start`.
 
 After binding, Speed additionally requires authoritative thread-scoped
-`fast_mode` support for the current runtime generation. A transient discovery
+per-tier speed support for the current runtime generation. A transient discovery
 failure may leave a known control visible but read-only. A definitive disabled
-observation withdraws the capability and reconciles both app-server and
-managed-TUI state to Standard. Null, unknown, or custom native tiers fail
+observation removes only that tier and reconciles a saved selection of that tier
+in both app-server and managed-TUI state to Standard. The control is withdrawn
+when no accelerated tier remains available. Null, unknown, or custom native tiers fail
 closed. Every create and turn rechecks that the frozen tier is still offered
 for the model; a tier the catalog no longer advertises is rejected before
 submission rather than silently omitted by Codex. Resume, reattachment, and
-`fast_mode` recovery check the live catalog before writing a retained Fast or
+speed-policy recovery check the live catalog before writing a retained Fast or
 Ultrafast tier:
 
 - A tier the desired model no longer offers resolves to Standard, as a
-  disabled `fast_mode` does. The clamp applies only while the checked
+  disabled flag for that tier does. The clamp applies only while the checked
   selection is still current; a selection changed during the catalog read is
   checked again.
 - A catalog read failure keeps the selection but writes no accelerated tier
@@ -237,7 +239,7 @@ Ultrafast tier:
   or stops.
 
 A fork admits the child's tier against the catalog before creation and
-discovers its `fast_mode` support afterwards, as described under forks below.
+discovers its per-tier speed policy afterwards, as described under forks below.
 
 Speed changes use revision-fenced, durable provider-feature receipts. Desired
 state is updated atomically before any runtime synchronization, accepted
@@ -267,6 +269,12 @@ enforces both 4,000 Unicode scalars and 16 KiB of UTF-8. Create and Resume may
 start agent execution; Pause and Clear do not. A successfully accepted Stop
 also attempts a best-effort Goal pause, but Stop acceptance does not depend on
 that follow-up succeeding.
+
+Explicit user Create, Pause, Resume, and Clear controls send native
+`origin: "user"`, so Codex records their user-instruction provenance in
+model-visible history. The automatic best-effort pause after Stop sends
+`origin: "automatic"`. Recovery reads postconditions without replaying a
+mutation or inventing a second user instruction.
 
 Goal is absent from unbound and creating threads. On attach, reconnect, or
 daemon-generation replacement, `thread/goal/get` is the authoritative read.

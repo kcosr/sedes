@@ -28,26 +28,26 @@ troubleshooting, see the [Codex operator guide](../../operator/backends/codex.md
 
 ## Protocol and release admission
 
-Sedes pins `@openai/codex` 0.160.0 as its development-time generated protocol
+Sedes pins `@openai/codex` 0.162.1 as its development-time generated protocol
 baseline. Generated TypeScript, JSON Schema, the method
 inventory, hashes, and release evidence live under
-`protocol/codex-app-server/0.160.0`.
+`protocol/codex-app-server/0.162.1`.
 
 Owned Codex processes support Linux x64 and macOS arm64/x64. External
 topologies retain their separate transport and execution-environment
 requirements.
 
-The compiled Codex backend supplies exactly one `0.160.0` generated parser
+The compiled Codex backend supplies exactly one `0.162.1` generated parser
 profile and persists that value for diagnostics and runtime-generation
 integrity. It is not operator configuration and remains separate from
 executable admission. Owned and external runtimes admit stable releases at or
-above 0.160.0. Build metadata is allowed. Prereleases, malformed versions,
+above 0.162.1. Build metadata is allowed. Prereleases, malformed versions,
 versions below the floor, and explicitly excluded known-bad releases are
 rejected.
 
-Releases newer than the 0.160.0 tested-through threshold receive a
+Releases newer than the 0.162.1 tested-through threshold receive a
 provider-private `newerThanTested` assessment for the installation advisory.
-They still use only the pinned 0.160.0 stable and experimental validators and
+They still use only the pinned 0.162.1 stable and experimental validators and
 gain no capabilities from their version. Managed TUI uses the same
 operator-installed command policy in every deployment: an optional canonical
 `tuiExecutablePath` override, otherwise the first `codex` on `PATH`, with the
@@ -59,7 +59,7 @@ update prompt must not intercept terminal input or replace the executable
 outside Sedes release admission; operators update the installed command
 separately.
 
-The official 0.160.0 validators own item lifecycle metadata and MCP app UI
+The official 0.162.1 validators own item lifecycle metadata and MCP app UI
 metadata. Sedes maps available item `startedAtMs`/`completedAtMs` into the existing
 normalized `startedAt`/`completedAt` fields for live events and loaded history.
 Missing timestamps stay absent, and command/MCP `durationMs` remains independent.
@@ -70,13 +70,13 @@ File-backed images are recognized without treating file IDs as URLs or paths;
 unavailable bytes remain visibly unavailable. Interrupted turns retain meaningful
 native errors as bounded warning notices; an ordinary Stop adds no error notice.
 
-The runtime floor is 0.160.0, aligning runtime admission with the qualified
-remote-TUI permission restoration and parser baseline. Upgrade operator-owned
+The runtime floor is 0.162.1, aligning runtime admission with the current
+turn lineage, partial-answer, subagent metadata, and speed-policy contracts. Upgrade operator-owned
 app-servers and managed TUI commands together with Sedes. The floor and
 tested-through policy remain independent constants; newer stable runtimes are
 admitted with the usual advisory.
 
-The [0.160.0 qualification](../../../protocol/codex-app-server/0.160.0/runtime-compatibility/README.md)
+The [0.162.1 qualification](../../../protocol/codex-app-server/0.162.1/runtime-compatibility/README.md)
 records exact exports and Linux x64 execution against a local mock model,
 including changed-settings notification, persistence after restart, explicit fork
 settings, and rejected command approval. macOS artifacts are integrity-checked
@@ -97,14 +97,17 @@ new Stop operation.
 
 Method stability is distinct from the selected wire artifact. Because Sedes
 initializes app-server with `experimentalApi`, ten reviewed route directions
-select their exact experimental 0.160.0 definition: five stable thread
+select their exact experimental 0.162.1 definition: five stable thread
 requests, settings update, command approval, MCP elicitation, settings-updated, and
 thread-started. Remaining adopted directions, including both pagination
 requests, select the stable artifact. No direction falls back between profiles.
-RPC admission recognizes all 85 official stable server notifications; 64 have
-reviewed thread-routing evidence for bounded resnapshot recovery. The 31
-adopted notifications retain their explicit semantic consumers, while other
-official notifications are validated and ignored when no consumer is active.
+RPC admission recognizes all 86 official stable server notifications; 65 have
+reviewed thread-routing evidence for bounded resnapshot recovery. The 32
+adopted notification directions have explicit dispositions. The prediction
+notification is validated and ignored because prediction requests remain
+unimplemented in this release; other notifications retain their reviewed
+consumers. Other official notifications are validated and ignored when no
+consumer is active.
 
 The 0.153.0 command-approval request distinguishes ordinary commands from
 `writeStdin`. Sedes handles both kinds. A `writeStdin` approval requires a
@@ -468,9 +471,11 @@ ordinary next-turn queue work. Every other rejection and uncertain outcome
 fails closed.
 
 A `turn/steer` response only admits the input to the active turn's pending
-input. Codex 0.153.0 records it (model history, then the `userMessage` item
-with its `clientId`) when the turn loop next drains that input, before the
-next model request. The handle therefore returns `pending_materialization`
+input. Codex records it (model history, then the `userMessage` item with its
+`clientId`) when the turn loop drains that input, before the next model request.
+Codex 0.162.1 enables `instant_interrupt` by default, so a Steer can preempt
+the current response and reach that drain immediately. Sedes uses the same
+item evidence in either mode; a fast native drain is not a new Sedes turn. The handle therefore returns `pending_materialization`
 unless the exact authenticated item is already in its projection, and the
 shared queue waits for that item's `completionCorrelations` evidence; a replay
 upgrades to accepted once the item appears. Several Steers can await their

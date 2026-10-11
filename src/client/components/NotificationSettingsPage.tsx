@@ -82,6 +82,7 @@ const eventOptions: ReadonlyArray<{
 ];
 const assistantResultPhaseOptions = [
   { value: "provisional", label: "Provisional" },
+  { value: "partial", label: "Partial" },
   { value: "unclassified", label: "Unclassified" },
   { value: "final", label: "Final" },
 ] as const;
@@ -435,7 +436,7 @@ export function NotificationSettingsPage({
                       </div>
                     ))}
                   </div>
-                  <p className="settings-field-description">Provisional response text may repeat updates already spoken as progress.</p>
+                  <p className="settings-field-description">Partial replies contain an answer while work continues. Provisional and Partial response text may repeat updates already spoken as progress.</p>
                 </div>
               ) : null}
             </SwitchField>

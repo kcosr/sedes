@@ -40,7 +40,7 @@ const backend: AgentBackendInstance = Object.freeze({
   label: "Codex",
   enabled: true,
   configurationRevision: 7,
-  protocolRelease: "0.160.0",
+  protocolRelease: "0.162.1",
 });
 
 const connection: AgentConnectionProfile = Object.freeze({
@@ -383,7 +383,8 @@ describe("Codex interactive presentation collaborators", () => {
       fastModeRuntime: {
         projection: () => ({
           revision: 1,
-          enabled: true,
+          fastEnabled: true,
+          ultrafastEnabled: true,
           availability: "available" as const,
         }),
       },
@@ -460,6 +461,39 @@ describe("Codex interactive presentation collaborators", () => {
       }),
     });
   });
+
+  it.each([[false, false], [false, true], [true, false], [true, true]])(
+    "intersects model offerings with Fast=%s and Ultrafast=%s policy",
+    async (fastEnabled, ultrafastEnabled) => {
+      const provider = presentationProvider({ fastModeRuntime: { projection: () => ({
+        revision: 1, fastEnabled, ultrafastEnabled,
+        availability: fastEnabled || ultrafastEnabled ? "available" : "unavailable",
+        ...(!fastEnabled && !ultrafastEnabled ? { unavailableReason: "feature_disabled" } : {}),
+      }) } });
+      const offered = (["fast", "ultrafast"] as const).filter(tier => tier === "fast" ? fastEnabled : ultrafastEnabled);
+      const presentation = await provider.read({
+        scope, applicationThreadId: "thread-one", backend, connection,
+        workspace: { authorityRevision: 0, canonicalPath: "/workspace", summary: {
+          id: "workspace-one", environmentId: connection.executionEnvironmentId,
+          displayName: "Workspace", displayPath: "/workspace", availability: "available", trustState: "trusted", revision: 0,
+        } },
+        catalog: { models: [{
+          provider: connection.id, id: "gpt-5.6-codex", label: "Codex", inputModalities: ["text"],
+          supportedReasoningEfforts: ["low", "high"], defaultReasoningEffort: "low",
+          serviceTiers: { offered: [{ selection: "fast" }, { selection: "ultrafast" }], defaultSelection: "standard" },
+        }], commands: [], skills: [], notices: [] },
+        effectiveSettings: { model: { provider: connection.id, id: "gpt-5.6-codex" }, thinkingLevel: "high" },
+      });
+      const capability = presentation.providerFeatureCapabilities.find(({ ref }) => ref.featureId === "codex.fast_mode");
+      if (offered.length === 0) expect(capability).toBeUndefined();
+      else {
+        expect(capability?.operations.map(({ actionId }) => actionId)).toEqual(offered.map(tier => `set_${tier}`));
+        expect(presentation.providerFeatureStates.find(({ ref }) => ref.featureId === "codex.fast_mode")).toMatchObject({
+          state: boundValue({ desired: "standard", effective: "standard", applicationState: "applied", offered: offered.map(selection => ({ selection })) }),
+        });
+      }
+    },
+  );
 
   it("advertises Speed as pending on an eligible unbound draft", async () => {
     const provider = presentationProvider({ backingState: "unbound" });
@@ -542,7 +576,8 @@ describe("Codex interactive presentation collaborators", () => {
       fastModeRuntime: {
         projection: () => ({
           revision: 1,
-          enabled: true,
+          fastEnabled: true,
+          ultrafastEnabled: true,
           availability: "available" as const,
         }),
       },
@@ -637,7 +672,8 @@ describe("Codex interactive presentation collaborators", () => {
       fastModeRuntime: {
         projection: () => ({
           revision: 2,
-          enabled: true,
+          fastEnabled: true,
+          ultrafastEnabled: true,
           availability: "unavailable" as const,
           unavailableReason: "generation_changed",
         }),

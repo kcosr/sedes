@@ -1,4 +1,9 @@
 import { GENERIC_TURN_FAILURE, turnFailure } from "../turn-failure.js";
+import {
+  codexSubagentActivitySummary,
+  type CodexSubagentCreationSettings,
+  type CodexSubagentParentSettings,
+} from "./codex-subagent-presentation.js";
 import { createHash } from "node:crypto";
 import type {
   BackendConversationSnapshot,
@@ -474,32 +479,13 @@ function collaborationToolSummary(
       : `Waiting for ${targetCount} agents`;
 }
 
-function subAgentActivitySummary(
-  item: Extract<CodexThreadItem, { readonly type: "subAgentActivity" }>,
-): string {
-  const prefix =
-    item.kind === "started"
-      ? "Started"
-      : item.kind === "interacted"
-        ? "Interacted with"
-        : item.kind === "completed"
-          ? "Completed"
-          : "Interrupted";
-  // The native field is generously bounded, while this is deliberately one
-  // quiet display line. Reserve room for the longest prefix and delimiters.
-  const agentPath = boundText(
-    item.agentPath.trim().replace(/\s+/gu, " ") || "agent",
-    4_000,
-  ).text;
-  return `${prefix} \`${agentPath}\``;
-}
-
 export function projectCodexHistory(
   value: CodexThread,
   correlationScope: CodexSubmissionCorrelationScope,
   streamingNativeItems: CodexStreamingNativeItems,
   generatedImages: CodexGeneratedImageProjectionContext,
   itemTimestamps: CodexHistoryItemTimestamps = new Map(),
+  subagentCreationSettings: CodexSubagentCreationSettings = new Map(),
 ): CodexHistoryProjection {
   let thread: CodexThread;
   const rawNativeHistoryBytes = serializedUtf8Bytes(value);
@@ -622,6 +608,7 @@ export function projectCodexHistory(
         generatedImages,
         pendingGeneratedImages,
         lifecycleTimestamps,
+        item.type === "subAgentActivity" ? subagentCreationSettings.get(item.agentThreadId) : undefined,
       );
       const retained = item.type === "imageView" && projected.length === 2 &&
         generatedImages.admitsRetainedViewedImage?.(projected[1]!.backendItemId) === false;
@@ -1015,6 +1002,7 @@ export function projectCodexItemSlice(
   generatedImages: CodexGeneratedImageProjectionContext,
   pendingGeneratedImages: DeferredCodexGeneratedImagePublication[],
   lifecycleTimestamps?: CodexItemLifecycleTimestamps,
+  subagentParentSettings?: CodexSubagentParentSettings | null,
 ): readonly BackendItem[] {
   const timestamps = lifecycleTimestamps
     ? refineCodexItemLifecycleTimestamps(lifecycleTimestamps)
@@ -1079,6 +1067,8 @@ export function projectCodexItemSlice(
           responsePhase:
             item.phase === "final_answer"
               ? "final"
+              : item.phase === "partial_answer"
+                ? "partial"
               : item.phase === "commentary"
                 ? "provisional"
                 : "unclassified",
@@ -1160,7 +1150,7 @@ export function projectCodexItemSlice(
               : item.kind === "interacted"
                 ? "message"
                 : "status",
-          summary: boundDisplayText(subAgentActivitySummary(item)),
+          summary: boundDisplayText(codexSubagentActivitySummary(item, subagentParentSettings)),
         },
       ];
     case "webSearch":

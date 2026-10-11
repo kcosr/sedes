@@ -240,7 +240,7 @@ describe("direct thread input admission", { timeout: 30_000 }, () => {
     } finally { vi.restoreAllMocks(); await h.close(); }
   });
 
-  it("resolves frozen queue and exact-turn steer policy against current authority while preserving admission identity", async () => {
+  it.each(["provisional", "partial"] as const)("resolves frozen queue and exact-turn steer policy while authorizing %s progress", async (phase) => {
     const h = await createInMemoryThreadRuntimeHarness({ retentionMilliseconds: 60_000 });
     const held: (() => void)[] = [];
     try {
@@ -257,7 +257,7 @@ describe("direct thread input admission", { timeout: 30_000 }, () => {
       if (active.steer.availability !== "available") throw new Error("missing_test_steer");
       const emit = vi.fn();
       const notifications = new NotificationLifecycleObserver(h.inventoryRepository, emit);
-      const progress = { applicationTurnId: active.sourceTurnId!, applicationItemId: "progress-item",
+      const progress = { phase, applicationTurnId: active.sourceTurnId!, applicationItemId: "progress-item",
         backendCorrelations: [initial.mutationId], text: { text: "Working" } };
       notifications.progress(h.scope, id, progress);
       expect(emit).toHaveBeenCalledOnce();

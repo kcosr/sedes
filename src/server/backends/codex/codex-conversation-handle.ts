@@ -131,6 +131,10 @@ import {
 } from "./codex-live-projection-overlay.js";
 import { CodexProjectionWorkQueue } from "./codex-projection-work-queue.js";
 import { CodexHistoryReader } from "./codex-history-reader.js";
+import type {
+  CodexSubagentCreationSettings,
+  CodexSubagentParentSettings,
+} from "./codex-subagent-presentation.js";
 import {
   codexClientUserMessageId,
   copyCodexSubmissionCorrelationKey,
@@ -186,6 +190,8 @@ import {
 } from "./codex-goal-protocol.js";
 import {
   CodexFastModeSessionRegistry,
+  codexSpeedPolicyAllows,
+  codexSpeedPolicyDisables,
   type CodexFastModeProjection,
 } from "./codex-fast-mode-session.js";
 import {
@@ -231,9 +237,9 @@ export interface CodexExecutionSettingsProvider {
     scope: ExecutionScope,
     applicationThreadId: string,
   ): CodexExecutionSettingsTuple | null;
-  resolveFastModeDisabled(
+  resolveUnavailableServiceTier(
     scope: ExecutionScope,
-    input: { readonly applicationThreadId: string; readonly now: number },
+    input: { readonly applicationThreadId: string; readonly unavailableServiceTiers: readonly CodexServiceTierSelection[]; readonly now: number },
   ): CodexExecutionSettingsTuple | null;
   forkSettingsEligibility(
     scope: ExecutionScope,
@@ -504,6 +510,7 @@ export class CodexConversationHandle implements ConversationHandle {
   // A turn/start in flight may run a different tuple before its receipt
   // updates #model; usage in that window attributes nothing unless unchanged.
   #pendingUsageTuple: { readonly model: string; readonly reasoningEffort: string | null } | undefined;
+  readonly #subagentCreationSettings = new Map<string, CodexSubagentParentSettings | null>();
   #modelInputModalities: readonly ("text" | "image")[] = ["text"];
   #closing = false;
   #closed = false;
@@ -2411,6 +2418,7 @@ export class CodexConversationHandle implements ConversationHandle {
       desired,
       arguments: input.arguments,
       currentState: current.state,
+      origin: stop ? "automatic" : "user",
       ...(stop ? { deadlineAt: stop.deadlineAt, signal: stopSignal } : {}),
     });
     if (outcome.kind === "accepted") {
@@ -2515,7 +2523,7 @@ export class CodexConversationHandle implements ConversationHandle {
     if (lifecycle.state !== "ready" || lifecycle.generation !== generation) {
       return;
     }
-    if (projection.unavailableReason === "feature_disabled") {
+    if (this.#desiredSpeedDisabled(projection)) {
       // Empty history confirms no native execution tuple. Resolve durable
       // intent without replaying native or managed-TUI settings.
       await this.#reconcileDisabledFastMode(projection, false);
@@ -2526,7 +2534,7 @@ export class CodexConversationHandle implements ConversationHandle {
   /**
    * The account-scoped catalog decides whether an accelerated tier exists. A
    * durable Fast or Ultrafast selection the desired model no longer offers
-   * resolves to Standard, as a disabled `fast_mode` does. The clamp applies
+   * resolves to Standard, as a disabled native flag for that tier does. The clamp applies
    * only while the checked selection is still current; a selection changed
    * during the catalog read is checked again. `writable` reports whether the
    * resolved tier may be written natively for the desired model: a catalog
@@ -2560,10 +2568,11 @@ export class CodexConversationHandle implements ConversationHandle {
       }
       if (offered) return { desired: latest, writable: true };
       // Re-read and clamp run without an intervening await.
-      const resolved = this.#executionSettings.resolveFastModeDisabled(
+      const resolved = this.#executionSettings.resolveUnavailableServiceTier(
         this.#scope(),
         {
           applicationThreadId: this.binding.applicationThreadId,
+          unavailableServiceTiers: [checked.serviceTier],
           now: this.#now(),
         },
       );
@@ -2598,12 +2607,12 @@ export class CodexConversationHandle implements ConversationHandle {
   async #replayDesiredServiceTier(
     observation: CodexSettingsObservationReceipt,
     desired: CodexServiceTierSelection | undefined,
-    fastModeEnabled: boolean,
+    speedPolicy: CodexFastModeProjection,
     signal: AbortSignal,
   ): Promise<CodexSettingsObservationReceipt> {
     if (
       desired === undefined ||
-      (desired !== "standard" && !fastModeEnabled) ||
+      !codexSpeedPolicyAllows(speedPolicy, desired) ||
       (observation.settings.serviceTierClassification === "recognized" &&
         observation.settings.serviceTier === desired)
     ) {
@@ -2629,11 +2638,17 @@ export class CodexConversationHandle implements ConversationHandle {
     return this.#newerSettingsObservation(observation) ?? observation;
   }
 
+  #desiredSpeedDisabled(projection: CodexFastModeProjection): boolean {
+    return codexSpeedPolicyDisables(projection, this.#executionSettings.desiredSettings(
+      this.#scope(), this.binding.applicationThreadId,
+    )?.serviceTier);
+  }
+
   async #reconcileDisabledFastMode(
     projection: CodexFastModeProjection,
     syncManagedTui = true,
   ): Promise<CodexServiceTierSelection | undefined> {
-    if (projection.unavailableReason !== "feature_disabled") {
+    if (!this.#desiredSpeedDisabled(projection)) {
       return this.#executionSettings.desiredSettings(
         this.#scope(),
         this.binding.applicationThreadId,
@@ -2643,7 +2658,7 @@ export class CodexConversationHandle implements ConversationHandle {
     let lastError: unknown;
     for (let attempt = 0; attempt < 3; attempt += 1) {
       if (
-        !sameDisabledProjection(
+        !sameSpeedPolicyProjection(
           this.#fastModeSessions.projection(
             this.#scope(),
             this.binding.applicationThreadId,
@@ -2654,10 +2669,13 @@ export class CodexConversationHandle implements ConversationHandle {
         return undefined;
       }
       try {
-        resolved = this.#executionSettings.resolveFastModeDisabled(
+        resolved = this.#executionSettings.resolveUnavailableServiceTier(
           this.#scope(),
           {
             applicationThreadId: this.binding.applicationThreadId,
+            unavailableServiceTiers: (["fast", "ultrafast"] as const).filter(
+              (tier) => codexSpeedPolicyDisables(projection, tier),
+            ),
             now: this.#now(),
           },
         );
@@ -2686,7 +2704,7 @@ export class CodexConversationHandle implements ConversationHandle {
     projection: CodexFastModeProjection,
   ): Promise<void> {
     if (this.#closing || this.#closed || this.#policyHistory) return;
-    if (projection.unavailableReason === "feature_disabled") {
+    if (this.#desiredSpeedDisabled(projection)) {
       try {
         if (await this.#restoreSupersedingFastModeSettings(projection)) {
           return;
@@ -2730,7 +2748,7 @@ export class CodexConversationHandle implements ConversationHandle {
             generation !== 0 &&
             lifecycle.state === "ready" &&
             lifecycle.generation === generation &&
-            sameDisabledProjection(projectionBeforeWrite, projection)
+            sameSpeedPolicyProjection(projectionBeforeWrite, projection)
           ) {
             const response = await this.#client.requestWithReceipt(
               codexThreadSettingsUpdateMethod,
@@ -2755,7 +2773,7 @@ export class CodexConversationHandle implements ConversationHandle {
       } catch (error) {
         this.#reportError(error);
       }
-    } else if (projection.enabled && projection.availability === "available") {
+    } else if (projection.availability === "available" || projection.unavailableReason === "feature_disabled") {
       for (let attempt = 0; attempt < 3; attempt += 1) {
         const resolution = await this.#resolveUnofferedServiceTier();
         const desired = resolution.desired;
@@ -2812,7 +2830,7 @@ export class CodexConversationHandle implements ConversationHandle {
         this.#scope(),
         this.binding.applicationThreadId,
       );
-      if (sameDisabledProjection(currentProjection, recoveredProjection)) {
+      if (sameSpeedPolicyProjection(currentProjection, recoveredProjection)) {
         return false;
       }
       const currentDesired = this.#executionSettings.desiredSettings(
@@ -2821,7 +2839,8 @@ export class CodexConversationHandle implements ConversationHandle {
       );
       if (!currentDesired) return true;
       const updates: Promise<unknown>[] = [];
-      if (currentProjection?.availability === "available") {
+      if ((currentProjection?.availability === "available" || currentProjection?.unavailableReason === "feature_disabled") &&
+        codexSpeedPolicyAllows(currentProjection, currentDesired.serviceTier)) {
         updates.push(
           this.#fastModeSessions.syncServiceTier(
             this.#scope(),
@@ -2845,7 +2864,7 @@ export class CodexConversationHandle implements ConversationHandle {
         this.#scope(),
         this.binding.applicationThreadId,
       );
-      if (sameDisabledProjection(projectionAfterSync, recoveredProjection)) {
+      if (sameSpeedPolicyProjection(projectionAfterSync, recoveredProjection)) {
         return false;
       }
       const desiredAfterSync = this.#executionSettings.desiredSettings(
@@ -3362,7 +3381,7 @@ export class CodexConversationHandle implements ConversationHandle {
         // permission to write it natively now.
         let retainedServiceTier: CodexServiceTierSelection | undefined;
         let replayServiceTier: CodexServiceTierSelection | undefined;
-        if (fastModeProjection.unavailableReason === "feature_disabled") {
+        if (this.#desiredSpeedDisabled(fastModeProjection)) {
           retainedServiceTier =
             await this.#reconcileDisabledFastMode(fastModeProjection);
           replayServiceTier = retainedServiceTier;
@@ -3397,8 +3416,7 @@ export class CodexConversationHandle implements ConversationHandle {
         settingsReceipt = await this.#replayDesiredServiceTier(
           settingsReceipt,
           replayServiceTier,
-          fastModeProjection.enabled &&
-            fastModeProjection.availability === "available",
+          fastModeProjection,
           signal,
         );
         let historyRaced = false;
@@ -3826,6 +3844,7 @@ export class CodexConversationHandle implements ConversationHandle {
             streamingNativeItems,
             this.#generatedImageProjectionContext(liveWindow),
             itemTimestamps,
+            this.#subagentCreationSettings,
           ),
           startNativeTurnIndex: selected.startNativeTurnIndex,
         };
@@ -4305,6 +4324,8 @@ export class CodexConversationHandle implements ConversationHandle {
           this.#generatedImageProjectionContext(),
           [],
           this.#itemTimestamps.get(liveKey),
+          live.item.type === "subAgentActivity"
+            ? this.#subagentCreationSettings.get(live.item.agentThreadId) : undefined,
         ).map((item) => backendItemSchema.parse(item));
         const oldSliceIds = coordinate.orderedBackendItemIds;
         const sameShape =
@@ -4491,6 +4512,7 @@ export class CodexConversationHandle implements ConversationHandle {
 
   readonly #consumeNotification: CodexNotificationListener = (notification) => {
     this.#observeControlNotification(notification);
+    this.#rememberSubagentCreationSettings(notification);
     if (this.#policyHistory) {
       const lifecycle = this.#client.lifecycleSnapshot();
       const threadId = isCodexRpcUndecodableNotification(notification)
@@ -4545,6 +4567,42 @@ export class CodexConversationHandle implements ConversationHandle {
         this.#projectionWorkQueue.enqueue(() => this.#installCapturedViewedImages());
       });
   };
+
+  #rememberSubagentCreationSettings(notification: Parameters<CodexNotificationListener>[0]): void {
+    if (this.#closing || this.#closed || this.#policyHistory || this.#establishing ||
+        this.#projectionInvalidated || this.#replayingPaginatedEstablishmentNotification ||
+        isCodexRpcUndecodableNotification(notification) ||
+        (notification.method !== "item/started" && notification.method !== "item/completed")) return;
+    const lifecycle = this.#client.lifecycleSnapshot();
+    if (lifecycle.state !== "ready" || lifecycle.generation !== notification.generation ||
+        notification.generation !== this.#establishedGeneration) return;
+    try {
+      const parsed = codexC2NotificationSchemas[notification.method].parse(notification.params);
+      const item = parsed.item;
+      if (parsed.threadId !== this.binding.backendConversationId || item.type !== "subAgentActivity" ||
+          item.kind !== "started" || this.#subagentCreationSettings.has(item.agentThreadId)) return;
+      // Capture at inbound delivery, before queued projection or a turn/start reply
+      // can change #model. Pending earlier notifications make that tuple uncertain.
+      const pending = this.#pendingUsageTuple;
+      const turn = this.#nativeTurnById.get(parsed.turnId);
+      const model = this.#pendingNotificationWork === 0 && this.#inflightNotificationProjection === 0 &&
+        turn?.status === "inProgress" && !turn.items.some(existing =>
+          existing.type === "subAgentActivity" && existing.kind === "started" &&
+          existing.agentThreadId === item.agentThreadId) &&
+        this.#model !== this.#unconfirmedUsageModel &&
+        (!pending || (pending.model === this.#model?.id &&
+          pending.reasoningEffort === (this.#model?.reasoningEffort ?? null)))
+        ? this.#model : undefined;
+      this.#subagentCreationSettings.set(item.agentThreadId,
+        model ? { model: model.id, reasoningEffort: model.reasoningEffort ?? null } : null);
+      // Bound resident presentation evidence; evicted evidence becomes unknown.
+      if (this.#subagentCreationSettings.size > 1_000) {
+        this.#subagentCreationSettings.delete(this.#subagentCreationSettings.keys().next().value!);
+      }
+    } catch {
+      // The ordinary notification path owns invalid-protocol reporting.
+    }
+  }
 
   readonly #consumeNotificationNow = async (
     notification: Parameters<CodexNotificationListener>[0],
@@ -5147,9 +5205,9 @@ export class CodexConversationHandle implements ConversationHandle {
                 : "item_completed",
             item,
             ...(method === "item/completed" && parsed.item.type === "agentMessage" &&
-              parsed.item.phase === "commentary" && currentTurn.status === "inProgress" &&
+              (parsed.item.phase === "commentary" || parsed.item.phase === "partial_answer") && currentTurn.status === "inProgress" &&
               item.semanticKind === "assistant_message" && item.status === "completed" &&
-              item.responsePhase === "provisional" && item.markdown.text.trim()
+              (item.responsePhase === "provisional" || item.responsePhase === "partial") && item.markdown.text.trim()
               ? { liveProgress: true as const } : {}),
           });
         }
@@ -5978,6 +6036,7 @@ export class CodexConversationHandle implements ConversationHandle {
     await this.#desiredInitializationSettled;
     await this.#notificationWork;
     await this.#releasePolicyHistory();
+    this.#subagentCreationSettings.clear();
     this.#interactions.close();
     this.#closed = true;
     this.#unsubscribeNotifications();
@@ -6305,6 +6364,7 @@ export function projectCodexThreadHistory(
   streamingNativeItems: CodexStreamingNativeItems,
   generatedImages: import("./codex-history-projector.js").CodexGeneratedImageProjectionContext,
   itemTimestamps: CodexHistoryItemTimestamps = new Map(),
+  subagentCreationSettings: CodexSubagentCreationSettings = new Map(),
 ) {
   try {
     return projectCodexHistory(
@@ -6313,6 +6373,7 @@ export function projectCodexThreadHistory(
       streamingNativeItems,
       generatedImages,
       itemTimestamps,
+      subagentCreationSettings,
     );
   } catch (error) {
     throw mapCodexHistoryProjectionError(error);
@@ -7186,6 +7247,8 @@ function sameProjection(
 ): boolean {
   return (
     left?.revision === right?.revision &&
+    left?.fastEnabled === right?.fastEnabled &&
+    left?.ultrafastEnabled === right?.ultrafastEnabled &&
     left?.availability === right?.availability &&
     left?.unavailableReason === right?.unavailableReason
   );
@@ -7212,13 +7275,13 @@ function sameExecutionSettingsTuple(
   );
 }
 
-function sameDisabledProjection(
+function sameSpeedPolicyProjection(
   current: CodexFastModeProjection | undefined,
   recovered: CodexFastModeProjection,
 ): boolean {
   return (
-    current?.revision === recovered.revision &&
-    current.unavailableReason === "feature_disabled"
+    sameProjection(current, recovered) &&
+    (current?.availability === "available" || current?.unavailableReason === "feature_disabled")
   );
 }
 

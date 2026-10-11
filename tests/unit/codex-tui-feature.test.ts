@@ -115,7 +115,7 @@ function readyClient(
 
 /** A live `model/list` page whose one model advertises `serviceTiers`. */
 function liveCatalog(serviceTiers: readonly string[]) {
-  return async () => ({
+  return async (...arguments_: readonly unknown[]) => (arguments_[0] as { method: string }).method === "experimentalFeature/list" ? liveSpeedPolicy() : ({
     generation: 7,
     inboundSequence: 1,
     result: {
@@ -149,6 +149,13 @@ function liveCatalog(serviceTiers: readonly string[]) {
   });
 }
 
+function liveSpeedPolicy(fast = true, ultrafast = true) {
+  return { generation: 7, inboundSequence: 1, result: { data: [
+    { name: "fast_mode", stage: "stable", enabled: fast },
+    { name: "ultrafast_mode", stage: "stable", enabled: ultrafast },
+  ], nextCursor: null } };
+}
+
 function handleAuthority() {
   const { appServerGeneration: _, ...result } = authority;
   return result;
@@ -169,7 +176,7 @@ function externalConfiguration(
       label: "Codex",
       enabled: true,
       configurationRevision: 1,
-      protocolRelease: "0.160.0",
+      protocolRelease: "0.162.1",
     },
     executionEnvironmentId: authority.executionEnvironmentId,
     connection: { ownership: "external", channel },
@@ -226,7 +233,7 @@ function launcherChannels() {
     ExecutionEnvironmentChannelProvider["openOwnedProcess"];
   const openOwnedProcess = vi.fn(
     async (..._arguments: Parameters<OpenOwnedProcess>) => {
-      return codexVersionProbeChannel("codex-cli 0.160.0\n");
+      return codexVersionProbeChannel("codex-cli 0.162.1\n");
     },
   );
   const resolveOwnedProcessExecutable = vi.fn(async (_scope, _input) => ({
@@ -929,7 +936,7 @@ describe("CodexManagedTuiRegistry", () => {
       state: {
         lifecycle: "failed",
         diagnostic: {
-          text: expect.stringContaining("no longer offers the selected speed"),
+          text: expect.stringContaining("selected speed is unavailable"),
         },
       },
     });
@@ -1021,6 +1028,7 @@ describe("EnvironmentCodexManagedTuiLauncher", () => {
       });
     };
     const requestWithReceipt = vi.fn(async (method: { method: string }, _params: unknown) => {
+      if (method.method === "experimentalFeature/list") return { ...liveSpeedPolicy(), inboundSequence: ++sequence };
       if (method.method === "model/list") return {
         generation: 7, inboundSequence: ++sequence,
         result: { data: [{ id: selectedSettings.model, upgrade: catalogSelection.upgrade, hidden: false, inputModalities: ["text"],
@@ -1074,7 +1082,7 @@ describe("EnvironmentCodexManagedTuiLauncher", () => {
     expect(fixture.openOwnedPty).not.toHaveBeenCalled();
     fixture.emitSettings();
     await launched;
-    expect(fixture.requestWithReceipt.mock.calls[1]?.[1]).toEqual({
+    expect(fixture.requestWithReceipt.mock.calls[2]?.[1]).toEqual({
       threadId: authority.backendConversationId, cwd: authority.canonicalWorkspacePath,
       model: settings.model, effort: settings.reasoningEffort, serviceTier: "priority",
       approvalPolicy: "on-request", approvalsReviewer: "auto_review",
@@ -1092,9 +1100,9 @@ describe("EnvironmentCodexManagedTuiLauncher", () => {
     const fixture = settingsFixture("no_op");
     await fixture.launch();
     expect(fixture.requestWithReceipt.mock.calls.map(([method]) => method.method)).toEqual([
-      "model/list", "thread/settings/update", "thread/resume",
+      "model/list", "experimentalFeature/list", "thread/settings/update", "thread/resume",
     ]);
-    expect(fixture.requestWithReceipt.mock.calls[2]?.[1]).toEqual({
+    expect(fixture.requestWithReceipt.mock.calls[3]?.[1]).toEqual({
       threadId: authority.backendConversationId, excludeTurns: true,
     });
     expect(fixture.openOwnedPty).toHaveBeenCalledOnce();
@@ -1109,7 +1117,7 @@ describe("EnvironmentCodexManagedTuiLauncher", () => {
     await fixture.launch();
     const args = fixture.openOwnedPty.mock.calls[0]![1].arguments;
     expect(args[args.indexOf("-m") + 1]).toBe(selection.model);
-    expect(fixture.requestWithReceipt.mock.calls[1]?.[1]).toMatchObject({ model: selection.model });
+    expect(fixture.requestWithReceipt.mock.calls[2]?.[1]).toMatchObject({ model: selection.model });
     const quoted = (value: string) => JSON.stringify(value).replace(/\u007f/gu, "\\u007f");
     expect(args.filter(arg => arg.startsWith("notice.model_migrations="))).toEqual([
       `notice.model_migrations={${quoted(selection.model)}=${quoted(selection.upgrade)}}`,
@@ -1602,6 +1610,7 @@ describe("assertCodexLiveModelSelection", () => {
 
     await expect(
       assertCodexLiveModelSelection({
+        nativeThreadId: "native-thread",
         client,
         expectedGeneration: 7,
         model: "gpt-5.6-luna",
@@ -1630,18 +1639,19 @@ describe("assertCodexLiveModelSelection", () => {
     });
     client.updateLifecycle({ state: "ready", generation: 7 });
     await expect(assertCodexLiveModelSelection({
+        nativeThreadId: "native-thread",
       client, expectedGeneration: 7, model: "gpt-6-sol", reasoningEffort: "high", serviceTier: "standard",
       signal: new AbortController().signal,
     })).rejects.toThrow("codex_tui_live_model_upgrade_invalid");
   });
 
   it("admits an accelerated speed only when the live model advertises it", async () => {
-    const offered = (serviceTiers: readonly string[]) => {
+    const offered = (serviceTiers: readonly string[], fast = true, ultrafast = true) => {
       const client = new CodexSharedClientFacade({
         current: () => ({
           generation: 7,
           request: vi.fn() as never,
-          requestWithReceipt: vi.fn(async () => ({
+          requestWithReceipt: vi.fn(async (method: { method: string }) => method.method === "experimentalFeature/list" ? liveSpeedPolicy(fast, ultrafast) : ({
             generation: 7,
             inboundSequence: 1,
             result: {
@@ -1665,6 +1675,7 @@ describe("assertCodexLiveModelSelection", () => {
       client.updateLifecycle({ state: "ready", generation: 7 });
       return (serviceTier: "standard" | "fast" | "ultrafast") =>
         assertCodexLiveModelSelection({
+        nativeThreadId: "native-thread",
           client,
           expectedGeneration: 7,
           model: "gpt-5.6-luna",
@@ -1689,6 +1700,10 @@ describe("assertCodexLiveModelSelection", () => {
     await expect(offered([])("fast")).rejects.toThrow(
       "codex_tui_live_model_selection_unavailable",
     );
+    await expect(offered(["priority", "ultrafast"], false, true)("ultrafast")).resolves.toEqual({ upgrade: null });
+    await expect(offered(["priority", "ultrafast"], false, true)("fast")).rejects.toThrow("codex_tui_live_speed_policy_disabled");
+    await expect(offered(["priority", "ultrafast"], true, false)("ultrafast")).rejects.toThrow("codex_tui_live_speed_policy_disabled");
+    await expect(offered(["priority", "ultrafast"], false, false)("standard")).resolves.toEqual({ upgrade: null });
   });
 
   it("rejects a response from a stale daemon generation", async () => {
@@ -1711,6 +1726,7 @@ describe("assertCodexLiveModelSelection", () => {
     client.updateLifecycle({ state: "ready", generation: 7 });
     await expect(
       assertCodexLiveModelSelection({
+        nativeThreadId: "native-thread",
         client,
         expectedGeneration: 7,
         model: "gpt-5.6-luna",

@@ -5,6 +5,67 @@ import { CodexFastModeSessionRegistry } from "../../src/server/backends/codex/co
 const scope = { tenantId: "tenant-one", principalId: "principal-one" };
 
 describe("Codex Fast mode session authority", () => {
+  it.each([[false, false], [false, true], [true, false], [true, true]])(
+    "independently admits Fast=%s and Ultrafast=%s while retaining Standard",
+    async (fastEnabled, ultrafastEnabled) => {
+      const requestWithReceipt = vi.fn(async (method: { method: string }) => ({
+        generation: 4, inboundSequence: 1,
+        result: method.method === "experimentalFeature/list" ? {
+          data: [feature("fast_mode", fastEnabled), feature("ultrafast_mode", ultrafastEnabled)], nextCursor: null,
+        } : {},
+      }));
+      const client = { lifecycleSnapshot: () => ({ state: "ready", generation: 4 }), requestWithReceipt } as unknown as CodexSharedClientFacade;
+      const registry = new CodexFastModeSessionRegistry();
+      expect(await registry.refresh({ scope, applicationThreadId: "thread-one", nativeThreadId: "native-one", connectionGeneration: 4, client }))
+        .toMatchObject({ fastEnabled, ultrafastEnabled, availability: fastEnabled || ultrafastEnabled ? "available" : "unavailable" });
+      for (const [selection, enabled] of [["standard", true], ["fast", fastEnabled], ["ultrafast", ultrafastEnabled]] as const) {
+        const before = requestWithReceipt.mock.calls.length;
+        const sync = registry.syncServiceTier(scope, "thread-one", selection);
+        if (enabled) {
+          await expect(sync).resolves.toBeUndefined();
+          expect(requestWithReceipt).toHaveBeenCalledTimes(before + 1);
+        } else {
+          await expect(sync).rejects.toThrow("codex_fast_mode_session_unavailable");
+          expect(requestWithReceipt).toHaveBeenCalledTimes(before);
+        }
+      }
+      await expect(registry.syncServiceTier({ ...scope, principalId: "other" }, "thread-one", "standard"))
+        .rejects.toThrow("codex_fast_mode_session_unavailable");
+    },
+  );
+
+  it("does not infer an absent Ultrafast flag from Fast", async () => {
+    const client = {
+      lifecycleSnapshot: () => ({ state: "ready", generation: 4 }),
+      requestWithReceipt: vi.fn(async () => ({ generation: 4, inboundSequence: 1,
+        result: { data: [feature("fast_mode", true)], nextCursor: null } })),
+    } as unknown as CodexSharedClientFacade;
+    const registry = new CodexFastModeSessionRegistry();
+    await registry.refresh({ scope, applicationThreadId: "thread-one", nativeThreadId: "native-one", connectionGeneration: 4, client });
+    expect(registry.projection(scope, "thread-one")).toMatchObject({ fastEnabled: true, ultrafastEnabled: false });
+    await expect(registry.syncServiceTier(scope, "thread-one", "ultrafast")).rejects.toThrow("codex_fast_mode_session_unavailable");
+  });
+
+  it("replaces independent policies after reconnect without reusing prior-generation admission", async () => {
+    let generation = 4;
+    const client = {
+      lifecycleSnapshot: () => ({ state: "ready", generation }),
+      requestWithReceipt: vi.fn(async (method: { method: string }) => ({ generation, inboundSequence: 1,
+        result: method.method === "experimentalFeature/list" ? { data: [feature("fast_mode", generation === 4), feature("ultrafast_mode", generation === 5)], nextCursor: null } : {} })),
+    } as unknown as CodexSharedClientFacade;
+    const registry = new CodexFastModeSessionRegistry();
+    const refresh = () => registry.refresh({ scope, applicationThreadId: "thread-one", nativeThreadId: "native-one", connectionGeneration: generation, client });
+    await refresh();
+    expect(registry.projection(scope, "thread-one")).toMatchObject({ fastEnabled: true, ultrafastEnabled: false });
+    generation = 5;
+    expect(registry.projection(scope, "thread-one")).toMatchObject({ availability: "unavailable", unavailableReason: "generation_changed" });
+    await expect(registry.syncServiceTier(scope, "thread-one", "fast")).rejects.toThrow("codex_fast_mode_generation_changed");
+    await refresh();
+    expect(registry.projection(scope, "thread-one")).toMatchObject({ fastEnabled: false, ultrafastEnabled: true, availability: "available" });
+    await expect(registry.syncServiceTier(scope, "thread-one", "fast")).rejects.toThrow("codex_fast_mode_session_unavailable");
+    await expect(registry.syncServiceTier(scope, "thread-one", "ultrafast")).resolves.toBeUndefined();
+  });
+
   it("paginates loaded-thread feature state and generation-fences projection and sync", async () => {
     let generation = 4;
     const requestWithReceipt = vi
@@ -44,7 +105,7 @@ describe("Codex Fast mode session authority", () => {
         connectionGeneration: 4,
         client,
       }),
-    ).resolves.toMatchObject({ enabled: true, availability: "available" });
+    ).resolves.toMatchObject({ fastEnabled: true, availability: "available" });
     expect(requestWithReceipt.mock.calls[1]?.[1]).toMatchObject({
       threadId: "native-one",
       cursor: "page-two",
@@ -58,7 +119,7 @@ describe("Codex Fast mode session authority", () => {
 
     generation = 5;
     expect(registry.projection(scope, "thread-one")).toMatchObject({
-      enabled: true,
+      fastEnabled: true,
       availability: "unavailable",
       unavailableReason: "generation_changed",
     });
@@ -95,20 +156,20 @@ describe("Codex Fast mode session authority", () => {
         client,
       }),
     ).resolves.toMatchObject({
-      enabled: false,
+      fastEnabled: false,
       availability: "unavailable",
       unavailableReason: "feature_unavailable",
     });
   });
 
-  it("fails closed when fast_mode is not stable", async () => {
+  it.each(["fast_mode", "ultrafast_mode"])("fails closed when %s is not stable", async (name) => {
     const client = {
       lifecycleSnapshot: () => ({ state: "ready" as const, generation: 3 }),
       requestWithReceipt: vi.fn().mockResolvedValue({
         generation: 3,
         inboundSequence: 1,
         result: {
-          data: [{ ...feature("fast_mode", true), stage: "beta" }],
+          data: [{ ...feature(name, true), stage: "beta" }],
           nextCursor: null,
         },
       }),
@@ -124,7 +185,7 @@ describe("Codex Fast mode session authority", () => {
         client,
       }),
     ).resolves.toMatchObject({
-      enabled: false,
+      fastEnabled: false,
       availability: "unavailable",
       unavailableReason: "feature_unavailable",
     });
@@ -167,13 +228,13 @@ describe("Codex Fast mode session authority", () => {
     await vi.waitFor(() =>
       expect(onRecovered).toHaveBeenCalledWith(
         expect.objectContaining({
-          enabled: true,
+          fastEnabled: true,
           availability: "available",
         }),
       ),
     );
     expect(registry.projection(scope, "thread-one")).toMatchObject({
-      enabled: true,
+      fastEnabled: true,
       availability: "available",
     });
     expect(requestWithReceipt).toHaveBeenCalledTimes(2);
@@ -239,7 +300,7 @@ describe("Codex Fast mode session authority", () => {
         connectionGeneration: 7,
         client,
       }),
-    ).resolves.toMatchObject({ enabled: true, availability: "available" });
+    ).resolves.toMatchObject({ fastEnabled: true, availability: "available" });
 
     resolveRecovery({
       generation: 6,
@@ -251,7 +312,7 @@ describe("Codex Fast mode session authority", () => {
     });
     await vi.waitFor(() =>
       expect(registry.projection(scope, "thread-one")).toMatchObject({
-        enabled: true,
+        fastEnabled: true,
         availability: "available",
       }),
     );
@@ -305,7 +366,7 @@ describe("Codex Fast mode session authority", () => {
     await vi.waitFor(() =>
       expect(newOnRecovered).toHaveBeenCalledWith(
         expect.objectContaining({
-          enabled: true,
+          fastEnabled: true,
           availability: "available",
         }),
       ),
@@ -381,7 +442,7 @@ describe("Codex Fast mode session authority", () => {
     await vi.waitFor(() =>
       expect(newOnRecovered).toHaveBeenCalledWith(
         expect.objectContaining({
-          enabled: true,
+          fastEnabled: true,
           availability: "available",
         }),
       ),
@@ -397,7 +458,7 @@ describe("Codex Fast mode session authority", () => {
     });
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
     expect(registry.projection(scope, "thread-one")).toMatchObject({
-      enabled: true,
+      fastEnabled: true,
       availability: "available",
     });
     expect(oldOnRecovered).not.toHaveBeenCalled();
@@ -464,11 +525,11 @@ describe("Codex Fast mode session authority", () => {
       },
     });
     await expect(currentRefresh).resolves.toMatchObject({
-      enabled: true,
+      fastEnabled: true,
       availability: "available",
     });
     expect(registry.projection(scope, "thread-one")).toMatchObject({
-      enabled: true,
+      fastEnabled: true,
       availability: "available",
     });
   });

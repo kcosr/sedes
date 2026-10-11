@@ -39,7 +39,7 @@ import {
 import type { CodexSharedClientFacade } from "./codex-client-facade.js";
 import type { CodexManagedTuiController } from "./codex-managed-tui-controller.js";
 import { CodexPaginatedHistoryAdapter } from "./codex-paginated-history-adapter.js";
-import { CodexFastModeSessionRegistry } from "./codex-fast-mode-session.js";
+import { CodexFastModeSessionRegistry, codexSpeedPolicyAllows, codexSpeedPolicyDisables } from "./codex-fast-mode-session.js";
 import type { CodexServerRequestRouter } from "./codex-server-request-router.js";
 import {
   codexThreadListMethod,
@@ -1036,9 +1036,10 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
         connectionGeneration: response.generation,
         client: this.#client,
       });
-      if (fastModeProjection.unavailableReason === "feature_disabled") {
-        this.#executionSettings.resolveFastModeDisabled(input.scope, {
+      if (codexSpeedPolicyDisables(fastModeProjection, executionSettings.serviceTier)) {
+        this.#executionSettings.resolveUnavailableServiceTier(input.scope, {
           applicationThreadId: input.applicationThreadId,
+          unavailableServiceTiers: (["fast", "ultrafast"] as const).filter((tier) => codexSpeedPolicyDisables(fastModeProjection, tier)),
           now: this.#nowMilliseconds(),
         });
       }
@@ -1661,8 +1662,9 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
         selectedModel &&
         !codexModelOffersServiceTier(selectedModel, childDesired.serviceTier)
       ) {
-        this.#executionSettings.resolveFastModeDisabled(input.scope, {
+        this.#executionSettings.resolveUnavailableServiceTier(input.scope, {
           applicationThreadId: input.childApplicationThreadId,
+          unavailableServiceTiers: [childDesired.serviceTier],
           now: this.#nowMilliseconds(),
         });
       }
@@ -1838,9 +1840,10 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
         connectionGeneration: response.generation,
         client: this.#client,
       });
-      if (fastModeProjection.unavailableReason === "feature_disabled") {
-        this.#executionSettings.resolveFastModeDisabled(input.scope, {
+      if (codexSpeedPolicyDisables(fastModeProjection, executionSettings.serviceTier)) {
+        this.#executionSettings.resolveUnavailableServiceTier(input.scope, {
           applicationThreadId: input.childApplicationThreadId,
+          unavailableServiceTiers: (["fast", "ultrafast"] as const).filter((tier) => codexSpeedPolicyDisables(fastModeProjection, tier)),
           now: this.#nowMilliseconds(),
         });
       }
@@ -2627,8 +2630,7 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
       (settings.serviceTier !== "standard" &&
         (!codexModelOffersServiceTier(model, settings.serviceTier) ||
           (fastModeApplicationThreadId !== undefined &&
-            (fastModeProjection?.availability !== "available" ||
-              fastModeProjection.enabled !== true))))
+            !codexSpeedPolicyAllows(fastModeProjection, settings.serviceTier))))
     ) {
       throw codexError(
         "rejected",

@@ -2294,19 +2294,24 @@ timestamp or add a voice age cutoff. Explicit reply playback remains available.
 Successful-turn notifications may opt into a separate immutable classified
 assistant-result snapshot captured alongside the callback aggregate. Keep the
 aggregate callback contract unchanged. Backend assistant items may carry
-server-only `responsePhase` (`provisional`, `final`, `unclassified`); omitted
+server-only `responsePhase` (`provisional`, `partial`, `final`, `unclassified`); omitted
 phase means no evidence, not final. Strip this field at browser projection.
 Classify all text blocks of one native message together. Codex preserves native
-phase labels; Pi uses settled native assistant-message evidence; Claude uses
+phase labels (`commentary` → `provisional`, `partial_answer` → `partial`,
+`final_answer` → `final`); Pi uses settled native assistant-message evidence; Claude uses
 native message groups and terminal evidence/receipts. Grok intentionally remains
 unclassified because ACP chunks do not establish a final-message boundary;
-OpenCode also intentionally remains unclassified.
+OpenCode also intentionally remains unclassified. Only Codex currently emits
+`partial`: stable substantive answer content while work may continue. Pi and
+Claude retain their existing provisional/final/unclassified dispositions; Grok
+and OpenCode do not manufacture partial evidence. A partial message is neither
+a user question nor terminal turn evidence.
 
 Live progress is a separate, passive observation of an already projected,
-completed provisional assistant item on an active Sedes-accepted turn. Providers
+completed provisional or partial assistant item on an active Sedes-accepted turn. Providers
 must attach `liveProgress: true` to the qualifying live `item_completed` or
 `item_updated` event; phase plus a running turn alone is insufficient evidence.
-Codex qualifies native commentary completion, Pi qualifies a native assistant
+Codex qualifies native commentary or partial-answer completion, Pi qualifies a native assistant
 message-end that contains a tool call and stopped for tool use (`toolUse`), and
 Claude qualifies a live tool-use message group, including earlier closed text
 reclassified by a later block of that same group. A message that ends aborted
@@ -2320,19 +2325,26 @@ requires a principal-scoped accepted submission correlation. Deduplicate by the
 stable normalized thread, turn, and item identity; no text matching or partial
 delta notification is allowed.
 
-The authoritative completion transaction freezes the three nullable sections.
+The live notification carries `progress.phase` (`provisional` or `partial`).
+Both use the existing `turn.progress` delivery policy and cannot start recognition.
+Only authoritative terminal turn evidence triggers completion callbacks and
+notifications, independently of message phase.
+
+The authoritative completion transaction freezes the four nullable sections.
+Migration 138 adds `partial: null` to existing classifications without changing
+their previously frozen text or filling unavailable classifications.
 Historical rows with unavailable classification remain unavailable on replay;
 never re-read a mutable transcript at notification dispatch or change an already
 finalized snapshot. Classification is principal/thread-owned completion data;
 the existing principal notification preference controls delivery only. Preserve
 wrong-scope denial, event eligibility, generation fencing, and disabled-path
 avoidance of result copying. Partition before bounding with one 16 KiB text
-budget, prioritizing final, then provisional, then unclassified. The serialized
+budget, prioritizing final, then partial, then provisional, then unclassified. The serialized
 64 KiB notification limit can further shorten sections or omit the result
 without dropping otherwise valid metadata; live progress text is shortened the
 same way rather than dropped. When neither the script nor a current voice
 subscriber can deliver an event, skip payload construction, result copying, and
-voice-context capture. Notification version 4 carries these
+voice-context capture. Notification version 5 carries these
 selected sections, omitting unselected keys; scripts must not accept obsolete
 shapes as aliases. The principal-owned `assistantResultPhases` selection defaults
 to final and unclassified on new settings and shares notification revision/generation fencing. It is the sole

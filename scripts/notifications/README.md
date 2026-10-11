@@ -1,20 +1,22 @@
 # Assistant voice notification hook
 
-`sedes-notify-assistant.py` consumes the Sedes version 3 notification JSON on
+`sedes-notify-assistant.py` consumes the Sedes version 5 notification JSON on
 stdin and invokes a separately installed `assistant-notifications-cli`.
 It sends a visible title/body and separate speech in event → workspace → thread
 title order. Speech shortens thread titles to 12 words and 80 characters.
 For `turn.completed`, the hook reads the sections selected in the notification
-UI, in **Provisional → Unclassified → Final** order. Unselected section keys
+UI, in **Provisional → Partial → Unclassified → Final** order. Unselected section keys
 are omitted from `assistantResult`. Missing, null, empty, or whitespace-only
 sections add no speech. With no response text, the normal completion
 announcement remains. Response whitespace and control characters are normalized;
 this hook does not truncate text. Upstream truncation remains in effect. The
 visible notification body is unchanged.
 
-Version 3 carries only selected sections. Update this hook together with the
-server; it intentionally rejects prior versions. Under **Turn completed → Response text**, all sections are off by default.
-Select Final to hear the final answer.
+Version 5 carries only selected sections, including Partial, and identifies live
+progress as `provisional` or `partial`. Both live phases use speak-only delivery. Update this hook together with the
+server; it intentionally rejects prior versions. Under **Turn completed → Response text**, fresh settings select Final and
+Unclassified. Select Partial to include substantive answers produced before
+the turn ended.
 Select Unclassified to hear Grok's response or other output without reliable
 phase evidence; this may include progress commentary. No script arguments are
 needed to choose which phases are spoken.

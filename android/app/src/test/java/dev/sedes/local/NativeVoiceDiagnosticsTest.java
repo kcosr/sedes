@@ -78,9 +78,9 @@ public class NativeVoiceDiagnosticsTest {
         assertTrue(failing.add(progress)); assertSame(progress, failing.take());
     }
     private NativeVoiceQueue.Item item(String id, String event) {
-        JSONObject payload = NativeVoiceJson.object("schemaVersion", 4, "notificationId", id, "event", event,
+        JSONObject payload = NativeVoiceJson.object("schemaVersion", 5, "notificationId", id, "event", event,
             "occurredAt", "2026-10-10T00:00:00Z", "title", "private title", "message", "private speech");
-        if (event.equals("turn.progress")) NativeVoiceJson.put(payload, "progress", NativeVoiceJson.object("itemId", "private item", "text", "private response"));
+        if (event.equals("turn.progress")) NativeVoiceJson.put(payload, "progress", NativeVoiceJson.object("itemId", "private item", "phase", "provisional", "text", "private response"));
         return new NativeVoiceQueue.Item(NativeVoiceJson.object("sourceEventId", id, "generation", 3, "voice", "speak", "payload", payload),
             NativeVoiceSettings.defaults().patch(0, NativeVoiceJson.object("audioMode", "speak")));
     }

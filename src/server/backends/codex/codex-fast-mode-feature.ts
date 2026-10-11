@@ -21,9 +21,9 @@ export const CODEX_FAST_MODE_FEATURE_REF = Object.freeze({
 export const CODEX_SPEED_TIER_DESCRIPTION_MAXIMUM_LENGTH = 240;
 
 /**
- * `offered` lists the accelerated tiers the desired model advertises, in
- * Sedes order. Standard is always offered. Descriptions are bounded catalog
- * text.
+ * `offered` lists the accelerated tiers the desired model advertises and,
+ * for bound threads, native thread policy enables, in Sedes order. Standard
+ * is always offered. Descriptions are bounded catalog text.
  */
 export const codexFastModeStateV2Schema = z
   .object({

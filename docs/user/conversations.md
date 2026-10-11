@@ -116,7 +116,7 @@ new message to that reply's thread when the thread currently accepts input. It r
 response text that a spoken completion would. When the phases selected under
 **Response text** hold no text, it reads the whole reply instead. That happens
 when **Response text** selects no phases, or when the turn has text only in
-unselected phases, such as Provisional commentary.
+unselected phases, such as Partial replies or Provisional commentary.
 **Record**, **Next**, and **Stop** work as for any notice. See
 [Replay a reply](../operator/clients/voice.md#replay-a-reply).
 

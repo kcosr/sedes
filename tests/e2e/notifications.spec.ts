@@ -66,9 +66,9 @@ test("notification settings persist and passive server scripts follow selected l
     .check();
   await expect(settings.getByRole("group", { name: "Response text", exact: true })).toBeVisible();
   await expect(settings.getByRole("checkbox", { name: "Include assistant response text", exact: true })).toHaveCount(0);
-  for (const name of ["Provisional", "Unclassified", "Final"]) {
+  for (const name of ["Provisional", "Partial", "Unclassified", "Final"]) {
     const phase = settings.getByRole("checkbox", { name, exact: true });
-    if (name === "Provisional") await expect(phase).not.toBeChecked();
+    if (name === "Provisional" || name === "Partial") await expect(phase).not.toBeChecked();
     else await expect(phase).toBeChecked();
     await expect(phase).toBeEnabled();
     await phase.check();
@@ -105,7 +105,7 @@ test("notification settings persist and passive server scripts follow selected l
   ).toBeVisible();
   await expect.poll(async () => (await payloads()).length).toBe(1);
   expect((await payloads())[0]).toMatchObject({
-    schemaVersion: 4,
+    schemaVersion: 5,
     event: "notification.test",
     notificationId: expect.any(String),
   });
@@ -133,7 +133,7 @@ test("notification settings persist and passive server scripts follow selected l
       settings.getByRole("switch", { name, exact: true }),
     ).toBeChecked();
   }
-  for (const name of ["Provisional", "Final", "Unclassified"]) {
+  for (const name of ["Provisional", "Partial", "Final", "Unclassified"]) {
     await expect(settings.getByRole("checkbox", { name, exact: true })).toBeChecked();
   }
   // The saved selection controls which sections the external script receives.
@@ -180,15 +180,16 @@ test("notification settings persist and passive server scripts follow selected l
     (payload) => payload.event === "turn.completed",
   )!;
   expect(completion).toMatchObject({
-    schemaVersion: 4,
+    schemaVersion: 5,
     thread: { id: threadId },
     turn: { id: expect.any(String), outcome: "completed" },
   });
   expect(completion.assistantResult).toMatchObject({
     final: null,
+    partial: null,
     unclassified: { text: expect.any(String) },
   });
-  expect(Object.keys(completion.assistantResult!).sort()).toEqual(["final", "unclassified"]);
+  expect(Object.keys(completion.assistantResult!).sort()).toEqual(["final", "partial", "unclassified"]);
   expect(completion.assistantResult!.unclassified).not.toHaveProperty("truncation");
   expect(completion.assistantResult!.unclassified!.text.length).toBeGreaterThan(0);
   expect(completion).not.toHaveProperty("prompt");

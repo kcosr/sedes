@@ -452,6 +452,24 @@ test.describe.serial("normalized interactive Codex projection", () => {
     await expect(streamingCommand).toBeVisible();
     await capture(page, testInfo, "codex-normalized-streaming.png");
     await page.keyboard.press("Escape");
+    const partialEmitted = await page.request.post(
+      `/__e2e/codex/partial-answer/${importedThreadPath.split("/").at(-1)}`,
+    );
+    expect(partialEmitted.status()).toBe(204);
+    const partialReply = submittedTurn.locator('[data-item-kind="assistant_message"]')
+      .filter({ hasText: "The first compatibility finding is confirmed." });
+    await expect(partialReply).toHaveAttribute("data-item-status", "completed");
+    await expect(partialReply).toContainText("I am checking the remaining paths.");
+    await expect(submittedTurn).toHaveAttribute("data-turn-status", "in_progress");
+    await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeVisible();
+    const collaboration = submittedTurn.getByLabel("Collaboration activity", { exact: true });
+    await expect(collaboration).toHaveCount(1);
+    await expect(collaboration).toHaveClass("collab-row marker-label");
+    // Only reasoning differs from the parent, so the existing inline row shows both settings.
+    await expect(collaboration).toHaveText("Started `/root/reviewer` · gpt-5.6-codex · Ultra");
+    await expect(collaboration.locator("button, details")).toHaveCount(0);
+    await partialReply.scrollIntoViewIfNeeded();
+    await capture(page, testInfo, "codex-partial-answer-active.png");
     const turnCompletionReleased = await page.request.post(
       "/__e2e/codex/turn-completion/release",
     );
@@ -464,7 +482,7 @@ test.describe.serial("normalized interactive Codex projection", () => {
     await expect(
       submittedTurn.locator(
         '[data-item-kind="assistant_message"][data-item-status="completed"]',
-      ),
+      ).filter({ hasText: "Codex is streaming a browser-neutral normalized response." }),
     ).toContainText(
       "Codex is streaming a browser-neutral normalized response.",
     );

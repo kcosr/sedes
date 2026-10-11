@@ -14,9 +14,47 @@ working tree and an `origin` pointing to `kcosr/sedes`. Run them with Node.js
 access. Both commands accept `--dry-run`; previews read remote state but do not
 write files, commits, tags, or releases.
 
-When changing the helper, run `env -u NODE_ENV npm run test:release`. Its
-disposable Git repositories and simulated GitHub CLI cover preparation,
-publication preconditions, and retries without contacting GitHub.
+## Day-to-day changes
+
+Add user- and operator-visible changes to `CHANGELOG.md` under Unreleased.
+Usually one to three short bullets per PR is enough. Describe the resulting
+behavior and required upgrade action; leave implementation details and test
+logs in the PR. Use Breaking Changes, Added, Changed, Fixed, and Removed only
+as needed, with no duplicate categories. Add the PR number or link after
+opening the PR and before merging.
+
+Consolidate related Unreleased entries as a feature evolves, retaining their
+PR references. Keep only the current upgrade requirements and link operator
+guides for detailed protocol contracts. Published sections stay byte-for-byte
+unchanged; put corrections in Unreleased. A versioned heading records release
+preparation and is also protected once it reaches the branch baseline.
+
+Product versions are assigned during release preparation, not in each feature
+PR. During `0.x`, use a **minor** release for features or breaking changes and
+a **patch** release for fixes and maintenance. From `1.0`, use **major** for
+breaking changes, **minor** for compatible features, and **patch** for fixes.
+Choose the highest bump required by the release's contents; this is reviewed
+by the maintainer, not inferred from note wording. Provider versions and
+browser/sidecar protocol versions are independent of the product version.
+
+Typecheck and build run `check:version` and `check:changelog`. The changelog
+check rejects duplicate releases/categories, malformed versions or dates,
+out-of-order releases, empty dated releases or bullets, and malformed
+Unreleased notes. An empty Unreleased section and its empty template headings
+are valid between changes; release preparation refuses empty notes.
+
+The check compares dated sections against the local merge-base of HEAD and
+`origin/main`, falling back to HEAD when that tracking ref is unavailable.
+It never fetches or calls GitHub. Source exports without a local Git baseline
+still receive structural checks and explicitly report that history comparison
+was skipped. This guards changes relative to the checkout's baseline; it does
+not authenticate old notes against published GitHub releases. PR references,
+accuracy, and concision remain review responsibilities.
+
+When changing release helpers, run `env -u NODE_ENV npm run test:release`.
+Its parser cases, disposable Git repositories, and simulated GitHub CLI cover
+changelog checks, preparation, publication preconditions, and retries without
+contacting GitHub.
 
 ## 1. Define the release
 
@@ -62,38 +100,28 @@ packages still carry the product version. Browser protocol and provider
 protocol versions change only when their own compatibility contracts require
 it, not merely because a product release is cut.
 
-On a clean preparation branch, preview and then prepare the initial release:
+On a clean preparation branch, preview and then prepare the chosen increment:
 
 ```sh
-env -u NODE_ENV npm run release:prepare -- 0.1.0 --dry-run
-env -u NODE_ENV npm run release:prepare -- 0.1.0
+env -u NODE_ENV npm run release:prepare -- minor --dry-run
+env -u NODE_ENV npm run release:prepare -- minor
 ```
 
-The initial changelog notes are literally `Initial release`. The helper sets
-all product versions, dates the release entry with the current UTC date, and
+The helper sets all product versions, dates the release entry with the current UTC date, and
 opens a fresh Unreleased section in the same working-tree change. It does not
 commit, switch branches, tag, push, or publish. Review and commit those changes
 and merge through the normal PR workflow. If preparation fails after writing
 files, inspect the diff and finish or restore those specific changes before
 retrying; preparation requires a clean tree.
 
-For subsequent releases, collect concise user- and operator-visible notes
-under Unreleased, using Breaking Changes, Added, Changed, Fixed, and Removed
-as applicable. Include the PR number or link before merging. Empty headings
-are removed from released notes and retained in the new Unreleased template.
-Choose either an explicit stable version or an increment:
-
-```sh
-env -u NODE_ENV npm run release:prepare -- patch --dry-run
-env -u NODE_ENV npm run release:prepare -- patch
-```
-
-`minor` resets patch to zero; `major` resets minor and patch to zero. Explicit
+Empty headings are removed from prepared notes and retained in the new
+Unreleased template. Use `patch`, `minor`, `major`, or an explicit stable
+version. `minor` resets patch to zero; `major` resets minor and patch to zero. Explicit
 versions accept an optional `v` prefix. Prerelease versions are not supported
 by this workflow. Preparation refuses empty notes, existing release entries
 or tags, and versions older than the current product version or no newer than
-an existing release. The first release can retain the existing `0.1.0`
-product version.
+an existing release. Both preparation and publication run the shared
+changelog validation before making changes.
 
 `npm run check:version` checks all version locations. For manual version
 maintenance, `npm run version:set -- X.Y.Z` remains available. The `0.1.0`
@@ -107,6 +135,7 @@ Run the deterministic contract checks relevant to the release:
 ```sh
 env -u NODE_ENV npm run check:docs
 env -u NODE_ENV npm run check:version
+env -u NODE_ENV npm run check:changelog
 env -u NODE_ENV npm run check:third-party-notices
 env -u NODE_ENV npm run check:agent-tool-contracts
 env -u NODE_ENV npm run check:e2e-timing-baseline
@@ -259,11 +288,11 @@ requested, update the primary checkout without discarding local work:
 git switch main
 git fetch origin
 git merge --ff-only origin/main
-env -u NODE_ENV npm run release:publish -- 0.1.0 --dry-run
-env -u NODE_ENV npm run release:publish -- 0.1.0
+env -u NODE_ENV npm run release:publish -- 0.2.0 --dry-run
+env -u NODE_ENV npm run release:publish -- 0.2.0
 ```
 
-Use the actual selected version for subsequent releases. Publication requires
+Replace `0.2.0` with the actual prepared version. Publication requires
 clean `main` to match the live `origin/main`, the package version to match,
 and the latest dated changelog entry to contain notes for that version. It
 creates an annotated tag at that exact commit, pushes only that tag, and

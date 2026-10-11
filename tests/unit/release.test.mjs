@@ -26,7 +26,7 @@ function fixture() {
   git("init", "--bare", remote);
   git("config", `url.${remote}.insteadOf`, "https://github.com/kcosr/sedes.git");
   git("remote", "add", "origin", "https://github.com/kcosr/sedes.git");
-  for (const file of ["scripts/release.mjs", "scripts/version.mjs", "src/shared/version.ts", "package.json", "package-lock.json", "electron/package.json", "electron/package-lock.json", "packages/electron-client-credentials/package.json", "packages/electron-connection-runtime/package.json", "packages/server-runtime/package.json", "packages/server-runtime/package-lock.json", "packages/electron-workspace-file-download/package.json"]) {
+  for (const file of ["scripts/release.mjs", "scripts/changelog.mjs", "scripts/version.mjs", "src/shared/version.ts", "package.json", "package-lock.json", "electron/package.json", "electron/package-lock.json", "packages/electron-client-credentials/package.json", "packages/electron-connection-runtime/package.json", "packages/server-runtime/package.json", "packages/server-runtime/package-lock.json", "packages/electron-workspace-file-download/package.json"]) {
     mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
     cpSync(path.join(source, file), path.join(root, file));
   }
@@ -106,6 +106,29 @@ describe("source release workflow", () => {
     expect(f.read("CHANGELOG.md")).toMatch(/## \[0.1.1\][^\n]*\n\n### Fixed\n\n- A fix \(#7\).\n\n## \[0.0.1\]/);
     f.commit();
     expect(f.run("prepare", "patch").output).toContain("no release notes");
+  });
+
+  it("uses changelog validation before changing any version files", () => {
+    const f = fixture();
+    f.write("CHANGELOG.md", "# Changelog\n\n## [Unreleased]\n\n### Fixed\n\n- A fix (#7).\n\n### Fixed\n\n- Duplicate category (#8).\n");
+    f.commit();
+    const result = f.run("prepare", "patch");
+    expect(result.status).toBe(1);
+    expect(result.output).toContain("Duplicate changelog category");
+    expect(JSON.parse(f.read("package.json")).version).toBe("0.1.0");
+    expect(f.git("status", "--porcelain")).toBe("");
+  });
+
+  it("refuses to publish rewritten release notes relative to the local main baseline", () => {
+    const f = fixture();
+    f.prepared();
+    f.write("CHANGELOG.md", f.read("CHANGELOG.md").replace("Initial release", "Rewritten release"));
+    f.commit();
+    const result = f.run("publish", "0.1.0");
+    expect(result.status).toBe(1);
+    expect(result.output).toContain("Released changelog notes for 0.1.0 changed");
+    expect(f.git("tag")).toBe("");
+    expect(f.state().creates).toBe(0);
   });
 
   it("refuses dirty trees, malformed versions, downgrades, and existing tags", () => {

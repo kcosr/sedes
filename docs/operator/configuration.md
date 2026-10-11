@@ -650,7 +650,7 @@ limits and uncertain-input recovery.
 Every enabled Codex backend declares one connection topology, an
 execution-policy ceiling, and a top-level model policy using model IDs and/or
 reasoning efforts, never `providerIds`. Sedes supplies its exact generated
-`0.160.0` protocol profile from the compiled backend module.
+`0.162.1` protocol profile from the compiled backend module.
 
 The backend policy contains closed nonempty allowlists for:
 
@@ -675,10 +675,10 @@ working directory. The executable is installed on the selected execution host.
 The service account's first executable `codex` on `PATH` is used by default;
 optional `connection.channel.executablePath` is a canonical absolute override.
 `codexHome` is optional; when omitted, normal Codex home resolution is
-retained. The compiled backend selects the generated 0.160.0 parser profile;
+retained. The compiled backend selects the generated 0.162.1 parser profile;
 independently, Sedes admits a stable Linux x64 or macOS arm64/x64 `codex-cli`
-runtime at or above 0.160.0.
-Sedes is tested through 0.160.0 and reports a newer admitted runtime as newer
+runtime at or above 0.162.1.
+Sedes is tested through 0.162.1 and reports a newer admitted runtime as newer
 than tested. It owns the process group and native-store lock for the process
 lifetime.
 
@@ -920,11 +920,11 @@ or interpolation of thread content is performed. Arguments in the settings UI
 are one per line. Use absolute paths for files the script needs.
 
 Each invocation receives one UTF-8 JSON object on standard input followed by
-EOF. Version 4 uses this shape for a completed turn:
+EOF. Version 5 uses this shape for a completed turn:
 
 ```json
 {
-  "schemaVersion": 4,
+  "schemaVersion": 5,
   "notificationId": "92e18aa5-70f7-41ee-afbc-48437f90619c",
   "event": "turn.completed",
   "occurredAt": "2026-09-05T14:32:10.000Z",
@@ -943,7 +943,7 @@ appear:
 
 | Event                                               | Event-specific data                                                                                          |
 | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `turn.progress` | `turn.id`, `progress.itemId`, completed live provisional `progress.text`, optional truncation |
+| `turn.progress` | `turn.id`, `progress.itemId`, `progress.phase` (`provisional` or `partial`), completed live `progress.text`, optional truncation |
 | `turn.completed`, `turn.failed`, `turn.interrupted` | `turn.id` and `turn.outcome`                                                                                 |
 | `thread.woke`                                       | `wake.reason` (`deadline`) and optional `wake.reminderText`                                                  |
 | `automation.started`, `automation.failed`           | `automation.id`, `name`, `runId`, `trigger` (`scheduled` or `manual`), and optional failure stage/diagnostic |
@@ -952,7 +952,7 @@ appear:
 | `notification.test`                                 | Synthetic title/message; no thread is required                                                               |
 
 **Response text**, nested inside **Turn completed**, offers compact
-**Provisional**, **Unclassified**, and **Final** checkboxes. Fresh settings select
+**Provisional**, **Partial**, **Unclassified**, and **Final** checkboxes. Fresh settings select
 Final and Unclassified; no selection means metadata-only notifications. Select any combination
 to include those sections of the assistant text captured at successful turn
 completion. Turning off **Turn completed** retains the selection. Existing
@@ -962,6 +962,7 @@ response text becomes an empty selection. With all selected:
 ```json
 "assistantResult": {
   "provisional": { "text": "Checking the implementation.\n\nFound the issue." },
+  "partial": { "text": "The first result is ready; further work continues." },
   "final": { "text": "Implemented the requested change. Tests passed." },
   "unclassified": null
 }
@@ -974,8 +975,10 @@ was identified in that phase; `{ "text": "" }` means an identified message was
 empty. Sections preserve their own message order, not interleaving between
 phases. The text retains its original formatting, including Markdown.
 
-Codex uses explicit commentary/final labels when supplied; missing labels remain
-unclassified. Pi and Claude group text blocks belonging to the terminal native
+Codex maps native `commentary`, `partial_answer`, and `final_answer` labels to
+Provisional, Partial, and Final. Partial is substantive assistant text while the
+turn can continue; it does not trigger completion notifications, callbacks, or
+automatic listening. Missing labels remain unclassified. Pi and Claude group text blocks belonging to the terminal native
 assistant message using completion evidence. Grok currently has no reliable
 final-message signal, so its assistant text is unclassified. Unclassified text
 is never silently promoted to final. Terminal text can itself be incomplete
@@ -987,10 +990,10 @@ The field is omitted when no sections are selected and on other events, includin
 omit this field even when sections are selected. Recovery never reclassifies an
 already finalized record from mutable history.
 
-The three sections share a 16 KiB UTF-8 text budget. Final text receives space
-first, then provisional, then unclassified. Sections may be shortened further
+The four sections share a 16 KiB UTF-8 text budget. Final text receives space
+first, then partial, then provisional, then unclassified. Sections may be shortened further
 to fit the 64 KiB serialized JSON payload limit, reducing unclassified and
-provisional text before final text. A shortened section carries metadata:
+provisional text before partial and final text. A shortened section carries metadata:
 
 ```json
 "final": {
@@ -1014,10 +1017,11 @@ still delivered: `progress.text` is shortened, ending in "…", and carries
 truncation metadata with `reason: "byte_limit"`. A notification is dropped only
 when its metadata alone exceeds the limit.
 
-Notification schema version 4 adds `turn.progress` with `progress.itemId`,
+Notification schema version 5 adds the Partial result section and requires
+`progress.phase` on `turn.progress` notices. These notices retain `progress.itemId`,
 `progress.text`, and optional truncation metadata. It continues to omit unselected
 completion sections. Update consumer scripts with the server. The repository's Assistant hook
-speaks each supplied nonempty section in **Provisional → Unclassified → Final**
+speaks each supplied nonempty section in **Provisional → Partial → Unclassified → Final**
 order, matching the checkbox row. Missing, null, empty, or whitespace-only
 sections add no speech. Select Unclassified to hear Grok and OpenCode responses; they may
 include progress commentary. With no selected text, only the normal completion
@@ -1048,7 +1052,7 @@ import json
 import sys
 
 notification = json.load(sys.stdin)
-if notification["schemaVersion"] != 4:
+if notification["schemaVersion"] != 5:
     raise SystemExit("Unsupported notification schema")
 # Call your notification API here, using credentials from a server-owned file.
 print(notification["title"] + ": " + notification["message"])

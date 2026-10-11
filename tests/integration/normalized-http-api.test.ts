@@ -1793,7 +1793,7 @@ describe("normalized HTTP application contract", () => {
         completions.observeCompletion(current.owner, threadId, operationId, {
           completionIdentity: `completion-${operationId}`, observedAt: acceptedAt, createAttention: false,
           finalized: { applicationTurnId: turnId, outcome: "completed", result: { text: "Whole reply" },
-            classifiedResult: final === null ? null : { provisional: { text: "Looking." }, final: { text: final }, unclassified: null } },
+            classifiedResult: final === null ? null : { partial: null, provisional: { text: "Looking." }, final: { text: final }, unclassified: null } },
         });
       };
       // A steer gives one turn two classified observations; the later accepted one is read.

@@ -126,6 +126,7 @@ export type LiveProgressObserver = (
   input: {
     readonly applicationTurnId: string;
     readonly applicationItemId: string;
+    readonly phase: "provisional" | "partial";
     readonly backendCorrelations: readonly string[];
     readonly text: BoundedText;
   },

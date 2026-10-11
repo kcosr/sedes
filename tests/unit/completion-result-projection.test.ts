@@ -106,7 +106,7 @@ describe("authoritative completion result projection", () => {
 });
 
 describe("classified completion result", () => {
-  const message = (text: string, responsePhase?: "provisional" | "final" | "unclassified") => ({
+  const message = (text: string, responsePhase?: "provisional" | "partial" | "final" | "unclassified") => ({
     backendItemId: "item", backendTurnId: "turn", sourceOrder: 0,
     semanticKind: "assistant_message" as const, status: "completed" as const,
     markdown: { text }, ...(responsePhase ? { responsePhase } : {}),
@@ -114,14 +114,15 @@ describe("classified completion result", () => {
   it("concatenates each phase in order and distinguishes absent from empty", () => {
     expect(projectClassifiedAssistantResult([
       message("Checking", "provisional"), message("Unknown"),
-      message("Found it", "provisional"), message("", "final"),
-    ])).toEqual({ provisional: { text: "Checking\n\nFound it" }, final: { text: "" }, unclassified: { text: "Unknown" } });
-    expect(projectClassifiedAssistantResult([])).toEqual({ provisional: null, final: null, unclassified: null });
+      message("Found it", "provisional"), message("Answer so far", "partial"), message("", "final"),
+    ])).toEqual({ partial: { text: "Answer so far" }, provisional: { text: "Checking\n\nFound it" }, final: { text: "" }, unclassified: { text: "Unknown" } });
+    expect(projectClassifiedAssistantResult([])).toEqual({ partial: null, provisional: null, final: null, unclassified: null });
   });
   it("reserves the shared text budget for final even after long commentary", () => {
     const result = projectClassifiedAssistantResult([
-      message("p".repeat(30_000), "provisional"), message("Answer 😀", "final"), message("u".repeat(30_000)),
+      message("p".repeat(30_000), "provisional"), message("Useful finding", "partial"), message("Answer 😀", "final"), message("u".repeat(30_000)),
     ]);
+    expect(result.partial).toEqual({ text: "Useful finding" });
     expect(result.final).toEqual({ text: "Answer 😀" });
     expect(result.provisional?.truncation?.truncated).toBe(true);
     expect(result.unclassified).toMatchObject({ text: "", truncation: { truncated: true, retainedBytes: 0 } });

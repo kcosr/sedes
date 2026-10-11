@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Sedes v4 stdin hook -> Assistant notification with optional response speech.
+"""Sedes v5 stdin hook -> Assistant notification with optional response speech.
 
 Sedes settings: absolute script path, no arguments, timeout 30 seconds.
 Use --dry-run to print the outgoing fields without contacting Assistant.
@@ -47,8 +47,8 @@ def main():
     if len(raw) > 1_048_576:
         raise ValueError("Notification payload exceeds 1 MiB")
     payload = json.loads(raw)
-    if not isinstance(payload, dict) or type(payload.get("schemaVersion")) is not int or payload["schemaVersion"] != 4:
-        raise ValueError("Expected Sedes notification schemaVersion 4")
+    if not isinstance(payload, dict) or type(payload.get("schemaVersion")) is not int or payload["schemaVersion"] != 5:
+        raise ValueError("Expected Sedes notification schemaVersion 5")
     event = payload.get("event")
     if not isinstance(event, str) or event not in EVENT_LABELS:
         raise ValueError("Unsupported notification event")
@@ -80,10 +80,10 @@ def main():
         result = payload["assistantResult"]
         if not isinstance(result, dict):
             raise ValueError("Expected an assistantResult object")
-        if not set(result).issubset({"provisional", "final", "unclassified"}):
+        if not set(result).issubset({"provisional", "partial", "final", "unclassified"}):
             raise ValueError("Expected selected assistantResult sections")
         # UI selection determines what arrives; finish speech with the final answer.
-        for phase in ("provisional", "unclassified", "final"):
+        for phase in ("provisional", "partial", "unclassified", "final"):
             section = result.get(phase)
             if section is None:
                 continue
@@ -93,6 +93,8 @@ def main():
             if response:
                 speech += " " + response
     if event == "turn.progress":
+        if payload["progress"].get("phase") not in ("provisional", "partial"):
+            raise ValueError("Expected progress phase")
         speech += " " + text(payload["progress"]["text"], limit=None)
     fields = {
         "title": "Sedes: " + label,

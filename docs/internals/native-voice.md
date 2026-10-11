@@ -9,8 +9,9 @@ completion follow-up listening. Speech content is device-owned presentation over
 the existing normalized notification envelope; explicit replays always read the
 requested reply. Queued items rebuild from their original envelope after a content
 change, while active playback finishes normally. Obsolete settings records reset
-without an alias or migration. Client protocol 149 and client-control tool schema
-version 2 carry the new audio-mode values.
+without an alias or migration. Client protocol 150 and client-control tool schema
+version 2 carry the audio-mode values. Notification payload version 5 carries
+Partial response sections and requires the live `progress.phase` field.
 Native snapshot version 14 includes `active.recording` (ID, Keep listening and
 Reconnecting), native-authoritative `canSetKeepListening`/`canSend` actions, the
 Keep listening blocked reason, and an independent `recordingRecovery` item.
@@ -407,7 +408,7 @@ selection, and fails when it returns `null`.
 The user-initiated `speakReply` bridge method queues one ended turn's reply for
 speech. Its strict keys are `threadId` (1–512 characters), `turnId` (1–160), an
 optional `threadTitle`, and a required `assistantResult` with the same shape and
-bounded-text validation as a notification's: only `provisional`, `unclassified`,
+bounded-text validation as a notification's: only `provisional`, `partial`, `unclassified`,
 and `final`, each null or bounded text. `threadTitle` is validated like
 `setForegroundContext`'s: absent, null, or a 1–512 character string. Arguments
 are validated first. It then requires a started session, ready speech
@@ -416,7 +417,7 @@ Audio mode Off, it fails with `voice_not_ready`, whose message is "Voice is not
 ready yet." Microphone permission and notification policy are not required. It
 returns the published snapshot.
 
-Native speaks the sections in notification order (provisional, unclassified,
+Native speaks the sections in notification order (provisional, partial, unclassified,
 final) with the same per-part `NativeSpeechText` cleanup and truncation notice
 as a completion notice, but never a context line, whatever
 `speechContent` selects. Empty prepared text fails with
@@ -529,7 +530,7 @@ dispatching, or uncertain non-Steer queue work, or any unacknowledged failure,
 blocks a new Steer, and input-context then reports Steer unavailable.
 
 Only a provider-qualified `liveProgress` event can trigger progress. The actor
-checks that the projected item is complete, nonempty provisional assistant text
+checks that the projected item is complete, nonempty provisional or partial assistant text
 on the active turn and that projection generation survived applying the event.
 The manager resolves normalized identities; the notification lifecycle requires
 a currently admitted Sedes submission. Item/turn identity supplies deduplication.
@@ -537,7 +538,10 @@ The projector retains updates to server-private turn completion correlations
 even when no visible turn field changes. Such updates produce no browser delta
 but immediately become available to live-progress admission checks.
 
-Codex marks completed commentary. Pi marks a completed assistant message that
+Codex marks completed commentary and partial answers. The notification retains
+`progress.phase` as `provisional` or `partial`; either phase follows the
+`turn.progress` delivery control and cannot start automatic listening. A partial
+answer never supplies authoritative turn completion or callback evidence. Pi marks a completed assistant message that
 contains a tool call and ended for tool use; an aborted or errored message is
 not progress because its tools never run. Claude marks the completed tool-use
 group or its later live classification. History replay, replacement snapshots,

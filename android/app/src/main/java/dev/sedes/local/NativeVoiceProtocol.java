@@ -73,10 +73,10 @@ final class NativeVoiceProtocol {
         if (arguments == null || arguments.length() > 64) throw new IllegalArgumentException("invalid_script_arguments");
         for (int i = 0; i < arguments.length(); i++) { Object value = arguments.opt(i); if (!(value instanceof String) || ((String) value).length() > 4096 || ((String) value).indexOf('\0') >= 0) throw new IllegalArgumentException("invalid_script_arguments"); }
         JSONArray phases = settings.optJSONArray("assistantResultPhases"); Set<String> seen = new HashSet<>();
-        if (phases == null || phases.length() > 3) throw new IllegalArgumentException("invalid_result_phases");
+        if (phases == null || phases.length() > RESULT_PHASES.length) throw new IllegalArgumentException("invalid_result_phases");
         for (int i = 0; i < phases.length(); i++) {
             Object phase = phases.opt(i);
-            if (!(phase instanceof String) || !(phase.equals("provisional") || phase.equals("unclassified") || phase.equals("final")) || !seen.add((String) phase))
+            if (!(phase instanceof String) || !java.util.Arrays.asList(RESULT_PHASES).contains(phase) || !seen.add((String) phase))
                 throw new IllegalArgumentException("invalid_result_phases");
         }
     }
@@ -109,7 +109,7 @@ final class NativeVoiceProtocol {
             if (automation.has("diagnostic")) text(automation, "diagnostic", 65536);
         }
     }
-    static final String[] RESULT_PHASES = { "provisional", "unclassified", "final" };
+    static final String[] RESULT_PHASES = { "provisional", "partial", "unclassified", "final" };
     /** Selected completion phases: an omitted phase is excluded, null has no text, otherwise bounded text. */
     static JSONObject assistantResult(JSONObject value) {
         NativeVoiceJson.keys(value, RESULT_PHASES);
@@ -118,9 +118,12 @@ final class NativeVoiceProtocol {
         return value;
     }
     static void bounded(JSONObject value, boolean progress) {
-        NativeVoiceJson.keys(value, progress ? new String[] { "text", "truncation", "itemId" } : new String[] { "text", "truncation" });
+        NativeVoiceJson.keys(value, progress ? new String[] { "text", "truncation", "itemId", "phase" } : new String[] { "text", "truncation" });
         text(value, "text", 65536);
-        if (progress) NativeVoiceJson.string(value, "itemId", 512);
+        if (progress) {
+            NativeVoiceJson.string(value, "itemId", 512);
+            choice(value, "phase", "provisional", "partial");
+        }
         JSONObject truncation = optionalObject(value, "truncation");
         if (truncation != null) {
             NativeVoiceJson.keys(truncation, "truncated", "originalBytes", "retainedBytes", "reason");

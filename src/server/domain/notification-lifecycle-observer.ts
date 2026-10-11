@@ -34,7 +34,7 @@ export class NotificationLifecycleObserver {
       this.emit(scope, {
         event: "turn.progress", occurredAt: new Date().toISOString(), title: "Agent progress",
         message: context.thread.title, ...context, turn: { id: input.applicationTurnId },
-        progress: { itemId: input.applicationItemId, ...input.text },
+        progress: { phase: input.phase, itemId: input.applicationItemId, ...input.text },
       }, JSON.stringify(["progress", threadId, input.applicationTurnId, input.applicationItemId]), "live");
     } catch { /* Passive progress cannot affect provider work. */ }
   }

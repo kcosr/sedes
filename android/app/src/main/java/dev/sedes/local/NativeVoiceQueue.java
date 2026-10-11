@@ -42,7 +42,7 @@ final class NativeVoiceQueue {
             JSONObject payload = NativeVoiceJson.requiredObject(envelope, "payload");
             NativeVoiceJson.keys(payload, "schemaVersion", "notificationId", "event", "occurredAt", "title", "message", "thread", "workspace",
                 "turn", "progress", "interaction", "question", "wake", "automation", "assistantResult");
-            NativeVoiceJson.integer(payload, "schemaVersion", 4, 4);
+            NativeVoiceJson.integer(payload, "schemaVersion", 5, 5);
             if (NativeVoiceJson.serializedBytes(payload) > MAX_PAYLOAD_BYTES) throw new IllegalArgumentException("voice_payload_too_large");
             NativeVoiceJson.string(payload, "notificationId", 512);
             NativeVoiceJson.string(payload, "occurredAt", 80);
