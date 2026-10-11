@@ -18,7 +18,7 @@ async function state(pid: number): Promise<{ live: boolean; parent: number }> {
     const fields = value.slice(value.lastIndexOf(")") + 2).split(" ");
     return { live: !["Z", "X"].includes(fields[0]!), parent: Number(fields[1]) };
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { live: false, parent: 0 };
+    if (["ENOENT", "ESRCH"].includes((error as NodeJS.ErrnoException).code ?? "")) return { live: false, parent: 0 };
     throw error;
   }
 }
