@@ -989,7 +989,7 @@ describe("SettingsView", () => {
     fireEvent.click(screen.getByTestId("seek-diagnostics-toggle"));
     expect(getDiagnosticCategoryEnabled("seek")).toBe(false);
     fireEvent.click(screen.getByRole("button", { name: "Clear copy buffer" }));
-    expect(screen.getByRole("button", { name: "Copy log (0)" })).toBeDisabled();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Copy log (0)" })).toBeDisabled());
     expect(screen.getByRole("status")).toHaveTextContent("Copy buffer cleared.");
   });
 

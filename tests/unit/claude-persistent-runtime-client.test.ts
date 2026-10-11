@@ -95,6 +95,69 @@ it("acknowledges replay only after asynchronous message application and suppress
   await client.close();
 });
 
+it("marks reconnect catch-up as recovered while preserving later live delivery behind asynchronous replay", async () => {
+  vi.useFakeTimers();
+  const { client, options, carriers } = setup();
+  const applied = deferred<void>();
+  const onMessage = vi.fn<ClaudeRuntimeSessionOptions["onMessage"]>(async (_message, evidence) => {
+    if (evidence?.completionProvenance === "recovered") await applied.promise;
+  });
+  const session = client.createSession({ ...options, onMessage });
+  await session.start();
+  const message = (sequence: number): ClaudePersistentEvent => ({ sessionId: SESSION_ID, sequence,
+    payload: { kind: "message", message: { type: "result", uuid: PROBE_ID, session_id: SESSION_ID, result: `Result ${sequence}` } } });
+  const retained = message(1);
+  const early = message(2);
+  const live = message(3);
+  connectionState.nextOpen = opened([retained], true);
+  const execute = client.execute.bind(client);
+  vi.spyOn(client, "execute").mockImplementation(async (...args) => {
+    const response = await execute(...args);
+    if (args[0].action === "open") connectionState.instances.at(-1)!.listener!(early);
+    return response;
+  });
+  carriers[0]!.lost.resolve();
+  await vi.advanceTimersByTimeAsync(1001);
+  connectionState.instances[1]!.listener!(live);
+  expect(onMessage).toHaveBeenCalledExactlyOnceWith(retained.payload.kind === "message" && retained.payload.message,
+    { completionProvenance: "recovered" });
+  applied.resolve();
+  await session.flushMessages!();
+  expect(onMessage.mock.calls).toEqual([
+    [retained.payload.kind === "message" && retained.payload.message, { completionProvenance: "recovered" }],
+    [early.payload.kind === "message" && early.payload.message, { completionProvenance: "recovered" }],
+    [live.payload.kind === "message" && live.payload.message],
+  ]);
+  await client.close();
+});
+
+it("marks an event queued on a lost carrier as recovered when it is first applied after reconnect", async () => {
+  vi.useFakeTimers();
+  const { client, options, carriers } = setup();
+  const applied = deferred<void>();
+  const onMessage = vi.fn<ClaudeRuntimeSessionOptions["onMessage"]>().mockImplementationOnce(() => applied.promise);
+  const session = client.createSession({ ...options, onMessage });
+  await session.start();
+  const event = (sequence: number): ClaudePersistentEvent => ({ sessionId: SESSION_ID, sequence,
+    payload: { kind: "message", message: { type: "result", uuid: PROBE_ID, session_id: SESSION_ID, result: `Result ${sequence}` } } });
+  const first = event(1);
+  const queued = event(2);
+  connectionState.instances[0]!.listener!(first);
+  connectionState.instances[0]!.listener!(queued);
+  await Promise.resolve();
+  expect(onMessage).toHaveBeenCalledOnce();
+  connectionState.nextOpen = opened([queued], true);
+  carriers[0]!.lost.resolve();
+  await vi.advanceTimersByTimeAsync(1001);
+  applied.resolve();
+  await session.flushMessages!();
+  expect(onMessage.mock.calls).toEqual([
+    [first.payload.kind === "message" && first.payload.message],
+    [queued.payload.kind === "message" && queued.payload.message, { completionProvenance: "recovered" }],
+  ]);
+  await client.close();
+});
+
 it.each(["sidecar_intentionally_disconnected", "sidecar_automatic_connection_disabled", "sidecar_runtime_closed"])("ends local sessions and permission waiters when the sidecar owner reports %s", async code => {
   vi.useFakeTimers();
   const { client, acquire, carriers, options } = setup();
@@ -303,7 +366,7 @@ it("applies full compact replay once when live events precede the first open res
   });
   const onMessage = vi.fn(); const session = client.createSession({ ...options, onMessage });
   await session.start(); await session.flushMessages!();
-  expect(onMessage).toHaveBeenCalledExactlyOnceWith(message("ab"));
+  expect(onMessage).toHaveBeenCalledExactlyOnceWith(message("ab"), { completionProvenance: "recovered" });
   await client.close();
 });
 
@@ -409,7 +472,7 @@ it("resumes an established identity when the detached idle worker has retired", 
   expect(reopened.request).not.toHaveProperty("title");
   await session.flushMessages!();
   expect(options.onMessage).toHaveBeenCalledTimes(2);
-  expect(options.onMessage).toHaveBeenLastCalledWith(expect.objectContaining({ message: { content: [{ type: "text", text: "Resumed worker output" }] } }));
+  expect(options.onMessage).toHaveBeenLastCalledWith(expect.objectContaining({ message: { content: [{ type: "text", text: "Resumed worker output" }] } }), { completionProvenance: "recovered" });
   // Fresh-worker responses omit confirmedEffort. Preserve the last successful
   // selection across another retirement instead of restoring original low.
   carriers[1]!.lost.resolve();

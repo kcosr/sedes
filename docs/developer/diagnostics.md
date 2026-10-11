@@ -48,6 +48,9 @@ are:
   and lightweight publication;
 - `[delivery-dispatch]` — queue dispatch, retry-anchor capture, submit,
   completion replay, and totals;
+- `[delivery-voice]` — completion provenance, notification admission and
+  suppression, subscriber counts, listener delivery, and application-stream
+  closure; see [Voice delivery](#voice-delivery);
 - `[delivery-capture]` — cache-only application state merged with the current
   normalized generation;
 - `[delivery-thread-load]` — correlated bound-thread runtime acquisition start,
@@ -280,6 +283,42 @@ diagnostics**, **Streaming diagnostics**, and **Composer input diagnostics**
 toggles. Enable only the relevant category, clear the buffer, reproduce once, and choose **Copy log**. The
 browser-local buffer holds at most 1,200 entries and is useful in the packaged
 Android client where developer tools are inconvenient.
+
+### Voice delivery
+
+On Android, **Voice diagnostics** adds an independent native capture to the
+same **Copy log** and **Clear** controls. Its device-local setting is off by
+default and survives application restart; captured records do not. The native
+ring holds at most 512 records, including while the WebView is backgrounded.
+It records notification receipt, queue admission and drops, stream/policy
+generations, synthesis start, playback start and drain, interruption, and
+interaction completion. Playback start means Android's playback head advanced;
+drain means the submitted frames finished playing. Neither means a person heard
+the audio. Synthesis completion alone does not prove playback completed.
+
+Records contain counters, bounded reasons, timestamps, and validated hashed
+source event IDs. They exclude message text, titles, thread IDs, audio, request
+bodies, provider errors, and credentials. Disabling capture stops new records;
+**Clear** removes retained records. Copy remains available while disconnected.
+
+On the server, `SEDES_DEBUG_DELIVERY` enables stderr-only `[delivery-voice]`
+records. These include normalized thread/turn IDs, `live` or `recovered`
+completion provenance, shared event claims, voice suppression reasons, and
+listener-delivery counts. They are excluded from the optional delivery file
+sink. Subscriber counts describe application streams (browser, Electron, or
+native), not online phones. A successful listener call proves only that the
+server handed the frame to that stream's queue. Application-stream closure
+records include a bounded reason, lifetime, and pending inventory/transient
+counts and bytes before cleanup.
+
+To investigate missing speech, match the server's hashed `sourceEventId` to the
+native record: `recovered` suppression is expected during state reconciliation;
+`no_recipients` means no eligible application stream at dispatch. A published
+frame without native receipt narrows the gap to stream delivery. Native receipt
+followed by a drop explains admission; synthesis without playback drain points
+to speech or audio interruption. Capture on both ends before reproducing:
+bounded logs cannot establish an exact history of offline notifications and do
+not add acknowledgments, retries, or catch-up delivery.
 
 ### Composer input
 

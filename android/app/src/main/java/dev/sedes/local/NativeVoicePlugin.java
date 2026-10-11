@@ -34,6 +34,24 @@ public final class NativeVoicePlugin extends Plugin {
     @PluginMethod public void setConnection(PluginCall call) { run("setConnection", call, false); }
     @PluginMethod public void disconnect(PluginCall call) { run("disconnect", call, false); }
     @PluginMethod public void getState(PluginCall call) { run("getState", call, false); }
+    /** Diagnostic controls are local to this device and remain available after disconnect. */
+    @PluginMethod public void setDiagnosticsEnabled(PluginCall call) {
+        try {
+            NativeVoiceJson.keys(call.getData(), "enabled");
+            runtime.setDiagnosticsEnabled(NativeVoiceJson.bool(call.getData(), "enabled"));
+            call.resolve();
+        } catch (Exception error) { call.reject("Invalid voice diagnostics request.", "invalid_diagnostics_request"); }
+    }
+    @PluginMethod public void readDiagnostics(PluginCall call) {
+        try {
+            NativeVoiceJson.keys(call.getData());
+            call.resolve(new JSObject(runtime.readDiagnostics().toString()));
+        } catch (Exception error) { call.reject("Voice diagnostics unavailable.", "voice_diagnostics_unavailable"); }
+    }
+    @PluginMethod public void clearDiagnostics(PluginCall call) {
+        try { NativeVoiceJson.keys(call.getData()); runtime.clearDiagnostics(); call.resolve(); }
+        catch (Exception error) { call.reject("Voice diagnostics unavailable.", "voice_diagnostics_unavailable"); }
+    }
     @PluginMethod public void listInputDevices(PluginCall call) { run("listInputDevices", call, false); }
     @PluginMethod public void setForegroundContext(PluginCall call) { run("setForegroundContext", call, false); }
     @PluginMethod public void setNextRecordingTarget(PluginCall call) { run("setNextRecordingTarget", call, true); }

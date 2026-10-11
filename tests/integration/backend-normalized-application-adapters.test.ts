@@ -3154,7 +3154,7 @@ describe("nonblocking question notifications", () => {
       });
       const observer = new NotificationLifecycleObserver(
         new InventoryRepository(current.database),
-        (scope, payload, key, result) => service.emit(scope, payload, key, result),
+        (scope, payload, key, provenance, result) => service.emit(scope, payload, key, provenance, result),
       );
       const request = {
         id: "application-question",
@@ -3347,7 +3347,7 @@ describe("passive lifecycle notification sources", () => {
       });
       const observer = new NotificationLifecycleObserver(
         new InventoryRepository(current.database),
-        (scope, payload, key, result) => service.emit(scope, payload, key, result),
+        (scope, payload, key, provenance, result) => service.emit(scope, payload, key, provenance, result),
       );
       const broker = new InteractionBroker({
         onOpened: (scope, interaction) =>
@@ -3465,7 +3465,7 @@ describe("passive lifecycle notification sources", () => {
             createAttention: true,
           },
         );
-        observer.completion(current.scope, partial);
+        observer.completion(current.scope, partial, "live");
         expect(emit).not.toHaveBeenCalled();
         const input = {
           backendCorrelation: "private-correlation",
@@ -3481,7 +3481,7 @@ describe("passive lifecycle notification sources", () => {
           current.threadId,
           input,
         )!;
-        observer.completion(current.scope, finalized);
+        observer.completion(current.scope, finalized, "live");
         completion.acknowledgeThrough(
           current.scope,
           current.threadId,
@@ -3494,7 +3494,7 @@ describe("passive lifecycle notification sources", () => {
             current.scope,
             current.threadId,
             input,
-          )!,
+          )!, "live",
         );
         completion.recordAccepted(current.scope, current.threadId, {
           operationId: "steered-operation",
@@ -3506,7 +3506,7 @@ describe("passive lifecycle notification sources", () => {
           completion.observeBackendCompletion(current.scope, current.threadId, {
             ...input,
             backendCorrelation: "private-steer",
-          })!,
+          })!, "live",
         );
         expect(emit).toHaveBeenCalledTimes(3);
         expect(new Set(emit.mock.calls.map((call) => call[2])).size).toBe(1);
@@ -3518,13 +3518,13 @@ describe("passive lifecycle notification sources", () => {
           turn: { id: "normalized-turn", outcome },
         });
         expect(JSON.stringify(emit.mock.calls)).not.toContain("private-");
-        expect(emit.mock.calls[0]![3]).toEqual(input.classifiedResult);
+        expect(emit.mock.calls[0]![4]).toEqual(input.classifiedResult);
         expect(JSON.stringify(emit.mock.calls.map((call) => call[1]))).not.toContain(
           "Private assistant transcript",
         );
         observer.completion(
           { ...current.scope, principalId: "other" },
-          finalized,
+          finalized, "live",
         );
         expect(emit).toHaveBeenCalledTimes(3);
         expect(

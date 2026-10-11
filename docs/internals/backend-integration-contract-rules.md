@@ -2231,6 +2231,41 @@ Passive external notifications consume finalized observations on this same rail,
 including enrichment after recovery first records an incomplete observation.
 Pi, Codex, Claude, Grok and OpenCode use this normalized path; none adds a private
 notification callback or exposes provider identifiers in a script payload.
+Each authoritative publication carries required `live` or `recovered`
+provenance. Initial history and replacement actors publish recovered completion;
+an existing actor can recognize a newly terminal live event or an in-place
+active-to-terminal change while observation remains continuous. Sequence gaps
+fence new live classification until a fresh baseline
+covers the gap, including gaps arriving during baseline capture. Coherent
+projection refreshes retain live transition detection. Repeated terminal
+metadata must not create a fresh live transition. The actor retains a bounded
+identity/evidence map so delayed submission acceptance can reuse the original
+live observation without making all later snapshot completions live. Providers
+delivering retained events mark recovered terminal evidence, including affected
+turn IDs on replacement projections; recovered evidence must survive projection
+retry. These annotations are server-private and never enter browser events.
+Pi and Grok do not recover a lost provider stream inside a handle. Codex and
+OpenCode declare that loss with `sequence_gap`; Claude marks retained messages
+per turn because its carrier can reconnect inside the same live handle. Claude
+also marks a received message recovered when its application was still queued
+when that carrier was lost. This deliberately favors missing an automatic
+announcement over applying old queued output as fresh after reconnect; durable
+completion processing remains unchanged.
+Unmarked events do not by themselves establish live provenance. Journal overflow
+is a coherent refresh; an explicit resnapshot reason takes precedence over the
+sequence number of the resnapshot notice.
+
+Provenance limits automatic voice only. Recovery still commits authoritative
+completion, settles queues and automation, freezes replies, and invokes
+configured scripts. Notification consumption remains shared and precedes the
+voice gate, so a recovered event is not spoken if a duplicate later arrives
+live. Completion voice uses only current same-principal application streams
+that subscribed before the first live completion observation. A captured
+subscriber sequence watermark survives delayed acceptance and excludes streams
+joining during observer or settlement waits. Voice never persists or replays
+offline notices. Do not infer freshness from an event
+timestamp or add a voice age cutoff. Explicit reply playback remains available.
+
 Successful-turn notifications may opt into a separate immutable classified
 assistant-result snapshot captured alongside the callback aggregate. Keep the
 aggregate callback contract unchanged. Backend assistant items may carry

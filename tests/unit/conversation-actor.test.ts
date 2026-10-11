@@ -221,6 +221,7 @@ class FakeHandle {
     },
   );
   readonly establishmentSnapshots: BackendConversationSnapshot[] = [snapshot()];
+  readonly establishmentRecoveredCompletionTurnIds: Array<readonly string[] | undefined> = [];
   readonly establishmentHistories: EstablishedBackendProjection["history"][] = [
     { operational: true },
   ];
@@ -261,6 +262,9 @@ class FakeHandle {
     return {
       handleSequence: -1,
       snapshot: selected,
+      ...(this.establishmentRecoveredCompletionTurnIds[index]
+        ? { recoveredCompletionTurnIds: this.establishmentRecoveredCompletionTurnIds[index] }
+        : {}),
       history:
         this.establishmentHistories[index] ??
         this.establishmentHistories.at(-1)!,
@@ -300,6 +304,7 @@ function fixture(
   deliveryInputSnapshots?: DeliveryInputSnapshotRepository,
   runtimeBudget = 8,
   onLiveProgress?: LiveProgressObserver,
+  captureCompletionVoiceSubscriberWatermark?: () => number,
 ) {
   const closeOrder: string[] = [];
   const handle = new FakeHandle(closeOrder);
@@ -364,6 +369,7 @@ function fixture(
     ...(onAuthoritativeCompletion ? { onAuthoritativeCompletion } : {}),
     ...(onAuthoritativeSubmission ? { onAuthoritativeSubmission } : {}),
     ...(onLiveProgress ? { onLiveProgress } : {}),
+    ...(captureCompletionVoiceSubscriberWatermark ? { captureCompletionVoiceSubscriberWatermark } : {}),
   });
   const manager = {
     acquire: (
@@ -5312,6 +5318,617 @@ describe("ConversationActorManager", () => {
     await manager.close();
   });
 
+  it("classifies initial, subscriber, and explicit snapshot completion replays as recovered", async () => {
+    const observed = vi.fn<AuthoritativeCompletionObserver>();
+    const captureWatermark = vi.fn(() => 10);
+    const { driver, handle, manager } = fixture(observed, undefined, 10, undefined, 8, undefined, captureWatermark);
+    const terminal = snapshot();
+    terminal.turnsById["turn-1"] = {
+      ...terminal.turnsById["turn-1"]!,
+      completionCorrelations: ["accepted-operation"],
+    };
+    handle.establishmentSnapshots[0] = terminal;
+    const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+    await vi.waitFor(() => expect(observed).toHaveBeenCalledTimes(1));
+    expect(observed.mock.calls[0]?.[2].provenance).toBe("recovered");
+
+    const completions: ConversationActorEvent[] = [];
+    acquired.actor.subscribe((event) => {
+      if (event.type === "authoritative_completion") completions.push(event);
+    });
+    expect(completions).toEqual([expect.objectContaining({ provenance: "recovered" })]);
+    expect(observed).toHaveBeenCalledTimes(1);
+
+    await acquired.actor.replayAuthoritativeCompletions();
+    await vi.waitFor(() => expect(observed).toHaveBeenCalledTimes(2));
+    expect(observed.mock.calls[1]?.[2].provenance).toBe("recovered");
+    expect(completions).toHaveLength(2);
+    expect(captureWatermark).not.toHaveBeenCalled();
+    expect(observed.mock.calls.every((call) => call[2].voiceSubscriberWatermark === undefined)).toBe(true);
+    acquired.release();
+    await manager.close();
+  });
+
+  it("retains live completion provenance and its first audience watermark when acceptance arrives before replay", async () => {
+    let accepted = false;
+    const matched: Parameters<AuthoritativeCompletionObserver>[2][] = [];
+    const observed = vi.fn<AuthoritativeCompletionObserver>((_scope, _threadId, completion) => {
+      if (accepted) matched.push(completion);
+    });
+    const captureWatermark = vi.fn(() => 10);
+    const { driver, handle, manager } = fixture(observed, undefined, 10, undefined, 8, undefined, captureWatermark);
+    handle.establishmentSnapshots[0] = { orderedBackendTurnIds: [], turnsById: {}, itemsById: {}, runState: "idle" };
+    const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+    handle.emit(0, { type: "turn_started", turn: {
+      backendTurnId: "turn-1", status: "in_progress", orderedBackendItemIds: [],
+      completionCorrelations: ["accepted-operation"],
+    } }, 0);
+    handle.emit(0, { type: "turn_completed", turn: {
+      backendTurnId: "turn-1", status: "completed", endedBy: "agent_settled", orderedBackendItemIds: [],
+      completionCorrelations: ["accepted-operation"],
+    } }, 1);
+    await vi.waitFor(() => expect(observed).toHaveBeenCalledTimes(1));
+    expect(observed.mock.calls[0]?.[2].provenance).toBe("live");
+    expect(observed.mock.calls[0]?.[2].voiceSubscriberWatermark).toBe(10);
+    expect(captureWatermark).toHaveBeenCalledTimes(1);
+    expect(matched).toEqual([]);
+
+    accepted = true;
+    captureWatermark.mockReturnValue(20);
+    await acquired.actor.replayAuthoritativeCompletions();
+    await vi.waitFor(() => expect(matched).toEqual([expect.objectContaining({ provenance: "live", voiceSubscriberWatermark: 10 })]));
+    const subscribed: ConversationActorEvent[] = [];
+    acquired.actor.subscribe((event) => {
+      if (event.type === "authoritative_completion") subscribed.push(event);
+    });
+    expect(subscribed).toEqual([expect.objectContaining({ provenance: "live" })]);
+    // Re-announcing this terminal turn retains the identity's earlier observation.
+    handle.emit(0, { type: "turn_completed", turn: {
+      backendTurnId: "turn-1", status: "completed", endedBy: "agent_settled", orderedBackendItemIds: [],
+      completionCorrelations: ["accepted-operation"],
+    } }, 2);
+    await vi.waitFor(() => expect(observed).toHaveBeenCalledTimes(3));
+    expect(observed.mock.calls[2]?.[2].provenance).toBe("live");
+    expect(observed.mock.calls[2]?.[2].voiceSubscriberWatermark).toBe(10);
+    expect(captureWatermark).toHaveBeenCalledTimes(1);
+    acquired.release();
+    await manager.close();
+  });
+
+  it.each([
+    { existing: false, provenance: "live" },
+    { existing: true, provenance: "recovered" },
+  ] as const)("classifies terminal live-rail events with existing terminal=$existing as $provenance", async ({ existing, provenance }) => {
+    const observed = vi.fn<AuthoritativeCompletionObserver>();
+    const { driver, handle, manager } = fixture(observed);
+    handle.establishmentSnapshots[0] = existing
+      ? snapshot()
+      : { orderedBackendTurnIds: [], turnsById: {}, itemsById: {}, runState: "idle" };
+    const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+    handle.emit(0, { type: "turn_completed", turn: {
+      backendTurnId: "turn-1", status: "completed", endedBy: "agent_settled",
+      orderedBackendItemIds: existing ? ["item-1"] : [], completionCorrelations: ["accepted-operation"],
+    } });
+    await vi.waitFor(() => expect(observed).toHaveBeenCalledTimes(1));
+    expect(observed.mock.calls[0]?.[2].provenance).toBe(provenance);
+    await acquired.actor.replayAuthoritativeCompletions();
+    await vi.waitFor(() => expect(observed).toHaveBeenCalledTimes(2));
+    expect(observed.mock.calls[1]?.[2].provenance).toBe(provenance);
+    acquired.release();
+    await manager.close();
+  });
+
+  it.each([
+    { prior: "running", provenance: "live" },
+    { prior: "idle", provenance: "recovered" },
+    { prior: "absent", provenance: "recovered" },
+  ] as const)("classifies in-place replacement completions from $prior as $provenance", async ({ prior, provenance }) => {
+    const observed = vi.fn<AuthoritativeCompletionObserver>();
+    const { driver, handle, manager } = fixture(observed);
+    handle.establishmentSnapshots[0] = prior === "absent"
+      ? { orderedBackendTurnIds: [], turnsById: {}, itemsById: {}, runState: "idle" }
+      : snapshot(prior);
+    const terminal = snapshot();
+    terminal.turnsById["turn-1"] = {
+      ...terminal.turnsById["turn-1"]!, completionCorrelations: ["accepted-operation"],
+    };
+    handle.establishmentSnapshots.push(terminal);
+    const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+    handle.emit(0, { type: "resnapshot_required", reason: "contradictory_state" });
+    await vi.waitFor(() => expect(observed).toHaveBeenCalledTimes(1));
+    expect(observed.mock.calls[0]?.[2].provenance).toBe(provenance);
+    await acquired.actor.replayAuthoritativeCompletions();
+    await vi.waitFor(() => expect(observed).toHaveBeenCalledTimes(2));
+    expect(observed.mock.calls[1]?.[2].provenance).toBe(provenance);
+    acquired.release();
+    await manager.close();
+  });
+
+  it("does not carry live completion provenance into a replacement actor", async () => {
+    const observed = vi.fn<AuthoritativeCompletionObserver>();
+    const { closeOrder, driver, handle, manager } = fixture(observed);
+    handle.establishmentSnapshots[0] = snapshot("running");
+    const input = { scope, binding, workspace, opaqueBindingDetail: "opaque", driver };
+    const first = await manager.acquire(input);
+    const terminal = snapshot();
+    terminal.turnsById["turn-1"] = {
+      ...terminal.turnsById["turn-1"]!, completionCorrelations: ["accepted-operation"],
+    };
+    handle.emit(0, { type: "turn_completed", turn: terminal.turnsById["turn-1"]! });
+    await vi.waitFor(() => expect(observed).toHaveBeenCalledTimes(1));
+    expect(observed.mock.calls[0]?.[2].provenance).toBe("live");
+    const replacementHandle = new FakeHandle(closeOrder);
+    replacementHandle.establishmentSnapshots[0] = terminal;
+    vi.mocked(driver.attach).mockResolvedValueOnce(replacementHandle as unknown as ConversationHandle);
+    handle.emit(0, { type: "resnapshot_required", reason: "provider_handle_closed" }, 1);
+    await vi.waitFor(() => expect(first.actor.replacementRequired).toBe(true));
+    const second = await manager.acquire(input);
+    expect(second.actor).not.toBe(first.actor);
+    await vi.waitFor(() => expect(observed).toHaveBeenCalledTimes(2));
+    expect(observed.mock.calls[1]?.[2].provenance).toBe("recovered");
+    first.release();
+    second.release();
+    await manager.close();
+  });
+
+  it.each([false, true])("preserves explicit recovered completion evidence across sequence gap=%s", async (sequenceGap) => {
+    const observed = vi.fn<AuthoritativeCompletionObserver>();
+    const { driver, handle, manager } = fixture(observed);
+    handle.establishmentSnapshots[0] = snapshot("running");
+    const terminal = snapshot();
+    terminal.turnsById["turn-1"] = {
+      ...terminal.turnsById["turn-1"]!, completionCorrelations: ["accepted-operation"],
+    };
+    handle.establishmentSnapshots.push(terminal);
+    const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+    handle.emit(0, {
+      type: "turn_completed", turn: terminal.turnsById["turn-1"]!, completionProvenance: "recovered",
+    }, sequenceGap ? 1 : 0);
+    await vi.waitFor(() => expect(observed).toHaveBeenCalledTimes(1));
+    expect(observed.mock.calls[0]?.[2].provenance).toBe("recovered");
+    await acquired.actor.replayAuthoritativeCompletions();
+    await vi.waitFor(() => expect(observed).toHaveBeenCalledTimes(2));
+    expect(observed.mock.calls[1]?.[2].provenance).toBe("recovered");
+    acquired.release();
+    await manager.close();
+  });
+
+  it("keeps per-turn recovery evidence separate from live transitions in the same replacement snapshot", async () => {
+    const observed = vi.fn<AuthoritativeCompletionObserver>();
+    const { driver, handle, manager } = fixture(observed);
+    handle.establishmentSnapshots[0] = {
+      orderedBackendTurnIds: ["recovered-turn", "live-turn"],
+      turnsById: Object.fromEntries(["recovered-turn", "live-turn"].map((backendTurnId) => [backendTurnId, {
+        backendTurnId, status: "in_progress" as const, orderedBackendItemIds: [],
+        completionCorrelations: [`${backendTurnId}-operation`],
+      }])),
+      itemsById: {}, runState: "running", activeBackendTurnId: "live-turn",
+    };
+    handle.establishmentSnapshots.push({
+      orderedBackendTurnIds: ["recovered-turn", "live-turn"],
+      turnsById: Object.fromEntries(["recovered-turn", "live-turn"].map((backendTurnId) => [backendTurnId, {
+        backendTurnId, status: "completed" as const, endedBy: "agent_settled" as const, orderedBackendItemIds: [],
+        completionCorrelations: [`${backendTurnId}-operation`],
+      }])),
+      itemsById: {}, runState: "idle",
+    });
+    handle.establishmentRecoveredCompletionTurnIds[1] = ["recovered-turn"];
+    const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+    handle.emit(0, { type: "resnapshot_required", reason: "contradictory_state" });
+    await vi.waitFor(() => expect(observed).toHaveBeenCalledTimes(2));
+    expect(observed.mock.calls.map((call) => [call[2].backendTurnId, call[2].provenance])).toEqual([
+      ["recovered-turn", "recovered"], ["live-turn", "live"],
+    ]);
+    acquired.release();
+    await manager.close();
+  });
+
+  it("retains recovered completion evidence when projection recovery fails before a later retry", async () => {
+    const observed = vi.fn<AuthoritativeCompletionObserver>();
+    const { driver, handle, manager } = fixture(observed);
+    handle.establishmentSnapshots[0] = snapshot("running");
+    const terminal = snapshot();
+    terminal.turnsById["turn-1"] = {
+      ...terminal.turnsById["turn-1"]!, completionCorrelations: ["accepted-operation"],
+    };
+    handle.establishmentSnapshots.push(terminal);
+    const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+    vi.spyOn(handle, "establishProjection")
+      .mockRejectedValueOnce(new Error("recovery-unavailable-1"))
+      .mockRejectedValueOnce(new Error("recovery-unavailable-2"))
+      .mockRejectedValueOnce(new Error("recovery-unavailable-3"));
+    handle.emit(0, {
+      type: "turn_completed", turn: terminal.turnsById["turn-1"]!, completionProvenance: "recovered",
+    }, 1);
+    await vi.waitFor(() => expect(acquired.actor.projectionRecoveryRequired).toBe(true));
+    expect(observed).not.toHaveBeenCalled();
+    await acquired.actor.ensureProjectionCurrent();
+    await vi.waitFor(() => expect(observed).toHaveBeenCalledTimes(1));
+    expect(observed.mock.calls[0]?.[2].provenance).toBe("recovered");
+    acquired.release();
+    await manager.close();
+  });
+
+  it.each(["sequence_gap", "backend_sequence_gap", "sequenced_sequence_gap", "backend_turn_identity_changed"] as const)(
+    "recovers completions across %s and restores live observation after the baseline",
+    async (gap) => {
+      const observed = vi.fn<AuthoritativeCompletionObserver>();
+      const { driver, handle, manager } = fixture(observed);
+      handle.establishmentSnapshots[0] = snapshot("running");
+      const terminal = snapshot();
+      terminal.turnsById["turn-1"] = {
+        ...terminal.turnsById["turn-1"]!, completionCorrelations: ["recovered-operation"],
+      };
+      handle.establishmentSnapshots.push(terminal);
+      const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+      if (gap === "backend_sequence_gap") {
+        handle.emit(0, { type: "turn_completed", turn: terminal.turnsById["turn-1"]! }, 1);
+      } else if (gap === "backend_turn_identity_changed") {
+        handle.emit(0, {
+          type: "turn_completed", turn: { ...terminal.turnsById["turn-1"]!, orderedBackendItemIds: [] },
+        });
+      } else if (gap === "sequenced_sequence_gap") {
+        handle.establishmentListeners[0]!({
+          handleSequence: 0, event: { type: "resnapshot_required", reason: "sequence_gap" },
+        });
+      } else {
+        handle.emit(0, { type: "resnapshot_required", reason: gap });
+      }
+      await vi.waitFor(() => expect(observed).toHaveBeenCalledTimes(1));
+      expect(observed.mock.calls[0]?.[2]).toMatchObject({ backendTurnId: "turn-1", provenance: "recovered" });
+
+      handle.emit(1, { type: "turn_started", turn: {
+        backendTurnId: "turn-2", status: "in_progress", orderedBackendItemIds: [],
+        completionCorrelations: ["live-operation"],
+      } }, 0);
+      handle.emit(1, { type: "turn_completed", turn: {
+        backendTurnId: "turn-2", status: "completed", endedBy: "agent_settled", orderedBackendItemIds: [],
+        completionCorrelations: ["live-operation"],
+      } }, 1);
+      await vi.waitFor(() => expect(observed).toHaveBeenCalledTimes(2));
+      expect(observed.mock.calls[1]?.[2]).toMatchObject({ backendTurnId: "turn-2", provenance: "live" });
+      acquired.release();
+      await manager.close();
+    },
+  );
+
+  it.each(["history_changed", "contradictory_state", "buffer_overflow", "persistence_pending", "ambiguous_correlation"] as const)(
+    "preserves live completion transitions across a coherent %s refresh",
+    async (reason) => {
+      const observed = vi.fn<AuthoritativeCompletionObserver>();
+      const { driver, handle, manager } = fixture(observed);
+      handle.establishmentSnapshots[0] = snapshot("running");
+      const terminal = snapshot();
+      terminal.turnsById["turn-1"] = {
+        ...terminal.turnsById["turn-1"]!, completionCorrelations: ["live-operation"],
+      };
+      handle.establishmentSnapshots.push(terminal);
+      const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+      // A bounded journal may report a rebuild without the next sequence.
+      // Preserve that explicit coherent cause rather than inventing a gap.
+      handle.emit(0, { type: "resnapshot_required", reason }, 9);
+      await vi.waitFor(() => expect(observed).toHaveBeenCalledTimes(1));
+      expect(observed.mock.calls[0]?.[2].provenance).toBe("live");
+      acquired.release();
+      await manager.close();
+    },
+  );
+
+  it("does not seed a new live completion when retrying after failed projection recovery", async () => {
+    const observed = vi.fn<AuthoritativeCompletionObserver>();
+    const { driver, handle, manager } = fixture(observed);
+    handle.establishmentSnapshots[0] = snapshot("running");
+    const terminal = snapshot();
+    terminal.turnsById["turn-1"] = {
+      ...terminal.turnsById["turn-1"]!, completionCorrelations: ["recovered-operation"],
+    };
+    handle.establishmentSnapshots.push(terminal);
+    const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+    vi.spyOn(handle, "establishProjection")
+      .mockRejectedValueOnce(new Error("recovery-unavailable-1"))
+      .mockRejectedValueOnce(new Error("recovery-unavailable-2"))
+      .mockRejectedValueOnce(new Error("recovery-unavailable-3"));
+    handle.emit(0, { type: "resnapshot_required", reason: "history_changed" });
+    await vi.waitFor(() => expect(acquired.actor.projectionRecoveryRequired).toBe(true));
+    expect(observed).not.toHaveBeenCalled();
+    await acquired.actor.ensureProjectionCurrent();
+    await vi.waitFor(() => expect(observed).toHaveBeenCalledTimes(1));
+    expect(observed.mock.calls[0]?.[2].provenance).toBe("recovered");
+    acquired.release();
+    await manager.close();
+  });
+
+  it.each(["capture", "usage"] as const)(
+    "automatically covers a raw observation gap arriving during awaited %s before later live turns",
+    async (phase) => {
+      const observed = vi.fn<AuthoritativeCompletionObserver>();
+      const { driver, handle, manager } = fixture(observed);
+      handle.establishmentSnapshots[0] = snapshot("running");
+      const terminal = snapshot();
+      terminal.turnsById["turn-1"] = {
+        ...terminal.turnsById["turn-1"]!, completionCorrelations: ["recovered-operation"],
+      };
+      handle.establishmentSnapshots.push(terminal, terminal);
+      const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+      let release!: () => void;
+      const blocked = new Promise<void>((resolve) => { release = resolve; });
+      let reached!: () => void;
+      const waiting = new Promise<void>((resolve) => { reached = resolve; });
+      if (phase === "capture") {
+        const establish = handle.establishProjection.bind(handle);
+        vi.spyOn(handle, "establishProjection").mockImplementationOnce(async (input) => {
+          const result = await establish(input);
+          reached();
+          await blocked;
+          return result;
+        });
+      } else {
+        handle.usage.mockImplementationOnce(async () => {
+          reached();
+          await blocked;
+          return {};
+        });
+      }
+      handle.emit(0, { type: "resnapshot_required", reason: "history_changed" }, 0);
+      await waiting;
+      // The old sequenced subscription is detached; only the raw rail sees this gap.
+      handle.emit(0, { type: "resnapshot_required", reason: "sequence_gap" }, 1);
+      release();
+      await vi.waitFor(() => expect(observed).toHaveBeenCalledTimes(2));
+      expect(observed.mock.calls.map((call) => call[2].provenance)).toEqual(["recovered", "recovered"]);
+      expect(handle.establishCount).toBe(3);
+      handle.emit(2, { type: "turn_completed", turn: {
+        backendTurnId: "turn-2", status: "completed", endedBy: "agent_settled", orderedBackendItemIds: [],
+        completionCorrelations: ["live-operation"],
+      } }, 0);
+      await vi.waitFor(() => expect(observed).toHaveBeenCalledTimes(3));
+      expect(observed.mock.calls[2]?.[2]).toMatchObject({ backendTurnId: "turn-2", provenance: "live" });
+      acquired.release();
+      await manager.close();
+    },
+  );
+
+  it.each([
+    { completionFirst: true, provenance: "live" },
+    { completionFirst: false, provenance: "recovered" },
+  ] as const)("preserves receipt ordering with a blocked mailbox when completionFirst=$completionFirst", async ({ completionFirst, provenance }) => {
+    const observed = vi.fn<AuthoritativeCompletionObserver>();
+    const { driver, handle, manager } = fixture(observed);
+    handle.establishmentSnapshots[0] = snapshot("running");
+    const terminal = snapshot();
+    terminal.turnsById["turn-1"] = {
+      ...terminal.turnsById["turn-1"]!, completionCorrelations: ["accepted-operation"],
+    };
+    handle.establishmentSnapshots.push(terminal);
+    const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => { release = resolve; });
+    let reached!: () => void;
+    const waiting = new Promise<void>((resolve) => { reached = resolve; });
+    handle.usage.mockImplementationOnce(async () => { reached(); await blocked; return {}; });
+    const reading = acquired.actor.usage();
+    await waiting;
+    if (completionFirst) {
+      handle.emit(0, { type: "turn_completed", turn: terminal.turnsById["turn-1"]! }, 0);
+      handle.emit(0, { type: "resnapshot_required", reason: "sequence_gap" }, 1);
+    } else {
+      handle.emit(0, { type: "resnapshot_required", reason: "sequence_gap" }, 0);
+      handle.emit(0, { type: "turn_completed", turn: terminal.turnsById["turn-1"]! }, 1);
+    }
+    release();
+    await reading;
+    const expectedPublications = completionFirst ? 2 : 1;
+    await vi.waitFor(() => expect(observed).toHaveBeenCalledTimes(expectedPublications));
+    await acquired.actor.replayAuthoritativeCompletions();
+    await vi.waitFor(() => expect(observed).toHaveBeenCalledTimes(expectedPublications + 1));
+    expect(observed.mock.calls.every((call) => call[2].provenance === provenance)).toBe(true);
+    acquired.release();
+    await manager.close();
+  });
+
+  it("bounds automatic captures without failing a current projection and restores live observation on natural refresh", async () => {
+    const observed = vi.fn<AuthoritativeCompletionObserver>();
+    const { driver, handle, manager } = fixture(observed);
+    handle.establishmentSnapshots[0] = snapshot("running");
+    const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+    const notices: ConversationActorEvent[] = [];
+    acquired.actor.subscribe((event) => {
+      if (event.type === "backend_event" && event.event.type === "notice") notices.push(event);
+    });
+    const establish = handle.establishProjection.bind(handle);
+    const replacement = vi.spyOn(handle, "establishProjection").mockImplementation(async (input) => {
+      const result = await establish(input);
+      for (const listener of handle.rawListeners) listener({ type: "resnapshot_required", reason: "sequence_gap" });
+      return result;
+    });
+    handle.emit(0, { type: "resnapshot_required", reason: "history_changed" });
+    await vi.waitFor(() => expect(replacement).toHaveBeenCalledTimes(2));
+    // A successful projection stays usable while voice observation is fenced.
+    await acquired.actor.usage();
+    expect(replacement).toHaveBeenCalledTimes(2);
+    expect(acquired.actor.projectionRecoveryRequired).toBe(false);
+    expect(notices).toEqual([]);
+
+    const terminal = snapshot();
+    terminal.turnsById["turn-1"] = {
+      ...terminal.turnsById["turn-1"]!, completionCorrelations: ["recovered-operation"],
+    };
+    handle.emit(2, { type: "turn_completed", turn: terminal.turnsById["turn-1"]! }, 0);
+    await vi.waitFor(() => expect(observed).toHaveBeenCalledTimes(1));
+    expect(observed.mock.calls[0]?.[2].provenance).toBe("recovered");
+
+    replacement.mockRestore();
+    handle.establishmentSnapshots[3] = terminal;
+    handle.emit(2, { type: "resnapshot_required", reason: "history_changed" }, 1);
+    await vi.waitFor(() => expect(observed).toHaveBeenCalledTimes(2));
+    expect(handle.establishCount).toBe(4);
+    handle.emit(3, { type: "turn_completed", turn: {
+      backendTurnId: "turn-2", status: "completed", endedBy: "agent_settled", orderedBackendItemIds: [],
+      completionCorrelations: ["live-operation"],
+    } }, 0);
+    await vi.waitFor(() => expect(observed).toHaveBeenCalledTimes(3));
+    expect(observed.mock.calls[2]?.[2]).toMatchObject({ backendTurnId: "turn-2", provenance: "live" });
+    expect(acquired.actor.projectionRecoveryRequired).toBe(false);
+    expect(notices).toEqual([]);
+    acquired.release();
+    await manager.close();
+  });
+
+  it("processes a completion received before a gap during establishment before the automatic replacement", async () => {
+    const observed = vi.fn<AuthoritativeCompletionObserver>();
+    const { driver, handle, manager } = fixture(observed);
+    handle.establishmentSnapshots[0] = snapshot("running");
+    const terminal = snapshot();
+    terminal.turnsById["turn-1"] = {
+      ...terminal.turnsById["turn-1"]!, completionCorrelations: ["live-operation"],
+    };
+    handle.establishmentSnapshots.push(snapshot("running"), terminal);
+    const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => { release = resolve; });
+    let reached!: () => void;
+    const waiting = new Promise<void>((resolve) => { reached = resolve; });
+    handle.usage.mockImplementationOnce(async () => { reached(); await blocked; return {}; });
+    handle.emit(0, { type: "resnapshot_required", reason: "history_changed" });
+    await waiting;
+    handle.emit(1, { type: "turn_completed", turn: terminal.turnsById["turn-1"]! }, 0);
+    handle.emit(1, { type: "resnapshot_required", reason: "sequence_gap" }, 1);
+    release();
+    await vi.waitFor(() => expect(observed).toHaveBeenCalledTimes(2));
+    expect(observed.mock.calls.map((call) => call[2].provenance)).toEqual(["live", "live"]);
+    await acquired.actor.usage();
+    expect(handle.establishCount).toBe(3);
+    acquired.release();
+    await manager.close();
+  });
+
+  it("aborts the automatic additional capture when the actor closes", async () => {
+    const { driver, handle, manager } = fixture();
+    handle.establishmentSnapshots[0] = snapshot("running");
+    const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+    const establish = handle.establishProjection.bind(handle);
+    let reached!: () => void;
+    const waiting = new Promise<void>((resolve) => { reached = resolve; });
+    let additionalSignal: AbortSignal | undefined;
+    const replacement = vi.spyOn(handle, "establishProjection")
+      .mockImplementationOnce(async (input) => {
+        const result = await establish(input);
+        for (const listener of handle.rawListeners) listener({ type: "resnapshot_required", reason: "sequence_gap" });
+        return result;
+      })
+      .mockImplementationOnce(({ signal }) => new Promise((_resolve, reject) => {
+        additionalSignal = signal;
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+        reached();
+      }));
+    handle.emit(0, { type: "resnapshot_required", reason: "history_changed" });
+    await waiting;
+    await acquired.actor.close();
+    expect(additionalSignal?.aborted).toBe(true);
+    expect(replacement).toHaveBeenCalledTimes(2);
+    acquired.release();
+    await manager.close();
+  });
+
+  it("keeps an already observed live identity live across an observation gap and acceptance replay", async () => {
+    const observed = vi.fn<AuthoritativeCompletionObserver>();
+    const { driver, handle, manager } = fixture(observed);
+    handle.establishmentSnapshots[0] = snapshot("running");
+    const terminal = snapshot();
+    terminal.turnsById["turn-1"] = {
+      ...terminal.turnsById["turn-1"]!, completionCorrelations: ["live-operation"],
+    };
+    handle.establishmentSnapshots.push(terminal);
+    const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+    handle.emit(0, { type: "turn_completed", turn: terminal.turnsById["turn-1"]! }, 0);
+    await vi.waitFor(() => expect(observed).toHaveBeenCalledTimes(1));
+    handle.emit(0, { type: "resnapshot_required", reason: "sequence_gap" }, 1);
+    await vi.waitFor(() => expect(observed).toHaveBeenCalledTimes(2));
+    await acquired.actor.replayAuthoritativeCompletions();
+    await vi.waitFor(() => expect(observed).toHaveBeenCalledTimes(3));
+    expect(observed.mock.calls.map((call) => call[2].provenance)).toEqual(["live", "live", "live"]);
+    acquired.release();
+    await manager.close();
+  });
+
+  it("inherits an earlier live completion through an explicitly recovered duplicate and replacement", async () => {
+    const observed = vi.fn<AuthoritativeCompletionObserver>();
+    const { driver, handle, manager } = fixture(observed);
+    handle.establishmentSnapshots[0] = snapshot("running");
+    const terminal = snapshot();
+    terminal.turnsById["turn-1"] = {
+      ...terminal.turnsById["turn-1"]!, completionCorrelations: ["accepted-operation"],
+    };
+    handle.establishmentSnapshots.push(terminal);
+    handle.establishmentRecoveredCompletionTurnIds[1] = ["turn-1"];
+    const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+    handle.emit(0, { type: "turn_completed", turn: terminal.turnsById["turn-1"]! }, 0);
+    await vi.waitFor(() => expect(observed).toHaveBeenCalledTimes(1));
+    handle.emit(0, {
+      type: "turn_completed", turn: terminal.turnsById["turn-1"]!, completionProvenance: "recovered",
+    }, 1);
+    handle.emit(0, { type: "resnapshot_required", reason: "contradictory_state" }, 2);
+    await vi.waitFor(() => expect(observed).toHaveBeenCalledTimes(3));
+    expect(observed.mock.calls.map((call) => call[2].provenance)).toEqual(["live", "live", "live"]);
+    acquired.release();
+    await manager.close();
+  });
+
+  it("retains 512 completion identities and audience watermarks, then evicts the oldest while preserving publications", async () => {
+    const observed = vi.fn<AuthoritativeCompletionObserver>();
+    let watermark = 0;
+    const captureWatermark = vi.fn(() => ++watermark);
+    const { driver, handle, manager } = fixture(observed, undefined, 10, undefined, 8, undefined, captureWatermark);
+    const empty: BackendConversationSnapshot = { orderedBackendTurnIds: [], turnsById: {}, itemsById: {}, runState: "idle" };
+    handle.establishmentSnapshots[0] = empty;
+    const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+    const completion = (index: number): BackendConversationEvent => ({ type: "turn_completed", turn: {
+        backendTurnId: `turn-${index}`, status: "completed", endedBy: "agent_settled", orderedBackendItemIds: [],
+        completionCorrelations: [`operation-${index}`],
+    } });
+    for (let index = 0; index < 512; index += 1) {
+      handle.emit(0, completion(index), index);
+    }
+    await vi.waitFor(() => expect(observed).toHaveBeenCalledTimes(512));
+    expect(captureWatermark).toHaveBeenCalledTimes(512);
+    handle.emit(0, completion(0), 512);
+    await vi.waitFor(() => expect(observed).toHaveBeenCalledTimes(513));
+    expect(observed.mock.calls[512]?.[2]).toMatchObject({
+      backendTurnId: "turn-0", provenance: "live", voiceSubscriberWatermark: 1,
+    });
+    expect(captureWatermark).toHaveBeenCalledTimes(512);
+
+    handle.emit(0, completion(512), 513);
+    await vi.waitFor(() => expect(observed).toHaveBeenCalledTimes(514));
+    expect(captureWatermark).toHaveBeenCalledTimes(513);
+    expect(observed.mock.calls.every((call) => call[2].provenance === "live")).toBe(true);
+    observed.mockClear();
+    await acquired.actor.replayAuthoritativeCompletions();
+    await vi.waitFor(() => expect(observed).toHaveBeenCalledTimes(513));
+    expect(observed.mock.calls[0]?.[2]).toMatchObject({ backendTurnId: "turn-0", provenance: "recovered" });
+    expect(observed.mock.calls[0]?.[2].voiceSubscriberWatermark).toBeUndefined();
+    expect(observed.mock.calls.slice(1).every((call) => call[2].provenance === "live")).toBe(true);
+    expect(observed.mock.calls.slice(1).map((call) => call[2].voiceSubscriberWatermark)).toEqual(
+      Array.from({ length: 512 }, (_, index) => index + 2),
+    );
+    expect(captureWatermark).toHaveBeenCalledTimes(513);
+
+    // A fresh live observation after the turn leaves retained history must
+    // capture again, proving the manager also evicted its oldest watermark.
+    handle.establishmentSnapshots[1] = empty;
+    handle.emit(0, { type: "resnapshot_required", reason: "history_changed" }, 514);
+    await acquired.actor.captureSnapshotState();
+    expect(handle.establishCount).toBe(2);
+    handle.emit(1, completion(0), 0);
+    await vi.waitFor(() => expect(observed).toHaveBeenCalledTimes(514));
+    expect(captureWatermark).toHaveBeenCalledTimes(514);
+    expect(observed.mock.calls[513]?.[2]).toMatchObject({
+      backendTurnId: "turn-0", provenance: "live", voiceSubscriberWatermark: 514,
+    });
+    acquired.release();
+    await manager.close();
+  });
+
   it.each([
     ["completed", "agent_settled"],
     ["interrupted", "interrupted"],
@@ -5333,6 +5950,7 @@ describe("ConversationActorManager", () => {
         backendTurnId: string;
         applicationTurnId: string;
         completionIdentity: string;
+        provenance: "live" | "recovered";
         outcome: "completed" | "interrupted" | "failed";
         result: { readonly text: string };
       }> = [];
@@ -5343,6 +5961,7 @@ describe("ConversationActorManager", () => {
             backendTurnId: event.backendTurnId,
             applicationTurnId: event.applicationTurnId,
             completionIdentity: event.completionIdentity,
+            provenance: event.provenance,
             outcome: event.outcome,
             result: event.result,
           });
@@ -5365,6 +5984,7 @@ describe("ConversationActorManager", () => {
             backendTurnId: "turn-1",
             applicationTurnId: projectedTurnId,
             completionIdentity: `turn-1:${status}`,
+            provenance: "live",
             outcome: status,
             result: { text: "a" },
           },
@@ -5453,6 +6073,7 @@ describe("ConversationActorManager", () => {
           backendTurnId: "turn-1",
           applicationTurnId: projectedTurnId,
           completionIdentity: "turn-1:completed",
+          provenance: "live",
           outcome: "completed",
           result: { text: "a" },
           classifiedResult: { provisional: null, final: null, unclassified: { text: "a" } },
@@ -5466,6 +6087,7 @@ describe("ConversationActorManager", () => {
       backendTurnId: "turn-1",
       applicationTurnId: projectedTurnId,
       completionIdentity: "turn-1:completed",
+      provenance: "live",
       outcome: "completed",
       result: { text: "a" },
       classifiedResult: { provisional: null, final: null, unclassified: { text: "a" } },
@@ -5507,6 +6129,7 @@ describe("ConversationActorManager", () => {
           backendTurnId: "turn-1",
           applicationTurnId: projectedTurnId,
           completionIdentity: "turn-1:completed",
+          provenance: "recovered",
           outcome: "completed",
           result: { text: "hello" },
           classifiedResult: { provisional: null, final: null, unclassified: { text: "hello" } },
@@ -5520,6 +6143,7 @@ describe("ConversationActorManager", () => {
       backendTurnId: "turn-1",
       applicationTurnId: projectedTurnId,
       completionIdentity: "turn-1:completed",
+      provenance: "recovered",
       outcome: "completed",
       result: { text: "hello" },
       classifiedResult: { provisional: null, final: null, unclassified: { text: "hello" } },

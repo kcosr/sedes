@@ -88,7 +88,11 @@ export interface ClaudeRuntimeSessionOptions {
     assessment: VerifiedClaudeRuntimeVersion,
   ) => void;
   readonly onVersionAssessmentFailed?: () => void;
-  readonly onMessage: (message: SDKMessage, evidence?: { readonly consumedTurnRootUuid: string }) => void | false | Promise<void | false>;
+  readonly onMessage: (message: SDKMessage, evidence?: {
+    readonly consumedTurnRootUuid?: string;
+    /** Retained delivery captured before this main-side attachment was live. */
+    readonly completionProvenance?: "recovered";
+  }) => void | false | Promise<void | false>;
   readonly onFailure?: (error: unknown) => void;
   /** A retained client attached to a newly created native query owner. */
   readonly onControlAuthorityChanged?: () => void;

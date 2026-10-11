@@ -489,7 +489,7 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
     const sessionId = randomUUID();
     const roots = new Map<string, string>();
     const remote = client.createSession(sessionOptions(sessionId, { onMessage: (message, evidence) => {
-      if (evidence && message.type === "user") roots.set(String(message.uuid), evidence.consumedTurnRootUuid);
+      if (evidence?.consumedTurnRootUuid && message.type === "user") roots.set(String(message.uuid), evidence.consumedTurnRootUuid);
     } }));
     await remote.start();
     // The owner withdraws; main sends no request of its own.
@@ -1640,7 +1640,7 @@ describe("native next over persistent replacement carriers", () => {
     const sessionId = randomUUID(); const firstId = randomUUID(); const steerId = randomUUID();
     const seen: SDKMessage[] = []; const roots: string[] = [];
     const session = f.client().createSession(sessionOptions(sessionId, { onMessage: (message, evidence) => {
-      seen.push(message); if (evidence) roots.push(evidence.consumedTurnRootUuid);
+      seen.push(message); if (evidence?.consumedTurnRootUuid) roots.push(evidence.consumedTurnRootUuid);
     } }));
     await session.start();
     await session.send({ operationId: firstId, content: "Parent input" });
@@ -1700,8 +1700,8 @@ describe("native next over persistent replacement carriers", () => {
     const f = await fixture(); const carrier = await f.attach();
     const sessionId = randomUUID();
     const first = randomUUID(), s1 = randomUUID(), s2 = randomUUID(), s3 = randomUUID(), s4 = randomUUID(), s5 = randomUUID();
-    const collect = (into: { uuid: string; root?: string }[]) => (message: SDKMessage, evidence?: { consumedTurnRootUuid: string }) => {
-      if (message.type === "user") into.push({ uuid: String(message.uuid), ...(evidence ? { root: evidence.consumedTurnRootUuid } : {}) });
+    const collect = (into: { uuid: string; root?: string }[]): ClaudeRuntimeSessionOptions["onMessage"] => (message, evidence) => {
+      if (message.type === "user") into.push({ uuid: String(message.uuid), ...(evidence?.consumedTurnRootUuid ? { root: evidence.consumedTurnRootUuid } : {}) });
     };
     const seen: { uuid: string; root?: string }[] = [];
     const session = f.client().createSession(sessionOptions(sessionId, { onMessage: collect(seen) }));
@@ -1786,7 +1786,7 @@ describe("native next over persistent replacement carriers", () => {
     await carrier.close(); await f.attach();
     const restoredSeen: SDKMessage[] = []; const consumedRoots: string[] = [];
     const restored = f.client().createSession(sessionOptions(sessionId, { launch: "resume", onMessage: (message, evidence) => {
-      restoredSeen.push(message); if (evidence) consumedRoots.push(evidence.consumedTurnRootUuid);
+      restoredSeen.push(message); if (evidence?.consumedTurnRootUuid) consumedRoots.push(evidence.consumedTurnRootUuid);
     } }));
     await restored.start();
     await restored.send({ operationId: steerId, content: "Correction", priority: "next" });

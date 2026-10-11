@@ -15,6 +15,7 @@ import type { ActivityDetailMode } from "../../shared/protocol/conversation.js";
 
 const seekOnSubmitKey = "sedes-seek-on-submit";
 const diagnosticCategoryKeys = {
+  voice: "sedes-diagnostics-voice",
   composer_input: "sedes-diagnostics-composer-input",
   seek: "sedes-diagnostics-seek",
   streaming: "sedes-diagnostics-streaming",

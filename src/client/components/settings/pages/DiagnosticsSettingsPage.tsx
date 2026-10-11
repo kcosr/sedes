@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { SEDES_VERSION } from "../../../../shared/version.js";
 import {
-  clearDiagnostics,
+  clearCopyDiagnostics,
   copyDiagnostics,
   readDiagnostics,
 } from "../../../app/diagnostics.js";
@@ -10,6 +10,7 @@ import {
   setDiagnosticCategoryEnabled,
   subscribeDiagnosticCategoryEnabled,
 } from "../../../app/settings.js";
+import { hasNativeVoice } from "../../../voice/native-voice-plugin.js";
 import type { ApplicationClientStore } from "../../../stores/ApplicationClientStore.js";
 import { Button } from "@client/components/ui/button";
 import { KeyValueList } from "@client/components/ui/key-value-list";
@@ -25,6 +26,12 @@ const CATEGORIES: ReadonlyArray<{
   readonly label: string;
   readonly description: string;
 }> = [
+  {
+    category: "voice",
+    id: "voice-diagnostics",
+    label: "Voice diagnostics",
+    description: "Record native notification receipt, queue decisions, playback timing, and connection changes without speech text or thread titles. Copy log includes up to 512 native entries, including after disconnect.",
+  },
   {
     category: "composer_input",
     id: "composer-input-diagnostics",
@@ -62,13 +69,14 @@ export function DiagnosticsSettingsPage({
 }): React.JSX.Element {
   const [status, setStatus] = useState("");
   const count = readDiagnostics().length;
+  const nativeVoice = hasNativeVoice();
   return (
     <SettingsPage
       title="Diagnostics"
-      description="Record a bounded trace in this browser, reproduce an issue, then copy it into a bug report."
+      description="Record a bounded trace on this device, reproduce an issue, then copy it into a bug report."
     >
       <SettingsSection title="Recording" card>
-        {CATEGORIES.map((entry) => (
+        {CATEGORIES.filter((entry) => entry.category !== "voice" || nativeVoice).map((entry) => (
           <DiagnosticCategorySwitch
             key={entry.category}
             {...entry}
@@ -79,16 +87,19 @@ export function DiagnosticsSettingsPage({
       <SettingsSection title="Log" card>
         <SettingsActionRow
           title="Diagnostics buffer"
-          description="Clear the shared browser-local buffer, reproduce the issue, then copy it here. It retains at most 1,200 entries."
+          description={nativeVoice
+            ? "Clear the copy buffers, reproduce the issue, then copy them here. They retain up to 1,200 browser entries and 512 native voice entries."
+            : "Clear the shared browser-local buffer, reproduce the issue, then copy it here. It retains at most 1,200 entries."}
           actions={
             <>
               <Button
                 type="button"
                 variant="outline"
-                disabled={count === 0}
+                disabled={count === 0 && !nativeVoice}
                 onClick={() => {
-                  clearDiagnostics();
-                  setStatus("Copy buffer cleared.");
+                  void clearCopyDiagnostics()
+                    .then(() => setStatus("Copy buffer cleared."))
+                    .catch(() => setStatus("Native buffer could not be cleared. Try again."));
                 }}
               >
                 Clear copy buffer
@@ -96,14 +107,14 @@ export function DiagnosticsSettingsPage({
               <Button
                 type="button"
                 variant="outline"
-                disabled={count === 0}
+                disabled={count === 0 && !nativeVoice}
                 onClick={() => {
                   void copyDiagnostics()
                     .then(() => setStatus("Log copied."))
                     .catch(() => setStatus("Copy failed. Try copying the log again."));
                 }}
               >
-                Copy log ({count})
+                {nativeVoice ? "Copy log" : `Copy log (${count})`}
               </Button>
             </>
           }

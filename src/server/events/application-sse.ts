@@ -1,5 +1,6 @@
 import type { Request, Response } from "express";
 import { type ApplicationEventEnvelope } from "../../shared/protocol/application.js";
+import { recordVoiceDiagnostic, type VoiceDiagnosticReason } from "../diagnostics/voice-diagnostics.js";
 import type { ApplicationEventHub } from "./application-event-hub.js";
 
 export interface ApplicationEventStreamOptions {
@@ -86,10 +87,16 @@ export async function serveApplicationEventStream(
   let subscription: ReturnType<ApplicationEventHub["subscribe"]> | undefined;
   let removeHubClose: (() => void) | undefined;
   let heartbeat: NodeJS.Timeout | undefined;
+  const startedAt = performance.now();
 
-  const cleanup = (): void => {
+  const cleanup = (reason: VoiceDiagnosticReason): void => {
     if (closed) return;
     closed = true;
+    recordVoiceDiagnostic("application_stream_closed", {
+      reason, live, durationMs: performance.now() - startedAt,
+      pendingEventCount: pending.length, pendingBytes,
+      transientEventCount: transient.length, transientBytes,
+    });
     clearInterval(heartbeat);
     drain?.finish(false);
     subscription?.close();
@@ -99,12 +106,13 @@ export async function serveApplicationEventStream(
     pendingBytes = 0;
     transient = [];
     transientBytes = 0;
-    request.removeListener("close", cleanup);
-    response.removeListener("close", cleanup);
+    request.removeListener("close", onClientClose);
+    response.removeListener("close", onClientClose);
   };
-  const close = (): void => {
+  const onClientClose = (): void => cleanup("client_closed");
+  const close = (reason: VoiceDiagnosticReason): void => {
     if (!closed) {
-      cleanup();
+      cleanup(reason);
       response.end();
     }
   };
@@ -136,7 +144,7 @@ export async function serveApplicationEventStream(
       finish(true);
       if (live) flush();
     };
-    const timer = setTimeout(close, drainTimeoutMilliseconds);
+    const timer = setTimeout(() => close("drain_timeout"), drainTimeoutMilliseconds);
     timer.unref();
     const finish = (ok: boolean): void => {
       if (drain?.promise !== promise) return;
@@ -166,7 +174,7 @@ export async function serveApplicationEventStream(
         write(encoded.frame);
       }
     } catch {
-      close();
+      close("stream_error");
     }
   }
   const writeInitial = async (
@@ -188,26 +196,26 @@ export async function serveApplicationEventStream(
     try {
       if (closed) return;
       if (!live || drain) {
-        if (!enqueue(event)) close();
+        if (!enqueue(event)) close("overflow");
       } else write(hub.encoded(event).frame);
     } catch {
-      close();
+      close("stream_error");
     }
   };
   // Subscription and replay selection happen synchronously, before capture or
   // socket waits. All crossing publications are queued until the baseline wins.
   subscription = hub.subscribe(onEvent, canReplay ? replayCursor : undefined);
-  removeHubClose = hub.onClose(close);
+  removeHubClose = hub.onClose(() => close("hub_closed"));
   heartbeat = setInterval(() => {
     try {
       if (!closed && !drain) write(": heartbeat\n\n");
     } catch {
-      close();
+      close("stream_error");
     }
   }, heartbeatMilliseconds);
   heartbeat.unref();
-  request.once("close", cleanup);
-  response.once("close", cleanup);
+  request.once("close", onClientClose);
+  response.once("close", onClientClose);
   try {
     removeTransient = options.subscribeTransient?.((frame) => {
       try {
@@ -215,10 +223,10 @@ export async function serveApplicationEventStream(
         if (live && !drain) { write(frame); return; }
         const bytes = Buffer.byteLength(frame, "utf8");
         if (pending.length + transient.length + 1 > pendingEventLimit ||
-          pendingBytes + transientBytes + bytes > pendingByteLimit) { close(); return; }
+          pendingBytes + transientBytes + bytes > pendingByteLimit) { close("transient_overflow"); return; }
         transient.push(frame);
         transientBytes += bytes;
-      } catch { close(); }
+      } catch { close("stream_error"); }
     });
   } catch {
     // The transient lane is optional: a failed subscription leaves inventory
@@ -263,6 +271,6 @@ export async function serveApplicationEventStream(
     live = true;
     write(LIVE_FRAME);
   } catch {
-    close();
+    close("handshake_error");
   }
 }

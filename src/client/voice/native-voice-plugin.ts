@@ -88,6 +88,10 @@ export type NativeVoiceInteractionCommandContext = NativeVoiceCommandContext & {
 /** One ended turn's reply to speak. The optional title (1–512 UTF-16 units) names the replay's thread; it is never spoken. */
 export type NativeReplySpeech = { threadId: string; turnId: string; threadTitle?: string | null; assistantResult: SelectedAssistantResult };
 export interface NativeVoicePlugin {
+  /** Device-owned diagnostics; available even when disconnected. Does not alter voice state. */
+  setDiagnosticsEnabled(input: { enabled: boolean }): Promise<void>;
+  readDiagnostics(): Promise<unknown>;
+  clearDiagnostics(): Promise<void>;
   setConnection(input: { profileId: string; serverOrigin: string; identity: string; reconnect?: boolean }): Promise<NativeVoiceState>;
   disconnect(input: NativeVoiceCommandContext): Promise<NativeVoiceState>;
   getState(): Promise<NativeVoiceState>;

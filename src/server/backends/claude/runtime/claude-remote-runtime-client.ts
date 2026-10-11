@@ -379,7 +379,10 @@ class PersistentSession implements ClaudeRuntimeSession {
     const snapshotSequence = Math.max(0, ...response.events.map(event => event.sequence));
     const pendingEvents = [...response.events, ...[...this.#earlyEvents.values()].filter(event => event.sequence > snapshotSequence)].sort((a, b) => a.sequence - b.sequence);
     this.#earlyEvents.clear();
-    for (const event of pendingEvents) this.event(event);
+    // Both retained output and events buffered before the attachment cut are
+    // recovery. Preserve that evidence when asynchronous delivery runs after
+    // the live carrier has resumed.
+    for (const event of pendingEvents) this.event(event, "recovered");
     // Failure is retained owner state, not merely an event that disappears on ACK.
     // Drain retained output before failing hydration; never advertise a dead query.
     if (response.failureCode !== null) {
@@ -509,7 +512,7 @@ class PersistentSession implements ClaudeRuntimeSession {
     this.#failure(error);
     await this.close().catch(closeError => this.client.report(closeError));
   }
-  event(event: ClaudePersistentEvent): void {
+  event(event: ClaudePersistentEvent, completionProvenance?: "recovered"): void {
     if (this.#closed || event.sessionId !== this.options.sessionId) return;
     if (!this.#initialization || this.#attached !== this.client.current()) {
       if (this.#earlyEvents.size >= 8192) { this.#failure(new Error("claude_persistent_initial_event_capacity_exceeded")); void this.close().catch(error => this.client.report(error)); return; }
@@ -523,14 +526,21 @@ class PersistentSession implements ClaudeRuntimeSession {
       void this.#permission(event).catch(error => this.client.report(error)).finally(() => this.#pending.delete(event.sequence));
       return;
     }
+    const receivedAttachment = this.#attached;
     this.#delivery = this.#delivery.then(async () => {
       if (this.#closed) return;
       const payload = event.payload;
       if (payload.kind === "message") {
         const message = payload.message as SDKMessage;
         if (message.type === "system" && message.subtype === "commands_changed") this.#safeSkills = [];
-        const committed = payload.consumedTurnRootUuid
-          ? await this.options.onMessage(message, { consumedTurnRootUuid: payload.consumedTurnRootUuid })
+        // A live event can wait behind earlier application/ACK work until
+        // after its carrier was lost. Its later application is catch-up too.
+        const provenance = completionProvenance ?? (receivedAttachment !== this.client.current() ? "recovered" : undefined);
+        const committed = payload.consumedTurnRootUuid || provenance
+          ? await this.options.onMessage(message, {
+            ...(payload.consumedTurnRootUuid ? { consumedTurnRootUuid: payload.consumedTurnRootUuid } : {}),
+            ...(provenance ? { completionProvenance: provenance } : {}),
+          })
           : await this.options.onMessage(message);
         // ACKs identify exact events, not a cumulative cursor. A failed main
         // accounting write retains only this original in the existing host

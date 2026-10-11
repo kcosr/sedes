@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 import type { Request, Response } from "express";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   applicationEventEnvelopeSchema,
   normalizedApplicationEventSchema,
@@ -896,5 +896,135 @@ describe("serveApplicationEventStream", () => {
     hub.close();
     expect(response.end).toHaveBeenCalledOnce();
     expect(response.listenerCount("drain")).toBe(0);
+  });
+});
+
+describe("application stream close diagnostics", () => {
+  afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.useRealTimers(); });
+
+  function captureDiagnostics() {
+    vi.stubEnv("SEDES_DEBUG_DELIVERY", "1");
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    return () => log.mock.calls.map(([line]) => JSON.parse(String(line).slice("[delivery-voice] ".length)));
+  }
+
+  function fixture() {
+    const hub = new ApplicationEventHub();
+    const baseline = hub.publish({ type: "snapshot", generation: hub.generation, snapshot: emptySnapshot });
+    return { hub, baseline, request: new FakeRequest(), response: new FakeResponse() };
+  }
+
+  it.each(["request", "response", "hub"] as const)("records one close when the %s closes", async (source) => {
+    const records = captureDiagnostics();
+    const { hub, baseline, request, response } = fixture();
+    await serveApplicationEventStream(request as unknown as Request, response as unknown as Response, hub,
+      async () => ({ envelope: baseline }));
+    if (source === "hub") hub.close();
+    else if (source === "request") request.emit("close");
+    else response.emit("close");
+    request.emit("close");
+    response.emit("close");
+    hub.close();
+    expect(records()).toEqual([{
+      event: "application_stream_closed", timestamp: expect.any(String),
+      reason: source === "hub" ? "hub_closed" : "client_closed", live: true,
+      pendingEventCount: 0, pendingBytes: 0, transientEventCount: 0, transientBytes: 0,
+      durationMs: expect.any(Number),
+    }]);
+    expect(request.listenerCount("close")).toBe(0);
+    expect(response.listenerCount("close")).toBe(0);
+  });
+
+  it("captures both queue sizes before transient overflow clears the stream", async () => {
+    const records = captureDiagnostics();
+    const { hub, baseline, request, response } = fixture();
+    let release!: () => void;
+    const capture = new Promise<void>(resolve => { release = resolve; });
+    let transient!: (frame: string) => void;
+    const serving = serveApplicationEventStream(request as unknown as Request, response as unknown as Response, hub,
+      async () => { await capture; return { envelope: baseline }; }, {
+        pendingEventLimit: 2,
+        subscribeTransient: listener => { transient = listener; return () => {}; },
+      });
+    const event = hub.publish({ type: "inventory_counts_changed", generation: hub.generation, counts: emptySnapshot.counts });
+    const frame = 'event: notification\ndata: {"message":"private speech 😀"}\n\n';
+    transient(frame);
+    transient(frame);
+    release();
+    await serving;
+    expect(records()).toEqual([{
+      event: "application_stream_closed", timestamp: expect.any(String), reason: "transient_overflow", live: false,
+      pendingEventCount: 1, pendingBytes: hub.encoded(event).bytes,
+      transientEventCount: 1, transientBytes: Buffer.byteLength(frame, "utf8"), durationMs: expect.any(Number),
+    }]);
+    expect(JSON.stringify(records())).not.toContain("private speech");
+    expect(response.end).toHaveBeenCalledOnce();
+  });
+
+  it("identifies inventory overflow without logging queued content", async () => {
+    const records = captureDiagnostics();
+    const { hub, baseline, request, response } = fixture();
+    let release!: () => void;
+    const capture = new Promise<void>(resolve => { release = resolve; });
+    const serving = serveApplicationEventStream(request as unknown as Request, response as unknown as Response, hub,
+      async () => { await capture; return { envelope: baseline }; }, { pendingEventLimit: 1 });
+    const event = hub.publish({ type: "inventory_counts_changed", generation: hub.generation, counts: emptySnapshot.counts });
+    hub.publish({ type: "inventory_counts_changed", generation: hub.generation, counts: emptySnapshot.counts });
+    release();
+    await serving;
+    expect(records()).toHaveLength(1);
+    expect(records()[0]).toMatchObject({ reason: "overflow", live: false, pendingEventCount: 1, pendingBytes: hub.encoded(event).bytes });
+    expect(response.end).toHaveBeenCalledOnce();
+  });
+
+  it("records drain timeout and clears the existing drain owner", async () => {
+    const records = captureDiagnostics();
+    vi.useFakeTimers();
+    const { hub, baseline, request, response } = fixture();
+    let transient!: (frame: string) => void;
+    await serveApplicationEventStream(request as unknown as Request, response as unknown as Response, hub,
+      async () => ({ envelope: baseline }), {
+        drainTimeoutMilliseconds: 100,
+        subscribeTransient: listener => { transient = listener; return () => {}; },
+      });
+    response.writeResult = () => false;
+    transient("event: notification\ndata: {}\n\n");
+    transient("event: notification\ndata: {}\n\n");
+    await vi.advanceTimersByTimeAsync(100);
+    expect(records()).toHaveLength(1);
+    expect(records()[0]).toMatchObject({ reason: "drain_timeout", live: true, transientEventCount: 1, transientBytes: 30 });
+    expect(response.listenerCount("drain")).toBe(0);
+    expect(response.end).toHaveBeenCalledOnce();
+  });
+
+  it.each(["write", "handshake"] as const)("does not log raw %s errors", async (source) => {
+    const records = captureDiagnostics();
+    const { hub, baseline, request, response } = fixture();
+    await serveApplicationEventStream(request as unknown as Request, response as unknown as Response, hub,
+      async () => {
+        if (source === "handshake") throw new Error("private checkpoint failure");
+        return { envelope: baseline };
+      });
+    if (source === "write") {
+      response.writeResult = () => { throw new Error("private socket failure"); };
+      hub.publish({ type: "inventory_counts_changed", generation: hub.generation, counts: emptySnapshot.counts });
+    }
+    expect(records()).toHaveLength(1);
+    expect(records()[0]).toMatchObject({ reason: source === "write" ? "stream_error" : "handshake_error", live: source === "write" });
+    expect(JSON.stringify(records())).not.toContain("private");
+    expect(response.end).toHaveBeenCalledOnce();
+  });
+
+  it("stays silent while disabled and still closes when stderr throws", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => { throw new Error("stderr unavailable"); });
+    for (const gate of ["", "1"]) {
+      vi.stubEnv("SEDES_DEBUG_DELIVERY", gate);
+      const { hub, baseline, request, response } = fixture();
+      await serveApplicationEventStream(request as unknown as Request, response as unknown as Response, hub,
+        async () => ({ envelope: baseline }));
+      expect(() => hub.close()).not.toThrow();
+      expect(response.end).toHaveBeenCalledOnce();
+      expect(log).toHaveBeenCalledTimes(gate ? 1 : 0);
+    }
   });
 });

@@ -65,6 +65,14 @@ export const DEFAULT_PROJECTION_UPDATE_INTERVAL_MILLISECONDS = 50;
 export const DEFAULT_MAXIMUM_PENDING_PROJECTION_ITEMS = 512;
 export const DEFAULT_MAXIMUM_PENDING_PROJECTION_BYTES = 16 * 1_024 * 1_024;
 export const MAXIMUM_TARGETED_TURN_LOOKUP_CANDIDATES = 12_800;
+const MAXIMUM_REMEMBERED_COMPLETION_PROVENANCES = 512;
+
+function interruptsCompletionObservation(reason: string): boolean {
+  // These backend causes rebuild a projection while provider observation
+  // remains continuous. Transport gaps and unknown projector causes do not.
+  return reason !== "buffer_overflow" && reason !== "persistence_pending" &&
+    reason !== "history_changed" && reason !== "ambiguous_correlation" && reason !== "contradictory_state";
+}
 
 function supportsTurnThroughput(
   capabilities: BackendCapabilityDocument | undefined,
@@ -147,6 +155,7 @@ export type ConversationActorEvent =
       readonly backendTurnId: string;
       readonly applicationTurnId: string;
       readonly completionIdentity: string;
+      readonly provenance: "live" | "recovered";
       readonly outcome: "completed" | "interrupted" | "failed";
       readonly result: BoundedText;
       readonly classifiedResult: ClassifiedAssistantResult | null;
@@ -259,6 +268,9 @@ export class ConversationActor {
   ) => Promise<BackendCheckpointRef>;
   readonly #mailbox = new SerializedMailbox();
   readonly #listeners = new Set<ConversationActorListener>();
+  // Preserve live acceptance replays and explicit recovery evidence across
+  // projection retries without retaining unbounded turn history.
+  readonly #completionProvenances = new Map<string, "live" | "recovered">();
   readonly #pendingInteractions = new Map<string, Extract<AncillaryBackendEvent, { type: "interaction_opened" }>>();
   readonly #closeListeners = new Set<() => void>();
   readonly #coalescer: ProjectionEventCoalescer;
@@ -279,6 +291,9 @@ export class ConversationActor {
   #executionCloseBegun = false;
   #executionCloseFinished = false;
   #establishmentEpoch = 0;
+  #completionObservationGapRevision = 0;
+  #completionBaselineGapRevision = 0;
+  #completionGapRecoveryQueued = false;
   #projectionRecoveryFailureSequence = 0;
   #projectionRecoveryRequired = false;
   #handleReplacementRequired = false;
@@ -347,6 +362,11 @@ export class ConversationActor {
     }
     this.#started = true;
     this.#unsubscribeHandleEvents = this.#handle.subscribe((event) => {
+      if (event.type === "resnapshot_required" && interruptsCompletionObservation(event.reason)) {
+        // Raw evidence remains observable while a replacement snapshot has
+        // detached the sequenced subscription.
+        this.#completionObservationGapRevision += 1;
+      }
       if (
         event.type === "resnapshot_required" &&
         event.reason === "provider_handle_closed"
@@ -1307,6 +1327,7 @@ export class ConversationActor {
     }
     this.#establishmentEpoch += 1;
     const epoch = this.#establishmentEpoch;
+    const completionGapRevision = this.#completionObservationGapRevision;
     this.#establishmentAbort?.abort();
     const controller = new AbortController();
     this.#establishmentAbort = controller;
@@ -1342,6 +1363,11 @@ export class ConversationActor {
     // Each established handle projection replays its authoritative pending
     // interactions. Retire the previous view before accepting that replay.
     this.#pendingInteractions.clear();
+    const previouslyActiveTurnIds = new Set(
+      this.#projector.backendTurns()
+        .filter((turn) => turn.status === "in_progress")
+        .map((turn) => turn.backendTurnId),
+    );
     const timeline = this.#projector.replace(
       established.snapshot,
       established.handleSequence,
@@ -1371,10 +1397,47 @@ export class ConversationActor {
     if (timeline.runState === "idle" || timeline.runState === "failed") {
       this.#awaitingAuthoritativeIdle = false;
     }
+    const observationInterrupted = this.#completionBaselineGapRevision !== this.#completionObservationGapRevision;
+    const recoveredCompletionTurnIds = new Set(established.recoveredCompletionTurnIds);
+    for (const turn of this.#projector.backendTurns()) {
+      if (this.#replacingProjection && turn.status !== "in_progress" && previouslyActiveTurnIds.has(turn.backendTurnId)) {
+        this.#rememberCompletionProvenance(
+          `${turn.backendTurnId}:${turn.status}`,
+          observationInterrupted || recoveredCompletionTurnIds.has(turn.backendTurnId) ? "recovered" : "live",
+        );
+      }
+    }
+    // A successful baseline covers only gaps known when capture began. A raw
+    // gap arriving during any awaited establishment work remains fenced.
+    this.#completionBaselineGapRevision = completionGapRevision;
     this.#snapshotState = state;
     this.#publish({ type: "projection_replaced", state });
     this.#publishSnapshotSubmissions();
     this.#publishSnapshotCompletions();
+    if (this.#completionBaselineGapRevision !== this.#completionObservationGapRevision) {
+      this.#queueCompletionGapRecovery();
+    }
+  }
+
+  #queueCompletionGapRecovery(): void {
+    if (this.#closing || this.#closed || this.#completionGapRecoveryQueued) return;
+    this.#completionGapRecoveryQueued = true;
+    // Let already queued events retain receipt order before taking a new
+    // baseline. A raw gap covered by capture may never be redelivered.
+    void this.#mailbox.enqueue(async () => {
+      try {
+        if (this.#closing || this.#closed || this.#handleReplacementRequired ||
+            this.#completionBaselineGapRevision === this.#completionObservationGapRevision) return;
+        await this.#recoverProjection();
+        // Bound automatic work to one pass. Another voice-observation gap
+        // keeps completions recovered until the next natural establishment;
+        // it does not invalidate a successfully established projection.
+      } finally {
+        this.#completionGapRecoveryQueued = false;
+      }
+    }).catch(() => {
+      // Recovery failure is reported by the actor's existing authority state.
+    });
   }
 
   #subscribeEstablished(
@@ -1383,10 +1446,25 @@ export class ConversationActor {
   ): Unsubscribe {
     return established.subscribeFromNext((event) => {
       if (this.#closing || this.#closed) return;
+      if (epoch === this.#establishmentEpoch && event.event.type === "resnapshot_required" &&
+          interruptsCompletionObservation(event.event.reason)) {
+        // Latch before enqueueing so an awaited establishment cannot miss a
+        // gap reported only on the sequenced rail.
+        this.#completionObservationGapRevision += 1;
+      }
+      // A later gap must not retroactively reclassify an earlier queued event.
+      const completionGapRevision = this.#completionObservationGapRevision;
       void this.#mailbox
         .enqueue(async () => {
           if (epoch !== this.#establishmentEpoch) return;
           const nativeEvent = event.event;
+          if (nativeEvent.type === "turn_completed" && nativeEvent.turn.status !== "in_progress" &&
+              nativeEvent.completionProvenance === "recovered") {
+            this.#rememberCompletionProvenance(
+              `${nativeEvent.turn.backendTurnId}:${nativeEvent.turn.status}`,
+              "recovered",
+            );
+          }
           const throughputSupported = nativeEvent.type === "capabilities_changed"
             ? supportsTurnThroughput(nativeEvent.capabilities, this.#projector.backendTurns())
             : nativeEvent.type === "turn_started" || nativeEvent.type === "turn_updated" || nativeEvent.type === "turn_completed"
@@ -1397,6 +1475,9 @@ export class ConversationActor {
             return;
           }
           const projectionGeneration = this.#projector.generation;
+          const priorCompletionStatus = nativeEvent.type === "turn_completed"
+            ? this.#projector.backendTurns().find((turn) => turn.backendTurnId === nativeEvent.turn.backendTurnId)?.status
+            : undefined;
           const application = this.#projector.apply(event);
           await this.#applyProjection(application);
           if (application.kind === "resnapshot_required" || this.#projector.generation !== projectionGeneration) {
@@ -1433,6 +1514,13 @@ export class ConversationActor {
           }
           if (event.event.type === "turn_completed") {
             if (event.event.turn.status === "in_progress") return;
+            const completionIdentity = `${event.event.turn.backendTurnId}:${event.event.turn.status}`;
+            if (priorCompletionStatus === undefined || priorCompletionStatus === "in_progress") {
+              this.#rememberCompletionProvenance(
+                completionIdentity,
+                this.#completionBaselineGapRevision === completionGapRevision ? "live" : "recovered",
+              );
+            }
             const completion = this.#completionResult(
               event.event.turn.backendTurnId,
             );
@@ -1445,7 +1533,8 @@ export class ConversationActor {
                 backendCorrelation,
                 backendTurnId: event.event.turn.backendTurnId,
                 applicationTurnId: completion.applicationTurnId,
-                completionIdentity: `${event.event.turn.backendTurnId}:${event.event.turn.status}`,
+                completionIdentity,
+                provenance: this.#completionProvenance(completionIdentity),
                 outcome: event.event.turn.status,
                 result: completion.result,
                 classifiedResult: completion.classifiedResult,
@@ -1461,6 +1550,19 @@ export class ConversationActor {
     });
   }
 
+  #rememberCompletionProvenance(completionIdentity: string, provenance: "live" | "recovered"): void {
+    if (this.#completionProvenances.has(completionIdentity)) return;
+    this.#completionProvenances.set(completionIdentity, provenance);
+    if (this.#completionProvenances.size > MAXIMUM_REMEMBERED_COMPLETION_PROVENANCES) {
+      const oldest = this.#completionProvenances.keys().next().value;
+      if (oldest !== undefined) this.#completionProvenances.delete(oldest);
+    }
+  }
+
+  #completionProvenance(completionIdentity: string): "live" | "recovered" {
+    return this.#completionProvenances.get(completionIdentity) ?? "recovered";
+  }
+
   #publishSnapshotCompletions(listener?: ConversationActorListener): void {
     for (const backendTurn of this.#projector.backendTurns()) {
       if (
@@ -1471,6 +1573,7 @@ export class ConversationActor {
       ) {
         continue;
       }
+      const completionIdentity = `${backendTurn.backendTurnId}:${backendTurn.status}`;
       const completion = this.#completionResult(backendTurn.backendTurnId);
       for (const backendCorrelation of backendTurn.completionCorrelations) {
         const event: ConversationActorEvent = {
@@ -1478,7 +1581,8 @@ export class ConversationActor {
           backendCorrelation,
           backendTurnId: backendTurn.backendTurnId,
           applicationTurnId: completion.applicationTurnId,
-          completionIdentity: `${backendTurn.backendTurnId}:${backendTurn.status}`,
+          completionIdentity,
+          provenance: this.#completionProvenance(completionIdentity),
           outcome: backendTurn.status,
           result: completion.result,
           classifiedResult: completion.classifiedResult,
@@ -1531,6 +1635,9 @@ export class ConversationActor {
 
   async #applyProjection(application: ProjectionApplication): Promise<void> {
     if (application.kind === "resnapshot_required") {
+      if (interruptsCompletionObservation(application.reason)) {
+        this.#completionObservationGapRevision += 1;
+      }
       await this.#recoverProjection();
       return;
     }

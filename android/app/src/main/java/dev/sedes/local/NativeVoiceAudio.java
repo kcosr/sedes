@@ -41,6 +41,8 @@ import org.json.JSONObject;
 final class NativeVoiceAudio {
     interface Listener {
         default void inputDevicesChanged() {}
+        /** Observed AudioTrack head advancement, not receipt of synthesized PCM. */
+        default void playbackStarted(String requestId) {}
         void drained(String requestId);
         void captureStarted(String requestId);
         void captured(String requestId, byte[] pcm);
@@ -233,6 +235,7 @@ final class NativeVoiceAudio {
     private void pump(long current, String id) {
         byte[] buffer = new byte[PUMP_BYTES];
         long deadline = SystemClock.elapsedRealtime() + MAX_STREAM_DURATION_MS + 60000;
+        boolean started = false;
         try {
             while (true) {
                 int count, warmup = 0;
@@ -256,12 +259,14 @@ final class NativeVoiceAudio {
                     while (warmup > 0 && current(current)) { int size = Math.min(silence.length, warmup); write(current, silence, size); warmup -= size; }
                 }
                 write(current, buffer, count);
+                if (!started) started = notifyPlaybackStarted(current, id);
                 if (SystemClock.elapsedRealtime() >= deadline) throw new IllegalStateException("speech_timeout");
             }
             long drainDeadline = SystemClock.elapsedRealtime() + 15000;
             long drainFrames = primeDrain(current, drainDeadline);
             if (drainFrames < 0) return;
             while (true) {
+                if (!started) started = notifyPlaybackStarted(current, id);
                 synchronized (lock) {
                     if (current != generation) return;
                     if (track == null) throw new IllegalStateException("empty_pcm_stream");
@@ -284,6 +289,15 @@ final class NativeVoiceAudio {
         } catch (Exception error) {
             failCurrent(current, id, code(error, "playback_failed", "speech_timeout", "audio_focus_unavailable", "empty_pcm_stream", "playback_drain_timeout"));
         }
+    }
+    private boolean notifyPlaybackStarted(long current, String id) {
+        try {
+            synchronized (lock) {
+                if (current != generation || track == null || (track.getPlaybackHeadPosition() & 0xffffffffL) == 0) return false;
+            }
+            listener.playbackStarted(id);
+            return true;
+        } catch (RuntimeException ignored) { return false; }
     }
     long pendingPcmBytes() { synchronized (lock) { return spoolWritten - spoolRead; } }
     File spoolForTest() { if (!BuildConfig.DEBUG) throw new IllegalStateException("test_audio_unavailable"); synchronized (lock) { return spool; } }

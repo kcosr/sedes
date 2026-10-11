@@ -856,6 +856,8 @@ export const backendConversationEventSchema = z
     z.strictObject({
       type: z.literal("turn_completed"),
       turn: backendTurnSchema,
+      /** Server-only replay evidence; never promotes a completion to live. */
+      completionProvenance: z.literal("recovered").optional(),
     }),
     z.strictObject({
       type: z.literal("item_started"),

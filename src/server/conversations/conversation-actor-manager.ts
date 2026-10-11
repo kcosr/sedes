@@ -24,6 +24,7 @@ import type { DeliveryInputSnapshotRepository } from "../db/repositories/deliver
 import type { BoundedText } from "../../shared/protocol/payload.js";
 import type { BackendCapabilityDocument } from "../../shared/protocol/backend.js";
 import type { ConversationItem, ThreadRunState } from "../../shared/protocol/conversation.js";
+import { recordVoiceDiagnostic } from "../diagnostics/voice-diagnostics.js";
 
 export interface AcquireConversationActorInput {
   readonly scope: ExecutionScope;
@@ -100,6 +101,8 @@ export type AuthoritativeCompletionObserver = (
     readonly backendTurnId: string;
     readonly applicationTurnId: string;
     readonly completionIdentity: string;
+    readonly provenance: "live" | "recovered";
+    readonly voiceSubscriberWatermark?: number;
     readonly outcome: "completed" | "interrupted" | "failed";
     readonly result: BoundedText;
     readonly classifiedResult: ClassifiedAssistantResult | null;
@@ -291,6 +294,7 @@ export class ConversationActorManager {
   readonly #retentionMilliseconds: number;
   readonly #runtimeBudget: number;
   readonly #onAuthoritativeCompletion?: AuthoritativeCompletionObserver;
+  readonly #captureCompletionVoiceSubscriberWatermark?: () => number;
   readonly #onAuthoritativeSubmission?: AuthoritativeSubmissionObserver;
   readonly #onLiveProgress?: LiveProgressObserver;
   readonly #entries = new Map<string, ActorEntry>();
@@ -307,6 +311,7 @@ export class ConversationActorManager {
     readonly retentionMilliseconds: number;
     readonly runtimeBudget: number;
     readonly onAuthoritativeCompletion?: AuthoritativeCompletionObserver;
+    readonly captureCompletionVoiceSubscriberWatermark?: () => number;
     readonly onAuthoritativeSubmission?: AuthoritativeSubmissionObserver;
     readonly onLiveProgress?: LiveProgressObserver;
     readonly onNonblockingQuestions?: NonblockingQuestionObserver;
@@ -316,6 +321,7 @@ export class ConversationActorManager {
     this.#attachmentDelivery = input.attachmentDelivery;
     this.#deliveryInputSnapshots = input.deliveryInputSnapshots;
     this.#onAuthoritativeCompletion = input.onAuthoritativeCompletion;
+    this.#captureCompletionVoiceSubscriberWatermark = input.captureCompletionVoiceSubscriberWatermark;
     this.#onAuthoritativeSubmission = input.onAuthoritativeSubmission;
     this.#onLiveProgress = input.onLiveProgress;
     this.#onNonblockingQuestions = input.onNonblockingQuestions;
@@ -1345,6 +1351,7 @@ export class ConversationActorManager {
     );
     let actor: ConversationActor | undefined;
     let observationChain = Promise.resolve();
+    const completionVoiceWatermarks = new Map<string, number>();
     try {
       const handle = await input.driver.attach({
         scope: input.scope,
@@ -1398,8 +1405,27 @@ export class ConversationActorManager {
             }
           : {}),
         initialObserver: (event) => {
-
           onStateChanged();
+          let voiceSubscriberWatermark: number | undefined;
+          if (event.type === "authoritative_completion") {
+            if (event.provenance === "live" && this.#captureCompletionVoiceSubscriberWatermark) {
+              voiceSubscriberWatermark = completionVoiceWatermarks.get(event.completionIdentity);
+              if (voiceSubscriberWatermark === undefined) {
+                try { voiceSubscriberWatermark = this.#captureCompletionVoiceSubscriberWatermark(); }
+                catch { voiceSubscriberWatermark = 0; }
+                completionVoiceWatermarks.set(event.completionIdentity, voiceSubscriberWatermark);
+                if (completionVoiceWatermarks.size > 512) {
+                  completionVoiceWatermarks.delete(completionVoiceWatermarks.keys().next().value!);
+                }
+              }
+            }
+            recordVoiceDiagnostic("completion_published", {
+              threadId: input.binding.applicationThreadId,
+              turnId: event.applicationTurnId,
+              outcome: event.outcome,
+              provenance: event.provenance,
+            });
+          }
           if (event.type === "live_progress" && this.#onLiveProgress) {
             // Preceding submission observers establish durable admission first.
             // Delayed observers must never revive progress after the live turn ends.
@@ -1434,6 +1460,8 @@ export class ConversationActorManager {
                           backendTurnId: event.backendTurnId,
                           applicationTurnId: event.applicationTurnId,
                           completionIdentity: event.completionIdentity,
+                          provenance: event.provenance,
+                          ...(voiceSubscriberWatermark === undefined ? {} : { voiceSubscriberWatermark }),
                           outcome: event.outcome,
                           result: event.result,
                           classifiedResult: event.classifiedResult,
