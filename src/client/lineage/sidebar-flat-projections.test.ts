@@ -708,6 +708,18 @@ describe("state buckets", () => {
           attention: {
             wake: false,
             automationContext: null,
+            unseenCompletion: true,
+            queueFailure: false,
+          },
+        }),
+      ),
+    ).toBe("needs-attention");
+    expect(
+      resolveStateBucket(
+        thread("t", {
+          attention: {
+            wake: false,
+            automationContext: null,
             unseenCompletion: false,
             queueFailure: true,
           },
@@ -787,6 +799,48 @@ describe("state buckets", () => {
           }),
         ),
       ).toBe("idle");
+    }
+  });
+
+  it.each([
+    ["idle", {}],
+    ["running", { runState: "running" }],
+    ["running", { runState: "starting" }],
+    ["running", { runState: "stopping" }],
+    ["running", { runState: "reconciling" }],
+    ["snoozed", { inventoryState: "snoozed", snoozedUntil: at(2026, 7, 14, 9) }],
+    ["settled", { inventoryState: "settled" }],
+    ["scheduled", { automation: automation({ nextRunAt: at(2026, 7, 13, 6) }) }],
+  ] as const)("keeps unseen completion above %s until acknowledged (%j)", (bucket, input) => {
+    const completed = thread("completed", input);
+    const unseen = {
+      ...completed,
+      attention: { ...completed.attention, unseenCompletion: true },
+    };
+
+    const groups = project("state", [unseen]);
+    expect(keysOf(groups)).toEqual(["needs-attention"]);
+    expect(idsOf(groupFor(groups, "needs-attention"))).toEqual(["completed"]);
+
+    const acknowledged = {
+      ...unseen,
+      attention: { ...unseen.attention, unseenCompletion: false },
+    };
+    const resolved = project("state", [acknowledged]);
+    expect(keysOf(resolved)).toEqual([bucket]);
+    expect(idsOf(groupFor(resolved, bucket))).toEqual(["completed"]);
+  });
+
+  it("keeps pinned unseen completions in Pinned before and after acknowledgement", () => {
+    const pinned = thread("pinned", { pinned: true, inventoryState: "settled" });
+    const unseen = {
+      ...pinned,
+      attention: { ...pinned.attention, unseenCompletion: true },
+    };
+    for (const current of [unseen, pinned]) {
+      const groups = project("state", [current]);
+      expect(keysOf(groups)).toEqual(["pinned"]);
+      expect(idsOf(groupFor(groups, "pinned"))).toEqual(["pinned"]);
     }
   });
 

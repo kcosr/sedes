@@ -1,5 +1,100 @@
+import { randomUUID } from "node:crypto";
 import { expect, test } from "./fixtures.js";
-import { capture, openSedesWorkspace, selectCustomNewThreadTarget } from "./helpers.js";
+import { capture, createDraftThread, expectNoPageOverflow, openSedesWorkspace, selectCustomNewThreadTarget } from "./helpers.js";
+import { taskMutationResultSchema } from "../../src/shared/index.js";
+
+test("sidebar open-task filter shares menu and toolbar state across views and live task updates", async ({ page }, testInfo) => {
+  await openSedesWorkspace(page);
+  const openPath = await createDraftThread(page, "Sidebar open task work");
+  const threadId = openPath.split("/").at(-1)!;
+  await createDraftThread(page, "Sidebar plain work");
+  const session = await (await page.request.get("/api/application/session")).json();
+  const headers = { "X-CSRF-Token": session.csrfToken };
+  const created = await page.request.post("/api/tasks", {
+    headers,
+    data: { mutationId: randomUUID(), title: "Direct sidebar task", scope: { kind: "thread", threadId } },
+  });
+  expect(created.status()).toBe(201);
+  let task = taskMutationResultSchema.parse(await created.json()).task;
+  expect((await page.request.post("/api/tasks", {
+    headers,
+    data: { mutationId: randomUUID(), title: "Global sidebar task", scope: { kind: "global" } },
+  })).status()).toBe(201);
+  const sidebar = page.getByTestId("desktop-sidebar");
+  // The modal View options menu hides its background from the accessibility
+  // tree; inspect the same toolbar control's saved state while it is open.
+  const toggle = sidebar.getByTestId("view-tasks-toggle");
+  await expect(toggle).toHaveAccessibleName("Has open tasks");
+  const openRow = sidebar.locator(`[data-thread-id="${threadId}"]`);
+  const plainRow = sidebar.getByText("Sidebar plain work", { exact: true });
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-pressed", "true");
+  await expect(openRow).toBeVisible();
+  await expect(plainRow).toHaveCount(0);
+  await sidebar.getByTestId("view-options-trigger").click();
+  const checkbox = page.getByRole("menuitemcheckbox", { name: "Has open tasks", exact: true });
+  await expect(checkbox).toHaveAttribute("aria-checked", "true");
+  await checkbox.click();
+  await expect(toggle).toHaveAttribute("aria-pressed", "false");
+  await expect(plainRow).toBeVisible();
+  await checkbox.click();
+  await page.keyboard.press("Escape");
+  for (const view of ["Timeline", "State", "Flat list", "Projects"]) {
+    await sidebar.getByTestId("view-options-trigger").click();
+    await page.getByRole("group", { name: "Group by", exact: true })
+      .getByRole("menuitemradio", { name: view, exact: true }).click();
+    await expect(openRow).toBeVisible();
+    await expect(plainRow).toHaveCount(0);
+  }
+  await page.evaluate(() => localStorage.setItem("sedes-sidebar-width", "220"));
+  await page.reload();
+  await expect(toggle).toHaveAttribute("aria-pressed", "true");
+  await expect(openRow).toBeVisible();
+  await expect(plainRow).toHaveCount(0);
+  const sidebarBox = await sidebar.boundingBox();
+  const toggleBox = await toggle.boundingBox();
+  expect(sidebarBox!.width).toBe(220);
+  expect(await sidebar.locator(".sidebar-search-row button").evaluateAll((buttons) =>
+    buttons.map((button) => (button as HTMLElement).dataset.testid),
+  )).toEqual(["view-quick-toggle", "view-options-trigger", "view-tasks-toggle"]);
+  expect(toggleBox!.x + toggleBox!.width).toBeLessThanOrEqual(sidebarBox!.x + sidebarBox!.width);
+  expect((await sidebar.getByRole("searchbox", { name: "Search threads" }).boundingBox())!.width).toBeGreaterThan(50);
+  await expectNoPageOverflow(page);
+  await capture(page, testInfo, "sidebar-open-tasks-narrow-desktop.png");
+
+  for (const completed of [true, false]) {
+    const updated = await page.request.patch(`/api/tasks/${task.id}`, {
+      headers,
+      data: { mutationId: randomUUID(), expectedRevision: task.revision, completed },
+    });
+    expect(updated.status()).toBe(200);
+    task = taskMutationResultSchema.parse(await updated.json()).task;
+    if (completed) await expect(openRow).toHaveCount(0);
+    else await expect(openRow).toBeVisible();
+  }
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole("button", { name: "Open thread navigation" }).click();
+  const drawer = page.getByRole("dialog", { name: "Thread navigation" });
+  const mobileToggle = drawer.getByRole("button", { name: "Has open tasks", exact: true });
+  await expect(mobileToggle).toBeInViewport();
+  await expect(mobileToggle).toHaveAttribute("aria-pressed", "true");
+  const mobileToggleBox = await mobileToggle.boundingBox();
+  expect(mobileToggleBox!.width).toBeGreaterThanOrEqual(36);
+  expect(mobileToggleBox!.height).toBeGreaterThanOrEqual(36);
+  await expectNoPageOverflow(page);
+  await capture(page, testInfo, "sidebar-open-tasks-mobile.png");
+  await drawer.getByTestId("view-options-trigger").click();
+  const sheet = page.getByRole("dialog", { name: "View options" });
+  await expect(sheet.getByRole("menuitemcheckbox", { name: "Has open tasks", exact: true })).toHaveAttribute("aria-checked", "true");
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Close thread navigation" }).click();
+  await page.setViewportSize({ width: 1280, height: 720 });
+  expect((await page.request.delete(`/api/tasks/${task.id}`, { headers })).status()).toBe(204);
+  await expect(openRow).toHaveCount(0);
+  await toggle.click();
+  await expect(openRow).toBeVisible();
+  await expect(plainRow).toBeVisible();
+});
 
 test("sidebar prioritizes turns, unseen completion, subagents, and background commands", async ({ page }, testInfo) => {
   await openSedesWorkspace(page);

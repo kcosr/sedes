@@ -15,10 +15,11 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildPiBubblewrapArguments } from "../../src/server/pi-sandbox/bubblewrap-policy.js";
+import { realBubblewrapTestsEnabled } from "../support/sandbox-test-gate.js";
 
 const execute = promisify(execFile);
 const roots: string[] = [];
-const describeRealBubblewrap = describe.runIf(process.platform === "linux");
+const describeRealBubblewrap = describe.runIf(realBubblewrapTestsEnabled);
 
 describeRealBubblewrap("Pi sandbox real Bubblewrap boundary", () => {
   let bubblewrapPath: string;

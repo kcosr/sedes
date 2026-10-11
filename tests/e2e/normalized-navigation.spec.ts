@@ -107,6 +107,8 @@ test("mobile worktree removal closes its sheet before cancellation or confirmati
   // Below 420px the toolbar toggle is a check row in Thread actions.
   await page.getByRole("button", { name: "Thread actions" }).click();
   await page.getByRole("menuitemcheckbox", { name: "Show thread toolbar" }).click();
+  await expect(page.getByTestId("thread-settings-sheet")).toBeVisible();
+  await page.keyboard.press("Escape");
   const picker = page.getByRole("button", { name: /^Thread worktree:/ });
   await picker.click();
   const sheet = page.getByRole("dialog", { name: "Thread worktree", exact: true });
@@ -331,6 +333,7 @@ test.describe.serial("normalized target and mobile navigation", () => {
     await expect(threadToolbarToggle).toBeVisible();
     await expect(page.getByTestId("thread-target-context")).toHaveCount(0);
     await expect(page.locator(".thread-project-name")).toBeVisible();
+    const pin = page.getByRole("button", { name: "Pin thread", exact: true });
     const bookmarks = page.getByRole("button", { name: "Bookmarks", exact: true });
     const settings = page.getByRole("button", { name: "Thread actions" });
     // Chat is a phone's home, so its header has no ✕. Phones have no
@@ -339,7 +342,7 @@ test.describe.serial("normalized target and mobile navigation", () => {
     await expect(chatHeader.getByRole("button", { name: "Hide Chat panel" })).toHaveCount(0);
     await expect(chatHeader.getByRole("button", { name: "Maximize Chat panel" })).toHaveCount(0);
     await expect(chatHeader.getByRole("button", { name: "Chat panel actions" })).toHaveCount(0);
-    const headerControls = [bookmarks, settings, threadToolbarToggle];
+    const headerControls = [pin, bookmarks, settings, threadToolbarToggle];
     const headerBoxes = [];
     for (const control of headerControls) {
       await expect(control).toBeVisible();
@@ -370,9 +373,30 @@ test.describe.serial("normalized target and mobile navigation", () => {
     await capture(page, testInfo, "thread-header-mobile-collapsed.png");
     // Below 420px the toolbar toggle is a check row in Thread actions, and
     // the title keeps its full width beside the remaining buttons.
-    await page.setViewportSize({ width: 390, height: 844 });
+    for (const width of [320, 360, 390]) {
+      await page.setViewportSize({ width, height: 844 });
+      await expect(threadToolbarToggle).toHaveCount(0);
+      const controls = [pin, bookmarks, settings];
+      let previousRight = 0;
+      for (const control of controls) {
+        await expect(control).toBeVisible();
+        const box = await control.boundingBox();
+        expect(box).not.toBeNull();
+        expect(box!.width).toBeGreaterThanOrEqual(36);
+        expect(box!.height).toBeGreaterThanOrEqual(40);
+        expect(box!.x).toBeGreaterThanOrEqual(previousRight);
+        expect(box!.x + box!.width).toBeLessThanOrEqual(width);
+        previousRight = box!.x + box!.width;
+      }
+      const title = await page.locator(".thread-header h1").boundingBox();
+      const pinBox = await pin.boundingBox();
+      expect(title).not.toBeNull();
+      expect(title!.width).toBeGreaterThan(0);
+      expect(title!.x + title!.width).toBeLessThanOrEqual(pinBox!.x);
+      await expectNoPageOverflow(page);
+    }
     await expect(threadToolbarToggle).toHaveCount(0);
-    for (const control of [bookmarks, settings]) {
+    for (const control of [pin, bookmarks, settings]) {
       const box = await control.boundingBox();
       expect(box!.width).toBeGreaterThanOrEqual(36);
       expect(box!.height).toBeGreaterThanOrEqual(40);
@@ -389,12 +413,20 @@ test.describe.serial("normalized target and mobile navigation", () => {
     await expect(toolbarRow).not.toBeChecked();
     await toolbarRow.click();
     await expect(threadControls).toBeVisible();
-    await expect(page.getByRole("button", { name: "Find in thread" })).toBeVisible();
-    await capture(page, testInfo, "thread-header-phone-toolbar.png");
-    await settings.click();
+    await expect(page.getByTestId("thread-settings-sheet")).toBeVisible();
     await expect(toolbarRow).toBeChecked();
     await toolbarRow.click();
     await expect(threadControls).toBeHidden();
+    await expect(toolbarRow).not.toBeChecked();
+    await toolbarRow.click();
+    await expect(threadControls).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("button", { name: "Find in thread" })).toBeVisible();
+    await capture(page, testInfo, "thread-header-phone-toolbar.png");
+    await settings.click();
+    await toolbarRow.click();
+    await expect(threadControls).toBeHidden();
+    await page.keyboard.press("Escape");
     await page.setViewportSize({ width: 456, height: 844 });
     await threadToolbarToggle.click();
     await expect(
@@ -540,9 +572,13 @@ test.describe.serial("normalized target and mobile navigation", () => {
       .getByRole("menuitemradio", { name: "High", exact: true })
       .click();
     await settingResponse;
-    // Choosing closes the sheet; reopen it to read the new value.
-    await expect(actionsSheet).toHaveCount(0);
-    await settings.click();
+    // A setting change leaves this pane ready for another selection.
+    await expect(actionsSheet).toBeVisible();
+    const high = actionsSheet.getByRole("menuitemradio", { name: "High", exact: true });
+    await expect(high).toBeChecked();
+    await high.click();
+    await expect(actionsSheet).toBeVisible();
+    await actionsSheet.getByRole("menuitem", { name: "Thinking", exact: true }).click();
     await expect(thinking).toContainText("High");
     await page.keyboard.press("Escape");
     await page.reload();

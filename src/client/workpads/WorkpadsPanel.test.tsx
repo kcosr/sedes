@@ -1357,29 +1357,70 @@ describe("WorkpadsPanel", () => {
       expect(getWorkpadsPanelPreferences().views.all.sort).toBe("updated");
     });
 
-    it("opens search from the header and clears it on Escape or Close search", async () => {
+    it("keeps search open through Escape clear and blur, and closes it with explicit controls", async () => {
       const { store, api } = fixture();
       render(<Panel context={panelContext(store)} />);
       await screen.findByRole("button", { name: "Integration" });
       const toggle = screen.getByRole("button", { name: "Search workpads" });
       expect(screen.queryByRole("textbox", { name: "Search workpads" })).not.toBeInTheDocument();
-      fireEvent.change(openSearch(), { target: { value: "agreement" } });
+      const search = openSearch();
+      fireEvent.change(search, { target: { value: "agreement" } });
       expect(toggle).toHaveAttribute("aria-pressed", "true");
       await waitFor(() => expect(api.listWorkpads).toHaveBeenLastCalledWith(expect.objectContaining({ query: "agreement" })));
-      fireEvent.keyDown(screen.getByRole("textbox", { name: "Search workpads" }), { key: "Escape" });
-      expect(screen.queryByRole("textbox", { name: "Search workpads" })).not.toBeInTheDocument();
-      expect(toggle).toHaveAttribute("aria-pressed", "false");
-      await waitFor(() => expect(api.listWorkpads.mock.lastCall).toEqual([expect.not.objectContaining({ query: expect.anything() })]));
-      const search = openSearch();
+      fireEvent.keyDown(search, { key: "Escape" });
       expect(search).toHaveValue("");
+      expect(search).toHaveFocus();
+      expect(toggle).toHaveAttribute("aria-pressed", "true");
+      await waitFor(() => expect(api.listWorkpads.mock.lastCall).toEqual([expect.not.objectContaining({ query: expect.anything() })]));
+      fireEvent.keyDown(search, { key: "Escape" });
+      expect(search).not.toHaveFocus();
+      expect(search).toBeInTheDocument();
+      expect(toggle).toHaveAttribute("aria-pressed", "true");
       fireEvent.change(search, { target: { value: "retry" } });
       fireEvent.click(screen.getByRole("button", { name: "Close search" }));
       expect(screen.queryByRole("textbox", { name: "Search workpads" })).not.toBeInTheDocument();
+      expect(toggle).toHaveAttribute("aria-pressed", "false");
       fireEvent.click(toggle);
       expect(screen.getByRole("textbox", { name: "Search workpads" })).toHaveValue("");
       // The header button closes it too.
       fireEvent.click(toggle);
       expect(screen.queryByRole("textbox", { name: "Search workpads" })).not.toBeInTheDocument();
+    });
+
+    it.each(["Search workpads", "New workpad title"])("consumes %s Escape to clear then blur without dismissing its parent", async name => {
+      const { store } = fixture();
+      const context = panelContext(store);
+      const parentKeyDown = vi.fn(() => context.host.close());
+      render(<div onKeyDown={parentKeyDown}><Panel context={context} /></div>);
+      await screen.findByRole("button", { name: "Integration" });
+      const input = name === "Search workpads" ? openSearch() : addRow();
+      input.focus();
+      // Whitespace is populated input too, even though it cannot create a workpad.
+      fireEvent.change(input, { target: { value: "   " } });
+      expect(fireEvent.keyDown(input, { key: "Escape" })).toBe(false);
+      expect(input).toHaveValue("");
+      expect(input).toHaveFocus();
+      expect(fireEvent.keyDown(input, { key: "Escape" })).toBe(false);
+      expect(input).not.toHaveFocus();
+      expect(input).toBeInTheDocument();
+      expect(parentKeyDown).not.toHaveBeenCalled();
+      expect(context.host.close).not.toHaveBeenCalled();
+      expect(screen.getByRole("region", { name: "Workpads" })).toBeInTheDocument();
+    });
+
+    it.each(["Search workpads", "New workpad title"])("ignores composing Escape in populated and empty %s", async name => {
+      const { store } = fixture();
+      render(<Panel context={panelContext(store)} />);
+      await screen.findByRole("button", { name: "Integration" });
+      const input = name === "Search workpads" ? openSearch() : addRow();
+      input.focus();
+      for (const value of ["Unfinished composition", ""]) {
+        fireEvent.change(input, { target: { value } });
+        expect(fireEvent.keyDown(input, { key: "Escape", isComposing: true })).toBe(true);
+        expect(input).toHaveValue(value);
+        expect(input).toHaveFocus();
+        expect(input).toBeInTheDocument();
+      }
     });
 
     it("switches revisions from the History menu and returns to the latest", async () => {

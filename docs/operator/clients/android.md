@@ -259,9 +259,9 @@ network path and at least the following:
    voice service and output-image provider must remain non-exported.
 10. Panels: with Tasks in front, Back closes an open task's detail, then
     returns to Chat with Tasks still loaded, then opens the drawer; an open
-    task menu or editor takes Back first. **Add to prompt** shows Chat with
-    the Task's pill, and with the keyboard up Tasks' add bar and search stay
-    above it.
+    task menu or editor takes Back first. **Add to prompt** keeps Tasks in
+    front so more Tasks can be added; switching to Chat shows their pills.
+    With the keyboard up, Tasks' add bar and search stay above it.
 
 For native voice, test Keep listening beyond 95 seconds and ten minutes on built-in
 and Bluetooth microphones, including screen off, planned session renewal, Send,

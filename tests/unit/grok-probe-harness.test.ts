@@ -16,6 +16,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { promisify } from "node:util";
+import { realBubblewrapTestsEnabled } from "../support/sandbox-test-gate.js";
 
 interface ProbeResult {
   mode: string;
@@ -178,9 +179,10 @@ async function createStaticStage() {
 }
 
 const describeGrokProbe = describe.runIf(process.platform === "linux");
+const itBubblewrap = it.runIf(realBubblewrapTestsEnabled);
 
 describeGrokProbe("Grok offline probe sandbox", () => {
-  it("runs O1 without initialize inside isolated, read-only host authority", async () => {
+  itBubblewrap("runs O1 without initialize inside isolated, read-only host authority", async () => {
     const hostHome = await mkdtemp(path.join(os.homedir(), ".sedes-probe-test-"));
     const homeCanary = path.join(hostHome, "host-only-canary");
     try {
@@ -311,7 +313,7 @@ describeGrokProbe("Grok offline probe sandbox", () => {
     }
   });
 
-  it("allows only one authority-free initialize request in O2a", async () => {
+  itBubblewrap("allows only one authority-free initialize request in O2a", async () => {
     const result = await probe.runGrokProbe(
       fakeInput({
         mode: probe.GROK_PROBE_MODES.O2A_INITIALIZE_ONLY,
@@ -342,7 +344,9 @@ describeGrokProbe("Grok offline probe sandbox", () => {
       }),
     ]);
     await expectRemoved(result.cleanup.temporaryRoot!);
+  });
 
+  it("rejects terminal authority in O2a before starting a process", async () => {
     await expect(
       probe.runGrokProbe(
         fakeInput({
@@ -361,7 +365,7 @@ describeGrokProbe("Grok offline probe sandbox", () => {
     ).rejects.toThrow("no filesystem or terminal authority");
   });
 
-  it("requires an exact reviewed O2b offline method allowlist", async () => {
+  itBubblewrap("requires an exact reviewed O2b offline method allowlist", async () => {
     const result = await probe.runGrokProbe(
       fakeInput({
         mode: probe.GROK_PROBE_MODES.O2B_OFFLINE,
@@ -397,7 +401,9 @@ describeGrokProbe("Grok offline probe sandbox", () => {
       },
     ]);
     await expectRemoved(result.cleanup.temporaryRoot!);
+  });
 
+  it("rejects unreviewed O2b methods before starting a process", async () => {
     await expect(
       probe.runGrokProbe(
         fakeInput({
@@ -422,7 +428,7 @@ describeGrokProbe("Grok offline probe sandbox", () => {
     ).rejects.toThrow("Unknown reviewed O2b scenario");
   });
 
-  it("redacts caller canaries and removes every raw capture", async () => {
+  itBubblewrap("redacts caller canaries and removes every raw capture", async () => {
     const canary = "do-not-persist-this-grok-probe-secret";
     const result = await probe.runGrokProbe(
       fakeInput({
@@ -435,7 +441,7 @@ describeGrokProbe("Grok offline probe sandbox", () => {
     await expectRemoved(result.cleanup.temporaryRoot!);
   });
 
-  it("waits for stdout close before hashing and returning frames", async () => {
+  itBubblewrap("waits for stdout close before hashing and returning frames", async () => {
     const result = await probe.runGrokProbe(
       fakeInput({ arguments: ["trailing-output"] }),
     );
@@ -443,7 +449,7 @@ describeGrokProbe("Grok offline probe sandbox", () => {
     await expectRemoved(result.cleanup.temporaryRoot!);
   });
 
-  it.each([
+  itBubblewrap.each([
     [
       "stdout-flood",
       { maxStdoutBytes: 4_096, maxFrameBytes: 4_096 },
@@ -475,7 +481,7 @@ describeGrokProbe("Grok offline probe sandbox", () => {
     },
   );
 
-  it("kills a signal-resistant child and all descendants after the O1 bound", async () => {
+  itBubblewrap("kills a signal-resistant child and all descendants after the O1 bound", async () => {
     const result = await probe.runGrokProbe(
       fakeInput({
         arguments: ["hang-with-descendant"],
@@ -628,7 +634,7 @@ describeGrokProbe("Grok offline probe sandbox", () => {
     await expectRemoved(temporaryRoot);
   });
 
-  it("runs only a verified private staged O0 executable with bounded raw capture", async () => {
+  itBubblewrap("runs only a verified private staged O0 executable with bounded raw capture", async () => {
     const stage = await createStaticStage();
     try {
       const result = await probe.runGrokStaticProbe({
@@ -676,7 +682,7 @@ describeGrokProbe("Grok offline probe sandbox", () => {
     }
   });
 
-  it("executes retained bytes and rejects a same-uid staged-path replacement", async () => {
+  itBubblewrap("executes retained bytes and rejects a same-uid staged-path replacement", async () => {
     const stage = await createStaticStage();
     try {
       const running = probe.runGrokStaticProbe({

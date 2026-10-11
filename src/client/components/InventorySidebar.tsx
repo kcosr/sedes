@@ -43,9 +43,11 @@ import {
   type SidebarSortBy,
 } from "../app/sidebar-view-model.js";
 import {
+  clearActiveSidebarFilters,
   resetSidebarMode,
   setSidebarGroupBy,
   setSidebarGroupForks,
+  setSidebarHasOpenTasks,
   setSidebarInventoryScope,
   setSidebarScopeCollapsed,
   setSidebarShowBackendIcons,
@@ -580,60 +582,6 @@ export function InventorySidebar({
       ),
     [state.descendantPages],
   );
-  const threads = useMemo(
-    () => filterThreadsBySidebarScope(state.visibleThreads, workspaces, scope),
-    [scope, state.visibleThreads, workspaces],
-  );
-  const descendants = useMemo(
-    () =>
-      allDescendants.filter(
-        ({ thread }) =>
-          filterThreadsBySidebarScope([thread], workspaces, scope).length > 0,
-      ),
-    [allDescendants, scope, workspaces],
-  );
-  const scopedSnapshot = useMemo(() => {
-    if (!snapshot || scope.activeFilterCount === 0) return snapshot;
-    const scopedThreads = filterThreadsBySidebarScope(
-      snapshot.threads,
-      workspaces,
-      scope,
-    );
-    return {
-      ...snapshot,
-      threads: [...scopedThreads],
-      // Protocol lineage-family totals are global. Under a project filter,
-      // expose only counts proven by loaded rows in this workspace; global
-      // totals remain available separately for archive impact.
-      lineageFamilies: loadedScopedLineageFamilies(
-        scopedThreads.map(({ id }) => id),
-        snapshot.forkOrigins,
-        descendants,
-      ),
-    };
-  }, [descendants, scope, snapshot, workspaces]);
-  const globalLineageFamilyCounts = useMemo(
-    () =>
-      new Map(
-        snapshot?.lineageFamilies.map(({ sourceThreadId, descendantCount }) => [
-          sourceThreadId,
-          descendantCount,
-        ]) ?? [],
-      ),
-    [snapshot?.lineageFamilies],
-  );
-  const scopedLineageFamilyCounts = useMemo(
-    () =>
-      new Map(
-        scopedSnapshot?.lineageFamilies.map(
-          ({ sourceThreadId, descendantCount }) => [
-            sourceThreadId,
-            descendantCount,
-          ],
-        ) ?? [],
-      ),
-    [scopedSnapshot?.lineageFamilies],
-  );
   const taskSummaryByThreadId = useMemo(() => {
     const summaries = new Map<string, FlatThreadRowTaskSummary>();
     for (const task of snapshot?.tasks ?? []) {
@@ -647,6 +595,115 @@ export function InventorySidebar({
     }
     return summaries;
   }, [snapshot?.tasks]);
+  const threads = useMemo(
+    () =>
+      filterThreadsBySidebarScope(state.visibleThreads, workspaces, scope).filter(
+        (thread) =>
+          !viewPreferences.hasOpenTasks || taskSummaryByThreadId.has(thread.id),
+      ),
+    [
+      scope,
+      state.visibleThreads,
+      workspaces,
+      viewPreferences.hasOpenTasks,
+      taskSummaryByThreadId,
+    ],
+  );
+  const descendants = useMemo(
+    () =>
+      allDescendants.filter(
+        ({ thread }) =>
+          filterThreadsBySidebarScope([thread], workspaces, scope).length > 0 &&
+          (!viewPreferences.hasOpenTasks || taskSummaryByThreadId.has(thread.id)),
+      ),
+    [
+      allDescendants,
+      scope,
+      workspaces,
+      viewPreferences.hasOpenTasks,
+      taskSummaryByThreadId,
+    ],
+  );
+  const scopedSnapshot = useMemo(() => {
+    if (
+      !snapshot ||
+      (scope.activeFilterCount === 0 && !viewPreferences.hasOpenTasks)
+    ) return snapshot;
+    const scopedThreads = filterThreadsBySidebarScope(
+      snapshot.threads,
+      workspaces,
+      scope,
+    ).filter(
+      (thread) =>
+        !viewPreferences.hasOpenTasks || taskSummaryByThreadId.has(thread.id),
+    );
+    return {
+      ...snapshot,
+      threads: [...scopedThreads],
+      // Protocol lineage-family totals are global. Under scope or task filters,
+      // expose only counts proven by loaded matching rows; global
+      // totals remain available for archive impact and paging discovery.
+      lineageFamilies: loadedScopedLineageFamilies(
+        scopedThreads.map(({ id }) => id),
+        snapshot.forkOrigins,
+        descendants,
+      ),
+    };
+  }, [
+    descendants,
+    scope,
+    snapshot,
+    workspaces,
+    viewPreferences.hasOpenTasks,
+    taskSummaryByThreadId,
+  ]);
+  const globalLineageFamilyCounts = useMemo(
+    () =>
+      new Map(
+        snapshot?.lineageFamilies.map(({ sourceThreadId, descendantCount }) => [
+          sourceThreadId,
+          descendantCount,
+        ]) ?? [],
+      ),
+    [snapshot?.lineageFamilies],
+  );
+  const loadedGlobalLineageFamilyCounts = useMemo(() => {
+    const origins = new Map(
+      allDescendants.map(({ origin }) => [origin.childThreadId, origin]),
+    );
+    for (const origin of snapshot?.forkOrigins ?? []) {
+      origins.set(origin.childThreadId, origin);
+    }
+    const loadedThreadIds = new Set([
+      ...(snapshot?.threads.map(({ id }) => id) ?? []),
+      ...allDescendants.map(({ thread }) => thread.id),
+    ]);
+    const counts = new Map<string, number>();
+    for (const threadId of loadedThreadIds) {
+      const seen = new Set([threadId]);
+      let currentId = threadId;
+      while (true) {
+        const sourceId = origins.get(currentId)?.sourceThreadId;
+        if (!sourceId || seen.has(sourceId)) break;
+        counts.set(sourceId, (counts.get(sourceId) ?? 0) + 1);
+        seen.add(sourceId);
+        currentId = sourceId;
+      }
+    }
+    return counts;
+  }, [allDescendants, snapshot?.threads, snapshot?.forkOrigins]);
+  const scopedLineageFamilyCounts = useMemo(
+    () =>
+      new Map(
+        scopedSnapshot?.lineageFamilies.map(
+          ({ sourceThreadId, descendantCount }) => [
+            sourceThreadId,
+            descendantCount,
+          ],
+        ) ?? [],
+      ),
+    [scopedSnapshot?.lineageFamilies],
+  );
   const keepShownThread = (thread: NormalizedApplicationThreadSummary) =>
     (viewPreferences.show.snoozed || thread.inventoryState !== "snoozed") &&
     (viewPreferences.show.settled || thread.inventoryState !== "settled") &&
@@ -981,26 +1038,7 @@ export function InventorySidebar({
         descendantCount,
       ]) ?? [],
     );
-    const loadedFamilyCounts = new Map<string, number>();
-    const loadedThreadIds = new Set([
-      ...(snapshot?.threads.map(({ id }) => id) ?? []),
-      ...descendants.map(({ thread }) => thread.id),
-    ]);
-    for (const threadId of loadedThreadIds) {
-      const seen = new Set([threadId]);
-      let currentId = threadId;
-      while (true) {
-        const sourceId = origins.get(currentId)?.sourceThreadId;
-        if (!sourceId || seen.has(sourceId)) break;
-        loadedFamilyCounts.set(
-          sourceId,
-          (loadedFamilyCounts.get(sourceId) ?? 0) + 1,
-        );
-        seen.add(sourceId);
-        currentId = sourceId;
-      }
-    }
-    return { origins, titles, placements, familyCounts, loadedFamilyCounts };
+    return { origins, titles, placements, familyCounts };
   }, [descendants, snapshot]);
   const forkInfoFor = (
     thread: NormalizedApplicationThreadSummary,
@@ -1013,13 +1051,28 @@ export function InventorySidebar({
       return sourceTitle ? { isChild: true, sourceTitle } : { isChild: true };
     }
     const descendantCount =
-      (scope.activeFilterCount === 0
+      (scope.activeFilterCount === 0 && !viewPreferences.hasOpenTasks
         ? forkContext.familyCounts
         : scopedLineageFamilyCounts
       ).get(thread.id) ?? 0;
     return descendantCount > 0
       ? { isChild: false, descendantCount }
       : undefined;
+  };
+  // Scope facets cannot page a global family. The task filter can discover
+  // unloaded matches, while row indicators count only matching loaded rows.
+  const descendantPagingFor = (threadId: string): FlatDescendantPaging => {
+    if (scope.activeFilterCount > 0) return { canLoad: false, loading: false };
+    const page = state.descendantPages[threadId];
+    return {
+      canLoad:
+        Boolean(page?.nextCursor) ||
+        (!page?.loaded &&
+          (globalLineageFamilyCounts.get(threadId) ?? 0) >
+            (loadedGlobalLineageFamilyCounts.get(threadId) ?? 0)),
+      loading: page?.loading ?? false,
+      error: page?.error,
+    };
   };
   /** Lineage inputs for a flat row's context menu (placement + provenance). */
   const menuLineageFor = (
@@ -1672,6 +1725,9 @@ export function InventorySidebar({
                   });
                 }
               }}
+              onHasOpenTasksToggle={() =>
+                setSidebarHasOpenTasks(!viewPreferences.hasOpenTasks)
+              }
               onShowToggle={(key) =>
                 setSidebarShowFilter(key, !viewPreferences.show[key])
               }
@@ -1699,6 +1755,7 @@ export function InventorySidebar({
               density={flatModePreferences!.density}
               mobile={!peekEnabled}
               showBackendBrand={viewPreferences.showBackendIcons}
+              hasOpenTasks={viewPreferences.hasOpenTasks}
               searchActive={Boolean(state.search)}
               pinnedOnly={flatModePreferences!.pinnedOnly}
               projectFilterLabel={
@@ -1733,22 +1790,7 @@ export function InventorySidebar({
               configurationCopyPendingFor={(threadId) =>
                 state.pendingThreadConfigurationCopySourceIds.includes(threadId)
               }
-              descendantPagingFor={(threadId) => {
-                if (scope.activeFilterCount > 0) {
-                  return { canLoad: false, loading: false };
-                }
-                const page = state.descendantPages[threadId];
-                const canLoad =
-                  Boolean(page?.nextCursor) ||
-                  (!page?.loaded &&
-                    (forkContext.familyCounts.get(threadId) ?? 0) >
-                      (forkContext.loadedFamilyCounts.get(threadId) ?? 0));
-                return {
-                  canLoad,
-                  loading: page?.loading ?? false,
-                  error: page?.error,
-                };
-              }}
+              descendantPagingFor={descendantPagingFor}
               store={store}
               threadRegistry={threadRegistry}
               onSelectThread={onSelectThread}
@@ -1791,6 +1833,7 @@ export function InventorySidebar({
                     density="compact"
                     mobile={!peekEnabled}
                     showBackendBrand={viewPreferences.showBackendIcons}
+                    hasOpenTasks={viewPreferences.hasOpenTasks}
                     searchActive={false}
                     pinnedOnly={false}
                     projectFilterLabel={
@@ -1830,22 +1873,7 @@ export function InventorySidebar({
                         threadId,
                       )
                     }
-                    descendantPagingFor={(threadId) => {
-                      if (scope.activeFilterCount > 0) {
-                        return { canLoad: false, loading: false };
-                      }
-                      const page = state.descendantPages[threadId];
-                      return {
-                        canLoad:
-                          Boolean(page?.nextCursor) ||
-                          (!page?.loaded &&
-                            (forkContext.familyCounts.get(threadId) ?? 0) >
-                              (forkContext.loadedFamilyCounts.get(threadId) ??
-                                0)),
-                        loading: page?.loading ?? false,
-                        error: page?.error,
-                      };
-                    }}
+                    descendantPagingFor={descendantPagingFor}
                     store={store}
                     threadRegistry={threadRegistry}
                     onSelectThread={onSelectThread}
@@ -1986,9 +2014,7 @@ export function InventorySidebar({
                               archiveDescendantCountFor={(threadId) =>
                                 globalLineageFamilyCounts.get(threadId) ?? 0
                               }
-                              allowDescendantPaging={
-                                scope.activeFilterCount === 0
-                              }
+                              descendantPagingFor={descendantPagingFor}
                               environmentTintStyleForWorkspace={
                                 environmentTintStyleForWorkspace
                               }
@@ -2002,7 +2028,12 @@ export function InventorySidebar({
               {effectiveStackBy === "none" &&
                 active.length === 0 &&
                 automated.length === 0 &&
-                !state.search && (
+                !state.search &&
+                (viewPreferences.hasOpenTasks ? (
+                  <OpenTaskFilterEmptyState
+                    activeOnly={(projection?.roots.length ?? 0) > 0}
+                  />
+                ) : (
                   <div className="sidebar-empty">
                     <p>No active threads</p>
                     <small>
@@ -2011,17 +2042,20 @@ export function InventorySidebar({
                         : "Start a thread when an idea is ready."}
                     </small>
                   </div>
-                )}
+                ))}
               {effectiveStackBy === "none" &&
                 state.search &&
-                projection?.matchingIds.size === 0 && (
+                projection?.matchingIds.size === 0 &&
+                (viewPreferences.hasOpenTasks ? (
+                  <OpenTaskFilterEmptyState />
+                ) : (
                   <div className="sidebar-empty">
                     <p>No matching threads</p>
                     <small>
                       Searches titles, projects, environments, and targets.
                     </small>
                   </div>
-                )}
+                ))}
               {effectiveStackBy === "none" && (
                 <>
                   <Shelf
@@ -2046,7 +2080,7 @@ export function InventorySidebar({
                     archiveDescendantCountFor={(threadId) =>
                       globalLineageFamilyCounts.get(threadId) ?? 0
                     }
-                    allowDescendantPaging={scope.activeFilterCount === 0}
+                    descendantPagingFor={descendantPagingFor}
                     environmentTintStyleForWorkspace={
                       environmentTintStyleForWorkspace
                     }
@@ -2074,7 +2108,7 @@ export function InventorySidebar({
                       archiveDescendantCountFor={(threadId) =>
                         globalLineageFamilyCounts.get(threadId) ?? 0
                       }
-                      allowDescendantPaging={scope.activeFilterCount === 0}
+                      descendantPagingFor={descendantPagingFor}
                       environmentTintStyleForWorkspace={
                         environmentTintStyleForWorkspace
                       }
@@ -2103,7 +2137,7 @@ export function InventorySidebar({
                       archiveDescendantCountFor={(threadId) =>
                         globalLineageFamilyCounts.get(threadId) ?? 0
                       }
-                      allowDescendantPaging={scope.activeFilterCount === 0}
+                      descendantPagingFor={descendantPagingFor}
                       environmentTintStyleForWorkspace={
                         environmentTintStyleForWorkspace
                       }
@@ -2431,7 +2465,7 @@ function Shelf({
   locationLabelFor,
   taskSummaryFor,
   archiveDescendantCountFor,
-  allowDescendantPaging,
+  descendantPagingFor,
   environmentTintStyleForWorkspace,
 }: {
   title: string;
@@ -2451,7 +2485,7 @@ function Shelf({
   ) => string | undefined;
   taskSummaryFor: (threadId: string) => FlatThreadRowTaskSummary | undefined;
   archiveDescendantCountFor: (threadId: string) => number;
-  allowDescendantPaging: boolean;
+  descendantPagingFor: (threadId: string) => FlatDescendantPaging;
   environmentTintStyleForWorkspace: EnvironmentTintStyleForWorkspace;
 }): React.JSX.Element {
   const [open, setOpen] = useSidebarDisclosure("shelves", kind, true);
@@ -2490,7 +2524,7 @@ function Shelf({
           locationLabelFor={locationLabelFor}
           taskSummaryFor={taskSummaryFor}
           archiveDescendantCountFor={archiveDescendantCountFor}
-          allowDescendantPaging={allowDescendantPaging}
+          descendantPagingFor={descendantPagingFor}
           environmentTintStyleForWorkspace={environmentTintStyleForWorkspace}
         />
         {nodes.length === 0 && (
@@ -3145,6 +3179,26 @@ function ViewAllAutomations({
   );
 }
 
+function OpenTaskFilterEmptyState({
+  activeOnly = false,
+}: {
+  readonly activeOnly?: boolean;
+}): React.JSX.Element {
+  return (
+    <div className="sidebar-empty">
+      <p>
+        {activeOnly
+          ? "No active threads with open tasks"
+          : "No threads with open tasks match the current filters"}
+      </p>
+      <small>Adjust the filters or clear them to show other threads.</small>
+      <Button variant="ghost" size="sm" onClick={clearActiveSidebarFilters}>
+        Clear filters
+      </Button>
+    </div>
+  );
+}
+
 /**
  * The flat (time / state / none) sidebar body: shelf-styled collapsible group
  * headers over FlatThreadRow lists. `none` renders its single group without a
@@ -3158,6 +3212,7 @@ function FlatGroupList({
   mobile,
   showBackendBrand,
   searchActive,
+  hasOpenTasks,
   pinnedOnly,
   projectFilterLabel,
   collapsed,
@@ -3193,6 +3248,7 @@ function FlatGroupList({
   readonly mobile: boolean;
   readonly showBackendBrand: boolean;
   readonly searchActive: boolean;
+  readonly hasOpenTasks: boolean;
   readonly pinnedOnly: boolean;
   readonly projectFilterLabel?: string;
   readonly collapsed: Readonly<Record<string, boolean>>;
@@ -3239,6 +3295,7 @@ function FlatGroupList({
   readonly environmentTintStyleForWorkspace: EnvironmentTintStyleForWorkspace;
 }): React.JSX.Element {
   if (groups.length === 0) {
+    if (hasOpenTasks) return <OpenTaskFilterEmptyState />;
     return (
       <div className="sidebar-empty">
         {searchActive ? (
@@ -3967,7 +4024,7 @@ function LineageRows({
   locationLabelFor,
   taskSummaryFor,
   archiveDescendantCountFor,
-  allowDescendantPaging,
+  descendantPagingFor,
   environmentTintStyleForWorkspace,
 }: {
   readonly nodes: readonly SidebarLineageNode[];
@@ -3990,7 +4047,7 @@ function LineageRows({
     threadId: string,
   ) => FlatThreadRowTaskSummary | undefined;
   readonly archiveDescendantCountFor: (threadId: string) => number;
-  readonly allowDescendantPaging: boolean;
+  readonly descendantPagingFor: (threadId: string) => FlatDescendantPaging;
   readonly environmentTintStyleForWorkspace: EnvironmentTintStyleForWorkspace;
 }): React.JSX.Element {
   const [expanded, setExpanded] = useSidebarDisclosures("lineage");
@@ -4014,7 +4071,7 @@ function LineageRows({
           locationLabelFor={locationLabelFor}
           taskSummaryFor={taskSummaryFor}
           archiveDescendantCountFor={archiveDescendantCountFor}
-          allowDescendantPaging={allowDescendantPaging}
+          descendantPagingFor={descendantPagingFor}
           environmentTintStyleForWorkspace={environmentTintStyleForWorkspace}
           expanded={expanded}
           setExpanded={setExpanded}
@@ -4041,7 +4098,7 @@ function LineageRow({
   locationLabelFor,
   taskSummaryFor,
   archiveDescendantCountFor,
-  allowDescendantPaging,
+  descendantPagingFor,
   expanded,
   setExpanded,
   showAll,
@@ -4068,7 +4125,7 @@ function LineageRow({
     threadId: string,
   ) => FlatThreadRowTaskSummary | undefined;
   readonly archiveDescendantCountFor: (threadId: string) => number;
-  readonly allowDescendantPaging: boolean;
+  readonly descendantPagingFor: (threadId: string) => FlatDescendantPaging;
   readonly expanded: Readonly<Record<string, boolean>>;
   readonly setExpanded: React.Dispatch<
     React.SetStateAction<Record<string, boolean>>
@@ -4084,12 +4141,7 @@ function LineageRow({
   const childContainer = useRef<HTMLDivElement>(null);
   const searchPath = Boolean(state.search && subtreeHasMatch(node));
   const descendantPage = state.descendantPages[node.thread.id];
-  const canLoad =
-    grouped &&
-    allowDescendantPaging &&
-    (Boolean(descendantPage?.nextCursor) ||
-      (!descendantPage?.loaded &&
-        node.familyDescendantCount > node.loadedFamilyDescendantCount));
+  const canLoad = grouped && descendantPagingFor(node.thread.id).canLoad;
   const hasChildren = grouped && node.children.length > 0;
   const hasExpandableContent =
     hasChildren || canLoad || Boolean(descendantPage?.error);
@@ -4220,7 +4272,7 @@ function LineageRow({
                   locationLabelFor={locationLabelFor}
                   taskSummaryFor={taskSummaryFor}
                   archiveDescendantCountFor={archiveDescendantCountFor}
-                  allowDescendantPaging={allowDescendantPaging}
+                  descendantPagingFor={descendantPagingFor}
                   environmentTintStyleForWorkspace={
                     environmentTintStyleForWorkspace
                   }

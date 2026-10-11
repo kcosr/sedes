@@ -165,6 +165,7 @@ function ActionsSheetHarness({
     <>
       <DropdownMenu
         presentation="sheet"
+        persistSheetCheckableSelections
         open={actionsOpen}
         onOpenChange={setActionsOpen}
       >
@@ -748,12 +749,38 @@ describe("ThreadSettingsControls", () => {
     expect(
       within(actions).getByRole("menuitemradio", { name: "Max" }),
     ).toBeDisabled();
+    await user.click(within(actions).getByRole("menuitemradio", { name: "Low" }));
+    expect(perform).not.toHaveBeenCalled();
+    expect(actions).toBeVisible();
+    await user.click(within(actions).getByRole("menuitemradio", { name: "Max" }));
+    expect(perform).not.toHaveBeenCalled();
     await user.click(within(actions).getByRole("menuitemradio", { name: "High" }));
     expect(perform).toHaveBeenCalledExactlyOnceWith({
       action: "set_setting",
       settingId: "thinking_level",
       value: "high",
     });
+    expect(actions).toBeVisible();
+    expect(within(actions).getByRole("menuitemradio", { name: "High" })).toBeVisible();
+    await user.click(within(actions).getByRole("menuitem", { name: "Thinking" }));
+    expect(within(actions).getByRole("menuitem", { name: /^Tool access/ })).toBeVisible();
+  });
+
+  it("keeps successive tool-access selections and failed updates in the same pane", async () => {
+    const perform = vi.fn().mockRejectedValueOnce(new Error("Update failed")).mockResolvedValue(undefined);
+    const toolAccess = thinkingSetting({ id: "tool_access", label: { text: "Tool access" } } as Partial<SettingDescriptor>);
+    const view = render(<ActionsSheetHarness perform={perform} snapshot={settingsSnapshot([toolAccess], { tool_access: "low" })} />);
+    await userEvent.click(screen.getByRole("menuitem", { name: "Tool access" }));
+    await userEvent.click(screen.getByRole("menuitemradio", { name: "High" }));
+    expect(screen.getByRole("menuitemradio", { name: "High" })).toBeVisible();
+    await userEvent.click(screen.getByRole("menuitemradio", { name: "High" }));
+    view.rerender(<ActionsSheetHarness perform={perform} snapshot={settingsSnapshot([toolAccess], { tool_access: "high" })} />);
+    expect(screen.getByRole("menuitemradio", { name: "High" })).toHaveAttribute("aria-checked", "true");
+    await userEvent.click(screen.getByRole("menuitemradio", { name: "High" }));
+    expect(perform).toHaveBeenCalledTimes(2);
+    await userEvent.click(screen.getByRole("menuitemradio", { name: "Low" }));
+    expect(perform).toHaveBeenLastCalledWith({ action: "set_setting", settingId: "tool_access", value: "low" });
+    expect(screen.getByRole("menuitemradio", { name: "High" })).toBeVisible();
   });
 
   it("keeps the effective value visible while a desired change is pending", () => {

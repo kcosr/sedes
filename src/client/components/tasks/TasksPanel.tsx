@@ -150,12 +150,10 @@ export interface TasksPanelContentProps {
    */
   readonly active: boolean;
   /**
-   * Phones: brings Chat in front of Tasks, which stays loaded, for the
-   * actions that continue there (Add to prompt, following a thread link).
-   * The host makes the announcement, since this content (and its live
-   * region) is parked once Chat is in front.
+   * Phones: brings Chat in front of Tasks, which stays loaded, when
+   * following a task's thread link.
    */
-  readonly onShowChat: (announcement?: string) => void;
+  readonly onShowChat: () => void;
   /**
    * The layout's close control, and on desktop its Maximize and Move to.
    * The content draws its header as the panel's `PanelChrome` with them,
@@ -330,11 +328,30 @@ export function TasksPanelContent({
   const searchButtonRef = useRef<HTMLButtonElement>(null);
   const lastFocused = useRef<{ key: string; element: HTMLElement } | null>(null);
   const lastNavOrder = useRef<readonly string[]>([]);
+  const announcementTimeout = useRef<number | undefined>(undefined);
 
-  const announce = useCallback((message: string) => {
+  const clearAnnouncement = useCallback(() => {
+    window.clearTimeout(announcementTimeout.current);
+    announcementTimeout.current = undefined;
     setAnnouncement("");
-    window.setTimeout(() => setAnnouncement(message), 0);
   }, []);
+  const announce = useCallback((message: string) => {
+    clearAnnouncement();
+    announcementTimeout.current = window.setTimeout(() => {
+      announcementTimeout.current = undefined;
+      setAnnouncement(message);
+    }, 0);
+  }, [clearAnnouncement]);
+
+  // A confirmation belongs to the current panel and thread. Clear pending
+  // announcements too, so a parked surface cannot bring old success back.
+  useEffect(() => {
+    clearAnnouncement();
+    return () => window.clearTimeout(announcementTimeout.current);
+  }, [active, clearAnnouncement, threadId]);
+  useEffect(() => {
+    if (error !== null) clearAnnouncement();
+  }, [clearAnnouncement, error]);
 
   // ── Per-task, per-action pending state ──────────────────────────────────
   const markPending = useCallback(
@@ -518,6 +535,7 @@ export function TasksPanelContent({
   useTaskReveal(({ taskId }) => {
     const task = store.getTasks().find(({ id }) => id === taskId);
     if (!task) return;
+    clearAnnouncement();
     setTasksLastView(revealView(task, context));
     setRevealId(taskId);
   });
@@ -559,12 +577,13 @@ export function TasksPanelContent({
     if (!active || detailId === null) return undefined;
     const closeDetail = (event: Event) => {
       event.preventDefault();
+      clearAnnouncement();
       setFocusRequest(detailId);
       setExpandedId(null);
     };
     window.addEventListener(CLOSE_TASK_DETAIL_EVENT, closeDetail);
     return () => window.removeEventListener(CLOSE_TASK_DETAIL_EVENT, closeDetail);
-  }, [active, detailId]);
+  }, [active, clearAnnouncement, detailId]);
 
   // The phone detail replaces the list: focus starts on its back button.
   useEffect(() => {
@@ -655,12 +674,9 @@ export function TasksPanelContent({
         return;
       }
       setError(null);
-      const message = `Added “${task.title}” to the prompt.`;
-      // On a phone Chat comes in front, so the chip arriving is visible.
-      if (sheet) onShowChat(message);
-      else announce(message);
+      announce(`Added “${task.title}” to the prompt.`);
     },
-    [announce, composerDraft, onShowChat, sheet],
+    [announce, composerDraft],
   );
 
   const openFile = useCallback(
@@ -804,6 +820,7 @@ export function TasksPanelContent({
   };
 
   const toggleExpanded = (task: AssociatedTask) => {
+    clearAnnouncement();
     setActiveNavKey(taskNavKey(task.id));
     setMoveMenuId(null);
     setExpandedId((current) => (current === task.id ? null : task.id));
@@ -811,6 +828,7 @@ export function TasksPanelContent({
 
   const changeView = (next: TasksView) => {
     if (viewUnavailableReason(next, context) !== undefined) return;
+    clearAnnouncement();
     setTasksLastView(next);
     setRevealed(null);
     setError(null);
@@ -834,6 +852,7 @@ export function TasksPanelContent({
       return;
     }
     // The phone detail hides the add bar until the list is back.
+    clearAnnouncement();
     setExpandedId(null);
     requestAnimationFrame(() => addInputRef.current?.focus());
   };
@@ -962,6 +981,7 @@ export function TasksPanelContent({
     if (event.nativeEvent.isComposing) return;
     if (event.key === "Escape") {
       event.preventDefault();
+      clearAnnouncement();
       if (expandedId !== null) {
         setFocusRequest(expandedId);
         setExpandedId(null);
@@ -1268,6 +1288,7 @@ export function TasksPanelContent({
             className="tasks-header-button tasks-back"
             aria-label="Back to tasks"
             onClick={() => {
+              clearAnnouncement();
               setFocusRequest(expandedTask.id);
               setExpandedId(null);
             }}
@@ -1433,10 +1454,12 @@ export function TasksPanelContent({
         value={searchText}
         onChange={(event) => setSearchText(event.target.value)}
         onKeyDown={(event) => {
+          if (event.nativeEvent.isComposing) return;
           if (event.key === "Escape") {
             event.preventDefault();
             event.stopPropagation();
-            closeSearch();
+            if (searchText.length > 0) setSearchText("");
+            else event.currentTarget.blur();
           }
         }}
       />
@@ -1465,7 +1488,6 @@ export function TasksPanelContent({
         )
       : addInputRef.current;
   };
-
   return (
     <TaskListProvider value={environment}>
       <div
@@ -1477,6 +1499,13 @@ export function TasksPanelContent({
         onKeyDown={onRootKeyDown}
       >
         {header}
+        <div
+          className="sr-only"
+          role="status"
+          aria-live="polite"
+        >
+          {error === null ? announcement : ""}
+        </div>
         {sheetDetail ? (
           <>
             <div className="tasks-sheet-detail">
@@ -1517,9 +1546,6 @@ export function TasksPanelContent({
             {sheet && addRow}
           </>
         )}
-        <div className="sr-only" role="status" aria-live="polite">
-          {announcement}
-        </div>
       </div>
 
       {editingId !== null && (
@@ -1553,6 +1579,7 @@ export function TasksPanelContent({
             markPending(deletingTask.id, "delete", false);
           }
           if (expandedId === deletingTask.id) setExpandedId(null);
+          setError(null);
           announce(`Deleted “${deletingTask.title}”.`);
         }}
       />
@@ -1711,7 +1738,6 @@ export function TasksPanel({
   const [dirty, setDirty] = useState(false);
   // A new body: what an unload discards (see below).
   const [bodyGeneration, setBodyGeneration] = useState(0);
-  const [announcement, setAnnouncement] = useState("");
   const [dock, publishDock] = useState<TasksDock>();
   const [bodyTarget] = useState(createBodyTarget);
 
@@ -1752,13 +1778,9 @@ export function TasksPanel({
     setBodyGeneration((generation) => generation + 1);
   }, [present]);
 
-  // Phones: Chat comes in front, Tasks staying loaded. The host announces
-  // what happened, since the content's live region is parked with it.
-  const showChat = useCallback((message?: string) => {
+  // Phones: thread links bring Chat in front, Tasks staying loaded.
+  const showChat = useCallback(() => {
     latest.current.dock?.showChat();
-    if (message === undefined) return;
-    setAnnouncement("");
-    window.setTimeout(() => setAnnouncement(message), 0);
   }, []);
 
   // The content switches view and expands the task itself.
@@ -1797,15 +1819,6 @@ export function TasksPanel({
   return (
     <TasksHostContext.Provider value={host}>
       {children}
-      {/* Mounted on every page, so it takes the status role only while it
-          has something to say. */}
-      <div
-        className="sr-only"
-        role={announcement.length > 0 ? "status" : undefined}
-        aria-live="polite"
-      >
-        {announcement}
-      </div>
       {presentation
         ? createPortal(
             <TasksPanelContent

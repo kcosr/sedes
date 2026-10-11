@@ -14,6 +14,7 @@ import {
   setSidebarEnvironmentFilterId,
   setSidebarGroupBy,
   setSidebarGroupForks,
+  setSidebarHasOpenTasks,
   setSidebarInventoryScope,
   setSidebarProjectFilterId,
   setSidebarScopeCollapsed,
@@ -104,6 +105,7 @@ describe("sidebar view preferences read path", () => {
       projectFilterPublication: null,
       groupFilterId: null,
       ungroupedFilter: false,
+      hasOpenTasks: false,
       scopeCollapsed: false,
       groupBy: "time",
       stackBy: "none",
@@ -662,6 +664,7 @@ describe("sidebar view preference mutations", () => {
     });
     setSidebarShowFilter("snoozed", false);
     setSidebarShowFilter("settled", false);
+    setSidebarHasOpenTasks(true);
     setSidebarGroupBy("time");
     updateSidebarModePreferences("time", {
       density: "card",
@@ -680,6 +683,7 @@ describe("sidebar view preference mutations", () => {
       projectFilterId: null,
       groupFilterId: null,
       ungroupedFilter: false,
+      hasOpenTasks: false,
       groupBy: "time",
       show: SIDEBAR_VIEW_DEFAULTS.show,
       modes: {
@@ -693,5 +697,30 @@ describe("sidebar view preference mutations", () => {
     setSidebarGroupForks(false);
     expect(getSidebarViewPreferences().groupForks).toBe(false);
     expect(readBlob()).toMatchObject({ groupForks: false });
+  });
+
+  it("persists the open-task filter across views and clears it independently of mode settings", () => {
+    setSidebarHasOpenTasks(true);
+    expect(hasActiveSidebarFilters()).toBe(true);
+    expect(readBlob()).toMatchObject({ hasOpenTasks: true });
+    invalidateSnapshot();
+    expect(getSidebarViewPreferences().hasOpenTasks).toBe(true);
+    setSidebarGroupBy("project");
+    updateSidebarModePreferences("project", { sortBy: "alpha" });
+    resetSidebarMode("project");
+    expect(getSidebarViewPreferences().hasOpenTasks).toBe(true);
+    clearActiveSidebarFilters();
+    expect(getSidebarViewPreferences().hasOpenTasks).toBe(false);
+    expect(hasActiveSidebarFilters()).toBe(false);
+    expect(readBlob()).toMatchObject({ hasOpenTasks: false });
+  });
+
+  it.each([undefined, "true", 1, null])("defaults missing or invalid open-task filter values off (%j)", (hasOpenTasks) => {
+    localStorage.setItem(SIDEBAR_VIEW_STORAGE_KEY, JSON.stringify({
+      ...SIDEBAR_VIEW_DEFAULTS,
+      hasOpenTasks,
+    }));
+    invalidateSnapshot();
+    expect(getSidebarViewPreferences().hasOpenTasks).toBe(false);
   });
 });

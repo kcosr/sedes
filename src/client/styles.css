@@ -4513,13 +4513,22 @@ textarea:disabled {
   flex: 0 0 auto;
 }
 
+.thread-pin-trigger,
 .thread-bookmarks-trigger,
 .workbench-panel-toggle {
   flex: 0 0 auto;
 }
 
+.thread-pin-trigger[aria-pressed="true"],
 .thread-bookmarks-trigger[data-has-items="true"] {
   color: var(--info);
+}
+
+.thread-pin-error {
+  margin: 0;
+  padding: var(--space-1-5) var(--space-3);
+  color: var(--destructive);
+  font-size: var(--text-ui);
 }
 
 /* With a count, such as open tasks, a panel toggle widens to show it beside

@@ -242,6 +242,7 @@ export function resolveStateBucket(
     thread.runState === "waiting_for_input" ||
     thread.runState === "waiting_for_approval" ||
     thread.pendingQuestionCount > 0 ||
+    thread.attention.unseenCompletion ||
     thread.attention.queueFailure ||
     thread.attention.wake ||
     thread.attention.automationContext === "failed" ||

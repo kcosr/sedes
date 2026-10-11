@@ -439,6 +439,31 @@ test("Workpads retain attributed history, reconcile shared drafts, and move betw
   // Choosing a segment returns to that view's list.
   await segment("Thread").click();
   await expect(panel.getByRole("button", { name: "Second thread notes", exact: true })).toBeVisible();
+  // Escape clears a populated list input, then blurs it without dismissing Workpads.
+  await addRow.fill("Abandoned title");
+  await addRow.press("Escape");
+  await expect(addRow).toHaveValue("");
+  await expect(addRow).toBeFocused();
+  await addRow.press("Escape");
+  await expect(addRow).not.toBeFocused();
+  await expect(panel).toBeVisible();
+  const searchToggle = pane.getByRole("button", { name: "Search workpads", exact: true });
+  await searchToggle.click();
+  const searchInput = panel.getByRole("textbox", { name: "Search workpads", exact: true });
+  await searchInput.fill("Unmatched workpad query");
+  await expect(panel.getByText("No workpads match “Unmatched workpad query”", { exact: true })).toBeVisible();
+  await searchInput.press("Escape");
+  await expect(searchInput).toHaveValue("");
+  await expect(searchInput).toBeFocused();
+  await expect(panel.getByRole("button", { name: "Second thread notes", exact: true })).toBeVisible();
+  await searchInput.press("Escape");
+  await expect(searchInput).not.toBeFocused();
+  await expect(searchInput).toBeVisible();
+  await expect(searchToggle).toHaveAttribute("aria-pressed", "true");
+  await expect(panel).toBeVisible();
+  await panel.getByRole("button", { name: "Close search", exact: true }).click();
+  await expect(searchInput).toHaveCount(0);
+  await expect(searchToggle).toHaveAttribute("aria-pressed", "false");
   await capture(page, testInfo, "workpads-list-thread.png");
   await segment("Project").click();
   await expect(segment("Project")).toHaveText("Project0");

@@ -27,10 +27,20 @@ projects and fork families are saved locally on this client and restored
 when you reopen the sidebar or reload the app. Explicitly collapsed projects
 stay collapsed even when they contain the current thread.
 
+Select **Has open tasks** in **View options**, or the Tasks icon immediately
+right of it, to show threads with open Tasks assigned directly to them. Both
+controls share one saved setting across views; the toolbar toggle is blue
+while active. Tasks assigned to a project or Global do not make threads match
+this filter.
+
 State puts each thread in the first group that applies: **Needs attention**,
 **Running**, **Snoozed**, **Parked**, **Scheduled**, then **Idle**. A snoozed
 or parked thread with an automation therefore stays under Snoozed or Parked
 rather than Scheduled.
+
+An unacknowledged completion, shown by the blue completion indicator, counts
+as Needs attention. Opening the thread acknowledges it; the thread then moves
+to the first group that still applies.
 
 Large groups initially show a bounded recent set, with an expander for older
 rows. An active search shows all matches, and the selected thread remains
@@ -213,8 +223,9 @@ as available and its settings are admitted.
 ## Search the inventory
 
 Sidebar search filters the currently selected working inventory. It combines
-with Scope, inventory visibility, and Pinned-only settings. Search bypasses
-thread-group stacking so a matching child is never concealed inside a stack.
+with Scope, inventory visibility, Pinned-only, and Has open tasks settings.
+Search bypasses thread-group stacking so a matching child is never concealed
+inside a stack.
 
 Press Ctrl+Shift+F (Command+Shift+F on macOS) to focus sidebar search and
 select its text, even from a terminal. It opens a collapsed sidebar, or the
@@ -227,8 +238,9 @@ conversation; sidebar search and transcript search serve different purposes.
 
 ## Pin important threads
 
-Pin or unpin a thread with its row action or context menu. Pinning is independent
-of Active, Snoozed, Parked, and Archived state.
+Pin or unpin a thread with its row action, context menu, or the pin toggle in
+the chat header immediately left of Bookmarks. The header toggle is blue when
+pinned. Pinning is independent of Active, Snoozed, Parked, and Archived state.
 
 - Timeline, State, and Flat list extract matching pinned threads into a
   collapsible **Pinned** section, without duplicating them elsewhere.

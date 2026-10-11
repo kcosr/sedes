@@ -61,6 +61,22 @@ env -u NODE_ENV npm run test:e2e
 Documentation-only changes normally need link/config validation and the
 proportionate deterministic checks; they do not justify live-provider calls.
 
+On Linux, the test suite runs real Bubblewrap boundary tests by default. If the
+test environment cannot mount `/proc` or set a sandbox hostname, explicitly
+skip those launches with:
+
+```sh
+SEDES_SKIP_SANDBOX_TESTS=1 env -u NODE_ENV npm test
+```
+
+Only the exact value `1` opts out. This skips the real launches in the Pi
+Bubblewrap boundary and worker-runtime suites and the Grok probe harness and
+offline tranche suites. Sandbox policy, launch-plan validation, and tests that
+do not launch Bubblewrap remain active. The flag does not alter production
+sandbox protections or the standalone Grok probe commands. Report these checks
+as skipped; run them with the flag unset in an environment that supports the
+required Bubblewrap operations before claiming sandbox boundary verification.
+
 Run the documentation check directly with:
 
 ```sh

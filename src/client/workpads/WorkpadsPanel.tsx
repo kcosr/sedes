@@ -907,7 +907,13 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
       <Search className="workpads-search-icon" aria-hidden="true" />
       <input autoFocus type="text" className="workpads-search-input" aria-label="Search workpads" placeholder="Search titles and text"
         autoComplete="off" maxLength={240} value={query} onChange={event => setQuery(event.target.value)}
-        onKeyDown={event => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); closeSearch(); } }} />
+        onKeyDown={event => {
+          if (event.nativeEvent.isComposing || event.key !== "Escape") return;
+          event.preventDefault();
+          event.stopPropagation();
+          if (query) setQuery("");
+          else event.currentTarget.blur();
+        }} />
       <Button variant="ghost" size="icon-xs" aria-label="Close search" onClick={closeSearch}><X aria-hidden="true" /></Button>
     </div>}
     <div className="workpads-toolbar">
@@ -919,7 +925,13 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
         <input ref={addInputRef} type="text" className="workpads-add-input" aria-label="New workpad title" placeholder={ADD_PLACEHOLDER[view]}
           autoComplete="off" enterKeyHint="done" maxLength={240} disabled={!destination} value={newTitle}
           onChange={event => setNewTitle(event.target.value)}
-          onKeyDown={event => { if (event.key === "Escape" && newTitle) { event.preventDefault(); event.stopPropagation(); setNewTitle(""); } }} />
+          onKeyDown={event => {
+            if (event.nativeEvent.isComposing || event.key !== "Escape") return;
+            event.preventDefault();
+            event.stopPropagation();
+            if (newTitle) setNewTitle("");
+            else event.currentTarget.blur();
+          }} />
         {newTitle.trim() && <span className="workpads-add-hint" aria-hidden="true">↵ create</span>}
       </form>}
     </div>

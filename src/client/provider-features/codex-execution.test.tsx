@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -310,6 +310,35 @@ describe("codex.execution@1 client feature", () => {
     expect(perform).toHaveBeenCalledWith(
       expect.objectContaining({ actionId: "set_sandbox_read_only" }),
     );
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("keeps the Thread actions settings pane open across execution choices and published updates", async () => {
+    const perform = vi.fn().mockResolvedValue(undefined);
+    let desired = defaultDesired;
+    const view = render(featureElement(snapshot({ desired }), perform, false, "sheet", true));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Codex execution" }));
+    await userEvent.click(screen.getByRole("menuitemradio", { name: "Workspace" }));
+    expect(perform).not.toHaveBeenCalled();
+    for (const [group, label, actionId, patch] of [
+      ["Sandbox", "Read-only", "set_sandbox_read_only", { sandboxMode: "read-only" }],
+      ["Network", "Enabled", "set_network_enabled", { networkAccess: "enabled" }],
+      ["Approval policy", "Untrusted", "set_approval_untrusted", { approvalPolicy: "untrusted" }],
+      ["Approval reviewer", "Auto-review", "set_reviewer_auto_review", { approvalReviewer: "auto_review" }],
+    ] as const) {
+      const choice = within(screen.getByRole("group", { name: group })).getByRole("menuitemradio", { name: label });
+      await userEvent.click(choice);
+      expect(perform).toHaveBeenLastCalledWith(expect.objectContaining({ actionId, expectedFeatureRevision: 7 }));
+      desired = { ...desired, ...patch };
+      view.rerender(featureElement(snapshot({ desired }), perform, false, "sheet", true));
+      expect(choice).toHaveAttribute("aria-checked", "true");
+      expect(screen.getByRole("group", { name: "Codex execution" })).toBeVisible();
+    }
+    await userEvent.click(screen.getByRole("menuitem", { name: "Codex execution" }));
+    expect(screen.queryByRole("menuitemradio")).toBeNull();
+    expect(screen.getByRole("menuitem", { name: "Codex execution" })).toBeVisible();
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   });
 
   it("renders no explanatory text when native execution state is absent", () => {
@@ -353,9 +382,10 @@ function featureElement(
   perform = vi.fn().mockResolvedValue(undefined),
   disabled = false,
   presentation: MenuPresentation = "menu",
+  persistSheetCheckableSelections = false,
 ): React.JSX.Element {
   return (
-    <DropdownMenu presentation={presentation} defaultOpen>
+    <DropdownMenu presentation={presentation} persistSheetCheckableSelections={persistSheetCheckableSelections} defaultOpen>
       <DropdownMenuTrigger>Thread actions</DropdownMenuTrigger>
       <DropdownMenuContent aria-label="Thread actions">
         <ProviderFeatureThreadDetails

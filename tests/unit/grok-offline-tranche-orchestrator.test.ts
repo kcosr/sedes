@@ -12,6 +12,7 @@ import {
 } from "../../scripts/grok-probes/run-grok-offline-tranche.js";
 import { createHash } from "node:crypto";
 import { readFile as readBinaryFile, stat } from "node:fs/promises";
+import { realBubblewrapTestsEnabled } from "../support/sandbox-test-gate.js";
 
 const rootDirectory = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -28,7 +29,8 @@ const scope = Object.freeze({
   executionEnvironmentId: "environment-grok-offline",
 });
 const temporaryDirectories: string[] = [];
-const itBubblewrap = it.runIf(process.platform === "linux");
+const itBubblewrap = it.runIf(realBubblewrapTestsEnabled);
+const itLinux = it.runIf(process.platform === "linux");
 
 afterEach(async () => {
   await Promise.all(
@@ -342,7 +344,7 @@ describe("Grok offline tranche orchestrator", () => {
     await expect(access(outputPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  itBubblewrap("applies the absolute deadline to candidate acquisition and joins its abort", async () => {
+  itLinux("applies the absolute deadline to candidate acquisition and joins its abort", async () => {
     const outputPath = await output("acquisition-deadline.json");
     let joined = false;
     await expect(

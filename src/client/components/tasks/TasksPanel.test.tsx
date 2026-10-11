@@ -28,6 +28,7 @@ import {
 import {
   ComposerDraftProvider,
   useComposerDraftCoordinator,
+  type ContextExcerptStageResult,
 } from "../../context-excerpts/coordinator.js";
 import {
   consumeReveal,
@@ -199,7 +200,7 @@ function makePanelLayoutStore(): { open: ReturnType<typeof vi.fn> } & PanelLayou
 function DraftConsumer({
   stageTaskReference,
 }: {
-  readonly stageTaskReference: (reference: unknown) => void;
+  readonly stageTaskReference: (reference: unknown) => ContextExcerptStageResult | void;
 }): null {
   const coordinator = useComposerDraftCoordinator();
   useLayoutEffect(
@@ -207,10 +208,7 @@ function DraftConsumer({
       coordinator?.registerConsumer({
         stage: () => ({ ok: true }),
         attachAndSubmit: () => ({ ok: true }),
-        stageTaskReference: (reference) => {
-          stageTaskReference(reference);
-          return { ok: true };
-        },
+        stageTaskReference: (reference) => stageTaskReference(reference) ?? { ok: true },
         getSnapshot: () => ({ available: true }),
       }),
     [coordinator, stageTaskReference],
@@ -291,7 +289,7 @@ function renderPanel(
   store: ApplicationClientStore,
   options: {
     readonly panelLayoutStore?: PanelLayoutStore;
-    readonly stageTaskReference?: (reference: unknown) => void;
+    readonly stageTaskReference?: (reference: unknown) => ContextExcerptStageResult | void;
     readonly drag?: boolean;
   } = {},
 ) {
@@ -815,6 +813,36 @@ describe("TasksPanel add row", () => {
     expect(addInput()).toHaveFocus();
   });
 
+  it("keeps search and expanded details open while Escape clears and blurs each add field", async () => {
+    const user = userEvent.setup();
+    const store = seededStore();
+    renderPanel(store);
+    await user.click(rowTitle("Add retry to the payment call"));
+    await user.click(screen.getByRole("button", { name: "Search tasks" }));
+    await user.type(addInput(), "Draft title{Shift>}{Enter}{/Shift}");
+    const notes = screen.getByRole("textbox", { name: "New task notes" });
+    await waitFor(() => expect(notes).toHaveFocus());
+    await user.type(notes, "Draft notes");
+
+    await user.keyboard("{Escape}");
+    expect(notes).toHaveValue("");
+    expect(notes).toHaveFocus();
+    expect(addInput()).toHaveValue("Draft title");
+    await user.keyboard("{Escape}");
+    expect(notes).not.toHaveFocus();
+    await user.click(addInput());
+    await user.keyboard("{Escape}");
+    expect(addInput()).toHaveValue("");
+    expect(addInput()).toHaveFocus();
+    await user.keyboard("{Escape}");
+    expect(addInput()).not.toHaveFocus();
+    expect(notes).toBeVisible();
+    expect(screen.getByRole("textbox", { name: "Search tasks" })).toBeVisible();
+    expect(rowTitle("Add retry to the payment call")).toHaveAttribute("aria-expanded", "true");
+    expect(panel()).toBeVisible();
+    expect(store.createTask).not.toHaveBeenCalled();
+  });
+
   it("asks before turning a multi-line paste into one task per line", async () => {
     const user = userEvent.setup();
     const store = seededStore();
@@ -1092,6 +1120,51 @@ describe("TasksPanel rows", () => {
     expect(within(confirm).getByRole("button", { name: "Cancel" })).toHaveFocus();
     await user.click(within(confirm).getByRole("button", { name: "Delete task" }));
     expect(store.deleteTask).toHaveBeenCalledWith("t-retry");
+  });
+
+  it.each([false, true])("announces deleting an expanded detail when phone presentation is %s", async (phone) => {
+    stubDensity(phone);
+    const user = userEvent.setup();
+    const store = seededStore();
+    renderPanel(store);
+    await user.click(rowTitle("Add retry to the payment call"));
+    await user.click(screen.getByRole("button", { name: 'Actions for "Add retry to the payment call"' }));
+    await user.click(screen.getByRole("menuitem", { name: "Delete…" }));
+    const confirm = screen.getByRole("dialog", { name: "Delete task?" });
+    await user.click(within(confirm).getByRole("button", { name: "Delete task" }));
+    await waitFor(() => expect(confirm).not.toBeInTheDocument());
+    const status = within(panel()).getByRole("status");
+    await waitFor(() => expect(status).toHaveTextContent("Deleted “Add retry to the payment call”."));
+    expect(status).toHaveClass("sr-only");
+    if (phone) {
+      expect(panel().querySelector(".tasks-content")).not.toHaveAttribute("data-task-detail-open");
+    } else {
+      expect(rowTitle("Add retry to the payment call")).toHaveAttribute("aria-expanded", "false");
+    }
+  });
+
+  it.each([false, true])("clears a previous action error after deleting a task when phone presentation is %s", async (phone) => {
+    stubDensity(phone);
+    const user = userEvent.setup();
+    const store = seededStore();
+    vi.mocked(store.updateTask).mockRejectedValueOnce(new Error("Pin update failed."));
+    renderPanel(store);
+    await user.click(rowTitle("Add retry to the payment call"));
+    const actions = () => screen.getByRole("button", { name: 'Actions for "Add retry to the payment call"' });
+    await user.click(actions());
+    await user.click(screen.getByRole("menuitem", { name: "Pin" }));
+    expect(await within(panel()).findByRole("alert")).toHaveTextContent("Pin update failed.");
+
+    await user.click(actions());
+    await user.click(screen.getByRole("menuitem", { name: "Delete…" }));
+    const confirm = screen.getByRole("dialog", { name: "Delete task?" });
+    await user.click(within(confirm).getByRole("button", { name: "Delete task" }));
+    await waitFor(() => expect(confirm).not.toBeInTheDocument());
+    expect(store.deleteTask).toHaveBeenCalledWith("t-retry");
+    expect(within(panel()).queryByRole("alert")).not.toBeInTheDocument();
+    const status = within(panel()).getByRole("status");
+    await waitFor(() => expect(status).toHaveTextContent("Deleted “Add retry to the payment call”."));
+    expect(status).toHaveClass("sr-only");
   });
 
   it("writes the versioned task identity when a row is dragged", () => {
@@ -1469,9 +1542,40 @@ describe("TasksPanel view options and search", () => {
 
     await user.click(search);
     await user.keyboard("{Escape}");
-    expect(screen.queryByRole("textbox", { name: "Search tasks" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Search tasks" })).toHaveFocus();
+    expect(search).toHaveValue("");
+    expect(search).toHaveFocus();
     expect(titles()).toHaveLength(2);
+    await user.keyboard("{Escape}");
+    expect(search).toBeInTheDocument();
+    expect(search).not.toHaveFocus();
+    expect(screen.getByRole("button", { name: "Search tasks" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("consumes search Escape without collapsing details and ignores IME composition", async () => {
+    const user = userEvent.setup();
+    renderPanel(seededStore());
+    await user.click(rowTitle("Add retry to the payment call"));
+    await user.click(screen.getByRole("button", { name: "Search tasks" }));
+    const search = screen.getByRole("textbox", { name: "Search tasks" });
+    await user.type(search, "retry");
+
+    expect(fireEvent.keyDown(search, { key: "Escape", isComposing: true })).toBe(true);
+    expect(search).toHaveValue("retry");
+    expect(search).toHaveFocus();
+    expect(rowTitle("Add retry to the payment call")).toHaveAttribute("aria-expanded", "true");
+
+    expect(fireEvent.keyDown(search, { key: "Escape" })).toBe(false);
+    expect(search).toHaveValue("");
+    expect(search).toHaveFocus();
+    expect(rowTitle("Add retry to the payment call")).toHaveAttribute("aria-expanded", "true");
+    expect(fireEvent.keyDown(search, { key: "Escape", isComposing: true })).toBe(true);
+    expect(search).toHaveFocus();
+
+    expect(fireEvent.keyDown(search, { key: "Escape" })).toBe(false);
+    expect(search).not.toHaveFocus();
+    expect(search).toBeVisible();
+    expect(rowTitle("Add retry to the payment call")).toHaveAttribute("aria-expanded", "true");
+    expect(panel()).toBeInTheDocument();
   });
 });
 
@@ -2033,7 +2137,7 @@ describe("TasksPanel on a phone", () => {
 
     const content = phonePanel.querySelector(".tasks-content")!;
     expect(content).toHaveAttribute("data-presentation", "sheet");
-    expect(content.lastElementChild?.previousElementSibling).toHaveClass("tasks-add");
+    expect(content.lastElementChild).toHaveClass("tasks-add");
     expect(within(phonePanel).getByRole("button", { name: "Add task" })).toBeDisabled();
     expect(within(phonePanel).queryByRole("button", { name: "View options" })).not.toBeInTheDocument();
     // Only › Pinned has its own header button beside Search.
@@ -2090,7 +2194,7 @@ describe("TasksPanel on a phone", () => {
     expect(back()).toBe(false);
   });
 
-  it("shows Chat after Add to prompt, keeping Tasks loaded, and announces it", async () => {
+  it("stages multiple tasks without leaving the phone detail or list and announces each addition", async () => {
     const user = userEvent.setup();
     const stageTaskReference = vi.fn();
     renderPanel(seededStore(), { stageTaskReference });
@@ -2099,11 +2203,52 @@ describe("TasksPanel on a phone", () => {
     await user.click(within(panel()).getByRole("button", { name: "Add to prompt" }));
 
     expect(stageTaskReference).toHaveBeenCalledWith({ taskId: "t-retry", titleSnapshot: "Add retry to the payment call" });
-    // Chat comes in front, so the chip is seen arriving; Tasks stays loaded,
-    // on its detail. The host announces, since Tasks is now off stage.
-    expect(screen.queryByRole("region", { name: "Tasks" })).not.toBeInTheDocument();
-    expect(document.querySelector('.tasks-content[data-task-detail-open="true"]')).toBeInTheDocument();
+    expect(panel()).toBeVisible();
+    expect(within(panel()).getByRole("heading", { name: "Add retry to the payment call" })).toBeVisible();
+    expect(panel().querySelector('.tasks-content[data-task-detail-open="true"]')).toBeInTheDocument();
     await waitFor(() => expect(announced("Added “Add retry to the payment call” to the prompt.")).toBe(true));
+    const status = within(panel()).getByRole("status");
+    expect(status).toHaveClass("sr-only");
+    expect(status.querySelector('[data-slot="callout"]')).not.toBeInTheDocument();
+    expect(status).toHaveAttribute("aria-live", "polite");
+
+    await user.click(within(panel()).getByRole("button", { name: "Back to tasks" }));
+    expect(status).toBeEmptyDOMElement();
+    expect(status).toHaveClass("sr-only");
+    await user.click(within(panel()).getByRole("button", { name: 'Actions for "Audit checkout error states"' }));
+    await user.click(screen.getByRole("menuitem", { name: "Add to prompt" }));
+    expect(stageTaskReference).toHaveBeenNthCalledWith(2, { taskId: "t-audit", titleSnapshot: "Audit checkout error states" });
+    expect(panel()).toBeVisible();
+    expect(panel().querySelector(".tasks-content")).not.toHaveAttribute("data-task-detail-open");
+    expect(titles()).toEqual(["Audit checkout error states", "Add retry to the payment call"]);
+    await waitFor(() => expect(announced("Added “Audit checkout error states” to the prompt.")).toBe(true));
+    expect(status).toHaveClass("sr-only");
+    expect(status.querySelector('[data-slot="callout"]')).not.toBeInTheDocument();
+    await user.click(segment("Global"));
+    expect(status).toBeEmptyDOMElement();
+    expect(status).toHaveClass("sr-only");
+  });
+
+  it("clears the screen-reader announcement on a duplicate-task error while keeping the detail open", async () => {
+    const user = userEvent.setup();
+    const stageTaskReference = vi.fn<() => ContextExcerptStageResult>()
+      .mockReturnValueOnce({ ok: true })
+      .mockReturnValue({ ok: false, reason: "That task is already attached." });
+    renderPanel(seededStore(), { stageTaskReference });
+    await user.click(rowTitle("Add retry to the payment call"));
+    const add = within(panel()).getByRole("button", { name: "Add to prompt" });
+    await user.click(add);
+    const status = within(panel()).getByRole("status");
+    await waitFor(() => expect(status).toHaveTextContent("Added “Add retry to the payment call” to the prompt."));
+    expect(status).toHaveClass("sr-only");
+
+    await user.click(add);
+    expect(within(panel()).getByRole("alert")).toHaveTextContent("That task is already attached.");
+    expect(status).toBeEmptyDOMElement();
+    expect(status).toHaveClass("sr-only");
+    expect(within(panel()).getByRole("heading", { name: "Add retry to the payment call" })).toBeVisible();
+    await user.click(within(panel()).getByRole("button", { name: "Dismiss error" }));
+    expect(status).toBeEmptyDOMElement();
   });
 
   it("shows Chat for a task's thread link", async () => {
@@ -2116,7 +2261,7 @@ describe("TasksPanel on a phone", () => {
     expect(document.querySelector(".tasks-content")).toBeInTheDocument();
   });
 
-  it("closes the detail, then search, with Escape, and leaves the panel open", async () => {
+  it("closes the detail with Escape and keeps search open when its empty input blurs", async () => {
     const user = userEvent.setup();
     renderPanel(seededStore());
     const phonePanel = panel();
@@ -2129,9 +2274,12 @@ describe("TasksPanel on a phone", () => {
     await user.click(within(phonePanel).getByRole("button", { name: "Search tasks" }));
     expect(within(phonePanel).getByRole("textbox", { name: "Search tasks" })).toHaveFocus();
     await user.keyboard("{Escape}");
-    expect(within(phonePanel).queryByRole("textbox", { name: "Search tasks" })).not.toBeInTheDocument();
+    const search = within(phonePanel).getByRole("textbox", { name: "Search tasks" });
+    expect(search).toBeVisible();
+    expect(search).not.toHaveFocus();
 
-    await user.keyboard("{Escape}");
+    await user.click(within(phonePanel).getByRole("button", { name: "Close search" }));
+    expect(search).not.toBeInTheDocument();
     expect(panel()).toBe(phonePanel);
   });
 

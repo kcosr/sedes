@@ -231,6 +231,16 @@
 
 ### Added
 
+- Pin or unpin the current thread directly from the chat header, beside
+  Bookmarks, with a blue selected state.
+  ([#72](https://github.com/kcosr/sedes/pull/72))
+- Filter the sidebar to threads with open Tasks using **Has open tasks** in
+  View options or the matching toolbar toggle.
+  ([#72](https://github.com/kcosr/sedes/pull/72))
+- `SEDES_SKIP_SANDBOX_TESTS=1` skips real Bubblewrap test execution on
+  restricted hosts while retaining sandbox policy and validation coverage.
+  ([#72](https://github.com/kcosr/sedes/pull/72))
+
 - Opt-in voice delivery diagnostics show server dispatch, Android receipt and
   queue decisions, and speech playback progress without recording message text.
   ([#69](https://github.com/kcosr/sedes/pull/69))
@@ -501,6 +511,10 @@
   Session stats stays in the thread menu rather than flashing during loading. (#8)
 
 ### Changed
+
+- State organization groups threads with an unacknowledged completion under
+  Needs attention until the completion is acknowledged.
+  ([#72](https://github.com/kcosr/sedes/pull/72))
 
 - Android voice uses Off, Input, and Speak modes. Input keeps eligible
   completion auto-listen without automatic speech; Speak adds a remembered
@@ -940,6 +954,12 @@
 
 ### Fixed
 
+- Mobile Tasks stays open after Add to prompt; mobile thread settings
+  stay open after changing options so further selections can be made.
+  ([#72](https://github.com/kcosr/sedes/pull/72))
+- Escape in Tasks and Workpads search/add inputs clears the focused field
+  first, then removes focus when pressed again while empty.
+  ([#72](https://github.com/kcosr/sedes/pull/72))
 - Preserve SSH carrier exit evidence and capture the first remote Codex/Claude
   event-forwarding failure in gated delivery diagnostics. Upgrade the execution
   sidecar to capture remote failures. ([#71](https://github.com/kcosr/sedes/pull/71))

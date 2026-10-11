@@ -230,11 +230,13 @@ function fixture(
     createThreadFromSettings: ReturnType<typeof vi.fn>;
     getThreadForceResetImpact: ReturnType<typeof vi.fn>;
     forceResetThread: ReturnType<typeof vi.fn>;
+    setThreadPinned: ReturnType<typeof vi.fn>;
   };
   readonly threadStore: ThreadClientStore;
+  readonly publishPin: (pinned: boolean, revision: number) => void;
 } {
   const environmentKind = options.environmentKind ?? "ssh";
-  const applicationState: ApplicationClientState = {
+  let applicationState: ApplicationClientState = {
     status: "ready",
     connection: "connected",
     authoritative: true,
@@ -270,6 +272,17 @@ function fixture(
     },
     visibleThreads: [],
   } as unknown as ApplicationClientState;
+  const applicationListeners = new Set<() => void>();
+  const publishPin = (pinned: boolean, pinRevision: number) => {
+    applicationState = {
+      ...applicationState,
+      snapshot: {
+        ...applicationState.snapshot!,
+        threads: [{ ...makeSnapshot().thread, pinned, pinRevision, bookmarkRevision: 0 } as NormalizedApplicationSnapshot["threads"][number]],
+      },
+    };
+    for (const listener of applicationListeners) listener();
+  };
   const applicationStore = {
     api: {
       listWorkspaceFileRoots: vi.fn(async () => ({
@@ -289,13 +302,17 @@ function fixture(
       updateThreadPreferredWorktree: vi.fn(),
       deleteLinkedWorktree: vi.fn(),
     },
-    subscribe: () => () => undefined,
+    subscribe: (listener: () => void) => {
+      applicationListeners.add(listener);
+      return () => applicationListeners.delete(listener);
+    },
     getSnapshot: () => applicationState,
     createThreadFromSettings: vi.fn(async () => ({
       threadId: "thread-copy",
       workspaceId: "workspace-1",
       targetId: "target-1",
     })),
+    setThreadPinned: vi.fn(async () => undefined),
     mutateInventory: vi.fn(async () => undefined),
     getThreadForceResetImpact: vi.fn(async () => ({
       blockerFingerprint: "a".repeat(64),
@@ -309,6 +326,7 @@ function fixture(
     createThreadFromSettings: ReturnType<typeof vi.fn>;
     getThreadForceResetImpact: ReturnType<typeof vi.fn>;
     forceResetThread: ReturnType<typeof vi.fn>;
+    setThreadPinned: ReturnType<typeof vi.fn>;
   };
   const threadStore = {
     usage: new UsageQueryCache("thread", {getUsage: vi.fn(), getUsageAvailability: vi.fn()}),
@@ -317,8 +335,9 @@ function fixture(
     perform: vi.fn(async () => undefined),
     forkTurn: vi.fn(),
     forkLatestProviderSnapshot: vi.fn(),
+    observePublishedBookmarkRevision: vi.fn(),
   } as unknown as ThreadClientStore;
-  return { applicationStore, threadStore };
+  return { applicationStore, threadStore, publishPin };
 }
 
 /** A header whose thread offers Model and Thinking settings. */
@@ -424,7 +443,7 @@ function renderHeader({
   readonly runState?:
     "idle" | "running" | "failed" | "reconciling" | "disconnected";
 } = {}) {
-  const { applicationStore, threadStore } = fixture(environmentCount, {
+  const { applicationStore, threadStore, publishPin } = fixture(environmentCount, {
     environmentKind,
     ...(forkOrigins === undefined ? {} : { forkOrigins }),
     ...(projects === undefined ? {} : { projects }),
@@ -468,7 +487,7 @@ function renderHeader({
       onFindOpenChange={onFindOpenChange}
     />,
   );
-  return { ...view, applicationStore, panelControls };
+  return { ...view, applicationStore, panelControls, publishPin };
 }
 
 /** Opens the desktop Thread actions menu (Radix opens on pointer down). */
@@ -507,6 +526,89 @@ function chatRegion(region: RegionId = "middle"): PanelRegionControls {
     onExtend: vi.fn(),
   };
 }
+
+describe("ThreadHeader thread pin", () => {
+  it("follows published pin revisions and stays available without the provider runtime", async () => {
+    const { applicationStore, publishPin } = renderHeader({
+      connection: "disconnected", available: false, runState: "disconnected",
+    });
+    const pin = screen.getByRole("button", { name: "Pin thread" });
+    expect(pin).toBeEnabled();
+    expect(pin).toHaveAttribute("aria-pressed", "false");
+    expect(pin.nextElementSibling).toBe(screen.getByRole("button", { name: "Bookmarks" }));
+    await userEvent.click(pin);
+    expect(applicationStore.setThreadPinned).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "thread-1", pinned: false, pinRevision: 0 }), true,
+    );
+    act(() => publishPin(true, 4));
+    const unpin = screen.getByRole("button", { name: "Unpin thread" });
+    expect(unpin).toHaveAttribute("aria-pressed", "true");
+    await userEvent.click(unpin);
+    expect(applicationStore.setThreadPinned).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: "thread-1", pinned: true, pinRevision: 4 }), false,
+    );
+    act(() => publishPin(false, 5));
+    expect(screen.getByRole("button", { name: "Pin thread" })).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("retains keyboard focus through pending and successful pin changes while blocking duplicate activations", async () => {
+    const { applicationStore, publishPin } = renderHeader();
+    const user = userEvent.setup();
+    let resolvePin!: () => void;
+    applicationStore.setThreadPinned.mockReturnValueOnce(new Promise<void>((resolve) => { resolvePin = resolve; }));
+    const pin = screen.getByRole("button", { name: "Pin thread" });
+    pin.focus();
+    await user.keyboard("{Enter}");
+    expect(pin).toHaveFocus();
+    expect(pin).toBeEnabled();
+    expect(pin).toHaveAttribute("aria-disabled", "true");
+    expect(pin).toHaveAttribute("aria-busy", "true");
+    await user.keyboard("{Enter} ");
+    await user.click(pin);
+    expect(applicationStore.setThreadPinned).toHaveBeenCalledOnce();
+    expect(pin).toHaveFocus();
+
+    act(() => publishPin(true, 4));
+    expect(screen.getByRole("button", { name: "Unpin thread" })).toBe(pin);
+    expect(pin).toHaveAttribute("aria-pressed", "true");
+    expect(pin).toHaveFocus();
+    await act(async () => resolvePin());
+    expect(pin).not.toHaveAttribute("aria-disabled");
+    expect(pin).not.toHaveAttribute("aria-busy");
+    expect(pin).toHaveFocus();
+
+    await user.keyboard(" ");
+    expect(applicationStore.setThreadPinned).toHaveBeenCalledTimes(2);
+    expect(applicationStore.setThreadPinned).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: "thread-1", pinned: true, pinRevision: 4 }), false,
+    );
+    expect(pin).toHaveFocus();
+  });
+
+  it("guards pending requests and lets a failed pin be retried without changing its saved state", async () => {
+    const { applicationStore } = renderHeader();
+    let rejectPin!: (error: Error) => void;
+    applicationStore.setThreadPinned.mockReturnValueOnce(new Promise<void>((_resolve, reject) => { rejectPin = reject; }));
+    const pin = screen.getByRole("button", { name: "Pin thread" });
+    pin.focus();
+    await userEvent.keyboard("{Enter}");
+    expect(pin).toHaveFocus();
+    expect(pin).toHaveAttribute("aria-disabled", "true");
+    expect(pin).toHaveAttribute("aria-busy", "true");
+    fireEvent.click(pin);
+    expect(applicationStore.setThreadPinned).toHaveBeenCalledOnce();
+    await act(async () => rejectPin(new Error("Pin update failed")));
+    expect(screen.getByRole("alert")).toHaveTextContent("Pin update failed");
+    expect(pin).toBeEnabled();
+    expect(pin).not.toHaveAttribute("aria-disabled");
+    expect(pin).toHaveFocus();
+    expect(pin).toHaveAttribute("aria-pressed", "false");
+    await userEvent.click(pin);
+    expect(applicationStore.setThreadPinned).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(pin).toHaveFocus();
+  });
+});
 
 describe("ThreadHeader panel chrome", () => {
   it("colors Chat by its environment only when environments are distinguishable", () => {
@@ -693,7 +795,10 @@ describe("ThreadHeader panel chrome", () => {
     expect(settings).toBeVisible();
     expect(toolbar).not.toContainElement(bookmarks);
     expect(toolbar).not.toContainElement(settings);
-    const actions = [bookmarks];
+    const pin = screen.getByRole("button", { name: "Pin thread" });
+    expect(pin).toBeVisible();
+    expect(toolbar).not.toContainElement(pin);
+    const actions = [pin, bookmarks];
     if (automation) {
       const automationButton = screen.getByRole("button", { name: "Automation" });
       expect(automationButton).toBeVisible();
@@ -746,9 +851,9 @@ describe("ThreadHeader panel chrome", () => {
     expect(show).toHaveAttribute("aria-checked", "false");
     await userEvent.click(show);
     expect(toolbar).not.toHaveAttribute("hidden");
-    expect(within(toolbar).getByRole("button", { name: "Find in thread" })).toBeVisible();
+    expect(within(toolbar).getByRole("button", { name: "Find in thread", hidden: true })).toBeVisible();
 
-    await userEvent.click(screen.getByRole("button", { name: "Thread actions" }));
+    expect(screen.getByTestId("thread-settings-sheet")).toBeVisible();
     const hide = await screen.findByRole("menuitemcheckbox", { name: "Show thread toolbar" });
     expect(hide).toHaveAttribute("aria-checked", "true");
     await userEvent.click(hide);
@@ -1195,11 +1300,9 @@ describe("ThreadHeader action menu", () => {
       settingId: "thinking_level",
       value: "high",
     });
-    await waitFor(() =>
-      expect(screen.queryByRole("dialog", { name: "Header thread" })).toBeNull(),
-    );
-
-    fireEvent.click(trigger);
+    expect(sheet).toBeVisible();
+    expect(within(sheet).getByRole("menuitemradio", { name: "High" })).toBeVisible();
+    fireEvent.click(within(sheet).getByRole("menuitem", { name: "Thinking" }));
     const model = within(
       screen.getByRole("dialog", { name: "Header thread" }),
     ).getByRole("menuitem", { name: /Model/ });

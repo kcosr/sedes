@@ -210,6 +210,8 @@ function parsePreferences(raw: string): SidebarViewPreferences {
     groupFilterId: parseFilterId(blob.groupFilterId),
     ungroupedFilter:
       typeof blob.ungroupedFilter === "boolean" ? blob.ungroupedFilter : false,
+    hasOpenTasks:
+      typeof blob.hasOpenTasks === "boolean" ? blob.hasOpenTasks : false,
     scopeCollapsed:
       typeof blob.scopeCollapsed === "boolean"
         ? blob.scopeCollapsed
@@ -410,7 +412,7 @@ export function hasActiveSidebarFilters(
   const pinnedOnlyActive =
     preferences.groupBy !== "project" &&
     resolveModePreferences(preferences, preferences.groupBy).pinnedOnly;
-  return scopeActive || showActive || pinnedOnlyActive;
+  return scopeActive || showActive || pinnedOnlyActive || preferences.hasOpenTasks;
 }
 
 /** Clear every filter active in the current sidebar view in one write. */
@@ -434,6 +436,7 @@ export function clearActiveSidebarFilters(): void {
     projectFilterPublication: null,
     groupFilterId: null,
     ungroupedFilter: false,
+    hasOpenTasks: false,
     show: SIDEBAR_VIEW_DEFAULTS.show,
     modes,
   });
@@ -485,6 +488,12 @@ export function setSidebarShowFilter(
 ): void {
   const current = getSidebarViewPreferences();
   persist({ ...current, show: { ...current.show, [key]: value } });
+}
+
+export function setSidebarHasOpenTasks(value: boolean): void {
+  const current = getSidebarViewPreferences();
+  if (current.hasOpenTasks === value) return;
+  persist({ ...current, hasOpenTasks: value });
 }
 
 export function setSidebarGroupForks(value: boolean): void {

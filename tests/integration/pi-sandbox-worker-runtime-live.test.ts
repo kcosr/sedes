@@ -14,9 +14,10 @@ import { build } from "esbuild";
 import { afterAll, describe, expect, it } from "vitest";
 import { LocalEnvironmentChannelProvider } from "../../src/server/execution/local-environment-channel.js";
 import { LocalPiSandboxRuntime } from "../../src/server/pi-sandbox/local-pi-sandbox-runtime.js";
+import { realBubblewrapTestsEnabled } from "../support/sandbox-test-gate.js";
 
 const roots: string[] = [];
-const describeRealBubblewrap = describe.runIf(process.platform === "linux");
+const describeRealBubblewrap = describe.runIf(realBubblewrapTestsEnabled);
 afterAll(async () => {
   await Promise.all(
     roots.splice(0).map((root) => rm(root, { recursive: true, force: true })),

@@ -1,5 +1,5 @@
 /* Header view controls (SidebarViewControls, Lane D of sidebar alternate
-   views). The two 28px ghost icon buttons sit in .sidebar-search-row beside
+   views). The 28px ghost icon buttons sit in .sidebar-search-row beside
    the search box and mirror .sidebar-group-toggle; View options itself is
    the shared DropdownMenu. Uses only custom properties that already exist
    in styles.css. */
@@ -14,6 +14,11 @@
   color: var(--foreground);
 }
 
+.view-controls-task-toggle[aria-pressed="true"] {
+  color: var(--info);
+  background: var(--info-soft);
+}
+
 /* Modified-from-defaults indicator on the options trigger. */
 .view-controls-dirty-dot {
   position: absolute;
@@ -25,8 +30,8 @@
   background: var(--info);
 }
 
-/* Same coarse-pointer hit-target bump styles.css gives .sidebar-group-toggle. */
-@media (pointer: coarse) {
+/* Match the app's touch density for narrow layouts and coarse pointers. */
+@media (max-width: 819px), (pointer: coarse) {
   .view-controls-button {
     width: 36px;
     height: 36px;

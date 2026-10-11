@@ -68,6 +68,8 @@ export interface SidebarViewPreferences {
   /** Viewer-local persistent group filter; mutually exclusive with ungrouped. */
   readonly groupFilterId: string | null;
   readonly ungroupedFilter: boolean;
+  /** Viewer-local filter for threads with directly assigned open tasks. */
+  readonly hasOpenTasks: boolean;
   /** Collapse the tall Environment / Target / Project scope controls. */
   readonly scopeCollapsed: boolean;
   readonly groupBy: SidebarGroupBy;
@@ -134,6 +136,7 @@ export const SIDEBAR_VIEW_DEFAULTS: SidebarViewPreferences = {
   projectFilterPublication: null,
   groupFilterId: null,
   ungroupedFilter: false,
+  hasOpenTasks: false,
   scopeCollapsed: false,
   groupBy: "time",
   stackBy: "none",
