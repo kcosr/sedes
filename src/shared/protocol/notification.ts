@@ -6,6 +6,7 @@ import { boundedTextSchema, requireSerializedByteLimit } from "./payload.js";
 
 export const notificationEventKindSchema = z.enum([
   "turn.progress",
+  "turn.partial",
   "turn.completed",
   "turn.failed",
   "turn.interrupted",
@@ -26,7 +27,7 @@ export const eventDeliverySchema = z.strictObject({
 });
 export const notificationDeliverySchema = z.record(notificationEventKindSchema, eventDeliverySchema)
   .superRefine((delivery, context) => {
-    for (const event of ["turn.progress", "approval.requested", "input.requested", "question.requested"] as const) {
+    for (const event of ["turn.progress", "turn.partial", "approval.requested", "input.requested", "question.requested"] as const) {
       if (delivery[event].voice === "speakThenListen") context.addIssue({
         code: "custom", path: [event, "voice"], message: "This event cannot start recognition.",
       });
@@ -36,7 +37,7 @@ export type NotificationDelivery = z.infer<typeof notificationDeliverySchema>;
 
 export function defaultNotificationDelivery(): NotificationDelivery {
   return Object.fromEntries(notificationEventKindSchema.options.map((event) => [event, {
-    script: false, voice: event === "turn.completed" ? "speakThenListen" : "speak",
+    script: false, voice: event === "turn.completed" ? "speakThenListen" : event === "turn.partial" ? "none" : "speak",
   }])) as NotificationDelivery;
 }
 
@@ -204,7 +205,15 @@ export const notificationPayloadSchema = z.strictObject({
   automation: z.strictObject({ id: identity, name: noticeText, runId: identity,
     trigger: z.enum(["scheduled", "manual"]), stage: noticeText.optional(), diagnostic: noticeText.optional() }).optional(),
   assistantResult: selectedAssistantResultSchema.optional(),
-}).superRefine((value, context) => requireSerializedByteLimit(value, context, 65_536, "Notification exceeds 64 KiB."));
+}).superRefine((value, context) => {
+  requireSerializedByteLimit(value, context, 65_536, "Notification exceeds 64 KiB.");
+  const phase = value.event === "turn.progress" ? "provisional" : value.event === "turn.partial" ? "partial" : undefined;
+  if (phase !== undefined && value.progress?.phase !== phase) {
+    context.addIssue({ code: "custom", path: ["progress", "phase"], message: "Live reply phase must match its notification event." });
+  } else if (phase === undefined && value.progress !== undefined) {
+    context.addIssue({ code: "custom", path: ["progress"], message: "Only live reply notifications carry progress text." });
+  }
+});
 
 export const voiceRecognitionTargetSchema = z.strictObject({
   threadId: identity, activityToken: identity, sourceTurnId: identity.optional(),
@@ -223,5 +232,9 @@ export const voiceNotificationSchema = z.strictObject({
   recognitionTarget: voiceRecognitionTargetSchema.optional(),
   /** Only state-attention events with the same explicit subject may coalesce. */
   subjectId: identity.optional(),
+}).superRefine((value, context) => {
+  if ((value.payload.event === "turn.progress" || value.payload.event === "turn.partial") && value.voice === "speakThenListen") {
+    context.addIssue({ code: "custom", path: ["voice"], message: "Live reply notifications cannot start recognition." });
+  }
 });
 export type VoiceNotification = z.infer<typeof voiceNotificationSchema>;

@@ -83,7 +83,7 @@ public class NativeVoiceProtocolTest {
         JSONObject disabled = policy(); NativeVoiceJson.put(disabled, "enabled", false); NativeVoiceJson.put(disabled, "scriptPath", "relative");
         NativeVoiceJson.put(disabled.optJSONObject("delivery").optJSONObject("turn.failed"), "script", true);
         NativeVoiceProtocol.validatePolicy(disabled);
-        for (String event : new String[] { "turn.progress", "approval.requested", "input.requested", "question.requested" })
+        for (String event : new String[] { "turn.progress", "turn.partial", "approval.requested", "input.requested", "question.requested" })
             assertInvalidPolicy(value -> NativeVoiceJson.put(value.optJSONObject("delivery").optJSONObject(event), "voice", "speakThenListen"));
         assertInvalidPolicy(value -> value.optJSONObject("delivery").remove("thread.woke"));
         assertInvalidPolicy(value -> NativeVoiceJson.put(value.optJSONObject("delivery"), "notification.test", NativeVoiceJson.object("script", false, "voice", "speak")));

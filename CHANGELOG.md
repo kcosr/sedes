@@ -54,9 +54,9 @@ User-facing changes are collected here before release. See the
 
 ### Added
 
-- Codex **Partial** replies appear inline and can be selected for script
-  notifications and voice playback. Partial replies keep the turn active;
-  completion notifications and follow-up listening wait for turn completion.
+- Codex **Partial** replies appear inline, with a separate notification section
+  for Script and Voice delivery, initially off. Partial text can also be selected
+  for completion notifications and playback. Work stays active until the turn ends.
 
 - Codex subagent activity shows both model and reasoning inline when either
   differs from the spawning agent, and suppresses them when both match.

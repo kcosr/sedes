@@ -3134,19 +3134,19 @@ public class NativeVoiceRuntimeTest {
         }
     }
 
-    @Test public void nextPreservesDeferredClientSwitchesFromProgressAndCompletionNotices() throws Exception {
-        for (boolean progress : new boolean[] { false, true }) for (boolean listen : new boolean[] { false, true }) {
+    @Test public void nextPreservesDeferredClientSwitchesFromNonterminalAndCompletionNotices() throws Exception {
+        for (String nonterminal : new String[] { null, "turn.progress", "turn.partial" }) for (boolean listen : new boolean[] { false, true }) {
             try (Fixture f = new Fixture(false, false)) {
                 f.readyClientVoice("speak"); f.foreground(f.target);
                 f.settings(NativeVoiceJson.object("autoListen", true)); f.policy(true, false, "speakThenListen");
                 String destination = UUID.randomUUID().toString(); JSONObject command = f.clientSwitch(destination, listen);
                 assertEquals("accepted", f.clientCommand(command).getString("status"));
-                if (progress) {
-                    f.receiveClientTurnNotice("turn.progress");
+                if (nonterminal != null) {
+                    f.receiveClientTurnNotice(nonterminal);
                     SpeechJob progressSpeech = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(progressSpeech);
                     assertNull(f.command("skipCurrentPlayback", new JSONObject())); assertTrue(progressSpeech.cancelled);
                     assertEquals(java.util.Collections.singleton(command.getString("id")), f.stagedClientActions());
-                    assertTrue("Progress cannot settle the staged action", f.contexts.isEmpty()); assertTrue(f.openThreads.isEmpty());
+                    assertTrue("A nonterminal notice cannot settle the staged action", f.contexts.isEmpty()); assertTrue(f.openThreads.isEmpty());
                 }
                 String completion = f.receiveClientTurnNotice("turn.completed");
                 SpeechJob reply = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(reply);
@@ -4718,6 +4718,8 @@ public class NativeVoiceRuntimeTest {
                 "payload", NativeVoiceJson.object("schemaVersion", 5, "notificationId", id, "event", event,
                     "occurredAt", "2026-10-10T00:00:00Z", "title", "Turn update", "message", "Agent reply",
                     "thread", NativeVoiceJson.object("id", target, "title", "Source thread"), "turn", turn));
+            if (event.equals("turn.progress") || event.equals("turn.partial")) NativeVoiceJson.put(frame.optJSONObject("payload"), "progress",
+                NativeVoiceJson.object("itemId", id, "phase", event.equals("turn.partial") ? "partial" : "provisional", "text", "Agent update"));
             onOwner(() -> invoke("receive", new Class<?>[] { String.class, JSONObject.class }, "notification", frame)); flush();
             return id;
         }

@@ -6,13 +6,14 @@ function run(payload: unknown) {
   return spawnSync("python3", ["scripts/notifications/sedes-notify-assistant.py", "--dry-run"], { input: JSON.stringify(payload), encoding: "utf8" });
 }
 describe("Assistant notification hook", () => {
-  it.each(["provisional", "partial"])("accepts %s progress and nonblocking questions with fixed speak-only delivery", (phase) => {
-    const progress = run({ ...metadata, event: "turn.progress", progress: { phase, itemId: "item", text: "Checking results." } });
+  it.each([["turn.progress", "provisional"], ["turn.partial", "partial"]])("accepts %s progress and nonblocking questions with fixed speak-only delivery", (event, phase) => {
+    const progress = run({ ...metadata, event, progress: { phase, itemId: "item", text: "Checking results." } });
     expect(progress.status).toBe(0);
     expect(JSON.parse(progress.stdout)).toMatchObject({ voiceMode: "speak", ttsText: expect.stringContaining("Checking results.") });
     expect(run({ ...metadata, event: "question.requested" }).status).toBe(0);
     expect(run({ ...metadata, schemaVersion: 4 }).status).toBe(1);
-    expect(run({ ...metadata, event: "turn.progress", progress: { itemId: "item", text: "No phase" } }).status).toBe(1);
+    expect(run({ ...metadata, event, progress: { itemId: "item", text: "No phase" } }).status).toBe(1);
+    expect(run({ ...metadata, event, progress: { phase: phase === "partial" ? "provisional" : "partial", itemId: "item", text: "Wrong phase" } }).status).toBe(1);
   });
   it("speaks selected sections in provisional, partial, unclassified, final order regardless of key order", () => {
     const result = run({ ...metadata, assistantResult: {

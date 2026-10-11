@@ -899,14 +899,16 @@ by the server operator. Browser requests derive tenant/principal authority on
 the server; a request cannot select another user's settings.
 
 Each event has independent `script` and `voice` (`none`, `speak`, or
-`speakThenListen`) delivery. `turn.progress`, `approval.requested`,
+`speakThenListen`) delivery. `turn.progress`, `turn.partial`, `approval.requested`,
 `input.requested`, and `question.requested` cannot use `speakThenListen`;
 settings that request it are rejected. `automation.started` accepts it but
 behaves as `speak` in practice: its recognition target, when present, is the
 automation's thread while the run's turn is still in progress, and that turn's
-completion makes the target stale. Fresh settings select no script events, speak every
-event, and speak then listen after `turn.completed`, with the master
-notification switch initially disabled. The former `events` array is removed.
+completion makes the target stale. Fresh settings select no script events, keep
+**Partial** voice off, speak other events, and speak then listen after
+`turn.completed`, with the master notification switch initially disabled.
+**Partial** has independent Script and Voice controls from **Turn progress**.
+Upgrades add Partial with both delivery channels off and preserve existing choices. The former `events` array is removed.
 The database upgrade preserves existing response-phase choices and script
 selections and applies the fresh voice actions. Disabled settings without a
 script path have never run a script, so the upgrade leaves them with no script
@@ -943,7 +945,8 @@ appear:
 
 | Event                                               | Event-specific data                                                                                          |
 | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `turn.progress` | `turn.id`, `progress.itemId`, `progress.phase` (`provisional` or `partial`), completed live `progress.text`, optional truncation |
+| `turn.progress` | `turn.id`, `progress.itemId`, `progress.phase: "provisional"`, completed live `progress.text`, optional truncation |
+| `turn.partial` | `turn.id`, `progress.itemId`, `progress.phase: "partial"`, completed live `progress.text`, optional truncation |
 | `turn.completed`, `turn.failed`, `turn.interrupted` | `turn.id` and `turn.outcome`                                                                                 |
 | `thread.woke`                                       | `wake.reason` (`deadline`) and optional `wake.reminderText`                                                  |
 | `automation.started`, `automation.failed`           | `automation.id`, `name`, `runId`, `trigger` (`scheduled` or `manual`), and optional failure stage/diagnostic |
@@ -1012,13 +1015,14 @@ metadata; it is not changed to `null`. If metadata leaves no room for the result
 envelope, the entire field is omitted to preserve notification delivery.
 Scripts should inspect truncation before assuming the text is complete.
 
-`turn.progress` uses the same 64 KiB limit. An oversized progress payload is
+`turn.progress` and `turn.partial` use the same 64 KiB limit. An oversized progress payload is
 still delivered: `progress.text` is shortened, ending in "…", and carries
 truncation metadata with `reason: "byte_limit"`. A notification is dropped only
 when its metadata alone exceeds the limit.
 
-Notification schema version 5 adds the Partial result section and requires
-`progress.phase` on `turn.progress` notices. These notices retain `progress.itemId`,
+Notification schema version 5 adds the independent `turn.partial` event and
+Partial result section. `turn.progress` requires `progress.phase: "provisional"`;
+`turn.partial` requires `progress.phase: "partial"`. These notices retain `progress.itemId`,
 `progress.text`, and optional truncation metadata. It continues to omit unselected
 completion sections. Update consumer scripts with the server. The repository's Assistant hook
 speaks each supplied nonempty section in **Provisional → Partial → Unclassified → Final**

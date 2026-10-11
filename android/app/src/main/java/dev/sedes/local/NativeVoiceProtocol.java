@@ -6,7 +6,7 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 final class NativeVoiceProtocol {
-    static final String[] EVENTS = { "turn.progress", "turn.completed", "turn.failed", "turn.interrupted", "thread.woke",
+    static final String[] EVENTS = { "turn.progress", "turn.partial", "turn.completed", "turn.failed", "turn.interrupted", "thread.woke",
         "automation.started", "automation.failed", "approval.requested", "input.requested", "question.requested" };
     private NativeVoiceProtocol() {}
     static String choice(JSONObject value, String key, String... choices) {
@@ -64,7 +64,7 @@ final class NativeVoiceProtocol {
             anyScript |= NativeVoiceJson.bool(value, "script");
             String action = NativeVoiceJson.string(value, "voice", 32);
             if (!action.equals("none") && !action.equals("speak") && !action.equals("speakThenListen")) throw new IllegalArgumentException("invalid_voice_policy");
-            if (action.equals("speakThenListen") && (event.equals("turn.progress") || event.endsWith(".requested"))) throw new IllegalArgumentException("invalid_voice_policy");
+            if (action.equals("speakThenListen") && (event.equals("turn.progress") || event.equals("turn.partial") || event.endsWith(".requested"))) throw new IllegalArgumentException("invalid_voice_policy");
         }
         String path = text(settings, "scriptPath", 4096);
         if (path.indexOf('\0') >= 0) throw new IllegalArgumentException("invalid_script_path");

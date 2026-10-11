@@ -11,7 +11,8 @@ requested reply. Queued items rebuild from their original envelope after a conte
 change, while active playback finishes normally. Obsolete settings records reset
 without an alias or migration. Client protocol 150 and client-control tool schema
 version 2 carry the audio-mode values. Notification payload version 5 carries
-Partial response sections and requires the live `progress.phase` field.
+Partial response sections, independent `turn.partial` delivery, and the required
+live `progress.phase` field.
 Native snapshot version 14 includes `active.recording` (ID, Keep listening and
 Reconnecting), native-authoritative `canSetKeepListening`/`canSend` actions, the
 Keep listening blocked reason, and an independent `recordingRecovery` item.
@@ -320,7 +321,8 @@ proceeds even if that disconnect fails or times out.
 
 ## Transient notifications
 
-Notification payload schema 4 includes `turn.progress`. Each event's delivery
+Notification payload schema 5 includes distinct `turn.progress` and
+`turn.partial` events. Each event's delivery
 has independent `script` and `voice` actions. `NotificationService` consumes one
 scoped event identity, checks that notifications are enabled and unsilenced,
 and fixes the voice recipients at emission. It builds the payload, copies
@@ -331,7 +333,7 @@ not wait for script execution or share its pending capacity.
 Voice context capture and the strict voice-frame parse are voice-only. A
 failure there skips voice and never blocks the script. `ThreadActivityService`
 context capture never throws; a failure degrades to an announcement without
-an origin or recognition target. A `turn.progress` payload over the 64 KiB
+an origin or recognition target. A `turn.progress` or `turn.partial` payload over the 64 KiB
 payload limit keeps a shortened `progress.text` with byte-limit truncation
 metadata. It is dropped only if its metadata alone exceeds the limit.
 
@@ -538,9 +540,12 @@ The projector retains updates to server-private turn completion correlations
 even when no visible turn field changes. Such updates produce no browser delta
 but immediately become available to live-progress admission checks.
 
-Codex marks completed commentary and partial answers. The notification retains
-`progress.phase` as `provisional` or `partial`; either phase follows the
-`turn.progress` delivery control and cannot start automatic listening. A partial
+Codex marks completed commentary and partial answers. Provisional updates emit
+`turn.progress` with `progress.phase: provisional`; substantive partial answers
+emit `turn.partial` with `progress.phase: partial`. Their delivery controls are
+independent, and `turn.partial` starts with script disabled and voice `none`.
+Neither event permits `speakThenListen`. The native queue preserves partial
+answers at completion-notice priority and only evicts provisional progress. A partial
 answer never supplies authoritative turn completion or callback evidence. Pi marks a completed assistant message that
 contains a tool call and ended for tool use; an aborted or errored message is
 not progress because its tools never run. Claude marks the completed tool-use

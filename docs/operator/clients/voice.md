@@ -159,7 +159,7 @@ of them.
 
 The quick sheet keeps three choices: **Off**, **Input**, and **Speak**. In Speak,
 **Read aloud** selects **Announcements** (event and thread description),
-**Messages** (progress or response text without a preamble), or **Both**.
+**Messages** (progress, partial, or completed response text without a preamble), or **Both**.
 The same selector appears in **Settings → Voice**. Its choice is remembered while
 Input or Off hides it. Events without message text, such as approval notices,
 are silent with Messages selected; use Announcements or Both to hear them.
@@ -168,21 +168,22 @@ an item already playing. Switching to Input stops automatic notification speech.
 
 Automatic recognition requires **Speak then listen**, **Auto-listen**, and a
 still-current eligible target. In Input mode only completions listen
-afterward. Progress, approvals, blocking input, and nonblocking questions are
+afterward. Progress, partial answers, approvals, blocking input, and nonblocking questions are
 speak-only when Speak is enabled. They never answer a structured form with free text.
 Input does not require hearing a response before an eligible completion opens
 the microphone. Explicit reply playback, optional recording-destination
 announcements, and recording cues remain available independently of automatic speech.
 
 Fresh completion settings select Final and Unclassified response text.
-Provisional and Partial are optional and can repeat live progress. Partial
-contains a substantive answer while the agent continues working; it does not
-complete the turn or trigger Auto-listen. Codex emits live progress for completed
-Provisional and Partial assistant items. Pi and Claude emit it for completed
-Provisional items. Hydrated history and text classified only at settlement do
-not produce progress. Grok and OpenCode do not advertise this live signal;
-their unclassified completion text remains available. Selected Partial text is
-also available in completion notifications and explicit reply playback.
+Provisional and Partial completion text are optional and can repeat their live
+notifications. **Partial** has independent Script and Voice controls in
+Notifications, initially off. It delivers a substantive answer while the agent
+continues working and cannot trigger Auto-listen. **Turn progress** controls
+provisional updates separately. Codex emits both kinds; Pi and Claude emit only
+provisional progress. Hydrated history and text classified only at settlement
+do not produce either event. Grok and OpenCode do not advertise these live
+signals; their unclassified completion text remains available. Selected Partial
+text is also available in completion notifications and explicit reply playback.
 
 Automatic completion voice follows live completion changes. Loading completed
 history or replaying retained provider events does not announce old replies or
@@ -544,9 +545,10 @@ requests. Completed, stopped, and failed playback removes its cache file.
 
 The pending queue holds at most 64 items and 256 KiB of complete UTF-8 speech,
 excluding the active item. Repeated attention notices with the same explicit
-thread/event/subject identity may coalesce. Distinct progress and completion
-items remain distinct. Overflow drops incoming progress first; other arrivals
-can evict old pending progress. Dropped counts appear in Voice settings.
+thread/event/subject identity may coalesce. Distinct progress, partial, and
+completion items remain distinct. Overflow drops incoming progress first;
+other arrivals can evict old pending progress. Partial answers are retained
+with the same priority as completion notices. Dropped counts appear in Voice settings.
 
 Interrupted adopted recordings appear in the existing toolbar as **Saved dictation**
 with their target and **Retry**/**Discard** actions. Fully recognized text appears

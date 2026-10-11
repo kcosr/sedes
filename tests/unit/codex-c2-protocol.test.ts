@@ -58,7 +58,7 @@ describe("Codex C2 pinned protocol", () => {
     }
   });
 
-  it.each(["flexUnavailable", "tooManyDenials"])("accepts the 0.160 %s error category", (codexErrorInfo) => {
+  it.each(["flexUnavailable", "tooManyDenials"])("accepts the official %s error category", (codexErrorInfo) => {
     const params = { threadId: "thread-1", turnId: "turn-1", willRetry: false,
       error: { message: "Provider could not continue", codexErrorInfo, additionalDetails: null } };
     expect(decodeCodexC2Notification("error", params)).toEqual(params);

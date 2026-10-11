@@ -232,9 +232,13 @@ child's resolved model or reasoning effort, Sedes appends both to that activity
 line, for example `Started /root/reviewer · gpt-6.1-sol · Ultra`. A missing
 value is labeled unknown; when neither value is supplied, the line has no
 settings suffix. The suffix is hidden only when both values match the spawning
-agent's confirmed settings observed at creation. That comparison is retained
-within the active Sedes runtime; history without creation evidence shows the
-supplied settings and never compares them with the parent's current settings.
+agent's running-turn settings confirmed by Sedes's own accepted turn start.
+Imported or externally started turns have no such comparison evidence. A
+midturn model or reasoning change clears that evidence for later child starts;
+settings echoes and policy-only changes preserve it. Each child's creation
+comparison is retained within the active Sedes runtime; history without that
+evidence shows the supplied settings and never compares them with the parent's
+current settings.
 These are creation settings, not later model changes or usage attribution.
 
 Async follow-up questions raise a notice above the conversation and a

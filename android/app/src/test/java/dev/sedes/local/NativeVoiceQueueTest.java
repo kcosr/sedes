@@ -17,14 +17,15 @@ public class NativeVoiceQueueTest {
                 "thread", NativeVoiceJson.object("id", "thread-a", "title", "Thread A"),
                 "assistantResult", NativeVoiceJson.object("final", NativeVoiceJson.object("text", text))));
         if (subject != null) NativeVoiceJson.put(result, "subjectId", subject);
-        if (event.equals("turn.progress") || event.endsWith(".requested")) NativeVoiceJson.put(result, "voice", "speak");
-        if (event.equals("turn.progress")) NativeVoiceJson.put(result.optJSONObject("payload"), "progress", NativeVoiceJson.object("itemId", id, "phase", "provisional", "text", text));
+        if (event.equals("turn.progress") || event.equals("turn.partial") || event.endsWith(".requested")) NativeVoiceJson.put(result, "voice", "speak");
+        if (event.equals("turn.progress") || event.equals("turn.partial")) NativeVoiceJson.put(result.optJSONObject("payload"), "progress",
+            NativeVoiceJson.object("itemId", id, "phase", event.equals("turn.partial") ? "partial" : "provisional", "text", text));
         return result;
     }
     @Test public void inputModeSilencesEveryNotificationWithOnlyEligibleCompletionFollowup() {
         NativeVoiceQueue.Item item = new NativeVoiceQueue.Item(envelope("one", "turn.completed", "Answer", null), settings("input"));
         assertEquals("", item.speech); assertTrue(item.followUp);
-        for (String event : new String[] { "turn.progress", "turn.failed", "turn.interrupted", "thread.woke",
+        for (String event : new String[] { "turn.progress", "turn.partial", "turn.failed", "turn.interrupted", "thread.woke",
             "automation.started", "automation.failed", "approval.requested", "input.requested", "question.requested" }) {
             NativeVoiceQueue.Item notice = new NativeVoiceQueue.Item(envelope(event, event, "Do not read this", null), settings("input"));
             assertEquals(event, "", notice.speech); assertFalse(event, notice.followUp);
@@ -34,13 +35,12 @@ public class NativeVoiceQueueTest {
         NativeVoiceJson.put(completion, "voice", "speak");
         assertFalse(new NativeVoiceQueue.Item(completion, settings("input")).followUp);
     }
-    @Test public void partialProgressSpeaksOnceWithoutOpeningFollowupListening() {
-        JSONObject source = envelope("partial-1", "turn.progress", "**First finding confirmed.**", null);
-        NativeVoiceJson.put(source.optJSONObject("payload").optJSONObject("progress"), "phase", "partial");
+    @Test public void partialAnswerSpeaksOnceWithoutOpeningFollowupListening() {
+        JSONObject source = envelope("partial-1", "turn.partial", "**First finding confirmed.**", null);
         NativeVoiceSettings configured = settings("speak").patch(1, NativeVoiceJson.object("speechContent", "messages", "autoListen", true));
         NativeVoiceQueue.Item item = new NativeVoiceQueue.Item(source, configured);
         assertEquals("First finding confirmed.", item.speech);
-        assertTrue(item.progress()); assertFalse(item.followUp);
+        assertFalse("Substantive partial answers are not evictable progress", item.progress()); assertFalse(item.followUp);
         NativeVoiceQueue queue = new NativeVoiceQueue();
         assertTrue(queue.add(item)); assertFalse(queue.add(new NativeVoiceQueue.Item(source, configured)));
         assertEquals(1, queue.size()); assertEquals(item, queue.take());
@@ -49,8 +49,22 @@ public class NativeVoiceQueueTest {
         NativeVoiceJson.put(source, "voice", "speakThenListen");
         assertThrows(IllegalArgumentException.class, () -> new NativeVoiceQueue.Item(source, configured));
     }
+    @Test public void liveAnswerEventMustMatchItsPayloadPhase() {
+        for (String event : new String[] { "turn.progress", "turn.partial" }) {
+            JSONObject source = envelope("mismatched", event, "Text", null);
+            JSONObject payload = source.optJSONObject("payload");
+            NativeVoiceJson.put(payload.optJSONObject("progress"), "phase", event.equals("turn.partial") ? "provisional" : "partial");
+            assertThrows(IllegalArgumentException.class, () -> new NativeVoiceQueue.Item(source, settings("speak")));
+            payload.remove("progress");
+            assertThrows(IllegalArgumentException.class, () -> new NativeVoiceQueue.Item(source, settings("speak")));
+        }
+        JSONObject completed = envelope("completed", "turn.completed", "Done.", null);
+        NativeVoiceJson.put(completed.optJSONObject("payload"), "progress",
+            NativeVoiceJson.object("itemId", "item-1", "phase", "partial", "text", "Answer."));
+        assertThrows(IllegalArgumentException.class, () -> new NativeVoiceQueue.Item(completed, settings("speak")));
+    }
     @Test public void speechContentSelectsAnnouncementsMessagesOrBothWithoutChangingFollowup() {
-        for (String event : new String[] { "turn.progress", "turn.completed" }) {
+        for (String event : new String[] { "turn.progress", "turn.partial", "turn.completed" }) {
             JSONObject source = envelope(event, event, "**Message body.**", null);
             String original = source.toString();
             for (String content : new String[] { "announcements", "messages", "both" }) {
@@ -91,12 +105,17 @@ public class NativeVoiceQueueTest {
         assertEquals(2, queue.size()); assertEquals("middle", queue.take().id); assertEquals("new", queue.take().id);
     }
     @Test public void responseOverflowEvictsOnlyOldestProgressAndPreservesOrder() {
-        NativeVoiceQueue queue = new NativeVoiceQueue();
-        for (int i = 0; i < 64; i++) queue.add(new NativeVoiceQueue.Item(envelope("item-" + i,
-            i == 2 ? "turn.progress" : "turn.completed", "Text", null), settings("speak")));
-        assertTrue(queue.add(new NativeVoiceQueue.Item(envelope("last", "turn.completed", "Text", null), settings("speak"))));
-        assertEquals(64, queue.size()); assertEquals("item-0", queue.take().id); assertEquals("item-1", queue.take().id); assertEquals("item-3", queue.take().id);
-        assertEquals(1, queue.state().optInt("droppedCount"));
+        for (String incoming : new String[] { "turn.completed", "turn.partial" }) {
+            NativeVoiceQueue queue = new NativeVoiceQueue();
+            for (int i = 0; i < 64; i++) queue.add(new NativeVoiceQueue.Item(envelope("item-" + i,
+                i == 2 ? "turn.progress" : i == 1 ? "turn.partial" : "turn.completed", "Text", null), settings("speak")));
+            assertTrue(queue.add(new NativeVoiceQueue.Item(envelope("last", incoming, "Text", null), settings("speak"))));
+            assertEquals(64, queue.size()); assertEquals("item-0", queue.take().id);
+            NativeVoiceQueue.Item retainedPartial = queue.take();
+            assertEquals("item-1", retainedPartial.id); assertEquals("turn.partial", retainedPartial.event);
+            assertEquals("item-3", queue.take().id);
+            assertEquals(1, queue.state().optInt("droppedCount"));
+        }
     }
     @Test public void exhaustedProgressEvictionNeverDropsTerminalContent() {
         NativeVoiceQueue queue = new NativeVoiceQueue();

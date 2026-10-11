@@ -26,7 +26,7 @@ import type { CodexLiveModelSelection } from "./codex-live-model-selection.js";
 
 const REMOTE_TOKEN_ENVIRONMENT_NAME = "SEDES_CODEX_TUI_REMOTE_TOKEN";
 
-// The managed terminal protocol depends on these Codex 0.160 TUI settings.
+// The managed terminal protocol depends on these reviewed Codex TUI settings.
 // Keep them process-local so account-owned config cannot change Stage/Send
 // framing, startup mode, or the repaint surface shared by Sedes viewers.
 const MANAGED_TUI_CONFIG_OVERRIDES = Object.freeze([

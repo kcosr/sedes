@@ -2325,8 +2325,12 @@ requires a principal-scoped accepted submission correlation. Deduplicate by the
 stable normalized thread, turn, and item identity; no text matching or partial
 delta notification is allowed.
 
-The live notification carries `progress.phase` (`provisional` or `partial`).
-Both use the existing `turn.progress` delivery policy and cannot start recognition.
+Live commentary emits `turn.progress` with `progress.phase: "provisional"`;
+live partial answers emit `turn.partial` with `progress.phase: "partial"`.
+Each event has independent Script and Voice controls; neither can start recognition.
+Partial delivery defaults to Script off and Voice none, for fresh settings and
+existing settings upgraded by migration 139. That migration preserves prior
+selections and consumption while advancing policy revision and generation.
 Only authoritative terminal turn evidence triggers completion callbacks and
 notifications, independently of message phase.
 

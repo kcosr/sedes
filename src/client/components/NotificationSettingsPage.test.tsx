@@ -134,6 +134,22 @@ describe("notification settings", () => {
     await waitFor(() => expect(phases.every(phase => phase.getAttribute("aria-checked") === "true")).toBe(true));
     expect(screen.getByLabelText("Script: Turn completed")).toHaveAttribute("aria-checked", "false");
   });
+  it("saves Partial delivery independently of progress and completion response phases", async () => {
+    const { api, store } = fixture();
+    render(<NotificationSettingsPage store={store} />);
+    const partial = await screen.findByRole("switch", { name: "Script: Partial" });
+    const progress = screen.getByRole("switch", { name: "Script: Turn progress" });
+    expect(partial).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByRole("combobox", { name: "Voice: Partial" })).toHaveTextContent("Off");
+    fireEvent.click(partial);
+    fireEvent.click(screen.getByRole("button", { name: "Save notifications" }));
+    await expectSaved();
+    expect(api.updateNotificationSettings).toHaveBeenLastCalledWith(expect.objectContaining({
+      delivery: scriptDelivery(["turn.completed", "turn.partial"]),
+      assistantResultPhases: [],
+    }));
+    expect(progress).toHaveAttribute("aria-checked", "false");
+  });
   it("saves selected response phases and disables them while saving", async () => {
     const { api, store } = fixture();
     let finishSave!: (settings: NotificationSettings) => void;

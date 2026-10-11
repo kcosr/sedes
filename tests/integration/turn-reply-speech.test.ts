@@ -192,7 +192,7 @@ describe("turn reply speech lookup", () => {
       expect(current.database.prepare("SELECT max(version) AS version FROM schema_migrations").get()).toEqual({ version: 137 });
       expect(classifiedAssistantResultSchema.safeParse(oldClassification).success).toBe(false);
 
-      applyDatabaseMigrations(current.database, backendNormalizedMigrations);
+      applyDatabaseMigrations(current.database, backendNormalizedMigrations.filter(({ version }) => version <= 138));
 
       const migrated = current.completions.latestClassifiedResult(current.scope, current.threadId, "old-turn");
       expect(classifiedAssistantResultSchema.parse(migrated)).toEqual({ ...oldClassification, partial: null });
@@ -206,6 +206,51 @@ describe("turn reply speech lookup", () => {
       selectPhases(current, ["partial", "final"]);
       expect(current.replies.read(current.scope, current.threadId, "old-turn"))
         .toEqual({ assistantResult: { partial: null, final: oldClassification.final } });
+    } finally { current.database.close(); }
+  });
+
+  it("adds an independent disabled Partial delivery choice while preserving existing scoped policy and consumption", () => {
+    const current = fixture(138);
+    try {
+      observe(current, { acceptedAt: 1_000, turnId: "completed-turn", classifiedResult: classified("Done") });
+      const { silenced: _silenced, revision, ...initial } = current.notifications.read(current.scope);
+      current.notifications.update(current.scope, { ...initial, enabled: true, scriptPath: "/test/notify",
+        assistantResultPhases: ["provisional", "unclassified"],
+        delivery: { ...initial.delivery, "turn.progress": { script: true, voice: "speak" } }, expectedRevision: revision });
+      current.notifications.setSilenced(current.scope, true);
+      const repository = new NotificationRepository(current.database);
+      const occurredAt = Date.now() + 100;
+      repository.consume(current.scope, "existing-progress", occurredAt);
+      current.database.prepare(`UPDATE principal_notification_settings
+        SET config_json = json_remove(config_json, '$.delivery."turn.partial"')`).run();
+      const readSettings = () => current.database.prepare("SELECT * FROM principal_notification_settings ORDER BY tenant_id, owner_principal_id")
+        .all() as Array<Record<string, unknown>>;
+      const before = readSettings();
+      const priorConfig = JSON.parse(before[0]!.config_json as string) as Record<string, unknown>;
+      const priorMigrations = current.database.prepare("SELECT * FROM schema_migrations WHERE version <= 138 ORDER BY version").all();
+      const observations = current.database.prepare("SELECT * FROM submission_completion_observations").all();
+      const consumption = current.database.prepare("SELECT * FROM notification_event_consumption").all();
+      expect(() => current.notifications.read(current.scope)).toThrow();
+
+      applyDatabaseMigrations(current.database, backendNormalizedMigrations.filter(({ version }) => version <= 139));
+
+      const settings = current.notifications.read(current.scope);
+      expect(settings.delivery["turn.partial"]).toEqual({ script: false, voice: "none" });
+      expect(settings.delivery["turn.progress"]).toEqual({ script: true, voice: "speak" });
+      expect(settings).toMatchObject({ enabled: true, silenced: true, assistantResultPhases: ["provisional", "unclassified"] });
+      expect(readSettings()).toEqual(before.map(row => ({ ...row,
+        revision: (row.revision as number) + 1, dispatch_generation: (row.dispatch_generation as number) + 1,
+        config_json: expect.any(String),
+      })));
+      const nextConfig = JSON.parse(readSettings()[0]!.config_json as string) as typeof priorConfig;
+      expect(nextConfig).toEqual({ ...priorConfig,
+        delivery: { ...priorConfig.delivery as object, "turn.partial": { script: false, voice: "none" } },
+      });
+      expect(current.database.prepare("SELECT * FROM schema_migrations WHERE version <= 138 ORDER BY version").all()).toEqual(priorMigrations);
+      expect(current.database.prepare("SELECT * FROM submission_completion_observations").all()).toEqual(observations);
+      expect(current.database.prepare("SELECT * FROM notification_event_consumption").all()).toEqual(consumption);
+      expect(repository.consume(current.scope, "existing-progress", occurredAt)).toBeNull();
+      expect(current.notifications.read(current.foreign).delivery["turn.partial"]).toEqual({ script: false, voice: "none" });
     } finally { current.database.close(); }
   });
 

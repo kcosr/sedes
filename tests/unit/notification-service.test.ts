@@ -3,6 +3,7 @@ import { notificationAssistantResultMigration } from "../../src/server/db/migrat
 import { notificationAssistantResultPhasesMigration } from "../../src/server/db/migrations/105-notification-assistant-result-phases.js";
 import { notificationPhaseSelectionMigration } from "../../src/server/db/migrations/106-notification-phase-selection.js";
 import { notificationDeliveryMigration } from "../../src/server/db/migrations/130-notification-delivery.js";
+import { partialNotificationDeliveryMigration } from "../../src/server/db/migrations/139-partial-notification-delivery.js";
 import { notificationPathlessScriptDeliveryMigration } from "../../src/server/db/migrations/132-notification-pathless-script-delivery.js";
 import type { BoundedText } from "../../src/shared/protocol/payload.js";
 import { createHash } from "node:crypto";
@@ -129,9 +130,10 @@ describe("notification settings and passive hooks", () => {
       ...old, events: ["turn.completed", "question.requested"], assistantResultPhases: ["provisional"],
     }));
     database.exec(notificationDeliveryMigration.sql);
+    database.exec(partialNotificationDeliveryMigration.sql);
     const settings = repository.read(scope);
     expect(settings).toMatchObject({ enabled: true, silenced: true, assistantResultPhases: ["provisional"],
-      scriptPath: script.scriptPath, arguments: script.arguments, revision: 2 });
+      scriptPath: script.scriptPath, arguments: script.arguments, revision: 3 });
     expect(settings).not.toHaveProperty("events");
     expect(settings.delivery).toEqual(scriptDelivery(["turn.completed", "question.requested"]));
     expect(repository.consume(scope, "already-consumed", 1001)).toBeNull();
@@ -158,6 +160,7 @@ describe("notification settings and passive hooks", () => {
       }), target.tenantId, target.principalId);
     }
     database.exec(notificationDeliveryMigration.sql);
+    database.exec(partialNotificationDeliveryMigration.sql);
     const raw = (target: typeof scope) => database.prepare(`SELECT config_json AS configJson, revision,
       dispatch_generation AS generation FROM principal_notification_settings
       WHERE tenant_id = ? AND owner_principal_id = ?`).get(target.tenantId, target.principalId) as
@@ -415,25 +418,25 @@ describe("notification settings and passive hooks", () => {
 
   it("delivers a partial answer once while completion and automatic listening remain separate", async () => {
     const { service, executor } = fixture();
-    service.update(scope, { ...config, delivery: scriptDelivery(["turn.progress", "turn.completed"]),
+    service.update(scope, { ...config, delivery: { ...scriptDelivery(["turn.completed"]), "turn.partial": { script: true, voice: "speak" } },
       assistantResultPhases: ["partial", "final"] });
     const frames: string[] = [];
     service.subscribe(scope, frame => frames.push(frame));
-    const partial: NotificationEventPayload = { ...progress(),
+    const partial: NotificationEventPayload = { ...progress(), event: "turn.partial",
       progress: { phase: "partial", itemId: "partial-1", text: "First substantive answer." } };
     service.emit(scope, partial, "partial-item", "live");
     service.emit(scope, partial, "partial-item", "live");
     await flush();
     expect(executor).toHaveBeenCalledOnce();
     expect(voiceFrames(frames)).toEqual([expect.objectContaining({ voice: "speak",
-      payload: expect.objectContaining({ event: "turn.progress", progress: partial.progress }) })]);
+      payload: expect.objectContaining({ event: "turn.partial", progress: partial.progress }) })]);
     expect(voiceFrames(frames)[0]).not.toHaveProperty("recognitionTarget");
     expect(executor.mock.calls[0]![0].payload).not.toHaveProperty("assistantResult");
     const result = { provisional: null, partial: { text: "First substantive answer." }, final: { text: "Finished." }, unclassified: null };
     service.emit(scope, event(1002), "completion", "live", result);
     await flush();
     expect(executor).toHaveBeenCalledTimes(2);
-    expect(voiceFrames(frames).map(frame => frame.payload.event)).toEqual(["turn.progress", "turn.completed"]);
+    expect(voiceFrames(frames).map(frame => frame.payload.event)).toEqual(["turn.partial", "turn.completed"]);
     expect(executor.mock.calls[1]![0].payload.assistantResult).toEqual({ partial: result.partial, final: result.final });
     const reconnected: string[] = [];
     service.subscribe(scope, frame => reconnected.push(frame));
@@ -442,6 +445,42 @@ describe("notification settings and passive hooks", () => {
     await flush();
     expect(executor).toHaveBeenCalledTimes(2);
     expect(voiceFrames(reconnected)).toEqual([]);
+  });
+
+  it("controls Partial independently of Turn progress and keeps disabled events consumed", async () => {
+    const { service, executor } = fixture();
+    const frames: string[] = [];
+    service.subscribe(scope, frame => frames.push(frame));
+    const partial: NotificationEventPayload = { ...progress(), event: "turn.partial",
+      progress: { phase: "partial", itemId: "partial-1", text: "Answer so far." } };
+    expect(service.read(scope).delivery["turn.partial"]).toEqual({ script: false, voice: "none" });
+    service.update(scope, { ...config, delivery: scriptDelivery(["turn.progress"]) });
+    service.emit(scope, partial, "disabled-partial", "live");
+    service.emit(scope, progress(), "enabled-progress", "live");
+    await flush();
+    expect(executor.mock.calls.map(call => call[0].payload.event)).toEqual(["turn.progress"]);
+    expect(voiceFrames(frames).map(frame => frame.payload.event)).toEqual(["turn.progress"]);
+    service.update(scope, { ...config, expectedRevision: 1, delivery: {
+      ...scriptDelivery([]), "turn.progress": { script: false, voice: "none" }, "turn.partial": { script: true, voice: "speak" },
+    } });
+    service.emit(scope, partial, "disabled-partial", "live");
+    service.emit(scope, progress(), "now-disabled-progress", "live");
+    service.emit(scope, partial, "enabled-partial", "live");
+    await flush();
+    expect(executor.mock.calls.map(call => call[0].payload.event)).toEqual(["turn.progress", "turn.partial"]);
+    expect(voiceFrames(frames).map(frame => frame.payload.event)).toEqual(["turn.progress", "turn.partial"]);
+  });
+
+  it.each([["turn.progress", "provisional"], ["turn.partial", "partial"]] as const)("requires matching live response phase for %s", (event, phase) => {
+    const payload = { ...progress(), event, notificationId: "notice", schemaVersion: 5,
+      progress: { phase, itemId: "item", text: "Response" } };
+    expect(notificationPayloadSchema.safeParse(payload).success).toBe(true);
+    expect(notificationPayloadSchema.safeParse({ ...payload, progress: { ...payload.progress, phase: phase === "partial" ? "provisional" : "partial" } }).success).toBe(false);
+    expect(notificationPayloadSchema.safeParse({ ...payload, progress: undefined }).success).toBe(false);
+    expect(notificationPayloadSchema.safeParse({ ...payload, event: "turn.completed" }).success).toBe(false);
+    const voice = { payload, voice: "speak", sourceEventId: "event", generation: 1 };
+    expect(voiceNotificationSchema.safeParse(voice).success).toBe(true);
+    expect(voiceNotificationSchema.safeParse({ ...voice, voice: "speakThenListen" }).success).toBe(false);
   });
 
   it.each([
@@ -898,7 +937,7 @@ describe("notification settings and passive hooks", () => {
     const delivery = scriptDelivery(notificationEventKindSchema.options);
     expect(service.update(scope, { ...config, delivery }).delivery).toEqual(delivery);
     expect(updateNotificationSettingsRequestSchema.safeParse({ ...config, events: ["turn.completed"] }).success).toBe(false);
-    for (const kind of ["turn.progress", "approval.requested", "input.requested", "question.requested"] as const) {
+    for (const kind of ["turn.progress", "turn.partial", "approval.requested", "input.requested", "question.requested"] as const) {
       expect(updateNotificationSettingsRequestSchema.safeParse({ ...config,
         delivery: { ...delivery, [kind]: { script: true, voice: "speakThenListen" } },
       }).success).toBe(false);

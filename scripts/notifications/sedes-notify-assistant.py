@@ -17,6 +17,7 @@ CLI = str(Path.home() / ".local/bin/assistant-notifications-cli")
 ASSISTANT_URL = "https://assistant"
 EVENT_LABELS = {
     "turn.progress": "Agent update",
+    "turn.partial": "Partial answer",
     "question.requested": "Nonblocking questions",
     "turn.completed": "Agent finished",
     "turn.failed": "Agent turn failed",
@@ -92,8 +93,9 @@ def main():
             response = text(section["text"], limit=None)
             if response:
                 speech += " " + response
-    if event == "turn.progress":
-        if payload["progress"].get("phase") not in ("provisional", "partial"):
+    if event in ("turn.progress", "turn.partial"):
+        expected_phase = "partial" if event == "turn.partial" else "provisional"
+        if payload["progress"].get("phase") != expected_phase:
             raise ValueError("Expected progress phase")
         speech += " " + text(payload["progress"]["text"], limit=None)
     fields = {

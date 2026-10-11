@@ -1518,7 +1518,7 @@ describe("Codex 0.162.1 C1 protocol codecs", () => {
     })).toThrow();
   });
 
-  it("decodes the authoritative Codex 0.160 completed subagent activity kind", () => {
+  it("decodes the authoritative Codex completed subagent activity kind", () => {
     const completedActivity = {
       type: "subAgentActivity",
       id: "subagent-completed",
@@ -1554,7 +1554,7 @@ describe("Codex 0.162.1 C1 protocol codecs", () => {
     ).toThrow();
   });
 
-  it("admits closed and bounded Codex 0.160 misalignment details without projecting them", () => {
+  it("admits closed and bounded Codex misalignment details without projecting them", () => {
     const failedTurn = turn("failed-turn", [], {
       rootTurnId: null,
       itemsView: "notLoaded",

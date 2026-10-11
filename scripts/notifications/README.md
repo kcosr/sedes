@@ -12,8 +12,11 @@ announcement remains. Response whitespace and control characters are normalized;
 this hook does not truncate text. Upstream truncation remains in effect. The
 visible notification body is unchanged.
 
-Version 5 carries only selected sections, including Partial, and identifies live
-progress as `provisional` or `partial`. Both live phases use speak-only delivery. Update this hook together with the
+Version 5 carries selected sections, including Partial. Live commentary uses
+`turn.progress` with `progress.phase: "provisional"`; substantive partial answers
+use `turn.partial` with `progress.phase: "partial"`. The separate **Partial**
+notification section controls its Script and Voice delivery, both initially off.
+Both live events use speak-only delivery. Update this hook together with the
 server; it intentionally rejects prior versions. Under **Turn completed → Response text**, fresh settings select Final and
 Unclassified. Select Partial to include substantive answers produced before
 the turn ended.

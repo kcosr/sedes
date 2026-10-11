@@ -13,7 +13,7 @@ final class NativeVoiceDiagnostics {
     static final int MAX_ENTRIES = 512;
     enum Event { RECEIVED, QUEUED, DROPPED, DEQUEUED, SYNTHESIS_STARTED, PLAYBACK_STARTED, PLAYBACK_DRAINED,
         PLAYBACK_STOPPED, INTERACTION_FINISHED, STREAM_CONNECTING, STREAM_LIVE, STREAM_LOST, POLICY_RECEIVED, DISCONNECTED }
-    private static final Set<String> KINDS = new HashSet<>(Arrays.asList("turn.progress", "turn.completed", "turn.failed",
+    private static final Set<String> KINDS = new HashSet<>(Arrays.asList("turn.progress", "turn.partial", "turn.completed", "turn.failed",
         "turn.interrupted", "thread.woke", "automation.started", "automation.failed", "approval.requested",
         "input.requested", "question.requested", "replay", "manual"));
     private static final Set<String> REASONS = new HashSet<>(Arrays.asList("duplicate", "ineligible", "empty_speech",

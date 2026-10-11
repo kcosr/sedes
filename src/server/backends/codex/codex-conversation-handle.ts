@@ -511,6 +511,11 @@ export class CodexConversationHandle implements ConversationHandle {
   // updates #model; usage in that window attributes nothing unless unchanged.
   #pendingUsageTuple: { readonly model: string; readonly reasoningEffort: string | null } | undefined;
   readonly #subagentCreationSettings = new Map<string, CodexSubagentParentSettings | null>();
+  #subagentSpawningTurn: {
+    readonly generation: number;
+    readonly turnId: string;
+    readonly settings: CodexSubagentParentSettings;
+  } | undefined;
   #modelInputModalities: readonly ("text" | "image")[] = ["text"];
   #closing = false;
   #closed = false;
@@ -1604,6 +1609,22 @@ export class CodexConversationHandle implements ConversationHandle {
           }
         }
         const acceptedTurn = materializeAcceptedTurn(response.result.turn);
+        const latestSettings = this.#lastSettingsObservation;
+        const spawningSettings = {
+          model: executionSettings.model,
+          reasoningEffort: executionSettings.reasoningEffort ?? null,
+        };
+        // Only our exact successful turn/start confirms the running turn's tuple.
+        // Resume and external thread settings describe current defaults instead.
+        const observedTurn = this.#nativeTurnById.get(acceptedTurn.id);
+        this.#subagentSpawningTurn = acceptedTurn.status === "inProgress" &&
+          (!observedTurn || observedTurn.status === "inProgress") &&
+          (latestSettings?.generation !== response.generation ||
+            latestSettings.inboundSequence <= settingsObservationSequenceBeforeRequest ||
+            (latestSettings.settings.model === spawningSettings.model &&
+              (latestSettings.settings.reasoningEffort ?? null) === spawningSettings.reasoningEffort))
+          ? { generation: response.generation, turnId: acceptedTurn.id, settings: spawningSettings }
+          : undefined;
         if (this.#controlGeneration === response.generation && !this.#controlLifetime.signal.aborted &&
             controlObservationBeforeStart === this.#controlObservationRevision &&
             !this.#nativeThread?.turns.some(turn => turn.id === acceptedTurn.id && turn.status !== "inProgress")) {
@@ -2084,16 +2105,18 @@ export class CodexConversationHandle implements ConversationHandle {
     try {
       if (notification.method === "turn/started") {
         const parsed = codexC2NotificationSchemas["turn/started"].parse(notification.params);
+        if (this.#subagentSpawningTurn?.turnId !== parsed.turn.id) this.#subagentSpawningTurn = undefined;
         this.#controlTurn = { generation: notification.generation, turnId: parsed.turn.id };
       } else if (notification.method === "turn/completed") {
         const parsed = codexC2NotificationSchemas["turn/completed"].parse(notification.params);
+        if (this.#subagentSpawningTurn?.turnId === parsed.turn.id) this.#subagentSpawningTurn = undefined;
         if (this.#controlTurn?.turnId === parsed.turn.id) this.#controlTurn = undefined;
       } else if (notification.method === "thread/status/changed") {
         const parsed = codexC2NotificationSchemas["thread/status/changed"].parse(notification.params);
         if (parsed.status.type === "idle") this.#controlTurn = { generation: notification.generation, turnId: null };
         else if (this.#controlTurn?.turnId === null) this.#controlTurn = undefined;
       }
-    } catch { this.#controlTurn = undefined; }
+    } catch { this.#controlTurn = undefined; this.#subagentSpawningTurn = undefined; }
   }
 
   async perform(
@@ -4488,6 +4511,7 @@ export class CodexConversationHandle implements ConversationHandle {
       { readonly type: "resnapshot_required" }
     >["reason"],
   ): void {
+    this.#subagentSpawningTurn = undefined;
     if (this.#projectionInvalidated) return;
     this.#projectionInvalidated = true;
     this.#projectionInstallEpoch += 1;
@@ -4573,6 +4597,13 @@ export class CodexConversationHandle implements ConversationHandle {
         this.#projectionInvalidated || this.#replayingPaginatedEstablishmentNotification ||
         isCodexRpcUndecodableNotification(notification) ||
         (notification.method !== "item/started" && notification.method !== "item/completed")) return;
+    // Routing guards inspect only scalar metadata. Only the owning handle's new
+    // subagent-start item reaches the full attested codec and can mutate evidence.
+    const params = notification.params;
+    if (!isRecord(params) || params.threadId !== this.binding.backendConversationId ||
+        !isRecord(params.item) || params.item.type !== "subAgentActivity" ||
+        params.item.kind !== "started" || typeof params.item.agentThreadId !== "string" ||
+        this.#subagentCreationSettings.has(params.item.agentThreadId)) return;
     const lifecycle = this.#client.lifecycleSnapshot();
     if (lifecycle.state !== "ready" || lifecycle.generation !== notification.generation ||
         notification.generation !== this.#establishedGeneration) return;
@@ -4581,20 +4612,16 @@ export class CodexConversationHandle implements ConversationHandle {
       const item = parsed.item;
       if (parsed.threadId !== this.binding.backendConversationId || item.type !== "subAgentActivity" ||
           item.kind !== "started" || this.#subagentCreationSettings.has(item.agentThreadId)) return;
-      // Capture at inbound delivery, before queued projection or a turn/start reply
-      // can change #model. Pending earlier notifications make that tuple uncertain.
-      const pending = this.#pendingUsageTuple;
+      // Capture at inbound delivery; queued settings changes make evidence uncertain.
+      const confirmed = this.#subagentSpawningTurn;
       const turn = this.#nativeTurnById.get(parsed.turnId);
-      const model = this.#pendingNotificationWork === 0 && this.#inflightNotificationProjection === 0 &&
+      const settings = this.#pendingNotificationWork === 0 && this.#inflightNotificationProjection === 0 &&
         turn?.status === "inProgress" && !turn.items.some(existing =>
           existing.type === "subAgentActivity" && existing.kind === "started" &&
           existing.agentThreadId === item.agentThreadId) &&
-        this.#model !== this.#unconfirmedUsageModel &&
-        (!pending || (pending.model === this.#model?.id &&
-          pending.reasoningEffort === (this.#model?.reasoningEffort ?? null)))
-        ? this.#model : undefined;
-      this.#subagentCreationSettings.set(item.agentThreadId,
-        model ? { model: model.id, reasoningEffort: model.reasoningEffort ?? null } : null);
+        confirmed?.generation === notification.generation && confirmed.turnId === parsed.turnId
+        ? confirmed.settings : null;
+      this.#subagentCreationSettings.set(item.agentThreadId, settings);
       // Bound resident presentation evidence; evicted evidence becomes unknown.
       if (this.#subagentCreationSettings.size > 1_000) {
         this.#subagentCreationSettings.delete(this.#subagentCreationSettings.keys().next().value!);
@@ -4700,6 +4727,7 @@ export class CodexConversationHandle implements ConversationHandle {
         this.#applySettingsObservation(observation);
         this.#scheduleDesiredInitialization(observation);
       } catch (error) {
+        this.#subagentSpawningTurn = undefined;
         this.#recordMutation(notification.generation, notification.sequence);
         this.#reportError(error);
         if (!this.#establishing) {
@@ -5385,6 +5413,9 @@ export class CodexConversationHandle implements ConversationHandle {
   };
 
   readonly #consumeLifecycleNow: CodexLifecycleListener = (lifecycle) => {
+    if (lifecycle.state !== "ready" || lifecycle.generation !== this.#subagentSpawningTurn?.generation) {
+      this.#subagentSpawningTurn = undefined;
+    }
     if (lifecycle.state !== "ready" || (this.#establishedGeneration !== 0 && lifecycle.generation !== this.#establishedGeneration)) {
       this.#usageCapture?.gap("capture_gap");
     }
@@ -5502,6 +5533,11 @@ export class CodexConversationHandle implements ConversationHandle {
         parsed.threadSettings.sandboxPolicy,
       ),
     } satisfies CodexSettingsObservationReceipt;
+    if (this.#subagentSpawningTurn &&
+        (this.#subagentSpawningTurn.settings.model !== observation.settings.model ||
+          this.#subagentSpawningTurn.settings.reasoningEffort !== (observation.settings.reasoningEffort ?? null))) {
+      this.#subagentSpawningTurn = undefined;
+    }
     this.#lastSettingsObservationGeneration = generation;
     this.#lastSettingsObservationInboundSequence = inboundSequence;
     this.#lastSettingsObservation = observation;
@@ -6037,6 +6073,7 @@ export class CodexConversationHandle implements ConversationHandle {
     await this.#notificationWork;
     await this.#releasePolicyHistory();
     this.#subagentCreationSettings.clear();
+    this.#subagentSpawningTurn = undefined;
     this.#interactions.close();
     this.#closed = true;
     this.#unsubscribeNotifications();

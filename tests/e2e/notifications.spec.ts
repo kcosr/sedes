@@ -61,6 +61,16 @@ test("notification settings persist and passive server scripts follow selected l
     .getByLabel("Arguments (one per line)", { exact: true })
     .fill(payloadPath);
   await settings.getByLabel("Timeout (seconds)", { exact: true }).fill("10");
+  const partialScript = settings.getByRole("switch", { name: "Script: Partial", exact: true });
+  const progressScript = settings.getByRole("switch", { name: "Script: Turn progress", exact: true });
+  await expect(partialScript).not.toBeChecked();
+  await expect(progressScript).not.toBeChecked();
+  await partialScript.check();
+  const partialVoice = settings.getByRole("combobox", { name: "Voice: Partial", exact: true });
+  await expect(partialVoice).toHaveText("Off");
+  await partialVoice.click();
+  await expect(page.getByRole("option")).toHaveText(["Off", "Speak"]);
+  await page.getByRole("option", { name: "Speak", exact: true }).click();
   await settings
     .getByRole("switch", { name: "Script: Turn completed", exact: true })
     .check();
@@ -114,6 +124,9 @@ test("notification settings persist and passive server scripts follow selected l
     .getByRole("heading", { name: "Notifications", exact: true })
     .scrollIntoViewIfNeeded();
   await capture(page, testInfo, "notification-settings-desktop.png");
+  await settings.getByRole("group", { name: "Response text", exact: true })
+    .evaluate(element => element.scrollIntoView({ block: "center" }));
+  await capture(page, testInfo, "notification-response-phases-desktop.png");
 
   await page.reload();
   settings = page.getByTestId("settings-view");
@@ -136,6 +149,9 @@ test("notification settings persist and passive server scripts follow selected l
   for (const name of ["Provisional", "Partial", "Final", "Unclassified"]) {
     await expect(settings.getByRole("checkbox", { name, exact: true })).toBeChecked();
   }
+  await expect(settings.getByRole("switch", { name: "Script: Partial", exact: true })).toBeChecked();
+  await expect(settings.getByRole("switch", { name: "Script: Turn progress", exact: true })).not.toBeChecked();
+  await expect(settings.getByRole("combobox", { name: "Voice: Partial", exact: true })).toHaveText("Speak");
   // The saved selection controls which sections the external script receives.
   await settings.getByRole("checkbox", { name: "Provisional", exact: true }).uncheck();
   await settings.getByRole("button", { name: "Save notifications", exact: true }).click();
@@ -146,6 +162,9 @@ test("notification settings persist and passive server scripts follow selected l
     .getByRole("heading", { name: "Notifications", exact: true })
     .scrollIntoViewIfNeeded();
   await capture(page, testInfo, "notification-settings-mobile.png");
+  await settings.getByRole("group", { name: "Response text", exact: true })
+    .evaluate(element => element.scrollIntoView({ block: "center" }));
+  await capture(page, testInfo, "notification-response-phases-mobile.png");
   await settings
     .getByRole("switch", { name: "Script: Automation started", exact: true })
     .scrollIntoViewIfNeeded();
@@ -299,4 +318,31 @@ test("notification settings persist and passive server scripts follow selected l
         payload.event === "turn.completed" && payload.thread?.id === threadId,
     ),
   ).toHaveLength(1);
+
+  // Partial delivery is selected independently from provisional progress. Both
+  // provider-shaped items arrive while a submitted Codex turn remains active.
+  await page.getByTestId("desktop-sidebar").getByTestId("thread-row-link")
+    .filter({ hasText: `Imported Codex history — ${path.basename(workspace)}` }).click();
+  const codexThreadId = new URL(page.url()).pathname.split("/").at(-1)!;
+  expect((await page.request.post("/__e2e/codex/turn-completion/arm")).status()).toBe(204);
+  await fillAndPersistDraft(page, "Check compatibility and share the first confirmed finding", "Message Codex TCP");
+  await sendCurrentDraft(page);
+  const codexTurn = page.locator(".conversation-turn").last();
+  await expect(codexTurn.getByTestId("activity-group")).toBeVisible();
+  expect((await page.request.post(`/__e2e/codex/partial-answer/${codexThreadId}`)).status()).toBe(204);
+  await expect.poll(async () => (await payloads()).filter(payload => payload.event === "turn.partial").length).toBe(1);
+  const partial = (await payloads()).find(payload => payload.event === "turn.partial")!;
+  expect(partial).toMatchObject({
+    thread: { id: codexThreadId },
+    progress: { phase: "partial", text: "The first compatibility finding is confirmed. I am checking the remaining paths." },
+  });
+  expect((await payloads()).filter(payload => payload.event === "turn.progress")).toHaveLength(0);
+  expect((await payloads()).filter(payload => payload.event === "turn.completed" && payload.thread?.id === codexThreadId)).toHaveLength(0);
+  await expect(codexTurn).toHaveAttribute("data-turn-status", "in_progress");
+  await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeVisible();
+  await capture(page, testInfo, "notification-partial-active.png");
+  expect((await page.request.post("/__e2e/codex/turn-completion/release")).status()).toBe(204);
+  await expect.poll(async () => (await payloads()).filter(payload => payload.event === "turn.completed" && payload.thread?.id === codexThreadId).length).toBe(1);
+  expect((await payloads()).find(payload => payload.event === "turn.completed" && payload.thread?.id === codexThreadId)?.assistantResult?.partial)
+    .toEqual({ text: partial.progress!.text });
 });

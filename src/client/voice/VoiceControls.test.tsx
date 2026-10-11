@@ -608,7 +608,7 @@ describe("voice controls card", () => {
     expect(lines()).toEqual(["Release review", "Speaking · Response"]);
     expect(card().querySelector(".voice-card-title[data-thread]")).toHaveTextContent("Release review");
     expect(buttons()).toEqual(["Open voice controls", "Open thread: Release review", "Next voice interaction", "Stop voice interaction", "Record reply"]);
-    const kinds = [["turn.progress", "Speaking · Progress"], ["question.requested", "Speaking · Question"], ["automation.started", "Speaking · Automation"],
+    const kinds = [["turn.progress", "Speaking · Progress"], ["turn.partial", "Speaking · Partial"], ["question.requested", "Speaking · Question"], ["automation.started", "Speaking · Automation"],
       ["replay", "Speaking · Replay"], ["future.kind", "Speaking"], [null, "Speaking"]] as const;
     for (const [index, [eventKind, line]] of kinds.entries()) {
       act(() => voice.fake.emit("stateChanged", speaking({ threadId: "named", threadTitle: "Release review", eventKind }, { stateRevision: index + 2 })));

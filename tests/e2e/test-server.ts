@@ -1768,6 +1768,11 @@ class CodexE2eRpcFixture {
     if (!thread || !turn) throw new Error("e2e_partial_answer_turn_not_active");
     const items: CodexThread["turns"][number]["items"] = [
       {
+        type: "agentMessage", id: `${turn.id}-progress`,
+        text: "Checking the remaining compatibility paths.",
+        phase: "commentary", memoryCitation: null, delivery: null, questions: null,
+      },
+      {
         type: "subAgentActivity", id: `${turn.id}-reviewer-started`, kind: "started",
         agentThreadId: `${nativeThreadId}-reviewer`, agentPath: "/root/reviewer",
         model: this.#modelByThread.get(nativeThreadId) ?? E2E_CODEX_DEFAULT_MODEL,

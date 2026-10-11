@@ -30,7 +30,8 @@ const eventOptions: ReadonlyArray<{
   label: string;
   description: string;
 }> = [
-  { value: "turn.progress", label: "Turn progress", description: "A completed live assistant update before the turn finishes." },
+  { value: "turn.progress", label: "Turn progress", description: "A completed live progress update while the agent works." },
+  { value: "turn.partial", label: "Partial", description: "An answer from the agent while its work continues." },
   {
     value: "turn.completed",
     label: "Turn completed",
@@ -375,7 +376,7 @@ export function NotificationSettingsPage({
       >
         {eventOptions.map((option) => {
           const delivery = draft.settings.delivery[option.value];
-          const canListen = !["turn.progress", "approval.requested", "input.requested", "question.requested"].includes(option.value);
+          const canListen = !["turn.progress", "turn.partial", "approval.requested", "input.requested", "question.requested"].includes(option.value);
           return (
             <SwitchField
               key={option.value}
@@ -396,7 +397,7 @@ export function NotificationSettingsPage({
                 })}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="none">None</SelectItem>
+                    <SelectItem value="none">Off</SelectItem>
                     <SelectItem value="speak">Speak</SelectItem>
                     {canListen ? <SelectItem value="speakThenListen">Speak then listen</SelectItem> : null}
                   </SelectContent>
@@ -436,7 +437,7 @@ export function NotificationSettingsPage({
                       </div>
                     ))}
                   </div>
-                  <p className="settings-field-description">Partial replies contain an answer while work continues. Provisional and Partial response text may repeat updates already spoken as progress.</p>
+                  <p className="settings-field-description">Provisional and Partial response text may repeat text already spoken through Turn progress or Partial notifications.</p>
                 </div>
               ) : null}
             </SwitchField>

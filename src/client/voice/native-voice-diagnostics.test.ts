@@ -54,6 +54,8 @@ describe("native voice diagnostics", () => {
     bridge.readDiagnostics.mockResolvedValue({ ...snapshot(), credential: "private credential", entries: [{ ...entry,
       threadId: "private thread", text: "private speech", title: "private title", error: "private error" }] });
     expect(JSON.stringify(await readNativeVoiceDiagnostics())).not.toContain("private");
+    expect(nativeVoiceDiagnosticsSchema.parse({ ...snapshot(), entries: [{ ...entry, eventKind: "turn.partial" }] })
+      .entries[0]?.eventKind).toBe("turn.partial");
     for (const patch of [{ sourceEventId: "private identifier" }, { eventKind: "private speech" }, { reason: "private error" },
       { event: "private title" }, { queueCount: 65 }, { queueBytes: 256 * 1024 + 1 }, { elapsedMilliseconds: Infinity }]) {
       expect(nativeVoiceDiagnosticsSchema.safeParse({ ...snapshot(), entries: [{ ...entry, ...patch }] }).success).toBe(false);

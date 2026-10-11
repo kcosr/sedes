@@ -118,6 +118,7 @@ import {
   type CodexServerRequestMethod,
 } from "../../src/server/provider-protocol/bindings/codex-app-server/codex-app-server-binding.js";
 import { createInMemoryOutputArtifactPublisher } from "../helpers/output-artifact-publisher.js";
+import * as codexBindingModule from "../../src/server/provider-protocol/bindings/codex-app-server/codex-app-server-binding.js";
 
 const scope = { tenantId: "tenant-1", principalId: "principal-1" };
 const instance: AgentBackendInstance = {
@@ -1045,6 +1046,14 @@ async function establish(
   });
 }
 
+async function startSubagentParentTurn(harness: RpcHarness, handle: ConversationHandle): Promise<void> {
+  harness.enqueue("turn/start", { turn: { ...nativeTurn(1), items: [], itemsView: "notLoaded",
+    status: "inProgress", completedAt: null } });
+  await handle.submit({ applicationOperationId: "subagent-parent-start", source: { kind: "user" },
+    mutationId: "subagent-parent-start", reconciliationToken: "subagent-parent-start-token",
+    taskContexts: [], contextExcerpts: [], attachments: [], text: "continue" });
+}
+
 describe("CodexConversationBackendDriver", () => {
   it.each([
     { model: "gpt-5.6", reasoningEffort: "low", suffix: "" },
@@ -1053,8 +1062,8 @@ describe("CodexConversationBackendDriver", () => {
   ])("compares live subagent creation settings with the confirmed spawning tuple: $model/$reasoningEffort", async ({ model, reasoningEffort, suffix }) => {
     const harness = new RpcHarness();
     const handle = await attachIdle(harness);
-    await establish(harness, handle, nativeThread({ status: { type: "active", activeFlags: [] },
-      turns: [{ ...nativeTurn(1), status: "inProgress", completedAt: null }] }));
+    await establish(harness, handle);
+    await startSubagentParentTurn(harness, handle);
     harness.notify("item/completed", { threadId: "thread-1", turnId: "turn-1", completedAtMs: 1_700_000_002_000,
       item: { type: "subAgentActivity", id: "child-started", kind: "started",
         agentThreadId: "private-child", agentPath: "/root/reviewer", model, reasoningEffort } });
@@ -1069,8 +1078,8 @@ describe("CodexConversationBackendDriver", () => {
   it("retains the creation comparison after the spawning agent changes reasoning", async () => {
     const harness = new RpcHarness();
     const handle = await attachIdle(harness);
-    await establish(harness, handle, nativeThread({ status: { type: "active", activeFlags: [] },
-      turns: [{ ...nativeTurn(1), status: "inProgress", completedAt: null }] }));
+    await establish(harness, handle);
+    await startSubagentParentTurn(harness, handle);
     const child = { type: "subAgentActivity", id: "child-started", kind: "started",
       agentThreadId: "private-child", agentPath: "/root/reviewer", model: "gpt-5.6", reasoningEffort: "low" };
     harness.notify("item/completed", { threadId: "thread-1", turnId: "turn-1", item: child, completedAtMs: 1_700_000_002_000 });
@@ -1091,6 +1100,34 @@ describe("CodexConversationBackendDriver", () => {
     expect(markers.map(item => item.summary?.text)).toEqual([
       "Started `/root/reviewer`", "Completed `/root/reviewer`",
     ]);
+    harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+    await handle.close();
+  });
+
+  it.each([
+    { effort: "low", approvalPolicy: "never", suffix: "" },
+    { effort: "low", approvalPolicy: "on-request", suffix: "" },
+    { effort: "high", approvalPolicy: "never", suffix: " · gpt-5.6 · High" },
+  ])("uses running-turn evidence after a midturn settings observation: $effort/$approvalPolicy", async ({ effort, approvalPolicy, suffix }) => {
+    const harness = new RpcHarness();
+    const handle = await attachIdle(harness);
+    await establish(harness, handle);
+    await startSubagentParentTurn(harness, handle);
+    harness.notify("thread/settings/updated", { threadId: "thread-1", threadSettings: {
+      cwd: workspace.canonicalPath, approvalPolicy, approvalsReviewer: "user",
+      sandboxPolicy: { type: "readOnly", networkAccess: false }, activePermissionProfile: null,
+      model: "gpt-5.6", modelProvider: "openai", serviceTier: "default", effort, summary: null,
+      collaborationMode: { mode: "default", settings: {
+        model: "gpt-5.6", reasoning_effort: effort, developer_instructions: null,
+      } }, multiAgentMode: "explicitRequestOnly", personality: null,
+    } });
+    await new Promise<void>(resolve => setImmediate(resolve));
+    harness.notify("item/completed", { threadId: "thread-1", turnId: "turn-1", completedAtMs: 1_700_000_002_000,
+      item: { type: "subAgentActivity", id: "child-after-settings", kind: "started",
+        agentThreadId: "private-child", agentPath: "/root/reviewer", model: "gpt-5.6", reasoningEffort: effort } });
+    const marker = Object.values((await handle.readCurrent()).snapshot.itemsById)
+      .find(item => item.semanticKind === "collaboration");
+    expect(marker).toMatchObject({ summary: { text: `Started \`/root/reviewer\`${suffix}` } });
     harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
     await handle.close();
   });
@@ -1138,13 +1175,13 @@ describe("CodexConversationBackendDriver", () => {
     await handle.close();
   });
 
-  it("does not assign current settings to a child creation already present in active history", async () => {
+  it.each([false, true])("keeps imported active turn settings unknown for a child (already in history: %s)", async alreadyPresent => {
     const harness = new RpcHarness();
     const handle = await attachIdle(harness);
     const item = { type: "subAgentActivity", id: "historic-child", kind: "started",
       agentThreadId: "private-child", agentPath: "/root/reviewer", model: "gpt-5.6", reasoningEffort: "low" };
     await establish(harness, handle, nativeThread({ status: { type: "active", activeFlags: [] },
-      turns: [{ ...nativeTurn(1), status: "inProgress", completedAt: null, items: [item] }] }));
+      turns: [{ ...nativeTurn(1), status: "inProgress", completedAt: null, items: alreadyPresent ? [item] : [] }] }));
     harness.notify("item/completed", { threadId: "thread-1", turnId: "turn-1", item,
       completedAtMs: 1_700_000_002_000 });
     expect(Object.values((await handle.readCurrent()).snapshot.itemsById)).toEqual([
@@ -1152,6 +1189,84 @@ describe("CodexConversationBackendDriver", () => {
     ]);
     harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
     await handle.close();
+  });
+
+  it("does not retain spawning-turn authority across a generation change", async () => {
+    const harness = new RpcHarness();
+    const handle = await attachIdle(harness);
+    await establish(harness, handle);
+    await startSubagentParentTurn(harness, handle);
+    harness.lifecycle("unavailable", 1);
+    harness.lifecycle("ready", 2);
+    await establish(harness, handle, nativeThread({ status: { type: "active", activeFlags: [] },
+      turns: [{ ...nativeTurn(1), status: "inProgress", completedAt: null, items: [] }] }));
+    harness.notify("item/completed", { threadId: "thread-1", turnId: "turn-1", completedAtMs: 1_700_000_002_000,
+      item: { type: "subAgentActivity", id: "child-new-generation", kind: "started",
+        agentThreadId: "private-child", agentPath: "/root/reviewer", model: "gpt-5.6", reasoningEffort: "low" } });
+    expect(Object.values((await handle.readCurrent()).snapshot.itemsById)).toEqual([
+      expect.objectContaining({ summary: { text: "Started `/root/reviewer` · gpt-5.6 · Low" } }),
+    ]);
+    harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+    await handle.close();
+  });
+
+  it("does not reuse spawning-turn settings for a later externally started turn", async () => {
+    const harness = new RpcHarness();
+    const handle = await attachIdle(harness);
+    await establish(harness, handle);
+    await startSubagentParentTurn(harness, handle);
+    harness.notify("turn/completed", { threadId: "thread-1", turn: { ...nativeTurn(1), items: [] } });
+    await new Promise<void>(resolve => setImmediate(resolve));
+    harness.notify("turn/started", { threadId: "thread-1", turn: { ...nativeTurn(2), items: [],
+      status: "inProgress", completedAt: null } });
+    await new Promise<void>(resolve => setImmediate(resolve));
+    harness.notify("item/completed", { threadId: "thread-1", turnId: "turn-2", completedAtMs: 1_700_000_003_000,
+      item: { type: "subAgentActivity", id: "external-turn-child", kind: "started",
+        agentThreadId: "private-child", agentPath: "/root/reviewer", model: "gpt-5.6", reasoningEffort: "low" } });
+    const marker = Object.values((await handle.readCurrent()).snapshot.itemsById)
+      .find(item => item.semanticKind === "collaboration");
+    expect(marker).toMatchObject({ summary: { text: "Started `/root/reviewer` · gpt-5.6 · Low" } });
+    harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+    await handle.close();
+  });
+
+  it("does not extra-parse foreign, large unrelated, or cached subagent notifications", async () => {
+    const harness = new RpcHarness();
+    const target = driver(harness);
+    const handle = await attachIdle(harness, target);
+    const other = await target.attach(attachInput(connection, "other-thread"));
+    await establish(harness, handle, nativeThread({ status: { type: "active", activeFlags: [] },
+      turns: [{ ...nativeTurn(1), status: "inProgress", completedAt: null, items: [] }] }));
+    await establish(harness, other, nativeThread({ id: "other-thread" }));
+    const parse = vi.spyOn(codexBindingModule, "assertCodexAttestedServerNotificationParams");
+    const item = { type: "agentMessage", id: "large-message", text: "x".repeat(128 * 1_024),
+      phase: "commentary", memoryCitation: null, delivery: null, questions: null };
+    const countItemParses = () => parse.mock.calls.filter(([method]) => method === "item/completed").length;
+    try {
+      harness.notify("item/completed", { threadId: "foreign-thread", turnId: "turn-1", item,
+        completedAtMs: 1_700_000_002_000 });
+      expect(countItemParses()).toBe(0);
+      harness.notify("item/completed", { threadId: "thread-1", turnId: "turn-1", item,
+        completedAtMs: 1_700_000_002_000 });
+      expect(countItemParses()).toBe(1);
+      await new Promise<void>(resolve => setImmediate(resolve));
+      parse.mockClear();
+      const child = { type: "subAgentActivity", id: "cached-child", kind: "started",
+        agentThreadId: "private-child", agentPath: "/root/reviewer", model: "gpt-5.6", reasoningEffort: "low" };
+      harness.notify("item/completed", { threadId: "thread-1", turnId: "turn-1", item: child,
+        completedAtMs: 1_700_000_003_000 });
+      expect(countItemParses()).toBe(2);
+      await new Promise<void>(resolve => setImmediate(resolve));
+      parse.mockClear();
+      harness.notify("item/completed", { threadId: "thread-1", turnId: "turn-1", item: child,
+        completedAtMs: 1_700_000_003_000 });
+      expect(countItemParses()).toBe(1);
+    } finally {
+      parse.mockRestore();
+      harness.enqueue("thread/unsubscribe", { status: "unsubscribed" }, { status: "unsubscribed" });
+      await handle.close();
+      await other.close();
+    }
   });
 
   it("gracefully interrupts only the cached active turn during owned runtime Stop without rereading inventory", async () => {
@@ -1351,7 +1466,7 @@ describe("CodexConversationBackendDriver", () => {
     ).resolves.toEqual(expect.objectContaining({ models: expect.any(Array) }));
   });
 
-  it("normalizes Fast and Ultrafast from the Codex 0.160 service-tier catalog", async () => {
+  it("normalizes Fast and Ultrafast from the Codex service-tier catalog", async () => {
     const harness = new RpcHarness();
     harness.enqueue("model/list", {
       data: [

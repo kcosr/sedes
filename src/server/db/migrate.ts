@@ -25,6 +25,7 @@ import { automationRunIndexesMigration } from "./migrations/135-automation-run-i
 import { automationTurnSettlementMigration } from "./migrations/136-automation-turn-settlement.js";
 import { submissionCompletionTurnIndexMigration } from "./migrations/137-submission-completion-turn-index.js";
 import { partialAssistantResultMigration } from "./migrations/138-partial-assistant-result.js";
+import { partialNotificationDeliveryMigration } from "./migrations/139-partial-notification-delivery.js";
 import { largeDirectInputsMigration } from "./migrations/133-large-direct-inputs.js";
 import { conversationStopReceiptsMigration } from "./migrations/119-conversation-stop-receipts.js";
 import { claudeTurnFailureDetailsMigration } from "./migrations/109-claude-turn-failure-details.js";
@@ -290,6 +291,7 @@ export const backendNormalizedMigrations = [
   automationTurnSettlementMigration,
   submissionCompletionTurnIndexMigration,
   partialAssistantResultMigration,
+  partialNotificationDeliveryMigration,
 ] as const;
 
 export type DatabaseMigration = {

@@ -261,6 +261,7 @@ describe("direct thread input admission", { timeout: 30_000 }, () => {
         backendCorrelations: [initial.mutationId], text: { text: "Working" } };
       notifications.progress(h.scope, id, progress);
       expect(emit).toHaveBeenCalledOnce();
+      expect(emit.mock.calls[0]?.[1]).toMatchObject({ event: phase === "partial" ? "turn.partial" : "turn.progress", progress: { phase } });
       notifications.progress({ ...h.scope, principalId: randomUUID() }, id, progress);
       notifications.progress(h.scope, id, { ...progress, backendCorrelations: ["provider-only"] });
       expect(emit).toHaveBeenCalledOnce();
