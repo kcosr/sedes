@@ -75,3 +75,16 @@ it("retains normalized backend codes and exact transport closure tokens", () => 
   expect(attachmentDiagnosticError(Object.assign(new Error("private message"), { backendCode: "/private/credential" })))
     .toEqual([{ name: "Error" }]);
 });
+
+it("admits machine-only SSH diagnostics and bounded event pressure", () => {
+  vi.stubEnv("SEDES_DEBUG_DELIVERY", "1");
+  const log = vi.spyOn(console, "error").mockImplementation(() => {});
+  attachmentDiagnostic("sidecar_byte_stream_closed", { diagnosticCode: "sidecar_upstream_detached", exitCode: 255, signal: null,
+    queuedEventBytes: 123, queuedEventCount: 16 });
+  expect(JSON.parse(String(log.mock.calls[0]![0]).replace("[delivery-attachment] ", ""))).toMatchObject({
+    diagnosticCode: "sidecar_upstream_detached", exitCode: 255, signal: null, queuedEventBytes: 123, queuedEventCount: 16,
+  });
+  attachmentDiagnostic("sidecar_byte_stream_closed", { diagnosticCode: "private_account_name" });
+  expect(log.mock.calls[1]![0]).toContain('"diagnosticCode":"redacted"');
+  expect(log.mock.calls[1]![0]).not.toContain("private_account_name");
+});

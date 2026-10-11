@@ -675,6 +675,9 @@ function sidecarByteStream(channel: SshOwnedStdioChannel): SidecarByteStream {
           : closure.reason === "spawn_error"
             ? "ssh_sidecar_spawn_error"
             : "ssh_sidecar_exited",
+      exitCode: closure.exitCode,
+      signal: closure.signal,
+      diagnosticCode: closure.diagnostic,
       ...(closure.cause ? { cause: closure.cause } : {}),
     })),
     write: async (

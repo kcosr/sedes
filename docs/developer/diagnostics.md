@@ -112,6 +112,14 @@ are:
   prompt-failure classification, resnapshot requests, normalized snapshot
   rebuilds, and handle event sequencing.
 
+Remote Codex and Claude `*_runtime_host_event_failed` attachment markers identify
+the first event admission, body encoding, or send failure before detaching the
+shared carrier. They include bounded machine error codes, event byte size,
+queued event count/bytes, and controller epoch; they never include event bodies.
+Main's `sidecar_byte_stream_closed` preserves SSH exit code, signal, and a
+redacted `diagnosticCode`. These markers require the corresponding
+main/sidecar build and the existing delivery diagnostics opt-in.
+
 Current sites are `thread-mutation-gateway.ts`,
 `queued-input-dispatcher.ts`, `thread-runtime-coordinator.ts`,
 `thread-sse.ts`,
