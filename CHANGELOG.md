@@ -11,13 +11,14 @@ User-facing changes are collected here before release. See the
   every execution host. Rebuild the server, execution sidecars, and Electron
   Local together for the updated generated protocol profile. See the
   [Codex upgrade requirements](docs/operator/backends/codex.md).
+  ([#73](https://github.com/kcosr/sedes/pull/73))
 
 - Upgrade browser and packaged clients together with the server for client
   protocol **150**. Rebuild and upgrade execution sidecars and local workers;
   older compiled runtime contracts are rejected. Notification scripts now use
   payload version **5**: update separately copied hooks with the server and
   review Script/Voice event and reply-phase settings.
-  ([#9](https://github.com/kcosr/sedes/pull/9), [#10](https://github.com/kcosr/sedes/pull/10), [#12](https://github.com/kcosr/sedes/pull/12), [#15](https://github.com/kcosr/sedes/pull/15), [#17](https://github.com/kcosr/sedes/pull/17), [#38](https://github.com/kcosr/sedes/pull/38), [#44](https://github.com/kcosr/sedes/pull/44), [#45](https://github.com/kcosr/sedes/pull/45))
+  ([#9](https://github.com/kcosr/sedes/pull/9), [#10](https://github.com/kcosr/sedes/pull/10), [#12](https://github.com/kcosr/sedes/pull/12), [#15](https://github.com/kcosr/sedes/pull/15), [#17](https://github.com/kcosr/sedes/pull/17), [#38](https://github.com/kcosr/sedes/pull/38), [#44](https://github.com/kcosr/sedes/pull/44), [#45](https://github.com/kcosr/sedes/pull/45), [#73](https://github.com/kcosr/sedes/pull/73))
 
 - Claude requires Claude Code **2.1.287 or newer** on every execution host
   and uses Agent SDK 0.3.287. See the
@@ -57,9 +58,11 @@ User-facing changes are collected here before release. See the
 - Codex **Partial** replies appear inline, with a separate notification section
   for Script and Voice delivery, initially off. Partial text can also be selected
   for completion notifications and playback. Work stays active until the turn ends.
+  ([#73](https://github.com/kcosr/sedes/pull/73))
 
 - Codex subagent activity shows both model and reasoning inline when either
   differs from the spawning agent, and suppresses them when both match.
+  ([#73](https://github.com/kcosr/sedes/pull/73))
 
 - Projects span locations across execution environments, with rename, move,
   merge, remove, and restore controls. Project Tasks and Workpads are shared
@@ -103,7 +106,7 @@ User-facing changes are collected here before release. See the
 - Codex Speed offers Standard, Fast, and Ultrafast according to the model
   catalog and independent Fast/Ultrafast enablement. Explicit user goal edits
   are recorded with their user origin. The managed TUI keeps its inline
-  transcript. ([#27](https://github.com/kcosr/sedes/pull/27), [#44](https://github.com/kcosr/sedes/pull/44))
+  transcript. ([#27](https://github.com/kcosr/sedes/pull/27), [#44](https://github.com/kcosr/sedes/pull/44), [#73](https://github.com/kcosr/sedes/pull/73))
 
 - Panels occupy remembered Middle, Left, Right, Top, or Bottom regions with
   **Move to**, **Maximize**, and a shared Panels menu. Narrow screens hide
@@ -135,6 +138,7 @@ User-facing changes are collected here before release. See the
 - Release maintenance uses concise PR-linked notes, an explicit version policy,
   and automatic changelog/version checks during typecheck and build. Unreleased
   notes summarize the current upgrade instead of superseded protocol steps.
+  ([#73](https://github.com/kcosr/sedes/pull/73))
 
 ### Fixed
 
