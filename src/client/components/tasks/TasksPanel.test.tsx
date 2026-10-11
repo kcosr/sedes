@@ -1135,11 +1135,10 @@ describe("TasksPanel rows", () => {
     await waitFor(() => expect(confirm).not.toBeInTheDocument());
     const status = within(panel()).getByRole("status");
     await waitFor(() => expect(status).toHaveTextContent("Deleted “Add retry to the payment call”."));
+    expect(status).toHaveClass("sr-only");
     if (phone) {
-      expect(status).not.toHaveClass("sr-only");
       expect(panel().querySelector(".tasks-content")).not.toHaveAttribute("data-task-detail-open");
     } else {
-      expect(status).toHaveClass("sr-only");
       expect(rowTitle("Add retry to the payment call")).toHaveAttribute("aria-expanded", "false");
     }
   });
@@ -1165,12 +1164,7 @@ describe("TasksPanel rows", () => {
     expect(within(panel()).queryByRole("alert")).not.toBeInTheDocument();
     const status = within(panel()).getByRole("status");
     await waitFor(() => expect(status).toHaveTextContent("Deleted “Add retry to the payment call”."));
-    if (phone) {
-      expect(status).not.toHaveClass("sr-only");
-      expect(status.querySelector('[data-slot="callout"][data-tone="success"]')).toBeVisible();
-    } else {
-      expect(status).toHaveClass("sr-only");
-    }
+    expect(status).toHaveClass("sr-only");
   });
 
   it("writes the versioned task identity when a row is dragged", () => {
@@ -2214,8 +2208,8 @@ describe("TasksPanel on a phone", () => {
     expect(panel().querySelector('.tasks-content[data-task-detail-open="true"]')).toBeInTheDocument();
     await waitFor(() => expect(announced("Added “Add retry to the payment call” to the prompt.")).toBe(true));
     const status = within(panel()).getByRole("status");
-    expect(status).not.toHaveClass("sr-only");
-    expect(status.querySelector('[data-slot="callout"][data-tone="success"]')).toBeVisible();
+    expect(status).toHaveClass("sr-only");
+    expect(status.querySelector('[data-slot="callout"]')).not.toBeInTheDocument();
     expect(status).toHaveAttribute("aria-live", "polite");
 
     await user.click(within(panel()).getByRole("button", { name: "Back to tasks" }));
@@ -2228,14 +2222,14 @@ describe("TasksPanel on a phone", () => {
     expect(panel().querySelector(".tasks-content")).not.toHaveAttribute("data-task-detail-open");
     expect(titles()).toEqual(["Audit checkout error states", "Add retry to the payment call"]);
     await waitFor(() => expect(announced("Added “Audit checkout error states” to the prompt.")).toBe(true));
-    expect(status).not.toHaveClass("sr-only");
-    expect(status.querySelector('[data-slot="callout"][data-tone="success"]')).toBeVisible();
+    expect(status).toHaveClass("sr-only");
+    expect(status.querySelector('[data-slot="callout"]')).not.toBeInTheDocument();
     await user.click(segment("Global"));
     expect(status).toBeEmptyDOMElement();
     expect(status).toHaveClass("sr-only");
   });
 
-  it("replaces the visible confirmation with a duplicate-task error while keeping the detail open", async () => {
+  it("clears the screen-reader announcement on a duplicate-task error while keeping the detail open", async () => {
     const user = userEvent.setup();
     const stageTaskReference = vi.fn<() => ContextExcerptStageResult>()
       .mockReturnValueOnce({ ok: true })
@@ -2246,7 +2240,7 @@ describe("TasksPanel on a phone", () => {
     await user.click(add);
     const status = within(panel()).getByRole("status");
     await waitFor(() => expect(status).toHaveTextContent("Added “Add retry to the payment call” to the prompt."));
-    expect(status).not.toHaveClass("sr-only");
+    expect(status).toHaveClass("sr-only");
 
     await user.click(add);
     expect(within(panel()).getByRole("alert")).toHaveTextContent("That task is already attached.");

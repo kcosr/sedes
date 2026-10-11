@@ -1488,8 +1488,6 @@ export function TasksPanelContent({
         )
       : addInputRef.current;
   };
-  const visibleAnnouncement = sheet && announcement.length > 0 && error === null;
-
   return (
     <TaskListProvider value={environment}>
       <div
@@ -1502,13 +1500,11 @@ export function TasksPanelContent({
       >
         {header}
         <div
-          className={visibleAnnouncement ? "mx-3 mb-2 shrink-0" : "sr-only"}
+          className="sr-only"
           role="status"
           aria-live="polite"
         >
-          {visibleAnnouncement ? (
-            <Callout tone="success">{announcement}</Callout>
-          ) : error === null ? announcement : ""}
+          {error === null ? announcement : ""}
         </div>
         {sheetDetail ? (
           <>

@@ -534,8 +534,9 @@ test.describe.serial("Tasks panel", () => {
     await expect(chatLeaf).toHaveCount(0);
     await expect(tasks.getByRole("heading", { name: "Global errand" })).toBeVisible();
     await expect(tasks.getByRole("status")).toHaveText("Added “Global errand” to the prompt.");
-    await expect(tasks.getByRole("status").locator('[data-slot="callout"][data-tone="success"]')).toBeVisible();
-    await capture(page, testInfo, "tasks-mobile-add-confirmation-detail.png");
+    await expect(tasks.getByRole("status")).toHaveClass("sr-only");
+    await expect(tasks.locator('[data-slot="callout"][data-tone="success"]')).toHaveCount(0);
+    await capture(page, testInfo, "tasks-mobile-staged-detail.png");
     await tasks.getByRole("button", { name: "Add to prompt" }).click();
     await expect(tasks.getByRole("alert")).toHaveText("That task is already attached.");
     await expect(tasks.getByRole("status")).toBeEmpty();
@@ -563,8 +564,9 @@ test.describe.serial("Tasks panel", () => {
     await expect(scopes.getByRole("radio", { name: "All" })).toHaveAttribute("aria-checked", "true");
     await expect(tasks).not.toHaveAttribute("data-task-detail-open");
     await expect(tasks.getByRole("status")).toHaveText("Added “Unpinned follow-up” to the prompt.");
-    await expect(tasks.getByRole("status").locator('[data-slot="callout"][data-tone="success"]')).toBeVisible();
-    await capture(page, testInfo, "tasks-mobile-add-confirmation-list.png");
+    await expect(tasks.getByRole("status")).toHaveClass("sr-only");
+    await expect(tasks.locator('[data-slot="callout"][data-tone="success"]')).toHaveCount(0);
+    await capture(page, testInfo, "tasks-mobile-staged-list.png");
     await quickButton(page, "Chat").click();
     await expect(chatLeaf).toBeVisible();
     await expect(tasksLeaf).toHaveCount(0);

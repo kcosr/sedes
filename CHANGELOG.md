@@ -109,7 +109,7 @@ User-facing changes are collected here before release. See the
   **Move to**, **Maximize**, and a shared Panels menu. Narrow screens hide
   less-recently-used regions; phones return to Chat when another panel closes.
   Chat includes a pin control, and the sidebar can filter for open Tasks.
-  ([#37](https://github.com/kcosr/sedes/pull/37), [#63](https://github.com/kcosr/sedes/pull/63), [#66](https://github.com/kcosr/sedes/pull/66))
+  ([#37](https://github.com/kcosr/sedes/pull/37), [#63](https://github.com/kcosr/sedes/pull/63), [#66](https://github.com/kcosr/sedes/pull/66), [#72](https://github.com/kcosr/sedes/pull/72))
 
 - Settings has grouped navigation, deep links, consistent dialogs, and touch
   controls; saved Agents live at `/settings/agents`. Archived threads share
@@ -119,7 +119,7 @@ User-facing changes are collected here before release. See the
 - **Park** replaces Settle in the UI; new input returns parked threads to
   Active. State organization keeps unseen completions under Needs attention.
   Archive/park previews offer to complete affected Tasks and protect against
-  stale choices. ([#19](https://github.com/kcosr/sedes/pull/19), [#61](https://github.com/kcosr/sedes/pull/61))
+  stale choices. ([#19](https://github.com/kcosr/sedes/pull/19), [#61](https://github.com/kcosr/sedes/pull/61), [#72](https://github.com/kcosr/sedes/pull/72))
 
 - Codex, Claude, and Pi accept multiple ordered Steers. Stop preserves
   undelivered inputs for explicit restore or dismissal; uncertain delivery
@@ -167,7 +167,7 @@ User-facing changes are collected here before release. See the
   Add to prompt and settings stay open for further actions; Escape clears
   Tasks/Workpads input before leaving it. Menus, terminal themes, archived
   search, and deep links remain usable across layout changes.
-  ([#21](https://github.com/kcosr/sedes/pull/21), [#28](https://github.com/kcosr/sedes/pull/28), [#39](https://github.com/kcosr/sedes/pull/39), [#65](https://github.com/kcosr/sedes/pull/65))
+  ([#21](https://github.com/kcosr/sedes/pull/21), [#28](https://github.com/kcosr/sedes/pull/28), [#39](https://github.com/kcosr/sedes/pull/39), [#65](https://github.com/kcosr/sedes/pull/65), [#72](https://github.com/kcosr/sedes/pull/72))
 
 - Windows desktop upgrades handle long temporary paths and refresh shortcuts;
   macOS packages declare local-network access. Linux server/full Electron
