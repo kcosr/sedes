@@ -1583,6 +1583,7 @@ export function TasksPanelContent({
             markPending(deletingTask.id, "delete", false);
           }
           if (expandedId === deletingTask.id) setExpandedId(null);
+          setError(null);
           announce(`Deleted “${deletingTask.title}”.`);
         }}
       />

@@ -1144,6 +1144,35 @@ describe("TasksPanel rows", () => {
     }
   });
 
+  it.each([false, true])("clears a previous action error after deleting a task when phone presentation is %s", async (phone) => {
+    stubDensity(phone);
+    const user = userEvent.setup();
+    const store = seededStore();
+    vi.mocked(store.updateTask).mockRejectedValueOnce(new Error("Pin update failed."));
+    renderPanel(store);
+    await user.click(rowTitle("Add retry to the payment call"));
+    const actions = () => screen.getByRole("button", { name: 'Actions for "Add retry to the payment call"' });
+    await user.click(actions());
+    await user.click(screen.getByRole("menuitem", { name: "Pin" }));
+    expect(await within(panel()).findByRole("alert")).toHaveTextContent("Pin update failed.");
+
+    await user.click(actions());
+    await user.click(screen.getByRole("menuitem", { name: "Delete…" }));
+    const confirm = screen.getByRole("dialog", { name: "Delete task?" });
+    await user.click(within(confirm).getByRole("button", { name: "Delete task" }));
+    await waitFor(() => expect(confirm).not.toBeInTheDocument());
+    expect(store.deleteTask).toHaveBeenCalledWith("t-retry");
+    expect(within(panel()).queryByRole("alert")).not.toBeInTheDocument();
+    const status = within(panel()).getByRole("status");
+    await waitFor(() => expect(status).toHaveTextContent("Deleted “Add retry to the payment call”."));
+    if (phone) {
+      expect(status).not.toHaveClass("sr-only");
+      expect(status.querySelector('[data-slot="callout"][data-tone="success"]')).toBeVisible();
+    } else {
+      expect(status).toHaveClass("sr-only");
+    }
+  });
+
   it("writes the versioned task identity when a row is dragged", () => {
     const store = seededStore();
     renderPanel(store, { drag: true });
