@@ -1,6 +1,5 @@
 import { boundText } from "../../conversations/payload-policy.js";
 import type { CodexThreadItem } from "./codex-c1-protocol.js";
-import { reasoningLabel } from "./codex-reasoning-label.js";
 
 export interface CodexSubagentParentSettings {
   readonly model: string;
@@ -29,6 +28,6 @@ export function codexSubagentActivitySummary(
   const modelLabel = model === null ? "Model unknown"
     : boundText(model.replace(/\s+/gu, " "), 512).text;
   const effortLabel = effort === null ? "Reasoning unknown"
-    : boundText(reasoningLabel(effort.replace(/\s+/gu, " ")), 256).text;
+    : boundText(effort.replace(/\s+/gu, " "), 256).text;
   return `${prefix} \`${path}\` · ${modelLabel} · ${effortLabel}`;
 }

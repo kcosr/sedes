@@ -15,7 +15,7 @@ describe("Codex subagent settings presentation", () => {
     })).toBe("Started `/root/reviewer`");
     expect(codexSubagentActivitySummary({ ...item, model: " gpt-6.1-sol " }, {
       model: "gpt-6.1-sol", reasoningEffort: "ultra",
-    })).toBe("Started `/root/reviewer` · gpt-6.1-sol · Ultra");
+    })).toBe("Started `/root/reviewer` · gpt-6.1-sol · ultra");
   });
 
   it.each([
@@ -26,35 +26,35 @@ describe("Codex subagent settings presentation", () => {
     undefined,
   ])("shows both when either differs or parent evidence is unknown: %j", (parent) => {
     expect(codexSubagentActivitySummary(item, parent))
-      .toBe("Started `/root/reviewer` · gpt-6.1-sol · Ultra");
+      .toBe("Started `/root/reviewer` · gpt-6.1-sol · ultra");
   });
 
   it("labels missing child values truthfully and preserves an absent suffix", () => {
     expect(codexSubagentActivitySummary({ ...item, model: null }, null))
-      .toBe("Started `/root/reviewer` · Model unknown · Ultra");
+      .toBe("Started `/root/reviewer` · Model unknown · ultra");
     expect(codexSubagentActivitySummary({ ...item, reasoningEffort: null }, null))
       .toBe("Started `/root/reviewer` · gpt-6.1-sol · Reasoning unknown");
     expect(codexSubagentActivitySummary({ ...item, model: null, reasoningEffort: null }, null))
       .toBe("Started `/root/reviewer`");
   });
 
-  it("uses standard effort labels and keeps both fields within one bounded line", () => {
+  it("preserves native effort identifiers and keeps both fields within one bounded line", () => {
     const text = codexSubagentActivitySummary({ ...item, kind: "completed",
       agentPath: `\n${"x".repeat(5_000)}\tchild`, model: `\n${"m".repeat(2_000)}\n`,
       reasoningEffort: "xhigh" }, null);
-    expect(text).toMatch(/^Completed `x+…` · m+… · Extra High$/u);
+    expect(text).toMatch(/^Completed `x+…` · m+… · xhigh$/u);
     expect(text.length).toBeLessThan(4_096);
     expect(text).not.toContain("private-child");
   });
 
   it("displays future native effort names without treating them as a known parent match", () => {
     expect(codexSubagentActivitySummary({ ...item, reasoningEffort: "future_effort" }, null))
-      .toBe("Started `/root/reviewer` · gpt-6.1-sol · Future Effort");
+      .toBe("Started `/root/reviewer` · gpt-6.1-sol · future_effort");
     const bounded = codexSubagentActivitySummary({ ...item,
       agentPath: "x".repeat(5_000), model: "m".repeat(2_000),
       reasoningEffort: `future\n${"e".repeat(2_000)}` }, null);
     expect(bounded.length).toBeLessThan(4_096);
     expect(bounded).not.toContain("\n");
-    expect(bounded).toContain(" · Future ");
+    expect(bounded).toContain(" · future ");
   });
 });

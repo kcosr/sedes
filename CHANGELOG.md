@@ -61,7 +61,8 @@ User-facing changes are collected here before release. See the
   ([#73](https://github.com/kcosr/sedes/pull/73))
 
 - Codex subagent activity shows both model and reasoning inline when either
-  differs from the spawning agent, and suppresses them when both match.
+  differs from the spawning agent, and suppresses them when both match. Both
+  use the supplied identifiers without display-name capitalization.
   ([#73](https://github.com/kcosr/sedes/pull/73))
 
 - Projects span locations across execution environments, with rename, move,

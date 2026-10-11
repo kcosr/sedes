@@ -466,7 +466,7 @@ test.describe.serial("normalized interactive Codex projection", () => {
     await expect(collaboration).toHaveCount(1);
     await expect(collaboration).toHaveClass("collab-row marker-label");
     // Only reasoning differs from the parent, so the existing inline row shows both settings.
-    await expect(collaboration).toHaveText("Started `/root/reviewer` · gpt-5.6-codex · Ultra");
+    await expect(collaboration).toHaveText("Started `/root/reviewer` · gpt-5.6-codex · ultra");
     await expect(collaboration.locator("button, details")).toHaveCount(0);
     await partialReply.scrollIntoViewIfNeeded();
     await capture(page, testInfo, "codex-partial-answer-active.png");

@@ -229,7 +229,8 @@ as account identity or authorization evidence.
 
 Subagent activity stays inline in the conversation. When Codex supplies the
 child's resolved model or reasoning effort, Sedes appends both to that activity
-line, for example `Started /root/reviewer · gpt-6.1-sol · Ultra`. A missing
+line using the supplied identifiers, for example
+`Started /root/reviewer · gpt-6.1-sol · ultra`. A missing
 value is labeled unknown; when neither value is supplied, the line has no
 settings suffix. The suffix is hidden only when both values match the spawning
 agent's running-turn settings confirmed by Sedes's own accepted turn start.

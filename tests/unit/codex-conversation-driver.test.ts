@@ -1057,8 +1057,8 @@ async function startSubagentParentTurn(harness: RpcHarness, handle: Conversation
 describe("CodexConversationBackendDriver", () => {
   it.each([
     { model: "gpt-5.6", reasoningEffort: "low", suffix: "" },
-    { model: "gpt-5.6", reasoningEffort: "ultra", suffix: " · gpt-5.6 · Ultra" },
-    { model: "gpt-6.1-sol", reasoningEffort: "low", suffix: " · gpt-6.1-sol · Low" },
+    { model: "gpt-5.6", reasoningEffort: "ultra", suffix: " · gpt-5.6 · ultra" },
+    { model: "gpt-6.1-sol", reasoningEffort: "low", suffix: " · gpt-6.1-sol · low" },
   ])("compares live subagent creation settings with the confirmed spawning tuple: $model/$reasoningEffort", async ({ model, reasoningEffort, suffix }) => {
     const harness = new RpcHarness();
     const handle = await attachIdle(harness);
@@ -1107,7 +1107,7 @@ describe("CodexConversationBackendDriver", () => {
   it.each([
     { effort: "low", approvalPolicy: "never", suffix: "" },
     { effort: "low", approvalPolicy: "on-request", suffix: "" },
-    { effort: "high", approvalPolicy: "never", suffix: " · gpt-5.6 · High" },
+    { effort: "high", approvalPolicy: "never", suffix: " · gpt-5.6 · high" },
   ])("uses running-turn evidence after a midturn settings observation: $effort/$approvalPolicy", async ({ effort, approvalPolicy, suffix }) => {
     const harness = new RpcHarness();
     const handle = await attachIdle(harness);
@@ -1155,7 +1155,7 @@ describe("CodexConversationBackendDriver", () => {
       taskContexts: [], contextExcerpts: [], attachments: [], text: "continue" });
     const marker = Object.values((await handle.readCurrent()).snapshot.itemsById)
       .find(item => item.semanticKind === "collaboration");
-    expect(marker).toMatchObject({ summary: { text: "Started `/root/reviewer` · gpt-5.6 · Low" } });
+    expect(marker).toMatchObject({ summary: { text: "Started `/root/reviewer` · gpt-5.6 · low" } });
     harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
     await handle.close();
   });
@@ -1169,7 +1169,7 @@ describe("CodexConversationBackendDriver", () => {
     }] }] });
     const established = await establish(harness, handle, history);
     expect(Object.values(established.snapshot.itemsById)).toEqual([
-      expect.objectContaining({ summary: { text: "Started `/root/reviewer` · gpt-5.6 · Low" } }),
+      expect.objectContaining({ summary: { text: "Started `/root/reviewer` · gpt-5.6 · low" } }),
     ]);
     harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
     await handle.close();
@@ -1185,7 +1185,7 @@ describe("CodexConversationBackendDriver", () => {
     harness.notify("item/completed", { threadId: "thread-1", turnId: "turn-1", item,
       completedAtMs: 1_700_000_002_000 });
     expect(Object.values((await handle.readCurrent()).snapshot.itemsById)).toEqual([
-      expect.objectContaining({ summary: { text: "Started `/root/reviewer` · gpt-5.6 · Low" } }),
+      expect.objectContaining({ summary: { text: "Started `/root/reviewer` · gpt-5.6 · low" } }),
     ]);
     harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
     await handle.close();
@@ -1204,7 +1204,7 @@ describe("CodexConversationBackendDriver", () => {
       item: { type: "subAgentActivity", id: "child-new-generation", kind: "started",
         agentThreadId: "private-child", agentPath: "/root/reviewer", model: "gpt-5.6", reasoningEffort: "low" } });
     expect(Object.values((await handle.readCurrent()).snapshot.itemsById)).toEqual([
-      expect.objectContaining({ summary: { text: "Started `/root/reviewer` · gpt-5.6 · Low" } }),
+      expect.objectContaining({ summary: { text: "Started `/root/reviewer` · gpt-5.6 · low" } }),
     ]);
     harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
     await handle.close();
@@ -1225,7 +1225,7 @@ describe("CodexConversationBackendDriver", () => {
         agentThreadId: "private-child", agentPath: "/root/reviewer", model: "gpt-5.6", reasoningEffort: "low" } });
     const marker = Object.values((await handle.readCurrent()).snapshot.itemsById)
       .find(item => item.semanticKind === "collaboration");
-    expect(marker).toMatchObject({ summary: { text: "Started `/root/reviewer` · gpt-5.6 · Low" } });
+    expect(marker).toMatchObject({ summary: { text: "Started `/root/reviewer` · gpt-5.6 · low" } });
     harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
     await handle.close();
   });
