@@ -12,6 +12,7 @@ import {
   expectNoPageOverflow,
   fillAndPersistDraft,
   openWorkspaceDirectory,
+  selectCustomNewThreadTarget,
   sendCurrentDraft,
 } from "./helpers";
 import { loadE2ERunContext } from "./run-context.js";
@@ -321,11 +322,18 @@ test("notification settings persist and passive server scripts follow selected l
 
   // Partial delivery is selected independently from provisional progress. Both
   // provider-shaped items arrive while a submitted Codex turn remains active.
-  await page.getByTestId("desktop-sidebar").getByTestId("thread-row-link")
-    .filter({ hasText: `Imported Codex history — ${path.basename(workspace)}` }).click();
+  await page.getByTestId("desktop-sidebar").getByTestId("new-thread-trigger").click();
+  await selectCustomNewThreadTarget(page, "Codex TCP external · Codex TCP");
+  await page.getByRole("textbox", { name: "Thread name", exact: true }).fill("Partial notification");
+  const codexCreated = page.waitForResponse(response => response.request().method() === "POST" &&
+    response.url().endsWith("/api/threads") && response.status() === 201);
+  await page.getByRole("button", { name: "Create thread", exact: true }).click();
+  await codexCreated;
+  await expect(page.getByRole("textbox", { name: "Message Codex TCP", exact: true })).toBeVisible();
   const codexThreadId = new URL(page.url()).pathname.split("/").at(-1)!;
   expect((await page.request.post("/__e2e/codex/turn-completion/arm")).status()).toBe(204);
   await fillAndPersistDraft(page, "Check compatibility and share the first confirmed finding", "Message Codex TCP");
+  await expect(page.getByRole("button", { name: "Send message", exact: true })).toBeEnabled();
   await sendCurrentDraft(page);
   const codexTurn = page.locator(".conversation-turn").last();
   await expect(codexTurn.getByTestId("activity-group")).toBeVisible();
@@ -340,6 +348,7 @@ test("notification settings persist and passive server scripts follow selected l
   expect((await payloads()).filter(payload => payload.event === "turn.completed" && payload.thread?.id === codexThreadId)).toHaveLength(0);
   await expect(codexTurn).toHaveAttribute("data-turn-status", "in_progress");
   await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeVisible();
+  await expect(codexTurn.getByText(partial.progress!.text, { exact: true })).toBeVisible();
   await capture(page, testInfo, "notification-partial-active.png");
   expect((await page.request.post("/__e2e/codex/turn-completion/release")).status()).toBe(204);
   await expect.poll(async () => (await payloads()).filter(payload => payload.event === "turn.completed" && payload.thread?.id === codexThreadId).length).toBe(1);

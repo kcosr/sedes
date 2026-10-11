@@ -414,8 +414,8 @@ describe("direct thread input admission", { timeout: 30_000 }, () => {
 
       const capabilities = h.driver.capabilities.bind(h.driver);
       vi.spyOn(h.driver, "capabilities").mockImplementation(revision => ({ ...capabilities(revision), deliveryModes: ["submit"], steerTarget: null }));
-      vi.spyOn(h.driver, "deliverScriptedAssistantStage").mockImplementation((_text, stage, deliver) => {
-        if (stage === "settled") held.push(deliver); else deliver();
+      vi.spyOn(h.driver, "deliverScriptedAssistantStage").mockImplementation((text, stage, deliver) => {
+        if (text === "Start without Steer" && stage === "settled") held.push(deliver); else deliver();
       });
       const id = (await draft(h)).applicationThreadId;
       await h.mutations.admitInput(h.scope, id, request("Start without Steer"));
@@ -430,12 +430,14 @@ describe("direct thread input admission", { timeout: 30_000 }, () => {
       expect(admitted).toMatchObject({ status: "queued" });
       expect(h.database.prepare("SELECT text FROM queued_inputs WHERE id = ?").get(admitted.queuedInputId!))
         .toEqual({ text: largeDirectInputText });
-      vi.restoreAllMocks();
+      // Release the first turn only after its settlement callback is captured;
+      // keep submit-only capabilities active while the queued turn is delivered.
+      await vi.waitFor(() => expect(held).toHaveLength(1));
       for (const release of held.splice(0)) release();
-      await settled(h, id);
       await vi.waitFor(() => expect(h.mutations.readInputReceipt(h.scope, queued.mutationId)).toMatchObject({
         status: "found", receipt: { status: "accepted" },
       }));
+      await settled(h, id);
     } finally {
       vi.restoreAllMocks();
       for (const release of held) release();
