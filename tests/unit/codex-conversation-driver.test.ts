@@ -17563,6 +17563,61 @@ describe("CodexConversationHandle", () => {
     }
   });
 
+  it("denies missing source rollout recovery after reconnect when earlier history contained turns", async () => {
+    const thread = paginatedThread({ id: "lost-history-missing-source" });
+    const reattachThread = vi.fn(async () => undefined);
+    const harness = new RpcHarness({
+      reattachThread,
+      detachThread: vi.fn(async () => undefined),
+    });
+    const handle = await driver(harness).attach(attachInput(connection, thread.id));
+    harness.enqueue("thread/read", { thread });
+    harness.enqueue("thread/resume", paginatedResumeResult({
+      thread,
+      shells: [notLoadedTurn(0)],
+    }));
+    harness.enqueue("thread/items/list", paginatedItems(0));
+    try {
+      const established = await handle.establishProjection({
+        signal: new AbortController().signal,
+      });
+      expect(established.snapshot.orderedBackendTurnIds).toEqual([
+        codexBackendTurnId(thread.id, "turn-0"),
+      ]);
+
+      harness.lifecycle("unavailable", 1);
+      harness.lifecycle("ready", 2);
+      harness.calls.length = 0;
+      reattachThread.mockImplementation(async () => {
+        throw new CodexRpcRemoteError({
+          code: -32600,
+          message: `invalid paginated history lineage for ${thread.id}: missing source rollout`,
+          generation: 2,
+          method: "thread/turns/list",
+        });
+      });
+      const empty = paginatedThread({ id: thread.id, preview: "" });
+      harness.enqueue("thread/read", { thread: empty }, { thread: empty });
+
+      await expect(handle.establishProjection({
+        signal: new AbortController().signal,
+      })).rejects.toMatchObject({ backendCode: "codex_remote_-32600" });
+      await expect(handle.history({ limit: 1 })).rejects.toMatchObject({
+        backendCode: "codex_history_reconciliation_required",
+      });
+      expect(reattachThread).toHaveBeenLastCalledWith(thread.id, {
+        timeoutMilliseconds: 60_000,
+        signal: expect.any(AbortSignal),
+      });
+      expect(harness.calls).toEqual([{
+        method: "thread/read",
+        params: { threadId: thread.id, includeTurns: false },
+      }]);
+    } finally {
+      await handle.close();
+    }
+  });
+
   it.each([
     { condition: "nonempty preview", overrides: { preview: "Existing conversation" } },
     { condition: "active status", overrides: { status: { type: "active", activeFlags: [] } } },
