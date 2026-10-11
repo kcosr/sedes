@@ -131,8 +131,11 @@ manual replays, and clears pending client voice actions. It does not disable
 voice or discard a separately saved dictation. New work can play afterward.
 Headset Play/Pause on a current Keep listening recording uses `sendRecording`:
 capture stops, all outstanding transcription finishes, and one nonblank transcript
-is submitted. Repeated presses during this Send are idempotent. A pending Keep
-listening or retarget mutation makes Play/Pause a no-op, preserving capture until
+is submitted. Play/Pause cancels preparation consistently before and after the
+default-held journal acknowledgement. Repeated presses during any Send are
+idempotent, including ordinary or released recordings sent through the app or
+notification. A pending Keep listening or retarget mutation makes Play/Pause a
+no-op, preserving capture until
 the mutation resolves. The current acknowledged Keep listening flag selects this
 behavior; durable adoption alone does not. An empty explicit Send ends normally
 without a failure cue, re-arming, or submitting input, then drains queued playback.

@@ -2642,7 +2642,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         if (active.finishReason == NativeVoiceRecording.FinishReason.SEND || active.recordingMutationPending) return;
         if (playingSpeech()) {
             if (settings.flag("autoListen") && canRecordDuringPlayback()) recordDuringPlayback(); else skip();
-        } else if (active.keepListening && active.recordingId != null) {
+        } else if (active.keepListening && active.recordingId != null && !phase.equals("arming")) {
             if (sendRecordingBlockedReason() == null) sendRecording(NativeVoiceJson.object("recordingId", active.recordingId));
         } else stopInteraction();
     }

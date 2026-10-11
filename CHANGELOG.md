@@ -150,8 +150,9 @@ User-facing changes are collected here before release. See the
 - Automation details link consistently to the Automations list and expose
   **Open thread** beside it. Queue/Steer choices open directly above their button.
 
-- Headset Play/Pause finishes transcription and sends speech in Keep listening;
-  an empty transcript ends normally and continues queued speech. Ordinary
+- Headset Play/Pause finishes transcription and sends speech in Keep listening.
+  Any explicit Send with an empty transcript ends without a completion tone and
+  continues queued speech; Play/Pause leaves a Send already in progress. Ordinary
   recording Play/Pause and headset Stop discard unsent recordings without leaving
   a recording failure to dismiss.
 

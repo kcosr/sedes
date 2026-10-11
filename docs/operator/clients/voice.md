@@ -445,8 +445,10 @@ Next, Stop, the mode button, and Rearm. During ordinary recording, the expanded
 notification shows Send, Cancel, the mode button, and Rearm. With an idle retained
 destination, it shows Start, Next, the mode button, and Rearm. During Keep listening, it offers **Cancel** and
 **Send**. During Keep listening, headset Play/Pause finishes recognition and
-sends any transcribed speech. Repeated presses while finishing or sending leave
-that send in progress. During ordinary recording, Play/Pause cancels and discards
+sends any transcribed speech. Once any Send is finishing or sending, Play/Pause
+leaves it in progress, including ordinary recordings sent from the on-screen arrow.
+During microphone preparation, Play/Pause cancels the start. During ordinary
+recording, Play/Pause cancels and discards
 the unsent recording. Headset Stop always cancels and discards unsent recording,
 including Keep listening. After cancellation or an empty transcript, queued
 speech continues; with no queued work, voice returns to idle. During speech,
@@ -529,8 +531,9 @@ recording does not start. Internal recognition retries, reconnects, Keep listeni
 and retargeting an existing recording do not repeat it.
 
 **Recognition cues** plays a rising start tone, a single success tone for
-recognized speech, and a descending tone for failed or empty recognition,
-the spoken stop command, or an explicit Stop while recognizing. **Cue gain**
+recognized speech, and a descending tone for failed recognition, empty automatic
+recognition, an automatically recognized stop command, or an explicit Stop while
+recognizing. An empty explicit Send ends without a completion tone. **Cue gain**
 controls all three independently of speech volume. Completion tones play after
 microphone capture stops. Success confirms recognition, not agent delivery;
 input recovery still reports any later delivery problem. Turning voice Off or
