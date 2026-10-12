@@ -360,7 +360,7 @@ function ExpandableImage({
     onClickCapture: longPress.onClickCapture,
     onContextMenu: longPress.onContextMenu,
     onPointerCancel: longPress.onPointerCancel,
-    onPointerDown: longPress.onPointerDown,
+    onPointerDownCapture: longPress.onPointerDown,
     onPointerMove: longPress.onPointerMove,
     onPointerUp: longPress.onPointerUp,
     "data-android-image-actions": androidActions ? "available" : undefined,

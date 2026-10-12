@@ -1,3 +1,4 @@
+import { DefaultThreadProvider, defaultThreadStorageKey } from "../app/default-thread.js";
 // @vitest-environment jsdom
 import { ThreadArchiveOperationHost } from "../operations/ThreadArchiveOperationHost.js";
 import { OperationOverlayHost } from "../operations/OperationOverlay.js";
@@ -154,6 +155,7 @@ function makeThread(
 }
 
 interface StateOptions {
+  readonly defaultThreadId?: string;
   readonly search?: string;
   readonly environments?: NonNullable<
     ApplicationClientState["snapshot"]
@@ -455,13 +457,18 @@ function renderSidebar(
     );
   };
   render(<ThreadArchiveOperationHost store={store} />);
-  const result = render(content(state));
+  const defaultScope = { profileId: "desktop-test", serverOrigin: "https://example.test", identity: "user" };
+  if (options.defaultThreadId) localStorage.setItem(defaultThreadStorageKey(defaultScope), options.defaultThreadId);
+  const wrap = (current: ApplicationClientState) => options.defaultThreadId
+    ? <DefaultThreadProvider scope={defaultScope}>{content(current)}</DefaultThreadProvider>
+    : content(current);
+  const result = render(wrap(state));
   return {
     ...result,
     store,
     rerenderSidebar(current: ApplicationClientState) {
       store.getSnapshot.mockReturnValue(current);
-      result.rerender(content(current));
+      result.rerender(wrap(current));
     },
   };
 }
@@ -5288,5 +5295,28 @@ describe("sidebar footer Automations", () => {
     expect(window.location.pathname).toBe("/automations");
     expect(onNavigate).toHaveBeenCalledOnce();
     window.history.replaceState({}, "", "/");
+  });
+});
+
+
+describe("shared default thread shelf", () => {
+  it.each(["project", "time", "state", "none"] as const)("shows the default once above ordinary groups in %s", (groupBy) => {
+    seedViewPreferences({ groupBy });
+    renderSidebar([
+      makeThread("default", "My default", { pinned: true }),
+      makeThread("other", "Other pinned", { pinned: true }),
+    ], { defaultThreadId: "default" });
+    const row = screen.getByTestId("default-thread-row");
+    expect(screen.getAllByText("My default")).toHaveLength(1);
+    expect(row.closest("nav")?.firstElementChild).toBe(row.closest("section"));
+    expect(within(row).queryByText(/Ctrl|⌘/)).not.toBeInTheDocument();
+  });
+  it("keeps the default available when search excludes all other threads", () => {
+    renderSidebar([makeThread("default", "My default")], { defaultThreadId: "default", search: "no match" });
+    expect(screen.getByTestId("default-thread-row")).toHaveTextContent("My default");
+  });
+  it("offers explicit settings selection for an unavailable saved target", () => {
+    renderSidebar([], { defaultThreadId: "missing" });
+    expect(screen.getByRole("button", { name: /Default thread unavailable/ })).toBeInTheDocument();
   });
 });

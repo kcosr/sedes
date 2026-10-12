@@ -1,3 +1,4 @@
+import { DefaultThreadProvider, defaultThreadStorageKey } from "../app/default-thread.js";
 // @vitest-environment jsdom
 
 import { ThreadArchiveOperationHost } from "../operations/ThreadArchiveOperationHost.js";
@@ -3095,5 +3096,23 @@ describe("sidebar row archive control", () => {
       }),
     );
     await waitFor(() => expect(window.location.pathname).toBe("/"));
+  });
+});
+
+
+describe("shared default thread action", () => {
+  it("sets and clears the client default without changing its pin", async () => {
+    const scope = { profileId: "desktop", serverOrigin: "https://example.test", identity: "user" };
+    const store = makeStore(); const thread = makeThread({ pinned: true });
+    render(<DefaultThreadProvider scope={scope}>
+      <ThreadContextMenu thread={thread} store={store}><div data-testid="default-trigger">Thread</div></ThreadContextMenu>
+    </DefaultThreadProvider>);
+    fireEvent.contextMenu(screen.getByTestId("default-trigger"));
+    fireEvent.click(await screen.findByText("Make default thread"));
+    await waitFor(() => expect(localStorage.getItem(defaultThreadStorageKey(scope))).toBe(thread.id));
+    fireEvent.contextMenu(screen.getByTestId("default-trigger"));
+    fireEvent.click(await screen.findByText("Clear default thread"));
+    await waitFor(() => expect(localStorage.getItem(defaultThreadStorageKey(scope))).toBeNull());
+    expect(store.setThreadPinned).not.toHaveBeenCalled();
   });
 });

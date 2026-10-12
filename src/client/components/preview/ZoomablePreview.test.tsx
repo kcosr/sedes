@@ -81,7 +81,7 @@ describe("ZoomablePreview", () => {
     ).toBeVisible();
   });
 
-  it("leaves a single-finger inline swipe to chat, pinches to zoom, and then drags without clicking", () => {
+  it("routes a single-finger inline swipe to chat, pinches to zoom, and then drags without clicking", () => {
     const gesture = vi.fn();
     const { container } = render(
       <ZoomablePreview
@@ -121,8 +121,8 @@ describe("ZoomablePreview", () => {
         clientY: y,
         button: 0,
       });
-    expect(pointer("pointerDown", 1, 0)).toBe(true);
-    expect(pointer("pointerMove", 1, 0, 30)).toBe(true);
+    expect(pointer("pointerDown", 1, 0)).toBe(false);
+    expect(pointer("pointerMove", 1, 0, 30)).toBe(false);
     pointer("pointerDown", 2, 100, 30);
     pointer("pointerMove", 2, 150, 30);
     expect(
@@ -144,7 +144,21 @@ describe("ZoomablePreview", () => {
       scrollHeight: { configurable: true, value: 200 },
     });
     fireEvent.click(screen.getByRole("button", { name: "Fit to view" }));
+    // Controls stay until an explicit tap; returning to fit is not a dismissal.
+    expect(screen.getByRole("group", { name: "Image controls" })).toBeVisible();
+    fireEvent.click(viewport);
     expect(screen.queryByRole("group", { name: "Image controls" })).toBeNull();
+  });
+
+  it("toggles inline controls on deliberate taps and owns touch gestures from fit", () => {
+    render(<ZoomablePreview controlsLabel="Inline controls" interactionMode="inline" resetLabel="Reset" title="Image" viewportLabel="Inline"><img alt="" /></ZoomablePreview>);
+    const viewport = screen.getByRole("region", { name: "Inline" });
+    expect(viewport).toHaveAttribute("data-gesture-zoom", "true");
+    expect(screen.queryByRole("group", { name: "Inline controls" })).toBeNull();
+    fireEvent.click(viewport);
+    expect(screen.getByRole("group", { name: "Inline controls" })).toBeVisible();
+    fireEvent.click(viewport);
+    expect(screen.queryByRole("group", { name: "Inline controls" })).toBeNull();
   });
 
   it("zooms below 100% without shrinking the popup viewport", () => {

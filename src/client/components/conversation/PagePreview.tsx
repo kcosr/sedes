@@ -396,8 +396,8 @@ function PageFrame({
     setAttempt((value) => value + 1);
   }, [refreshVersion, request]);
   useEffect(() => {
-    if (!admitted) onDeactivate();
-  }, [admitted, onDeactivate]);
+    if (!admitted || !visible) onDeactivate();
+  }, [admitted, onDeactivate, visible]);
   const ready =
     enabled && admitted && state.status === "ready" ? state : undefined;
   const loadGuard = useRef(new PageFrameLoadGuard());

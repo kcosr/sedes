@@ -13,7 +13,7 @@ Model setup and server operation are documented in that repository.
 ## Agent controls
 
 Enable the **Client controls** group in a thread's Agent tools settings to let
-its agent inspect basic voice settings, change the mode/default voice thread,
+its agent inspect basic voice settings, change the mode/default thread,
 finish an interaction without follow-up listening, or switch to another thread.
 The current device is the client that started the turn. Steering from a second
 device does not transfer ownership. The agent targets another listed client only
@@ -238,7 +238,7 @@ A replay joins the voice queue behind current speech or recording, and starts at
 once when voice is idle. The card then shows **Speaking · Replay**. It plays in
 Input and Speak mode and ignores the filters for automatic playback:
 notification enablement, per-event Voice actions, the Silence bell, **Only play
-from default voice thread**, and **Ignore voice started on other devices**.
+from default thread**, and **Ignore voice started on other devices**.
 **Clean up formatting for speech** and the speech text limit apply. A replay
 reads the reply only, without a context line whatever **Read aloud** selects.
 After playback, the current **Auto-listen** setting controls
@@ -283,7 +283,7 @@ and returns the card to A. Deliberately navigating to another thread while idle
 selects that thread; backgrounding and resuming on the same thread keep the voice
 destination. An explicit choice in the voice target picker takes priority.
 In-app, headset, and notification starts use the same destination. With no retained
-destination, starts use the visible thread, then the saved **Default voice thread**
+destination, starts use the visible thread, then the saved **Default thread**
 or a picker when no thread is visible. The ordinary idle viewed destination remains
 selected when you leave the app, including after Next or idle unpinning.
 An unavailable visible destination opens the
@@ -292,8 +292,8 @@ Recording can target a running thread. While
 voice is listening, the target picker on the voice card changes the target before
 finishing starts. Pickers list the visible thread first as **This thread**;
 when choosing a default, the saved thread comes first as **Current default
-voice thread**. Ordinary navigation does not change an active target. **Only play
-from default voice thread** filters automatic playback and listening. This
+thread**. Ordinary navigation does not change an active target. **Only play
+from default thread** filters automatic playback and listening. This
 preference follows the device, but each connection needs its own default thread.
 Until one is selected, the idle card says **Default thread needed** and
 the voice settings and quick sheet explain how to resume automatic voice.
@@ -302,7 +302,7 @@ Explicit recording remains available. The filter does not change its target.
 and completion from another initiating client. Steering an existing turn does
 not take over its origin.
 
-**Pin default voice thread** supplies the initial target for new manual
+**Pin default thread** supplies the initial target for new manual
 recordings and clears the retained destination. Turning pinning off during an
 interaction retains its current voice thread. Every manual Start uses an explicit
 pending choice first, then the pinned default, retained destination, visible thread,
@@ -313,10 +313,13 @@ next recording without editing the saved default. It remains available with
 pinning off and survives ordinary navigation. The pending choice clears when a
 new manual recording starts, on Off, or on connection change; automatic replies
 retain their notification targets. A missing initial target opens the target
-picker without saving a replacement default. Only **Default voice thread** in
-quick or full settings edits the saved preference. Those selectors share the
-popup's search and row styling in a modal/mobile sheet, with no mobile search
-autofocus. Pinning does not redirect an active interaction.
+picker without saving a replacement default. The **Default thread** selectors in
+**Settings → General**, **Settings → Voice**, the voice sheet, and the thread
+sidebar menu all edit the same shared preference. The voice selectors keep the
+search and row styling of the recording picker. The choice is local to the client,
+connection, and signed-in identity.
+On Android it also supplies the background voice target. Pinning does not
+redirect an active interaction.
 
 While idle and showing a retained destination, **Next**
 releases it and returns the card to the viewed thread, or the saved default or
@@ -399,10 +402,11 @@ it does not send automatically. There is no on-screen timer or live transcript.
 
 The left status icon, marked with a small caret, opens the **Voice** sheet in
 every state. The sheet has **Audio mode**, **Auto-listen**, **Keep listening by
-default**, **Follow composer mode**, **Pin default voice
-thread**, **Only play from default voice thread**, **Default voice thread**, and
+default**, **Follow composer mode**, **Pin default
+thread**, **Only play from default thread**, **Default thread**, and
 **All voice settings**, which opens
-**Settings → Voice**. The default thread can be chosen from either place.
+**Settings → Voice**. The default thread picker in either place edits the same
+choice as **Settings → General** and the thread sidebar menu.
 Its status line reports readiness or the latest error, and it offers **Resume
 voice** when a session needs it.
 

@@ -1,0 +1,28 @@
+.default-thread-section {
+  margin-bottom: var(--space-2);
+}
+
+.default-thread-heading {
+  margin: 0;
+  padding: var(--space-2) var(--space-3) var(--space-1);
+  font-size: var(--text-label);
+  font-weight: var(--weight-semibold);
+  color: var(--muted-foreground);
+}
+
+.default-thread-section .thread-row-link > svg {
+  flex: 0 0 auto;
+  color: var(--muted-foreground);
+}
+
+.default-thread-unavailable {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  text-align: left;
+  font-size: var(--text-meta);
+  color: var(--muted-foreground);
+  background: transparent;
+  border: 0;
+}

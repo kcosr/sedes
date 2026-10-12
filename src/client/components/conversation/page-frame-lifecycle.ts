@@ -13,6 +13,7 @@ export class PageFrameBudget {
     {
       requested: boolean;
       priority: number;
+      foreground: boolean;
       admitted: boolean;
       update: (admitted: boolean) => void;
     }
@@ -25,6 +26,7 @@ export class PageFrameBudget {
     this.#entries.set(id, {
       requested: false,
       priority: 0,
+      foreground: false,
       admitted: false,
       update,
     });
@@ -37,6 +39,7 @@ export class PageFrameBudget {
     if (requested && (!entry.requested || foreground))
       entry.priority = ++this.#sequence;
     entry.requested = requested;
+    entry.foreground = foreground;
     this.#reconcile();
   }
 
@@ -49,7 +52,11 @@ export class PageFrameBudget {
     const active = new Set(
       [...this.#entries]
         .filter(([, entry]) => entry.requested)
-        .sort((a, b) => b[1].priority - a[1].priority)
+        .sort(
+          (a, b) =>
+            Number(b[1].foreground) - Number(a[1].foreground) ||
+            b[1].priority - a[1].priority,
+        )
         .slice(0, this.limit)
         .map(([id]) => id),
     );
@@ -63,6 +70,7 @@ export class PageFrameBudget {
 }
 
 const frameBudget = new PageFrameBudget();
+const RETENTION_MS = 30_000;
 
 /** A navigation retains its WindowProxy; trusted DOM reparenting creates one. */
 export class PageFrameLoadGuard {
@@ -90,6 +98,12 @@ export function usePageFrameAdmission(
   const [requested, setRequested] = useState(false);
   const [activation, setActivation] = useState(0);
   const [visible, setVisible] = useState(false);
+  const [retained, setRetained] = useState(false);
+  const retentionTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
+    undefined,
+  );
+  const admittedRef = useRef(false);
+  admittedRef.current = admitted;
   const [documentVisible, setDocumentVisible] = useState(
     () => document.visibilityState !== "hidden",
   );
@@ -114,12 +128,26 @@ export function usePageFrameAdmission(
       (entries) => {
         const intersecting = entries.some((entry) => entry.isIntersecting);
         setVisible(intersecting);
-        if (!intersecting) setRequested(false);
+        clearTimeout(retentionTimer.current);
+        // Update visibility and retention together so there is no intermediate
+        // render that tears down the frame while starting its grace period.
+        if (intersecting) setRetained(false);
+        else {
+          setRequested(false);
+          setRetained(admittedRef.current);
+          retentionTimer.current = setTimeout(
+            () => setRetained(false),
+            RETENTION_MS,
+          );
+        }
       },
       { rootMargin: "256px 0px" },
     );
     observer.observe(element);
-    return () => observer.disconnect();
+    return () => {
+      clearTimeout(retentionTimer.current);
+      observer.disconnect();
+    };
   }, [target]);
 
   useEffect(() => {
@@ -130,13 +158,21 @@ export function usePageFrameAdmission(
   }, []);
 
   useEffect(() => {
+    if (!enabled || !documentVisible) {
+      clearTimeout(retentionTimer.current);
+      setRetained(false);
+      setRequested(false);
+    }
+  }, [enabled, documentVisible]);
+
+  useEffect(() => {
     if (id.current)
       frameBudget.request(
         id.current,
         enabled &&
           documentVisible &&
-          (requested || (automatic && (visible || foreground))),
-        foreground || requested,
+          (requested || retained || (automatic && (visible || foreground))),
+        foreground || requested || visible,
       );
   }, [
     activation,
@@ -145,6 +181,7 @@ export function usePageFrameAdmission(
     enabled,
     foreground,
     requested,
+    retained,
     visible,
   ]);
 

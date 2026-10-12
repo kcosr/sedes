@@ -19,7 +19,7 @@
 
 .zoomable-preview-actions {
   position: absolute;
-  z-index: 2;
+  z-index: calc(var(--z-sticky) + 1);
   top: 8px;
   left: 8px;
   display: flex;
@@ -88,14 +88,14 @@
   justify-content: center;
 }
 
-.zoomable-preview-content > img,
-.zoomable-preview-content > .mermaid-diagram-svg,
-.zoomable-preview-content > .mermaid-diagram-svg > svg {
+.zoomable-preview-shell .zoomable-preview-viewport .zoomable-preview-content > img,
+.zoomable-preview-shell .zoomable-preview-viewport .zoomable-preview-content > .mermaid-diagram-svg,
+.zoomable-preview-shell .zoomable-preview-viewport .zoomable-preview-content > .mermaid-diagram-svg > svg {
   display: block;
   width: 100%;
   height: 100%;
-  max-width: none !important;
-  max-height: none !important;
+  max-width: none;
+  max-height: none;
   object-fit: contain;
   pointer-events: none;
 }
@@ -117,7 +117,7 @@
 
 .inline-media-expand {
   position: absolute;
-  z-index: 2;
+  z-index: calc(var(--z-sticky) + 1);
   top: 8px;
   right: 8px;
 }

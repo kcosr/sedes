@@ -382,6 +382,13 @@ For the JSON input contract and server-side execution behavior, see
 
 ## General
 
+**Default thread** selects one conversation for this client, connection, and
+signed-in identity. Set or clear it here, or choose **Make default thread** from
+its sidebar menu. It appears in a **Default** section above **Pinned**, without
+a duplicate row. **Ctrl+Shift+H** on Windows/Linux or **⌘+Shift+H** on macOS opens
+it and focuses the composer. Android voice uses the same default. Changing this
+choice does not start recording or redirect an active interaction.
+
 ### Click project and environment names to filter
 
 This setting is off by default and saved on this client. Enable it to click or
@@ -534,7 +541,7 @@ The Android app's **Voice** page configures
 [Android voice](../operator/clients/voice.md) for the selected server
 connection. Its settings are saved on this device for
 that connection and Sedes user. The caret on the voice card opens a **Voice**
-sheet with Audio mode, behavior toggles, and the Default voice thread picker
+sheet with Audio mode, behavior toggles, and the shared Default thread picker
 below them; its **All voice settings** row opens this page.
 
 While voice connects, the page shows **Connecting voice to this server…**. If
@@ -563,12 +570,14 @@ app does not wait for voice.
 - **Show voice bar when off** keeps a dimmed voice card under the composer
   while Audio mode is Off, so its Voice sheet can turn voice back on. By
   default Off hides the card. The switch changes only what the app shows.
-- **Default voice thread** is the target for explicit recording when no thread
-  is visible. Its picker lists the current default voice thread first. Untitled
-  threads appear as **Untitled thread**. The quick voice menu also includes
-  this picker and **Only play from default voice thread**, which filters
-  automatic playback without changing the recording target.
-- **Pin default voice thread** keeps the idle voice bar and new explicit
+- **Default thread** is shared with quick navigation. Choose it in
+  **Settings → General**, **Settings → Voice**, the voice sheet, or the thread’s
+  sidebar menu. All edit the same choice, saved on
+  this client for the current connection and signed-in identity; other clients
+  can choose a different default. On Android, voice uses it when no thread is
+  visible or pinning is enabled. **Only play from default thread** filters automatic playback
+  without changing the recording target.
+- **Pin default thread** keeps the idle voice bar and new explicit
   recordings on the default thread, even while another thread is visible.
   If it is missing or unavailable, the record button asks you to choose a
   default. Pinning does not redirect a recording or playback already in progress.

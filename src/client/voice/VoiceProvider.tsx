@@ -1,3 +1,4 @@
+import { DefaultThreadProvider } from "../app/default-thread.js";
 import { createContext, useContext, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { App as CapacitorApp } from "@capacitor/app";
 import type { RegisteredClient } from "../../shared/protocol/client-controls.js";
@@ -50,7 +51,7 @@ function BrowserOriginProvider({ profileId, endpoint, identity, children }: {
       Client controls are active in another window.
       <button type="button" onClick={() => setAttempt(value => value + 1)}>Use this window</button>
     </div>}
-    {children}
+    {identity ? <DefaultThreadProvider scope={{ profileId: profileId ?? "browser", serverOrigin: endpoint.baseUrl ?? window.location.origin, identity }}>{children}</DefaultThreadProvider> : children}
   </OriginContext.Provider>;
 }
 function createStore(profileId: string, serverOrigin: string, identity: string): NativeVoiceStore {
@@ -81,5 +82,5 @@ function AndroidVoiceProvider({ profileId, serverOrigin, identity, children }: {
       store.dispose();
     };
   }, [store, profileId, serverOrigin, identity]);
-  return <VoiceContext.Provider value={store}><OriginContext.Provider value={origin}>{children}</OriginContext.Provider></VoiceContext.Provider>;
+  return <VoiceContext.Provider value={store}><OriginContext.Provider value={origin}><DefaultThreadProvider scope={{profileId, serverOrigin, identity}} native={store}>{children}</DefaultThreadProvider></OriginContext.Provider></VoiceContext.Provider>;
 }

@@ -1,3 +1,8 @@
+import { findDefaultThread } from "../app/default-thread-shortcut.js";
+import { openThreadRoute } from "../workspace-panels/thread-panel-navigation.js";
+import { House } from "lucide-react";
+import { canUseDefaultThread, useDefaultThread } from "../app/default-thread.js";
+import "../app/default-thread.css";
 import { SearchableSelect } from "./ui/searchable-select.js";
 import { useSidebarDisclosure, useSidebarDisclosures } from "../app/sidebar-disclosures.js";
 import * as Collapsible from "@radix-ui/react-collapsible";
@@ -412,7 +417,13 @@ export function InventorySidebar({
   /** Client-session position retained by the shell while the drawer is closed. */
   scrollPosition?: { current: number };
 }): React.JSX.Element {
-  const snapshot = state.snapshot;
+  const defaultThread = useDefaultThread();
+  const defaultThreadId = defaultThread?.threadId;
+  const defaultSummary = findDefaultThread(state, defaultThreadId);
+  const usableDefault = defaultSummary && canUseDefaultThread(defaultSummary) ? defaultSummary : undefined;
+  const snapshot = useMemo(() => state.snapshot && defaultThreadId
+    ? { ...state.snapshot, threads: state.snapshot.threads.filter((thread) => thread.id !== defaultThreadId) }
+    : state.snapshot, [state.snapshot, defaultThreadId]);
   const projects = snapshot?.projects ?? [];
   const workspaces = snapshot?.workspaces ?? [];
   const environments = snapshot?.environments ?? [];
@@ -597,13 +608,14 @@ export function InventorySidebar({
   }, [snapshot?.tasks]);
   const threads = useMemo(
     () =>
-      filterThreadsBySidebarScope(state.visibleThreads, workspaces, scope).filter(
+      filterThreadsBySidebarScope(state.visibleThreads, workspaces, scope).filter((thread) => thread.id !== defaultThreadId).filter(
         (thread) =>
           !viewPreferences.hasOpenTasks || taskSummaryByThreadId.has(thread.id),
       ),
     [
       scope,
       state.visibleThreads,
+      defaultThreadId,
       workspaces,
       viewPreferences.hasOpenTasks,
       taskSummaryByThreadId,
@@ -613,11 +625,13 @@ export function InventorySidebar({
     () =>
       allDescendants.filter(
         ({ thread }) =>
+          thread.id !== defaultThreadId &&
           filterThreadsBySidebarScope([thread], workspaces, scope).length > 0 &&
           (!viewPreferences.hasOpenTasks || taskSummaryByThreadId.has(thread.id)),
       ),
     [
       allDescendants,
+      defaultThreadId,
       scope,
       workspaces,
       viewPreferences.hasOpenTasks,
@@ -1748,6 +1762,27 @@ export function InventorySidebar({
           className="inventory-scroll"
           aria-label="Threads and automations"
         >
+          {defaultThreadId && (
+            <section className="inventory-shelf default-thread-section" aria-label="Default thread">
+              <h3 className="default-thread-heading">Default</h3>
+              {usableDefault ? (
+                <ThreadContextMenu thread={usableDefault} store={store} threadRegistry={threadRegistry} onNavigate={onNavigate}>
+                  <div className={`thread-row compact ${selectedThreadId === usableDefault.id ? "selected" : ""}`}
+                    data-thread-id={usableDefault.id} data-testid="default-thread-row">
+                    <button className="thread-row-link" aria-current={selectedThreadId === usableDefault.id ? "page" : undefined}
+                      onClick={() => { openThreadRoute(usableDefault.id); onNavigate(); }}>
+                      <House size={16} aria-hidden="true" />
+                      <span className="thread-title">{usableDefault.title.text || "Untitled thread"}</span>
+                    </button>
+                  </div>
+                </ThreadContextMenu>
+              ) : (
+                <button className="default-thread-unavailable" onClick={(event) => onOpenSettings(event.currentTarget, "general")}>
+                  <House size={16} aria-hidden="true" /> Default thread unavailable — choose another
+                </button>
+              )}
+            </section>
+          )}
           {groupBy !== "project" ? (
             <FlatGroupList
               groups={stackedFlatGroups}

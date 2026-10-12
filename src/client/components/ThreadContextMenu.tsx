@@ -1,3 +1,4 @@
+import { canUseDefaultThread, useDefaultThread } from "../app/default-thread.js";
 import { runThreadCreation, runThreadFork } from "../operations/thread-creation.js";
 import { useEffect, useRef, useState } from "react";
 import type {
@@ -39,6 +40,7 @@ import {
   CornerUpLeft,
   GitCommitVertical,
   Hash,
+  House,
   IndentDecrease,
   IndentIncrease,
   PencilLine,
@@ -250,6 +252,7 @@ export function ThreadContextMenu({
 }): React.JSX.Element {
   // Under the density switch the menu is a bottom sheet with 44px rows.
   const sheet = useTouchDensity();
+  const defaultThread = useDefaultThread();
   // Inventory parents already subscribe to the application store. Reading the
   // current snapshot here avoids adding a second subscription requirement to
   // this reusable menu (whose focused test stores intentionally implement only
@@ -624,6 +627,16 @@ export function ThreadContextMenu({
             <Pin aria-hidden="true" />
           )}
           {thread.pinned ? "Unpin" : "Pin"}
+        </ContextMenuItem>
+      )}
+      {defaultThread && (defaultThread.threadId === thread.id || canUseDefaultThread(thread)) && (
+        <ContextMenuItem disabled={defaultThread.pending} onSelect={() => {
+          setActionError("");
+          void defaultThread.setThread(defaultThread.threadId === thread.id ? null : thread)
+            .catch(() => setActionError("The default thread could not be saved."));
+        }}>
+          <House aria-hidden="true" />
+          {defaultThread.threadId === thread.id ? "Clear default thread" : "Make default thread"}
         </ContextMenuItem>
       )}
       <MoveToGroupSubmenu

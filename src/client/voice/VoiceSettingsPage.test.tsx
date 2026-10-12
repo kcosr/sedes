@@ -220,51 +220,51 @@ describe("voice settings page", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("E");
     store.dispose();
   });
-  it("labels the default voice thread control with its choice and saves bridge-safe titles", async () => {
+  it("labels the default thread control with its choice and saves bridge-safe titles", async () => {
     const { fake, store } = await renderPage(voiceSnapshot());
-    expect(screen.getByRole("switch", { name: "Only play from default voice thread" })).toHaveAccessibleDescription("Requires a default voice thread.");
-    fireEvent.click(screen.getByRole("button", { name: "Default voice thread Choose thread" }));
-    expect(await screen.findByRole("dialog", { name: "Default voice thread" })).toBeInTheDocument();
-    const list = await screen.findByRole("list", { name: "Voice threads" });
+    expect(screen.getByRole("switch", { name: "Only play from default thread" })).toHaveAccessibleDescription("Requires a default thread.");
+    fireEvent.click(screen.getByRole("button", { name: "Default thread Choose thread" }));
+    expect(await screen.findByRole("dialog", { name: "Default thread" })).toBeInTheDocument();
+    const list = await screen.findByRole("list", { name: "Threads" });
     expect(within(list).getAllByRole("listitem")).toHaveLength(3);
     fireEvent.click(within(list).getByRole("button", { name: "T".repeat(600) }));
     await waitFor(() => expect(fake.plugin.updateSettings).toHaveBeenCalledTimes(1));
     expect(fake.plugin.updateSettings.mock.lastCall).toEqual([{ expectedConnectionGeneration: 1, expectedRevision: 0, patch: { voiceThreadId: "long", voiceThreadTitle: "T".repeat(512) } }]);
-    await waitFor(() => expect(screen.getByRole("button", { name: "Default voice thread Choose thread" })).toBeEnabled());
-    fireEvent.click(screen.getByRole("button", { name: "Default voice thread Choose thread" }));
-    fireEvent.click(within(await screen.findByRole("list", { name: "Voice threads" })).getByRole("button", { name: "Untitled thread" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Default thread Choose thread" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Default thread Choose thread" }));
+    fireEvent.click(within(await screen.findByRole("list", { name: "Threads" })).getByRole("button", { name: "Untitled thread" }));
     await waitFor(() => expect(fake.plugin.updateSettings).toHaveBeenCalledTimes(2));
     expect(fake.plugin.updateSettings.mock.lastCall).toEqual([{ expectedConnectionGeneration: 1, expectedRevision: 0, patch: { voiceThreadId: "untitled", voiceThreadTitle: null } }]);
     act(() => fake.emit("settingsChanged", voiceSnapshot({ stateRevision: 3, settingsRevision: 2, settings: voiceSettings({ voiceThreadId: "untitled", voiceThreadTitle: null }) })));
-    expect(screen.getByRole("button", { name: "Default voice thread Untitled thread" })).toBeInTheDocument();
-    expect(screen.getByRole("switch", { name: "Only play from default voice thread" })).toHaveAccessibleDescription("Limit automatic playback to the default voice thread above.");
-    // The saved default voice thread leads the picker under its label; the rest keep their order without a duplicate.
-    fireEvent.click(screen.getByRole("button", { name: "Default voice thread Untitled thread" }));
-    const pinned = await screen.findByRole("list", { name: "Voice threads" });
-    expect(within(pinned).getAllByRole("listitem").map(item => item.textContent)).toEqual(["Current default voice threadUntitled thread", "T".repeat(600), "Release review"]);
-    expect(within(pinned).getByRole("button", { name: "Untitled thread" })).toHaveAccessibleDescription("Current default voice thread");
+    expect(screen.getByRole("button", { name: "Default thread Untitled thread" })).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: "Only play from default thread" })).toHaveAccessibleDescription("Limit automatic playback to the default thread above.");
+    // The saved default thread leads the picker under its label; the rest keep their order without a duplicate.
+    fireEvent.click(screen.getByRole("button", { name: "Default thread Untitled thread" }));
+    const pinned = await screen.findByRole("list", { name: "Threads" });
+    expect(within(pinned).getAllByRole("listitem").map(item => item.textContent)).toEqual(["Current default threadUntitled thread", "T".repeat(600), "Release review"]);
+    expect(within(pinned).getByRole("button", { name: "Untitled thread" })).toHaveAccessibleDescription("Current default thread");
     store.dispose();
   });
   it("saves the default recording pin without changing the playback filter", async () => {
     const native = voiceSnapshot({ settings: voiceSettings({ onlyVoiceThread: true }) });
     const { fake, store } = await renderPage(native, fake => fake.plugin.updateSettings.mockResolvedValue({ ...native, stateRevision: 2, settingsRevision: 1,
       settings: { ...native.settings, pinDefaultVoiceThread: true } }));
-    const pin = screen.getByRole("switch", { name: "Pin default voice thread" });
+    const pin = screen.getByRole("switch", { name: "Pin default thread" });
     expect(pin).not.toBeChecked();
     expect(pin).toHaveAccessibleDescription("Use this as the initial recording target while viewing other threads.");
     fireEvent.click(pin);
     await waitFor(() => expect(pin).toBeChecked());
     expect(fake.plugin.updateSettings).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, expectedRevision: 0, patch: { pinDefaultVoiceThread: true } });
-    expect(screen.getByRole("switch", { name: "Only play from default voice thread" })).toBeChecked();
-    expect(screen.getByRole("switch", { name: "Only play from default voice thread" })).toHaveAccessibleDescription("Requires a default voice thread.");
+    expect(screen.getByRole("switch", { name: "Only play from default thread" })).toBeChecked();
+    expect(screen.getByRole("switch", { name: "Only play from default thread" })).toHaveAccessibleDescription("Requires a default thread.");
     store.dispose();
   });
   it("explains that the carried playback filter needs a default thread on this connection", async () => {
     const settings = voiceSettings({ audioMode: "speak", onlyVoiceThread: true });
     const native = voiceSnapshot({ settings, ready: true, readiness: "ready", phase: "idle" });
     const { fake, store } = await renderPage(native);
-    expect(screen.getByRole("status")).toHaveTextContent("Automatic playback and listening are paused. Choose a default voice thread for this connection");
-    expect(screen.getByRole("switch", { name: "Only play from default voice thread" })).toHaveAccessibleDescription("Requires a default voice thread.");
+    expect(screen.getByRole("status")).toHaveTextContent("Automatic playback and listening are paused. Choose a default thread in General or Voice settings for this connection");
+    expect(screen.getByRole("switch", { name: "Only play from default thread" })).toHaveAccessibleDescription("Requires a default thread.");
     act(() => fake.emit("settingsChanged", { ...native, stateRevision: 2, settingsRevision: 1,
       settings: { ...settings, onlyVoiceThread: false } }));
     expect(screen.getByRole("status")).toHaveTextContent(/^Voice is ready\.$/u);

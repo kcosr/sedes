@@ -7,6 +7,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { scrollPreviewAncestors } from "./inline-touch-scroll.js";
 import { MediaZoomControls } from "../../workbench/components/MediaZoomControls.js";
 import "../../workbench/styles/media-frame.css";
 import "./zoomable-preview.css";
@@ -160,6 +161,30 @@ export function ZoomablePreview({
     new Map<number, { readonly x: number; readonly y: number }>(),
   );
   const pinchRef = useRef<PinchState | undefined>(undefined);
+  const scrollTouch = useRef<{ pointerId: number; y: number; time: number; velocity: number; moved: boolean } | undefined>(undefined);
+  const scrollMomentum = useRef<number | undefined>(undefined);
+  const [controlsVisible, setControlsVisible] = useState(false);
+  useEffect(() => () => { if (scrollMomentum.current !== undefined) cancelAnimationFrame(scrollMomentum.current); }, []);
+  const stopMomentum = () => {
+    if (scrollMomentum.current !== undefined) cancelAnimationFrame(scrollMomentum.current);
+    scrollMomentum.current = undefined;
+  };
+  const finishScroll = (viewport: HTMLDivElement) => {
+    const touch = scrollTouch.current;
+    scrollTouch.current = undefined;
+    if (!touch?.moved || performance.now() - touch.time > 100) return;
+    let velocity = Math.max(-2.5, Math.min(2.5, touch.velocity));
+    let last = performance.now();
+    const step = (now: number) => {
+      const elapsed = Math.min(32, now - last);
+      last = now;
+      const moved = scrollPreviewAncestors(viewport, velocity * elapsed);
+      velocity *= Math.pow(0.92, elapsed / 16);
+      if (Math.abs(velocity) > 0.03 && Math.abs(moved) > 0.1) scrollMomentum.current = requestAnimationFrame(step);
+      else scrollMomentum.current = undefined;
+    };
+    if (Math.abs(velocity) > 0.03) scrollMomentum.current = requestAnimationFrame(step);
+  };
   const [dragging, setDragging] = useState(false);
   const [overflowing, setOverflowing] = useState(false);
   const [panned, setPanned] = useState(false);
@@ -282,6 +307,8 @@ export function ZoomablePreview({
     const touches = [...touchPointersRef.current.entries()];
     if (touches.length >= 2) {
       const [first, second] = touches;
+      scrollTouch.current = undefined;
+      setControlsVisible(true);
       pinchRef.current = {
         firstPointerId: first![0],
         secondPointerId: second![0],
@@ -376,7 +403,7 @@ export function ZoomablePreview({
       {toolbarActions ? (
         <div className="zoomable-preview-actions">{toolbarActions}</div>
       ) : null}
-      {!inline || resettable ? (
+      {!inline || controlsVisible ? (
         <MediaZoomControls
           label={controlsLabel}
           zoomPercent={Math.round(actualScale * 100)}
@@ -393,6 +420,7 @@ export function ZoomablePreview({
         {popupInteractions
           ? "Use the zoom controls, pinch, or Control- or Command-scroll to zoom. Drag, scroll, or use the arrow keys to pan overflowing content. Press 0 to reset the view."
           : "Use the zoom controls to zoom. Drag, scroll, or use the arrow keys to pan overflowing content. Press 0 to reset the view."}
+        {inline ? " Tap to show or hide zoom controls." : null}
         <span>{resetLabel} returns to fit size.</span>
       </p>
       <div
@@ -402,16 +430,19 @@ export function ZoomablePreview({
         className="zoomable-preview-viewport"
         data-dragging={dragging ? "true" : undefined}
         data-gesture-zoom={
-          popupInteractions && (!inline || zoom > BASE_ZOOM + 0.001)
+          popupInteractions
             ? "true"
             : undefined
         }
         data-pannable={overflowing ? "true" : undefined}
         onClickCapture={(event) => {
-          if (!suppressClick.current) return;
-          suppressClick.current = false;
-          event.preventDefault();
-          event.stopPropagation();
+          if (suppressClick.current) {
+            suppressClick.current = false;
+            event.preventDefault();
+            event.stopPropagation();
+            return;
+          }
+          if (inline) setControlsVisible(value => !value);
         }}
         onKeyDown={(event) => {
           if (event.ctrlKey || event.metaKey || event.altKey) return;
@@ -449,6 +480,7 @@ export function ZoomablePreview({
         }}
         onLostPointerCapture={(event) => {
           if (event.pointerType === "touch") {
+            if (scrollTouch.current?.pointerId === event.pointerId) scrollTouch.current = undefined;
             touchPointersRef.current.delete(event.pointerId);
             rebuildTouchGesture(event.currentTarget);
             rememberViewState();
@@ -461,6 +493,7 @@ export function ZoomablePreview({
         }}
         onPointerCancel={(event) => {
           if (event.pointerType === "touch") {
+            if (scrollTouch.current?.pointerId === event.pointerId) scrollTouch.current = undefined;
             touchPointersRef.current.delete(event.pointerId);
             rebuildTouchGesture(event.currentTarget);
             rememberViewState();
@@ -473,15 +506,12 @@ export function ZoomablePreview({
         onPointerDown={(event) => {
           if (event.pointerType === "touch") {
             if (!popupInteractions) return;
-            if (
-              !inline ||
-              zoomRef.current > BASE_ZOOM + 0.001 ||
-              touchPointersRef.current.size > 0
-            ) {
-              event.preventDefault();
-              event.currentTarget.setPointerCapture(event.pointerId);
-              for (const pointerId of touchPointersRef.current.keys())
-                event.currentTarget.setPointerCapture(pointerId);
+            stopMomentum();
+            if (touchPointersRef.current.size === 0) suppressClick.current = false;
+            event.preventDefault();
+            event.currentTarget.setPointerCapture(event.pointerId);
+            if (inline && zoomRef.current <= BASE_ZOOM + 0.001 && touchPointersRef.current.size === 0) {
+              scrollTouch.current = { pointerId: event.pointerId, y: event.clientY, time: performance.now(), velocity: 0, moved: false };
             }
             touchPointersRef.current.set(event.pointerId, {
               x: event.clientX,
@@ -533,6 +563,22 @@ export function ZoomablePreview({
               return;
             }
           }
+          const scrolling = scrollTouch.current;
+          if (event.pointerType === "touch" && scrolling?.pointerId === event.pointerId) {
+            const now = performance.now();
+            const delta = scrolling.y - event.clientY;
+            if (Math.abs(delta) >= 2 || scrolling.moved) {
+              event.preventDefault();
+              const moved = scrollPreviewAncestors(event.currentTarget, delta);
+              scrolling.velocity = moved / Math.max(8, now - scrolling.time);
+              scrolling.y = event.clientY;
+              scrolling.time = now;
+              scrolling.moved = true;
+              suppressClick.current = true;
+              onGestureStart?.();
+            }
+            return;
+          }
           const drag = dragRef.current;
           if (!drag || drag.pointerId !== event.pointerId) return;
           event.preventDefault();
@@ -549,6 +595,7 @@ export function ZoomablePreview({
         }}
         onPointerUp={(event) => {
           if (event.pointerType === "touch") {
+            if (scrollTouch.current?.pointerId === event.pointerId) finishScroll(event.currentTarget);
             touchPointersRef.current.delete(event.pointerId);
             if (event.currentTarget.hasPointerCapture(event.pointerId)) {
               event.currentTarget.releasePointerCapture(event.pointerId);

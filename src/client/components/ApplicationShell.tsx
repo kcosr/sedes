@@ -1,3 +1,6 @@
+import { canUseDefaultThread, useDefaultThread } from "../app/default-thread.js";
+import { findDefaultThread, installDefaultThreadShortcut } from "../app/default-thread-shortcut.js";
+import { openThreadRoute } from "../workspace-panels/thread-panel-navigation.js";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type {
@@ -102,6 +105,13 @@ export function ApplicationShell({
       document.removeEventListener("visibilitychange", refresh);
     };
   }, [applicationStore, state.status]);
+  const defaultThread = useDefaultThread();
+  useEffect(() => installDefaultThreadShortcut(window, () => {
+    const thread = findDefaultThread(applicationStore.getSnapshot(), defaultThread?.threadId);
+    if (thread && canUseDefaultThread(thread)) openThreadRoute(thread.id);
+    else navigate(settingsPath("general"));
+    setDrawerOpen(false);
+  }), [applicationStore, defaultThread?.threadId]);
   const route = useRoute();
   const [drawerOpen, setDrawerOpen] = useState(false);
   // Drawer contents unmount on close; retain this client-session UI state here.

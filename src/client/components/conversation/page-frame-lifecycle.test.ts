@@ -31,4 +31,22 @@ describe("page frame lifetime budget", () => {
     budget.remove(ids[0]!);
     expect(callbacks[1]).toHaveBeenLastCalledWith(true);
   });
+  it("evicts the least recently viewed retained frame before any visible frame", () => {
+    const budget = new PageFrameBudget(4);
+    const callbacks = Array.from({ length: 6 }, () => vi.fn());
+    const ids = callbacks.map((callback) => budget.register(callback));
+    for (const id of ids.slice(0, 4)) budget.request(id, true, true);
+    budget.request(ids[0]!, true, false);
+    budget.request(ids[1]!, true, false);
+    budget.request(ids[4]!, true, true);
+    expect(callbacks[0]).toHaveBeenLastCalledWith(false);
+    expect(callbacks[1]).toHaveBeenLastCalledWith(true);
+    expect(callbacks[2]).toHaveBeenLastCalledWith(true);
+    expect(callbacks[3]).toHaveBeenLastCalledWith(true);
+    budget.request(ids[5]!, true, true);
+    expect(callbacks[1]).toHaveBeenLastCalledWith(false);
+    for (const callback of callbacks.slice(2))
+      expect(callback).toHaveBeenLastCalledWith(true);
+  });
+
 });

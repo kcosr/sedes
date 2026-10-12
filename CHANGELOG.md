@@ -55,6 +55,10 @@ User-facing changes are collected here before release. See the
 
 ### Added
 
+- A device-local default thread is shared by quick navigation and Android
+  voice. Choose it in General settings or a thread's context menu; it appears
+  above Pinned and opens with Ctrl/Command+Shift+H.
+
 - Agents can publish interactive [HTML previews](docs/user/html-previews.md)
   from files or inline HTML, with captured local images, immutable revisions,
   optional viewport dimensions, and compact revision/refresh controls. They
@@ -163,6 +167,11 @@ User-facing changes are collected here before release. See the
   ([#73](https://github.com/kcosr/sedes/pull/73))
 
 ### Fixed
+
+- Recent HTML previews stay loaded briefly when scrolling away and back, and
+  inactive touch previews avoid nested scrolling. Inline image and Mermaid
+  zoom gestures remain available after scrolling; tap to show or hide controls.
+  Composer effort visibility updates before the changed send controls paint.
 
 - Automation details link consistently to the Automations list and expose
   **Open thread** beside it. Queue/Steer choices open directly above their button.

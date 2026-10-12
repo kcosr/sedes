@@ -7,7 +7,7 @@ import { useComposerDeliveryMode } from "../app/composer-delivery-mode.js";
 import { useNativeVoice, useVoiceState } from "./VoiceProvider.js";
 import type { NativeVoiceStore } from "./NativeVoiceStore.js";
 import { VoiceQuickSheet } from "./VoiceQuickSheet.js";
-import { VoiceThreadPicker } from "./VoiceThreadPicker.js";
+import { ThreadPicker } from "../components/ThreadPicker.js";
 import { voiceReadiness } from "./VoiceSettingsPage.js";
 import { useShowVoiceBarWhenOff } from "./voice-bar-preference.js";
 import { resumeVoice, voiceThreadFilterWarning } from "./voice-session.js";
@@ -280,7 +280,7 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
         {inputActions && keepBlocked ? <span id={`${statusId}-keep-blocked`} className="sr-only">{keepBlocked}</span> : null}
       </div>
     </div> : null}
-    <VoiceThreadPicker threads={threads} open={picker !== null} onOpenChange={open => { if (!open) setPicker(null); }}
+    <ThreadPicker threads={threads} open={picker !== null} onOpenChange={open => { if (!open) setPicker(null); }}
       presentation="popover" anchorRef={pickerAnchor} title="Choose target thread"
       selectedThreadId={picker === "retarget" ? targetId : startTarget?.threadId}
       description={picker === "start" ? "Choose a thread and start recording." : "Recognized text will be sent to the thread you select."}

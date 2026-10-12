@@ -14,7 +14,7 @@
 .page-preview-controls {
   position: sticky;
   top: var(--space-2);
-  z-index: 2;
+  z-index: calc(var(--z-sticky) + 1);
   display: flex;
   height: 0;
   justify-content: flex-end;
@@ -100,7 +100,8 @@
   overscroll-behavior: contain;
 }
 .page-frame-viewport[data-interactive="false"] {
-  overflow: hidden;
+  /* clip is not a nested scroll container: Android must scroll the transcript. */
+  overflow: clip;
   overscroll-behavior: auto;
   touch-action: pan-y;
 }

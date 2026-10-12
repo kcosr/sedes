@@ -306,19 +306,79 @@ describe("published page preview", () => {
     expect(screen.queryByRole("button", { name: "Retry preview" })).toBeNull();
   });
 
-  it("resumes automatically after scrolling away before acknowledgement", async () => {
+  it("resumes automatically after an offscreen retention expires before acknowledgement", async () => {
+    vi.useFakeTimers();
     const visible = makePreviewsVisible(),
       api = services();
     const { container } = render(
       <PagePreview page={original} services={api} />,
     );
-    await waitForFrame(container);
+    await act(async () => {});
+    expect(container.querySelector("iframe")).not.toBeNull();
     visible(false);
-    await waitFor(() => expect(container.querySelector("iframe")).toBeNull());
+    act(() => vi.advanceTimersByTime(30_000));
+    expect(container.querySelector("iframe")).toBeNull();
     expect(localStorage.length).toBe(0);
+    visible(true);
+    await act(async () => {});
+    expect(container.querySelector("iframe")).not.toBeNull();
+    expect(api.createPageRenderAdmission).toHaveBeenCalledTimes(2);
+  });
+
+
+  it("retains the same frame and measured dimensions during a brief scroll away", async () => {
+    const visible = makePreviewsVisible(), api = services();
+    const { container } = render(
+      <PagePreview page={{ ...original, viewport: { width: 390 } }} services={api} />,
+    );
+    const frame = await waitForFrame(container);
+    sendFrameMessage(frame, "sedes:page-size", { height: 510 });
+    const canvas = container.querySelector<HTMLElement>(".page-frame-canvas")!;
+    const canvasHeight = canvas.style.height;
+    vi.useFakeTimers();
+    visible(false);
+    act(() => vi.advanceTimersByTime(29_999));
+    expect(container.querySelector("iframe")).toBe(frame);
+    visible(true);
+    act(() => vi.advanceTimersByTime(30_000));
+    expect(container.querySelector("iframe")).toBe(frame);
+    expect(canvas.style.height).toBe(canvasHeight);
+    expect(api.createPageRenderAdmission).toHaveBeenCalledTimes(1);
+    visible(false);
+    act(() => vi.advanceTimersByTime(30_000));
+    expect(container.querySelector("iframe")).toBeNull();
+    expect(canvas.style.height).toBe(canvasHeight);
+  });
+
+  it("immediately releases retained frames when the document hides", async () => {
+    const visible = makePreviewsVisible(), api = services();
+    const { container } = render(<PagePreview page={original} services={api} />);
+    const frame = await waitForFrame(container);
+    sendFrameMessage(frame, "sedes:page-size", { height: 844 });
+    visible(false);
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    act(() => document.dispatchEvent(new Event("visibilitychange")));
+    expect(container.querySelector("iframe")).toBeNull();
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    act(() => document.dispatchEvent(new Event("visibilitychange")));
+    expect(container.querySelector("iframe")).toBeNull();
     visible(true);
     await waitForFrame(container);
     expect(api.createPageRenderAdmission).toHaveBeenCalledTimes(2);
+  });
+
+  it("ends touch interaction while keeping an offscreen frame alive", async () => {
+    safety.android.mockReturnValue(true);
+    const visible = makePreviewsVisible();
+    const { container } = render(<PagePreview page={original} services={services()} />);
+    const frame = await waitForFrame(container);
+    fireEvent.click(screen.getByRole("button", { name: "Interact with preview" }));
+    expect(frame).not.toHaveAttribute("inert");
+    visible(false);
+    expect(container.querySelector("iframe")).toBe(frame);
+    expect(frame).toHaveAttribute("inert");
+    visible(true);
+    expect(frame).toHaveAttribute("inert");
   });
 
   it("expands during loading and uses shared zoom controls with actual CSS-pixel sizing", async () => {
@@ -414,7 +474,7 @@ describe("published page preview", () => {
     );
   });
 
-  it("retains a previous failure when a pending retry is scrolled away", async () => {
+  it("retains a previous failure when a pending retry expires offscreen", async () => {
     const visible = makePreviewsVisible();
     const { container } = render(
       <PagePreview page={original} services={services()} />,
@@ -424,8 +484,11 @@ describe("published page preview", () => {
       await screen.findByRole("button", { name: "Retry preview" }),
     );
     await waitForFrame(container);
+    vi.useFakeTimers();
     visible(false);
-    await waitFor(() => expect(container.querySelector("iframe")).toBeNull());
+    act(() => vi.advanceTimersByTime(30_000));
+    expect(container.querySelector("iframe")).toBeNull();
+    vi.useRealTimers();
     visible(true);
     await screen.findByRole("button", { name: "Retry preview" });
     expect(container.querySelector("iframe")).toBeNull();
