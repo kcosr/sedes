@@ -1930,6 +1930,15 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
     );
   });
 
+  routes.get("/api/threads/:threadId/summary", async (request, response) => {
+    const requestScope = await scope(request);
+    const { threadId } = threadRouteParametersSchema.parse(request.params);
+    const thread = await dependencies.applicationSnapshots.snapshots.readThreadSummary(requestScope, threadId);
+    if (!thread) throw new ApiError(404, "not_found", "Thread not found.", false);
+    response.setHeader("Cache-Control", "no-store");
+    response.json(thread);
+  });
+
   routes.get("/api/projects", async (request, response) => {
     response.json(listProjectsResultSchema.parse(projectManagement().list(await scope(request))));
   });

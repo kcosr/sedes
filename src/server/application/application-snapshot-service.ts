@@ -1,5 +1,6 @@
 import {
   normalizedApplicationSnapshotSchema,
+  normalizedApplicationThreadSummarySchema,
   type ApplicationEventEnvelope,
   type NormalizedApplicationEvent,
   type NormalizedApplicationSnapshot,
@@ -164,6 +165,22 @@ export class ApplicationSnapshotService {
     readonly terminalSummaries: ApplicationTerminalSummaryReader,
     readonly advisories: InstallationAdvisoryReader = NO_INSTALLATION_ADVISORIES,
   ) {}
+
+  /** A targeted inventory read never attaches the conversation or reads history. */
+  async readThreadSummary(scope: RequestScope, id: string): Promise<NormalizedApplicationThreadSummary | undefined> {
+    const durable = this.summaries.listByIds(scope, [id])[0];
+    if (!durable) return undefined;
+    const terminalSummary = this.terminalSummaries.summariesByThread(scope, [id]).get(id)
+      ?? { runningCount: 0, retainedCount: 0 };
+    const loaded = await this.runtimes.captureLoadedState(scope, id);
+    return normalizedApplicationThreadSummarySchema.parse({
+      ...durable,
+      ...(durable.available && durable.backingState === "bound" && loaded?.backgroundWork
+        ? { backgroundWork: loaded.backgroundWork } : {}),
+      terminalSummary,
+      runState: runState(durable.backingState, durable.available, loaded?.runState),
+    });
+  }
 
   async capture(scope: RequestScope): Promise<NormalizedApplicationSnapshot> {
     const environments = this.inventory.listEnvironments(scope);

@@ -881,6 +881,9 @@ async function fixture(
   const application = {
     captureMetadata: new WeakMap<NormalizedApplicationSnapshot, ReadonlyMap<string, boolean>>(),
     tasks: taskRepository as ApplicationTaskReader,
+    async readThreadSummary(scope: RequestScope, threadId: string) {
+      return summary(repository, scope, threadId);
+    },
     async capture(scope: RequestScope): Promise<NormalizedApplicationSnapshot> {
       const environment = repository.getLocalEnvironment(scope);
       const workspaces = repository.listWorkspaces(scope);
@@ -1730,6 +1733,23 @@ async function fixture(
 }
 
 describe("normalized HTTP application contract", () => {
+  it("reads an authorized thread summary without establishing a runtime", async () => {
+    const current = await fixture();
+    try {
+      const workspace = await current.mutate(request(current.app).post("/api/workspaces/open"))
+        .send({ environmentId: current.environmentId, path: current.workspacePath, project: { kind: "new", name: "workspace" } }).expect(201);
+      const created = await current.mutate(request(current.app).post("/api/threads"))
+        .send({ workspaceId: workspace.body.id, configuration: { kind: "custom", targetId: current.profile.id }, executionWorkspace: { kind: "direct" }, title: "Default thread" }).expect(201);
+      const threadId = created.body.threadId;
+      const result = await current.withHost(request(current.app).get(`/api/threads/${threadId}/summary`)).expect(200);
+      expect(result.body).toMatchObject({ id: threadId, title: { text: "Default thread" }, available: true });
+      expect(result.headers["cache-control"]).toBe("no-store");
+      await current.withHost(request(current.app).get(`/api/threads/${threadId}/summary`)).set("X-Test-Foreign-Principal", "yes").expect(404);
+      await current.withHost(request(current.app).get(`/api/threads/${randomUUID()}/summary`)).expect(404);
+      expect(current.runtimeEstablishmentCaptures).not.toHaveBeenCalled();
+    } finally { current.close(); }
+  });
+
   it("disables all experimental usage reports by default before parsing or reading accounting", async () => {
     const current = await fixture();
     const reads = vi.spyOn(UsageService.prototype, "read");

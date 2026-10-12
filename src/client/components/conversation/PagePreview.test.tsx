@@ -222,6 +222,10 @@ describe("published page preview", () => {
     expect(container.querySelector(".page-preview-controls")?.children).toHaveLength(2);
     expandPage();
     const dialog = await screen.findByRole("dialog");
+    const expandedFrame = await waitForFrame(dialog);
+    expect(expandedFrame).not.toHaveAttribute("inert");
+    expect(expandedFrame).toHaveAttribute("tabindex", "0");
+    expect(within(dialog).queryByRole("button", { name: /interact.*preview/i })).toBeNull();
     const header = dialog.querySelector(".page-preview-fullscreen-header");
     expect(header).toBeInTheDocument();
     expect(within(header as HTMLElement).getByRole("toolbar", { name: "Page actions" })).toBeInTheDocument();
@@ -414,9 +418,8 @@ describe("published page preview", () => {
     const dialog = await screen.findByRole("dialog");
     expect(dialog).toHaveClass("media-preview-dialog");
     const frame = await waitForFrame(dialog);
-    expect(frame).toHaveAttribute("inert");
-    fireEvent.click(within(dialog).getByRole("button", { name: "Interact with preview" }));
     expect(frame).not.toHaveAttribute("inert");
+    expect(within(dialog).queryByRole("button", { name: "Interact with preview" })).toBeNull();
     expect(dialog.querySelector(".page-frame-toolbar")).toBeNull();
     const controls = within(dialog).getByRole("group", {
       name: "Page zoom controls",

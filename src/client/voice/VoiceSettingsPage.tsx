@@ -17,6 +17,7 @@ import { recentVoiceErrors, type NativeVoiceStore } from "./NativeVoiceStore.js"
 import { nativeThreadTitle, type NativeVoiceInputDevice, type NativeVoiceSettings, type NativeVoiceState } from "./native-voice-plugin.js";
 import { inputPreference, selectedInputDevice } from "./native-voice-input.js";
 import { ThreadPicker } from "../components/ThreadPicker.js";
+import { defaultThreadChoices, useDefaultThread } from "../app/default-thread.js";
 import { useShowVoiceBarWhenOff } from "./voice-bar-preference.js";
 import { canEnableVoice, resumeVoice, voiceThreadFilterWarning } from "./voice-session.js";
 import { savedRecording, VoiceRecordingRecovery } from "./VoiceRecordingRecovery.js";
@@ -48,6 +49,8 @@ const numbers = [
 export function VoiceSettingsPage({ store, applicationStore }: { store: NativeVoiceStore; applicationStore: ApplicationClientStore }): React.JSX.Element {
   const state = useVoiceState(store);
   const application = useApplicationStore(applicationStore);
+  const defaultThread = useDefaultThread();
+  const threads = defaultThreadChoices(application.snapshot?.threads ?? [], defaultThread?.thread);
   const [picker, setPicker] = useState(false);
   const [showBarWhenOff, setShowBarWhenOff] = useShowVoiceBarWhenOff();
   const [devices, setDevices] = useState<NativeVoiceInputDevice[]>([]);
@@ -85,7 +88,7 @@ export function VoiceSettingsPage({ store, applicationStore }: { store: NativeVo
   const deviceLabels = inputDeviceLabels(devices);
   const selectedDevice = selectedInputDevice(settings.inputDevice, devices);
   const voiceThreadLabel = settings.voiceThreadTitle ?? (settings.voiceThreadId
-    ? application.snapshot?.threads.find(thread => thread.id === settings.voiceThreadId)?.title.text.trim() || "Untitled thread" : "Choose thread");
+    ? threads.find(thread => thread.id === settings.voiceThreadId)?.title.text.trim() || "Untitled thread" : "Choose thread");
   return <SettingsPage title="Voice" description="Preferences are saved on this device. The default thread is shared with General settings and quick navigation for this connection and account.">
     {errors.length ? <Callout tone="danger" role="alert" action={<Button variant="outline" size="sm" onClick={() => store.dismissErrors()}>Clear errors</Button>}>
       {errors.length === 1 ? errors[0] : <ul className="grid gap-1">{errors.map(error => <li key={error}>{error}</li>)}</ul>}
@@ -109,7 +112,7 @@ export function VoiceSettingsPage({ store, applicationStore }: { store: NativeVo
         : !native.clientConnectionToken && <Button disabled={state.pending} onClick={() => { void store.reconnect().catch(() => undefined); }}>Retry client connection</Button>}
     </SettingsSection>
     {savedRecording(native) ? <SettingsSection title="Saved dictation" card>
-      <VoiceRecordingRecovery store={store} threads={application.snapshot?.threads ?? []} />
+      <VoiceRecordingRecovery store={store} threads={threads} />
     </SettingsSection> : null}
     <SpeechProviderSettings store={store} native={native} pending={state.pending} recordingWork={recordingWork} />
     <SettingsSection title="Speech text" card>
@@ -166,7 +169,7 @@ export function VoiceSettingsPage({ store, applicationStore }: { store: NativeVo
       </div>)}
     </SettingsSection> : null}
     {native.queue.droppedCount ? <Callout>{native.queue.droppedCount} automatic voice items were dropped because the queue was full or the item became ineligible.</Callout> : null}
-    <ThreadPicker threads={application.snapshot?.threads ?? []} open={picker} onOpenChange={setPicker} title="Default thread"
+    <ThreadPicker threads={threads} open={picker} onOpenChange={setPicker} title="Default thread"
       description="Shared with General settings and quick navigation. Used when pinned or when no thread is visible."
       selectedThreadId={settings.voiceThreadId} pinned={{ threadId: settings.voiceThreadId, label: "Current default thread" }} onSelect={thread => update({ voiceThreadId: thread.id, voiceThreadTitle: nativeThreadTitle(thread.title.text) })} />
   </SettingsPage>;

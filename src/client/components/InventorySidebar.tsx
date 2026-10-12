@@ -1,4 +1,3 @@
-import { findDefaultThread } from "../app/default-thread-shortcut.js";
 import { openThreadRoute } from "../workspace-panels/thread-panel-navigation.js";
 import { House } from "lucide-react";
 import { canUseDefaultThread, useDefaultThread } from "../app/default-thread.js";
@@ -432,7 +431,7 @@ export function InventorySidebar({
 }): React.JSX.Element {
   const defaultThread = useDefaultThread();
   const defaultThreadId = defaultThread?.threadId;
-  const defaultSummary = findDefaultThread(state, defaultThreadId);
+  const defaultSummary = state.snapshot?.threads.find(thread => thread.id === defaultThreadId) ?? defaultThread?.thread;
   const usableDefault = defaultSummary && canUseDefaultThread(defaultSummary) ? defaultSummary : undefined;
   const snapshot = useMemo(() => state.snapshot && defaultThreadId
     ? { ...state.snapshot, threads: state.snapshot.threads.filter((thread) => thread.id !== defaultThreadId) }
@@ -1788,10 +1787,17 @@ export function InventorySidebar({
                   </div>
                 </ThreadContextMenu>
               ) : (
-                <button className="default-thread-unavailable" onClick={(event) => onOpenSettings(event.currentTarget, "general")}>
-                  <House size={16} aria-hidden="true" /> Default thread unavailable — choose another
+                <button className="default-thread-unavailable" disabled={defaultThread?.resolving} onClick={(event) => onOpenSettings(event.currentTarget, "general")}>
+                  <House size={16} aria-hidden="true" /> {defaultThread?.resolving ? "Loading default thread…" : "Default thread unavailable — choose another"}
                 </button>
               )}
+              {usableDefault && descendantPagingFor(usableDefault.id).canLoad ? (
+                <Button variant="ghost" size="xs" className="lineage-more" disabled={descendantPagingFor(usableDefault.id).loading}
+                  onClick={() => void store.loadMoreDescendants(usableDefault.id).catch(() => undefined)}>
+                  {descendantPagingFor(usableDefault.id).loading ? "Loading runs/forks…" : "Show all runs/forks"}
+                </Button>
+              ) : null}
+              {usableDefault && descendantPagingFor(usableDefault.id).error ? <p className="thread-row-error" role="alert">{descendantPagingFor(usableDefault.id).error}</p> : null}
             </section>
           )}
           {groupBy !== "project" ? (

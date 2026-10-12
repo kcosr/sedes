@@ -49,17 +49,48 @@ const root=document.documentElement,body=document.body;
 const viewportHeight=host.innerHeight||root.clientHeight||1;
 let naturalHeight=1;
 if(body){
-const margin=parseFloat(getComputedStyle(body).marginBottom)||0;
+const bodyStyle=getComputedStyle(body),rootStyle=getComputedStyle(root);
+const margin=parseFloat(bodyStyle.marginBottom)||0;
 naturalHeight=body.getBoundingClientRect().bottom+host.scrollY+margin;
-// Bounding rectangles include SVG geometry and positioned children outside
-// overflow clips. Only visible overflow can contribute to the page height.
-const clipBottoms=new host.WeakMap(),children=body.querySelectorAll("*");
+// Overflow clips do not affect positioned descendants whose containing block
+// is outside the clipping ancestor (CSS 2.1 11.1.1). Retain separate bounds for
+// normal flow and each positioning containing block, including transformed or
+// contained blocks, so escaping a clip does not discard applicable outer clips.
+const bounds=new host.WeakMap(),unclipped={flow:Infinity,absolute:Infinity,fixed:Infinity};
+const fixedContainer=(element,style)=>{
+if(style.display==="contents")return false;
+const changed=name=>style[name]&&style[name]!=="none";
+const containment=style.contain.split(" "),willChange=style.willChange.split(",").map(value=>value.trim());
+// Transforms and containment do not apply to non-replaced inline boxes;
+// filters can still establish their fixed positioning containing block.
+const atomic=style.display!=="inline"||element.namespaceURI==="http://www.w3.org/2000/svg";
+return ["filter","backdropFilter"].some(changed)||["filter","backdrop-filter"].some(value=>willChange.includes(value))||atomic&&(
+["transform","translate","rotate","scale","perspective"].some(changed)||
+["layout","paint","strict","content"].some(value=>containment.includes(value))||
+["transform","translate","rotate","scale","perspective","contain"].some(value=>willChange.includes(value))||
+style.contentVisibility==="auto"||style.contentVisibility==="hidden");
+};
+const elementBounds=(element,style,rect,parent,usesOverflow=true)=>{
+const inherited=style.position==="fixed"?parent.fixed:style.position==="absolute"?parent.absolute:parent.flow;
+const overflow=style.overflowY||style.overflow;
+const clips=usesOverflow&&(overflow==="hidden"||overflow==="clip"||overflow==="auto"||overflow==="scroll");
+const flow=clips?Math.min(inherited,rect.bottom-(parseFloat(style.borderBottomWidth)||0)):inherited;
+const fixes=fixedContainer(element,style),positions=style.display!=="contents"&&style.position!=="static";
+return {inherited,flow,absolute:fixes||positions?flow:parent.absolute,fixed:fixes?flow:parent.fixed};
+};
+const children=body.querySelectorAll("*");
+// Root overflow clips the viewport, which auto-height is still determining.
+// Body overflow usually propagates there too, except when the root handles
+// overflow itself or containment disables that HTML-specific propagation.
+const bodyOverflowPropagates=rootStyle.overflowX==="visible"&&rootStyle.overflowY==="visible"&&
+rootStyle.contain==="none"&&bodyStyle.contain==="none"&&
+rootStyle.contentVisibility==="visible"&&bodyStyle.contentVisibility==="visible";
+bounds.set(body,elementBounds(body,bodyStyle,body.getBoundingClientRect(),unclipped,!bodyOverflowPropagates));
 for(let index=0;index<Math.min(children.length,5000);index++){
-const child=children[index],rect=child.getBoundingClientRect(),inherited=clipBottoms.get(child.parentElement)??Infinity;
-naturalHeight=Math.max(naturalHeight,Math.min(rect.bottom,inherited)+host.scrollY+margin);
-const style=getComputedStyle(child),overflow=style.overflowY||style.overflow;
-const clips=overflow==="hidden"||overflow==="clip"||overflow==="auto"||overflow==="scroll";
-clipBottoms.set(child,clips?Math.min(inherited,rect.bottom-(parseFloat(style.borderBottomWidth)||0)):inherited);
+const child=children[index],rect=child.getBoundingClientRect(),style=getComputedStyle(child),parent=bounds.get(child.parentElement)||unclipped;
+const state=elementBounds(child,style,rect,parent);
+naturalHeight=Math.max(naturalHeight,Math.min(rect.bottom,state.inherited)+host.scrollY+margin);
+bounds.set(child,state);
 }
 }
 if(root.scrollHeight>viewportHeight+1)naturalHeight=Math.max(naturalHeight,root.scrollHeight);

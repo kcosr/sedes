@@ -60,7 +60,7 @@ test("native dictation keeps its controls reachable on narrow screens and retain
   await toolbar.getByRole("button", { name: "Open voice controls", exact: true }).click();
   const filterSheet = page.getByRole("dialog", { name: "Voice", exact: true });
   await expect(filterSheet.getByRole("status")).toContainText("Automatic playback and listening are paused.");
-  await expect(filterSheet.getByRole("switch", { name: "Only play from default voice thread", exact: true })).toBeChecked();
+  await expect(filterSheet.getByRole("switch", { name: "Only play from default thread", exact: true })).toBeChecked();
   await expectNoPageOverflow(page);
   await capture(page, testInfo, "voice-default-thread-warning-sheet-narrow.png");
   await filterSheet.press("Escape");
@@ -75,7 +75,7 @@ test("native dictation keeps its controls reachable on narrow screens and retain
   const targetPicker = page.getByRole("dialog", { name: "Choose target thread", exact: true });
   await idleChooser.click();
   await expect(targetPicker).toHaveAttribute("data-slot", "popover-content");
-  await expect(targetPicker.getByRole("searchbox", { name: "Search voice threads" })).not.toBeFocused();
+  await expect(targetPicker.getByRole("searchbox", { name: "Search threads" })).not.toBeFocused();
   await targetPicker.getByRole("button", { name: "Voice navigation destination", exact: true }).click();
   await expect(targetPicker).toHaveCount(0);
   await expect(toolbar.locator(".voice-card-title")).toHaveText("Voice navigation destination");
@@ -122,14 +122,14 @@ test("native dictation keeps its controls reachable on narrow screens and retain
   expect(await page.evaluate(() => window.__voiceFixture.calls.filter(call => call.method === "retargetActiveRecognition"))).toEqual([]);
   await page.setViewportSize({ width: 1280, height: 900 });
   await change.click();
-  await expect(targetPicker.getByRole("searchbox", { name: "Search voice threads" })).toBeFocused();
+  await expect(targetPicker.getByRole("searchbox", { name: "Search threads" })).toBeFocused();
   await targetPicker.press("Escape");
   await expect(targetPicker).toHaveCount(0);
   await page.setViewportSize({ width: 320, height: 780 });
   await change.click();
   await expect(targetPicker).toContainText("Recognized text will be sent to the thread you select.");
   await expect(targetPicker).toBeFocused();
-  await expect(targetPicker.getByRole("searchbox", { name: "Search voice threads" })).not.toBeFocused();
+  await expect(targetPicker.getByRole("searchbox", { name: "Search threads" })).not.toBeFocused();
   await capture(page, testInfo, "voice-thread-picker-mobile-browsing.png");
   await targetPicker.getByRole("button", { name: "Voice navigation source", exact: true }).click();
   await expect(page).toHaveURL(new RegExp(`${otherThreadPath}$`, "u"));
@@ -540,6 +540,32 @@ test("native dictation keeps its controls reachable on narrow screens and retain
     await expect(voiceSheet.getByRole("combobox", { name: "Read aloud" })).toContainText("Messages");
   }
   await voiceSheet.press("Escape");
+
+  // Voice and General edit one device-local default without starting or
+  // retargeting a recording; the sidebar immediately follows either editor.
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const recordingCalls = () => page.evaluate(() => window.__voiceFixture.calls.filter(call =>
+    call.method === "startManualListen" || call.method === "retargetActiveRecognition"));
+  const previousRecordingCalls = await recordingCalls();
+  await toolbar.getByRole("button", { name: "Open voice controls", exact: true }).click();
+  await voiceSheet.getByRole("button", { name: "Default thread", exact: true }).click();
+  const defaultPicker = page.getByRole("dialog", { name: "Default thread", exact: true });
+  await defaultPicker.getByRole("button", { name: "Voice navigation destination", exact: true }).click();
+  await expect(defaultPicker).toHaveCount(0);
+  await expect(voiceSheet.getByRole("button", { name: "Default thread", exact: true })).toHaveAccessibleDescription("Voice navigation destination");
+  await voiceSheet.press("Escape");
+  await expect(page.getByTestId("default-thread-row")).toContainText("Voice navigation destination");
+  await page.getByTestId("desktop-sidebar").getByTestId("settings-trigger").click();
+  await expect(page).toHaveURL(/\/settings\/general$/u);
+  const defaultSetting = page.getByRole("region", { name: "Default thread", exact: true });
+  await defaultSetting.getByRole("button", { name: "Voice navigation destination", exact: true }).click();
+  await defaultPicker.getByRole("button", { name: "Voice navigation source", exact: true }).click();
+  await expect(defaultSetting.getByRole("button", { name: "Voice navigation source", exact: true })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => window.__voiceFixture.state.settings.voiceThreadId)).toBe(threadId);
+  await toolbar.getByRole("button", { name: "Open voice controls", exact: true }).click();
+  await expect(voiceSheet.getByRole("button", { name: "Default thread", exact: true })).toHaveAccessibleDescription("Voice navigation source");
+  await voiceSheet.press("Escape");
+  expect(await recordingCalls()).toEqual(previousRecordingCalls);
 });
 
 test("saved dictation appends to its original composer without losing drafts or truncating text", async ({ page }, testInfo) => {

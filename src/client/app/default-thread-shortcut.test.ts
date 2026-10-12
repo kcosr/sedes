@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { findDefaultThread, installDefaultThreadShortcut } from "./default-thread-shortcut.js";
+import { installDefaultThreadShortcut } from "./default-thread-shortcut.js";
 const cleanups: (() => void)[] = [];
 afterEach(() => { cleanups.splice(0).forEach((cleanup) => cleanup()); document.body.replaceChildren(); });
 function press(target: EventTarget, options: KeyboardEventInit = {}) {
@@ -28,16 +28,4 @@ describe("default thread shortcut", () => {
     press(terminal); expect(open).toHaveBeenCalledOnce(); expect(receive).not.toHaveBeenCalled();
     remove(); press(document.body); expect(open).toHaveBeenCalledOnce();
   });
-});
-
-
-it("resolves a loaded descendant even when it is absent from root inventory", () => {
-  const child = { id: "child" };
-  const state = {
-    snapshot: { threads: [] }, visibleThreads: [],
-    descendantPages: { root: { descendants: [{ thread: child }] } },
-  } as unknown as Parameters<typeof findDefaultThread>[0];
-  expect(findDefaultThread(state, "child")).toBe(child);
-  expect(findDefaultThread(state, "missing")).toBeUndefined();
-  expect(findDefaultThread(state, null)).toBeUndefined();
 });

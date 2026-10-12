@@ -3102,7 +3102,7 @@ describe("sidebar row archive control", () => {
 
 describe("shared default thread action", () => {
   it("sets and clears the client default without changing its pin", async () => {
-    const scope = { profileId: "desktop", serverOrigin: "https://example.test", identity: "user" };
+    const scope = { profileId: "desktop", serverKey: "https://example.test", identity: "user" };
     const store = makeStore(); const thread = makeThread({ pinned: true });
     render(<DefaultThreadProvider scope={scope}>
       <ThreadContextMenu thread={thread} store={store}><div data-testid="default-trigger">Thread</div></ThreadContextMenu>

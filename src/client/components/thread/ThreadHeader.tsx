@@ -833,15 +833,12 @@ export const ThreadHeader = memo(function ThreadHeader({
                   >
                     <Braces aria-hidden="true" />
                     <span className="min-w-0 flex-1">
-                      Environment variables…{" "}
-                      <DropdownMenuItemDescription>
-                        Saved tools and commands snapshot
-                      </DropdownMenuItemDescription>
+                      Environment variables…
                     </span>
                   </DropdownMenuItem>
                   <DropdownMenuItem onSelect={() => closeActionsBefore(() => setPagesOpen(true))}>
                     <FileCode aria-hidden="true" />
-                    <span className="min-w-0 flex-1">Published pages…<DropdownMenuItemDescription>HTML previews and saved revisions</DropdownMenuItemDescription></span>
+                    <span className="min-w-0 flex-1">Published pages…</span>
                   </DropdownMenuItem>
                   <ProviderFeatureThreadDetails
                     store={store}

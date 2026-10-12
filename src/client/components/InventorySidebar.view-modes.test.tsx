@@ -457,7 +457,7 @@ function renderSidebar(
     );
   };
   render(<ThreadArchiveOperationHost store={store} />);
-  const defaultScope = { profileId: "desktop-test", serverOrigin: "https://example.test", identity: "user" };
+  const defaultScope = { profileId: "desktop-test", serverKey: "https://example.test", identity: "user" };
   if (options.defaultThreadId) localStorage.setItem(defaultThreadStorageKey(defaultScope), options.defaultThreadId);
   const wrap = (current: ApplicationClientState) => options.defaultThreadId
     ? <DefaultThreadProvider scope={defaultScope}>{content(current)}</DefaultThreadProvider>
@@ -5322,6 +5322,22 @@ describe("sidebar footer Automations", () => {
 
 
 describe("shared default thread shelf", () => {
+  it.each(["project", "none"] as const)("pages a default parent's older forks into the %s view", async (groupBy) => {
+    seedViewPreferences({ groupBy });
+    const parent = makeThread("default", "My default");
+    const options = { defaultThreadId: "default", lineageFamilies: [{ sourceThreadId: "default", descendantCount: 1 }] };
+    const view = renderSidebar([parent], options);
+    await userEvent.click(screen.getByRole("button", { name: "Show all runs/forks" }));
+    expect(view.store.loadMoreDescendants).toHaveBeenCalledWith("default");
+    const child = makeThread("older-fork", "Older fork");
+    view.rerenderSidebar(makeState([parent], { ...options, descendantPages: { default: {
+      loading: false, loaded: true, descendants: [{ thread: child, origin: forkOrigin(child.id, parent.id), placement: nestedPlacement(child.id) }],
+    } } }));
+    expect(screen.getByText("Older fork")).toBeVisible();
+    expect(screen.getAllByText("My default")).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: "Show all runs/forks" })).not.toBeInTheDocument();
+  });
+
   it.each(["project", "time", "state", "none"] as const)("shows the default once above ordinary groups in %s", (groupBy) => {
     seedViewPreferences({ groupBy });
     renderSidebar([

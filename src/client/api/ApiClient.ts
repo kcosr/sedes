@@ -116,6 +116,7 @@ import {
   createThreadResultSchema,
   composerSkillCatalogSchema,
   normalizedApplicationSessionSchema,
+  normalizedApplicationThreadSummarySchema,
   normalizedThreadDescendantsPageSchema,
   normalizedThreadLineagePlacementSchema,
   normalizedDraftSchema,
@@ -148,6 +149,7 @@ import {
   SEDES_CLIENT_PROTOCOL_VERSION,
   type ActivityDetailMode,
   type NormalizedApplicationSession,
+  type NormalizedApplicationThreadSummary,
   type CreateThreadRequest,
   type CreateThreadFromSettingsRequest,
   type CreateThreadResult,
@@ -1749,6 +1751,12 @@ export class ApiClient {
       normalizedThreadLineagePlacementSchema,
       { method: "PATCH", body: JSON.stringify(input) },
     );
+  }
+
+  async readThreadSummary(threadId: string, signal?: AbortSignal): Promise<NormalizedApplicationThreadSummary> {
+    const summary = await this.#request(`/api/threads/${encodeURIComponent(threadId)}/summary`, { signal }, normalizedApplicationThreadSummarySchema);
+    if (summary.id !== threadId) throw new Error("The returned summary did not match the requested thread.");
+    return summary;
   }
 
   listThreadDescendants(

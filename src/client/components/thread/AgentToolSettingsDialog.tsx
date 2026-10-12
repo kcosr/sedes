@@ -180,19 +180,7 @@ function needsNativeToolConfirmation(
 
 export function agentToolPolicySummary(policy: AgentToolPolicy): string {
   if (!policy.enabled) return "Off";
-  const count = enabledToolIds(policy).length;
-  const presentation = `${
-    policy.presentation.surface === "native" ? "Native" : "CLI"
-  } · ${
-    policy.presentation.mode === "progressive" ? "Progressive" : "Individual"
-  }`;
-  const accessBoundary =
-    {
-      thread: "Ask outside this thread",
-      environment: "Ask outside this environment",
-      unrestricted: "Allow without asking",
-    }[policy.accessBoundary];
-  return `${count} enabled · ${accessBoundary} · ${presentation}`;
+  return `${enabledToolIds(policy).length} enabled`;
 }
 
 function effectSummary(tool: AgentToolGroup["tools"][number]): string {

@@ -58,7 +58,9 @@ User-facing changes are collected here before release. See the
 - A device-local default thread is shared by quick navigation and Android
   voice. Choose it in General settings or a thread's context menu; it appears
   above Pinned as a compact row whose home icon changes to the normal activity
-  or unread indicator, and opens with Ctrl/Command+Shift+H.
+  or unread indicator, and opens with Ctrl/Command+Shift+H. The selection
+  survives Managed Local restarts, resolves older forks for navigation and
+  voice, and preserves access to the default thread's runs and forks.
 
 - Agents can publish interactive [HTML previews](docs/user/html-previews.md)
   from files or inline HTML, with captured local images, immutable revisions,
@@ -120,6 +122,9 @@ User-facing changes are collected here before release. See the
 
 ### Changed
 
+- Chat header options omit the static descriptions beneath Environment
+  variables and Published pages. Agent tools shows only Off or the enabled count.
+
 - Images and Mermaid diagrams support inline pinch zoom and pan, with an
   explicit expand control. Expanded images, diagrams, and HTML previews share
   a floating bottom zoom bar with **Fit** and **1:1**. See
@@ -175,9 +180,12 @@ User-facing changes are collected here before release. See the
   inactive previews avoid nested scrolling. Inline image and Mermaid
   zoom gestures remain available after scrolling, without an inline zoom toolbar.
   HTML preview controls appear in a fullscreen header with large touch targets;
-  a finger toggle or stationary tap enables interaction on desktop and mobile.
-  Clipped SVG content no longer makes previews excessively tall, and fullscreen
-  media surrounds match the chat background.
+  a finger toggle or stationary tap enables inline interaction on desktop and
+  mobile, while fullscreen previews accept input immediately.
+  Clipped SVG content no longer makes previews excessively tall, positioned
+  content remains visible, and fullscreen media surrounds match the chat
+  background. Mermaid diagrams magnify beyond their original size, and touching
+  elsewhere stops a preview's scrolling momentum.
   Composer effort visibility updates before the changed send controls paint.
 
 - Automation details link consistently to the Automations list and expose

@@ -259,15 +259,6 @@ export function PagePreview({
         >
           <header className="page-preview-fullscreen-header">
             <DialogTitle className="page-preview-name">{selected.title}</DialogTitle>
-            <Button
-              size="icon-lg"
-              variant="ghost"
-              aria-label={interacting ? "Done interacting with preview" : "Interact with preview"}
-              aria-pressed={interacting}
-              onClick={() => setInteracting((value) => !value)}
-            >
-              {interacting ? <Check /> : <Pointer />}
-            </Button>
             {headerActions}
           </header>
           {error ? <p className="page-preview-error" role="alert">{error}</p> : null}
@@ -276,7 +267,7 @@ export function PagePreview({
             page={selected}
             createAdmission={services.createPageRenderAdmission}
             enabled={expanded}
-            interactive={interacting}
+            interactive
             onActivate={() => setInteracting(true)}
             onDeactivate={deactivate}
             refreshVersion={refreshVersion}

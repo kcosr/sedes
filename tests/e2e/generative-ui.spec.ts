@@ -63,11 +63,14 @@ function pageDocument(container: Locator): FrameLocator {
     .frameLocator("iframe[data-page-document]");
 }
 
-async function openPageMenu(page: Page, card: Locator): Promise<Locator> {
-  const trigger = card.getByRole("button", { name: /^Page details:/ });
-  if ((await trigger.getAttribute("aria-expanded")) !== "true")
-    await trigger.click();
-  return page.locator(".page-preview-menu:visible");
+async function expandPage(page: Page, card: Locator): Promise<Locator> {
+  await card.getByRole("button", { name: /^Expand page:/ }).click();
+  const dialog = page.getByRole("dialog").filter({
+    has: page.locator(".page-preview-fullscreen-header"),
+  });
+  await expect(dialog).toBeVisible();
+  await overlaySettled(dialog);
+  return dialog;
 }
 
 test("published HTML keeps revisions, target viewport, local images, and host isolation across screen sizes", async ({
@@ -127,6 +130,8 @@ test("published HTML keeps revisions, target viewport, local images, and host is
     expect(await firstCard.locator("iframe").getAttribute("sandbox")).toBe(
       "allow-scripts",
     );
+    await expect(firstCard.locator("iframe")).toHaveAttribute("inert", "");
+    await firstCard.getByRole("button", { name: "Interact with preview", exact: true }).click();
     await firstFrame.getByRole("button", { name: "Clicks: 0" }).click();
     await expect(
       firstFrame.getByRole("button", { name: "Clicks: 1" }),
@@ -163,26 +168,27 @@ test("published HTML keeps revisions, target viewport, local images, and host is
       firstFrame.getByRole("heading", { name: "Inbox one" }),
     ).toBeVisible();
 
-    const revisionMenu = await openPageMenu(page, secondCard);
-    await revisionMenu
+    const revisionDialog = await expandPage(page, secondCard);
+    const revisionFrame = pageDocument(revisionDialog);
+    await revisionDialog
       .getByRole("button", { name: "Previous page revision" })
       .click();
     await expect(
-      revisionMenu.getByRole("button", {
+      revisionDialog.getByRole("button", {
         name: "Return to published revision 2",
       }),
     ).toBeVisible();
     await expect(
-      pageDocument(secondCard).getByRole("heading", { name: "Inbox one" }),
+      revisionFrame.getByRole("heading", { name: "Inbox one" }),
     ).toBeVisible();
-    await revisionMenu
+    await revisionDialog
       .getByRole("button", {
         name: "Return to published revision 2",
         exact: true,
       })
       .click();
     await expect(
-      pageDocument(secondCard).getByRole("heading", { name: "Inbox two" }),
+      revisionFrame.getByRole("heading", { name: "Inbox two" }),
     ).toBeVisible();
 
     await writeFile(htmlPath, mockup("three"));
@@ -193,28 +199,29 @@ test("published HTML keeps revisions, target viewport, local images, and host is
       expectedRevision: 2,
       viewport: { width: 390, height: 600 },
     });
-    await revisionMenu
+    await revisionDialog
       .getByRole("button", { name: "Check for a newer page revision" })
       .click();
     await expect(
-      pageDocument(secondCard).getByRole("heading", { name: "Inbox three" }),
+      revisionFrame.getByRole("heading", { name: "Inbox three" }),
     ).toBeVisible();
     await expect(
-      revisionMenu.getByRole("button", {
+      revisionDialog.getByRole("button", {
         name: "Return to published revision 2",
       }),
     ).toBeVisible();
-    await revisionMenu
+    await revisionDialog
       .getByRole("button", {
         name: "Return to published revision 2",
         exact: true,
       })
       .click();
     await expect(
-      pageDocument(secondCard).getByRole("heading", { name: "Inbox two" }),
+      revisionFrame.getByRole("heading", { name: "Inbox two" }),
     ).toBeVisible();
 
-    await page.keyboard.press("Escape");
+    await revisionDialog.getByRole("button", { name: "Close", exact: true }).click();
+    await expect(revisionDialog).toBeHidden();
     await page.setViewportSize({ width: 360, height: 900 });
     await firstCard.scrollIntoViewIfNeeded();
     await expect(firstFrame.locator("#layout")).toHaveText(
@@ -227,19 +234,15 @@ test("published HTML keeps revisions, target viewport, local images, and host is
       .toBeLessThan(390);
     await expectNoPageOverflow(page);
     await capture(page, testInfo, "generative-ui-phone-on-phone.png");
-    await openPageMenu(page, firstCard);
-    await page
-      .getByRole("button", { name: "Expand page: Inbox mockup" })
-      .click();
-    const expanded = page.getByRole("dialog", {
-      name: "Inbox mockup · Revision 1",
-      exact: true,
-    });
-    await expect(expanded).toBeVisible();
-    await overlaySettled(expanded);
+    const expanded = await expandPage(page, firstCard);
+    await expect(expanded).toHaveAccessibleName("Inbox mockup");
     await expect(pageDocument(expanded).locator("#layout")).toHaveText(
       "Viewport 390 × 600",
     );
+    await expect(expanded.locator(".page-frame-document")).not.toHaveAttribute("inert", "");
+    await expect(expanded.getByRole("button", { name: /interact.*preview/i })).toHaveCount(0);
+    await pageDocument(expanded).getByRole("button", { name: "Clicks: 0" }).click();
+    await expect(pageDocument(expanded).getByRole("button", { name: "Clicks: 1" })).toBeVisible();
     const initialScale = await expanded
       .locator("iframe")
       .evaluate((frame) => getComputedStyle(frame).transform);
@@ -260,7 +263,7 @@ test("published HTML keeps revisions, target viewport, local images, and host is
     await expanded.getByRole("button", { name: "Close", exact: true }).click();
     await expect(expanded).toBeHidden();
     await expect(
-      firstCard.getByRole("button", { name: "Page details: Inbox mockup" }),
+      firstCard.getByRole("button", { name: "Expand page: Inbox mockup" }),
     ).toBeFocused();
 
     const responsive = await publish(page, threadId, {
@@ -293,6 +296,8 @@ test("published HTML keeps revisions, target viewport, local images, and host is
     await capture(page, testInfo, "generative-ui-responsive-component.png");
 
     // The source files are editable inputs, not live dependencies of saved revisions.
+    await firstCard.scrollIntoViewIfNeeded();
+    await expect(firstFrame.getByRole("heading", { name: "Inbox one" })).toBeVisible();
     await rm(htmlPath);
     await rm(path.join(workspace, "images", "logo.png"));
     await page.reload();
@@ -311,6 +316,10 @@ test("published HTML keeps revisions, target viewport, local images, and host is
     await page
       .getByRole("button", { name: "Thread actions", exact: true })
       .click();
+    await expect(page.getByRole("menuitem", { name: "Environment variables…", exact: true })).toHaveText("Environment variables…");
+    await expect(page.getByRole("menuitem", { name: /^Published pages/ })).toHaveText("Published pages…");
+    await expect(page.getByRole("menuitem", { name: /^Agent tools/ })).toHaveText(/^Agent tools…\s*(Off|\d+ enabled)$/u);
+    await capture(page, testInfo, "generative-ui-thread-actions.png");
     await page.getByRole("menuitem", { name: /^Published pages/ }).click();
     const library = page.getByRole("dialog", {
       name: "Published pages",
@@ -448,6 +457,20 @@ test("page loading waits for transfer completion and viewport-based content reac
           (await fitted.locator(".page-frame-document").boundingBox())!.height,
       )
       .toBe(32);
+
+    const positioned = await publish(page, threadId, {
+      title: "Visible positioned content",
+      html: '<!doctype html><html><head><style>body{margin:0}.clip{height:100px;overflow:hidden}.fixed{position:fixed;top:50px;height:100px;width:100px;background:#bde}</style></head><body><div class="clip"><div class="fixed">Visible outside ancestor</div></div></body></html>',
+    });
+    const positionedCard = pageCard(page, positioned.title, 1);
+    await positionedCard.scrollIntoViewIfNeeded();
+    await expect.poll(async () =>
+      (await positionedCard.locator(".page-frame-document").boundingBox())?.height,
+    ).toBe(150);
+    expect(await pageDocument(positionedCard).locator("body").evaluate(() =>
+      window.document.elementFromPoint(50, 120)?.className,
+    )).toBe("fixed");
+    await capture(page, testInfo, "generative-ui-positioned-content.png");
   } finally {
     releaseResponse();
     await page.unrouteAll({ behavior: "wait" });
@@ -525,6 +548,16 @@ test.describe("mobile inline preview interaction", () => {
       });
       await expect(viewport).toHaveAttribute("data-gesture-zoom", "true");
       await expect(page.getByRole("dialog")).toHaveCount(0);
+      // Cross natural size: Mermaid's generated inline max-width must not cap
+      // the painted SVG while the containing zoom canvas keeps growing.
+      await viewport.focus();
+      for (let step = 0; step < 4; step++) await viewport.press("+");
+      await expect.poll(() => diagram.locator("svg").evaluate((svg) => {
+        const content = svg.closest<HTMLElement>(".zoomable-preview-content")!;
+        const width = svg.getBoundingClientRect().width;
+        return width > (svg as SVGSVGElement).viewBox.baseVal.width &&
+          Math.abs(width - content.getBoundingClientRect().width) < 1;
+      })).toBe(true);
       await capture(page, testInfo, "generative-ui-inline-diagram-zoom.png");
 
       const saved = await publish(page, threadId, {
@@ -590,7 +623,7 @@ test.describe("mobile inline preview interaction", () => {
         .getByRole("button", { name: "Done interacting with preview" })
         .tap();
       await expect(frame).toHaveAttribute("inert", "");
-      await openPageMenu(page, card);
+      await expandPage(page, card);
       await capture(page, testInfo, "generative-ui-mobile-details.png");
     } finally {
       await page.request.post("/__e2e/pi/mermaid/release/closed");

@@ -1226,6 +1226,11 @@ describe("ThreadHeader agent tools", () => {
     expect(
       screen.queryByRole("switch", { name: "Enable agent tools" }),
     ).toBeNull();
+    for (const name of ["Environment variables…", "Published pages…"]) {
+      const option = within(menu).getByRole("menuitem", { name });
+      expect(option.textContent).toBe(name);
+      expect(option.querySelector('[data-slot="dropdown-menu-item-description"]')).toBeNull();
+    }
 
     await userEvent.click(row);
     await waitFor(() =>

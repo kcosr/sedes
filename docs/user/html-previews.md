@@ -6,9 +6,10 @@ web, desktop, and Android. Their JavaScript can update the displayed content
 locally; it has no connection to the agent, your credentials, or other Sedes
 tools.
 
-The content appears without a permanent header or dimensions footer. Open the
-small ellipsis at the top right for a compact row containing the title,
-previous/next revision arrows, a `vN` version indicator, maximize, and refresh.
+Inline content appears without a permanent header or dimensions footer. Use
+the maximize button at the top right to open the larger viewer. Its header
+contains the title, previous/next revision arrows, a `vN`
+version indicator, and refresh.
 Refresh reloads the selected saved revision and resets its local interaction
 state.
 
@@ -32,8 +33,7 @@ path; inline publications return their saved HTML so the agent can revise
 and republish it without relying on its previous chat context.
 
 Maximize the preview to see its header, then use the previous and next arrows
-around the
-version indicator to browse that page's revisions. Browsing does not change
+around the version indicator to browse that page's revisions. Browsing does not change
 the saved conversation or the revision originally published there. While
 browsing another revision, select the `vN` indicator to return to the revision
 published at that position in chat. Open **Pages** in the thread header to find
@@ -53,12 +53,13 @@ is deleted.
 
 ## Interact and recover
 
-HTML previews initially let gestures scroll the conversation on both desktop
+Inline HTML previews initially let gestures scroll the conversation on both desktop
 and mobile. Tap or click the preview, or use its finger icon, to enable input.
 Dragging, scrolling, and long presses do not enable interaction. The activating
 tap only changes modes; tap again to use the page's controls. Use the checkmark
-to return to conversation scrolling. Expanded previews use the same interaction
-toggle in their header. The page still loads and runs while input is inactive.
+to return to conversation scrolling. Expanded previews accept input immediately
+and have no interaction toggle. The page still loads and runs while inline input
+is inactive.
 
 A failed render or an attempt interrupted before cleanup does not restart
 automatically. Use **Retry** to try that revision again. This protects against

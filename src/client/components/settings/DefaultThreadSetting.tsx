@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useDefaultThread } from "../../app/default-thread.js";
+import { defaultThreadChoices, useDefaultThread } from "../../app/default-thread.js";
 import { useApplicationStore, type ApplicationClientStore } from "../../stores/ApplicationClientStore.js";
 import { ThreadPicker } from "../ThreadPicker.js";
 import { Button } from "../ui/button.js";
@@ -11,7 +11,7 @@ export function DefaultThreadSetting({ store }: { store: ApplicationClientStore 
   const application = useApplicationStore(store);
   const [open, setOpen] = useState(false);
   if (!controls) return null;
-  const threads = application.snapshot?.threads ?? [];
+  const threads = defaultThreadChoices(application.snapshot?.threads ?? [], controls.thread);
   const current = threads.find(t => t.id === controls.threadId);
   return <SettingsSection title="Default thread" description="Used for quick navigation and as the default voice target on this device." card>
     <SettingsField label="Thread" description="Saved separately for this connection and signed-in identity.">
