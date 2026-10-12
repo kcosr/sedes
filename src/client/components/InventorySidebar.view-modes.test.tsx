@@ -5332,6 +5332,31 @@ describe("shared default thread shelf", () => {
     expect(screen.getAllByText("My default")).toHaveLength(1);
     expect(row.closest("nav")?.firstElementChild).toBe(row.closest("section"));
     expect(within(row).queryByText(/Ctrl|⌘/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Default" })).not.toBeInTheDocument();
+  });
+  it.each([
+    ["running", "Running"],
+    ["waiting_for_input", "Waiting for input"],
+    ["waiting_for_approval", "Waiting for approval"],
+    ["failed", "Failed"],
+  ] as const)("shows the ordinary %s indicator on the compact default row", (runState, label) => {
+    renderSidebar([makeThread("default", "My default", { runState })], { defaultThreadId: "default" });
+    const row = screen.getByTestId("default-thread-row");
+    expect(within(row).getByRole("img", { name: label })).toBeVisible();
+    expect(row.querySelector(".flat-row-glyph")?.nextElementSibling?.tagName.toLowerCase()).toBe("svg");
+  });
+  it("updates the default row from running to unread without losing its indicator", () => {
+    const running = makeThread("default", "My default", { runState: "running" });
+    const view = renderSidebar([running], { defaultThreadId: "default" });
+    expect(within(screen.getByTestId("default-thread-row")).getByRole("img", { name: "Running" })).toBeVisible();
+    const unread = { ...running, runState: "idle" as const, attention: { ...running.attention, unseenCompletion: true } };
+    view.rerenderSidebar(makeState([unread], { defaultThreadId: "default" }));
+    const row = screen.getByTestId("default-thread-row");
+    expect(within(row).getByRole("img", { name: "Finished while you were away" })).toBeVisible();
+    expect(within(row).getByTestId("flat-row-unseen-dot")).toBeVisible();
+    expect(within(row).queryByRole("img", { name: "Running" })).toBeNull();
+    view.rerenderSidebar(makeState([running], { defaultThreadId: "default" }));
+    expect(within(screen.getByTestId("default-thread-row")).queryByTestId("flat-row-unseen-dot")).toBeNull();
   });
   it("keeps the default available when search excludes all other threads", () => {
     renderSidebar([makeThread("default", "My default")], { defaultThreadId: "default", search: "no match" });

@@ -57,7 +57,8 @@ User-facing changes are collected here before release. See the
 
 - A device-local default thread is shared by quick navigation and Android
   voice. Choose it in General settings or a thread's context menu; it appears
-  above Pinned and opens with Ctrl/Command+Shift+H.
+  above Pinned as a compact row with normal activity and unread indicators,
+  and opens with Ctrl/Command+Shift+H.
 
 - Agents can publish interactive [HTML previews](docs/user/html-previews.md)
   from files or inline HTML, with captured local images, immutable revisions,

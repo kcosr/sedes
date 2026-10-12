@@ -384,7 +384,7 @@ For the JSON input contract and server-side execution behavior, see
 
 **Default thread** selects one conversation for this client, connection, and
 signed-in identity. Set or clear it here, or choose **Make default thread** from
-its sidebar menu. It appears in a **Default** section above **Pinned**, without
+its sidebar menu. It appears as a compact row above **Pinned**, with activity and unread indicators but without
 a duplicate row. **Ctrl+Shift+H** on Windows/Linux or **⌘+Shift+H** on macOS opens
 it and focuses the composer. Android voice uses the same default. Changing this
 choice does not start recording or redirect an active interaction.

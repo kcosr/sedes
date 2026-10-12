@@ -390,6 +390,19 @@ function keyboardEventTargetBlocksSidebarNavigation(
   );
 }
 
+/** Keep the compact default row on the same status ladder as other threads. */
+function DefaultThreadIndicator({ thread }: { readonly thread: NormalizedApplicationThreadSummary }) {
+  const backgroundWorkCurrent = useContext(SidebarBackgroundWorkCurrentContext);
+  const kind = flatRowGlyphKind(thread, backgroundWorkCurrent);
+  const label = flatRowGlyphLabel(thread, backgroundWorkCurrent);
+  const visible = kind !== "idle";
+  return <span className="flat-row-glyph" data-glyph={visible ? kind : undefined}
+    role={visible ? "img" : undefined} aria-hidden={visible ? undefined : true}
+    aria-label={visible ? label : undefined} title={visible ? label : undefined}>
+    {visible ? flatRowGlyphIcon(kind) : null}
+  </span>;
+}
+
 export function InventorySidebar({
   state,
   store,
@@ -1763,15 +1776,15 @@ export function InventorySidebar({
         >
           {defaultThreadId && (
             <section className="inventory-shelf default-thread-section" aria-label="Default thread">
-              <h3 className="default-thread-heading">Default</h3>
               {usableDefault ? (
                 <ThreadContextMenu thread={usableDefault} store={store} threadRegistry={threadRegistry} onNavigate={onNavigate}>
-                  <div className={`thread-row compact ${selectedThreadId === usableDefault.id ? "selected" : ""}`}
+                  <div className={`thread-row compact ${selectedThreadId === usableDefault.id ? "selected" : ""} ${usableDefault.attention.unseenCompletion ? "flat-row-unseen" : ""}`}
                     data-thread-id={usableDefault.id} data-testid="default-thread-row">
                     <button className="thread-row-link" aria-current={selectedThreadId === usableDefault.id ? "page" : undefined}
                       onClick={() => { openThreadRoute(usableDefault.id); onNavigate(); }}>
+                      <DefaultThreadIndicator thread={usableDefault} />
                       <House size={16} aria-hidden="true" />
-                      <span className="thread-title">{usableDefault.title.text || "Untitled thread"}</span>
+                      <span className="thread-title flat-row-title">{usableDefault.title.text || "Untitled thread"}</span>
                     </button>
                   </div>
                 </ThreadContextMenu>
