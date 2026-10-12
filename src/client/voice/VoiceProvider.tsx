@@ -1,4 +1,5 @@
-import { DefaultThreadProvider, defaultThreadScope } from "../app/default-thread.js";
+import { DefaultThreadProvider } from "../app/default-thread.js";
+import { ConnectionScopeProvider, connectionScope } from "../app/connection-scope.js";
 import { createContext, useContext, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { App as CapacitorApp } from "@capacitor/app";
 import type { RegisteredClient } from "../../shared/protocol/client-controls.js";
@@ -46,12 +47,13 @@ function BrowserOriginProvider({ profileId, endpoint, identity, children }: {
     void connection.run();
     return () => { connection.close(); if (current.current === connection) current.current = null; };
   }, [profileId, endpoint.baseUrl, identity, attempt]);
+  const scope = identity ? connectionScope(profileId ?? "browser", endpoint.baseUrl ?? window.location.origin, identity) : undefined;
   return <OriginContext.Provider value={origin}>
     {replaced && <div className="client-controls-replaced" role="status">
       Client controls are active in another window.
       <button type="button" onClick={() => setAttempt(value => value + 1)}>Use this window</button>
     </div>}
-    {identity ? <DefaultThreadProvider scope={defaultThreadScope(profileId ?? "browser", endpoint.baseUrl ?? window.location.origin, identity)}>{children}</DefaultThreadProvider> : children}
+    {scope ? <ConnectionScopeProvider scope={scope}><DefaultThreadProvider scope={scope}>{children}</DefaultThreadProvider></ConnectionScopeProvider> : children}
   </OriginContext.Provider>;
 }
 function createStore(profileId: string, serverOrigin: string, identity: string): NativeVoiceStore {
@@ -82,5 +84,6 @@ function AndroidVoiceProvider({ profileId, serverOrigin, identity, children }: {
       store.dispose();
     };
   }, [store, profileId, serverOrigin, identity]);
-  return <VoiceContext.Provider value={store}><OriginContext.Provider value={origin}><DefaultThreadProvider scope={defaultThreadScope(profileId, serverOrigin, identity)} native={store}>{children}</DefaultThreadProvider></OriginContext.Provider></VoiceContext.Provider>;
+  const scope = connectionScope(profileId, serverOrigin, identity);
+  return <VoiceContext.Provider value={store}><OriginContext.Provider value={origin}><ConnectionScopeProvider scope={scope}><DefaultThreadProvider scope={scope} native={store}>{children}</DefaultThreadProvider></ConnectionScopeProvider></OriginContext.Provider></VoiceContext.Provider>;
 }

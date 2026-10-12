@@ -1,15 +1,16 @@
 import type { PageRevision } from "../../../shared/protocol/pages.js";
+import { connectionScopeKey, type ConnectionScope } from "../../app/connection-scope.js";
 
 const STORAGE_KEY = "sedes-page-preview-pending";
 const MAX_ENTRIES = 256;
 
 /** Persist identities only: capability URLs and document content stay in memory. */
 export function pageFrameRecoveryKey(
-  admissionUrl: string,
+  scope: ConnectionScope,
   page: Pick<PageRevision, "threadId" | "pageId" | "revision">,
 ): string {
   return JSON.stringify([
-    new URL(admissionUrl, window.location.href).origin,
+    connectionScopeKey(scope),
     page.threadId,
     page.pageId,
     page.revision,
