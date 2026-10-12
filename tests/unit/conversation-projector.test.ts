@@ -480,6 +480,7 @@ describe("ConversationProjector", () => {
     ] as const) {
       expect(
         projectedTurnForkCapability({
+          itemsById: {},
           turn: {
             id: "turn-eligibility",
             revision: 0,
@@ -495,6 +496,7 @@ describe("ConversationProjector", () => {
     // A backend can withhold one completed turn that has no exact boundary.
     const reason = { text: "This turn has no exact fork boundary." };
     expect(projectedTurnForkCapability({
+      itemsById: {},
       turn: { id: "turn-unforkable", revision: 2, status: "completed", endedBy: "agent_settled", forkUnavailableReason: reason, orderedItemIds: [] },
       branching,
       sourceRunState: "idle",
@@ -580,7 +582,7 @@ describe("ConversationProjector", () => {
     for (const sourceMustBeIdle of [true, false]) {
       for (const sourceRunState of ["failed", "disconnected", "reconciling"] as const) {
         const expected = sourceRunState === "failed";
-        expect(projectedTurnForkCapability({ turn, branching: { ...branching, sourceMustBeIdle }, sourceRunState }).available).toBe(expected);
+        expect(projectedTurnForkCapability({ turn, itemsById: {}, branching: { ...branching, sourceMustBeIdle }, sourceRunState }).available).toBe(expected);
         const projected = projectedThreadForkSourceCapability({ branching: { ...branching, sourceMustBeIdle }, sourceRunState });
         expect(projected.selectedCompletedTurn.available).toBe(expected);
         expect(projected.latestProviderSnapshot.available).toBe(expected);
@@ -589,6 +591,7 @@ describe("ConversationProjector", () => {
 
     expect(
       projectedTurnForkCapability({
+        itemsById: {},
         turn,
         branching,
         sourceRunState: "running",
@@ -605,6 +608,7 @@ describe("ConversationProjector", () => {
     });
     expect(
       projectedTurnForkCapability({
+        itemsById: {},
         turn,
         branching,
         sourceRunState: "reconciling",

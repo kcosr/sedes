@@ -18,7 +18,7 @@ const stamp: OpenCodeToolInvocationStamp = { authority: { ...source.scope, execu
   session: { applicationThreadId: "thread", nativeSessionID: "ses_fixture", bindingFingerprint: "binding" } },
   journalId: "journal", throughSequence: 1, nativeContinuity: "continuity", inputId: "msg_input", authorityEpoch: 1, nativeConnected: true };
 function request(): AgentToolCliRequest {
-  return { protocolVersion: 3, requestId: randomUUID(), sourceCapability: "source-capability-1234567890abcdefghijklmnop",
+  return { protocolVersion: 4, requestId: randomUUID(), sourceCapability: "source-capability-1234567890abcdefghijklmnop",
     operation: { type: "invoke", request: { toolId: "agent.context", schemaVersion: 3, requestId: randomUUID(), input: {} } } };
 }
 async function fixture(presentation: "mcp" | "cli" = "mcp", openCodeTools = true) {
@@ -54,6 +54,16 @@ async function fixture(presentation: "mcp" | "cli" = "mcp", openCodeTools = true
 }
 
 describe("OpenCode private tool relay over production framing", () => {
+  it.each(["mcp", "cli"] as const)("preserves model images through the %s sidecar reply", async presentation => {
+    const f = await fixture(presentation);
+    const image = { type: "image" as const, mimeType: "image/png" as const,
+      data: Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]), Buffer.alloc(70_000)]).toString("base64") };
+    f.invoke.mockImplementationOnce(async () => ({ invocationId: "media-result", state: "completed" as const,
+      output: { ok: true }, modelContent: [image] }));
+    await expect(f.call()).resolves.toEqual({ type: "invoke", value: { invocationId: "media-result", state: "completed",
+      output: { ok: true }, modelContent: [image] } });
+  });
+
   it.each(["mcp", "cli"] as const)("gives an upgrade instruction for a missing private %s route without using generic invoke", async presentation => {
     const f = await fixture(presentation, false);
     await expect(f.call()).rejects.toMatchObject({ toolError: { code: "unavailable", retryable: false,

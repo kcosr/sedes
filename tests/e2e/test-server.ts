@@ -174,6 +174,8 @@ import { LocalExecutionAttachmentStager } from "../../src/server/composer-attach
 import { ComposerAttachmentService } from "../../src/server/composer-attachments/service.js";
 import { OutputArtifactBlobStore } from "../../src/server/output-artifacts/blob-store.js";
 import { OutputArtifactService } from "../../src/server/output-artifacts/service.js";
+import { PageRepository } from "../../src/server/db/repositories/page-repository.js";
+import { PageService } from "../../src/server/pages/page-service.js";
 import { TaskRepository } from "../../src/server/db/repositories/task-repository.js";
 import { WorkspaceFileRootRepository } from "../../src/server/db/repositories/workspace-file-root-repository.js";
 import { WorkspaceFileLinkedWorktreeRepository } from "../../src/server/db/repositories/workspace-file-linked-worktree-repository.js";
@@ -4325,6 +4327,7 @@ async function main(): Promise<void> {
     new WorkspaceFileLinkedWorktreeRepository(database),
     new WorkspaceDiffReviewRepository(database),
   );
+  const pageRepository = new PageRepository(database);
   const bindings = new ConversationBindingRepository(database);
   viewedImageCapture = new ViewedImageCaptureService({ artifacts: outputArtifacts,
     files: workspaceFiles, bindings, inventory: inventoryRepository });
@@ -4495,6 +4498,7 @@ async function main(): Promise<void> {
   let observeAuthoritativeCompletion:
     AuthoritativeCompletionObserver | undefined;
   const actors = new ConversationActorManager({
+    pagePublications: (pageScope, threadId, turnIds) => pageRepository.publications(pageScope, threadId, turnIds),
     onLiveProgress: (eventScope, threadId, input) => notificationLifecycle.progress(eventScope, threadId, input),
     environments: execution,
     attachmentDelivery,
@@ -4515,6 +4519,12 @@ async function main(): Promise<void> {
     captureCompletionVoiceSubscriberWatermark: () => notifications.captureSubscriberWatermark(),
     onAuthoritativeCompletion: (eventScope, applicationThreadId, input) =>
       observeAuthoritativeCompletion?.(eventScope, applicationThreadId, input),
+  });
+  const pages = new PageService({
+    repository: pageRepository,
+    files: workspaceFiles,
+    inventory: inventoryRepository,
+    onPublished: (pageScope, page) => actors.refreshPagePublications(pageScope, page.threadId),
   });
   const environmentVariables = new EnvironmentVariablesService(database, configurationFixture.repository);
   const lifecycle = new ConversationLifecycleService({
@@ -6001,6 +6011,20 @@ async function main(): Promise<void> {
       next(error);
     }
   });
+  // Substitute only the provider's tool invocation. Import, scoped persistence,
+  // current-turn fencing, projection, and the public delivery routes are real.
+  app.post("/__e2e/threads/:threadId/pages", express.json({ limit: "2mb" }), async (request, response, next) => {
+    try {
+      const publication = actors.capturePagePublication(scope, request.params.threadId);
+      response.json(await pages.publish(scope, request.params.threadId, request.body, { invocationId: randomUUID(), ...publication }));
+    } catch (error) { next(error); }
+  });
+  let pageNavigationSinkHits = 0;
+  app.all("/__e2e/page-navigation-sink", (_request, response) => {
+    pageNavigationSinkHits += 1;
+    response.status(204).end();
+  });
+  app.get("/__e2e/page-navigation-sink-count", (_request, response) => response.json({ hits: pageNavigationSinkHits }));
   const e2eAgentToolSourceAuthority = new DatabaseAgentToolSourceAuthority(
     database,
     Buffer.alloc(32, 19),
@@ -6123,6 +6147,7 @@ async function main(): Promise<void> {
       threadGroups,
       composerAttachments,
       outputArtifacts,
+      pages,
       threadArchives,
       threadBulkInventory,
       threadExecutionWorkspaces: directThreadExecutionWorkspaceLifecycle,

@@ -26,6 +26,56 @@ comparison, compatibility policy, and security boundary.
   a complete file in WebView memory.
 - Bounded native copy/save actions for provider-generated PNG, JPEG, GIF, and
   WebP images.
+- Sandboxed inline HTML page revisions with local interaction and zoom.
+
+### Generated page isolation
+
+Generated HTML runs in an opaque-origin `srcdoc` iframe inside a trusted
+sandboxed wrapper. It has no native plugin authority, application storage, or server API bridge. Page
+resources are captured at publication; the document policy blocks network
+resource loading, workers, network frames, forms, and browser permissions.
+These browser policies do not constitute an operating-system network sandbox;
+see [the runtime network limits](../page-previews.md#rendering-and-isolation).
+Saved revisions contain captured authored content; the server adds its current
+trusted wrapper and bootstrap when serving them, so host security updates also
+apply to existing revisions.
+
+Android requires an explicit **Run** action on each page card. Generated code
+shares the application's WebView renderer: origin isolation protects credentials
+and native APIs, but does not guarantee a separate process or CPU budget. A
+script that loops indefinitely can freeze the application, and a JavaScript
+timeout cannot interrupt that loop. Restart the app if necessary. A failed
+render or an attempt interrupted before cleanup requires manual recovery
+instead of loading again automatically. Closing or unloading a responsive
+preview clears that attempt's pending marker. This
+record is local to the browser and scoped to the server origin, thread, page,
+and revision; other devices retain their own decisions.
+
+The Android application WebView rejects all `addJavascriptInterface`
+registrations, including the legacy Capacitor bridge and the built-in raw
+cookie, HTTP, and system-bar hooks. Native plugins use Capacitor's
+origin-scoped, main-frame-only `WebMessageListener`. The system-bar layout
+notification is delivered from the native main-document lifecycle instead.
+Keep Android System WebView current: this bridge is required, and there is no
+legacy all-frame bridge fallback. The frontend checks the native `PageSafety`
+handshake before loading generated HTML and shows an unavailable state when
+that check fails. The trusted main frame obtains a scoped, short-lived URL to
+load the wrapper. Its `frame-src 'none'` policy permits the local
+`srcdoc` document but blocks that document from navigating to HTTP(S) URLs.
+Native subframe external-protocol handling is denied, so generated pages cannot
+launch an external browser or another application. HTTP navigation isolation
+does not depend on Android's navigation callback, which omits HTTP subframes.
+
+Startup checks WebView messaging support before creating the bridge and detects
+any attempted legacy fallback during bridge creation. If either fails, Sedes
+shows a native **Update Android System WebView** screen with a Retry button;
+it does not continue with an unusable plugin bridge.
+
+`PageFrameIsolationTest` checks both iframe isolation and the actual application's
+plugin and credential channels. `PageNavigationIsolationTest` checks that child
+HTTP navigation is rejected before any request reaches its test server.
+Android package verification compiles these on-device instrumentation tests;
+running them on a supported device or emulator is a separate validation step.
 
 The package supports [native voice](voice.md) through an Android foreground
 service. Its reviewed permission set includes network access, microphone,

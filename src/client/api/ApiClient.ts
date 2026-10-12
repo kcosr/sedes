@@ -2,6 +2,12 @@ import { usageReportSchema, usageAvailabilitySchema, usageAvailabilityRequestSch
 import { usageAnalyticsRequestSchema, usageAnalyticsResponseSchema, type UsageAnalyticsRequest, type UsageAnalyticsResponse } from "../../shared/protocol/usage-analytics.js";
 import { turnReplySpeechSchema, type TurnReplySpeech } from "../../shared/protocol/turn-reply-speech.js";
 import {
+  pageRevisionPageSchema,
+  pageRevisionSchema,
+  type PageRevision,
+  type PageRevisionPage,
+} from "../../shared/protocol/pages.js";
+import {
   environmentVariablesPreviewQuerySchema,
   environmentVariablesPreviewResultSchema,
   threadEnvironmentVariablesResultSchema,
@@ -500,6 +506,18 @@ export interface PreparedWorkspaceFileDownload {
   readonly contentDisposition: string;
   readonly contentLength: number;
   readonly revision: string;
+}
+
+export interface PageRenderAdmission {
+  /** A document-only URL: it contains no pairing or client credential. */
+  readonly url: string;
+  readonly expiresAt: string;
+}
+
+export interface PageListOptions {
+  readonly cursor?: string;
+  readonly limit?: number;
+  readonly signal?: AbortSignal;
 }
 
 export class ApiClient {
@@ -2016,6 +2034,40 @@ export class ApiClient {
     );
   }
 
+  listThreadPages(threadId: string, options: PageListOptions = {}): Promise<PageRevisionPage> {
+    return this.#request(
+      `/api/threads/${encodeURIComponent(threadId)}/pages${pageListQuery(options)}`,
+      { signal: options.signal }, pageRevisionPageSchema,
+    );
+  }
+
+  listPageRevisions(threadId: string, pageId: string, options: PageListOptions = {}): Promise<PageRevisionPage> {
+    return this.#request(
+      `/api/threads/${encodeURIComponent(threadId)}/pages/${encodeURIComponent(pageId)}/revisions${pageListQuery(options)}`,
+      { signal: options.signal }, pageRevisionPageSchema,
+    );
+  }
+
+  async getPageRevision(threadId: string, pageId: string, revision: number, signal?: AbortSignal): Promise<PageRevision> {
+    const result = await this.#request(
+      `/api/threads/${encodeURIComponent(threadId)}/pages/${encodeURIComponent(pageId)}/revisions/${revision}`,
+      { signal }, z.strictObject({ page: pageRevisionSchema }),
+    );
+    return result.page;
+  }
+
+  async createPageRenderAdmission(threadId: string, pageId: string, revision: number, signal?: AbortSignal): Promise<PageRenderAdmission> {
+    const result = await this.#mutation(
+      `/api/threads/${encodeURIComponent(threadId)}/pages/${encodeURIComponent(pageId)}/revisions/${revision}/render-token`,
+      z.strictObject({ url: z.string().regex(/^\/page-render\/[A-Za-z0-9_-]+$/), expiresAt: z.iso.datetime() }),
+      { method: "POST", body: "{}", signal },
+    );
+    return {
+      ...result,
+      url: this.#endpoint.baseUrl ? new URL(result.url, this.#endpoint.baseUrl).toString() : result.url,
+    };
+  }
+
   async #loadImageContent(path: string, signal?: AbortSignal): Promise<Blob> {
     const response = await this.#fetch(path, {
       method: "GET",
@@ -2678,4 +2730,11 @@ export class ApiClient {
     }
     return parsed.data;
   }
+}
+
+function pageListQuery(options: PageListOptions): string {
+  const query = new URLSearchParams();
+  if (options.cursor !== undefined) query.set("cursor", options.cursor);
+  if (options.limit !== undefined) query.set("limit", String(options.limit));
+  return query.size ? `?${query}` : "";
 }

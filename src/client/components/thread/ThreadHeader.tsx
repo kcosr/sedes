@@ -46,6 +46,7 @@ import {
   ChevronDown,
   CopyPlus,
   FolderInput,
+  FileCode,
   PanelTop,
   Pin,
   Repeat,
@@ -83,6 +84,7 @@ import { menuDescriptionClass } from "@client/components/ui/floating";
 import { cn } from "@client/lib/utils";
 import { useTouchDensity } from "../../app/use-touch-density.js";
 import { SessionStatsDialog } from "./SessionStatsDialog.js";
+import { ThreadPagesDialog } from "./ThreadPagesDialog.js";
 import { SnoozeDialog } from "./SnoozeDialog.js";
 import {
   ThreadModelPickerDialog,
@@ -221,6 +223,7 @@ export const ThreadHeader = memo(function ThreadHeader({
   const [parkImpact, setParkImpact] = useState<ThreadArchiveImpact>();
   const [parkChoicesOpen, setParkChoicesOpen] = useState(false);
   const [sessionStatsOpen, setSessionStatsOpen] = useState(false);
+  const [pagesOpen, setPagesOpen] = useState(false);
   const [agentToolsOpen, setAgentToolsOpen] = useState(false);
   const [environmentVariablesOpen, setEnvironmentVariablesOpen] = useState(false);
   const [workspaceDeleteTarget, setWorkspaceDeleteTarget] =
@@ -836,6 +839,10 @@ export const ThreadHeader = memo(function ThreadHeader({
                       </DropdownMenuItemDescription>
                     </span>
                   </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => closeActionsBefore(() => setPagesOpen(true))}>
+                    <FileCode aria-hidden="true" />
+                    <span className="min-w-0 flex-1">Published pages…<DropdownMenuItemDescription>HTML previews and saved revisions</DropdownMenuItemDescription></span>
+                  </DropdownMenuItem>
                   <ProviderFeatureThreadDetails
                     store={store}
                     snapshot={snapshot}
@@ -1247,6 +1254,7 @@ export const ThreadHeader = memo(function ThreadHeader({
         usage={snapshot.usage}
         returnFocusRef={actionsTrigger}
       />
+      <ThreadPagesDialog open={active && pagesOpen} onOpenChange={setPagesOpen} store={store} returnFocusRef={actionsTrigger} />
     </>
   );
 });

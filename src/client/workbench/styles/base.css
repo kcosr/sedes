@@ -1,0 +1,59 @@
+/*
+ * Minimal element base. Everything is wrapped in :where() so it has zero
+ * specificity: any kit component class or app rule wins over it.
+ */
+@layer wb.base {
+  :where(*, *::before, *::after) {
+    box-sizing: border-box;
+  }
+  :where(html, body) {
+    margin: 0;
+    height: 100%;
+  }
+  :where(body) {
+    font: var(--wb-fs-14) / var(--wb-lh) var(--wb-font-sans);
+    color: var(--wb-fg);
+    background: var(--wb-page);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  :where(button) {
+    font: inherit;
+    color: inherit;
+    background: none;
+    border: 0;
+    padding: 0;
+    cursor: pointer;
+  }
+  :where(input, select, textarea) {
+    font: inherit;
+    color: inherit;
+  }
+  :where(a) {
+    color: inherit;
+    text-decoration: none;
+  }
+  :where(code) {
+    font-family: var(--wb-font-mono);
+    font-size: 0.88em;
+    background: var(--wb-surface-3);
+    padding: 1px 5px;
+    border-radius: var(--wb-radius-xs);
+  }
+  :where(kbd) {
+    font: var(--wb-fw-medium) var(--wb-fs-11) / 1 var(--wb-font-sans);
+    color: var(--wb-muted);
+    border: 1px solid var(--wb-border-strong);
+    border-bottom-width: 2px;
+    border-radius: var(--wb-radius-sm);
+    padding: 3px 5px;
+    background: var(--wb-surface);
+  }
+  :where(:focus-visible) {
+    outline: 2px solid var(--wb-accent);
+    outline-offset: 1px;
+  }
+  :where(a, button, summary, [role="button"], [role="link"]):focus-visible {
+    border-radius: var(--wb-radius-seg);
+  }
+}

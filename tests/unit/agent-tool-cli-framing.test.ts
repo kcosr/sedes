@@ -5,7 +5,7 @@ import {
   encodeAgentToolCliFrame,
 } from "../../src/internal/agent-tool-cli-protocol/index.js";
 
-describe("agent_tools_cli@3 framing", () => {
+describe("agent_tools_cli@4 framing", () => {
   it("decodes one fragmented length-prefixed JSON frame", () => {
     const frame = encodeAgentToolCliFrame({ operation: "list", revision: 1 });
     const decoder = new AgentToolCliFrameDecoder();

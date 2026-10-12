@@ -5,6 +5,9 @@ import {
   subscribeResolvedAppearance,
 } from "../../app/appearance.js";
 import { ZoomablePreview } from "../preview/ZoomablePreview.js";
+import { MediaFrame } from "../../workbench/components/MediaFrame.js";
+import "../../workbench/styles/media-frame.css";
+import "./page-preview.css";
 import {
   Dialog,
   DialogContent,
@@ -62,22 +65,22 @@ export function MermaidDiagram({
     state.key === key ? state : { key, status: "loading" as const };
   if (current.status === "error") {
     return (
-      <div
+      <MediaFrame
         {...sourcePositionAttributes}
         aria-label="Mermaid diagram could not be rendered"
-        className="mermaid-diagram mermaid-diagram-error"
+        className="mermaid-diagram mermaid-diagram-error conversation-media-frame"
         role="group"
       >
         <p role="alert">Could not render this Mermaid diagram.</p>
         <pre>
           <code className="language-mermaid">{source}</code>
         </pre>
-      </div>
+      </MediaFrame>
     );
   }
 
   return (
-    <div {...sourcePositionAttributes} className="mermaid-diagram">
+    <MediaFrame {...sourcePositionAttributes} className="mermaid-diagram conversation-media-frame">
       {current.status === "rendered" ? (
         <Dialog>
           <DialogTrigger asChild>
@@ -119,7 +122,7 @@ export function MermaidDiagram({
           Rendering diagram…
         </span>
       )}
-    </div>
+    </MediaFrame>
   );
 }
 

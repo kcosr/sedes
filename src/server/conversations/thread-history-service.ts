@@ -344,6 +344,7 @@ export class ThreadHistoryService {
             forksByTurnId: {
               [targetTurnId]: projectedTurnForkCapability({
                 turn: currentTurn,
+                itemsById: state.timeline.itemsById,
                 branching: state.backendCapabilities.branching,
                 sourceRunState: state.timeline.runState,
               }),

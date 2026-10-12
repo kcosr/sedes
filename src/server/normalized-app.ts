@@ -226,6 +226,9 @@ import {
 import type { InventoryService } from "./domain/inventory-service.js";
 import type { TaskService } from "./domain/task-service.js";
 import type { WorkpadService } from "./domain/workpad-service.js";
+import type { PageService } from "./pages/page-service.js";
+import { createPageRenderRoutes } from "./pages/render-routes.js";
+import { pageRevisionSchema, pageRevisionPageSchema } from "../shared/protocol/pages.js";
 import { registerWorkpadRoutes } from "./http/workpad-routes.js";
 import type { WorkspaceFileService } from "./domain/workspace-file-service.js";
 import {
@@ -401,6 +404,8 @@ export interface NormalizedAppDependencies {
   readonly outputArtifacts: OutputArtifactService;
   readonly tasks: TaskService;
   readonly workpads: WorkpadService;
+  /** Production supplies pages; isolated fixtures may omit the feature. */
+  readonly pages?: PageService;
   readonly workspaceFiles: WorkspaceFileService;
   readonly workspaceDiffReviews: WorkspaceDiffReviewService;
   readonly threadArchives: ThreadArchiveService;
@@ -839,6 +844,17 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
   app.use(securityHeaders);
   app.use(hostOriginGuard(dependencies.config));
   app.use(packagedClientCors(dependencies.config));
+  const pageRoutes = dependencies.pages ? createPageRenderRoutes({
+    pages: dependencies.pages,
+    identity: dependencies.identity, config: dependencies.config,
+  }) : undefined;
+  if (pageRoutes) {
+    app.get("/page-render/:token", (request, response, next) =>
+      dependencies.requestOperations
+        ? dependencies.requestOperations.run(() => pageRoutes.renderHandler(request, response, next))
+        : pageRoutes.renderHandler(request, response, next),
+    );
+  }
   if (dependencies.authentication) {
     app.use("/api/auth", dependencies.authentication.router());
     app.use(dependencies.authentication.middleware());
@@ -3142,6 +3158,29 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
     response.status(201).json(taskMutationResultSchema.parse({ task }));
   });
   registerWorkpadRoutes(routes, scope, dependencies.workpads);
+  if (pageRoutes && dependencies.pages) {
+    const pageParameters = z.object({ threadId: z.string().uuid(), pageId: z.string().uuid().optional(), revision: z.coerce.number().int().positive().safe().optional() });
+    const pageQuery = z.strictObject({ limit: z.coerce.number().int().min(1).max(100).optional(), cursor: z.string().max(256).optional() });
+    routes.post("/api/threads/:threadId/pages/:pageId/revisions/:revision/render-token", pageRoutes.mintHandler);
+    routes.get("/api/threads/:threadId/pages", async (request, response) => {
+      const requestScope = await scope(request);
+      const { threadId } = pageParameters.parse(request.params);
+      response.setHeader("Cache-Control", "no-store");
+      response.json(pageRevisionPageSchema.parse(dependencies.pages!.list(requestScope, threadId, pageQuery.parse(request.query))));
+    });
+    routes.get("/api/threads/:threadId/pages/:pageId/revisions", async (request, response) => {
+      const requestScope = await scope(request);
+      const { threadId, pageId } = pageParameters.parse(request.params);
+      response.setHeader("Cache-Control", "no-store");
+      response.json(pageRevisionPageSchema.parse(dependencies.pages!.revisions(requestScope, threadId, pageId!, pageQuery.parse(request.query))));
+    });
+    routes.get("/api/threads/:threadId/pages/:pageId/revisions/:revision", async (request, response) => {
+      const requestScope = await scope(request);
+      const { threadId, pageId, revision } = pageParameters.parse(request.params);
+      response.setHeader("Cache-Control", "no-store");
+      response.json({ page: pageRevisionSchema.parse(dependencies.pages!.get(requestScope, threadId, pageId!, revision!)) });
+    });
+  }
   if (dependencies.hostPairingAdmin) {
     registerHostPairingRoutes(routes, scope, dependencies.hostPairingAdmin);
   }

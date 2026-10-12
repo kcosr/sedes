@@ -3,6 +3,7 @@ import type { TrustedClientTurn } from "../contracts/agent-tool-contracts.js";
 import { CanonicalAgentToolRequestError } from "./canonical-agent-tool-request-error.js";
 export { CanonicalAgentToolRequestError } from "./canonical-agent-tool-request-error.js";
 import type { WorkpadAgentToolService } from "../tools/workpad-agent-tool-service.js";
+import type { PageAgentToolService } from "../tools/page-agent-tool-service.js";
 import { randomUUID } from "node:crypto";
 import { ZodError } from "zod";
 import { deterministicJson } from "../../canonical-json.js";
@@ -26,7 +27,8 @@ import type {
   TrustedAgentToolPolicyIdentity,
   TrustedToolInvocationSubject,
 } from "../contracts/agent-tool-contracts.js";
-import { assertTrustedAgentToolAuthority } from "../contracts/agent-tool-contracts.js";
+import { AgentToolOutput, assertTrustedAgentToolAuthority } from "../contracts/agent-tool-contracts.js";
+import { agentToolModelContentsSchema } from "../../../internal/agent-tool-cli-protocol/model-content.js";
 import type { TrustedEnvironmentAuthorityGrant } from "../environment/environment-authority.js";
 import { createTrustedCapabilityAccess } from "../contracts/agent-tool-contracts.js";
 import {
@@ -104,6 +106,7 @@ function catalogSummary(
       order: artifact.catalog.order,
     }),
     effects: artifact.effects,
+    ...(artifact.outputMediaTypes ? { outputMediaTypes: artifact.outputMediaTypes } : {}),
     ...(cli
       ? {
           cli: Object.freeze({
@@ -133,6 +136,7 @@ function publicDescription(
     description: artifact.description,
     inputSchema: artifact.inputSchema,
     outputSchema: artifact.outputSchema,
+    ...(artifact.outputMediaTypes ? { outputMediaTypes: artifact.outputMediaTypes } : {}),
     effects: artifact.effects,
     execution: Object.freeze({
       form: artifact.execution.form,
@@ -295,6 +299,7 @@ export class CanonicalInlineAgentToolService {
     readonly clientControls?: ClientControlToolService;
     readonly management?: AgentManagementService;
     readonly workpads?: WorkpadAgentToolService;
+    readonly pages?: PageAgentToolService;
     readonly automations?: AutomationAgentToolService;
     readonly threadCreation?: AgentThreadCreationService;
     readonly savedAgents?: SavedAgentCanonicalToolService;
@@ -503,7 +508,17 @@ export class CanonicalInlineAgentToolService {
     );
 
     try {
-      const output = await Promise.race([operation, execution.boundary]);
+      const executed = await Promise.race([operation, execution.boundary]);
+      if (execution.signal.aborted) await execution.boundary;
+      const output = executed instanceof AgentToolOutput ? executed.output : executed;
+      const content = executed instanceof AgentToolOutput
+        ? agentToolModelContentsSchema.safeParse(executed.modelContent)
+        : undefined;
+      if (content && !content.success) throw new Error("agent_tool_model_content_invalid");
+      const modelContent = content?.data;
+      if (modelContent?.some(block => block.type === "image" && !definition.outputMediaTypes?.includes(block.mimeType))) {
+        throw new Error("agent_tool_output_media_type_undeclared");
+      }
       if (
         typeof output === "object" &&
         output !== null &&
@@ -519,11 +534,12 @@ export class CanonicalInlineAgentToolService {
           definition.schemaVersion,
           output,
         ) ||
-        bytes(serializedOutput) > definition.execution.maximumOutputBytes
+        bytes(modelContent ? deterministicJson({ output, modelContent }) : serializedOutput) > definition.execution.maximumOutputBytes ||
+        bytes(deterministicJson({ invocationId, state: "completed", output, ...(modelContent ? { modelContent } : {}) })) > AGENT_TOOL_MAXIMUM_RESPONSE_BYTES
       ) {
         throw new Error("agent_tool_output_invalid");
       }
-      return { invocationId, state: "completed", output: output as Output };
+      return { invocationId, state: "completed", output: output as Output, ...(modelContent ? { modelContent } : {}) };
     } catch (cause) {
       if (cause instanceof CanonicalAgentToolRequestError) throw cause;
       if (cause instanceof ZodError) {

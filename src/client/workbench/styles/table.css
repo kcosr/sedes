@@ -1,0 +1,691 @@
+/*
+ * Tables: dense record lists with a sticky header, optional sticky group
+ * rows, a keyboard cursor and focus ring per row, priority-based column
+ * hiding, and a compact density. DataTable renders this markup; plain
+ * <table class="wb-table"> works too.
+ */
+@layer wb.components {
+  .wb-table {
+    /* Heights the sticky layers and scroll margins rely on. */
+    --wb-table-head-h: 34px;
+    --wb-table-group-h: 0px;
+    --wb-table-ring: var(--wb-accent);
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    font-size: var(--wb-fs-13);
+    font-variant-numeric: tabular-nums;
+  }
+  .wb-table--grouped {
+    --wb-table-group-h: 36px;
+  }
+
+  /* ---------- header */
+  .wb-table thead th {
+    position: sticky;
+    top: 0;
+    z-index: calc(var(--wb-z-sticky) + 1);
+    height: var(--wb-table-head-h);
+    padding: 0 10px;
+    background: var(--wb-pane-bg, var(--wb-surface));
+    border-bottom: 1px solid var(--wb-border);
+    color: var(--wb-muted);
+    font-size: var(--wb-fs-11-5);
+    font-weight: var(--wb-fw-semibold);
+    letter-spacing: 0.05em;
+    text-align: left;
+    text-transform: uppercase;
+    white-space: nowrap;
+    vertical-align: middle;
+  }
+
+  /* ---------- body cells (td, and th scope=row for the primary column) */
+  .wb-table td,
+  .wb-table tbody th[scope="row"] {
+    padding: 7px 10px;
+    border-bottom: 1px solid var(--wb-border);
+    color: var(--wb-fg-2);
+    font-weight: var(--wb-fw-regular);
+    text-align: left;
+    vertical-align: middle;
+  }
+  /* Visually hidden text (a " on jira" suffix in a row link) is anchored
+     in its cell: at its static position, past an ellipsis, it would widen
+     the scroll area. */
+  .wb-table td,
+  .wb-table tbody th[scope="row"] {
+    position: relative;
+  }
+  .wb-table .wb-sr-only {
+    top: 0;
+    left: 0;
+  }
+  .wb-table tbody tr {
+    /* j/k scrollIntoView lands below the sticky header and group row. */
+    scroll-margin-top: calc(
+      var(--wb-table-head-h) + var(--wb-table-group-h) + 4px
+    );
+    scroll-margin-bottom: 8px;
+  }
+  .wb-table tbody:last-child tr:last-child > * {
+    border-bottom: 0;
+  }
+  .wb-table tbody tr:hover > * {
+    background: var(--wb-surface-2);
+  }
+  .wb-table tbody tr.is-selected > *,
+  .wb-table tbody tr.is-active > *,
+  .wb-table tbody tr[aria-selected="true"] > *,
+  .wb-table tbody tr[aria-current]:not([aria-current="false"]) > * {
+    background: var(--wb-accent-weak);
+  }
+  .wb-table tbody tr.is-clickable {
+    cursor: pointer;
+  }
+  .wb-table tbody tr.is-dim > * {
+    opacity: 0.7;
+  }
+  /* Live rows that just arrived (follow mode) */
+  .wb-table tbody tr.is-new > * {
+    animation: wb-row-new 2.4s var(--wb-ease);
+  }
+  @keyframes wb-row-new {
+    from {
+      background: var(--wb-accent-weak);
+    }
+  }
+
+  /* ---------- row cursor and focus ring: an inset accent ring drawn with
+     cell box-shadows (rows can't carry a reliable outline). The outer
+     edges go on the first and last visible cells, also when priorities
+     hide trailing or leading columns. */
+  .wb-table tbody tr:is(.is-cursor, :has(.wb-row-link:focus-visible)) > * {
+    box-shadow:
+      inset var(--wb-ring-l, 0px) 0 0 var(--wb-table-ring),
+      inset calc(-1 * var(--wb-ring-r, 0px)) 0 0 var(--wb-table-ring),
+      inset 0 1.5px 0 var(--wb-table-ring),
+      inset 0 -1.5px 0 var(--wb-table-ring);
+  }
+  .wb-table tbody tr > :first-child {
+    --wb-ring-l: 1.5px;
+  }
+  .wb-table tbody tr > :last-child,
+  .wb-table tbody tr > :has(+ .wb-cell-filler:last-child) {
+    --wb-ring-r: 1.5px;
+  }
+  @container wb-main (max-width: 940px) {
+    .wb-table tbody tr > :not(.wb-cell-p4):not(:not(.wb-cell-p4) ~ *) {
+      --wb-ring-l: 1.5px;
+    }
+    .wb-table
+      tbody
+      tr
+      > :not(.wb-cell-p4, .wb-cell-filler):not(
+        :has(~ :not(.wb-cell-p4, .wb-cell-filler))
+      ) {
+      --wb-ring-r: 1.5px;
+    }
+  }
+  @container wb-main (max-width: 700px) {
+    .wb-table
+      tbody
+      tr
+      > :not(.wb-cell-p4, .wb-cell-p3, .wb-cell-optional):not(
+        :not(.wb-cell-p4, .wb-cell-p3, .wb-cell-optional) ~ *
+      ) {
+      --wb-ring-l: 1.5px;
+    }
+    .wb-table
+      tbody
+      tr
+      > :not(.wb-cell-p4, .wb-cell-p3, .wb-cell-optional, .wb-cell-filler):not(
+        :has(
+          ~ :not(.wb-cell-p4, .wb-cell-p3, .wb-cell-optional, .wb-cell-filler)
+        )
+      ) {
+      --wb-ring-r: 1.5px;
+    }
+  }
+  @container wb-main (max-width: 520px) {
+    .wb-table
+      tbody
+      tr
+      > :not(.wb-cell-p4, .wb-cell-p3, .wb-cell-optional, .wb-cell-p2):not(
+        :not(.wb-cell-p4, .wb-cell-p3, .wb-cell-optional, .wb-cell-p2) ~ *
+      ) {
+      --wb-ring-l: 1.5px;
+    }
+    .wb-table
+      tbody
+      tr
+      > :not(
+        .wb-cell-p4,
+        .wb-cell-p3,
+        .wb-cell-optional,
+        .wb-cell-p2,
+        .wb-cell-filler
+      ):not(
+        :has(
+          ~ :not(
+            .wb-cell-p4,
+            .wb-cell-p3,
+            .wb-cell-optional,
+            .wb-cell-p2,
+            .wb-cell-filler
+          )
+        )
+      ) {
+      --wb-ring-r: 1.5px;
+    }
+  }
+
+  /* The row link stays inside its cell (no stretched ::after as in lists);
+     the row ring above is its focus indicator. */
+  .wb-table .wb-row-link {
+    position: static;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--wb-fg);
+    font: inherit;
+    font-weight: var(--wb-fw-strong);
+    text-align: left;
+    text-decoration: none;
+    cursor: pointer;
+  }
+  .wb-table .wb-row-link::after {
+    content: none;
+  }
+  .wb-table .wb-row-link:hover {
+    color: var(--wb-accent-text);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+  .wb-table .wb-row-link:focus-visible {
+    outline: none;
+  }
+  @supports not selector(:has(*)) {
+    .wb-table .wb-row-link:focus-visible {
+      outline: 2px solid var(--wb-accent);
+      outline-offset: 1px;
+    }
+  }
+
+  .wb-table td a:not(.wb-btn, .wb-row-link) {
+    color: var(--wb-fg);
+  }
+  .wb-table td a:not(.wb-btn, .wb-row-link):hover {
+    color: var(--wb-accent-text);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+
+  /* ---------- cell modifiers */
+  .wb-table .wb-cell-strong,
+  .wb-table tbody .wb-cell-primary {
+    color: var(--wb-fg);
+    font-weight: var(--wb-fw-strong);
+  }
+  .wb-table .wb-cell-num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .wb-table .wb-cell-center {
+    text-align: center;
+  }
+  .wb-table tbody .wb-cell-mono {
+    font-family: var(--wb-font-mono);
+    font-size: var(--wb-fs-12);
+  }
+  .wb-table .wb-cell-muted {
+    color: var(--wb-muted);
+  }
+  .wb-table .wb-cell-nowrap {
+    white-space: nowrap;
+  }
+  /* td-level truncation: the column gets only the width you give it (a
+     percentage), since the cell contributes no content width. */
+  .wb-table .wb-cell-truncate {
+    max-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  /* Content-sized truncation (DataTable truncate): wrap the cell content,
+     <div class="wb-cell-clip"><span>…</span></div>. The one-track grid
+     sizes the column by its content yet lets it shrink to nothing, so these
+     columns give way before one-line columns overflow the table. */
+  .wb-cell-clip {
+    display: grid;
+    grid-template-columns: minmax(0, max-content);
+    /* legible minimum (DataTable minWidth overrides it) */
+    min-width: 10ch;
+  }
+  /* In tables, clipped and wrapping content (.wb-cell-flow) never claims
+     more than 5000px of max-content, so DataTable's grow sizers (10000px
+     per weight) decide how spare width is shared. */
+  .wb-table .wb-cell-clip,
+  .wb-table .wb-cell-flow {
+    max-width: 5000px;
+  }
+  .wb-cell-clip > * {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  /* capped content ("hug up to N"): short values in full, long ones end
+     in an ellipsis at the cap (DataTable maxWidth sets the cap) */
+  .wb-cell-cap {
+    display: inline-block;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    vertical-align: bottom;
+  }
+  /* Hug (DataTable hug): the full value up to the cap (max-width, set
+     inline) with an ellipsis beyond it; its column hugs (wb-cell-fit). */
+  .wb-cell-hug {
+    display: inline-block;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    vertical-align: bottom;
+  }
+  .wb-cell-hug > * {
+    white-space: nowrap;
+  }
+  /* A tight table (DataTable sets data-wb-tight when the full values
+     would overflow its container): hug content becomes a shrinkable clip
+     down to --wb-hug-min (10ch or the cap, or the column's minWidth), its
+     column stops hugging, and growing sizers step aside, so the shrinkable
+     columns give way in proportion instead of overflowing. */
+  .wb-table[data-wb-tight] .wb-th-grow {
+    display: none;
+  }
+  .wb-table[data-wb-tight] .wb-cell-hugcol {
+    width: auto;
+  }
+  .wb-table[data-wb-tight] .wb-cell-hug {
+    display: grid;
+    grid-template-columns: minmax(0, max-content);
+    min-width: var(--wb-hug-min, 10ch);
+  }
+  .wb-table[data-wb-tight] .wb-cell-hug > * {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  /* ellipsis at the start (hug + truncate "start"; the text is in <bdi>) */
+  .wb-cell-hug--start,
+  .wb-table[data-wb-tight] .wb-cell-hug--start > * {
+    direction: rtl;
+    text-align: left;
+  }
+  /* content plus extras (badges) on one line; the content gives way */
+  .wb-cell-line {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+  }
+  .wb-cell-line > .wb-cell-clip {
+    flex: 0 1 auto;
+  }
+  .wb-cell-extra {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    gap: 6px;
+    font-weight: var(--wb-fw-regular);
+  }
+  /* keeps the end visible (paths); put the text in a <bdi> */
+  .wb-cell-clip--start > * {
+    direction: rtl;
+    text-align: left;
+  }
+  /* hug the content; spare width goes to the other columns */
+  .wb-table .wb-cell-fit {
+    width: 1%;
+  }
+  .wb-table .wb-cell-actions {
+    width: 1%;
+    padding-top: 3px;
+    padding-bottom: 3px;
+    text-align: right;
+    white-space: nowrap;
+  }
+  .wb-table .wb-cell-actions .wb-row-actions {
+    justify-content: flex-end;
+  }
+  .wb-table .wb-cell-spark {
+    width: 1%;
+    padding-top: 3px;
+    padding-bottom: 3px;
+    line-height: 0;
+  }
+  .wb-table tr:hover .wb-row-actions,
+  .wb-table tr:focus-within .wb-row-actions,
+  .wb-table tr.is-cursor .wb-row-actions,
+  .wb-table tr.is-active .wb-row-actions,
+  .wb-table tr.is-selected .wb-row-actions,
+  .wb-table tr[aria-current]:not([aria-current="false"]) .wb-row-actions {
+    opacity: 1;
+  }
+
+  /* Width sizer for growing columns (DataTable grow): no height, no
+     min-content, a max-content of 10000px per smallest weight (set inline). */
+  .wb-th-grow {
+    display: grid;
+    height: 0;
+    overflow: hidden;
+  }
+
+  /* ---------- sort header */
+  .wb-th-sort {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    letter-spacing: inherit;
+    text-transform: inherit;
+    cursor: pointer;
+  }
+  /* The label sets the button's baseline even when the arrow comes first
+     (numeric columns), so sortable and plain headers line up. */
+  .wb-th-sort-label {
+    align-self: baseline;
+  }
+  .wb-th-sort .wb-icon {
+    width: 12px;
+    height: 12px;
+    opacity: 0;
+  }
+  .wb-th-sort:hover {
+    color: var(--wb-fg-2);
+  }
+  .wb-th-sort:hover .wb-icon {
+    opacity: 0.6;
+  }
+  .wb-th-sort:focus-visible .wb-icon {
+    opacity: 0.6;
+  }
+  th[aria-sort="ascending"] .wb-th-sort,
+  th[aria-sort="descending"] .wb-th-sort {
+    color: var(--wb-fg-2);
+  }
+  th[aria-sort="ascending"] .wb-th-sort .wb-icon,
+  th[aria-sort="descending"] .wb-th-sort .wb-icon {
+    opacity: 1;
+  }
+  th[aria-sort="ascending"] .wb-th-sort .wb-icon {
+    transform: rotate(180deg);
+  }
+  .wb-table th.wb-cell-num .wb-th-sort {
+    flex-direction: row-reverse;
+  }
+
+  /* ---------- group rows: <tbody> per group, first row
+     <tr class="wb-table-group"><th scope="rowgroup" colspan=…> */
+  .wb-table tbody th[scope="rowgroup"] {
+    position: sticky;
+    top: var(--wb-table-head-h);
+    z-index: var(--wb-z-sticky);
+    height: var(--wb-table-group-h);
+    padding: 10px 10px 4px;
+    background: var(--wb-pane-bg, var(--wb-surface));
+    border-bottom: 1px solid var(--wb-border);
+    color: var(--wb-fg);
+    font-weight: var(--wb-fw-regular);
+    text-align: left;
+    vertical-align: bottom;
+  }
+  .wb-table tbody tr.wb-table-group:hover > * {
+    background: var(--wb-pane-bg, var(--wb-surface));
+  }
+  .wb-table-group-h {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    min-width: 0;
+  }
+  .wb-table-group-h .wb-group-title {
+    font-size: var(--wb-fs-13);
+  }
+
+  /* ---------- loading and empty rows */
+  .wb-table tr.wb-table-skel > td {
+    padding-top: 11px;
+    padding-bottom: 11px;
+  }
+  .wb-table tr.wb-table-skel:hover > td,
+  .wb-table tr.wb-table-empty:hover > td {
+    background: none;
+  }
+  .wb-table tr.wb-table-empty > td {
+    padding: 0;
+    border-bottom: 0;
+  }
+
+  /* ---------- error over stale rows: a slim alert row above the rows
+     (DataTable error with rows shown); an ErrorState inside becomes a
+     one-line danger banner that keeps its Retry. */
+  .wb-table tr.wb-table-alert > td {
+    padding: 8px 0;
+    border-bottom: 0;
+  }
+  .wb-table tr.wb-table-alert:hover > td {
+    background: none;
+  }
+  .wb-table-alert .wb-empty {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-areas:
+      "icon title actions"
+      "icon text actions";
+    align-items: center;
+    column-gap: 10px;
+    padding: 6px 10px 6px 12px;
+    border: 1px solid var(--wb-danger-border);
+    border-radius: var(--wb-radius-md);
+    background: var(--wb-danger-weak);
+    text-align: left;
+  }
+  .wb-table-alert .wb-empty-icon {
+    grid-area: icon;
+    width: auto;
+    height: auto;
+    background: none;
+  }
+  .wb-table-alert .wb-empty-icon .wb-icon {
+    width: 16px;
+    height: 16px;
+    color: var(--wb-danger-text);
+  }
+  .wb-table-alert .wb-empty-title {
+    grid-area: title;
+    margin: 0;
+    font-size: var(--wb-fs-13);
+    font-weight: var(--wb-fw-semibold);
+  }
+  .wb-table-alert .wb-empty-text {
+    grid-area: text;
+    max-width: none;
+    margin: 0;
+    font-size: var(--wb-fs-12-5);
+  }
+  .wb-table-alert .wb-empty-text:empty {
+    display: none;
+  }
+  .wb-table-alert .wb-empty-actions {
+    grid-area: actions;
+  }
+  /* the rows under it are stale: dimmed until a refetch succeeds */
+  .wb-table.is-stale tr[data-wb-row] > * {
+    opacity: 0.6;
+    transition: opacity 0.2s;
+  }
+  .wb-table.is-stale tr.is-dim[data-wb-row] > * {
+    opacity: 0.42;
+  }
+
+  /* ---------- fill="end": an empty trailing column takes the spare width.
+     It is outside the row: no padding, no highlight, no ring (the ring's
+     right edge stays on the last real column); row lines run through it. */
+  /* important: variants (card, compact) set cell padding with more
+     specific selectors; the filler must stay zero-width when unused */
+  .wb-table .wb-cell-filler {
+    padding: 0 !important;
+  }
+  .wb-table tbody tr > .wb-cell-filler {
+    background: none !important;
+    box-shadow: none !important;
+    animation: none !important;
+    cursor: default;
+  }
+
+  /* ---------- variants */
+  /* bleed: cell padding hangs outside the column so text aligns with the pane */
+  .wb-table--bleed {
+    width: calc(100% + 20px);
+    margin-inline: -10px;
+  }
+  /* compact: dense tables (charts' data tables, dense panels) */
+  .wb-table--compact {
+    --wb-table-head-h: 28px;
+    font-size: var(--wb-fs-12-5);
+  }
+  .wb-table--compact.wb-table--grouped {
+    --wb-table-group-h: 32px;
+  }
+  /* density only: headers keep the uppercase micro-labels */
+  .wb-table--compact thead th {
+    padding: 0 8px;
+    font-size: var(--wb-fs-11);
+  }
+  .wb-table--compact td,
+  .wb-table--compact tbody th[scope="row"] {
+    padding: 5px 8px;
+  }
+
+  /* boxed table (card). overflow: clip (not hidden) keeps the pane as the
+     scroll container, so the header still sticks. */
+  .wb-table-card {
+    --wb-pane-bg: var(--wb-surface);
+    overflow: clip;
+    border: 1px solid var(--wb-border);
+    border-radius: var(--wb-radius-card);
+    background: var(--wb-surface);
+  }
+  .wb-table-card .wb-table {
+    --wb-table-head-h: 38px;
+  }
+  .wb-table-card .wb-table thead th,
+  .wb-table-card .wb-table tbody th[scope="rowgroup"] {
+    padding-inline: 14px;
+  }
+  .wb-table-card .wb-table td,
+  .wb-table-card .wb-table tbody th[scope="row"] {
+    padding: 9px 14px;
+  }
+
+  /* Last resort for tables that can't fit: a focusable horizontal scroll
+     region (it becomes the sticky header's scroll container, so the header
+     no longer sticks to the pane). */
+  .wb-table-wrap {
+    overflow: auto;
+  }
+  .wb-table-wrap:focus-visible {
+    outline: 2px solid var(--wb-accent);
+    outline-offset: -2px;
+  }
+
+  /* ---------- column priorities: lower-priority columns give way as the
+     main pane narrows (drawer open, sidebar, small windows). Priority 1 is
+     never hidden. wb-cell-optional is an alias for p3. */
+  @container wb-main (max-width: 940px) {
+    .wb-table .wb-cell-p4 {
+      display: none;
+    }
+  }
+  @container wb-main (max-width: 700px) {
+    .wb-table .wb-cell-p3,
+    .wb-table .wb-cell-optional {
+      display: none;
+    }
+  }
+  @container wb-main (max-width: 520px) {
+    .wb-table .wb-cell-p2 {
+      display: none;
+    }
+  }
+
+  /* ---------- list/table pager ("N of M · Load more") */
+  .wb-list-pager {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px 12px;
+    padding: 16px 0 4px;
+    color: var(--wb-fg-2);
+    font-size: var(--wb-fs-12-5);
+  }
+  .wb-list-pager-count {
+    font-variant-numeric: tabular-nums;
+  }
+  .wb-list-pager-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--wb-muted);
+  }
+  .wb-list-pager-status .wb-spinner .wb-icon {
+    width: 13px;
+    height: 13px;
+  }
+  .wb-list-pager-error {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 12px;
+    width: 100%;
+    color: var(--wb-danger-text);
+  }
+
+  /* ---------- sparkline (table cells, tiles) */
+  .wb-spark {
+    display: inline-block;
+    overflow: visible;
+    vertical-align: middle;
+  }
+  .wb-spark-bar {
+    fill: var(--wb-deemph);
+  }
+  .wb-spark-bar.is-last {
+    fill: var(--wb-accent);
+  }
+  .wb-spark-bar.is-zero {
+    fill: var(--wb-grid);
+  }
+  .wb-spark-line {
+    fill: none;
+    stroke: var(--wb-accent);
+    stroke-width: 1.5;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+  .wb-spark-area {
+    fill: var(--wb-accent-weak);
+  }
+  .wb-spark-dot {
+    fill: var(--wb-accent);
+  }
+}

@@ -1,0 +1,32 @@
+.thread-pages-layout {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+}
+.thread-pages-list {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.thread-pages-list > button {
+  height: auto;
+  min-height: var(--control-md);
+  white-space: normal;
+  justify-content: space-between;
+  text-align: start;
+}
+.thread-pages-list-revision {
+  color: var(--muted-foreground);
+  font-size: var(--text-meta);
+  white-space: nowrap;
+}
+.thread-pages-selected {
+  min-width: 0;
+}
+@media (min-width: 820px) {
+  .thread-pages-layout {
+    grid-template-columns: minmax(140px, 1fr) minmax(0, 3fr);
+  }
+}

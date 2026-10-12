@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -146,11 +147,13 @@ async function runCodex(input: {
  * Runs one real Codex turn with the thread's `sedes` MCP server configured
  * exactly as Sedes sends it in thread config, against a real Sedes listener.
  */
-async function nativeRun(mode: "progressive" | "individual", prompt: string) {
+async function nativeRun(mode: "progressive" | "individual", prompt: string | ((sourcePath: string) => string), pages = false, visualCode?: string) {
   const root = await mkdtemp(path.join(os.tmpdir(), "sedes-real-codex-mcp-"));
   roots.push(root);
   const workspace = path.join(root, "workspace");
   await mkdir(workspace, { recursive: true });
+  const sourcePath = path.join(workspace, "preview.html");
+  if (visualCode) await writeFile(sourcePath, `<!doctype html><html><body style="margin:0;background:white;color:black"><p style="margin:24px;font:72px monospace">${visualCode}</p></body></html>`);
   const listener = await startLiveAgentToolListener({
     root,
     workspace,
@@ -158,7 +161,9 @@ async function nativeRun(mode: "progressive" | "individual", prompt: string) {
     environmentId,
     targetId: "codex-local",
     presentation: { surface: "native", mode },
-    enabledToolIds: ["agent.context", "thread.status"],
+    enabledToolIds: ["agent.context", "thread.status", ...(pages ? ["page.publish", "page.preview"] : [])],
+    pages,
+    ...(visualCode ? { pageSourceFiles: [sourcePath] } : {}),
   });
   try {
     const reference = listener.issue("mcp");
@@ -169,11 +174,12 @@ async function nativeRun(mode: "progressive" | "individual", prompt: string) {
       JSON.stringify({
         type: "object",
         additionalProperties: false,
-        required: ["threadId", "workspaceId", "backend"],
+        required: ["threadId", "workspaceId", "backend", ...(visualCode ? ["imageText"] : [])],
         properties: {
           threadId: { type: "string" },
           workspaceId: { type: "string" },
           backend: { type: "string" },
+          ...(visualCode ? { imageText: { type: "string" } } : {}),
         },
       }),
     );
@@ -189,7 +195,7 @@ async function nativeRun(mode: "progressive" | "individual", prompt: string) {
     };
     const execution = await runCodex({
       cwd: workspace,
-      stdin: prompt,
+      stdin: typeof prompt === "function" ? prompt(sourcePath) : prompt,
       arguments_: [
         "exec",
         "--ephemeral",
@@ -233,6 +239,27 @@ async function nativeRun(mode: "progressive" | "individual", prompt: string) {
 
 describe("real Codex Native Sedes MCP tools", () => {
   const run = process.env[liveGate] === "1" ? it : it.skip;
+
+  run("publishes HTML and reads screenshot-only text through native MCP", async () => {
+    const visualCode = randomBytes(4).toString("hex").toUpperCase();
+    const result = await nativeRun("individual", sourcePath => [
+      'Use only Sedes MCP tools and no shell commands.',
+      `Call sedes_page_publish once with ${JSON.stringify({ title: "Live preview", path: sourcePath, viewport: { width: 600, height: 240 } })}.`,
+      `Call sedes_page_preview once with ${JSON.stringify({ path: sourcePath, viewport: { width: 600, height: 240 } })}. Read the eight-character code visible in the returned screenshot. Do not read the source file using any other tool.`,
+      'Finally call sedes_agent_context once and return its threadId, workspaceId, backend, and the screenshot code as imageText in the required JSON proof.',
+    ].join("\n"), true, visualCode);
+    try {
+      const calls = completedItems(result.events, "mcp_tool_call");
+      expect(calls.map(call => call.tool)).toEqual(["sedes_page_publish", "sedes_page_preview", "sedes_agent_context"]);
+      expect(calls.every(call => call.status === "completed")).toBe(true);
+      const preview = calls[1]!.result as { content?: { type?: string }[]; structured_content?: { screenshot?: { mimeType?: string } } };
+      expect(preview.content?.some(block => block.type === "image")).toBe(true);
+      expect(preview.structured_content?.screenshot?.mimeType).toBe("image/png");
+      expect(result.listener.pages!.list(result.listener.scope, result.listener.threadId).items).toHaveLength(1);
+      expect(completedItems(result.events, "command_execution")).toEqual([]);
+      expect(result.proof).toMatchObject({ imageText: visualCode });
+    } finally { await result.listener.close(); }
+  }, 420_000);
 
   run(
     "calls an individual Sedes tool through the thread's MCP server",

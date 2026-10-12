@@ -1,4 +1,6 @@
 import type { WorkpadAgentToolService } from "../../src/server/agent-tools/tools/workpad-agent-tool-service.js";
+import type { PageAgentToolService } from "../../src/server/agent-tools/tools/page-agent-tool-service.js";
+import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import {
   nativeAgentToolName,
@@ -109,6 +111,14 @@ function definition(
 }
 
 describe("AgentToolRegistry", () => {
+  it("parses every committed artifact through the current HTTP contract", () => {
+    for (const { id, schemaVersion } of CANONICAL_AGENT_TOOL_MANIFEST_ENTRIES) {
+      const artifact: unknown = JSON.parse(readFileSync(new URL(`../../src/server/agent-tools/schema/artifacts/${id}.v${schemaVersion}.json`, import.meta.url), "utf8"));
+      const parsed = agentToolContractArtifactSchema.safeParse(artifact);
+      expect(parsed.success, `${id}: ${parsed.success ? "" : parsed.error.message}`).toBe(true);
+      if (parsed.success) expect(parsed.data).toEqual(artifact);
+    }
+  });
   it("publishes one frozen stable group catalog", () => {
     expect(CANONICAL_AGENT_TOOL_GROUPS.map(({ id }) => id)).toEqual([
       "context",
@@ -117,6 +127,7 @@ describe("AgentToolRegistry", () => {
       "agents",
       "tasks",
       "workpads",
+      "pages",
       "automations",
       "research",
     ]);
@@ -133,7 +144,7 @@ describe("AgentToolRegistry", () => {
         ({ id, schemaVersion }) => `${id}@${schemaVersion}`,
       ),
     );
-    expect(CANONICAL_AGENT_TOOL_MANIFEST_ENTRIES).toHaveLength(44);
+    expect(CANONICAL_AGENT_TOOL_MANIFEST_ENTRIES).toHaveLength(49);
   });
 
   it("assembles the complete production catalog only with every domain adapter", () => {
@@ -151,6 +162,7 @@ describe("AgentToolRegistry", () => {
       webSearch,
       threadWorktrees,
       workpads: {} as WorkpadAgentToolService,
+      pages: {} as PageAgentToolService,
     });
 
     expect(definitions.map(({ id }) => id)).toEqual(
@@ -167,6 +179,7 @@ describe("AgentToolRegistry", () => {
           callerEligibility,
           deployment,
           environmentAuthority,
+          outputMediaTypes,
         }) => ({
           id,
           schemaVersion,
@@ -176,9 +189,11 @@ describe("AgentToolRegistry", () => {
           callerEligibility,
           deployment,
           environmentAuthority,
+          ...(outputMediaTypes ? { outputMediaTypes } : {}),
         }),
       ),
     ).toEqual(CANONICAL_AGENT_TOOL_MANIFEST_ENTRIES);
+    expect(definitions.filter(tool => tool.outputMediaTypes).map(tool => tool.id)).toEqual(["page.preview"]);
     expect(() =>
       createCanonicalAgentToolDefinitions({
         application: { readThreadStatus: async () => undefined },
@@ -200,10 +215,11 @@ describe("AgentToolRegistry", () => {
       webSearch,
       threadWorktrees,
       workpads: {} as WorkpadAgentToolService,
+      pages: {} as PageAgentToolService,
     });
     const summaries = canonical.catalogSummaries("cli", "thread_agent");
 
-    expect(summaries).toHaveLength(44);
+    expect(summaries).toHaveLength(49);
     expect(
       Buffer.byteLength(JSON.stringify({ tools: summaries }), "utf8"),
     ).toBeLessThanOrEqual(AGENT_TOOL_MAXIMUM_CATALOG_SUMMARY_BYTES);
@@ -275,6 +291,7 @@ describe("AgentToolRegistry", () => {
       webSearch,
       threadWorktrees,
       workpads: {} as WorkpadAgentToolService,
+      pages: {} as PageAgentToolService,
     });
     const invocable = definitions
       .filter(({ deployment }) => deployment?.eligible === true)
@@ -339,6 +356,7 @@ describe("AgentToolRegistry", () => {
       webSearch,
       threadWorktrees,
       workpads: {} as WorkpadAgentToolService,
+      pages: {} as PageAgentToolService,
     });
     for (const definition of definitions) {
       expect(definition.execution.uncertainExternalOutcome, definition.id).toBe(

@@ -158,6 +158,10 @@ import { CannedPromptService } from "./domain/canned-prompt-service.js";
 import { TaskService } from "./domain/task-service.js";
 import { WorkpadService } from "./domain/workpad-service.js";
 import { WorkpadRepository } from "./db/repositories/workpad-repository.js";
+import { PageRepository } from "./db/repositories/page-repository.js";
+import { PageService } from "./pages/page-service.js";
+import { PageAgentToolService } from "./agent-tools/tools/page-agent-tool-service.js";
+import { PagePreviewBrowser, PagePreviewError } from "./pages/preview-browser.js";
 import { WorkpadAgentToolService } from "./agent-tools/tools/workpad-agent-tool-service.js";
 import { WorkspaceFileService } from "./domain/workspace-file-service.js";
 import { WorkspaceDiffReviewService } from "./domain/workspace-diff-review-service.js";
@@ -1032,7 +1036,9 @@ export async function startProductionApplication(
     let questions: QuestionRequestService | undefined;
     let observeAuthoritativeCompletion:
       AuthoritativeCompletionObserver | undefined;
+    const pageRepository = new PageRepository(database);
     actors = new ConversationActorManager({
+      pagePublications: (eventScope, threadId, turnIds) => pageRepository.publications(eventScope, threadId, turnIds),
       onLiveProgress: (eventScope, threadId, input) => notificationLifecycle.progress(eventScope, threadId, input),
       environments: execution,
       attachmentDelivery,
@@ -1573,6 +1579,14 @@ export async function startProductionApplication(
       activeApplicationSnapshots,
       () => scheduler?.rearm(),
     );
+    const pagePreview = new PagePreviewBrowser();
+    resources.defer("page preview browser", () => pagePreview.close(), {
+      mode: "ownership_critical",
+    });
+    const pages = new PageService({
+      repository: pageRepository, files: workspaceFiles, inventory: inventoryRepository,
+      onPublished: (eventScope, page) => actors!.refreshPagePublications(eventScope, page.threadId),
+    });
     forks.bindTaskPublications(tasks);
     const threadArchives = new ThreadArchiveService({
       inventory: inventoryRepository,
@@ -1795,6 +1809,27 @@ export async function startProductionApplication(
     const canonicalAgentTools = new CanonicalInlineAgentToolService({
       clientControls: clientControlTools,
       workpads: new WorkpadAgentToolService({ workpads, authorityReader: agentToolSources }),
+      pages: new PageAgentToolService({
+        pages,
+        capturePublication: (eventScope, threadId) => actors!.capturePagePublication(eventScope, threadId),
+        preview: async (input) => {
+          try {
+            const { png, imageWidth, imageHeight, ...result } = await pagePreview.render(input);
+            return {
+              ...result,
+              screenshot: {
+                mimeType: "image/png" as const,
+                data: png.toString("base64"),
+                width: imageWidth,
+                height: imageHeight,
+              },
+            };
+          } catch (error) {
+            if (error instanceof PagePreviewError) throw new DomainError("runtime_unavailable", error.message);
+            throw error;
+          }
+        },
+      }),
       application: agentToolApplication,
       management: managementAgentTools,
       automations: automationAgentTools,
@@ -3064,6 +3099,7 @@ export async function startProductionApplication(
       configurationAdmin,
       configurationOperationRecovery,
       workpads,
+      pages,
       tasks,
       workspaceFiles,
       workspaceDiffReviews,
@@ -3200,6 +3236,10 @@ export async function startProductionApplication(
         // generation.
         drain.beginDrain();
         backendStartupAbort.abort();
+        // Stop new previews and abort active renderers before tool shutdown
+        // waits for admitted calls. The resource stack awaits the same close
+        // promise and keeps dependent resources alive through browser cleanup.
+        void pagePreview.close().catch(() => undefined);
         // Stop detached admission at the same boundary as HTTP mutation
         // admission, rather than waiting for the resource stack to reach it.
         void discoveryOperations.close().catch(() => undefined);

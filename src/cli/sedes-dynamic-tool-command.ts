@@ -100,7 +100,7 @@ export function renderDynamicCatalogHelp(
   else {
     for (const { tool, path } of sorted) {
       lines.push(
-        `  ${path.slice(prefix.length).join(" ")}  ${tool.description}`,
+        `  ${path.slice(prefix.length).join(" ")}  ${tool.description}${tool.outputMediaTypes ? ` [media: ${tool.outputMediaTypes.join(", ")}]` : ""}`,
       );
     }
   }
@@ -110,6 +110,7 @@ export function renderDynamicCatalogHelp(
       ? "Run sedes <command> --help for live typed options."
       : `Run sedes ${prefix.join(" ")} <command> --help for live typed options.`,
     "Successful invocations emit the operation's canonical JSON output.",
+    "Media results emit {output, modelContent}; image blocks contain private local PNG paths and byteSize.",
     "",
   );
   return lines.join("\n");
@@ -211,6 +212,7 @@ export function renderDynamicToolHelp(
     tool.description,
     "",
     `Effects: application=${tool.effects.application}, model=${tool.effects.modelUsage}, external=${tool.effects.external}`,
+    ...(tool.outputMediaTypes ? ["", `Output media: ${tool.outputMediaTypes.join(", ")}. Images are saved to private local temporary files; stdout includes path and byteSize alongside canonical output.`] : []),
     "",
     "Options:",
   ];

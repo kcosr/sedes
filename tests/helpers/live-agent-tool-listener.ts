@@ -1,4 +1,5 @@
 import { createServer, type Server } from "node:http";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type { Request } from "express";
 import { ApplicationSnapshotPublicationBoundary } from "../../src/server/application/application-snapshot-service.js";
@@ -26,6 +27,10 @@ import {
 import type { AgentToolPresentation } from "../../src/shared/protocol/conversation.js";
 import type { ConfigurationDocument } from "../../src/shared/protocol/configuration-admin.js";
 import { initializeDatabaseConfigurationFixture } from "../support/database-configuration-fixture.js";
+import { PageRepository } from "../../src/server/db/repositories/page-repository.js";
+import { PageService } from "../../src/server/pages/page-service.js";
+import { PagePreviewBrowser } from "../../src/server/pages/preview-browser.js";
+import { PageAgentToolService } from "../../src/server/agent-tools/tools/page-agent-tool-service.js";
 
 export interface ObservedAgentToolRequest {
   readonly method: string;
@@ -46,6 +51,10 @@ export async function startLiveAgentToolListener(input: {
   readonly targetId: string;
   readonly presentation: AgentToolPresentation;
   readonly enabledToolIds: readonly string[];
+  /** Enable the real page service and preview browser. */
+  readonly pages?: boolean;
+  /** Exact test-owned source files; contents are never included in the prompt. */
+  readonly pageSourceFiles?: readonly string[];
 }) {
   const database = openOverlayDatabaseConnection(
     path.join(input.root, "state", "overlay.sqlite"),
@@ -111,9 +120,23 @@ export async function startLiveAgentToolListener(input: {
     enabledToolIds: [...input.enabledToolIds],
     now: 310,
   });
+  const pageService = input.pages ? new PageService({ repository: new PageRepository(database), inventory,
+    files: { readAbsoluteFile: async (_scope, _threadId, filePath, maximumBytes, signal) => {
+      if (!input.pageSourceFiles?.includes(filePath)) throw new Error("live_fixture_source_not_allowed");
+      const bytes = await readFile(filePath, { signal });
+      if (bytes.length > maximumBytes) throw new Error("live_fixture_source_too_large");
+      return bytes;
+    } } }) : undefined;
+  const preview = input.pages ? new PagePreviewBrowser() : undefined;
+  const pageTools = pageService && preview ? new PageAgentToolService({ pages: pageService,
+    capturePublication: () => ({ anchor: { turnId: "live-page-tool-turn" }, assertCurrent: () => undefined }),
+    preview: async request => { const { png, imageWidth, imageHeight, ...metadata } = await preview.render(request);
+      return { ...metadata, screenshot: { mimeType: "image/png", data: png.toString("base64"), width: imageWidth, height: imageHeight } }; },
+  }) : undefined;
   const scopedTools = new SourceScopedAgentToolService(
     new CanonicalInlineAgentToolService({
       application,
+      ...(pageTools ? { pages: pageTools } : {}),
       invocationId: () => "live-agent-tool-invocation",
     }),
     policies,
@@ -188,6 +211,8 @@ export async function startLiveAgentToolListener(input: {
     threadId: thread.id,
     workspaceId: workspace.id,
     observed,
+    pages: pageService,
+    scope,
     issue: (presentation: "cli" | "mcp") =>
       sources.issue(trustedSource, "management_http", presentation),
     async close() {

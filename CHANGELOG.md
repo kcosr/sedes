@@ -14,7 +14,7 @@ User-facing changes are collected here before release. See the
   ([#73](https://github.com/kcosr/sedes/pull/73))
 
 - Upgrade browser and packaged clients together with the server for client
-  protocol **150**. Rebuild and upgrade execution sidecars and local workers;
+  protocol **151**. Rebuild and upgrade execution sidecars and local workers;
   older compiled runtime contracts are rejected. Notification scripts now use
   payload version **5**: update separately copied hooks with the server and
   review Script/Voice event and reply-phase settings.
@@ -54,6 +54,15 @@ User-facing changes are collected here before release. See the
   `remind`. ([#58](https://github.com/kcosr/sedes/pull/58), [#61](https://github.com/kcosr/sedes/pull/61))
 
 ### Added
+
+- Agents can publish interactive [HTML previews](docs/user/html-previews.md)
+  from files or inline HTML, with captured local images, immutable revisions,
+  optional viewport dimensions, and zoom. A thread's Pages library retains
+  previews beyond the currently loaded chat history.
+
+- An optional [server preview browser](docs/operator/page-previews.md) lets
+  agents inspect screenshots and console output before publishing. Publishing
+  and viewing do not require the browser installation.
 
 - Codex **Partial** replies appear inline, with a separate notification section
   for Script and Voice delivery, initially off. Partial text can also be selected

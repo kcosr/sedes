@@ -1,4 +1,6 @@
 import type { ReactNode } from "react";
+import type { PageRevision, PageRevisionPage } from "../../../shared/protocol/pages.js";
+import type { PageListOptions, PageRenderAdmission } from "../../api/ApiClient.js";
 import type {
   ConversationItem,
   ProviderFeatureCapability,
@@ -14,6 +16,9 @@ export interface ItemRenderContext {
     artifactId: string,
     signal: AbortSignal,
   ) => Promise<Blob>;
+  createPageRenderAdmission?: (pageId: string, revision: number, signal?: AbortSignal) => Promise<PageRenderAdmission>;
+  listPageRevisions?: (pageId: string, options?: PageListOptions) => Promise<PageRevisionPage>;
+  getPageRevision?: (pageId: string, revision: number, signal?: AbortSignal) => Promise<PageRevision>;
   providerFeatureCapabilities?: readonly ProviderFeatureCapability[];
   /** A disclosure already names the image, so the figure omits its caption. */
   omitImageCaption?: boolean;

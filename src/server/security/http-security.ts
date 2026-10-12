@@ -93,6 +93,18 @@ function isApiRequest(request: Request): boolean {
   return request.path === "/api" || request.path.startsWith("/api/");
 }
 
+/** Only this capability-authenticated document route admits cross-origin
+ * iframe navigation. Ordinary APIs retain their existing Origin checks. */
+function isPageRenderNavigation(request: Request): boolean {
+  return (
+    (request.method === "GET" || request.method === "HEAD") &&
+    /^\/page-render\/[A-Za-z0-9_-]{43}$/u.test(request.path) &&
+    (request.header("Sec-Fetch-Mode") === undefined ||
+      (request.header("Sec-Fetch-Mode") === "navigate" &&
+        request.header("Sec-Fetch-Dest") === "iframe"))
+  );
+}
+
 function packagedClientApiOrigin(
   request: Request,
   config: AppConfig,
@@ -297,7 +309,7 @@ export function securityHeaders(
   // evaluation.
   response.setHeader(
     "Content-Security-Policy",
-    "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; style-src-attr 'unsafe-inline'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+    "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; style-src-attr 'unsafe-inline'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self' data:; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
   );
   response.setHeader("Referrer-Policy", "no-referrer");
   response.setHeader("X-Content-Type-Options", "nosniff");
@@ -311,7 +323,10 @@ export function securityHeaders(
 
 export function hostOriginGuard(config: AppConfig) {
   return (request: Request, response: Response, next: NextFunction): void => {
-    const packagedClientOrigin = packagedClientApiOrigin(request, config);
+    const pageRenderNavigation = isPageRenderNavigation(request);
+    const packagedClientOrigin = pageRenderNavigation
+      ? config.packagedClientOrigins.find((origin) => origin === request.headers.origin)
+      : packagedClientApiOrigin(request, config);
     const authority = validateHostOriginAuthority({
       config,
       host: request.headers.host,
@@ -333,6 +348,7 @@ export function hostOriginGuard(config: AppConfig) {
     if (
       request.header("Sec-Fetch-Site") === "cross-site" &&
       !crossSiteTopLevelNavigation &&
+      !pageRenderNavigation &&
       !packagedClientOrigin
     ) {
       response.status(403).json({

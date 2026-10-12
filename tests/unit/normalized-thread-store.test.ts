@@ -261,6 +261,28 @@ function queuedInput(
 }
 
 describe("NormalizedThreadStore", () => {
+  it("validates page ordering and keeps fork authority independent of presentation revisions", () => {
+    const initial = snapshot();
+    const page: ConversationItem = { id: "page-one", turnId: "turn-1", kind: "page", revision: 0, status: "completed", page: {
+      pageId: "22222222-2222-4222-8222-222222222222", threadId: "thread-1", revision: 1, title: "Preview", viewport: {},
+      createdAt: "2026-10-11T00:00:00.000Z", sha256: "a".repeat(64), byteSize: 123,
+    } };
+    const turn = { ...initial.turnsById["turn-1"]!, revision: 1, orderedItemIds: [page.id] };
+    const fork = { ...initial.forksByTurnId["turn-1"]!, expectedTurnRevision: 0 };
+    const store = new NormalizedThreadStore();
+    store.apply(envelope(0, { type: "snapshot", generation: "pages", snapshot: initial }));
+    expect(store.apply(envelope(1, { type: "item_upsert", generation: "pages", item: page }))).toEqual({ kind: "applied" });
+    expect(store.apply(envelope(2, { type: "turn_upsert", generation: "pages", turn, fork }))).toEqual({ kind: "applied" });
+    expect(store.apply(envelope(3, { type: "fork_source_state_changed", generation: "pages", forkSource: initial.forkSource }))).toEqual({ kind: "applied" });
+    expect(store.state.snapshot?.forksByTurnId["turn-1"]?.expectedTurnRevision).toBe(0);
+    expect(store.apply(envelope(4, { type: "turn_upsert", generation: "pages", turn: { ...turn, revision: 2 },
+      fork: { ...fork, expectedTurnRevision: 2 } }))).toEqual({ kind: "resnapshot_required", reason: "turn_fork_revision_invalid" });
+    const outOfOrder = new NormalizedThreadStore();
+    outOfOrder.apply(envelope(0, { type: "snapshot", generation: "pages", snapshot: initial }));
+    expect(outOfOrder.apply(envelope(1, { type: "turn_upsert", generation: "pages", turn, fork })))
+      .toEqual({ kind: "resnapshot_required", reason: "turn_item_reference_invalid" });
+  });
+
   it("applies accounting invalidations without rebuilding transcript state and rejects stale generations", () => {
     const store=new NormalizedThreadStore();
     store.apply(envelope(0,{type:"snapshot",generation:"one",snapshot:snapshot()}));

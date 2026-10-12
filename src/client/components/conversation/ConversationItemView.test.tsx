@@ -176,6 +176,7 @@ describe("normalized conversation renderers", () => {
         "image",
         "mcp",
         "notice",
+        "page",
         "plan",
         "reasoning",
         "review_marker",

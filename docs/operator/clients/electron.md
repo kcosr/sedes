@@ -15,6 +15,31 @@ application inventory then arrives through its SSE snapshot and replay stream.
 See [Packaged clients](index.md) for the shared architecture, connection
 comparison, compatibility policy, and security boundary.
 
+Generated HTML page revisions run in opaque-origin sandboxed `srcdoc` iframes
+inside trusted wrappers. They
+receive an expiring URL for one saved revision, never the paired credential,
+and cannot call Electron plugins or access application storage. The document
+policy blocks network resources, workers, forms, network frames, and browser
+permissions. The wrapper's `frame-src 'none'` blocks its child from navigating
+to any network document. Only the bundled main renderer may initiate a wrapper
+frame; only that wrapper may initialize the local `srcdoc` child. Frame
+redirects and page-initiated document navigation are also denied by the
+Electron main process. The existing sandbox, context isolation, bundled
+application origin, and default-deny permissions remain required.
+These browser policies do not constitute an operating-system network sandbox;
+see [the runtime network limits](../page-previews.md#rendering-and-isolation).
+
+Saved revisions contain authored content rather than a frozen copy of the
+trusted wrapper; the server applies current host security code when serving
+them. Web and Electron clients load page cards automatically unless that local
+browser recorded a failed render or an attempt interrupted before cleanup for
+the same server origin, thread, page, and revision. Such a card requires a
+manual **Run** action. Closing or unloading a responsive preview clears that
+attempt's pending marker.
+Origin and native API isolation do not promise a separate renderer process or
+CPU budget. A script that does not yield can freeze its renderer, and a
+JavaScript timeout cannot interrupt it.
+
 ## Distribution profiles
 
 | Profile | Contents | Connections |

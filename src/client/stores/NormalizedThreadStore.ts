@@ -1,6 +1,7 @@
 import {
   MAXIMUM_NORMALIZED_TIMELINE_ITEMS,
   MAXIMUM_NORMALIZED_TIMELINE_TURNS,
+  conversationTurnSourceRevision,
   threadEventEnvelopeSchema,
   threadCheckpointSchema,
   type ConversationItem,
@@ -312,7 +313,9 @@ export class NormalizedThreadStore {
     if (envelope.event.type === "snapshot") {
       const invalid = validateSnapshotDerivedState(envelope.event.snapshot);
       if (invalid) return this.#invalidate(invalid);
-      if (envelope.event.generation !== this.#state.generation) {
+      const sameGeneration = envelope.event.generation === this.#state.generation;
+      const sameCapabilityRevision = envelope.event.snapshot.capabilities.revision === this.#state.snapshot?.capabilities.revision;
+      if (!sameGeneration) {
         this.#clearReceiptFences();
       }
       this.#confirmReceiptProjection(envelope.event.snapshot, true);
@@ -321,16 +324,17 @@ export class NormalizedThreadStore {
       this.#replayCursor = envelope.eventId;
       this.#recovery = this.#checkpointHandshake ? "catching_up" : "current";
       this.#snapshotBytes = serializedUtf8Bytes(envelope.event.snapshot);
-      this.#capabilityThreadRevision =
-        envelope.event.snapshot.thread.threadRevision;
-      this.#capabilityRunState = envelope.event.snapshot.capabilities.runState;
+      if (!sameGeneration || !sameCapabilityRevision) {
+        this.#capabilityThreadRevision = envelope.event.snapshot.thread.threadRevision;
+        this.#capabilityRunState = envelope.event.snapshot.capabilities.runState;
+      }
       this.#replaceState({
         authoritative:
           !this.#checkpointHandshake &&
           this.#authorityReady(envelope.event.snapshot),
         generation: envelope.event.generation,
         snapshot: envelope.event.snapshot,
-        notices: [],
+        notices: sameGeneration ? this.#state.notices : [],
       });
       return { kind: "applied" };
     }
@@ -490,6 +494,7 @@ export class NormalizedThreadStore {
         if (error) return this.#invalidate(error);
         const pageForks = forkCapabilitiesForTurns(
           event.page.turnsById,
+          event.page.itemsById,
           snapshot.forkSource,
         );
         const merged: NormalizedThreadSnapshot = {
@@ -526,6 +531,7 @@ export class NormalizedThreadStore {
         // authoritative here.
         const forksByTurnId = forkCapabilitiesForTurns(
           snapshot.turnsById,
+          snapshot.itemsById,
           event.forkSource,
         );
         return this.#setSnapshot({
@@ -744,6 +750,7 @@ export class NormalizedThreadStore {
             : { recovery: undefined }),
           forksByTurnId: forkCapabilitiesForTurns(
             snapshot.turnsById,
+            snapshot.itemsById,
             event.state.forkSource,
           ),
         });
@@ -781,6 +788,9 @@ export class NormalizedThreadStore {
       if (!item || item.turnId !== turn.id) {
         return this.#invalidate("turn_item_reference_invalid");
       }
+    }
+    if (fork.expectedTurnRevision !== conversationTurnSourceRevision(turn, snapshot.itemsById)) {
+      return this.#invalidate("turn_fork_revision_invalid");
     }
     const next = {
       ...snapshot,
@@ -1249,7 +1259,7 @@ function validateHistoryPrepend(
     orderedTurnIds: [...page.orderedTurnIds, ...snapshot.orderedTurnIds],
     turnsById: { ...page.turnsById, ...snapshot.turnsById },
     forksByTurnId: {
-      ...forkCapabilitiesForTurns(page.turnsById, snapshot.forkSource),
+      ...forkCapabilitiesForTurns(page.turnsById, page.itemsById, snapshot.forkSource),
       ...snapshot.forksByTurnId,
     },
     itemsById: { ...page.itemsById, ...snapshot.itemsById },
@@ -1281,6 +1291,7 @@ function validateHistoryPrepend(
 
 function forkCapabilitiesForTurns(
   turnsById: NormalizedThreadSnapshot["turnsById"],
+  itemsById: NormalizedThreadSnapshot["itemsById"],
   forkSource: NormalizedThreadSnapshot["forkSource"],
 ): NormalizedThreadSnapshot["forksByTurnId"] {
   return Object.fromEntries(
@@ -1297,7 +1308,7 @@ function forkCapabilitiesForTurns(
         turnId,
         {
           sourceTurnId: turnId,
-          expectedTurnRevision: turn.revision,
+          expectedTurnRevision: conversationTurnSourceRevision(turn, itemsById),
           available: unavailableReason === undefined,
           ...(unavailableReason ? { unavailableReason } : {}),
         },

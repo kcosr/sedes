@@ -324,6 +324,18 @@ export function Transcript({
       store.loadOutputArtifactContent(artifactId, signal),
     [store],
   );
+  const createPageRenderAdmission = useCallback(
+    (pageId: string, revision: number, signal?: AbortSignal) => store.createPageRenderAdmission(pageId, revision, signal),
+    [store],
+  );
+  const listPageRevisions = useCallback(
+    (pageId: string, options?: import("../../api/ApiClient.js").PageListOptions) => store.listPageRevisions(pageId, options),
+    [store],
+  );
+  const getPageRevision = useCallback(
+    (pageId: string, revision: number, signal?: AbortSignal) => store.getPageRevision(pageId, revision, signal),
+    [store],
+  );
   const itemRenderContext = useMemo(
     () =>
       assistantLabel && providerFeatureCapabilities
@@ -331,6 +343,9 @@ export function Transcript({
             assistantLabel,
             loadAttachmentContent,
             loadOutputArtifactContent,
+            createPageRenderAdmission,
+            listPageRevisions,
+            getPageRevision,
             providerFeatureCapabilities,
           }
         : undefined,
@@ -338,6 +353,9 @@ export function Transcript({
       assistantLabel,
       loadAttachmentContent,
       loadOutputArtifactContent,
+      createPageRenderAdmission,
+      listPageRevisions,
+      getPageRevision,
       providerFeatureCapabilities,
     ],
   );

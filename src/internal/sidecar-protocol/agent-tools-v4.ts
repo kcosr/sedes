@@ -39,7 +39,7 @@ const boundedInputSchema = z.custom(
 
 export const agentToolsCatalogOperation = defineSidecarOperation({
   capabilityId: "agent_tools_cli",
-  majorVersion: 3,
+  majorVersion: 4,
   operation: "catalog.list",
   lane: "operation",
   maximumDeadlineMilliseconds: 30_000,
@@ -58,7 +58,7 @@ export const agentToolsCatalogOperation = defineSidecarOperation({
 
 export const agentToolsDescribeOperation = defineSidecarOperation({
   capabilityId: "agent_tools_cli",
-  majorVersion: 3,
+  majorVersion: 4,
   operation: "catalog.describe",
   lane: "operation",
   maximumDeadlineMilliseconds: 30_000,
@@ -77,7 +77,7 @@ export const agentToolsDescribeOperation = defineSidecarOperation({
 
 export const agentToolsInvokeOperation = defineSidecarOperation({
   capabilityId: "agent_tools_cli",
-  majorVersion: 3,
+  majorVersion: 4,
   operation: "tool.invoke",
   lane: "operation",
   maximumDeadlineMilliseconds: "caller_abort",
@@ -97,7 +97,7 @@ export const agentToolsInvokeOperation = defineSidecarOperation({
   ]),
 });
 
-export const agentToolsV3Operations = Object.freeze([
+export const agentToolsV4Operations = Object.freeze([
   agentToolsCatalogOperation,
   agentToolsDescribeOperation,
   agentToolsInvokeOperation,

@@ -18,6 +18,9 @@ import type {
   ViewedImageItem,
 } from "../../../../shared/index.js";
 import { ZoomablePreview } from "../../preview/ZoomablePreview.js";
+import { MediaFrame } from "../../../workbench/components/MediaFrame.js";
+import "../../../workbench/styles/media-frame.css";
+import "../page-preview.css";
 import { canSafelyPreviewRaster } from "../../../attachments/safeRasterPreview.js";
 import {
   presentAndroidOutputImageActions,
@@ -169,7 +172,8 @@ export const imageRenderer: ConversationItemRenderer<ImageItem> = {
       : (image.alt?.text ??
         (image.representation === "artifact" ? image.fileName?.text : undefined));
     return (
-      <figure className="image-figure">
+      <figure className="image-figure" aria-label={caption}>
+        <MediaFrame className="conversation-media-frame" title={caption}>
         {image.representation === "artifact" ? (
           <ArtifactImage
             key={image.artifactId}
@@ -182,7 +186,7 @@ export const imageRenderer: ConversationItemRenderer<ImageItem> = {
             Image unavailable · {image.reason.replaceAll("_", " ")}
           </div>
         )}
-        {caption && <figcaption>{caption}</figcaption>}
+        </MediaFrame>
       </figure>
     );
   },

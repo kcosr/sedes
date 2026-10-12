@@ -161,6 +161,19 @@ function raw(client: SedesToolClient = fakeClient(), mode: "progressive" | "indi
 }
 
 describe("sedes mcp server", () => {
+  it("delivers standard PNG blocks through the official MCP client", async () => {
+    const media = { type: "image" as const, mimeType: "image/png" as const,
+      data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j3x8AAAAASUVORK5CYII=" };
+    const output = { threadId, backend: "codex_app_server", lifecycle: "active", activity: "idle", pinned: false };
+    const { mcp } = await connect(fakeClient(catalog(), async () => ({ invocationId: "image-call", state: "completed", output, modelContent: [media] })));
+    await mcp.listTools();
+    const result = await mcp.callTool({ name: "sedes_thread_status", arguments: { threadId } });
+    expect(result.structuredContent).toEqual(output);
+    expect(result.content).toEqual([{ type: "text", text: expect.any(String) }, media]);
+    expect(JSON.stringify(result.structuredContent)).not.toContain(media.data);
+    await mcp.close();
+  });
+
   it("negotiates the current protocol and advertises tools only", async () => {
     const { mcp } = await connect(fakeClient());
     expect(mcp.getServerVersion()).toEqual({

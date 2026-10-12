@@ -18,6 +18,7 @@ If Sedes is not running yet, begin with [Getting started](getting-started.md).
 | Open local or Sidecar SSH shells and understand panel, control, and history behavior | [Terminal panes](terminals.md) |
 | Track work or schedule a recurring agent run | [Tasks and automations](tasks-and-automations.md) |
 | Share working notes with agents and inspect attributed revisions | [Workpads](workpads.md) |
+| View agent-created mock-ups, interactive examples, and saved revisions | [HTML previews](html-previews.md) |
 | Review tokens and estimated spend over time across threads | [Usage and spend](usage.md) |
 | Understand backend controls, blocking interactions, and per-thread Agent tools | [Provider features](provider-features.md) |
 | Move around Settings; configure environments, backends, projects, Agents, appearance, prompts, mobile behavior, terminals, servers, and Tool clients | [Settings](settings.md) |

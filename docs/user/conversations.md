@@ -559,6 +559,12 @@ can hold up to 50 stashes.
 
 ## Read agent activity
 
+Agents with the Pages tools enabled can publish interactive HTML previews in
+chat. Each changed publication adds a new saved revision, with navigation and
+zoom controls. Open **Pages** in the thread header to find all its published
+documents. See [HTML previews](html-previews.md) for editing, sizing, images,
+and the optional screenshot tool.
+
 Consecutive reasoning and tool work is grouped into an **Activity** row so
 commands, file operations, searches, and tool calls do not overwhelm the
 transcript.

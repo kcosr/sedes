@@ -8,4 +8,6 @@ process.exitCode = args[0] === "auth"
   ? await (await import("./auth-cli.js")).runAuthCli(args.slice(1))
   : args[0] === "config"
     ? await (await import("./config-cli.js")).runConfigCli(args.slice(1))
-    : await runSedesCli(args, { signal: controller.signal });
+    : args[0] === "page-preview-browser"
+      ? await (await import("./page-preview-browser-cli.js")).runPagePreviewBrowserCli(args.slice(1))
+      : await runSedesCli(args, { signal: controller.signal });

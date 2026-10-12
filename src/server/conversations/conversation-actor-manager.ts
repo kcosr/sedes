@@ -25,6 +25,9 @@ import type { BoundedText } from "../../shared/protocol/payload.js";
 import type { BackendCapabilityDocument } from "../../shared/protocol/backend.js";
 import type { ConversationItem, ThreadRunState } from "../../shared/protocol/conversation.js";
 import { recordVoiceDiagnostic } from "../diagnostics/voice-diagnostics.js";
+import type { PagePublicationAnchor } from "../../shared/protocol/pages.js";
+import type { PagePublication } from "./page-publication-projection.js";
+import { DomainError } from "../domain/errors.js";
 
 export interface AcquireConversationActorInput {
   readonly scope: ExecutionScope;
@@ -292,6 +295,7 @@ export class ConversationActorManager {
   readonly #environments: ExecutionEnvironmentProvider;
   readonly #attachmentDelivery: ComposerAttachmentDeliveryService;
   readonly #deliveryInputSnapshots?: DeliveryInputSnapshotRepository;
+  readonly #pagePublications?: (scope: ExecutionScope, threadId: string, turnIds: readonly string[]) => readonly PagePublication[];
   readonly #retentionMilliseconds: number;
   readonly #runtimeBudget: number;
   readonly #onAuthoritativeCompletion?: AuthoritativeCompletionObserver;
@@ -309,6 +313,7 @@ export class ConversationActorManager {
     readonly environments: ExecutionEnvironmentProvider;
     readonly attachmentDelivery: ComposerAttachmentDeliveryService;
     readonly deliveryInputSnapshots?: DeliveryInputSnapshotRepository;
+    readonly pagePublications?: (scope: ExecutionScope, threadId: string, turnIds: readonly string[]) => readonly PagePublication[];
     readonly retentionMilliseconds: number;
     readonly runtimeBudget: number;
     readonly onAuthoritativeCompletion?: AuthoritativeCompletionObserver;
@@ -321,6 +326,7 @@ export class ConversationActorManager {
     this.#environments = input.environments;
     this.#attachmentDelivery = input.attachmentDelivery;
     this.#deliveryInputSnapshots = input.deliveryInputSnapshots;
+    this.#pagePublications = input.pagePublications;
     this.#onAuthoritativeCompletion = input.onAuthoritativeCompletion;
     this.#captureCompletionVoiceSubscriberWatermark = input.captureCompletionVoiceSubscriberWatermark;
     this.#onAuthoritativeSubmission = input.onAuthoritativeSubmission;
@@ -344,6 +350,44 @@ export class ConversationActorManager {
     if (this.#closing) return () => {};
     this.#inputActivityListeners.add(listener);
     return () => { this.#inputActivityListeners.delete(listener); };
+  }
+
+  /** Exact current-turn lease, captured before file IO and rechecked at publication commit. */
+  capturePagePublication(
+    scope: Pick<ExecutionScope, "tenantId" | "principalId">,
+    threadId: string,
+  ): { readonly anchor: PagePublicationAnchor; readonly assertCurrent: () => void } {
+    const key = scopedActorKey(scope, threadId);
+    const entry = this.#entries.get(key);
+    const actor = entry?.actor;
+    const control = entry?.control;
+    const unavailable = () => new DomainError("runtime_unavailable", "Publishing a page requires the originating active conversation turn.");
+    const capture = () => {
+      if (!entry || this.#entries.get(key) !== entry || this.#closing || this.#maintenance.has(key) ||
+          entry.actor !== actor || entry.control !== control ||
+          entry.access !== "execution" || entry.eviction || entry.poisoned || entry.controlEnded || entry.creationAbort.signal.aborted) {
+        throw unavailable();
+      }
+      const anchor = entry.actor?.capturePagePublicationAnchor();
+      if (!anchor) throw unavailable();
+      return anchor;
+    };
+    const anchor = capture();
+    return Object.freeze({ anchor: Object.freeze(anchor), assertCurrent: () => {
+      const current = capture();
+      if (current.turnId !== anchor.turnId) throw unavailable();
+    } });
+  }
+
+  async refreshPagePublications(
+    scope: Pick<ExecutionScope, "tenantId" | "principalId">,
+    threadId: string,
+  ): Promise<void> {
+    const key = scopedActorKey(scope, threadId);
+    const entry = this.#entries.get(key);
+    // A committed document is durable even if the viewer/runtime departed.
+    if (!entry?.actor || entry.eviction || entry.poisoned || this.#closing || this.#maintenance.has(key)) return;
+    await entry.actor.refreshPagePublications();
   }
 
   /** Observe the exclusive owner even when no browser/coordinator lease exists. Never attaches. */
@@ -1326,6 +1370,8 @@ export class ConversationActorManager {
         projector: new ConversationProjector({
           backendInstanceId: input.binding.backendInstanceId,
           bindingIdentity: input.binding.applicationThreadId,
+          ...(this.#pagePublications ? { resolvePagePublications: (turnIds: readonly string[]) =>
+            this.#pagePublications!(input.scope, input.binding.applicationThreadId, turnIds) } : {}),
           ...(this.#deliveryInputSnapshots ? {
             resolveDeliveryInputSnapshot: (operationId: string) => this.#deliveryInputSnapshots!.find(
               input.scope, input.binding.applicationThreadId, operationId,
@@ -1514,6 +1560,8 @@ export class ConversationActorManager {
         projector: new ConversationProjector({
           backendInstanceId: input.binding.backendInstanceId,
           bindingIdentity: input.binding.applicationThreadId,
+          ...(this.#pagePublications ? { resolvePagePublications: (turnIds: readonly string[]) =>
+            this.#pagePublications!(input.scope, input.binding.applicationThreadId, turnIds) } : {}),
           ...(this.#deliveryInputSnapshots
             ? {
                 resolveDeliveryInputSnapshot: (operationId: string) =>

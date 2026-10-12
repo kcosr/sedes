@@ -126,6 +126,7 @@ const agentToolContractArtifactBaseSchema = z.strictObject({
   description: z.string().min(1).max(2_000),
   inputSchema: canonicalRootSchema,
   outputSchema: canonicalRootSchema,
+  outputMediaTypes: z.tuple([z.literal("image/png")]).readonly().optional(),
   requiredCapabilities: z.array(toolIdSchema).max(64),
   callerEligibility: z
     .array(z.enum(["thread_agent", "principal_client"]))
@@ -171,11 +172,13 @@ const agentToolContractArtifactBaseSchema = z.strictObject({
     groupId: z.enum([
       "client",
       "context",
-      "files",
       "threads",
       "agents",
       "tasks",
+      "workpads",
+      "pages",
       "automations",
+      "research",
     ]),
     label: z.string().min(1).max(120),
     order: z.number().int().nonnegative().max(10_000),

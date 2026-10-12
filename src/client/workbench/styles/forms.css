@@ -1,0 +1,494 @@
+/* Fields, inputs, select, textarea, checkbox, switch, filter input, combobox. */
+@layer wb.components {
+  .wb-field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+  }
+  .wb-field + .wb-field {
+    margin-top: 14px;
+  }
+  .wb-field-label {
+    font-size: var(--wb-fs-12-5);
+    font-weight: var(--wb-fw-medium);
+    color: var(--wb-fg-2);
+  }
+  .wb-field-optional {
+    margin-left: 1px; /* plus the space before it */
+    font-weight: var(--wb-fw-regular);
+    color: var(--wb-muted);
+  }
+  .wb-field-hint {
+    font-size: var(--wb-fs-12);
+    line-height: 1.4;
+    color: var(--wb-muted);
+  }
+  .wb-field-error {
+    display: flex;
+    align-items: flex-start;
+    gap: 5px;
+    font-size: var(--wb-fs-12-5);
+    color: var(--wb-danger-text);
+  }
+  .wb-field-error .wb-icon {
+    width: 13px;
+    height: 13px;
+    margin-top: 2px;
+  }
+  .wb-form-error {
+    margin-top: 8px;
+    font-size: var(--wb-fs-12-5);
+    color: var(--wb-danger-text);
+  }
+
+  /* ---------- form layout */
+  /* A vertical stack of fields and whatever sits between them (checks,
+     banners, form rows, a form error): the gap, the same 14px as two
+     consecutive fields, spaces every child. */
+  .wb-form-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    min-width: 0;
+  }
+  /* <fieldset class="wb-form-stack" disabled> disables a whole form */
+  fieldset.wb-form-stack {
+    margin: 0;
+    padding: 0;
+    border: 0;
+  }
+  /* Fields side by side, sharing the width, wrapping below 200px each.
+     Fields align at the top, so an error under one doesn't move its
+     neighbours; anything else (a submit button) aligns with the bottom,
+     the inputs' line when the fields have no hint. */
+  .wb-form-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 14px 12px;
+    min-width: 0;
+  }
+  .wb-form-row > .wb-field {
+    flex: 1 1 200px;
+  }
+  .wb-form-row > :not(.wb-field) {
+    align-self: flex-end;
+  }
+  /* the gaps replace the fields' own spacing */
+  .wb-form-stack > :is(.wb-field, .wb-form-error),
+  .wb-form-row > .wb-field {
+    margin-top: 0;
+  }
+
+  /* ---------- text inputs */
+  .wb-input {
+    width: 100%;
+    min-width: 0;
+    height: var(--wb-ctl-lg);
+    padding: 0 10px;
+    border: 1px solid var(--wb-border-strong);
+    border-radius: var(--wb-radius-ctl);
+    background: var(--wb-surface);
+    color: var(--wb-fg);
+    font: inherit;
+    font-size: var(--wb-fs-13-5);
+    outline: none;
+  }
+  .wb-input::placeholder {
+    color: var(--wb-muted);
+  }
+  .wb-input:focus,
+  .wb-input:focus-visible {
+    border-color: var(--wb-accent);
+    box-shadow: 0 0 0 3px var(--wb-accent-weak);
+    outline: none;
+  }
+  .wb-input[aria-invalid="true"] {
+    border-color: var(--wb-danger);
+  }
+  .wb-input[aria-invalid="true"]:focus {
+    box-shadow: 0 0 0 3px var(--wb-danger-weak);
+  }
+  .wb-input:disabled {
+    background: var(--wb-surface-2);
+    color: var(--wb-fg-2);
+    cursor: not-allowed;
+  }
+  .wb-input[readonly] {
+    background: var(--wb-page);
+  }
+  .wb-input--sm {
+    height: var(--wb-ctl-md);
+    font-size: var(--wb-fs-13);
+  }
+  .wb-input--mono {
+    font-family: var(--wb-font-mono);
+    font-size: var(--wb-fs-12-5);
+  }
+  .wb-input--num {
+    width: 96px;
+    font-variant-numeric: tabular-nums;
+  }
+  .wb-input--auto {
+    width: auto;
+  }
+  .wb-textarea {
+    display: block;
+    height: auto;
+    min-height: 84px;
+    padding: 8px 10px;
+    line-height: 1.5;
+    resize: vertical;
+  }
+  .wb-textarea.wb-input--mono {
+    line-height: 1.6;
+  }
+
+  /* ---------- select (styled native) */
+  .wb-select {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    min-width: 160px;
+    max-width: 100%;
+  }
+  .wb-field > .wb-select,
+  .wb-select--block {
+    display: flex;
+    width: 100%;
+  }
+  .wb-select > select {
+    width: 100%;
+    padding-right: 30px;
+    appearance: none;
+    cursor: pointer;
+  }
+  .wb-select > .wb-icon {
+    position: absolute;
+    right: 9px;
+    width: 14px;
+    height: 14px;
+    color: var(--wb-muted);
+    pointer-events: none;
+  }
+
+  /* ---------- checkbox / radio */
+  .wb-checkbox {
+    flex: none;
+    width: 16px;
+    height: 16px;
+    margin: 0;
+    accent-color: var(--wb-accent);
+    cursor: pointer;
+  }
+  .wb-check {
+    display: inline-flex;
+    align-items: flex-start;
+    gap: 8px;
+    font-size: var(--wb-fs-13-5);
+    color: var(--wb-fg);
+  }
+  .wb-check-text > label {
+    cursor: pointer;
+  }
+  .wb-check > .wb-checkbox {
+    margin-top: 2px;
+  }
+  .wb-check-text {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+  .wb-check-desc {
+    font-size: var(--wb-fs-12);
+    color: var(--wb-muted);
+    line-height: 1.4;
+  }
+  .wb-check:has(> input:disabled) {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+
+  /* ---------- switch */
+  .wb-switch {
+    position: relative;
+    flex: none;
+    width: 34px;
+    height: 20px;
+    margin: 0;
+    border-radius: var(--wb-radius-pill);
+    background: var(--wb-surface-3);
+    appearance: none;
+    cursor: pointer;
+    transition: background var(--wb-dur-fast) var(--wb-ease);
+  }
+  .wb-switch::after {
+    content: "";
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+    transition: transform var(--wb-dur-fast) var(--wb-ease);
+  }
+  .wb-switch:checked {
+    background: var(--wb-accent);
+  }
+  .wb-switch:checked::after {
+    transform: translateX(14px);
+  }
+  /* small: 26×16, for dense rows and table cells */
+  .wb-switch--sm {
+    width: 26px;
+    height: 16px;
+  }
+  .wb-switch--sm::after {
+    width: 12px;
+    height: 12px;
+  }
+  .wb-switch--sm:checked::after {
+    transform: translateX(10px);
+  }
+  .wb-switch:focus-visible {
+    outline: 2px solid var(--wb-accent);
+    outline-offset: 2px;
+  }
+  .wb-switch:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  .wb-switch-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: var(--wb-fs-13);
+    color: var(--wb-fg);
+    cursor: pointer;
+  }
+
+  /* ---------- filter input (search icon, "/" hint, clear) */
+  .wb-filter {
+    position: relative;
+    display: flex;
+    align-items: center;
+    min-width: 0;
+  }
+  .wb-filter > .wb-icon {
+    position: absolute;
+    left: 9px;
+    width: 14px;
+    height: 14px;
+    color: var(--wb-muted);
+    pointer-events: none;
+  }
+  .wb-filter-input {
+    width: 100%;
+    height: var(--wb-ctl-md);
+    padding: 0 30px 0 29px;
+    border: 1px solid var(--wb-border-strong);
+    border-radius: var(--wb-radius-ctl);
+    background: var(--wb-surface);
+    color: var(--wb-fg);
+    font: inherit;
+    font-size: var(--wb-fs-13);
+    outline: none;
+  }
+  .wb-filter-input::placeholder {
+    color: var(--wb-muted);
+  }
+  .wb-filter-input::-webkit-search-cancel-button {
+    display: none;
+  }
+  .wb-filter-input:focus,
+  .wb-filter-input:focus-visible {
+    border-color: var(--wb-accent);
+    box-shadow: 0 0 0 3px var(--wb-accent-weak);
+    outline: none;
+  }
+  .wb-filter > .wb-kbd {
+    position: absolute;
+    right: 6px;
+    pointer-events: none;
+  }
+  .wb-filter-clear {
+    position: absolute;
+    right: 5px;
+    display: grid;
+    place-items: center;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    border: 0;
+    border-radius: var(--wb-radius-sm);
+    background: none;
+    color: var(--wb-muted);
+    cursor: pointer;
+  }
+  .wb-filter-clear .wb-icon {
+    width: 12px;
+    height: 12px;
+  }
+  .wb-filter-clear:hover {
+    background: var(--wb-surface-2);
+    color: var(--wb-fg);
+  }
+  .wb-filter-clear:focus-visible {
+    outline-offset: 0;
+  }
+  .wb-toolbar .wb-filter {
+    flex: 0 1 290px;
+    min-width: 180px;
+  }
+
+  /* ---------- combobox */
+  .wb-combo {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+    width: 100%;
+    min-height: var(--wb-ctl-lg);
+    padding: 3px 30px 3px 4px;
+    position: relative;
+    border: 1px solid var(--wb-border-strong);
+    border-radius: var(--wb-radius-ctl);
+    background: var(--wb-surface);
+    cursor: text;
+  }
+  .wb-combo:focus-within {
+    border-color: var(--wb-accent);
+    box-shadow: 0 0 0 3px var(--wb-accent-weak);
+  }
+  .wb-combo[aria-invalid="true"] {
+    border-color: var(--wb-danger);
+  }
+  .wb-combo.is-disabled {
+    background: var(--wb-surface-2);
+    cursor: not-allowed;
+  }
+  .wb-combo > .wb-chip {
+    height: 22px;
+  }
+  .wb-combo-input {
+    flex: 1;
+    min-width: 100px;
+    height: 24px;
+    padding: 0 6px;
+    border: 0;
+    background: transparent;
+    color: var(--wb-fg);
+    font: inherit;
+    font-size: var(--wb-fs-13-5);
+    outline: none;
+  }
+  .wb-combo-input::placeholder {
+    color: var(--wb-muted);
+  }
+  .wb-combo-input:focus-visible {
+    outline: none;
+  }
+  .wb-combo-toggle {
+    position: absolute;
+    top: 50%;
+    right: 5px;
+    display: grid;
+    place-items: center;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border: 0;
+    border-radius: var(--wb-radius-sm);
+    background: none;
+    color: var(--wb-muted);
+    transform: translateY(-50%);
+    cursor: pointer;
+  }
+  .wb-combo-toggle .wb-icon {
+    width: 14px;
+    height: 14px;
+  }
+  .wb-combo-toggle:hover {
+    background: var(--wb-surface-2);
+    color: var(--wb-fg);
+  }
+  .wb-listbox {
+    position: fixed;
+    z-index: calc(var(--wb-z-overlay) + var(--wb-z-depth, 0));
+    max-height: 280px;
+    margin: 0;
+    padding: 4px;
+    overflow: auto;
+    list-style: none;
+    border: 1px solid var(--wb-border-strong);
+    border-radius: var(--wb-radius-row);
+    background: var(--wb-surface);
+    box-shadow: var(--wb-shadow-pop);
+  }
+  .wb-option {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: var(--wb-ctl-lg);
+    padding: 5px 10px 5px 8px;
+    border-radius: var(--wb-radius-seg);
+    color: var(--wb-fg);
+    font-size: var(--wb-fs-13);
+    cursor: pointer;
+  }
+  .wb-option.is-active {
+    background: var(--wb-surface-2);
+  }
+  .wb-option[aria-disabled="true"] {
+    opacity: 0.5;
+    cursor: default;
+  }
+  .wb-option-check {
+    display: grid;
+    flex: none;
+    place-items: center;
+    width: 16px;
+    color: var(--wb-accent);
+  }
+  .wb-option-check .wb-icon {
+    width: 15px;
+    height: 15px;
+    stroke-width: 2.2;
+  }
+  .wb-option > .wb-icon {
+    width: 14px;
+    height: 14px;
+    color: var(--wb-muted);
+  }
+  .wb-option-text {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    min-width: 0;
+  }
+  .wb-option-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .wb-option-label mark {
+    background: none;
+    color: var(--wb-accent-text);
+    font-weight: var(--wb-fw-semibold);
+  }
+  .wb-option-desc {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: var(--wb-fs-12);
+    color: var(--wb-muted);
+  }
+  .wb-listbox-note {
+    padding: 8px 10px;
+    font-size: var(--wb-fs-12-5);
+    color: var(--wb-muted);
+  }
+}

@@ -10,6 +10,7 @@ import {
   AGENT_TOOL_MAXIMUM_RESPONSE_BYTES,
 } from "../../server/agent-tools/contracts/agent-tool-transport-limits.js";
 import { normalizeCanonicalAgentToolSchema } from "../../server/agent-tools/schema/canonical-json-schema.js";
+import { agentToolModelContentsSchema } from "./model-content.js";
 
 export const agentToolCliTransportLimits = Object.freeze({
   maximumCatalogTools: 256,
@@ -115,12 +116,14 @@ export const agentToolCatalogSummarySchema: z.ZodType<AgentToolCatalogSummary> =
         "agents",
         "tasks",
         "workpads",
+        "pages",
         "automations",
         "research",
       ]),
       order: z.number().int().nonnegative().max(10_000),
     }),
     effects: effectsSchema,
+    outputMediaTypes: z.tuple([z.literal("image/png")]).readonly().optional(),
     cli: z
       .strictObject({
         commandPath: z
@@ -139,6 +142,7 @@ export const agentToolDescriptionSchema: z.ZodType<AgentToolDescription> =
     description: z.string().min(1).max(2_000),
     inputSchema: canonicalRootSchema,
     outputSchema: canonicalRootSchema,
+    outputMediaTypes: z.tuple([z.literal("image/png")]).readonly().optional(),
     effects: effectsSchema,
     execution: z.strictObject({
       form: z.enum(["inline", "operation", "hybrid"]),
@@ -222,6 +226,7 @@ export const agentToolInvocationResultSchema: z.ZodType<
     invocationId: agentToolCliIdentifierSchema,
     state: z.literal("completed"),
     output: boundedJsonSchema,
+    modelContent: agentToolModelContentsSchema.optional(),
   }),
   z.strictObject({
     invocationId: agentToolCliIdentifierSchema,
@@ -240,7 +245,11 @@ export const agentToolInvocationResultSchema: z.ZodType<
     error: agentToolCliErrorSchema,
     operationId: agentToolCliIdentifierSchema.optional(),
   }),
-]) as z.ZodType<SedesToolInvocationResult<unknown>>;
+]).superRefine((result, context) => {
+  if (Buffer.byteLength(JSON.stringify(result), "utf8") > AGENT_TOOL_MAXIMUM_RESPONSE_BYTES) {
+    context.addIssue({ code: "custom", message: "The tool response exceeds its transport limit." });
+  }
+}) as z.ZodType<SedesToolInvocationResult<unknown>>;
 
 export type CreateAgentToolDescriptionsRequest = z.infer<
   typeof createAgentToolDescriptionsRequestSchema

@@ -1,0 +1,340 @@
+/* Dense lists (icon, title/meta/description, side column) and sticky group headers. */
+@layer wb.components {
+  .wb-list {
+    max-width: var(--wb-list-max);
+    padding: 0 var(--wb-pane-x) 48px;
+  }
+  .wb-list--full {
+    max-width: none;
+  }
+  .wb-rows {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  /* content-visibility skips off-screen groups; its paint containment clips
+     at the padding box. The padding gives the rows' 12px outset (hover,
+     active, cursor ring) room to paint; the negative margin keeps the
+     content box, so nothing moves. */
+  .wb-group {
+    margin-inline: -12px;
+    padding-inline: 12px;
+    content-visibility: auto;
+    contain-intrinsic-size: auto 900px;
+  }
+  /* The sticky header spans the outset too, so a highlighted row scrolling
+     under it doesn't show at its sides. */
+  .wb-group > .wb-group-h {
+    margin-inline: -12px;
+    padding-inline: 12px;
+  }
+  .wb-group-h {
+    position: sticky;
+    top: 0;
+    z-index: var(--wb-z-sticky);
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 6px 10px;
+    padding: 18px 0 8px;
+    background: var(--wb-pane-bg, var(--wb-surface));
+  }
+  /* a section title that scrolls away (above a DataTable, whose header sticks) */
+  .wb-group-h--static {
+    position: static;
+    z-index: auto;
+  }
+  .wb-group-title {
+    margin: 0;
+    font-size: var(--wb-fs-13);
+    font-weight: var(--wb-fw-bold);
+    white-space: nowrap;
+  }
+  .wb-group-sub {
+    font-size: var(--wb-fs-12-5);
+    color: var(--wb-muted);
+    white-space: nowrap;
+  }
+  .wb-group-rule {
+    flex: 1 1 24px;
+    align-self: center;
+    min-width: 24px;
+    height: 1px;
+    background: var(--wb-border);
+  }
+  .wb-group-count {
+    font-size: var(--wb-fs-12);
+    color: var(--wb-muted);
+    white-space: nowrap;
+  }
+  /* count and actions stay together and move below (right-aligned) when
+     the line is full */
+  .wb-group-count:has(+ .wb-group-actions) {
+    margin-left: auto;
+  }
+  .wb-group-actions {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 6px;
+    margin-left: auto;
+    align-self: center;
+  }
+  .wb-group-count + .wb-group-actions {
+    margin-left: 0;
+  }
+
+  /* ---------- row */
+  .wb-row {
+    position: relative;
+    display: grid;
+    grid-template-columns: 16px minmax(0, 1fr) auto;
+    column-gap: 12px;
+    margin: 0 -12px;
+    padding: 12px;
+    border-radius: var(--wb-radius-row);
+    /* clear of the sticky group header (GroupHeader publishes its height,
+       which grows when its actions wrap) */
+    scroll-margin-top: calc(var(--wb-group-h, 44px) + 8px);
+    scroll-margin-bottom: 12px;
+  }
+  /* visually hidden text stays inside the row (see tables) */
+  .wb-row .wb-sr-only {
+    top: 0;
+    left: 0;
+  }
+  .wb-row--noicon {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .wb-row + .wb-row::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 40px;
+    right: 12px;
+    height: 1px;
+    background: var(--wb-border);
+  }
+  .wb-row--noicon + .wb-row::before,
+  .wb-row + .wb-row--noicon::before {
+    left: 12px;
+  }
+  .wb-row:hover {
+    background: var(--wb-surface-2);
+  }
+  .wb-row:hover::before,
+  .wb-row:hover + .wb-row::before,
+  .wb-row.is-active::before,
+  .wb-row.is-active + .wb-row::before,
+  .wb-row.is-cursor::before,
+  .wb-row.is-cursor + .wb-row::before {
+    opacity: 0;
+  }
+  .wb-row--static:hover {
+    background: none;
+  }
+  .wb-row--static:hover::before,
+  .wb-row--static:hover + .wb-row::before {
+    opacity: 1;
+  }
+  .wb-row.is-active {
+    background: var(--wb-accent-weak);
+  }
+  .wb-row.is-cursor,
+  .wb-row:has(.wb-row-link:focus-visible) {
+    box-shadow: inset 0 0 0 1.5px var(--wb-accent);
+  }
+  .wb-row-icon {
+    --wb-tone: var(--wb-muted);
+    padding-top: 2px;
+    color: var(--wb-tone);
+  }
+  .wb-row-icon .wb-icon {
+    display: block;
+    width: 16px;
+    height: 16px;
+  }
+  .wb-row-main {
+    min-width: 0;
+  }
+  .wb-row-title {
+    margin: 0;
+    font-size: var(--wb-fs-14-5);
+    font-weight: var(--wb-fw-semibold);
+    line-height: 1.35;
+    letter-spacing: -0.005em;
+    overflow-wrap: anywhere;
+  }
+  .wb-row-link {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    letter-spacing: inherit;
+    text-align: left;
+    text-decoration: none;
+    cursor: pointer;
+  }
+  .wb-row-link:focus-visible {
+    outline: none;
+  }
+  .wb-row-link::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+  }
+  .wb-row
+    :where(a, button, input, select, textarea, label, summary, [tabindex]):not(
+      .wb-row-link
+    ) {
+    position: relative;
+    z-index: 1;
+  }
+  .wb-row-extra {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-left: 8px;
+    vertical-align: 1px;
+  }
+  .wb-row-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 5px;
+    margin-top: 3px;
+    font-size: var(--wb-fs-12-5);
+    color: var(--wb-fg-2);
+  }
+  .wb-row-meta b {
+    color: var(--wb-fg);
+    font-weight: var(--wb-fw-semibold);
+  }
+  .wb-row-meta .wb-icon {
+    width: 12px;
+    height: 12px;
+    color: var(--wb-muted);
+  }
+  .wb-row-desc {
+    display: -webkit-box;
+    max-width: 860px;
+    margin: 6px 0 0;
+    overflow: hidden;
+    color: var(--wb-fg-2);
+    font-size: var(--wb-fs-13-5);
+    line-height: 1.5;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+  }
+  .wb-row-side {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 8px;
+    padding-top: 1px;
+    font-size: var(--wb-fs-12-5);
+    color: var(--wb-muted);
+    white-space: nowrap;
+  }
+  .wb-row-actions {
+    display: flex;
+    gap: 2px;
+    opacity: 0;
+  }
+  .wb-row:hover .wb-row-actions,
+  .wb-row:focus-within .wb-row-actions,
+  .wb-row.is-cursor .wb-row-actions,
+  .wb-row.is-active .wb-row-actions {
+    opacity: 1;
+  }
+  .wb-row-actions .wb-btn--icon {
+    width: 24px;
+    height: 24px;
+    color: var(--wb-muted);
+  }
+  .wb-row-actions .wb-btn--icon .wb-icon {
+    width: 14px;
+    height: 14px;
+    color: inherit;
+  }
+  .wb-row-actions .wb-btn--icon:hover {
+    background: var(--wb-accent-weak);
+    color: var(--wb-accent-text);
+  }
+
+  /* compact: one line per row */
+  .wb-row--compact {
+    align-items: center;
+    padding: 7px 12px;
+  }
+  .wb-row--compact .wb-row-icon {
+    padding-top: 0;
+  }
+  .wb-row--compact .wb-row-main {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+  }
+  .wb-row--compact .wb-row-title {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    font-size: var(--wb-fs-13-5);
+    font-weight: var(--wb-fw-strong);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  /* Meta gives way first, then the title; badges never clip. */
+  .wb-row--compact .wb-row-main > .wb-row-extra {
+    flex: none;
+    margin-left: -4px;
+  }
+  .wb-row--compact .wb-row-meta {
+    /* huge factor: meta absorbs all overflow (even sub-pixel) before the title */
+    flex: 0 100000000 auto;
+    flex-wrap: nowrap;
+    min-width: 0;
+    margin-top: 0;
+    overflow: hidden;
+    white-space: nowrap;
+  }
+  .wb-row--compact .wb-row-desc {
+    display: none;
+  }
+  .wb-row--compact .wb-row-side {
+    flex-direction: row;
+    align-items: center;
+    padding-top: 0;
+  }
+
+  .wb-list-foot {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 14px;
+    margin-top: 22px;
+    font-size: var(--wb-fs-12);
+    color: var(--wb-muted);
+  }
+  .wb-list-foot .wb-kbd {
+    margin-right: 1px;
+  }
+  .wb-list-note {
+    margin-top: 16px;
+    padding: 8px 12px;
+    border-radius: var(--wb-radius-md);
+    background: var(--wb-surface-2);
+    color: var(--wb-fg-2);
+    font-size: var(--wb-fs-12-5);
+  }
+  .wb-new-dot {
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--wb-accent);
+  }
+}
