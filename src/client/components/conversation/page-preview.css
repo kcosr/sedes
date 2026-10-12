@@ -199,9 +199,6 @@
   --wb-media-muted: var(--muted-foreground);
   --wb-media-font-size: var(--text-meta);
 }
-.image-figure > .conversation-media-frame {
-  max-width: min(100%, 440px);
-}
 .markdown .mermaid-diagram.conversation-media-frame {
   flex-direction: column;
   align-items: stretch;

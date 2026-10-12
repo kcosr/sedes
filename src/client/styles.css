@@ -5661,9 +5661,13 @@ textarea:disabled {
   scroll-margin-top: 22px;
 }
 
-.message-row.assistant {
+.message-row.assistant,
+.image-figure {
   /* Use most of the shared --measure column; ch caps wrapped too early. */
   max-width: 90%;
+}
+
+.message-row.assistant {
   margin: 6px 0;
 }
 
@@ -10332,7 +10336,8 @@ tr.diff-hunk td {
     padding: 22px 15px 44px;
   }
 
-  .message-row.assistant {
+  .message-row.assistant,
+  .image-figure {
     width: 100%;
     max-width: none;
   }

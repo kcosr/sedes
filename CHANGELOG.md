@@ -128,7 +128,8 @@ User-facing changes are collected here before release. See the
   variables and Published pages. Agent tools shows only Off or the enabled count.
 
 - Images and Mermaid diagrams support inline pinch zoom and pan, with an
-  explicit expand control. Expanded images, diagrams, and HTML previews share
+  explicit expand control. Inline images share the assistant message column's
+  width, with the existing height limit. Expanded images, diagrams, and HTML previews share
   a floating bottom zoom bar with **Fit** and **1:1**. Escape closes an open
   zoom menu before closing the viewer. See
   [media viewing](docs/user/files-and-context.md#view-images-and-diagrams).
