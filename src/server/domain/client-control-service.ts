@@ -194,13 +194,19 @@ export class ClientControlService {
   }
 
   async complete(scope: RequestScope, threadId: string, turnId: string, outcome = "completed", superseded = false) {
-    const publication = await this.#notifications.get(scopeKey(scope) + turnKey(threadId, turnId));
+    const cancelled = outcome !== "completed" || superseded;
+    const publication = cancelled ? undefined : await this.#notifications.get(scopeKey(scope) + turnKey(threadId, turnId));
     for (const client of this.#clients.values()) {
       if (!sameScope(scope, client.scope)) continue;
       const key = turnKey(threadId, turnId);
       const deferred = client.deferred.get(key);
       client.deferred.delete(key);
-      if (!deferred || deferred.expiresAt <= this.now() || outcome !== "completed" || superseded) continue;
+      if (!deferred || deferred.expiresAt <= this.now()) continue;
+      if (cancelled) {
+        client.commands.push({ ...deferred, action: "turn_cancelled", expiresAt: this.now() + 3_600_000 });
+        client.wake?.();
+        continue;
+      }
       // Overlapping reconnects may both receive a frame. Only the newest stream
       // of this exact registration can become this client's playback barrier.
       const delivery = publication?.deliveries.reduce<(VoiceNotificationPublication["deliveries"][number]) | undefined>(

@@ -78,6 +78,8 @@ describe("registered client authority", () => {
       expect(clientCommandSchema.safeParse({ ...command, ...fields }).success).toBe(false);
     }
     expect(clientCommandSchema.safeParse({ ...command, action: "switch_thread", replyEventId: null, replyStreamId: null }).success).toBe(false);
+    expect(clientCommandSchema.safeParse({ ...command, action: "turn_cancelled" }).success).toBe(true);
+    expect(clientCommandSchema.safeParse({ ...command, action: "turn_cancelled", replyEventId: null, replyStreamId: null }).success).toBe(false);
   });
 
   it("registers anonymous clients independently without pairing and denies foreign principals and tokens", () => {
@@ -192,7 +194,14 @@ describe("registered client authority", () => {
     expect((await settled).commands).toEqual([{ ...commands[0], action: "turn_settled", replyEventId: "reply-event", replyStreamId, expiresAt: expect.any(Number) }]);
   });
 
-  it.each(["end_interaction", "switch_thread"] as const)("discards a superseded turn's deferred %s without settling it later", async action => {
+  it.each([
+    { action: "end_interaction", outcome: "completed", superseded: true },
+    { action: "end_interaction", outcome: "failed", superseded: false },
+    { action: "end_interaction", outcome: "interrupted", superseded: false },
+    { action: "switch_thread", outcome: "completed", superseded: true },
+    { action: "switch_thread", outcome: "failed", superseded: false },
+    { action: "switch_thread", outcome: "interrupted", superseded: false },
+  ] as const)("cancels accepted $action on outcome $outcome (superseded: $superseded)", async ({ action, outcome, superseded }) => {
     const service = fixture();
     const registered = service.register(scope, undefined, registration);
     const requested = service.request(service.target(scope, registered.clientId), {
@@ -202,11 +211,32 @@ describe("registered client authority", () => {
     const { commands } = await poll(service, registered.connectionToken);
     await poll(service, registered.connectionToken, [{ id: commands[0]!.id, result: { status: "accepted", state } }], aborted());
     await requested;
-    await service.complete(scope, "thread", "turn", "completed", true);
-    expect(await poll(service, registered.connectionToken, [], aborted())).toEqual({ commands: [] });
+    await service.complete(scope, "thread", "turn", outcome, superseded);
+    const cancelled = (await poll(service, registered.connectionToken)).commands;
+    expect(cancelled).toEqual([{ ...commands[0], action: "turn_cancelled", expiresAt: expect.any(Number) }]);
+    expect(clientCommandSchema.parse(cancelled[0])).toEqual(cancelled[0]);
     // A repeated completion must not revive the discarded request.
     await service.complete(scope, "thread", "turn");
     expect(await poll(service, registered.connectionToken, [], aborted())).toEqual({ commands: [] });
+  });
+
+  it("cancels an accepted action without waiting for source voice publication", async () => {
+    const service = fixture();
+    const registered = service.register(scope, undefined, registration);
+    const requested = service.request(service.target(scope, registered.clientId), {
+      action: "switch_thread", sourceThreadId: "thread", sourceTurnId: "turn", threadId: randomUUID(), listen: true,
+    }, new AbortController().signal);
+    const { commands } = await poll(service, registered.connectionToken);
+    await poll(service, registered.connectionToken, [{ id: commands[0]!.id, result: { status: "accepted", state } }], aborted());
+    await requested;
+    let publish!: (publication: undefined) => void;
+    service.observeNotification(scope, "thread", "turn", new Promise(resolve => { publish = resolve; }));
+    try {
+      await service.complete(scope, "thread", "turn", "failed");
+      expect((await poll(service, registered.connectionToken)).commands).toEqual([
+        { ...commands[0], action: "turn_cancelled", expiresAt: expect.any(Number) },
+      ]);
+    } finally { publish(undefined); }
   });
 
   it("keeps another principal's deferred action when a superseded completion arrives", async () => {
@@ -244,7 +274,7 @@ describe("registered client authority", () => {
     expect(settled.commands[0]).toMatchObject({ id: commands[0]!.id, action: "turn_settled", expiresAt: now + 3_600_000 });
   });
 
-  it("does not replay accepted actions into a replacement connection", async () => {
+  it.each(["completed", "failed"])("does not replay accepted actions into a replacement connection on %s", async outcome => {
     const service = fixture();
     const registered = service.register(scope, undefined, registration);
     const requested = service.request(service.target(scope, registered.clientId), {
@@ -254,9 +284,8 @@ describe("registered client authority", () => {
     const abort = new AbortController(); abort.abort();
     await poll(service, registered.connectionToken, [{ id: commands[0]!.id, result: { status: "accepted", state } }], abort.signal);
     await requested;
-    service.close();
-    const next = service.register(scope, undefined, registration);
-    await service.complete(scope, "thread", "turn");
+    const next = service.register(scope, undefined, { ...registration, resumeToken: registered.resumeToken });
+    await service.complete(scope, "thread", "turn", outcome);
     expect(await poll(service, next.connectionToken, [], abort.signal)).toEqual({ commands: [] });
   });
 

@@ -76,6 +76,19 @@ describe("browser client controls", () => {
     expect(client.execute({ ...replay, expiresAt: 0 })).toMatchObject({ status: "noop", reason: "expired" });
     client.close();
   });
+  it("cancels only the exact accepted action without navigating or reviving it", () => {
+    const navigate = vi.fn(); const client = new ClientControlConnection({ baseUrl: null }, navigate);
+    expect(client.execute(command())).toMatchObject({ status: "accepted" });
+    for (const mismatch of [{ id: "another" }, { sourceThreadId: "another-thread" }, { sourceTurnId: "another-turn" }]) {
+      expect(client.execute(command({ action: "turn_cancelled", ...mismatch }))).toMatchObject({ status: "noop", reason: "superseded" });
+    }
+    expect(client.execute(command({ action: "turn_cancelled" }))).toMatchObject({ status: "applied", reason: "source_turn_cancelled" });
+    expect(navigate).not.toHaveBeenCalled();
+    expect(client.execute(command({ action: "turn_settled" }))).toMatchObject({ status: "noop", reason: "superseded" });
+    expect(client.execute(command({ action: "turn_cancelled" }))).toMatchObject({ status: "noop", reason: "superseded" });
+    expect(navigate).not.toHaveBeenCalled();
+    client.close();
+  });
   it("drops expired, disconnected, manually superseded, and background navigation", () => {
     const navigate = vi.fn(); const client = new ClientControlConnection({ baseUrl: null }, navigate);
     expect(client.execute(command({ expiresAt: 0 }))).toMatchObject({ status: "noop", reason: "expired" });

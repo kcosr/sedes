@@ -339,12 +339,15 @@ makes it voice-only. Background `listen: false` is a no-op. Neither operation
 enables voice or changes the pinned/default thread. Recording preferences,
 including Keep listening by default, still apply.
 Accepted deferred actions are acknowledged before turn completion, then wait for
-the matching reply's actual audio drain. The barrier names the exact event and
+the matching reply's actual audio drain. An accepted explicit listen reserves
+the next automatic-listening slot while the source turn runs. The barrier names the exact event and
 native notification stream that received the reply; delivery to another client
 does not create a wait. Silent replies and benign notification drops release
 their barrier. Notification-stream loss releases undelivered playback waits;
 control-connection loss retires the command. Failed/interrupted or superseded
-turns, playback failure, manual supersession, and expiry prevent deferred actions.
+turns explicitly retire the client's matching accepted action through the
+internal `turn_cancelled` command, releasing any listening reservation. Playback
+failure, manual supersession, and expiry also prevent deferred actions.
 Browser/Electron navigation works; voice,
 voice settings, and replay report unsupported with a successful no-op.
 

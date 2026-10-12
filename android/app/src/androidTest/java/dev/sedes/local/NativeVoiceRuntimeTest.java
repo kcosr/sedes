@@ -1573,6 +1573,49 @@ public class NativeVoiceRuntimeTest {
         }
     }
 
+    @Test public void unsettledExplicitListenKeepsItsPlaceBeforeUnrelatedDefaultHeldFollowup() throws Exception {
+        try (Fixture f = new Fixture(false, false)) {
+            f.readyClientVoice("speak"); f.settings(NativeVoiceJson.object("autoListen", true, "keepListeningByDefault", true));
+            f.policy(true, false, "speakThenListen");
+            f.receiveReply("Unrelated answer", true);
+            SpeechJob unrelated = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(unrelated);
+            String target = UUID.randomUUID().toString(); JSONObject command = f.clientSwitch(target, true);
+            assertEquals("accepted", f.clientCommand(command).getString("status"));
+            f.runtime.drained(unrelated.id); f.flush();
+            assertTrue("Unsettled explicit intent prevents unrelated automatic capture", f.runtime.snapshot().isNull("active"));
+            assertTrue(f.speech.transcriptions.isEmpty()); assertTrue(f.contexts.isEmpty());
+            assertTrue(f.stagedClientActions().contains(command.getString("id")));
+            String reply = f.receiveClientTurnNotice("turn.completed");
+            SpeechJob source = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(source);
+            f.settleClientSwitch(command, reply); f.runtime.drained(source.id); f.flush(); f.completeClientTarget(target);
+            JSONObject active = f.runtime.snapshot().getJSONObject("active");
+            assertEquals(target, active.getString("recognitionThreadId"));
+            assertTrue(active.getJSONObject("recording").getBoolean("keepListening")); assertTrue(f.openThreads.isEmpty());
+        }
+    }
+
+    @Test public void terminalSourceCancellationRevokesOnlyItsMatchingPendingListen() throws Exception {
+        try (Fixture f = new Fixture(false, false)) {
+            f.readyClientVoice("speak"); f.settings(NativeVoiceJson.object("autoListen", true)); f.policy(true, false, "speakThenListen");
+            f.receiveReply("Unrelated answer", true);
+            SpeechJob unrelated = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(unrelated);
+            JSONObject command = f.clientSwitch(UUID.randomUUID().toString(), true); f.clientCommand(command);
+            JSONObject cancellation = NativeVoiceJson.copy(command); NativeVoiceJson.put(cancellation, "action", "turn_cancelled");
+            NativeVoiceJson.put(cancellation, "sourceTurnId", "wrong-source");
+            assertEquals("noop", f.clientCommand(cancellation).getString("status"));
+            assertTrue(f.stagedClientActions().contains(command.getString("id")));
+            NativeVoiceJson.put(cancellation, "sourceTurnId", command.getString("sourceTurnId"));
+            JSONObject result = f.clientCommand(cancellation);
+            assertEquals("applied", result.getString("status")); assertEquals("source_turn_cancelled", result.getString("reason"));
+            assertTrue(f.stagedClientActions().isEmpty());
+            f.runtime.drained(unrelated.id); f.flush();
+            assertEquals("validating", f.runtime.snapshot().getString("phase"));
+            assertEquals(f.target, f.runtime.snapshot().getJSONObject("active").getString("recognitionThreadId"));
+            assertEquals("noop", f.settleClientSwitch(command, null).getString("status"));
+            assertTrue("Late settlement cannot restore the cancelled destination", f.speech.transcriptions.isEmpty());
+        }
+    }
+
     @Test public void benignSourceQueueDropsReleaseTheExplicitListen() throws Exception {
         for (String drop : new String[] { "filter", "overflow", "presentation" }) try (Fixture f = new Fixture(false, false)) {
             f.readyClientVoice("speak"); f.policy(true, false, "speak");
@@ -1928,6 +1971,28 @@ public class NativeVoiceRuntimeTest {
             JSONObject opened = f.openThreads.poll(10, TimeUnit.SECONDS); assertNotNull(opened);
             assertEquals(target, opened.getString("threadId")); assertTrue(f.openThreads.isEmpty());
             assertTrue(f.runtime.snapshot().isNull("active")); assertTrue(f.speech.transcriptions.isEmpty());
+        }
+    }
+
+    @Test public void delayedForegroundNavigationSurvivesOnlyItsOwnHeldCaptureReset() throws Exception {
+        for (boolean hidden : new boolean[] { false, true }) try (Fixture f = new Fixture(false, false)) {
+            f.readyClientVoice("input"); f.settings(NativeVoiceJson.object("keepListeningByDefault", true)); f.foreground(f.target);
+            NativeVoiceAudio.setTestSource(() -> captureFrame(0));
+            String target = UUID.randomUUID().toString(); JSONObject command = f.clientSwitch(target, true);
+            f.clientCommand(command);
+            try (MainBlock delayed = new MainBlock()) {
+                f.settleClientSwitch(command, null); RecognitionJob recognition = f.completeClientTarget(target);
+                if (hidden) { f.runtime.nativeVisibility(false); f.flush(); f.foreground(f.target); }
+                recognition.ready(); f.flush();
+                assertNotNull("Held capture reached the microphone before main dispatched navigation", field(f.runtime, "captureOwner"));
+                assertTrue(f.openThreads.isEmpty());
+            }
+            f.flushEvents();
+            if (hidden) assertTrue("A real visibility change still permanently suppresses navigation", f.openThreads.isEmpty());
+            else {
+                JSONObject opened = f.openThreads.poll(10, TimeUnit.SECONDS); assertNotNull(opened);
+                assertEquals(target, opened.getString("threadId")); assertTrue(f.openThreads.isEmpty());
+            }
         }
     }
 

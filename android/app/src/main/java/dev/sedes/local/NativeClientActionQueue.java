@@ -38,6 +38,11 @@ final class NativeClientActionQueue {
         action.settled = true; action.replyEventId = replyEventId; action.replyStreamId = replyStreamId;
         NativeVoiceJson.put(action.command, "expiresAt", expiresAt); return true;
     }
+    boolean cancel(String id, String threadId, String turnId) {
+        Action action = pending.get(id);
+        if (action == null || !action.matches(threadId, turnId)) return false;
+        pending.remove(id); return true;
+    }
     void drained(String id) {
         drained.add(id);
         while (drained.size() > 256) drained.remove(drained.iterator().next());

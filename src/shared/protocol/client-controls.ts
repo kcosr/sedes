@@ -42,7 +42,7 @@ export const clientActionResultSchema = z.strictObject({
 });
 export const clientCommandSchema = z.strictObject({
   id: z.string().uuid(),
-  action: z.enum(["settings.get", "settings.update", "end_interaction", "switch_thread", "turn_settled", "replay_turn"]),
+  action: z.enum(["settings.get", "settings.update", "end_interaction", "switch_thread", "turn_settled", "turn_cancelled", "replay_turn"]),
   expiresAt: z.number().int().nonnegative(),
   sourceThreadId: z.string().min(1).max(128),
   sourceTurnId: z.string().min(1).max(128),

@@ -292,6 +292,9 @@ ready before microphone capture. It works independently of Auto-listen and
 requires an already ready native voice session. Normal recording preferences,
 including Keep listening by default, remain in effect; no background service
 start is attempted.
+Accepting that explicit listen reserves the next automatic-listening slot even
+while its source turn is still running. Existing playback can drain, but an
+automatic notice does not start recognition ahead of the accepted request.
 
 A request accepted in the background, or one that becomes backgrounded while
 pending, permanently becomes voice-only. Returning to the foreground cannot
@@ -394,6 +397,12 @@ an explicit listen wait. A retired notification stream cannot leave a barrier
 waiting for an event that will never arrive. The control connection separately
 owns the lifetime of deferred commands.
 
+A failed, interrupted, or superseded source turn produces an internal
+`turn_cancelled` command naming the original accepted command ID. Browser and
+native clients remove that exact pending action. Native then releases its
+listening reservation and drains the queue, so the action cannot block voice
+until the turn-completion deadline expires.
+
 These frames have no SSE `id`, replay entry, projection fold, or inventory
 checkpoint. Policy is subscribed and delivered before voice. If policy cannot
 be read at subscription, that stream carries inventory without a transient
@@ -470,7 +479,8 @@ awaiting acknowledgement. This uses normalized application observations for
 Pi, Codex, Claude, Grok, and OpenCode; provider protocols are unchanged.
 
 A response superseded at capture still reaches its script hook, but produces no
-voice frame and retires that turn's deferred switch/end-interaction commands.
+voice frame. Its deferred switch/end-interaction commands are explicitly retired
+on the client through `turn_cancelled`.
 Otherwise the frame keeps the captured revision even if another message is
 admitted while publication waits. Missing recognition authority does not remove
 playback freshness. Before first speech, native reads the source thread's

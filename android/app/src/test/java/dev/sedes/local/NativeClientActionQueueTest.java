@@ -138,4 +138,15 @@ public class NativeClientActionQueueTest {
         queue.discardListens();
         assertFalse(queue.settle("cancelled", null, null, 120000));
     }
+    @Test public void sourceCancellationRevokesOnlyTheMatchingAcceptedAction() {
+        NativeClientActionQueue queue = new NativeClientActionQueue();
+        queue.stage(listen("cancelled", "turn"), navigation, true, 0);
+        queue.stage(listen("other", "other-turn"), navigation, true, 0);
+        assertFalse(queue.cancel("cancelled", "other-thread", "turn"));
+        assertFalse(queue.cancel("cancelled", "thread", "other-turn"));
+        assertTrue(queue.hasListen(1)); assertTrue(queue.cancel("cancelled", "thread", "turn"));
+        assertFalse(queue.settle("cancelled", "reply", "stream", 120000));
+        assertTrue(queue.suppresses("thread", "other-turn", 1));
+        assertTrue(queue.cancel("other", "thread", "other-turn")); assertFalse(queue.hasListen(1));
+    }
 }

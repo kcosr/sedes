@@ -24,6 +24,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 import java.util.function.BiConsumer;
 import okhttp3.Call;
 import org.json.JSONArray;
@@ -98,6 +99,8 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
     private volatile boolean nativeVisible;
     /** Invalidates a queued local UI event even if navigation or visibility changes back before dispatch. */
     private volatile Object inputSubmissionContext = new Object();
+    private static final AtomicReferenceFieldUpdater<NativeVoiceRuntime, Object> INPUT_CONTEXT =
+        AtomicReferenceFieldUpdater.newUpdater(NativeVoiceRuntime.class, Object.class, "inputSubmissionContext");
     private volatile String sessionStartId;
     interface SessionStarter { void start(Intent intent); }
     private SessionStarter testSessionStarter;
@@ -120,6 +123,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         boolean backgroundControlStart;
         NativeClientActionQueue.Action clientAction;
         volatile boolean clientNavigationPending;
+        volatile Object clientNavigationResetContext;
         boolean clientNavigationConsidered;
         /** A notification's proposed follow-up destination cannot replace its spoken thread before validation. */
         boolean recordingTargetAccepted;
@@ -427,6 +431,11 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
             long expires = NativeVoiceJson.integer(command, "expiresAt", 0, Long.MAX_VALUE);
             if (expires <= System.currentTimeMillis()) return clientResult("noop", "expired");
             if (action.equals("settings.get")) return clientResult("applied", null);
+            if (action.equals("turn_cancelled")) {
+                if (!clientActions.cancel(id, command.optString("sourceThreadId"), command.optString("sourceTurnId")))
+                    return clientResult("noop", "superseded");
+                drain(); return clientResult("applied", "source_turn_cancelled");
+            }
             if (action.equals("settings.update")) {
                 JSONObject patch = NativeVoiceJson.copy(NativeVoiceJson.requiredObject(command, "patch"));
                 NativeVoiceJson.keys(patch, CLIENT_VOICE_FIELDS);
@@ -1089,19 +1098,23 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         NativeClientActionQueue.Action action = item.clientAction;
         if (action == null || item.clientNavigationConsidered) return;
         item.clientNavigationConsidered = true;
-        if (action.voiceOnly || !nativeVisible || inputSubmissionContext != action.navigationContext) return;
+        if (action.voiceOnly || !nativeVisible || !clientNavigationCurrent(item)) return;
         final long generation = connectionGeneration;
         item.clientNavigationPending = true;
         JSONObject event = NativeVoiceJson.object("threadId", item.targetId, "profileId", profileId, "serverOrigin", origin,
             "identity", identity, "connectionGeneration", generation);
         main.post(() -> {
             JSONObject current = snapshot().optJSONObject("active");
-            if (!nativeVisible || inputSubmissionContext != action.navigationContext || current == null ||
+            if (!nativeVisible || !clientNavigationCurrent(item) || current == null ||
                 !item.id.equals(current.optString("id")) || generation != snapshot().optLong("connectionGeneration")) {
                 item.clientNavigationPending = false; return;
             }
             for (Observer observer : observers) observer.event("openThread", event);
         });
+    }
+    private boolean clientNavigationCurrent(Active item) {
+        Object current = inputSubmissionContext;
+        return item.clientAction != null && (current == item.clientAction.navigationContext || current == item.clientNavigationResetContext);
     }
     private void validateTarget(Active item, boolean automatic, boolean playCue) {
         if ((automatic || item.replayListening) && defaultHeldBlocked()) { finishItem(item); return; }
@@ -1333,7 +1346,16 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
     private void recordAudio(Active item) {
         if (captureOwner == item) return;
         if (item.heldAuthorityResetPending) {
-            clientActions.clear(); inputSubmissionContext = new Object(); item.heldAuthorityResetPending = false;
+            Object previous = inputSubmissionContext, next = new Object();
+            // Our own held transition clears other controls without invalidating this foreground navigation.
+            // Publish its replacement fence first so the main-thread callback sees either valid context.
+            if (item.clientListenStart && item.clientAction != null &&
+                (previous == item.clientAction.navigationContext || previous == item.clientNavigationResetContext))
+                item.clientNavigationResetContext = next;
+            clientActions.clear();
+            // Visibility changes publish from the main thread. They must win over this local reset.
+            if (!INPUT_CONTEXT.compareAndSet(this, previous, next)) item.clientNavigationResetContext = null;
+            item.heldAuthorityResetPending = false;
         }
         item.lastAudioId = item.captureId; captureOwner = item;
         audio.record(item.captureId, NativeVoiceInput.read(item.recordingSettings.value));

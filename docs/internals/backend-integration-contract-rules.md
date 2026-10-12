@@ -2334,7 +2334,10 @@ establish a playback barrier. Settlement carries the reply event and stream
 identity together, or two nulls when no playback was delivered. Notification
 stream loss releases undeliverable playback waits, while control-connection
 loss still retires pending commands. Benign notification drops release the
-barrier; a superseded source turn discards its deferred controls.
+barrier. Failed, interrupted, and superseded source turns send explicit
+`turn_cancelled` commands for their accepted client-action IDs. Clients retire
+those exact actions and release any reserved listening slot; server-only
+deletion would leave the client waiting until expiry.
 
 Successful-turn notifications may opt into a separate immutable classified
 assistant-result snapshot captured alongside the callback aggregate. Keep the
