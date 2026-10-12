@@ -26,6 +26,7 @@ import {
 } from "./page-frame-lifecycle.js";
 import { supportsSafePageFrames } from "../../app/page-safety.js";
 import { useConnectionScope } from "../../app/connection-scope.js";
+import { stoppedPreviewScrollMomentum } from "../preview/inline-touch-scroll.js";
 import {
   PageFrameRecoveryAttempt,
   pageFrameNeedsActivation,
@@ -397,19 +398,7 @@ function PageFrame({
   const host = useRef<HTMLDivElement>(null);
   const frame = useRef<HTMLIFrameElement>(null);
   const tap = useRef<{ id: number; x: number; y: number; time: number } | undefined>(undefined);
-  const lastScroll = useRef(-Infinity);
-  useEffect(() => {
-    const cancel = () => {
-      tap.current = undefined;
-      lastScroll.current = performance.now();
-    };
-    window.addEventListener("scroll", cancel, true);
-    window.addEventListener("wheel", cancel, true);
-    return () => {
-      window.removeEventListener("scroll", cancel, true);
-      window.removeEventListener("wheel", cancel, true);
-    };
-  }, []);
+  const clickReady = useRef(false);
   const [width, setWidth] = useState(page.viewport.width ?? 640);
   const [height, setHeight] = useState(page.viewport.height ?? 240);
   const [availableHeight, setAvailableHeight] = useState(0);
@@ -624,6 +613,8 @@ function PageFrame({
         aria-label={`Page preview: ${page.title}`}
         tabIndex={!interactive || expanded ? 0 : undefined}
         onKeyDown={(event) => {
+          clickReady.current = false;
+          tap.current = undefined;
           if (!interactive && ready && event.target === event.currentTarget &&
               (event.key === "Enter" || event.key === " ")) {
             event.preventDefault();
@@ -632,11 +623,10 @@ function PageFrame({
         }}
         onPointerDown={(event) => {
           tap.current = undefined;
+          clickReady.current = false;
           if (interactive || !ready || !event.isPrimary || event.button !== 0 ||
               (event.target as Element).closest("button") ||
-              // A stationary touch can be the gesture that stops a fling.
-              // It must not also enable the document underneath that touch.
-              performance.now() - lastScroll.current < 250) return;
+              stoppedPreviewScrollMomentum(event.nativeEvent)) return;
           tap.current = { id: event.pointerId, x: event.clientX, y: event.clientY, time: event.timeStamp };
         }}
         onPointerMove={(event) => {
@@ -644,16 +634,30 @@ function PageFrame({
           if (start && (Math.hypot(event.clientX - start.x, event.clientY - start.y) > 10))
             tap.current = undefined;
         }}
-        onPointerCancel={() => { tap.current = undefined; }}
+        onPointerCancel={() => {
+          tap.current = undefined;
+          clickReady.current = false;
+        }}
+        onWheelCapture={() => {
+          tap.current = undefined;
+          clickReady.current = false;
+        }}
         onPointerUp={(event) => {
           const start = tap.current;
           tap.current = undefined;
-          if (start && event.pointerId === start.id && event.timeStamp - start.time < 500 &&
-              Math.hypot(event.clientX - start.x, event.clientY - start.y) <= 10) {
-            // Consume the activating tap; interacting with page content starts next time.
-            event.preventDefault();
-            onActivate();
-          }
+          clickReady.current = Boolean(start && event.pointerId === start.id &&
+            event.timeStamp - start.time < 500 &&
+            Math.hypot(event.clientX - start.x, event.clientY - start.y) <= 10);
+        }}
+        onClick={(event) => {
+          const canActivate = clickReady.current;
+          clickReady.current = false;
+          // Native scrolling suppresses the click for a fling-stopping tap.
+          // Scripted clicks have no matching pointer click count.
+          if (!canActivate || event.detail === 0 || interactive || !ready) return;
+          event.preventDefault();
+          event.stopPropagation();
+          onActivate();
         }}
       >
         <div

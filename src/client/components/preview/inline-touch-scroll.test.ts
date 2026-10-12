@@ -3,6 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   scrollPreviewAncestors,
   startPreviewScrollMomentum,
+  stoppedPreviewScrollMomentum,
 } from "./inline-touch-scroll.js";
 
 afterEach(() => {
@@ -106,6 +107,23 @@ it("allows a second preview to take over scrolling without competing momentum", 
   stopSecond();
   advanceFrame();
   expect(conversation.scrollTop).toBe(8);
+});
+
+it("marks only the exact pointer event that stopped momentum before its first frame", () => {
+  const conversation = scrollContainer(500);
+  const media = document.createElement("div");
+  document.body.append(conversation);
+  conversation.append(media);
+  const stop = startPreviewScrollMomentum(media, 1);
+  const stoppingInput = new Event("pointerdown", { bubbles: true });
+  media.dispatchEvent(stoppingInput);
+  expect(stoppedPreviewScrollMomentum(stoppingInput)).toBe(true);
+  expect(frames.size).toBe(0);
+  expect(conversation.scrollTop).toBe(0);
+  const subsequentInput = new Event("pointerdown", { bubbles: true });
+  media.dispatchEvent(subsequentInput);
+  expect(stoppedPreviewScrollMomentum(subsequentInput)).toBe(false);
+  stop();
 });
 
 it("releases a fling at the scroll boundary or when its view is removed", () => {

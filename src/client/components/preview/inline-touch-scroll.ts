@@ -1,3 +1,10 @@
+const momentumStoppingInputs = new WeakSet<Event>();
+
+/** Only the input which stopped custom momentum must not activate a preview. */
+export function stoppedPreviewScrollMomentum(event: Event): boolean {
+  return momentumStoppingInputs.has(event);
+}
+
 /** Route one-finger drags at fit to the containing transcript, not the image.
  * Owning the touch from pointerdown keeps Android from cancelling a later pinch.
  */
@@ -41,11 +48,15 @@ export function startPreviewScrollMomentum(
     if (stopped) return;
     stopped = true;
     if (frame !== undefined) cancelAnimationFrame(frame);
-    ownerDocument.removeEventListener("pointerdown", stop, true);
+    ownerDocument.removeEventListener("pointerdown", stopForPointer, true);
     ownerDocument.removeEventListener("wheel", stop, true);
     ownerDocument.removeEventListener("keydown", stop, true);
     ownerDocument.removeEventListener("visibilitychange", onVisibilityChange);
     ownerWindow?.removeEventListener("blur", stop);
+  };
+  const stopForPointer = (event: Event) => {
+    momentumStoppingInputs.add(event);
+    stop();
   };
   const onVisibilityChange = () => {
     if (ownerDocument.hidden) stop();
@@ -69,7 +80,7 @@ export function startPreviewScrollMomentum(
 
   // Capture before another preview or a native scroller handles the new input.
   // These listeners never cancel that input and exist only during the fling.
-  ownerDocument.addEventListener("pointerdown", stop, true);
+  ownerDocument.addEventListener("pointerdown", stopForPointer, true);
   ownerDocument.addEventListener("wheel", stop, {
     capture: true,
     passive: true,

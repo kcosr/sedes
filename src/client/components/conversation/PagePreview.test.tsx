@@ -12,6 +12,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PageRevision, PageRevisionPage } from "../../../shared/protocol/pages.js";
 import { PagePreview } from "./PagePreview.js";
+import { startPreviewScrollMomentum } from "../preview/inline-touch-scroll.js";
 import { connectionScope, ConnectionScopeProvider } from "../../app/connection-scope.js";
 
 const scope = connectionScope("test", window.location.origin, "test-principal");
@@ -208,9 +209,7 @@ describe("published page preview", () => {
     ).toBeInTheDocument();
   });
 
-  it("activates only for a short stationary tap, never a drag, scroll, wheel or canceled gesture", async () => {
-    let now = 1000;
-    vi.spyOn(performance, "now").mockImplementation(() => now);
+  it("activates only on the browser click after a short stationary pointer sequence", async () => {
     const { container } = render(<PagePreview page={original} services={services()} />);
     const frame = await waitForFrame(container);
     const viewport = container.querySelector(".page-frame-viewport")!;
@@ -219,25 +218,23 @@ describe("published page preview", () => {
       Object.defineProperties(event, { pointerId: { value: 1 }, isPrimary: { value: true }, timeStamp: { value: timeStamp } });
       fireEvent(viewport, event);
     };
-    pointer("pointerdown"); pointer("pointermove", 20, 50); pointer("pointerup");
+    const click = () => fireEvent.click(viewport, { detail: 1 });
+    pointer("pointerdown"); pointer("pointermove", 20, 50); pointer("pointerup"); click();
     expect(frame).toHaveAttribute("inert");
-    pointer("pointerdown"); fireEvent.scroll(window); pointer("pointerup");
+    pointer("pointerdown"); fireEvent.wheel(viewport); pointer("pointerup"); click();
     expect(frame).toHaveAttribute("inert");
-    pointer("pointerdown"); fireEvent.wheel(viewport); pointer("pointerup");
+    pointer("pointerdown"); pointer("pointercancel"); pointer("pointerup"); click();
     expect(frame).toHaveAttribute("inert");
-    pointer("pointerdown"); pointer("pointercancel"); pointer("pointerup");
+    pointer("pointerdown"); pointer("pointerup", 20, 20, 700); click();
     expect(frame).toHaveAttribute("inert");
-    pointer("pointerdown"); pointer("pointerup", 20, 20, 700);
-    expect(frame).toHaveAttribute("inert");
-    now += 300;
     pointer("pointerdown"); pointer("pointerup");
+    expect(frame).toHaveAttribute("inert");
+    click();
     expect(frame).not.toHaveAttribute("inert");
     expect(screen.getByRole("button", { name: "Done interacting with preview" })).toHaveAttribute("aria-pressed", "true");
   });
 
-  it("uses a stationary tap after recent scrolling only to stop the fling", async () => {
-    let now = 1000;
-    vi.spyOn(performance, "now").mockImplementation(() => now);
+  it("does not activate a native fling-stopping tap when the browser suppresses its click", async () => {
     const { container } = render(<PagePreview page={original} services={services()} />);
     const frame = await waitForFrame(container);
     const viewport = container.querySelector(".page-frame-viewport")!;
@@ -246,13 +243,53 @@ describe("published page preview", () => {
       fireEvent.pointerUp(viewport, { pointerId: 1, isPrimary: true, button: 0, clientX: 20, clientY: 20 });
     };
     fireEvent.scroll(container);
-    now += 16;
     tap();
     expect(frame).toHaveAttribute("inert");
     expect(screen.getByRole("button", { name: "Interact with preview" })).toHaveAttribute("aria-pressed", "false");
-    now += 300;
+    // A scripted click cannot consume the abandoned pointer candidate.
+    fireEvent.click(viewport);
+    expect(frame).toHaveAttribute("inert");
+    tap();
+    fireEvent.click(viewport, { detail: 1 });
+    expect(frame).not.toHaveAttribute("inert");
+  });
+
+  it("permits a stationary click through programmatic and unrelated scrolling", async () => {
+    const { container } = render(<PagePreview page={original} services={services()} />);
+    const frame = await waitForFrame(container);
+    const viewport = container.querySelector(".page-frame-viewport")!;
+    const otherScroller = document.createElement("div");
+    document.body.append(otherScroller);
+    fireEvent.scroll(container);
+    fireEvent.scroll(otherScroller);
+    fireEvent.pointerDown(viewport, { pointerId: 1, isPrimary: true, button: 0, clientX: 20, clientY: 20 });
+    fireEvent.scroll(container);
+    fireEvent.scroll(otherScroller);
+    fireEvent.pointerUp(viewport, { pointerId: 1, isPrimary: true, button: 0, clientX: 20, clientY: 20 });
+    fireEvent.click(viewport, { detail: 1 });
+    expect(frame).not.toHaveAttribute("inert");
+    otherScroller.remove();
+  });
+
+  it("rejects the exact custom-fling stop input even before the first animation frame", async () => {
+    const { container } = render(<PagePreview page={original} services={services()} />);
+    const frame = await waitForFrame(container);
+    const viewport = container.querySelector<HTMLElement>(".page-frame-viewport")!;
+    vi.stubGlobal("requestAnimationFrame", vi.fn(() => 41));
+    const cancel = vi.fn();
+    vi.stubGlobal("cancelAnimationFrame", cancel);
+    const stop = startPreviewScrollMomentum(viewport, 1);
+    const tap = () => {
+      fireEvent.pointerDown(viewport, { pointerId: 1, isPrimary: true, button: 0, clientX: 20, clientY: 20 });
+      fireEvent.pointerUp(viewport, { pointerId: 1, isPrimary: true, button: 0, clientX: 20, clientY: 20 });
+      fireEvent.click(viewport, { detail: 1 });
+    };
+    tap();
+    expect(cancel).toHaveBeenCalledWith(41);
+    expect(frame).toHaveAttribute("inert");
     tap();
     expect(frame).not.toHaveAttribute("inert");
+    stop();
   });
 
   it.each([
