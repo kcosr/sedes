@@ -90,7 +90,8 @@ export function ThreadPagesDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        size="xl"
+        size="viewer"
+        className="thread-pages-dialog"
         returnFocusRef={returnFocusRef}
       >
         <DialogHeader>
@@ -100,7 +101,7 @@ export function ThreadPagesDialog({
             history.
           </DialogDescription>
         </DialogHeader>
-        <DialogBody>
+        <DialogBody className="thread-pages-body">
           <div className="thread-pages-layout">
             <nav aria-label="Published pages" className="thread-pages-list">
               <Button
@@ -123,9 +124,6 @@ export function ThreadPagesDialog({
                   }
                 >
                   <span>{page.title}</span>
-                  <span className="thread-pages-list-revision">
-                    Revision {page.revision}
-                  </span>
                 </Button>
               ))}
               {result.nextCursor ? (
@@ -150,6 +148,7 @@ export function ThreadPagesDialog({
                   key={`${selected.pageId}:${selected.revision}`}
                   page={selected}
                   services={services}
+                  presentation="library"
                 />
               ) : null}
             </div>

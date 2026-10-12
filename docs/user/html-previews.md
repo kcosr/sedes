@@ -8,8 +8,9 @@ tools.
 
 Inline content appears without a permanent header or dimensions footer. Use
 the maximize button at the top right to open the larger viewer. Its header
-contains the title, previous/next revision arrows, a `vN`
-version indicator, and refresh.
+contains the title, refresh, and previous/next arrows around a `1/3` revision
+indicator when the page has multiple revisions. Single-revision pages omit
+the revision controls.
 Refresh reloads the selected saved revision and resets its local interaction
 state.
 
@@ -35,7 +36,7 @@ and republish it without relying on its previous chat context.
 Maximize the preview to see its header, then use the previous and next arrows
 around the version indicator to browse that page's revisions. Browsing does not change
 the saved conversation or the revision originally published there. While
-browsing another revision, select the `vN` indicator to return to the revision
+browsing another revision, select the revision indicator to return to the revision
 published at that position in chat. Open **Pages** in the thread header to find
 published documents even when their original chat turn is outside the loaded
 history or has been compacted by the provider.
@@ -44,6 +45,10 @@ revisions keep their document's position. Earlier chat previews remain available
 there even when a conversation reaches its display limits.
 If loaded history reaches its item or size limit, additional previews remain
 available through **Pages** without displacing conversation messages.
+The library lists page titles without revision labels. Its viewer stays the
+same size when switching pages, scrolls long content within that space, and
+accepts interaction immediately. It shares the fullscreen revision and zoom
+controls, while each chat occurrence keeps its own interaction toggle.
 
 Saved revisions preserve document content, images, and requested dimensions.
 They do not save transient interaction state such as selected filters or text
@@ -57,9 +62,9 @@ Inline HTML previews initially let gestures scroll the conversation on both desk
 and mobile. Tap or click the preview, or use its finger icon, to enable input.
 Dragging, scrolling, and long presses do not enable interaction. The activating
 tap only changes modes; tap again to use the page's controls. Use the checkmark
-to return to conversation scrolling. Expanded previews accept input immediately
-and have no interaction toggle. The page still loads and runs while inline input
-is inactive.
+to return to conversation scrolling. Expanded previews and the Pages library
+accept input immediately and have no interaction toggle. The page still loads
+and runs while inline input is inactive.
 
 A failed render or an attempt interrupted before cleanup does not restart
 automatically. Use **Retry** to try that revision again. This protects against

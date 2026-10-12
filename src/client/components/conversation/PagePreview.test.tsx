@@ -9,7 +9,7 @@ import {
   within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { PageRevision } from "../../../shared/protocol/pages.js";
+import type { PageRevision, PageRevisionPage } from "../../../shared/protocol/pages.js";
 import { PagePreview } from "./PagePreview.js";
 
 const safety = vi.hoisted(() => ({ supports: vi.fn(), android: vi.fn() }));
@@ -76,14 +76,24 @@ afterEach(() => {
 });
 function services() {
   return {
-    createPageRenderAdmission: vi.fn(async () => ({
-      url: "/page-render/token",
-      expiresAt: "2026-10-11T10:10:00.000Z",
-    })),
-    listPageRevisions: vi.fn(async () => ({
-      items: [{ ...original, revision: 2, title: "Updated phone" }],
-    })),
-    getPageRevision: vi.fn(async () => original),
+    createPageRenderAdmission: vi.fn(
+      async (_pageId: string, _revision: number, _signal?: AbortSignal) => ({
+        url: "/page-render/token",
+        expiresAt: "2026-10-11T10:10:00.000Z",
+      }),
+    ),
+    listPageRevisions: vi.fn(
+      async (
+        _pageId: string,
+        _options?: { limit?: number; signal?: AbortSignal },
+      ): Promise<PageRevisionPage> => ({
+        items: [{ ...original, revision: 2, title: "Updated phone" }],
+      }),
+    ),
+    getPageRevision: vi.fn(
+      async (_pageId: string, _revision: number, _signal?: AbortSignal) =>
+        original,
+    ),
   };
 }
 function sendFrameMessage(frame: HTMLIFrameElement, type: string, extra = {}) {
@@ -233,10 +243,10 @@ describe("published page preview", () => {
     expect(within(header as HTMLElement).getByRole("button", { name: "Refresh page preview" })).toHaveAttribute("data-size", "icon-lg");
     fireEvent.click(within(dialog).getByRole("button", { name: "Next page revision" }));
     const originalButton = await within(dialog).findByRole("button", { name: "Return to published revision 1" });
-    expect(originalButton).toHaveTextContent("v2");
+    expect(originalButton).toHaveTextContent("2/2");
     expect(api.listPageRevisions).toHaveBeenCalledWith(original.pageId, expect.objectContaining({ limit: 1 }));
     fireEvent.click(originalButton);
-    expect(within(dialog).getByLabelText("Revision 1")).toHaveTextContent("v1");
+    expect(within(dialog).getByLabelText("Revision 1 of 2")).toHaveTextContent("1/2");
     fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
     await waitFor(() => expect(expand).toHaveFocus());
     expect(screen.queryByRole("toolbar", { name: "Page actions" })).toBeNull();
@@ -275,17 +285,199 @@ describe("published page preview", () => {
         items: [{ ...original, revision: 2, title: "Updated phone" }],
       })
       .mockResolvedValueOnce({
+        items: [{ ...original, revision: 2, title: "Updated phone" }],
+      })
+      .mockResolvedValueOnce({
         items: [{ ...original, revision: 3, title: "Newest phone" }],
       });
     render(<PagePreview page={original} services={api} />);
     expandPage();
-    fireEvent.click(screen.getByRole("button", { name: "Next page revision" }));
-    await screen.findByText("v2");
+    fireEvent.click(await screen.findByRole("button", { name: "Next page revision" }));
+    await screen.findByText("2/2");
     fireEvent.click(
       screen.getByRole("button", { name: "Check for a newer page revision" }),
     );
-    await screen.findByText("v3");
-    expect(api.listPageRevisions).toHaveBeenCalledTimes(2);
+    await screen.findByText("3/3");
+    expect(api.listPageRevisions).toHaveBeenCalledTimes(3);
+  });
+
+  it("loads the total on viewer open without switching the published revision", async () => {
+    const api = services();
+    api.listPageRevisions.mockResolvedValue({
+      items: [{ ...original, revision: 4 }],
+    });
+    const { container } = render(
+      <PagePreview page={original} services={api} />,
+    );
+    await waitForFrame(container);
+    expect(api.listPageRevisions).not.toHaveBeenCalled();
+    expandPage();
+    const dialog = await screen.findByRole("dialog");
+    expect(
+      await within(dialog).findByLabelText("Revision 1 of 4"),
+    ).toHaveTextContent("1/4");
+    expect((await waitForFrame(dialog)).title).toBe("Phone · Revision 1");
+    expect(api.getPageRevision).not.toHaveBeenCalled();
+  });
+
+  it("hides revision controls and the separator for a single revision", async () => {
+    const api = services();
+    api.listPageRevisions.mockResolvedValue({ items: [original] });
+    render(
+      <PagePreview page={original} services={api} presentation="library" />,
+    );
+    await screen.findByRole("button", { name: "Refresh page preview" });
+    await waitFor(() => expect(api.listPageRevisions).toHaveBeenCalledOnce());
+    expect(
+      screen.queryByRole("group", { name: "Page revision controls" }),
+    ).toBeNull();
+    expect(document.querySelector(".page-preview-header-separator")).toBeNull();
+  });
+
+  it("renders library content interactively without chat controls or a nested dialog", async () => {
+    const api = services();
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(640);
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(300);
+    const { container } = render(
+      <PagePreview
+        page={{ ...original, viewport: { width: 390, height: 2000 } }}
+        services={api}
+        presentation="library"
+      />,
+    );
+    const frame = await waitForFrame(container);
+    expect(frame).not.toHaveAttribute("inert");
+    expect(frame.style.height).toBe("2000px");
+    expect(frame.style.transform).toBe("scale(1)");
+    expect(
+      screen.queryByRole("button", { name: /interact.*preview|Expand page:/i }),
+    ).toBeNull();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(
+      screen.getByRole("group", { name: "Page zoom controls" }),
+    ).toBeInTheDocument();
+  });
+
+  it("discovers additional revisions on refresh without changing the library selection", async () => {
+    const api = services();
+    api.listPageRevisions.mockResolvedValueOnce({ items: [original] });
+    const { container } = render(
+      <PagePreview page={original} services={api} presentation="library" />,
+    );
+    await waitForFrame(container);
+    expect(screen.queryByRole("group", { name: "Page revision controls" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Refresh page preview" }));
+    expect(await screen.findByLabelText("Revision 1 of 2")).toHaveTextContent("1/2");
+    expect((await waitForFrame(container)).title).toBe("Phone · Revision 1");
+  });
+
+  it("preserves explicit retry protection in the immediate-interaction library", async () => {
+    const api = services();
+    let view = render(
+      <PagePreview page={original} services={api} presentation="library" />,
+    );
+    sendFrameMessage(await waitForFrame(view.container), "sedes:page-error");
+    view.unmount();
+    view = render(
+      <PagePreview page={original} services={api} presentation="library" />,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Retry preview" }));
+    expect(await waitForFrame(view.container)).not.toHaveAttribute("inert");
+  });
+
+  it("ignores stale revision counts after switching library pages", async () => {
+    const api = services();
+    let resolveOld!: (value: PageRevisionPage) => void;
+    let resolveNew!: (value: PageRevisionPage) => void;
+    api.listPageRevisions
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveOld = resolve;
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveNew = resolve;
+          }),
+      );
+    const view = render(
+      <PagePreview page={original} services={api} presentation="library" />,
+    );
+    const oldSignal = api.listPageRevisions.mock.calls[0]?.[1]?.signal;
+    const another = {
+      ...original,
+      pageId: "30000000-0000-4000-8000-000000000002",
+      title: "Another page",
+    };
+    view.rerender(
+      <PagePreview page={another} services={api} presentation="library" />,
+    );
+    expect(oldSignal?.aborted).toBe(true);
+    await act(async () => resolveNew({ items: [{ ...another, revision: 3 }] }));
+    expect(screen.getByLabelText("Revision 1 of 3")).toHaveTextContent("1/3");
+    await act(async () =>
+      resolveOld({ items: [{ ...original, revision: 9 }] }),
+    );
+    expect(screen.getByLabelText("Revision 1 of 3")).toHaveTextContent("1/3");
+    expect(screen.queryByText("1/9")).toBeNull();
+  });
+
+  it("aborts a viewer count request on close and reloads it on reopen", async () => {
+    const api = services();
+    let resolveOld!: (value: PageRevisionPage) => void;
+    api.listPageRevisions.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveOld = resolve;
+        }),
+    );
+    render(<PagePreview page={original} services={api} />);
+    expandPage();
+    const oldSignal = api.listPageRevisions.mock.calls[0]?.[1]?.signal;
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(oldSignal?.aborted).toBe(true);
+    expandPage();
+    await screen.findByLabelText("Revision 1 of 2");
+    await act(async () =>
+      resolveOld({ items: [{ ...original, revision: 8 }] }),
+    );
+    expect(screen.queryByText("1/8")).toBeNull();
+    expect(screen.getByLabelText("Revision 1 of 2")).toBeInTheDocument();
+  });
+
+  it("keeps a return to the published revision when a pending navigation resolves late", async () => {
+    const api = services();
+    const published = { ...original, revision: 3 };
+    api.listPageRevisions.mockResolvedValue({ items: [published] });
+    let resolvePending!: (value: PageRevision) => void;
+    api.getPageRevision
+      .mockResolvedValueOnce({ ...original, revision: 2 })
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolvePending = resolve;
+          }),
+      );
+    render(
+      <PagePreview page={published} services={api} presentation="library" />,
+    );
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Previous page revision" }),
+    );
+    await screen.findByText("2/3");
+    fireEvent.click(
+      screen.getByRole("button", { name: "Previous page revision" }),
+    );
+    await waitFor(() => expect(api.getPageRevision).toHaveBeenCalledTimes(2));
+    const signal = api.getPageRevision.mock.calls[1]?.[2];
+    fireEvent.click(
+      screen.getByRole("button", { name: "Return to published revision 3" }),
+    );
+    expect(signal?.aborted).toBe(true);
+    await act(async () => resolvePending(original));
+    expect(screen.getByLabelText("Revision 3 of 3")).toHaveTextContent("3/3");
   });
 
   it("disposes the page only for its authenticated frame error", async () => {

@@ -169,6 +169,7 @@ test("published HTML keeps revisions, target viewport, local images, and host is
     ).toBeVisible();
 
     const revisionDialog = await expandPage(page, secondCard);
+    await expect(revisionDialog.getByLabel("Revision 2 of 2")).toHaveText("2/2");
     const revisionFrame = pageDocument(revisionDialog);
     await revisionDialog
       .getByRole("button", { name: "Previous page revision" })
@@ -181,6 +182,7 @@ test("published HTML keeps revisions, target viewport, local images, and host is
     await expect(
       revisionFrame.getByRole("heading", { name: "Inbox one" }),
     ).toBeVisible();
+    await expect(revisionDialog.getByRole("button", { name: "Return to published revision 2" })).toHaveText("1/2");
     await revisionDialog
       .getByRole("button", {
         name: "Return to published revision 2",
@@ -205,6 +207,7 @@ test("published HTML keeps revisions, target viewport, local images, and host is
     await expect(
       revisionFrame.getByRole("heading", { name: "Inbox three" }),
     ).toBeVisible();
+    await expect(revisionDialog.getByRole("button", { name: "Return to published revision 2" })).toHaveText("3/3");
     await expect(
       revisionDialog.getByRole("button", {
         name: "Return to published revision 2",
@@ -313,6 +316,11 @@ test("published HTML keeps revisions, target viewport, local images, and host is
         .getByRole("img", { name: "Saved local logo" })
         .evaluate((image) => (image as HTMLImageElement).naturalWidth),
     ).toBe(1);
+    await publish(page, threadId, {
+      html: '<!doctype html><style>body{margin:0;height:2200px;background:#eef2ff}</style><h1>Long library example</h1>',
+      title: "Long example",
+      viewport: { width: 390 },
+    });
     await page
       .getByRole("button", { name: "Thread actions", exact: true })
       .click();
@@ -326,11 +334,77 @@ test("published HTML keeps revisions, target viewport, local images, and host is
       exact: true,
     });
     await expect(library).toBeVisible();
-    await library
-      .getByRole("button", { name: /Inbox mockup.*Revision 3/ })
+    await expect(
+      pageDocument(library).getByRole("heading", {
+        name: "Long library example",
+      }),
+    ).toBeVisible();
+    await expect(
+      library.getByRole("button", { name: /interact.*preview|Expand page:/i }),
+    ).toHaveCount(0);
+    await expect(library.locator(".page-frame-document")).not.toHaveAttribute(
+      "inert",
+      "",
+    );
+    await expect(
+      library.getByRole("group", { name: "Page revision controls" }),
+    ).toHaveCount(0);
+    const libraryBox = (await library.boundingBox())!;
+    const viewerBox = (await library
+      .locator(".thread-pages-selected")
+      .boundingBox())!;
+    const libraryViewport = library.locator(".page-frame-viewport");
+    await expect
+      .poll(() =>
+        libraryViewport.evaluate(
+          (element) => element.scrollHeight > element.clientHeight,
+        ),
+      )
+      .toBe(true);
+    await libraryViewport.evaluate((element) => {
+      element.scrollTop = 300;
+    });
+    await expect
+      .poll(() => libraryViewport.evaluate((element) => element.scrollTop))
+      .toBe(300);
+    const libraryList = library.getByRole("navigation", {
+      name: "Published pages",
+    });
+    await expect(libraryList.getByText(/^Revision /)).toHaveCount(0);
+    await libraryList
+      .getByRole("button", { name: "Chat component", exact: true })
+      .click();
+    await expect(
+      pageDocument(library).getByText("Chat bubble example"),
+    ).toBeVisible();
+    const compactBox = (await library.boundingBox())!;
+    const compactViewerBox = (await library
+      .locator(".thread-pages-selected")
+      .boundingBox())!;
+    expect(Math.abs(compactBox.width - libraryBox.width)).toBeLessThanOrEqual(
+      1,
+    );
+    expect(Math.abs(compactBox.height - libraryBox.height)).toBeLessThanOrEqual(
+      1,
+    );
+    expect(
+      Math.abs(compactViewerBox.width - viewerBox.width),
+    ).toBeLessThanOrEqual(1);
+    expect(
+      Math.abs(compactViewerBox.height - viewerBox.height),
+    ).toBeLessThanOrEqual(1);
+    await libraryList
+      .getByRole("button", { name: "Inbox mockup", exact: true })
       .click();
     await expect(
       pageDocument(library).getByRole("heading", { name: "Inbox three" }),
+    ).toBeVisible();
+    await expect(library.getByLabel("Revision 3 of 3")).toHaveText("3/3");
+    await pageDocument(library)
+      .getByRole("button", { name: "Clicks: 0" })
+      .click();
+    await expect(
+      pageDocument(library).getByRole("button", { name: "Clicks: 1" }),
     ).toBeVisible();
     await capture(page, testInfo, "generative-ui-saved-pages.png");
     await library.getByRole("button", { name: "Close", exact: true }).click();

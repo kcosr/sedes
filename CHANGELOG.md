@@ -182,7 +182,10 @@ User-facing changes are collected here before release. See the
   HTML preview controls appear in a fullscreen header with large touch targets
   and right-aligned revision and refresh controls;
   a finger toggle or stationary tap enables inline interaction on desktop and
-  mobile, while fullscreen previews accept input immediately.
+  mobile, while fullscreen previews and the Pages library accept input immediately.
+  Revision controls show the current and total count only for pages with multiple
+  revisions. The library lists titles without revision labels and keeps its
+  viewer size stable while long pages scroll inside it.
   Clipped SVG content no longer makes previews excessively tall, positioned
   content remains visible, and fullscreen media surrounds match the chat
   background. Mermaid diagrams magnify beyond their original size, and touching

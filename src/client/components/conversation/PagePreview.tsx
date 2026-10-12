@@ -42,9 +42,11 @@ export type PagePreviewServices = Pick<
 export function PagePreview({
   page,
   services,
+  presentation = "chat",
 }: {
   readonly page: PageRevision;
   readonly services: PagePreviewServices;
+  readonly presentation?: "chat" | "library";
 }): React.JSX.Element {
   const [selected, setSelected] = useState(page);
   const [expanded, setExpanded] = useState(false);
@@ -56,6 +58,7 @@ export function PagePreview({
   const abort = useRef<AbortController | undefined>(undefined);
   const expandButton = useRef<HTMLButtonElement>(null);
   const deactivate = useCallback(() => setInteracting(false), []);
+  const viewerOpen = presentation === "library" || expanded;
 
   useEffect(() => {
     setSelected(page);
@@ -63,10 +66,45 @@ export function PagePreview({
     setError("");
     return () => abort.current?.abort();
   }, [page.pageId, page.revision]);
-  useEffect(deactivate, [
-    deactivate,
-    selected.pageId,
-    selected.revision,
+  useEffect(deactivate, [deactivate, selected.pageId, selected.revision]);
+
+  useEffect(() => {
+    if (!viewerOpen || !services.listPageRevisions) {
+      setLoading(false);
+      return;
+    }
+    const controller = new AbortController();
+    abort.current?.abort();
+    abort.current = controller;
+    setLoading(true);
+    setError("");
+    void services
+      .listPageRevisions(page.pageId, {
+        limit: 1,
+        signal: controller.signal,
+      })
+      .then(
+        (result) => {
+          if (controller.signal.aborted) return;
+          setLatestRevision(
+            Math.max(page.revision, result.items[0]?.revision ?? page.revision),
+          );
+        },
+        () => {
+          if (!controller.signal.aborted)
+            setError("Could not load page revisions.");
+        },
+      )
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+    return () => abort.current?.abort();
+  }, [
+    viewerOpen,
+    page.pageId,
+    page.revision,
+    services.listPageRevisions,
+    refreshVersion,
   ]);
 
   const navigateRevision = async (direction: -1 | 1) => {
@@ -85,7 +123,9 @@ export function PagePreview({
         })
       ).items[0];
       if (controller.signal.aborted) return;
-      setLatestRevision(newest?.revision);
+      setLatestRevision(
+        Math.max(page.revision, newest?.revision ?? page.revision),
+      );
       const wanted = selected.revision + direction;
       if (newest && wanted >= 1 && wanted <= newest.revision) {
         const next =
@@ -106,72 +146,86 @@ export function PagePreview({
     }
   };
 
+  const returnToPublishedRevision = () => {
+    abort.current?.abort();
+    setLoading(false);
+    setError("");
+    setSelected(page);
+  };
+
+  const hasRevisions = latestRevision !== undefined && latestRevision > 1;
+
   const headerActions = (
-    <div className="page-preview-header-actions" role="toolbar" aria-label="Page actions">
-      <div
-        className="page-preview-revisions"
-        role="group"
-        aria-label="Page revision controls"
-      >
-        <Button
-          aria-label="Previous page revision"
-          title="Previous revision"
-          disabled={
-            loading ||
-            selected.revision <= 1 ||
-            !services.listPageRevisions ||
-            !services.getPageRevision
-          }
-          onClick={() => void navigateRevision(-1)}
-          size="icon-lg"
-          variant="ghost"
-        >
-          <ChevronLeft />
-        </Button>
-        {selected.revision === page.revision ? (
-          <span
-            aria-live="polite"
-            aria-label={`Revision ${selected.revision}`}
-            className="page-revision-label"
+    <div
+      className="page-preview-header-actions"
+      role="toolbar"
+      aria-label="Page actions"
+    >
+      {hasRevisions ? (
+        <>
+          <div
+            className="page-preview-revisions"
+            role="group"
+            aria-label="Page revision controls"
           >
-            v{selected.revision}
-          </span>
-        ) : (
-          <Button
-            className="page-revision-label"
-            variant="ghost"
-            size="sm"
-            aria-label={`Return to published revision ${page.revision}`}
-            title={`Published here as revision ${page.revision}; return to it`}
-            onClick={() => setSelected(page)}
-          >
-            v{selected.revision}
-          </Button>
-        )}
-        <Button
-          aria-label={
-            latestRevision !== undefined &&
-            selected.revision >= latestRevision
-              ? "Check for a newer page revision"
-              : "Next page revision"
-          }
-          title="Next revision"
-          disabled={
-            loading ||
-            !services.listPageRevisions ||
-            !services.getPageRevision
-          }
-          onClick={() => void navigateRevision(1)}
-          size="icon-lg"
-          variant="ghost"
-        >
-          <ChevronRight />
-        </Button>
-      </div>
-      <span
-        className="page-preview-header-separator"
-        aria-hidden="true"
-      />
+            <Button
+              aria-label="Previous page revision"
+              title="Previous revision"
+              disabled={
+                loading ||
+                selected.revision <= 1 ||
+                !services.listPageRevisions ||
+                !services.getPageRevision
+              }
+              onClick={() => void navigateRevision(-1)}
+              size="icon-lg"
+              variant="ghost"
+            >
+              <ChevronLeft />
+            </Button>
+            {selected.revision === page.revision ? (
+              <span
+                aria-live="polite"
+                aria-label={`Revision ${selected.revision} of ${latestRevision}`}
+                className="page-revision-label"
+              >
+                {selected.revision}/{latestRevision}
+              </span>
+            ) : (
+              <Button
+                className="page-revision-label"
+                variant="ghost"
+                size="sm"
+                aria-label={`Return to published revision ${page.revision}`}
+                title={`Published here as revision ${page.revision}; return to it`}
+                onClick={returnToPublishedRevision}
+              >
+                {selected.revision}/{latestRevision}
+              </Button>
+            )}
+            <Button
+              aria-label={
+                latestRevision !== undefined &&
+                selected.revision >= latestRevision
+                  ? "Check for a newer page revision"
+                  : "Next page revision"
+              }
+              title="Next revision"
+              disabled={
+                loading ||
+                !services.listPageRevisions ||
+                !services.getPageRevision
+              }
+              onClick={() => void navigateRevision(1)}
+              size="icon-lg"
+              variant="ghost"
+            >
+              <ChevronRight />
+            </Button>
+          </div>
+          <span className="page-preview-header-separator" aria-hidden="true" />
+        </>
+      ) : null}
       <Button
         aria-label="Refresh page preview"
         title="Refresh preview"
@@ -185,6 +239,52 @@ export function PagePreview({
       </Button>
     </div>
   );
+
+  const viewer = (
+    <>
+      <header className="page-preview-fullscreen-header">
+        {presentation === "library" ? (
+          <h3 className="page-preview-name">{selected.title}</h3>
+        ) : (
+          <DialogTitle className="page-preview-name">
+            {selected.title}
+          </DialogTitle>
+        )}
+        {headerActions}
+      </header>
+      {error ? (
+        <p className="page-preview-error" role="alert">
+          {error}
+        </p>
+      ) : null}
+      <PageFrame
+        key={`${selected.pageId}:${selected.revision}`}
+        page={selected}
+        createAdmission={services.createPageRenderAdmission}
+        enabled={viewerOpen}
+        interactive
+        onActivate={() => setInteracting(true)}
+        onDeactivate={deactivate}
+        refreshVersion={refreshVersion}
+        expanded
+        fitHeight={presentation !== "library"}
+      />
+    </>
+  );
+
+  if (presentation === "library")
+    return (
+      <div
+        className="page-preview-library"
+        data-page-id={page.pageId}
+        data-page-revision={page.revision}
+        role="group"
+        aria-label={selected.title}
+        aria-busy={loading}
+      >
+        {viewer}
+      </div>
+    );
 
   return (
     <>
@@ -224,8 +324,13 @@ export function PagePreview({
             aria-label={`Expand page: ${selected.title}`}
             aria-haspopup="dialog"
             title="Expand preview"
-            onClick={() => { setExpanded(true); deactivate(); }}
-          ><Maximize2 /></Button>
+            onClick={() => {
+              setExpanded(true);
+              deactivate();
+            }}
+          >
+            <Maximize2 />
+          </Button>
         </div>
         {error && !expanded ? (
           <p className="page-preview-error" role="alert">
@@ -257,22 +362,7 @@ export function PagePreview({
           returnFocusRef={expandButton}
           aria-describedby={undefined}
         >
-          <header className="page-preview-fullscreen-header">
-            <DialogTitle className="page-preview-name">{selected.title}</DialogTitle>
-            {headerActions}
-          </header>
-          {error ? <p className="page-preview-error" role="alert">{error}</p> : null}
-          <PageFrame
-            key={`${selected.pageId}:${selected.revision}`}
-            page={selected}
-            createAdmission={services.createPageRenderAdmission}
-            enabled={expanded}
-            interactive
-            onActivate={() => setInteracting(true)}
-            onDeactivate={deactivate}
-            refreshVersion={refreshVersion}
-            expanded
-          />
+          {viewer}
         </DialogContent>
       </Dialog>
     </>
@@ -288,6 +378,7 @@ function PageFrame({
   onActivate,
   refreshVersion,
   expanded = false,
+  fitHeight = true,
 }: {
   readonly page: PageRevision;
   readonly createAdmission: PagePreviewServices["createPageRenderAdmission"];
@@ -297,6 +388,7 @@ function PageFrame({
   readonly onActivate: () => void;
   readonly refreshVersion: number;
   readonly expanded?: boolean;
+  readonly fitHeight?: boolean;
 }): React.JSX.Element {
   const host = useRef<HTMLDivElement>(null);
   const frame = useRef<HTMLIFrameElement>(null);
@@ -335,7 +427,7 @@ function PageFrame({
   );
   const fitted = pageFrameLayout(page.viewport, width, height);
   const fitScale =
-    expanded && availableHeight > 0
+    expanded && fitHeight && availableHeight > 0
       ? Math.min(
           fitted.scale,
           Math.max(1, availableHeight - 64) / fitted.height,

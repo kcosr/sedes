@@ -5,6 +5,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -15,8 +16,14 @@ import type { ThreadClientStore } from "../../stores/ThreadClientStore.js";
 import { ThreadPagesDialog } from "./ThreadPagesDialog.js";
 
 vi.mock("../conversation/PagePreview.js", () => ({
-  PagePreview: ({ page }: { page: PageRevision }) => (
-    <article>
+  PagePreview: ({
+    page,
+    presentation,
+  }: {
+    page: PageRevision;
+    presentation: string;
+  }) => (
+    <article data-presentation={presentation}>
       {page.title} preview revision {page.revision}
     </article>
   ),
@@ -69,6 +76,18 @@ describe("thread page discovery", () => {
     expect(
       await screen.findByText("Newest mockup preview revision 2"),
     ).toBeInTheDocument();
+    const dialog = screen.getByRole("dialog", { name: "Published pages" });
+    expect(dialog).toHaveAttribute("data-size", "viewer");
+    const list = within(dialog).getByRole("navigation", {
+      name: "Published pages",
+    });
+    expect(
+      within(list).getByRole("button", { name: "Newest mockup" }),
+    ).toBeInTheDocument();
+    expect(within(list).queryByText(/Revision/)).toBeNull();
+    expect(
+      screen.getByText("Newest mockup preview revision 2"),
+    ).toHaveAttribute("data-presentation", "library");
     fireEvent.click(screen.getByRole("button", { name: "Load more pages" }));
     await waitFor(() =>
       expect(listPages).toHaveBeenCalledWith(
