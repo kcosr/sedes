@@ -351,6 +351,7 @@ class ClaudeE2eSdk implements ClaudeSdkFacade {
     readonly queue: ClaudeE2eMessageQueue;
   }[]>();
   readonly #backgroundTasks = new Map<string, { taskId: string; toolId: string }>();
+  #nextCompactNoop = false;
 
   #sidebarBackground?: {
     sessionId: string;
@@ -381,6 +382,10 @@ class ClaudeE2eSdk implements ClaudeSdkFacade {
 
   async readCliRelease(): Promise<string> {
     return "2.1.287";
+  }
+
+  armNextCompactNoop(): void {
+    this.#nextCompactNoop = true;
   }
 
   async readCliAuthStatus() {
@@ -546,6 +551,45 @@ class ClaudeE2eSdk implements ClaudeSdkFacade {
     for await (const prompt of prompts) {
       if (prompt.isSynthetic && prompt.shouldQuery === false) continue;
       const promptText = claudePromptText(prompt);
+      if (promptText === "/compact" || promptText.startsWith("/compact ")) {
+        // Native local commands have their own input identity and terminal
+        // lifecycle. They never become an ordinary user/model turn.
+        queue.push(claudeCommandLifecycle(sessionId, prompt.uuid!, "queued"));
+        queue.push(claudeCommandLifecycle(sessionId, prompt.uuid!, "started"));
+        const noop = this.#nextCompactNoop;
+        this.#nextCompactNoop = false;
+        if (noop) {
+          const content = "<local-command-stderr>Error: No messages to compact</local-command-stderr>";
+          queue.push({ type: "assistant", uuid: crypto.randomUUID(), session_id: sessionId,
+            parent_tool_use_id: null, parent_agent_id: null,
+            message: { id: `compact-${crypto.randomUUID()}`, type: "message", role: "assistant",
+              model: "<synthetic>", content: [{ type: "text", text: content }],
+              stop_reason: "end_turn", stop_sequence: null, usage: { input_tokens: 0, output_tokens: 0 } },
+            local_command_run: { command: "compact", args: "" },
+            local_command_outcome: { kind: "failed" }, local_command_source: content,
+          } as unknown as ClaudeMessage);
+        } else {
+          queue.push({ type: "system", subtype: "compact_boundary", uuid: crypto.randomUUID(),
+            session_id: sessionId, compact_metadata: { trigger: "manual", pre_tokens: 640, post_tokens: 80 },
+          });
+          const summary = {
+            type: "user", uuid: crypto.randomUUID(), session_id: sessionId,
+            parent_tool_use_id: null, parent_agent_id: null, isSynthetic: true,
+            isCompactSummary: true, timestamp: new Date().toISOString(),
+            message: { role: "user", content: [{ type: "text", text:
+              "Claude compacted the earlier browser conversation. Keep every correction, completed background task, and selected permission mode." }] },
+          } as unknown as ClaudeSessionMessage & ClaudeMessage;
+          this.#sessions.set(sessionId, [...(this.#sessions.get(sessionId) ?? []), summary]);
+          queue.push(summary);
+          queue.push({ type: "user", uuid: crypto.randomUUID(), session_id: sessionId,
+            parent_tool_use_id: null, isReplay: true,
+            message: { role: "user", content: "<local-command-stdout>Compacted </local-command-stdout>" },
+          });
+        }
+        queue.push({ ...claudeFixtureResult(sessionId, prompt.uuid!), num_turns: 0, local_command: "compact" } as ClaudeMessage);
+        queue.push(claudeCommandLifecycle(sessionId, prompt.uuid!, "completed"));
+        continue;
+      }
       const parityScenario = promptText.includes("CLAUDE_PARITY_NATIVE_IMAGE");
       const skillScenario = promptText.trimStart().startsWith("/review");
       const sidebarBackgroundScenario = promptText === "Start sidebar background fixture";
@@ -1006,7 +1050,8 @@ function claudeFixtureResult(sessionId: string, operationId: string): ClaudeMess
   return { type: "result", subtype: "success", uuid: crypto.randomUUID(),
     session_id: sessionId, duration_ms: 1, duration_api_ms: 1,
     is_error: false, num_turns: 1, result: "Fixture response complete.",
-    stop_reason: "end_turn", total_cost_usd: 0, usage: {}, modelUsage: {},
+    stop_reason: "end_turn", total_cost_usd: 0,
+    usage: { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 }, modelUsage: {},
     permission_denials: [], user_message_uuid: operationId, user_message_uuids: [operationId],
   } as unknown as ClaudeMessage;
 }
@@ -1018,7 +1063,7 @@ const CLAUDE_E2E_HELD_STEERS = new Set([
   "Mention the Claude changelog too",
 ]);
 
-function claudeCommandLifecycle(sessionId: string, commandUuid: string, state: "queued" | "started" | "cancelled"): ClaudeMessage {
+function claudeCommandLifecycle(sessionId: string, commandUuid: string, state: "queued" | "started" | "completed" | "cancelled"): ClaudeMessage {
   return { type: "command_lifecycle", command_uuid: commandUuid, state, uuid: crypto.randomUUID(),
     session_id: sessionId } as unknown as ClaudeMessage;
 }
@@ -5405,6 +5450,10 @@ async function main(): Promise<void> {
   });
   app.post("/__e2e/claude/steers/fold", (_request, response) => {
     claudeSdk.foldHeldSteers();
+    response.status(204).end();
+  });
+  app.post("/__e2e/claude/arm-compact-noop", (_request, response) => {
+    claudeSdk.armNextCompactNoop();
     response.status(204).end();
   });
   app.post("/__e2e/codex/arm-create-outcome-unknown", (_request, response) => {

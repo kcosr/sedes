@@ -57,6 +57,28 @@ const historyAuthentication = {
   forkBoundaryAuthentication: markerAuthentication,
 };
 
+describe("Claude completed local command history", () => {
+  it("omits provider-proven command rows without hiding user text that resembles command output", () => {
+    const output = "<local-command-stdout>Compacted </local-command-stdout>";
+    const messages = [
+      user(uuid(1), "Describe the project"),
+      assistant(uuid(2), [{ type: "text", text: "Project description" }]),
+      { ...user(uuid(3), "<command-name>/compact</command-name>"), isCompletedLocalCommand: true },
+      { ...user(uuid(4), output), isCompletedLocalCommand: true },
+      user(uuid(5), output),
+    ] as SessionMessage[];
+    const projection = projectClaudeHistory(messages);
+    expect(projection.snapshot.orderedBackendTurnIds).toHaveLength(2);
+    const prompts = Object.values(projection.snapshot.itemsById).filter(item => item.semanticKind === "user_message");
+    expect(prompts).toHaveLength(2);
+    expect(JSON.stringify(prompts)).toContain(output);
+    expect(JSON.stringify(projection.snapshot)).not.toContain("<command-name>");
+    expect(projection.nativeUserMessageUuidByBackendTurnId.size).toBe(2);
+    expect(nextClaudeUserMessageOrdinal(messages, markerAuthentication)).toBe(2);
+    expect(projectClaudeHistoryPage(messages, { limit: 10 }).itemsById).toEqual(projection.snapshot.itemsById);
+  });
+});
+
 describe("Claude assistant response classification", () => {
   function fragment(index: number, id: string | undefined, content: unknown, stopReason: string | null) {
     return {

@@ -12,7 +12,7 @@ thread state does not support it.
 | Mid-turn Steer | Yes, aimed at the current turn | Yes, aimed at the current turn | Yes, delivered to the conversation | No; Queue instead | Yes, delivered to the conversation |
 | Stop | Yes | Yes | Yes | Yes | Yes; pending native inputs may remain unconfirmed |
 | Background work indicator above composer | No | No | Subagents and commands | No | Child sessions and attributed shells |
-| Manual compact | Yes | Yes | No | No | Yes; exact native outcome |
+| Manual compact | Yes | Yes | Yes; idle bound thread | No | Yes; exact native outcome |
 | Exact completed-turn fork | Yes | Yes | Yes, idle source | No | No |
 | Latest provider snapshot fork | No | Yes | No | No | No |
 | Skills | Yes | Yes | Yes, eligible skills | Not currently | Explicit native skill selection |
@@ -402,7 +402,7 @@ only within that ceiling.
 
 Claude supports:
 
-- Send, Steer, Queue, Stop, and rename;
+- Send, Steer, Queue, Stop, rename, and manual compact;
 - native permission prompts and multiple-choice questions;
 - eligible native skills;
 - usage reporting;
@@ -418,7 +418,13 @@ opportunity, so it may join the running turn or start the next one, and it
 never interrupts work. Pending input stays visible until Claude confirms it was
 incorporated. Choose Queue when you want the input held for a new turn instead.
 
-Claude does not support manual compact, active-source or latest snapshot forks,
+Choose **Thread actions → Compact context** after a Claude thread has completed
+its first turn and is idle. Claude summarizes its current context; earlier
+turns stay visible, and **Conversation compacted** expands to the summary.
+An active turn or pending input blocks compaction. If Claude
+has nothing to compact, Sedes shows a notice without adding a marker.
+
+Claude does not support active-source or latest snapshot forks,
 managed terminals, plan-mode/reset workflows, or provider-output image
 artifacts. The same managed Claude runtime serves local execution and the
 persistent sidecar on SSH or outbound hosts.

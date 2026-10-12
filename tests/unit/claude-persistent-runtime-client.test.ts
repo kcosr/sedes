@@ -23,14 +23,14 @@ vi.mock("../../src/server/backends/claude/runtime/claude-sidecar-runtime.js", as
 const SESSION_ID = "11111111-1111-4111-8111-111111111111";
 const PROBE_ID = "22222222-2222-4222-8222-222222222222";
 function opened(events: ClaudePersistentEvent[] = [], reattached = false) {
-  return { failureCode: null, pendingBackgroundTaskIds: [], backgroundActivity: { state: "known", agents: 0, commands: 0, other: 0 }, reattached, queryId: SESSION_ID, startupProbeUuid: PROBE_ID, initialization: { cliRelease: "2.1.287", models: [], commands: [], skillNames: [], terminalCommandNames: [], account: {}, actualPermissionMode: "default" }, events };
+  return { throughSequence: Math.max(0, ...events.map(event => event.sequence)), failureCode: null, pendingBackgroundTaskIds: [], backgroundActivity: { state: "known", agents: 0, commands: 0, other: 0 }, reattached, queryId: SESSION_ID, startupProbeUuid: PROBE_ID, initialization: { cliRelease: "2.1.287", models: [], commands: [], skillNames: [], terminalCommandNames: [], account: {}, actualPermissionMode: "default" }, events };
 }
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(r => { resolve = r; }); return { promise, resolve }; }
 function setup(input: { nativeDefault?: boolean; supportsRuntime?: boolean; runtimeMajor?: number } = {}) {
   const carriers: { lost: ReturnType<typeof deferred<void>>; release: ReturnType<typeof vi.fn> }[] = [];
   const acquire = vi.fn(async (_signal?: AbortSignal, _options?: { existingOnly?: boolean }) => {
     const lost = deferred<void>(); const release = vi.fn(); carriers.push({ lost, release });
-    return { channel: { assertReady: vi.fn(), supportsOperation: (operation: { majorVersion: number }) => input.supportsRuntime !== false && operation.majorVersion === (input.runtimeMajor ?? 4) } as unknown as SidecarRuntimeChannel, controllerEpoch: carriers.length, serviceIncarnation: "service", closed: lost.promise, release };
+    return { channel: { assertReady: vi.fn(), supportsOperation: (operation: { majorVersion: number }) => input.supportsRuntime !== false && operation.majorVersion === (input.runtimeMajor ?? 5) } as unknown as SidecarRuntimeChannel, controllerEpoch: carriers.length, serviceIncarnation: "service", closed: lost.promise, release };
   });
   const client = new ClaudePersistentRuntimeClient({ scope: { tenantId: "tenant", principalId: "principal", executionEnvironmentId: "remote", backendInstanceId: "claude" }, sidecarRuntime: { acquireExisting: async () => { throw new Error("unused_existing_carrier_admission"); }, acquire }, executablePath: "/bin/claude", ...(input.nativeDefault ? {} : { configDirectory: "/config" }), initializationTimeoutMs: 1000 });
   const options: ClaudeRuntimeSessionOptions = { executablePath: "/bin/claude", initializationTimeoutMs: 1000, sessionId: SESSION_ID, cwd: "/work", launch: "new", environment: {}, onMessage: vi.fn() };
@@ -93,6 +93,141 @@ it("acknowledges replay only after asynchronous message application and suppress
   connection.listener!(event);
   expect(onMessage).toHaveBeenCalledOnce();
   await client.close();
+});
+
+it("waits for the compaction event cut and ordered application when the terminal response arrives first", async () => {
+  const { client, options } = setup();
+  const applied = deferred<void>(); const onMessage = vi.fn(async () => applied.promise);
+  const session = client.createSession({ ...options, onMessage }); await session.start();
+  const connection = connectionState.instances[0]!;
+  connection.execute.mockImplementation(async command => command.action === "compact"
+    ? { response: { outcome: "compacted" }, throughSequence: 1 } : {});
+  const input = { operationId: "33333333-3333-4333-8333-333333333333", instructions: "Keep the task." };
+  let complete = false;
+  const result = session.compact(input); expect(session.compact(input)).toBe(result);
+  void result.then(() => { complete = true; });
+  await vi.waitFor(() => expect(connection.execute).toHaveBeenCalledWith(expect.objectContaining({ action: "compact",
+    request: { queryId: SESSION_ID, startupProbeUuid: PROBE_ID, ...input } })));
+  expect(complete).toBe(false);
+  connection.listener!({ sessionId: SESSION_ID, sequence: 1, payload: { kind: "message", message: {
+    type: "system", subtype: "compact_boundary", uuid: PROBE_ID, session_id: SESSION_ID,
+    compact_metadata: { trigger: "manual", pre_tokens: 20_000 },
+  } } });
+  await vi.waitFor(() => expect(onMessage).toHaveBeenCalledOnce());
+  expect(complete).toBe(false);
+  applied.resolve(); expect(await result).toEqual({ outcome: "compacted" });
+  expect(complete).toBe(true);
+  expect(connection.execute.mock.calls.filter(([command]) => command.action === "compact")).toHaveLength(1);
+  await client.close();
+});
+
+it("re-reads a retained terminal result after exact reconciliation without blindly retrying a lost command", async () => {
+  const { client, options } = setup(); const onFailure = vi.fn();
+  const session = client.createSession({ ...options, onFailure }); await session.start();
+  const connection = connectionState.instances[0]!;
+  const input = { operationId: "33333333-3333-4333-8333-333333333333" };
+  const lost = new Error("sidecar_request_timeout");
+  connection.execute.mockRejectedValueOnce(lost);
+  await expect(session.compact(input)).rejects.toBe(lost);
+  await expect(session.compact(input)).rejects.toBe(lost);
+  expect(connection.execute.mock.calls.filter(([command]) => command.action === "compact")).toHaveLength(1);
+  connection.execute.mockImplementation(async command => command.action === "compact_disposition"
+    ? { outcome: "accepted", pending: false, throughSequence: 0 }
+    : command.action === "compact" ? { response: { outcome: "noop", message: "Not enough history." }, throughSequence: 0 } : {});
+  expect(await session.reconcileCompact(input)).toEqual({ outcome: "accepted", pending: false });
+  expect(await session.compact(input)).toEqual({ outcome: "noop", message: "Not enough history." });
+  await expect(session.compact({ ...input, instructions: "Different request" })).rejects.toMatchObject({ backendCode: "claude_compact_operation_conflict", crossedSubmissionBoundary: false });
+  expect(onFailure).not.toHaveBeenCalled(); expect(session.closed).toBe(false);
+  await client.close();
+});
+
+it("replaces a stale crossed failure with a non-crossed tombstone after exact not-applied proof", async () => {
+  const { client, options } = setup(); const session = client.createSession(options); await session.start();
+  const connection = connectionState.instances[0]!;
+  const input = { operationId: "33333333-3333-4333-8333-333333333333" };
+  connection.execute.mockRejectedValueOnce(new Error("sidecar_request_timeout"));
+  await expect(session.compact(input)).rejects.toThrow("sidecar_request_timeout");
+  connection.execute.mockImplementation(async command => command.action === "compact_disposition"
+    ? { outcome: "not_applied", pending: false, throughSequence: 0 } : {});
+  expect(await session.reconcileCompact(input)).toEqual({ outcome: "not_applied", pending: false });
+  await expect(session.compact(input)).rejects.toMatchObject({ crossedSubmissionBoundary: false, backendCode: "claude_compact_not_applied" });
+  expect(connection.execute.mock.calls.filter(([command]) => command.action === "compact")).toHaveLength(1);
+  expect(session.closed).toBe(false); await client.close();
+});
+
+it.each(["not_ready", "attachment", "attach", "schema"] as const)("retains known non-dispatch when compact preparation fails at %s", async stage => {
+  vi.useFakeTimers();
+  const { client, options, acquire, carriers } = setup(); const onFailure = vi.fn();
+  const session = client.createSession({ ...options, onFailure });
+  const input = { operationId: "33333333-3333-4333-8333-333333333333",
+    ...(stage === "schema" ? { instructions: "\0" } : {}) };
+  if (stage !== "not_ready") await session.start();
+  if (stage === "attachment" || stage === "attach") {
+    carriers[0]!.lost.resolve(); await Promise.resolve();
+    if (stage === "attachment") acquire.mockRejectedValueOnce(new Error("test_carrier_unavailable"));
+    else {
+      await client.attachment();
+      connectionState.instances.at(-1)!.execute.mockRejectedValueOnce(new Error("test_open_failed"));
+    }
+  }
+  await expect(session.compact(input)).rejects.toMatchObject({ backendCode: "claude_compact_not_admitted", crossedSubmissionBoundary: false });
+  expect(await session.reconcileCompact(input)).toEqual({ outcome: "not_applied", pending: false });
+  await expect(session.compact(input)).rejects.toMatchObject({ crossedSubmissionBoundary: false });
+  expect(connectionState.instances.flatMap(connection => connection.execute.mock.calls).filter(([command]) => command.action === "compact")).toHaveLength(0);
+  expect(onFailure).not.toHaveBeenCalled();
+  if (stage === "not_ready") expect(acquire).not.toHaveBeenCalled();
+  await client.close();
+});
+
+it("keeps accepted proof after a retained-result read fails before execution", async () => {
+  vi.useFakeTimers();
+  const { client, options, acquire, carriers } = setup(); const session = client.createSession(options); await session.start();
+  const input = { operationId: "33333333-3333-4333-8333-333333333333" };
+  const first = connectionState.instances[0]!;
+  first.execute.mockRejectedValueOnce(new Error("sidecar_request_timeout"));
+  await expect(session.compact(input)).rejects.toThrow("sidecar_request_timeout");
+  first.execute.mockImplementation(async command => command.action === "compact_disposition"
+    ? { outcome: "accepted", pending: false, throughSequence: 0 } : {});
+  expect(await session.reconcileCompact(input)).toEqual({ outcome: "accepted", pending: false });
+  carriers[0]!.lost.resolve(); await Promise.resolve();
+  acquire.mockRejectedValueOnce(new Error("test_carrier_unavailable"));
+  await expect(session.compact(input)).rejects.toMatchObject({ crossedSubmissionBoundary: false });
+  expect(await session.reconcileCompact(input)).toEqual({ outcome: "accepted", pending: false });
+  await client.attachment();
+  const second = connectionState.instances.at(-1)!;
+  second.execute.mockImplementation(async command => command.action === "open" ? opened([], true)
+    : command.action === "compact" ? { response: { outcome: "noop" }, throughSequence: 0 } : {});
+  expect(await session.compact(input)).toEqual({ outcome: "noop" });
+  expect(first.execute.mock.calls.filter(([command]) => command.action === "compact")).toHaveLength(1);
+  expect(second.execute.mock.calls.filter(([command]) => command.action === "compact")).toHaveLength(1);
+  await client.close();
+});
+
+it("covers already reclaimed sequences in a replacement attachment before replaying a no-op receipt", async () => {
+  connectionState.nextOpen = { ...opened([], true), throughSequence: 9 };
+  const { client, options } = setup(); const session = client.createSession(options); await session.start();
+  const connection = connectionState.instances[0]!;
+  connection.execute.mockImplementation(async command => command.action === "compact"
+    ? { response: { outcome: "noop" }, throughSequence: 9 } : {});
+  expect(await session.compact({ operationId: "33333333-3333-4333-8333-333333333333" })).toEqual({ outcome: "noop" });
+  expect(options.onMessage).not.toHaveBeenCalled(); await client.close();
+});
+
+it.each(["session", "operation"])("rejects a terminal compaction receipt carrying another %s identity", async changed => {
+  const { client, options } = setup(); const session = client.createSession(options); await session.start();
+  const input = { operationId: "33333333-3333-4333-8333-333333333333" };
+  const another = "44444444-4444-4444-8444-444444444444";
+  const operationId = changed === "operation" ? another : input.operationId;
+  connectionState.instances[0]!.execute.mockImplementation(async command => command.action === "compact" ? {
+    response: { outcome: "noop", nativeResult: { type: "result", subtype: "success", is_error: false,
+      uuid: PROBE_ID, session_id: changed === "session" ? another : SESSION_ID,
+      user_message_uuid: operationId, user_message_uuids: [operationId], num_turns: 0,
+      total_cost_usd: 0, modelUsage: {},
+      usage: { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+    } }, throughSequence: 0,
+  } : {});
+  await expect(session.compact(input)).rejects.toMatchObject({ backendCode: "claude_compact_result_identity_mismatch", crossedSubmissionBoundary: true });
+  expect(options.onMessage).not.toHaveBeenCalled(); await client.close();
 });
 
 it("marks reconnect catch-up as recovered while preserving later live delivery behind asynchronous replay", async () => {
@@ -563,7 +698,7 @@ it("leaves the omitted SSH native store unresolved despite main-server environme
   await client.close();
 });
 
-it.each([undefined, 2, 3])("fails closed when Claude runtime support is absent or uses an old major (%s)", async runtimeMajor => {
+it.each([undefined, 2, 3, 4])("fails closed when Claude runtime support is absent or uses an old major (%s)", async runtimeMajor => {
   const { client, carriers, options } = setup(runtimeMajor === undefined ? { supportsRuntime: false } : { runtimeMajor });
   await expect(client.createSession(options).start()).rejects.toThrow("claude_remote_runtime_unsupported");
   expect(connectionState.instances).toHaveLength(0);

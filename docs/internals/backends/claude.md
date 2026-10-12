@@ -18,6 +18,7 @@ operator-visible capabilities, and troubleshooting, use the
 - [Inputs, images, and skill correlation](#inputs-images-and-skill-correlation)
 - [Agent-tool presentation](#agent-tool-presentation)
 - [Fork lineage](#fork-lineage)
+- [Manual compaction](#manual-compaction)
 - [Recovery and unsupported mutations](#recovery-and-unsupported-mutations)
 - [Verification contract](#verification-contract)
 
@@ -39,8 +40,8 @@ enabled. One
 principal/backend runtime owns the SDK queries admitted by the shared Sedes
 conversation-runtime budget for that execution environment. A live Sedes thread
 has at most one warm query. The strict worker and persistent sidecar capabilities
-are `claude_runtime@3` and `claude_persistent_runtime@4`. Worker operations are
-defined in `src/server/backends/claude/worker/claude-runtime-v3.ts`; older majors
+are `claude_runtime@4` and `claude_persistent_runtime@5`. Worker operations are
+defined in `src/server/backends/claude/worker/claude-runtime-v4.ts`; older majors
 are not accepted.
 Closing a handle does not delete its Claude session, and attaching the same
 native session twice is denied independently. After a query closes or fails,
@@ -258,7 +259,7 @@ late responses cannot restore them. Missing telemetry leaves context unknown
 without failing the conversation. Persistent reads bind the current service,
 controller and startup identity and never launch or reconnect a runtime for the
 meter. The worker requires `query.context_usage` in its exact operation inventory;
-the persistent closed command union requires `claude_persistent_runtime@4`.
+the persistent closed command union requires `claude_persistent_runtime@5`.
 
 Counters continue to come from the transcript projection. Every `usage_changed`
 event replaces the complete context-and-counters snapshot. Neither the context
@@ -1103,7 +1104,7 @@ The alias list is bounded to 128 names of at most 160 characters per skill.
 The catalog exposes at most 512 skills. Client protocol 132 carries the
 optional normalized field; Pi, Codex, Grok, and OpenCode omit it and retain
 their existing behavior. Native `builtin` classification stays private and
-is preserved by `claude_runtime@3` / `claude_persistent_runtime@4` catalogs.
+is preserved by `claude_runtime@4` / `claude_persistent_runtime@5` catalogs.
 Stale selections, terminal-only commands, unclassified builtins, malformed
 commands, and reset-producing forms fail before provider submission.
 
@@ -1270,6 +1271,55 @@ Claude Code can no longer resume at that row. Branching fidelity keeps `compacti
 resumes the same compacted context, and states in a limitation that earlier
 turns are not copied or forkable.
 
+## Manual compaction
+
+Claude implements the normalized thread `compact` action through a dedicated
+backend-private runtime operation. Its configuration, capability, receipt,
+history effect, and controls belong to the requesting principal's thread.
+The action requires a bound conversation, a complete desired model/effort/permission
+tuple admitted by installation policy, an idle foreground, no pending input,
+and no other compaction in progress. The shared mutation gateway applies its
+normal scope, thread revision, capability, and durable receipt checks. Direct
+backend invocation repeats the provider admission checks.
+
+At this idle boundary, the handle applies any pending desired settings through
+the same native controls as Submit. It confirms the complete tuple before
+dispatching `/compact`; an unavailable, disallowed, or unconfirmed axis prevents
+the native compaction request.
+
+The SDK session sends one UUID-stamped native `/compact` command, with optional
+instructions. It owns that command separately from ordinary Submit and Steer;
+neither the command text nor local command output creates a visible human
+turn. Completion correlates the exact command lifecycle. A compacted outcome
+requires Claude's manual boundary and actual synthetic summary as well as
+terminal command evidence. The summary uses the existing normalized compaction
+projection, retaining earlier turns and invalidating context and fork evidence.
+Native history remains the authority after reload.
+
+A completed command without a boundary can report that there is nothing to
+compact. Sedes completes that action with a neutral notice and leaves the
+transcript and compaction count unchanged. Failure or cancellation rejects the
+action only on exact native evidence. A lost reply or runtime authority keeps
+the operation uncertain; recovery consults its retained receipt and never
+resends a command whose outcome cannot be proven. Persistent sidecars carry
+the same command, result, and scoped receipt behavior. This operation requires
+the current `claude_runtime@4` / `claude_persistent_runtime@5` capability majors;
+the shared sidecar wire protocol remains 14.
+
+Full accounting receipts are limited to 256 per native query and persistent
+session journal, including earlier query incarnations under the same authority.
+The persistent host also reserves an aggregate 64 MiB receipt budget before
+dispatch. No-spend rejections use bounded identity tombstones. The application
+does not acknowledge receipt release to the native owner: accepted and
+spend-bearing evidence therefore remains until the owner's journal ends, and
+capacity refusal is intentional. Dropping accounting evidence merely because
+one consumer captured it could lose spend during another recovery attempt.
+
+Composer `/compact` remains rejected by the command classifier. Manual
+compaction is exposed only through the normalized action, preserving its
+durable operation identity. Automatic compaction remains Claude's own decision
+and uses the same summary projection without a manual-action receipt.
+
 ## Recovery and unsupported mutations
 
 Provider history is the durable transcript authority. After restart or
@@ -1414,12 +1464,6 @@ cannot justify replay or an invented receiving turn. Existing assistant output
 cannot confirm a newly enqueued steer. Queue remains application-owned
 next-turn work. Native `now` interruption semantics are not exposed by this
 feature.
-
-Manual compaction is also unavailable. `/compact` is a Claude Code local
-command, and a command result cannot be recovered as one durable normalized
-compaction operation. Automatic compaction remains Claude's own decision. Sedes
-displays it from the summary row, as described under
-[Semantic projection](#semantic-projection-and-terminal-receipts).
 
 Terminal-only, unclassified, reset-producing, and plan-mode commands fail
 before submission. Active-source forks, latest-provider-snapshot forks,

@@ -4606,6 +4606,101 @@ describe("ThreadMutationGateway backend-action receipts", () => {
     expect(perform).toHaveBeenCalledOnce();
   });
 
+  it.each(["accepted", "not_applied", "unknown"] as const)(
+    "settles scoped late backend action evidence: %s",
+    async (outcome) => {
+      const late = deferred<{ outcome: "accepted" | "not_applied" | "unknown" }>();
+      const subject = backendActionFixture({
+        perform: async () => {
+          throw new BackendError({
+            category: "submission_unknown",
+            retryable: true,
+            crossedSubmissionBoundary: true,
+            safeMessage: "The compaction result is not confirmed yet.",
+          }, { lateMutationReconciliation: late.promise });
+        },
+      });
+      await expect(subject.gateway.mutate(scope, "thread-1", compact)).resolves.toEqual({
+        status: "recovery_required", retryable: true,
+      });
+      subject.setAggregateRevision(5);
+      subject.publishThreadSnapshot.mockClear();
+      late.resolve({ outcome });
+      await vi.waitFor(() => expect(subject.publishThreadSnapshot).toHaveBeenCalled());
+      await subject.gateway.close();
+      expect(subject.actor.perform).toHaveBeenCalledOnce();
+      expect(subject.getRecord()?.state).toBe(
+        outcome === "not_applied" ? undefined : outcome === "accepted" ? "accepted" : "uncertain",
+      );
+      if (outcome === "accepted") {
+        expect(subject.persistAccepted).toHaveBeenCalledExactlyOnceWith(
+          scope, "thread-1", expect.objectContaining({
+            expectedThreadRevision: 5, settingsGuard: { kind: "proven_applied" },
+          }),
+        );
+      } else {
+        expect(subject.persistAccepted).not.toHaveBeenCalled();
+      }
+      expect(subject.publishThreadSnapshot).toHaveBeenCalledWith(scope, "thread-1");
+    },
+  );
+
+  it.each(["abandoned", "changed", "already_accepted"] as const)(
+    "ignores late backend action evidence after its receipt is %s",
+    async (disposition) => {
+      const late = deferred<{ outcome: "accepted" }>();
+      const subject = backendActionFixture({
+        perform: async () => {
+          throw new BackendError({
+            category: "submission_unknown",
+            retryable: true,
+            crossedSubmissionBoundary: true,
+            safeMessage: "The compaction result is not confirmed yet.",
+          }, { lateMutationReconciliation: late.promise });
+        },
+      });
+      await subject.gateway.mutate(scope, "thread-1", compact);
+      if (disposition === "abandoned") {
+        subject.operations.rejectBackendActionProvenNotApplied();
+      } else if (disposition === "already_accepted") {
+        subject.operations.acceptBackendAction();
+      } else {
+        // Replace the receipt's operation rather than mutate the captured request.
+        const record = subject.getRecord()!;
+        record.operation = { action: "compact", instructions: "Another request." };
+      }
+      subject.publishThreadSnapshot.mockClear();
+      late.resolve({ outcome: "accepted" });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      await subject.gateway.close();
+      expect(subject.persistAccepted).not.toHaveBeenCalled();
+      expect(subject.publishThreadSnapshot).not.toHaveBeenCalled();
+      expect(subject.actor.perform).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("closes promptly with pending action evidence and ignores completion after shutdown", async () => {
+    const late = deferred<{ outcome: "accepted" }>();
+    const subject = backendActionFixture({
+      perform: async () => {
+        throw new BackendError({
+          category: "submission_unknown", retryable: true, crossedSubmissionBoundary: true,
+          safeMessage: "The compaction result is not confirmed yet.",
+        }, { lateMutationReconciliation: late.promise });
+      },
+    });
+    await subject.gateway.mutate(scope, "thread-1", compact);
+    subject.publishThreadSnapshot.mockClear();
+    await subject.gateway.close();
+    expect(subject.getRecord()?.state).toBe("uncertain");
+    late.resolve({ outcome: "accepted" });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(subject.getRecord()?.state).toBe("uncertain");
+    expect(subject.persistAccepted).not.toHaveBeenCalled();
+    expect(subject.publishThreadSnapshot).not.toHaveBeenCalled();
+    expect(subject.actor.perform).toHaveBeenCalledOnce();
+  });
+
   it("retains an uncertain backend action when reconciliation fails", async () => {
     const perform = vi.fn(async () => {
       throw new Error("response lost");

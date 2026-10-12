@@ -1679,6 +1679,21 @@ from nearby history. A backend whose durable compaction item carries no summary
 must omit the field. The browser renders every boundary as a static marker and
 offers expansion only when the optional summary is present.
 
+Manual compaction is a scoped, recoverable backend action. A successful command
+that had no history to summarize is a settled action, not a compaction boundary:
+surface its native explanation without fabricating a marker or incrementing the
+compaction count. When a backend dispatches compaction through its native input
+channel, keep that command's admission, lifecycle, and result distinct from
+ordinary user submissions and their completion consumers. Reconciliation must
+use the exact action's retained evidence; a nearby automatic compaction cannot
+prove that a manual request ran. Pi, Codex, Claude, and OpenCode implement the
+normalized action; Grok intentionally omits it and rejects direct invocation.
+Exact terminal evidence may release a native execution fence while the action
+receipt remains uncertain. The application owns any bounded late reconciliation
+continuation and persists its scoped result without dispatching another effect.
+Retained accounting receipts must have bounded sizes and omit provider output;
+reclaiming payloads must preserve operation identities that prevent redispatch.
+
 Every new backend-neutral normalized activity kind must receive an explicit
 browser-presentation audit disposition. It must either define an
 `activityKind`, its fixed client-derived label and count category, and the
@@ -2754,7 +2769,7 @@ exact-target interrupt. An authoritative idle observation accepts a no-op.
 A stale native target is nonapplication; old-turn disappearance alone never
 proves command acceptance. Drivers record operation/generation evidence before
 effects. Persistent Claude owner evidence survives main-client replacement;
-`claude_runtime@3` and `claude_persistent_runtime@4` are required, without
+`claude_runtime@4` and `claude_persistent_runtime@5` are required, without
 older-contract parsers.
 
 The deadline includes pending-input withdrawal and carrier/SDK acknowledgement.

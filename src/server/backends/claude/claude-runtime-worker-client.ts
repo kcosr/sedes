@@ -32,6 +32,7 @@ import type {
   ClaudeRuntimeSessionOptions,
 } from "./claude-runtime-client.js";
 import { runClaudeForkLaunch } from "./claude-fork-launch.js";
+import { assertClaudeCompactReceiptScope, ClaudeRuntimeCompactError, type ClaudeRuntimeCompactInput, type ClaudeRuntimeCompactResult } from "./claude-compact-operation.js";
 import {
   CLAUDE_RUNTIME_CAPABILITY_ID,
   CLAUDE_RUNTIME_MAJOR_VERSION,
@@ -44,6 +45,9 @@ import {
   claudeRuntimeQueryMessageEventSchema,
   claudeRuntimeQueryOpenOperation,
   claudeRuntimeQuerySendOperation,
+  claudeRuntimeQueryCompactOperation,
+  claudeRuntimeQueryCompactDispositionOperation,
+  claudeRuntimeCompactResponseSchema,
   claudeRuntimeQuerySetEffortOperation,
   claudeRuntimeQuerySetModelOperation,
   claudeRuntimeQueryContextUsageOperation,
@@ -55,13 +59,13 @@ import {
   claudeRuntimeSessionMessagesOperation,
   claudeRuntimeSessionTranscriptOperation,
   claudeRuntimeSessionRenameOperation,
-  registerClaudeRuntimeV3HostOperations,
+  registerClaudeRuntimeV4HostOperations,
   type ClaudeRuntimeCanUseToolRequest,
   type ClaudeRuntimeCanUseToolResponse,
   type ClaudeRuntimeQueryFailedEvent,
   type ClaudeRuntimeQueryMessageEvent,
   type ClaudeRuntimePermissionResponseAckRequest,
-} from "./worker/claude-runtime-v3.js";
+} from "./worker/claude-runtime-v4.js";
 
 export interface ClaudeRuntimeWorkerClientPeer {
   call<Request, Response>(
@@ -114,7 +118,7 @@ export class ClaudeRuntimeWorkerClient implements ClaudeOwnedRuntimeClient {
       startupEnvironmentVariables: input.startupEnvironmentVariables,
       initializationTimeoutMs: input.initializationTimeoutMs,
     });
-    registerClaudeRuntimeV3HostOperations(input.hostRegistry, {
+    registerClaudeRuntimeV4HostOperations(input.hostRegistry, {
       canUseTool: async (request, context) =>
         await this.#canUseTool(request, context.signal),
       acknowledgePermissionResponse: async (request) =>
@@ -270,6 +274,8 @@ export class ClaudeRuntimeWorkerClient implements ClaudeOwnedRuntimeClient {
     return this.#peer.call(definition, request, options);
   }
 
+  assertReadyForCompaction(): void { this.#assertOpen(); }
+
   initialize(): Promise<void> {
     this.#assertOpen();
     return this.#initialize();
@@ -376,6 +382,8 @@ export class ClaudeRuntimeWorkerClient implements ClaudeOwnedRuntimeClient {
 }
 
 class WorkerSession implements ClaudeOwnedRuntimeSession {
+  /** A closed presentation cannot turn an already dispatched UUID into a refusal. */
+  readonly #compactDispatches = new Set<string>();
   readonly #client: ClaudeRuntimeWorkerClient;
   readonly #queryId: string;
   readonly #options: ClaudeRuntimeSessionOptions;
@@ -521,6 +529,38 @@ class WorkerSession implements ClaudeOwnedRuntimeSession {
           : {}),
       })
       .catch((error) => { this.workerFailed(error); throw error; });
+  }
+
+  async compact(input: ClaudeRuntimeCompactInput): Promise<ClaudeRuntimeCompactResult> {
+    let request: z.infer<typeof claudeRuntimeQueryCompactOperation.requestSchema>;
+    try {
+      this.#assertReady();
+      this.#client.assertReadyForCompaction();
+      request = claudeRuntimeQueryCompactOperation.requestSchema.parse({ queryId: this.#queryId, ...input });
+      if (!this.#compactDispatches.has(input.operationId) && this.#compactDispatches.size >= 4_096) {
+        throw new Error("claude_compact_dispatch_capacity");
+      }
+    } catch {
+      throw new ClaudeRuntimeCompactError("claude_compact_local_admission_refused", this.#compactDispatches.has(input.operationId));
+    }
+    this.#compactDispatches.add(input.operationId);
+    // Once the peer is called, transport and response failures remain uncertain.
+    const response = claudeRuntimeCompactResponseSchema.parse(await this.#client.call(claudeRuntimeQueryCompactOperation,
+      request, { deadlineMilliseconds: 600_000 }));
+    assertClaudeCompactReceiptScope(response, input, this.#options.sessionId);
+    if (response.outcome === "failed") {
+      throw new ClaudeRuntimeCompactError(response.code, response.crossedSubmissionBoundary,
+        response.nativeResult);
+    }
+    await this.flushMessages();
+    return response;
+  }
+
+  async flushMessages(): Promise<void> { await this.#messageDelivery; }
+
+  async reconcileCompact(input: ClaudeRuntimeCompactInput) {
+    this.#assertReady();
+    return this.#client.call(claudeRuntimeQueryCompactDispositionOperation, { queryId: this.#queryId, ...input });
   }
 
   async interrupt(input: Parameters<ClaudeRuntimeSession["interrupt"]>[0]) {

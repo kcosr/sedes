@@ -74,7 +74,7 @@ export class ClaudeThreadActionPersistence implements ThreadActionPersistencePro
     operation: PerformOperation,
     applicationOperationId: string,
   ): RegisteredBackendActionInput {
-    if (operation.action === "rename") {
+    if (operation.action === "rename" || operation.action === "compact") {
       return { ...operation, applicationOperationId };
     }
     throw unsupportedAction();
@@ -93,6 +93,9 @@ export class ClaudeThreadActionPersistence implements ThreadActionPersistencePro
   ): void {
     this.#assertScope(scope);
     const operation = input.operation;
+    // Compaction changes only provider-owned history. The shared mutation
+    // gateway records its scoped application receipt after native evidence.
+    if (operation.action === "compact") return;
     if (operation.action === "set_setting") {
       this.#persistSetting(scope, applicationThreadId, {
         ...input,

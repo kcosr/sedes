@@ -14,6 +14,7 @@ import type {
   SDKControlGetContextUsageResponse,
   SDKControlInterruptResponse,
   SDKMessage,
+  SDKResultMessage,
   SDKUserMessage,
   SessionMessage,
 } from "@anthropic-ai/claude-agent-sdk";
@@ -40,9 +41,12 @@ import type {
 import {
   ClaudeSdkRuntimeAdapter,
   type ClaudeRuntimeClient,
+  type ClaudeRuntimeSession,
   type ClaudeRuntimeSessionOptions,
 } from "../../src/server/backends/claude/claude-runtime-client.js";
 import { ClaudeThreadRepository } from "../../src/server/backends/claude/claude-thread-repository.js";
+import { ClaudeRuntimeCompactError } from "../../src/server/backends/claude/claude-compact-operation.js";
+import { projectClaudeCompactUsageReceipt } from "../../src/server/backends/claude/claude-compact-usage-receipt.js";
 import { compileBackendModelPolicy } from "../../src/server/backends/model-policy.js";
 import type { BackendModelPolicy } from "../../src/server/backends/model-policy.js";
 import {
@@ -56,6 +60,8 @@ import { parseClaudeTranscript, resolveClaudeSessionMessages } from "../../src/s
 import { ClaudeTranscriptFixture } from "../helpers/claude-native-transcript-fixture.js";
 import { createInMemoryOutputArtifactPublisher } from "../helpers/output-artifact-publisher.js";
 import { ConversationProjector } from "../../src/server/conversations/conversation-projector.js";
+import { ThreadMutationGateway } from "../../src/server/conversations/thread-mutation-gateway.js";
+import { ConversationOperationRepository } from "../../src/server/db/repositories/conversation-operation-repository.js";
 import { inspectSupportedRasterImage } from "../../src/server/images/raster-image-inspector.js";
 import type { OutputArtifactPublisher, PublishOutputImageInput } from "../../src/server/output-artifacts/contracts.js";
 
@@ -270,7 +276,7 @@ function fixture(options: {
     interrupt: vi.fn(async (): Promise<SDKControlInterruptResponse> => ({ still_queued: [] })),
     cancelAsyncMessage: vi.fn(async (_messageUuid: string) => true),
     setModel: vi.fn(async () => undefined),
-    setPermissionMode: vi.fn(async () => undefined),
+    setPermissionMode: vi.fn(async (): Promise<void> => undefined),
     applyFlagSettings: vi.fn(async () => undefined),
     close: vi.fn(() => messages.close()),
   };
@@ -614,6 +620,8 @@ function retainedRuntime(
         },
         flushMessages: () => delivery,
         send: session.send.bind(session),
+        compact: session.compact.bind(session),
+        reconcileCompact: session.reconcileCompact.bind(session),
         // A service-owned owner withdraws unstarted inputs when it handles
         // the interrupt, so the session offers the caller no withdrawal.
         interrupt: session.interrupt.bind(session),
@@ -2575,7 +2583,7 @@ describe("ClaudeConversationHandle", () => {
     await handle.close();
   });
 
-  it("interrupts only the exact active turn and fails closed for unsupported actions", async () => {
+  it("interrupts only the exact active turn and rejects compaction while it is running", async () => {
     const provider = fixture();
     const { handle } = createHandle(provider);
     const established = await handle.establishProjection({
@@ -2622,7 +2630,7 @@ describe("ClaudeConversationHandle", () => {
         applicationOperationId: "66666666-6666-4666-8666-666666666666",
         action: "compact",
       }),
-    ).rejects.toBeInstanceOf(BackendError);
+    ).rejects.toMatchObject({ backendCode: "claude_compaction_requires_idle", crossedSubmissionBoundary: false });
     await handle.close();
   });
 
@@ -7281,5 +7289,509 @@ describe("Claude live context independent of accounting", () => {
       await vi.waitFor(async () => expect((await handle.usage()).context?.usedTokens).toBe(100));
       expect((await handle.establishProjection({ signal: new AbortController().signal })).snapshot.runState).not.toBe("disconnected");
     } finally { await handle.close(); }
+  });
+});
+
+
+describe("Claude manual compaction actions", () => {
+  const action = { action: "compact" as const, applicationOperationId: OPERATION_ID, instructions: "Keep the test plan." };
+  const historical = (type: "user" | "assistant", text: string): SessionMessage => ({
+    type, uuid: crypto.randomUUID(), session_id: SESSION_ID, parent_tool_use_id: null, parent_agent_id: null,
+    message: type === "user" ? { role: type, content: text }
+      : { role: type, content: [{ type: "text", text }], stop_reason: "end_turn", model: "claude-sonnet-5" },
+  });
+  const initialMessages = [historical("user", "Explain this project."), historical("assistant", "It runs agents.")];
+  function compactionFixture(options: { readonly settings?: ClaudeThreadRepository; readonly modelPolicy?: BackendModelPolicy;
+    readonly usage?: UsageSink; readonly confirmSettings?: boolean; readonly permissionPolicy?: ClaudePermissionPolicy } = {}) {
+    const provider = fixture();
+    const compact = vi.fn<ClaudeRuntimeSession["compact"]>(async () => ({ outcome: "noop", message: "Not enough messages to compact." }));
+    const reconcile = vi.fn<ClaudeRuntimeSession["reconcileCompact"]>(async () => ({ outcome: "unknown", pending: true }));
+    let runtimeOptions: ClaudeRuntimeSessionOptions | undefined;
+    const runtime = new (class extends ClaudeSdkRuntimeAdapter {
+      override createSession(input: ClaudeRuntimeSessionOptions) {
+        runtimeOptions = input;
+        const session = super.createSession(input);
+        session.compact = compact;
+        session.reconcileCompact = reconcile;
+        return session;
+      }
+    })(provider.sdk);
+    const settings = options.settings ?? repository();
+    const created = createHandle(provider, vi.fn(), { ...options, settings, runtimeClient: runtime, initialMessages,
+      ...(options.confirmSettings ? persistEffectiveEvidence(settings) : {}) });
+    return { ...created, provider, compact, reconcile, deliver: async (message: SDKMessage) => {
+      if (!runtimeOptions) throw new Error("compaction_fixture_not_started");
+      await runtimeOptions.onMessage(message);
+    } };
+  }
+
+  it("runs a normalized compact action without reopening the previous turn and deduplicates exact replays", async () => {
+    const f = compactionFixture();
+    const events: BackendConversationEvent[] = [];
+    f.handle.subscribe(event => events.push(event));
+    const before = await projectionSnapshot(f.handle);
+    expect((await f.handle.backendCapabilities()).actions).toContain("compact");
+    let resolve!: (value: Awaited<ReturnType<ClaudeRuntimeSession["compact"]>>) => void;
+    f.compact.mockImplementation(() => new Promise(done => { resolve = done; }));
+    const running = f.handle.perform(action);
+    await vi.waitFor(() => expect(f.compact).toHaveBeenCalledOnce());
+    const inFlight = await projectionSnapshot(f.handle);
+    expect(inFlight.runState).toBe("running");
+    expect(inFlight.activeBackendTurnId).toBeUndefined();
+    expect(inFlight.turnsById).toEqual(before.turnsById);
+    expect(f.handle.retirementBlocked).toBe(true);
+    const duplicate = f.handle.perform(action);
+    await expect(f.handle.perform({ ...action, instructions: "Different instructions." }))
+      .rejects.toMatchObject({ backendCode: "claude_compaction_replay_mismatch", crossedSubmissionBoundary: false });
+    await expect(f.handle.perform({ ...action, applicationOperationId: crypto.randomUUID() }))
+      .rejects.toMatchObject({ backendCode: "claude_compaction_requires_idle" });
+    await expect(f.handle.submit({ applicationOperationId: crypto.randomUUID(), mutationId: "send-during-compact",
+      reconciliationToken: "send-during-compact", source: { kind: "user" }, text: "Next task", attachments: [], contextExcerpts: [], taskContexts: [] }))
+      .rejects.toMatchObject({ backendCode: "claude_compaction_active", crossedSubmissionBoundary: false });
+    await expect(f.handle.steer({ applicationOperationId: crypto.randomUUID(), mutationId: "steer-during-compact",
+      reconciliationToken: "steer-during-compact", target: { kind: "conversation" }, text: "Change plans", attachments: [], contextExcerpts: [], taskContexts: [] }))
+      .rejects.toMatchObject({ backendCode: "claude_compaction_active", crossedSubmissionBoundary: false });
+    resolve({ outcome: "noop", message: "Not enough messages to compact." });
+    await expect(running).resolves.toEqual({ accepted: true });
+    await expect(duplicate).resolves.toEqual({ accepted: true });
+    await expect(f.handle.perform(action)).resolves.toEqual({ accepted: true });
+    expect(f.compact).toHaveBeenCalledOnce();
+    expect(f.compact).toHaveBeenCalledWith({ operationId: OPERATION_ID, instructions: "Keep the test plan." });
+    expect(events.filter(event => event.type === "notice")).toHaveLength(1);
+    expect(events).toContainEqual({ type: "notice", notice: expect.objectContaining({ tone: "neutral", message: { text: "Not enough messages to compact." } }) });
+    expect(Object.values((await projectionSnapshot(f.handle)).itemsById).some(item => item.semanticKind === "compaction")).toBe(false);
+    expect((await projectionSnapshot(f.handle)).runState).toBe("idle");
+    expect(f.handle.retirementBlocked).toBe(false);
+    await f.handle.close();
+  });
+
+  it("projects only Claude's actual manual boundary and summary, with existing history and context counters", async () => {
+    const f = compactionFixture();
+    await projectionSnapshot(f.handle);
+    f.compact.mockImplementation(async () => {
+      await f.deliver({ type: "system", subtype: "compact_boundary", session_id: SESSION_ID, uuid: crypto.randomUUID(),
+        compact_metadata: { trigger: "manual", pre_tokens: 500 } });
+      await f.deliver({ type: "user", session_id: SESSION_ID, uuid: crypto.randomUUID(), parent_tool_use_id: null,
+        isSynthetic: true, message: { role: "user", content: "The project runs agents. Preserve the test plan." } });
+      return { outcome: "compacted" };
+    });
+    await expect(f.handle.perform(action)).resolves.toEqual({ accepted: true });
+    const after = await projectionSnapshot(f.handle);
+    expect(after.runState).toBe("idle");
+    const summaries = Object.values(after.itemsById).filter(item => item.semanticKind === "compaction");
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0]).toMatchObject({ semanticKind: "compaction", summary: { text: "The project runs agents. Preserve the test plan." } });
+    expect(JSON.stringify(after)).toContain("Explain this project.");
+    expect(JSON.stringify(after)).not.toContain("/compact");
+    expect(await f.handle.usage()).toMatchObject({ counters: { compactions: 1 } });
+    await f.handle.close();
+  });
+
+  it.each(["manual", "auto"] as const)("preserves a %s boundary across an unrelated origin-bearing synthetic input", async trigger => {
+    const f = compactionFixture();
+    await projectionSnapshot(f.handle);
+    const deliverCompaction = async () => {
+      await f.deliver({ type: "system", subtype: "compact_boundary", session_id: SESSION_ID, uuid: crypto.randomUUID(),
+        compact_metadata: { trigger, pre_tokens: 500 } });
+      await f.deliver({ type: "user", session_id: SESSION_ID, uuid: crypto.randomUUID(), parent_tool_use_id: null,
+        isSynthetic: true, origin: { kind: "task-notification" },
+        message: { role: "user", content: "Unrelated task notification must not become the summary." } } as unknown as SDKMessage);
+      expect(Object.values((await projectionSnapshot(f.handle)).itemsById).filter(item => item.semanticKind === "compaction"))
+        .toHaveLength(0);
+      await f.deliver({ type: "user", session_id: SESSION_ID, uuid: crypto.randomUUID(), parent_tool_use_id: null,
+        isSynthetic: true, message: { role: "user", content: "The provider's actual compaction summary." } });
+    };
+    if (trigger === "manual") {
+      f.compact.mockImplementation(async () => { await deliverCompaction(); return { outcome: "compacted" }; });
+      await expect(f.handle.perform(action)).resolves.toEqual({ accepted: true });
+    } else await deliverCompaction();
+    const after = await projectionSnapshot(f.handle);
+    const summaries = Object.values(after.itemsById).filter(item => item.semanticKind === "compaction");
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0]).toMatchObject({ semanticKind: "compaction", summary: { text: "The provider's actual compaction summary." } });
+    expect(JSON.stringify(after)).not.toContain("Unrelated task notification");
+    await f.handle.close();
+  });
+
+  it("advertises admitted compact but does not send it until desired settings have exact effective confirmation", async () => {
+    const settings = repository();
+    const current = settings.get({ tenantId: BINDING.tenantId, principalId: BINDING.ownerPrincipalId }, BINDING.applicationThreadId);
+    settings.updateDesired({ tenantId: BINDING.tenantId, principalId: BINDING.ownerPrincipalId }, BINDING.applicationThreadId,
+      { expectedRevision: current.revision, desired: { model: current.model, effort: "high", permissionMode: "default" }, now: 5 });
+    const f = compactionFixture({ settings });
+    expect((await f.handle.backendCapabilities()).actions).toContain("compact");
+    await expect(f.handle.perform(action)).rejects.toMatchObject({ backendCode: "claude_effective_settings_unconfirmed", crossedSubmissionBoundary: false });
+    expect(f.compact).not.toHaveBeenCalled();
+    await f.handle.close();
+  });
+
+  it("applies changed model, effort and permission settings before an idle compact without a user prompt", async () => {
+    const f = compactionFixture({ confirmSettings: true, permissionPolicy: { allowedModes: ["default", "dontAsk"] } });
+    const before = await projectionSnapshot(f.handle);
+    const scope = { tenantId: BINDING.tenantId, principalId: BINDING.ownerPrincipalId };
+    const current = f.settings.get(scope, BINDING.applicationThreadId);
+    f.settings.updateDesired(scope, BINDING.applicationThreadId, { expectedRevision: current.revision,
+      desired: { model: "claude-opus-5", effort: "high", permissionMode: "dontAsk" }, now: 30 });
+    f.provider.controls.setModel.mockClear();
+    f.provider.controls.applyFlagSettings.mockClear();
+    f.provider.controls.setPermissionMode.mockClear();
+    expect((await f.handle.backendCapabilities()).actions).toContain("compact");
+    f.compact.mockImplementation(async () => {
+      expect(f.settings.get(scope, BINDING.applicationThreadId)).toMatchObject({
+        model: "claude-opus-5", effectiveModel: "claude-opus-5", effectiveModelState: "confirmed", effectiveModelGeneration: 1,
+        effort: "high", effectiveEffort: "high", effectiveEffortState: "confirmed", effectiveEffortGeneration: 1,
+        permissionMode: "dontAsk", effectivePermissionMode: "dontAsk", effectivePermissionState: "confirmed", effectivePermissionGeneration: 1,
+      });
+      return { outcome: "noop", message: "Not enough messages to compact." };
+    });
+    await expect(f.handle.perform(action)).resolves.toEqual({ accepted: true });
+    expect(f.provider.controls.setModel).toHaveBeenCalledExactlyOnceWith("claude-opus-5");
+    expect(f.provider.controls.setPermissionMode).toHaveBeenCalledExactlyOnceWith("dontAsk");
+    expect(f.provider.controls.applyFlagSettings).toHaveBeenCalledExactlyOnceWith({ effortLevel: "high" });
+    expect((await projectionSnapshot(f.handle)).turnsById).toEqual(before.turnsById);
+    expect(f.settings.findOperationSettingsSnapshot(scope, BINDING.applicationThreadId, OPERATION_ID)).toBeUndefined();
+    await expect(f.handle.perform(action)).resolves.toEqual({ accepted: true });
+    expect(f.compact).toHaveBeenCalledOnce();
+    expect(f.provider.controls.setPermissionMode).toHaveBeenCalledOnce();
+    await f.handle.close();
+  });
+
+  it("rejects compaction before command dispatch if a desired-settings control fails", async () => {
+    const f = compactionFixture({ confirmSettings: true, permissionPolicy: { allowedModes: ["default", "dontAsk"] } });
+    await projectionSnapshot(f.handle);
+    const scope = { tenantId: BINDING.tenantId, principalId: BINDING.ownerPrincipalId };
+    const current = f.settings.get(scope, BINDING.applicationThreadId);
+    f.settings.updateDesired(scope, BINDING.applicationThreadId, { expectedRevision: current.revision,
+      desired: { model: current.model, effort: current.effort, permissionMode: "dontAsk" }, now: 30 });
+    f.provider.controls.setPermissionMode.mockRejectedValueOnce(new Error("Control refused"));
+    await expect(f.handle.perform(action)).rejects.toMatchObject({ crossedSubmissionBoundary: false });
+    expect(f.compact).not.toHaveBeenCalled();
+    expect((await projectionSnapshot(f.handle)).runState).toBe("idle");
+    expect(f.handle.retirementBlocked).toBe(false);
+    await f.handle.close();
+  });
+
+  it("fences compaction when settings change again while their control is applying", async () => {
+    const f = compactionFixture({ confirmSettings: true, permissionPolicy: { allowedModes: ["default", "dontAsk"] } });
+    await projectionSnapshot(f.handle);
+    const scope = { tenantId: BINDING.tenantId, principalId: BINDING.ownerPrincipalId };
+    const current = f.settings.get(scope, BINDING.applicationThreadId);
+    f.settings.updateDesired(scope, BINDING.applicationThreadId, { expectedRevision: current.revision,
+      desired: { model: current.model, effort: current.effort, permissionMode: "dontAsk" }, now: 30 });
+    f.provider.controls.setPermissionMode.mockImplementationOnce(async () => {
+      const changed = f.settings.get(scope, BINDING.applicationThreadId);
+      f.settings.updateDesired(scope, BINDING.applicationThreadId, { expectedRevision: changed.revision,
+        desired: { model: changed.model, effort: changed.effort, permissionMode: "default" }, now: 31 });
+    });
+    await expect(f.handle.perform(action)).rejects.toMatchObject({ backendCode: "claude_compaction_settings_changed", crossedSubmissionBoundary: false });
+    expect(f.compact).not.toHaveBeenCalled();
+    await f.handle.close();
+  });
+
+  it("rechecks native idle state after applying settings before starting compaction", async () => {
+    const f = compactionFixture({ confirmSettings: true, permissionPolicy: { allowedModes: ["default", "dontAsk"] } });
+    await projectionSnapshot(f.handle);
+    const scope = { tenantId: BINDING.tenantId, principalId: BINDING.ownerPrincipalId };
+    const current = f.settings.get(scope, BINDING.applicationThreadId);
+    f.settings.updateDesired(scope, BINDING.applicationThreadId, { expectedRevision: current.revision,
+      desired: { model: current.model, effort: current.effort, permissionMode: "dontAsk" }, now: 30 });
+    f.provider.controls.setPermissionMode.mockImplementationOnce(async () => { await f.deliver(nativeFrames.state("running")); });
+    await expect(f.handle.perform(action)).rejects.toMatchObject({ backendCode: "claude_compaction_requires_idle", crossedSubmissionBoundary: false });
+    expect(f.compact).not.toHaveBeenCalled();
+    expect((await projectionSnapshot(f.handle)).runState).toBe("running");
+    await f.handle.close();
+  });
+
+  it("honors Stop while preparing settings before sending the compact command", async () => {
+    const f = compactionFixture({ confirmSettings: true, permissionPolicy: { allowedModes: ["default", "dontAsk"] } });
+    await projectionSnapshot(f.handle);
+    const scope = { tenantId: BINDING.tenantId, principalId: BINDING.ownerPrincipalId };
+    const current = f.settings.get(scope, BINDING.applicationThreadId);
+    f.settings.updateDesired(scope, BINDING.applicationThreadId, { expectedRevision: current.revision,
+      desired: { model: current.model, effort: current.effort, permissionMode: "dontAsk" }, now: 30 });
+    let resolve!: () => void;
+    f.provider.controls.setPermissionMode.mockImplementationOnce(() => new Promise<void>(done => { resolve = done; }));
+    const running = f.handle.perform(action);
+    const failure = expect(running).rejects.toMatchObject({ backendCode: "claude_compaction_cancelled_before_dispatch", crossedSubmissionBoundary: false });
+    await vi.waitFor(() => expect(resolve).toBeTypeOf("function"));
+    await f.handle.interrupt({ applicationOperationId: crypto.randomUUID(), deadlineAt: Date.now() + 1_000 });
+    resolve();
+    await failure;
+    expect(f.compact).not.toHaveBeenCalled();
+    expect((await projectionSnapshot(f.handle)).runState).toBe("idle");
+    await f.handle.close();
+  });
+
+  it("checks installation model policy before admitting a new compaction", async () => {
+    const f = compactionFixture({ modelPolicy: { type: "denylist", denied: [{ modelIds: ["claude-sonnet-5"] }] } });
+    expect((await f.handle.backendCapabilities()).actions).not.toContain("compact");
+    await expect(f.handle.perform(action)).rejects.toMatchObject({ backendCode: "model_policy_rejected", crossedSubmissionBoundary: false });
+    expect(f.compact).not.toHaveBeenCalled();
+    await f.handle.close();
+  });
+
+  it("retains unknown compaction identity and reconciles without dispatching another command", async () => {
+    const f = compactionFixture();
+    const events: BackendConversationEvent[] = [];
+    f.handle.subscribe(event => events.push(event));
+    await projectionSnapshot(f.handle);
+    f.compact.mockRejectedValue(new Error("The response was lost."));
+    await expect(f.handle.perform(action)).rejects.toMatchObject({ crossedSubmissionBoundary: true });
+    await expect(f.handle.perform(action)).rejects.toMatchObject({ crossedSubmissionBoundary: true });
+    expect(f.compact).toHaveBeenCalledOnce();
+    expect(f.handle.retirementBlocked).toBe(true);
+    await expect(f.handle.reconcileAction(action)).resolves.toEqual({ outcome: "unknown" });
+    expect(f.provider.sdk.getSessionMessages).not.toHaveBeenCalled();
+    f.reconcile.mockResolvedValue({ outcome: "accepted", pending: false });
+    f.compact.mockResolvedValue({ outcome: "noop", message: "Not enough messages to compact." });
+    f.provider.sdk.getSessionMessages.mockResolvedValue(initialMessages);
+    await expect(f.handle.reconcileAction(action)).resolves.toEqual({ outcome: "accepted" });
+    await expect(f.handle.perform(action)).resolves.toEqual({ accepted: true });
+    expect(f.compact).toHaveBeenCalledTimes(2); // The second call reads the proven retained result.
+    expect(f.provider.sdk.getSessionMessages).toHaveBeenCalledOnce();
+    expect(events).toContainEqual({ type: "resnapshot_required", reason: "history_changed" });
+    expect(f.handle.retirementBlocked).toBe(false);
+    expect((await projectionSnapshot(f.handle)).runState).toBe("idle");
+    await f.handle.close();
+  });
+
+  it("recaptures a proven compact result after failed accounting without sending another command", async () => {
+    let durable = false;
+    const captured: UsageObservation[] = [];
+    const usage: UsageSink = { ...NO_USAGE_SINK, enabled: true, open: () => ({ registerTurns: () => {},
+      capture: entries => { if (!durable) return false; captured.push(...entries); return true; },
+      gap: () => {}, reconcile: () => true, seal: () => {} }) };
+    const f = compactionFixture({ usage });
+    const nativeResult = projectClaudeCompactUsageReceipt(nativeFrames.result([OPERATION_ID], { num_turns: 0, total_cost_usd: 0.002,
+      usage: { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 } }) as SDKResultMessage);
+    f.compact.mockResolvedValue({ outcome: "noop", message: "Not enough messages to compact.", nativeResult });
+    await projectionSnapshot(f.handle);
+    await expect(f.handle.perform(action)).rejects.toMatchObject({ backendCode: "claude_compaction_usage_uncommitted", crossedSubmissionBoundary: true });
+    await expect(f.handle.perform(action)).rejects.toMatchObject({ backendCode: "claude_compaction_usage_uncommitted", crossedSubmissionBoundary: true });
+    expect(f.compact).toHaveBeenCalledOnce();
+    expect(f.handle.retirementBlocked).toBe(false); // Native completion is distinct from a pending accounting commit.
+    expect(f.provider.sdk.getSessionMessages).toHaveBeenCalledOnce();
+    const nextOperationId = crypto.randomUUID();
+    const next = f.handle.submit({ applicationOperationId: nextOperationId, mutationId: "after-compact-accounting",
+      reconciliationToken: "after-compact-accounting", source: { kind: "user" }, text: "Continue the next task.",
+      attachments: [], contextExcerpts: [], taskContexts: [] });
+    await f.provider.prompt()[Symbol.asyncIterator]().next();
+    await f.deliver(nativeFrames.lifecycle(nextOperationId, "started"));
+    await f.deliver(nativeFrames.state("running"));
+    await next;
+    const live = await projectionSnapshot(f.handle);
+    f.reconcile.mockResolvedValue({ outcome: "accepted", pending: false });
+    f.provider.sdk.getSessionMessages.mockResolvedValue(initialMessages);
+    durable = true;
+    await expect(f.handle.reconcileAction(action)).resolves.toEqual({ outcome: "accepted" });
+    await expect(f.handle.perform(action)).resolves.toEqual({ accepted: true });
+    await f.deliver({ type: "user", uuid: crypto.randomUUID(), session_id: SESSION_ID, parent_tool_use_id: null,
+      isSynthetic: true, origin: { kind: "peer" }, message: { role: "user", content: "Context absorbed into the current task." } } as SDKMessage);
+    expect(f.compact).toHaveBeenCalledOnce();
+    expect(f.provider.sdk.getSessionMessages).toHaveBeenCalledOnce();
+    expect(captured).toHaveLength(1);
+    expect(captured[0]).toMatchObject({ id: `${nativeResult.uuid}:pipeline`, facts: [
+      expect.objectContaining({ coverageDomain: "claude_query_pipeline", turn: null }),
+    ] });
+    expect(f.handle.retirementBlocked).toBe(true); // The later native turn still runs.
+    const after = await projectionSnapshot(f.handle);
+    expect(after.runState).toBe("running");
+    expect(after.activeBackendTurnId).toBe(live.activeBackendTurnId);
+    expect(after.orderedBackendTurnIds).toEqual(live.orderedBackendTurnIds);
+    expect(after.turnsById[after.activeBackendTurnId!]!.completionCorrelations).toContain(nextOperationId);
+    expect(after.turnsById[after.activeBackendTurnId!]!.orderedBackendItemIds.map(id => after.itemsById[id]))
+      .toContainEqual(expect.objectContaining({ semanticKind: "user_message", content: expect.arrayContaining([
+        expect.objectContaining({ kind: "text", text: { text: "Context absorbed into the current task." } }),
+      ]) }));
+    await f.handle.close();
+  });
+
+  it("retains failed-command spend until accounting recovers before releasing native rejection", async () => {
+    let durable = false;
+    const captured: UsageObservation[] = [];
+    const usage: UsageSink = { ...NO_USAGE_SINK, enabled: true, open: () => ({ registerTurns: () => {},
+      capture: entries => { if (!durable) return false; captured.push(...entries); return true; },
+      gap: () => {}, reconcile: () => true, seal: () => {} }) };
+    const f = compactionFixture({ usage });
+    const nativeResult = projectClaudeCompactUsageReceipt(nativeFrames.result([OPERATION_ID], { num_turns: 0, total_cost_usd: 0.001,
+      usage: { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 } }) as SDKResultMessage);
+    f.compact.mockRejectedValue(new ClaudeRuntimeCompactError("claude_compact_failed", false, nativeResult));
+    await projectionSnapshot(f.handle);
+    await expect(f.handle.perform(action)).rejects.toMatchObject({ backendCode: "claude_compaction_usage_uncommitted", crossedSubmissionBoundary: true });
+    f.reconcile.mockResolvedValue({ outcome: "not_applied", pending: false });
+    await expect(f.handle.reconcileAction(action)).rejects.toMatchObject({ backendCode: "claude_compaction_usage_uncommitted", crossedSubmissionBoundary: true });
+    expect(f.handle.retirementBlocked).toBe(false);
+    durable = true;
+    await expect(f.handle.reconcileAction(action)).resolves.toEqual({ outcome: "not_applied" });
+    await expect(f.handle.perform(action)).rejects.toMatchObject({ backendCode: "claude_compaction_not_applied", crossedSubmissionBoundary: false });
+    expect(f.compact).toHaveBeenCalledOnce();
+    expect(captured).toHaveLength(1);
+    expect(captured[0]?.facts.every(fact => fact.turn === null)).toBe(true);
+    expect(f.handle.retirementBlocked).toBe(false);
+    await f.handle.close();
+  });
+
+  it("finishes gateway recovery after non-application proof instead of replaying the original crossed error", async () => {
+    const f = compactionFixture();
+    await projectionSnapshot(f.handle);
+    const database = f.settings.database;
+    database.exec(`CREATE TABLE mutation_receipts (
+      tenant_id TEXT, principal_id TEXT, thread_id TEXT, mutation_id TEXT, operation_kind TEXT,
+      request_fingerprint TEXT, result_code TEXT, result_json TEXT, replayable INTEGER, created_at INTEGER,
+      force_reset_at INTEGER, task_contexts_json TEXT DEFAULT '[]', PRIMARY KEY (tenant_id, principal_id, mutation_id)
+    )`);
+    const operations = new ConversationOperationRepository(database);
+    const scope = { tenantId: BINDING.tenantId, principalId: BINDING.ownerPrincipalId };
+    let runState = "idle";
+    f.handle.subscribe(event => { if (event.type === "run_state_changed") runState = event.state; });
+    const gateway = new ThreadMutationGateway({
+      bindings: { database }, completions: { database }, agentToolPolicies: { database }, operations,
+      inventory: { database, assertWorkspaceActive: () => {}, getThread: () => ({ thread: {
+        revision: 1, availability: "available", backingState: "bound", backendInstanceId: BINDING.backendInstanceId,
+      }, inventory: { inventoryState: "active" } }) },
+      runtimes: { acquire: async () => ({ actor: { timeline: { get runState() { return runState; } },
+        backendCapabilities: () => f.handle.backendCapabilities(), perform: (input: Parameters<ClaudeConversationHandle["perform"]>[0]) => f.handle.perform(input),
+        reconcileAction: (input: Parameters<ClaudeConversationHandle["reconcileAction"]>[0]) => f.handle.reconcileAction(input),
+      }, release: () => {}, publishAuthoritativeReplacement: async () => {} }) },
+      actionPersistence: new Map([[BINDING.backendInstanceId, { driverAction: (operation: { action: "compact"; instructions?: string }, applicationOperationId: string) =>
+        ({ ...operation, applicationOperationId }), persistAccepted: () => {}, afterPersistAccepted: async () => {} }]]),
+      actors: {}, lifecycle: {}, forks: {}, queue: {}, queueGateway: {}, interactions: {}, presentation: {},
+      publishThreadSnapshot: async () => {}, now: () => 10,
+    } as unknown as ConstructorParameters<typeof ThreadMutationGateway>[0]);
+    const command = { kind: "perform" as const, mutationId: OPERATION_ID, expectedThreadRevision: 1,
+      operation: { action: "compact" as const, instructions: action.instructions } };
+    try {
+      f.compact.mockRejectedValue(new Error("Lost terminal response."));
+      await expect(gateway.mutate(scope, BINDING.applicationThreadId, command)).resolves.toEqual({ status: "recovery_required", retryable: true });
+      expect(operations.findBackendAction(scope, OPERATION_ID)?.state).toBe("uncertain");
+      f.reconcile.mockResolvedValue({ outcome: "not_applied", pending: false });
+      await expect(gateway.mutate(scope, BINDING.applicationThreadId, command)).rejects.toMatchObject({ crossedSubmissionBoundary: false });
+      expect(operations.findBackendAction(scope, OPERATION_ID)).toBeUndefined();
+      expect(f.compact).toHaveBeenCalledOnce();
+    } finally { await f.handle.close(); await gateway.close(); }
+  });
+
+  it("releases the live guard for terminal unknown proof and retains the old identity without another command", async () => {
+    const f = compactionFixture();
+    await projectionSnapshot(f.handle);
+    f.reconcile.mockResolvedValue({ outcome: "unknown", pending: false });
+    f.provider.sdk.getSessionMessages.mockResolvedValue(initialMessages);
+    f.compact.mockRejectedValue(new ClaudeRuntimeCompactError("claude_compact_completion_unproven", true));
+    const failure = await f.handle.perform(action).catch(error => error as BackendError);
+    if (!(failure instanceof BackendError)) throw new Error("expected uncertain compaction");
+    await expect(failure.lateMutationReconciliation).resolves.toEqual({ outcome: "unknown" });
+    expect(f.handle.retirementBlocked).toBe(false);
+    expect((await projectionSnapshot(f.handle)).runState).toBe("idle");
+    await expect(f.handle.perform(action)).rejects.toMatchObject({ crossedSubmissionBoundary: true });
+    expect(f.compact).toHaveBeenCalledOnce();
+    f.compact.mockResolvedValueOnce({ outcome: "noop", message: "Not enough messages to compact." });
+    await expect(f.handle.perform({ ...action, applicationOperationId: crypto.randomUUID() })).resolves.toEqual({ accepted: true });
+    expect(f.compact).toHaveBeenCalledTimes(2);
+    await f.handle.close();
+  });
+
+  it("follows late acceptance through scoped owner evidence without waiting for an explicit Recover action", async () => {
+    const f = compactionFixture();
+    await projectionSnapshot(f.handle);
+    let finish!: (value: Awaited<ReturnType<ClaudeRuntimeSession["reconcileCompact"]>>) => void;
+    f.reconcile.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    f.compact.mockRejectedValueOnce(new Error("Lost terminal response."));
+    const failure = await f.handle.perform(action).catch(error => error as BackendError);
+    if (!(failure instanceof BackendError)) throw new Error("expected uncertain compaction");
+    f.provider.sdk.getSessionMessages.mockResolvedValue(initialMessages);
+    f.compact.mockResolvedValueOnce({ outcome: "noop", message: "Not enough messages to compact." });
+    finish({ outcome: "accepted", pending: false });
+    await expect(failure.lateMutationReconciliation).resolves.toEqual({ outcome: "accepted" });
+    expect(f.handle.retirementBlocked).toBe(false);
+    await expect(f.handle.perform(action)).resolves.toEqual({ accepted: true });
+    expect(f.compact).toHaveBeenCalledTimes(2); // One request and one proof-authorized terminal read.
+    await f.handle.close();
+  });
+
+  it("releases an unobservable presentation at the bounded recovery deadline without inventing an idle or successful outcome", async () => {
+    const f = compactionFixture();
+    await projectionSnapshot(f.handle);
+    const events: BackendConversationEvent[] = [];
+    f.handle.subscribe(event => events.push(event));
+    vi.useFakeTimers();
+    try {
+      f.compact.mockRejectedValueOnce(new Error("The carrier lost the command."));
+      const failure = await f.handle.perform(action).catch(error => error as BackendError);
+      if (!(failure instanceof BackendError)) throw new Error("expected uncertain compaction");
+      await vi.advanceTimersByTimeAsync(10 * 60_000 + 1);
+      await expect(failure.lateMutationReconciliation).resolves.toEqual({ outcome: "unknown" });
+      expect(f.handle.retirementBlocked).toBe(false);
+      expect(events).toContainEqual({ type: "resnapshot_required", reason: "provider_handle_closed" });
+      expect(events.filter(event => event.type === "run_state_changed").map(event => event.state)).not.toContain("idle");
+      expect(f.provider.sdk.getSessionMessages).not.toHaveBeenCalled();
+      expect(f.compact).toHaveBeenCalledOnce();
+      const received = events.length;
+      f.reconcile.mockResolvedValue({ outcome: "accepted", pending: false });
+      await f.deliver(nativeFrames.result([OPERATION_ID], { num_turns: 0, local_command: "compact" }));
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(events).toHaveLength(received);
+      await expect(f.handle.perform(action)).rejects.toMatchObject({ backendCode: "claude_handle_closed" });
+      expect(f.compact).toHaveBeenCalledOnce();
+    } finally { await f.handle.close(); vi.useRealTimers(); }
+  });
+
+  it("ends the owned recovery continuation promptly when the handle closes during a private receipt read", async () => {
+    const f = compactionFixture();
+    await projectionSnapshot(f.handle);
+    f.reconcile.mockImplementationOnce(() => new Promise(() => {}));
+    f.compact.mockRejectedValueOnce(new Error("Lost terminal response."));
+    const failure = await f.handle.perform(action).catch(error => error as BackendError);
+    if (!(failure instanceof BackendError)) throw new Error("expected uncertain compaction");
+    await f.handle.close();
+    await expect(failure.lateMutationReconciliation).resolves.toEqual({ outcome: "unknown" });
+    expect(f.compact).toHaveBeenCalledOnce();
+  });
+
+  it("compacts no-spend rejection records into bounded identity tombstones without redispatching an old id", async () => {
+    const f = compactionFixture();
+    await projectionSnapshot(f.handle);
+    f.compact.mockRejectedValue(new ClaudeRuntimeCompactError("claude_compact_busy", false));
+    const first = { ...action, applicationOperationId: crypto.randomUUID() };
+    await expect(f.handle.perform(first)).rejects.toMatchObject({ crossedSubmissionBoundary: false });
+    for (let index = 0; index < 1_024; index++) {
+      await expect(f.handle.perform({ ...action, applicationOperationId: crypto.randomUUID() })).rejects.toMatchObject({ crossedSubmissionBoundary: false });
+    }
+    expect(f.compact).toHaveBeenCalledTimes(1_025);
+    await expect(f.handle.perform(first)).rejects.toMatchObject({ backendCode: "claude_compaction_not_applied", crossedSubmissionBoundary: false });
+    await expect(f.handle.perform({ ...first, instructions: "Different instructions." })).rejects.toMatchObject({ backendCode: "claude_compaction_replay_mismatch" });
+    expect(f.compact).toHaveBeenCalledTimes(1_025);
+    await f.handle.close();
+  });
+
+  it("preserves native acceptance when the presentation closes while its terminal response arrives", async () => {
+    const f = compactionFixture();
+    await projectionSnapshot(f.handle);
+    let resolve!: (value: Awaited<ReturnType<ClaudeRuntimeSession["compact"]>>) => void;
+    f.compact.mockImplementation(() => new Promise(done => { resolve = done; }));
+    const running = f.handle.perform(action);
+    await vi.waitFor(() => expect(f.compact).toHaveBeenCalledOnce());
+    await f.handle.close();
+    resolve({ outcome: "noop", message: "Not enough messages to compact." });
+    await expect(running).resolves.toEqual({ accepted: true });
+  });
+
+  it("allows bounded Stop during compaction without writing a terminal receipt for a previous user turn", async () => {
+    const f = compactionFixture();
+    const before = await projectionSnapshot(f.handle);
+    let reject!: (error: unknown) => void;
+    f.compact.mockImplementation(() => new Promise((_done, failed) => { reject = failed; }));
+    const running = f.handle.perform(action);
+    const failure = expect(running).rejects.toMatchObject({ crossedSubmissionBoundary: false });
+    await vi.waitFor(() => expect(f.compact).toHaveBeenCalledOnce());
+    await f.handle.interrupt({ applicationOperationId: crypto.randomUUID(), deadlineAt: Date.now() + 1_000 });
+    expect(f.provider.controls.interrupt).toHaveBeenCalledOnce();
+    expect((await projectionSnapshot(f.handle)).runState).toBe("stopping");
+    reject(new BackendError({ category: "rejected", retryable: false, crossedSubmissionBoundary: false, safeMessage: "Compaction was cancelled." }));
+    await failure;
+    const after = await projectionSnapshot(f.handle);
+    expect(after.turnsById).toEqual(before.turnsById);
+    expect(after.runState).toBe("idle");
+    expect(f.handle.retirementBlocked).toBe(false);
+    await f.handle.close();
   });
 });

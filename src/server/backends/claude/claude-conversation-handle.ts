@@ -1,4 +1,6 @@
 import { ClaudeUsageAccounting } from "./claude-usage-accounting.js";
+import { assertClaudeCompactReceiptScope, ClaudeRuntimeCompactError, type ClaudeCompactUsageReceipt, type ClaudeRuntimeCompactDisposition,
+  type ClaudeRuntimeCompactResult } from "./claude-compact-operation.js";
 import { ClaudeContextUsageTracker } from "./claude-context-usage.js";
 import type { UsageSink } from "../../usage/contracts.js";
 import { turnFailure } from "../turn-failure.js";
@@ -82,6 +84,7 @@ import type { ClaudeForkBoundaryAuthentication } from "./claude-fork-context-bou
 import { claudeAttachmentEnvelope } from "./claude-attachment-manifest.js";
 import { claudeSubmissionContent } from "./claude-native-images.js";
 import type {
+  ClaudeExecutionSettingsTuple,
   ClaudeTerminalStatus,
   ClaudeThreadRepository,
 } from "./claude-thread-repository.js";
@@ -112,6 +115,7 @@ const MAXIMUM_EVENT_JOURNAL = 256;
 const MAXIMUM_ACKNOWLEDGEMENT_WAIT_MS = 30_000;
 const MAXIMUM_SUBMISSION_HISTORY_READ_MS = 5_000;
 const MAXIMUM_REPLAY_RECORDS = 1_024;
+const MAXIMUM_COMPACT_RECOVERY_WAIT_MS = 10 * 60_000;
 /** A Stop Claude acknowledged but never settled with a result ends after this. */
 /** Once Claude reports idle, a result it already emitted has this long to land. */
 const CLAUDE_HANDLE_HISTORY_CURSOR_PREFIX = "claude-handle-history:v1:";
@@ -162,6 +166,20 @@ type PendingSubmission = {
   started?: true;
   admissionError?: BackendError;
   observationEnded?: boolean;
+};
+
+type ManualCompaction = {
+  readonly instructions: string | undefined;
+  readonly promise: Promise<BackendActionResult>;
+  accepted: boolean;
+  notApplied?: true;
+  result?: ClaudeRuntimeCompactResult;
+  failureNativeResult?: ClaudeCompactUsageReceipt;
+  observation?: Promise<BackendMutationReconciliation>;
+  historyReload?: Promise<void>;
+  noticePublished?: true;
+  submitted?: true;
+  stopRequested?: true;
 };
 
 export interface ClaudePermissionModeEvidence {
@@ -303,6 +321,10 @@ export class ClaudeConversationHandle implements ConversationHandle {
   #controlLifetime = new AbortController();
   #controlOwnerIdentity: string | undefined;
   readonly #renames = new Map<string, string>();
+  readonly #compactions = new Map<string, ManualCompaction>();
+  /** No-spend rejections retain identity without a promise or input text. */
+  readonly #compactRejections = new Map<string, string>();
+  #activeCompaction: string | undefined;
   readonly #partialItems = new Map<
     string,
     {
@@ -700,7 +722,8 @@ export class ClaudeConversationHandle implements ConversationHandle {
   }
 
   get retirementBlocked(): boolean {
-    return this.#backgroundActivity.retirementBlocked ||
+    if (this.#closed || this.#projectionInvalidated) return false;
+    return this.#activeCompaction !== undefined || this.#backgroundActivity.retirementBlocked ||
       (!this.#closed && !this.#projectionInvalidated &&
         (this.#providerState !== "idle" ||
           [...this.#submissions.values()].some(submission => !submission.accepted && !submission.observationEnded)));
@@ -885,7 +908,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
     this.#announcedForkBlocker = forkBlocker?.code ?? "";
     return {
       revision: `claude-c4:${desired.revision}:${this.#effectiveModel ?? ""}:${this.#effectiveEffort ?? ""}:${this.#effectivePermissionMode ?? ""}:${forkBlocker?.code ?? ""}`,
-      actions: ["rename", "set_model", "set_thinking_level"],
+      actions: ["rename", "set_model", "set_thinking_level", ...(submissionReadiness.available ? ["compact" as const] : [])],
       deliveryModes: submissionReadiness.available ? ["submit", ...(branchingReadiness.available ? ["steer" as const] : [])] : [],
       steerTarget: "conversation",
       composerAttachments: { fileStaging: true, nativeImage: true },
@@ -1017,6 +1040,9 @@ export class ClaudeConversationHandle implements ConversationHandle {
 
   async #sendInput(input: SubmitTurnInput, steering: boolean): Promise<SubmitTurnResult> {
     this.#assertOpen();
+    if (this.#activeCompaction !== undefined) {
+      throw claudeError("invalid_state", "Claude is compacting this conversation.", "claude_compaction_active");
+    }
     if (!hasDeliverableComposerInput(input)) {
       throw claudeError(
         "rejected",
@@ -1077,7 +1103,6 @@ export class ClaudeConversationHandle implements ConversationHandle {
         applicationOperationId: input.applicationOperationId,
         now: this.#now(),
       });
-      const effort = asEffort(desired.effort);
       const permissionMode = desired.permissionMode;
       this.#assertModelPolicyAllowed(desired.model, desired.effort);
       if (
@@ -1089,60 +1114,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
           "claude_permission_mode_rejected",
         );
       }
-      if (!steering) {
-        // Each setter is a sidecar and CLI control round trip. Skip an axis
-        // this query already applied and confirmed; a new query generation or
-        // any contrary evidence (fallback, status, failure) re-applies it.
-        const applied = this.#desiredSettings();
-        const generation = this.#sessionGeneration;
-        if (!(this.#effectiveModel === desired.model && applied.effectiveModelState === "confirmed" &&
-            applied.effectiveModel === desired.model && applied.effectiveModelGeneration === generation)) {
-          try {
-            this.#contextUsage.invalidate();
-            await this.#session.setModel(desired.model);
-            this.#effectiveModel = desired.model;
-            if (this.#effectiveModel && !this.#closed) {
-              this.#recordModelEvidence(this.#effectiveModel, "setter");
-            }
-            this.#refreshContextUsage();
-            this.#emit({
-              type: "capabilities_changed",
-              capabilities: this.#capabilities(),
-            });
-          } catch (error) {
-            this.#markEffectiveAxisUnknown("model");
-            throw mapClaudePreSubmissionError(error, "settings");
-          }
-        }
-        if (!(this.#effectivePermissionMode === permissionMode && applied.effectivePermissionState === "confirmed" &&
-            applied.effectivePermissionClassification === "recognized" &&
-            applied.effectivePermissionMode === permissionMode && applied.effectivePermissionGeneration === generation)) {
-          try {
-            await this.#session.setPermissionMode(permissionMode);
-            if (generation === this.#sessionGeneration && !this.#closed) {
-              this.#recordPermissionModeEvidence(permissionMode, "setter");
-            }
-          } catch (error) {
-            this.#markEffectiveAxisUnknown("permission");
-            throw mapClaudePreSubmissionError(error, "settings");
-          }
-        }
-        if (!(this.#effectiveEffort === (effort ?? null) && applied.effectiveEffortState === "confirmed" &&
-            applied.effectiveEffort === (effort ?? null) && applied.effectiveEffortGeneration === generation)) {
-          try {
-            await this.#session.setEffort(effort);
-            this.#effectiveEffort = effort ?? null;
-            if (!this.#closed) this.#recordEffortEvidence(effort);
-            this.#emit({
-              type: "capabilities_changed",
-              capabilities: this.#capabilities(),
-            });
-          } catch (error) {
-            this.#markEffectiveAxisUnknown("effort");
-            throw mapClaudePreSubmissionError(error, "settings");
-          }
-        }
-      }
+      if (!steering) await this.#applyDesiredSettings(desired);
       const liveSettings = this.#desiredSettings();
       const confirmed = this.#confirmedSettingsReadiness({
         ...liveSettings,
@@ -1279,6 +1251,69 @@ export class ClaudeConversationHandle implements ConversationHandle {
     }
   }
 
+  /** Apply one admitted tuple at an idle provider boundary, without user input. */
+  async #applyDesiredSettings(desired: ClaudeExecutionSettingsTuple): Promise<void> {
+    this.#assertOpen();
+    const effort = asEffort(desired.effort);
+    const permissionMode = desired.permissionMode;
+    this.#assertModelPolicyAllowed(desired.model, desired.effort);
+    if (!isClaudePermissionModeAllowed(permissionMode, this.#permissionPolicy)) {
+      throw claudeError("rejected", "The selected Claude permission mode is no longer allowed.", "claude_permission_mode_rejected");
+    }
+    // Each setter is a sidecar and CLI control round trip. Skip an axis
+    // this query already applied and confirmed; a new query generation or
+    // any contrary evidence (fallback, status, failure) re-applies it.
+    const applied = this.#desiredSettings();
+    const generation = this.#sessionGeneration;
+    if (!(this.#effectiveModel === desired.model && applied.effectiveModelState === "confirmed" &&
+        applied.effectiveModel === desired.model && applied.effectiveModelGeneration === generation)) {
+      try {
+        this.#contextUsage.invalidate();
+        await this.#session.setModel(desired.model);
+        this.#effectiveModel = desired.model;
+        if (this.#effectiveModel && !this.#closed) {
+          this.#recordModelEvidence(this.#effectiveModel, "setter");
+        }
+        this.#refreshContextUsage();
+        this.#emit({
+          type: "capabilities_changed",
+          capabilities: this.#capabilities(),
+        });
+      } catch (error) {
+        this.#markEffectiveAxisUnknown("model");
+        throw mapClaudePreSubmissionError(error, "settings");
+      }
+    }
+    if (!(this.#effectivePermissionMode === permissionMode && applied.effectivePermissionState === "confirmed" &&
+        applied.effectivePermissionClassification === "recognized" &&
+        applied.effectivePermissionMode === permissionMode && applied.effectivePermissionGeneration === generation)) {
+      try {
+        await this.#session.setPermissionMode(permissionMode);
+        if (generation === this.#sessionGeneration && !this.#closed) {
+          this.#recordPermissionModeEvidence(permissionMode, "setter");
+        }
+      } catch (error) {
+        this.#markEffectiveAxisUnknown("permission");
+        throw mapClaudePreSubmissionError(error, "settings");
+      }
+    }
+    if (!(this.#effectiveEffort === (effort ?? null) && applied.effectiveEffortState === "confirmed" &&
+        applied.effectiveEffort === (effort ?? null) && applied.effectiveEffortGeneration === generation)) {
+      try {
+        await this.#session.setEffort(effort);
+        this.#effectiveEffort = effort ?? null;
+        if (!this.#closed) this.#recordEffortEvidence(effort);
+        this.#emit({
+          type: "capabilities_changed",
+          capabilities: this.#capabilities(),
+        });
+      } catch (error) {
+        this.#markEffectiveAxisUnknown("effort");
+        throw mapClaudePreSubmissionError(error, "settings");
+      }
+    }
+  }
+
   async #recoverPersistedSubmission(operationId: string): Promise<void> {
     if (this.#closed || this.#projectionInvalidated) return;
     try {
@@ -1360,6 +1395,10 @@ export class ClaudeConversationHandle implements ConversationHandle {
     this.#assertOpen();
     if (this.#controlLifetime.signal.aborted) throw unavailable("Claude control authority has ended.", "claude_control_closed");
     const active = this.#activeBackendTurnId();
+    const compact = this.#activeCompaction === undefined ? undefined : this.#compactions.get(this.#activeCompaction);
+    // Applying next-turn settings may still be awaiting its control reply.
+    // Stop must fence a compact command that has not reached the owner yet.
+    if (compact && !compact.submitted && Date.now() < input.deadlineAt && !input.signal?.aborted) compact.stopRequested = true;
     await this.#interrupts.run({ ...input, signal: input.signal ? AbortSignal.any([input.signal, this.#controlLifetime.signal]) : this.#controlLifetime.signal }, async signal => {
       const bounded = { ...input, signal };
       const withdraw = this.#session.cancelQueuedInput?.bind(this.#session);
@@ -1375,8 +1414,9 @@ export class ClaudeConversationHandle implements ConversationHandle {
     });
     // Native results remain authoritative; never resurrect replaced/settled work.
     if (Date.now() < input.deadlineAt && !input.signal?.aborted && !this.#closed &&
-        this.#initialProjectionReady && active !== undefined && this.#runState === "running" &&
-        this.#activeBackendTurnId() === active) this.#setRunState("stopping");
+        this.#initialProjectionReady && this.#runState === "running" &&
+        ((this.#activeCompaction !== undefined) || (active !== undefined &&
+          this.#activeBackendTurnId() === active))) this.#setRunState("stopping");
   }
 
   async reconcileInterrupt(input: InterruptConversationInput): Promise<BackendMutationReconciliation> {
@@ -1390,6 +1430,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
     input: RegisteredBackendActionInput,
   ): Promise<BackendActionResult> {
     this.#assertOpen();
+    if (input.action === "compact") return this.#performCompact(input);
     if (input.action === "rename") {
       const previous = this.#renames.get(input.applicationOperationId);
       if (previous !== undefined) {
@@ -1414,19 +1455,305 @@ export class ClaudeConversationHandle implements ConversationHandle {
       return { accepted: true };
     }
     throw unavailable(
-      input.action === "compact"
-        ? "Claude compaction is not supported."
-        : input.action === "set_tool_access"
+      input.action === "set_tool_access"
           ? "Claude tool-access mutation is not supported."
           : "Claude settings are persisted locally and applied at the next turn boundary.",
       `claude_${input.action}_handle_unavailable`,
     );
   }
 
+  #assertCompactReplay(input: Extract<RegisteredBackendActionInput, { action: "compact" }>): void {
+    const previous = this.#compactions.get(input.applicationOperationId);
+    const rejected = this.#compactRejections.get(input.applicationOperationId);
+    if ((previous && previous.instructions !== input.instructions) ||
+        (rejected !== undefined && rejected !== this.#compactFingerprint(input))) {
+      throw claudeError("rejected", "The Claude compaction was replayed with different instructions.", "claude_compaction_replay_mismatch");
+    }
+  }
+
+  #compactFingerprint(input: Extract<RegisteredBackendActionInput, { action: "compact" }>): string {
+    return createHash("sha256").update(JSON.stringify([input.applicationOperationId, input.instructions ?? null])).digest("hex");
+  }
+
+  #makeCompactRoom(): void {
+    if (this.#compactions.size < MAXIMUM_REPLAY_RECORDS) return;
+    const negative = this.#compactRejections.size < MAXIMUM_REPLAY_RECORDS * 4
+      ? [...this.#compactions].find(([, operation]) => operation.notApplied && !operation.result && !operation.failureNativeResult)
+      : undefined;
+    if (negative) {
+      this.#compactRejections.set(negative[0], this.#compactFingerprint({ action: "compact", applicationOperationId: negative[0],
+        ...(negative[1].instructions === undefined ? {} : { instructions: negative[1].instructions }) }));
+      this.#compactions.delete(negative[0]);
+      return;
+    }
+    const accepted = [...this.#compactions].find(([, operation]) => operation.accepted);
+    if (accepted) { this.#compactions.delete(accepted[0]); return; }
+    throw unavailable("Claude cannot retain another compaction operation.", "claude_compaction_capacity_exceeded");
+  }
+
+  async #performCompact(input: Extract<RegisteredBackendActionInput, { action: "compact" }>): Promise<BackendActionResult> {
+    await this.#ensureInitialProjection();
+    this.#assertOpen();
+    this.#assertCompactReplay(input);
+    const previous = this.#compactions.get(input.applicationOperationId);
+    if (previous?.accepted) return { accepted: true };
+    if (previous?.notApplied || this.#compactRejections.has(input.applicationOperationId)) throw this.#compactNotAppliedError();
+    if (previous?.result) return this.#acceptCompactResult(input, previous, previous.result);
+    if (previous) return previous.promise;
+    const selected = this.#desiredSettings();
+    const readiness = this.#submissionReadiness(selected);
+    if (!readiness.available) throw unavailable(readiness.reason, readiness.code);
+    if (this.#activeCompaction !== undefined || this.#submissionReserved || this.#hasSubmissionAwaitingStart(true) ||
+        (this.#runState !== "idle" && this.#runState !== "failed") || this.#providerState !== "idle") {
+      throw claudeError("invalid_state", "Claude must be idle before compacting this conversation.", "claude_compaction_requires_idle");
+    }
+    // A rejected application's receipt is deleted by the gateway. Keep known
+    // rejection tombstones too: without an acknowledgement contract, dropping
+    // one could permit another dispatch under the same identity.
+    this.#makeCompactRoom();
+    this.#activeCompaction = input.applicationOperationId;
+    const desired: ClaudeExecutionSettingsTuple = {
+      model: selected.model!, effort: selected.effort, permissionMode: selected.permissionMode!,
+    };
+    const operation: ManualCompaction = {
+      instructions: input.instructions,
+      accepted: false,
+      promise: Promise.resolve().then(async () => {
+        try {
+          await this.#applyDesiredSettings(desired);
+          this.#assertOpen();
+          const current = this.#desiredSettings();
+          if (current.model !== desired.model || current.effort !== desired.effort || current.permissionMode !== desired.permissionMode) {
+            throw claudeError("invalid_state", "Claude execution settings changed before compaction started.", "claude_compaction_settings_changed");
+          }
+          const readiness = this.#confirmedSettingsReadiness(current);
+          if (!readiness.available) throw unavailable(readiness.reason, readiness.code);
+          if (this.#providerState !== "idle") {
+            throw claudeError("invalid_state", "Claude started another turn before compaction could begin.", "claude_compaction_requires_idle");
+          }
+          if (operation.stopRequested) {
+            throw claudeError("rejected", "Claude compaction was stopped before its command was sent.", "claude_compaction_cancelled_before_dispatch");
+          }
+          operation.submitted = true;
+          const result = await this.#session.compact({
+            operationId: input.applicationOperationId,
+            ...(input.instructions === undefined ? {} : { instructions: input.instructions }),
+          });
+          // Save native terminal proof before accounting. A failed capture
+          // retries this result; it must never issue another /compact.
+          operation.result = result;
+          return this.#acceptCompactResult(input, operation, result);
+        } catch (caught) {
+          let error = caught;
+          if (error instanceof ClaudeRuntimeCompactError && error.nativeResult) {
+            try {
+              assertClaudeCompactReceiptScope(error, { operationId: input.applicationOperationId }, this.binding.backendConversationId);
+              operation.failureNativeResult = error.nativeResult;
+              this.#captureCompactUsage(error.nativeResult);
+            }
+            catch (captureError) { error = captureError; }
+          }
+          if (error instanceof BackendError && !error.crossedSubmissionBoundary) {
+            operation.notApplied = true;
+            this.#settleCompact(input.applicationOperationId, "idle");
+            throw error;
+          }
+          // Observation loss never authorizes another /compact. The owner may
+          // still be running it and retains its exact terminal evidence.
+          if (!this.#closed && !this.#projectionInvalidated) this.#setRunState("disconnected");
+          const observation = operation.observation ??= this.#observeCompact(input, operation);
+          throw new BackendError({ category: error instanceof BackendError ? error.category : "submission_unknown",
+            retryable: error instanceof BackendError ? error.retryable : false, crossedSubmissionBoundary: true,
+            backendCode: error instanceof BackendError ? error.backendCode : "claude_compaction_outcome_unknown",
+            safeMessage: error instanceof BackendError ? error.safeMessage : "Claude compaction requires recovery." },
+          { cause: error, lateMutationReconciliation: observation });
+        }
+      }),
+    };
+    this.#compactions.set(input.applicationOperationId, operation);
+    this.#setRunState("running");
+    return operation.promise;
+  }
+
+  #compactNotAppliedError(): BackendError {
+    return claudeError("rejected", "Claude did not apply this compaction. Start a new compaction to try again.", "claude_compaction_not_applied");
+  }
+
+  #captureCompactUsage(nativeResult: ClaudeCompactUsageReceipt | undefined): void {
+    if (!nativeResult || !this.#usageAccounting) return;
+    this.#usageAccounting.beginDelivery();
+    this.#usageAccounting.pipeline(nativeResult, this.#effectiveEffort ?? null, this.#effectiveModel ?? null);
+    if (!this.#usageAccounting.deliveryCommitted) {
+      throw claudeError("submission_unknown", "Claude compaction usage could not be saved. Recover its result before continuing.",
+        "claude_compaction_usage_uncommitted", false, true);
+    }
+  }
+
+  #acceptCompactResult(
+    input: Extract<RegisteredBackendActionInput, { action: "compact" }>,
+    operation: ManualCompaction,
+    result: ClaudeRuntimeCompactResult,
+  ): BackendActionResult {
+    // The owner's terminal proof survives an attachment closing while its
+    // response is in flight. Closure cannot make applied work unsent.
+    assertClaudeCompactReceiptScope(result, { operationId: input.applicationOperationId }, this.binding.backendConversationId);
+    this.#captureCompactUsage(result.nativeResult);
+    operation.accepted = true;
+    this.#settleCompact(input.applicationOperationId, "idle");
+    this.#refreshContextUsage();
+    if (result.outcome === "noop" && !operation.noticePublished && !this.#closed && !this.#projectionInvalidated) {
+      operation.noticePublished = true;
+      this.#emit({ type: "notice", notice: {
+        id: `claude-compact:${input.applicationOperationId}`,
+        tone: "neutral",
+        message: boundDisplayText(result.message || "Claude did not compact this conversation because there was not enough history to summarize."),
+        createdAt: new Date(this.#now()).toISOString(),
+      } });
+    }
+    return { accepted: true };
+  }
+
+  #settleCompact(operationId: string, state: "idle" | "failed"): void {
+    if (this.#activeCompaction !== operationId) return;
+    this.#activeCompaction = undefined;
+    if (!this.#closed && !this.#projectionInvalidated) {
+      this.#setRunState(state, true);
+      // A background notification may start a new native turn as the local
+      // command finishes. Its current state remains authoritative.
+      if (state === "idle" && this.#providerState !== "idle") this.#beginProviderTurn();
+    }
+  }
+
+  async #reloadCompactedHistory(): Promise<void> {
+    await this.#ensureInitialProjection();
+    const messages = await this.#runtimeClient.getSessionMessages(
+      this.binding.backendConversationId, { dir: this.#canonicalWorkspacePath }, this.#childEnvironment,
+    );
+    this.#assertOpen();
+    assertClaudeHistorySession(messages, this.binding.backendConversationId);
+    // Read the provider's retained full history, including earlier compaction
+    // segments. Never reconstruct a summary from compact instructions.
+    this.#installInitialMessages(messages);
+    this.#historyCursorNonce = randomBytes(16).toString("base64url");
+    this.#emit({ type: "resnapshot_required", reason: "history_changed" });
+    this.#refreshContextUsage();
+  }
+
+  async #finishCompactProjection(operationId: string, operation: ManualCompaction): Promise<void> {
+    if (this.#activeCompaction !== operationId) return;
+    const reload = operation.historyReload ??= this.#reloadCompactedHistory();
+    try { await reload; }
+    catch (error) {
+      if (operation.historyReload === reload) operation.historyReload = undefined;
+      throw error;
+    }
+    // Accounting and terminal-receipt retries may continue after this release.
+    // They cannot reinstall history over a later live turn.
+    this.#settleCompact(operationId, "idle");
+  }
+
+  async #applyCompactDisposition(
+    input: Extract<RegisteredBackendActionInput, { action: "compact" }>,
+    disposition: ClaudeRuntimeCompactDisposition,
+  ): Promise<BackendMutationReconciliation> {
+    this.#assertOpen();
+    this.#assertCompactReplay(input);
+    let operation = this.#compactions.get(input.applicationOperationId);
+    if (!operation) {
+      this.#makeCompactRoom();
+      const promise = Promise.reject<BackendActionResult>(claudeError("submission_unknown", "Claude compaction has an unresolved outcome.",
+        "claude_compaction_outcome_unknown", false, true));
+      void promise.catch(() => undefined);
+      operation = { instructions: input.instructions, accepted: false, promise };
+      this.#compactions.set(input.applicationOperationId, operation);
+    }
+    if (disposition.nativeResult) {
+      assertClaudeCompactReceiptScope(disposition, { operationId: input.applicationOperationId }, this.binding.backendConversationId);
+      operation.failureNativeResult = disposition.nativeResult;
+    }
+    if (!disposition.pending) {
+      // Terminal truth ends the live fence even when the command's effect or
+      // accounting remains uncertain. Canonical history remains authoritative.
+      await this.#finishCompactProjection(input.applicationOperationId, operation);
+    }
+    this.#captureCompactUsage(disposition.nativeResult ?? operation.failureNativeResult);
+    if (disposition.outcome === "accepted") {
+      // Exact acceptance permits only a read of the retained terminal result.
+      const result = operation.result ?? await this.#session.compact({ operationId: input.applicationOperationId,
+        ...(input.instructions === undefined ? {} : { instructions: input.instructions }) });
+      operation.result = result;
+      this.#acceptCompactResult(input, operation, result);
+    } else if (disposition.outcome === "not_applied") {
+      operation.notApplied = true;
+      this.#settleCompact(input.applicationOperationId, "idle");
+    }
+    return { outcome: disposition.outcome };
+  }
+
+  async #observeCompact(
+    input: Extract<RegisteredBackendActionInput, { action: "compact" }>, operation: ManualCompaction,
+  ): Promise<BackendMutationReconciliation> {
+    const lifetime = this.#controlLifetime.signal;
+    const deadlineAt = Date.now() + MAXIMUM_COMPACT_RECOVERY_WAIT_MS;
+    let onAbort!: () => void;
+    const aborted = new Promise<BackendMutationReconciliation>(resolve => {
+      onAbort = () => resolve({ outcome: "unknown" });
+      lifetime.addEventListener("abort", onAbort, { once: true });
+      if (lifetime.aborted) onAbort();
+    });
+    const follow = async (): Promise<BackendMutationReconciliation> => {
+      while (!lifetime.aborted && !this.#closed && Date.now() < deadlineAt) {
+        try {
+          if (operation.accepted) return { outcome: "accepted" };
+          if (operation.notApplied) return { outcome: "not_applied" };
+          if (operation.result) return await this.reconcileAction(input);
+          const disposition = await withTimeout(this.#session.reconcileCompact({ operationId: input.applicationOperationId,
+            ...(input.instructions === undefined ? {} : { instructions: input.instructions }) }),
+          Math.min(MAXIMUM_SUBMISSION_HISTORY_READ_MS, Math.max(1, deadlineAt - Date.now())), "claude_compaction_observation_timeout");
+          const reconciliation = await this.#applyCompactDisposition(input, disposition);
+          if (disposition.outcome !== "unknown" || !disposition.pending) return reconciliation;
+        } catch {
+          // A transient carrier/history/accounting failure cannot authorize a
+          // resend. The same scoped owner receipt can be observed again.
+        }
+        await new Promise<void>(resolve => {
+          const done = () => { clearTimeout(timer); lifetime.removeEventListener("abort", done); resolve(); };
+          const timer = setTimeout(done, 1_000);
+          timer.unref();
+          lifetime.addEventListener("abort", done, { once: true });
+          if (lifetime.aborted) done();
+        });
+      }
+      if (!lifetime.aborted && !this.#closed && this.#activeCompaction === input.applicationOperationId) {
+        this.#fail(claudeError("submission_unknown", "Claude compaction could not be observed within the recovery window. Reopen the thread to recover its outcome.",
+          "claude_compaction_recovery_deadline", false, true));
+      }
+      return { outcome: "unknown" };
+    };
+    try { return await Promise.race([follow(), aborted]); }
+    finally { lifetime.removeEventListener("abort", onAbort); }
+  }
+
   async reconcileAction(
     input: RegisteredBackendActionInput,
   ): Promise<BackendMutationReconciliation> {
     this.#assertOpen();
+    if (input.action === "compact") {
+      this.#assertCompactReplay(input);
+      const operation = this.#compactions.get(input.applicationOperationId);
+      if (operation?.accepted) return { outcome: "accepted" };
+      if (operation?.notApplied || this.#compactRejections.has(input.applicationOperationId)) return { outcome: "not_applied" };
+      if (operation?.result) {
+        await this.#finishCompactProjection(input.applicationOperationId, operation);
+        this.#acceptCompactResult(input, operation, operation.result);
+        return { outcome: "accepted" };
+      }
+      const reconciliation = await this.#session.reconcileCompact({
+        operationId: input.applicationOperationId,
+        ...(input.instructions === undefined ? {} : { instructions: input.instructions }),
+      });
+      return this.#applyCompactDisposition(input, reconciliation);
+    }
     if (input.action !== "rename") return { outcome: "unknown" };
     const previous = this.#renames.get(input.applicationOperationId);
     if (previous !== undefined) {
@@ -1643,7 +1970,8 @@ export class ClaudeConversationHandle implements ConversationHandle {
     // Synthetic rows from external sources are visible in native history.
     // Internal notes stay hidden except for the summary after a compaction.
     const externalInput = message.type === "user" && claudeMessageHasVisibleExternalOrigin(message.origin);
-    if (message.type === "user" && message.isSynthetic === true && !externalInput && this.#liveCompaction === undefined) return;
+    if (message.type === "user" && message.isSynthetic === true && !externalInput &&
+        (message.origin !== undefined || this.#liveCompaction === undefined)) return;
     // Claude Code streams a compaction's summary right after its boundary, as
     // a synthetic user row; history marks the same row as the summary.
     const compaction = externalInput ? undefined : this.#liveCompaction;
@@ -1716,7 +2044,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
         this.#usage = mergeUsage(this.#projection.usage ?? {}, this.#usage);
         this.#emit({ type: "resnapshot_required", reason: "history_changed" });
       }
-      if (message.type === "user" && [...this.#projection.nativeUserMessageUuidByBackendTurnId.values()].includes(message.uuid!)) {
+      if (!compactSummary && message.type === "user" && [...this.#projection.nativeUserMessageUuidByBackendTurnId.values()].includes(message.uuid!)) {
         this.#beginSedesTurn(message.uuid!);
       }
       this.#emit({ type: "usage_changed", usage: this.#usage });
@@ -2312,7 +2640,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
     const previous = this.#providerState;
     this.#providerState = state;
     this.#providerStateReported = true;
-    if (this.#initialHistoryLoaded) {
+    if (this.#initialHistoryLoaded && this.#activeCompaction === undefined) {
       if (state !== "idle") {
         // Claude began work while no Sedes input is awaiting its turn: a task
         // notification or peer hand-back started this turn. Handling this
@@ -2700,6 +3028,9 @@ export class ClaudeConversationHandle implements ConversationHandle {
   }
 
   #activeBackendTurnId(): string | undefined {
+    // Manual compaction is a conversation action. Reopening the previous
+    // completed turn would forge a user turn and its terminal correlation.
+    if (this.#activeCompaction !== undefined) return undefined;
     return (
       this.#projection.snapshot.activeBackendTurnId ??
       this.#projection.snapshot.orderedBackendTurnIds.at(-1)

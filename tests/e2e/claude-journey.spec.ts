@@ -308,13 +308,13 @@ test("compiled Claude backend streams, settles, and reloads through normalized U
   ).toContainText("Claude Sonnet 5");
   await page.getByRole("button", { name: "Thread actions" }).click();
   await expect(permissionMode).toContainText("Don't ask");
+  await expect(
+    threadControls.getByRole("menuitem", { name: "Compact context" }),
+  ).toBeEnabled();
   await permissionMode.click();
   await expect(
     permissionModes.getByRole("menuitemradio", { name: "Don't ask", exact: true }),
   ).toHaveAttribute("aria-checked", "true");
-  await expect(
-    threadControls.getByRole("menuitem", { name: "Compact context" }),
-  ).toHaveCount(0);
   await page.keyboard.press("Escape");
   await expect(threadControls).toHaveCount(0);
 
@@ -348,11 +348,81 @@ test("compiled Claude backend streams, settles, and reloads through normalized U
     ({ id }) => id,
   );
   expect(restoredOperationIds).not.toContain("clone");
-  expect(restoredOperationIds).not.toContain("compact");
+  expect(restoredOperationIds).toContain("compact");
+
+  const compact = async () => {
+    await page.getByRole("button", { name: "Thread actions" }).click();
+    const response = page.waitForResponse(candidate =>
+      candidate.request().method() === "POST" && candidate.url().endsWith("/operations") &&
+      candidate.request().postDataJSON().kind === "perform" &&
+      candidate.request().postDataJSON().operation?.action === "compact",
+    );
+    await threadControls.getByRole("menuitem", { name: "Compact context" }).click();
+    const accepted = await response;
+    expect(accepted.status()).toBe(200);
+    expect(await accepted.json()).toMatchObject({ status: "accepted" });
+  };
+  await compact();
+  const compactedSnapshotResponse = await page.request.get(`/api${threadPath}?activityDetail=full`);
+  expect(compactedSnapshotResponse.ok()).toBe(true);
+  const compactedSnapshot = normalizedThreadSnapshotSchema.parse(await compactedSnapshotResponse.json());
+  // Compact applies the pending permission selection at its own idle boundary,
+  // without requiring a separate ordinary message first.
+  expect(compactedSnapshot.providerFeatures).toEqual([
+    expect.objectContaining({
+      ref: { featureId: "claude.permissions", schemaVersion: 1 },
+      state: expect.objectContaining({ kind: "object", entries: expect.arrayContaining([
+        { key: { text: "desired" }, value: { text: "dontAsk" } },
+        { key: { text: "effective" }, value: { text: "dontAsk" } },
+        { key: { text: "effectiveState" }, value: { text: "confirmed" } },
+      ]) }),
+    }),
+  ]);
+  const compactionMarker = messages.getByLabel("Conversation compacted");
+  const summaryText = "Claude compacted the earlier browser conversation. Keep every correction, completed background task, and selected permission mode.";
+  await expect(compactionMarker).toHaveCount(1);
+  await compactionMarker.locator("summary").click();
+  await expect(compactionMarker.getByText(summaryText, { exact: true })).toBeVisible();
+  await expect(messages.getByText(summaryText, { exact: true })).toHaveCount(1);
+  await expect(messages.getByText(prompt, { exact: true })).toBeVisible();
+  await expect(messages.getByText(firstSteer, { exact: true })).toHaveCount(1);
+  await expect(messages.getByText(steeredAnswer, { exact: true })).toHaveCount(1);
+  await expect(messages.getByText("/compact", { exact: true })).toHaveCount(0);
+  await capture(page, testInfo, "claude-manual-compaction.png");
+  await page.reload();
+  await expect(compactionMarker).toHaveCount(1);
+  await compactionMarker.locator("summary").click();
+  await expect(compactionMarker.getByText(summaryText, { exact: true })).toBeVisible();
+  await expect(messages.getByText(prompt, { exact: true })).toBeVisible();
+  await expect(messages.getByText(completedText, { exact: true }).first()).toBeVisible();
+  await expect(messages.getByText(firstSteer, { exact: true })).toHaveCount(1);
+  await expect(messages.getByText(secondSteer, { exact: true })).toHaveCount(1);
+  await expect(messages.getByText(thirdSteer, { exact: true })).toHaveCount(1);
+  await expect(completedAgent).toHaveCount(1);
+  await page.getByRole("button", { name: "Thread actions" }).click();
+  await threadControls.getByRole("menuitem", { name: "Session stats" }).click();
+  const stats = page.getByRole("dialog", { name: "Session stats" });
+  await expect(stats.getByTestId("session-stat-group").filter({ hasText: "Compactions" })
+    .getByText("1", { exact: true })).toBeVisible();
+  await capture(page, testInfo, "claude-manual-compaction-restored-stats.png");
+  await page.keyboard.press("Escape");
+
+  // Claude can complete a native command without changing the context. That
+  // outcome must not fabricate another summary or visible user prompt.
+  expect((await page.request.post("/__e2e/claude/arm-compact-noop")).status()).toBe(204);
+  await compact();
+  await expect(compactionMarker).toHaveCount(1);
+  await expect(page.getByText("Error: No messages to compact", { exact: true })).toBeVisible();
+  await expect(messages.getByText("Error: No messages to compact", { exact: true })).toHaveCount(0);
+  await expect(messages.getByText("<local-command-stdout>Compacted </local-command-stdout>", { exact: true })).toHaveCount(0);
+  await expect(messages.getByText("/compact", { exact: true })).toHaveCount(0);
 
   await input.fill("Exercise Claude Stop");
   await page.getByRole("button", { name: "Send message" }).click();
   await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Thread actions" }).click();
+  await expect(threadControls.getByRole("menuitem", { name: "Compact context" })).toBeDisabled();
+  await page.keyboard.press("Escape");
   await capture(page, testInfo, "claude-stop-working.png");
   // Two steers Claude queued but never started when Stop lands.
   const stopPending = page.getByRole("region", { name: "Pending inputs" });

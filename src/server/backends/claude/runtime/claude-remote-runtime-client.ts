@@ -1,6 +1,8 @@
 import type { EnvironmentVariableOverrides } from "../../../../shared/protocol/environment-variables.js";
+import { createHash } from "node:crypto";
 import { readClaudeSessionHistory, type ClaudeHistoryPage, type ClaudeHistoryPageOptions } from "../claude-session-history.js";
 import { BackendError } from "../../contracts.js";
+import { assertClaudeCompactReceiptScope, ClaudeRuntimeCompactError, type ClaudeRuntimeCompactDisposition, type ClaudeRuntimeCompactInput, type ClaudeRuntimeCompactResult } from "../claude-compact-operation.js";
 import { attachmentDiagnostic } from "../../../diagnostics/attachment-diagnostics.js";
 import type { BackgroundActivity } from "../../../../shared/protocol/background-activity.js";
 import { z } from "zod";
@@ -13,8 +15,8 @@ import { SidecarOperationError } from "../../../../internal/sidecar-protocol/ope
 import type { ClaudeSdkSessionInitialization } from "../claude-sdk-session.js";
 import { verifyClaudeRuntimeVersion } from "../claude-release-guard.js";
 import { resolveClaudeSafeSkills, type ClaudeSafeSkill } from "../claude-skills.js";
-import * as worker from "../worker/claude-runtime-v3.js";
-import { CLAUDE_PERSISTENT_MAXIMUM_SESSIONS, claudePersistentOpenRequestSchema, claudePersistentRetireResponseSchema, claudePersistentSubmissionDispositionResponseSchema, claudePersistentConfigurationSchema, claudePersistentAttachmentSchema, claudePersistentSendResponseSchema, type ClaudePersistentCommand, type ClaudePersistentEvent } from "./claude-persistent-runtime-wire.js";
+import * as worker from "../worker/claude-runtime-v4.js";
+import { CLAUDE_PERSISTENT_MAXIMUM_SESSIONS, claudePersistentCompactResponseSchema, claudePersistentCompactDispositionResponseSchema, claudePersistentOpenRequestSchema, claudePersistentRetireResponseSchema, claudePersistentSubmissionDispositionResponseSchema, claudePersistentConfigurationSchema, claudePersistentAttachmentSchema, claudePersistentSendResponseSchema, type ClaudePersistentCommand, type ClaudePersistentEvent } from "./claude-persistent-runtime-wire.js";
 import { ClaudeSidecarRuntimeConnection, claudePersistentRuntimeOperations } from "./claude-sidecar-runtime.js";
 import { CLAUDE_CONTEXT_USAGE_TIMEOUT_MS } from "../claude-context-usage.js";
 
@@ -22,6 +24,11 @@ type Command = ClaudePersistentCommand extends infer C ? C extends ClaudePersist
 /** Acknowledgements in flight per client; the sidecar peer admits 128 requests. */
 export const CLAUDE_PERSISTENT_PIPELINED_ACKNOWLEDGEMENTS = 16;
 interface Attachment { readonly lease: SidecarRuntimeLease; readonly connection: ClaudeSidecarRuntimeConnection; readonly runtimeId: string; readonly unsubscribe: () => void }
+interface CachedCompaction {
+  readonly fingerprint: string; promise?: Promise<ClaudeRuntimeCompactResult>;
+  result?: ClaudeRuntimeCompactResult; accepted?: true; needsRead?: boolean;
+  notApplied?: ClaudeRuntimeCompactDisposition; lightweight?: boolean;
+}
 
 /** Main owns subscriptions; the authenticated sidecar owns persistent SDK queries. */
 export class ClaudePersistentRuntimeClient implements ClaudeRuntimeClient {
@@ -274,6 +281,9 @@ class PersistentSession implements ClaudeRuntimeSession {
   readonly #permissionControllers = new Map<string, AbortController>();
   readonly #permissionResponses = new Map<string, worker.ClaudeRuntimeCanUseToolResponse>();
   readonly #settledPermissions = new Set<string>();
+  readonly #compactions = new Map<string, CachedCompaction>();
+  #observedThrough = 0;
+  readonly #sequenceWaiters = new Set<{ through: number; resolve(): void; reject(error: unknown): void }>();
   constructor(readonly client: ClaudePersistentRuntimeClient, readonly options: ClaudeRuntimeSessionOptions) {}
   get lifetime() { return "persistent_service" as const; }
   get closed() { return this.#closed; }
@@ -357,6 +367,7 @@ class PersistentSession implements ClaudeRuntimeSession {
       this.#pending.clear();
       this.#settledPermissions.clear();
       this.#permissionResponses.clear();
+      this.#observedThrough = 0;
     }
     this.#reattached = response.reattached;
     this.#backgroundActivity = response.backgroundActivity;
@@ -383,6 +394,9 @@ class PersistentSession implements ClaudeRuntimeSession {
     // recovery. Preserve that evidence when asynchronous delivery runs after
     // the live carrier has resumed.
     for (const event of pendingEvents) this.event(event, "recovered");
+    // This attachment offers every outstanding event through the cut. Missing
+    // sequences were already adopted or reclaimed by the owning host.
+    this.#observeThrough(response.throughSequence);
     // Failure is retained owner state, not merely an event that disappears on ACK.
     // Drain retained output before failing hydration; never advertise a dead query.
     if (response.failureCode !== null) {
@@ -418,6 +432,108 @@ class PersistentSession implements ClaudeRuntimeSession {
             : "The Claude runtime cannot retain another input. The input was not sent.",
       });
     }
+  }
+  compact(input: ClaudeRuntimeCompactInput): Promise<ClaudeRuntimeCompactResult> {
+    const fingerprint = compactInputFingerprint(input);
+    const previous = this.#compactions.get(input.operationId);
+    if (previous) {
+      if (previous.fingerprint !== fingerprint) return Promise.reject(new ClaudeRuntimeCompactError("claude_compact_operation_conflict", false));
+      if (!previous.needsRead && previous.promise) return previous.promise;
+    }
+    if (!previous && (this.#compactions.size >= 16_384 || [...this.#compactions.values()].filter(entry => !entry.lightweight).length >= 256)) return Promise.reject(new ClaudeRuntimeCompactError("claude_compact_receipt_capacity", false));
+    const entry: CachedCompaction = previous ?? { fingerprint };
+    const promise = this.#compact(input).then(result => {
+      entry.result = result; entry.accepted = true; entry.needsRead = false;
+      return result;
+    }, error => {
+      if (entry.accepted) entry.needsRead = true;
+      else if (error instanceof ClaudeRuntimeCompactError && !error.crossedSubmissionBoundary) {
+        entry.lightweight = !error.nativeResult;
+        entry.notApplied = { outcome: "not_applied", pending: false,
+          ...(error.nativeResult ? { nativeResult: error.nativeResult } : {}) };
+      }
+      throw error;
+    });
+    entry.promise = promise;
+    this.#compactions.set(input.operationId, entry);
+    return promise;
+  }
+  async #compact(input: ClaudeRuntimeCompactInput): Promise<ClaudeRuntimeCompactResult> {
+    let attachment: Attachment;
+    let request: Extract<ClaudePersistentCommand, { action: "compact" }>["request"];
+    try {
+      this.#assertReady();
+      attachment = await this.client.attachment();
+      await this.attach(attachment);
+      this.#assertReady();
+      request = worker.claudeRuntimeQueryCompactRequestSchema.extend({ startupProbeUuid: z.string().uuid() }).parse({
+        queryId: this.options.sessionId, startupProbeUuid: this.#startupProbeUuid, ...input,
+      });
+    } catch {
+      // No compact command has been issued. Keep its exact negative identity
+      // locally so recovery can finish even if this owner never saw the ID.
+      throw new ClaudeRuntimeCompactError("claude_compact_not_admitted", false);
+    }
+    const response = claudePersistentCompactResponseSchema.parse(await this.client.execute({ action: "compact", request }, attachment));
+    assertClaudeCompactReceiptScope(response.response, input, this.options.sessionId);
+    await this.#applyThrough(response.throughSequence);
+    if (response.response.outcome === "failed") {
+      throw new ClaudeRuntimeCompactError(response.response.code, response.response.crossedSubmissionBoundary,
+        response.response.nativeResult);
+    }
+    return response.response;
+  }
+  async reconcileCompact(input: ClaudeRuntimeCompactInput): Promise<ClaudeRuntimeCompactDisposition> {
+    const prior = this.#compactions.get(input.operationId);
+    if (prior && prior.fingerprint !== compactInputFingerprint(input)) return { outcome: "unknown", pending: true };
+    if (prior?.notApplied) return prior.notApplied;
+    if (prior?.accepted) return { outcome: "accepted", pending: false,
+      ...(prior.result?.nativeResult ? { nativeResult: prior.result.nativeResult } : {}) };
+    this.#assertReady();
+    const attachment = await this.client.attachment();
+    await this.attach(attachment);
+    this.#assertReady();
+    const request = worker.claudeRuntimeQueryCompactRequestSchema.extend({ startupProbeUuid: z.string().uuid() }).parse({
+      queryId: this.options.sessionId, startupProbeUuid: this.#startupProbeUuid, ...input,
+    });
+    const response = claudePersistentCompactDispositionResponseSchema.parse(await this.client.execute({ action: "compact_disposition", request }, attachment));
+    assertClaudeCompactReceiptScope(response, input, this.options.sessionId);
+    if (!response.pending) await this.#applyThrough(response.throughSequence);
+    if (response.outcome === "accepted") {
+      // Retain accepted proof while a subsequent compact reads its terminal
+      // result. A failed read cannot reclassify the original native command.
+      const entry: CachedCompaction = prior ?? { fingerprint: compactInputFingerprint(input) };
+      entry.accepted = true; entry.needsRead = !entry.result;
+      this.#compactions.set(input.operationId, entry);
+    } else if (response.outcome === "not_applied") {
+      const promise = Promise.reject<ClaudeRuntimeCompactResult>(new ClaudeRuntimeCompactError("claude_compact_not_applied", false, response.nativeResult));
+      void promise.catch(() => undefined);
+      this.#compactions.set(input.operationId, { fingerprint: compactInputFingerprint(input), promise,
+        lightweight: !response.nativeResult, notApplied: { outcome: "not_applied", pending: false,
+          ...(response.nativeResult ? { nativeResult: response.nativeResult } : {}) } });
+    }
+    return { outcome: response.outcome, pending: response.pending,
+      ...(response.nativeResult ? { nativeResult: response.nativeResult } : {}) };
+  }
+  async #applyThrough(through: number): Promise<void> {
+    if (this.#observedThrough < through) {
+      let waiter!: { through: number; resolve(): void; reject(error: unknown): void };
+      let timeout!: ReturnType<typeof setTimeout>;
+      try {
+        await new Promise<void>((resolve, reject) => {
+          waiter = { through, resolve, reject }; this.#sequenceWaiters.add(waiter);
+          timeout = setTimeout(() => reject(new ClaudeRuntimeCompactError("claude_compact_replay_timeout", true)), 30_000);
+          timeout.unref();
+        });
+      } finally { clearTimeout(timeout); this.#sequenceWaiters.delete(waiter); }
+    }
+    await this.#delivery;
+    if (this.#deliveryFailure !== undefined) throw this.#deliveryFailure;
+    this.#assertOpen();
+  }
+  #observeThrough(sequence: number): void {
+    this.#observedThrough = Math.max(this.#observedThrough, sequence);
+    for (const waiter of this.#sequenceWaiters) if (waiter.through <= this.#observedThrough) waiter.resolve();
   }
   async interrupt(input: Parameters<ClaudeRuntimeSession["interrupt"]>[0]) {
     this.#assertReady();
@@ -490,6 +606,7 @@ class PersistentSession implements ClaudeRuntimeSession {
   async close(options?: { readonly reason: "evicted" }) {
     if (this.#closed) return;
     this.#closed = true;
+    for (const waiter of this.#sequenceWaiters) waiter.reject(new ClaudeRuntimeCompactError("claude_compact_attachment_closed", true));
     this.#evicted = options?.reason === "evicted";
     if (this.#evicted) await this.#opening?.promise.catch(() => undefined);
     for (const controller of this.#permissionControllers.values()) controller.abort();
@@ -519,11 +636,12 @@ class PersistentSession implements ClaudeRuntimeSession {
       this.#earlyEvents.set(event.sequence, event);
       return;
     }
-    if (this.#delivered.has(event.sequence) || this.#acknowledged.has(event.sequence)) { void this.#ack(event.sequence).catch(error => this.client.report(error)); return; }
+    if (this.#delivered.has(event.sequence) || this.#acknowledged.has(event.sequence)) { this.#observeThrough(event.sequence); void this.#ack(event.sequence).catch(error => this.client.report(error)); return; }
     if (this.#pending.has(event.sequence)) return;
     this.#pending.add(event.sequence);
     if (event.payload.kind === "permission") {
       void this.#permission(event).catch(error => this.client.report(error)).finally(() => this.#pending.delete(event.sequence));
+      this.#observeThrough(event.sequence);
       return;
     }
     const receivedAttachment = this.#attached;
@@ -569,6 +687,7 @@ class PersistentSession implements ClaudeRuntimeSession {
       this.#failure(error);
       void this.close().catch(error => this.client.report(error));
     }).finally(() => this.#pending.delete(event.sequence));
+    this.#observeThrough(event.sequence);
   }
   async #permission(event: ClaudePersistentEvent) {
     if (event.payload.kind !== "permission") return;
@@ -651,6 +770,9 @@ function attachmentDisabled(error: unknown): boolean {
 
 function assertEmptyEnvironment(environment: Readonly<Record<string, string | undefined>>): void {
   if (Object.values(environment).some(value => value !== undefined)) throw new Error("claude_persistent_runtime_environment_invalid");
+}
+function compactInputFingerprint(input: ClaudeRuntimeCompactInput): string {
+  return createHash("sha256").update(JSON.stringify([input.operationId, input.instructions ?? null])).digest("hex");
 }
 
 function retainedQueryFailure(code: string): BackendError {

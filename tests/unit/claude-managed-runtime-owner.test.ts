@@ -17,9 +17,9 @@ import {
   CLAUDE_RUNTIME_CAPABILITY_ID,
   CLAUDE_RUNTIME_MAJOR_VERSION,
   claudeRuntimeHostOperations,
-  registerClaudeRuntimeV3WorkerOperations,
-  type ClaudeRuntimeV3WorkerHandlers,
-} from "../../src/server/backends/claude/worker/claude-runtime-v3.js";
+  registerClaudeRuntimeV4WorkerOperations,
+  type ClaudeRuntimeV4WorkerHandlers,
+} from "../../src/server/backends/claude/worker/claude-runtime-v4.js";
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); });
 
@@ -75,8 +75,15 @@ describe("ClaudeManagedRuntimeOwner", () => {
       onMessage: () => undefined,
     });
     expect(open).not.toHaveBeenCalled();
+    await expect(session.compact({ operationId: "00000000-0000-4000-8000-000000000002" })).rejects.toMatchObject({
+      backendCode: "claude_compact_local_admission_refused", crossedSubmissionBoundary: false });
+    expect(open).not.toHaveBeenCalled();
     await owner.close();
     await expect(session.start()).rejects.toThrow("claude_managed_runtime_closed");
+    expect(open).not.toHaveBeenCalled();
+    await session.close();
+    await expect(session.compact({ operationId: "00000000-0000-4000-8000-000000000003" })).rejects.toMatchObject({
+      backendCode: "claude_compact_local_admission_refused", crossedSubmissionBoundary: false });
     expect(open).not.toHaveBeenCalled();
     await expect(owner.close()).resolves.toBeUndefined();
   });
@@ -344,7 +351,7 @@ function memoryWorkerGeneration(
     }),
   });
   const registry = new SidecarOperationRegistry();
-  registerClaudeRuntimeV3WorkerOperations(registry, lifecycleHandlers());
+  registerClaudeRuntimeV4WorkerOperations(registry, lifecycleHandlers());
   registerControlV2Operations(registry, {
     buildId: artifact.buildId,
     artifactSha256: artifact.artifactSha256,
@@ -371,7 +378,7 @@ function memoryWorkerGeneration(
   return { stream, finish };
 }
 
-function lifecycleHandlers(): ClaudeRuntimeV3WorkerHandlers {
+function lifecycleHandlers(): ClaudeRuntimeV4WorkerHandlers {
   const unused = () => {
     throw new Error("owner_lifecycle_unexpected_operation");
   };
@@ -388,6 +395,8 @@ function lifecycleHandlers(): ClaudeRuntimeV3WorkerHandlers {
     renameSession: unused,
     openQuery: unused,
     sendQuery: unused,
+    compactQuery: unused,
+    compactDisposition: unused,
     interruptQuery: unused,
     interruptDisposition: unused,
     cancelQueryInput: unused,

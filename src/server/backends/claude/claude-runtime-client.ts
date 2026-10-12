@@ -1,4 +1,6 @@
 import type { InterruptConversationInput } from "../contracts.js";
+import type { ClaudeRuntimeCompactDisposition, ClaudeRuntimeCompactInput, ClaudeRuntimeCompactResult } from "./claude-compact-operation.js";
+export { ClaudeRuntimeCompactError, type ClaudeRuntimeCompactDisposition, type ClaudeRuntimeCompactInput, type ClaudeRuntimeCompactResult, type ClaudeCompactUsageReceipt } from "./claude-compact-operation.js";
 import type { ResolvedEnvironmentVariables } from "../../environment-variables/runtime-environment.js";
 import type { BackgroundActivity } from "../../../shared/protocol/background-activity.js";
 import type { ClaudeContextUsage } from "./claude-context-usage.js";
@@ -30,7 +32,7 @@ import type {
   VerifiedClaudeRuntimeVersion,
 } from "./claude-release-guard.js";
 import type { CanUseTool } from "@anthropic-ai/claude-agent-sdk";
-import type { ClaudeRuntimeAgentToolMcp } from "./worker/claude-runtime-v3.js";
+import type { ClaudeRuntimeAgentToolMcp } from "./worker/claude-runtime-v4.js";
 import {
   runClaudeForkLaunch,
   type ClaudeRuntimeForkOptions,
@@ -137,6 +139,10 @@ export interface ClaudeRuntimeSession {
     readonly shouldQuery?: boolean;
     readonly priority?: "next";
   }): void | Promise<void>;
+  /** A dedicated native local command, never an ordinary user turn. */
+  compact(input: ClaudeRuntimeCompactInput): Promise<ClaudeRuntimeCompactResult>;
+  /** Exact retained operation evidence; never reissues the command. */
+  reconcileCompact(input: ClaudeRuntimeCompactInput): Promise<ClaudeRuntimeCompactDisposition>;
   /**
    * A service-owned session's owner first withdraws every Sedes input it holds
    * that Claude has not started, as Stop requires, including inputs an earlier

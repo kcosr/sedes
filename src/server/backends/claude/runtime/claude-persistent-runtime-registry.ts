@@ -4,7 +4,7 @@ import type { ExecutionEnvironmentChannelProvider } from "../../../execution/env
 import type { ManagedWorkerArtifactRegistration } from "../../../managed-workers/artifact.js";
 import { SidecarResourceHandoffPendingError, type PersistentSidecarServiceRegistry } from "../../../sidecar/persistent-sidecar-service-registry.js";
 import type { ClaudeOwnedRuntimeClient } from "../claude-runtime-client.js";
-import type { ClaudeRuntimeAgentToolMcp } from "../worker/claude-runtime-v3.js";
+import type { ClaudeRuntimeAgentToolMcp } from "../worker/claude-runtime-v4.js";
 import { ClaudeManagedRuntimeOwner } from "../claude-managed-runtime-owner.js";
 import { ClaudePersistentRuntimeHost } from "./claude-persistent-runtime-host.js";
 import { claudePersistentConfigurationSchema, type ClaudePersistentConfiguration } from "./claude-persistent-runtime-wire.js";
@@ -22,6 +22,7 @@ export class ClaudePersistentRuntimeRegistry {
     createRuntime?: (configuration: ClaudePersistentConfiguration) => ClaudeOwnedRuntimeClient & { close(): Promise<void> };
     /** Residency limit for detached, quiescent queries; tests shorten it. */
     detachedSessionTtlMs?: number;
+    maximumCompactReceiptBytes?: number;
   }) {}
 
   ensure(raw: ClaudePersistentConfiguration, epoch: number): ClaudePersistentRuntimeHost {
@@ -48,6 +49,7 @@ export class ClaudePersistentRuntimeRegistry {
       startupEnvironmentVariables: configuration.startupEnvironmentVariables,
     });
     const host = new ClaudePersistentRuntimeHost({ configuration, client, close: () => client.close(), services: this.input.services, ...(this.input.validateQueryEnvironment ? { validateQueryEnvironment: this.input.validateQueryEnvironment } : {}), ...(this.input.validateAgentToolMcp ? { validateAgentToolMcp: this.input.validateAgentToolMcp } : {}),
+      ...(this.input.maximumCompactReceiptBytes !== undefined ? { maximumCompactReceiptBytes: this.input.maximumCompactReceiptBytes } : {}),
       ...(this.input.detachedSessionTtlMs !== undefined ? { detachedSessionTtlMs: this.input.detachedSessionTtlMs } : {}) });
     const unregister = this.input.services.register({
       resourceId: host.runtimeId, kind: "provider", snapshot: () => host.snapshot(),

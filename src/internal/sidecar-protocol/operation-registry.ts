@@ -130,7 +130,7 @@ function validateDefinition(
       definition.operation === "tool.invoke" &&
       definition.lane === "operation") ||
     (definition.capabilityId === "claude_runtime" &&
-      definition.majorVersion === 3 &&
+      definition.majorVersion === 4 &&
       [
         "query.can_use_tool",
         "query.open",

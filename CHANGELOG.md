@@ -55,6 +55,10 @@ User-facing changes are collected here before release. See the
 
 ### Added
 
+- Claude threads support **Compact context** while idle, with retained earlier
+  turns, expandable summaries, session statistics, and recovery for uncertain
+  outcomes. See [manual compaction](docs/operator/backends/claude.md#manual-compaction).
+
 - A device-local default thread unifies quick navigation and Android voice.
   Choose it in General settings or a thread's context menu; it appears above
   Pinned with activity and unread status, and opens with Ctrl/Command+Shift+H.

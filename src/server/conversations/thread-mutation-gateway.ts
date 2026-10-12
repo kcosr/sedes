@@ -23,7 +23,10 @@ import {
   type InteractionResponseInput,
   type RegisteredBackendActionInput,
 } from "../backends/contracts.js";
-import type { ConversationOperationRepository } from "../db/repositories/conversation-operation-repository.js";
+import type {
+  BackendActionOperationRecord,
+  ConversationOperationRepository,
+} from "../db/repositories/conversation-operation-repository.js";
 import type { SubmissionCompletionRepository } from "../db/repositories/submission-completion-repository.js";
 import type { InventoryRepository } from "../db/repositories/inventory-repository.js";
 import type { ConversationBindingRepository } from "../db/repositories/conversation-binding-repository.js";
@@ -298,6 +301,7 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
   readonly #mailboxes = new Map<string, SerializedMailbox>();
   readonly #interruptDeadlines = new Map<string, { controller: AbortController; timer: ReturnType<typeof setTimeout> }>();
   readonly #detachedPublications = new Set<Promise<void>>();
+  readonly #lateActionClosing = new AbortController();
   readonly #callbacks: ThreadCompletionCallbackRepository;
   #activity: ThreadActivityService | undefined;
   #closing = false;
@@ -794,6 +798,7 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
 
   close(): Promise<void> {
     this.#closing = true;
+    this.#lateActionClosing.abort();
     this.#closePromise ??= this.#performClose();
     return this.#closePromise;
   }
@@ -2935,6 +2940,16 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
             );
             throw error;
           }
+          if (error instanceof BackendError && error.lateMutationReconciliation) {
+            this.#ownLateBackendActionReconciliation(
+              scope,
+              applicationThreadId,
+              receipt,
+              aggregate.thread.backendInstanceId,
+              provider,
+              error.lateMutationReconciliation,
+            );
+          }
           return { status: "recovery_required", retryable: true };
         }
         const acceptedAt = this.#now();
@@ -2973,6 +2988,69 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
     }
     await this.#changed(scope, applicationThreadId);
     return { status: "accepted", operationId: operation.mutationId };
+  }
+
+  #ownLateBackendActionReconciliation(
+    scope: RequestScope,
+    applicationThreadId: string,
+    original: BackendActionOperationRecord,
+    backendInstanceId: string,
+    provider: ThreadActionPersistenceProvider,
+    reconciliation: Promise<{ readonly outcome: "accepted" | "not_applied" | "unknown" }>,
+  ): void {
+    this.#ownDetachedPublication(async () => {
+      if (this.#closing) {
+        void reconciliation.catch(() => undefined);
+        return;
+      }
+      const signal = this.#lateActionClosing.signal;
+      let stop!: () => void;
+      const closing = new Promise<null>((resolve) => {
+        stop = () => resolve(null);
+        signal.addEventListener("abort", stop, { once: true });
+      });
+      let result;
+      try {
+        result = await Promise.race([reconciliation, closing]);
+      } finally {
+        signal.removeEventListener("abort", stop);
+      }
+      // Preserve the durable uncertain receipt for startup recovery. Waiting
+      // for provider evidence must not delay the later handle shutdown that
+      // cancels its observer, or publish against already-closed resources.
+      if (result === null || this.#closing) return;
+      const publish = this.input.operations.database.transaction(() => {
+        const current = this.input.operations.findBackendAction(scope, original.mutationId);
+        if (
+          !current || current.state !== "uncertain" ||
+          current.threadId !== applicationThreadId ||
+          current.applicationOperationId !== original.applicationOperationId ||
+          current.operationKind !== original.operationKind ||
+          current.expectedThreadRevision !== original.expectedThreadRevision ||
+          current.expectedSettingsRevision !== original.expectedSettingsRevision ||
+          current.createdAt !== original.createdAt ||
+          JSON.stringify(current.operation) !== JSON.stringify(original.operation)
+        ) return false;
+        const aggregate = this.input.inventory.getThread(scope, applicationThreadId);
+        if (aggregate.thread.backendInstanceId !== backendInstanceId) return false;
+        if (result.outcome === "accepted") {
+          provider.persistAccepted(scope, applicationThreadId, {
+            mutationId: original.mutationId,
+            expectedThreadRevision: aggregate.thread.revision,
+            settingsGuard: { kind: "proven_applied" },
+            operation: current.operation,
+            now: this.#now(),
+          });
+          this.input.operations.acceptBackendAction(scope, original.mutationId);
+        } else if (result.outcome === "not_applied") {
+          this.input.operations.rejectBackendActionProvenNotApplied(scope, original.mutationId);
+        }
+        return true;
+      })();
+      if (!publish) return;
+      await this.input.publishThreadSnapshot(scope, applicationThreadId);
+      await this.#changed(scope, applicationThreadId);
+    });
   }
 
   #hasActiveQueuedInput(

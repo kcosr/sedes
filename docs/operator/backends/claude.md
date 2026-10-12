@@ -19,6 +19,7 @@ input in Sedes. Compare it with the other integrations in the
 - [Topology and ownership](#topology-and-ownership)
 - [Permissions and security](#permissions-and-security)
 - [Capabilities](#capabilities)
+- [Manual compaction](#manual-compaction)
 - [Current limits](#current-limits)
 - [Safe verification](#safe-verification)
 - [Troubleshooting](#troubleshooting)
@@ -153,8 +154,9 @@ package bundles Claude Code 2.1.287; Sedes never runs it, removes it at
 install, and always uses the operator-installed executable.
 
 Upgrade local worker artifacts and persistent sidecars with this server:
-Claude requires `claude_runtime@3` and `claude_persistent_runtime@4` for its
-updated catalog and history behavior. Client protocol 132 also requires a
+Claude requires `claude_runtime@4` and `claude_persistent_runtime@5` for its
+catalog, history, and manual-compaction behavior. Upgrade local workers and
+remote sidecars together with the server. Client protocol 132 also requires a
 matching browser or packaged-client build for skill alias search.
 
 For the most predictable deployment, pin the reviewed baseline. Before adopting
@@ -309,7 +311,7 @@ and interaction invariants, see the
 
 The Claude backend can:
 
-- create, discover or import, resume, submit, Steer, Queue, Stop, rename, and
+- create, discover or import, resume, submit, Steer, Queue, Stop, rename, compact, and
   recover threads;
 - choose an admitted native model, reasoning effort, and Claude permission
   mode;
@@ -412,16 +414,47 @@ running is never marked. **Stop** ends with Claude's result. If Claude reports
 that it is idle without one, the turn ends a second later, and otherwise after
 30 seconds.
 
+## Manual compaction
+
+For an idle Claude conversation, choose **Thread actions → Compact context**.
+The thread must have a bound Claude session, an admitted model and effort, and
+an allowed permission mode. Active turns and pending input block compaction.
+The same action works on local, SSH, and
+outbound Claude runtimes.
+
+The selected model, effort, and permission mode apply before Claude starts
+summarizing, including settings changed since the last turn. Sedes waits for
+Claude to confirm those settings before sending the compaction request.
+
+Claude writes its own summary. Earlier turns stay visible, and
+**Conversation compacted** expands to that summary after completion and after
+reload. Compaction also updates session statistics and the available fork
+points: Claude can resume a fork only from a turn after its latest summary.
+If Claude has nothing to compact, the action completes with a notice and no
+new marker. Automatic compaction remains Claude's own decision.
+
+Each native query retains at most 256 full compaction receipts. A persistent
+runtime retains those receipts across query resumes and reserves at most 64 MiB
+for all compaction receipts. When a limit is reached, another compaction is
+refused before it starts; earlier summaries remain readable. Restart the idle
+Claude runtime through its normal management controls to clear its receipt
+journal. Sedes keeps these limits because the runtime must retain accounting
+and exact request evidence until its ownership ends.
+
+Sedes waits for the outcome of the exact compaction request. If a connection
+or process failure leaves that outcome unknown, recover the existing operation
+before retrying; Sedes does not send it again automatically. Typing `/compact`
+in the composer is not supported; use the thread action.
+
 ## Current limits
 
 Claude does not support:
 
-- manual compaction;
 - plan mode, reset-producing commands, terminal-only commands, or unclassified
   slash commands;
 - active-source forks or latest-provider-snapshot forks;
 - forks from attachment-ended structured-output turns;
-- forks from turns before Claude's latest automatic compaction. Claude Code
+- forks from turns before Claude's latest compaction. Claude Code
   resumes only from its compaction summary, so a later fork copies that summary
   instead of the earlier turns;
 - guaranteed file-history or attachment fidelity across a native fork;
@@ -448,9 +481,7 @@ launch does not start a model turn; if Claude starts one anyway, Sedes stops it
 and the fork fails.
 
 Claude Steer targets the conversation; it does not provide Codex’s exact-turn
-guarantee. A separate interrupt-and-send action is not exposed. Manual
-compaction is a Claude Code local command, which Sedes does not send.
-Automatic compaction remains Claude's own decision; Sedes displays it.
+guarantee. A separate interrupt-and-send action is not exposed.
 The [internal integration contract](../../internals/backends/claude.md) records
 the complete reasoning and recovery rules.
 
@@ -542,7 +573,7 @@ an estimate against Claude's effective auto-compaction window. Read failures or
 query/model/compaction changes clear old estimates without interrupting work.
 Rebuild local workers and upgrade remote Claude sidecars with this server:
 the worker requires `query.context_usage`, and the persistent runtime requires
-`claude_persistent_runtime@4`. Context telemetry itself needs no browser
+`claude_persistent_runtime@5`. Context telemetry itself needs no browser
 protocol or database migration; follow the current upgrade requirements above.
 
 ## Recorded usage
