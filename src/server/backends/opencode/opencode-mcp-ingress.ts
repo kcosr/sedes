@@ -2,10 +2,10 @@ import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { BackendAgentToolRequestError } from "../../agent-tools/adapters/backend-facade.js";
-import { isBoundedAgentToolJson } from "../../../internal/agent-tool-cli-protocol/contracts.js";
+import { agentToolCatalogResponseSchema, agentToolDescriptionsResponseSchema, agentToolInvocationResultSchema, isBoundedAgentToolJson } from "../../../internal/agent-tool-cli-protocol/contracts.js";
 import type { AgentToolCatalogSummary } from "../../agent-tools/contracts/agent-tool-contracts.js";
 import { OPENCODE_MCP_CREDENTIAL, OPENCODE_MCP_ENDPOINT, OPENCODE_MCP_HEARTBEAT_MS,
-  OPENCODE_MCP_MAXIMUM_BYTES, OPENCODE_MCP_STARTUP_MS, opencodeMcpRequest, type OpenCodeMcpRequest } from "../../../internal/opencode-mcp/contracts.js";
+  OPENCODE_MCP_MAXIMUM_BYTES, OPENCODE_MCP_STARTUP_MS, OPENCODE_MCP_PROTOCOL_VERSION, opencodeMcpRequest, type OpenCodeMcpRequest } from "../../../internal/opencode-mcp/contracts.js";
 
 interface ChannelInput {
   readonly catalog: readonly AgentToolCatalogSummary[];
@@ -93,7 +93,7 @@ export class OpenCodeMcpIngress {
       this.#endStream(state); clearTimeout(state.expiration);
       const id = randomUUID(); const controller = new AbortController();
       res.writeHead(200, { "content-type": "application/x-ndjson", "cache-control": "no-store" });
-      res.write(`${JSON.stringify({ streamID: id, catalog: state.input.catalog })}\n`);
+      res.write(`${JSON.stringify({ protocolVersion: OPENCODE_MCP_PROTOCOL_VERSION, streamID: id, catalog: state.input.catalog })}\n`);
       const heartbeat = setInterval(() => {
         if (!res.write("{}\n")) res.destroy();
       }, OPENCODE_MCP_HEARTBEAT_MS); heartbeat.unref();
@@ -119,7 +119,10 @@ export class OpenCodeMcpIngress {
       const request = opencodeMcpRequest.parse(await readBody(req, signal));
       signal.throwIfAborted();
       if (state.stream !== stream || state.revoked) throw new Error("opencode_mcp_stream_stale");
-      const result = await state.input.invoke(request, signal);
+      const value = await state.input.invoke(request, signal);
+      const result = request.operation === "list" ? agentToolCatalogResponseSchema.parse(value)
+        : request.operation === "describe" ? agentToolDescriptionsResponseSchema.parse(value)
+        : agentToolInvocationResultSchema.parse(value);
       signal.throwIfAborted();
       reply(res, 200, result);
     } catch (error) {
@@ -131,7 +134,7 @@ export class OpenCodeMcpIngress {
 function unavailable() { return { code: "unavailable", message: "Sedes OpenCode tools are unavailable.", retryable: false }; }
 function reply(response: ServerResponse, status: number, value: unknown): void {
   let body = JSON.stringify(value);
-  if (Buffer.byteLength(body) > OPENCODE_MCP_MAXIMUM_BYTES || !isBoundedAgentToolJson(value)) {
+  if (Buffer.byteLength(body) > OPENCODE_MCP_MAXIMUM_BYTES) {
     status = 503; body = JSON.stringify(unavailable());
   }
   response.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" }); response.end(body);

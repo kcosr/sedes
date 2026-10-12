@@ -7,6 +7,7 @@ export const OPENCODE_MCP_CREDENTIAL = "SEDES_OPENCODE_MCP_CREDENTIAL";
 export const OPENCODE_MCP_HEARTBEAT_MS = 500;
 export const OPENCODE_MCP_WATCHDOG_MS = 3_000;
 export const OPENCODE_MCP_STARTUP_MS = 10_000;
+export const OPENCODE_MCP_PROTOCOL_VERSION = 2;
 // Preserve the canonical 4 MiB result/input budget plus transport envelopes in
 // both directions, including replies produced after a side-effecting tool ran.
 export const OPENCODE_MCP_MAXIMUM_BYTES = SEDES_MCP_MAXIMUM_INBOUND_LINE_BYTES;
@@ -21,7 +22,7 @@ export const opencodeMcpRequest = z.discriminatedUnion("operation", [
     request: createAgentToolInvocationRequestSchema }).strict(),
 ]);
 export type OpenCodeMcpRequest = z.infer<typeof opencodeMcpRequest>;
-export const opencodeMcpHello = z.object({ streamID: opencodeMcpStream,
+export const opencodeMcpHello = z.object({ protocolVersion: z.literal(OPENCODE_MCP_PROTOCOL_VERSION), streamID: opencodeMcpStream,
   catalog: z.array(agentToolCatalogSummarySchema).max(256) }).strict();
 export function opencodeMcpEndpoint(value: string | undefined): string {
   if (!value || !/^http:\/\/127\.0\.0\.1:[1-9][0-9]{0,4}$/u.test(value) || new URL(value).port === "") {

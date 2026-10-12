@@ -128,13 +128,13 @@ describe("voice controls card", () => {
     expect(within(card()).getByRole("button", { name: "Start voice recording" })).toBeEnabled();
     fireEvent.click(within(card()).getByRole("button", { name: "Open voice controls" }));
     const sheet = await screen.findByRole("dialog", { name: "Voice" });
-    expect(within(sheet).getByRole("status")).toHaveTextContent("Automatic playback and listening are paused. Choose a default voice thread for this connection");
-    expect(within(sheet).getByRole("switch", { name: "Only play from default voice thread" })).toBeChecked();
+    expect(within(sheet).getByRole("status")).toHaveTextContent("Automatic playback and listening are paused. Choose a default thread in General or Voice settings for this connection");
+    expect(within(sheet).getByRole("switch", { name: "Only play from default thread" })).toBeChecked();
     // Choosing this account's default clears the warning without weakening the saved playback filter.
     act(() => voice.fake.emit("settingsChanged", ready({ stateRevision: 2, settingsRevision: 1,
       settings: { ...settings, voiceThreadId: "named", voiceThreadTitle: "Release review" } })));
     expect(within(sheet).getByRole("status")).toHaveTextContent(/^Ready$/u);
-    expect(within(sheet).getByRole("switch", { name: "Only play from default voice thread" })).toBeChecked();
+    expect(within(sheet).getByRole("switch", { name: "Only play from default thread" })).toBeChecked();
     fireEvent.keyDown(sheet, { key: "Escape" });
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Voice" })).toBeNull());
     expect(lines()[1]).toBe(`Ready · ${audioMode === "input" ? "Input" : "Speak"} · Auto-listen on`);
@@ -158,7 +158,7 @@ describe("voice controls card", () => {
     act(() => voice.fake.emit("stateChanged", { ...listening({ recognitionThreadId: "long", recognitionThreadTitle: "Renamed review" }), stateRevision: 2 }));
     expect(status).toHaveTextContent(/^Renamed review\. Listening$/u);
   });
-  it("names the saved default voice thread when no thread is visible, or asks for one", async () => {
+  it("names the saved default thread when no thread is visible, or asks for one", async () => {
     voice.fake.plugin.setConnection.mockResolvedValue(ready({ settings: voiceSettings({ audioMode: "speak", voiceThreadId: "named", voiceThreadTitle: null }) }));
     navigate("/settings/voice", { replace: true });
     renderControls();
@@ -172,7 +172,7 @@ describe("voice controls card", () => {
     expect(buttons()).toEqual(["Open voice controls", "Choose target thread", "Start voice recording"]);
     // Without a visible or saved thread the Mic asks for a target first.
     fireEvent.click(within(card()).getByRole("button", { name: "Start voice recording" }));
-    expect(await screen.findByRole("list", { name: "Voice threads" })).toBeInTheDocument();
+    expect(await screen.findByRole("list", { name: "Threads" })).toBeInTheDocument();
     expect(voice.fake.plugin.startManualListen).not.toHaveBeenCalled();
   });
   it.each([
@@ -547,7 +547,7 @@ describe("voice controls card", () => {
     fireEvent.click(within(await screen.findByRole("dialog", { name: "Choose target thread" })).getByRole("button", { name: "Release review" }));
     await waitFor(() => expect(voice.fake.plugin.startManualListen).toHaveBeenCalledWith({ expectedConnectionGeneration: 1, threadId: "named", threadTitle: "Release review" }));
     act(() => navigate("/"));
-    // A saved default voice thread that is unavailable or deleted is not a target, so it is not named.
+    // A saved default thread that is unavailable or deleted is not a target, so it is not named.
     for (const [index, voiceThreadId] of ["offline", "deleted"].entries()) {
       act(() => voice.fake.emit("stateChanged", ready({ stateRevision: index + 3, settings: voiceSettings({ audioMode: "speak", voiceThreadId, voiceThreadTitle: "Saved title" }) })));
       expect(lines()).toEqual(["Choose a thread", "Ready · Speak · Auto-listen on"]);
@@ -583,11 +583,11 @@ describe("voice controls card", () => {
     renderControls();
     fireEvent.click(await screen.findByRole("button", { name: "Open voice controls" }));
     const sheet = await screen.findByRole("dialog", { name: "Voice" });
-    fireEvent.click(within(sheet).getByRole("button", { name: "Default voice thread" }));
-    fireEvent.click(within(await screen.findByRole("list", { name: "Voice threads" })).getByRole("button", { name: "Release review" }));
+    fireEvent.click(within(sheet).getByRole("button", { name: "Default thread" }));
+    fireEvent.click(within(await screen.findByRole("list", { name: "Threads" })).getByRole("button", { name: "Release review" }));
     await waitFor(() => expect(voice.fake.plugin.updateSettings).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, expectedRevision: 0,
       patch: { voiceThreadId: "named", voiceThreadTitle: "Release review" } }));
-    expect(within(sheet).getByRole("button", { name: "Default voice thread" })).toHaveAccessibleDescription("Release review");
+    expect(within(sheet).getByRole("button", { name: "Default thread" })).toHaveAccessibleDescription("Release review");
     expect(voice.fake.plugin.startManualListen).not.toHaveBeenCalled();
     expect(voice.fake.plugin.retargetActiveRecognition).not.toHaveBeenCalled();
     expect(window.location.pathname).toBe(threadPath("long"));
@@ -809,7 +809,7 @@ describe("voice controls card", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(voice.fake.plugin.retargetActiveRecognition).not.toHaveBeenCalled();
     fireEvent.click(chip);
-    const list = await screen.findByRole("list", { name: "Voice threads" });
+    const list = await screen.findByRole("list", { name: "Threads" });
     expect(within(list).getAllByRole("listitem")).toHaveLength(3);
     fireEvent.click(within(list).getByRole("button", { name: "Untitled thread" }));
     await waitFor(() => expect(voice.fake.plugin.retargetActiveRecognition).toHaveBeenCalledTimes(1));
@@ -840,11 +840,11 @@ describe("voice controls card", () => {
     expect(card().querySelector(".voice-card-tile")).toHaveAttribute("data-tone", "destructive");
     fireEvent.click(chip);
     // The visible thread leads the picker as This thread; the rest keep their order without a duplicate.
-    const list = await screen.findByRole("list", { name: "Voice threads" });
+    const list = await screen.findByRole("list", { name: "Threads" });
     expect(within(list).getAllByRole("listitem").map(item => item.textContent)).toEqual(["This threadRelease review", "L".repeat(600), "Untitled thread"]);
     expect(within(list).getByRole("button", { name: "Release review" })).toHaveAccessibleDescription("This thread");
     fireEvent.keyDown(document.activeElement!, { key: "Escape" });
-    await waitFor(() => expect(screen.queryByRole("list", { name: "Voice threads" })).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("list", { name: "Threads" })).toBeNull());
     const cancel = within(card()).getByRole("button", { name: "Cancel voice recording" });
     expect(cancel).toHaveAttribute("title", "Cancel");
     fireEvent.click(cancel);
@@ -1351,8 +1351,8 @@ describe("voice controls card lifecycle", () => {
     renderControls();
     fireEvent.click(await screen.findByRole("button", { name: "Open voice controls" }));
     const sheet = await screen.findByRole("dialog", { name: "Voice" });
-    fireEvent.click(within(sheet).getByRole("button", { name: "Default voice thread" }));
-    await screen.findByRole("dialog", { name: "Default voice thread" });
+    fireEvent.click(within(sheet).getByRole("button", { name: "Default thread" }));
+    await screen.findByRole("dialog", { name: "Default thread" });
     act(() => voice.fake.emit("stateChanged", disconnectedVoiceSnapshot(2)));
     expect(screen.queryByRole("group", { name: "Voice controls" })).toBeNull();
     expect(screen.queryByRole("dialog")).toBeNull();
@@ -1361,7 +1361,7 @@ describe("voice controls card lifecycle", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
     // Without a visible or saved thread the Mic opens the picker.
     fireEvent.click(within(card()).getByRole("button", { name: "Start voice recording" }));
-    await screen.findByRole("list", { name: "Voice threads" });
+    await screen.findByRole("list", { name: "Threads" });
     act(() => voice.fake.emit("stateChanged", disconnectedVoiceSnapshot(3)));
     expect(screen.queryByRole("dialog")).toBeNull();
     act(() => voice.fake.emit("stateChanged", ready({ connectionGeneration: 3 })));
@@ -1377,14 +1377,14 @@ describe("voice controls card lifecycle", () => {
     const chip = await screen.findByRole("button", { name: "Change recording thread: Release review" });
     chip.focus();
     fireEvent.click(chip);
-    fireEvent.click(within(await screen.findByRole("list", { name: "Voice threads" })).getByRole("button", { name: "Untitled thread" }));
+    fireEvent.click(within(await screen.findByRole("list", { name: "Threads" })).getByRole("button", { name: "Untitled thread" }));
     await waitFor(() => expect(voice.fake.plugin.retargetActiveRecognition).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(screen.queryByRole("list", { name: "Voice threads" })).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("list", { name: "Threads" })).toBeNull());
     expect(chip).toHaveAttribute("aria-disabled", "true");
     expect(chip).toHaveFocus();
     // A pending retarget does not open a second picker.
     fireEvent.click(chip);
-    expect(screen.queryByRole("list", { name: "Voice threads" })).toBeNull();
+    expect(screen.queryByRole("list", { name: "Threads" })).toBeNull();
     await act(async () => { settle({ ...listening({ recognitionThreadId: "untitled" }), stateRevision: 2 }); });
     expect(lines()).toEqual(["Untitled thread", "Listening"]);
     expect(screen.getByRole("button", { name: "Change recording thread: Untitled thread" })).toBe(chip);

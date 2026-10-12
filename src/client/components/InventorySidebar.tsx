@@ -1,3 +1,7 @@
+import { openThreadRoute } from "../workspace-panels/thread-panel-navigation.js";
+import { House } from "lucide-react";
+import { canUseDefaultThread, useDefaultThread } from "../app/default-thread.js";
+import "../app/default-thread.css";
 import { SearchableSelect } from "./ui/searchable-select.js";
 import { useSidebarDisclosure, useSidebarDisclosures } from "../app/sidebar-disclosures.js";
 import * as Collapsible from "@radix-ui/react-collapsible";
@@ -385,6 +389,19 @@ function keyboardEventTargetBlocksSidebarNavigation(
   );
 }
 
+/** Keep the compact default row on the same status ladder as other threads. */
+function DefaultThreadIndicator({ thread }: { readonly thread: NormalizedApplicationThreadSummary }) {
+  const backgroundWorkCurrent = useContext(SidebarBackgroundWorkCurrentContext);
+  const kind = flatRowGlyphKind(thread, backgroundWorkCurrent);
+  const label = flatRowGlyphLabel(thread, backgroundWorkCurrent);
+  const visible = kind !== "idle";
+  return <span className="flat-row-glyph" data-glyph={visible ? kind : undefined}
+    role={visible ? "img" : undefined} aria-hidden={visible ? undefined : true}
+    aria-label={visible ? label : undefined} title={visible ? label : undefined}>
+    {visible ? flatRowGlyphIcon(kind) : <House size={16} aria-hidden="true" />}
+  </span>;
+}
+
 export function InventorySidebar({
   state,
   store,
@@ -412,7 +429,14 @@ export function InventorySidebar({
   /** Client-session position retained by the shell while the drawer is closed. */
   scrollPosition?: { current: number };
 }): React.JSX.Element {
-  const snapshot = state.snapshot;
+  const defaultThread = useDefaultThread();
+  const defaultThreadId = defaultThread?.threadId;
+  const defaultSummary = state.snapshot?.threads.find(thread => thread.id === defaultThreadId) ?? defaultThread?.thread;
+  const usableDefault = defaultSummary && canUseDefaultThread(defaultSummary) ? defaultSummary : undefined;
+  const displayedDefaultId = usableDefault?.id;
+  const snapshot = useMemo(() => state.snapshot && displayedDefaultId
+    ? { ...state.snapshot, threads: state.snapshot.threads.filter((thread) => thread.id !== displayedDefaultId) }
+    : state.snapshot, [state.snapshot, displayedDefaultId]);
   const projects = snapshot?.projects ?? [];
   const workspaces = snapshot?.workspaces ?? [];
   const environments = snapshot?.environments ?? [];
@@ -597,13 +621,14 @@ export function InventorySidebar({
   }, [snapshot?.tasks]);
   const threads = useMemo(
     () =>
-      filterThreadsBySidebarScope(state.visibleThreads, workspaces, scope).filter(
+      filterThreadsBySidebarScope(state.visibleThreads, workspaces, scope).filter((thread) => thread.id !== displayedDefaultId).filter(
         (thread) =>
           !viewPreferences.hasOpenTasks || taskSummaryByThreadId.has(thread.id),
       ),
     [
       scope,
       state.visibleThreads,
+      displayedDefaultId,
       workspaces,
       viewPreferences.hasOpenTasks,
       taskSummaryByThreadId,
@@ -613,11 +638,13 @@ export function InventorySidebar({
     () =>
       allDescendants.filter(
         ({ thread }) =>
+          thread.id !== displayedDefaultId &&
           filterThreadsBySidebarScope([thread], workspaces, scope).length > 0 &&
           (!viewPreferences.hasOpenTasks || taskSummaryByThreadId.has(thread.id)),
       ),
     [
       allDescendants,
+      displayedDefaultId,
       scope,
       workspaces,
       viewPreferences.hasOpenTasks,
@@ -668,14 +695,17 @@ export function InventorySidebar({
     [snapshot?.lineageFamilies],
   );
   const loadedGlobalLineageFamilyCounts = useMemo(() => {
+    // Moving the default into its own shelf does not unload it. Count the
+    // full inventory before that display filter so its ancestors do not
+    // offer to page a descendant which is already present.
     const origins = new Map(
       allDescendants.map(({ origin }) => [origin.childThreadId, origin]),
     );
-    for (const origin of snapshot?.forkOrigins ?? []) {
+    for (const origin of state.snapshot?.forkOrigins ?? []) {
       origins.set(origin.childThreadId, origin);
     }
     const loadedThreadIds = new Set([
-      ...(snapshot?.threads.map(({ id }) => id) ?? []),
+      ...(state.snapshot?.threads.map(({ id }) => id) ?? []),
       ...allDescendants.map(({ thread }) => thread.id),
     ]);
     const counts = new Map<string, number>();
@@ -691,7 +721,7 @@ export function InventorySidebar({
       }
     }
     return counts;
-  }, [allDescendants, snapshot?.threads, snapshot?.forkOrigins]);
+  }, [allDescendants, state.snapshot?.threads, state.snapshot?.forkOrigins]);
   const scopedLineageFamilyCounts = useMemo(
     () =>
       new Map(
@@ -1686,13 +1716,12 @@ export function InventorySidebar({
                 value={state.search}
                 onChange={(event) => store.setSearch(event.target.value)}
                 onKeyDown={(event) => {
-                  // Escape in an empty search returns the keyboard to sidebar navigation.
+                  // Escape returns the keyboard to sidebar navigation without clearing the filter.
                   // It is consumed so global Escape handlers, such as Find in thread's,
                   // don't also act on the now-unfocused page.
                   if (
                     event.key === "Escape" &&
-                    !event.nativeEvent.isComposing &&
-                    event.currentTarget.value === ""
+                    !event.nativeEvent.isComposing
                   ) {
                     event.preventDefault();
                     event.stopPropagation();
@@ -1748,6 +1777,33 @@ export function InventorySidebar({
           className="inventory-scroll"
           aria-label="Threads and automations"
         >
+          {defaultThreadId && (
+            <section className="inventory-shelf default-thread-section" aria-label="Default thread">
+              {usableDefault ? (
+                <ThreadContextMenu thread={usableDefault} store={store} threadRegistry={threadRegistry} onNavigate={onNavigate}>
+                  <div className={`thread-row compact ${selectedThreadId === usableDefault.id ? "selected" : ""} ${usableDefault.attention.unseenCompletion ? "flat-row-unseen" : ""}`}
+                    data-thread-id={usableDefault.id} data-testid="default-thread-row">
+                    <button className="thread-row-link" aria-current={selectedThreadId === usableDefault.id ? "page" : undefined}
+                      onClick={() => { openThreadRoute(usableDefault.id); onNavigate(); }}>
+                      <DefaultThreadIndicator thread={usableDefault} />
+                      <span className="thread-title flat-row-title">{usableDefault.title.text || "Untitled thread"}</span>
+                    </button>
+                  </div>
+                </ThreadContextMenu>
+              ) : (
+                <button className="default-thread-unavailable" disabled={defaultThread?.resolving} onClick={(event) => onOpenSettings(event.currentTarget, "general")}>
+                  <House size={16} aria-hidden="true" /> {defaultThread?.resolving ? "Loading default thread…" : "Default thread unavailable — choose another"}
+                </button>
+              )}
+              {usableDefault && descendantPagingFor(usableDefault.id).canLoad ? (
+                <Button variant="ghost" size="xs" className="lineage-more" disabled={descendantPagingFor(usableDefault.id).loading}
+                  onClick={() => void store.loadMoreDescendants(usableDefault.id).catch(() => undefined)}>
+                  {descendantPagingFor(usableDefault.id).loading ? "Loading runs/forks…" : "Show all runs/forks"}
+                </Button>
+              ) : null}
+              {usableDefault && descendantPagingFor(usableDefault.id).error ? <p className="thread-row-error" role="alert">{descendantPagingFor(usableDefault.id).error}</p> : null}
+            </section>
+          )}
           {groupBy !== "project" ? (
             <FlatGroupList
               groups={stackedFlatGroups}

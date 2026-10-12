@@ -1,6 +1,7 @@
 import {
   MAXIMUM_NORMALIZED_TIMELINE_ITEMS,
   MAXIMUM_NORMALIZED_TIMELINE_TURNS,
+  conversationTurnSourceRevision,
   normalizedThreadEventSchema,
   threadCheckpointSchema,
   threadEventEnvelopeSchema,
@@ -10,6 +11,7 @@ import {
   type ThreadForkSourceCapability,
   type ThreadCheckpoint,
   type RuntimeNotice,
+  type PageItem,
 } from "../../shared/protocol/conversation.js";
 import {
   EventHub,
@@ -22,6 +24,7 @@ import {
   serializedUtf8Bytes,
 } from "../../shared/protocol/payload.js";
 import { SerializedMailbox } from "../conversations/serialized-mailbox.js";
+import { fitPageItemsToSnapshot, type PageProjectionInput } from "../conversations/page-publication-projection.js";
 
 export interface ThreadEventSubscription {
   readonly watermark: number;
@@ -32,6 +35,8 @@ export interface ThreadEventSubscription {
 export interface ThreadCheckpointSubscription extends ThreadEventSubscription {
   readonly checkpoint: ThreadCheckpoint | undefined;
 }
+
+type ItemTurnEvent = Extract<NormalizedThreadEvent, { type: "item_upsert" | "turn_upsert" }>;
 
 function envelope(
   event: SequencedEvent<NormalizedThreadEvent>,
@@ -57,6 +62,15 @@ export class ThreadEventHub {
   #internalSubscriberCount = 0;
   #projectionGeneration?: string;
   #snapshot?: NormalizedThreadSnapshot;
+  // Shares native item objects with the fitted view; only optional page
+  // membership differs. This process-local source is never persisted.
+  #sourceSnapshot?: NormalizedThreadSnapshot;
+  #sourceSnapshotBytes = 0;
+  #sourceItemCount = 0;
+  #snapshotBytes = 0;
+  #snapshotItemCount = 0;
+  #visiblePageIds: ReadonlySet<string> = new Set();
+  #sourcePages: ReadonlyMap<string, PageItem> = new Map();
   #checkpoint?: ThreadCheckpoint;
   #notices: readonly RuntimeNotice[] = [];
   #capabilityThreadRevision = 0;
@@ -136,14 +150,120 @@ export class ThreadEventHub {
     return this.#applicationPublications.enqueue(operation);
   }
 
-  publish(rawEvent: NormalizedThreadEvent): ThreadEventEnvelope {
-    const event = normalizedThreadEventSchema.parse(rawEvent);
+  /** A native item and its owning turn must reach a capacity reset together. */
+  publishBatch(events: readonly ItemTurnEvent[]): readonly ThreadEventEnvelope[] {
+    if (events.some(event => event.type !== "item_upsert" && event.type !== "turn_upsert")) throw new Error("thread_projection_item_turn_batch_required");
+    if (events.length < 2 || (this.#sourcePages.size === 0 && !events.some(event => event.type === "item_upsert" && event.item.kind === "page"))) {
+      return events.map(event => this.publish(event));
+    }
+    if (!this.#sourceSnapshot) throw new Error("thread_projection_snapshot_required");
+    let source = this.#sourceSnapshot;
+    let bytes = this.#sourceSnapshotBytes;
+    let itemCount = this.#sourceItemCount;
+    let pages = this.#sourcePages;
+    let published = this.#snapshot!;
+    let publishedBytes = this.#snapshotBytes;
+    let publishedCount = this.#snapshotItemCount;
+    let prefixOverflow = false;
+    let expectedPageIds = this.#visiblePageIds;
+    for (const event of events) if (event.type === "item_upsert" && event.item.kind === "page" && !this.#sourcePages.has(event.item.id)) expectedPageIds = new Set([...expectedPageIds, event.item.id]);
+    const allSourcePagesVisible = this.#sourcePages.size === this.#visiblePageIds.size;
+    const pending: { event: ItemTurnEvent; source: NormalizedThreadSnapshot; bytes: number; itemCount: number;
+      pages: ReadonlyMap<string, PageItem>; published: NormalizedThreadSnapshot; publishedBytes: number; publishedCount: number }[] = [];
+    for (const raw of events) {
+      const event = normalizedThreadEventSchema.parse(raw);
+      if ((event.type !== "item_upsert" && event.type !== "turn_upsert") || event.generation !== this.#projectionGeneration) throw new Error("thread_projection_item_turn_batch_required");
+      const next = applyIncremental(source, event);
+      const nextCount = nextItemCount(source, event, itemCount);
+      bytes += snapshotFieldByteDelta(source, next, event, itemCount, nextCount);
+      itemCount = nextCount;
+      source = next;
+      pages = nextPageItems(pages, event);
+      const visibleEvent = allSourcePagesVisible ? event : visibleTurnEvent(event, pages, expectedPageIds);
+      if (allSourcePagesVisible) {
+        published = source;
+        publishedBytes = bytes;
+        publishedCount = itemCount;
+      } else {
+        const nextPublished = applyIncremental(published, visibleEvent);
+        const nextPublishedCount = nextItemCount(published, visibleEvent, publishedCount);
+        publishedBytes += snapshotFieldByteDelta(published, nextPublished, visibleEvent, publishedCount, nextPublishedCount);
+        publishedCount = nextPublishedCount;
+        published = nextPublished;
+      }
+      if (publishedBytes > MAXIMUM_NORMALIZED_SNAPSHOT_OR_PAGE_BYTES || publishedCount > MAXIMUM_NORMALIZED_TIMELINE_ITEMS) {
+        prefixOverflow = true;
+      }
+      pending.push({ event: visibleEvent, source, bytes, itemCount, pages, published, publishedBytes, publishedCount });
+    }
+    const fitted = fitPageItemsToSnapshot(source, bytes, pages, itemCount);
+    if (fitted.serializedBytes > MAXIMUM_NORMALIZED_SNAPSHOT_OR_PAGE_BYTES ||
+      itemCount - pages.size + fitted.pageIds.size > MAXIMUM_NORMALIZED_TIMELINE_ITEMS) throw new Error("thread_projection_snapshot_limit_exceeded");
+    const omittedPageEvent = events.some(event => event.type === "item_upsert" && event.item.kind === "page" && !fitted.pageIds.has(event.item.id));
+    if (prefixOverflow || omittedPageEvent || !samePageIds(fitted.pageIds, expectedPageIds)) {
+      const event = normalizedThreadEventSchema.parse({ type: "snapshot", generation: events[0]!.generation, snapshot: fitted.snapshot });
+      this.#sourceSnapshot = source;
+      this.#sourceSnapshotBytes = bytes;
+      this.#sourceItemCount = itemCount;
+      this.#sourcePages = pages;
+      this.#visiblePageIds = fitted.pageIds;
+      this.#snapshot = fitted.snapshot;
+      this.#snapshotBytes = fitted.serializedBytes;
+      this.#snapshotItemCount = itemCount - pages.size + fitted.pageIds.size;
+      this.#checkpoint = undefined;
+      return [envelope(this.#hub.publish(event.type, event))];
+    }
+    return pending.map(step => {
+      this.#sourceSnapshot = step.source;
+      this.#sourceSnapshotBytes = step.bytes;
+      this.#sourceItemCount = step.itemCount;
+      this.#sourcePages = step.pages;
+      this.#snapshot = step.published;
+      this.#snapshotBytes = step.publishedBytes;
+      this.#snapshotItemCount = step.publishedCount;
+      if (step.event.type === "item_upsert" && step.event.item.kind === "page" && !this.#visiblePageIds.has(step.event.item.id)) {
+        this.#visiblePageIds = new Set([...this.#visiblePageIds, step.event.item.id]);
+      }
+      this.#checkpoint = undefined;
+      return envelope(this.#hub.publish(step.event.type, step.event));
+    });
+  }
+
+  publish(rawEvent: NormalizedThreadEvent, sourceTimeline?: PageProjectionInput): ThreadEventEnvelope {
+    const priorGeneration = this.#projectionGeneration;
+    const priorCapabilityRevision = this.#snapshot?.capabilities.revision;
+    let event: NormalizedThreadEvent;
+    if (rawEvent.type === "snapshot") {
+      const sourceSnapshot = sourceTimeline ? {
+        ...rawEvent.snapshot,
+        orderedTurnIds: [...sourceTimeline.orderedTurnIds],
+        turnsById: sourceTimeline.turnsById,
+        itemsById: sourceTimeline.itemsById,
+      } : rawEvent.snapshot;
+      const bytes = serializedUtf8Bytes(sourceSnapshot);
+      const itemCount = Object.keys(sourceSnapshot.itemsById).length;
+      const pages = new Map(Object.entries(sourceSnapshot.itemsById).filter((entry): entry is [string, PageItem] => entry[1].kind === "page"));
+      const fitted = fitPageItemsToSnapshot(sourceSnapshot, bytes, pages, itemCount);
+      event = normalizedThreadEventSchema.parse({ ...rawEvent, snapshot: fitted.snapshot });
+      this.#sourceSnapshot = fitted.snapshot === sourceSnapshot && event.type === "snapshot" ? event.snapshot : sourceSnapshot;
+      this.#sourceSnapshotBytes = bytes;
+      this.#sourceItemCount = itemCount;
+      this.#snapshotBytes = fitted.serializedBytes;
+      this.#snapshotItemCount = itemCount - pages.size + fitted.pageIds.size;
+      this.#visiblePageIds = fitted.pageIds;
+      this.#sourcePages = pages;
+    } else {
+      event = normalizedThreadEventSchema.parse(rawEvent);
+    }
     if (event.type === "snapshot") {
+      const sameGeneration = event.generation === priorGeneration;
       this.#projectionGeneration = event.generation;
       this.#snapshot = event.snapshot;
-      this.#notices = [];
-      this.#capabilityThreadRevision = event.snapshot.thread.threadRevision;
-      this.#capabilityRunState = event.snapshot.capabilities.runState;
+      if (!sameGeneration) this.#notices = [];
+      if (!sameGeneration || event.snapshot.capabilities.revision !== priorCapabilityRevision) {
+        this.#capabilityThreadRevision = event.snapshot.thread.threadRevision;
+        this.#capabilityRunState = event.snapshot.capabilities.runState;
+      }
     } else if (event.generation !== this.#projectionGeneration) {
       throw new Error("thread_projection_snapshot_required");
     } else {
@@ -153,7 +273,53 @@ export class ThreadEventHub {
       ) {
         throw new Error("thread_projection_thread_revision_regressed");
       }
-      this.#snapshot = applyIncremental(this.#snapshot, event);
+      const source = this.#sourceSnapshot ?? this.#snapshot;
+      const nextSource = applyIncremental(source, event);
+      const itemCount = nextItemCount(source!, event, this.#sourceItemCount);
+      const sourceBytes = this.#sourceSnapshotBytes + snapshotFieldByteDelta(source!, nextSource, event, this.#sourceItemCount, itemCount);
+      const pages = nextPageItems(this.#sourcePages, event);
+      const unchangedVisiblePages = event.type === "item_upsert" && event.item.kind !== "page" &&
+        Object.hasOwn(source!.itemsById, event.item.id) && pages === this.#sourcePages && pages.size === this.#visiblePageIds.size &&
+        sourceBytes <= MAXIMUM_NORMALIZED_SNAPSHOT_OR_PAGE_BYTES && itemCount <= MAXIMUM_NORMALIZED_TIMELINE_ITEMS;
+      const fitted = unchangedVisiblePages
+        ? { snapshot: nextSource, serializedBytes: sourceBytes, pageIds: this.#visiblePageIds }
+        : fitPageItemsToSnapshot(nextSource, sourceBytes, pages, itemCount);
+      if (event.type === "history_prepend" && (
+        itemCount - pages.size + fitted.pageIds.size > MAXIMUM_NORMALIZED_TIMELINE_ITEMS ||
+        fitted.serializedBytes > MAXIMUM_NORMALIZED_SNAPSHOT_OR_PAGE_BYTES
+      )) throw new Error("thread_projection_history_limit_exceeded");
+      if (fitted.serializedBytes > MAXIMUM_NORMALIZED_SNAPSHOT_OR_PAGE_BYTES ||
+        itemCount - pages.size + fitted.pageIds.size > MAXIMUM_NORMALIZED_TIMELINE_ITEMS) {
+        throw new Error("thread_projection_snapshot_limit_exceeded");
+      }
+      let expectedPageIds = this.#visiblePageIds;
+      if (event.type === "history_prepend") {
+        const added = Object.values(event.page.itemsById).filter(item => item.kind === "page");
+        if (added.length) expectedPageIds = new Set([...expectedPageIds, ...added.map(item => item.id)]);
+      }
+      const membershipChanged = !samePageIds(fitted.pageIds, expectedPageIds);
+      const hiddenPageItem = event.type === "item_upsert" && event.item.kind === "page" && !fitted.pageIds.has(event.item.id);
+      if (membershipChanged || hiddenPageItem) {
+        // A complete reset clears removed items, and includes both newly
+        // admitted page items and every changed turn in one consistent frame.
+        event = normalizedThreadEventSchema.parse({ type: "snapshot", generation: event.generation, snapshot: fitted.snapshot });
+      } else if (event.type === "turn_upsert") {
+        event = normalizedThreadEventSchema.parse({ ...event, turn: fitted.snapshot.turnsById[event.turn.id] });
+      }
+      this.#sourceSnapshot = nextSource;
+      this.#sourceSnapshotBytes = sourceBytes;
+      this.#sourceItemCount = itemCount;
+      this.#snapshotBytes = fitted.serializedBytes;
+      this.#snapshotItemCount = itemCount - pages.size + fitted.pageIds.size;
+      this.#visiblePageIds = fitted.pageIds;
+      this.#sourcePages = pages;
+      this.#snapshot = fitted.snapshot;
+      if (event.type === "snapshot") {
+        if (event.snapshot.capabilities.revision !== priorCapabilityRevision) {
+          this.#capabilityThreadRevision = event.snapshot.thread.threadRevision;
+          this.#capabilityRunState = event.snapshot.capabilities.runState;
+        }
+      }
       if (event.type === "capabilities_changed")
         this.#capabilityThreadRevision = event.threadRevision;
       if (event.type === "application_state_changed")
@@ -293,6 +459,79 @@ export class ThreadEventHub {
       }),
     );
   }
+}
+
+/** Count only changed metadata or map entries; never serialize retained text. */
+function samePageIds(left: ReadonlySet<string>, right: ReadonlySet<string>): boolean {
+  if (left === right) return true;
+  return left.size === right.size && [...left].every(id => right.has(id));
+}
+
+function nextItemCount(snapshot: NormalizedThreadSnapshot, event: Exclude<NormalizedThreadEvent, { type: "snapshot" }>, count: number): number {
+  if (event.type === "item_upsert") return count + (Object.hasOwn(snapshot.itemsById, event.item.id) ? 0 : 1);
+  if (event.type === "history_prepend") return count + Object.keys(event.page.itemsById).length;
+  return count;
+}
+
+function nextPageItems(pages: ReadonlyMap<string, PageItem>, event: Exclude<NormalizedThreadEvent, { type: "snapshot" }>): ReadonlyMap<string, PageItem> {
+  if (event.type === "item_upsert" && (event.item.kind === "page" || pages.has(event.item.id))) {
+    const next = new Map(pages);
+    if (event.item.kind === "page") next.set(event.item.id, event.item);
+    else next.delete(event.item.id);
+    return next;
+  }
+  if (event.type === "history_prepend") {
+    const added = Object.values(event.page.itemsById).filter((item): item is PageItem => item.kind === "page");
+    return added.length ? new Map([...pages, ...added.map(item => [item.id, item] as const)]) : pages;
+  }
+  return pages;
+}
+
+function visibleTurnEvent(event: ItemTurnEvent, pages: ReadonlyMap<string, PageItem>, visible: ReadonlySet<string>): ItemTurnEvent {
+  if (event.type !== "turn_upsert") return event;
+  const orderedItemIds = event.turn.orderedItemIds.filter(id => !pages.has(id) || visible.has(id));
+  const removed = event.turn.orderedItemIds.length - orderedItemIds.length;
+  return removed === 0 ? event : { ...event, turn: { ...event.turn, orderedItemIds, revision: event.turn.revision - removed } };
+}
+
+function snapshotFieldByteDelta(
+  previous: NormalizedThreadSnapshot,
+  next: NormalizedThreadSnapshot,
+  event: Exclude<NormalizedThreadEvent, { type: "snapshot" }>,
+  previousItemCount: number,
+  nextItemCount: number,
+): number {
+  let delta = 0;
+  const keys = new Set([...Object.keys(previous), ...Object.keys(next)]) as Set<keyof NormalizedThreadSnapshot>;
+  for (const key of keys) {
+    if (previous[key] === next[key]) continue;
+    if (key === "itemsById" || key === "turnsById" || key === "forksByTurnId") {
+      const changedId = event.type === "item_upsert" && key === "itemsById" ? event.item.id :
+        event.type === "turn_upsert" && (key === "turnsById" || key === "forksByTurnId") ? event.turn.id : undefined;
+      const previousCount = key === "itemsById" ? previousItemCount : previous.orderedTurnIds.length;
+      const nextCount = key === "itemsById" ? nextItemCount : next.orderedTurnIds.length;
+      delta += recordMapByteDelta(previous[key], next[key], changedId, previousCount, nextCount);
+      continue;
+    }
+    if (previous[key] !== undefined) delta -= serializedUtf8Bytes({ [key]: previous[key] }) - 1;
+    if (next[key] !== undefined) delta += serializedUtf8Bytes({ [key]: next[key] }) - 1;
+  }
+  return delta;
+}
+
+function recordMapByteDelta(previous: Readonly<Record<string, unknown>>, next: Readonly<Record<string, unknown>>, changedId: string | undefined, previousCount: number, nextCount: number): number {
+  if (changedId !== undefined) {
+    if (previous[changedId] !== undefined && next[changedId] !== undefined) return serializedUtf8Bytes(next[changedId]) - serializedUtf8Bytes(previous[changedId]);
+    return Math.max(0, nextCount - 1) - Math.max(0, previousCount - 1) +
+      (next[changedId] === undefined ? 0 : serializedUtf8Bytes({ [changedId]: next[changedId] }) - 2) -
+      (previous[changedId] === undefined ? 0 : serializedUtf8Bytes({ [changedId]: previous[changedId] }) - 2);
+  }
+  const previousKeys = Object.keys(previous);
+  const nextKeys = Object.keys(next);
+  let delta = Math.max(0, nextKeys.length - 1) - Math.max(0, previousKeys.length - 1);
+  for (const key of previousKeys) if (previous[key] !== next[key]) delta -= serializedUtf8Bytes({ [key]: previous[key] }) - 2;
+  for (const key of nextKeys) if (previous[key] !== next[key]) delta += serializedUtf8Bytes({ [key]: next[key] }) - 2;
+  return delta;
 }
 
 function sameValue(left: unknown, right: unknown): boolean {
@@ -447,7 +686,7 @@ function applyIncremental(
         throw new Error("thread_projection_history_overlap");
       }
       const forksByTurnId = {
-        ...forkCapabilities(event.page.turnsById, snapshot.forkSource),
+        ...forkCapabilities(event.page.turnsById, event.page.itemsById, snapshot.forkSource),
         ...snapshot.forksByTurnId,
       };
       next = {
@@ -464,16 +703,19 @@ function applyIncremental(
           : { hasOlder: false },
       };
       if (
-        next.orderedTurnIds.length > MAXIMUM_NORMALIZED_TIMELINE_TURNS ||
-        Object.keys(next.itemsById).length >
-          MAXIMUM_NORMALIZED_TIMELINE_ITEMS ||
-        serializedUtf8Bytes(next) > MAXIMUM_NORMALIZED_SNAPSHOT_OR_PAGE_BYTES
+        next.orderedTurnIds.length > MAXIMUM_NORMALIZED_TIMELINE_TURNS
       ) {
         throw new Error("thread_projection_history_limit_exceeded");
       }
       break;
     }
     case "turn_upsert":
+      for (const id of event.turn.orderedItemIds) {
+        if (snapshot.itemsById[id]?.turnId !== event.turn.id) throw new Error("thread_projection_turn_item_reference_invalid");
+      }
+      if (event.fork.expectedTurnRevision !== conversationTurnSourceRevision(event.turn, snapshot.itemsById)) {
+        throw new Error("thread_projection_turn_fork_revision_invalid");
+      }
       assertRevisionMonotonic(
         snapshot.turnsById[event.turn.id],
         event.turn,
@@ -496,7 +738,7 @@ function applyIncremental(
       next = {
         ...snapshot,
         forkSource: event.forkSource,
-        forksByTurnId: forkCapabilities(snapshot.turnsById, event.forkSource),
+        forksByTurnId: forkCapabilities(snapshot.turnsById, snapshot.itemsById, event.forkSource),
       };
       break;
     case "item_upsert":
@@ -631,6 +873,7 @@ function applyIncremental(
           : { recovery: undefined }),
         forksByTurnId: forkCapabilities(
           snapshot.turnsById,
+          snapshot.itemsById,
           event.state.forkSource,
         ),
       };
@@ -644,6 +887,7 @@ function applyIncremental(
 
 function forkCapabilities(
   turnsById: NormalizedThreadSnapshot["turnsById"],
+  itemsById: NormalizedThreadSnapshot["itemsById"],
   forkSource: ThreadForkSourceCapability,
 ): NormalizedThreadSnapshot["forksByTurnId"] {
   return Object.fromEntries(
@@ -656,7 +900,7 @@ function forkCapabilities(
         turn.id,
         {
           sourceTurnId: turn.id,
-          expectedTurnRevision: turn.revision,
+          expectedTurnRevision: conversationTurnSourceRevision(turn, itemsById),
           available,
           ...(available
             ? {}

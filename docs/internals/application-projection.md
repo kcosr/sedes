@@ -28,6 +28,15 @@ no subscriber, is discarded because the next seed reads authoritative state.
 A failed seed or recapture discards the aggregate and closes its streams; the
 server does not retry, and the next reconnect seeds a new generation.
 
+`GET /api/threads/:threadId/summary` resolves one normalized thread summary
+independently of the bounded bootstrap and descendant pages. It uses the
+authenticated request's tenant/principal scope and returns 404 for an unknown
+or inaccessible thread. The read combines durable inventory, terminal counts,
+and runtime state already loaded in memory; it never attaches a dormant
+provider or reads its transcript. Responses use `Cache-Control: no-store`.
+Clients use this read to resolve a saved default thread that is absent from
+their currently loaded inventory.
+
 ## Fold and epoch model
 
 An aggregate is `unseeded`, `seeding`, `ready`, `recapturing` or `closed`. The

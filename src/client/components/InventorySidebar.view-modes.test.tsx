@@ -1,3 +1,4 @@
+import { DefaultThreadProvider, defaultThreadStorageKey } from "../app/default-thread.js";
 // @vitest-environment jsdom
 import { ThreadArchiveOperationHost } from "../operations/ThreadArchiveOperationHost.js";
 import { OperationOverlayHost } from "../operations/OperationOverlay.js";
@@ -154,6 +155,7 @@ function makeThread(
 }
 
 interface StateOptions {
+  readonly defaultThreadId?: string;
   readonly search?: string;
   readonly environments?: NonNullable<
     ApplicationClientState["snapshot"]
@@ -455,13 +457,18 @@ function renderSidebar(
     );
   };
   render(<ThreadArchiveOperationHost store={store} />);
-  const result = render(content(state));
+  const defaultScope = { profileId: "desktop-test", serverKey: "https://example.test", identity: "user" };
+  if (options.defaultThreadId) localStorage.setItem(defaultThreadStorageKey(defaultScope), options.defaultThreadId);
+  const wrap = (current: ApplicationClientState) => options.defaultThreadId
+    ? <DefaultThreadProvider scope={defaultScope}>{content(current)}</DefaultThreadProvider>
+    : content(current);
+  const result = render(wrap(state));
   return {
     ...result,
     store,
     rerenderSidebar(current: ApplicationClientState) {
       store.getSnapshot.mockReturnValue(current);
-      result.rerender(content(current));
+      result.rerender(wrap(current));
     },
   };
 }
@@ -1895,6 +1902,28 @@ describe("InventorySidebar view modes", () => {
       expect(onSelectThread).toHaveBeenCalledTimes(2);
     },
   );
+
+  it.each(["", "Matching"])("Escape blurs sidebar search and preserves its filter %j", (searchText) => {
+    seedViewPreferences({ groupBy: "none" });
+    const { store } = renderSidebar([makeThread("thread-1", "Matching thread")], { search: searchText });
+    const search = screen.getByRole("searchbox", { name: "Search threads" });
+    search.focus();
+    expect(search).toHaveFocus();
+    expect(fireEvent.keyDown(search, { key: "Escape" })).toBe(false);
+    expect(search).not.toHaveFocus();
+    expect(search).toHaveValue(searchText);
+    expect(store.setSearch).not.toHaveBeenCalled();
+  });
+
+  it("leaves composing Escape alone in sidebar search", () => {
+    seedViewPreferences({ groupBy: "none" });
+    const { store } = renderSidebar([], { search: "draft" });
+    const search = screen.getByRole("searchbox", { name: "Search threads" });
+    search.focus();
+    expect(fireEvent.keyDown(search, { key: "Escape", isComposing: true })).toBe(true);
+    expect(search).toHaveFocus();
+    expect(store.setSearch).not.toHaveBeenCalled();
+  });
 
   it("does not wrap sidebar arrow navigation or consume native editing chords", () => {
     seedViewPreferences({ groupBy: "none" });
@@ -5288,5 +5317,119 @@ describe("sidebar footer Automations", () => {
     expect(window.location.pathname).toBe("/automations");
     expect(onNavigate).toHaveBeenCalledOnce();
     window.history.replaceState({}, "", "/");
+  });
+});
+
+
+describe("shared default thread shelf", () => {
+  it.each(["project", "time", "state", "none"] as const)("keeps an unusable default in ordinary inventory and search in %s", (groupBy) => {
+    seedViewPreferences({ groupBy });
+    const target = makeThread("default", "Default target", { inventoryState: "snoozed" });
+    const options = { defaultThreadId: target.id };
+    const view = renderSidebar([target], options);
+    expect(screen.getByText("Default target")).toBeVisible();
+    expect(screen.queryByTestId("default-thread-row")).not.toBeInTheDocument();
+    view.rerenderSidebar(makeState([target], { ...options, search: "Default target" }));
+    expect(screen.getByText("Default target")).toBeVisible();
+    const unavailable = { ...target, inventoryState: "active" as const, available: false };
+    view.rerenderSidebar(makeState([unavailable], { ...options, search: "Default target" }));
+    expect(screen.getByText("Default target")).toBeVisible();
+    expect(screen.queryByTestId("default-thread-row")).not.toBeInTheDocument();
+  });
+
+  it.each(["project", "time", "state", "none"] as const)("counts a loaded default child before offering more forks in %s", (groupBy) => {
+    seedViewPreferences({ groupBy });
+    const parent = makeThread("parent", "Fork source");
+    const child = makeThread("default-child", "Default child");
+    const options = {
+      defaultThreadId: child.id,
+      forkOrigins: [forkOrigin(child.id, parent.id)],
+      lineagePlacements: [nestedPlacement(child.id)],
+      lineageFamilies: [{ sourceThreadId: parent.id, descendantCount: 1 }],
+    };
+    const view = renderSidebar([parent, child], options);
+    expect(screen.getByText("Fork source")).toBeVisible();
+    expect(screen.getAllByText("Default child")).toHaveLength(1);
+    expect(screen.getByTestId("default-thread-row")).toHaveTextContent("Default child");
+    expect(screen.queryByRole("button", { name: "Show all runs/forks" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /fork family for Fork source/ })).not.toBeInTheDocument();
+
+    // A second, genuinely unloaded sibling still needs the paging action.
+    view.rerenderSidebar(makeState([parent, child], {
+      ...options,
+      lineageFamilies: [{ sourceThreadId: parent.id, descendantCount: 2 }],
+    }));
+    expect(screen.getByRole("button", { name: "Show all runs/forks" })).toBeVisible();
+    expect(screen.getAllByText("Default child")).toHaveLength(1);
+  });
+
+  it.each(["project", "none"] as const)("pages a default parent's older forks into the %s view", async (groupBy) => {
+    seedViewPreferences({ groupBy });
+    const parent = makeThread("default", "My default");
+    const options = { defaultThreadId: "default", lineageFamilies: [{ sourceThreadId: "default", descendantCount: 1 }] };
+    const view = renderSidebar([parent], options);
+    await userEvent.click(screen.getByRole("button", { name: "Show all runs/forks" }));
+    expect(view.store.loadMoreDescendants).toHaveBeenCalledWith("default");
+    const child = makeThread("older-fork", "Older fork");
+    view.rerenderSidebar(makeState([parent], { ...options, descendantPages: { default: {
+      loading: false, loaded: true, descendants: [{ thread: child, origin: forkOrigin(child.id, parent.id), placement: nestedPlacement(child.id) }],
+    } } }));
+    expect(screen.getByText("Older fork")).toBeVisible();
+    expect(screen.getAllByText("My default")).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: "Show all runs/forks" })).not.toBeInTheDocument();
+  });
+
+  it.each(["project", "time", "state", "none"] as const)("shows the default once above ordinary groups in %s", (groupBy) => {
+    seedViewPreferences({ groupBy });
+    renderSidebar([
+      makeThread("default", "My default", { pinned: true }),
+      makeThread("other", "Other pinned", { pinned: true }),
+    ], { defaultThreadId: "default" });
+    const row = screen.getByTestId("default-thread-row");
+    expect(screen.getAllByText("My default")).toHaveLength(1);
+    expect(row.closest("nav")?.firstElementChild).toBe(row.closest("section"));
+    expect(within(row).queryByText(/Ctrl|⌘/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Default" })).not.toBeInTheDocument();
+  });
+  it.each([
+    ["running", "Running"],
+    ["waiting_for_input", "Waiting for input"],
+    ["waiting_for_approval", "Waiting for approval"],
+    ["failed", "Failed"],
+  ] as const)("shows the ordinary %s indicator on the compact default row", (runState, label) => {
+    renderSidebar([makeThread("default", "My default", { runState })], { defaultThreadId: "default" });
+    const row = screen.getByTestId("default-thread-row");
+    expect(within(row).getByRole("img", { name: label })).toBeVisible();
+    expect(row.querySelector(".flat-row-glyph")?.nextElementSibling).toHaveClass("thread-title");
+    expect(row.querySelector(".thread-row-link")?.children).toHaveLength(2);
+  });
+  it("updates the default row from running to unread without losing its indicator", () => {
+    const running = makeThread("default", "My default", { runState: "running" });
+    const view = renderSidebar([running], { defaultThreadId: "default" });
+    expect(within(screen.getByTestId("default-thread-row")).getByRole("img", { name: "Running" })).toBeVisible();
+    const unread = { ...running, runState: "idle" as const, attention: { ...running.attention, unseenCompletion: true } };
+    view.rerenderSidebar(makeState([unread], { defaultThreadId: "default" }));
+    const row = screen.getByTestId("default-thread-row");
+    expect(within(row).getByRole("img", { name: "Finished while you were away" })).toBeVisible();
+    expect(within(row).getByTestId("flat-row-unseen-dot")).toBeVisible();
+    expect(within(row).queryByRole("img", { name: "Running" })).toBeNull();
+    const glyph = row.querySelector(".flat-row-glyph");
+    const title = row.querySelector(".thread-title");
+    const idle = { ...running, runState: "idle" as const };
+    view.rerenderSidebar(makeState([idle], { defaultThreadId: "default" }));
+    expect(glyph).not.toHaveAttribute("data-glyph");
+    expect(glyph?.querySelector("svg")).not.toBeNull();
+    expect(glyph?.nextElementSibling).toBe(title);
+    expect(row.querySelector(".thread-row-link")?.children).toHaveLength(2);
+    view.rerenderSidebar(makeState([running], { defaultThreadId: "default" }));
+    expect(within(screen.getByTestId("default-thread-row")).queryByTestId("flat-row-unseen-dot")).toBeNull();
+  });
+  it("keeps the default available when search excludes all other threads", () => {
+    renderSidebar([makeThread("default", "My default")], { defaultThreadId: "default", search: "no match" });
+    expect(screen.getByTestId("default-thread-row")).toHaveTextContent("My default");
+  });
+  it("offers explicit settings selection for an unavailable saved target", () => {
+    renderSidebar([], { defaultThreadId: "missing" });
+    expect(screen.getByRole("button", { name: /Default thread unavailable/ })).toBeInTheDocument();
   });
 });

@@ -19,7 +19,7 @@ the app keeps working. The microphone targets the thread shown on the card.
 Voice sends a separate message and preserves the unsent composer draft. It can
 also make the first send to an empty thread.
 
-Enable **Pin default voice thread** to use your default thread as the initial
+Enable **Pin default thread** to use your default thread as the initial
 recording target while browsing elsewhere. The row picker can override it for
 one recording. If no initial target is available, Start asks you to choose one
 without changing the saved default. An unavailable retained voice thread reports
@@ -61,12 +61,13 @@ Headset and notification Start use that same choice, followed by the pinned
 default, retained destination, visible thread, or saved default. Idle headset or notification **Next** releases
 the retained destination. Automatic notification replies keep their own targets.
 The popup lists the visible thread first. On mobile, search stays visible and
-the keyboard stays closed until you tap it. **Default voice thread** in quick
-or full settings uses the same search and rows inside a modal or mobile sheet.
+the keyboard stays closed until you tap it. **Default thread** in the voice
+sheet or **Settings → Voice** edits the same shared choice as **Settings → General**
+and the thread’s sidebar menu, with the same search and rows.
 Once recognition finishes, its target and delivery policy stay fixed through
 any connection recovery. The left status icon opens the **Voice** sheet with
-**Audio mode**, **Auto-listen**, **Keep listening by default**, **Follow composer mode**, **Pin default voice
-thread**, **Only play from default voice thread**, **Default voice thread**, and
+**Audio mode**, **Auto-listen**, **Keep listening by default**, **Follow composer mode**, **Pin default
+thread**, **Only play from default thread**, **Default thread**, and
 **All voice settings**. The playback filter limits automatic playback to the default thread; it does not change
 where explicit recordings go.
 
@@ -558,6 +559,15 @@ thread is parked or archived. The sidebar shows a stash count. Each thread
 can hold up to 50 stashes.
 
 ## Read agent activity
+
+Agents with the Pages tools enabled can publish interactive HTML previews in
+chat. Each changed publication adds a new saved revision. Previews load as
+they approach view. Use the hand icon or a stationary tap to interact with
+inline HTML, and the checkmark to return to scrolling chat. The maximize
+button opens a viewer with revision and refresh controls. Fullscreen previews
+and **Pages** in the thread header accept input immediately. See
+[HTML previews](html-previews.md) for editing, sizing, images, and the optional
+screenshot tool.
 
 Consecutive reasoning and tool work is grouped into an **Activity** row so
 commands, file operations, searches, and tool calls do not overwhelm the

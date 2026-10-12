@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { materializeToolModelContent } from "../internal/agent-tool-cli-protocol/local-media-files.js";
 import { readFile } from "node:fs/promises";
 import { deterministicJson } from "../server/canonical-json.js";
 import { compileCanonicalAgentToolSchema } from "../server/agent-tools/schema/canonical-json-schema.js";
@@ -57,6 +58,7 @@ const progressiveUsage = `Usage:
   sedes tool invoke TOOL_ID (--input-json <json> | --input-file <path|->) --json
 
 Successful invocation stdout matches the described tool outputSchema.
+Media results emit {output, modelContent}; images are private local PNG files with path and byteSize.
 `;
 
 const individualUsage = `Usage:
@@ -68,6 +70,7 @@ const individualUsage = `Usage:
 
 Help is generated from the currently exposed catalog and schemas.
 Successful invocations emit the operation's canonical JSON output.
+Media results emit {output, modelContent}; images are private local PNG files with path and byteSize.
 `;
 
 class SedesCliUsageError extends Error {}
@@ -238,12 +241,31 @@ function writeJson(output: SedesCliIo["stdout"], value: unknown): void {
   output.write(`${deterministicJson(value)}\n`);
 }
 
-function renderInvocation(
+async function renderInvocation(
   io: SedesCliIo,
   result: Awaited<ReturnType<SedesToolClient["invoke"]>>,
   json: boolean,
-): number {
-  if (result.state === "completed") writeJson(io.stdout, result.output);
+  signal?: AbortSignal,
+): Promise<number> {
+  if (result.state === "completed") {
+    if (result.modelContent) {
+      let media: Awaited<ReturnType<typeof materializeToolModelContent>>;
+      try {
+        media = await materializeToolModelContent(result.modelContent, signal);
+      } catch (error) {
+        if (signal?.aborted) throw error;
+        throw new SedesToolApiError(
+          "media_unavailable",
+          `The tool completed (invocation ${result.invocationId}), but saving its local image files failed. Do not retry the tool invocation.`,
+          false,
+        );
+      }
+      try {
+        signal?.throwIfAborted();
+        writeJson(io.stdout, { output: result.output, modelContent: media.content });
+      } catch (error) { await media.cleanup(); throw error; }
+    } else writeJson(io.stdout, result.output);
+  }
   else if (json) writeJson(io.stdout, result);
   else if ("error" in result) io.stderr.write(`${result.error.message}\n`);
   else io.stderr.write(`Unexpected non-terminal invocation: ${result.state}\n`);
@@ -378,7 +400,7 @@ export async function runSedesCli(
           `The serialized tool input exceeds the ${tool.execution.maximumInputBytes}-byte transport limit.`,
         );
       }
-      return renderInvocation(
+      return await renderInvocation(
         io,
         await client.invoke(
           {
@@ -390,6 +412,7 @@ export async function runSedesCli(
           dependencies.signal,
         ),
         parsed.json,
+        dependencies.signal,
       );
     }
     const catalog = await client.listTools(dependencies.signal);
@@ -428,7 +451,7 @@ export async function runSedesCli(
         `The serialized tool input exceeds the ${tool.execution.maximumInputBytes}-byte transport limit.`,
       );
     }
-    return renderInvocation(
+    return await renderInvocation(
       io,
       await client.invoke(
         {
@@ -440,6 +463,7 @@ export async function runSedesCli(
         dependencies.signal,
       ),
       dynamic.json,
+      dependencies.signal,
     );
   } catch (error) {
     if (dependencies.signal?.aborted) {

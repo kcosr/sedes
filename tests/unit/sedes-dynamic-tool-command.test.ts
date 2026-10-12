@@ -187,6 +187,7 @@ describe("dynamic Sedes tool commands", () => {
   it("renders live schema and effects in command help", () => {
     const tool = {
       ...summary,
+      outputMediaTypes: ["image/png"],
       inputSchema,
       outputSchema: {
         $schema: AGENT_TOOL_JSON_SCHEMA_DIALECT,
@@ -217,6 +218,8 @@ describe("dynamic Sedes tool commands", () => {
     expect(help).toContain("--scope-workspace-id <string>  optional");
     expect(help).toContain("values must be unique");
     expect(help).toContain("application=write");
+    expect(help).toContain("Output media: image/png");
+    expect(help).toContain("private local temporary files");
   });
 
   it("renders root minimum-property constraints", () => {

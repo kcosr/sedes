@@ -101,6 +101,7 @@ async function verifySyncedAssets() {
     "OutputImageActions",
     "ClientCredentials",
     "NativeVoice",
+    "PageSafety",
   ]) {
     assert(
       javascript.includes(required),
@@ -142,6 +143,14 @@ async function verifySyncedAssets() {
   );
   assert(mainActivity.includes("registerPlugin(ClientCredentialsPlugin.class)"), "client_credentials_plugin_not_registered");
   assert(mainActivity.includes("registerPlugin(NativeVoicePlugin.class)"), "native_voice_plugin_not_registered");
+  assert(mainActivity.includes("registerPlugin(PageSafetyPlugin.class)"), "page_safety_plugin_not_registered");
+  assert(mainActivity.includes("new SedesWebViewClient(getBridge())"), "page_native_client_guard_missing");
+  assert(mainActivity.includes("WebViewFeature.WEB_MESSAGE_LISTENER") && mainActivity.includes("showWebViewUpdateRequired()") && mainActivity.includes("hasRejectedLegacyBridge()"), "page_secure_bridge_startup_check_missing");
+  const pageWebViewLayout = await readFile(path.join(androidRoot, "app/src/main/res/layout/capacitor_bridge_layout_main.xml"), "utf8");
+  assert(pageWebViewLayout.includes("dev.sedes.local.SedesWebView"), "page_isolated_webview_missing");
+  const pageWebView = await readFile(path.join(androidRoot, "app/src/main/java/dev/sedes/local/SedesWebView.java"), "utf8");
+  assert(/public void addJavascriptInterface\(Object object, String name\)/u.test(pageWebView), "page_all_frame_bridge_guard_missing");
+  assert(!pageWebView.includes("super.addJavascriptInterface"), "page_all_frame_bridge_enabled");
   assert(/android:allowBackup=["']false["']/u.test(sourceManifest), "android_credential_backup_enabled");
   const outputImagePaths = await readFile(
     path.join(androidRoot, "app/src/main/res/xml/output_image_paths.xml"),

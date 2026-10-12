@@ -117,6 +117,21 @@ function completedOutput() {
 }
 
 describe("Pi agent-tool adapter", () => {
+  it("returns PNG content directly to Pi with JSON metadata kept separate", async () => {
+    const media = { type: "image" as const, mimeType: "image/png" as const,
+      data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j3x8AAAAASUVORK5CYII=" };
+    const set = createPiAgentToolSet({
+      facade: { ...emptyDiscovery, eligibleCatalog: () => [artifact()], readPolicy: () => enabledPolicy,
+        async invoke<Output>() { return { invocationId: "media-result", state: "completed" as const, output: completedOutput() as Output, modelContent: [media] }; } },
+      source, manager: sessionManager().manager, authentication,
+      providerTurnCorrelation: () => "user-entry", toolAccess: new PiToolAccessController("full"),
+    });
+    const result = await set.tools[0]!.execute("pi-call-1", {}, undefined, undefined, {} as never);
+    expect(result.content).toEqual([{ type: "text", text: expect.any(String) }, media]);
+    expect(JSON.stringify(result.details)).not.toContain(media.data);
+    expect(JSON.parse((result.content[0] as {text:string}).text)).toEqual(completedOutput());
+  });
+
   it("progressively discovers and invokes one exact read with a v1 marker", async () => {
     const contract = artifact();
     const description = {

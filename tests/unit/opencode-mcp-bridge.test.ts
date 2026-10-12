@@ -7,6 +7,7 @@ import { SEDES_MCP_MAXIMUM_INBOUND_LINE_BYTES } from "../../src/internal/agent-t
 import { AGENT_TOOL_MAXIMUM_RESPONSE_BYTES } from "../../src/server/agent-tools/contracts/agent-tool-transport-limits.js";
 import { BackendAgentToolRequestError } from "../../src/server/agent-tools/adapters/backend-facade.js";
 import { CanonicalInlineAgentToolService } from "../../src/server/agent-tools/invocation/canonical-inline-agent-tool-service.js";
+import { maximumPreviewResult } from "../helpers/page-preview-media-fixture.js";
 
 const cleanups: (() => Promise<unknown>)[] = [];
 afterEach(async () => { for (const close of cleanups.splice(0).reverse()) await close(); });
@@ -29,6 +30,33 @@ const call = (sessionID?: string) => ({ name: "sedes_catalog", arguments: { acti
   ...(sessionID ? { _meta: { "ai.opencode/sessionID": sessionID } } : {}) });
 
 describe("OpenCode per-call MCP bridge", () => {
+  it("preserves maximum preview PNG and escaped console through real private HTTP and MCP framing", async () => {
+    const maximum = maximumPreviewResult();
+    const pageTools = new CanonicalInlineAgentToolService({ application: { readThreadStatus: async () => undefined }, pages: {} as never });
+    const description = pageTools.describeMany("mcp", "thread_agent", ["page.preview"])[0]!;
+    const f = await fixture(async request => request.operation === "describe" ? { tools: [description] } : maximum);
+    f.send(2, "tools/call", { name: "sedes_read", arguments: { toolId: "page.preview", schemaVersion: 1, input: { html: "<p>preview</p>" } }, _meta: { "ai.opencode/sessionID": "ses_a" } });
+    const response = await f.reply(2);
+    expect(response.result.isError).toBeUndefined();
+    expect(response.result.structuredContent).toEqual(maximum.output);
+    expect(response.result.content[1]).toEqual(maximum.modelContent[0]);
+    expect(Buffer.byteLength(JSON.stringify(response))).toBeGreaterThan(4 * 1024 * 1024);
+    expect(f.stderr()).toBe("");
+  });
+  it("delivers PNG blocks above the generic JSON-string bound", async () => {
+    const description = tools.describeMany("mcp", "thread_agent", ["thread.status"])[0]!;
+    const output = { threadId: "thread", backend: "opencode", lifecycle: "active", activity: "idle", pinned: false };
+    const image = { type: "image", mimeType: "image/png",
+      data: Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]), Buffer.alloc(70_000)]).toString("base64") };
+    const f = await fixture(async request => request.operation === "describe" ? { tools: [description] }
+      : { invocationId: "image-result", state: "completed", output, modelContent: [image] });
+    f.send(2, "tools/call", { name: "sedes_read", arguments: { toolId: "thread.status", schemaVersion: description.schemaVersion,
+      input: { threadId: "thread" } }, _meta: { "ai.opencode/sessionID": "ses_a" } });
+    const response = await f.reply(2);
+    expect(response.result.isError).toBeUndefined();
+    expect(response.result.structuredContent).toEqual(output);
+    expect(response.result.content[1]).toEqual(image);
+  });
   it("preserves a completed act invocation and near-4 MiB result through both bridge transports", async () => {
     // Exercise aggregate transport size while retaining the canonical JSON
     // codec's independent per-string/depth/node limits.
@@ -162,7 +190,7 @@ it("exits on a silent lifetime watchdog without waiting for stdin EOF", async ()
   try {
     const input = new PassThrough(); let stdout = "";
     const wire = new ReadableStream<Uint8Array>({ start(controller) {
-      controller.enqueue(Buffer.from(`${JSON.stringify({ streamID: "00000000-0000-4000-8000-000000000001", catalog: [] })}\n`));
+      controller.enqueue(Buffer.from(`${JSON.stringify({ protocolVersion: 2, streamID: "00000000-0000-4000-8000-000000000001", catalog: [] })}\n`));
     } });
     const running = runSedesOpenCodeMcp([], { input, environment: { SEDES_OPENCODE_MCP_ENDPOINT: "http://127.0.0.1:4096", SEDES_OPENCODE_MCP_CREDENTIAL: "a".repeat(43) },
       fetch: vi.fn(async () => new Response(wire, { headers: { "content-type": "application/x-ndjson" } })),

@@ -1,3 +1,5 @@
+import type { AgentToolModelContent } from "../../../internal/agent-tool-cli-protocol/model-content.js";
+export type { AgentToolModelContent } from "../../../internal/agent-tool-cli-protocol/model-content.js";
 import type { CanonicalAgentToolRootSchema } from "../schema/canonical-json-schema.js";
 import type { BackendKind } from "../../backends/contracts.js";
 import type { CanonicalJsonValue } from "../../canonical-json.js";
@@ -42,6 +44,7 @@ export type AgentToolGroupId =
   | "agents"
   | "tasks"
   | "workpads"
+  | "pages"
   | "automations"
   | "research";
 
@@ -100,6 +103,8 @@ export interface AgentToolContract {
   readonly description: string;
   readonly inputSchema: CanonicalAgentToolRootSchema;
   readonly outputSchema: CanonicalAgentToolRootSchema;
+  /** Native media a completed result may carry outside its JSON output. */
+  readonly outputMediaTypes?: readonly ["image/png"];
   readonly requiredCapabilities: readonly SedesCapability[];
   readonly effects: ToolEffects;
   readonly execution: ToolExecutionPolicy;
@@ -405,11 +410,23 @@ export interface SedesToolError {
   readonly details?: CanonicalJsonValue;
 }
 
+/** Explicit execution result; ordinary output objects are never shape-detected. */
+export class AgentToolOutput<Output> {
+  readonly output: Output;
+  readonly modelContent: readonly AgentToolModelContent[];
+
+  constructor(output: Output, modelContent: readonly AgentToolModelContent[]) {
+    this.output = output;
+    this.modelContent = modelContent;
+  }
+}
+
 export type SedesToolInvocationResult<Output> =
   | {
       readonly invocationId: string;
       readonly state: "completed";
       readonly output: Output;
+      readonly modelContent?: readonly AgentToolModelContent[];
     }
   | {
       readonly invocationId: string;
@@ -447,7 +464,7 @@ export interface AgentToolDefinition<
   execute(
     input: Input,
     context: TrustedToolInvocationContext,
-  ): Promise<Output | AcceptedToolOperation<Output>>;
+  ): Promise<Output | AgentToolOutput<Output> | AcceptedToolOperation<Output>>;
   /**
    * Reconstructs a completed, side-effect-free result from immutable trusted
    * context. It must not re-enter domain/business execution.
@@ -473,6 +490,7 @@ export interface AgentToolCatalogSummary {
     readonly order: number;
   };
   readonly effects: ToolEffects;
+  readonly outputMediaTypes?: readonly ["image/png"];
   /** Live named command derived from the registered CLI adapter identity. */
   readonly cli?: {
     readonly commandPath: readonly string[];
@@ -487,6 +505,7 @@ export interface AgentToolDescription {
   readonly description: string;
   readonly inputSchema: CanonicalAgentToolRootSchema;
   readonly outputSchema: CanonicalAgentToolRootSchema;
+  readonly outputMediaTypes?: readonly ["image/png"];
   readonly effects: ToolEffects;
   readonly execution: {
     readonly form: "inline" | "operation" | "hybrid";

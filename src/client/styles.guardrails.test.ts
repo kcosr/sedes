@@ -121,6 +121,9 @@ function listFiles(directory: string, accept: (file: string) => boolean): string
   const files: string[] = [];
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
     const target = path.join(directory, entry.name);
+    // The pinned, immutable UI-kit snapshot has its own style verification.
+    // Consumer overrides remain in this ratchet; do not rewrite vendor CSS.
+    if (target === path.join(CLIENT_DIRECTORY, "workbench")) continue;
     if (entry.isDirectory()) files.push(...listFiles(target, accept));
     else if (accept(target)) files.push(target);
   }

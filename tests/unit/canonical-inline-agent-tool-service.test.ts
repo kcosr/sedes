@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { BackendError } from "../../src/server/backends/contracts.js";
 import { DomainError } from "../../src/server/domain/errors.js";
+import { AgentToolOutput } from "../../src/server/agent-tools/contracts/agent-tool-contracts.js";
 import type { AgentToolDefinition } from "../../src/server/agent-tools/contracts/agent-tool-contracts.js";
 import {
   CanonicalAgentToolRequestError,
@@ -12,6 +13,7 @@ import type { AgentManagementService } from "../../src/server/agent-tools/applic
 import { createTaskUpdateToolDefinition } from "../../src/server/agent-tools/tools/task-management-tools.js";
 import { AutomationAgentToolService } from "../../src/server/agent-tools/tools/automation-agent-tool-service.js";
 import { createAutomationCreateToolDefinition } from "../../src/server/agent-tools/tools/automation-create-tool.js";
+import { maximumPreviewResult, maximumPreviewPng } from "../helpers/page-preview-media-fixture.js";
 
 const source = {
   scope: { tenantId: "tenant-1", principalId: "principal-1" },
@@ -69,6 +71,7 @@ function writeDefinition(input: {
     ...agentContextToolDefinition,
     id: "example.write",
     schemaVersion: 2,
+    outputMediaTypes: ["image/png"],
     description: "Writes one bounded example.",
     effects: input.effects ?? {
       application: "write",
@@ -93,6 +96,71 @@ function writeDefinition(input: {
 }
 
 describe("CanonicalInlineAgentToolService", () => {
+  const media = { type: "image" as const, mimeType: "image/png" as const,
+    data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j3x8AAAAASUVORK5CYII=" };
+  const mediaOutput = { threadId: "source-thread", workspaceId: "workspace-1", projectId: "project-1", backend: "pi" };
+  const mediaRequest = { toolId: "example.write", schemaVersion: 2, requestId: "media-request", input: {} };
+
+  it("keeps validated model media outside the canonical JSON output", async () => {
+    const service = new CanonicalInlineAgentToolService({
+      application: { readThreadStatus: async () => undefined },
+      additionalDefinitions: [writeDefinition({ execute: async () => new AgentToolOutput(mediaOutput, [media]) })],
+    });
+    await expect(service.invoke(mediaRequest, source)).resolves.toMatchObject({ state: "completed", output: mediaOutput, modelContent: [media] });
+  });
+
+  it("rejects undeclared image output and advertises declared media independently of outputSchema", async () => {
+    const { outputMediaTypes: _media, ...undeclared } = writeDefinition({ execute: async () => new AgentToolOutput(mediaOutput, [media]) });
+    const service = new CanonicalInlineAgentToolService({ application: { readThreadStatus: async () => undefined }, additionalDefinitions: [undeclared] });
+    await expect(service.invoke(mediaRequest, source)).rejects.toMatchObject({ code: "internal_error" });
+    const declared = new CanonicalInlineAgentToolService({ application: { readThreadStatus: async () => undefined }, additionalDefinitions: [writeDefinition({ execute: async () => new AgentToolOutput(mediaOutput, [media]) })] });
+    expect(declared.describeMany("http", "thread_agent", ["example.write"])[0]).toMatchObject({ outputMediaTypes: ["image/png"], outputSchema: agentContextToolDefinition.outputSchema });
+    expect(declared.catalogSummaries("http", "thread_agent").find(tool => tool.id === "example.write")).toMatchObject({ outputMediaTypes: ["image/png"] });
+  });
+
+  it("admits maximum PNG and worst escaped production console, rejecting one decoded byte over", async () => {
+    const maximum = maximumPreviewResult();
+    let result = new AgentToolOutput(maximum.output, maximum.modelContent);
+    const service = new CanonicalInlineAgentToolService({ application: { readThreadStatus: async () => undefined }, pages: { execute: async () => result } as never });
+    const request = { toolId: "page.preview", schemaVersion: 1, requestId: "max-preview", input: { html: "<p>test</p>" } };
+    await expect(service.invoke(request, source)).resolves.toMatchObject({ output: maximum.output, modelContent: maximum.modelContent });
+    result = new AgentToolOutput(maximum.output, [{ ...maximum.modelContent[0]!, data: maximumPreviewPng(1).toString("base64") }]);
+    await expect(service.invoke({ ...request, requestId: "over-preview" }, source)).rejects.toMatchObject({ code: "internal_error" });
+  });
+
+  it.each([
+    [{ ...media, data: "not a png" }],
+    [{ ...media, mimeType: "image/jpeg" }],
+    [{ ...media, data: Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]), Buffer.alloc(2 * 1024 * 1024)]).toString("base64") }],
+  ])("rejects invalid model content without returning partial output", async (content) => {
+    const service = new CanonicalInlineAgentToolService({
+      application: { readThreadStatus: async () => undefined },
+      additionalDefinitions: [writeDefinition({ execute: async () => new AgentToolOutput(mediaOutput, content as never) })],
+    });
+    await expect(service.invoke(mediaRequest, source)).rejects.toMatchObject({ code: "internal_error" });
+  });
+
+  it("counts model content against the declared output budget", async () => {
+    const definition = writeDefinition({ execute: async () => new AgentToolOutput(mediaOutput, [media]) });
+    const service = new CanonicalInlineAgentToolService({
+      application: { readThreadStatus: async () => undefined },
+      additionalDefinitions: [{ ...definition, execution: { ...definition.execution, maximumOutputBytes: 150 } }],
+    });
+    await expect(service.invoke(mediaRequest, source)).rejects.toMatchObject({ code: "internal_error" });
+  });
+
+  it("drops completed media when the caller cancels before delivery", async () => {
+    const controller = new AbortController();
+    const service = new CanonicalInlineAgentToolService({
+      application: { readThreadStatus: async () => undefined },
+      additionalDefinitions: [writeDefinition({ execute: async () => {
+        controller.abort();
+        return new AgentToolOutput(mediaOutput, [media]);
+      } })],
+    });
+    await expect(service.invoke(mediaRequest, { ...source, signal: controller.signal })).rejects.toMatchObject({ code: "cancelled" });
+  });
+
   it("lists only explicit deterministic deployment exposure", () => {
     const service = new CanonicalInlineAgentToolService({
       application: { readThreadStatus: async () => undefined },

@@ -15,6 +15,7 @@ export type CanonicalAgentToolManifestEntry = Pick<
   | "id"
   | "schemaVersion"
   | "description"
+  | "outputMediaTypes"
   | "catalog"
   | "effects"
   | "deployment"
@@ -102,6 +103,7 @@ export const CANONICAL_AGENT_TOOL_GROUPS = Object.freeze([
     description: "Read and collaboratively edit scoped working documents.",
     order: 55,
   }),
+  Object.freeze({ id: "pages" as const, label: "Pages", description: "Publish and preview self-contained HTML documents.", order: 57 }),
   Object.freeze({
     id: "automations" as const,
     label: "Automations",
@@ -117,6 +119,37 @@ export const CANONICAL_AGENT_TOOL_GROUPS = Object.freeze([
 ] satisfies readonly CanonicalAgentToolGroup[]);
 
 export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
+  "page.publish": threadOnlyManifestEntry({
+    id: "page.publish", schemaVersion: 1, environmentAuthority: { kind: "source_only" },
+    description: "Publish an interactive HTML preview. Provide exactly one source: path to an HTML file in this thread's execution environment (up to 1 MiB), or html text (up to 65,536 characters). CSS and JavaScript must be inline. File sources capture referenced local PNG, JPEG, GIF and WebP images; html text requires embedded data images. HTTP resources are unsupported. Omit viewport dimensions for fluid layout, or specify width and optionally height for a fixed mock-up. To update a page pass its pageId and expectedRevision; each changed publication preserves earlier versions and appends a preview.",
+    catalog: { groupId: "pages", label: "Publish HTML page", order: 10 },
+    effects: { application: "write", modelUsage: "none", external: "none" },
+  }),
+  "page.preview": threadOnlyManifestEntry({
+    id: "page.preview", schemaVersion: 1, environmentAuthority: { kind: "source_only" },
+    outputMediaTypes: ["image/png"] as const,
+    description: "Capture a screenshot, console output and dimensions before publishing. Provide exactly one of path or html, with the same source limits, local-image capture and isolation as page.publish. Returns image/png as native model content; CLI output contains a private local PNG path. Requires the optional preview browser installation. Does not publish a page or revision.",
+    catalog: { groupId: "pages", label: "Preview HTML page", order: 20 },
+    effects: { application: "read", modelUsage: "none", external: "none" },
+  }),
+  "page.list": threadOnlyManifestEntry({
+    id: "page.list", schemaVersion: 1, environmentAuthority: { kind: "source_only" },
+    description: "List the current revisions of HTML pages published in this thread, including previews from before context compaction.",
+    catalog: { groupId: "pages", label: "List HTML pages", order: 30 },
+    effects: { application: "read", modelUsage: "none", external: "none" },
+  }),
+  "page.get": threadOnlyManifestEntry({
+    id: "page.get", schemaVersion: 1, environmentAuthority: { kind: "source_only" },
+    description: "Get a current or historical HTML page revision with its original source: sourcePath for a file publication, or html for an inline publication. Use the returned source to edit and publish another immutable revision, including after context compaction.",
+    catalog: { groupId: "pages", label: "Get HTML page", order: 40 },
+    effects: { application: "read", modelUsage: "none", external: "none" },
+  }),
+  "page.revisions": threadOnlyManifestEntry({
+    id: "page.revisions", schemaVersion: 1, environmentAuthority: { kind: "source_only" },
+    description: "List immutable saved revisions of an HTML page in this thread, newest first.",
+    catalog: { groupId: "pages", label: "List page revisions", order: 50 },
+    effects: { application: "read", modelUsage: "none", external: "none" },
+  }),
   "client.list": threadOnlyManifestEntry({
     id: "client.list", schemaVersion: 2, environmentAuthority: { kind: "source_only" },
     description: "List connected Sedes clients only when the user asks to list devices or explicitly target another device. Never automatically choose another client.",

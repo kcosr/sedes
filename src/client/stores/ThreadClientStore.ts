@@ -1,6 +1,8 @@
 import { UsageQueryCache } from "./UsageQueryCache.js";
 import type { EnvironmentVariableOverrides } from "../../shared/protocol/environment-variables.js";
 import type { TurnReplySpeech } from "../../shared/protocol/turn-reply-speech.js";
+import type { PageRevision, PageRevisionPage } from "../../shared/protocol/pages.js";
+import type { PageListOptions, PageRenderAdmission } from "../api/ApiClient.js";
 import type {
   QuestionRequest,
   QuestionRequestsResult,
@@ -826,6 +828,22 @@ export class ThreadClientStore {
       artifactId,
       signal,
     );
+  }
+
+  listPages(options?: PageListOptions): Promise<PageRevisionPage> {
+    return this.#api.listThreadPages(this.threadId, options);
+  }
+
+  listPageRevisions(pageId: string, options?: PageListOptions): Promise<PageRevisionPage> {
+    return this.#api.listPageRevisions(this.threadId, pageId, options);
+  }
+
+  getPageRevision(pageId: string, revision: number, signal?: AbortSignal): Promise<PageRevision> {
+    return this.#api.getPageRevision(this.threadId, pageId, revision, signal);
+  }
+
+  createPageRenderAdmission(pageId: string, revision: number, signal?: AbortSignal): Promise<PageRenderAdmission> {
+    return this.#api.createPageRenderAdmission(this.threadId, pageId, revision, signal);
   }
 
   stash(draft: NormalizedDraft): Promise<NormalizedDraft> {

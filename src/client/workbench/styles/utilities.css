@@ -1,0 +1,142 @@
+/*
+ * Tone modifiers (wb.tones, above components so a tone class always beats a
+ * component's default tone) and small utilities (wb.utilities).
+ */
+@layer wb.tones {
+  .wb-tone-neutral {
+    --wb-tone: var(--wb-neutral);
+    --wb-tone-text: var(--wb-neutral-text);
+    --wb-tone-weak: var(--wb-neutral-weak);
+    --wb-tone-border: var(--wb-neutral-border);
+  }
+  .wb-tone-info {
+    --wb-tone: var(--wb-info);
+    --wb-tone-text: var(--wb-info-text);
+    --wb-tone-weak: var(--wb-info-weak);
+    --wb-tone-border: var(--wb-info-border);
+  }
+  .wb-tone-success {
+    --wb-tone: var(--wb-success);
+    --wb-tone-text: var(--wb-success-text);
+    --wb-tone-weak: var(--wb-success-weak);
+    --wb-tone-border: var(--wb-success-border);
+  }
+  .wb-tone-warning {
+    --wb-tone: var(--wb-warning);
+    --wb-tone-text: var(--wb-warning-text);
+    --wb-tone-weak: var(--wb-warning-weak);
+    --wb-tone-border: var(--wb-warning-border);
+  }
+  .wb-tone-danger {
+    --wb-tone: var(--wb-danger);
+    --wb-tone-text: var(--wb-danger-text);
+    --wb-tone-weak: var(--wb-danger-weak);
+    --wb-tone-border: var(--wb-danger-border);
+  }
+  /* Toned sidebar icons keep their colour, also on the current item (this
+     layer sits above wb.components, so it wins over the current-item rule). */
+  .wb-side-icon[class*="wb-tone-"] {
+    color: var(--wb-tone);
+  }
+  /* muted: grey icon/dot with no status meaning (e.g. paused, draft) */
+  .wb-tone-muted {
+    --wb-tone: var(--wb-muted);
+    --wb-tone-text: var(--wb-fg-2);
+    --wb-tone-weak: var(--wb-neutral-weak);
+    --wb-tone-border: var(--wb-neutral-border);
+  }
+}
+
+@layer wb.utilities {
+  .wb-sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+    border: 0;
+  }
+  .wb-spacer {
+    flex: 1;
+  }
+  .wb-muted {
+    color: var(--wb-muted);
+  }
+  .wb-fg-2 {
+    color: var(--wb-fg-2);
+  }
+  .wb-small {
+    font-size: var(--wb-fs-12-5);
+  }
+  .wb-mono {
+    font-family: var(--wb-font-mono);
+  }
+  /* ids, counts, short hashes: mono 12px, secondary */
+  .wb-num {
+    color: var(--wb-fg-2);
+    font-family: var(--wb-font-mono);
+    font-size: var(--wb-fs-12);
+  }
+  .wb-tabular {
+    font-variant-numeric: tabular-nums;
+  }
+  .wb-truncate {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  /* Truncates at the start ("…/deep/path/file.ts"): keeps the end of paths
+     and ids visible. Wrap the text in <bdi> (TruncateStart does). */
+  .wb-truncate-start {
+    display: inline-block;
+    max-width: 100%;
+    min-width: 0;
+    overflow: hidden;
+    direction: rtl;
+    text-align: left;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    vertical-align: bottom;
+  }
+  .wb-sep {
+    color: var(--wb-muted);
+  }
+  /* solid tone colour for an icon: <span class="wb-tone-danger wb-tone-color"> */
+  .wb-tone-color {
+    color: var(--wb-tone, currentColor);
+  }
+  .wb-link {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--wb-accent-text);
+    font: inherit;
+    text-decoration: none;
+    cursor: pointer;
+  }
+  .wb-link:not(:disabled, [aria-disabled="true"]):hover {
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+  /* disabled: quiet, muted text with no hover underline */
+  .wb-link:disabled,
+  .wb-link[aria-disabled="true"] {
+    color: var(--wb-muted);
+    cursor: default;
+  }
+  .wb-stack {
+    display: flex;
+    flex-direction: column;
+    gap: var(--wb-space-3);
+  }
+  .wb-inline {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--wb-space-2);
+  }
+}

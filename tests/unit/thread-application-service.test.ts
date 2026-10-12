@@ -30,6 +30,7 @@ import {
   type ProviderFeatureConcurrency,
 } from "../../src/server/provider-features/contracts.js";
 import type { ProviderFeatureRef } from "../../src/shared/protocol/provider-feature.js";
+import { MAXIMUM_NORMALIZED_SNAPSHOT_OR_PAGE_BYTES, serializedUtf8Bytes } from "../../src/shared/protocol/payload.js";
 
 const scope = {
   tenantId: "tenant-1",
@@ -471,6 +472,34 @@ function createService(input?: {
 }
 
 describe("ThreadApplicationService", () => {
+  it("fits pages only after including the complete application envelope", async () => {
+    const state = { ...inventory(), stashes: Array.from({ length: 120 }, (_, index) => ({
+      id: `padding-${index}`, text: "s".repeat(200_000), contextExcerpts: [], attachments: [], taskReferences: [],
+      createdAt: "2026-10-11T00:00:00.000Z",
+    })) };
+    const current = createService({ state });
+    const capture = await current.capture();
+    if (capture.status !== "connected") throw new Error("fixture");
+    const baseline = await current.service.snapshotFromActorCapture(scope, "thread-1", capture.state);
+    const original = capture.state.timeline.itemsById["item-1"]!;
+    if (original.kind !== "assistant_message") throw new Error("fixture");
+    const native = { ...original, markdown: { text: original.markdown.text +
+      "x".repeat(MAXIMUM_NORMALIZED_SNAPSHOT_OR_PAGE_BYTES - 100 - serializedUtf8Bytes(baseline)) } };
+    const page = { id: "page-preview", turnId: "turn-1", revision: 0, kind: "page" as const, status: "completed" as const, page: {
+      pageId: "22222222-2222-4222-8222-222222222222", threadId: "thread-1", revision: 1, title: "Preview", viewport: {},
+      createdAt: "2026-10-11T00:00:00.000Z", sha256: "a".repeat(64), byteSize: 123,
+    } };
+    const result = await current.service.snapshotFromActorCapture(scope, "thread-1", { ...capture.state, timeline: {
+      ...capture.state.timeline,
+      turnsById: { "turn-1": { ...capture.state.timeline.turnsById["turn-1"]!, revision: 1, orderedItemIds: [native.id, page.id] } },
+      itemsById: { [native.id]: native, [page.id]: page },
+    } });
+    expect(result.itemsById[page.id]).toBeUndefined();
+    expect(result.itemsById[native.id]).toEqual(native);
+    expect(result.turnsById["turn-1"]).toMatchObject({ revision: 0, orderedItemIds: [native.id] });
+    expect(serializedUtf8Bytes(result)).toBe(MAXIMUM_NORMALIZED_SNAPSHOT_OR_PAGE_BYTES - 100);
+  });
+
   it("reads saved agent-tool policy and location without consulting a bound provider", async () => {
     const state = inventory();
     const current = createService({ state, disconnected: true });

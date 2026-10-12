@@ -3417,6 +3417,17 @@ is the default; `unrestricted` bypasses only the application access prompt, neve
 identity, resource, turn, policy, capability, or provider checks. Provider-native
 tool injection and approval remain private to the backend.
 
+Model-visible tool media is a separate closed `modelContent` array on a
+completed canonical invocation, never an oversized base64 string in ordinary
+JSON output. Validate the canonical `AgentToolOutput` class, declared output
+schema, declared `outputMediaTypes`, media bounds, and total response budget before exposing any result.
+Pi and MCP adapters preserve native PNG blocks alongside JSON metadata;
+CLI materializes images in private local temporary files and emits their path
+and byte size in an explicit JSON envelope; an ordinary shell consumer receives
+text and can open those files with its image tool. Cancellation must suppress the complete result, including all
+media. Version the strict local and sidecar transport contracts when adding
+new result shapes; stale peers must fail closed rather than discard media.
+
 Environment discovery is not environment entry. `environment.list` may expose
 only the bounded principal-scoped directory needed to address tools—no routes,
 credentials, hosts, or topology. Environment-scoped workspace and thread lists
@@ -3455,7 +3466,7 @@ alternate source claims, and to exactly one presentation, CLI or MCP. Derive
 the calling adapter from the resolved reference, never from a request field,
 so the CLI and `sedes mcp` share routes and relay frames without either
 satisfying the other's surface. The remote relay uses only the
-strict `agent_tools_cli@3` contract advertised for the enabled
+strict `agent_tools_cli@4` contract advertised for the enabled
 `agent_tools_cli` capability; unsupported or stale versions fail closed.
 Discovery may retain a bounded transport deadline, but invocation
 must propagate caller abort so an indefinitely waiting approval is not turned
@@ -3652,6 +3663,42 @@ scope, not historical scope. Approval binds current resource identity/revision;
 document updates additionally check the expected revision atomically. Backend
 adapters must not introduce provider-specific Workpad storage or bypass these
 checks. Unsupported tool transports remain explicitly unavailable.
+
+HTML pages are application-owned immutable revisions. Only an authenticated
+source invocation may capture an active actor's exact turn and item anchor;
+provider-authored tool text is never proof of publication. Join scoped page
+metadata to that anchor when projecting live or historical provider state,
+without mirroring the provider transcript. Optional page items must fit the
+existing item and byte bounds; excess pages remain available in the Pages list.
+Prepare publication metadata once per repository read and reuse native
+incremental byte accounting during streaming. Apply the final snapshot limit
+after including application state and fork metadata. The event hub retains a
+structurally shared source view and fits optional pages against its complete
+envelope, updating byte counts from changed fields rather than serializing
+retained native text. If capacity changes alter visible page membership,
+publish an authoritative snapshot reset so all item and turn references agree;
+later source events must not resurrect omitted pages. A reset within the same
+generation preserves runtime notices. It also preserves the last actual
+capability revision and run state when the capability document identity is
+unchanged. That identity includes run state, thread revision, and all capability
+authority inputs, so a fresh authoritative composition can advance the fences
+without mistaking a presentation reset for refreshed controls.
+Presentation turn revisions include visible pages;
+fork capabilities and `thread.messages` retain the native source revision,
+derived by subtracting referenced page items. Validate that relationship with
+the referenced items in snapshots, history pages, and incremental stores.
+
+Persist only immutable authored content, never a copy of trusted host scripts.
+During import, use the already parsed HTML document to compute an insertion
+offset and an escaped authored payload. `sha256` and `byteSize` describe the
+canonical authored HTML before host code is added. The authored document is
+bounded to 16 MiB, its escaped storage representation to 32 MiB, and current
+trusted wrapper/bootstrap overhead to 64 KiB. Keep the insertion offset,
+publication anchor, and other queried metadata before large text columns.
+Rendering an old revision must add the current trusted host code using bounded
+string slicing and concatenation, without parsing or re-encoding its authored
+payload on each request. Thus security updates protect existing revisions
+without changing their authored content, digest, revision, or source text.
 
 Committed Workpad writes publish revision invalidations on the existing
 principal application stream. Browser panels subscribe and reconcile after

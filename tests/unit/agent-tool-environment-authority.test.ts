@@ -134,12 +134,33 @@ const grantAuthority = {
 
 describe("agent-tool environment authority", () => {
   it("declares an explicit disposition for the complete canonical catalog", () => {
-    expect(CANONICAL_AGENT_TOOL_MANIFEST_ENTRIES).toHaveLength(44);
+    expect(CANONICAL_AGENT_TOOL_MANIFEST_ENTRIES).toHaveLength(49);
     expect(
       CANONICAL_AGENT_TOOL_MANIFEST_ENTRIES.every(
         ({ environmentAuthority }) => environmentAuthority.kind.length > 0,
       ),
     ).toBe(true);
+    const pages = CANONICAL_AGENT_TOOL_MANIFEST_ENTRIES.filter(entry => entry.id.startsWith("page."));
+    expect(pages.map(entry => ({ id: entry.id, environmentAuthority: entry.environmentAuthority,
+      callerEligibility: entry.callerEligibility, effects: entry.effects }))).toEqual([
+      ["page.publish", "write"], ["page.preview", "read"], ["page.list", "read"], ["page.get", "read"], ["page.revisions", "read"],
+    ].map(([id, application]) => ({ id, environmentAuthority: { kind: "source_only" },
+      callerEligibility: ["thread_agent"], effects: { application, modelUsage: "none", external: "none" } })));
+  });
+
+  it.each([
+    ["page.publish", { path: "/remote/mockup.html", title: "Preview" }],
+    ["page.publish", { html: "<h1>Inline preview</h1>", title: "Preview" }],
+    ["page.preview", { path: "/remote/mockup.html" }],
+    ["page.preview", { html: "<h1>Inline preview</h1>" }],
+    ["page.list", {}],
+    ["page.get", { pageId: "page-from-another-thread", revision: 2 }],
+    ["page.revisions", { pageId: "page-from-another-thread" }],
+  ])("keeps %s owned by its source thread, including inline HTML", (toolId, input) => {
+    const plan = new AgentToolEnvironmentAuthorityResolver(reader).resolve(request(toolId, input));
+    expect(plan.targetEnvironmentIds).toEqual(["env-a"]);
+    expect(plan.resolvedResourceRefs).toEqual([{ kind: "thread", id: "thread-a", environmentId: "env-a" }]);
+    expect(reachesOutsideEveryEnvironment(plan)).toBe(false);
   });
 
   it("resolves direct resources without reading their domain contents", () => {

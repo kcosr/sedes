@@ -188,7 +188,7 @@ export function SettingsView({
         <section ref={content} className="settings-content" tabIndex={-1} aria-label={current?.label ?? "Settings"}>
           {showList ? <SettingsHome pages={pages} onOpen={openSettingsEntry} /> : null}
           {page === "general" ? (
-            <GeneralSettingsPage applicationPreferences={applicationPreferences} />
+            <GeneralSettingsPage applicationPreferences={applicationPreferences} applicationStore={applicationStore} />
           ) : page === "diagnostics" ? (
             <DiagnosticsSettingsPage applicationStore={applicationStore} />
           ) : page === "appearance" ? (

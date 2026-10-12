@@ -10,6 +10,7 @@ import type {
   DeliveryInputOrigin,
   HistoryPage,
 } from "../../shared/protocol/conversation.js";
+import { conversationTurnSourceRevision } from "../../shared/protocol/conversation.js";
 import { DomainError } from "../domain/errors.js";
 import type { RequestScope } from "../identity/identity-provider.js";
 import {
@@ -290,7 +291,7 @@ function rawTurn(
   const messages = allMessages.slice(0, MAXIMUM_MESSAGES_PER_TURN);
   return {
     id: turn.id,
-    revision: turn.revision,
+    revision: conversationTurnSourceRevision(turn, itemsById),
     status: turn.status,
     ...(turn.startedAt ? { startedAt: turn.startedAt } : {}),
     ...(turn.completedAt ? { completedAt: turn.completedAt } : {}),
@@ -654,6 +655,7 @@ export class ThreadMessagesService {
           timeline.itemsById,
           projectedTurnForkCapability({
             turn,
+            itemsById: timeline.itemsById,
             branching,
             sourceRunState: timeline.runState,
           }).available && forkSource.selectedCompletedTurn.available,

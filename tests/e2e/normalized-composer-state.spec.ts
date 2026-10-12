@@ -352,6 +352,7 @@ test.describe.serial("normalized composer state", () => {
     const imageCanvas = imageDialog.locator(".zoomable-preview-canvas");
     const popupImage = imageDialog.locator(".zoomable-preview-content > img");
     await overlaySettled(imageDialog);
+    await popupImage.evaluate((image) => (image as HTMLImageElement).decode());
     const [
       initialImageViewportBox,
       initialImageCanvasBox,
@@ -364,8 +365,15 @@ test.describe.serial("normalized composer state", () => {
     expect(initialImageViewportBox).not.toBeNull();
     expect(initialImageCanvasBox).not.toBeNull();
     expect(initialPopupImageBox).not.toBeNull();
+    const naturalImageWidth = await popupImage.evaluate(
+      (image) => (image as HTMLImageElement).naturalWidth,
+    );
+    const initialScale = initialPopupImageBox!.width / naturalImageWidth;
+    const reducedScale = Math.max(initialScale * 0.25, initialScale - 0.25);
     await imageDialog.getByRole("button", { name: "Zoom out" }).click();
-    await expect(imageDialog.getByLabel("Zoom level")).toHaveText("75%");
+    await expect(
+      imageDialog.getByRole("button", { name: /^Zoom percentage:/ }),
+    ).toHaveText(`${Math.round(reducedScale * 100)}%`);
     const [
       reducedImageViewportBox,
       reducedImageCanvasBox,
@@ -384,11 +392,11 @@ test.describe.serial("normalized composer state", () => {
       0,
     );
     expect(reducedImageCanvasBox!.width).toBeCloseTo(
-      initialImageCanvasBox!.width * 0.75,
+      initialImageCanvasBox!.width,
       0,
     );
     expect(reducedPopupImageBox!.width).toBeCloseTo(
-      initialPopupImageBox!.width * 0.75,
+      naturalImageWidth * reducedScale,
       0,
     );
     await imageDialog.getByRole("button", { name: "Close" }).click();
@@ -460,9 +468,17 @@ test.describe.serial("normalized composer state", () => {
 
     // Restore mounts a fresh thumbnail. Wait for its request to finish before
     // Send removes the draft card, avoiding an intentional image cancellation.
-    await expect.poll(() => page.getByTestId("composer").getByLabel("Attachments")
-      .locator("[data-attachment-id]").filter({ hasText: "tiny-preview.png" }).locator("img")
-      .evaluate(image => (image as HTMLImageElement).naturalWidth)).toBeGreaterThan(0);
+    await expect
+      .poll(() =>
+        page
+          .getByTestId("composer")
+          .getByLabel("Attachments")
+          .locator("[data-attachment-id]")
+          .filter({ hasText: "tiny-preview.png" })
+          .locator("img")
+          .evaluate((image) => (image as HTMLImageElement).naturalWidth),
+      )
+      .toBeGreaterThan(0);
     await sendCurrentDraft(page);
     const sentAttachment = page
       .locator('[data-item-kind="user_message"]')

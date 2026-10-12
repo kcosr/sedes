@@ -53,6 +53,24 @@ function thread(
 }
 
 describe("ApplicationSnapshotService", () => {
+  it("reads one scoped summary outside the bootstrap without capturing inventory or attaching a runtime", async () => {
+    const id = "older-fork";
+    const durable = thread(id, "workspace-local", "2026-08-04T00:00:00.000Z");
+    const listByIds = vi.fn((requestedScope: RequestScope, ids: readonly string[]) => requestedScope === scope && ids[0] === id ? [durable] : []);
+    const loaded = vi.fn(async () => ({ runState: "running" as const }));
+    const capture = vi.fn();
+    const service = new ApplicationSnapshotService({} as InventoryRepository,
+      { list: capture, listByIds, forkSelectionSaturated: () => false, structure: () => undefined },
+      { captureLoadedState: loaded }, {} as never, {} as never, {} as never, {} as never, () => "available",
+      { summariesByThread: () => new Map([[id, { runningCount: 1, retainedCount: 0 }]]) });
+    expect(await service.readThreadSummary(scope, id)).toMatchObject({ id, runState: "running", terminalSummary: { runningCount: 1 } });
+    expect(listByIds).toHaveBeenCalledWith(scope, [id]);
+    expect(capture).not.toHaveBeenCalled();
+    expect(await service.readThreadSummary({ ...scope, principalId: "different" }, id)).toBeUndefined();
+    expect(await service.readThreadSummary(scope, "missing")).toBeUndefined();
+    expect(loaded).toHaveBeenCalledTimes(1);
+  });
+
   it("projects every scoped environment and gathers threads from each one", async () => {
     const list = vi.fn((_scope: RequestScope, environmentId: string) =>
       environmentId === "environment-local"

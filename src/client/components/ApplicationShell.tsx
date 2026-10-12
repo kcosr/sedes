@@ -1,3 +1,5 @@
+import { useDefaultThread, DefaultThreadResolutionProvider, defaultThreadChoices } from "../app/default-thread.js";
+import { installDefaultThreadShortcut, openDefaultThread } from "../app/default-thread-shortcut.js";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type {
@@ -66,7 +68,11 @@ import type { ToolClientSettingsResources } from "./tool-clients/ToolClientsSett
 import { describeProjectLocations } from "../app/project-locations.js";
 import { VoiceControls } from "../voice/VoiceControls.js";
 
-export function ApplicationShell({
+export function ApplicationShell(props: Parameters<typeof ApplicationShellContent>[0]): React.JSX.Element {
+  return <DefaultThreadResolutionProvider store={props.applicationStore}><ApplicationShellContent {...props} /></DefaultThreadResolutionProvider>;
+}
+
+function ApplicationShellContent({
   state,
   applicationStore,
   threadRegistry,
@@ -102,6 +108,10 @@ export function ApplicationShell({
       document.removeEventListener("visibilitychange", refresh);
     };
   }, [applicationStore, state.status]);
+  const defaultThread = useDefaultThread();
+  useEffect(() => installDefaultThreadShortcut(window, () => {
+    if (openDefaultThread(defaultThread)) setDrawerOpen(false);
+  }), [defaultThread?.thread, defaultThread?.resolving]);
   const route = useRoute();
   const [drawerOpen, setDrawerOpen] = useState(false);
   // Drawer contents unmount on close; retain this client-session UI state here.
@@ -490,7 +500,7 @@ export function ApplicationShell({
             />
           ) : null}
           </div>
-          <VoiceControls threads={state.snapshot?.threads ?? []} />
+          <VoiceControls threads={defaultThreadChoices(state.snapshot?.threads ?? [], defaultThread?.thread)} />
         </div>
         <DiscardChangesDialog
           open={Boolean(workspaceNavConfirm)}

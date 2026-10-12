@@ -1,0 +1,215 @@
+.page-preview {
+  --wb-media-border: var(--border-soft);
+  --wb-media-radius: var(--radius-card);
+  --wb-media-background: var(--background);
+  --wb-media-color: var(--foreground);
+  --wb-media-muted: var(--muted-foreground);
+  --wb-media-font-size: var(--text-meta);
+  position: relative;
+  margin-block: var(--space-2);
+}
+.page-preview > .wb-media-frame-body {
+  overflow: visible;
+}
+.page-preview-controls {
+  position: sticky;
+  top: var(--space-2);
+  z-index: calc(var(--z-sticky) + 1);
+  display: flex;
+  height: 0;
+  justify-content: flex-end;
+  align-items: flex-start;
+  gap: var(--space-1);
+  padding-inline: var(--space-2);
+  pointer-events: none;
+}
+.page-preview-controls > * {
+  pointer-events: auto;
+}
+.page-preview-controls > button {
+  width: var(--control-md);
+  height: var(--control-md);
+  background: var(--background);
+  color: var(--muted-foreground);
+  box-shadow: var(--elevation-1);
+}
+.page-preview-controls > button[aria-pressed="true"] {
+  color: var(--foreground);
+  background: var(--secondary);
+  border-color: var(--input);
+}
+.page-preview[data-interacting="true"] {
+  border-color: var(--border);
+}
+/* Page metadata and revision controls belong only to the expanded viewer. */
+.page-preview-fullscreen-header {
+  --page-preview-control: var(--control-lg);
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) calc(var(--control-touch) + var(--space-3)) var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border-soft);
+  background: var(--background);
+}
+.page-preview-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-title);
+}
+.page-preview-dialog > .page-frame-expanded,
+.page-preview-library > .page-frame-expanded {
+  flex: 1;
+  height: auto;
+}
+.page-preview-library {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-card);
+  background: var(--background);
+}
+.page-preview-library > .page-preview-fullscreen-header {
+  padding: var(--space-2) var(--space-3);
+}
+.page-preview-header-actions {
+  margin-inline-start: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  max-width: 100%;
+}
+.page-preview-revisions {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+}
+.page-preview-fullscreen-header > button,
+.page-preview-header-actions button {
+  width: var(--page-preview-control);
+  min-width: var(--page-preview-control);
+  height: var(--page-preview-control);
+  flex-shrink: 0;
+}
+.page-preview-fullscreen-header > button svg,
+.page-preview-header-actions button svg {
+  width: var(--icon-lg);
+  height: var(--icon-lg);
+}
+.page-revision-label {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--page-preview-control);
+  height: var(--page-preview-control);
+  white-space: nowrap;
+  font-size: var(--text-ui);
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted-foreground);
+}
+.page-preview-header-separator {
+  width: 1px;
+  height: var(--space-4);
+  background: var(--border-soft);
+}
+.page-frame-shell {
+  --wb-media-background: var(--popover);
+  --wb-media-border: var(--border);
+  --wb-media-color: var(--foreground);
+  --wb-media-muted: var(--muted-foreground);
+  position: relative;
+  min-width: 0;
+}
+.page-frame-viewport {
+  width: 100%;
+  min-width: 0;
+  max-height: 640px;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.page-frame-viewport[data-interactive="false"] {
+  /* clip is not a nested scroll container: Android must scroll the transcript. */
+  overflow: clip;
+  overscroll-behavior: auto;
+  touch-action: pan-y;
+}
+.page-frame-viewport[data-interactive="false"] .page-frame-document {
+  pointer-events: none;
+}
+.page-frame-canvas {
+  position: relative;
+  margin-inline: auto;
+}
+.page-frame-document {
+  display: block;
+  position: absolute;
+  inset: 0 auto auto 0;
+  border: 0;
+  transform-origin: top left;
+  background: var(--background);
+}
+.page-frame-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  color: var(--muted-foreground);
+}
+.page-preview-error {
+  color: var(--destructive);
+  margin: var(--space-2);
+}
+.page-frame-expanded {
+  display: flex;
+  min-height: 0;
+  height: 100%;
+  flex-direction: column;
+}
+.page-frame-expanded .page-frame-viewport {
+  flex: 1;
+  max-height: none;
+  padding-bottom: 64px;
+}
+@media (pointer: coarse) {
+  .page-preview-controls > button {
+    width: 36px;
+    height: 36px;
+  }
+  .page-preview-fullscreen-header {
+    --page-preview-control: var(--control-touch);
+  }
+}
+
+.conversation-media-frame {
+  --wb-media-border: var(--border-soft);
+  --wb-media-radius: var(--radius-card);
+  --wb-media-background: var(--background);
+  --wb-media-color: var(--foreground);
+  --wb-media-muted: var(--muted-foreground);
+  --wb-media-font-size: var(--text-meta);
+}
+.markdown .mermaid-diagram.conversation-media-frame {
+  flex-direction: column;
+  align-items: stretch;
+  padding: 0;
+}
+.markdown .mermaid-diagram.conversation-media-frame > .wb-media-frame-body {
+  padding: var(--space-3);
+}
+
+/* Letterboxed space belongs to the app, not the authored page or image. */
+.media-preview-dialog[data-slot="dialog-content"],
+.page-frame-expanded {
+  background: var(--background);
+}

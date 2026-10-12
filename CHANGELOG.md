@@ -14,11 +14,11 @@ User-facing changes are collected here before release. See the
   ([#73](https://github.com/kcosr/sedes/pull/73))
 
 - Upgrade browser and packaged clients together with the server for client
-  protocol **150**. Rebuild and upgrade execution sidecars and local workers;
+  protocol **151**. Rebuild and upgrade execution sidecars and local workers;
   older compiled runtime contracts are rejected. Notification scripts now use
   payload version **5**: update separately copied hooks with the server and
   review Script/Voice event and reply-phase settings.
-  ([#9](https://github.com/kcosr/sedes/pull/9), [#10](https://github.com/kcosr/sedes/pull/10), [#12](https://github.com/kcosr/sedes/pull/12), [#15](https://github.com/kcosr/sedes/pull/15), [#17](https://github.com/kcosr/sedes/pull/17), [#38](https://github.com/kcosr/sedes/pull/38), [#44](https://github.com/kcosr/sedes/pull/44), [#45](https://github.com/kcosr/sedes/pull/45), [#73](https://github.com/kcosr/sedes/pull/73))
+  ([#9](https://github.com/kcosr/sedes/pull/9), [#10](https://github.com/kcosr/sedes/pull/10), [#12](https://github.com/kcosr/sedes/pull/12), [#15](https://github.com/kcosr/sedes/pull/15), [#17](https://github.com/kcosr/sedes/pull/17), [#38](https://github.com/kcosr/sedes/pull/38), [#44](https://github.com/kcosr/sedes/pull/44), [#45](https://github.com/kcosr/sedes/pull/45), [#73](https://github.com/kcosr/sedes/pull/73), [#75](https://github.com/kcosr/sedes/pull/75))
 
 - Claude requires Claude Code **2.1.287 or newer** on every execution host
   and uses Agent SDK 0.3.287. See the
@@ -54,6 +54,19 @@ User-facing changes are collected here before release. See the
   `remind`. ([#58](https://github.com/kcosr/sedes/pull/58), [#61](https://github.com/kcosr/sedes/pull/61))
 
 ### Added
+
+- A device-local default thread unifies quick navigation and Android voice.
+  Choose it in General settings or a thread's context menu; it appears above
+  Pinned with activity and unread status, and opens with Ctrl/Command+Shift+H.
+  ([#75](https://github.com/kcosr/sedes/pull/75))
+
+- Agents can publish revisioned [HTML previews](docs/user/html-previews.md)
+  from files or inline HTML, with local images, optional viewport dimensions,
+  fullscreen viewing, and a thread Pages library. Previews load automatically;
+  tap to interact in chat while fullscreen and library views accept input
+  immediately. An optional [server preview browser](docs/operator/page-previews.md)
+  provides screenshots and console output for agents before publishing.
+  ([#75](https://github.com/kcosr/sedes/pull/75))
 
 - Codex **Partial** replies appear inline, with a separate notification section
   for Script and Voice delivery, initially off. Partial text can also be selected
@@ -103,6 +116,13 @@ User-facing changes are collected here before release. See the
   ([#8](https://github.com/kcosr/sedes/pull/8))
 
 ### Changed
+
+- Images, Mermaid diagrams, and HTML previews share compact fullscreen
+  [zoom controls](docs/user/files-and-context.md#view-images-and-diagrams).
+  Images and diagrams support inline pinch zoom and pan, and images use the
+  assistant column's width. Chat header options are more compact, and Escape
+  exits sidebar search without clearing its filter.
+  ([#75](https://github.com/kcosr/sedes/pull/75))
 
 - Voice keeps the last reply target after playback ends, even while another thread
   is open. Idle **Next** returns to the viewed thread; navigating to a different

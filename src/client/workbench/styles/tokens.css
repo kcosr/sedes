@@ -1,0 +1,263 @@
+/*
+ * Design tokens: surface, border, text, accent, scrim and chart colours, in a
+ * light and a dark theme (README, "Tokens"). Contrast is part of the palette;
+ * these values are set to meet WCAG AA (4.5:1):
+ *   --wb-muted    #6a6964 light, #97958f dark: small muted text on every
+ *                 pane background;
+ *   --wb-success  #1a7f37 light, #238636 dark,
+ *   --wb-danger   #cf222e light, #da3633 dark and
+ *   --wb-warning  #9a6700 light, #9e6a03 dark: white text on the solid fill
+ *                 (brighter fills, such as the chart ambers #c98500 and
+ *                 #eda100, are too light for it).
+ * Tone text, weak and border tokens, the neutral tone, and the dark drawer
+ * and raised shadows complete the set.
+ * The theme is chosen by data-theme on <html> (see lib/theme.ts); any element
+ * with data-theme re-themes its subtree (the gallery uses this). Without the
+ * attribute the light theme applies.
+ */
+@layer wb.tokens {
+  :root {
+    /* ---- type */
+    --wb-font-sans:
+      "Inter Variable", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI",
+      "Helvetica Neue", "Liberation Sans", Arial, sans-serif;
+    --wb-font-mono:
+      "JetBrains Mono", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+    --wb-fs-10-5: 10.5px;
+    --wb-fs-11: 11px;
+    --wb-fs-11-5: 11.5px;
+    --wb-fs-12: 12px;
+    --wb-fs-12-5: 12.5px;
+    --wb-fs-13: 13px;
+    --wb-fs-13-5: 13.5px;
+    --wb-fs-14: 14px;
+    --wb-fs-14-5: 14.5px;
+    --wb-fs-15: 15px;
+    --wb-fs-16: 16px;
+    --wb-fs-18: 18px;
+    --wb-fs-20: 20px;
+    --wb-fs-22: 22px;
+    --wb-fs-30: 30px;
+    --wb-lh: 1.45;
+    --wb-lh-tight: 1.3;
+    --wb-lh-prose: 1.55;
+    --wb-fw-regular: 400;
+    --wb-fw-book: 450;
+    --wb-fw-medium: 500;
+    --wb-fw-strong: 550;
+    --wb-fw-semibold: 600;
+    --wb-fw-bold: 650;
+    --wb-tracking-caps: 0.06em;
+    --wb-tracking-tight: -0.01em;
+
+    /* ---- radii */
+    --wb-radius-xs: 4px;
+    --wb-radius-sm: 5px;
+    --wb-radius-seg: 6px;
+    --wb-radius-ctl: 7px;
+    --wb-radius-md: 8px;
+    --wb-radius-row: 10px;
+    --wb-radius-card: 12px;
+    --wb-radius-modal: 14px;
+    --wb-radius-pill: 999px;
+
+    /* ---- control heights */
+    --wb-ctl-xs: 24px;
+    --wb-ctl-sm: 26px;
+    --wb-ctl-md: 30px;
+    --wb-ctl-lg: 32px;
+
+    /* ---- spacing */
+    --wb-space-1: 4px;
+    --wb-space-2: 8px;
+    --wb-space-3: 12px;
+    --wb-space-4: 16px;
+    --wb-space-5: 20px;
+    --wb-space-6: 24px;
+    --wb-space-8: 32px;
+    --wb-space-12: 48px;
+    --wb-pane-x: 24px;
+
+    /* ---- stacking */
+    --wb-z-sticky: 2;
+    --wb-z-resize: 3;
+    --wb-z-progress: 5;
+    /* modals, popovers, menus, listboxes, palette: one level, stacked in
+       the order they open (portals append to <body> as they mount) */
+    --wb-z-overlay: 60;
+    --wb-z-tooltip: 200;
+    --wb-z-toast: 300;
+
+    /* ---- motion */
+    --wb-dur-fast: 120ms;
+    --wb-dur-base: 180ms;
+    --wb-dur-slow: 400ms;
+    --wb-ease: ease-out;
+
+    /* ---- layout */
+    --wb-topbar-h: 52px;
+    --wb-side-w: 268px;
+    --wb-drawer-w: 540px;
+    --wb-drawer-wide-w: 760px;
+    --wb-page-max: 860px;
+    --wb-list-max: 1180px;
+  }
+
+  :root,
+  [data-theme="light"] {
+    color-scheme: light;
+    --wb-page: #f6f6f3;
+    --wb-surface: #fcfcfb;
+    --wb-surface-2: #f1f0ec;
+    --wb-surface-3: #e8e7e2;
+    --wb-raised: var(--wb-surface);
+    --wb-border: rgba(11, 11, 11, 0.09);
+    --wb-border-strong: rgba(11, 11, 11, 0.16);
+    --wb-fg: #0b0b0b;
+    --wb-fg-2: #52514e;
+    /* Dark enough that small muted text meets WCAG AA on page, surface,
+       surface-2 and accent-weak (tests/tokens.test.ts). */
+    --wb-muted: #6a6964;
+    --wb-accent: #2a78d6;
+    --wb-accent-weak: rgba(42, 120, 214, 0.09);
+    --wb-accent-text: #1c5cab;
+    --wb-on-accent: #fff;
+    --wb-scrim: rgba(20, 20, 18, 0.28);
+    --wb-shadow-pop:
+      0 1px 2px rgba(0, 0, 0, 0.05), 0 12px 32px rgba(0, 0, 0, 0.1);
+    --wb-shadow-drawer: -12px 0 32px -24px rgba(0, 0, 0, 0.25);
+    --wb-shadow-raised: 0 1px 2px rgba(0, 0, 0, 0.08);
+
+    /* status: solid fill (dots, pills with white text), text on weak, weak bg, border */
+    --wb-success: #1a7f37;
+    --wb-success-text: #116329;
+    --wb-success-weak: rgba(26, 127, 55, 0.1);
+    --wb-success-border: rgba(26, 127, 55, 0.3);
+    /* Amber deep enough for white text (4.9:1); the chart amber #c98500
+       gives only 3.1:1. */
+    --wb-warning: #9a6700;
+    --wb-warning-text: #7d4e00;
+    --wb-warning-weak: rgba(191, 135, 0, 0.14);
+    --wb-warning-border: rgba(191, 135, 0, 0.38);
+    --wb-danger: #cf222e;
+    --wb-danger-text: #a40e26;
+    --wb-danger-weak: rgba(207, 34, 46, 0.09);
+    --wb-danger-border: rgba(207, 34, 46, 0.3);
+    --wb-info: var(--wb-accent);
+    --wb-info-text: var(--wb-accent-text);
+    --wb-info-weak: var(--wb-accent-weak);
+    --wb-info-border: rgba(42, 120, 214, 0.3);
+    --wb-neutral: #6b6a65;
+    --wb-neutral-text: #52514e;
+    --wb-neutral-weak: rgba(11, 11, 11, 0.06);
+    --wb-neutral-border: rgba(11, 11, 11, 0.16);
+
+    /* charts */
+    --wb-grid: #e1e0d9;
+    --wb-axis: #c3c2b7;
+    --wb-deemph: #cfcec7;
+    --wb-s1: #2a78d6;
+    --wb-s2: #eb6834;
+    --wb-s3: #1baf7a;
+    --wb-s4: #eda100;
+    --wb-s5: #e87ba4;
+    --wb-s6: #008300;
+    --wb-s7: #4a3aa7;
+    --wb-s8: #e34948;
+    --wb-seq-0: #eeede8;
+    --wb-seq-1: #cde2fb;
+    --wb-seq-2: #9ec5f4;
+    --wb-seq-3: #5598e7;
+    --wb-seq-4: #2a78d6;
+    --wb-seq-5: #184f95;
+  }
+
+  [data-theme="dark"] {
+    color-scheme: dark;
+    --wb-page: #0d0d0d;
+    --wb-surface: #1a1a19;
+    --wb-surface-2: #232322;
+    --wb-surface-3: #2e2e2c;
+    --wb-raised: var(--wb-surface-3);
+    --wb-border: rgba(255, 255, 255, 0.08);
+    --wb-border-strong: rgba(255, 255, 255, 0.15);
+    --wb-fg: #f5f5f3;
+    --wb-fg-2: #c3c2b7;
+    /* Light enough for AA on surface-2, surface-3 and accent-weak. */
+    --wb-muted: #97958f;
+    --wb-accent: #3987e5;
+    --wb-accent-weak: rgba(57, 135, 229, 0.15);
+    --wb-accent-text: #86b6ef;
+    --wb-on-accent: #fff;
+    --wb-scrim: rgba(0, 0, 0, 0.5);
+    --wb-shadow-pop:
+      0 1px 2px rgba(0, 0, 0, 0.4), 0 12px 32px rgba(0, 0, 0, 0.5);
+    --wb-shadow-drawer: -12px 0 32px -24px rgba(0, 0, 0, 0.6);
+    --wb-shadow-raised: 0 1px 2px rgba(0, 0, 0, 0.3);
+
+    /* Solids carry white text (pills), so they are deep fills that reach AA;
+       the brighter #3fb950, #eda100 and #f85149, which suit text on dark
+       backgrounds, give only 2.5, 2.2 and 3.4:1. */
+    --wb-success: #238636;
+    --wb-success-text: #56d364;
+    --wb-success-weak: rgba(63, 185, 80, 0.15);
+    --wb-success-border: rgba(63, 185, 80, 0.4);
+    --wb-warning: #9e6a03;
+    --wb-warning-text: #e3b341;
+    --wb-warning-weak: rgba(210, 153, 34, 0.15);
+    --wb-warning-border: rgba(210, 153, 34, 0.4);
+    --wb-danger: #da3633;
+    --wb-danger-text: #ff7b72;
+    --wb-danger-weak: rgba(248, 81, 73, 0.15);
+    --wb-danger-border: rgba(248, 81, 73, 0.4);
+    --wb-info: var(--wb-accent);
+    --wb-info-text: var(--wb-accent-text);
+    --wb-info-weak: var(--wb-accent-weak);
+    --wb-info-border: rgba(57, 135, 229, 0.4);
+    --wb-neutral: #6e6d68;
+    --wb-neutral-text: #c3c2b7;
+    --wb-neutral-weak: rgba(255, 255, 255, 0.08);
+    --wb-neutral-border: rgba(255, 255, 255, 0.15);
+
+    --wb-grid: #2c2c2a;
+    --wb-axis: #383835;
+    --wb-deemph: #454542;
+    --wb-s1: #3987e5;
+    --wb-s2: #d95926;
+    --wb-s3: #199e70;
+    --wb-s4: #c98500;
+    --wb-s5: #d55181;
+    --wb-s6: #008300;
+    --wb-s7: #9085e9;
+    --wb-s8: #e66767;
+    --wb-seq-0: #262625;
+    --wb-seq-1: #0d366b;
+    --wb-seq-2: #184f95;
+    --wb-seq-3: #256abf;
+    --wb-seq-4: #3987e5;
+    --wb-seq-5: #86b6ef;
+  }
+
+  /* Desktop only, but stay usable down to 1024px: panes narrow first. */
+  @media (max-width: 1280px) {
+    :root {
+      --wb-drawer-w: 460px;
+      --wb-drawer-wide-w: 640px;
+    }
+  }
+  @media (max-width: 1100px) {
+    :root {
+      --wb-drawer-w: 420px;
+      --wb-drawer-wide-w: 540px;
+      --wb-pane-x: 18px;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    :root {
+      --wb-dur-fast: 0ms;
+      --wb-dur-base: 0ms;
+      --wb-dur-slow: 0ms;
+    }
+  }
+}

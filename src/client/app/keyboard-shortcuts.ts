@@ -138,3 +138,10 @@ export function keyboardShortcutAriaKey(
   });
   return [...parts, binding.key].join("+");
 }
+
+/** Opens this client's default thread using the normal guarded navigation. */
+export const DEFAULT_THREAD_OPEN_COMMAND = {
+  id: "thread.default.open",
+  scope: "global",
+  defaultBinding: { key: "H", modifiers: ["primary", "shift"] },
+} as const satisfies KeyboardShortcutCommand;

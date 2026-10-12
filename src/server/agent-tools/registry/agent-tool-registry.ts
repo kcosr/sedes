@@ -31,6 +31,7 @@ const groupIds = new Set([
   "agents",
   "tasks",
   "workpads",
+  "pages",
   "automations",
   "research",
 ]);
@@ -325,6 +326,7 @@ function normalizedArtifact(
     description: definition.description,
     inputSchema,
     outputSchema,
+    ...(definition.outputMediaTypes ? { outputMediaTypes: [...definition.outputMediaTypes] as ["image/png"] } : {}),
     requiredCapabilities,
     callerEligibility: [...definition.callerEligibility].sort(),
     effects: { ...definition.effects },
@@ -446,6 +448,10 @@ export class AgentToolRegistry {
       throw new Error("agent_tool_deployment_exposure_invalid");
     }
     validatePresentations(definition.id, definition.adapters, exposure);
+    if (definition.outputMediaTypes !== undefined &&
+        (!Array.isArray(definition.outputMediaTypes) || definition.outputMediaTypes.length !== 1 || definition.outputMediaTypes[0] !== "image/png")) {
+      throw new Error("agent_tool_output_media_types_invalid");
+    }
     validateExecution(definition.execution, exposure);
     validateEffects(definition as AgentToolDefinition);
     validateCatalog(definition as AgentToolDefinition);

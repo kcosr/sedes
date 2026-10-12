@@ -1,5 +1,6 @@
 import { defineConfig } from '@capawesome/capacitor-electron/config';
 import type { Session, WebContents } from 'electron';
+import { allowsPageFrameNavigation } from './page-frame-policy.js';
 
 const PACKAGED_RENDERER_PROTOCOL = 'capacitor-electron:';
 const PACKAGED_RENDERER_HOST = 'localhost';
@@ -53,11 +54,21 @@ export default defineConfig({
   },
   csp: {
     policy:
-      "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; style-src-attr 'unsafe-inline'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self' data: http: https: ws: wss:; frame-ancestors 'none'; object-src 'none'; base-uri 'none'; form-action 'self'",
+      "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; style-src-attr 'unsafe-inline'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self' data: http: https: ws: wss:; frame-src 'self' http: https:; frame-ancestors 'none'; object-src 'none'; base-uri 'none'; form-action 'self'",
   },
   hooks: {
     onWindowCreated(window) {
       const session = window.webContents.session;
+      window.webContents.on('will-frame-navigate', (event) => {
+        if (!allowsPageFrameNavigation({
+          isMainFrame: event.isMainFrame,
+          url: event.url,
+          initiatorUrl: event.initiator?.url,
+        })) event.preventDefault();
+      });
+      window.webContents.on('will-redirect', (event) => {
+        if (!event.isMainFrame) event.preventDefault();
+      });
       const handlePermissionCheck: PermissionCheckHandler = (
         webContents,
         permission,

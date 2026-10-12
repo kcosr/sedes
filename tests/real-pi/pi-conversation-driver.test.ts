@@ -27,6 +27,9 @@ import type {
 import { BackendError } from "../../src/server/backends/contracts.js";
 import type { ValidatedWorkspace } from "../../src/server/execution/contracts.js";
 import { CanonicalInlineAgentToolService } from "../../src/server/agent-tools/invocation/canonical-inline-agent-tool-service.js";
+import { PageService } from "../../src/server/pages/page-service.js";
+import { PageAgentToolService } from "../../src/server/agent-tools/tools/page-agent-tool-service.js";
+import { PagePreviewBrowser } from "../../src/server/pages/preview-browser.js";
 import { evaluateModelEligibility } from "../support/model-eligibility.js";
 import { compileBackendModelPolicy } from "../../src/server/backends/model-policy.js";
 import { createInMemoryOutputArtifactPublisher } from "../helpers/output-artifact-publisher.js";
@@ -493,13 +496,29 @@ async function unexpectedTerminalTurnFailure(input: {
 }
 
 describe.sequential("Pi 0.86.0 normalized driver live verification", () => {
-  it("installs and invokes the source-scoped native agent context tool", async () => {
+  it.each([false, true])("installs and invokes a native tool with Playwright preview %s", async (previewPage) => {
+    const toolId = previewPage ? "page.preview" : "agent.context";
     const fixture = await createFixture();
     const selectedModel = await resolveEligibleModel(fixture);
     process.stdout.write(
       `Real Pi native agent tool model: ${selectedModel.provider}/${selectedModel.id}; low reasoning and read-only tools verified before prompting.\n`,
     );
+    const browser = new PagePreviewBrowser();
+    const pages = new PageService({ repository: {} as never,
+      files: { readAbsoluteFile: async () => { throw new Error("inline preview must not read files"); } },
+      inventory: {
+        getThread: () => ({ thread: { workspaceId: fixture.workspace.summary.id } }),
+        getWorkspace: () => ({ canonicalPath: fixture.workspace.canonicalPath, environmentId: connection.executionEnvironmentId, availability: "available" }),
+        getEnvironment: () => ({ availability: "available", configurationRevision: 1, operationsConfigurationRevision: 1 }),
+      } as never,
+    });
+    const pageTools = new PageAgentToolService({ pages,
+      capturePublication: () => { throw new Error("read-only Pi test must not publish"); },
+      preview: async request => { const { png, imageWidth, imageHeight, ...metadata } = await browser.render(request);
+        return { ...metadata, screenshot: { mimeType: "image/png", data: png.toString("base64"), width: imageWidth, height: imageHeight } }; },
+    });
     const canonical = new CanonicalInlineAgentToolService({
+      pages: pageTools,
       application: {
         readThreadStatus: async () => undefined,
       },
@@ -512,7 +531,7 @@ describe.sequential("Pi 0.86.0 normalized driver live verification", () => {
         enabled: true,
         presentation: { surface: "native", mode: "individual" },
         accessBoundary: "environment",
-        enabledToolIds: ["agent.context"],
+        enabledToolIds: [toolId],
       }),
       invoke: (input) =>
         canonical.invoke(input.request, {
@@ -608,8 +627,10 @@ describe.sequential("Pi 0.86.0 normalized driver live verification", () => {
         attachments: [],
         taskContexts: [],
         text:
-          "Call the sedes_agent_context tool exactly once with an empty object. " +
-          "Then reply with exactly TOOL_CONTEXT_OK and nothing else. Do not call any other tool.",
+          previewPage
+            ? 'Call sedes_page_preview exactly once with {"html":"<!doctype html><html><body><div style=width:200px;height:100px;background:green>LIVE PAGE</div></body></html>","viewport":{"width":390,"height":300}}. Inspect the returned image and reply PREVIEW_OK. Do not call any other tool.'
+            : "Call the sedes_agent_context tool exactly once with an empty object. " +
+              "Then reply with exactly TOOL_CONTEXT_OK and nothing else. Do not call any other tool.",
       });
       await waitFor(
         () =>
@@ -635,7 +656,7 @@ describe.sequential("Pi 0.86.0 normalized driver live verification", () => {
       const toolItems = Object.values(persisted.snapshot.itemsById).filter(
         (item) =>
           item.semanticKind === "tool" &&
-          item.agentToolInvocation?.toolId === "agent.context",
+          item.agentToolInvocation?.toolId === toolId,
       );
       expect(toolItems).toHaveLength(1);
       const tool = toolItems[0]!;
@@ -643,8 +664,8 @@ describe.sequential("Pi 0.86.0 normalized driver live verification", () => {
         semanticKind: "tool",
         phase: "completed",
         agentToolInvocation: {
-          toolId: "agent.context",
-          schemaVersion: 3,
+          toolId,
+          schemaVersion: canonical.describeMany("pi_sdk", "thread_agent", [toolId])[0]!.schemaVersion,
         },
       });
       if (tool.semanticKind !== "tool") {
@@ -655,8 +676,16 @@ describe.sequential("Pi 0.86.0 normalized driver live verification", () => {
       const resultText = (tool.result?.content ?? [])
         .flatMap((part) => (part.kind === "text" ? [part.value.text] : []))
         .join("");
-      expect(resultText).toContain(current.binding.applicationThreadId);
-      expect(resultText).toContain(fixture.workspace.summary.id);
+      if (previewPage) {
+        expect(resultText).toContain('"mimeType":"image/png"');
+        const native = await new PiSessionStore({ sessionDirectory: fixture.sessionDirectory })
+          .openPersisted(fixture.workspace, current.binding.backendConversationId);
+        const results = native!.getBranch().flatMap(entry => entry.type === "message" && entry.message.role === "toolResult" ? [entry.message] : []);
+        expect(results.some(message => message.content.some(part => part.type === "image" && part.mimeType === "image/png" && part.data.length > 0))).toBe(true);
+      } else {
+        expect(resultText).toContain(current.binding.applicationThreadId);
+        expect(resultText).toContain(fixture.workspace.summary.id);
+      }
     } finally {
       unsubscribe();
       await current.handle.close();

@@ -48,6 +48,8 @@ export default defineConfig({
     proxy: {
       // Preserve browser authority for the API's Host/Origin validation.
       "/api": { target: "http://127.0.0.1:4784", changeOrigin: false },
+      // Capability-authenticated page documents retain their own sandbox CSP.
+      "/page-render": { target: "http://127.0.0.1:4784", changeOrigin: false },
     },
   },
   build: {

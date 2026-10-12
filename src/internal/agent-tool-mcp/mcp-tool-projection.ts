@@ -3,6 +3,7 @@ import {
   nativeAgentToolName,
   type AgentToolCatalogSummary,
   type AgentToolDescription,
+  type AgentToolModelContent,
   type SedesToolError,
   type SedesToolInvocationResult,
   type ToolEffects,
@@ -45,7 +46,7 @@ export interface SedesMcpTool {
 }
 
 export interface SedesMcpCallToolResult {
-  readonly content: readonly { readonly type: "text"; readonly text: string }[];
+  readonly content: readonly AgentToolModelContent[];
   readonly structuredContent?: Readonly<Record<string, unknown>>;
   readonly isError?: true;
 }
@@ -138,6 +139,7 @@ export function projectSedesMcpTool(
     meta: {
       "sedes/toolId": description.id,
       "sedes/schemaVersion": description.schemaVersion,
+      ...(description.outputMediaTypes ? { "sedes/outputMediaTypes": description.outputMediaTypes } : {}),
     },
   });
 }
@@ -298,8 +300,13 @@ export function sedesMcpInvocationResult(
   version: SedesMcpProtocolVersion,
 ): SedesMcpCallToolResult {
   switch (result.state) {
-    case "completed":
-      return sedesMcpJsonResult(result.output, version);
+    case "completed": {
+      const projected = sedesMcpJsonResult(result.output, version);
+      return result.modelContent ? Object.freeze({
+        ...projected,
+        content: Object.freeze([...projected.content, ...result.modelContent]),
+      }) : projected;
+    }
     case "accepted":
     case "running":
     case "waiting_for_input":

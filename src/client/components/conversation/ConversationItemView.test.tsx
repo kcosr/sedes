@@ -176,6 +176,7 @@ describe("normalized conversation renderers", () => {
         "image",
         "mcp",
         "notice",
+        "page",
         "plan",
         "reasoning",
         "review_marker",
@@ -349,12 +350,18 @@ describe("normalized conversation renderers", () => {
       name: "Expand image: Generated chart",
     });
     expect(image).toBeVisible();
-    expect(expand).toContainElement(image);
-    expect(screen.queryByLabelText("Zoom level")).toBeNull();
-
+    expect(expand).not.toContainElement(image);
+    expect(
+      screen.queryByRole("button", { name: /^Zoom percentage:/ }),
+    ).toBeNull();
     fireEvent.click(image);
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    fireEvent.click(expand);
     expect(screen.getByRole("dialog")).toBeVisible();
-    expect(screen.getByLabelText("Zoom level")).toHaveTextContent("100%");
+    expect(
+      screen.getByRole("button", { name: /^Zoom percentage:/ }),
+    ).toHaveTextContent("100%");
     expect(screen.getByRole("button", { name: "Zoom out" })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
     await waitFor(() => expect(expand).toHaveFocus());
@@ -398,10 +405,18 @@ describe("normalized conversation renderers", () => {
     );
     act(() => intersection.intersect());
     const image = await screen.findByRole("img", { name: "Long press image" });
-    const preview = screen.getByRole("button", {
-      name: "Expand image: Long press image",
+    const preview = screen.getByRole("region", {
+      name: "Image preview: Long press image",
     });
-    expect(preview).toHaveAttribute("data-android-image-actions", "available");
+    Object.assign(preview, {
+      setPointerCapture: vi.fn(),
+      hasPointerCapture: () => true,
+      releasePointerCapture: vi.fn(),
+    });
+    expect(preview.closest("[data-android-image-actions]")).toHaveAttribute(
+      "data-android-image-actions",
+      "available",
+    );
 
     expect(fireEvent.contextMenu(image)).toBe(false);
     expect(androidImageActions.present).toHaveBeenCalledWith({
@@ -417,6 +432,7 @@ describe("normalized conversation renderers", () => {
     Object.defineProperties(pointerDown, {
       isPrimary: { value: true },
       pointerType: { value: "touch" },
+      pointerId: { value: 1 },
       clientX: { value: 20 },
       clientY: { value: 30 },
     });
@@ -424,6 +440,32 @@ describe("normalized conversation renderers", () => {
     act(() => vi.advanceTimersByTime(550));
     expect(androidImageActions.present).toHaveBeenCalledOnce();
     expect(fireEvent.click(preview)).toBe(false);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    fireEvent.pointerUp(preview, { pointerType: "touch", pointerId: 1 });
+    await act(async () => undefined);
+    androidImageActions.present.mockClear();
+    fireEvent.pointerDown(preview, {
+      pointerType: "touch",
+      pointerId: 1,
+      isPrimary: true,
+      clientX: 20,
+      clientY: 30,
+    });
+    fireEvent.pointerDown(preview, {
+      pointerType: "touch",
+      pointerId: 2,
+      isPrimary: false,
+      clientX: 120,
+      clientY: 30,
+    });
+    fireEvent.pointerMove(preview, {
+      pointerType: "touch",
+      pointerId: 2,
+      clientX: 170,
+      clientY: 30,
+    });
+    act(() => vi.advanceTimersByTime(550));
+    expect(androidImageActions.present).not.toHaveBeenCalled();
     expect(screen.queryByRole("dialog")).toBeNull();
     vi.useRealTimers();
   });

@@ -8,7 +8,7 @@ import type {
   BackendEffectiveSettings,
   BackendTurn,
 } from "../../shared/protocol/backend.js";
-import type { NormalizedThreadEvent } from "../../shared/protocol/conversation.js";
+import { conversationTurnSourceRevision, type NormalizedThreadEvent } from "../../shared/protocol/conversation.js";
 import type {
   BackendActionResult,
   BackendMutationReconciliation,
@@ -60,6 +60,7 @@ import {
 } from "./completion-result-projection.js";
 import type { BoundedText } from "../../shared/protocol/payload.js";
 import { boundText } from "./payload-policy.js";
+import type { PagePublicationAnchor } from "../../shared/protocol/pages.js";
 
 export const DEFAULT_PROJECTION_UPDATE_INTERVAL_MILLISECONDS = 50;
 export const DEFAULT_MAXIMUM_PENDING_PROJECTION_ITEMS = 512;
@@ -70,7 +71,7 @@ const MAXIMUM_REMEMBERED_COMPLETION_PROVENANCES = 512;
 function interruptsCompletionObservation(reason: string): boolean {
   // These backend causes rebuild a projection while provider observation
   // remains continuous. Transport gaps and unknown projector causes do not.
-  return reason !== "buffer_overflow" && reason !== "persistence_pending" &&
+  return reason !== "page_overlay_capacity_changed" && reason !== "buffer_overflow" && reason !== "persistence_pending" &&
     reason !== "history_changed" && reason !== "ambiguous_correlation" && reason !== "contradictory_state";
 }
 
@@ -395,6 +396,17 @@ export class ConversationActor {
       throw new Error("conversation_actor_projection_unavailable");
     }
     return this.#projector.timeline();
+  }
+
+  capturePagePublicationAnchor(): PagePublicationAnchor | undefined {
+    const observed = this.peekInputState();
+    if (!observed?.authoritative || observed.settled) return undefined;
+    return this.#projector.capturePagePublicationAnchor();
+  }
+
+  /** Application-only publication uses the same mailbox/event rail as native projection. */
+  refreshPagePublications(): Promise<void> {
+    return this.#enqueue(() => this.#applyProjection(this.#projector.refreshPagePublications()));
   }
 
   /** Main-turn readiness is independent of background work and cleanup safety. */
@@ -781,7 +793,7 @@ export class ConversationActor {
             });
             const turn = turnId ? timeline.turnsById[turnId] : undefined;
             return turnId && turn
-              ? { turnId, expectedTurnRevision: turn.revision }
+              ? { turnId, expectedTurnRevision: conversationTurnSourceRevision(turn, timeline.itemsById) }
               : undefined;
           })();
     if (
@@ -1690,8 +1702,11 @@ export class ConversationActor {
       } finally {
         this.#synchronousCoalescerOutputs = undefined;
       }
-      for (const output of outputs) {
-        await this.#applyCoalescerOutput(output);
+      if (outputs.every(output => output.kind === "event")) {
+        const events = outputs.map(output => output.event).filter(event => event.generation === this.#projector.generation);
+        if (events.length > 0) this.#publish({ type: "projection_events", generation, events });
+      } else {
+        for (const output of outputs) await this.#applyCoalescerOutput(output);
       }
       if (runStateChanged && this.#snapshotState) {
         // Application operation availability is composed from run state and
@@ -1767,7 +1782,8 @@ export class ConversationActor {
     return {
       ...event,
       fork: projectedTurnForkCapability({
-        turn: event.turn,
+        turn: { ...event.turn, revision: this.#projector.sourceTurnRevision(event.turn.id) },
+        itemsById: {},
         branching,
         sourceRunState: this.#projector.runState,
       }),

@@ -12,6 +12,8 @@ const configuredOrigin = new URL(configuredBaseUrl).origin;
 
 export interface BrowserDiagnostics {
   allowNetworkFailures: boolean;
+  /** Narrow, explicitly asserted negative-test browser errors. */
+  allowedConsoleErrors: RegExp[];
 }
 
 function sameOrigin(url: string, currentPageUrl: string): boolean {
@@ -43,13 +45,13 @@ export const test = base.extend<{
 }>({
   browserDiagnostics: [
     async ({ page }, use) => {
-      const diagnostics: BrowserDiagnostics = { allowNetworkFailures: false };
+      const diagnostics: BrowserDiagnostics = { allowNetworkFailures: false, allowedConsoleErrors: [] };
       const failures: string[] = [];
       page.on("pageerror", (error) =>
         failures.push(`pageerror: ${error.message}`),
       );
       page.on("console", (message) => {
-        if (message.type() === "error" && !diagnostics.allowNetworkFailures) {
+        if (message.type() === "error" && !diagnostics.allowNetworkFailures && !diagnostics.allowedConsoleErrors.some(pattern => pattern.test(message.text()))) {
           failures.push(consoleDescription(message));
         }
       });
@@ -64,6 +66,13 @@ export const test = base.extend<{
               // navigating away from its view deliberately cancels the read.
               (request.method() === "POST" &&
                 /^\/api\/threads\/[^/]+\/usage\/turn-availability$/u.test(new URL(request.url()).pathname)) ||
+              // Page frames are deliberately unloaded offscreen, and changing
+              // revisions or closing the library cancels stale reads/admissions.
+              (request.method() === "GET" &&
+                (/^\/page-render\/[A-Za-z0-9_-]+$/u.test(new URL(request.url()).pathname) ||
+                  /^\/api\/threads\/[^/]+\/pages(?:\/|$)/u.test(new URL(request.url()).pathname))) ||
+              (request.method() === "POST" &&
+                /^\/api\/threads\/[^/]+\/pages\/[^/]+\/revisions\/\d+\/render-token$/u.test(new URL(request.url()).pathname)) ||
               // The automation page and editor abort stale reads (the
               // definition, runs, capability and schedule preview) when the
               // thread summary moves on or they close.

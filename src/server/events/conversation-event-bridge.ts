@@ -290,7 +290,7 @@ export class ConversationEventBridge {
                 type: "snapshot",
                 generation: event.state.timeline.generation,
                 snapshot,
-              });
+              }, event.state.timeline);
               if (!initialSeen) {
                 initialSeen = true;
                 readyResolve();
@@ -298,7 +298,12 @@ export class ConversationEventBridge {
             });
             return;
           }
-          case "projection_events":
+          case "projection_events": {
+            let pending: Extract<NormalizedThreadEvent, { type: "item_upsert" | "turn_upsert" }>[] = [];
+            const flush = () => {
+              input.hub.publishBatch(pending);
+              pending = [];
+            };
             for (const normalizedEvent of event.events) {
               if (normalizedEvent.generation !== event.generation) {
                 throw new Error(
@@ -314,12 +319,17 @@ export class ConversationEventBridge {
                   throw new Error("conversation_event_bridge_generation_mismatch");
                 }
                 this.#registerUsageTurns(input.scope, input.applicationThreadId, [normalizedEvent.turn]);
-                input.hub.publish({
+                pending.push({
                   ...normalizedEvent,
                   fork: clampTurnFork(normalizedEvent.fork, currentForkSource),
                 });
                 continue;
               }
+              if (normalizedEvent.type === "item_upsert") {
+                pending.push(normalizedEvent);
+                continue;
+              }
+              flush();
               if (normalizedEvent.type === "fork_source_state_changed") {
                 if (
                   forkSourceBecameAvailable(
@@ -365,7 +375,9 @@ export class ConversationEventBridge {
                   : normalizedEvent,
               );
             }
+            flush();
             return;
+          }
           case "backend_event": {
             if (event.event.type === "capabilities_changed") {
               await publishCurrentControls(event.generation);
@@ -500,7 +512,7 @@ export class ConversationEventBridge {
               type: "snapshot",
               generation: state.timeline.generation,
               snapshot,
-            });
+            }, state.timeline);
           });
         }),
       detach,

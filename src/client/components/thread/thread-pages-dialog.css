@@ -1,0 +1,49 @@
+.thread-pages-dialog > [data-slot="dialog-header"] {
+  padding: var(--space-3);
+  padding-inline-end: calc(var(--control-touch) + var(--space-3));
+  border-bottom: 1px solid var(--border-soft);
+}
+.thread-pages-dialog > .thread-pages-body {
+  margin: 0;
+  padding: var(--space-3);
+  overflow: hidden;
+}
+.thread-pages-layout {
+  display: grid;
+  flex: 1;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: var(--space-3);
+  min-width: 0;
+  min-height: 0;
+}
+.thread-pages-list {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--space-1);
+  min-width: 0;
+  max-height: min(160px, 25dvh);
+  overflow: auto;
+}
+.thread-pages-list > button {
+  height: auto;
+  min-height: var(--control-md);
+  white-space: normal;
+  justify-content: flex-start;
+  text-align: start;
+}
+.thread-pages-selected {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+@media (min-width: 820px) {
+  .thread-pages-layout {
+    grid-template-columns: minmax(140px, 1fr) minmax(0, 3fr);
+    grid-template-rows: minmax(0, 1fr);
+  }
+  .thread-pages-list {
+    max-height: none;
+  }
+}

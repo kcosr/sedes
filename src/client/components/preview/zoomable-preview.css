@@ -1,0 +1,131 @@
+.zoomable-preview-shell {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  --wb-media-border: var(--border);
+  --wb-media-background: var(--background);
+  --wb-media-color: var(--foreground);
+  --wb-media-muted: var(--muted-foreground);
+}
+
+.zoomable-preview-shell[data-mode="inline"] {
+  min-height: 72px;
+  max-height: min(540px, max(160px, calc(100cqh - 96px)));
+}
+
+.zoomable-preview-actions {
+  position: absolute;
+  z-index: calc(var(--z-sticky) + 1);
+  top: 8px;
+  left: 8px;
+  display: flex;
+  gap: 4px;
+}
+
+.zoomable-preview-viewport {
+  background: var(--background);
+  display: flex;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  outline: none;
+  scrollbar-width: thin;
+  touch-action: pan-x pan-y pinch-zoom;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.zoomable-preview-shell[data-mode="inline"] .zoomable-preview-viewport {
+  overscroll-behavior-y: auto;
+  touch-action: pan-y;
+}
+
+.zoomable-preview-shell .zoomable-preview-viewport[data-gesture-zoom="true"] {
+  touch-action: none;
+}
+
+.zoomable-preview-viewport:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--ring);
+}
+
+.zoomable-preview-viewport[data-pannable="true"] {
+  cursor: grab;
+}
+.zoomable-preview-viewport[data-dragging="true"] {
+  cursor: grabbing;
+}
+
+.zoomable-preview-canvas {
+  display: flex;
+  box-sizing: border-box;
+  flex: 0 0 auto;
+  min-width: 100%;
+  min-height: 100%;
+  align-items: center;
+  justify-content: center;
+}
+
+.zoomable-preview-canvas[data-reduced="true"] {
+  min-width: 0;
+  min-height: 0;
+  margin: auto;
+}
+
+.zoomable-preview-content {
+  display: flex;
+  box-sizing: border-box;
+  flex: 0 0 auto;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  align-items: center;
+  justify-content: center;
+}
+
+.zoomable-preview-shell .zoomable-preview-viewport .zoomable-preview-content > img,
+.zoomable-preview-shell .zoomable-preview-viewport .zoomable-preview-content > .mermaid-diagram-svg,
+.zoomable-preview-shell .zoomable-preview-viewport .zoomable-preview-content > .mermaid-diagram-svg > svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+  object-fit: contain;
+  pointer-events: none;
+}
+
+.image-figure .zoomable-preview-content > img {
+  border: 0;
+  border-radius: 0;
+}
+
+.image-figure > .conversation-media-frame {
+  width: 100%;
+}
+
+.inline-media-preview {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+}
+
+.inline-media-expand {
+  position: absolute;
+  z-index: calc(var(--z-sticky) + 1);
+  top: 8px;
+  right: 8px;
+}
+
+.image-preview-interactions {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}

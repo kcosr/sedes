@@ -1,4 +1,5 @@
 import { initialThreadSettingsReady, threadInputDeliveryAvailability } from "./thread-input-readiness.js";
+import { fitPageItemsToSnapshot } from "./page-publication-projection.js";
 import type { UsageService } from "../usage/usage-service.js";
 import { createHash } from "node:crypto";
 import type { BackendCapabilityDocument } from "../../shared/protocol/backend.js";
@@ -10,6 +11,7 @@ import type {
 } from "../../shared/protocol/api.js";
 import {
   normalizedThreadSnapshotSchema,
+  conversationTurnSourceRevision,
   type BackendInteraction,
   type ComposerCommandDescriptor,
   type ComposerSkillCatalog,
@@ -721,7 +723,7 @@ export class ThreadApplicationService {
       presentationSource,
     );
     const timeline = actor?.timeline;
-    const snapshotWithoutHistory = normalizedThreadSnapshotSchema.parse({
+    const snapshotWithoutHistory: NormalizedThreadSnapshot = {
       thread: {
         ...inventory.thread,
         runState,
@@ -738,9 +740,9 @@ export class ThreadApplicationService {
       environment: inventory.environment,
       draft: inventory.draft,
       stashes: inventory.stashes,
-      composerCommands: presentation.composerCommands,
+      composerCommands: [...presentation.composerCommands],
       agentTools: inventory.agentTools,
-      orderedTurnIds: timeline?.orderedTurnIds ?? [],
+      orderedTurnIds: [...(timeline?.orderedTurnIds ?? [])],
       turnsById: timeline?.turnsById ?? {},
       forkSource,
       forksByTurnId: Object.fromEntries(
@@ -756,7 +758,7 @@ export class ThreadApplicationService {
             turn.id,
             {
               sourceTurnId: turn.id,
-              expectedTurnRevision: turn.revision,
+              expectedTurnRevision: conversationTurnSourceRevision(turn, timeline?.itemsById ?? {}),
               available,
               ...(unavailableReason
                 ? { unavailableReason: { text: unavailableReason } }
@@ -772,26 +774,26 @@ export class ThreadApplicationService {
       ...(timeline?.activeTurnId
         ? { activeTurnId: timeline.activeTurnId }
         : {}),
-      queue,
+      queue: [...queue],
       capabilities,
       settings: presentation.settings,
-      providerFeatures: presentation.providerFeatureStates,
+      providerFeatures: [...presentation.providerFeatureStates],
       usage: actor?.usage ?? {},
       interactions,
       ...(recovery ? { recovery } : {}),
       attention: inventory.attention,
-    });
-    this.#usage.registerVisibleTurns(scope, applicationThreadId, Object.values(snapshotWithoutHistory.turnsById));
-    if (!historyOperational) return snapshotWithoutHistory;
-    return normalizedThreadSnapshotSchema.parse({
+    };
+    const snapshot = normalizedThreadSnapshotSchema.parse(fitPageItemsToSnapshot({
       ...snapshotWithoutHistory,
-      history: this.#history!.window(
+      history: historyOperational ? this.#history!.window(
         scope,
         applicationThreadId,
         actor,
         snapshotWithoutHistory,
-      ),
-    });
+      ) : snapshotWithoutHistory.history,
+    }).snapshot);
+    this.#usage.registerVisibleTurns(scope, applicationThreadId, Object.values(snapshot.turnsById));
+    return snapshot;
   }
 
   async #composeApplicationState(
@@ -1364,6 +1366,9 @@ function composeCapabilities(input: {
       };
     },
   );
+  // This identity includes run state, thread revision, and all authority inputs.
+  // Same-generation presentation resets retain capability fences when this
+  // identity is unchanged; a fresh authoritative composition advances it.
   const capabilityRevision = createHash("sha256")
     .update(
       JSON.stringify({

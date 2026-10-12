@@ -1,6 +1,5 @@
 import { SEDES_VERSION } from "../shared/version.js";
-import { agentToolCatalogResponseSchema, agentToolDescriptionsResponseSchema, agentToolInvocationResultSchema,
-  isBoundedAgentToolJson } from "../internal/agent-tool-cli-protocol/contracts.js";
+import { agentToolCatalogResponseSchema, agentToolDescriptionsResponseSchema, agentToolInvocationResultSchema } from "../internal/agent-tool-cli-protocol/contracts.js";
 import { OPENCODE_MCP_CREDENTIAL, OPENCODE_MCP_ENDPOINT, OPENCODE_MCP_MAXIMUM_BYTES,
   OPENCODE_MCP_STARTUP_MS, OPENCODE_MCP_WATCHDOG_MS, opencodeMcpCredential, opencodeMcpEndpoint,
   opencodeMcpHello, opencodeMcpSession, type OpenCodeMcpRequest } from "../internal/opencode-mcp/contracts.js";
@@ -103,6 +102,7 @@ async function boundedJson(response: Response): Promise<unknown> {
   try { for (;;) { const part = await reader.read(); if (part.done) break;
     bytes += part.value.byteLength; if (bytes > OPENCODE_MCP_MAXIMUM_BYTES) throw unavailable(); chunks.push(part.value);
   } } finally { await reader.cancel().catch(() => undefined); }
-  const value: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-  if (!isBoundedAgentToolJson(value)) throw unavailable(); return value;
+  // Each successful operation is validated by its exact response schema above.
+  // Generic JSON-string limits cannot apply to the separate PNG content field.
+  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
 }

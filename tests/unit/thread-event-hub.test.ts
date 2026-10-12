@@ -4,12 +4,43 @@ import type {
   NormalizedThreadSnapshot,
   ThreadEventEnvelope,
 } from "../../src/shared/protocol/conversation.js";
-import { MAXIMUM_NORMALIZED_TIMELINE_TURNS } from "../../src/shared/protocol/conversation.js";
+import { MAXIMUM_NORMALIZED_TIMELINE_TURNS, normalizedThreadSnapshotSchema, pageItemSchema, type PageItem } from "../../src/shared/protocol/conversation.js";
 import { ThreadEventHub } from "../../src/server/events/thread-event-hub.js";
+import { fitPageItemsToSnapshot } from "../../src/server/conversations/page-publication-projection.js";
+import * as pageProjection from "../../src/server/conversations/page-publication-projection.js";
+import { MAXIMUM_NORMALIZED_SNAPSHOT_OR_PAGE_BYTES, serializedUtf8Bytes } from "../../src/shared/protocol/payload.js";
+import * as payload from "../../src/shared/protocol/payload.js";
+import { NormalizedThreadStore } from "../../src/client/stores/NormalizedThreadStore.js";
 import {
   projectThreadEventEnvelopeActivity,
   projectThreadSnapshotActivity,
 } from "../../src/server/conversations/thread-activity-projection.js";
+
+function previewItem(): PageItem {
+  return { id: "page-preview", turnId: "preview-turn", kind: "page", status: "completed", revision: 0, page: {
+    pageId: "22222222-2222-4222-8222-222222222222", threadId: "thread-1", revision: 1, title: "Preview", viewport: {},
+    createdAt: "2026-10-11T00:00:00.000Z", sha256: "a".repeat(64), byteSize: 123,
+  } };
+}
+
+function snapshotAtPageBoundary(): { native: NormalizedThreadSnapshot; source: NormalizedThreadSnapshot } {
+  const native = snapshot();
+  native.stashes = Array.from({ length: 120 }, (_, index) => ({ id: `padding-${index}`, text: "s".repeat(200_000),
+    contextExcerpts: [], attachments: [], taskReferences: [], createdAt: "2026-10-11T00:00:00.000Z" }));
+  const item = { id: "native-answer", turnId: "preview-turn", kind: "assistant_message" as const,
+    status: "completed" as const, revision: 0, markdown: { text: "" } };
+  native.orderedTurnIds = ["preview-turn"];
+  native.turnsById = { "preview-turn": { id: "preview-turn", status: "completed", endedBy: "agent_settled", revision: 0,
+    orderedItemIds: [item.id] } };
+  native.itemsById = { [item.id]: item };
+  native.forksByTurnId = { "preview-turn": { sourceTurnId: "preview-turn", expectedTurnRevision: 0, available: false,
+    unavailableReason: { text: "Unavailable" } } };
+  item.markdown.text = "x".repeat(MAXIMUM_NORMALIZED_SNAPSHOT_OR_PAGE_BYTES - 100 - serializedUtf8Bytes(native));
+  const page = previewItem();
+  return { native, source: { ...native, itemsById: { ...native.itemsById, [page.id]: page }, turnsById: {
+    "preview-turn": { ...native.turnsById["preview-turn"]!, revision: 1, orderedItemIds: [item.id, page.id] },
+  } } };
+}
 
 function snapshot(): NormalizedThreadSnapshot {
   return {
@@ -169,6 +200,270 @@ function applicationState(
 }
 
 describe("ThreadEventHub", () => {
+  it("retains notices and pending capability authority across a page-fit reset, then accepts a fresh same-generation capability identity", () => {
+    const { source } = snapshotAtPageBoundary();
+    source.thread.runState = source.runState = source.capabilities.runState = "running";
+    const answer = source.itemsById["native-answer"];
+    if (answer?.kind !== "assistant_message") throw new Error("fixture");
+    answer.markdown.text = answer.markdown.text.slice(0, MAXIMUM_NORMALIZED_SNAPSHOT_OR_PAGE_BYTES + 4 - serializedUtf8Bytes(source));
+    const hub = new ThreadEventHub();
+    const store = new NormalizedThreadStore();
+    store.apply(hub.publish({ type: "snapshot", generation: "authority", snapshot: source }));
+    const notice = { id: "warning", tone: "warning" as const, message: { text: "Tool needs attention" }, createdAt: "2026-10-11T00:00:00.000Z" };
+    store.apply(hub.publish({ type: "notice", generation: "authority", notice }));
+    expect(hub.snapshot?.itemsById[previewItem().id]).toBeUndefined();
+    const reset = hub.publish({ type: "run_state", generation: "authority", state: "idle" });
+    expect(reset.event.type).toBe("snapshot");
+    expect(store.apply(reset)).toEqual({ kind: "applied" });
+    expect(hub.snapshot?.itemsById[previewItem().id]).toBeDefined();
+    expect(hub.currentCheckpoint()).toMatchObject({ capabilityRunState: "running", notices: [notice] });
+    expect(store.awaitingRunStateCapabilities).toBe(true);
+    expect(store.state.authoritative).toBe(false);
+    expect(store.state.notices).toEqual([notice]);
+    const fresh = hub.publish({ type: "snapshot", generation: "authority", snapshot: {
+      ...hub.snapshot!, thread: { ...hub.snapshot!.thread, threadRevision: 1 },
+      capabilities: { ...hub.snapshot!.capabilities, revision: "fresh-idle" },
+    } });
+    expect(store.apply(fresh)).toEqual({ kind: "applied" });
+    expect(hub.currentCheckpoint()).toMatchObject({ capabilityRunState: "idle", capabilityThreadRevision: 1, notices: [notice] });
+    expect(store.awaitingRunStateCapabilities).toBe(false);
+    expect(store.state.authoritative).toBe(true);
+    expect(store.capabilityThreadRevision).toBe(1);
+    expect(store.state.notices).toEqual([notice]);
+    store.apply(hub.publish({ type: "snapshot", generation: "next-generation", snapshot: hub.snapshot! }));
+    expect(hub.currentCheckpoint()?.notices).toEqual([]);
+    expect(store.state.notices).toEqual([]);
+  });
+
+  it.each(["capabilities_changed", "application_state_changed"] as const)("advances capability authority when %s itself triggers page admission", type => {
+    const { source } = snapshotAtPageBoundary();
+    source.capabilities.revision = "prior-capability-" + "x".repeat(100);
+    const answer = source.itemsById["native-answer"];
+    if (answer?.kind !== "assistant_message") throw new Error("fixture");
+    answer.markdown.text = answer.markdown.text.slice(0, MAXIMUM_NORMALIZED_SNAPSHOT_OR_PAGE_BYTES + 4 - serializedUtf8Bytes(source));
+    const hub = new ThreadEventHub();
+    const store = new NormalizedThreadStore();
+    store.apply(hub.publish({ type: "snapshot", generation: "authority", snapshot: source }));
+    const capabilities = { ...source.capabilities, revision: "new" };
+    const event: NormalizedThreadEvent = type === "capabilities_changed"
+      ? { type, generation: "authority", capabilities, threadRevision: 1, providerFeatures: source.providerFeatures }
+      : { type, generation: "authority", state: { ...applicationState(source), capabilities,
+          thread: { ...source.thread, threadRevision: 1 } } };
+    const reset = hub.publish(event);
+    expect(reset.event.type).toBe("snapshot");
+    expect(store.apply(reset)).toEqual({ kind: "applied" });
+    expect(hub.snapshot?.itemsById[previewItem().id]).toBeDefined();
+    expect(hub.currentCheckpoint()?.capabilityThreadRevision).toBe(1);
+    expect(store.capabilityThreadRevision).toBe(1);
+    expect(store.state.authoritative).toBe(true);
+  });
+
+  it("fits a new native item and its paired turn atomically when they consume page capacity", () => {
+    const { source } = snapshotAtPageBoundary();
+    const answer = source.itemsById["native-answer"];
+    if (answer?.kind !== "assistant_message") throw new Error("fixture");
+    answer.markdown.text = answer.markdown.text.slice(0, -500);
+    const hub = new ThreadEventHub();
+    const store = new NormalizedThreadStore();
+    expect(store.apply(hub.publish({ type: "snapshot", generation: "atomic", snapshot: source }))).toEqual({ kind: "applied" });
+    const item = { id: "new-native", turnId: "preview-turn", kind: "notice" as const, status: "completed" as const,
+      revision: 0, tone: "info" as const, text: { text: "n".repeat(300) } };
+    const turn = { ...source.turnsById["preview-turn"]!, revision: 2,
+      orderedItemIds: [...source.turnsById["preview-turn"]!.orderedItemIds, item.id] };
+    const events = hub.publishBatch([
+      { type: "item_upsert", generation: "atomic", item },
+      { type: "turn_upsert", generation: "atomic", turn,
+        fork: { ...source.forksByTurnId["preview-turn"]!, expectedTurnRevision: 1 } },
+    ]);
+    expect(events).toHaveLength(1);
+    expect(events[0]?.event.type).toBe("snapshot");
+    expect(store.apply(events[0]!)).toEqual({ kind: "applied" });
+    expect(hub.snapshot?.itemsById[item.id]).toEqual(item);
+    expect(hub.snapshot?.itemsById[previewItem().id]).toBeUndefined();
+    expect(hub.snapshot?.turnsById[turn.id]?.orderedItemIds).toEqual(["native-answer", item.id]);
+    expect(hub.currentCheckpoint()?.snapshot).toEqual(store.state.snapshot);
+  });
+
+  it("publishes fitting page pairs incrementally with one fit and preserves ordinary event order", () => {
+    const initial = snapshot();
+    const page = previewItem();
+    initial.orderedTurnIds = [page.turnId];
+    initial.turnsById = { [page.turnId]: { id: page.turnId, revision: 0, status: "in_progress", orderedItemIds: [] } };
+    const fork = { sourceTurnId: page.turnId, expectedTurnRevision: 0, available: false, unavailableReason: { text: "Unavailable" } };
+    initial.forksByTurnId = { [page.turnId]: fork };
+    const hub = new ThreadEventHub();
+    const store = new NormalizedThreadStore();
+    store.apply(hub.publish({ type: "snapshot", generation: "pair", snapshot: initial }));
+    const fitting = vi.spyOn(pageProjection, "fitPageItemsToSnapshot");
+    let published: readonly ThreadEventEnvelope[];
+    try {
+      published = hub.publishBatch([
+        { type: "item_upsert", generation: "pair", item: page },
+        { type: "turn_upsert", generation: "pair", fork, turn: { ...initial.turnsById[page.turnId]!, revision: 1, orderedItemIds: [page.id] } },
+      ]);
+      expect(fitting).toHaveBeenCalledOnce();
+    } finally { fitting.mockRestore(); }
+    expect(published.map(value => value.event.type)).toEqual(["item_upsert", "turn_upsert"]);
+    for (const event of published) expect(store.apply(event)).toEqual({ kind: "applied" });
+    expect(hub.snapshot?.itemsById[page.id]).toEqual(page);
+    const item = { id: "native-next", turnId: page.turnId, kind: "notice" as const, status: "completed" as const,
+      revision: 0, tone: "info" as const, text: { text: "Next" } };
+    const ordinary = hub.publishBatch([
+      { type: "item_upsert", generation: "pair", item },
+      { type: "turn_upsert", generation: "pair", fork: { ...fork, expectedTurnRevision: 1 },
+        turn: { ...initial.turnsById[page.turnId]!, revision: 2, orderedItemIds: [page.id, item.id] } },
+    ]);
+    expect(ordinary.map(event => event.event.type)).toEqual(["item_upsert", "turn_upsert"]);
+    expect(hub.snapshot?.turnsById[page.turnId]?.orderedItemIds).toEqual([page.id, item.id]);
+  });
+
+  it("retains a fitting page in an incremental history prepend", () => {
+    const hub = new ThreadEventHub();
+    const store = new NormalizedThreadStore();
+    store.apply(hub.publish(replacement("history-pages")));
+    const page = { ...previewItem(), id: "older-page", turnId: "older" };
+    const event = hub.publish({ type: "history_prepend", generation: "history-pages", page: {
+      orderedTurnIds: ["older"], turnsById: { older: { id: "older", status: "completed", endedBy: "agent_settled", revision: 1, orderedItemIds: [page.id] } },
+      itemsById: { [page.id]: page }, forkSource: snapshot().forkSource,
+      forksByTurnId: { older: { sourceTurnId: "older", expectedTurnRevision: 0, available: false, unavailableReason: { text: "Unavailable" } } },
+    } });
+    expect(event.event.type).toBe("history_prepend");
+    expect(store.apply(event)).toEqual({ kind: "applied" });
+    expect(store.state.snapshot).toEqual(hub.snapshot);
+  });
+
+  it("resets an item batch when an intermediate prefix overflows even though its final state fits", () => {
+    const { source } = snapshotAtPageBoundary();
+    const answer = source.itemsById["native-answer"];
+    if (answer?.kind !== "assistant_message") throw new Error("fixture");
+    answer.markdown.text = answer.markdown.text.slice(0, -1000);
+    const hub = new ThreadEventHub(); const store = new NormalizedThreadStore();
+    store.apply(hub.publish({ type: "snapshot", generation: "prefix", snapshot: source }));
+    const batch = hub.publishBatch([
+      { type: "item_upsert", generation: "prefix", item: { ...answer, revision: 1, markdown: { text: answer.markdown.text + "x".repeat(2000) } } },
+      { type: "item_upsert", generation: "prefix", item: { ...answer, revision: 2, markdown: { text: answer.markdown.text + "x" } } },
+    ]);
+    expect(batch).toHaveLength(1); expect(batch[0]?.event.type).toBe("snapshot");
+    expect(store.apply(batch[0]!)).toEqual({ kind: "applied" });
+    expect(store.state.snapshot).toEqual(hub.snapshot);
+  });
+
+  it("rejects non-item/turn batch events before changing notice or capability fences", () => {
+    const hub = new ThreadEventHub(); hub.publish(replacement("closed-batch"));
+    const before = hub.watermark;
+    expect(() => hub.publishBatch([{ type: "run_state", generation: "closed-batch", state: "running" }] as never)).toThrow("thread_projection_item_turn_batch_required");
+    expect(hub.watermark).toBe(before);
+  });
+
+  it("does not resurrect an omitted old page when its source item is replayed", () => {
+    const { source } = snapshotAtPageBoundary();
+    const page = pageItemSchema.parse(previewItem());
+    source.itemsById[page.id] = page;
+    const hub = new ThreadEventHub(); const store = new NormalizedThreadStore();
+    store.apply(hub.publish({ type: "snapshot", generation: "omitted", snapshot: source }));
+    expect(hub.snapshot?.itemsById[previewItem().id]).toBeUndefined();
+    const events = hub.publishBatch([
+      { type: "item_upsert", generation: "omitted", item: page },
+      { type: "turn_upsert", generation: "omitted", turn: { ...source.turnsById["preview-turn"]!, revision: 2 },
+        fork: { ...source.forksByTurnId["preview-turn"]!, expectedTurnRevision: 1 } },
+    ]);
+    expect(events.map(value => value.event.type)).toEqual(["snapshot"]);
+    expect(store.apply(events[0]!)).toEqual({ kind: "applied" });
+    expect(store.state.snapshot?.itemsById[previewItem().id]).toBeUndefined();
+  });
+
+  it("fits only optional pages against the complete envelope and preserves source state across snapshot resets", () => {
+    const { native, source } = snapshotAtPageBoundary();
+    expect(normalizedThreadSnapshotSchema.safeParse(native).success).toBe(true);
+    expect(normalizedThreadSnapshotSchema.safeParse(source).success).toBe(false);
+    const fitted = fitPageItemsToSnapshot(source).snapshot;
+    expect(fitted.itemsById).toEqual(native.itemsById);
+    expect(fitted.turnsById).toEqual(native.turnsById);
+    const hub = new ThreadEventHub();
+    const store = new NormalizedThreadStore();
+    const initial = hub.publish({ type: "snapshot", generation: "fitted", snapshot: fitted }, source);
+    expect(store.apply(initial)).toEqual({ kind: "applied" });
+    const sourceTurn = { ...source.turnsById["preview-turn"]!, revision: 2 };
+    const update = hub.publish({ type: "turn_upsert", generation: "fitted", turn: sourceTurn,
+      fork: { ...source.forksByTurnId["preview-turn"]!, expectedTurnRevision: 1 } });
+    expect(update.event).toMatchObject({ type: "turn_upsert", turn: { revision: 1, orderedItemIds: ["native-answer"] } });
+    expect(store.apply(update)).toEqual({ kind: "applied" });
+    expect(hub.snapshot?.itemsById[previewItem().id]).toBeUndefined();
+    const revealed = hub.publish({ type: "stashes_changed", generation: "fitted", stashes: [] });
+    expect(revealed.event.type).toBe("snapshot");
+    expect(store.apply(revealed)).toEqual({ kind: "applied" });
+    expect(hub.snapshot?.turnsById["preview-turn"]).toMatchObject({ revision: 2, orderedItemIds: ["native-answer", previewItem().id] });
+    expect(hub.snapshot?.forksByTurnId["preview-turn"]?.expectedTurnRevision).toBe(1);
+    const hidden = hub.publish({ type: "stashes_changed", generation: "fitted", stashes: native.stashes });
+    expect(hidden.event.type).toBe("snapshot");
+    expect(store.apply(hidden)).toEqual({ kind: "applied" });
+    expect(hub.snapshot?.turnsById["preview-turn"]?.revision).toBe(1);
+    expect(hub.snapshot?.itemsById[previewItem().id]).toBeUndefined();
+    expect(store.state.snapshot?.itemsById[previewItem().id]).toBeUndefined();
+    expect(hub.currentCheckpoint()?.snapshot).toEqual(store.state.snapshot);
+    const continuing = hub.publish({ type: "turn_upsert", generation: "fitted", turn: { ...sourceTurn, revision: 3 },
+      fork: { ...source.forksByTurnId["preview-turn"]!, expectedTurnRevision: 2 } });
+    expect(store.apply(continuing)).toEqual({ kind: "applied" });
+    expect(store.state.snapshot?.turnsById["preview-turn"]?.revision).toBe(2);
+  });
+
+  it.each([false, true])("accounts streamed changes without serializing retained native text (pages: %s)", withPage => {
+    const base = snapshot();
+    const large = { id: "retained", turnId: "preview-turn", revision: 0, kind: "assistant_message" as const,
+      status: "completed" as const, markdown: { text: "x".repeat(8 * 1_024 * 1_024) } };
+    const streaming = { ...large, id: "streaming", status: "streaming" as const, markdown: { text: "" } };
+    base.itemsById = { [large.id]: large, [streaming.id]: streaming, ...(withPage ? { [previewItem().id]: previewItem() } : {}) };
+    base.orderedTurnIds = ["preview-turn"];
+    base.turnsById = { "preview-turn": { id: "preview-turn", revision: withPage ? 1 : 0, status: "in_progress",
+      orderedItemIds: Object.keys(base.itemsById) } };
+    base.forksByTurnId = { "preview-turn": { sourceTurnId: "preview-turn", expectedTurnRevision: 0, available: false,
+      unavailableReason: { text: "Unavailable" } } };
+    const hub = new ThreadEventHub();
+    hub.publish({ type: "snapshot", generation: "stream", snapshot: base });
+    const serialization = vi.spyOn(payload, "serializedUtf8Bytes");
+    const fitting = vi.spyOn(pageProjection, "fitPageItemsToSnapshot");
+    try {
+      for (let revision = 1; revision <= 20; revision++) hub.publish({ type: "item_upsert", generation: "stream",
+        item: { ...streaming, revision, markdown: { text: "delta".repeat(revision) } } });
+      expect(serialization.mock.calls.some(([value]) => value && typeof value === "object" && "itemsById" in value)).toBe(false);
+      expect(serialization.mock.calls.some(([value]) => value === large)).toBe(false);
+      expect(fitting).not.toHaveBeenCalled();
+      expect(normalizedThreadSnapshotSchema.safeParse(hub.snapshot).success).toBe(true);
+    } finally { serialization.mockRestore(); fitting.mockRestore(); }
+  });
+
+  it("does not discard native data to rescue an oversized application envelope", () => {
+    const { native } = snapshotAtPageBoundary();
+    const hub = new ThreadEventHub();
+    hub.publish({ type: "snapshot", generation: "native-bound", snapshot: native });
+    expect(() => hub.publish({ type: "stashes_changed", generation: "native-bound", stashes: [
+      ...native.stashes, { id: "too-large", text: "x".repeat(200), contextExcerpts: [], attachments: [], taskReferences: [],
+        createdAt: "2026-10-11T00:00:00.000Z" },
+    ] })).toThrow("thread_projection_snapshot_limit_exceeded");
+    expect(hub.snapshot?.itemsById).toEqual(native.itemsById);
+  });
+
+  it("requires page items before their turn and preserves the source fork revision", () => {
+    const hub = new ThreadEventHub();
+    hub.publish(replacement("pages"));
+    const turn = { id: "turn-1", revision: 0, status: "in_progress" as const, orderedItemIds: [] as string[] };
+    const fork = { sourceTurnId: turn.id, expectedTurnRevision: 0, available: false, unavailableReason: { text: "Unavailable" } };
+    hub.publish({ type: "turn_upsert", generation: "pages", turn, fork });
+    const page = { id: "page-one", turnId: turn.id, kind: "page" as const, revision: 0, status: "completed" as const, page: {
+      pageId: "22222222-2222-4222-8222-222222222222", threadId: "thread-1", revision: 1, title: "Preview", viewport: {},
+      createdAt: "2026-10-11T00:00:00.000Z", sha256: "a".repeat(64), byteSize: 123,
+    } };
+    const published = { ...turn, revision: 1, orderedItemIds: [page.id] };
+    expect(() => hub.publish({ type: "turn_upsert", generation: "pages", turn: published, fork }))
+      .toThrow("thread_projection_turn_item_reference_invalid");
+    hub.publish({ type: "item_upsert", generation: "pages", item: page });
+    hub.publish({ type: "turn_upsert", generation: "pages", turn: published, fork });
+    hub.publish({ type: "fork_source_state_changed", generation: "pages", forkSource: snapshot().forkSource });
+    expect(hub.snapshot?.forksByTurnId[turn.id]?.expectedTurnRevision).toBe(0);
+    expect(() => hub.publish({ type: "turn_upsert", generation: "pages", turn: { ...published, revision: 2 },
+      fork: { ...fork, expectedTurnRevision: 2 } })).toThrow("thread_projection_turn_fork_revision_invalid");
+  });
+
   it("retains throughput in replay, checkpoints, and summary views until an authoritative replacement clears it", () => {
     const hub = new ThreadEventHub();
     const initial = hub.publish(replacement("generation-1"));

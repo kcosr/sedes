@@ -479,6 +479,38 @@ describe("normalized application protocol", () => {
 });
 
 describe("NormalizedApplicationStore", () => {
+  it("invalidates targeted summaries for thread changes and all summaries for inventory replacement or location availability", () => {
+    const store = new NormalizedApplicationStore();
+    seedStore(store);
+    const changed = vi.fn();
+    const unsubscribe = store.subscribeThreadSummaryChanges(changed);
+    const update = envelope(5, {
+      type: "thread_upsert", generation: "application-1", thread: thread(), counts: snapshot().counts,
+    });
+    expect(store.apply(update)).toEqual({ kind: "applied" });
+    expect(changed).toHaveBeenLastCalledWith("thread-1");
+    expect(store.apply(update)).toEqual({ kind: "ignored" });
+    expect(changed).toHaveBeenCalledTimes(1);
+    expect(store.apply(envelope(6, {
+      type: "environment_upsert", generation: "application-1", environment: { ...snapshot().environments[0]!, available: false },
+    }))).toEqual({ kind: "applied" });
+    expect(changed).toHaveBeenLastCalledWith(undefined);
+    expect(store.apply(envelope(7, {
+      type: "workspace_upsert", generation: "application-1", workspace: { ...snapshot().workspaces[0]!, available: false },
+    }))).toEqual({ kind: "applied" });
+    expect(changed).toHaveBeenLastCalledWith(undefined);
+    expect(store.apply(envelope(8, {
+      type: "snapshot", generation: "application-1", snapshot: snapshot(),
+    }))).toEqual({ kind: "applied" });
+    expect(changed).toHaveBeenLastCalledWith(undefined);
+    expect(changed).toHaveBeenCalledTimes(4);
+    unsubscribe();
+    expect(store.apply(envelope(9, {
+      type: "thread_remove", generation: "application-1", threadId: "thread-1", counts: snapshot().counts,
+    }))).toEqual({ kind: "applied" });
+    expect(changed).toHaveBeenCalledTimes(4);
+  });
+
   it("delivers sequenced Workpad invalidations without replacing inventory", () => {
     const store = new NormalizedApplicationStore();
     seedStore(store);

@@ -1,3 +1,5 @@
+import { DefaultThreadSetting } from "../DefaultThreadSetting.js";
+import type { ApplicationClientStore } from "../../../stores/ApplicationClientStore.js";
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import type { ActivityDetailMode } from "../../../../shared/protocol/conversation.js";
 import type {
@@ -39,7 +41,9 @@ export interface ApplicationPreferenceControls {
 /** Device-local behavior, plus one account-wide composer preference. */
 export function GeneralSettingsPage({
   applicationPreferences,
+  applicationStore,
 }: {
+  readonly applicationStore?: ApplicationClientStore;
   readonly applicationPreferences?: ApplicationPreferenceControls;
 }): React.JSX.Element {
   const clickNamesToFilter = useSyncExternalStore(
@@ -64,6 +68,7 @@ export function GeneralSettingsPage({
       title="General"
       description="How Sedes behaves in this browser. Changes apply as you make them."
     >
+      {applicationStore ? <DefaultThreadSetting store={applicationStore} /> : null}
       <SettingsSection title="Workspace" card>
         <SwitchField
           id="setting-click-names-to-filter"

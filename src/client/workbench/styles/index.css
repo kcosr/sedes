@@ -1,0 +1,20 @@
+/*
+ * workbench-ui: import this file once. Everything lives in @layer wb, so any
+ * unlayered app CSS overrides the kit. Tailwind v4 apps declare the order
+ * first:  @layer theme, base, wb, components, utilities;
+ */
+@layer wb.fonts, wb.tokens, wb.base, wb.components, wb.tones, wb.utilities;
+
+@import "./fonts.css";
+@import "./tokens.css";
+@import "./base.css";
+@import "./controls.css";
+@import "./forms.css";
+@import "./shell.css";
+@import "./list.css";
+@import "./table.css";
+@import "./overlays.css";
+@import "./states.css";
+@import "./pages.css";
+@import "./media-frame.css";
+@import "./utilities.css";

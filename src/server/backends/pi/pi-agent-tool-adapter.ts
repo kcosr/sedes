@@ -364,9 +364,10 @@ function completedResult(
 ): AgentToolResult<{
   readonly invocation: SedesToolInvocationResult<unknown>;
 }> {
+  const { modelContent, ...invocation } = result;
   return {
-    content: [{ type: "text", text: deterministicJson(result.output) }],
-    details: { invocation: result },
+    content: [{ type: "text", text: deterministicJson(result.output) }, ...(modelContent ?? [])],
+    details: { invocation },
   };
 }
 

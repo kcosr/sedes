@@ -1,4 +1,6 @@
 import { createClientControlToolDefinitions, type ClientControlToolService } from "../tools/client-control-tools.js";
+import { createPageToolDefinitions } from "../tools/page-management-tools.js";
+import type { PageAgentToolService } from "../tools/page-agent-tool-service.js";
 import { createWorkpadToolDefinitions } from "../tools/workpad-management-tools.js";
 import type { WorkpadAgentToolService } from "../tools/workpad-agent-tool-service.js";
 import type { AgentToolDefinition } from "../contracts/agent-tool-contracts.js";
@@ -100,6 +102,7 @@ export function createCanonicalAgentToolDefinitions(input: {
   readonly clientControls?: ClientControlToolService;
   readonly management?: AgentManagementService;
   readonly workpads?: WorkpadAgentToolService;
+  readonly pages?: PageAgentToolService;
   readonly automations?: AutomationAgentToolService;
   readonly threadCreation?: AgentThreadCreationService;
   readonly savedAgents?: SavedAgentCanonicalToolService;
@@ -151,6 +154,7 @@ export function createCanonicalAgentToolDefinitions(input: {
     agentContextToolDefinition,
     ...createClientControlToolDefinitions(input.clientControls),
     ...(input.workpads ? createWorkpadToolDefinitions(input.workpads) : []),
+    ...(input.pages ? createPageToolDefinitions(input.pages) : []),
     ...(input.threadWorktrees
       ? [
           createThreadWorktreeListToolDefinition(input.threadWorktrees),

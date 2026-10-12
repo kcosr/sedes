@@ -1,3 +1,4 @@
+import { htmlPagesMigration } from "./migrations/140-html-pages.js";
 import { durableUsageAccountingMigration } from "./migrations/110-durable-usage-accounting.js";
 import { usageGapSessionScopeMigration } from "./migrations/111-usage-gap-session-scope.js";
 import { usageSubagentsMigration } from "./migrations/112-usage-subagents.js";
@@ -292,6 +293,7 @@ export const backendNormalizedMigrations = [
   submissionCompletionTurnIndexMigration,
   partialAssistantResultMigration,
   partialNotificationDeliveryMigration,
+  htmlPagesMigration,
 ] as const;
 
 export type DatabaseMigration = {

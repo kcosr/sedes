@@ -22,6 +22,7 @@ If you only want to use an existing installation, start with
 | Choose a safe deployment shape | [Operations and security](operations.md#deployment-matrix) |
 | Connect a host that calls the server over HTTP or HTTPS | [Outbound hosts](outbound-hosts.md) |
 | Configure and recover interactive terminal resources | [Operating terminal resources](terminals.md) |
+| Install the optional server browser for HTML screenshots | [HTML preview browser](page-previews.md) |
 | Operate a production process | [Production lifecycle](operations.md#production-lifecycle) |
 | Back up, upgrade, or roll back | [State, upgrades, and backups](operations.md#state-upgrades-and-backups) |
 | Reach Sedes through a tailnet | [Tailscale Serve](operations.md#tailscale-serve) |

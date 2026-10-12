@@ -480,9 +480,9 @@ OpenCode's other configured tools and MCP servers do not grant Sedes authority.
 The shared CLI implements both CLI modes for every supported row: local Pi,
 Codex, Claude, Grok, and OpenCode, plus the admitted Codex and Claude remote relays. It does not
 add a CLI path to the intentionally unsupported Pi-SSH or Grok-SSH topologies.
-The incompatible catalog-summary cutover advances both the owner-only local
-CLI frame and the managed relay capability to `agent_tools_cli@3`; stale peers
-fail closed.
+The owner-only local CLI frame and managed relay capability use
+`agent_tools_cli@4`, which carries bounded model media separately from JSON
+output. Stale peers fail closed and must be upgraded together.
 The in-memory conformance backend exercises normalized catalog,
 admission, and invocation behavior without creating a production presentation
 contract. Missing presentation eligibility must omit or disable the surface;
@@ -660,11 +660,59 @@ route is an alternate authorization path.
 
 `describe` accepts one through sixteen unique IDs as one atomic request. List,
 select a currently present ID, describe its schema, then invoke it. Successful
-invocations write exactly the operation payload advertised by `outputSchema`;
-the HTTP invocation envelope is not part of CLI stdout, including with
-`--json`. Validation and transport failures are diagnostic stderr. A named
+invocations normally write exactly the operation payload advertised by
+`outputSchema`. Media-bearing results instead write `{output, modelContent}`;
+`output` still matches that schema. Image blocks contain an absolute local `path`,
+`mimeType`, and `byteSize`, with no inline base64. The HTTP invocation envelope is not part
+of CLI stdout, including with `--json`. Validation and transport failures are
+diagnostic stderr. A named
 form exists only while its exact tool is advertised in the live catalog;
 command metadata is presentation, never authorization.
+
+### Model media results
+
+A canonical definition may return `new AgentToolOutput(output, modelContent)`.
+The invocation service recognizes that class explicitly, validates `output`
+against the definition's output schema, and validates the separate media
+array. Definitions that produce images declare `outputMediaTypes: ["image/png"]`;
+absence means image output is forbidden. This declaration is exposed in tool
+descriptions, catalog summaries, and live CLI help, independently of the JSON
+`outputSchema`. Ordinary objects with fields named `output` or `modelContent` remain
+ordinary tool output. Model content is allowed only on completed invocations;
+cancellation, failure, progress, and accepted operations never carry partial
+media.
+
+The closed content union supports text and base64 PNG image blocks. It accepts
+one through eight blocks, text up to 65,536 characters, and each PNG up to
+2 MiB decoded with a checked PNG signature and canonical base64 encoding. The
+complete output plus model content must fit the definition's declared output
+budget, and the invocation response remains limited to 4 MiB. Generic JSON
+output retains its existing string limits; images do not bypass them by being
+placed inside ordinary output.
+
+Pi native tools and the stdio MCP bridges emit the JSON metadata as text,
+followed by these native content blocks; MCP also exposes JSON metadata as
+structured content when supported by the negotiated protocol. Pi keeps bytes
+in the content array rather than duplicating them in tool details. The CLI saves
+images on its own execution host in a fresh private temporary directory (0700)
+as PNG files (0600), then emits their path descriptors. It writes no partial
+result and removes files on cancellation or output failure. Successful files
+remain after CLI exit so the agent can open them with its image tool; the caller
+may remove the directory when finished, or normal system temporary-file cleanup
+may remove it later. If local image saving fails after completion, the CLI exits
+with `media_unavailable` and identifies the completed invocation; the operation
+must not be repeated to recover its image. Ordinary shell output is text and does not turn a CLI tool
+into a native multimodal tool. This is
+transient model-visible content, independent of durable page revisions and
+output-artifact publication.
+
+The sidecar's `agent_tools_cli@4` and OpenCode's private `opencode_tools@2`
+reverse operation carry the same validated result. Their exact capability
+versions are negotiated before dispatch; there is no fallback to the earlier
+media-free contracts. OpenCode's ephemeral local MCP bridge additionally
+requires handshake protocol version 2 and validates every reply against its
+operation's exact schema, preserving PNG fields above the generic JSON string
+limit without widening ordinary output or input strings.
 
 The selected CLI mode is injected as `SEDES_AGENT_TOOL_CLI_MODE` for a managed
 thread-agent process. It is a deterministic presentation hint, not a security
@@ -818,7 +866,7 @@ references for one thread and ingress differ, and the server derives the
 calling adapter (`cli` for discovery and `http` for invocation over HTTP,
 `cli` over the relay, or `mcp`) from the reference rather than from the
 request. Both presentations therefore share the same routes and
-`agent_tools_cli@3` frames without a wire discriminator, and admission rejects
+`agent_tools_cli@4` frames without a wire discriminator, and admission rejects
 a reference whose presentation does not match the thread's current surface.
 CLI references keep the bytes issued before MCP presentation existed.
 
@@ -847,16 +895,16 @@ Sedes adds CLI variables, so injection cannot discard its normal `HOME`,
 `PATH`, or external login.
 
 Codex over SSH can use CLI presentation only when the environment explicitly
-enables `agent_tools_cli` and the sidecar advertises `agent_tools_cli@3`.
+enables `agent_tools_cli` and the sidecar advertises `agent_tools_cli@4`.
 Sedes deploys one owner-only Unix socket beside the managed sidecar, and the
-sidecar relays the strict v3 agent-tool protocol over its current persistent-service
+sidecar relays the strict v4 agent-tool protocol over its current persistent-service
 connection. Codex and sidecar health remain independent. Missing
 capability, unavailable sidecar, imported thread, disabled network policy, or
 unverifiable environment isolation fails closed. Network access is currently
 still required for this admission even though the agent endpoint itself is a
 Unix socket.
 
-Claude over SSH or an outbound connection uses the same independently admitted `agent_tools_cli@3` relay
+Claude over SSH or an outbound connection uses the same independently admitted `agent_tools_cli@4` relay
 with its exact thread/query context. The sidecar retains the provider query
 when main disconnects, but tool invocation still needs current main-server
 authority and fails closed while that connection is absent. Remote Grok

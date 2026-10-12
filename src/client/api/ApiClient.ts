@@ -2,6 +2,12 @@ import { usageReportSchema, usageAvailabilitySchema, usageAvailabilityRequestSch
 import { usageAnalyticsRequestSchema, usageAnalyticsResponseSchema, type UsageAnalyticsRequest, type UsageAnalyticsResponse } from "../../shared/protocol/usage-analytics.js";
 import { turnReplySpeechSchema, type TurnReplySpeech } from "../../shared/protocol/turn-reply-speech.js";
 import {
+  pageRevisionPageSchema,
+  pageRevisionSchema,
+  type PageRevision,
+  type PageRevisionPage,
+} from "../../shared/protocol/pages.js";
+import {
   environmentVariablesPreviewQuerySchema,
   environmentVariablesPreviewResultSchema,
   threadEnvironmentVariablesResultSchema,
@@ -110,6 +116,7 @@ import {
   createThreadResultSchema,
   composerSkillCatalogSchema,
   normalizedApplicationSessionSchema,
+  normalizedApplicationThreadSummarySchema,
   normalizedThreadDescendantsPageSchema,
   normalizedThreadLineagePlacementSchema,
   normalizedDraftSchema,
@@ -142,6 +149,7 @@ import {
   SEDES_CLIENT_PROTOCOL_VERSION,
   type ActivityDetailMode,
   type NormalizedApplicationSession,
+  type NormalizedApplicationThreadSummary,
   type CreateThreadRequest,
   type CreateThreadFromSettingsRequest,
   type CreateThreadResult,
@@ -500,6 +508,18 @@ export interface PreparedWorkspaceFileDownload {
   readonly contentDisposition: string;
   readonly contentLength: number;
   readonly revision: string;
+}
+
+export interface PageRenderAdmission {
+  /** A document-only URL: it contains no pairing or client credential. */
+  readonly url: string;
+  readonly expiresAt: string;
+}
+
+export interface PageListOptions {
+  readonly cursor?: string;
+  readonly limit?: number;
+  readonly signal?: AbortSignal;
 }
 
 export class ApiClient {
@@ -1733,6 +1753,12 @@ export class ApiClient {
     );
   }
 
+  async readThreadSummary(threadId: string, signal?: AbortSignal): Promise<NormalizedApplicationThreadSummary> {
+    const summary = await this.#request(`/api/threads/${encodeURIComponent(threadId)}/summary`, { signal }, normalizedApplicationThreadSummarySchema);
+    if (summary.id !== threadId) throw new Error("The returned summary did not match the requested thread.");
+    return summary;
+  }
+
   listThreadDescendants(
     threadId: string,
     input: { readonly cursor?: string; readonly pageSize?: number } = {},
@@ -2014,6 +2040,40 @@ export class ApiClient {
       `/api/threads/${encodeURIComponent(threadId)}/output-artifacts/${encodeURIComponent(artifactId)}/content`,
       signal,
     );
+  }
+
+  listThreadPages(threadId: string, options: PageListOptions = {}): Promise<PageRevisionPage> {
+    return this.#request(
+      `/api/threads/${encodeURIComponent(threadId)}/pages${pageListQuery(options)}`,
+      { signal: options.signal }, pageRevisionPageSchema,
+    );
+  }
+
+  listPageRevisions(threadId: string, pageId: string, options: PageListOptions = {}): Promise<PageRevisionPage> {
+    return this.#request(
+      `/api/threads/${encodeURIComponent(threadId)}/pages/${encodeURIComponent(pageId)}/revisions${pageListQuery(options)}`,
+      { signal: options.signal }, pageRevisionPageSchema,
+    );
+  }
+
+  async getPageRevision(threadId: string, pageId: string, revision: number, signal?: AbortSignal): Promise<PageRevision> {
+    const result = await this.#request(
+      `/api/threads/${encodeURIComponent(threadId)}/pages/${encodeURIComponent(pageId)}/revisions/${revision}`,
+      { signal }, z.strictObject({ page: pageRevisionSchema }),
+    );
+    return result.page;
+  }
+
+  async createPageRenderAdmission(threadId: string, pageId: string, revision: number, signal?: AbortSignal): Promise<PageRenderAdmission> {
+    const result = await this.#mutation(
+      `/api/threads/${encodeURIComponent(threadId)}/pages/${encodeURIComponent(pageId)}/revisions/${revision}/render-token`,
+      z.strictObject({ url: z.string().regex(/^\/page-render\/[A-Za-z0-9_-]+$/), expiresAt: z.iso.datetime() }),
+      { method: "POST", body: "{}", signal },
+    );
+    return {
+      ...result,
+      url: this.#endpoint.baseUrl ? new URL(result.url, this.#endpoint.baseUrl).toString() : result.url,
+    };
   }
 
   async #loadImageContent(path: string, signal?: AbortSignal): Promise<Blob> {
@@ -2678,4 +2738,11 @@ export class ApiClient {
     }
     return parsed.data;
   }
+}
+
+function pageListQuery(options: PageListOptions): string {
+  const query = new URLSearchParams();
+  if (options.cursor !== undefined) query.set("cursor", options.cursor);
+  if (options.limit !== undefined) query.set("limit", String(options.limit));
+  return query.size ? `?${query}` : "";
 }

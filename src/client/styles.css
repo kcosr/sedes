@@ -2935,8 +2935,7 @@ textarea:disabled {
 }
 
 .workspace-files-editor-shell,
-.workspace-files-download-preview-shell,
-.zoomable-preview-shell {
+.workspace-files-download-preview-shell {
   display: flex;
   flex-direction: column;
   width: 100%;
@@ -2945,13 +2944,7 @@ textarea:disabled {
   min-height: 0;
 }
 
-.workspace-files-download-preview-shell > .zoomable-preview-shell {
-  min-height: 0;
-  flex: 1 1 auto;
-}
-
-.workspace-files-editor-toolbar,
-.zoomable-preview-toolbar {
+.workspace-files-editor-toolbar {
   display: flex;
   min-width: 0;
   align-items: center;
@@ -2963,15 +2956,13 @@ textarea:disabled {
   font-size: 12px;
 }
 
-.workspace-files-editor-toolbar > span,
-.zoomable-preview-toolbar > span {
+.workspace-files-editor-toolbar > span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.workspace-files-editor-toolbar > div,
-.zoomable-preview-toolbar > div {
+.workspace-files-editor-toolbar > div {
   display: flex;
   flex: 0 0 auto;
   gap: 4px;
@@ -2984,8 +2975,7 @@ textarea:disabled {
   overflow: hidden;
 }
 
-.workspace-files-image-preview,
-.zoomable-preview-viewport {
+.workspace-files-image-preview {
   display: flex;
   min-width: 0;
   min-height: 0;
@@ -2995,84 +2985,6 @@ textarea:disabled {
   overflow: hidden;
   padding: 16px;
   background: var(--background);
-}
-
-.zoomable-preview-viewport {
-  align-items: stretch;
-  justify-content: flex-start;
-  overflow: auto;
-  overscroll-behavior: contain;
-  padding: 0;
-  cursor: default;
-  outline: none;
-  scrollbar-width: thin;
-  touch-action: pan-x pan-y pinch-zoom;
-  -webkit-user-select: none;
-  user-select: none;
-}
-
-.zoomable-preview-viewport[data-gesture-zoom="true"] {
-  touch-action: none;
-}
-
-.zoomable-preview-viewport:focus-visible {
-  box-shadow: inset 0 0 0 2px var(--ring);
-}
-
-.zoomable-preview-viewport[data-pannable="true"] {
-  cursor: grab;
-}
-
-.zoomable-preview-viewport[data-dragging="true"] {
-  cursor: grabbing;
-}
-
-.zoomable-preview-canvas {
-  display: flex;
-  box-sizing: border-box;
-  min-width: 100%;
-  min-height: 100%;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: center;
-}
-
-.zoomable-preview-canvas[data-reduced="true"] {
-  min-width: 0;
-  min-height: 0;
-  margin: auto;
-}
-
-.zoomable-preview-content {
-  display: flex;
-  box-sizing: border-box;
-  width: 100%;
-  height: 100%;
-  min-width: 0;
-  min-height: 0;
-  align-items: center;
-  justify-content: center;
-  padding: var(--zoomable-preview-content-padding, 16px);
-}
-
-.zoomable-preview-content > img {
-  display: block;
-  width: 100%;
-  height: 100%;
-  min-width: 0;
-  min-height: 0;
-  max-width: 100%;
-  max-height: 100%;
-  object-fit: contain;
-  pointer-events: none;
-}
-
-.zoomable-preview-zoom-value {
-  min-width: 42px;
-  align-self: center;
-  color: var(--muted-foreground);
-  text-align: center;
-  font-variant-numeric: tabular-nums;
 }
 
 .workspace-files-markdown-preview {
@@ -5749,9 +5661,13 @@ textarea:disabled {
   scroll-margin-top: 22px;
 }
 
-.message-row.assistant {
+.message-row.assistant,
+.image-figure {
   /* Use most of the shared --measure column; ch caps wrapped too early. */
   max-width: 90%;
+}
+
+.message-row.assistant {
   margin: 6px 0;
 }
 
@@ -6408,78 +6324,6 @@ textarea:disabled {
   margin-bottom: 0;
 }
 
-.markdown .mermaid-diagram-svg {
-  width: 100%;
-  min-width: 0;
-}
-
-.markdown .mermaid-diagram-svg svg {
-  display: block;
-  width: 100%;
-  max-width: 100% !important;
-  height: auto;
-}
-
-.message-viewport .markdown .mermaid-diagram-svg svg {
-  max-height: max(0px, calc(100cqh - 32px));
-  margin-inline: auto;
-}
-
-.markdown .mermaid-diagram-visual {
-  display: flex;
-  width: 100%;
-  min-width: 0;
-  align-items: center;
-  justify-content: center;
-}
-
-.markdown .mermaid-diagram-preview-trigger {
-  position: relative;
-  appearance: none;
-  padding: 0;
-  border: 0;
-  border-radius: var(--radius-ctl);
-  outline: none;
-  background: transparent;
-  color: inherit;
-  cursor: zoom-in;
-  font: inherit;
-}
-
-.markdown .mermaid-diagram-preview-trigger:focus-visible {
-  box-shadow: 0 0 0 2px var(--ring);
-}
-
-.markdown .mermaid-diagram-preview-trigger > [role="img"] {
-  display: flex;
-  width: 100%;
-  min-width: 0;
-  align-items: center;
-  justify-content: center;
-}
-
-.markdown .mermaid-diagram-expand {
-  position: absolute;
-  z-index: var(--z-sticky);
-  top: 8px;
-  right: 8px;
-  display: inline-flex;
-  width: 32px;
-  height: 32px;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-ctl);
-  background: color-mix(in oklch, var(--popover), transparent 8%);
-  color: var(--foreground);
-  box-shadow: var(--shadow-small);
-}
-
-.markdown .mermaid-diagram-expand svg {
-  width: 16px;
-  height: 16px;
-}
-
 .markdown .mermaid-diagram-status {
   color: var(--muted-foreground);
   font-size: 0.9em;
@@ -6496,13 +6340,6 @@ textarea:disabled {
 
 .markdown .mermaid-diagram-error > pre {
   margin-bottom: 0;
-}
-
-/* Media viewers (the Dialog's viewer size): the dialog's X sits in the zoom
-   toolbar's row, which is tall enough for it and leaves it room. */
-[data-slot="dialog-content"][data-size="viewer"] .zoomable-preview-toolbar {
-  min-height: calc(var(--dialog-close-size) + 2 * var(--space-0-5) + 1px);
-  padding-right: calc(var(--dialog-close-size) + var(--space-2));
 }
 
 [data-slot="dialog-content"][data-size="viewer"] > [data-slot="dialog-close"] {
@@ -7270,62 +7107,9 @@ tr.diff-hunk td {
   margin: 8px 0;
 }
 
-.image-figure img {
-  max-width: min(100%, 440px);
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-card);
-}
-
-.message-viewport .image-figure img {
-  width: auto;
-  height: auto;
-  max-height: max(0px, calc(100cqh - 32px));
-  object-fit: contain;
-}
-
-.image-figure-preview {
-  position: relative;
-  display: inline-flex;
-  max-width: 100%;
-  appearance: none;
-  padding: 0;
-  border: 0;
-  border-radius: var(--radius-card);
-  outline: none;
-  background: transparent;
-  color: inherit;
-  cursor: zoom-in;
-  font: inherit;
-}
-
-.image-figure-preview:focus-visible {
-  box-shadow: 0 0 0 2px var(--ring);
-}
-
 [data-android-image-actions="available"] {
   -webkit-touch-callout: none;
   user-select: none;
-}
-
-.image-figure-expand {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  display: inline-flex;
-  width: 32px;
-  height: 32px;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-ctl);
-  background: color-mix(in oklch, var(--popover), transparent 8%);
-  color: var(--foreground);
-  box-shadow: var(--shadow-small);
-}
-
-.image-figure-expand svg {
-  width: 16px;
-  height: 16px;
 }
 
 .image-figure figcaption {
@@ -10552,7 +10336,8 @@ tr.diff-hunk td {
     padding: 22px 15px 44px;
   }
 
-  .message-row.assistant {
+  .message-row.assistant,
+  .image-figure {
     width: 100%;
     max-width: none;
   }

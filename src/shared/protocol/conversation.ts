@@ -28,6 +28,7 @@ import {
   unifiedDiffSchema,
 } from "./payload.js";
 import { imageItemOriginSchema, normalizedImageSchema } from "./output-artifacts.js";
+import { pageRevisionSchema } from "./pages.js";
 import {
   MAXIMUM_PROVIDER_FEATURES_PER_CONVERSATION_ITEM,
   MAXIMUM_PROVIDER_FEATURES_PER_THREAD,
@@ -105,6 +106,7 @@ export const normalizedItemKindSchema = z.enum([
   "collaboration",
   "image",
   "viewed_image",
+  "page",
   "review_marker",
   "compaction",
   "notice",
@@ -464,6 +466,13 @@ export const viewedImageItemSchema = z.strictObject({
   kind: z.literal("viewed_image"),
   fileName: boundedDisplayTextSchema.optional(),
 });
+/** An application-owned immutable page revision, independent of provider output text. */
+export const pageItemSchema = z.strictObject({
+  ...conversationItemBaseShape,
+  kind: z.literal("page"),
+  status: z.literal("completed"),
+  page: pageRevisionSchema,
+});
 export const reviewMarkerItemSchema = z.strictObject({
   ...conversationItemBaseShape,
   kind: z.literal("review_marker"),
@@ -505,6 +514,7 @@ export const conversationItemSchema = z
     collaborationItemSchema,
     imageItemSchema,
     viewedImageItemSchema,
+    pageItemSchema,
     reviewMarkerItemSchema,
     compactionItemSchema,
     noticeItemSchema,
@@ -534,10 +544,21 @@ export type ActivitySummaryItem = z.infer<typeof activitySummaryItemSchema>;
 export type CollaborationItem = z.infer<typeof collaborationItemSchema>;
 export type ImageItem = z.infer<typeof imageItemSchema>;
 export type ViewedImageItem = z.infer<typeof viewedImageItemSchema>;
+export type PageItem = z.infer<typeof pageItemSchema>;
 export type ReviewMarkerItem = z.infer<typeof reviewMarkerItemSchema>;
 export type CompactionItem = z.infer<typeof compactionItemSchema>;
 export type NoticeItem = z.infer<typeof noticeItemSchema>;
 export type ConversationItem = z.infer<typeof conversationItemSchema>;
+
+/** Application pages advance presentation revisions, not the provider fork boundary. */
+export function conversationTurnSourceRevision(
+  turn: Pick<ConversationTurn, "revision" | "orderedItemIds">,
+  itemsById: Readonly<Record<string, ConversationItem>>,
+): number {
+  let pages = 0;
+  for (const id of turn.orderedItemIds) if (itemsById[id]?.kind === "page") pages++;
+  return turn.revision - pages;
+}
 
 export const conversationHistoryWindowSchema = z.discriminatedUnion(
   "hasOlder",
@@ -1845,7 +1866,8 @@ export const normalizedThreadEventSchema = z.discriminatedUnion("type", [
     .superRefine((event, context) => {
       if (
         event.fork.sourceTurnId !== event.turn.id ||
-        event.fork.expectedTurnRevision !== event.turn.revision
+        event.fork.expectedTurnRevision > event.turn.revision ||
+        event.turn.revision - event.fork.expectedTurnRevision > event.turn.orderedItemIds.length
       ) {
         context.addIssue({
           code: "custom",
@@ -2309,7 +2331,8 @@ function requireConsistentTimelineMaps(
           path: ["forksByTurnId", turnId, "sourceTurnId"],
         });
       }
-      if (fork.expectedTurnRevision !== value.turnsById[turnId]?.revision) {
+      const turn = value.turnsById[turnId];
+      if (turn && fork.expectedTurnRevision !== conversationTurnSourceRevision(turn, value.itemsById)) {
         context.addIssue({
           code: "custom",
           message: "Fork capability revision does not match its source turn.",

@@ -24,7 +24,7 @@ of a built installation and are not listed.
 This file is generated. Run `npm run generate:third-party-notices` to refresh it
 and `npm run check:third-party-notices` to verify that it is current.
 
-Packages listed: 607.
+Packages listed: 617.
 
 ## Packages
 
@@ -47,6 +47,13 @@ Packages listed: 607.
 - License: SEE LICENSE IN README.md
 - URL: https://github.com/anthropics/claude-agent-sdk-typescript
 - Shipped by: sedes, @sedes/server-runtime
+- License text (`LICENSE.md`): [af2be7b670a0](#license-text-af2be7b670a0)
+
+### @anthropic-ai/claude-agent-sdk-linux-x64 0.3.287
+
+- License: SEE LICENSE IN LICENSE.md
+- URL: not declared in package metadata
+- Shipped by: @sedes/server-runtime
 - License text (`LICENSE.md`): [af2be7b670a0](#license-text-af2be7b670a0)
 
 ### @anthropic-ai/sdk 0.124.0
@@ -619,9 +626,9 @@ Packages listed: 607.
 ### @hono/node-server 2.1.1
 
 - License: MIT
-- URL: not declared in package metadata
+- URL: https://github.com/honojs/node-server
 - Shipped by: @sedes/server-runtime
-- License text: license text not included in package; see repository
+- License text (`LICENSE`): [35d16fc259cf](#license-text-35d16fc259cf)
 
 ### @iconify/types 2.0.0
 
@@ -1627,9 +1634,9 @@ Packages listed: 607.
 ### @types/node 26.6.2
 
 - License: MIT
-- URL: not declared in package metadata
+- URL: https://github.com/DefinitelyTyped/DefinitelyTyped/tree/HEAD/types/node
 - Shipped by: @sedes/server-runtime
-- License text: license text not included in package; see repository
+- License text (`LICENSE`): [ff82c90f8494](#license-text-ff82c90f8494)
 
 ### @types/react 19.2.17
 
@@ -1928,9 +1935,9 @@ Packages listed: 607.
 ### content-type 2.1.0
 
 - License: MIT
-- URL: not declared in package metadata
+- URL: https://github.com/jshttp/content-type
 - Shipped by: @sedes/server-runtime
-- License text: license text not included in package; see repository
+- License text (`LICENSE`): [fb06d5b872e5](#license-text-fb06d5b872e5)
 
 ### cookie 0.7.2
 
@@ -1980,6 +1987,13 @@ Packages listed: 607.
 - URL: https://github.com/moxystudio/node-cross-spawn
 - Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [5e7b89989b94](#license-text-5e7b89989b94)
+
+### css-tree 3.2.1
+
+- License: MIT
+- URL: https://github.com/csstree/csstree
+- Shipped by: sedes, @sedes/server-runtime
+- License text (`LICENSE`): [2a9c6ba31315](#license-text-2a9c6ba31315)
 
 ### csstype 3.2.3
 
@@ -2389,6 +2403,20 @@ Packages listed: 607.
 - Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [b4d257dd0d1c](#license-text-b4d257dd0d1c)
 
+### entities 8.0.0
+
+- License: BSD-2-Clause
+- URL: https://github.com/fb55/entities
+- Shipped by: sedes
+- License text (`LICENSE`): [0e57eeaccc07](#license-text-0e57eeaccc07)
+
+### entities 8.1.0
+
+- License: BSD-2-Clause
+- URL: https://github.com/fb55/entities
+- Shipped by: @sedes/server-runtime
+- License text (`LICENSE`): [0e57eeaccc07](#license-text-0e57eeaccc07)
+
 ### es-define-property 1.0.1
 
 - License: MIT
@@ -2469,9 +2497,9 @@ Packages listed: 607.
 ### eventsource-parser 3.1.1
 
 - License: MIT
-- URL: not declared in package metadata
+- URL: https://github.com/rexxars/eventsource-parser
 - Shipped by: @sedes/server-runtime
-- License text: license text not included in package; see repository
+- License text (`LICENSE`): [39813fa23b19](#license-text-39813fa23b19)
 
 ### express 5.2.1
 
@@ -2490,9 +2518,9 @@ Packages listed: 607.
 ### express-rate-limit 8.7.0
 
 - License: MIT
-- URL: not declared in package metadata
+- URL: https://github.com/express-rate-limit/express-rate-limit
 - Shipped by: @sedes/server-runtime
-- License text: license text not included in package; see repository
+- License text (`license`): [339875e6494e](#license-text-339875e6494e)
 
 ### extend 3.0.2
 
@@ -2532,9 +2560,9 @@ Packages listed: 607.
 ### fast-uri 3.1.6
 
 - License: BSD-3-Clause
-- URL: not declared in package metadata
+- URL: https://github.com/fastify/fast-uri
 - Shipped by: @sedes/server-runtime
-- License text: license text not included in package; see repository
+- License text (`LICENSE`): [b010b0dfdfdb](#license-text-b010b0dfdfdb)
 
 ### fetch-blob 3.2.0
 
@@ -2735,9 +2763,9 @@ Packages listed: 607.
 ### hono 4.13.5
 
 - License: MIT
-- URL: not declared in package metadata
+- URL: https://github.com/honojs/hono
 - Shipped by: @sedes/server-runtime
-- License text: license text not included in package; see repository
+- License text (`LICENSE`): [2e0a854a1106](#license-text-2e0a854a1106)
 
 ### hosted-git-info 9.0.3
 
@@ -2854,9 +2882,9 @@ Packages listed: 607.
 ### ip-address 10.5.1
 
 - License: MIT
-- URL: not declared in package metadata
+- URL: https://github.com/beaugunderson/ip-address
 - Shipped by: @sedes/server-runtime
-- License text: license text not included in package; see repository
+- License text (`LICENSE`): [02d42589c644](#license-text-02d42589c644)
 
 ### ipaddr.js 1.9.1
 
@@ -2924,9 +2952,9 @@ Packages listed: 607.
 ### jose 6.2.10
 
 - License: MIT
-- URL: not declared in package metadata
+- URL: https://github.com/panva/jose
 - Shipped by: @sedes/server-runtime
-- License text: license text not included in package; see repository
+- License text (`LICENSE.md`): [d6f4fc856b99](#license-text-d6f4fc856b99)
 
 ### jose 6.2.5
 
@@ -3186,6 +3214,13 @@ Packages listed: 607.
 - URL: https://github.com/syntax-tree/mdast-util-to-string
 - Shipped by: sedes
 - License text (`license`): [c37a32dd1cd4](#license-text-c37a32dd1cd4)
+
+### mdn-data 2.27.1
+
+- License: CC0-1.0
+- URL: https://github.com/mdn/data
+- Shipped by: sedes, @sedes/server-runtime
+- License text (`LICENSE`): [5537d4d10b76](#license-text-5537d4d10b76)
 
 ### media-typer 1.1.1
 
@@ -3456,9 +3491,9 @@ Packages listed: 607.
 ### negotiator 1.1.0
 
 - License: MIT
-- URL: not declared in package metadata
+- URL: https://github.com/jshttp/negotiator
 - Shipped by: @sedes/server-runtime
-- License text: license text not included in package; see repository
+- License text (`LICENSE`): [8a160f8ccc7b](#license-text-8a160f8ccc7b)
 
 ### node-addon-api 7.1.1
 
@@ -3477,9 +3512,9 @@ Packages listed: 607.
 ### node-addon-api 8.9.2
 
 - License: MIT
-- URL: not declared in package metadata
+- URL: https://github.com/nodejs/node-addon-api
 - Shipped by: @sedes/server-runtime
-- License text: license text not included in package; see repository
+- License text (`LICENSE.md`): [1d660eff8965](#license-text-1d660eff8965)
 
 ### node-domexception 1.0.0
 
@@ -3579,6 +3614,13 @@ Packages listed: 607.
 - Shipped by: sedes
 - License text (`license`): [c74f9c5a522f](#license-text-c74f9c5a522f)
 
+### parse5 8.0.1
+
+- License: MIT
+- URL: https://github.com/inikulin/parse5
+- Shipped by: sedes, @sedes/server-runtime
+- License text (`LICENSE`): [2c01a01133de](#license-text-2c01a01133de)
+
 ### parseurl 1.3.3
 
 - License: MIT
@@ -3620,6 +3662,20 @@ Packages listed: 607.
 - URL: https://github.com/crouchcd/pkce-challenge
 - Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE`): [64c4e54df59c](#license-text-64c4e54df59c)
+
+### playwright 1.62.0
+
+- License: Apache-2.0
+- URL: https://github.com/microsoft/playwright
+- Shipped by: sedes, @sedes/server-runtime
+- License text (`LICENSE`): [5b475effab78](#license-text-5b475effab78)
+
+### playwright-core 1.62.0
+
+- License: Apache-2.0
+- URL: https://github.com/microsoft/playwright
+- Shipped by: sedes, @sedes/server-runtime
+- License text (`LICENSE`): [5b475effab78](#license-text-5b475effab78)
 
 ### points-on-curve 0.2.0
 
@@ -3964,6 +4020,20 @@ Packages listed: 607.
 - Shipped by: sedes, @sedes/server-runtime
 - License text (`LICENSE.txt`): [fc5c72a172de](#license-text-fc5c72a172de)
 
+### source-map-js 1.2.1
+
+- License: BSD-3-Clause
+- URL: https://github.com/7rulnik/source-map-js
+- Shipped by: sedes
+- License text (`LICENSE`): [6ead954f9672](#license-text-6ead954f9672)
+
+### source-map-js 1.2.2
+
+- License: BSD-3-Clause
+- URL: https://github.com/7rulnik/source-map-js
+- Shipped by: @sedes/server-runtime
+- License text (`LICENSE`): [6ead954f9672](#license-text-6ead954f9672)
+
 ### space-separated-tokens 2.0.2
 
 - License: MIT
@@ -4121,9 +4191,9 @@ Packages listed: 607.
 ### undici-types 8.9.0
 
 - License: MIT
-- URL: not declared in package metadata
+- URL: https://github.com/nodejs/undici
 - Shipped by: @sedes/server-runtime
-- License text: license text not included in package; see repository
+- License text (`LICENSE`): [fe64958bfaef](#license-text-fe64958bfaef)
 
 ### unified 11.0.5
 
@@ -4362,7 +4432,7 @@ Original Author, when distributed with the Software.
 
 ### License text 02d42589c644
 
-Applies to: ip-address 10.4.0.
+Applies to: ip-address 10.4.0, ip-address 10.5.1.
 
 ```text
 Copyright (C) 2011 by Beau Gunderson
@@ -4604,6 +4674,24 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+```
+
+### License text 0e57eeaccc07
+
+Applies to: entities 8.0.0, entities 8.1.0.
+
+```text
+Copyright (c) Felix Böhm
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
+
+Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+
+Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.
+
+THIS IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS,
+EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
 
 ### License text 0e8d2550baea
@@ -5069,7 +5157,7 @@ SOFTWARE.
 
 ### License text 1d660eff8965
 
-Applies to: node-addon-api 7.1.1, node-addon-api 8.9.0.
+Applies to: node-addon-api 7.1.1, node-addon-api 8.9.0, node-addon-api 8.9.2.
 
 ```text
 The MIT License (MIT)
@@ -5453,6 +5541,32 @@ Apache License
    limitations under the License.
 ```
 
+### License text 2a9c6ba31315
+
+Applies to: css-tree 3.2.1.
+
+```text
+Copyright (C) 2016-2026 by Roman Dvornov
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+```
+
 ### License text 2b41a50a006f
 
 Applies to: msgpackr 2.1.0, msgpackr-extract 3.0.4.
@@ -5489,6 +5603,32 @@ Applies to: object-assign 4.1.1.
 The MIT License (MIT)
 
 Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (sindresorhus.com)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+```
+
+### License text 2c01a01133de
+
+Applies to: parse5 8.0.1.
+
+```text
+Copyright (c) 2013-2019 Ivan Nikulin (ifaaan@gmail.com, https://github.com/inikulin)
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -5580,7 +5720,7 @@ THE SOFTWARE.
 
 ### License text 2e0a854a1106
 
-Applies to: hono 4.12.32.
+Applies to: hono 4.12.32, hono 4.13.5.
 
 ```text
 MIT License
@@ -6010,9 +6150,37 @@ CONDITIONS OF ANY KIND, either express or implied. See the License for the
 specific language governing permissions and limitations under the License.
 ```
 
+### License text 339875e6494e
+
+Applies to: express-rate-limit 8.7.0.
+
+```text
+MIT License
+
+Copyright 2023 Nathan Friedly, Vedant K
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software is furnished to do so,
+subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
 ### License text 35d16fc259cf
 
-Applies to: @hono/node-server 2.0.12.
+Applies to: @hono/node-server 2.0.12, @hono/node-server 2.1.1.
 
 ```text
 MIT License
@@ -6155,7 +6323,7 @@ IN THE SOFTWARE.
 
 ### License text 39813fa23b19
 
-Applies to: eventsource-parser 3.1.0.
+Applies to: eventsource-parser 3.1.0, eventsource-parser 3.1.1.
 
 ```text
 MIT License
@@ -7354,6 +7522,129 @@ FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 ```
 
+### License text 5537d4d10b76
+
+Applies to: mdn-data 2.27.1.
+
+```text
+CC0 1.0 Universal
+
+Statement of Purpose
+
+The laws of most jurisdictions throughout the world automatically confer
+exclusive Copyright and Related Rights (defined below) upon the creator and
+subsequent owner(s) (each and all, an "owner") of an original work of
+authorship and/or a database (each, a "Work").
+
+Certain owners wish to permanently relinquish those rights to a Work for the
+purpose of contributing to a commons of creative, cultural and scientific
+works ("Commons") that the public can reliably and without fear of later
+claims of infringement build upon, modify, incorporate in other works, reuse
+and redistribute as freely as possible in any form whatsoever and for any
+purposes, including without limitation commercial purposes. These owners may
+contribute to the Commons to promote the ideal of a free culture and the
+further production of creative, cultural and scientific works, or to gain
+reputation or greater distribution for their Work in part through the use and
+efforts of others.
+
+For these and/or other purposes and motivations, and without any expectation
+of additional consideration or compensation, the person associating CC0 with a
+Work (the "Affirmer"), to the extent that he or she is an owner of Copyright
+and Related Rights in the Work, voluntarily elects to apply CC0 to the Work
+and publicly distribute the Work under its terms, with knowledge of his or her
+Copyright and Related Rights in the Work and the meaning and intended legal
+effect of CC0 on those rights.
+
+1. Copyright and Related Rights. A Work made available under CC0 may be
+protected by copyright and related or neighboring rights ("Copyright and
+Related Rights"). Copyright and Related Rights include, but are not limited
+to, the following:
+
+  i. the right to reproduce, adapt, distribute, perform, display, communicate,
+  and translate a Work;
+
+  ii. moral rights retained by the original author(s) and/or performer(s);
+
+  iii. publicity and privacy rights pertaining to a person's image or likeness
+  depicted in a Work;
+
+  iv. rights protecting against unfair competition in regards to a Work,
+  subject to the limitations in paragraph 4(a), below;
+
+  v. rights protecting the extraction, dissemination, use and reuse of data in
+  a Work;
+
+  vi. database rights (such as those arising under Directive 96/9/EC of the
+  European Parliament and of the Council of 11 March 1996 on the legal
+  protection of databases, and under any national implementation thereof,
+  including any amended or successor version of such directive); and
+
+  vii. other similar, equivalent or corresponding rights throughout the world
+  based on applicable law or treaty, and any national implementations thereof.
+
+2. Waiver. To the greatest extent permitted by, but not in contravention of,
+applicable law, Affirmer hereby overtly, fully, permanently, irrevocably and
+unconditionally waives, abandons, and surrenders all of Affirmer's Copyright
+and Related Rights and associated claims and causes of action, whether now
+known or unknown (including existing as well as future claims and causes of
+action), in the Work (i) in all territories worldwide, (ii) for the maximum
+duration provided by applicable law or treaty (including future time
+extensions), (iii) in any current or future medium and for any number of
+copies, and (iv) for any purpose whatsoever, including without limitation
+commercial, advertising or promotional purposes (the "Waiver"). Affirmer makes
+the Waiver for the benefit of each member of the public at large and to the
+detriment of Affirmer's heirs and successors, fully intending that such Waiver
+shall not be subject to revocation, rescission, cancellation, termination, or
+any other legal or equitable action to disrupt the quiet enjoyment of the Work
+by the public as contemplated by Affirmer's express Statement of Purpose.
+
+3. Public License Fallback. Should any part of the Waiver for any reason be
+judged legally invalid or ineffective under applicable law, then the Waiver
+shall be preserved to the maximum extent permitted taking into account
+Affirmer's express Statement of Purpose. In addition, to the extent the Waiver
+is so judged Affirmer hereby grants to each affected person a royalty-free,
+non transferable, non sublicensable, non exclusive, irrevocable and
+unconditional license to exercise Affirmer's Copyright and Related Rights in
+the Work (i) in all territories worldwide, (ii) for the maximum duration
+provided by applicable law or treaty (including future time extensions), (iii)
+in any current or future medium and for any number of copies, and (iv) for any
+purpose whatsoever, including without limitation commercial, advertising or
+promotional purposes (the "License"). The License shall be deemed effective as
+of the date CC0 was applied by Affirmer to the Work. Should any part of the
+License for any reason be judged legally invalid or ineffective under
+applicable law, such partial invalidity or ineffectiveness shall not
+invalidate the remainder of the License, and in such case Affirmer hereby
+affirms that he or she will not (i) exercise any of his or her remaining
+Copyright and Related Rights in the Work or (ii) assert any associated claims
+and causes of action with respect to the Work, in either case contrary to
+Affirmer's express Statement of Purpose.
+
+4. Limitations and Disclaimers.
+
+  a. No trademark or patent rights held by Affirmer are waived, abandoned,
+  surrendered, licensed or otherwise affected by this document.
+
+  b. Affirmer offers the Work as-is and makes no representations or warranties
+  of any kind concerning the Work, express, implied, statutory or otherwise,
+  including without limitation warranties of title, merchantability, fitness
+  for a particular purpose, non infringement, or the absence of latent or
+  other defects, accuracy, or the present or absence of errors, whether or not
+  discoverable, all to the greatest extent permissible under applicable law.
+
+  c. Affirmer disclaims responsibility for clearing rights of other persons
+  that may apply to the Work or any use thereof, including without limitation
+  any person's Copyright and Related Rights in the Work. Further, Affirmer
+  disclaims responsibility for obtaining any necessary consents, permissions
+  or other rights required for any use of the Work.
+
+  d. Affirmer understands and acknowledges that Creative Commons is not a
+  party to this document and has no duty or obligation with respect to this
+  CC0 or use of the Work.
+
+For more information, please see
+<http://creativecommons.org/publicdomain/zero/1.0/>
+```
+
 ### License text 56c9299ed8fb
 
 Applies to: @protobufjs/aspromise 1.1.2, @protobufjs/base64 1.1.2, @protobufjs/codegen 2.0.5, @protobufjs/eventemitter 1.1.1, @protobufjs/fetch 1.1.1, @protobufjs/float 1.0.2, @protobufjs/path 1.1.2, @protobufjs/pool 1.1.0, @protobufjs/utf8 1.1.1, @protobufjs/utf8 1.1.2.
@@ -7498,6 +7789,215 @@ IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
 CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
 TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+```
+
+### License text 5b475effab78
+
+Applies to: playwright 1.62.0, playwright-core 1.62.0.
+
+```text
+Apache License
+                           Version 2.0, January 2004
+                        http://www.apache.org/licenses/
+
+   TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
+
+   1. Definitions.
+
+      "License" shall mean the terms and conditions for use, reproduction,
+      and distribution as defined by Sections 1 through 9 of this document.
+
+      "Licensor" shall mean the copyright owner or entity authorized by
+      the copyright owner that is granting the License.
+
+      "Legal Entity" shall mean the union of the acting entity and all
+      other entities that control, are controlled by, or are under common
+      control with that entity. For the purposes of this definition,
+      "control" means (i) the power, direct or indirect, to cause the
+      direction or management of such entity, whether by contract or
+      otherwise, or (ii) ownership of fifty percent (50%) or more of the
+      outstanding shares, or (iii) beneficial ownership of such entity.
+
+      "You" (or "Your") shall mean an individual or Legal Entity
+      exercising permissions granted by this License.
+
+      "Source" form shall mean the preferred form for making modifications,
+      including but not limited to software source code, documentation
+      source, and configuration files.
+
+      "Object" form shall mean any form resulting from mechanical
+      transformation or translation of a Source form, including but
+      not limited to compiled object code, generated documentation,
+      and conversions to other media types.
+
+      "Work" shall mean the work of authorship, whether in Source or
+      Object form, made available under the License, as indicated by a
+      copyright notice that is included in or attached to the work
+      (an example is provided in the Appendix below).
+
+      "Derivative Works" shall mean any work, whether in Source or Object
+      form, that is based on (or derived from) the Work and for which the
+      editorial revisions, annotations, elaborations, or other modifications
+      represent, as a whole, an original work of authorship. For the purposes
+      of this License, Derivative Works shall not include works that remain
+      separable from, or merely link (or bind by name) to the interfaces of,
+      the Work and Derivative Works thereof.
+
+      "Contribution" shall mean any work of authorship, including
+      the original version of the Work and any modifications or additions
+      to that Work or Derivative Works thereof, that is intentionally
+      submitted to Licensor for inclusion in the Work by the copyright owner
+      or by an individual or Legal Entity authorized to submit on behalf of
+      the copyright owner. For the purposes of this definition, "submitted"
+      means any form of electronic, verbal, or written communication sent
+      to the Licensor or its representatives, including but not limited to
+      communication on electronic mailing lists, source code control systems,
+      and issue tracking systems that are managed by, or on behalf of, the
+      Licensor for the purpose of discussing and improving the Work, but
+      excluding communication that is conspicuously marked or otherwise
+      designated in writing by the copyright owner as "Not a Contribution."
+
+      "Contributor" shall mean Licensor and any individual or Legal Entity
+      on behalf of whom a Contribution has been received by Licensor and
+      subsequently incorporated within the Work.
+
+   2. Grant of Copyright License. Subject to the terms and conditions of
+      this License, each Contributor hereby grants to You a perpetual,
+      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+      copyright license to reproduce, prepare Derivative Works of,
+      publicly display, publicly perform, sublicense, and distribute the
+      Work and such Derivative Works in Source or Object form.
+
+   3. Grant of Patent License. Subject to the terms and conditions of
+      this License, each Contributor hereby grants to You a perpetual,
+      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+      (except as stated in this section) patent license to make, have made,
+      use, offer to sell, sell, import, and otherwise transfer the Work,
+      where such license applies only to those patent claims licensable
+      by such Contributor that are necessarily infringed by their
+      Contribution(s) alone or by combination of their Contribution(s)
+      with the Work to which such Contribution(s) was submitted. If You
+      institute patent litigation against any entity (including a
+      cross-claim or counterclaim in a lawsuit) alleging that the Work
+      or a Contribution incorporated within the Work constitutes direct
+      or contributory patent infringement, then any patent licenses
+      granted to You under this License for that Work shall terminate
+      as of the date such litigation is filed.
+
+   4. Redistribution. You may reproduce and distribute copies of the
+      Work or Derivative Works thereof in any medium, with or without
+      modifications, and in Source or Object form, provided that You
+      meet the following conditions:
+
+      (a) You must give any other recipients of the Work or
+          Derivative Works a copy of this License; and
+
+      (b) You must cause any modified files to carry prominent notices
+          stating that You changed the files; and
+
+      (c) You must retain, in the Source form of any Derivative Works
+          that You distribute, all copyright, patent, trademark, and
+          attribution notices from the Source form of the Work,
+          excluding those notices that do not pertain to any part of
+          the Derivative Works; and
+
+      (d) If the Work includes a "NOTICE" text file as part of its
+          distribution, then any Derivative Works that You distribute must
+          include a readable copy of the attribution notices contained
+          within such NOTICE file, excluding those notices that do not
+          pertain to any part of the Derivative Works, in at least one
+          of the following places: within a NOTICE text file distributed
+          as part of the Derivative Works; within the Source form or
+          documentation, if provided along with the Derivative Works; or,
+          within a display generated by the Derivative Works, if and
+          wherever such third-party notices normally appear. The contents
+          of the NOTICE file are for informational purposes only and
+          do not modify the License. You may add Your own attribution
+          notices within Derivative Works that You distribute, alongside
+          or as an addendum to the NOTICE text from the Work, provided
+          that such additional attribution notices cannot be construed
+          as modifying the License.
+
+      You may add Your own copyright statement to Your modifications and
+      may provide additional or different license terms and conditions
+      for use, reproduction, or distribution of Your modifications, or
+      for any such Derivative Works as a whole, provided Your use,
+      reproduction, and distribution of the Work otherwise complies with
+      the conditions stated in this License.
+
+   5. Submission of Contributions. Unless You explicitly state otherwise,
+      any Contribution intentionally submitted for inclusion in the Work
+      by You to the Licensor shall be under the terms and conditions of
+      this License, without any additional terms or conditions.
+      Notwithstanding the above, nothing herein shall supersede or modify
+      the terms of any separate license agreement you may have executed
+      with Licensor regarding such Contributions.
+
+   6. Trademarks. This License does not grant permission to use the trade
+      names, trademarks, service marks, or product names of the Licensor,
+      except as required for reasonable and customary use in describing the
+      origin of the Work and reproducing the content of the NOTICE file.
+
+   7. Disclaimer of Warranty. Unless required by applicable law or
+      agreed to in writing, Licensor provides the Work (and each
+      Contributor provides its Contributions) on an "AS IS" BASIS,
+      WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+      implied, including, without limitation, any warranties or conditions
+      of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A
+      PARTICULAR PURPOSE. You are solely responsible for determining the
+      appropriateness of using or redistributing the Work and assume any
+      risks associated with Your exercise of permissions under this License.
+
+   8. Limitation of Liability. In no event and under no legal theory,
+      whether in tort (including negligence), contract, or otherwise,
+      unless required by applicable law (such as deliberate and grossly
+      negligent acts) or agreed to in writing, shall any Contributor be
+      liable to You for damages, including any direct, indirect, special,
+      incidental, or consequential damages of any character arising as a
+      result of this License or out of the use or inability to use the
+      Work (including but not limited to damages for loss of goodwill,
+      work stoppage, computer failure or malfunction, or any and all
+      other commercial damages or losses), even if such Contributor
+      has been advised of the possibility of such damages.
+
+   9. Accepting Warranty or Additional Liability. While redistributing
+      the Work or Derivative Works thereof, You may choose to offer,
+      and charge a fee for, acceptance of support, warranty, indemnity,
+      or other liability obligations and/or rights consistent with this
+      License. However, in accepting such obligations, You may act only
+      on Your own behalf and on Your sole responsibility, not on behalf
+      of any other Contributor, and only if You agree to indemnify,
+      defend, and hold each Contributor harmless for any liability
+      incurred by, or claims asserted against, such Contributor by reason
+      of your accepting any such warranty or additional liability.
+
+   END OF TERMS AND CONDITIONS
+
+   APPENDIX: How to apply the Apache License to your work.
+
+      To apply the Apache License to your work, attach the following
+      boilerplate notice, with the fields enclosed by brackets "[]"
+      replaced with your own identifying information. (Don't include
+      the brackets!)  The text should be enclosed in the appropriate
+      comment syntax for the file format. We also recommend that a
+      file or class name and description of purpose be included on the
+      same "printed page" as the copyright notice for easier
+      identification within third-party archives.
+
+   Portions Copyright (c) Microsoft Corporation.
+   Portions Copyright 2017 Google Inc.
+
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
 ```
 
 ### License text 5dd2a43c0ed6
@@ -8068,6 +8568,40 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+```
+
+### License text 6ead954f9672
+
+Applies to: source-map-js 1.2.1, source-map-js 1.2.2.
+
+```text
+Copyright (c) 2009-2011, Mozilla Foundation and contributors
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+* Redistributions of source code must retain the above copyright notice, this
+  list of conditions and the following disclaimer.
+
+* Redistributions in binary form must reproduce the above copyright notice,
+  this list of conditions and the following disclaimer in the documentation
+  and/or other materials provided with the distribution.
+
+* Neither the names of the Mozilla Foundation nor the names of project
+  contributors may be used to endorse or promote products derived from this
+  software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
 
 ### License text 6efa74cb6d21
@@ -9192,7 +9726,7 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ### License text 8a160f8ccc7b
 
-Applies to: negotiator 1.0.0.
+Applies to: negotiator 1.0.0, negotiator 1.1.0.
 
 ```text
 (The MIT License)
@@ -10403,7 +10937,7 @@ THE SOFTWARE.
 
 ### License text af2be7b670a0
 
-Applies to: @anthropic-ai/claude-agent-sdk 0.3.287.
+Applies to: @anthropic-ai/claude-agent-sdk 0.3.287, @anthropic-ai/claude-agent-sdk-linux-x64 0.3.287.
 
 ```text
 © Anthropic PBC. All rights reserved. Use is subject to the Legal Agreements outlined here: https://code.claude.com/docs/en/legal-and-compliance.
@@ -10411,7 +10945,7 @@ Applies to: @anthropic-ai/claude-agent-sdk 0.3.287.
 
 ### License text b010b0dfdfdb
 
-Applies to: fast-uri 3.1.5.
+Applies to: fast-uri 3.1.5, fast-uri 3.1.6.
 
 ```text
 Copyright (c) 2011-2021, Gary Court until https://github.com/garycourt/uri-js/commit/a1acf730b4bba3f1097c9f52e7d9d3aba8cdcaae
@@ -11888,7 +12422,7 @@ THE SOFTWARE.
 
 ### License text d6f4fc856b99
 
-Applies to: jose 6.2.5.
+Applies to: jose 6.2.10, jose 6.2.5.
 
 ```text
 The MIT License (MIT)
@@ -13695,7 +14229,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ### License text fb06d5b872e5
 
-Applies to: content-type 1.0.5, content-type 2.0.0.
+Applies to: content-type 1.0.5, content-type 2.0.0, content-type 2.1.0.
 
 ```text
 (The MIT License)
@@ -13860,7 +14394,7 @@ SOFTWARE.
 
 ### License text fe64958bfaef
 
-Applies to: undici 8.10.2, undici-types 6.21.0, undici-types 8.3.0.
+Applies to: undici 8.10.2, undici-types 6.21.0, undici-types 8.3.0, undici-types 8.9.0.
 
 ```text
 MIT License
@@ -13952,7 +14486,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ### License text ff82c90f8494
 
-Applies to: @types/d3 7.4.3, @types/d3-array 3.2.2, @types/d3-axis 3.0.6, @types/d3-brush 3.0.6, @types/d3-chord 3.0.6, @types/d3-color 3.1.3, @types/d3-contour 3.0.6, @types/d3-delaunay 6.0.4, @types/d3-dispatch 3.0.7, @types/d3-drag 3.0.7, @types/d3-dsv 3.0.7, @types/d3-ease 3.0.2, @types/d3-fetch 3.0.7, @types/d3-force 3.0.10, @types/d3-format 3.0.4, @types/d3-geo 3.1.1, @types/d3-hierarchy 3.1.7, @types/d3-interpolate 3.0.4, @types/d3-path 3.1.1, @types/d3-polygon 3.0.2, @types/d3-quadtree 3.0.6, @types/d3-random 3.0.4, @types/d3-scale 4.0.9, @types/d3-scale-chromatic 3.1.0, @types/d3-selection 3.0.11, @types/d3-shape 3.1.8, @types/d3-time 3.0.4, @types/d3-time-format 4.0.3, @types/d3-timer 3.0.2, @types/d3-transition 3.0.9, @types/d3-zoom 3.0.8, @types/debug 4.1.13, @types/estree 1.0.9, @types/estree-jsx 1.0.5, @types/geojson 7946.0.16, @types/hast 3.0.5, @types/mdast 4.0.4, @types/ms 2.1.0, @types/node 22.19.19, @types/node 26.1.2, @types/react 19.2.17, @types/trusted-types 2.0.7, @types/unist 2.0.11, @types/unist 3.0.3.
+Applies to: @types/d3 7.4.3, @types/d3-array 3.2.2, @types/d3-axis 3.0.6, @types/d3-brush 3.0.6, @types/d3-chord 3.0.6, @types/d3-color 3.1.3, @types/d3-contour 3.0.6, @types/d3-delaunay 6.0.4, @types/d3-dispatch 3.0.7, @types/d3-drag 3.0.7, @types/d3-dsv 3.0.7, @types/d3-ease 3.0.2, @types/d3-fetch 3.0.7, @types/d3-force 3.0.10, @types/d3-format 3.0.4, @types/d3-geo 3.1.1, @types/d3-hierarchy 3.1.7, @types/d3-interpolate 3.0.4, @types/d3-path 3.1.1, @types/d3-polygon 3.0.2, @types/d3-quadtree 3.0.6, @types/d3-random 3.0.4, @types/d3-scale 4.0.9, @types/d3-scale-chromatic 3.1.0, @types/d3-selection 3.0.11, @types/d3-shape 3.1.8, @types/d3-time 3.0.4, @types/d3-time-format 4.0.3, @types/d3-timer 3.0.2, @types/d3-transition 3.0.9, @types/d3-zoom 3.0.8, @types/debug 4.1.13, @types/estree 1.0.9, @types/estree-jsx 1.0.5, @types/geojson 7946.0.16, @types/hast 3.0.5, @types/mdast 4.0.4, @types/ms 2.1.0, @types/node 22.19.19, @types/node 26.1.2, @types/node 26.6.2, @types/react 19.2.17, @types/trusted-types 2.0.7, @types/unist 2.0.11, @types/unist 3.0.3.
 
 ```text
 MIT License

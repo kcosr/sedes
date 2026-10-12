@@ -1,5 +1,8 @@
 import { createServer } from "node:http";
-import { describe, expect, it, vi } from "vitest";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { runSedesCli, type SedesCliIo } from "../../src/cli/sedes-cli.js";
 import { SEDES_VERSION } from "../../src/shared/version.js";
 import { SedesToolHttpClient } from "../../src/cli/sedes-tool-api-client.js";
@@ -14,6 +17,8 @@ import { CANONICAL_AGENT_TOOL_MANIFEST_ENTRIES } from "../../src/server/agent-to
 import { agentToolCliResultSchema } from "../../src/internal/agent-tool-cli-protocol/index.js";
 
 const sourceCapability = "c".repeat(48);
+const mediaDirectories: string[] = [];
+afterEach(async () => { await Promise.all(mediaDirectories.splice(0).map(directory => rm(directory, { recursive: true, force: true }))); });
 const sourceCredential = {
   kind: "thread_source" as const,
   value: sourceCapability,
@@ -80,6 +85,73 @@ function environment(mode: "progressive" | "individual" = "progressive") {
 }
 
 describe("Sedes CLI", () => {
+  it("materializes remote result images on the CLI host and emits compact local file descriptors", async () => {
+    const output = bufferedIo();
+    const modelContent = [{ type: "image", mimeType: "image/png",
+      data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j3x8AAAAASUVORK5CYII=" }];
+    const metadata = { note: "preview complete" };
+    const fetch = vi.fn(async (input: URL | RequestInfo) => {
+      const url = String(input);
+      if (url.endsWith("/api/agent-tool-csrf")) return json({ csrfToken: "csrf" });
+      if (url.endsWith("/api/agent-tool-descriptions")) return json({ tools: [artifacts().find(tool => tool.id === "agent.context")] });
+      return json({ invocationId: "image-result", state: "completed", output: metadata, modelContent });
+    });
+    const exit = await runSedesCli(["tool", "invoke", "agent.context", "--input-json", "{}", "--json"], { environment: environment(), io: output.io, fetch });
+    expect(exit, output.stderr()).toBe(0);
+    const parsed = JSON.parse(output.stdout());
+    const image = parsed.modelContent[0];
+    mediaDirectories.push(path.dirname(image.path));
+    expect(parsed).toEqual({ output: metadata, modelContent: [{ type: "image", mimeType: "image/png", path: expect.any(String), byteSize: Buffer.from(modelContent[0]!.data, "base64").length }] });
+    expect(path.isAbsolute(image.path)).toBe(true);
+    expect(await readFile(image.path)).toEqual(Buffer.from(modelContent[0]!.data, "base64"));
+    expect(output.stdout().length).toBeLessThan(512);
+    expect(output.stdout()).not.toContain(modelContent[0]!.data);
+    if (process.platform !== "win32") {
+      expect((await stat(path.dirname(image.path))).mode & 0o777).toBe(0o700);
+      expect((await stat(image.path)).mode & 0o777).toBe(0o600);
+    }
+  });
+
+  it("removes staged media when stdout delivery fails", async () => {
+    const output = bufferedIo();
+    let imagePath = "";
+    const fetch = vi.fn(async (input: URL | RequestInfo) => {
+      const url = String(input);
+      if (url.endsWith("/api/agent-tool-csrf")) return json({ csrfToken: "csrf" });
+      if (url.endsWith("/api/agent-tool-descriptions")) return json({ tools: [artifacts().find(tool => tool.id === "agent.context")] });
+      return json({ invocationId: "image-result", state: "completed", output: {}, modelContent: [{ type: "image", mimeType: "image/png", data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j3x8AAAAASUVORK5CYII=" }] });
+    });
+    const io = { ...output.io, stdout: { write(value: string) { imagePath = JSON.parse(value).modelContent[0].path; throw new Error("stdout closed"); } } };
+    expect(await runSedesCli(["tool", "invoke", "agent.context", "--input-json", "{}", "--json"], { environment: environment(), io, fetch })).toBe(1);
+    expect(imagePath).not.toBe("");
+    await expect(stat(path.dirname(imagePath))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("reports completion without retry when a non-directory temporary location prevents saving media", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "sedes-media-failure-"));
+    mediaDirectories.push(root);
+    const filePath = path.join(root, "not-a-directory");
+    await writeFile(filePath, "file");
+    const output = bufferedIo();
+    let invocations = 0;
+    const fetch = vi.fn(async (input: URL | RequestInfo) => {
+      const url = String(input);
+      if (url.endsWith("/api/agent-tool-csrf")) return json({ csrfToken: "csrf" });
+      if (url.endsWith("/api/agent-tool-descriptions")) return json({ tools: [artifacts().find(tool => tool.id === "agent.context")] });
+      invocations++;
+      return json({ invocationId: "already-completed", state: "completed", output: { saved: true }, modelContent: [{ type: "image", mimeType: "image/png", data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j3x8AAAAASUVORK5CYII=" }] });
+    });
+    vi.stubEnv("TMPDIR", filePath); vi.stubEnv("TMP", filePath); vi.stubEnv("TEMP", filePath);
+    try {
+      expect(await runSedesCli(["tool", "invoke", "agent.context", "--input-json", "{}", "--json"], { environment: environment(), io: output.io, fetch })).toBe(1);
+      expect(invocations).toBe(1);
+      expect(output.stdout()).toBe("");
+      expect(output.stderr()).toContain("media_unavailable: The tool completed (invocation already-completed)");
+      expect(output.stderr()).toContain("Do not retry the tool invocation.");
+      expect(output.stderr()).not.toContain("The Sedes command failed.");
+    } finally { vi.unstubAllEnvs(); }
+  });
+
   it("transports the complete canonical catalog and renders every individual command in root help", async () => {
     type Dependencies = ConstructorParameters<typeof CanonicalInlineAgentToolService>[0];
     // Help needs the real definitions and projections, but executes no domain
@@ -88,6 +160,7 @@ describe("Sedes CLI", () => {
       application: { readThreadStatus: async () => undefined },
       management: {} as NonNullable<Dependencies["management"]>,
       workpads: {} as NonNullable<Dependencies["workpads"]>,
+      pages: {} as NonNullable<Dependencies["pages"]>,
       automations: {} as NonNullable<Dependencies["automations"]>,
       threadCreation: {} as NonNullable<Dependencies["threadCreation"]>,
       savedAgents: {} as NonNullable<Dependencies["savedAgents"]>,

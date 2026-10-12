@@ -292,6 +292,18 @@ function historyPage(
 }
 
 describe("ThreadMessagesService", () => {
+  it("reports the source revision for agent forks while omitting page presentation items", async () => {
+    const page: ConversationItem = { id: "page", turnId: "turn-1", revision: 0, kind: "page", status: "completed", page: {
+      pageId: "22222222-2222-4222-8222-222222222222", threadId: "thread-1", revision: 1, title: "Preview", viewport: {},
+      createdAt: "2026-10-11T00:00:00.000Z", sha256: "a".repeat(64), byteSize: 123,
+    } };
+    const message = item("message", "turn-1", "assistant", "Published");
+    const harness = fixture(state([turn("turn-1", "completed", 3, [message.id, page.id])], [message, page]));
+    const result = await harness.service.list(scope, "thread-1");
+    expect(result.turns[0]?.revision).toBe(2);
+    expect(result.turns[0]?.messages).toEqual([{ role: "assistant", text: { text: "Published" } }]);
+  });
+
   it.each(["in_progress", "completed"] as const)(
     "projects question answers in a %s turn through the canonical tool output schema",
     async (status) => {

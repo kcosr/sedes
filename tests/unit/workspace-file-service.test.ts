@@ -265,6 +265,37 @@ function fixture(input?: {
 }
 
 describe("WorkspaceFileService", () => {
+  it("captures bounded page source through the exact Files provider with a revision-fenced download", async () => {
+    const current = fixture();
+    const bytes = await current.service.readAbsoluteFile(owner, "thread-1", "/workspaces/one/README.md", 100);
+    expect(Buffer.from(bytes).toString()).toBe("read me");
+    expect(current.files.withDownload).toHaveBeenCalledWith(owner, expect.objectContaining({
+      environmentId: primary.environmentId, rootId: "primary", canonicalPath: primary.canonicalPath,
+    }), { path: "README.md", expectedRevision: "revision-1" }, expect.any(Function), expect.any(AbortSignal));
+    expect(current.files.discoverFileLinkRoot).not.toHaveBeenCalled();
+  });
+
+  it("does not download page bytes outside their declared size bound or from an unavailable environment", async () => {
+    const current = fixture();
+    await expect(current.service.readAbsoluteFile(owner, "thread-1", "/workspaces/one/README.md", 3)).rejects.toThrow("capture limit");
+    expect(current.files.withDownload).not.toHaveBeenCalled();
+    vi.mocked(current.files.supportsPrimaryRoot).mockReturnValue(false);
+    vi.mocked(current.files.supportsFileLinkRootDiscovery).mockReturnValue(false);
+    await expect(current.service.readAbsoluteFile(owner, "thread-1", "/workspaces/one/README.md", 100)).rejects.toThrow("unavailable");
+    expect(current.files.withDownload).not.toHaveBeenCalled();
+  });
+
+  it("rejects short page capture streams and forwards source cancellation", async () => {
+    const current = fixture();
+    vi.mocked(current.files.withDownload).mockImplementation(async (_scope, _root, input, operation) => operation({
+      path: input.path, fileName: "README.md", sizeBytes: 7, revision: input.expectedRevision,
+      stream: async write => { await write(Buffer.from("short")); },
+    }));
+    await expect(current.service.readAbsoluteFile(owner, "thread-1", "/workspaces/one/README.md", 100)).rejects.toThrow("changed during capture");
+    const controller = new AbortController(); controller.abort(new Error("cancel capture"));
+    await expect(current.service.readAbsoluteFile(owner, "thread-1", "/workspaces/one/README.md", 100, controller.signal)).rejects.toThrow("cancel capture");
+  });
+
   it("captures an absolute image through an authorized hidden root without refreshing Files topology", async () => {
     const files = provider();
     const current = fixture({ files, preferredWorktreeRootId: "different-worktree" });

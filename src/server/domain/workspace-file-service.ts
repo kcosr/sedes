@@ -811,6 +811,46 @@ export class WorkspaceFileService {
     });
   }
 
+  /** Read exact bounded bytes in the thread's execution environment. Never treats a remote path as local. */
+  async readAbsoluteFile(
+    scope: RequestScope, threadId: string, absolutePath: string, maximumBytes: number, signal?: AbortSignal,
+  ): Promise<Uint8Array> {
+    if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 1 || maximumBytes > 16_777_216) {
+      throw new DomainError("bad_request", "Invalid file capture limit.");
+    }
+    const thread = this.inventory.getThread(scope, threadId);
+    const workspace = this.inventory.getWorkspace(scope, thread.thread.workspaceId);
+    const controller = new AbortController();
+    const operationSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
+    return this.#withWorkspaceOperation(scope, workspace.id, async () => {
+      operationSignal.throwIfAborted();
+      if (workspace.availability !== "available") throw new DomainError("not_found", "The source file is unavailable.");
+      const located = await this.#primaryCaptureTarget(scope, workspace, absolutePath, operationSignal) ??
+        await this.#linkedCaptureTarget(scope, workspace, absolutePath, operationSignal);
+      if (!located) throw new DomainError("not_found", "The source file is unavailable through Files.");
+      const { target } = located;
+      return this.#withRootOperation(scope, workspace.id, target.rootId, async () => {
+        const metadata = await this.providers.read(scope, target, located.path, operationSignal);
+        if (metadata.availability !== "available") throw new DomainError("not_found", "The source file is unavailable.");
+        if (metadata.sizeBytes < 1 || metadata.sizeBytes > maximumBytes) throw new DomainError("bad_request", "The source file exceeds the capture limit or is empty.");
+        return this.providers.withDownload(scope, target, { path: located.path, expectedRevision: metadata.revision }, async source => {
+          if (source.sizeBytes < 1 || source.sizeBytes > maximumBytes) throw new DomainError("bad_request", "The source file exceeds the capture limit or is empty.");
+          const chunks: Uint8Array[] = [];
+          let size = 0;
+          await source.stream(async chunk => {
+            operationSignal.throwIfAborted();
+            size += chunk.byteLength;
+            if (size > maximumBytes || size > source.sizeBytes) throw new DomainError("bad_request", "The source file exceeds the capture limit.");
+            chunks.push(Buffer.from(chunk));
+          }, operationSignal);
+          operationSignal.throwIfAborted();
+          if (size !== source.sizeBytes) throw new DomainError("conflict", "The source file changed during capture.");
+          return Buffer.concat(chunks);
+        }, operationSignal);
+      }, () => controller.abort(new Error("page_source_root_retired")));
+    });
+  }
+
   /** Capture reads do not depend on Files visibility, preferred worktrees, or topology refresh. */
   async readAbsoluteImage(
     scope: RequestScope,
@@ -829,8 +869,8 @@ export class WorkspaceFileService {
     return this.#withWorkspaceOperation(scope, workspace.id, async () => {
       operationSignal.throwIfAborted();
       if (workspace.availability !== "available") return undefined;
-      const located = await this.#primaryImageTarget(scope, workspace, absolutePath, operationSignal) ??
-        await this.#linkImageTarget(scope, workspace, absolutePath, operationSignal);
+      const located = await this.#primaryCaptureTarget(scope, workspace, absolutePath, operationSignal) ??
+        await this.#linkedCaptureTarget(scope, workspace, absolutePath, operationSignal);
       operationSignal.throwIfAborted();
       if (!located) return undefined;
       const { target } = located;
@@ -846,7 +886,7 @@ export class WorkspaceFileService {
   }
 
   /** An image inside Primary reads through it, like a listed link match, without a hidden root. */
-  async #primaryImageTarget(
+  async #primaryCaptureTarget(
     scope: RequestScope,
     workspace: InventoryWorkspaceRecord,
     absolutePath: string,
@@ -878,7 +918,7 @@ export class WorkspaceFileService {
     return relativePath === undefined ? undefined : { target, path: relativePath };
   }
 
-  async #linkImageTarget(
+  async #linkedCaptureTarget(
     scope: RequestScope,
     workspace: InventoryWorkspaceRecord,
     absolutePath: string,

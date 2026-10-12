@@ -18,6 +18,10 @@ import type {
   ViewedImageItem,
 } from "../../../../shared/index.js";
 import { ZoomablePreview } from "../../preview/ZoomablePreview.js";
+import { Button } from "../../ui/button.js";
+import { MediaFrame } from "../../../workbench/components/MediaFrame.js";
+import "../../../workbench/styles/media-frame.css";
+import "../page-preview.css";
 import { canSafelyPreviewRaster } from "../../../attachments/safeRasterPreview.js";
 import {
   presentAndroidOutputImageActions,
@@ -132,7 +136,9 @@ export function ViewedImageDisclosure({
         <span className="viewed-image-label">{label}</span>
       </button>
       {error ? (
-        <span hidden id={errorId}>{error.message.text}</span>
+        <span hidden id={errorId}>
+          {error.message.text}
+        </span>
       ) : null}
       {open ? (
         <div className="activity-group-disclosure" id={detailsId}>
@@ -167,22 +173,25 @@ export const imageRenderer: ConversationItemRenderer<ImageItem> = {
     const caption = context.omitImageCaption
       ? undefined
       : (image.alt?.text ??
-        (image.representation === "artifact" ? image.fileName?.text : undefined));
+        (image.representation === "artifact"
+          ? image.fileName?.text
+          : undefined));
     return (
-      <figure className="image-figure">
-        {image.representation === "artifact" ? (
-          <ArtifactImage
-            key={image.artifactId}
-            artifact={image}
-            loadContent={context.loadOutputArtifactContent}
-          />
-        ) : (
-          <div className="marker-label">
-            <span aria-hidden="true" className="marker-dot" />
-            Image unavailable · {image.reason.replaceAll("_", " ")}
-          </div>
-        )}
-        {caption && <figcaption>{caption}</figcaption>}
+      <figure className="image-figure" aria-label={caption}>
+        <MediaFrame className="conversation-media-frame" title={caption}>
+          {image.representation === "artifact" ? (
+            <ArtifactImage
+              key={image.artifactId}
+              artifact={image}
+              loadContent={context.loadOutputArtifactContent}
+            />
+          ) : (
+            <div className="marker-label">
+              <span aria-hidden="true" className="marker-dot" />
+              Image unavailable · {image.reason.replaceAll("_", " ")}
+            </div>
+          )}
+        </MediaFrame>
       </figure>
     );
   },
@@ -347,52 +356,61 @@ function ExpandableImage({
       });
   }, [androidActions, artifact, content]);
   const longPress = useAndroidLongPress(androidActions, presentActions);
+  const imageInteractions = {
+    onClickCapture: longPress.onClickCapture,
+    onContextMenu: longPress.onContextMenu,
+    onPointerCancel: longPress.onPointerCancel,
+    onPointerDownCapture: longPress.onPointerDown,
+    onPointerMove: longPress.onPointerMove,
+    onPointerUp: longPress.onPointerUp,
+    "data-android-image-actions": androidActions ? "available" : undefined,
+  };
   return (
     <Dialog>
-      <DialogTrigger asChild>
-        <button
-          aria-label={alt ? `Expand image: ${alt}` : "Expand image"}
-          className="image-figure-preview"
-          data-android-image-actions={androidActions ? "available" : undefined}
-          onClickCapture={longPress.onClickCapture}
-          onContextMenu={longPress.onContextMenu}
-          onPointerCancel={longPress.onPointerCancel}
-          onPointerDown={longPress.onPointerDown}
-          onPointerMove={longPress.onPointerMove}
-          onPointerUp={longPress.onPointerUp}
-          title="Expand image"
-          type="button"
-        >
-          <img alt={alt ?? ""} src={source} onError={() => onError?.(source)} />
-          <span aria-hidden="true" className="image-figure-expand">
+      <div className="inline-media-preview">
+        <div {...imageInteractions}>
+          <ZoomablePreview
+            controlsLabel="Image zoom controls"
+            interactionMode="inline"
+            onGestureStart={longPress.onPointerCancel}
+            resetLabel="Reset image view"
+            title={alt ?? "Image"}
+            viewportLabel={previewLabel}
+          >
+            <img
+              alt={alt ?? ""}
+              draggable={false}
+              src={source}
+              onError={() => onError?.(source)}
+            />
+          </ZoomablePreview>
+        </div>
+        <DialogTrigger asChild>
+          <Button
+            aria-label={alt ? `Expand image: ${alt}` : "Expand image"}
+            className="inline-media-expand"
+            size="icon-xs"
+            variant="outline"
+            title="Expand image"
+          >
             <Maximize2 />
-          </span>
-        </button>
-      </DialogTrigger>
-      <DialogContent size="viewer" aria-describedby={undefined}>
+          </Button>
+        </DialogTrigger>
+      </div>
+      <DialogContent size="viewer" className="media-preview-dialog" aria-describedby={undefined}>
         <DialogTitle className="sr-only">{previewLabel}</DialogTitle>
-        <ZoomablePreview
-          controlsLabel="Image zoom controls"
-          interactionMode="popup"
-          resetLabel="Reset image view"
-          title={alt ?? "Image"}
-          viewportLabel={previewLabel}
-        >
-          <img
-            alt=""
-            data-android-image-actions={
-              androidActions ? "available" : undefined
-            }
-            draggable={false}
-            onClickCapture={longPress.onClickCapture}
-            onContextMenu={longPress.onContextMenu}
-            onPointerCancel={longPress.onPointerCancel}
-            onPointerDown={longPress.onPointerDown}
-            onPointerMove={longPress.onPointerMove}
-            onPointerUp={longPress.onPointerUp}
-            src={source}
-          />
-        </ZoomablePreview>
+        <div className="image-preview-interactions" {...imageInteractions}>
+          <ZoomablePreview
+            controlsLabel="Image zoom controls"
+            interactionMode="popup"
+            onGestureStart={longPress.onPointerCancel}
+            resetLabel="Reset image view"
+            title={alt ?? "Image"}
+            viewportLabel={previewLabel}
+          >
+            <img alt="" draggable={false} src={source} />
+          </ZoomablePreview>
+        </div>
       </DialogContent>
     </Dialog>
   );
@@ -451,6 +469,7 @@ function useAndroidLongPress(
     onPointerDown(event) {
       if (
         !enabled ||
+        event.defaultPrevented ||
         event.isPrimary === false ||
         (event.pointerType !== "touch" && event.pointerType !== "pen")
       ) {

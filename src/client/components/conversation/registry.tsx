@@ -12,6 +12,7 @@ import {
   webSearchRenderer,
 } from "./renderers/OperationRenderers";
 import { reasoningRenderer } from "./renderers/ReasoningRenderer";
+import { pageRenderer } from "./renderers/PageRenderer.js";
 import {
   collaborationRenderer,
   compactionRenderer,
@@ -49,6 +50,7 @@ export const conversationItemRenderers = {
   },
   collaboration: collaborationRenderer,
   image: imageRenderer,
+  page: pageRenderer,
   viewed_image: viewedImageRenderer,
   review_marker: reviewMarkerRenderer,
   compaction: compactionRenderer,

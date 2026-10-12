@@ -92,8 +92,8 @@ describe("MermaidDiagram", () => {
       name: "Expand Mermaid diagram",
     });
     const diagram = screen.getByRole("img", { name: "Mermaid diagram" });
-    expect(expand).toContainElement(diagram);
-    fireEvent.click(diagram);
+    expect(expand).not.toContainElement(diagram);
+    fireEvent.click(expand);
 
     const dialog = screen.getByRole("dialog", {
       name: "Mermaid diagram preview",
@@ -112,20 +112,20 @@ describe("MermaidDiagram", () => {
     expect(createObjectURL).toHaveBeenCalledTimes(1);
 
     fireEvent.click(within(dialog).getByRole("button", { name: "Zoom in" }));
-    expect(within(dialog).getByLabelText("Zoom level")).toHaveTextContent(
-      "125%",
-    );
+    expect(
+      within(dialog).getByRole("button", { name: /^Zoom percentage:/ }),
+    ).toHaveTextContent("125%");
     fireEvent.keyDown(viewport, { key: "+" });
-    expect(within(dialog).getByLabelText("Zoom level")).toHaveTextContent(
-      "150%",
-    );
+    expect(
+      within(dialog).getByRole("button", { name: /^Zoom percentage:/ }),
+    ).toHaveTextContent("150%");
     fireEvent.click(
-      within(dialog).getByRole("button", { name: "Reset diagram view" }),
+      within(dialog).getByRole("button", { name: "Fit to view" }),
     );
     fireEvent.click(within(dialog).getByRole("button", { name: "Zoom out" }));
-    expect(within(dialog).getByLabelText("Zoom level")).toHaveTextContent(
-      "75%",
-    );
+    expect(
+      within(dialog).getByRole("button", { name: /^Zoom percentage:/ }),
+    ).toHaveTextContent("75%");
 
     fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());

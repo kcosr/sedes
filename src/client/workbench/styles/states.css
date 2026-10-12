@@ -1,0 +1,338 @@
+/* Empty / error states, skeletons, progress, meter, banner, draft bar. */
+@layer wb.components {
+  .wb-empty {
+    padding: 80px 24px;
+    color: var(--wb-fg-2);
+    text-align: center;
+  }
+  .wb-empty--compact {
+    padding: 32px 16px;
+  }
+  .wb-empty-icon {
+    --wb-tone: var(--wb-muted);
+    display: inline-grid;
+    place-items: center;
+    width: 40px;
+    height: 40px;
+    border-radius: var(--wb-radius-card);
+    background: var(--wb-surface-2);
+    color: var(--wb-tone);
+  }
+  .wb-empty-icon .wb-icon {
+    width: 20px;
+    height: 20px;
+  }
+  .wb-empty-title {
+    margin: 12px 0 4px;
+    color: var(--wb-fg);
+    font-size: var(--wb-fs-15);
+    font-weight: var(--wb-fw-bold);
+  }
+  .wb-empty-text {
+    max-width: 520px;
+    margin: 0 auto 16px;
+    font-size: var(--wb-fs-13);
+    overflow-wrap: anywhere;
+  }
+  .wb-empty-actions {
+    display: inline-flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 8px;
+  }
+
+  /* ---------- skeletons */
+  .wb-skel,
+  .wb-skel-block > i,
+  .wb-skel-side > i {
+    background: linear-gradient(
+      90deg,
+      var(--wb-surface-2) 0%,
+      var(--wb-surface-3) 50%,
+      var(--wb-surface-2) 100%
+    );
+    background-size: 200% 100%;
+    animation: wb-shimmer 1.4s ease-in-out infinite;
+  }
+  @keyframes wb-shimmer {
+    0% {
+      background-position: 100% 0;
+    }
+    100% {
+      background-position: -100% 0;
+    }
+  }
+  .wb-skel {
+    display: block;
+    height: 11px;
+    border-radius: var(--wb-radius-sm);
+  }
+  .wb-skel--tile {
+    height: 118px;
+    border-radius: var(--wb-radius-card);
+  }
+  .wb-skel--card {
+    height: 212px;
+    border-radius: var(--wb-radius-card);
+  }
+  .wb-skel-rows {
+    padding-bottom: 24px;
+  }
+  .wb-skel-rows .wb-group-h .wb-skel {
+    width: 120px;
+    height: 13px;
+  }
+  .wb-skel-row {
+    display: grid;
+    grid-template-columns: 16px minmax(0, 1fr);
+    gap: 12px;
+    padding: 14px 0;
+    border-top: 1px solid var(--wb-border);
+  }
+  .wb-skel-row:first-of-type {
+    border-top: 0;
+  }
+  .wb-skel-row > div {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .wb-skel-row--compact {
+    padding: 9px 0;
+  }
+  .wb-skel-block {
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+    padding: 8px 0;
+  }
+  .wb-skel-block > i {
+    display: block;
+    height: 12px;
+    border-radius: var(--wb-radius-sm);
+  }
+  .wb-skel-block > i:nth-child(4n + 1) {
+    width: 90%;
+  }
+  .wb-skel-block > i:nth-child(4n + 2) {
+    width: 72%;
+  }
+  .wb-skel-block > i:nth-child(4n + 3) {
+    width: 84%;
+  }
+  .wb-skel-block > i:nth-child(4n + 4) {
+    width: 56%;
+  }
+  .wb-skel-side {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding: 18px 10px;
+  }
+  .wb-skel-side > i {
+    height: 12px;
+    border-radius: var(--wb-radius-sm);
+  }
+  .wb-skel-side > i:nth-child(3n) {
+    width: 70%;
+  }
+  .wb-skel-side > i:nth-child(3n + 1) {
+    width: 85%;
+  }
+
+  /* ---------- refetch progress (sticky, 2px) */
+  .wb-progress {
+    position: sticky;
+    top: 0;
+    z-index: var(--wb-z-progress);
+    height: 0;
+    overflow: visible;
+    pointer-events: none;
+  }
+  /* A clipped 2px track (zero layout height) with the moving bar inside, so
+     the animation never widens the scroll region. */
+  .wb-progress > i {
+    position: absolute;
+    top: 0;
+    right: 0;
+    left: 0;
+    height: 2px;
+    overflow: hidden;
+    opacity: 0;
+  }
+  .wb-progress > i::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 30%;
+    height: 100%;
+    border-radius: 0 2px 2px 0;
+    background: var(--wb-accent);
+  }
+  .wb-progress.is-active > i {
+    opacity: 1;
+  }
+  .wb-progress.is-active > i::before {
+    animation: wb-progress 1.1s ease-in-out infinite;
+  }
+  @keyframes wb-progress {
+    0% {
+      left: -30%;
+      width: 30%;
+    }
+    60% {
+      width: 45%;
+    }
+    100% {
+      left: 100%;
+      width: 30%;
+    }
+  }
+
+  /* ---------- meter (determinate) */
+  .wb-meter {
+    --wb-tone: var(--wb-accent);
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    min-width: 0;
+  }
+  .wb-meter-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: var(--wb-fs-12-5);
+    color: var(--wb-fg-2);
+  }
+  .wb-meter-value {
+    color: var(--wb-muted);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .wb-meter-track {
+    height: 6px;
+    overflow: hidden;
+    border-radius: 3px;
+    background: var(--wb-surface-2);
+  }
+  .wb-meter-bar {
+    display: block;
+    height: 100%;
+    border-radius: 3px;
+    background: var(--wb-tone);
+    transition: width var(--wb-dur-slow);
+  }
+
+  /* ---------- banner */
+  .wb-banner {
+    --wb-tone: var(--wb-info);
+    --wb-tone-text: var(--wb-info-text);
+    --wb-tone-weak: var(--wb-info-weak);
+    --wb-tone-border: var(--wb-info-border);
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 9px 10px 9px 12px;
+    border: 1px solid var(--wb-tone-border);
+    border-radius: var(--wb-radius-md);
+    background: var(--wb-tone-weak);
+    color: var(--wb-fg);
+    font-size: var(--wb-fs-13);
+    line-height: 1.45;
+  }
+  .wb-banner > .wb-icon {
+    width: 16px;
+    height: 16px;
+    margin-top: 1px;
+    color: var(--wb-tone-text);
+  }
+  .wb-banner-body {
+    flex: 1;
+    min-width: 0;
+    padding-top: 0;
+  }
+  .wb-banner-title {
+    font-weight: var(--wb-fw-semibold);
+  }
+  .wb-banner-title + .wb-banner-text {
+    margin-top: 1px;
+  }
+  .wb-banner-text {
+    color: var(--wb-fg-2);
+  }
+  .wb-banner-actions {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: 6px;
+    margin: -3px 0;
+  }
+  .wb-banner-dismiss {
+    margin: -4px -4px -4px 0;
+  }
+  .wb-banner--slim {
+    align-items: center;
+    padding-top: 6px;
+    padding-bottom: 6px;
+  }
+  .wb-banner--slim > .wb-icon {
+    margin-top: 0;
+  }
+
+  /* ---------- draft bar (staged changes) */
+  .wb-draftbar {
+    display: flex;
+    flex: none;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 10px;
+    padding: 10px var(--wb-pane-x);
+    border-top: 1px solid var(--wb-warning-border);
+    background: var(--wb-warning-weak);
+    color: var(--wb-fg);
+    font-size: var(--wb-fs-13);
+  }
+  .wb-draftbar > .wb-icon {
+    width: 15px;
+    height: 15px;
+    color: var(--wb-warning-text);
+  }
+  /* Wraps (and pushes the actions to their own line) in narrow panes. */
+  .wb-draftbar-text {
+    flex: 1 1 220px;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  .wb-draftbar-text b {
+    font-weight: var(--wb-fw-semibold);
+  }
+  .wb-draftbar-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-left: auto;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .wb-skel,
+    .wb-skel-block > i,
+    .wb-skel-side > i,
+    .wb-status-dot--pulse,
+    .wb-spinner .wb-icon {
+      animation: none;
+    }
+    .wb-progress.is-active > i {
+      opacity: 0.45;
+    }
+    .wb-progress.is-active > i::before {
+      width: 100%;
+      animation: none;
+    }
+    .wb-toast,
+    .wb-scrim {
+      animation: none;
+    }
+  }
+}

@@ -29,6 +29,7 @@ export * from "./protocol/workspace-diffs.js";
 export * from "./protocol/workspace-diff-reviews.js";
 
 export * from "./protocol/workpads.js";
+export * from "./protocol/pages.js";
 
 export * from "./protocol/usage-accounting.js";
 export * from "./protocol/usage-analytics.js";

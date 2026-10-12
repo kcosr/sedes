@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { useRef, useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { NormalizedApplicationThreadSummary } from "../../shared/protocol/application.js";
-import { VoiceThreadPicker } from "./VoiceThreadPicker.js";
+import { ThreadPicker } from "./ThreadPicker.js";
 
 const threads = ["Release review", "Deployment checklist"].map((title, index) => ({
   id: `thread-${index}`, title: { text: title }, available: true, inventoryState: "active",
@@ -19,18 +19,18 @@ function AnchoredPicker({ onSelect }: { onSelect: (thread: NormalizedApplication
   const anchorRef = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
   return <><button ref={anchorRef} onClick={() => setOpen(value => !value)}>Choose target</button>
-    <VoiceThreadPicker threads={threads} open={open} onOpenChange={setOpen} onSelect={onSelect}
+    <ThreadPicker threads={threads} open={open} onOpenChange={setOpen} onSelect={onSelect}
       presentation="popover" anchorRef={anchorRef} selectedThreadId={threads[0]!.id} /></>;
 }
 
-describe("VoiceThreadPicker focus", () => {
+describe("ThreadPicker focus", () => {
   it("opens for mobile browsing and searches only after the input is tapped", async () => {
     vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: true }));
     const user = userEvent.setup();
     const onSelect = vi.fn();
     const onOpenChange = vi.fn();
-    render(<VoiceThreadPicker threads={threads} open onOpenChange={onOpenChange} onSelect={onSelect} />);
-    const search = screen.getByRole("searchbox", { name: "Search voice threads" });
+    render(<ThreadPicker threads={threads} open onOpenChange={onOpenChange} onSelect={onSelect} />);
+    const search = screen.getByRole("searchbox", { name: "Search threads" });
     const dialog = screen.getByRole("dialog", { name: "Choose target thread" });
     await waitFor(() => expect(dialog).toHaveFocus());
     expect(dialog).toHaveAttribute("data-layout", "sheet");
@@ -47,16 +47,16 @@ describe("VoiceThreadPicker focus", () => {
   it("keeps mobile search reachable with the keyboard from the focused dialog", async () => {
     vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: true }));
     const user = userEvent.setup();
-    render(<VoiceThreadPicker threads={threads} open onOpenChange={vi.fn()} onSelect={vi.fn()} />);
+    render(<ThreadPicker threads={threads} open onOpenChange={vi.fn()} onSelect={vi.fn()} />);
     await waitFor(() => expect(screen.getByRole("dialog", { name: "Choose target thread" })).toHaveFocus());
     await user.tab();
-    expect(screen.getByRole("searchbox", { name: "Search voice threads" })).toHaveFocus();
+    expect(screen.getByRole("searchbox", { name: "Search threads" })).toHaveFocus();
   });
 
   it("preserves desktop search autofocus", async () => {
     vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: false }));
-    render(<VoiceThreadPicker threads={threads} open onOpenChange={vi.fn()} onSelect={vi.fn()} />);
-    await waitFor(() => expect(screen.getByRole("searchbox", { name: "Search voice threads" })).toHaveFocus());
+    render(<ThreadPicker threads={threads} open onOpenChange={vi.fn()} onSelect={vi.fn()} />);
+    await waitFor(() => expect(screen.getByRole("searchbox", { name: "Search threads" })).toHaveFocus());
   });
 
   it("keeps the mobile row chooser anchored, shows its current choice, and returns focus after selection", async () => {
@@ -73,7 +73,7 @@ describe("VoiceThreadPicker focus", () => {
     const current = screen.getByRole("button", { name: "Release review" });
     expect(current).toHaveAttribute("aria-current", "true");
     expect(current.querySelector(".lucide-check")).not.toBeNull();
-    const search = screen.getByRole("searchbox", { name: "Search voice threads" });
+    const search = screen.getByRole("searchbox", { name: "Search threads" });
     expect(search).not.toHaveFocus();
     expect(search.closest(".searchable-select-search")).not.toBeNull();
     await user.type(search, "deployment");

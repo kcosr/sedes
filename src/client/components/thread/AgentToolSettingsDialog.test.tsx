@@ -377,15 +377,17 @@ describe("AgentToolSettingsDialog", () => {
     ).toBeVisible();
 
     expect(agentToolPolicySummary(policySnapshot().agentTools)).toBe(
-      "1 enabled · Ask outside this environment · Native · Progressive",
+      "1 enabled",
     );
     expect(
       agentToolPolicySummary(
         policySnapshot({ presentationMode: "individual" }).agentTools,
       ),
     ).toBe(
-      "1 enabled · Ask outside this environment · Native · Individual",
+      "1 enabled",
     );
+    expect(agentToolPolicySummary(policySnapshot({ contextEnabled: false }).agentTools)).toBe("0 enabled");
+    expect(agentToolPolicySummary(policySnapshot({ workspaceEnabled: true, presentationSurface: "cli", accessBoundary: "unrestricted" }).agentTools)).toBe("2 enabled");
   });
 
   it("hides a fixed surface while retaining the CLI presentation selector", () => {

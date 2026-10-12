@@ -1,14 +1,14 @@
 import { Check } from "lucide-react";
 import { useId, useRef, useState, type RefObject } from "react";
 import type { NormalizedApplicationThreadSummary } from "../../shared/protocol/application.js";
-import { Dialog, DialogBody, DialogContent, DialogDescription, DialogHeader, DialogTitle, type DialogLayer } from "../components/ui/dialog.js";
-import { menuCheckIndicatorClass, menuCheckRowClass, menuEmptyClass, menuLabelClass, menuListRowClass, menuRowClass } from "../components/ui/floating.js";
-import { Popover, PopoverAnchor, PopoverContent, PopoverDescription, PopoverTitle } from "../components/ui/popover.js";
-import { SearchableSelectSearch } from "../components/ui/searchable-select.js";
+import { Dialog, DialogBody, DialogContent, DialogDescription, DialogHeader, DialogTitle, type DialogLayer } from "./ui/dialog.js";
+import { menuCheckIndicatorClass, menuCheckRowClass, menuEmptyClass, menuLabelClass, menuListRowClass, menuRowClass } from "./ui/floating.js";
+import { Popover, PopoverAnchor, PopoverContent, PopoverDescription, PopoverTitle } from "./ui/popover.js";
+import { SearchableSelectSearch } from "./ui/searchable-select.js";
 import { usePickerFocus } from "../lib/use-picker-focus.js";
 import { cn } from "../lib/utils.js";
 
-type VoiceThreadPickerProps = {
+type ThreadPickerProps = {
   threads: readonly NormalizedApplicationThreadSummary[];
   open: boolean;
   title?: string;
@@ -24,9 +24,9 @@ type VoiceThreadPickerProps = {
   anchorRef: RefObject<HTMLElement | null>;
 });
 
-export function VoiceThreadPicker({ threads, open, onOpenChange, onSelect, pinned, selectedThreadId,
-  title = "Choose target thread", description = "Recognized text will be sent to the thread you select.",
-  layer = "dialog", presentation = "dialog", anchorRef }: VoiceThreadPickerProps): React.JSX.Element {
+export function ThreadPicker({ threads, open, onOpenChange, onSelect, pinned, selectedThreadId,
+  title = "Choose target thread", description = "Choose a thread.",
+  layer = "dialog", presentation = "dialog", anchorRef }: ThreadPickerProps): React.JSX.Element {
   const [search, setSearch] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
   const choiceRefs = useRef<Array<HTMLButtonElement | null>>([]);
@@ -43,14 +43,14 @@ export function VoiceThreadPicker({ threads, open, onOpenChange, onSelect, pinne
     if (!next) setSearch("");
     onOpenChange(next);
   };
-  const searchInput = <SearchableSelectSearch ref={searchRef} type="search" aria-label="Search voice threads" placeholder="Search threads"
+  const searchInput = <SearchableSelectSearch ref={searchRef} type="search" aria-label="Search threads" placeholder="Search threads"
     value={search} onChange={event => setSearch(event.currentTarget.value)} onKeyDown={event => {
       if (event.key === "ArrowDown" && choices.length) {
         event.preventDefault();
         choiceRefs.current[0]?.focus();
       }
     }} />;
-  const list = choices.length ? <ul className="m-0 flex list-none flex-col p-0" aria-label="Voice threads">
+  const list = choices.length ? <ul className="m-0 flex list-none flex-col p-0" aria-label="Threads">
     {choices.map((thread, index) => <li key={thread.id} className="min-w-0">
       {thread === first ? <span id={labelId} className={cn(menuLabelClass, "block")}>{pinned!.label}</span> : null}
       <div className={menuListRowClass}>

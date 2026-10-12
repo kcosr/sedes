@@ -16,18 +16,19 @@ import { useVoiceState } from "./VoiceProvider.js";
 import { recentVoiceErrors, type NativeVoiceStore } from "./NativeVoiceStore.js";
 import { nativeThreadTitle, type NativeVoiceInputDevice, type NativeVoiceSettings, type NativeVoiceState } from "./native-voice-plugin.js";
 import { inputPreference, selectedInputDevice } from "./native-voice-input.js";
-import { VoiceThreadPicker } from "./VoiceThreadPicker.js";
+import { ThreadPicker } from "../components/ThreadPicker.js";
+import { defaultThreadChoices, useDefaultThread } from "../app/default-thread.js";
 import { useShowVoiceBarWhenOff } from "./voice-bar-preference.js";
 import { canEnableVoice, resumeVoice, voiceThreadFilterWarning } from "./voice-session.js";
 import { savedRecording, VoiceRecordingRecovery } from "./VoiceRecordingRecovery.js";
 import { VoiceSpeechContent } from "./VoiceSpeechContent.js";
 
 const toggles = [
-  ["pinDefaultVoiceThread", "Pin default voice thread", "Use this as the initial recording target while viewing other threads."],
+  ["pinDefaultVoiceThread", "Pin default thread", "Use this as the initial recording target while viewing other threads."],
   ["autoListen", "Auto-listen", "Eligible notifications reopen the microphone."],
   ["keepListeningByDefault", "Keep listening by default", "Use Keep listening for new manual and auto-listen recordings. The ∞ control changes only the current recording."],
   ["ignoreOtherDevices", "Ignore voice started on other devices", "Automations are still included."],
-  ["onlyVoiceThread", "Only play from default voice thread", "Limit automatic playback to the default voice thread above."],
+  ["onlyVoiceThread", "Only play from default thread", "Limit automatic playback to the default thread above."],
   ["followComposerMode", "Follow composer's selected mode", "Use its Steer or Queue choice. Otherwise queue while a thread is running."],
   ["recognizeStopCommand", "Recognize stop command", "Say “stop” or “stop listening” to cancel."],
   ["announceRecordingThread", "Announce recording thread", "Read the destination before a new headset or notification recording. Skip in-app starts, playback interruptions to reply, and automatic follow-up recording."],
@@ -48,6 +49,8 @@ const numbers = [
 export function VoiceSettingsPage({ store, applicationStore }: { store: NativeVoiceStore; applicationStore: ApplicationClientStore }): React.JSX.Element {
   const state = useVoiceState(store);
   const application = useApplicationStore(applicationStore);
+  const defaultThread = useDefaultThread();
+  const threads = defaultThreadChoices(application.snapshot?.threads ?? [], defaultThread?.thread);
   const [picker, setPicker] = useState(false);
   const [showBarWhenOff, setShowBarWhenOff] = useShowVoiceBarWhenOff();
   const [devices, setDevices] = useState<NativeVoiceInputDevice[]>([]);
@@ -85,8 +88,8 @@ export function VoiceSettingsPage({ store, applicationStore }: { store: NativeVo
   const deviceLabels = inputDeviceLabels(devices);
   const selectedDevice = selectedInputDevice(settings.inputDevice, devices);
   const voiceThreadLabel = settings.voiceThreadTitle ?? (settings.voiceThreadId
-    ? application.snapshot?.threads.find(thread => thread.id === settings.voiceThreadId)?.title.text.trim() || "Untitled thread" : "Choose thread");
-  return <SettingsPage title="Voice" description="Voice preferences are saved on this device. The default thread belongs to the connected account.">
+    ? threads.find(thread => thread.id === settings.voiceThreadId)?.title.text.trim() || "Untitled thread" : "Choose thread");
+  return <SettingsPage title="Voice" description="Preferences are saved on this device. The default thread is shared with General settings and quick navigation for this connection and account.">
     {errors.length ? <Callout tone="danger" role="alert" action={<Button variant="outline" size="sm" onClick={() => store.dismissErrors()}>Clear errors</Button>}>
       {errors.length === 1 ? errors[0] : <ul className="grid gap-1">{errors.map(error => <li key={error}>{error}</li>)}</ul>}
     </Callout> : null}
@@ -109,7 +112,7 @@ export function VoiceSettingsPage({ store, applicationStore }: { store: NativeVo
         : !native.clientConnectionToken && <Button disabled={state.pending} onClick={() => { void store.reconnect().catch(() => undefined); }}>Retry client connection</Button>}
     </SettingsSection>
     {savedRecording(native) ? <SettingsSection title="Saved dictation" card>
-      <VoiceRecordingRecovery store={store} threads={application.snapshot?.threads ?? []} />
+      <VoiceRecordingRecovery store={store} threads={threads} />
     </SettingsSection> : null}
     <SpeechProviderSettings store={store} native={native} pending={state.pending} recordingWork={recordingWork} />
     <SettingsSection title="Speech text" card>
@@ -118,12 +121,12 @@ export function VoiceSettingsPage({ store, applicationStore }: { store: NativeVo
         onCheckedChange={cleanSpeechText => update({ cleanSpeechText })} />
     </SettingsSection>
     <SettingsSection title="Targets and behavior" card>
-      <SettingsField label="Default voice thread" description="Used when pinned or when no thread is visible.">
+      <SettingsField label="Default thread" description="Shared with General settings and quick navigation. Used when pinned or when no thread is visible.">
         <div className="flex flex-wrap gap-2"><VoiceThreadButton disabled={state.pending} onClick={() => setPicker(true)}>{voiceThreadLabel}</VoiceThreadButton>
           {settings.voiceThreadId ? <Button variant="ghost" disabled={state.pending} onClick={() => update({ voiceThreadId: null, voiceThreadTitle: null })}>Clear</Button> : null}</div>
       </SettingsField>
       {toggles.map(([key, label, description]) => <SwitchField key={key} label={label}
-        description={key === "onlyVoiceThread" && !settings.voiceThreadId ? "Requires a default voice thread." : description}
+        description={key === "onlyVoiceThread" && !settings.voiceThreadId ? "Requires a default thread." : description}
         checked={settings[key]} disabled={state.pending}
         onCheckedChange={value => update({ [key]: value })} />)}
     </SettingsSection>
@@ -166,9 +169,9 @@ export function VoiceSettingsPage({ store, applicationStore }: { store: NativeVo
       </div>)}
     </SettingsSection> : null}
     {native.queue.droppedCount ? <Callout>{native.queue.droppedCount} automatic voice items were dropped because the queue was full or the item became ineligible.</Callout> : null}
-    <VoiceThreadPicker threads={application.snapshot?.threads ?? []} open={picker} onOpenChange={setPicker} title="Default voice thread"
-      description="Used when pinned or when no thread is visible."
-      selectedThreadId={settings.voiceThreadId} pinned={{ threadId: settings.voiceThreadId, label: "Current default voice thread" }} onSelect={thread => update({ voiceThreadId: thread.id, voiceThreadTitle: nativeThreadTitle(thread.title.text) })} />
+    <ThreadPicker threads={threads} open={picker} onOpenChange={setPicker} title="Default thread"
+      description="Shared with General settings and quick navigation. Used when pinned or when no thread is visible."
+      selectedThreadId={settings.voiceThreadId} pinned={{ threadId: settings.voiceThreadId, label: "Current default thread" }} onSelect={thread => update({ voiceThreadId: thread.id, voiceThreadTitle: nativeThreadTitle(thread.title.text) })} />
   </SettingsPage>;
 }
 

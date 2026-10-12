@@ -1,5 +1,5 @@
-import { randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
+import { randomBytes, randomUUID } from "node:crypto";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { Query, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
@@ -92,12 +92,18 @@ class SedesOnlyClaudeSdkFacade extends OfficialClaudeSdkFacade {
 }
 
 describe.sequential("real Claude Native Sedes MCP tools", () => {
-  it("calls an individual Sedes tool through the query's MCP server", async () => {
+  it.each([
+    { label: "fresh-thread agent context", previewPage: false },
+    { label: "established-thread page preview", previewPage: true },
+  ])("calls native Sedes tools with $label", async ({ previewPage }) => {
     const root = await mkdtemp(path.join(os.tmpdir(), "sedes-real-claude-mcp-"));
     temporaryRoots.push(root);
     const workspacePath = path.join(root, "workspace");
     await mkdir(workspacePath, { recursive: true });
     const workspace = await realpath(workspacePath);
+    const visualCode = randomBytes(4).toString("hex").toUpperCase();
+    const sourcePath = path.join(workspace, "preview.html");
+    if (previewPage) await writeFile(sourcePath, `<!doctype html><html><body style="margin:0;background:white;color:black"><p style="margin:24px;font:72px monospace">${visualCode}</p></body></html>`);
     const executablePath = process.env.SEDES_REAL_CLAUDE_EXECUTABLE ?? "claude";
     const environment = Object.freeze({
       ...process.env,
@@ -128,15 +134,25 @@ describe.sequential("real Claude Native Sedes MCP tools", () => {
       environmentId,
       targetId: "claude-local",
       presentation: { surface: "native", mode: "individual" },
-      enabledToolIds: ["agent.context", "thread.status"],
+      enabledToolIds: ["agent.context", "thread.status", ...(previewPage ? ["page.publish", "page.preview"] : [])],
+      pages: previewPage,
+      ...(previewPage ? { pageSourceFiles: [sourcePath] } : {}),
     });
     const reference = listener.issue("mcp");
     const messages: SDKMessage[] = [];
     const permissionRequests: string[] = [];
     let settle!: () => void;
-    const settled = new Promise<void>((resolve) => {
+    let settled = new Promise<void>((resolve) => {
       settle = resolve;
     });
+    const waitForTurn = async () => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([settled, new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error("real_claude_mcp_turn_timed_out")), MODEL_TURN_TIMEOUT_MS);
+        })]);
+      } finally { clearTimeout(timer); }
+    };
     // The startup handshake reports its own zero-turn result, which can
     // arrive after the prompt is sent.
     const session = new ClaudeSdkSession({
@@ -180,6 +196,7 @@ describe.sequential("real Claude Native Sedes MCP tools", () => {
         expect.arrayContaining([
           "mcp__sedes__sedes_agent_context",
           "mcp__sedes__sedes_thread_status",
+          ...(previewPage ? ["mcp__sedes__sedes_page_publish", "mcp__sedes__sedes_page_preview"] : []),
         ]),
       );
       // The CLI arguments carry only a placeholder for the reference.
@@ -187,21 +204,26 @@ describe.sequential("real Claude Native Sedes MCP tools", () => {
         reference,
       );
 
+      let greetingResult: SDKMessage | undefined;
+      if (previewPage) {
+        // A real first user turn consumes startup metadata. The actual page
+        // request is a distinct human turn, never an automatic retry.
+        session.send({ operationId: randomUUID(), content: "Hello. Please reply READY without using tools." });
+        await waitForTurn();
+        greetingResult = messages.findLast(message => message.type === "result" && message.num_turns > 0);
+        expect(greetingResult).toMatchObject({ type: "result", subtype: "success" });
+        settled = new Promise<void>(resolve => { settle = resolve; });
+      }
       const promptIndex = messages.length;
       session.send({
         operationId: randomUUID(),
         content:
-          "Call the mcp__sedes__sedes_agent_context tool exactly once with an empty object, then reply with only the threadId value it returned.",
+          previewPage
+            ? `Please publish an HTML page titled Live preview using path ${JSON.stringify(sourcePath)} with a 600 by 240 viewport. Then use the page preview tool on that same path and viewport. Read the eight-character code visible in the returned screenshot; do not read the source through any other tool. Finally read the agent context. Reply with its threadId and a separate line IMAGE_CODE= followed by the exact screenshot code.`
+            : "Call the mcp__sedes__sedes_agent_context tool exactly once with an empty object, then reply with only the threadId value it returned.",
       });
-      await Promise.race([
-        settled,
-        new Promise((_resolve, reject) =>
-          setTimeout(
-            () => reject(new Error("real_claude_mcp_turn_timed_out")),
-            MODEL_TURN_TIMEOUT_MS,
-          ),
-        ),
-      ]);
+      await waitForTurn();
+      if (greetingResult) expect(messages).toContain(greetingResult);
 
       const turn = messages.slice(promptIndex);
       const toolUses = turn.flatMap((message) =>
@@ -212,10 +234,15 @@ describe.sequential("real Claude Native Sedes MCP tools", () => {
             )
           : [],
       );
-      expect(toolUses.map(({ name }) => name)).toEqual([
-        "mcp__sedes__sedes_agent_context",
-      ]);
-      expect(permissionRequests).toEqual(["mcp__sedes__sedes_agent_context"]);
+      const expectedTools = [...(previewPage ? ["mcp__sedes__sedes_page_publish", "mcp__sedes__sedes_page_preview"] : []), "mcp__sedes__sedes_agent_context"];
+      if (toolUses.length === 0) {
+        const terminal = turn.find(message => message.type === "result" && message.num_turns > 0);
+        const diagnostic = terminal?.type === "result" ? { subtype: terminal.subtype,
+          ...("result" in terminal ? { result: terminal.result } : { errors: terminal.errors }) } : { subtype: "missing" };
+        throw new Error(`Claude completed without calling the required tool: ${JSON.stringify(diagnostic).slice(0, 4000)}`);
+      }
+      expect(toolUses.map(({ name }) => name)).toEqual(expectedTools);
+      expect(permissionRequests).toEqual(expectedTools);
       const toolResults = turn.flatMap((message) =>
         message.type === "user" && Array.isArray(message.message.content)
           ? message.message.content.filter(
@@ -225,10 +252,19 @@ describe.sequential("real Claude Native Sedes MCP tools", () => {
                 (block as { type?: unknown }).type === "tool_result",
             )
           : [],
-      ) as { is_error?: boolean; content?: unknown }[];
-      expect(toolResults).toHaveLength(1);
-      expect(toolResults[0]!.is_error ?? false).toBe(false);
-      expect(JSON.stringify(toolResults[0]!.content)).toContain(
+      ) as { tool_use_id?: string; is_error?: boolean; content?: unknown }[];
+      expect(toolResults).toHaveLength(expectedTools.length);
+      expect(toolResults.every(result => !(result.is_error ?? false))).toBe(true);
+      if (previewPage) {
+        const previewUse = toolUses.find(use => use.name === "mcp__sedes__sedes_page_preview")!;
+        const previewResult = toolResults.find(result => result.tool_use_id === previewUse.id)!;
+        expect(JSON.stringify(previewResult.content)).toContain("image/png");
+        expect(JSON.stringify(previewResult.content)).toContain('"type":"image"');
+        expect(listener.pages!.list(listener.scope, listener.threadId).items).toHaveLength(1);
+      }
+      const contextUse = toolUses.find(use => use.name === "mcp__sedes__sedes_agent_context")!;
+      const contextResult = toolResults.find(result => result.tool_use_id === contextUse.id)!;
+      expect(JSON.stringify(contextResult.content)).toContain(
         listener.threadId,
       );
       const result = turn.find(
@@ -239,17 +275,15 @@ describe.sequential("real Claude Native Sedes MCP tools", () => {
         (result as Extract<SDKMessage, { type: "result"; subtype: "success" }>)
           .result,
       ).toContain(listener.threadId);
+      if (previewPage) {
+        const finalText = (result as Extract<SDKMessage, { type: "result"; subtype: "success" }>).result;
+        expect(finalText.match(/IMAGE_CODE=([A-Z0-9]+)/)?.[1]).toBe(visualCode);
+      }
       expect(
         listener.observed.filter(
           ({ url }) => url === "/api/agent-tool-invocations",
         ),
-      ).toEqual([
-        {
-          method: "POST",
-          url: "/api/agent-tool-invocations",
-          sourceReference: reference,
-        },
-      ]);
+      ).toEqual(expectedTools.map(() => ({ method: "POST", url: "/api/agent-tool-invocations", sourceReference: reference })));
     } finally {
       await session.close();
       await listener.close();

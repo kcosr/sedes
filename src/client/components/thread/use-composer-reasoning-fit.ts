@@ -1,20 +1,23 @@
-import { useLayoutEffect, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 
 /** Reasoning yields to delivery actions, using their actual rendered widths. */
 export function useComposerReasoningFit() {
   const [footer, setFooter] = useState<HTMLDivElement | null>(null);
   const [reasoningPickerOpen, setReasoningPickerOpen] = useState(false);
 
+  const measureRef = useRef<(() => void) | undefined>(undefined);
+  // React commits the new delivery controls before this layout effect. Measure
+  // in that same commit, before a wider action group can paint a wrapped row.
+  useLayoutEffect(() => { measureRef.current?.(); });
+
   useLayoutEffect(() => {
     if (!footer) return;
     const tools = footer.querySelector<HTMLElement>(".composer-tools");
     const actions = footer.querySelector<HTMLElement>(".send-group");
     if (!tools || !actions) return;
-    let frame: number | undefined;
     let disposed = false;
 
     const measure = () => {
-      frame = undefined;
       if (disposed || footer.getBoundingClientRect().width === 0) return;
       const reasoning = tools.querySelector<HTMLElement>(
         '[data-setting-id="thinking_level"] > button',
@@ -44,7 +47,7 @@ export function useComposerReasoningFit() {
       footer.toggleAttribute("data-reasoning-collapsed", overflow);
     };
     const schedule = () => {
-      if (!disposed && frame === undefined) frame = requestAnimationFrame(measure);
+      if (!disposed) measure();
     };
     const resize = new ResizeObserver(schedule);
     resize.observe(footer);
@@ -61,10 +64,11 @@ export function useComposerReasoningFit() {
     footer.addEventListener("focusout", schedule);
     window.addEventListener("resize", schedule);
     void document.fonts?.ready.then(schedule);
+    measureRef.current = measure;
     measure();
     return () => {
       disposed = true;
-      if (frame !== undefined) cancelAnimationFrame(frame);
+      measureRef.current = undefined;
       resize.disconnect();
       mutations.disconnect();
       footer.removeEventListener("focusout", schedule);

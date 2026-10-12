@@ -1,0 +1,176 @@
+/* Standalone media framing: no reset, fonts, shell or theme bootstrap needed. */
+@layer wb.components {
+  .wb-media-frame {
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    max-width: 100%;
+    border: 1px solid var(--wb-media-border, var(--wb-border, #d8d8dc));
+    border-radius: var(--wb-media-radius, var(--wb-radius-card, 0.5rem));
+    background: var(--wb-media-background, var(--wb-surface, transparent));
+    color: var(--wb-media-color, var(--wb-fg, inherit));
+  }
+
+  .wb-media-frame-header {
+    box-sizing: border-box;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem 0.75rem;
+    min-width: 0;
+    padding: var(--wb-media-header-padding, 0.5rem 0.75rem);
+    border-bottom: 1px solid var(--wb-media-border, var(--wb-border, #d8d8dc));
+    border-start-start-radius: inherit;
+    border-start-end-radius: inherit;
+    background: var(
+      --wb-media-header-background,
+      var(--wb-surface-2, transparent)
+    );
+    font-size: var(--wb-media-font-size, 0.8125rem);
+    line-height: 1.4;
+  }
+
+  .wb-media-frame-labels {
+    flex: 1 1 8rem;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .wb-media-frame-title {
+    font-weight: var(--wb-fw-semibold, 600);
+  }
+
+  .wb-media-frame-metadata {
+    color: var(--wb-media-muted, var(--wb-muted, inherit));
+    font-size: 0.923em;
+  }
+
+  .wb-media-frame-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.375rem;
+    min-width: 0;
+    max-width: 100%;
+    margin-inline-start: auto;
+  }
+
+  .wb-media-frame-body {
+    box-sizing: border-box;
+    min-width: 0;
+    max-width: 100%;
+    padding: var(--wb-media-body-padding, 0);
+    overflow: auto;
+    border-radius: inherit;
+  }
+
+  .wb-media-zoom {
+    box-sizing: border-box;
+    position: absolute;
+    z-index: var(--wb-media-controls-z-index, 2);
+    bottom: var(--wb-media-controls-offset, 0.75rem);
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 0.125rem;
+    width: max-content;
+    max-width: calc(100% - 1rem);
+    padding: 0.25rem;
+    border: 1px solid var(--wb-media-border, var(--wb-border, #d8d8dc));
+    border-radius: var(--wb-media-controls-radius, 0.625rem);
+    background: var(
+      --wb-media-controls-background,
+      var(--wb-media-background, var(--wb-surface, #fff))
+    );
+    box-shadow: var(
+      --wb-media-controls-shadow,
+      var(--wb-shadow-pop, 0 2px 10px #0002)
+    );
+    color: var(--wb-media-color, var(--wb-fg, inherit));
+    font-size: var(--wb-media-font-size, 0.8125rem);
+    line-height: 1;
+    isolation: isolate;
+  }
+
+  .wb-media-zoom-button {
+    box-sizing: border-box;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    min-width: 2rem;
+    min-height: 2rem;
+    margin: 0;
+    padding: 0.375rem;
+    border: 0;
+    border-radius: 0.375rem;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+  }
+
+  .wb-media-zoom-button:not(:disabled):hover,
+  .wb-media-zoom-button[aria-pressed="true"],
+  .wb-media-zoom-button[aria-expanded="true"] {
+    background: var(
+      --wb-media-controls-hover-background,
+      var(--wb-media-header-background, var(--wb-surface-2, #f2f2f3))
+    );
+  }
+
+  .wb-media-zoom-button:focus-visible {
+    outline: 2px solid var(--wb-media-focus, var(--wb-accent, #2a78d6));
+    outline-offset: 1px;
+  }
+
+  .wb-media-zoom-button:disabled {
+    color: var(--wb-media-muted, var(--wb-muted, #777));
+    opacity: 0.55;
+    cursor: default;
+  }
+
+  .wb-media-zoom-percentage {
+    box-sizing: border-box;
+    min-width: 3.5rem;
+    padding-inline: 0.375rem;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .wb-media-zoom-actual {
+    min-width: 2.5rem;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .wb-media-zoom-divider {
+    width: 1px;
+    height: 1rem;
+    margin-inline: 0.25rem;
+    background: var(--wb-media-border, var(--wb-border, #d8d8dc));
+  }
+
+  .wb-media-zoom-fit-icon {
+    display: block;
+    width: 1.125rem;
+    height: 1.125rem;
+  }
+
+  .wb-media-zoom-presets {
+    position: absolute;
+    bottom: calc(100% + 0.375rem);
+    left: 50%;
+    transform: translateX(-50%);
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.125rem;
+    width: 10rem;
+    padding: 0.25rem;
+    border: inherit;
+    border-radius: inherit;
+    background: inherit;
+    box-shadow: inherit;
+  }
+}
