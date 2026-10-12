@@ -1903,6 +1903,28 @@ describe("InventorySidebar view modes", () => {
     },
   );
 
+  it.each(["", "Matching"])("Escape blurs sidebar search and preserves its filter %j", (searchText) => {
+    seedViewPreferences({ groupBy: "none" });
+    const { store } = renderSidebar([makeThread("thread-1", "Matching thread")], { search: searchText });
+    const search = screen.getByRole("searchbox", { name: "Search threads" });
+    search.focus();
+    expect(search).toHaveFocus();
+    expect(fireEvent.keyDown(search, { key: "Escape" })).toBe(false);
+    expect(search).not.toHaveFocus();
+    expect(search).toHaveValue(searchText);
+    expect(store.setSearch).not.toHaveBeenCalled();
+  });
+
+  it("leaves composing Escape alone in sidebar search", () => {
+    seedViewPreferences({ groupBy: "none" });
+    const { store } = renderSidebar([], { search: "draft" });
+    const search = screen.getByRole("searchbox", { name: "Search threads" });
+    search.focus();
+    expect(fireEvent.keyDown(search, { key: "Escape", isComposing: true })).toBe(true);
+    expect(search).toHaveFocus();
+    expect(store.setSearch).not.toHaveBeenCalled();
+  });
+
   it("does not wrap sidebar arrow navigation or consume native editing chords", () => {
     seedViewPreferences({ groupBy: "none" });
     const onSelectThread = vi.fn();

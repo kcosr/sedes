@@ -230,8 +230,8 @@ inside a stack.
 Press Ctrl+Shift+F (Command+Shift+F on macOS) to focus sidebar search and
 select its text, even from a terminal. It opens a collapsed sidebar, or the
 navigation drawer on narrow screens, first. Ctrl+F (Command+F) still opens Find
-in thread. Press Escape in an empty search to leave it and return to
-Ctrl+Shift+Up/Down sidebar navigation.
+in thread. Press Escape to leave sidebar search without clearing its text or
+filter, and return to Ctrl+Shift+Up/Down sidebar navigation.
 
 Use [Find in thread](conversations.md#find-text-in-a-thread) for text inside one
 conversation; sidebar search and transcript search serve different purposes.

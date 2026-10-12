@@ -168,6 +168,8 @@ User-facing changes are collected here before release. See the
 
 ### Fixed
 
+- Escape exits sidebar search without clearing its text or filter.
+
 - Recent HTML previews stay loaded briefly when scrolling away and back, and
   inactive touch previews avoid nested scrolling. Inline image and Mermaid
   zoom gestures remain available after scrolling; tap to show or hide controls.
