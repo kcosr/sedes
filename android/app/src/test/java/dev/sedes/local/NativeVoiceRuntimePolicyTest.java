@@ -7,7 +7,7 @@ import org.junit.Test;
 public class NativeVoiceRuntimePolicyTest {
     @Test public void replayRepliesUseFreshManualAvailabilityRatherThanHistoricalTurnOrAutomaticAuthority() {
         org.json.JSONObject current = NativeVoiceJson.object("threadId", "13b02f0b-3060-4d6f-a3e0-60b5fa757011",
-            "threadTitle", "Current server title", "activityToken", "current-epoch", "authority", "unavailable", "runState", null,
+            "threadTitle", "Current server title", "activityToken", "current-epoch", "userInputRevision", 0, "authority", "unavailable", "runState", null,
             "automaticListenEligible", false, "manualListenEligible", true,
             "steer", NativeVoiceJson.object("availability", "unavailable"));
         NativeVoiceProtocol.inputContext(current);

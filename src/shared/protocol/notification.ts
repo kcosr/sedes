@@ -228,11 +228,22 @@ export const voiceNotificationSchema = z.strictObject({
   sourceEventId: identity,
   voice: voiceActionSchema,
   generation: z.number().int().nonnegative(),
+  userInputRevision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
   origin: z.strictObject({ clientId: identity }).optional(),
   recognitionTarget: voiceRecognitionTargetSchema.optional(),
   /** Only state-attention events with the same explicit subject may coalesce. */
   subjectId: identity.optional(),
 }).superRefine((value, context) => {
+  const turnEvent = value.payload.event.startsWith("turn.");
+  if (turnEvent !== (value.userInputRevision !== undefined)) {
+    context.addIssue({ code: "custom", path: ["userInputRevision"], message: "Input revision is required exactly for turn voice notifications." });
+  }
+  if (turnEvent && !value.payload.thread) {
+    context.addIssue({ code: "custom", path: ["payload", "thread"], message: "Turn voice notifications require a source thread." });
+  }
+  if (turnEvent && value.recognitionTarget && value.recognitionTarget.threadId !== value.payload.thread?.id) {
+    context.addIssue({ code: "custom", path: ["recognitionTarget", "threadId"], message: "A turn's recognition target must match its source thread." });
+  }
   if ((value.payload.event === "turn.progress" || value.payload.event === "turn.partial") && value.voice === "speakThenListen") {
     context.addIssue({ code: "custom", path: ["voice"], message: "Live reply notifications cannot start recognition." });
   }

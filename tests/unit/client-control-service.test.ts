@@ -130,6 +130,40 @@ describe("registered client authority", () => {
     expect((await settled).commands).toEqual([{ ...commands[0], action: "turn_settled", replyEventId: "reply-event", expiresAt: expect.any(Number) }]);
   });
 
+  it.each(["end_interaction", "switch_thread"] as const)("discards a superseded turn's deferred %s without settling it later", async action => {
+    const service = fixture();
+    const registered = service.register(scope, undefined, registration);
+    const requested = service.request(service.target(scope, registered.clientId), {
+      action, sourceThreadId: "thread", sourceTurnId: "turn",
+      ...(action === "switch_thread" ? { threadId: randomUUID(), listen: true } : {}),
+    }, new AbortController().signal);
+    const { commands } = await poll(service, registered.connectionToken);
+    await poll(service, registered.connectionToken, [{ id: commands[0]!.id, result: { status: "accepted", state } }], aborted());
+    await requested;
+    await service.complete(scope, "thread", "turn", "completed", true);
+    expect(await poll(service, registered.connectionToken, [], aborted())).toEqual({ commands: [] });
+    // A repeated completion must not revive the discarded request.
+    await service.complete(scope, "thread", "turn");
+    expect(await poll(service, registered.connectionToken, [], aborted())).toEqual({ commands: [] });
+  });
+
+  it("keeps another principal's deferred action when a superseded completion arrives", async () => {
+    const service = fixture();
+    const registered = service.register(scope, undefined, registration);
+    const requested = service.request(service.target(scope, registered.clientId), {
+      action: "end_interaction", sourceThreadId: "thread", sourceTurnId: "turn",
+    }, new AbortController().signal);
+    const { commands } = await poll(service, registered.connectionToken);
+    await poll(service, registered.connectionToken, [{ id: commands[0]!.id, result: { status: "accepted", state } }], aborted());
+    await requested;
+    await service.complete({ ...scope, principalId: "foreign" }, "thread", "turn", "completed", true);
+    expect(await poll(service, registered.connectionToken, [], aborted())).toEqual({ commands: [] });
+    await service.complete(scope, "thread", "turn");
+    expect((await poll(service, registered.connectionToken)).commands).toEqual([
+      expect.objectContaining({ id: commands[0]!.id, action: "turn_settled" }),
+    ]);
+  });
+
   it("retains deferred actions across long turns and starts a separate playback deadline at settlement", async () => {
     let now = 0;
     const service = fixture(() => now);

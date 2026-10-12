@@ -1,3 +1,5 @@
+import { UserInputRevisionRepository } from "../../src/server/db/repositories/user-input-revision-repository.js";
+import type { ResponseVoiceFreshness } from "../../src/server/conversations/response-voice-freshness.js";
 import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import type { ConversationActorEvent } from "../../src/server/conversations/conversation-actor.js";
@@ -28,15 +30,19 @@ async function fixture(observeNotifications = true) {
   const observations: Array<{
     observation: SubmissionCompletionObservationRecord;
     provenance: "live" | "recovered";
+    responseVoice?: ResponseVoiceFreshness;
   }> = [];
   let observer: NotificationLifecycleObserver | undefined;
   let notifications: NotificationService;
   const harness = await createInMemoryThreadRuntimeHarness({
     retentionMilliseconds: 60_000,
-    captureCompletionVoiceSubscriberWatermark: () => notifications.captureSubscriberWatermark(),
-    onObservedCompletion(scope, observation, provenance, subscriberWatermark) {
-      observations.push({ observation, provenance });
-      if (observeNotifications) observer?.completion(scope, observation, provenance, subscriberWatermark);
+    captureResponseVoiceContext: (scope, threadId, correlations) => ({
+      ...new UserInputRevisionRepository(harness.database).capture(scope, threadId, correlations),
+      subscriberWatermark: notifications.captureSubscriberWatermark(),
+    }),
+    onObservedCompletion(scope, observation, provenance, subscriberWatermark, responseVoice) {
+      observations.push({ observation, provenance, responseVoice });
+      if (observeNotifications) observer?.completion(scope, observation, provenance, subscriberWatermark, responseVoice);
     },
   });
   const executor = vi.fn<typeof executeNotificationScript>().mockResolvedValue({
@@ -46,9 +52,9 @@ async function fixture(observeNotifications = true) {
     repository: new NotificationRepository(harness.database), executor,
   });
   const publications: Promise<string | undefined>[] = [];
-  observer = new NotificationLifecycleObserver(harness.inventoryRepository, (scope, payload, key, provenance, result, _recognitionThreadId, subscriberWatermark) => {
+  observer = new NotificationLifecycleObserver(harness.inventoryRepository, (scope, payload, key, provenance, result, _recognitionThreadId, subscriberWatermark, responseVoice) => {
     publications.push(notifications.emit(scope, payload, key, provenance, result, () =>
-      harness.mutations.activity.notificationContext(scope, payload.thread!.id, payload.turn!.id), subscriberWatermark));
+      harness.mutations.activity.notificationContext(scope, payload.thread!.id, payload.turn!.id), subscriberWatermark, responseVoice));
   });
   notifications.update(harness.scope, {
     enabled: true, scriptPath: "/test/notification-script", arguments: [], timeoutSeconds: 1,
@@ -58,7 +64,7 @@ async function fixture(observeNotifications = true) {
   return {
     harness, notifications, executor, observations, publications, completions,
     enableObservation() { observeNotifications = true; },
-    async send() {
+    async start() {
       const created = await harness.lifecycle.createServerDraft(harness.scope, {
         workspaceId: harness.workspaceRecord.id, connectionProfileId: harness.connection.id,
         title: "Completion notifications", initialText: "Complete one observed turn",
@@ -69,6 +75,10 @@ async function fixture(observeNotifications = true) {
         expectedThreadRevision: harness.inventoryRepository.getThread(harness.scope, threadId).thread.revision,
         expectedDraftRevision: created.draft.revision,
       })).resolves.toMatchObject({ status: "delivery_accepted" });
+      return threadId;
+    },
+    async send() {
+      const threadId = await this.start();
       await vi.waitFor(() => {
         expect(observations.length).toBeGreaterThan(0);
         expect(harness.actors.observeInputRuntime(harness.scope, threadId)?.settled).toBe(true);
@@ -85,6 +95,80 @@ async function fixture(observeNotifications = true) {
 }
 
 describe("live completion notification provenance", { timeout: 30_000 }, () => {
+  it("keeps the original admission revision when another message arrives during delayed publication", async () => {
+    const current = await fixture();
+    const { harness, notifications } = current;
+    const frames: string[] = [];
+    const unsubscribe = notifications.subscribe(harness.scope, frame => frames.push(frame));
+    const entered = deferred(), release = deferred();
+    let sourceTurnId: string | undefined;
+    const original = harness.queueDispatcher.onAuthoritativeCompletion.bind(harness.queueDispatcher);
+    const observe = vi.spyOn(harness.queueDispatcher, "onAuthoritativeCompletion").mockImplementationOnce(async (...args) => {
+      sourceTurnId = args[2].applicationTurnId;
+      entered.resolve();
+      await release.promise;
+      return original(...args);
+    });
+    try {
+      const threadId = await current.start();
+      await entered.promise;
+      const before = await harness.mutations.inputContext(harness.scope, threadId);
+      expect(before.userInputRevision).toBe(1);
+      await harness.mutations.admitInput(harness.scope, threadId, {
+        mutationId: randomUUID(), origin: { clientId: randomUUID() }, text: "A later typed or recognized message", runningPolicy: { mode: "queue" },
+      });
+      expect((await harness.mutations.inputContext(harness.scope, threadId)).userInputRevision).toBe(2);
+      await vi.waitFor(() => expect(harness.actors.observeInputRuntime(harness.scope, threadId)?.sourceTurnId).not.toBe(sourceTurnId));
+      release.resolve();
+      await vi.waitFor(() => expect(voiceFrames(frames).some(frame => frame.payload.turn?.id === sourceTurnId)).toBe(true));
+      const source = voiceFrames(frames).find(frame => frame.payload.turn?.id === sourceTurnId)!;
+      expect(source.userInputRevision).toBe(1);
+      expect(source).not.toHaveProperty("recognitionTarget");
+      expect(current.observations.find(item => item.observation.applicationTurnId === sourceTurnId)?.responseVoice)
+        .toEqual({ userInputRevision: 1, superseded: false });
+      await vi.waitFor(() => expect(current.executor.mock.calls.filter(call => call[0].payload.turn?.id === sourceTurnId)).toHaveLength(1));
+      await vi.waitFor(() => expect(harness.actors.observeInputRuntime(harness.scope, threadId)?.settled).toBe(true));
+      await Promise.all(harness.completionFollowUps.splice(0));
+    } finally {
+      release.resolve(); observe.mockRestore(); unsubscribe(); await current.close();
+    }
+  });
+
+  it("suppresses an answer overtaken by a pending human follow-up while preserving its script", async () => {
+    const current = await fixture();
+    const { harness, notifications } = current;
+    const frames: string[] = [];
+    const unsubscribe = notifications.subscribe(harness.scope, frame => frames.push(frame));
+    const held: (() => void)[] = [];
+    const stages = vi.spyOn(harness.driver, "deliverScriptedAssistantStage").mockImplementation((text, stage, deliver) => {
+      if (text === "Complete one observed turn" && stage === "settled") held.push(deliver); else deliver();
+    });
+    try {
+      const threadId = await current.start();
+      await vi.waitFor(() => expect(held).toHaveLength(1));
+      const sourceTurnId = harness.actors.observeInputRuntime(harness.scope, threadId)!.sourceTurnId;
+      const followUp = await harness.mutations.admitInput(harness.scope, threadId, {
+        mutationId: randomUUID(), origin: { clientId: randomUUID() }, text: "Follow-up already sent", runningPolicy: { mode: "queue" },
+      });
+      expect(followUp.status).toBe("queued");
+      expect(harness.database.prepare("SELECT state FROM queued_inputs WHERE id = ?").get(followUp.queuedInputId!))
+        .toEqual({ state: "pending" });
+      const before = await harness.mutations.inputContext(harness.scope, threadId);
+      expect(before.userInputRevision).toBe(2);
+      held.shift()!();
+      await vi.waitFor(() => expect(current.observations.some(item => item.observation.applicationTurnId === sourceTurnId)).toBe(true));
+      await Promise.all(current.publications);
+      expect(current.observations.find(item => item.observation.applicationTurnId === sourceTurnId)?.responseVoice)
+        .toEqual({ userInputRevision: 2, superseded: true });
+      expect(voiceFrames(frames).filter(frame => frame.payload.turn?.id === sourceTurnId)).toEqual([]);
+      await vi.waitFor(() => expect(current.executor.mock.calls.filter(call => call[0].payload.turn?.id === sourceTurnId)).toHaveLength(1));
+      await vi.waitFor(() => expect(harness.actors.observeInputRuntime(harness.scope, threadId)?.settled).toBe(true));
+      await Promise.all(harness.completionFollowUps.splice(0));
+    } finally {
+      stages.mockRestore(); for (const release of held) release(); unsubscribe(); await current.close();
+    }
+  });
+
   it("excludes streams joining while the durable completion observer is delayed", async () => {
     const current = await fixture();
     const { harness, notifications } = current;

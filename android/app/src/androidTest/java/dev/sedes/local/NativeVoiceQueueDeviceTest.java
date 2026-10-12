@@ -21,7 +21,7 @@ public class NativeVoiceQueueDeviceTest {
     }
     private static int utf8(String value) { return value.getBytes(StandardCharsets.UTF_8).length; }
     private static JSONObject wire(String payload) throws Exception {
-        return NativeVoiceJson.object("sourceEventId", "fitted", "generation", 1, "voice", "speak", "payload", new JSONObject(payload));
+        return NativeVoiceJson.object("sourceEventId", "fitted", "generation", 1, "voice", "speak", "userInputRevision", 0, "payload", new JSONObject(payload));
     }
     private static NativeVoiceSettings response() {
         return NativeVoiceSettings.defaults().patch(0, NativeVoiceJson.object("audioMode", "speak"));

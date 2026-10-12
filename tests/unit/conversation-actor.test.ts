@@ -305,7 +305,7 @@ function fixture(
   deliveryInputSnapshots?: DeliveryInputSnapshotRepository,
   runtimeBudget = 8,
   onLiveProgress?: LiveProgressObserver,
-  captureCompletionVoiceSubscriberWatermark?: () => number,
+  captureResponseVoiceContext?: NonNullable<ConstructorParameters<typeof ConversationActorManager>[0]["captureResponseVoiceContext"]>,
   pagePublications?: (requestedScope: typeof scope, threadId: string, turnIds: readonly string[]) => readonly PagePublication[],
 ) {
   const closeOrder: string[] = [];
@@ -371,7 +371,7 @@ function fixture(
     ...(onAuthoritativeCompletion ? { onAuthoritativeCompletion } : {}),
     ...(onAuthoritativeSubmission ? { onAuthoritativeSubmission } : {}),
     ...(onLiveProgress ? { onLiveProgress } : {}),
-    ...(captureCompletionVoiceSubscriberWatermark ? { captureCompletionVoiceSubscriberWatermark } : {}),
+    ...(captureResponseVoiceContext ? { captureResponseVoiceContext } : {}),
     ...(pagePublications ? { pagePublications } : {}),
   });
   const manager = {
@@ -5336,7 +5336,8 @@ describe("ConversationActorManager", () => {
 
   it.each(["provisional", "partial"] as const)("publishes qualified live %s progress after projection, including late phase evidence, but not snapshots or terminal backfill", async (phase) => {
     const observed = vi.fn<LiveProgressObserver>();
-    const { driver, handle, manager } = fixture(undefined, undefined, 10, undefined, 8, observed);
+    const capture = vi.fn(() => ({ userInputRevision: 5, superseded: false, subscriberWatermark: 10 }));
+    const { driver, handle, manager } = fixture(undefined, undefined, 10, undefined, 8, observed, capture);
     const base = snapshot("running", "Inspecting the files");
     const initial = { ...base, turnsById: { "turn-1": { ...base.turnsById["turn-1"]!, completionCorrelations: ["accepted-input"] } } };
     handle.establishmentSnapshots[0] = initial;
@@ -5353,7 +5354,9 @@ describe("ConversationActorManager", () => {
       handle.emit(0, { type: "item_updated", item: { ...item, responsePhase: phase }, liveProgress: true }, 1);
       await vi.waitFor(() => expect(observed).toHaveBeenCalledTimes(1));
       const progress = observed.mock.calls[0]![2];
-      expect(progress).toMatchObject({ phase, applicationTurnId: projectedTurnId, backendCorrelations: ["accepted-input"], text: { text: "Inspecting the files" } });
+      expect(progress).toMatchObject({ phase, applicationTurnId: projectedTurnId, backendCorrelations: ["accepted-input"], text: { text: "Inspecting the files" },
+        responseVoice: { userInputRevision: 5, superseded: false } });
+      expect(capture).toHaveBeenCalledWith(scope, binding.applicationThreadId, ["accepted-input"]);
       expect(progress.applicationItemId).not.toBe("item-1");
       expect(acquired.actor.timeline.itemsById[progress.applicationItemId]).toMatchObject({ status: "completed" });
       expect(acquired.actor.timeline.runState).toBe("running");
@@ -5369,6 +5372,36 @@ describe("ConversationActorManager", () => {
       await acquired.actor.captureSnapshotState();
       expect(observed).toHaveBeenCalledTimes(1);
     } finally { acquired.release(); await manager.close(); }
+  });
+
+  it("captures progress freshness before a preceding submission observer can delay publication", async () => {
+    let release!: () => void, entered!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const waiting = new Promise<void>(resolve => { entered = resolve; });
+    const submission = vi.fn<AuthoritativeSubmissionObserver>(async () => { entered(); await gate; });
+    const progress = vi.fn<LiveProgressObserver>();
+    let userInputRevision = 1;
+    const capture = vi.fn(() => ({ userInputRevision, superseded: false, subscriberWatermark: 10 }));
+    const { driver, handle, manager } = fixture(undefined, submission, 10, undefined, 8, progress, capture);
+    const base = snapshot("running", "Progress held behind admission");
+    const initial = { ...base, turnsById: { "turn-1": { ...base.turnsById["turn-1"]!, completionCorrelations: ["accepted-input"] } } };
+    handle.establishmentSnapshots[0] = initial;
+    const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+    try {
+      await waiting;
+      handle.emit(0, { type: "item_completed", liveProgress: true, item: {
+        ...initial.itemsById["item-1"]!, semanticKind: "assistant_message", status: "completed", responsePhase: "partial",
+        markdown: { text: "An early partial answer" },
+      } }, 0);
+      await acquired.actor.captureSnapshotState();
+      expect(capture).toHaveBeenCalledOnce();
+      expect(progress).not.toHaveBeenCalled();
+      userInputRevision = 2;
+      release();
+      await vi.waitFor(() => expect(progress).toHaveBeenCalledOnce());
+      expect(progress.mock.calls[0]![2].responseVoice).toEqual({ userInputRevision: 1, superseded: false });
+      expect(capture).toHaveBeenCalledOnce();
+    } finally { release(); acquired.release(); await manager.close(); }
   });
 
   it.each(["provisional", "partial"] as const)("rejects %s progress from a sequence-gap replacement or a provider-only turn", async (phase) => {
@@ -5429,7 +5462,7 @@ describe("ConversationActorManager", () => {
 
   it("classifies initial, subscriber, and explicit snapshot completion replays as recovered", async () => {
     const observed = vi.fn<AuthoritativeCompletionObserver>();
-    const captureWatermark = vi.fn(() => 10);
+    const captureWatermark = vi.fn(() => ({ subscriberWatermark: 10, userInputRevision: 7, superseded: false }));
     const { driver, handle, manager } = fixture(observed, undefined, 10, undefined, 8, undefined, captureWatermark);
     const terminal = snapshot();
     terminal.turnsById["turn-1"] = {
@@ -5464,7 +5497,7 @@ describe("ConversationActorManager", () => {
     const observed = vi.fn<AuthoritativeCompletionObserver>((_scope, _threadId, completion) => {
       if (accepted) matched.push(completion);
     });
-    const captureWatermark = vi.fn(() => 10);
+    const captureWatermark = vi.fn(() => ({ subscriberWatermark: 10, userInputRevision: 7, superseded: false }));
     const { driver, handle, manager } = fixture(observed, undefined, 10, undefined, 8, undefined, captureWatermark);
     handle.establishmentSnapshots[0] = { orderedBackendTurnIds: [], turnsById: {}, itemsById: {}, runState: "idle" };
     const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
@@ -5479,11 +5512,13 @@ describe("ConversationActorManager", () => {
     await vi.waitFor(() => expect(observed).toHaveBeenCalledTimes(1));
     expect(observed.mock.calls[0]?.[2].provenance).toBe("live");
     expect(observed.mock.calls[0]?.[2].voiceSubscriberWatermark).toBe(10);
+    expect(observed.mock.calls[0]?.[2].responseVoice).toMatchObject({ userInputRevision: 7, superseded: false });
+    expect(captureWatermark).toHaveBeenCalledWith(scope, binding.applicationThreadId, ["accepted-operation"]);
     expect(captureWatermark).toHaveBeenCalledTimes(1);
     expect(matched).toEqual([]);
 
     accepted = true;
-    captureWatermark.mockReturnValue(20);
+    captureWatermark.mockReturnValue({ subscriberWatermark: 20, userInputRevision: 8, superseded: true });
     await acquired.actor.replayAuthoritativeCompletions();
     await vi.waitFor(() => expect(matched).toEqual([expect.objectContaining({ provenance: "live", voiceSubscriberWatermark: 10 })]));
     const subscribed: ConversationActorEvent[] = [];
@@ -5499,6 +5534,7 @@ describe("ConversationActorManager", () => {
     await vi.waitFor(() => expect(observed).toHaveBeenCalledTimes(3));
     expect(observed.mock.calls[2]?.[2].provenance).toBe("live");
     expect(observed.mock.calls[2]?.[2].voiceSubscriberWatermark).toBe(10);
+    expect(observed.mock.calls[2]?.[2].responseVoice).toMatchObject({ userInputRevision: 7, superseded: false });
     expect(captureWatermark).toHaveBeenCalledTimes(1);
     acquired.release();
     await manager.close();
@@ -5986,7 +6022,7 @@ describe("ConversationActorManager", () => {
   it("retains 512 completion identities and audience watermarks, then evicts the oldest while preserving publications", async () => {
     const observed = vi.fn<AuthoritativeCompletionObserver>();
     let watermark = 0;
-    const captureWatermark = vi.fn(() => ++watermark);
+    const captureWatermark = vi.fn(() => ({ subscriberWatermark: ++watermark, userInputRevision: watermark, superseded: false }));
     const { driver, handle, manager } = fixture(observed, undefined, 10, undefined, 8, undefined, captureWatermark);
     const empty: BackendConversationSnapshot = { orderedBackendTurnIds: [], turnsById: {}, itemsById: {}, runState: "idle" };
     handle.establishmentSnapshots[0] = empty;
@@ -6179,6 +6215,7 @@ describe("ConversationActorManager", () => {
         binding.applicationThreadId,
         {
           backendCorrelation: "accepted-operation",
+          backendCorrelations: ["accepted-operation", "accepted-steer-operation"],
           backendTurnId: "turn-1",
           applicationTurnId: projectedTurnId,
           completionIdentity: "turn-1:completed",
@@ -6193,6 +6230,7 @@ describe("ConversationActorManager", () => {
     );
     expect(observed).toHaveBeenCalledWith(scope, binding.applicationThreadId, {
       backendCorrelation: "accepted-steer-operation",
+      backendCorrelations: ["accepted-operation", "accepted-steer-operation"],
       backendTurnId: "turn-1",
       applicationTurnId: projectedTurnId,
       completionIdentity: "turn-1:completed",
@@ -6235,6 +6273,7 @@ describe("ConversationActorManager", () => {
         binding.applicationThreadId,
         {
           backendCorrelation: "accepted-operation",
+          backendCorrelations: ["accepted-operation", "accepted-steer-operation"],
           backendTurnId: "turn-1",
           applicationTurnId: projectedTurnId,
           completionIdentity: "turn-1:completed",
@@ -6249,6 +6288,7 @@ describe("ConversationActorManager", () => {
     );
     expect(observed).toHaveBeenCalledWith(scope, binding.applicationThreadId, {
       backendCorrelation: "accepted-steer-operation",
+      backendCorrelations: ["accepted-operation", "accepted-steer-operation"],
       backendTurnId: "turn-1",
       applicationTurnId: projectedTurnId,
       completionIdentity: "turn-1:completed",

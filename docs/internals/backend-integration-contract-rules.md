@@ -2090,6 +2090,26 @@ input/recovery, cached presentation settings, and normalized blocking
 interactions. This shared contract applies to all five backends; steering still
 uses each backend's declared target and delivery capabilities.
 
+Automatic turn speech uses a separate durable, scoped `userInputRevision`.
+Advance it only for fresh user-written composer, direct-input, and nonblocking
+question-response admission, including first sends, within the admission
+transaction. Preserve a queued row's classification on retry; replay, retry,
+restore, cancellation, agent/Tool-client input, callbacks, automation, forks,
+and lifecycle changes do not advance it. Capture the revision and queued-user
+supersession synchronously at the normalized response event, before delayed
+observers, and retain the first completion capture with its audience watermark.
+Use the response's complete correlation set to distinguish pending or
+unassociated user Steers from Steers already associated with that response.
+Supersession suppresses voice only and retires that source turn's deferred
+client actions. Keep script delivery independent. The wire revision is required
+for turn notices even when automatic-listen authority is absent; their optional
+recognition target must name the same source thread. Native validates it before
+playback and automatic microphone startup while retaining activity-token
+readiness. Pi, Codex, Claude, Grok, and OpenCode implement this through the shared
+application admission and actor-observation paths. Pi/Codex use turn Steer,
+Claude/OpenCode use conversation Steer, and Grok keeps shared Submit/Queue with
+Steer unsupported. No provider-native correlation escapes into browser DTOs.
+
 The required input-context `threadTitle` is current principal-scoped display
 text from the application title overlay, normalized by the same
 `boundDisplayText` projection as thread summaries. Preserve its empty-text

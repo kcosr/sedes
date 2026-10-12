@@ -9,6 +9,7 @@ export type VoiceDiagnosticEvent = typeof events[number];
 const suppressionReasons = [
   "not_claimed", "service_closed", "invalid_event", "disabled", "silenced",
   "recovered", "voice_disabled", "no_recipients", "payload_unavailable", "processing_failed", "policy_changed",
+  "superseded_by_input",
 ] as const;
 export type VoiceDiagnosticSuppressionReason = typeof suppressionReasons[number];
 

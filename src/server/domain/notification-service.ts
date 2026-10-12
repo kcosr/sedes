@@ -23,6 +23,7 @@ import {
   selectAssistantResult,
 } from "./assistant-result-selection.js";
 import { DomainError } from "./errors.js";
+import type { ResponseVoiceFreshness } from "../conversations/response-voice-freshness.js";
 
 const MAX_CONCURRENT = 4;
 const MAX_PENDING = 64;
@@ -152,6 +153,7 @@ export class NotificationService {
     assistantResult?: ClassifiedAssistantResult,
     voiceContext?: () => VoiceNotificationContext,
     subscriberWatermark?: number,
+    responseVoice?: ResponseVoiceFreshness,
   ): Promise<string | undefined> {
     const sourceEventId = createHash("sha256").update(eventKey).digest("hex");
     let claimed = false;
@@ -178,11 +180,13 @@ export class NotificationService {
       if (dispatch.settings.silenced) { decision("silenced"); return; }
       const channels = dispatch.settings.delivery[event.event];
       const script = channels.script && this.#pending.length < MAX_PENDING;
+      const superseded = event.event.startsWith("turn.") && responseVoice?.superseded === true;
       // Completion recipients must also predate the first live observation.
-      const recipients = provenance !== "live" || channels.voice === "none" ? []
+      const recipients = provenance !== "live" || channels.voice === "none" || superseded ? []
         : [...this.#subscribers].filter((subscriber) => sameScope(scope, subscriber.scope) &&
           (subscriberWatermark === undefined || subscriber.sequence <= subscriberWatermark));
       const suppressionReason = provenance !== "live" ? "recovered"
+        : superseded ? "superseded_by_input"
         : channels.voice === "none" ? "voice_disabled" : !recipients.length ? "no_recipients" : undefined;
       if (!script && !recipients.length) { decision(suppressionReason, 0, channels.voice); return; }
       const payload = notificationPayload(event, dispatch.settings, assistantResult);
@@ -194,7 +198,7 @@ export class NotificationService {
       }
       decision(suppressionReason, recipients.length, channels.voice);
       if (recipients.length) {
-        return this.#voice(scope, sourceEventId, payload, channels.voice, dispatch.generation, recipients, voiceContext);
+        return this.#voice(scope, sourceEventId, payload, channels.voice, dispatch.generation, recipients, voiceContext, responseVoice);
       }
     } catch {
       decision("processing_failed");
@@ -220,12 +224,14 @@ export class NotificationService {
     generation: number,
     recipients: readonly Subscriber[],
     voiceContext: (() => VoiceNotificationContext) | undefined,
+    responseVoice: ResponseVoiceFreshness | undefined,
   ): Promise<string | undefined> {
     try {
       const { settlement, ...context } = voiceContext?.() ?? {};
       const envelope = {
         payload, sourceEventId,
         voice, generation, ...context,
+        ...(payload.event.startsWith("turn.") && responseVoice ? { userInputRevision: responseVoice.userInputRevision } : {}),
       };
       const publish = (recognitionTarget: VoiceRecognitionTarget | undefined) => {
         const staleGeneration = !this.#closed && this.input.repository.readDispatch(scope).generation !== generation;

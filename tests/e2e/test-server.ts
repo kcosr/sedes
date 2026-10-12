@@ -158,6 +158,7 @@ import { ConversationOperationRepository } from "../../src/server/db/repositorie
 import { ComposerAttachmentRepository } from "../../src/server/db/repositories/composer-attachment-repository.js";
 import { OutputImageArtifactRepository } from "../../src/server/db/repositories/output-image-artifact-repository.js";
 import { InventoryRepository } from "../../src/server/db/repositories/inventory-repository.js";
+import { UserInputRevisionRepository } from "../../src/server/db/repositories/user-input-revision-repository.js";
 import { ConversationTurnBookmarkRepository } from "../../src/server/db/repositories/conversation-turn-bookmark-repository.js";
 import { CannedPromptRepository } from "../../src/server/db/repositories/canned-prompt-repository.js";
 import { ThreadGroupRepository } from "../../src/server/db/repositories/thread-group-repository.js";
@@ -4300,9 +4301,10 @@ async function main(): Promise<void> {
   }
 
   const inventoryRepository = new InventoryRepository(database);
+  const userInputs = new UserInputRevisionRepository(database);
   const notificationLifecycle = new NotificationLifecycleObserver(
     inventoryRepository,
-    (eventScope, payload, eventKey, provenance, assistantResult, recognitionThreadId, subscriberWatermark) => {
+    (eventScope, payload, eventKey, provenance, assistantResult, recognitionThreadId, subscriberWatermark, responseVoice) => {
       // Same wiring as production: voice context is captured only after dedup,
       // policy and recipient checks admit voice delivery.
       const publication = notifications.emit(eventScope, payload, eventKey, provenance, assistantResult, () => {
@@ -4311,7 +4313,7 @@ async function main(): Promise<void> {
         const subjectId = payload.interaction?.id ?? payload.question?.id ??
           (payload.event === "thread.woke" ? payload.occurredAt : undefined);
         return { ...context, ...(subjectId ? { subjectId } : {}) };
-      }, subscriberWatermark);
+      }, subscriberWatermark, responseVoice);
       if (payload.turn && payload.thread && ["turn.completed", "turn.failed", "turn.interrupted"].includes(payload.event)) {
         clientControls.observeNotification(eventScope, payload.thread.id, payload.turn.id, publication);
       }
@@ -4562,7 +4564,10 @@ async function main(): Promise<void> {
         applicationThreadId,
         input.backendCorrelation,
       ),
-    captureCompletionVoiceSubscriberWatermark: () => notifications.captureSubscriberWatermark(),
+    captureResponseVoiceContext: (eventScope, threadId, backendCorrelations) => ({
+      ...userInputs.capture(eventScope, threadId, backendCorrelations),
+      subscriberWatermark: notifications.captureSubscriberWatermark(),
+    }),
     onAuthoritativeCompletion: (eventScope, applicationThreadId, input) =>
       observeAuthoritativeCompletion?.(eventScope, applicationThreadId, input),
   });
@@ -5027,8 +5032,9 @@ async function main(): Promise<void> {
     } catch {
       // As in production, run history never breaks completion.
     }
-    notificationLifecycle.completion(eventScope, observed, input.provenance, input.voiceSubscriberWatermark);
-    if (observed.applicationTurnId) void clientControls.complete(eventScope, applicationThreadId, observed.applicationTurnId, observed.completionOutcome ?? "interrupted");
+    notificationLifecycle.completion(eventScope, observed, input.provenance, input.voiceSubscriberWatermark, input.responseVoice);
+    if (observed.applicationTurnId) void clientControls.complete(eventScope, applicationThreadId, observed.applicationTurnId,
+      observed.completionOutcome ?? "interrupted", input.responseVoice?.superseded);
     authoritativeCompletionFollowUp.defer(async () => {
       const failures: unknown[] = [];
       try {

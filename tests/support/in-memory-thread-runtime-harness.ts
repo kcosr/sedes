@@ -1,3 +1,4 @@
+import { UserInputRevisionRepository } from "../../src/server/db/repositories/user-input-revision-repository.js";
 import type Database from "better-sqlite3";
 import { DeliveryInputSnapshotRepository } from "../../src/server/db/repositories/delivery-input-snapshot-repository.js";
 import { UsageService } from "../../src/server/usage/usage-service.js";
@@ -217,12 +218,13 @@ export async function createInMemoryThreadRuntimeHarness(options: {
   readonly retentionMilliseconds?: number;
   readonly persistDeliveryInputSnapshots?: boolean;
   readonly onCompletion?: (scope: RequestScope, threadId: string, turnId: string) => void;
-  readonly captureCompletionVoiceSubscriberWatermark?: () => number;
+  readonly captureResponseVoiceContext?: NonNullable<ConstructorParameters<typeof ConversationActorManager>[0]["captureResponseVoiceContext"]>;
   readonly onObservedCompletion?: (
     scope: RequestScope,
     observation: SubmissionCompletionObservationRecord,
     provenance: "live" | "recovered",
     subscriberWatermark?: number,
+    responseVoice?: Parameters<AuthoritativeCompletionObserver>[2]["responseVoice"],
   ) => void;
 } = {}) {
   const database = openOverlayDatabase(":memory:");
@@ -367,7 +369,9 @@ export async function createInMemoryThreadRuntimeHarness(options: {
     runtimeBudget: 8,
     onAuthoritativeSubmission: (eventScope, applicationThreadId, input) =>
       observeSubmission?.(eventScope, applicationThreadId, input),
-    captureCompletionVoiceSubscriberWatermark: options.captureCompletionVoiceSubscriberWatermark,
+    captureResponseVoiceContext: options.captureResponseVoiceContext ?? ((eventScope, threadId, correlations) => ({
+      ...new UserInputRevisionRepository(database).capture(eventScope, threadId, correlations), subscriberWatermark: 0,
+    })),
     onAuthoritativeCompletion: (eventScope, applicationThreadId, input) =>
       observeCompletion?.(eventScope, applicationThreadId, input),
   });
@@ -517,7 +521,7 @@ export async function createInMemoryThreadRuntimeHarness(options: {
       input,
     );
     if (!observed) return;
-    options.onObservedCompletion?.(eventScope, observed, input.provenance, input.voiceSubscriberWatermark);
+    options.onObservedCompletion?.(eventScope, observed, input.provenance, input.voiceSubscriberWatermark, input.responseVoice);
     if (observed.applicationTurnId) options.onCompletion?.(eventScope, applicationThreadId, observed.applicationTurnId);
     // Match the production observer boundary: recovery and inventory wake
     // re-enter the loaded actor and must not be awaited from the actor's

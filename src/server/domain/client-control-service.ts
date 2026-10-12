@@ -183,14 +183,14 @@ export class ClientControlService {
     void publication.finally(() => { if (this.#notifications.get(key) === publication) this.#notifications.delete(key); });
   }
 
-  async complete(scope: RequestScope, threadId: string, turnId: string, outcome = "completed") {
+  async complete(scope: RequestScope, threadId: string, turnId: string, outcome = "completed", superseded = false) {
     const replyEventId = await this.#notifications.get(scopeKey(scope) + turnKey(threadId, turnId));
     for (const client of this.#clients.values()) {
       if (!sameScope(scope, client.scope)) continue;
       const key = turnKey(threadId, turnId);
       const deferred = client.deferred.get(key);
       client.deferred.delete(key);
-      if (!deferred || deferred.expiresAt <= this.now() || outcome !== "completed") continue;
+      if (!deferred || deferred.expiresAt <= this.now() || outcome !== "completed" || superseded) continue;
       client.commands.push({ ...deferred, action: "turn_settled", replyEventId: replyEventId ?? null, expiresAt: this.now() + 3_600_000 });
       client.wake?.();
     }

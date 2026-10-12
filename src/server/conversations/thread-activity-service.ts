@@ -23,6 +23,7 @@ type DurableObservation = {
   backingState: string;
   availability: string;
   activityRevision: number;
+  userInputRevision: number;
   inventoryState: string;
   workspaceAvailable: string;
   workspaceRemovedAt: number | null;
@@ -143,6 +144,7 @@ export class ThreadActivityService {
     const stored = this.input.database.prepare(`SELECT
       thread.title AS threadTitle, thread.backing_state AS backingState, thread.availability,
       thread.input_activity_revision AS activityRevision, inventory.inventory_state AS inventoryState,
+      thread.user_input_revision AS userInputRevision,
       workspace.availability AS workspaceAvailable, workspace.removed_at AS workspaceRemovedAt,
       project.removed_at AS projectRemovedAt,
       (SELECT COUNT(*) FROM queued_inputs q WHERE q.tenant_id = thread.tenant_id
@@ -225,6 +227,7 @@ export class ThreadActivityService {
       pending: stored.backingState === "bound" && observation?.reestablishing === true,
       context: {
         threadId, threadTitle: boundDisplayText(stored.threadTitle).text, activityToken: token, authority,
+        userInputRevision: stored.userInputRevision,
         runState: observation?.runState ?? null,
         ...(observation?.sourceTurnId ? { sourceTurnId: observation.sourceTurnId } : {}),
         automaticListenEligible: !this.#closed && targetAvailable && authority === "current" &&

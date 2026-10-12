@@ -237,7 +237,11 @@ export async function startOpencodeModelFixture(options: { readonly vision?: boo
       const hold = createStreamHold(promptMarker);
       nextHold = hold;
       holds.add(hold);
-      return { started: hold.started, release: hold.release };
+      return { started: hold.started, release: () => {
+        if (nextHold === hold) nextHold = undefined;
+        holds.delete(hold);
+        hold.release();
+      } };
     },
     async stop() {
       for (const hold of holds) hold.release();

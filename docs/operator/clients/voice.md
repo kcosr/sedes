@@ -174,6 +174,19 @@ Input does not require hearing a response before an eligible completion opens
 the microphone. Explicit reply playback, optional recording-destination
 announcements, and recording cues remain available independently of automatic speech.
 
+Automatic turn notices check for newer messages before speaking. A typed or
+recognized message accepted by Sedes in the same thread, including a queued
+message or one sent from another device, supersedes the older notice and its
+automatic recording. A follow-up queued before the reply completes can suppress
+that reply's voice notice too. Steering already associated with the responding
+turn preserves its reply. Unsent drafts and unfinished recordings do not count.
+
+A reply that has started playing continues; Sedes checks again before the
+recording cue and microphone startup. Explicit **Play response aloud**, manual
+recording, and question or approval notices keep their own behavior. If Sedes
+temporarily cannot answer the pre-speech check, the reply may still play;
+automatic recording always requires a successful current-target check.
+
 Fresh completion settings select Final and Unclassified response text.
 Provisional and Partial completion text are optional and can repeat their live
 notifications. **Partial** has independent Script and Voice controls in

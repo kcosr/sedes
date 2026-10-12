@@ -1,4 +1,5 @@
 import type Database from "better-sqlite3";
+import { UserInputRevisionRepository } from "./user-input-revision-repository.js";
 import type { ClientOrigin } from "../../../shared/protocol/thread-input.js";
 import { DirectInputRepository } from "./direct-input-repository.js";
 import { DomainError } from "../../domain/errors.js";
@@ -623,6 +624,9 @@ export class ConversationCreationRepository {
         });
       }
       if (input.creationKind === "first_input") {
+        if (input.sourceKind === "composer" || input.sourceKind === "direct_input") {
+          new UserInputRevisionRepository(this.database).advance(scope, applicationThreadId);
+        }
         new DirectInputRepository(this.database).recordOrigin(scope, applicationThreadId, input.mutationId, input.origin);
       }
       return this.get(scope, applicationThreadId, input.attemptId);

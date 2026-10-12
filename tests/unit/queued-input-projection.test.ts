@@ -26,6 +26,7 @@ function queued(
     requestedThreadRevision: null,
     requestedDraftRevision: null,
     triggerKind: "user",
+    isUserInput: 1,
     sourceAutomationId: null,
     sourceAutomationRunId: null,
     initiatingAgentThreadId: null,

@@ -1,5 +1,6 @@
 import { steerTargetSchema, type SteerTarget } from "../../../shared/protocol/conversation.js";
 import { createHash, randomUUID } from "node:crypto";
+import { UserInputRevisionRepository } from "./user-input-revision-repository.js";
 import type Database from "better-sqlite3";
 import { DomainError } from "../../domain/errors.js";
 import type { RequestScope } from "../../identity/identity-provider.js";
@@ -50,6 +51,7 @@ export type QueuedInputRecord = {
   readonly id: string;
   readonly applicationThreadId: string;
   readonly sequence: number;
+  readonly isUserInput: 0 | 1;
   readonly mutationId: string;
   readonly text: string;
   readonly selectedSkillId: string | null;
@@ -141,6 +143,7 @@ const columns = `
   id,
   application_thread_id AS applicationThreadId,
   sequence,
+  is_user_input AS isUserInput,
   mutation_id AS mutationId,
   text,
   selected_skill_id AS selectedSkillId,
@@ -189,6 +192,7 @@ const qualifiedColumns = `
   q.id,
   q.application_thread_id AS applicationThreadId,
   q.sequence,
+  q.is_user_input AS isUserInput,
   q.mutation_id AS mutationId,
   q.text,
   q.selected_skill_id AS selectedSkillId,
@@ -688,6 +692,7 @@ export class QueuedInputRepository {
         }
       ).sequence;
       const id = input.id ?? randomUUID();
+      const isUserInput = input.source.kind === "composer" || input.source.kind === "direct_input" || input.source.kind === "question_response";
       this.#attachments.replaceOwnerLinks(
         scope,
         { kind: "queue", threadId: applicationThreadId, queuedInputId: id },
@@ -708,8 +713,9 @@ export class QueuedInputRepository {
               resolved_delivery_mode, resolved_steer_target_json,
               requested_thread_revision, requested_draft_revision,
               state, created_at
+              , is_user_input
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
           `,
         )
         .run(
@@ -773,7 +779,9 @@ export class QueuedInputRepository {
             ? input.source.expectedDraftRevision
             : null,
           input.now,
+          isUserInput ? 1 : 0,
         );
+      if (isUserInput) new UserInputRevisionRepository(this.database).advance(scope, applicationThreadId);
       new DirectInputRepository(this.database).recordOrigin(scope, applicationThreadId, input.mutationId, input.origin);
       if (input.source.kind === "completion_callback") {
         this.#callbacks.markMaterialized(scope, input.source.callbackId, {
@@ -2073,9 +2081,9 @@ export class QueuedInputRepository {
               source_automation_id, source_automation_run_id,
               initiating_agent_thread_id, initiating_tool_client_id,
               question_response_origin_json,
-              resolved_delivery_mode, state, retry_of_id, created_at
+              resolved_delivery_mode, state, retry_of_id, created_at, is_user_input
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queue', 'pending', ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queue', 'pending', ?, ?, ?)
           `,
         )
         .run(
@@ -2099,6 +2107,7 @@ export class QueuedInputRepository {
             : null,
           failed.id,
           input.now,
+          failed.isUserInput,
         );
       this.#touchThread(scope, applicationThreadId, input.now, false);
       return {

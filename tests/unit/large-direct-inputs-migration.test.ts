@@ -2,7 +2,6 @@ import { createHash, randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { applyDatabaseMigrations, backendNormalizedMigrations } from "../../src/server/db/migrate.js";
 import { ConversationBindingRepository } from "../../src/server/db/repositories/conversation-binding-repository.js";
-import { ConversationCreationRepository } from "../../src/server/db/repositories/conversation-creation-repository.js";
 import { DirectInputRepository } from "../../src/server/db/repositories/direct-input-repository.js";
 import { InventoryRepository } from "../../src/server/db/repositories/inventory-repository.js";
 import { QueuedInputRepository } from "../../src/server/db/repositories/queued-input-repository.js";
@@ -34,14 +33,21 @@ describe("large direct-input storage migration", () => {
       const queueThread = createThread();
       const request = { mutationId: randomUUID(), origin: { clientId: randomUUID() }, text: "Original first input",
         runningPolicy: { mode: "queue" as const } };
-      const attempts = new ConversationCreationRepository(database);
       const receipts = new DirectInputRepository(database);
       const attemptId = randomUUID();
       database.transaction(() => {
-        attempts.prepare(scope, firstThread.id, { attemptId, mutationId: request.mutationId,
-          expectedThreadRevision: inventory.getThread(scope, firstThread.id).thread.revision,
-          creationKind: "first_input", sourceKind: "direct_input", initialInputText: request.text,
-          initialAttachmentIds: [], backendCreationCorrelation: request.mutationId, origin: request.origin, now: 202 });
+        // Seed the actual pre-133 shape; current admission repositories require the current schema.
+        database.prepare(`INSERT INTO conversation_creation_attempts (tenant_id, owner_principal_id,
+          application_thread_id, attempt_id, mutation_id, backend_instance_id, connection_profile_id,
+          execution_environment_id, creation_kind, source_kind, initial_input_text,
+          backend_creation_correlation, phase, prepared_at)
+          SELECT tenant_id, owner_principal_id, id, ?, ?, backend_instance_id, connection_profile_id,
+            environment_id, 'first_input', 'direct_input', ?, ?, 'prepared', 202
+          FROM application_threads WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?`)
+          .run(attemptId, request.mutationId, request.text, request.mutationId,
+            scope.tenantId, scope.principalId, firstThread.id);
+        database.prepare("UPDATE application_threads SET backing_state = 'creating', revision = revision + 1 WHERE id = ?")
+          .run(firstThread.id);
         receipts.record(scope, firstThread.id, request, { admittedMode: "submit", creationAttemptId: attemptId, now: 202 });
       })();
       const queuedId = randomUUID();
@@ -67,7 +73,7 @@ describe("large direct-input storage migration", () => {
       const beforeReceipts = [receipts.lookup(scope, request.mutationId), receipts.lookup(scope, queueRequest.mutationId)];
       const foreignKeys = () => [database.pragma("foreign_key_list(conversation_creation_attempts)"), database.pragma("foreign_key_list(queued_inputs)")];
       const beforeForeignKeys = foreignKeys();
-      expect(() => applyDatabaseMigrations(database, backendNormalizedMigrations, {
+      expect(() => applyDatabaseMigrations(database, backendNormalizedMigrations.filter(migration => migration.version <= 134), {
         verifyBeforeCommit: (_database, migration) => { if (migration.version === 133) throw new Error("test_upgrade_rollback"); },
       })).toThrow("test_upgrade_rollback");
       expect(rows()).toEqual(beforeRows);
@@ -80,7 +86,7 @@ describe("large direct-input storage migration", () => {
         expect(applied).toMatchObject({ checksum: "43e5db02c7165ec0bf05db23d55c4e626c61d7950b9f16540345ff97a491c726" });
         const originalOrder = triggerOrder();
         expect(originalOrder).not.toEqual(beforeTriggerOrder);
-        expect(() => applyDatabaseMigrations(database, backendNormalizedMigrations, {
+        expect(() => applyDatabaseMigrations(database, backendNormalizedMigrations.filter(migration => migration.version <= 134), {
           verifyBeforeCommit: (_database, migration) => { if (migration.version === 134) throw new Error("test_order_rollback"); },
         })).toThrow("test_order_rollback");
         expect(triggerOrder()).toEqual(originalOrder);
@@ -89,7 +95,7 @@ describe("large direct-input storage migration", () => {
         expect(database.prepare("SELECT * FROM schema_migrations WHERE version = 133").get()).toEqual(applied);
         expect(database.prepare("SELECT version FROM schema_migrations WHERE version = 134").get()).toBeUndefined();
       }
-      applyDatabaseMigrations(database, backendNormalizedMigrations);
+      applyDatabaseMigrations(database, backendNormalizedMigrations.filter(migration => migration.version <= 134));
       expect(objects()).toEqual(beforeObjects);
       expect(triggerOrder()).toEqual(beforeTriggerOrder);
       expect(foreignKeys()).toEqual(beforeForeignKeys);
@@ -103,6 +109,8 @@ describe("large direct-input storage migration", () => {
       updateQueue.run(largeDirectInputText, queuedId);
       expect(() => updateFirst.run(largeDirectInputText + "x", attemptId)).toThrow(/CHECK constraint/u);
       expect(() => updateQueue.run(largeDirectInputText + "x", queuedId)).toThrow(/CHECK constraint/u);
+      // Exercise the current repository only after the historical migration assertions.
+      applyDatabaseMigrations(database, backendNormalizedMigrations);
       expect(() => new QueuedInputRepository(database).enqueue(scope, queueThread.id, {
         mutationId: randomUUID(), text: "é".repeat(32_768) + "x", contextExcerpts: [], attachmentIds: [], taskReferences: [],
         source: { kind: "composer", expectedThreadRevision: 0, expectedDraftRevision: 0,

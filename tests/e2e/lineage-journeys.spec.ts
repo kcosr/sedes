@@ -129,66 +129,75 @@ test.describe.serial("normalized lineage browser journeys", () => {
       ),
     ).toHaveCount(1, { timeout: 15_000 });
 
-    const activeForkPage = await page.context().newPage();
-    await activeForkPage.goto(sourcePath);
-
-    await fillAndPersistDraft(page, "Later turn excluded by the first fork");
-    await sendCurrentDraft(page);
-    await expect(page.getByRole("button", { name: "Stop" })).toBeVisible();
-    await expect(
-      activeForkPage.getByRole("button", { name: "Stop" }),
-    ).toBeVisible();
     const firstBoundary = page
       .getByRole("button", { name: /Fork from here/ })
       .first();
-    await expect(firstBoundary).toHaveAttribute("aria-disabled", "false");
-    await expect(
-      page.getByRole("button", { name: /Fork from here/ }),
-    ).toHaveCount(1);
-    const runningUsageButton = page.locator('[data-turn-status="in_progress"]')
-      .getByRole("button", { name: "Turn usage and cost" });
-    await expect(runningUsageButton).toHaveCount(0);
-    await expect(page.locator('[data-turn-status="in_progress"] footer')).toHaveCount(0);
-    await expect(page.getByText("Current turn", { exact: true })).toHaveCount(0);
-    await capture(page, testInfo, "running-turn-actions.png");
+    // Each live client holds application/thread streams and a control poll.
+    // Separate contexts keep this cross-client journey's HTTP pools independent.
+    const activeForkContext = await browser.newContext({
+      baseURL: testInfo.project.use.baseURL as string,
+      viewport: page.viewportSize() ?? { width: 1280, height: 720 },
+    });
+    try {
+      const activeForkPage = await activeForkContext.newPage();
+      await activeForkPage.goto(sourcePath);
 
-    await page.getByRole("button", { name: "Thread actions" }).click();
-    await expect(
-      page
-        .getByRole("menu", { name: "Thread actions" })
-        .getByRole("menuitem", { name: "Fork", exact: true }),
-    ).toBeEnabled();
-    await page.keyboard.press("Escape");
-    const completedTurn = page
-      .locator('[data-turn-status="completed"]')
-      .first();
-    await completedTurn.hover();
-    await expect(completedTurn.locator(".turn-fork-controls")).toHaveCSS(
-      "opacity",
-      "1",
-    );
-    await capture(
-      page,
-      testInfo,
-      "lineage-streaming-historical-fork-desktop.png",
-    );
+      await fillAndPersistDraft(page, "Later turn excluded by the first fork");
+      await sendCurrentDraft(page);
+      await expect(page.getByRole("button", { name: "Stop" })).toBeVisible();
+      await expect(
+        activeForkPage.getByRole("button", { name: "Stop" }),
+      ).toBeVisible();
+      await expect(firstBoundary).toHaveAttribute("aria-disabled", "false");
+      await expect(
+        page.getByRole("button", { name: /Fork from here/ }),
+      ).toHaveCount(1);
+      const runningUsageButton = page.locator('[data-turn-status="in_progress"]')
+        .getByRole("button", { name: "Turn usage and cost" });
+      await expect(runningUsageButton).toHaveCount(0);
+      await expect(page.locator('[data-turn-status="in_progress"] footer')).toHaveCount(0);
+      await expect(page.getByText("Current turn", { exact: true })).toHaveCount(0);
+      await capture(page, testInfo, "running-turn-actions.png");
 
-    await expect(
-      activeForkPage.getByRole("button", { name: /Fork from here/ }),
-    ).toHaveCount(1);
-    await activeForkPage
-      .getByRole("button", { name: /Fork from here/ })
-      .click();
-    await expect
-      .poll(() => new URL(activeForkPage.url()).pathname)
-      .not.toBe(sourcePath);
-    await expect(
-      activeForkPage.getByText("First inclusive boundary").first(),
-    ).toBeVisible();
-    await expect(
-      activeForkPage.getByText("Later turn excluded by the first fork"),
-    ).toHaveCount(0);
-    await activeForkPage.close();
+      await page.getByRole("button", { name: "Thread actions" }).click();
+      await expect(
+        page
+          .getByRole("menu", { name: "Thread actions" })
+          .getByRole("menuitem", { name: "Fork", exact: true }),
+      ).toBeEnabled();
+      await page.keyboard.press("Escape");
+      const completedTurn = page
+        .locator('[data-turn-status="completed"]')
+        .first();
+      await completedTurn.hover();
+      await expect(completedTurn.locator(".turn-fork-controls")).toHaveCSS(
+        "opacity",
+        "1",
+      );
+      await capture(
+        page,
+        testInfo,
+        "lineage-streaming-historical-fork-desktop.png",
+      );
+
+      await expect(
+        activeForkPage.getByRole("button", { name: /Fork from here/ }),
+      ).toHaveCount(1);
+      await activeForkPage
+        .getByRole("button", { name: /Fork from here/ })
+        .click();
+      await expect
+        .poll(() => new URL(activeForkPage.url()).pathname)
+        .not.toBe(sourcePath);
+      await expect(
+        activeForkPage.getByText("First inclusive boundary").first(),
+      ).toBeVisible();
+      await expect(
+        activeForkPage.getByText("Later turn excluded by the first fork"),
+      ).toHaveCount(0);
+    } finally {
+      await activeForkContext.close();
+    }
 
     await expect(
       page.locator(
@@ -456,64 +465,76 @@ test.describe.serial("normalized lineage browser journeys", () => {
       page.getByRole("textbox", { name: "Message Scripted agent" }),
     ).toHaveValue("");
 
-    const secondPage = await page.context().newPage();
-    await secondPage.goto(recoveredChildPath);
     const childRow = (candidate: typeof page) =>
       candidate
         .getByTestId("desktop-sidebar")
         .locator(`[data-thread-id="${recoveredChildId}"]`);
-    await expect(childRow(page)).toHaveAttribute("data-lineage-depth", "1");
-    await expect(childRow(secondPage)).toHaveAttribute(
-      "data-lineage-depth",
-      "1",
-    );
-    await expect(
-      childRow(page).getByRole("button", { name: /Forked from/ }),
-    ).toHaveCount(0);
-    await expect(
-      childRow(secondPage).getByRole("button", { name: /Forked from/ }),
-    ).toHaveCount(0);
-    await childRow(page).hover();
-    const detachAction = childRow(page).getByRole("button", {
-      name: /Show .* as top-level/,
+    const secondContext = await browser.newContext({
+      baseURL: testInfo.project.use.baseURL as string,
+      viewport: page.viewportSize() ?? { width: 1280, height: 720 },
     });
-    await expect(detachAction).toBeVisible();
-    await expect(
-      childRow(page).locator(".thread-row-default-trailing"),
-    ).toHaveCSS("opacity", "0");
-    await capture(page, testInfo, "lineage-sidebar-nesting-hover-desktop.png");
-    await detachAction.click();
-    await expect(childRow(page)).toHaveAttribute("data-lineage-depth", "0");
-    await expect(childRow(secondPage)).toHaveAttribute(
-      "data-lineage-depth",
-      "0",
-    );
-    await expect(
-      childRow(page).getByRole("button", { name: /Forked from/ }),
-    ).toHaveCount(1);
-    await expect(
-      childRow(secondPage).getByRole("button", { name: /Forked from/ }),
-    ).toHaveCount(1);
-    await childRow(secondPage).hover();
-    const reattachAction = childRow(secondPage).getByRole("button", {
-      name: /Group .* under its source/,
-    });
-    await expect(
-      reattachAction.locator(".lucide-arrow-down-wide-narrow"),
-    ).toHaveCount(1);
-    await reattachAction.click();
-    await expect(childRow(page)).toHaveAttribute("data-lineage-depth", "1");
-    await expect(childRow(secondPage)).toHaveAttribute(
-      "data-lineage-depth",
-      "1",
-    );
-    await expect(
-      childRow(page).getByRole("button", { name: /Forked from/ }),
-    ).toHaveCount(0);
-    await expect(
-      childRow(secondPage).getByRole("button", { name: /Forked from/ }),
-    ).toHaveCount(0);
-    await secondPage.close();
+    try {
+      const secondPage = await secondContext.newPage();
+      await secondPage.goto(recoveredChildPath);
+      // The source selected Projects in openSedesWorkspace. Give this device
+      // the same hierarchy view before comparing live lineage placement.
+      await secondPage.getByRole("button", { name: "View options" }).click();
+      await secondPage.getByRole("group", { name: "Group by" })
+        .getByRole("menuitemradio", { name: "Projects", exact: true }).click();
+      await expect(childRow(page)).toHaveAttribute("data-lineage-depth", "1");
+      await expect(childRow(secondPage)).toHaveAttribute(
+        "data-lineage-depth",
+        "1",
+      );
+      await expect(
+        childRow(page).getByRole("button", { name: /Forked from/ }),
+      ).toHaveCount(0);
+      await expect(
+        childRow(secondPage).getByRole("button", { name: /Forked from/ }),
+      ).toHaveCount(0);
+      await childRow(page).hover();
+      const detachAction = childRow(page).getByRole("button", {
+        name: /Show .* as top-level/,
+      });
+      await expect(detachAction).toBeVisible();
+      await expect(
+        childRow(page).locator(".thread-row-default-trailing"),
+      ).toHaveCSS("opacity", "0");
+      await capture(page, testInfo, "lineage-sidebar-nesting-hover-desktop.png");
+      await detachAction.click();
+      await expect(childRow(page)).toHaveAttribute("data-lineage-depth", "0");
+      await expect(childRow(secondPage)).toHaveAttribute(
+        "data-lineage-depth",
+        "0",
+      );
+      await expect(
+        childRow(page).getByRole("button", { name: /Forked from/ }),
+      ).toHaveCount(1);
+      await expect(
+        childRow(secondPage).getByRole("button", { name: /Forked from/ }),
+      ).toHaveCount(1);
+      await childRow(secondPage).hover();
+      const reattachAction = childRow(secondPage).getByRole("button", {
+        name: /Group .* under its source/,
+      });
+      await expect(
+        reattachAction.locator(".lucide-arrow-down-wide-narrow"),
+      ).toHaveCount(1);
+      await reattachAction.click();
+      await expect(childRow(page)).toHaveAttribute("data-lineage-depth", "1");
+      await expect(childRow(secondPage)).toHaveAttribute(
+        "data-lineage-depth",
+        "1",
+      );
+      await expect(
+        childRow(page).getByRole("button", { name: /Forked from/ }),
+      ).toHaveCount(0);
+      await expect(
+        childRow(secondPage).getByRole("button", { name: /Forked from/ }),
+      ).toHaveCount(0);
+    } finally {
+      await secondContext.close();
+    }
 
     const [session, snapshot] = await Promise.all([
       applicationSession(page),

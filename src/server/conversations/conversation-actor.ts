@@ -154,6 +154,7 @@ export type ConversationActorEvent =
        */
       readonly type: "authoritative_completion";
       readonly backendCorrelation: string;
+      readonly backendCorrelations: readonly string[];
       readonly backendTurnId: string;
       readonly applicationTurnId: string;
       readonly completionIdentity: string;
@@ -1544,6 +1545,7 @@ export class ConversationActor {
               this.#publish({
                 type: "authoritative_completion",
                 backendCorrelation,
+                backendCorrelations: correlations,
                 backendTurnId: event.event.turn.backendTurnId,
                 applicationTurnId: completion.applicationTurnId,
                 completionIdentity,
@@ -1592,6 +1594,7 @@ export class ConversationActor {
         const event: ConversationActorEvent = {
           type: "authoritative_completion",
           backendCorrelation,
+          backendCorrelations: backendTurn.completionCorrelations,
           backendTurnId: backendTurn.backendTurnId,
           applicationTurnId: completion.applicationTurnId,
           completionIdentity,

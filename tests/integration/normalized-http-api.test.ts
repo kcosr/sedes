@@ -4993,7 +4993,7 @@ describe("normalized HTTP application contract", () => {
         .expect(200);
       expect(context.headers["cache-control"]).toBe("no-store");
       expect(context.body).toEqual({
-        threadId, threadTitle: "Direct input", activityToken: expect.any(String), authority: "unavailable", runState: null,
+        threadId, threadTitle: "Direct input", activityToken: expect.any(String), userInputRevision: 3, authority: "unavailable", runState: null,
         automaticListenEligible: false, manualListenEligible: true, steer: { availability: "unavailable" },
       });
       expect((await current
@@ -5001,7 +5001,7 @@ describe("normalized HTTP application contract", () => {
         .expect(200)).body.activityToken).toBe(context.body.activityToken);
       expect((await current
         .withHost(request(current.app).get(`/api/threads/${unboundThreadId}/input-context`))
-        .expect(200)).body).toMatchObject({ threadId: unboundThreadId, threadTitle: "Unbound direct input", authority: "unbound", automaticListenEligible: false });
+        .expect(200)).body).toMatchObject({ threadId: unboundThreadId, threadTitle: "Unbound direct input", userInputRevision: 0, authority: "unbound", automaticListenEligible: false });
       current.repository.renameThread(current.owner, threadId, {
         title: "Renamed direct input", expectedRevision: current.repository.getThread(current.owner, threadId).thread.revision,
         mutationId: randomUUID(), now: Date.now(),

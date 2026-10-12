@@ -70,36 +70,17 @@ describe("native voice production pipeline with loopback providers", () => {
     expect(response.headers.get("content-type")).toBe("audio/pcm; rate=24000; channels=1; format=s16le");
     const pcm = Buffer.from(await response.arrayBuffer());
     expect(createHash("sha256").update(pcm).digest("hex")).toBe(speech.pcmSha256);
-    const socket = new WebSocket(`${speech.endpoint.replace(/^http/u, "ws")}/realtime?intent=transcription`, {
-      headers: { authorization: `Bearer ${speech.token}` },
-    });
-    const events: Record<string, any>[] = [];
-    socket.on("message", data => events.push(JSON.parse(data.toString())));
-    let socketError: Error | undefined;
-    socket.on("error", error => { socketError = error; });
-    const next = (type: string) => waitForSpeech(() => { if (socketError) throw socketError; return events.find(event => event.type === type); });
-    try {
-      const created = await next("session.created");
-      socket.send(JSON.stringify({ type: "session.update", session: { type: "transcription", audio: { input: {
-        format: { type: "audio/pcm", rate: 24000 }, transcription: { model: "parakeet-local" }, turn_detection: null, noise_reduction: null,
-      } } } }));
-      const updated = await next("session.updated");
-      expect(updated.session.id).toBe(created.session.id);
-      socket.send(JSON.stringify({ type: "input_audio_buffer.append", audio: pcm.toString("base64") }));
-      socket.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
-      const committed = await next("input_audio_buffer.committed");
-      const completed = await next("conversation.item.input_audio_transcription.completed");
-      expect(completed).toMatchObject({ item_id: committed.item_id, content_index: 0, transcript: "voice contract input" });
-      expect(events.filter(event => event.type === "conversation.item.input_audio_transcription.completed")).toHaveLength(1);
-      const observations = await speech.observations();
-      expect(observations.speech.at(-1)?.text).toBe("Fixture voice");
-      expect(observations.transcriptions.at(-1)).toMatchObject({ sampleRate: 16000, bytes: 32000 });
-    } finally { socket.terminate(); }
+    const result = await transcribeFixtureAudio(speech, pcm);
+    expect(result.completed.transcript).toBe("voice contract input");
+    const observations = await speech.observations();
+    expect(observations.speech.at(-1)?.text).toBe("Fixture voice");
+    expect(observations.transcriptions.at(-1)).toMatchObject({ sampleRate: 16000, bytes: 32000 });
   });
 
   it("admits content once without touching drafts, emits a live voice completion, and never replays it", async () => {
     const threadId = await app.createThread();
     const otherThreadId = await app.createThread();
+    expect(threadInputContextSchema.parse(await app.json(`/api/threads/${threadId}/input-context`)).userInputRevision).toBe(0);
     const initial = await app.thread(threadId);
     await app.json(`/api/threads/${threadId}/draft`, "PUT", {
       text: "Keep this unsent composer draft", contextExcerpts: [], attachmentIds: [], taskReferenceIds: [], expectedRevision: initial.draft.revision,
@@ -119,14 +100,18 @@ describe("native voice production pipeline with loopback providers", () => {
       const frame = await waitForSpeech(() => feed.frames.find(frame => frame.event === "notification" && frame.value.payload?.thread?.id === threadId));
       const notification = voiceNotificationSchema.parse(frame.value);
       expect(frame.id).toBeUndefined();
-      expect(notification).toMatchObject({ voice: "speakThenListen", origin: { clientId: registration.clientId }, payload: { event: "turn.completed" } });
+      expect(notification).toMatchObject({ voice: "speakThenListen", userInputRevision: 1,
+        origin: { clientId: registration.clientId }, payload: { event: "turn.completed" } });
       expect(notification.recognitionTarget?.threadId).toBe(threadId);
       const context = threadInputContextSchema.parse(await app.json(`/api/threads/${threadId}/input-context`));
-      expect(context).toMatchObject({ authority: "current", automaticListenEligible: true, activityToken: notification.recognitionTarget?.activityToken });
+      expect(context).toMatchObject({ authority: "current", userInputRevision: notification.userInputRevision,
+        automaticListenEligible: true, activityToken: notification.recognitionTarget?.activityToken });
       expect((await app.thread(threadId)).draft).toEqual(savedDraft);
       expect(directInputReceiptSchema.parse(await app.json(`/api/threads/${threadId}/inputs`, "POST", input, clientHeaders))).toEqual(receipt);
       expect(await app.json(`/api/input-receipts/${input.mutationId}`)).toEqual({ status: "found", receipt });
       expect((await app.request(`/api/threads/${otherThreadId}/inputs`, "POST", input, clientHeaders)).status).toBe(409);
+      expect(threadInputContextSchema.parse(await app.json(`/api/threads/${threadId}/input-context`)).userInputRevision).toBe(1);
+      expect(threadInputContextSchema.parse(await app.json(`/api/threads/${otherThreadId}/input-context`)).userInputRevision).toBe(0);
       expect(app.model.requests.filter(request => request.lastRole === "user" && request.lastText === input.text)).toHaveLength(1);
       const reconnected = await voiceFeed(app);
       try {
@@ -151,8 +136,86 @@ describe("native voice production pipeline with loopback providers", () => {
       const overParser = { ...input, mutationId: randomUUID(), text: "\u0001".repeat(Math.floor(MAX_DIRECT_INPUT_REQUEST_BYTES / 6) + 1) };
       expect(Buffer.byteLength(JSON.stringify(overParser))).toBeGreaterThan(MAX_DIRECT_INPUT_REQUEST_BYTES);
       expect((await app.request(`/api/threads/${threadId}/inputs`, "POST", overParser, clientHeaders)).status).toBe(413);
+      expect(threadInputContextSchema.parse(await app.json(`/api/threads/${threadId}/input-context`)).userInputRevision).toBe(1);
       expect((await app.request(`/api/threads/${threadId}/inputs`, "POST", escaped, clientHeaders)).status).toBe(200);
+      expect(threadInputContextSchema.parse(await app.json(`/api/threads/${threadId}/input-context`)).userInputRevision).toBe(2);
     } finally { await feed.close(); }
+  });
+
+  it.each(["text", "voice"] as const)("suppresses an obsolete completion after another client queues a %s follow-up", async source => {
+    const threadId = await app.createThread(`Follow-up freshness ${source}`);
+    const state = { runtime: { foreground: true, voiceReady: false, interactionActive: false }, settings: null };
+    const register = async (credential = app.credential) => registeredClientSchema.parse(await app.json("/api/client-registration", "POST", {
+      platform: "browser", capabilities: { navigate: true, voice: false, voiceSettings: false }, state,
+    }, {}, credential));
+    const initialClient = await register();
+    const pairing = app.authentication.createPairing({ kind: "management" });
+    const followingIdentity = app.authentication.exchangePairing({ token: pairing.token,
+      clientName: `Following ${source} client`, kind: "device" });
+    expect(followingIdentity).toBeDefined();
+    const followingCredential = followingIdentity!.credential;
+    const followingClient = await register(followingCredential);
+    expect(followingClient.clientId).not.toBe(initialClient.clientId);
+    const initialText = `Held first reply before ${source} follow-up`;
+    const followUpText = `New ${source} message from another client`;
+    const feed = await voiceFeed(app);
+    let held: ReturnType<typeof app.model.holdNextStream> | undefined;
+    try {
+      await waitForSpeech(() => feed.frames.find(frame => frame.event === "notification_policy"));
+      held = app.model.holdNextStream(initialText);
+      const first = directInputReceiptSchema.parse(await app.json(`/api/threads/${threadId}/inputs`, "POST", {
+        mutationId: randomUUID(), text: initialText, runningPolicy: { mode: "queue" },
+      }, { "X-Sedes-Client": initialClient.connectionToken }));
+      expect(first.admittedMode).toBe("submit");
+      await held.started;
+      await app.waitFor(async () => (await app.thread(threadId)).runState === "running");
+      const active = threadInputContextSchema.parse(await app.json(`/api/threads/${threadId}/input-context`));
+      expect(active.userInputRevision).toBe(1);
+      expect(active.sourceTurnId).toBeDefined();
+      const headers = { "X-Sedes-Client": followingClient.connectionToken };
+      if (source === "text") {
+        let snapshot = await app.thread(threadId);
+        await app.json(`/api/threads/${threadId}/draft`, "PUT", {
+          text: followUpText, contextExcerpts: [], attachmentIds: [], taskReferenceIds: [], expectedRevision: snapshot.draft.revision,
+        });
+        // A saved draft alone is not an admission and must not stale the response.
+        expect(threadInputContextSchema.parse(await app.json(`/api/threads/${threadId}/input-context`)).userInputRevision).toBe(1);
+        snapshot = await app.thread(threadId);
+        expect(await app.json(`/api/threads/${threadId}/operations`, "POST", {
+          kind: "deliver", mode: "queue", mutationId: randomUUID(),
+          expectedThreadRevision: snapshot.thread.threadRevision, expectedDraftRevision: snapshot.draft.revision,
+        }, headers, followingCredential)).toMatchObject({ status: "delivery_queued" });
+      } else {
+        await speech.configure({ transcripts: [followUpText], asrDelayMs: 0, reset: true });
+        const result = await transcribeFixtureAudio(speech, speech.pcm);
+        expect(result.completed.transcript).toBe(followUpText);
+        const followUp = directInputReceiptSchema.parse(await app.json(`/api/threads/${threadId}/inputs`, "POST", {
+          mutationId: randomUUID(), text: result.completed.transcript, runningPolicy: { mode: "queue" },
+        }, headers, followingCredential));
+        expect(followUp).toMatchObject({ admittedMode: "queue", status: "queued" });
+        expect((await speech.observations()).transcriptions).toHaveLength(1);
+      }
+      const queuedContext = threadInputContextSchema.parse(await app.json(`/api/threads/${threadId}/input-context`));
+      expect(queuedContext).toMatchObject({ userInputRevision: 2, sourceTurnId: active.sourceTurnId });
+      held.release();
+      // The next response on the ordered transient lane proves publication of the
+      // earlier completion has finished; no arbitrary delay is needed for absence.
+      const frame = await waitForSpeech(() => feed.frames.find(frame => frame.event === "notification" &&
+        frame.value.payload?.event === "turn.completed" && frame.value.payload?.thread?.id === threadId &&
+        frame.value.payload?.turn?.id !== active.sourceTurnId));
+      const latest = voiceNotificationSchema.parse(frame.value);
+      expect(latest).toMatchObject({ userInputRevision: 2, origin: { clientId: followingClient.clientId },
+        recognitionTarget: { threadId }, payload: { event: "turn.completed" } });
+      expect(feed.frames.filter(frame => frame.event === "notification" && frame.value.payload?.event === "turn.completed" &&
+        frame.value.payload?.turn?.id === active.sourceTurnId)).toEqual([]);
+      await app.waitFor(async () => (await app.thread(threadId)).runState === "idle");
+      expect(threadInputContextSchema.parse(await app.json(`/api/threads/${threadId}/input-context`)).userInputRevision).toBe(latest.userInputRevision);
+      expect(app.model.requests.filter(request => request.lastRole === "user" && request.lastText === initialText)).toHaveLength(1);
+      expect(app.model.requests.filter(request => request.lastRole === "user" && request.lastText === followUpText)).toHaveLength(1);
+    } finally {
+      held?.release();
+      await feed.close();
+    }
   });
 
   it("routes a real native client tool to the submitting registration and settles it with the published reply", async () => {
@@ -202,6 +265,7 @@ describe("native voice production pipeline with loopback providers", () => {
       expect(settlement.commands[0]!.expiresAt).toBeGreaterThanOrEqual(settlementRequestedAt + 3_600_000);
       expect(settlement.commands[0]!.expiresAt).toBeLessThanOrEqual(Date.now() + 3_600_000);
       expect(reply.origin).toEqual({ clientId: registration.clientId });
+      expect(reply.userInputRevision).toBe(2);
       await app.waitFor(async () => (await app.thread(threadId)).runState === "idle");
     } finally { await feed.close(); }
   });
@@ -513,6 +577,35 @@ describe("native voice production pipeline with loopback providers", () => {
 function shellArgument(value: string): string { return "'" + value.replaceAll("'", "'\\''") + "'"; }
 
 type VoiceFrame = { event: string; id?: string; value: any };
+async function transcribeFixtureAudio(speech: Awaited<ReturnType<typeof startOpenAiSpeechFixture>>, pcm: Buffer) {
+  const socket = new WebSocket(`${speech.endpoint.replace(/^http/u, "ws")}/realtime?intent=transcription`, {
+    headers: { authorization: `Bearer ${speech.token}` },
+  });
+  const events: Record<string, any>[] = [];
+  socket.on("message", data => events.push(JSON.parse(data.toString())));
+  let socketError: Error | undefined;
+  socket.on("error", error => { socketError = error; });
+  const next = (type: string) => waitForSpeech(() => {
+    if (socketError) throw socketError;
+    return events.find(event => event.type === type);
+  });
+  try {
+    const created = await next("session.created");
+    socket.send(JSON.stringify({ type: "session.update", session: { type: "transcription", audio: { input: {
+      format: { type: "audio/pcm", rate: 24000 }, transcription: { model: "parakeet-local" }, turn_detection: null, noise_reduction: null,
+    } } } }));
+    const updated = await next("session.updated");
+    expect(updated.session.id).toBe(created.session.id);
+    socket.send(JSON.stringify({ type: "input_audio_buffer.append", audio: pcm.toString("base64") }));
+    socket.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
+    const committed = await next("input_audio_buffer.committed");
+    const completed = await next("conversation.item.input_audio_transcription.completed");
+    expect(completed).toMatchObject({ item_id: committed.item_id, content_index: 0 });
+    expect(events.filter(event => event.type === "conversation.item.input_audio_transcription.completed")).toHaveLength(1);
+    return { completed, events };
+  } finally { socket.terminate(); }
+}
+
 export async function voiceFeed(app: OpenCodeProductionFixture, onFrame?: (frame: VoiceFrame) => void) {
   const controller = new AbortController();
   const response = await fetch(`${app.url}/api/application/events`, { headers: { Authorization: `Bearer ${app.credential}` }, signal: controller.signal });
