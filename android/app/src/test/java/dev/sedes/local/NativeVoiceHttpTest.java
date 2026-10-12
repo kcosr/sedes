@@ -36,7 +36,7 @@ public class NativeVoiceHttpTest {
                 boolean registered = false;
                 for (String line = in.readLine(); line != null && !line.isEmpty(); line = in.readLine())
                     if (line.equals("X-Sedes-Client: native-connection")) registered = true;
-                assertTrue("Native delivery must belong to this exact registered connection", registered);
+                assertFalse("Notification streams must survive control registration loss", registered);
                 OutputStream out = socket.getOutputStream();
                 out.write(("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream; charset=utf-8\r\nConnection: close\r\n\r\n" +
                     "event: application\nid: 1\ndata: {\"type\":\"snapshot\"}\n\n").getBytes(StandardCharsets.UTF_8)); out.flush();

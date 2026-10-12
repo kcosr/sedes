@@ -270,8 +270,11 @@ client or principal.
 An in-memory server resume secret preserves the ID across reconnects within
 five minutes. Each successful reconnect refreshes the session and resumes enabled
 voice/recovery work; a temporary control-channel outage clears deferred actions
-without cancelling active capture or playback. Replaced paired windows stop
-reclaiming the connection automatically and expose an explicit reconnect action.
+without replacing a healthy notification stream or cancelling active capture
+or playback. The stream keeps its policy and existing turn audience across
+control retries; it reconnects only after its own connection is lost.
+Replaced paired windows stop reclaiming the connection automatically and expose
+an explicit reconnect action.
 Reattaching the WebView preserves the native binding during a control outage.
 Inputs prepared in that live process wait for registration before transmission;
 an explicit `client_registration_required` response also proves no admission
@@ -292,6 +295,9 @@ ready before microphone capture. It works independently of Auto-listen and
 requires an already ready native voice session. Normal recording preferences,
 including Keep listening by default, remain in effect; no background service
 start is attempted.
+When the destination is valid, a foreground request can still navigate if
+recording is blocked. Manual supersession and the background navigation fence
+continue to apply.
 Accepting that explicit listen reserves the next automatic-listening slot even
 while its source turn is still running. Existing playback can drain, but an
 automatic notice does not start recognition ahead of the accepted request.
@@ -380,28 +386,36 @@ metadata. It is dropped only if its metadata alone exceeds the limit.
   required for every `turn.*` event and forbidden for other events. A turn's
   recognition target, when present, must name the payload's source thread.
 
-Android identifies each native connection with a fresh `voiceStreamId` UUID
-query parameter and its registered `X-Sedes-Client` connection token. The server
-checks the token against the authenticated principal and paired client; only
-an Android registration with voice capability can claim a voice stream.
-Ordinary inventory streams may omit the parameter and do not establish native
-playback delivery.
+Native identifies each notification connection with a fresh `voiceStreamId`
+UUID query parameter. The stream uses ordinary application-SSE principal
+authentication and is independent of client-control registration. It does not
+require `X-Sedes-Client`. The server admits at most 128 identified voice streams
+per principal and rejects excess subscriptions before sending response headers.
+Ordinary inventory streams omit the parameter and keep their existing behavior.
 
-The server records only successful notification deliveries to the captured
-native streams. A `turn_settled` command carries both `replyEventId` and
-`replyStreamId`, or both as null when that client received no native playback.
-For overlapping streams of one current client registration, only its newest
-delivered stream establishes the barrier. Native waits only for that exact
-event/stream pair; receipt by another client or an inventory stream cannot make
-an explicit listen wait. A retired notification stream cannot leave a barrier
-waiting for an event that will never arrive. The control connection separately
-owns the lifetime of deferred commands.
+The server records only the UUIDs of captured native streams that actually
+received a notification; it retains no client-control token or subscriber
+sequence in the publication result. A `turn_settled` command requires
+`replyEventId` and `replyStreamIds`, listing every successful native delivery
+within that principal. No native delivery, and browser-only recipients, use
+null and an empty array.
+
+Native keeps the event ID to await any matching locally queued or playing item,
+including an item received on an older stream. Otherwise it waits for an
+undelivered reply only if `replyStreamIds` contains its current `voiceStreamId`.
+Another stream's delivery cannot create that wait. A retired notification
+stream releases its undelivered playback barriers. The control connection
+separately owns the lifetime of deferred commands.
 
 A failed, interrupted, or superseded source turn produces an internal
 `turn_cancelled` command naming the original accepted command ID. Browser and
 native clients remove that exact pending action. Native then releases its
 listening reservation and drains the queue, so the action cannot block voice
 until the turn-completion deadline expires.
+Timed-out or aborted deferred requests also retain bounded cancellation
+records: at most 128 retired command IDs per client for five minutes. A late accepted
+acknowledgement triggers `turn_cancelled` for that exact ID, retiring any orphan
+client action created after the original request ended.
 
 These frames have no SSE `id`, replay entry, projection fold, or inventory
 checkpoint. Policy is subscribed and delivered before voice. If policy cannot
@@ -423,7 +437,10 @@ first save or silence change creates the row and advances the generation.
 Native treats a closed stream as unknown policy. It clears queued notices,
 cancels automatic work whose recognition has not finalized, forgets the last
 policy generation, and waits for new policy on reconnect. It never requests
-missed notifications. The server ends its inventory handshake with an
+missed notifications. An invalid native notification or policy frame ends that
+stream and releases its undelivered playback barriers rather than leaving the
+connection waiting for an event it discarded. The server ends its inventory
+handshake with an
 `application-live` frame, after any transient frames queued during the
 handshake. If no valid policy has arrived 2 seconds after that frame, native
 treats the stream as failed and reports `notification_policy_unavailable`. A

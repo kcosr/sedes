@@ -32,7 +32,7 @@ turn voice on or change the default/pin. Recording preferences, including **Keep
 listening by default**, still apply. If another reply is playing, that explicit
 listen waits for it to finish. The requested thread is checked for ordinary
 input readiness before the start cue, after the cue, and before the microphone
-opens.
+opens. A valid foreground destination can still open when recording is blocked.
 
 While Android is in the background, a switch with `listen: true` can start
 recognition on the requested thread if the native voice session is already ready.
@@ -46,6 +46,9 @@ longer arrive. A superseded source reply cancels its pending switch instead of
 starting another listen. Actions have a 24-hour turn-completion limit and a
 separate one-hour reply-playback limit after completion. Browser and Electron
 clients support navigation and report voice controls as unavailable.
+Retrying the client-control connection keeps a healthy notification connection,
+its policy, and current speech intact. A late acceptance of a cancelled or
+timed-out request is cancelled explicitly so it cannot reserve another listen.
 
 With **Replay turn reply** ticked in the same group, the agent can queue an
 ended turn's reply on the current device, as if you had tapped that turn's

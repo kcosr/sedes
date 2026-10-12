@@ -2326,18 +2326,25 @@ joining during observer or settlement waits. Voice never persists or replays
 offline notices. Do not infer freshness from an event
 timestamp or add a voice age cutoff. Explicit reply playback remains available.
 
-Deferred client controls wait only for playback delivered to their own current
-registration. Native notification subscriptions identify their stream with a
-UUID and the authenticated client connection token. Track successful deliveries
-to those exact streams; inventory subscriptions and other clients must never
-establish a playback barrier. Settlement carries the reply event and stream
-identity together, or two nulls when no playback was delivered. Notification
-stream loss releases undeliverable playback waits, while control-connection
-loss still retires pending commands. Benign notification drops release the
-barrier. Failed, interrupted, and superseded source turns send explicit
+Native notification subscriptions use ordinary principal authentication and a
+stream UUID independently of client-control registration. Admit at most 128
+identified streams per principal before sending headers; ordinary inventory
+subscriptions retain their existing behavior. Publication results contain only
+UUIDs of streams that actually received the notice, never control tokens or
+subscriber sequences. Settlement carries the reply event and all delivered
+native stream UUIDs, or null and an empty array. A client waits for matching
+local playback or its own current stream's unseen event, never for another
+stream's delivery. Healthy SSE and its audience survive control retries;
+notification loss or an invalid native frame releases undeliverable playback
+waits, while control-connection loss still retires pending commands. Benign
+notification drops release the barrier. Failed, interrupted, and superseded
+source turns send explicit
 `turn_cancelled` commands for their accepted client-action IDs. Clients retire
 those exact actions and release any reserved listening slot; server-only
 deletion would leave the client waiting until expiry.
+An aborted or timed-out deferred request needs an exact-ID cancellation if its
+acceptance arrives late. Retain at most 128 retired IDs per client for five
+minutes so bounded request cleanup also retires orphan client reservations.
 
 Successful-turn notifications may opt into a separate immutable classified
 assistant-result snapshot captured alongside the callback aggregate. Keep the

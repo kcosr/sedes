@@ -1654,6 +1654,7 @@ async function fixture(
   return {
     app,
     notifications,
+    applicationSnapshots,
     questions,
     questionDispatch,
     drain,
@@ -5145,36 +5146,81 @@ describe("normalized HTTP application contract", () => {
     }
   });
 
-  it("binds native voice streams to exact Android registration and rejects malformed or foreign authority", async () => {
+  it("admits bounded native voice streams per authenticated principal without control registration", async () => {
     const current = await fixture();
     const server = current.app.listen(0, "127.0.0.1");
     try {
       await new Promise<void>((resolve, reject) => { server.once("listening", resolve); server.once("error", reject); });
-      const input = { platform: "android", capabilities: { navigate: true, voice: true, voiceSettings: true },
-        state: { runtime: { foreground: false, voiceReady: true, interactionActive: false }, settings: null } };
-      const register = async (body = input) => (await current.mutate(request(current.app).post("/api/client-registration")).send(body).expect(200)).body;
-      const native = await register();
       const voiceStreamId = randomUUID();
       const route = `/api/application/events?voiceStreamId=${voiceStreamId}`;
       const subscribe = vi.spyOn(current.notifications, "subscribe");
-      await readFirstSseEvent(server, route, { "X-Sedes-Client": native.connectionToken });
-      expect(subscribe).toHaveBeenCalledWith(current.owner, expect.any(Function), {
-        connectionToken: native.connectionToken, voiceStreamId,
+      await readFirstSseEvent(server, route);
+      expect(subscribe).toHaveBeenCalledWith(current.owner, expect.any(Function), expect.objectContaining({ voiceStreamId }));
+      await vi.waitFor(() => {
+        const probes = [];
+        try { for (let index = 0; index < 128; index++) probes.push(current.notifications.reserveVoiceStream(current.owner, randomUUID())); }
+        finally { for (const probe of probes) probe.release(); }
       });
-      await current.withHost(request(current.app).get(route)).expect(503);
-      await current.withHost(request(current.app).get(route)).set("X-Sedes-Client", native.connectionToken)
-        .set("X-Test-Foreign-Principal", "yes").expect(503);
       for (const invalid of ["bad", `${voiceStreamId}&voiceStreamId=${randomUUID()}`]) {
-        await current.withHost(request(current.app).get(`/api/application/events?voiceStreamId=${invalid}`))
-          .set("X-Sedes-Client", native.connectionToken).expect(400);
+        await current.withHost(request(current.app).get(`/api/application/events?voiceStreamId=${invalid}`)).expect(400);
       }
-      const browser = await register({ ...input, platform: "browser", capabilities: { navigate: true, voice: false, voiceSettings: false } });
-      await current.withHost(request(current.app).get(route)).set("X-Sedes-Client", browser.connectionToken).expect(400);
-      const silent = await register({ ...input, capabilities: { navigate: true, voice: false, voiceSettings: false } });
-      await current.withHost(request(current.app).get(route)).set("X-Sedes-Client", silent.connectionToken).expect(400);
-      await current.mutate(request(current.app).post("/api/client-registration")).send({ ...input, resumeToken: native.resumeToken }).expect(200);
-      await current.withHost(request(current.app).get(route)).set("X-Sedes-Client", native.connectionToken).expect(409);
+      const reservations = Array.from({ length: 128 }, () => current.notifications.reserveVoiceStream(current.owner, randomUUID()));
+      try {
+        await current.withHost(request(current.app).get(route)).expect(503)
+          .expect(({ headers, body }) => { expect(headers["content-type"]).toContain("application/json"); expect(body.error.code).toBe("runtime_unavailable"); });
+        reservations[0]!.release(); reservations[0]!.release();
+        await readFirstSseEvent(server, route);
+      } finally { for (const reservation of reservations) reservation.release(); }
     } finally {
+      await closeHttpTestServer(server);
+      current.close();
+    }
+  });
+
+  it("releases a native stream reservation when application stream setup fails", async () => {
+    const current = await fixture();
+    try {
+      vi.spyOn(current.applicationSnapshots, "hub").mockImplementationOnce(() => { throw new Error("setup failed"); });
+      await current.withHost(request(current.app).get(`/api/application/events?voiceStreamId=${randomUUID()}`)).expect(500);
+      const reservations = Array.from({ length: 128 }, () => current.notifications.reserveVoiceStream(current.owner, randomUUID()));
+      for (const reservation of reservations) reservation.release();
+    } finally { current.close(); }
+  });
+
+  it("keeps a native notification stream delivering while its control registration is replaced", async () => {
+    const current = await fixture();
+    const server = current.app.listen(0, "127.0.0.1");
+    const abort = new AbortController();
+    try {
+      await new Promise<void>((resolve, reject) => { server.once("listening", resolve); server.once("error", reject); });
+      const { revision, silenced: _silenced, ...settings } = current.notifications.read(current.owner);
+      current.notifications.update(current.owner, { ...settings, enabled: true, expectedRevision: revision,
+        delivery: { ...settings.delivery, "turn.completed": { script: false, voice: "speak" } } });
+      const input = { platform: "android", capabilities: { navigate: true, voice: true, voiceSettings: true },
+        state: { runtime: { foreground: false, voiceReady: true, interactionActive: false }, settings: null } };
+      const native = (await current.mutate(request(current.app).post("/api/client-registration")).send(input).expect(200)).body;
+      const voiceStreamId = randomUUID();
+      const address = server.address();
+      if (!address || typeof address === "string") throw new Error("test_server_address_invalid");
+      const response = await fetch(`http://127.0.0.1:${address.port}/api/application/events?voiceStreamId=${voiceStreamId}`, {
+        headers: { Host: "127.0.0.1:4783" }, signal: AbortSignal.any([abort.signal, AbortSignal.timeout(10_000)]),
+      });
+      expect(response.status).toBe(200);
+      const reader = response.body!.getReader();
+      const decoder = new TextDecoder();
+      let received = "";
+      while (!received.includes("event: notification_policy\n")) received += decoder.decode((await reader.read()).value, { stream: true });
+      const watermark = current.notifications.captureSubscriberWatermark();
+      await current.mutate(request(current.app).post("/api/client-registration")).send({ ...input, resumeToken: native.resumeToken }).expect(200);
+      const publication = await current.notifications.emit(current.owner, { event: "turn.completed", occurredAt: new Date().toISOString(),
+        title: "Done", message: "Done", thread: { id: randomUUID(), title: "Example" }, turn: { id: "turn", outcome: "completed" } },
+        "after-control-replacement", "live", undefined, undefined, watermark, { userInputRevision: 0, superseded: false });
+      expect(publication?.voiceStreamIds).toEqual([voiceStreamId]);
+      while (!received.includes("event: notification\n")) received += decoder.decode((await reader.read()).value, { stream: true });
+      expect(received).toContain(publication!.sourceEventId);
+      abort.abort(); await reader.cancel().catch(() => undefined);
+    } finally {
+      abort.abort();
       await closeHttpTestServer(server);
       current.close();
     }

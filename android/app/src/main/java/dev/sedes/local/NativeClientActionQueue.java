@@ -63,7 +63,7 @@ final class NativeClientActionQueue {
         List<Action> ready = new ArrayList<>();
         for (Action action : new ArrayList<>(pending.values())) {
             if (!action.settled || action.replyEventId != null && (queuedPlayback.test(action.replyEventId) ||
-                voiceActive && Objects.equals(streamId, action.replyStreamId) && !drained.contains(action.replyEventId)) ||
+                voiceActive && action.replyStreamId != null && Objects.equals(streamId, action.replyStreamId) && !drained.contains(action.replyEventId)) ||
                 action.matches(activeThreadId, activeTurnId) || action.listens() && audioBusy) continue;
             pending.remove(action.command.optString("id"));
             if (!action.listens() && !action.voiceOnly && action.command.optString("action").equals("switch_thread") && navigationContext != action.navigationContext) continue;

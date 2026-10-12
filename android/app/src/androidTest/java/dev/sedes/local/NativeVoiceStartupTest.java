@@ -202,7 +202,7 @@ public class NativeVoiceStartupTest {
                 f.runtime.nativeVisibility(true); f.flush();
                 if (mode.equals("off")) assertTrue(f.starts.isEmpty());
                 else assertTrue(f.accepted(f.start()));
-                NativeVoiceJson.put(command, "action", "turn_settled"); NativeVoiceJson.put(command, "replyEventId", null); NativeVoiceJson.put(command, "replyStreamId", null);
+                NativeVoiceJson.put(command, "action", "turn_settled"); NativeVoiceJson.put(command, "replyEventId", null); NativeVoiceJson.put(command, "replyStreamIds", new org.json.JSONArray());
                 assertEquals("superseded", f.clientCommand(command).getString("reason"));
                 assertTrue("Restoring a saved mode must not replay the rejected recognition", f.runtime.snapshot().isNull("active"));
             }

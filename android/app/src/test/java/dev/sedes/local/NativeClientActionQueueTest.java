@@ -129,6 +129,13 @@ public class NativeClientActionQueueTest {
             assertEquals(1, queue.takeReady(3, true, currentStream, false, null, null, navigation, id -> false).size());
         }
     }
+    @Test public void noMatchingLocalStreamDoesNotCreateANullIdentityBarrier() {
+        NativeClientActionQueue queue = new NativeClientActionQueue();
+        queue.stage(listen("action", "turn"), navigation, true, 0);
+        queue.settle("action", "delivered-elsewhere", null, 120000);
+        assertTrue(queue.takeReady(1, true, null, false, null, null, navigation, "delivered-elsewhere"::equals).isEmpty());
+        assertEquals(1, queue.takeReady(2, true, null, false, null, null, navigation, id -> false).size());
+    }
     @Test public void foregroundListenSurvivesVisibilityButManualNavigationCancelsIt() {
         NativeClientActionQueue queue = new NativeClientActionQueue();
         queue.stage(listen("listen", "turn"), navigation, false, 0);

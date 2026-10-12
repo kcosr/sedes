@@ -239,20 +239,35 @@ describe("native voice production pipeline with loopback providers", () => {
       revision: 0, voice: { audioMode: "speak", voiceThreadId: threadId, pinDefaultVoiceThread: false,
         autoListen: false, onlyVoiceThread: false, ignoreOtherDevices: false, followComposerMode: true },
     } : null };
-    const registration = registeredClientSchema.parse(await app.json("/api/client-registration", "POST", {
+    let registration = registeredClientSchema.parse(await app.json("/api/client-registration", "POST", {
       platform: native ? "android" : "browser", capabilities: { navigate: true, voice: native, voiceSettings: native }, state,
     }));
-    const clientHeaders = { "X-Sedes-Client": registration.connectionToken };
     const feed = await voiceFeed(app);
     const voiceStreamId = native ? randomUUID() : undefined;
+    const peerVoiceStreamId = native ? randomUUID() : undefined;
     let nativeFeed: Awaited<ReturnType<typeof voiceFeed>> | undefined;
+    let peerNativeFeed: Awaited<ReturnType<typeof voiceFeed>> | undefined;
     try {
-      if (voiceStreamId) nativeFeed = await voiceFeed(app, undefined, {
-        connectionToken: registration.connectionToken, voiceStreamId,
-      });
+      if (voiceStreamId && peerVoiceStreamId) {
+        nativeFeed = await voiceFeed(app, undefined, { voiceStreamId });
+        peerNativeFeed = await voiceFeed(app, undefined, { voiceStreamId: peerVoiceStreamId });
+      }
       const voiceSubscriber = nativeFeed;
+      const peerVoiceSubscriber = peerNativeFeed;
       await waitForSpeech(() => feed.frames.find(frame => frame.event === "notification_policy"));
       if (voiceSubscriber) await waitForSpeech(() => voiceSubscriber.frames.find(frame => frame.event === "notification_policy"));
+      if (peerVoiceSubscriber) await waitForSpeech(() => peerVoiceSubscriber.frames.find(frame => frame.event === "notification_policy"));
+      if (native) {
+        // Replacing the control connection must preserve these authenticated speech streams.
+        const initialRegistration = registration;
+        registration = registeredClientSchema.parse(await app.json("/api/client-registration", "POST", {
+          resumeToken: initialRegistration.resumeToken, platform: "android",
+          capabilities: { navigate: true, voice: true, voiceSettings: true }, state,
+        }));
+        expect(registration.clientId).toBe(initialRegistration.clientId);
+        expect(registration.connectionToken).not.toBe(initialRegistration.connectionToken);
+      }
+      const clientHeaders = { "X-Sedes-Client": registration.connectionToken };
       const marker = `Switch this client after the reply with ${recipient}`;
       app.model.callToolNextStream(marker, nativeTool!, { toolId: "client.switch_thread", schemaVersion: 2,
         input: { threadId: destination, listen: native } });
@@ -277,8 +292,14 @@ describe("native voice production pipeline with loopback providers", () => {
           frame.event === "notification" && frame.value.payload?.turn?.id === command.sourceTurnId))).value);
         expect(nativeReply.sourceEventId).toBe(reply.sourceEventId);
       }
+      if (peerVoiceSubscriber) {
+        const peerReply = voiceNotificationSchema.parse((await waitForSpeech(() => peerVoiceSubscriber.frames.find(frame =>
+          frame.event === "notification" && frame.value.payload?.turn?.id === command.sourceTurnId))).value);
+        expect(peerReply.sourceEventId).toBe(reply.sourceEventId);
+      }
       expect(settlement.commands[0]).toMatchObject({ ...command, action: "turn_settled",
-        replyEventId: native ? reply.sourceEventId : null, replyStreamId: voiceStreamId ?? null, expiresAt: expect.any(Number) });
+        replyEventId: native ? reply.sourceEventId : null, expiresAt: expect.any(Number) });
+      expect([...settlement.commands[0]!.replyStreamIds!].sort()).toEqual(native ? [voiceStreamId!, peerVoiceStreamId!].sort() : []);
       expect(settlement.commands[0]!.expiresAt).toBeLessThan(command.expiresAt);
       expect(settlement.commands[0]!.expiresAt).toBeGreaterThanOrEqual(settlementRequestedAt + 3_600_000);
       expect(settlement.commands[0]!.expiresAt).toBeLessThanOrEqual(Date.now() + 3_600_000);
@@ -286,6 +307,7 @@ describe("native voice production pipeline with loopback providers", () => {
       expect(reply.userInputRevision).toBe(2);
       await app.waitFor(async () => (await app.thread(threadId)).runState === "idle");
     } finally {
+      await peerNativeFeed?.close();
       await nativeFeed?.close();
       await feed.close();
     }
@@ -628,12 +650,11 @@ async function transcribeFixtureAudio(speech: Awaited<ReturnType<typeof startOpe
 }
 
 export async function voiceFeed(app: OpenCodeProductionFixture, onFrame?: (frame: VoiceFrame) => void,
-  nativeStream?: { readonly connectionToken: string; readonly voiceStreamId: string }) {
+  nativeStream?: { readonly voiceStreamId: string }) {
   const controller = new AbortController();
   const endpoint = new URL("/api/application/events", app.url);
   if (nativeStream) endpoint.searchParams.set("voiceStreamId", nativeStream.voiceStreamId);
-  const response = await fetch(endpoint, { headers: { Authorization: `Bearer ${app.credential}`,
-    ...(nativeStream ? { "X-Sedes-Client": nativeStream.connectionToken } : {}) }, signal: controller.signal });
+  const response = await fetch(endpoint, { headers: { Authorization: `Bearer ${app.credential}` }, signal: controller.signal });
   if (!response.ok || !response.body) throw new Error(`SSE open failed: ${response.status}`);
   const frames: VoiceFrame[] = [];
   const reader = response.body.getReader();

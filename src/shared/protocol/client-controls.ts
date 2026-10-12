@@ -40,6 +40,7 @@ export const clientActionResultSchema = z.strictObject({
   reason: z.string().min(1).max(160).optional(),
   state: clientStateSchema,
 });
+export const MAX_REPLY_STREAM_IDS = 128;
 export const clientCommandSchema = z.strictObject({
   id: z.string().uuid(),
   action: z.enum(["settings.get", "settings.update", "end_interaction", "switch_thread", "turn_settled", "turn_cancelled", "replay_turn"]),
@@ -52,18 +53,19 @@ export const clientCommandSchema = z.strictObject({
   expectedRevision: z.number().int().nonnegative().optional(),
   patch: clientVoicePatchSchema.optional(),
   replyEventId: z.string().min(1).max(128).nullable().optional(),
-  replyStreamId: z.uuid().nullable().optional(),
+  replyStreamIds: z.array(z.uuid()).max(MAX_REPLY_STREAM_IDS).optional(),
   /** `replay_turn` only: the ended application turn whose reply native queues, as the turn footer's speaker does. */
   turnId: z.string().min(1).max(160).optional(),
   assistantResult: selectedAssistantResultSchema.optional(),
 }).superRefine((command, context) => {
   if (command.action === "turn_settled") {
-    if (command.replyEventId === undefined || command.replyStreamId === undefined ||
-        (command.replyEventId === null) !== (command.replyStreamId === null)) {
-      context.addIssue({ code: "custom", path: ["replyStreamId"], message: "Turn settlement requires an event/stream pair, or two nulls." });
+    if (command.replyEventId === undefined || command.replyStreamIds === undefined ||
+        (command.replyEventId === null) !== (command.replyStreamIds.length === 0) ||
+        new Set(command.replyStreamIds).size !== command.replyStreamIds.length) {
+      context.addIssue({ code: "custom", path: ["replyStreamIds"], message: "Turn settlement requires a reply event with unique recipient streams, or null with an empty list." });
     }
-  } else if (command.replyEventId !== undefined || command.replyStreamId !== undefined) {
-    context.addIssue({ code: "custom", path: ["replyStreamId"], message: "Only turn settlement carries a reply event/stream pair." });
+  } else if (command.replyEventId !== undefined || command.replyStreamIds !== undefined) {
+    context.addIssue({ code: "custom", path: ["replyStreamIds"], message: "Only turn settlement carries reply recipient streams." });
   }
 });
 export const clientPollRequestSchema = z.strictObject({

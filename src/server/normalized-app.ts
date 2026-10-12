@@ -1495,30 +1495,35 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
       const untrack = dependencies.longLivedConnections?.track(response);
       if (untrack) response.once("close", untrack);
       const requestScope = await scope(request);
-      const voiceStream = query.voiceStreamId === undefined ? undefined : (() => {
-        if (!dependencies.clientControls) throw new ApiError(503, "client_controls_unavailable", "Client controls are unavailable.");
-        return dependencies.clientControls.voiceStream(requestScope, request.get("X-Sedes-Client"), clientIdentity(request)?.id, query.voiceStreamId);
-      })();
-      const hub = dependencies.applicationSnapshots.hub(requestScope);
-      const release = () =>
-        dependencies.applicationSnapshots.release(requestScope);
-      await serveApplicationEventStream(
-        request,
-        response,
-        hub,
-        (force) => dependencies.applicationSnapshots.checkpoint(requestScope, hub, force),
-        {
-          onReplay: () => dependencies.applicationSnapshots.resumed(requestScope, hub),
-          subscribeTransient: (listener) => dependencies.notifications.subscribe(requestScope, listener, voiceStream),
-          ...(query.replayCursor
-            ? { explicitReplayCursor: query.replayCursor }
-            : {}),
-          ...(query.handshake ? { initialHandshake: query.handshake } : {}),
-        },
-      );
-      release();
-      request.once("close", release);
-      response.once("close", release);
+      const voiceStream = query.voiceStreamId === undefined ? undefined : dependencies.notifications.reserveVoiceStream(requestScope, query.voiceStreamId);
+      if (voiceStream) {
+        request.once("close", voiceStream.release);
+        response.once("close", voiceStream.release);
+      }
+      let release = () => {};
+      try {
+        const hub = dependencies.applicationSnapshots.hub(requestScope);
+        release = () => dependencies.applicationSnapshots.release(requestScope);
+        await serveApplicationEventStream(
+          request,
+          response,
+          hub,
+          (force) => dependencies.applicationSnapshots.checkpoint(requestScope, hub, force),
+          {
+            onReplay: () => dependencies.applicationSnapshots.resumed(requestScope, hub),
+            subscribeTransient: (listener) => dependencies.notifications.subscribe(requestScope, listener, voiceStream),
+            ...(query.replayCursor ? { explicitReplayCursor: query.replayCursor } : {}),
+            ...(query.handshake ? { initialHandshake: query.handshake } : {}),
+          },
+        );
+        release();
+        request.once("close", release);
+        response.once("close", release);
+      } catch (error) {
+        voiceStream?.release();
+        release();
+        throw error;
+      }
     }),
   );
 

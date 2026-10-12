@@ -6,7 +6,7 @@ import { navigate as navigateRoute } from "../app/router.js";
 
 const command = (patch: Partial<ClientCommand> = {}): ClientCommand => ({ id: "action", action: "switch_thread", sourceThreadId: "source",
   sourceTurnId: "turn", threadId: "target", listen: false, expiresAt: Date.now() + 120000,
-  ...(patch.action === "turn_settled" ? { replyEventId: null, replyStreamId: null } : {}), ...patch });
+  ...(patch.action === "turn_settled" ? { replyEventId: null, replyStreamIds: [] } : {}), ...patch });
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
 describe("browser client controls", () => {
   it("resumes the same anonymous session after an outage without replaying pending navigation", async () => {

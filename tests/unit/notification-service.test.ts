@@ -127,20 +127,16 @@ const flush = async () => {
 };
 
 describe("notification settings and passive hooks", () => {
-  it("reports only exact native streams actually handed a voice event, preserving subscriber order", async () => {
+  it("reports only native streams actually handed a voice event in the same scope", async () => {
     const { service } = fixture(); enable(service);
     service.subscribe(scope, () => {}); // Ordinary browser/WebView: no playback barrier.
-    const token = "native-token";
     const oldStream = randomUUID(), newStream = randomUUID();
-    service.subscribe(scope, () => {}, { connectionToken: token, voiceStreamId: oldStream });
-    service.subscribe(scope, () => {}, { connectionToken: token, voiceStreamId: newStream });
-    service.subscribe(other, () => {}, { connectionToken: "other-scope", voiceStreamId: randomUUID() });
+    service.subscribe(scope, () => {}, service.reserveVoiceStream(scope, oldStream));
+    service.subscribe(scope, () => {}, service.reserveVoiceStream(scope, newStream));
+    service.subscribe(other, () => {}, service.reserveVoiceStream(other, randomUUID()));
     const publication = await emitFresh(service, scope, event(), "stream-deliveries", "live");
     expect(publication?.sourceEventId).toBe(createHash("sha256").update("stream-deliveries").digest("hex"));
-    expect(publication?.deliveries.map(({ connectionToken, voiceStreamId }) => ({ connectionToken, voiceStreamId }))).toEqual([
-      { connectionToken: token, voiceStreamId: oldStream }, { connectionToken: token, voiceStreamId: newStream },
-    ]);
-    expect(publication!.deliveries[1]!.subscriberSequence).toBeGreaterThan(publication!.deliveries[0]!.subscriberSequence);
+    expect(publication?.voiceStreamIds).toEqual([oldStream, newStream]);
   });
 
   it("never reports late, removed, failed, or synchronously closed streams as playback barriers", async () => {
@@ -148,18 +144,60 @@ describe("notification settings and passive hooks", () => {
     service.subscribe(scope, () => {});
     let remove!: () => void;
     remove = service.subscribe(scope, frame => { if (frame.startsWith("event: notification\n")) remove(); },
-      { connectionToken: "self-closed", voiceStreamId: randomUUID() });
+      service.reserveVoiceStream(scope, randomUUID()));
     service.subscribe(scope, frame => { if (frame.startsWith("event: notification\n")) throw new Error("closed"); },
-      { connectionToken: "failed", voiceStreamId: randomUUID() });
-    const disconnect = service.subscribe(scope, () => {}, { connectionToken: "removed", voiceStreamId: randomUUID() });
+      service.reserveVoiceStream(scope, randomUUID()));
+    const disconnect = service.subscribe(scope, () => {}, service.reserveVoiceStream(scope, randomUUID()));
     const watermark = service.captureSubscriberWatermark();
     let settle!: (target: undefined) => void;
     const publication = emitFresh(service, scope, event(), "ending-streams", "live", undefined,
       () => ({ settlement: new Promise(resolve => { settle = resolve; }) }), watermark);
     disconnect();
-    service.subscribe(scope, () => {}, { connectionToken: "late", voiceStreamId: randomUUID() });
+    service.subscribe(scope, () => {}, service.reserveVoiceStream(scope, randomUUID()));
     settle(undefined);
-    expect((await publication)?.deliveries).toEqual([]);
+    expect((await publication)?.voiceStreamIds).toEqual([]);
+  });
+
+  it("bounds native stream admission per principal without truncating delivery receipts", async () => {
+    const { service, database } = fixture(); enable(service);
+    const foreign = { ...scope, principalId: "foreign" };
+    database.prepare("INSERT INTO principals VALUES (?, ?)").run(foreign.tenantId, foreign.principalId);
+    service.subscribe(scope, () => {});
+    const streams = Array.from({ length: 128 }, () => service.reserveVoiceStream(scope, randomUUID()));
+    expect(() => service.reserveVoiceStream(scope, randomUUID())).toThrow("capacity");
+    for (const stream of streams) service.subscribe(scope, () => {}, stream);
+    expect((await emitFresh(service, scope, event(), "all-native-streams", "live"))?.voiceStreamIds).toEqual(streams.map(stream => stream.voiceStreamId));
+    const otherStream = service.reserveVoiceStream(other, randomUUID());
+    expect(() => service.subscribe(scope, () => {}, otherStream)).toThrow("reservation");
+    service.subscribe(other, () => {}, otherStream);
+    const foreignStream = service.reserveVoiceStream(foreign, randomUUID());
+    expect(() => service.subscribe(scope, () => {}, foreignStream)).toThrow("reservation");
+    service.subscribe(foreign, () => {}, foreignStream);
+    expect(() => service.subscribe(other, () => {}, otherStream)).toThrow("reservation");
+    streams[0]!.release(); streams[0]!.release();
+    const replacement = service.reserveVoiceStream(scope, randomUUID());
+    expect(() => service.reserveVoiceStream(scope, randomUUID())).toThrow("capacity");
+    const unsubscribe = service.subscribe(scope, () => {}, replacement);
+    unsubscribe(); unsubscribe();
+    service.reserveVoiceStream(scope, randomUUID()).release();
+    await service.close();
+    expect(() => service.reserveVoiceStream(scope, randomUUID())).toThrow("capacity");
+  });
+
+  it("releases failed and closed native streams without reviving an old reservation", () => {
+    const { service } = fixture();
+    const released = service.reserveVoiceStream(scope, randomUUID());
+    released.release();
+    expect(() => service.subscribe(scope, () => {}, released)).toThrow("reservation");
+    const failed = service.reserveVoiceStream(scope, randomUUID());
+    service.subscribe(scope, () => { throw new Error("stream closed"); }, failed);
+    expect(() => service.subscribe(scope, () => {}, failed)).toThrow("reservation");
+    const active = service.reserveVoiceStream(scope, randomUUID());
+    const frames: string[] = [];
+    service.subscribe(scope, frame => frames.push(frame), active);
+    active.release();
+    service.setSilenced(scope, true);
+    expect(frames).toHaveLength(1);
   });
 
   it("suppresses superseded turn voice without suppressing scripts or invoking recognition context", async () => {
