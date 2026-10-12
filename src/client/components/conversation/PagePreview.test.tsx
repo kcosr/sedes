@@ -105,9 +105,9 @@ async function waitForFrame(container: HTMLElement) {
   );
   return container.querySelector("iframe")!;
 }
-function openDetails(title = "Phone") {
+function expandPage(title = "Phone") {
   fireEvent.click(
-    screen.getByRole("button", { name: `Page details: ${title}` }),
+    screen.getByRole("button", { name: `Expand page: ${title}` }),
   );
 }
 
@@ -165,7 +165,7 @@ describe("published page preview", () => {
     expect(api.createPageRenderAdmission).toHaveBeenCalledTimes(1);
   });
 
-  it("gates coarse touch devices but leaves a narrow desktop directly interactive", async () => {
+  it("requires explicit interaction on both touch devices and desktop", async () => {
     vi.stubGlobal("matchMedia", (query: string) => ({
       matches: query === "(pointer: coarse)",
       addEventListener: vi.fn(),
@@ -181,74 +181,76 @@ describe("published page preview", () => {
       removeEventListener: vi.fn(),
     }));
     view = render(<PagePreview page={original} services={services()} />);
-    expect(await waitForFrame(view.container)).not.toHaveAttribute("inert");
+    expect(await waitForFrame(view.container)).toHaveAttribute("inert");
     expect(
       screen.queryByRole("button", { name: "Interact with preview" }),
-    ).toBeNull();
+    ).toBeInTheDocument();
   });
 
-  it("expands an inline header without remounting the page and returns to the published revision", async () => {
+  it("activates only for a short stationary tap, never a drag, scroll, wheel or canceled gesture", async () => {
+    const { container } = render(<PagePreview page={original} services={services()} />);
+    const frame = await waitForFrame(container);
+    const viewport = container.querySelector(".page-frame-viewport")!;
+    const pointer = (type: string, x = 20, y = 20, timeStamp = 100) => {
+      const event = new MouseEvent(type, { bubbles: true, clientX: x, clientY: y, button: 0 });
+      Object.defineProperties(event, { pointerId: { value: 1 }, isPrimary: { value: true }, timeStamp: { value: timeStamp } });
+      fireEvent(viewport, event);
+    };
+    pointer("pointerdown"); pointer("pointermove", 20, 50); pointer("pointerup");
+    expect(frame).toHaveAttribute("inert");
+    pointer("pointerdown"); fireEvent.scroll(window); pointer("pointerup");
+    expect(frame).toHaveAttribute("inert");
+    pointer("pointerdown"); fireEvent.wheel(viewport); pointer("pointerup");
+    expect(frame).toHaveAttribute("inert");
+    pointer("pointerdown"); pointer("pointercancel"); pointer("pointerup");
+    expect(frame).toHaveAttribute("inert");
+    pointer("pointerdown"); pointer("pointerup", 20, 20, 700);
+    expect(frame).toHaveAttribute("inert");
+    pointer("pointerdown"); pointer("pointerup");
+    expect(frame).not.toHaveAttribute("inert");
+    expect(screen.getByRole("button", { name: "Done interacting with preview" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("shows only maximize and interaction inline and keeps revision controls in the fullscreen header", async () => {
     const api = services();
-    const { container } = render(
-      <PagePreview page={original} services={api} />,
-    );
-    const initialFrame = await waitForFrame(container);
+    const { container } = render(<PagePreview page={original} services={api} />);
+    await waitForFrame(container);
     expect(container.querySelector(".wb-media-frame-header")).toBeNull();
-    expect(container.querySelector(".page-frame-size")).toBeNull();
-    expect(screen.queryByText("HTML preview")).toBeNull();
-    openDetails();
-    const header = container.querySelector(".wb-media-frame-header");
+    expect(screen.queryByRole("toolbar", { name: "Page actions" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Page details|Hide page details/ })).toBeNull();
+    const expand = screen.getByRole("button", { name: "Expand page: Phone" });
+    expect(container.querySelector(".page-preview-controls")?.children).toHaveLength(2);
+    expandPage();
+    const dialog = await screen.findByRole("dialog");
+    const header = dialog.querySelector(".page-preview-fullscreen-header");
     expect(header).toBeInTheDocument();
     expect(within(header as HTMLElement).getByRole("toolbar", { name: "Page actions" })).toBeInTheDocument();
     expect(within(header as HTMLElement).getByRole("button", { name: "Next page revision" })).toHaveAttribute("data-size", "icon-lg");
     expect(within(header as HTMLElement).getByRole("button", { name: "Refresh page preview" })).toHaveAttribute("data-size", "icon-lg");
-    expect(header?.querySelector(".page-preview-header-actions")?.lastElementChild).toBe(
-      screen.getByRole("button", { name: "Expand page: Phone" }),
-    );
-    expect(container.querySelector("iframe")).toBe(initialFrame);
-    const collapse = screen.getByRole("button", { name: "Hide page details" });
-    expect(collapse).toHaveAttribute("aria-expanded", "true");
-    expect(collapse.querySelector(".lucide-ellipsis")).toBeInTheDocument();
-    expect(collapse.closest(".wb-media-frame-header")).toBeNull();
-    expect(collapse.closest(".page-preview-controls")).toBeInTheDocument();
-    fireEvent.click(collapse);
-    expect(container.querySelector(".wb-media-frame-header")).toBeNull();
-    expect(container.querySelector("iframe")).toBe(initialFrame);
-    openDetails();
-    fireEvent.click(screen.getByRole("button", { name: "Next page revision" }));
-    const originalButton = await screen.findByRole("button", {
-      name: "Return to published revision 1",
-    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Next page revision" }));
+    const originalButton = await within(dialog).findByRole("button", { name: "Return to published revision 1" });
     expect(originalButton).toHaveTextContent("v2");
-    expect(api.listPageRevisions).toHaveBeenCalledWith(
-      original.pageId,
-      expect.objectContaining({ limit: 1 }),
-    );
+    expect(api.listPageRevisions).toHaveBeenCalledWith(original.pageId, expect.objectContaining({ limit: 1 }));
     fireEvent.click(originalButton);
-    expect(screen.getByLabelText("Revision 1")).toHaveTextContent("v1");
+    expect(within(dialog).getByLabelText("Revision 1")).toHaveTextContent("v1");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(expand).toHaveFocus());
+    expect(screen.queryByRole("toolbar", { name: "Page actions" })).toBeNull();
   });
 
-  it("refreshes the document without publishing a new revision", async () => {
+  it("refreshes the fullscreen document without publishing a new revision", async () => {
     const api = services();
-    const { container } = render(
-      <PagePreview page={original} services={api} />,
-    );
-    const frame = await waitForFrame(container);
+    const { container } = render(<PagePreview page={original} services={api} />);
+    await waitForFrame(container);
+    expandPage();
+    const dialog = await screen.findByRole("dialog");
+    const frame = await waitForFrame(dialog);
     sendFrameMessage(frame, "sedes:page-size", { height: 100 });
-    openDetails();
-    fireEvent.click(
-      screen.getByRole("button", { name: "Refresh page preview" }),
-    );
-    await waitFor(() =>
-      expect(api.createPageRenderAdmission).toHaveBeenCalledTimes(2),
-    );
-    await waitFor(() =>
-      expect(container.querySelector("iframe")).not.toBe(frame),
-    );
-    expect(container.querySelector(".page-preview")).toHaveAttribute(
-      "data-page-revision",
-      "1",
-    );
+    const admissionsBeforeRefresh = api.createPageRenderAdmission.mock.calls.length;
+    fireEvent.click(within(dialog).getByRole("button", { name: "Refresh page preview" }));
+    await waitFor(() => expect(api.createPageRenderAdmission).toHaveBeenCalledTimes(admissionsBeforeRefresh + 1));
+    await waitFor(() => expect(dialog.querySelector("iframe")).not.toBe(frame));
+    expect(container.querySelector(".page-preview")).toHaveAttribute("data-page-revision", "1");
   });
 
   it("fails closed before minting on an unsafe native host", async () => {
@@ -272,7 +274,7 @@ describe("published page preview", () => {
         items: [{ ...original, revision: 3, title: "Newest phone" }],
       });
     render(<PagePreview page={original} services={api} />);
-    openDetails();
+    expandPage();
     fireEvent.click(screen.getByRole("button", { name: "Next page revision" }));
     await screen.findByText("v2");
     fireEvent.click(
@@ -408,11 +410,12 @@ describe("published page preview", () => {
         services={api}
       />,
     );
-    openDetails();
-    fireEvent.click(screen.getByRole("button", { name: "Expand page: Phone" }));
+    expandPage();
     const dialog = await screen.findByRole("dialog");
     expect(dialog).toHaveClass("media-preview-dialog");
     const frame = await waitForFrame(dialog);
+    expect(frame).toHaveAttribute("inert");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Interact with preview" }));
     expect(frame).not.toHaveAttribute("inert");
     expect(dialog.querySelector(".page-frame-toolbar")).toBeNull();
     const controls = within(dialog).getByRole("group", {

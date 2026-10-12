@@ -48,7 +48,20 @@ const measure=()=>{
 const root=document.documentElement,body=document.body;
 const viewportHeight=host.innerHeight||root.clientHeight||1;
 let naturalHeight=1;
-if(body){const margin=parseFloat(getComputedStyle(body).marginBottom)||0;naturalHeight=body.getBoundingClientRect().bottom+host.scrollY+margin;const children=body.querySelectorAll("*");for(let index=0;index<Math.min(children.length,5000);index++)naturalHeight=Math.max(naturalHeight,children[index].getBoundingClientRect().bottom+host.scrollY+margin);}
+if(body){
+const margin=parseFloat(getComputedStyle(body).marginBottom)||0;
+naturalHeight=body.getBoundingClientRect().bottom+host.scrollY+margin;
+// Bounding rectangles include SVG geometry and positioned children outside
+// overflow clips. Only visible overflow can contribute to the page height.
+const clipBottoms=new host.WeakMap(),children=body.querySelectorAll("*");
+for(let index=0;index<Math.min(children.length,5000);index++){
+const child=children[index],rect=child.getBoundingClientRect(),inherited=clipBottoms.get(child.parentElement)??Infinity;
+naturalHeight=Math.max(naturalHeight,Math.min(rect.bottom,inherited)+host.scrollY+margin);
+const style=getComputedStyle(child),overflow=style.overflowY||style.overflow;
+const clips=overflow==="hidden"||overflow==="clip"||overflow==="auto"||overflow==="scroll";
+clipBottoms.set(child,clips?Math.min(inherited,rect.bottom-(parseFloat(style.borderBottomWidth)||0)):inherited);
+}
+}
 if(root.scrollHeight>viewportHeight+1)naturalHeight=Math.max(naturalHeight,root.scrollHeight);
 return {width:host.innerWidth||root.clientWidth||1,viewportHeight,naturalHeight:Math.max(1,Math.ceil(naturalHeight)),contentWidth:Math.max(root.scrollWidth,body?.scrollWidth||0)};
 };

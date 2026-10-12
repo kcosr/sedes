@@ -31,8 +31,8 @@ current or earlier revision. File publications return their original source
 path; inline publications return their saved HTML so the agent can revise
 and republish it without relying on its previous chat context.
 
-Tap the preview's ellipsis to expand a header above the page, then use the
-previous and next arrows around the
+Maximize the preview to see its header, then use the previous and next arrows
+around the
 version indicator to browse that page's revisions. Browsing does not change
 the saved conversation or the revision originally published there. While
 browsing another revision, select the `vN` indicator to return to the revision
@@ -53,13 +53,12 @@ is deleted.
 
 ## Interact and recover
 
-On Android and devices with coarse pointer input, an inline HTML preview
-initially lets gestures scroll the conversation. Tap the hand icon beside the
-ellipsis to interact with the page's buttons, inputs, or other controls. Tap
-the checkmark to return to conversation scrolling. Other inline previews
-accept input directly, and an expanded preview is always interactive. The hand
-control changes input routing; the page still loads and runs while input is
-inactive.
+HTML previews initially let gestures scroll the conversation on both desktop
+and mobile. Tap or click the preview, or use its finger icon, to enable input.
+Dragging, scrolling, and long presses do not enable interaction. The activating
+tap only changes modes; tap again to use the page's controls. Use the checkmark
+to return to conversation scrolling. Expanded previews use the same interaction
+toggle in their header. The page still loads and runs while input is inactive.
 
 A failed render or an attempt interrupted before cleanup does not restart
 automatically. Use **Retry** to try that revision again. This protects against

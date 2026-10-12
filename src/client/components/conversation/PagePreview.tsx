@@ -2,19 +2,16 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
-  Ellipsis,
   Maximize2,
   Pointer,
   RotateCcw,
 } from "lucide-react";
 import {
   useCallback,
-  useId,
   useEffect,
   useLayoutEffect,
   useRef,
   useState,
-  useSyncExternalStore,
 } from "react";
 import type { PageRevision } from "../../../shared/protocol/pages.js";
 import { MediaFrame } from "../../workbench/components/MediaFrame.js";
@@ -28,7 +25,6 @@ import {
   usePageFrameAdmission,
 } from "./page-frame-lifecycle.js";
 import { supportsSafePageFrames } from "../../app/page-safety.js";
-import { isAndroidClient } from "../../app/client-platform.js";
 import {
   PageFrameRecoveryAttempt,
   pageFrameNeedsActivation,
@@ -42,21 +38,6 @@ export type PagePreviewServices = Pick<
   "createPageRenderAdmission" | "listPageRevisions" | "getPageRevision"
 >;
 
-// Interaction follows the input device, not the width of a desktop window.
-function readTouchInput(): boolean {
-  return (
-    isAndroidClient() ||
-    (typeof window.matchMedia === "function" &&
-      window.matchMedia("(pointer: coarse)").matches)
-  );
-}
-function subscribeTouchInput(notify: () => void): () => void {
-  if (typeof window.matchMedia !== "function") return () => {};
-  const query = window.matchMedia("(pointer: coarse)");
-  query.addEventListener("change", notify);
-  return () => query.removeEventListener("change", notify);
-}
-
 /** Each occurrence keeps its pinned revision and its own interaction state. */
 export function PagePreview({
   page,
@@ -67,24 +48,13 @@ export function PagePreview({
 }): React.JSX.Element {
   const [selected, setSelected] = useState(page);
   const [expanded, setExpanded] = useState(false);
-  const [detailsOpen, setDetailsOpen] = useState(false);
   const [interacting, setInteracting] = useState(false);
   const [refreshVersion, setRefreshVersion] = useState(0);
   const [latestRevision, setLatestRevision] = useState<number>();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const abort = useRef<AbortController | undefined>(undefined);
-  const menuButton = useRef<HTMLButtonElement>(null);
-  const detailsId = useId();
-  const detailsRef = useRef<HTMLDivElement>(null);
-  useLayoutEffect(() => {
-    if (detailsOpen) detailsRef.current?.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus();
-  }, [detailsOpen]);
-  const touchInput = useSyncExternalStore(
-    subscribeTouchInput,
-    readTouchInput,
-    () => false,
-  );
+  const expandButton = useRef<HTMLButtonElement>(null);
   const deactivate = useCallback(() => setInteracting(false), []);
 
   useEffect(() => {
@@ -97,7 +67,6 @@ export function PagePreview({
     deactivate,
     selected.pageId,
     selected.revision,
-    touchInput,
   ]);
 
   const navigateRevision = async (direction: -1 | 1) => {
@@ -137,13 +106,8 @@ export function PagePreview({
     }
   };
 
-  const hideDetails = () => {
-    setDetailsOpen(false);
-    requestAnimationFrame(() => menuButton.current?.focus());
-  };
-  const headerActions = detailsOpen ? (
-    <div id={detailsId} ref={detailsRef} className="page-preview-header-actions" role="toolbar" aria-label="Page actions"
-      onKeyDown={event => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); hideDetails(); } }}>
+  const headerActions = (
+    <div className="page-preview-header-actions" role="toolbar" aria-label="Page actions">
       <div
         className="page-preview-revisions"
         role="group"
@@ -219,69 +183,51 @@ export function PagePreview({
       >
         <RotateCcw />
       </Button>
-      <Button
-        aria-label={`Expand page: ${selected.title}`}
-        title="Expand preview"
-        onClick={() => {
-          setDetailsOpen(false);
-          setExpanded(true);
-          deactivate();
-        }}
-        size="icon-lg"
-        variant="ghost"
-      >
-        <Maximize2 />
-      </Button>
     </div>
-  ) : undefined;
+  );
 
   return (
     <>
       <MediaFrame
         className="page-preview"
-        title={detailsOpen ? selected.title : undefined}
-        actions={headerActions}
         data-page-id={page.pageId}
         data-page-revision={page.revision}
-        data-interacting={touchInput && interacting ? "true" : undefined}
+        data-interacting={interacting ? "true" : undefined}
         aria-busy={loading}
         role="group"
         aria-label={selected.title}
       >
         <div className="page-preview-controls">
-          {touchInput ? (
-            <Button
-              size="icon-xs"
-              variant="outline"
-              aria-label={
-                interacting
-                  ? "Done interacting with preview"
-                  : "Interact with preview"
-              }
-              title={
-                interacting
-                  ? "Done interacting with preview"
-                  : "Interact with preview"
-              }
-              aria-pressed={interacting}
-              className="page-preview-interact"
-              onClick={() => setInteracting((value) => !value)}
-            >
-              {interacting ? <Check /> : <Pointer />}
-            </Button>
-          ) : null}
           <Button
-            ref={menuButton}
             size="icon-xs"
             variant="outline"
-            aria-label={detailsOpen ? "Hide page details" : `Page details: ${selected.title}`}
-            aria-expanded={detailsOpen}
-            aria-controls={detailsId}
-            title="Page details"
-            onClick={() => { if (detailsOpen) hideDetails(); else setDetailsOpen(true); }}
-          ><Ellipsis /></Button>
+            aria-label={
+              interacting
+                ? "Done interacting with preview"
+                : "Interact with preview"
+            }
+            title={
+              interacting
+                ? "Done interacting with preview"
+                : "Interact with preview"
+            }
+            aria-pressed={interacting}
+            className="page-preview-interact"
+            onClick={() => setInteracting((value) => !value)}
+          >
+            {interacting ? <Check /> : <Pointer />}
+          </Button>
+          <Button
+            ref={expandButton}
+            size="icon-xs"
+            variant="outline"
+            aria-label={`Expand page: ${selected.title}`}
+            aria-haspopup="dialog"
+            title="Expand preview"
+            onClick={() => { setExpanded(true); deactivate(); }}
+          ><Maximize2 /></Button>
         </div>
-        {error ? (
+        {error && !expanded ? (
           <p className="page-preview-error" role="alert">
             {error}
           </p>
@@ -291,7 +237,8 @@ export function PagePreview({
           page={selected}
           createAdmission={services.createPageRenderAdmission}
           enabled={!expanded}
-          interactive={!touchInput || interacting}
+          interactive={interacting}
+          onActivate={() => setInteracting(true)}
           onDeactivate={deactivate}
           refreshVersion={refreshVersion}
         />
@@ -305,20 +252,32 @@ export function PagePreview({
       >
         <DialogContent
           size="viewer"
-          className="media-preview-dialog"
+          className="media-preview-dialog page-preview-dialog"
           layer="over-dialog"
-          returnFocusRef={menuButton}
+          returnFocusRef={expandButton}
           aria-describedby={undefined}
         >
-          <DialogTitle className="sr-only">
-            {selected.title} · Revision {selected.revision}
-          </DialogTitle>
+          <header className="page-preview-fullscreen-header">
+            <DialogTitle className="page-preview-name">{selected.title}</DialogTitle>
+            <Button
+              size="icon-lg"
+              variant="ghost"
+              aria-label={interacting ? "Done interacting with preview" : "Interact with preview"}
+              aria-pressed={interacting}
+              onClick={() => setInteracting((value) => !value)}
+            >
+              {interacting ? <Check /> : <Pointer />}
+            </Button>
+            {headerActions}
+          </header>
+          {error ? <p className="page-preview-error" role="alert">{error}</p> : null}
           <PageFrame
             key={`${selected.pageId}:${selected.revision}`}
             page={selected}
             createAdmission={services.createPageRenderAdmission}
             enabled={expanded}
-            interactive
+            interactive={interacting}
+            onActivate={() => setInteracting(true)}
             onDeactivate={deactivate}
             refreshVersion={refreshVersion}
             expanded
@@ -335,6 +294,7 @@ function PageFrame({
   enabled,
   interactive,
   onDeactivate,
+  onActivate,
   refreshVersion,
   expanded = false,
 }: {
@@ -343,11 +303,22 @@ function PageFrame({
   readonly enabled: boolean;
   readonly interactive: boolean;
   readonly onDeactivate: () => void;
+  readonly onActivate: () => void;
   readonly refreshVersion: number;
   readonly expanded?: boolean;
 }): React.JSX.Element {
   const host = useRef<HTMLDivElement>(null);
   const frame = useRef<HTMLIFrameElement>(null);
+  const tap = useRef<{ id: number; x: number; y: number; time: number } | undefined>(undefined);
+  useEffect(() => {
+    const cancel = () => { tap.current = undefined; };
+    window.addEventListener("scroll", cancel, true);
+    window.addEventListener("wheel", cancel, true);
+    return () => {
+      window.removeEventListener("scroll", cancel, true);
+      window.removeEventListener("wheel", cancel, true);
+    };
+  }, []);
   const [width, setWidth] = useState(page.viewport.width ?? 640);
   const [height, setHeight] = useState(page.viewport.height ?? 240);
   const [availableHeight, setAvailableHeight] = useState(0);
@@ -560,7 +531,36 @@ function PageFrame({
         ref={host}
         role="region"
         aria-label={`Page preview: ${page.title}`}
-        tabIndex={expanded ? 0 : undefined}
+        tabIndex={!interactive || expanded ? 0 : undefined}
+        onKeyDown={(event) => {
+          if (!interactive && ready && event.target === event.currentTarget &&
+              (event.key === "Enter" || event.key === " ")) {
+            event.preventDefault();
+            onActivate();
+          }
+        }}
+        onPointerDown={(event) => {
+          tap.current = undefined;
+          if (interactive || !ready || !event.isPrimary || event.button !== 0 ||
+              (event.target as Element).closest("button")) return;
+          tap.current = { id: event.pointerId, x: event.clientX, y: event.clientY, time: event.timeStamp };
+        }}
+        onPointerMove={(event) => {
+          const start = tap.current;
+          if (start && (Math.hypot(event.clientX - start.x, event.clientY - start.y) > 10))
+            tap.current = undefined;
+        }}
+        onPointerCancel={() => { tap.current = undefined; }}
+        onPointerUp={(event) => {
+          const start = tap.current;
+          tap.current = undefined;
+          if (start && event.pointerId === start.id && event.timeStamp - start.time < 500 &&
+              Math.hypot(event.clientX - start.x, event.clientY - start.y) <= 10) {
+            // Consume the activating tap; interacting with page content starts next time.
+            event.preventDefault();
+            onActivate();
+          }
+        }}
       >
         <div
           className="page-frame-canvas"

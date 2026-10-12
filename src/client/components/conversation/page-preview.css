@@ -41,22 +41,30 @@
 .page-preview[data-interacting="true"] {
   border-color: var(--border);
 }
-/* Details expand in the frame's ordinary header, never over the document. */
-.page-preview > .wb-media-frame-header {
-  --wb-media-header-background: var(--background);
-  --wb-media-header-padding: var(--space-2) var(--space-3);
+/* Page metadata and revision controls belong only to the expanded viewer. */
+.page-preview-fullscreen-header {
   --page-preview-control: var(--control-lg);
-  gap: var(--space-1);
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) calc(var(--control-touch) + var(--space-3)) var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border-soft);
+  background: var(--background);
 }
-.page-preview .wb-media-frame-labels {
+.page-preview-name {
   flex: 1 1 auto;
   min-width: 0;
-}
-.page-preview .wb-media-frame-title {
+  margin: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: var(--text-title);
+}
+.page-preview-dialog > .page-frame-expanded {
+  flex: 1;
+  height: auto;
 }
 .page-preview-header-actions {
   display: flex;
@@ -69,12 +77,14 @@
   flex-shrink: 0;
   align-items: center;
 }
+.page-preview-fullscreen-header > button,
 .page-preview-header-actions button {
   width: var(--page-preview-control);
   min-width: var(--page-preview-control);
   height: var(--page-preview-control);
   flex-shrink: 0;
 }
+.page-preview-fullscreen-header > button svg,
 .page-preview-header-actions button svg {
   width: var(--icon-lg);
   height: var(--icon-lg);
@@ -160,7 +170,7 @@
     width: 36px;
     height: 36px;
   }
-  .page-preview > .wb-media-frame-header {
+  .page-preview-fullscreen-header {
     --page-preview-control: var(--control-touch);
   }
 }

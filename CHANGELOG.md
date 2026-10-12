@@ -63,7 +63,7 @@ User-facing changes are collected here before release. See the
 - Agents can publish interactive [HTML previews](docs/user/html-previews.md)
   from files or inline HTML, with captured local images, immutable revisions,
   optional viewport dimensions, and compact revision/refresh controls. They
-  load as they approach view on all clients; a touch interaction toggle keeps
+  load as they approach view on all clients; an interaction toggle keeps
   inline pages from interrupting chat scrolling. A thread's Pages library
   retains previews beyond the currently loaded chat history.
 
@@ -172,10 +172,12 @@ User-facing changes are collected here before release. See the
 - Escape exits sidebar search without clearing its text or filter.
 
 - Recent HTML previews stay loaded briefly when scrolling away and back, and
-  inactive touch previews avoid nested scrolling. Inline image and Mermaid
+  inactive previews avoid nested scrolling. Inline image and Mermaid
   zoom gestures remain available after scrolling, without an inline zoom toolbar.
-  HTML preview controls expand into a header with large touch targets, and fullscreen media surrounds
-  match the chat background.
+  HTML preview controls appear in a fullscreen header with large touch targets;
+  a finger toggle or stationary tap enables interaction on desktop and mobile.
+  Clipped SVG content no longer makes previews excessively tall, and fullscreen
+  media surrounds match the chat background.
   Composer effort visibility updates before the changed send controls paint.
 
 - Automation details link consistently to the Automations list and expose
