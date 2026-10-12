@@ -694,14 +694,17 @@ export function InventorySidebar({
     [snapshot?.lineageFamilies],
   );
   const loadedGlobalLineageFamilyCounts = useMemo(() => {
+    // Moving the default into its own shelf does not unload it. Count the
+    // full inventory before that display filter so its ancestors do not
+    // offer to page a descendant which is already present.
     const origins = new Map(
       allDescendants.map(({ origin }) => [origin.childThreadId, origin]),
     );
-    for (const origin of snapshot?.forkOrigins ?? []) {
+    for (const origin of state.snapshot?.forkOrigins ?? []) {
       origins.set(origin.childThreadId, origin);
     }
     const loadedThreadIds = new Set([
-      ...(snapshot?.threads.map(({ id }) => id) ?? []),
+      ...(state.snapshot?.threads.map(({ id }) => id) ?? []),
       ...allDescendants.map(({ thread }) => thread.id),
     ]);
     const counts = new Map<string, number>();
@@ -717,7 +720,7 @@ export function InventorySidebar({
       }
     }
     return counts;
-  }, [allDescendants, snapshot?.threads, snapshot?.forkOrigins]);
+  }, [allDescendants, state.snapshot?.threads, state.snapshot?.forkOrigins]);
   const scopedLineageFamilyCounts = useMemo(
     () =>
       new Map(

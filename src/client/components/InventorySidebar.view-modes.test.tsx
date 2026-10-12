@@ -5322,6 +5322,32 @@ describe("sidebar footer Automations", () => {
 
 
 describe("shared default thread shelf", () => {
+  it.each(["project", "time", "state", "none"] as const)("counts a loaded default child before offering more forks in %s", (groupBy) => {
+    seedViewPreferences({ groupBy });
+    const parent = makeThread("parent", "Fork source");
+    const child = makeThread("default-child", "Default child");
+    const options = {
+      defaultThreadId: child.id,
+      forkOrigins: [forkOrigin(child.id, parent.id)],
+      lineagePlacements: [nestedPlacement(child.id)],
+      lineageFamilies: [{ sourceThreadId: parent.id, descendantCount: 1 }],
+    };
+    const view = renderSidebar([parent, child], options);
+    expect(screen.getByText("Fork source")).toBeVisible();
+    expect(screen.getAllByText("Default child")).toHaveLength(1);
+    expect(screen.getByTestId("default-thread-row")).toHaveTextContent("Default child");
+    expect(screen.queryByRole("button", { name: "Show all runs/forks" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /fork family for Fork source/ })).not.toBeInTheDocument();
+
+    // A second, genuinely unloaded sibling still needs the paging action.
+    view.rerenderSidebar(makeState([parent, child], {
+      ...options,
+      lineageFamilies: [{ sourceThreadId: parent.id, descendantCount: 2 }],
+    }));
+    expect(screen.getByRole("button", { name: "Show all runs/forks" })).toBeVisible();
+    expect(screen.getAllByText("Default child")).toHaveLength(1);
+  });
+
   it.each(["project", "none"] as const)("pages a default parent's older forks into the %s view", async (groupBy) => {
     seedViewPreferences({ groupBy });
     const parent = makeThread("default", "My default");
