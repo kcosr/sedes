@@ -5,6 +5,7 @@ import {
   subscribeResolvedAppearance,
 } from "../../app/appearance.js";
 import { ZoomablePreview } from "../preview/ZoomablePreview.js";
+import { Button } from "../ui/button.js";
 import { MediaFrame } from "../../workbench/components/MediaFrame.js";
 import "../../workbench/styles/media-frame.css";
 import "./page-preview.css";
@@ -80,28 +81,39 @@ export function MermaidDiagram({
   }
 
   return (
-    <MediaFrame {...sourcePositionAttributes} className="mermaid-diagram conversation-media-frame">
+    <MediaFrame
+      {...sourcePositionAttributes}
+      className="mermaid-diagram conversation-media-frame"
+    >
       {current.status === "rendered" ? (
         <Dialog>
-          <DialogTrigger asChild>
-            <button
-              aria-label="Expand Mermaid diagram"
-              className="mermaid-diagram-visual mermaid-diagram-preview-trigger"
-              title="Expand diagram"
-              type="button"
+          <div className="inline-media-preview">
+            <ZoomablePreview
+              controlsLabel="Diagram zoom controls"
+              interactionMode="inline"
+              resetLabel="Reset diagram view"
+              title="Mermaid diagram"
+              viewportLabel="Inline Mermaid diagram preview"
             >
-              <span aria-label="Mermaid diagram" role="img">
-                <span
-                  aria-hidden="true"
-                  className="mermaid-diagram-svg"
-                  dangerouslySetInnerHTML={{ __html: current.svg }}
-                />
-              </span>
-              <span aria-hidden="true" className="mermaid-diagram-expand">
+              <span
+                aria-label="Mermaid diagram"
+                role="img"
+                className="mermaid-diagram-svg"
+                dangerouslySetInnerHTML={{ __html: current.svg }}
+              />
+            </ZoomablePreview>
+            <DialogTrigger asChild>
+              <Button
+                aria-label="Expand Mermaid diagram"
+                className="inline-media-expand"
+                size="icon-xs"
+                variant="outline"
+                title="Expand diagram"
+              >
                 <Maximize2 />
-              </span>
-            </button>
-          </DialogTrigger>
+              </Button>
+            </DialogTrigger>
+          </div>
           <DialogContent size="viewer" aria-describedby={undefined}>
             <DialogTitle className="sr-only">
               Mermaid diagram preview

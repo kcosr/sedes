@@ -30,6 +30,28 @@ import {
   writeAlphaExample,
 } from "./workspace-files-fixture";
 
+function zoomPercentage(container: Locator): Locator {
+  return container.getByRole("button", { name: /^Zoom percentage:/ });
+}
+
+async function imageFitScale(
+  image: Locator,
+  viewport: Locator,
+): Promise<number> {
+  await expect(viewport).toBeVisible();
+  await expect(image).toBeVisible();
+  const natural = await image.evaluate(async (element) => {
+    const raster = element as HTMLImageElement;
+    await raster.decode();
+    return { width: raster.naturalWidth, height: raster.naturalHeight };
+  });
+  const size = await viewport.evaluate((element) => ({
+    width: element.clientWidth,
+    height: element.clientHeight,
+  }));
+  return Math.min(1, size.width / natural.width, size.height / natural.height);
+}
+
 async function openWorkspace(page: Page, workspace: string): Promise<void> {
   const picker = page
     .getByTestId("desktop-sidebar")
@@ -402,8 +424,29 @@ test.describe.serial("workspace file browser and editor", () => {
     ]);
     expect(diagramBlockBox).not.toBeNull();
     expect(diagramSvgBox).not.toBeNull();
-    expect(diagramSvgBox!.width).toBeGreaterThan(diagramBlockBox!.width * 0.85);
-    expect(diagramSvgBox!.height).toBeGreaterThan(520);
+    const inlineViewportBox = await diagramBlock
+      .getByRole("region", { name: "Inline Mermaid diagram preview" })
+      .boundingBox();
+    const intrinsicDiagram = await diagramSvg.evaluate((element) => {
+      const viewBox = (element.getAttribute("viewBox") ?? "")
+        .split(/[ ,]+/)
+        .map(Number);
+      return { width: viewBox[2]!, height: viewBox[3]! };
+    });
+    const inlineScale = Math.min(
+      1,
+      inlineViewportBox!.width / intrinsicDiagram.width,
+      inlineViewportBox!.height / intrinsicDiagram.height,
+    );
+    expect(diagramSvgBox!.width).toBeCloseTo(
+      intrinsicDiagram.width * inlineScale,
+      0,
+    );
+    expect(diagramSvgBox!.height).toBeCloseTo(
+      intrinsicDiagram.height * inlineScale,
+      0,
+    );
+    expect(diagramSvgBox!.width).toBeLessThanOrEqual(diagramBlockBox!.width);
     await expect(diagramBlock).toHaveCSS(
       "background-color",
       "rgba(0, 0, 0, 0)",
@@ -414,7 +457,7 @@ test.describe.serial("workspace file browser and editor", () => {
     const expandDiagram = panel.getByRole("button", {
       name: "Expand Mermaid diagram",
     });
-    await diagram.click();
+    await expandDiagram.click();
     const diagramDialog = page.getByRole("dialog", {
       name: "Mermaid diagram preview",
     });
@@ -424,6 +467,9 @@ test.describe.serial("workspace file browser and editor", () => {
       ".zoomable-preview-content > img",
     );
     await expect(diagramPreviewImage).toBeVisible();
+    await diagramPreviewImage.evaluate((image) =>
+      (image as HTMLImageElement).decode(),
+    );
     const diagramViewport = diagramDialog.getByRole("region", {
       name: "Mermaid diagram preview",
     });
@@ -434,8 +480,25 @@ test.describe.serial("workspace file browser and editor", () => {
     expect(diagramPreviewImageBox).not.toBeNull();
     expect(diagramViewportBox).not.toBeNull();
     await expect(diagramPreviewImage).toHaveCSS("object-fit", "contain");
-    expect(diagramPreviewImageBox!.width).toBeGreaterThan(
-      diagramViewportBox!.width * 0.85,
+    const popupNaturalWidth = await diagramPreviewImage.evaluate(
+      (image) => (image as HTMLImageElement).naturalWidth,
+    );
+    const popupNaturalHeight = await diagramPreviewImage.evaluate(
+      (image) => (image as HTMLImageElement).naturalHeight,
+    );
+    const fitDiagramScale = Math.min(
+      1,
+      diagramViewportBox!.width / popupNaturalWidth,
+      diagramViewportBox!.height / popupNaturalHeight,
+    );
+    const fitDiagramText = `${Math.round(fitDiagramScale * 100)}%`;
+    expect(diagramPreviewImageBox!.width).toBeCloseTo(
+      popupNaturalWidth * fitDiagramScale,
+      0,
+    );
+    expect(diagramPreviewImageBox!.height).toBeCloseTo(
+      popupNaturalHeight * fitDiagramScale,
+      0,
     );
     const initialDiagramScrollRange = await diagramViewport.evaluate(
       (element) => ({
@@ -449,8 +512,14 @@ test.describe.serial("workspace file browser and editor", () => {
       .locator(".zoomable-preview-canvas")
       .boundingBox();
     expect(initialCanvasBox).not.toBeNull();
+    const reducedDiagramScale = Math.max(
+      fitDiagramScale * 0.25,
+      fitDiagramScale - 0.25,
+    );
     await diagramDialog.getByRole("button", { name: "Zoom out" }).click();
-    await expect(diagramDialog.getByLabel("Zoom level")).toHaveText("75%");
+    await expect(zoomPercentage(diagramDialog)).toHaveText(
+      `${Math.round(reducedDiagramScale * 100)}%`,
+    );
     const [reducedImageBox, reducedCanvasBox, reducedViewportBox] =
       await Promise.all([
         diagramPreviewImage.boundingBox(),
@@ -465,18 +534,13 @@ test.describe.serial("workspace file browser and editor", () => {
       diagramViewportBox!.height,
       0,
     );
-    expect(reducedCanvasBox!.width).toBeCloseTo(
-      initialCanvasBox!.width * 0.75,
-      0,
-    );
+    expect(reducedCanvasBox!.width).toBeCloseTo(initialCanvasBox!.width, 0);
     expect(reducedImageBox!.width).toBeCloseTo(
-      diagramPreviewImageBox!.width * 0.75,
+      popupNaturalWidth * reducedDiagramScale,
       0,
     );
-    await diagramDialog
-      .getByRole("button", { name: "Reset diagram view" })
-      .click();
-    await expect(diagramDialog.getByLabel("Zoom level")).toHaveText("100%");
+    await diagramDialog.getByRole("button", { name: "Fit to view" }).click();
+    await expect(zoomPercentage(diagramDialog)).toHaveText(fitDiagramText);
     const trackpadPrevented = await diagramViewport.evaluate((element) => {
       const event = new WheelEvent("wheel", {
         bubbles: true,
@@ -490,23 +554,33 @@ test.describe.serial("workspace file browser and editor", () => {
       return event.defaultPrevented;
     });
     expect(trackpadPrevented).toBe(true);
-    await expect(diagramDialog.getByLabel("Zoom level")).not.toHaveText("100%");
-    await diagramDialog
-      .getByRole("button", { name: "Reset diagram view" })
-      .click();
+    await expect(zoomPercentage(diagramDialog)).not.toHaveText(fitDiagramText);
+    await diagramDialog.getByRole("button", { name: "Fit to view" }).click();
     const zoomInDiagram = diagramDialog.getByRole("button", {
       name: "Zoom in",
     });
     await zoomInDiagram.click();
-    await expect(diagramDialog.getByLabel("Zoom level")).toHaveText("125%");
+    await expect(zoomPercentage(diagramDialog)).toHaveText(
+      `${Math.round((fitDiagramScale + 0.25) * 100)}%`,
+    );
     await zoomInDiagram.click();
-    await expect(diagramDialog.getByLabel("Zoom level")).toHaveText("150%");
+    await expect(zoomPercentage(diagramDialog)).toHaveText(
+      `${Math.round((fitDiagramScale + 0.5) * 100)}%`,
+    );
     const diagramScrollRange = await diagramViewport.evaluate((element) => ({
       horizontal: element.scrollWidth - element.clientWidth,
       vertical: element.scrollHeight - element.clientHeight,
     }));
-    expect(diagramScrollRange.horizontal).toBeGreaterThan(0);
-    expect(diagramScrollRange.vertical).toBeGreaterThan(0);
+    const zoomedDiagramBox = await diagramPreviewImage.boundingBox();
+    expect(zoomedDiagramBox).not.toBeNull();
+    expect(diagramScrollRange.horizontal).toBeCloseTo(
+      Math.max(0, zoomedDiagramBox!.width - diagramViewportBox!.width),
+      0,
+    );
+    expect(diagramScrollRange.vertical).toBeCloseTo(
+      Math.max(0, zoomedDiagramBox!.height - diagramViewportBox!.height),
+      0,
+    );
     await expectNoPageOverflow(page);
     // Radix Presence treats Playwright's forced animation completion as an
     // exit transition. Preserve motion for this open-dialog capture so the
@@ -1012,6 +1086,14 @@ test.describe.serial("workspace file browser and editor", () => {
   }, testInfo) => {
     test.setTimeout(120_000);
     await resetWorkspaceFileFixtures();
+    // A real large raster exercises image panning; the default 64×36 fixture
+    // would remain smaller than this pane even at 400% natural-pixel scale.
+    await writeFile(
+      path.join(imageWorkspace, "preview.png"),
+      await readFile(
+        path.resolve("docs/assets/sedes-desktop-tool-activity.png"),
+      ),
+    );
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto("/");
     await expect(
@@ -1041,9 +1123,10 @@ test.describe.serial("workspace file browser and editor", () => {
       });
       expect(dimensions.width).toBeGreaterThan(0);
       expect(dimensions.height).toBeGreaterThan(0);
-      await expect(
-        panel.locator(".zoomable-preview-toolbar > span"),
-      ).toHaveAttribute("title", filename);
+      await expect(panel.locator(".zoomable-preview-shell")).toHaveAttribute(
+        "aria-label",
+        filename,
+      );
       await expect(
         panel.getByRole("button", { name: "Edit", exact: true }),
       ).toHaveCount(0);
@@ -1062,11 +1145,17 @@ test.describe.serial("workspace file browser and editor", () => {
     const desktopViewport = panel.getByRole("region", {
       name: "Image preview for preview.png",
     });
-    await expect(panel.getByLabel("Zoom level")).toHaveText("100%");
+    const desktopFitScale = await imageFitScale(
+      panel.locator(".zoomable-preview-viewport img"),
+      desktopViewport,
+    );
+    const desktopFitText = `${Math.round(desktopFitScale * 100)}%`;
+    const desktopZoomText = `${Math.round((desktopFitScale + 1) * 100)}%`;
+    await expect(zoomPercentage(panel)).toHaveText(desktopFitText);
     for (let step = 0; step < 4; step += 1) {
       await panel.getByRole("button", { name: "Zoom in" }).click();
     }
-    await expect(panel.getByLabel("Zoom level")).toHaveText("200%");
+    await expect(zoomPercentage(panel)).toHaveText(desktopZoomText);
     const initialScroll = await desktopViewport.evaluate((element) => ({
       left: element.scrollLeft,
       top: element.scrollTop,
@@ -1101,11 +1190,17 @@ test.describe.serial("workspace file browser and editor", () => {
     await capture(page, testInfo, "workspace-files-image-preview-zoomed.png");
 
     await fileTab(panel, undefined, "preview.jpg").click();
-    await expect(panel.getByLabel("Zoom level")).toHaveText("100%");
+    const jpegFit = await imageFitScale(
+      panel.locator(".zoomable-preview-viewport img"),
+      panel.getByRole("region", { name: "Image preview for preview.jpg" }),
+    );
+    await expect(zoomPercentage(panel)).toHaveText(
+      `${Math.round(jpegFit * 100)}%`,
+    );
     await fileTab(panel, undefined, "preview.png").click();
-    await expect(panel.getByLabel("Zoom level")).toHaveText("200%");
-    await panel.getByRole("button", { name: "Reset image view" }).click();
-    await expect(panel.getByLabel("Zoom level")).toHaveText("100%");
+    await expect(zoomPercentage(panel)).toHaveText(desktopZoomText);
+    await panel.getByRole("button", { name: "Fit to view" }).click();
+    await expect(zoomPercentage(panel)).toHaveText(desktopFitText);
     await expect
       .poll(() =>
         desktopViewport.evaluate((element) => ({
@@ -1242,12 +1337,15 @@ test.describe.serial("workspace file browser and editor", () => {
     expect(previewBox).not.toBeNull();
     expect(imageBox!.width).toBeLessThanOrEqual(previewBox!.width);
     expect(imageBox!.height).toBeLessThanOrEqual(previewBox!.height);
-    await panel.getByRole("button", { name: "Zoom in" }).click();
-    await panel.getByRole("button", { name: "Zoom in" }).click();
-    await expect(panel.getByLabel("Zoom level")).toHaveText("150%");
     const mobileViewport = panel.getByRole("region", {
       name: "Image preview for preview.png",
     });
+    const mobileFitScale = await imageFitScale(image, mobileViewport);
+    await panel.getByRole("button", { name: "Zoom in" }).click();
+    await panel.getByRole("button", { name: "Zoom in" }).click();
+    await expect(zoomPercentage(panel)).toHaveText(
+      `${Math.round((mobileFitScale + 0.5) * 100)}%`,
+    );
     const mobileScrollRange = await mobileViewport.evaluate((element) => ({
       horizontal: element.scrollWidth - element.clientWidth,
       vertical: element.scrollHeight - element.clientHeight,
@@ -1271,8 +1369,10 @@ test.describe.serial("workspace file browser and editor", () => {
       testInfo,
       "workspace-files-image-preview-mobile-zoomed.png",
     );
-    await panel.getByRole("button", { name: "Reset image view" }).click();
-    await expect(panel.getByLabel("Zoom level")).toHaveText("100%");
+    await panel.getByRole("button", { name: "Fit to view" }).click();
+    await expect(zoomPercentage(panel)).toHaveText(
+      `${Math.round(mobileFitScale * 100)}%`,
+    );
     await expectNoPageOverflow(page);
     await capture(page, testInfo, "workspace-files-image-preview-mobile.png");
   });

@@ -57,8 +57,10 @@ User-facing changes are collected here before release. See the
 
 - Agents can publish interactive [HTML previews](docs/user/html-previews.md)
   from files or inline HTML, with captured local images, immutable revisions,
-  optional viewport dimensions, and zoom. A thread's Pages library retains
-  previews beyond the currently loaded chat history.
+  optional viewport dimensions, and compact revision/refresh controls. They
+  load as they approach view on all clients; a touch interaction toggle keeps
+  inline pages from interrupting chat scrolling. A thread's Pages library
+  retains previews beyond the currently loaded chat history.
 
 - An optional [server preview browser](docs/operator/page-previews.md) lets
   agents inspect screenshots and console output before publishing. Publishing
@@ -112,6 +114,11 @@ User-facing changes are collected here before release. See the
   ([#8](https://github.com/kcosr/sedes/pull/8))
 
 ### Changed
+
+- Images and Mermaid diagrams support inline pinch zoom and pan, with an
+  explicit expand control. Expanded images, diagrams, and HTML previews share
+  a floating bottom zoom bar with **Fit** and **1:1**. See
+  [media viewing](docs/user/files-and-context.md#view-images-and-diagrams).
 
 - Voice keeps the last reply target after playback ends, even while another thread
   is open. Idle **Next** returns to the viewed thread; navigating to a different

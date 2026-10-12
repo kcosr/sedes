@@ -1,4 +1,10 @@
-import { useEffect, useRef, useState, type RefObject } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type RefObject,
+} from "react";
 
 /** A long transcript must not keep an unbounded collection of scripts alive. */
 export class PageFrameBudget {
@@ -79,7 +85,7 @@ export function usePageFrameAdmission(
   enabled: boolean,
   foreground: boolean,
   automatic: boolean,
-): { admitted: boolean; request: () => void } {
+): { admitted: boolean; visible: boolean; request: () => void } {
   const [admitted, setAdmitted] = useState(false);
   const [requested, setRequested] = useState(false);
   const [activation, setActivation] = useState(0);
@@ -99,14 +105,18 @@ export function usePageFrameAdmission(
 
   useEffect(() => {
     const element = target.current;
-    if (!element || typeof IntersectionObserver === "undefined") return;
+    if (!element) return;
+    if (typeof IntersectionObserver === "undefined") {
+      setVisible(true);
+      return;
+    }
     const observer = new IntersectionObserver(
       (entries) => {
         const intersecting = entries.some((entry) => entry.isIntersecting);
         setVisible(intersecting);
         if (!intersecting) setRequested(false);
       },
-      { rootMargin: "96px 0px" },
+      { rootMargin: "256px 0px" },
     );
     observer.observe(element);
     return () => observer.disconnect();
@@ -138,11 +148,13 @@ export function usePageFrameAdmission(
     visible,
   ]);
 
+  const request = useCallback(() => {
+    setRequested(true);
+    setActivation((value) => value + 1);
+  }, []);
   return {
     admitted: admitted && enabled && documentVisible,
-    request: () => {
-      setRequested(true);
-      setActivation((value) => value + 1);
-    },
+    visible: visible || foreground,
+    request,
   };
 }

@@ -1,16 +1,26 @@
 import {
+  Check,
   ChevronLeft,
   ChevronRight,
+  Ellipsis,
   Maximize2,
+  Pointer,
   RotateCcw,
-  ZoomIn,
-  ZoomOut,
 } from "lucide-react";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import type { PageRevision } from "../../../shared/protocol/pages.js";
 import { MediaFrame } from "../../workbench/components/MediaFrame.js";
+import { MediaZoomControls } from "../../workbench/components/MediaZoomControls.js";
 import { Button } from "../ui/button.js";
 import { Dialog, DialogContent, DialogTitle } from "../ui/dialog.js";
+import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover.js";
 import type { ItemRenderContext } from "./types.js";
 import { pageFrameLayout, pageFrameMessage } from "./page-frame-layout.js";
 import {
@@ -32,7 +42,22 @@ export type PagePreviewServices = Pick<
   "createPageRenderAdmission" | "listPageRevisions" | "getPageRevision"
 >;
 
-/** Local revision browsing never changes the immutable reference in chat. */
+// Interaction follows the input device, not the width of a desktop window.
+function readTouchInput(): boolean {
+  return (
+    isAndroidClient() ||
+    (typeof window.matchMedia === "function" &&
+      window.matchMedia("(pointer: coarse)").matches)
+  );
+}
+function subscribeTouchInput(notify: () => void): () => void {
+  if (typeof window.matchMedia !== "function") return () => {};
+  const query = window.matchMedia("(pointer: coarse)");
+  query.addEventListener("change", notify);
+  return () => query.removeEventListener("change", notify);
+}
+
+/** Each occurrence keeps its pinned revision and its own interaction state. */
 export function PagePreview({
   page,
   services,
@@ -42,11 +67,20 @@ export function PagePreview({
 }): React.JSX.Element {
   const [selected, setSelected] = useState(page);
   const [expanded, setExpanded] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [interacting, setInteracting] = useState(false);
+  const [refreshVersion, setRefreshVersion] = useState(0);
   const [latestRevision, setLatestRevision] = useState<number>();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const abort = useRef<AbortController | undefined>(undefined);
-  const expandButton = useRef<HTMLButtonElement>(null);
+  const menuButton = useRef<HTMLButtonElement>(null);
+  const touchInput = useSyncExternalStore(
+    subscribeTouchInput,
+    readTouchInput,
+    () => false,
+  );
+  const deactivate = useCallback(() => setInteracting(false), []);
 
   useEffect(() => {
     setSelected(page);
@@ -54,6 +88,12 @@ export function PagePreview({
     setError("");
     return () => abort.current?.abort();
   }, [page.pageId, page.revision]);
+  useEffect(deactivate, [
+    deactivate,
+    selected.pageId,
+    selected.revision,
+    touchInput,
+  ]);
 
   const navigateRevision = async (direction: -1 | 1) => {
     if (loading || !services.listPageRevisions || !services.getPageRevision)
@@ -92,77 +132,153 @@ export function PagePreview({
     }
   };
 
-  const controls = (
-    <>
-      <Button
-        aria-label="Previous page revision"
-        disabled={
-          loading ||
-          selected.revision <= 1 ||
-          !services.listPageRevisions ||
-          !services.getPageRevision
-        }
-        onClick={() => void navigateRevision(-1)}
-        size="icon-xs"
-        variant="ghost"
-      >
-        <ChevronLeft />
-      </Button>
-      <span aria-live="polite" className="page-revision-label">
-        Revision {selected.revision}
-      </span>
-      <Button
-        aria-label={
-          latestRevision !== undefined && selected.revision >= latestRevision
-            ? "Check for a newer page revision"
-            : "Next page revision"
-        }
-        title={
-          latestRevision !== undefined && selected.revision >= latestRevision
-            ? "Check for a newer page revision"
-            : "Next page revision"
-        }
-        disabled={
-          loading || !services.listPageRevisions || !services.getPageRevision
-        }
-        onClick={() => void navigateRevision(1)}
-        size="icon-xs"
-        variant="ghost"
-      >
-        <ChevronRight />
-      </Button>
-      {selected.revision !== page.revision ? (
-        <Button onClick={() => setSelected(page)} size="xs" variant="ghost">
-          Original
-        </Button>
-      ) : null}
-      <Button
-        ref={expandButton}
-        aria-label={`Expand page: ${selected.title}`}
-        onClick={() => setExpanded(true)}
-        size="icon-xs"
-        variant="ghost"
-      >
-        <Maximize2 />
-      </Button>
-    </>
-  );
-
   return (
     <>
       <MediaFrame
         className="page-preview"
         data-page-id={page.pageId}
         data-page-revision={page.revision}
+        data-interacting={touchInput && interacting ? "true" : undefined}
         aria-busy={loading}
-        title={selected.title}
-        metadata={
-          selected.revision === page.revision
-            ? "HTML preview"
-            : `Published here as revision ${page.revision}`
-        }
-        actions={controls}
+        role="group"
+        aria-label={selected.title}
       >
+        <div className="page-preview-controls">
+          {touchInput ? (
+            <Button
+              size="icon-xs"
+              variant="outline"
+              aria-label={
+                interacting
+                  ? "Done interacting with preview"
+                  : "Interact with preview"
+              }
+              title={
+                interacting
+                  ? "Done interacting with preview"
+                  : "Interact with preview"
+              }
+              aria-pressed={interacting}
+              className="page-preview-interact"
+              onClick={() => setInteracting((value) => !value)}
+            >
+              {interacting ? <Check /> : <Pointer />}
+            </Button>
+          ) : null}
+          <Popover open={menuOpen} onOpenChange={setMenuOpen}>
+            <PopoverTrigger asChild>
+              <Button
+                ref={menuButton}
+                size="icon-xs"
+                variant="outline"
+                aria-label={`Page details: ${selected.title}`}
+                title="Page details"
+              >
+                <Ellipsis />
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent
+              align="end"
+              className="page-preview-menu"
+              onCloseAutoFocus={(event) => {
+                if (expanded) event.preventDefault();
+              }}
+            >
+              <span className="page-preview-name" title={selected.title}>
+                {selected.title}
+              </span>
+              <div
+                className="page-preview-revisions"
+                role="group"
+                aria-label="Page revision controls"
+              >
+                <Button
+                  aria-label="Previous page revision"
+                  title="Previous revision"
+                  disabled={
+                    loading ||
+                    selected.revision <= 1 ||
+                    !services.listPageRevisions ||
+                    !services.getPageRevision
+                  }
+                  onClick={() => void navigateRevision(-1)}
+                  size="icon-xs"
+                  variant="ghost"
+                >
+                  <ChevronLeft />
+                </Button>
+                {selected.revision === page.revision ? (
+                  <span
+                    aria-live="polite"
+                    aria-label={`Revision ${selected.revision}`}
+                    className="page-revision-label"
+                  >
+                    v{selected.revision}
+                  </span>
+                ) : (
+                  <Button
+                    className="page-revision-label"
+                    variant="ghost"
+                    size="xs"
+                    aria-label={`Return to published revision ${page.revision}`}
+                    title={`Published here as revision ${page.revision}; return to it`}
+                    onClick={() => setSelected(page)}
+                  >
+                    v{selected.revision}
+                  </Button>
+                )}
+                <Button
+                  aria-label={
+                    latestRevision !== undefined &&
+                    selected.revision >= latestRevision
+                      ? "Check for a newer page revision"
+                      : "Next page revision"
+                  }
+                  title="Next revision"
+                  disabled={
+                    loading ||
+                    !services.listPageRevisions ||
+                    !services.getPageRevision
+                  }
+                  onClick={() => void navigateRevision(1)}
+                  size="icon-xs"
+                  variant="ghost"
+                >
+                  <ChevronRight />
+                </Button>
+              </div>
+              <span
+                className="page-preview-menu-separator"
+                aria-hidden="true"
+              />
+              <Button
+                aria-label={`Expand page: ${selected.title}`}
+                title="Expand preview"
+                onClick={() => {
+                  setMenuOpen(false);
+                  setExpanded(true);
+                  deactivate();
+                }}
+                size="icon-xs"
+                variant="ghost"
+              >
+                <Maximize2 />
+              </Button>
+              <Button
+                aria-label="Refresh page preview"
+                title="Refresh preview"
+                onClick={() => {
+                  setRefreshVersion((value) => value + 1);
+                  setMenuOpen(false);
+                }}
+                size="icon-xs"
+                variant="ghost"
+              >
+                <RotateCcw />
+              </Button>
+            </PopoverContent>
+          </Popover>
+        </div>
         {error ? (
           <p className="page-preview-error" role="alert">
             {error}
@@ -173,13 +289,22 @@ export function PagePreview({
           page={selected}
           createAdmission={services.createPageRenderAdmission}
           enabled={!expanded}
+          interactive={!touchInput || interacting}
+          onDeactivate={deactivate}
+          refreshVersion={refreshVersion}
         />
       </MediaFrame>
-      <Dialog open={expanded} onOpenChange={setExpanded}>
+      <Dialog
+        open={expanded}
+        onOpenChange={(value) => {
+          setExpanded(value);
+          deactivate();
+        }}
+      >
         <DialogContent
           size="viewer"
           layer="over-dialog"
-          returnFocusRef={expandButton}
+          returnFocusRef={menuButton}
           aria-describedby={undefined}
         >
           <DialogTitle className="sr-only">
@@ -190,6 +315,9 @@ export function PagePreview({
             page={selected}
             createAdmission={services.createPageRenderAdmission}
             enabled={expanded}
+            interactive
+            onDeactivate={deactivate}
+            refreshVersion={refreshVersion}
             expanded
           />
         </DialogContent>
@@ -202,23 +330,29 @@ function PageFrame({
   page,
   createAdmission,
   enabled,
+  interactive,
+  onDeactivate,
+  refreshVersion,
   expanded = false,
 }: {
   readonly page: PageRevision;
   readonly createAdmission: PagePreviewServices["createPageRenderAdmission"];
   readonly enabled: boolean;
+  readonly interactive: boolean;
+  readonly onDeactivate: () => void;
+  readonly refreshVersion: number;
   readonly expanded?: boolean;
 }): React.JSX.Element {
   const host = useRef<HTMLDivElement>(null);
   const frame = useRef<HTMLIFrameElement>(null);
   const [width, setWidth] = useState(page.viewport.width ?? 640);
   const [height, setHeight] = useState(page.viewport.height ?? 240);
-  const [zoom, setZoom] = useState(1);
+  const [availableHeight, setAvailableHeight] = useState(0);
+  const [zoom, setZoom] = useState<number>();
   const [attempt, setAttempt] = useState(0);
   const [needsActivation, setNeedsActivation] = useState(false);
   const manualActivation = useRef(false);
   const activeRecoveryKey = useRef<string | undefined>(undefined);
-  const wasAdmitted = useRef(false);
   const [state, setState] = useState<
     | { status: "waiting" | "loading" | "error" }
     | {
@@ -228,13 +362,42 @@ function PageFrame({
         recovery: PageFrameRecoveryAttempt;
       }
   >({ status: "waiting" });
-  const { admitted, request } = usePageFrameAdmission(
+  const { admitted, request, visible } = usePageFrameAdmission(
     host,
     enabled,
     expanded,
-    !isAndroidClient() && !needsActivation,
+    !needsActivation,
   );
-  const layout = pageFrameLayout(page.viewport, width, height, zoom);
+  const fitted = pageFrameLayout(page.viewport, width, height);
+  const fitScale =
+    expanded && availableHeight > 0
+      ? Math.min(
+          fitted.scale,
+          Math.max(1, availableHeight - 64) / fitted.height,
+        )
+      : fitted.scale;
+  const scale = zoom ?? fitScale;
+  const layout = pageFrameLayout(
+    page.viewport,
+    width,
+    height,
+    scale / fitted.scale,
+  );
+  useEffect(() => {
+    if (!visible) manualActivation.current = false;
+  }, [visible]);
+  const previousRefresh = useRef(refreshVersion);
+  useEffect(() => {
+    if (previousRefresh.current === refreshVersion) return;
+    previousRefresh.current = refreshVersion;
+    manualActivation.current = true;
+    setNeedsActivation(false);
+    request();
+    setAttempt((value) => value + 1);
+  }, [refreshVersion, request]);
+  useEffect(() => {
+    if (!admitted) onDeactivate();
+  }, [admitted, onDeactivate]);
   const ready =
     enabled && admitted && state.status === "ready" ? state : undefined;
   const loadGuard = useRef(new PageFrameLoadGuard());
@@ -247,6 +410,7 @@ function PageFrame({
     if (!element) return;
     const measure = () => {
       if (element.clientWidth > 0) setWidth(element.clientWidth);
+      setAvailableHeight(element.clientHeight);
     };
     measure();
     if (typeof ResizeObserver === "undefined") {
@@ -260,8 +424,6 @@ function PageFrame({
 
   useEffect(() => {
     if (!admitted || !enabled) {
-      if (wasAdmitted.current) manualActivation.current = false;
-      wasAdmitted.current = false;
       if (
         activeRecoveryKey.current &&
         pageFrameNeedsActivation(activeRecoveryKey.current)
@@ -272,7 +434,6 @@ function PageFrame({
       );
       return;
     }
-    wasAdmitted.current = true;
     if (!createAdmission) {
       setState({ status: "error" });
       return;
@@ -376,56 +537,23 @@ function PageFrame({
       className={`page-frame-shell${expanded ? " page-frame-expanded" : ""}`}
     >
       {expanded ? (
-        <div
-          className="page-frame-toolbar"
-          role="group"
-          aria-label="Page zoom controls"
-        >
-          <span>
-            {page.title} · Revision {page.revision}
-          </span>
-          <Button
-            aria-label="Zoom out"
-            disabled={zoom <= 0.25}
-            onClick={() => setZoom((value) => Math.max(0.25, value - 0.25))}
-            size="icon-xs"
-            variant="ghost"
-          >
-            <ZoomOut />
-          </Button>
-          <output aria-label="Page zoom level">
-            {Math.round(layout.scale * 100)}%
-          </output>
-          <Button
-            aria-label="Zoom in"
-            disabled={zoom >= 4}
-            onClick={() => setZoom((value) => Math.min(4, value + 0.25))}
-            size="icon-xs"
-            variant="ghost"
-          >
-            <ZoomIn />
-          </Button>
-          <Button
-            aria-label="Fit page to view"
-            onClick={() => setZoom(1)}
-            size="icon-xs"
-            variant="ghost"
-          >
-            <RotateCcw />
-          </Button>
-          <Button
-            onClick={() =>
-              setZoom(1 / pageFrameLayout(page.viewport, width, height).scale)
-            }
-            size="xs"
-            variant="ghost"
-          >
-            Actual size
-          </Button>
-        </div>
+        <MediaZoomControls
+          label="Page zoom controls"
+          zoomPercent={Math.round(scale * 100)}
+          canZoomOut={scale > 0.1}
+          canZoomIn={scale < 4}
+          onZoomOut={() => setZoom(Math.max(0.1, scale - 0.25))}
+          onZoomIn={() => setZoom(Math.min(4, scale + 0.25))}
+          onFit={() => setZoom(undefined)}
+          onActualSize={() => setZoom(1)}
+          onZoomToPercent={(percent) =>
+            setZoom(Math.max(0.1, Math.min(4, percent / 100)))
+          }
+        />
       ) : null}
       <div
         className="page-frame-viewport"
+        data-interactive={interactive ? "true" : "false"}
         ref={host}
         role="region"
         aria-label={`Page preview: ${page.title}`}
@@ -442,6 +570,8 @@ function PageFrame({
               title={`${page.title} · Revision ${page.revision}`}
               src={ready.url}
               sandbox="allow-scripts"
+              inert={!interactive}
+              tabIndex={interactive ? 0 : -1}
               allow="camera 'none'; microphone 'none'; geolocation 'none'; clipboard-read 'none'; clipboard-write 'none'"
               referrerPolicy="no-referrer"
               style={{
@@ -489,7 +619,7 @@ function PageFrame({
                     Retry preview
                   </Button>
                 </>
-              ) : (
+              ) : needsActivation ? (
                 <Button
                   size="xs"
                   variant="outline"
@@ -497,20 +627,18 @@ function PageFrame({
                   onClick={() => {
                     manualActivation.current = true;
                     request();
+                    setAttempt((value) => value + 1);
                   }}
                 >
-                  Run interactive preview
+                  Retry preview
                 </Button>
+              ) : (
+                <span role="status">Loading preview…</span>
               )}
             </div>
           )}
         </div>
       </div>
-      {page.viewport.width !== undefined ? (
-        <div className="page-frame-size">
-          {page.viewport.width} × {page.viewport.height ?? "content"} px
-        </div>
-      ) : null}
     </div>
   );
 }

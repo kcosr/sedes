@@ -292,7 +292,7 @@ test.describe.serial("normalized streaming and restored state", () => {
       streamingAssistant.getByRole("heading", { name: "Live summary" }),
     ).toBeVisible();
     const activeStreamingMarkdown = streamingAssistant.locator(
-      '.progressive-markdown-animated .markdown',
+      ".progressive-markdown-animated .markdown",
     );
     await expect(activeStreamingMarkdown).toContainText("Workspace inspected");
     await expect(streamingAssistant.locator("strong").first()).toHaveText("Workspace inspected");
@@ -806,15 +806,25 @@ test.describe.serial("normalized streaming and restored state", () => {
         ".mermaid-diagram-svg > svg",
       );
       const expectDiagramToFitViewport = async () => {
-        await expect.poll(() => diagramSvg.evaluate((svg) => {
-          const viewport = svg.closest<HTMLElement>(".message-viewport")!;
-          const maximum = Math.max(0, viewport.clientHeight - 32);
-          const renderedHeight = svg.getBoundingClientRect().height;
-          const maximumHeight = Number.parseFloat(getComputedStyle(svg).maxHeight);
-          return viewport.clientHeight > 100 &&
-            renderedHeight > 0 && renderedHeight <= maximum + 1 &&
-            Math.abs(maximumHeight - maximum) <= 1;
-        })).toBe(true);
+        await expect
+          .poll(() =>
+            diagramSvg.evaluate((svg) => {
+              const viewport = svg.closest<HTMLElement>(".message-viewport")!;
+              const maximum = Math.max(0, viewport.clientHeight - 32);
+              const renderedHeight = svg.getBoundingClientRect().height;
+              const media = svg.closest<HTMLElement>(
+                ".zoomable-preview-viewport",
+              )!;
+              return (
+                viewport.clientHeight > 100 &&
+                renderedHeight > 0 &&
+                renderedHeight <= maximum + 1 &&
+                renderedHeight <= media.clientHeight + 1 &&
+                media.clientHeight <= maximum + 1
+              );
+            }),
+          )
+          .toBe(true);
       };
       await expectDiagramToFitViewport();
       const [messageViewportBox, diagramSvgBox] = await Promise.all([
@@ -960,7 +970,7 @@ test.describe.serial("normalized streaming and restored state", () => {
       .click();
     // Exercise the normalized Codex session breakdown independently of this
     // conformance backend's inclusive usage fixture.
-    await page.route("**/api/threads/*/usage", async route => {
+    await page.route("**/api/threads/*/usage", async (route) => {
       const response = await route.fetch();
       const report = await response.json();
       const part = (input: string, cacheRead: string, output: string, reasoning: string, total: string) => {
@@ -1041,7 +1051,7 @@ test.describe.serial("normalized streaming and restored state", () => {
 
     // Exercise the compact mobile layout with realistic partial Codex counts.
     // Availability remains backed by the real fixture's persisted turn usage.
-    await page.route("**/api/threads/*/usage/turns/*", async route => {
+    await page.route("**/api/threads/*/usage/turns/*", async (route) => {
       const response = await route.fetch();
       const report = await response.json();
       report.state = "partial";
@@ -1076,7 +1086,11 @@ test.describe.serial("normalized streaming and restored state", () => {
     expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(382);
     expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(836);
     expect(bounds!.height).toBeLessThan(310);
-    expect(await mobileUsage.evaluate(element => element.scrollHeight <= element.clientHeight)).toBe(true);
+    expect(
+      await mobileUsage.evaluate(
+        (element) => element.scrollHeight <= element.clientHeight,
+      ),
+    ).toBe(true);
     await capture(page, testInfo, "mobile-recorded-turn-usage.png");
     await page.keyboard.press("Escape");
     await capture(page, testInfo, "mobile-turn-footer.png");

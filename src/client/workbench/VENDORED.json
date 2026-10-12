@@ -1,5 +1,5 @@
 {
-  "commit": "b9db4131fb6695a7bb74f445a35507350d2a85fb",
+  "commit": "189ff5a112c560fa18dccf1114399335046fe23a",
   "files": {
     ".gitattributes": "b204f987d9c4231fe20681f6c0c36db0f558a3ff0b4e9a1072881864c43ade29",
     "components/AppShell.tsx": "159b387b5536761e536c785122900856820f4eab1cfad1366b3e6d9b8e3dd121",
@@ -15,6 +15,7 @@
     "components/List.tsx": "d4f18c6e04a18dc5e006a70929fc94dcd211003728f134eaad6c8b2fa2bac8e4",
     "components/Main.tsx": "69f69acfe831443e9a489e3377fe838dfedb9c0cadd535bf4bf0019c2cd0bad3",
     "components/MediaFrame.tsx": "969ce74332aac8b9afef81e0676eeeb6861391f332cb3020224db94f3495ad8a",
+    "components/MediaZoomControls.tsx": "7d12ebdba093510e194ca6f996c262bb5f4f54085ec364e4bffe2fd6dc9282eb",
     "components/Modal.tsx": "bd62400e5acc404f3ce3635ac1eeef0e88807cb6f2cf8d0d2d4f750c369e1361",
     "components/Pager.tsx": "ad268b94525c0391eab301cea54b3b8302dc347736c851ebaa109594c5e827e8",
     "components/Pages.tsx": "3679126b1b026ad541a4abd77cc605929e27c3c8dec84e2f1b0f7aead610cefc",
@@ -51,7 +52,7 @@
     "fonts/jetbrains-mono-vietnamese-500-normal.woff2": "bb7b98e92899b511e8f3e99c924142f4421896b2cbc9406c3727c25427662cc9",
     "fonts/LICENSE-Inter.txt": "3b0a5fca3d17942cde889069889dedbbbd075e9b599968c82a95f4d944e9b345",
     "fonts/LICENSE-JetBrainsMono.txt": "403581b69dac5cff4079205e01c6b467e56af449ecbd7247693ddb1baafa005b",
-    "index.ts": "a932ce2a5e2d8a13311eb7a5ecf27262e64fd282946ce2680f8efdab91eb31e9",
+    "index.ts": "1cb04e55e8ec0ef63612154c6c9577ba32ef8012f911a200802ec4e391226c72",
     "lib/cx.ts": "7be38149804698a31f9d7af44453d59cfdfdf18b9dbbbd4912e0635d6ea25c7c",
     "lib/dom.ts": "12ba6bf1b07bb4da1f0ccea12799a5bdd5acc3683c29caf8abe50859f63450a9",
     "lib/hotkeys.ts": "fd01e3995ec189afc9876e47174bcd91a368fb9b99607f4c79eeb1f48fd836a4",
@@ -70,7 +71,7 @@
     "styles/forms.css": "eb24612720cdd3e1389fdfad04c446ad985ca78df62cfc7d535471ce984a7584",
     "styles/index.css": "4e1dcbb1fa9f3ffec6da0ddd52615344fd62bae035610897f833d70f5dc66403",
     "styles/list.css": "6ccb20b70f701ab4c3be2354000e6617990970b5ce05d0665023e617cc07ec1e",
-    "styles/media-frame.css": "789206adf1c736b5660823c60cd953a5f74486e86a6c8cf46012be17351cc3ac",
+    "styles/media-frame.css": "deb3a888f2b717f500566241c9f6bda305c5ba86543c4ba1096d9dc7217af7fe",
     "styles/overlays.css": "956cf15bbdb5ce5cf6370299bfd4015fcdcc9f971f4bc20c09a7b84047a271e1",
     "styles/pages.css": "d064adbfee6efb630bf23ed67e37808ecf6312165846d7649661e9c487778037",
     "styles/shell.css": "47b09a8c8c967783a3b18ef04a0df9e3190484804fbfbbc1dbc74789f7645f45",

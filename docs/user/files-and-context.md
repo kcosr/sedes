@@ -270,10 +270,15 @@ terminal submission.
 ## View images and diagrams
 
 Completed fenced `mermaid` blocks render as diagrams in chat and Markdown
-previews. Invalid or unsafe definitions fall back to literal source. Select an
-inline image or diagram, or use **Expand**, to open the viewer. It supports
-fit-to-window, 25–400% zoom, pinch, Control/Command-scroll, keyboard controls,
-drag, scroll, and touch pan.
+previews. Invalid or unsafe definitions fall back to literal source. Images
+and diagrams support pinch zoom and pan directly in chat. At normal size, a
+one-finger gesture scrolls the conversation; when zoomed, dragging pans the
+media. Use the explicit **Expand** control to open the larger viewer.
+
+Expanded images, Mermaid diagrams, and HTML previews share a floating bottom
+zoom bar with minus, percentage, plus, **Fit**, and **1:1**. The image and
+diagram viewer also supports pinch, Control/Command-scroll, keyboard controls,
+and panning.
 
 Supported provider-generated images appear as their own transcript items and
 are loaded on demand. When an agent views a local image, a collapsed **Viewed

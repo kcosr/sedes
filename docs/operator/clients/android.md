@@ -40,16 +40,20 @@ Saved revisions contain captured authored content; the server adds its current
 trusted wrapper and bootstrap when serving them, so host security updates also
 apply to existing revisions.
 
-Android requires an explicit **Run** action on each page card. Generated code
-shares the application's WebView renderer: origin isolation protects credentials
-and native APIs, but does not guarantee a separate process or CPU budget. A
-script that loops indefinitely can freeze the application, and a JavaScript
+Page previews load automatically when in or near view, including on Android.
+The hand/check control switches between inline page interaction and
+conversation scrolling; it does not enable or disable script execution.
+Generated code shares the application's WebView renderer: origin
+isolation protects credentials and native APIs, but does not guarantee a
+separate process or CPU budget. A script that loops indefinitely can freeze
+the application, and a JavaScript
 timeout cannot interrupt that loop. Restart the app if necessary. A failed
-render or an attempt interrupted before cleanup requires manual recovery
-instead of loading again automatically. Closing or unloading a responsive
-preview clears that attempt's pending marker. This
-record is local to the browser and scoped to the server origin, thread, page,
-and revision; other devices retain their own decisions.
+render or an attempt interrupted before cleanup requires explicit **Retry**
+instead of loading again automatically. Unavailable recovery storage also
+requires explicit retry. Closing or unloading a responsive preview clears
+that attempt's pending marker. This record is local to the browser and scoped
+to the server origin, thread, page, and revision; other devices retain their
+own decisions.
 
 The Android application WebView rejects all `addJavascriptInterface`
 registrations, including the legacy Capacitor bridge and the built-in raw

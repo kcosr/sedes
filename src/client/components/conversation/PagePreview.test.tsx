@@ -16,11 +16,9 @@ const safety = vi.hoisted(() => ({ supports: vi.fn(), android: vi.fn() }));
 vi.mock("../../app/page-safety.js", () => ({
   supportsSafePageFrames: safety.supports,
 }));
-
 vi.mock("../../app/client-platform.js", () => ({
   isAndroidClient: safety.android,
 }));
-
 const original: PageRevision = {
   pageId: "30000000-0000-4000-8000-000000000001",
   threadId: "thread-1",
@@ -31,7 +29,34 @@ const original: PageRevision = {
   sha256: "a".repeat(64),
   byteSize: 256,
 };
-
+function makePreviewsVisible(initial = true) {
+  const observers = new Set<IntersectionObserverCallback>();
+  vi.stubGlobal(
+    "IntersectionObserver",
+    class {
+      constructor(readonly callback: IntersectionObserverCallback) {
+        observers.add(callback);
+      }
+      observe() {
+        this.callback(
+          [{ isIntersecting: initial } as IntersectionObserverEntry],
+          this as unknown as IntersectionObserver,
+        );
+      }
+      disconnect() {
+        observers.delete(this.callback);
+      }
+    },
+  );
+  return (visible: boolean) =>
+    act(() => {
+      for (const callback of observers)
+        callback(
+          [{ isIntersecting: visible } as IntersectionObserverEntry],
+          {} as IntersectionObserver,
+        );
+    });
+}
 beforeEach(() => {
   safety.supports.mockReset().mockResolvedValue(true);
   safety.android.mockReset().mockReturnValue(false);
@@ -41,6 +66,7 @@ beforeEach(() => {
     addEventListener: vi.fn(),
     removeEventListener: vi.fn(),
   }));
+  makePreviewsVisible();
 });
 afterEach(() => {
   cleanup();
@@ -48,7 +74,6 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
-
 function services() {
   return {
     createPageRenderAdmission: vi.fn(async () => ({
@@ -61,31 +86,35 @@ function services() {
     getPageRevision: vi.fn(async () => original),
   };
 }
-
-function makePreviewsVisible() {
-  const observers = new Set<IntersectionObserverCallback>();
-  vi.stubGlobal("IntersectionObserver", class {
-    constructor(readonly callback: IntersectionObserverCallback) { observers.add(callback); }
-    observe() { this.callback([{ isIntersecting: true } as IntersectionObserverEntry], this as unknown as IntersectionObserver); }
-    disconnect() { observers.delete(this.callback); }
-  });
-  return (visible: boolean) => act(() => {
-    for (const callback of observers)
-      callback([{ isIntersecting: visible } as IntersectionObserverEntry], {} as IntersectionObserver);
-  });
-}
-
 function sendFrameMessage(frame: HTMLIFrameElement, type: string, extra = {}) {
-  const channel = new URLSearchParams(new URL(frame.src).hash.slice(1)).get("channel");
-  act(() => window.dispatchEvent(new MessageEvent("message", {
-    source: frame.contentWindow,
-    data: { type, channel, ...extra },
-  })));
+  const channel = new URLSearchParams(new URL(frame.src).hash.slice(1)).get(
+    "channel",
+  );
+  act(() =>
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        source: frame.contentWindow,
+        data: { type, channel, ...extra },
+      }),
+    ),
+  );
+}
+async function waitForFrame(container: HTMLElement) {
+  await waitFor(() =>
+    expect(container.querySelector("iframe")).toBeInTheDocument(),
+  );
+  return container.querySelector("iframe")!;
+}
+function openDetails(title = "Phone") {
+  fireEvent.click(
+    screen.getByRole("button", { name: `Page details: ${title}` }),
+  );
 }
 
 describe("published page preview", () => {
-  it("requires admission, retains the authored viewport, and trusts only its frame's size messages", async () => {
-    const api = services();
+  it("loads on visibility, preserves authored width, and accepts only its own sizing messages", async () => {
+    const visible = makePreviewsVisible(false),
+      api = services();
     const { container } = render(
       <PagePreview
         page={{ ...original, viewport: { width: 390 } }}
@@ -93,23 +122,16 @@ describe("published page preview", () => {
       />,
     );
     expect(api.createPageRenderAdmission).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "Run interactive preview" }));
-    await waitFor(() =>
-      expect(container.querySelector("iframe")).toBeInTheDocument(),
+    expect(screen.queryByText("Run interactive preview")).toBeNull();
+    visible(true);
+    const frame = await waitForFrame(container);
+    expect(frame).toHaveAttribute("sandbox", "allow-scripts");
+    expect(frame).toHaveAttribute("referrerpolicy", "no-referrer");
+    expect(frame.style.width).toBe("390px");
+    expect(frame.style.height).toBe("240px");
+    const channel = new URLSearchParams(new URL(frame.src).hash.slice(1)).get(
+      "channel",
     );
-    const iframe = container.querySelector("iframe")!;
-    expect(iframe).toHaveAttribute("sandbox", "allow-scripts");
-    expect(iframe).toHaveAttribute("referrerpolicy", "no-referrer");
-    expect(iframe.style.width).toBe("390px");
-    expect(iframe.style.height).toBe("240px");
-    const url = new URL(iframe.src);
-    const channel = new URLSearchParams(url.hash.slice(1)).get("channel");
-    const received = new MessageEvent("message", {
-      source: iframe.contentWindow,
-      data: { type: "sedes:page-size", channel, height: 310 },
-    });
-    expect(received.source).toBe(iframe.contentWindow);
-    expect(channel).toBeTruthy();
     act(() =>
       window.dispatchEvent(
         new MessageEvent("message", {
@@ -118,60 +140,105 @@ describe("published page preview", () => {
         }),
       ),
     );
-    expect(iframe.style.height).toBe("240px");
-    await act(async () => {
-      window.dispatchEvent(
-        new MessageEvent("message", {
-          source: iframe.contentWindow,
-          data: { type: "sedes:page-size", channel, height: 310 },
-        }),
-      );
-    });
-    await waitFor(() => expect(iframe.style.height).toBe("310px"));
+    expect(frame.style.height).toBe("240px");
+    sendFrameMessage(frame, "sedes:page-size", { height: 310 });
+    await waitFor(() => expect(frame.style.height).toBe("310px"));
   });
 
-  it("keeps revision navigation local to each occurrence and returns to its pinned version", async () => {
+  it("automatically renders on Android while hand/check gates only interaction", async () => {
+    safety.android.mockReturnValue(true);
     const api = services();
-    const second = { ...original, revision: 2, title: "Updated phone" };
     const { container } = render(
-      <>
-        <PagePreview page={original} services={api} />
-        <PagePreview page={second} services={api} />
-      </>,
+      <PagePreview page={original} services={api} />,
     );
-    const cards = container.querySelectorAll<HTMLElement>(".page-preview");
+    const frame = await waitForFrame(container);
+    expect(frame).toHaveAttribute("inert");
+    expect(frame).toHaveAttribute("tabindex", "-1");
+    const enter = screen.getByRole("button", { name: "Interact with preview" });
+    expect(enter).toHaveAttribute("aria-pressed", "false");
+    fireEvent.click(enter);
+    expect(frame).not.toHaveAttribute("inert");
     fireEvent.click(
-      within(cards[1]!).getByRole("button", { name: "Previous page revision" }),
+      screen.getByRole("button", { name: "Done interacting with preview" }),
     );
-    await waitFor(() =>
-      expect(
-        within(cards[1]!).getByText("Published here as revision 2"),
-      ).toBeInTheDocument(),
+    expect(frame).toHaveAttribute("inert");
+    expect(api.createPageRenderAdmission).toHaveBeenCalledTimes(1);
+  });
+
+  it("gates coarse touch devices but leaves a narrow desktop directly interactive", async () => {
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      matches: query === "(pointer: coarse)",
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    }));
+    let view = render(<PagePreview page={original} services={services()} />);
+    expect(await waitForFrame(view.container)).toHaveAttribute("inert");
+    view.unmount();
+    vi.stubGlobal("innerWidth", 360);
+    vi.stubGlobal("matchMedia", () => ({
+      matches: false,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    }));
+    view = render(<PagePreview page={original} services={services()} />);
+    expect(await waitForFrame(view.container)).not.toHaveAttribute("inert");
+    expect(
+      screen.queryByRole("button", { name: "Interact with preview" }),
+    ).toBeNull();
+  });
+
+  it("keeps chrome in the compact menu and returns to the published revision", async () => {
+    const api = services();
+    const { container } = render(
+      <PagePreview page={original} services={api} />,
     );
-    expect(within(cards[0]!).getByText("Revision 1")).toBeInTheDocument();
+    await waitForFrame(container);
+    expect(container.querySelector(".wb-media-frame-header")).toBeNull();
+    expect(container.querySelector(".page-frame-size")).toBeNull();
+    expect(screen.queryByText("HTML preview")).toBeNull();
+    openDetails();
+    fireEvent.click(screen.getByRole("button", { name: "Next page revision" }));
+    const originalButton = await screen.findByRole("button", {
+      name: "Return to published revision 1",
+    });
+    expect(originalButton).toHaveTextContent("v2");
     expect(api.listPageRevisions).toHaveBeenCalledWith(
       original.pageId,
       expect.objectContaining({ limit: 1 }),
     );
-    expect(api.getPageRevision).toHaveBeenCalledWith(
-      original.pageId,
-      1,
-      expect.any(AbortSignal),
-    );
-    fireEvent.click(
-      within(cards[1]!).getByRole("button", { name: "Original" }),
-    );
-    expect(within(cards[1]!).getByText("Revision 2")).toBeInTheDocument();
-    expect(within(cards[0]!).getByText("Revision 1")).toBeInTheDocument();
+    fireEvent.click(originalButton);
+    expect(screen.getByLabelText("Revision 1")).toHaveTextContent("v1");
   });
 
-  it("fails closed before minting a document URL on an unsafe native host", async () => {
+  it("refreshes the document without publishing a new revision", async () => {
+    const api = services();
+    const { container } = render(
+      <PagePreview page={original} services={api} />,
+    );
+    const frame = await waitForFrame(container);
+    sendFrameMessage(frame, "sedes:page-size", { height: 100 });
+    openDetails();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Refresh page preview" }),
+    );
+    await waitFor(() =>
+      expect(api.createPageRenderAdmission).toHaveBeenCalledTimes(2),
+    );
+    await waitFor(() =>
+      expect(container.querySelector("iframe")).not.toBe(frame),
+    );
+    expect(container.querySelector(".page-preview")).toHaveAttribute(
+      "data-page-revision",
+      "1",
+    );
+  });
+
+  it("fails closed before minting on an unsafe native host", async () => {
     safety.supports.mockResolvedValue(false);
     const api = services();
     const { container } = render(
       <PagePreview page={original} services={api} />,
     );
-    fireEvent.click(screen.getByRole("button", { name: "Run interactive preview" }));
     await screen.findByRole("alert");
     expect(api.createPageRenderAdmission).not.toHaveBeenCalled();
     expect(container.querySelector("iframe")).toBeNull();
@@ -179,35 +246,29 @@ describe("published page preview", () => {
 
   it("checks the server again after reaching a previously latest revision", async () => {
     const api = services();
-    const second = { ...original, revision: 2, title: "Updated phone" };
-    const third = { ...original, revision: 3, title: "Newest phone" };
     api.listPageRevisions
-      .mockResolvedValueOnce({ items: [second] })
-      .mockResolvedValueOnce({ items: [third] });
+      .mockResolvedValueOnce({
+        items: [{ ...original, revision: 2, title: "Updated phone" }],
+      })
+      .mockResolvedValueOnce({
+        items: [{ ...original, revision: 3, title: "Newest phone" }],
+      });
     render(<PagePreview page={original} services={api} />);
+    openDetails();
     fireEvent.click(screen.getByRole("button", { name: "Next page revision" }));
-    await screen.findByText("Revision 2");
-    const check = screen.getByRole("button", {
-      name: "Check for a newer page revision",
-    });
-    expect(check).toBeEnabled();
-    fireEvent.click(check);
-    await screen.findByText("Revision 3");
-    expect(
-      screen.getByText("Published here as revision 1"),
-    ).toBeInTheDocument();
+    await screen.findByText("v2");
+    fireEvent.click(
+      screen.getByRole("button", { name: "Check for a newer page revision" }),
+    );
+    await screen.findByText("v3");
     expect(api.listPageRevisions).toHaveBeenCalledTimes(2);
   });
 
-  it("disposes the page only for an authenticated outer-frame error", async () => {
+  it("disposes the page only for its authenticated frame error", async () => {
     const { container } = render(
       <PagePreview page={original} services={services()} />,
     );
-    fireEvent.click(screen.getByRole("button", { name: "Run interactive preview" }));
-    await waitFor(() =>
-      expect(container.querySelector("iframe")).toBeInTheDocument(),
-    );
-    const frame = container.querySelector("iframe")!;
+    const frame = await waitForFrame(container);
     const channel = new URLSearchParams(new URL(frame.src).hash.slice(1)).get(
       "channel",
     );
@@ -220,166 +281,153 @@ describe("published page preview", () => {
       ),
     );
     expect(container.querySelector("iframe")).toBe(frame);
-    act(() =>
-      window.dispatchEvent(
-        new MessageEvent("message", {
-          source: frame.contentWindow,
-          data: { type: "sedes:page-error", channel },
-        }),
-      ),
-    );
+    sendFrameMessage(frame, "sedes:page-error");
     expect(screen.getByRole("alert")).toHaveTextContent(
       "Page preview unavailable.",
     );
     expect(container.querySelector("iframe")).toBeNull();
   });
 
-  it("preserves an early size acknowledgment when wrapper-ready arrives later", async () => {
+  it("retains a failed revision across remount and clears it after successful retry", async () => {
+    const api = services();
+    let view = render(<PagePreview page={original} services={api} />);
+    sendFrameMessage(await waitForFrame(view.container), "sedes:page-error");
+    view.unmount();
+    view = render(<PagePreview page={original} services={api} />);
+    const retry = await screen.findByRole("button", { name: "Retry preview" });
+    expect(view.container.querySelector("iframe")).toBeNull();
+    fireEvent.click(retry);
+    sendFrameMessage(await waitForFrame(view.container), "sedes:page-size", {
+      height: 100,
+    });
+    view.unmount();
+    view = render(<PagePreview page={original} services={api} />);
+    await waitForFrame(view.container);
+    expect(screen.queryByRole("button", { name: "Retry preview" })).toBeNull();
+  });
+
+  it("resumes automatically after scrolling away before acknowledgement", async () => {
+    const visible = makePreviewsVisible(),
+      api = services();
+    const { container } = render(
+      <PagePreview page={original} services={api} />,
+    );
+    await waitForFrame(container);
+    visible(false);
+    await waitFor(() => expect(container.querySelector("iframe")).toBeNull());
+    expect(localStorage.length).toBe(0);
+    visible(true);
+    await waitForFrame(container);
+    expect(api.createPageRenderAdmission).toHaveBeenCalledTimes(2);
+  });
+
+  it("expands during loading and uses shared zoom controls with actual CSS-pixel sizing", async () => {
+    const api = services();
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(640);
+    render(
+      <PagePreview
+        page={{ ...original, viewport: { width: 1440, height: 1000 } }}
+        services={api}
+      />,
+    );
+    openDetails();
+    fireEvent.click(screen.getByRole("button", { name: "Expand page: Phone" }));
+    const dialog = await screen.findByRole("dialog");
+    const frame = await waitForFrame(dialog);
+    expect(frame).not.toHaveAttribute("inert");
+    expect(dialog.querySelector(".page-frame-toolbar")).toBeNull();
+    const controls = within(dialog).getByRole("group", {
+      name: "Page zoom controls",
+    });
+    expect(
+      within(controls).getByRole("button", { name: "Zoom percentage: 44%" }),
+    ).toBeInTheDocument();
+    fireEvent.click(
+      within(controls).getByRole("button", { name: "Actual size (100%)" }),
+    );
+    expect(
+      within(controls).getByRole("button", { name: "Zoom percentage: 100%" }),
+    ).toBeInTheDocument();
+    sendFrameMessage(frame, "sedes:page-size", { height: 1000 });
+  });
+
+  it("retains manual recovery if durable browser recovery storage is unavailable", async () => {
+    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+      throw new Error("unavailable");
+    });
+    const { container } = render(
+      <PagePreview page={original} services={services()} />,
+    );
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Retry preview" }),
+    );
+    await waitForFrame(container);
+  });
+
+  it("bounds stalled transfer separately from wrapper execution and ignores duplicate ready messages", async () => {
     vi.useFakeTimers();
     const { container } = render(
       <PagePreview page={original} services={services()} />,
     );
-    fireEvent.click(screen.getByRole("button", { name: "Run interactive preview" }));
     await act(async () => {});
-    expect(container.querySelector("iframe")).toBeInTheDocument();
     const frame = container.querySelector("iframe")!;
-    act(() => vi.advanceTimersByTime(15_000));
-    expect(container.querySelector("iframe")).toBe(frame);
-    const channel = new URLSearchParams(new URL(frame.src).hash.slice(1)).get(
-      "channel",
-    );
-    act(() =>
-      window.dispatchEvent(
-        new MessageEvent("message", {
-          source: frame.contentWindow,
-          data: { type: "sedes:page-size", channel, height: 100 },
-        }),
-      ),
-    );
-    fireEvent.load(frame);
-    act(() => window.dispatchEvent(new MessageEvent("message", {
-      source: frame.contentWindow,
-      data: { type: "sedes:page-wrapper-ready", channel },
-    })));
-    act(() => vi.advanceTimersByTime(15_000));
-    expect(container.querySelector("iframe")).toBe(frame);
-    expect(screen.queryByRole("alert")).toBeNull();
-  });
-
-  it("requires an explicit Android activation even for a visible preview", async () => {
-    makePreviewsVisible();
-    safety.android.mockReturnValue(true);
-    const api = services();
-    const { container } = render(<PagePreview page={original} services={api} />);
-    await act(async () => {});
-    expect(api.createPageRenderAdmission).not.toHaveBeenCalled();
-    expect(container.querySelector("iframe")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Run interactive preview" }));
-    await waitFor(() => expect(container.querySelector("iframe")).toBeInTheDocument());
-    expect(api.createPageRenderAdmission).toHaveBeenCalledTimes(1);
-  });
-
-  it("remembers a failed revision and restores its failure when a manual retry is cancelled", async () => {
-    makePreviewsVisible();
-    const api = services();
-    let view = render(<PagePreview page={original} services={api} />);
-    await waitFor(() => expect(view.container.querySelector("iframe")).toBeInTheDocument());
-    sendFrameMessage(view.container.querySelector("iframe")!, "sedes:page-error");
-    view.unmount();
-    view = render(<PagePreview page={original} services={api} />);
-    await waitFor(() => expect(api.createPageRenderAdmission).toHaveBeenCalledTimes(2));
-    await screen.findByRole("button", { name: "Run interactive preview" });
-    expect(view.container.querySelector("iframe")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Run interactive preview" }));
-    await waitFor(() => expect(view.container.querySelector("iframe")).toBeInTheDocument());
-    view.unmount();
-    view = render(<PagePreview page={original} services={api} />);
-    await screen.findByRole("button", { name: "Run interactive preview" });
-    await waitFor(() => expect(api.createPageRenderAdmission).toHaveBeenCalledTimes(4));
-    expect(view.container.querySelector("iframe")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Run interactive preview" }));
-    await waitFor(() => expect(view.container.querySelector("iframe")).toBeInTheDocument());
-    sendFrameMessage(view.container.querySelector("iframe")!, "sedes:page-size", { height: 100 });
-    view.unmount();
-    view = render(<PagePreview page={original} services={api} />);
-    await waitFor(() => expect(view.container.querySelector("iframe")).toBeInTheDocument());
-    expect(api.createPageRenderAdmission).toHaveBeenCalledTimes(6);
-  });
-
-  it("automatically resumes after scrolling away before the size acknowledgement", async () => {
-    const setVisible = makePreviewsVisible();
-    const api = services();
-    const { container } = render(<PagePreview page={original} services={api} />);
-    await waitFor(() => expect(container.querySelector("iframe")).toBeInTheDocument());
-    setVisible(false);
-    await waitFor(() => expect(container.querySelector("iframe")).toBeNull());
-    expect(localStorage.length).toBe(0);
-    setVisible(true);
-    await waitFor(() => expect(container.querySelector("iframe")).toBeInTheDocument());
-    expect(api.createPageRenderAdmission).toHaveBeenCalledTimes(2);
-  });
-
-  it("opens the expanded preview during initial loading without requiring a manual retry", async () => {
-    makePreviewsVisible();
-    const api = services();
-    const { container } = render(<PagePreview page={original} services={api} />);
-    await waitFor(() => expect(container.querySelector("iframe")).toBeInTheDocument());
-    fireEvent.click(screen.getByRole("button", { name: "Expand page: Phone" }));
-    const dialog = await screen.findByRole("dialog");
-    await waitFor(() => expect(dialog.querySelector("iframe")).toBeInTheDocument());
-    expect(container.querySelector("iframe")).toBeNull();
-    expect(api.createPageRenderAdmission).toHaveBeenCalledTimes(2);
-    sendFrameMessage(dialog.querySelector("iframe")!, "sedes:page-size", { height: 100 });
-    expect(localStorage.length).toBe(0);
-  });
-
-  it("requires a manual start when browser recovery storage is unavailable", async () => {
-    makePreviewsVisible();
-    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => { throw new Error("unavailable"); });
-    const api = services();
-    const { container } = render(<PagePreview page={original} services={api} />);
-    await screen.findByRole("button", { name: "Run interactive preview" });
-    await waitFor(() => expect(api.createPageRenderAdmission).toHaveBeenCalledTimes(1));
-    expect(container.querySelector("iframe")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Run interactive preview" }));
-    await waitFor(() => expect(container.querySelector("iframe")).toBeInTheDocument());
-  });
-
-  it("bounds a stalled transport separately from wrapper execution", async () => {
-    vi.useFakeTimers();
-    const { container } = render(<PagePreview page={original} services={services()} />);
-    fireEvent.click(screen.getByRole("button", { name: "Run interactive preview" }));
-    await act(async () => {});
-    expect(container.querySelector("iframe")).toBeInTheDocument();
+    expect(frame).not.toBeNull();
     act(() => vi.advanceTimersByTime(59_999));
-    expect(container.querySelector("iframe")).toBeInTheDocument();
+    expect(container.querySelector("iframe")).toBe(frame);
+    sendFrameMessage(frame, "sedes:page-wrapper-ready");
+    act(() => vi.advanceTimersByTime(5_000));
+    sendFrameMessage(frame, "sedes:page-wrapper-ready");
+    act(() => vi.advanceTimersByTime(5_000));
+    expect(container.querySelector("iframe")).toBeNull();
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Page preview unavailable.",
+    );
+  });
+
+  it("does not time out after a size acknowledgement preceding wrapper-ready", async () => {
+    vi.useFakeTimers();
+    const { container } = render(
+      <PagePreview page={original} services={services()} />,
+    );
+    await act(async () => {});
+    const frame = container.querySelector("iframe")!;
+    sendFrameMessage(frame, "sedes:page-size", { height: 100 });
+    fireEvent.load(frame);
+    sendFrameMessage(frame, "sedes:page-wrapper-ready");
+    act(() => vi.advanceTimersByTime(65_000));
+    expect(container.querySelector("iframe")).toBe(frame);
+  });
+  it("expires a transfer that never acknowledges its wrapper", async () => {
+    vi.useFakeTimers();
+    const { container } = render(
+      <PagePreview page={original} services={services()} />,
+    );
+    await act(async () => {});
+    const frame = container.querySelector("iframe");
+    expect(frame).not.toBeNull();
+    act(() => vi.advanceTimersByTime(59_999));
+    expect(container.querySelector("iframe")).toBe(frame);
     act(() => vi.advanceTimersByTime(1));
     expect(container.querySelector("iframe")).toBeNull();
-    expect(screen.getByRole("alert")).toHaveTextContent("Page preview unavailable.");
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Page preview unavailable.",
+    );
   });
 
-  it("times out ten seconds after trusted wrapper-ready without extending for duplicates", async () => {
-    vi.useFakeTimers();
-    const { container } = render(<PagePreview page={original} services={services()} />);
-    fireEvent.click(screen.getByRole("button", { name: "Run interactive preview" }));
-    await act(async () => {});
-    const frame = container.querySelector("iframe")!;
-    const channel = new URLSearchParams(new URL(frame.src).hash.slice(1)).get("channel");
-    act(() => window.dispatchEvent(new MessageEvent("message", {
-      source: window,
-      data: { type: "sedes:page-wrapper-ready", channel },
-    })));
-    act(() => vi.advanceTimersByTime(20_000));
-    expect(container.querySelector("iframe")).toBe(frame);
-    sendFrameMessage(frame, "sedes:page-wrapper-ready");
-    act(() => vi.advanceTimersByTime(5_000));
-    sendFrameMessage(frame, "sedes:page-wrapper-ready");
-    act(() => vi.advanceTimersByTime(5_000));
+  it("retains a previous failure when a pending retry is scrolled away", async () => {
+    const visible = makePreviewsVisible();
+    const { container } = render(
+      <PagePreview page={original} services={services()} />,
+    );
+    sendFrameMessage(await waitForFrame(container), "sedes:page-error");
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Retry preview" }),
+    );
+    await waitForFrame(container);
+    visible(false);
+    await waitFor(() => expect(container.querySelector("iframe")).toBeNull());
+    visible(true);
+    await screen.findByRole("button", { name: "Retry preview" });
     expect(container.querySelector("iframe")).toBeNull();
-    expect(screen.getByRole("alert")).toHaveTextContent("Page preview unavailable.");
-    expect(localStorage.length).toBe(1);
-    fireEvent.click(screen.getByRole("button", { name: "Retry preview" }));
-    await act(async () => {});
-    expect(container.querySelector("iframe")).toBeInTheDocument();
   });
 });

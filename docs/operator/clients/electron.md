@@ -31,11 +31,11 @@ see [the runtime network limits](../page-previews.md#rendering-and-isolation).
 
 Saved revisions contain authored content rather than a frozen copy of the
 trusted wrapper; the server applies current host security code when serving
-them. Web and Electron clients load page cards automatically unless that local
-browser recorded a failed render or an attempt interrupted before cleanup for
-the same server origin, thread, page, and revision. Such a card requires a
-manual **Run** action. Closing or unloading a responsive preview clears that
-attempt's pending marker.
+them. All clients load page previews automatically when in or near view unless
+that local browser recorded a failed render or an attempt interrupted before
+cleanup for the same server origin, thread, page, and revision. Such a card
+requires a manual **Retry** action, as does unavailable recovery storage.
+Closing or unloading a responsive preview clears that attempt's pending marker.
 Origin and native API isolation do not promise a separate renderer process or
 CPU budget. A script that does not yield can freeze its renderer, and a
 JavaScript timeout cannot interrupt it.

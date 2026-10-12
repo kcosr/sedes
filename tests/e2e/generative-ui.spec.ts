@@ -63,6 +63,13 @@ function pageDocument(container: Locator): FrameLocator {
     .frameLocator("iframe[data-page-document]");
 }
 
+async function openPageMenu(page: Page, card: Locator): Promise<Locator> {
+  const trigger = card.getByRole("button", { name: /^Page details:/ });
+  if ((await trigger.getAttribute("aria-expanded")) !== "true")
+    await trigger.click();
+  return page.locator(".page-preview-menu:visible");
+}
+
 test("published HTML keeps revisions, target viewport, local images, and host isolation across screen sizes", async ({
   page,
   browserDiagnostics,
@@ -102,6 +109,9 @@ test("published HTML keeps revisions, target viewport, local images, and host is
     const firstCard = pageCard(page, "Inbox mockup", 1);
     await firstCard.scrollIntoViewIfNeeded();
     const firstFrame = pageDocument(firstCard);
+    await expect(
+      firstCard.locator(".wb-media-frame-header, .page-frame-size"),
+    ).toHaveCount(0);
     await expect(
       firstFrame.getByRole("heading", { name: "Inbox one" }),
     ).toBeVisible();
@@ -153,17 +163,23 @@ test("published HTML keeps revisions, target viewport, local images, and host is
       firstFrame.getByRole("heading", { name: "Inbox one" }),
     ).toBeVisible();
 
-    await secondCard
+    const revisionMenu = await openPageMenu(page, secondCard);
+    await revisionMenu
       .getByRole("button", { name: "Previous page revision" })
       .click();
     await expect(
-      secondCard.getByText("Published here as revision 2", { exact: true }),
+      revisionMenu.getByRole("button", {
+        name: "Return to published revision 2",
+      }),
     ).toBeVisible();
     await expect(
       pageDocument(secondCard).getByRole("heading", { name: "Inbox one" }),
     ).toBeVisible();
-    await secondCard
-      .getByRole("button", { name: "Original", exact: true })
+    await revisionMenu
+      .getByRole("button", {
+        name: "Return to published revision 2",
+        exact: true,
+      })
       .click();
     await expect(
       pageDocument(secondCard).getByRole("heading", { name: "Inbox two" }),
@@ -177,22 +193,28 @@ test("published HTML keeps revisions, target viewport, local images, and host is
       expectedRevision: 2,
       viewport: { width: 390, height: 600 },
     });
-    await secondCard
+    await revisionMenu
       .getByRole("button", { name: "Check for a newer page revision" })
       .click();
     await expect(
       pageDocument(secondCard).getByRole("heading", { name: "Inbox three" }),
     ).toBeVisible();
     await expect(
-      secondCard.getByText("Published here as revision 2", { exact: true }),
+      revisionMenu.getByRole("button", {
+        name: "Return to published revision 2",
+      }),
     ).toBeVisible();
-    await secondCard
-      .getByRole("button", { name: "Original", exact: true })
+    await revisionMenu
+      .getByRole("button", {
+        name: "Return to published revision 2",
+        exact: true,
+      })
       .click();
     await expect(
       pageDocument(secondCard).getByRole("heading", { name: "Inbox two" }),
     ).toBeVisible();
 
+    await page.keyboard.press("Escape");
     await page.setViewportSize({ width: 360, height: 900 });
     await firstCard.scrollIntoViewIfNeeded();
     await expect(firstFrame.locator("#layout")).toHaveText(
@@ -205,7 +227,8 @@ test("published HTML keeps revisions, target viewport, local images, and host is
       .toBeLessThan(390);
     await expectNoPageOverflow(page);
     await capture(page, testInfo, "generative-ui-phone-on-phone.png");
-    await firstCard
+    await openPageMenu(page, firstCard);
+    await page
       .getByRole("button", { name: "Expand page: Inbox mockup" })
       .click();
     const expanded = page.getByRole("dialog", {
@@ -237,7 +260,7 @@ test("published HTML keeps revisions, target viewport, local images, and host is
     await expanded.getByRole("button", { name: "Close", exact: true }).click();
     await expect(expanded).toBeHidden();
     await expect(
-      firstCard.getByRole("button", { name: "Expand page: Inbox mockup" }),
+      firstCard.getByRole("button", { name: "Page details: Inbox mockup" }),
     ).toBeFocused();
 
     const responsive = await publish(page, threadId, {
@@ -430,4 +453,148 @@ test("page loading waits for transfer completion and viewport-based content reac
     await page.unrouteAll({ behavior: "wait" });
     await page.request.post("/__e2e/pi/turn-response/release");
   }
+});
+
+test.describe("mobile inline preview interaction", () => {
+  test.use({
+    viewport: { width: 1280, height: 900 },
+    isMobile: true,
+    hasTouch: true,
+  });
+
+  test("HTML hands swipes to chat until interaction is enabled and diagrams pinch inline", async ({
+    page,
+  }, testInfo) => {
+    const workspace = path.join(
+      loadE2ERunContext().workspacesDirectory,
+      "mobile-preview-input",
+    );
+    await mkdir(workspace, { recursive: true });
+    await openWorkspaceDirectory(page, workspace);
+    const threadPath = await createDraftThread(page, "Mobile preview input");
+    const threadId = threadPath.split("/").at(-1)!;
+    await page.setViewportSize({ width: 390, height: 844 });
+    await fillAndPersistDraft(page, "Stream a Mermaid diagram progressively");
+    expect((await page.request.post("/__e2e/pi/mermaid/arm")).status()).toBe(
+      204,
+    );
+    try {
+      await sendCurrentDraft(page);
+      await expect(
+        page.locator('[data-item-kind="assistant_message"][data-item-status="streaming"]'),
+      ).toBeVisible({ timeout: 12_000 });
+      await expect(
+        page.getByText("Waiting for diagram…", { exact: true }),
+      ).toBeVisible();
+      expect(
+        (await page.request.post("/__e2e/pi/mermaid/release/closed")).status(),
+      ).toBe(204);
+      const diagram = page.locator(".mermaid-diagram .zoomable-preview-shell");
+      await expect(diagram).toBeVisible();
+      const touch = await page.context().newCDPSession(page);
+      await diagram.scrollIntoViewIfNeeded();
+      const viewport = diagram.locator(".zoomable-preview-viewport");
+      const box = (await viewport.boundingBox())!;
+      const y = box.y + box.height / 2;
+      const center = box.x + box.width / 2;
+      await touch.send("Input.dispatchTouchEvent", {
+        type: "touchStart",
+        touchPoints: [
+          { id: 1, x: center - 28, y },
+          { id: 2, x: center + 28, y },
+        ],
+      });
+      for (let step = 1; step <= 6; step++) {
+        await touch.send("Input.dispatchTouchEvent", {
+          type: "touchMove",
+          touchPoints: [
+            { id: 1, x: center - 28 - step * 8, y },
+            { id: 2, x: center + 28 + step * 8, y },
+          ],
+        });
+        await page.evaluate(
+          () =>
+            new Promise<void>((resolve) =>
+              requestAnimationFrame(() => resolve()),
+            ),
+        );
+      }
+      await touch.send("Input.dispatchTouchEvent", {
+        type: "touchEnd",
+        touchPoints: [],
+      });
+      await expect(viewport).toHaveAttribute("data-gesture-zoom", "true");
+      await expect(page.getByRole("dialog")).toHaveCount(0);
+      await capture(page, testInfo, "generative-ui-inline-diagram-zoom.png");
+
+      const saved = await publish(page, threadId, {
+        title: "Mobile touch preview",
+        viewport: { width: 360, height: 1100 },
+        html: '<!doctype html><html><body style="margin:0;padding:24px;background:#eceef8;min-height:1100px;font:16px system-ui"><h1>Touch preview</h1><button id="tap" style="padding:18px">Taps: 0</button><p>Swipe this preview to scroll the conversation.</p><script>let taps=0;document.querySelector("#tap").onclick=()=>document.querySelector("#tap").textContent="Taps: "+(++taps)</script></body></html>',
+      });
+      const card = pageCard(page, saved.title, 1);
+      await card.scrollIntoViewIfNeeded();
+      const frame = card.locator("iframe");
+      await expect(frame).toBeVisible();
+      await expect(frame).toHaveAttribute("inert", "");
+      await expect(
+        card.getByRole("button", { name: "Run interactive preview" }),
+      ).toHaveCount(0);
+      await page.evaluate(() => {
+        document.documentElement.dataset.theme = "dark";
+      });
+      await capture(page, testInfo, "generative-ui-mobile-passive.png");
+      const messages = page.getByRole("region", { name: "Messages" });
+      await messages.evaluate((element) => {
+        element.scrollTop = Math.max(0, element.scrollTop - 100);
+      });
+      const before = await messages.evaluate((element) => element.scrollTop);
+      const area = (await messages.boundingBox())!;
+      const frameBox = (await frame.boundingBox())!;
+      const x = frameBox.x + frameBox.width / 2;
+      const start = Math.max(area.y + 130, frameBox.y + 110);
+      await touch.send("Input.dispatchTouchEvent", {
+        type: "touchStart",
+        touchPoints: [{ x, y: start }],
+      });
+      for (let step = 1; step <= 6; step++) {
+        await touch.send("Input.dispatchTouchEvent", {
+          type: "touchMove",
+          touchPoints: [{ x, y: start - 12 * step }],
+        });
+        await page.evaluate(
+          () =>
+            new Promise<void>((resolve) =>
+              requestAnimationFrame(() => resolve()),
+            ),
+        );
+      }
+      await touch.send("Input.dispatchTouchEvent", {
+        type: "touchEnd",
+        touchPoints: [],
+      });
+      await expect
+        .poll(() => messages.evaluate((element) => element.scrollTop))
+        .toBeGreaterThan(before + 20);
+      await card.scrollIntoViewIfNeeded();
+      await card
+        .getByRole("button", { name: "Interact with preview", exact: true })
+        .tap();
+      await expect(frame).not.toHaveAttribute("inert", "");
+      await pageDocument(card).getByRole("button", { name: "Taps: 0" }).tap();
+      await expect(
+        pageDocument(card).getByRole("button", { name: "Taps: 1" }),
+      ).toBeVisible();
+      await capture(page, testInfo, "generative-ui-mobile-interacting.png");
+      await card
+        .getByRole("button", { name: "Done interacting with preview" })
+        .tap();
+      await expect(frame).toHaveAttribute("inert", "");
+      await openPageMenu(page, card);
+      await capture(page, testInfo, "generative-ui-mobile-details.png");
+    } finally {
+      await page.request.post("/__e2e/pi/mermaid/release/closed");
+      await page.request.post("/__e2e/pi/mermaid/release/settled");
+    }
+  });
 });

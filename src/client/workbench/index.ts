@@ -231,6 +231,8 @@ export {
 export type { TileDelta } from "./components/Pages";
 export { MediaFrame } from "./components/MediaFrame";
 export type { MediaFrameProps } from "./components/MediaFrame";
+export { MediaZoomControls } from "./components/MediaZoomControls";
+export type { MediaZoomControlsProps } from "./components/MediaZoomControls";
 
 // icons, time
 export { Icon, iconNames } from "./components/Icon";

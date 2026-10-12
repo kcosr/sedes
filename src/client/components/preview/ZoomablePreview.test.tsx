@@ -1,12 +1,152 @@
 // @vitest-environment jsdom
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ZoomablePreview } from "./ZoomablePreview.js";
 
 afterEach(cleanup);
 
 describe("ZoomablePreview", () => {
+  it("reports natural-pixel scale and uses 1:1 for actual image size", () => {
+    const { container } = render(
+      <ZoomablePreview
+        controlsLabel="Image controls"
+        interactionMode="popup"
+        resetLabel="Reset image"
+        title="Image"
+        viewportLabel="Image viewport"
+      >
+        <img alt="Natural size image" />
+      </ZoomablePreview>,
+    );
+    const viewport = screen.getByRole("region", { name: "Image viewport" });
+    const image = screen.getByRole("img", { name: "Natural size image" });
+    Object.defineProperties(viewport, {
+      clientWidth: { configurable: true, value: 200 },
+      clientHeight: { configurable: true, value: 200 },
+    });
+    Object.defineProperties(image, {
+      naturalWidth: { configurable: true, value: 1000 },
+      naturalHeight: { configurable: true, value: 500 },
+    });
+    fireEvent.load(image);
+    expect(
+      screen.getByRole("button", { name: "Zoom percentage: 20%" }),
+    ).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Actual size (100%)" }));
+    expect(
+      screen.getByRole("button", { name: "Zoom percentage: 100%" }),
+    ).toBeVisible();
+    expect(container.querySelector(".zoomable-preview-content")).toHaveStyle({
+      width: "1000px",
+      height: "500px",
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Fit to view" }));
+    expect(
+      screen.getByRole("button", { name: "Zoom percentage: 20%" }),
+    ).toBeVisible();
+    expect(container.querySelector("header")).toBeNull();
+  });
+
+  it("restores a natural-size image view even when it is more than four times fit", () => {
+    render(
+      <ZoomablePreview
+        controlsLabel="Image controls"
+        interactionMode="popup"
+        initialViewState={{
+          zoom: 5,
+          horizontalCenter: 0.5,
+          verticalCenter: 0.5,
+        }}
+        resetLabel="Reset image"
+        title="Image"
+        viewportLabel="Restored image"
+      >
+        <img alt="Restored" />
+      </ZoomablePreview>,
+    );
+    const viewport = screen.getByRole("region", { name: "Restored image" });
+    const image = screen.getByRole("img", { name: "Restored" });
+    Object.defineProperties(viewport, {
+      clientWidth: { value: 200 },
+      clientHeight: { value: 200 },
+    });
+    Object.defineProperties(image, {
+      naturalWidth: { value: 1000 },
+      naturalHeight: { value: 500 },
+    });
+    fireEvent.load(image);
+    expect(
+      screen.getByRole("button", { name: "Zoom percentage: 100%" }),
+    ).toBeVisible();
+  });
+
+  it("leaves a single-finger inline swipe to chat, pinches to zoom, and then drags without clicking", () => {
+    const gesture = vi.fn();
+    const { container } = render(
+      <ZoomablePreview
+        controlsLabel="Image controls"
+        interactionMode="inline"
+        onGestureStart={gesture}
+        resetLabel="Reset image"
+        title="Image"
+        viewportLabel="Inline image"
+      >
+        <img alt="" />
+      </ZoomablePreview>,
+    );
+    const viewport = screen.getByRole("region", { name: "Inline image" });
+    expect(screen.queryByRole("group", { name: "Image controls" })).toBeNull();
+    Object.defineProperties(viewport, {
+      clientWidth: { configurable: true, value: 200 },
+      clientHeight: { configurable: true, value: 200 },
+      scrollWidth: { configurable: true, value: 500 },
+      scrollHeight: { configurable: true, value: 500 },
+    });
+    Object.assign(viewport, {
+      setPointerCapture: vi.fn(),
+      hasPointerCapture: () => true,
+      releasePointerCapture: vi.fn(),
+    });
+    const pointer = (
+      type: "pointerDown" | "pointerMove" | "pointerUp",
+      pointerId: number,
+      x: number,
+      y = 0,
+    ) =>
+      fireEvent[type](viewport, {
+        pointerId,
+        pointerType: "touch",
+        clientX: x,
+        clientY: y,
+        button: 0,
+      });
+    expect(pointer("pointerDown", 1, 0)).toBe(true);
+    expect(pointer("pointerMove", 1, 0, 30)).toBe(true);
+    pointer("pointerDown", 2, 100, 30);
+    pointer("pointerMove", 2, 150, 30);
+    expect(
+      screen.getByRole("button", { name: "Zoom percentage: 150%" }),
+    ).toBeVisible();
+    expect(gesture).toHaveBeenCalled();
+    pointer("pointerUp", 2, 150, 30);
+    const before = viewport.scrollLeft;
+    pointer("pointerMove", 1, -20, 30);
+    expect(viewport.scrollLeft).toBeGreaterThan(before);
+    expect(fireEvent.click(viewport)).toBe(false);
+    expect(container.querySelector(".zoomable-preview-shell")).toHaveAttribute(
+      "data-mode",
+      "inline",
+    );
+    pointer("pointerUp", 1, -20, 30);
+    Object.defineProperties(viewport, {
+      scrollWidth: { configurable: true, value: 200 },
+      scrollHeight: { configurable: true, value: 200 },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Fit to view" }));
+    expect(screen.queryByRole("group", { name: "Image controls" })).toBeNull();
+  });
+
   it("zooms below 100% without shrinking the popup viewport", () => {
     const { container } = render(
       <ZoomablePreview
@@ -22,7 +162,9 @@ describe("ZoomablePreview", () => {
 
     const zoomOut = screen.getByRole("button", { name: "Zoom out" });
     fireEvent.click(zoomOut);
-    expect(screen.getByLabelText("Zoom level")).toHaveTextContent("75%");
+    expect(
+      screen.getByRole("button", { name: /^Zoom percentage:/ }),
+    ).toHaveTextContent("75%");
     expect(container.querySelector(".zoomable-preview-canvas")).toHaveStyle({
       "--zoomable-preview-content-padding": "12px",
       height: "75%",
@@ -32,15 +174,19 @@ describe("ZoomablePreview", () => {
       "data-reduced",
       "true",
     );
-    expect(screen.getByRole("button", { name: "Reset preview" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Fit to view" })).toBeEnabled();
 
     fireEvent.click(zoomOut);
     fireEvent.click(zoomOut);
-    expect(screen.getByLabelText("Zoom level")).toHaveTextContent("25%");
+    expect(
+      screen.getByRole("button", { name: /^Zoom percentage:/ }),
+    ).toHaveTextContent("25%");
     expect(zoomOut).toBeDisabled();
 
-    fireEvent.click(screen.getByRole("button", { name: "Reset preview" }));
-    expect(screen.getByLabelText("Zoom level")).toHaveTextContent("100%");
+    fireEvent.click(screen.getByRole("button", { name: "Fit to view" }));
+    expect(
+      screen.getByRole("button", { name: /^Zoom percentage:/ }),
+    ).toHaveTextContent("100%");
   });
 
   it("keeps popup trackpad zoom contained and accumulates wheel deltas", () => {
@@ -60,7 +206,9 @@ describe("ZoomablePreview", () => {
     });
 
     expect(fireEvent.wheel(viewport, { deltaY: -25 })).toBe(true);
-    expect(screen.getByLabelText("Zoom level")).toHaveTextContent("100%");
+    expect(
+      screen.getByRole("button", { name: /^Zoom percentage:/ }),
+    ).toHaveTextContent("100%");
 
     for (let index = 0; index < 2; index += 1) {
       const pinch = new WheelEvent("wheel", {
@@ -72,7 +220,9 @@ describe("ZoomablePreview", () => {
       fireEvent(viewport, pinch);
       expect(pinch.defaultPrevented).toBe(true);
     }
-    expect(screen.getByLabelText("Zoom level")).toHaveTextContent("122%");
+    expect(
+      screen.getByRole("button", { name: /^Zoom percentage:/ }),
+    ).toHaveTextContent("122%");
   });
 
   it("leaves trackpad and sub-100% zoom disabled outside popup mode", () => {
@@ -98,7 +248,9 @@ describe("ZoomablePreview", () => {
 
     fireEvent(viewport, wheel);
     expect(wheel.defaultPrevented).toBe(false);
-    expect(screen.getByLabelText("Zoom level")).toHaveTextContent("100%");
+    expect(
+      screen.getByRole("button", { name: /^Zoom percentage:/ }),
+    ).toHaveTextContent("100%");
     expect(screen.getByRole("button", { name: "Zoom out" })).toBeDisabled();
   });
 
@@ -144,7 +296,9 @@ describe("ZoomablePreview", () => {
       pointerType: "touch",
     });
 
-    expect(screen.getByLabelText("Zoom level")).toHaveTextContent("150%");
+    expect(
+      screen.getByRole("button", { name: /^Zoom percentage:/ }),
+    ).toHaveTextContent("150%");
   });
 
   it("keeps a two-finger pinch active across a third touch and promotes a remaining finger after cancellation", () => {
@@ -189,12 +343,16 @@ describe("ZoomablePreview", () => {
     pointer("pointerDown", 1, 0);
     pointer("pointerDown", 2, 100);
     pointer("pointerMove", 2, 150);
-    expect(screen.getByLabelText("Zoom level")).toHaveTextContent("150%");
+    expect(
+      screen.getByRole("button", { name: /^Zoom percentage:/ }),
+    ).toHaveTextContent("150%");
 
     pointer("pointerDown", 3, 220);
     pointer("pointerUp", 3, 220);
     pointer("pointerMove", 2, 180);
-    expect(screen.getByLabelText("Zoom level")).toHaveTextContent("180%");
+    expect(
+      screen.getByRole("button", { name: /^Zoom percentage:/ }),
+    ).toHaveTextContent("180%");
 
     pointer("pointerCancel", 1, 0);
     expect(viewport).toHaveAttribute("data-dragging", "true");
@@ -215,9 +373,11 @@ describe("ZoomablePreview", () => {
     const viewport = screen.getByRole("region", {
       name: "Tall preview viewport",
     });
-    const reset = screen.getByRole("button", { name: "Reset preview" });
-    expect(screen.getByLabelText("Zoom level")).toHaveTextContent("100%");
-    expect(reset).toBeDisabled();
+    const reset = screen.getByRole("button", { name: "Fit to view" });
+    expect(
+      screen.getByRole("button", { name: /^Zoom percentage:/ }),
+    ).toHaveTextContent("100%");
+    expect(reset).toBeEnabled();
 
     Object.defineProperties(viewport, {
       clientHeight: { configurable: true, value: 300 },
@@ -231,12 +391,12 @@ describe("ZoomablePreview", () => {
 
     fireEvent.click(reset);
     expect(viewport.scrollTop).toBe(0);
-    expect(reset).toBeDisabled();
+    expect(reset).toBeEnabled();
 
     viewport.scrollTop = 180;
     fireEvent.scroll(viewport);
     fireEvent.keyDown(viewport, { key: "0" });
     expect(viewport.scrollTop).toBe(0);
-    expect(reset).toBeDisabled();
+    expect(reset).toBeEnabled();
   });
 });

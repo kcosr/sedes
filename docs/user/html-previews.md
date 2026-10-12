@@ -1,9 +1,16 @@
 # HTML previews
 
 An agent can publish a mock-up, chart, or other interactive HTML example in a
-conversation. Each preview has a title, revision number, and expand control.
-Its JavaScript can update the displayed content locally; it has no connection
-to the agent, your credentials, or other Sedes tools.
+conversation. Previews load automatically when they are in or near view on
+web, desktop, and Android. Their JavaScript can update the displayed content
+locally; it has no connection to the agent, your credentials, or other Sedes
+tools.
+
+The content appears without a permanent header or dimensions footer. Open the
+small ellipsis at the top right for a compact row containing the title,
+previous/next revision arrows, a `vN` version indicator, maximize, and refresh.
+Refresh reloads the selected saved revision and resets its local interaction
+state.
 
 Enable the **Pages** tools in the thread's Agent tools settings. Ask the agent
 to publish its result, for example: “Show a mobile mock-up of the settings
@@ -24,11 +31,13 @@ current or earlier revision. File publications return their original source
 path; inline publications return their saved HTML so the agent can revise
 and republish it without relying on its previous chat context.
 
-Use the previous and next controls in a preview's header to browse that page's
-revisions. **Original** returns that occurrence to the revision published
-there; browsing does not change the saved conversation. Open **Pages** in the
-thread header to find published documents even when their original chat turn
-is outside the loaded history or has been compacted by the provider.
+Open the preview's ellipsis and use the previous and next arrows around the
+version indicator to browse that page's revisions. Browsing does not change
+the saved conversation or the revision originally published there. While
+browsing another revision, select the `vN` indicator to return to the revision
+published at that position in chat. Open **Pages** in the thread header to find
+published documents even when their original chat turn is outside the loaded
+history or has been compacted by the provider.
 The library orders documents by their first publication, newest first; later
 revisions keep their document's position. Earlier chat previews remain available
 there even when a conversation reaches its display limits.
@@ -40,6 +49,24 @@ They do not save transient interaction state such as selected filters or text
 typed into a mock form. Reopening or switching revisions starts that page
 again. Pages belong to their original thread and are removed when that thread
 is deleted.
+
+## Interact and recover
+
+On Android and devices with coarse pointer input, an inline HTML preview
+initially lets gestures scroll the conversation. Tap the hand icon beside the
+ellipsis to interact with the page's buttons, inputs, or other controls. Tap
+the checkmark to return to conversation scrolling. Other inline previews
+accept input directly, and an expanded preview is always interactive. The hand
+control changes input routing; the page still loads and runs while input is
+inactive.
+
+A failed render or an attempt interrupted before cleanup does not restart
+automatically. Use **Retry** to try that revision again. This protects against
+repeated failures after a restart. If the browser cannot store recovery state,
+a preview also requires an explicit retry. Closing a responsive preview
+normally does not require a retry. Recovery state is local to this browser and
+scoped to the server origin, thread, page, and revision; another device keeps
+its own state.
 
 ## Layout and zoom
 
@@ -53,9 +80,15 @@ its width and let its height fit the content. Explicit dimensions are saved
 with each revision and preserved across devices. A large desktop mock-up
 viewed on a phone keeps its desktop layout and is scaled to fit.
 
-Expand the preview to inspect it with zoom controls. Zoom changes the displayed
-scale, not the document's saved viewport. Very tall content and large canvases
-remain bounded by the viewer's size limits.
+Use the maximize icon to open the expanded viewer. HTML pages, images, and
+Mermaid diagrams share a floating zoom bar at the bottom: minus, percentage,
+plus, **Fit**, and **1:1**. Zoom changes the displayed scale, not the document's
+saved viewport. Very tall content and large canvases remain bounded by the
+viewer's size limits.
+
+Images and Mermaid diagrams also support pinch zoom and pan inline. At normal
+size, a one-finger gesture scrolls the conversation; when zoomed, dragging pans
+the media. Use their explicit expand control to open the larger viewer.
 
 ## Files and embedded images
 

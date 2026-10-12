@@ -1955,7 +1955,6 @@ describe("WorkspaceFilesPanel", () => {
       ).toBeVisible(),
     );
 
-
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByText("History body")).toBeVisible();
     fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
@@ -3083,8 +3082,13 @@ describe("WorkspaceFilesPanel", () => {
     const filesApi = { ...api, readWorkspaceFile };
     const { context } = setupContext();
     const panel = (visible: boolean) => (
-      <WorkspaceFilesPanel context={{ ...context, visible }} api={filesApi}
-        renderFile={({ content }) => <div data-testid="resumed-file">{content}</div>} />
+      <WorkspaceFilesPanel
+        context={{ ...context, visible }}
+        api={filesApi}
+        renderFile={({ content }) => (
+          <div data-testid="resumed-file">{content}</div>
+        )}
+      />
     );
     const view = render(panel(true));
     await waitForListing(filesApi);
@@ -3449,9 +3453,7 @@ describe("WorkspaceFilesPanel", () => {
       expect(image).toHaveAttribute("src", `data:${mediaType};base64,AA==`);
       const imageShell = image.closest(".zoomable-preview-shell");
       expect(imageShell).not.toBeNull();
-      expect(
-        within(imageShell as HTMLElement).getByTitle(path),
-      ).toHaveTextContent(path);
+      expect(imageShell).toHaveAttribute("aria-label", path);
       expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
       expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
       expect(renderFile).not.toHaveBeenCalled();
@@ -3507,14 +3509,16 @@ describe("WorkspaceFilesPanel", () => {
       },
     });
 
-    expect(screen.getByLabelText("Zoom level")).toHaveTextContent("100%");
-    expect(screen.getByRole("button", { name: "Zoom out" })).toBeDisabled();
     expect(
-      screen.getByRole("button", { name: "Reset image view" }),
-    ).toBeDisabled();
+      screen.getByRole("button", { name: /^Zoom percentage:/ }),
+    ).toHaveTextContent("100%");
+    expect(screen.getByRole("button", { name: "Zoom out" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Fit to view" })).toBeEnabled();
 
     fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
-    expect(screen.getByLabelText("Zoom level")).toHaveTextContent("125%");
+    expect(
+      screen.getByRole("button", { name: /^Zoom percentage:/ }),
+    ).toHaveTextContent("125%");
     expect(firstCanvas).toHaveStyle({ height: "125%", width: "125%" });
     expect(firstViewport.scrollLeft).toBe(37.5);
     expect(firstViewport.scrollTop).toBe(25);
@@ -3524,7 +3528,9 @@ describe("WorkspaceFilesPanel", () => {
     expect(fireEvent.keyDown(firstViewport, { ctrlKey: true, key: "+" })).toBe(
       true,
     );
-    expect(screen.getByLabelText("Zoom level")).toHaveTextContent("125%");
+    expect(
+      screen.getByRole("button", { name: /^Zoom percentage:/ }),
+    ).toHaveTextContent("125%");
 
     act(() => selectPaths(["second.png"]));
     expect(
@@ -3532,7 +3538,9 @@ describe("WorkspaceFilesPanel", () => {
         name: "Image preview for second.png",
       }),
     ).toBeInTheDocument();
-    expect(screen.getByLabelText("Zoom level")).toHaveTextContent("100%");
+    expect(
+      screen.getByRole("button", { name: /^Zoom percentage:/ }),
+    ).toHaveTextContent("100%");
 
     fireEvent.click(screen.getByRole("tab", { name: /^first\.png/ }));
     expect(
@@ -3540,16 +3548,22 @@ describe("WorkspaceFilesPanel", () => {
         name: "Image preview for first.png",
       }),
     ).toBeInTheDocument();
-    expect(screen.getByLabelText("Zoom level")).toHaveTextContent("125%");
+    expect(
+      screen.getByRole("button", { name: /^Zoom percentage:/ }),
+    ).toHaveTextContent("125%");
 
-    fireEvent.click(screen.getByRole("button", { name: "Reset image view" }));
-    expect(screen.getByLabelText("Zoom level")).toHaveTextContent("100%");
+    fireEvent.click(screen.getByRole("button", { name: "Fit to view" }));
+    expect(
+      screen.getByRole("button", { name: /^Zoom percentage:/ }),
+    ).toHaveTextContent("100%");
     expect(screen.getByRole("button", { name: "Zoom out" })).toBeDisabled();
 
     for (let step = 0; step < 12; step += 1) {
       fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
     }
-    expect(screen.getByLabelText("Zoom level")).toHaveTextContent("400%");
+    expect(
+      screen.getByRole("button", { name: /^Zoom percentage:/ }),
+    ).toHaveTextContent("400%");
     expect(screen.getByRole("button", { name: "Zoom in" })).toBeDisabled();
 
     fireEvent.click(screen.getByRole("button", { name: "Close first.png" }));
@@ -3559,7 +3573,9 @@ describe("WorkspaceFilesPanel", () => {
         name: "Image preview for first.png",
       }),
     ).toBeInTheDocument();
-    expect(screen.getByLabelText("Zoom level")).toHaveTextContent("100%");
+    expect(
+      screen.getByRole("button", { name: /^Zoom percentage:/ }),
+    ).toHaveTextContent("100%");
   });
 
   it("shows a payload-free oversized image refusal without creating an image", async () => {
@@ -4139,8 +4155,15 @@ describe("WorkspaceFilesPanel", () => {
   it("parks pending file confirmations while Settings owns the foreground", async () => {
     const api = setupApi();
     const { context } = setupContext();
-    const content = (visible: boolean) => <WorkspaceFilesPanel context={{ ...context, visible }} api={api}
-      renderFile={({ content, onChange }) => <button onClick={() => onChange(`${content} changed`)}>Change</button>} />;
+    const content = (visible: boolean) => (
+      <WorkspaceFilesPanel
+        context={{ ...context, visible }}
+        api={api}
+        renderFile={({ content, onChange }) => (
+          <button onClick={() => onChange(`${content} changed`)}>Change</button>
+        )}
+      />
+    );
     const view = render(content(true));
     await waitForListing(api);
     act(() => selectPaths(["notes.ts"]));
