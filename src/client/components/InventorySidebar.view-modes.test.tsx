@@ -5343,7 +5343,8 @@ describe("shared default thread shelf", () => {
     renderSidebar([makeThread("default", "My default", { runState })], { defaultThreadId: "default" });
     const row = screen.getByTestId("default-thread-row");
     expect(within(row).getByRole("img", { name: label })).toBeVisible();
-    expect(row.querySelector(".flat-row-glyph")?.nextElementSibling?.tagName.toLowerCase()).toBe("svg");
+    expect(row.querySelector(".flat-row-glyph")?.nextElementSibling).toHaveClass("thread-title");
+    expect(row.querySelector(".thread-row-link")?.children).toHaveLength(2);
   });
   it("updates the default row from running to unread without losing its indicator", () => {
     const running = makeThread("default", "My default", { runState: "running" });
@@ -5355,6 +5356,14 @@ describe("shared default thread shelf", () => {
     expect(within(row).getByRole("img", { name: "Finished while you were away" })).toBeVisible();
     expect(within(row).getByTestId("flat-row-unseen-dot")).toBeVisible();
     expect(within(row).queryByRole("img", { name: "Running" })).toBeNull();
+    const glyph = row.querySelector(".flat-row-glyph");
+    const title = row.querySelector(".thread-title");
+    const idle = { ...running, runState: "idle" as const };
+    view.rerenderSidebar(makeState([idle], { defaultThreadId: "default" }));
+    expect(glyph).not.toHaveAttribute("data-glyph");
+    expect(glyph?.querySelector("svg")).not.toBeNull();
+    expect(glyph?.nextElementSibling).toBe(title);
+    expect(row.querySelector(".thread-row-link")?.children).toHaveLength(2);
     view.rerenderSidebar(makeState([running], { defaultThreadId: "default" }));
     expect(within(screen.getByTestId("default-thread-row")).queryByTestId("flat-row-unseen-dot")).toBeNull();
   });

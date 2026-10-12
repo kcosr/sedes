@@ -2,11 +2,6 @@
   margin-bottom: var(--space-2);
 }
 
-.default-thread-section .thread-row-link > svg {
-  flex: 0 0 auto;
-  color: var(--muted-foreground);
-}
-
 .default-thread-unavailable {
   display: flex;
   align-items: center;

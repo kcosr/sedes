@@ -399,7 +399,7 @@ function DefaultThreadIndicator({ thread }: { readonly thread: NormalizedApplica
   return <span className="flat-row-glyph" data-glyph={visible ? kind : undefined}
     role={visible ? "img" : undefined} aria-hidden={visible ? undefined : true}
     aria-label={visible ? label : undefined} title={visible ? label : undefined}>
-    {visible ? flatRowGlyphIcon(kind) : null}
+    {visible ? flatRowGlyphIcon(kind) : <House size={16} aria-hidden="true" />}
   </span>;
 }
 
@@ -1783,7 +1783,6 @@ export function InventorySidebar({
                     <button className="thread-row-link" aria-current={selectedThreadId === usableDefault.id ? "page" : undefined}
                       onClick={() => { openThreadRoute(usableDefault.id); onNavigate(); }}>
                       <DefaultThreadIndicator thread={usableDefault} />
-                      <House size={16} aria-hidden="true" />
                       <span className="thread-title flat-row-title">{usableDefault.title.text || "Untitled thread"}</span>
                     </button>
                   </div>
