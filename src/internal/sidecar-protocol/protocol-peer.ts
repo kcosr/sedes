@@ -406,7 +406,7 @@ export class SidecarProtocolPeer {
       throw new Error("sidecar_stream_already_registered");
     }
     let terminalReceived = false;
-    this.#incomingStreams.set(input.streamId, {
+    const stream: IncomingStream = {
       capabilityId: input.capabilityId,
       majorVersion: input.majorVersion,
       terminalSchema: input.terminalSchema as z.ZodType<unknown>,
@@ -417,15 +417,17 @@ export class SidecarProtocolPeer {
       },
       expectedSequence: 0,
       remainingCredit: input.initialCreditBytes,
-    });
+    };
+    this.#incomingStreams.set(input.streamId, stream);
     return Object.freeze({
       addCredit: async (bytes: number) => {
         validateStreamCredit(bytes);
         // A queued consumer can finish reading data after the terminal retired
         // this registration. No producer remains to receive its final credit.
         if (terminalReceived) return;
-        const stream = this.#incomingStreams.get(input.streamId);
-        if (!stream) throw new Error("sidecar_stream_not_registered");
+        if (this.#incomingStreams.get(input.streamId) !== stream) {
+          throw new Error("sidecar_stream_not_registered");
+        }
         if (stream.remainingCredit + bytes > Number.MAX_SAFE_INTEGER) {
           throw new Error("sidecar_stream_credit_overflow");
         }
@@ -444,7 +446,9 @@ export class SidecarProtocolPeer {
         this.#markOutboundActivity();
       },
       unregister: () => {
-        this.#incomingStreams.delete(input.streamId);
+        if (this.#incomingStreams.get(input.streamId) === stream) {
+          this.#incomingStreams.delete(input.streamId);
+        }
       },
     });
   }
