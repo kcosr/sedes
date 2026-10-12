@@ -64,7 +64,7 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
   const showingRecovery = saved !== null && (active === null || saved.recordingId === active.recording?.id);
   const savedElsewhere = saved !== null && !showingRecovery && saved.recordingId !== active?.recording?.id;
   const act = (action: () => ReturnType<typeof store.plugin.getState>) => { void store.run(action).catch(() => undefined); };
-  // Explicit choice and pin lead; otherwise idle recording follows the viewed thread.
+  // Display and Start share native continuity; navigation releases it through foreground context.
   const startTarget = voiceRecordingTarget(threads, native, threadId);
   const start = () => {
     // Native decides when explicit recording can start; it does not need the notification stream that `ready` includes.

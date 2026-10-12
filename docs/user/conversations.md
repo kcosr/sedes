@@ -28,20 +28,24 @@ an error and stays selected until you release it or choose another target.
 The card's first line always names its thread, using its title or **Untitled
 thread**: the thread being spoken or recorded to, or, when idle, the thread a
 recording would use. An explicit choice takes priority. Otherwise, pinning uses
-the default thread; without pinning, it follows the visible available thread.
-With no thread visible, it uses the retained voice thread, then the default.
-An unavailable visible thread or no available target makes the card ask you
+the default thread; without pinning, it keeps the retained voice thread before
+using the visible thread, then the default when no thread is visible.
+An unavailable visible destination or no available target makes the card ask you
 to choose a thread.
 The second line is the state, such as **Ready · Speak · Auto-listen on**,
 **Speaking** with the notice kind and queued count, or **Listening**. If voice
 needs to resume, the card offers **Resume**.
 
-Voice retains its last active thread after playback or recording ends in the
-background, including Stop or Cancel. While idle in the app, browsing updates
-the destination for in-app, headset, and notification recording. That destination
-stays selected when you background the app. While idle and showing the retained fallback,
-**Next** releases it and restores the default selection. Next stays hidden
-when the card follows a visible or explicitly chosen thread. Releasing does
+Voice retains its last active thread after playback or recording ends, including
+Stop or Cancel. If B speaks while you view A, the idle card keeps B so **Start**
+can reply to B even with Auto-listen off. Idle **Next**, immediately left of Start,
+releases B and returns to A; with no viewed thread, it returns to the saved default
+or chooser. Deliberately opening a different thread while idle selects it.
+Resuming on the same thread preserves the voice destination. In-app, headset,
+and notification recording use the same destination, and an ordinary idle viewed
+destination stays selected when you background the app, including after Next.
+Next stays hidden when the retained target matches the viewed thread or the card
+follows an explicitly chosen thread. Releasing does
 not record, send, navigate, or change the draft.
 Off, a connection change, an ended voice session, or enabling pinning clears
 retention. Turning pinning off during an interaction retains its current thread.
@@ -54,7 +58,7 @@ The choice leaves the viewed thread and saved default unchanged, and navigation
 does not redirect it. The choice is consumed when a new manual recording
 starts, and clears when voice is turned Off or the connection changes.
 Headset and notification Start use that same choice, followed by the pinned
-default, visible thread, retained destination, or saved default. Idle headset or notification **Next** releases
+default, retained destination, visible thread, or saved default. Idle headset or notification **Next** releases
 the retained destination. Automatic notification replies keep their own targets.
 The popup lists the visible thread first. On mobile, search stays visible and
 the keyboard stays closed until you tap it. **Default voice thread** in quick
@@ -100,7 +104,14 @@ Playback **Stop** in the app or notification cancels the interaction and clears
 queued speech and pending agent-requested voice actions. It leaves voice enabled
 and does not stop the agent. Headset Play/Pause and Next preserve queued speech.
 While voice is recording or recognizing, Stop becomes **Cancel**, which discards
-the recording unsent and preserves queued playback. **Off** clears
+the recording unsent and preserves queued playback. During **Keep listening**,
+headset Play/Pause finishes transcription and sends the complete message. If the
+transcript is empty, the recording ends normally without sending. During ordinary
+recording, Play/Pause cancels and discards; headset Stop or on-screen **Cancel**
+always discards unsent recording. Play/Pause cancels microphone preparation and
+ignores repeated presses once any Send is finishing or sending. After cancellation
+or an empty transcript, queued speech continues, or voice returns to idle if the
+queue is empty. **Off** clears
 the voice queue and hides the card unless **Show voice bar when off** is on in
 **Settings → Voice**; then a dimmed card stays, and its status icon opens the Voice
 sheet to turn voice back on. The notification silence bell suppresses

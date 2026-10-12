@@ -13,7 +13,7 @@ async function alive(pid: number): Promise<boolean> {
   try {
     const value = await readFile(`/proc/${pid}/stat`, "utf8");
     return !["Z", "X"].includes(value.slice(value.lastIndexOf(")") + 2).split(" ")[0]!);
-  } catch (cause) { if ((cause as NodeJS.ErrnoException).code === "ENOENT") return false; throw cause; }
+  } catch (cause) { if (["ENOENT", "ESRCH"].includes((cause as NodeJS.ErrnoException).code ?? "")) return false; throw cause; }
 }
 async function fake(source: string, version = "2.0.18") {
   const root = await mkdtemp(path.join(os.tmpdir(), "sedes-opencode-launch-"));

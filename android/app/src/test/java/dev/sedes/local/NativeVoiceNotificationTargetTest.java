@@ -24,7 +24,7 @@ public class NativeVoiceNotificationTargetTest {
         NativeVoiceJson.put(state.optJSONObject("actions"), "canReleaseRetainedTarget", false);
         assertFalse(NativeVoiceRuntimeService.retainedIdleControls(state));
     }
-    @Test public void unpinnedIdleNotificationFollowsExplicitThenVisibleThenRetainedDestination() {
+    @Test public void unpinnedIdleNotificationFollowsExplicitThenRetainedThenVisibleDestination() {
         JSONObject state = idle(false, false);
         NativeVoiceJson.put(state, "retainedVoiceTarget", NativeVoiceJson.object("threadId", "retained", "threadTitle", "Last voice thread", "revision", 7));
         NativeVoiceJson.put(state, "nextRecordingTarget", NativeVoiceJson.object("threadId", "next", "threadTitle", "Chosen next"));
@@ -41,12 +41,24 @@ public class NativeVoiceNotificationTargetTest {
         assertEquals("retained", NativeVoiceRuntimeService.notificationTarget(state).optString("threadId"));
         assertTrue(NativeVoiceRuntimeService.retainedIdleControls(state));
         NativeVoiceJson.put(state.optJSONObject("foreground"), "visible", true);
-        assertEquals("another-viewed-thread", NativeVoiceRuntimeService.notificationTarget(state).optString("threadId"));
-        assertFalse("A visible thread is not a releasable fallback", NativeVoiceRuntimeService.retainedIdleControls(state));
-        NativeVoiceJson.put(state.optJSONObject("foreground"), "visible", false);
+        assertEquals("retained", NativeVoiceRuntimeService.notificationTarget(state).optString("threadId"));
+        assertTrue("Next releases a reply target even with another thread visible", NativeVoiceRuntimeService.retainedIdleControls(state));
         NativeVoiceJson.put(state, "retainedVoiceTarget", null);
+        assertEquals("another-viewed-thread", NativeVoiceRuntimeService.notificationTarget(state).optString("threadId"));
+        assertFalse(NativeVoiceRuntimeService.retainedIdleControls(state));
+        NativeVoiceJson.put(state.optJSONObject("foreground"), "visible", false);
         assertTrue("Releasing retention with no default does not invent a background target",
             NativeVoiceRuntimeService.notificationTarget(state).isNull("threadId"));
+    }
+    @Test public void rememberingTheViewedThreadRefreshesItsTitleWithoutOfferingRedundantNext() {
+        JSONObject state = idle(false, false);
+        NativeVoiceJson.put(state, "retainedVoiceTarget", NativeVoiceJson.object("threadId", "foreground", "threadTitle", "Older title", "revision", 7));
+        NativeVoiceJson.put(state, "actions", NativeVoiceJson.object("canReleaseRetainedTarget", true));
+        assertEquals("Foreground thread", NativeVoiceRuntimeService.notificationTarget(state).optString("threadTitle"));
+        assertFalse(NativeVoiceRuntimeService.retainedIdleControls(state));
+        NativeVoiceJson.put(state.optJSONObject("foreground"), "visible", false);
+        assertEquals("foreground", NativeVoiceRuntimeService.notificationTarget(state).optString("threadId"));
+        assertTrue("A background destination remains releasable", NativeVoiceRuntimeService.retainedIdleControls(state));
     }
     @Test public void pinWinsOverRetentionAndNeverFallsBackWhenItsDefaultIsMissing() {
         JSONObject state = idle(true, false);

@@ -388,18 +388,108 @@ describe("voice controls card", () => {
       expect(actions()[2]).toBeDisabled();
     }
   });
-  it("follows navigation for idle recording while keeping background retention untouched", async () => {
-    const native = ready({ retainedVoiceTarget: { threadId: "outside-inventory", threadTitle: "Background voice thread", revision: 7 },
-      actions: voiceActions({ canStart: true, canReleaseRetainedTarget: true }) });
+  it.each(["speech", "recording"] as const)("keeps the completed %s destination until Next, without changing the viewed thread", async ending => {
+    let native = ending === "speech" ? speaking({ threadId: "long", threadTitle: longTitle })
+      : listening({ threadId: "long", recognitionThreadId: "untitled", recognitionThreadTitle: null });
+    const target = ending === "speech" ? "long" : "untitled";
+    const title = ending === "speech" ? longTitle : "Untitled thread";
     voice.fake.plugin.setConnection.mockResolvedValue(native);
+    navigate(threadPath("named"), { replace: true });
+    renderControls();
+    await screen.findByRole("group", { name: "Voice controls" });
+    await waitFor(() => expect(voice.fake.plugin.setForegroundContext).toHaveBeenCalled());
+    native = ready({ stateRevision: 2, retainedVoiceTarget: { threadId: target, threadTitle: title, revision: 7 },
+      actions: voiceActions({ canStart: true, canReleaseRetainedTarget: true }) });
+    act(() => voice.fake.emit("stateChanged", native));
+    expect(lines()[0]).toBe(title);
+    const actions = Array.from(card().querySelectorAll(".voice-card-actions > button"));
+    expect(actions.map(button => button.getAttribute("aria-label"))).toEqual(["Next voice interaction", "Start voice recording"]);
     voice.fake.plugin.startManualListen.mockResolvedValue(native);
+    fireEvent.click(screen.getByRole("button", { name: "Start voice recording" }));
+    await waitFor(() => expect(voice.fake.plugin.startManualListen).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1,
+      threadId: target, threadTitle: ending === "speech" ? "L".repeat(512) : undefined }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Next voice interaction" })).toBeEnabled());
+    voice.fake.plugin.releaseRetainedVoiceTarget.mockResolvedValue(ready({ stateRevision: 3,
+      foreground: { visible: true, threadId: "named", threadTitle: "Release review" },
+      retainedVoiceTarget: { threadId: "named", threadTitle: "Release review", revision: 8 },
+      actions: voiceActions({ canStart: true, canReleaseRetainedTarget: true }) }));
+    fireEvent.click(screen.getByRole("button", { name: "Next voice interaction" }));
+    await waitFor(() => expect(lines()[0]).toBe("Release review"));
+    expect(screen.queryByRole("button", { name: "Next voice interaction" })).toBeNull();
+    expect(voice.fake.plugin.releaseRetainedVoiceTarget).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, expectedRetainedRevision: 7 });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Start voice recording" })).toBeEnabled());
+    voice.fake.plugin.startManualListen.mockResolvedValue(ready({ stateRevision: 4,
+      retainedVoiceTarget: { threadId: "named", threadTitle: "Release review", revision: 8 } }));
+    fireEvent.click(screen.getByRole("button", { name: "Start voice recording" }));
+    await waitFor(() => expect(voice.fake.plugin.startManualListen).toHaveBeenNthCalledWith(2, {
+      expectedConnectionGeneration: 1, threadId: "named", threadTitle: "Release review" }));
+    expect(voice.fake.plugin.skipCurrentPlayback).not.toHaveBeenCalled();
+    expect(voice.fake.plugin.updateSettings).not.toHaveBeenCalled();
+    expect(window.location.pathname).toBe(threadPath("named"));
+  });
+  it("starts in the newly viewed thread while its foreground bridge reply is delayed", async () => {
+    const initial = ready({ foreground: { visible: true, threadId: "named", threadTitle: "Release review" },
+      retainedVoiceTarget: { threadId: "untitled", threadTitle: null, revision: 7 },
+      actions: voiceActions({ canStart: true, canReleaseRetainedTarget: true }) });
+    let release!: () => void;
+    voice.fake.plugin.setConnection.mockResolvedValue(initial);
+    voice.fake.plugin.startManualListen.mockResolvedValue(initial);
+    vi.mocked(voice.fake.asPlugin.setForegroundContext).mockImplementation(async context => {
+      if (context.threadId !== "long") return initial;
+      return new Promise(resolve => {
+        release = () => {
+          const updated = { ...initial, stateRevision: 2, foreground: { visible: true, threadId: "long", threadTitle: "L".repeat(512) },
+            retainedVoiceTarget: { threadId: "long", threadTitle: "L".repeat(512), revision: 8 } };
+          voice.fake.emit("stateChanged", updated);
+          resolve(updated);
+        };
+      });
+    });
     navigate(threadPath("named"), { replace: true });
     renderControls();
     await screen.findByRole("button", { name: "Start voice recording" });
-    expect(lines()[0]).toBe("Release review");
-    expect(screen.queryByRole("button", { name: "Next voice interaction" })).toBeNull();
+    expect(lines()[0]).toBe("Untitled thread");
     act(() => navigate(threadPath("long")));
+    await waitFor(() => expect(release).toBeTypeOf("function"));
     expect(lines()[0]).toBe(longTitle);
+    expect(screen.queryByRole("button", { name: "Next voice interaction" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Start voice recording" }));
+    await waitFor(() => expect(voice.fake.plugin.startManualListen).toHaveBeenCalledExactlyOnceWith({
+      expectedConnectionGeneration: 1, threadId: "long", threadTitle: "L".repeat(512) }));
+    expect(lines()[0]).toBe(longTitle);
+    await act(async () => release());
+    expect(lines()[0]).toBe(longTitle);
+    expect(screen.queryByRole("button", { name: "Next voice interaction" })).toBeNull();
+    expect(voice.fake.plugin.releaseRetainedVoiceTarget).not.toHaveBeenCalled();
+  });
+  it("preserves continuity on same-route foreground updates and follows a deliberate new route", async () => {
+    let native = ready({ retainedVoiceTarget: { threadId: "outside-inventory", threadTitle: "Background voice thread", revision: 7 },
+      actions: voiceActions({ canStart: true, canReleaseRetainedTarget: true }) });
+    let viewed = "named";
+    voice.fake.plugin.setConnection.mockResolvedValue(native);
+    voice.fake.plugin.getState.mockImplementation(async () => native);
+    vi.mocked(voice.fake.asPlugin.setForegroundContext).mockImplementation(async context => {
+      if (context.visible && context.threadId && context.threadId !== viewed) {
+        viewed = context.threadId;
+        native = { ...native, stateRevision: native.stateRevision + 1,
+          retainedVoiceTarget: { threadId: viewed, threadTitle: context.threadTitle ?? null, revision: 8 } };
+        voice.fake.emit("stateChanged", native);
+      }
+      return native;
+    });
+    navigate(threadPath("named"), { replace: true });
+    renderControls();
+    await screen.findByRole("button", { name: "Start voice recording" });
+    expect(lines()[0]).toBe("Background voice thread");
+    await waitFor(() => expect(voice.fake.plugin.setForegroundContext).toHaveBeenCalled());
+    fireEvent(document, new Event("visibilitychange"));
+    await act(async () => undefined);
+    expect(lines()[0]).toBe("Background voice thread");
+    expect(screen.getByRole("button", { name: "Next voice interaction" })).toBeEnabled();
+    act(() => navigate(threadPath("long")));
+    await waitFor(() => expect(lines()[0]).toBe(longTitle));
+    expect(screen.queryByRole("button", { name: "Next voice interaction" })).toBeNull();
+    voice.fake.plugin.startManualListen.mockResolvedValue(native);
     fireEvent.click(screen.getByRole("button", { name: "Start voice recording" }));
     await waitFor(() => expect(voice.fake.plugin.startManualListen).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, threadId: "long", threadTitle: "L".repeat(512) }));
     expect(voice.fake.plugin.releaseRetainedVoiceTarget).not.toHaveBeenCalled();

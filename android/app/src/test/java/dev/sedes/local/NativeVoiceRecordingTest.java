@@ -50,6 +50,51 @@ public class NativeVoiceRecordingTest {
         assertNull(h.listener.error);
     }
 
+    @Test public void repeatedSendWaitsForEveryFinalSegmentAndCompletesOnlyOnce() {
+        Harness h = new Harness(); h.start(true); h.feedFrames(50);
+        Session socket = h.latest(); String first = socket.commits.get(0);
+        socket.ack(first); h.flush(); h.feedFrames(50);
+        // The second sealed segment cannot commit until the first result is durable.
+        assertEquals(1, socket.commits.size()); assertTrue(h.recording.accept(pcm(17, 2100))); h.flush();
+        h.recording.beginFinish(NativeVoiceRecording.FinishReason.SEND);
+        h.recording.finish(NativeVoiceRecording.FinishReason.SEND); h.flush();
+        h.recording.finish(NativeVoiceRecording.FinishReason.SEND); h.flush();
+        assertFalse(h.recording.accept(pcm(2400, 2100))); assertNull(h.listener.text); assertEquals(0, h.listener.completions);
+        socket.result(first, "Complete beginning"); h.flush();
+        String second = socket.commits.get(1); socket.ack(second); h.flush();
+        assertEquals("Complete beginning", h.journal.text); assertNull("A prefix cannot complete Send", h.listener.text);
+        h.recording.finish(NativeVoiceRecording.FinishReason.SEND); h.flush();
+        socket.result(second, "and middle"); h.flush();
+        String tail = socket.commits.get(2); socket.ack(tail); h.flush();
+        assertEquals("Complete beginning and middle", h.journal.text); assertNull("A delayed tail cannot be skipped", h.listener.text);
+        h.recording.finish(NativeVoiceRecording.FinishReason.SEND); h.flush();
+        socket.result(tail, "including the ending."); h.flush();
+        assertEquals("Complete beginning and middle including the ending.", h.listener.text); assertTrue(h.listener.maySubmit);
+        assertEquals(240017, h.journal.end); assertEquals(h.journal.end, h.journal.completedSamples);
+        socket.result(tail, "duplicate final"); socket.result(first, "late prefix");
+        h.recording.finish(NativeVoiceRecording.FinishReason.SEND); h.flush(); h.advance(60000);
+        assertEquals(1, h.listener.completions); assertEquals(3, socket.commits.size()); assertNull(h.listener.error);
+    }
+
+    @Test public void repeatedSendAfterRecognitionReconnectCannotRestoreAutomaticSubmissionOrLoseThePrefix() {
+        Harness h = new Harness(); h.start(true); h.feedFrames(50);
+        Session socket = h.latest(); String first = socket.commits.get(0);
+        socket.ack(first); h.flush(); socket.result(first, "Durable beginning"); h.flush();
+        h.feedFrames(10); h.recording.finish(NativeVoiceRecording.FinishReason.SEND); h.flush();
+        String tail = socket.commits.get(1); socket.ack(tail); h.flush();
+        socket.fail(NativeSpeechTransport.Kind.NETWORK, "recognition_network_error"); h.flush();
+        h.recording.finish(NativeVoiceRecording.FinishReason.SEND); h.flush(); h.advance(1000);
+        h.advance(100); h.advance(100); h.advance(100);
+        Session retry = h.latest(); assertNotSame(socket, retry); assertEquals(1, retry.commits.size());
+        String retried = retry.commits.get(0); assertTrue(retried.contains("segment-1"));
+        assertArrayEquals(pcm(24000, 2100), retry.audio.get(retried).toByteArray());
+        socket.result(tail, "stale result"); h.flush(); assertEquals("Durable beginning", h.journal.text);
+        retry.ack(retried); h.flush(); h.recording.finish(NativeVoiceRecording.FinishReason.SEND); h.flush();
+        retry.result(retried, "recovered ending"); h.flush();
+        assertEquals("Durable beginning recovered ending", h.listener.text); assertFalse(h.listener.maySubmit);
+        assertEquals(1, h.listener.completions); assertFalse(h.journal.discarded); assertNull(h.listener.error);
+    }
+
     @Test public void aJournalAdoptedBeforeStartupHasHeldRetryAndRetentionSemanticsImmediately() {
         Harness h = new Harness(); h.journal.adopt(true); h.recording.start(true); h.flush();
         assertTrue(h.journal.keep); h.feedFrames(1);
@@ -572,11 +617,11 @@ public class NativeVoiceRecordingTest {
         }
     }
     private static final class Listener implements NativeVoiceRecording.Listener {
-        int ready; String text, error; boolean maySubmit, retained, reconnecting;
+        int ready, completions; String text, error; boolean maySubmit, retained, reconnecting;
         Runnable afterFailure;
         public void ready(String id) { ready++; }
         public void changed(String id, boolean value) { reconnecting = value; }
-        public void completed(String id, String text, boolean maySubmit) { this.text = text; this.maySubmit = maySubmit; }
+        public void completed(String id, String text, boolean maySubmit) { completions++; this.text = text; this.maySubmit = maySubmit; }
         public void failed(String id, String code, boolean retained) {
             this.error = code; this.retained = retained; if (afterFailure != null) afterFailure.run();
         }

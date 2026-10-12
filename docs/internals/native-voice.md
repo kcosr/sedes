@@ -35,7 +35,7 @@ falling back to another thread. The nullable native `nextRecordingTarget`
 contains a thread ID/title chosen through generation-fenced
 `setNextRecordingTarget`. This transient state is independent of navigation and
 saved settings. Explicit start arguments take priority, then this pending
-choice, then the pin/foreground/retained/default policy. In-app, headset, and
+choice, then the pin/retained/foreground/default policy. In-app, headset, and
 notification starts share this policy and consume the pending choice when the
 interaction is admitted, before asynchronous target validation. The idle
 notification label and open action use the same resolver. An unpinned retained
@@ -44,16 +44,23 @@ pinned default cannot fall back to another thread. Local readiness rejection
 preserves the pending choice; Off and
 connection changes clear it. The setter rejects an active interaction or Off.
 Automatic notification replies preserve it and retain their own targets.
-The in-app card follows a visible available thread before using retention.
-An unavailable visible thread opens the chooser; retention and the saved default
-are fallbacks only when no thread is visible. While idle, native retains the
-visible destination, so clearing foreground context on backgrounding does not
-revert to an older voice thread. Explicit pending choices and pinning still take
-priority. Navigation never retargets an active interaction; when it ends with
-the app visible, native reconciles retention to the idle card's destination.
-Remembering a visible thread does not turn its ordinary in-app Start into a
-retained-fallback start. The extra pre/post-cue authority checks apply when
-retention supplies the fallback, or when a background start adds an announcement.
+The in-app card and all manual starts keep the last voice destination after
+playback or recording ends, even when another thread is visible. Idle Next releases
+that destination so the visible thread can supply the next target. An actual idle
+route change selects the newly viewed thread; repeated foreground updates, title
+changes, and resuming on the same route preserve continuity. Native remembers the
+last viewed route across foreground hiding. Idle publication remembers the visible
+destination only when no retained destination or pending choice exists, including
+after Next or idle unpinning, so background starts keep that destination.
+The WebView follows a new route immediately while native still reports a different
+visible foreground thread; same-route and hidden foreground snapshots preserve
+voice continuity. Explicit pending choices and pinning still take
+priority. Navigation never retargets an active interaction or replaces its retained
+destination. When retention matches the visible thread, the card treats it as the
+ordinary visible destination and hides redundant Next. An unavailable visible
+destination opens the chooser; a distinct retained destination never falls back
+to the visible or saved default. The extra pre/post-cue authority checks apply when
+retention determines the target, or when a background start adds an announcement.
 
 `retainedVoiceTarget` is nullable session state containing a thread ID, a bounded
 nullable title, and a revision. Every new interaction advances its revision,
@@ -64,8 +71,8 @@ their validation is accepted. Manual and recovery activations retain their
 destination, and successful retargets update it after durable acknowledgement.
 Current input-context titles refresh this metadata independently of announcements. Pure
 threadless notices preserve the previous ID/title while advancing the revision.
-Completion, Stop, cancellation, and a drained queue preserve retention while
-backgrounded; an idle visible thread replaces it when the app is open. Off,
+Completion, Stop, cancellation, and a drained queue preserve retention in both
+foreground and background. Idle navigation to a different thread replaces it. Off,
 disconnect or connection-identity changes, session teardown, service detach, and
 pinning clear it. Pinning suppresses retention; unpinning during an interaction
 seeds its spoken thread or accepted recording destination. Nothing is persisted to settings,
@@ -76,14 +83,17 @@ Idle `releaseRetainedVoiceTarget` takes the expected connection generation and
 capture readiness; unavailable targets remain releasable. A stale revision or
 an active interaction makes release a no-op, preserving queued work, settings,
 and the explicit pending app selection. An idle headset Next or notification Next
-performs the same release. The notification exposes Next only while displaying
-the retained fallback. `idleTargetRevision` also advances on default/pin edits,
+performs the same release. When a thread is visible, idle publication remembers
+that thread after release; without one, retention stays clear.
+The notification exposes Next only while displaying
+the retained destination when it differs from the visible thread and no explicit
+choice overrides it. `idleTargetRevision` also advances on default/pin edits,
 pending choices, idle foreground changes, and session teardown.
 Notification identities and extras, and headset dispatch,
 capture both revisions alongside generation and interaction/recording IDs, so an
 old idle Start or Next cannot act on a later idle session, even after an
-idle/active/idle or same-target transition. Ordinary manual/headset starts that
-match retention use fresh manual-input eligibility and activity-token validation
+idle/active/idle or same-target transition. Manual/headset starts whose destination
+comes from retention use fresh manual-input eligibility and activity-token validation
 before and after the cue, even with announcements off. They fail on that exact
 unavailable target without selecting a fallback, and preserve ordinary capture
 and deferred-admission behavior while client controls reconnect.
@@ -119,9 +129,22 @@ Explicit app and notification playback Stop uses `stopPlayback`: it cancels the
 current playback and its unsent follow-up, clears queued automatic speech and
 manual replays, and clears pending client voice actions. It does not disable
 voice or discard a separately saved dictation. New work can play afterward.
-Recording Cancel and headset stop paths retain `stopCurrentInteraction`
-semantics, preserving queued playback. The normal headset Play/Pause and
-dedicated Next mappings do not clear the queue.
+Headset Play/Pause on a current Keep listening recording uses `sendRecording`:
+capture stops, all outstanding transcription finishes, and one nonblank transcript
+is submitted. Play/Pause cancels preparation consistently before and after the
+default-held journal acknowledgement. Repeated presses during any Send are
+idempotent, including ordinary or released recordings sent through the app or
+notification. A pending Keep listening or retarget mutation makes Play/Pause a
+no-op, preserving capture until
+the mutation resolves. The current acknowledged Keep listening flag selects this
+behavior; durable adoption alone does not. An empty explicit Send ends normally
+without a failure cue, re-arming, or submitting input, then drains queued playback.
+Recording Cancel and dedicated headset Stop retain `stopCurrentInteraction`
+semantics: discard unsent capture, including adopted Keep listening recordings,
+then drain queued playback or return to idle. Cancelling capture from the headset
+does not itself report a recording failure or leave saved-dictation recovery.
+Ordinary recording Play/Pause also cancels and discards. The normal headset
+Play/Pause and dedicated Next mappings do not clear the queue.
 The device preference `announceRecordingThread` defaults to false. A new
 recording start validates the exact target's normalized input context and projects
 its required canonical `threadTitle` (a string up to 4,096 UTF-16 units, including
@@ -195,7 +218,7 @@ result once, stops capture, and retains its active slot until completion feedbac
 drains. Cue callbacks are tied to that active item and a unique cue ID; cancellation
 invalidates them. Cue failure or a bounded drain timeout continues the recognized
 input path, while a late provider result cannot replay feedback or input. A
-blank final transcript after locally detected speech re-arms the same item
+blank automatic final transcript after locally detected speech re-arms the same item
 after its failure cue; that pending retry remains dependent on the original
 provider and current voice policy. A no-speech timeout cancels without commit
 and ends the item after the failure cue, with no retry. External focus loss
@@ -771,10 +794,11 @@ Choosing a target does not navigate or save a default. Quick and full settings
 share the default-thread picker. Mobile pickers leave search unfocused to avoid
 opening the keyboard. Long text truncates without reducing the 15 px title or
 13 px status fonts. Reconnecting and error details use the existing status line.
-Idle Next releases retention only when the card displays that fallback. A
-visible thread or explicit choice takes priority and hides unavailable Next.
-Browsing changes the next in-app target without retargeting active work or the
-retained background destination. Keep listening changes automatic stopping;
+Idle Next releases retention when the card displays a different retained thread
+from the one being viewed, or when no thread is visible. An explicit choice or a
+matching visible thread hides redundant Next. Idle navigation changes the next
+target; same-route foreground updates preserve it, and browsing never retargets
+active work. Keep listening changes automatic stopping;
 Send can explicitly finish either ordinary or held capture through the same
 recording identity, endpoint fences, recognition drain, and admission path.
 Saved-dictation stages retain three positions for Retry/Resume, Discard, and

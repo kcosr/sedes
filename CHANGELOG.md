@@ -104,6 +104,11 @@ User-facing changes are collected here before release. See the
 
 ### Changed
 
+- Voice keeps the last reply target after playback ends, even while another thread
+  is open. Idle **Next** returns to the viewed thread; navigating to a different
+  thread while idle selects it. See [voice controls](docs/operator/clients/voice.md).
+  ([#74](https://github.com/kcosr/sedes/pull/74))
+
 - Codex Speed offers Standard, Fast, and Ultrafast according to the model
   catalog and independent Fast/Ultrafast enablement. Explicit user goal edits
   are recorded with their user origin. The managed TUI keeps its inline
@@ -142,6 +147,17 @@ User-facing changes are collected here before release. See the
   ([#73](https://github.com/kcosr/sedes/pull/73))
 
 ### Fixed
+
+- Automation details link consistently to the Automations list and expose
+  **Open thread** beside it. Queue/Steer choices open directly above their button.
+  ([#74](https://github.com/kcosr/sedes/pull/74))
+
+- Headset Play/Pause finishes transcription and sends speech in Keep listening.
+  Any explicit Send with an empty transcript ends without a completion tone and
+  continues queued speech; Play/Pause leaves a Send already in progress. Ordinary
+  recording Play/Pause and headset Stop discard unsent recordings without leaving
+  a recording failure to dismiss.
+  ([#74](https://github.com/kcosr/sedes/pull/74))
 
 - Codex live/history parsing, empty-thread recovery, saved security policy,
   settings updates, speed changes, and forks survive reconnects and races.

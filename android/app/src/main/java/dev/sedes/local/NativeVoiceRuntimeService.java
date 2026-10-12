@@ -19,6 +19,7 @@ import android.view.KeyEvent;
 import android.view.View;
 import android.widget.RemoteViews;
 import androidx.core.app.NotificationCompat;
+import java.util.Objects;
 import org.json.JSONObject;
 
 /** Non-exported foreground owner, started only while the app is visible. */
@@ -158,12 +159,13 @@ public final class NativeVoiceRuntimeService extends Service {
         }
         return NativeVoiceJson.object("threadId", threadId, "threadTitle", threadTitle);
     }
-    /** Show Next only when the notification actually uses the releasable retained fallback. */
+    /** Show Next only when retention determines the destination, independently of visible browsing. */
     static boolean retainedIdleControls(JSONObject state) {
-        JSONObject actions = state.optJSONObject("actions"), foreground = state.optJSONObject("foreground");
+        JSONObject actions = state.optJSONObject("actions"), foreground = state.optJSONObject("foreground"), retained = state.optJSONObject("retainedVoiceTarget");
         return state.optString("phase").equals("idle") && state.optJSONObject("active") == null &&
             state.optJSONObject("nextRecordingTarget") == null &&
-            !(foreground != null && foreground.optBoolean("visible") && nullable(foreground, "threadId") != null) &&
+            retained != null && !(foreground != null && foreground.optBoolean("visible") &&
+                Objects.equals(nullable(foreground, "threadId"), nullable(retained, "threadId"))) &&
             actions != null && actions.optBoolean("canReleaseRetainedTarget");
     }
     private Notification build(JSONObject state) {

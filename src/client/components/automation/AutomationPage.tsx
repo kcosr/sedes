@@ -21,8 +21,8 @@ import {
 import {
   automationEditPath,
   automationsPath,
+  historyStepsBackTo,
   navigate,
-  navigateBack,
   navigateUp,
   threadPath,
 } from "../../app/router.js";
@@ -118,15 +118,25 @@ export function AutomationPage({
   const minute = useMinuteClock();
   const now = useMemo(() => new Date(minute), [minute]);
   const back = (
-    <SettingsBackLink
-      href={automationsPath()}
-      label="Automations"
-      onNavigate={(event) => {
-        if (!isPlainClick(event)) return;
-        event.preventDefault();
-        navigateBack(automationsPath());
-      }}
-    />
+    <nav className="automation-page-navigation" aria-label="Automation navigation">
+      <SettingsBackLink href={automationsPath()} label="Automations" />
+      <Button asChild variant="ghost" size="xs">
+        <a
+          href={threadPath(threadId)}
+          onClick={(event) => {
+            if (!isPlainClick(event)) return;
+            event.preventDefault();
+            const path = threadPath(threadId);
+            const steps = historyStepsBackTo(path);
+            if (steps === undefined) navigate(path);
+            else window.history.go(steps);
+          }}
+        >
+          <MessageSquare aria-hidden="true" />
+          Open thread
+        </a>
+      </Button>
+    </nav>
   );
 
   let content: React.ReactNode;
@@ -194,20 +204,11 @@ function LoadedAutomation({
                 "This thread can't take an automation right now.")
           }
           action={
-            <>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => navigate(threadPath(thread.id))}
-              >
-                Open thread
+            canAttach ? (
+              <Button type="button" onClick={() => navigate(automationEditPath(thread.id))}>
+                Automate…
               </Button>
-              {canAttach ? (
-                <Button type="button" onClick={() => navigate(automationEditPath(thread.id))}>
-                  Automate…
-                </Button>
-              ) : null}
-            </>
+            ) : undefined
           }
         />
       </>
@@ -492,13 +493,9 @@ function AutomationDetails({
                       <DropdownMenuValue aria-hidden="true">{actions.edit.hint}</DropdownMenuValue>
                     ) : null}
                   </DropdownMenuItem>
+                  <DropdownMenuSeparator />
                 </>
               ) : null}
-              <DropdownMenuItem onSelect={() => openThread()}>
-                <MessageSquare aria-hidden="true" />
-                Open thread
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
               <DropdownMenuItem
                 variant="destructive"
                 disabled={!actions.remove.available}

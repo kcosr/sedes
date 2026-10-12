@@ -446,6 +446,8 @@ describe("AutomationPage", () => {
       }),
     });
     expect(screen.getByText("No automation")).toBeInTheDocument();
+    expect(screen.getAllByRole("link", { name: "Open thread" })).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: "Open thread" })).toBeNull();
     await userEvent.click(await screen.findByRole("button", { name: "Automate…" }));
     expect(window.location.pathname).toBe(`/automations/${THREAD_ID}/edit`);
   });
@@ -523,6 +525,8 @@ describe("AutomationPage", () => {
       getThreadAutomation: vi.fn().mockRejectedValue(new ApiError(404, "not_found", "This thread has no automation.", false)),
     });
     expect(await screen.findByText("No automation")).toBeInTheDocument();
+    expect(screen.getAllByRole("link", { name: "Open thread" })).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: "Open thread" })).toBeNull();
   });
 
   it("shows five runs, then the whole history with a filter, paging and Show fewer", async () => {
@@ -654,6 +658,7 @@ describe("AutomationPage", () => {
     const fixture = renderPage([{ automation: automationSummary() }]);
     await screen.findByText("Check acme-web for outdated dependencies.");
     await userEvent.click(screen.getByRole("button", { name: "More automation actions" }));
+    expect(within(screen.getByRole("menu")).queryByRole("separator")).toBeNull();
     await userEvent.click(screen.getByRole("menuitem", { name: "Delete automation…" }));
     const confirm = screen.getByRole("dialog", { name: "Delete this automation?" });
     expect(confirm).toHaveTextContent("Run history is no longer shown.");
@@ -690,13 +695,36 @@ describe("AutomationPage", () => {
     expect(await screen.findByText("Second prompt")).toBeInTheDocument();
   });
 
-  it("goes back where the user came from", async () => {
-    navigate(`/threads/${THREAD_ID}`, { replace: true });
-    navigate(`/automations/${THREAD_ID}`);
-    renderPage([{ automation: automationSummary() }]);
-    await userEvent.click(screen.getByRole("link", { name: "Automations" }));
-    await waitFor(() => expect(window.location.pathname).toBe(`/threads/${THREAD_ID}`));
-  });
+  it.each([`/threads/${THREAD_ID}`, "/automations", "/settings/general"])(
+    "opens the Automations list after arriving from %s",
+    async (origin) => {
+      navigate(origin, { replace: true });
+      navigate(`/automations/${THREAD_ID}`);
+      renderPage([{ automation: automationSummary() }]);
+      await userEvent.click(screen.getByRole("link", { name: "Automations" }));
+      await waitFor(() => expect(window.location.pathname).toBe("/automations"));
+    },
+  );
+
+  it.each([`/threads/${THREAD_ID}`, "/automations", "/settings/general"])(
+    "opens the thread directly after arriving from %s",
+    async (origin) => {
+      const previous = "/threads/previous-thread";
+      navigate(previous, { replace: true });
+      navigate(origin);
+      navigate(`/automations/${THREAD_ID}`);
+      renderPage([{ automation: automationSummary() }]);
+      const navigation = screen.getByRole("navigation", { name: "Automation navigation" });
+      const openThread = within(navigation).getByRole("link", { name: "Open thread" });
+      expect(openThread).toHaveAttribute("href", `/threads/${THREAD_ID}`);
+      await userEvent.click(openThread);
+      await waitFor(() => expect(window.location.pathname).toBe(`/threads/${THREAD_ID}`));
+      window.history.back();
+      await waitFor(() => expect(window.location.pathname).toBe(
+        origin === `/threads/${THREAD_ID}` ? previous : `/automations/${THREAD_ID}`,
+      ));
+    },
+  );
 });
 
 describe("AutomationPage: agent turns", () => {

@@ -172,6 +172,24 @@ test("lists every automation from the More menu and opens one", async ({
     .click();
   await expect(page).toHaveURL(`/automations/${nightly}`);
 
+  const navigation = view.getByRole("navigation", { name: "Automation navigation" });
+  await expect(navigation.getByRole("link", { name: "Open thread" })).toBeVisible();
+  await capture(page, testInfo, "automation-navigation-desktop.png");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(navigation.getByRole("link", { name: "Open thread" })).toBeVisible();
+  await expectNoPageOverflow(page);
+  await capture(page, testInfo, "automation-navigation-mobile.png");
+  await page.setViewportSize({ width: 1440, height: 900 });
+
+  await navigation.getByRole("link", { name: "Open thread" }).click();
+  await expect(page).toHaveURL(`/threads/${nightly}`);
+  await page.getByRole("button", { name: "Automation", exact: true }).click();
+  await expect(page).toHaveURL(`/automations/${nightly}`);
+  await navigation.getByRole("link", { name: "Automations", exact: true }).click();
+  await expect(page).toHaveURL("/automations");
+  await row(page, nightly).getByRole("link", { name: "Nightly dependency audit" }).click();
+  await expect(page).toHaveURL(`/automations/${nightly}`);
+
   // Run now: the scripted agent answers, and once its turn settles the run
   // reads how that turn ended, here and in the list.
   await view.getByRole("button", { name: "Run now" }).click();

@@ -61,7 +61,6 @@ import {
 } from "@client/components/ui/dropdown-menu";
 import { EmptyState } from "@client/components/ui/empty-state";
 import {
-  FLOATING_SIDE_OFFSET,
   eyebrowClass,
   menuDescriptionClass,
   menuEmptyClass,
@@ -383,19 +382,10 @@ export function Composer({
   const composerId = useId();
   const stashButtons = useRef<Array<HTMLButtonElement | null>>([]);
   const [stashOpen, setStashOpen] = useState(false);
-  const [deliveryMenuOpen, setDeliveryMenuOpen] = useState(false);
-  // Surfaces that open upward from inside the stack clear all of it, so
-  // they never cover the Prompts tab above the composer.
+  // The stash clears the whole stack, including the Prompts tab.
   const composerStack = useRef<HTMLDivElement>(null);
   const surfaceStack = useRef<HTMLDivElement>(null);
-  const deliveryMenuTrigger = useRef<HTMLButtonElement>(null);
   const stashOffset = useOffsetAboveStack(composerStack, surfaceStack, stashOpen, 8);
-  const deliveryMenuOffset = useOffsetAboveStack(
-    composerStack,
-    deliveryMenuTrigger,
-    deliveryMenuOpen,
-    FLOATING_SIDE_OFFSET,
-  );
   const stashTitleId = useId();
   const stashDescriptionId = useId();
   const preferredDeliveryMode = useComposerDeliveryMode();
@@ -3594,13 +3584,9 @@ export function Composer({
                                 <Layers size={16} aria-hidden="true" />
                               )}
                             </button>
-                            <DropdownMenu
-                              open={deliveryMenuOpen}
-                              onOpenChange={setDeliveryMenuOpen}
-                            >
+                            <DropdownMenu>
                               <DropdownMenuTrigger asChild>
                                 <button
-                                  ref={deliveryMenuTrigger}
                                   className="delivery-split-menu"
                                   aria-label="Delivery mode"
                                   title="Delivery mode"
@@ -3616,7 +3602,6 @@ export function Composer({
                               <DropdownMenuContent
                                 side="top"
                                 align="end"
-                                sideOffset={deliveryMenuOffset}
                               >
                                 <DropdownMenuRadioGroup
                                   aria-label="Delivery mode"

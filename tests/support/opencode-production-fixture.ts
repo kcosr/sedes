@@ -332,5 +332,5 @@ export class OpenCodeProductionFixture {
 
 export async function fixtureProcessAlive(pid: number) {
   try { const value = await readFile(`/proc/${pid}/stat`, "utf8"); return !["Z", "X"].includes(value.slice(value.lastIndexOf(")") + 2).split(" ")[0]!); }
-  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; }
+  catch (error) { if (["ENOENT", "ESRCH"].includes((error as NodeJS.ErrnoException).code ?? "")) return false; throw error; }
 }
