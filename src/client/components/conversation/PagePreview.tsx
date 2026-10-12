@@ -2,7 +2,6 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
-  ChevronUp,
   Ellipsis,
   Maximize2,
   Pointer,
@@ -160,7 +159,7 @@ export function PagePreview({
             !services.getPageRevision
           }
           onClick={() => void navigateRevision(-1)}
-          size="icon-xs"
+          size="icon-lg"
           variant="ghost"
         >
           <ChevronLeft />
@@ -177,7 +176,7 @@ export function PagePreview({
           <Button
             className="page-revision-label"
             variant="ghost"
-            size="xs"
+            size="sm"
             aria-label={`Return to published revision ${page.revision}`}
             title={`Published here as revision ${page.revision}; return to it`}
             onClick={() => setSelected(page)}
@@ -199,7 +198,7 @@ export function PagePreview({
             !services.getPageRevision
           }
           onClick={() => void navigateRevision(1)}
-          size="icon-xs"
+          size="icon-lg"
           variant="ghost"
         >
           <ChevronRight />
@@ -210,6 +209,17 @@ export function PagePreview({
         aria-hidden="true"
       />
       <Button
+        aria-label="Refresh page preview"
+        title="Refresh preview"
+        onClick={() => {
+          setRefreshVersion((value) => value + 1);
+        }}
+        size="icon-lg"
+        variant="ghost"
+      >
+        <RotateCcw />
+      </Button>
+      <Button
         aria-label={`Expand page: ${selected.title}`}
         title="Expand preview"
         onClick={() => {
@@ -217,24 +227,11 @@ export function PagePreview({
           setExpanded(true);
           deactivate();
         }}
-        size="icon-xs"
+        size="icon-lg"
         variant="ghost"
       >
         <Maximize2 />
       </Button>
-      <Button
-        aria-label="Refresh page preview"
-        title="Refresh preview"
-        onClick={() => {
-          setRefreshVersion((value) => value + 1);
-        }}
-        size="icon-xs"
-        variant="ghost"
-      >
-        <RotateCcw />
-      </Button>
-      <Button size="icon-xs" variant="ghost" aria-label="Hide page details" title="Hide page details"
-        aria-expanded={true} aria-controls={detailsId} onClick={hideDetails}><ChevronUp /></Button>
     </div>
   ) : undefined;
 
@@ -273,16 +270,16 @@ export function PagePreview({
               {interacting ? <Check /> : <Pointer />}
             </Button>
           ) : null}
-          {!detailsOpen ? <Button
+          <Button
             ref={menuButton}
             size="icon-xs"
             variant="outline"
-            aria-label={`Page details: ${selected.title}`}
-            aria-expanded={false}
+            aria-label={detailsOpen ? "Hide page details" : `Page details: ${selected.title}`}
+            aria-expanded={detailsOpen}
             aria-controls={detailsId}
             title="Page details"
-            onClick={() => setDetailsOpen(true)}
-          ><Ellipsis /></Button> : null}
+            onClick={() => { if (detailsOpen) hideDetails(); else setDetailsOpen(true); }}
+          ><Ellipsis /></Button>
         </div>
         {error ? (
           <p className="page-preview-error" role="alert">

@@ -44,7 +44,8 @@
 /* Details expand in the frame's ordinary header, never over the document. */
 .page-preview > .wb-media-frame-header {
   --wb-media-header-background: var(--background);
-  --wb-media-header-padding: var(--space-2);
+  --wb-media-header-padding: var(--space-2) var(--space-3);
+  --page-preview-control: var(--control-lg);
   gap: var(--space-1);
 }
 .page-preview .wb-media-frame-labels {
@@ -55,7 +56,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: var(--text-meta);
+  font-size: var(--text-title);
 }
 .page-preview-header-actions {
   display: flex;
@@ -68,17 +69,24 @@
   flex-shrink: 0;
   align-items: center;
 }
-.page-preview-header-actions > button {
+.page-preview-header-actions button {
+  width: var(--page-preview-control);
+  min-width: var(--page-preview-control);
+  height: var(--page-preview-control);
   flex-shrink: 0;
+}
+.page-preview-header-actions button svg {
+  width: var(--icon-lg);
+  height: var(--icon-lg);
 }
 .page-revision-label {
   display: flex;
   align-items: center;
   justify-content: center;
-  min-width: 25px;
-  height: var(--control-sm);
+  min-width: var(--page-preview-control);
+  height: var(--page-preview-control);
   white-space: nowrap;
-  font-size: var(--text-label);
+  font-size: var(--text-ui);
   line-height: 1;
   font-variant-numeric: tabular-nums;
   color: var(--muted-foreground);
@@ -152,9 +160,8 @@
     width: 36px;
     height: 36px;
   }
-  .page-preview-header-actions button {
-    min-width: 30px;
-    min-height: 36px;
+  .page-preview > .wb-media-frame-header {
+    --page-preview-control: var(--control-touch);
   }
 }
 

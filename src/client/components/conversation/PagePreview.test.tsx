@@ -200,8 +200,18 @@ describe("published page preview", () => {
     const header = container.querySelector(".wb-media-frame-header");
     expect(header).toBeInTheDocument();
     expect(within(header as HTMLElement).getByRole("toolbar", { name: "Page actions" })).toBeInTheDocument();
+    expect(within(header as HTMLElement).getByRole("button", { name: "Next page revision" })).toHaveAttribute("data-size", "icon-lg");
+    expect(within(header as HTMLElement).getByRole("button", { name: "Refresh page preview" })).toHaveAttribute("data-size", "icon-lg");
+    expect(header?.querySelector(".page-preview-header-actions")?.lastElementChild).toBe(
+      screen.getByRole("button", { name: "Expand page: Phone" }),
+    );
     expect(container.querySelector("iframe")).toBe(initialFrame);
-    fireEvent.click(screen.getByRole("button", { name: "Hide page details" }));
+    const collapse = screen.getByRole("button", { name: "Hide page details" });
+    expect(collapse).toHaveAttribute("aria-expanded", "true");
+    expect(collapse.querySelector(".lucide-ellipsis")).toBeInTheDocument();
+    expect(collapse.closest(".wb-media-frame-header")).toBeNull();
+    expect(collapse.closest(".page-preview-controls")).toBeInTheDocument();
+    fireEvent.click(collapse);
     expect(container.querySelector(".wb-media-frame-header")).toBeNull();
     expect(container.querySelector("iframe")).toBe(initialFrame);
     openDetails();
