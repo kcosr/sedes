@@ -127,7 +127,9 @@ User-facing changes are collected here before release. See the
 
 - Agent-requested thread switches can listen on their requested thread after
   current playback, even with Auto-listen off. Backgrounding a pending switch
-  keeps it from navigating when the app resumes. See [agent voice controls](docs/operator/clients/voice.md#agent-controls).
+  keeps it from navigating when the app resumes. Explicit background listening
+  announces its destination when recording-thread announcements are enabled.
+  See [agent voice controls](docs/operator/clients/voice.md#agent-controls).
 
 - Images, Mermaid diagrams, and HTML previews share compact fullscreen
   [zoom controls](docs/user/files-and-context.md#view-images-and-diagrams).

@@ -132,6 +132,15 @@ Electron platform and is independent of the Sedes release version.
 
 Run the deterministic contract checks relevant to the release:
 
+Install the independent server dependency graph before auditing notices. Its
+lockfile can pin different transitive versions from the root development graph;
+the generator needs those packages' license files rather than lockfile-only
+metadata. This install does not build or run the server.
+
+```sh
+env -u NODE_ENV npm ci --prefix packages/server-runtime --ignore-scripts
+```
+
 ```sh
 env -u NODE_ENV npm run check:docs
 env -u NODE_ENV npm run check:version

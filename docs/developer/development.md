@@ -214,8 +214,13 @@ x64, procfs, and a compatible operator-installed Codex command.
 
 The OpenCode v2 qualification suite uses an explicitly selected `opencode2`
 2.0.18 binary with disposable configuration/storage and loopback model/MCP
-fixtures. It never uses a native account or external inference. It is excluded
-from ordinary `npm test` and self-gates before launching the binary:
+fixtures. Its page-preview image qualification uses the pinned Playwright
+Chromium installed for browser tests, with the production preview sandbox
+enabled; it does not require an operator-owned Sedes preview-browser
+installation. Run `npx playwright install chromium` first and use a host
+that supports sandboxed Chromium. It never uses a native account or external
+inference. It is excluded from ordinary `npm test` and self-gates before
+launching the binary:
 
 ```sh
 SEDES_RUN_REAL_OPENCODE=1 \

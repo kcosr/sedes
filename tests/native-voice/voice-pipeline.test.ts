@@ -462,8 +462,15 @@ describe("native voice production pipeline with loopback providers", () => {
         }
         if (scenario === "cycle" || scenario === "record" || scenario === "background-switch") {
           expect(evidence.announceRecordingThread).toBe(true);
-          expect(evidence.phases).not.toContain("announcing");
-          expect((await speech.observations()).speech.filter(request => request.text.startsWith("Replying to "))).toHaveLength(0);
+          const announcements = (await speech.observations()).speech.filter(request => request.text.startsWith("Replying to "));
+          if (scenario === "background-switch") {
+            expect(evidence.phases).toContain("announcing");
+            expect(announcements).toHaveLength(1);
+            expect(announcements[0]?.text).toBe(`Replying to ${secondThreadTitle}.`);
+          } else {
+            expect(evidence.phases).not.toContain("announcing");
+            expect(announcements).toHaveLength(0);
+          }
         }
         if (scenario === "retained-target") {
           const canonical = threadInputContextSchema.parse(await app.json(`/api/threads/${threadId}/input-context`));

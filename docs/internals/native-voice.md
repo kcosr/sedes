@@ -150,12 +150,13 @@ recording start validates the exact target's normalized input context and projec
 its required canonical `threadTitle` (a string up to 4,096 UTF-16 units, including
 blank) into native nullable, trimmed, 512-unit target metadata without splitting
 a surrogate pair. It never substitutes the spoken source thread for a different
-automatic recognition destination. When enabled, only a new idle headset or
-notification start enters a separate `announcing` phase. The initiating control,
-not foreground visibility, selects this behavior. A separate start after speech
-ends announces again, without a recency timer. In-app manual starts,
-`recordDuringPlayback`, automatic follow-ups, and agent-directed recording skip
-the announcement. The phase
+automatic recognition destination. When enabled, a new idle headset or
+notification start enters a separate `announcing` phase. Explicit agent-directed
+listening also announces when its request is voice-only or has lost its original
+foreground navigation context. Foreground agent requests remain silent. A separate
+start after speech ends announces again, without a recency timer. In-app manual
+starts, `recordDuringPlayback`, and automatic follow-ups skip the announcement.
+The phase
 speaks “Replying to {title}.” before the existing recognition start cue and capture
 sequence. Blank titles use “Untitled thread”; spoken titles compact whitespace
 and controls and are limited to 160 Unicode code points with an ellipsis.

@@ -7,6 +7,7 @@ import { startOpencodeModelFixture } from "../support/opencode-model-fixture.js"
 import { OpenCodeMcpIngress } from "../../src/server/backends/opencode/opencode-mcp-ingress.js";
 import { CanonicalInlineAgentToolService } from "../../src/server/agent-tools/invocation/canonical-inline-agent-tool-service.js";
 import { createHash } from "node:crypto";
+import { chromium } from "playwright";
 import { PagePreviewBrowser } from "../../src/server/pages/preview-browser.js";
 import { importInlineHtmlPage } from "../../src/server/pages/html-import.js";
 import { renderPageDocument } from "../../src/server/pages/html-policy.js";
@@ -15,13 +16,18 @@ const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => { for (const close of cleanups.splice(0).reverse()) await close(); });
 
 it.skipIf(!RUN_REAL_OPENCODE)("stock opencode2 forwards a Playwright page preview image to its model", async () => {
+  // Qualification uses the pinned test browser, independent of an operator's
+  // optional Sedes preview-browser installation. OpenCode qualification is Linux-only.
+  const browser = new PagePreviewBrowser({ directory: path.dirname(path.dirname(path.dirname(chromium.executablePath()))) });
+  cleanups.push(() => browser.close());
+  const browserStatus = await browser.status();
+  expect(browserStatus, browserStatus.error).toMatchObject({ installed: true, ready: true });
   const model = await startOpencodeModelFixture({ vision: true });
   const native = await startOpencodeNativeFixture({ config: model.config }).catch(async error => { await model.stop(); throw error; });
   const ingress = new OpenCodeMcpIngress();
   const cleanup = async () => { await ingress.close(); await native.stop(); await model.stop(); };
   cleanups.push(cleanup);
   const canonical = new CanonicalInlineAgentToolService({ application: { readThreadStatus: async () => undefined }, pages: {} as never });
-  const browser = new PagePreviewBrowser();
   let screenshotHash: string | undefined;
   const channel = await ingress.admit({ catalog: canonical.catalogSummaries("mcp", "thread_agent"), invoke: async request => {
     if (request.operation === "describe") return { tools: canonical.describeMany("mcp", "thread_agent", request.toolIds) };

@@ -547,9 +547,11 @@ could not be routed.
 on, a new recording started from the headset or notification while idle begins
 with “Replying to {thread title}.” using the current title of the thread that
 will receive it. This also applies to a separate start just after playback ends.
-In-app starts, interrupting playback to reply, and automatic follow-up recordings
-skip the announcement. The initiating control determines this behavior, even if
-the app is visible when a headset or notification start is used.
+Explicit agent requests to listen on a thread also announce when accepted
+in the background or when the app leaves their original foreground context before
+recording starts. In-app starts, foreground agent requests, interrupting playback
+to reply, and automatic follow-up recordings skip the announcement. Headset and
+notification starts announce even if the app is visible.
 Long titles are shortened and blank
 titles are announced as “Untitled thread”. The title finishes playing before the
 usual start cue and microphone preparation. The input shows **Announcing thread…**
