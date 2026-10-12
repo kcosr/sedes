@@ -536,15 +536,16 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
     private void applyClientActions() {
         // A held start has not passed its final gate; it cannot retire unrelated staged controls.
         if (active != null && active.heldAuthorityResetPending) return;
-        boolean listeningBlocked = defaultHeldBlocked() || blockingDictation() || active != null && (active.adopted || active.defaultHeld);
-        NativeVoiceQueue.Item notification = active == null || listeningBlocked ? null : active.notification;
-        for (NativeClientActionQueue.Action action : clientActions.takeReady(System.currentTimeMillis(), sessionStarted && settings.active() && !listeningBlocked, voiceStreamId, active != null && !listeningBlocked,
-                notification == null ? null : notification.threadId, clientTurn(notification), inputSubmissionContext, id -> !listeningBlocked && queue.contains(id))) {
+        boolean playbackBlocked = blockingDictation() || active != null && (active.adopted || active.defaultHeld);
+        boolean listeningBlocked = defaultHeldBlocked() || playbackBlocked;
+        NativeVoiceQueue.Item notification = active == null || playbackBlocked ? null : active.notification;
+        for (NativeClientActionQueue.Action action : clientActions.takeReady(System.currentTimeMillis(), sessionStarted && settings.active() && !playbackBlocked, voiceStreamId, active != null && !playbackBlocked,
+                notification == null ? null : notification.threadId, clientTurn(notification), inputSubmissionContext, id -> !playbackBlocked && queue.contains(id))) {
             JSONObject command = action.command;
             if (!command.optString("action").equals("switch_thread")) continue;
             boolean startListen = action.listens() && settings.active() && !listeningBlocked;
             if (action.listens() && listeningBlocked) {
-                if (defaultHeldBlocked() || !action.voiceOnly) report("saved_recording_pending");
+                if (defaultHeldBlocked() || !action.voiceOnly) report(clientListenBlockedReason());
                 // A blocked microphone does not remove separately authorized foreground navigation.
                 handler.post(this::applyClientActions);
             }
@@ -2214,6 +2215,12 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
     }
     private boolean blockingDictation() {
         return dictationLoading || dictationOperationPending || dictationStorageError || savedDictationBlocks();
+    }
+    private String clientListenBlockedReason() {
+        if (dictationStorageError) return "dictation_storage_unavailable";
+        if (dictationLoading || dictationOperationPending) return "recording_operation_pending";
+        if (active != null && (active.adopted || active.defaultHeld)) return "voice_busy";
+        return "saved_recording_pending";
     }
     private boolean defaultHeldBlocked() { return settings.flag("keepListeningByDefault") && retainedDictation != null; }
     private void acceptDictation(NativeDictationStore.Recording record) {

@@ -1983,14 +1983,51 @@ public class NativeVoiceRuntimeTest {
         }
     }
 
+    @Test public void retainedHandedOffRecordingDoesNotBypassSourcePlaybackBeforeNavigation() throws Exception {
+        for (boolean listen : new boolean[] { false, true }) for (boolean queued : new boolean[] { false, true }) {
+            try (Fixture f = new Fixture(false, false)) {
+                f.readyClientVoice("speak"); NativeDictationStore.Recording saved = f.savedRecording(true, false);
+                AtomicReference<NativeDictationStore.Recording> handedOff = new AtomicReference<>();
+                f.onStore(() -> {
+                    f.dictations.saveFinalRequest(f.binding, saved.id, NativeVoiceJson.object("mutationId", saved.mutationId, "text", saved.text,
+                        "origin", NativeVoiceJson.object("clientId", f.request.getJSONObject("origin").getString("clientId")),
+                        "runningPolicy", NativeVoiceJson.object("mode", "queue")));
+                    handedOff.set(f.dictations.markHandedOff(f.binding, saved.id));
+                });
+                f.onOwner(() -> set(f.runtime, "retainedDictation", handedOff.get()));
+                f.settings(NativeVoiceJson.object("audioMode", "speak", "autoListen", false, "keepListeningByDefault", true));
+                f.policy(true, false, "speak"); f.foreground(f.target);
+                SpeechJob earlier = null;
+                if (queued) { f.receiveReply("Earlier reply", false); earlier = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(earlier); }
+                String reply = f.receiveClientTurnNotice("turn.completed");
+                SpeechJob source = queued ? null : f.speech.speechRequests.poll(10, TimeUnit.SECONDS);
+                String target = UUID.randomUUID().toString(); JSONObject command = f.clientSwitch(target, listen);
+                assertEquals("accepted", f.clientCommand(command).getString("status")); f.settleClientSwitch(command, reply);
+                f.flushEvents(); assertTrue(f.contexts.isEmpty()); assertTrue(f.openThreads.isEmpty());
+                if (queued) {
+                    f.runtime.drained(earlier.id); f.flush(); source = f.speech.speechRequests.poll(10, TimeUnit.SECONDS);
+                    assertTrue(f.contexts.isEmpty()); assertTrue(f.openThreads.isEmpty());
+                }
+                assertNotNull(source); assertEquals(reply, f.runtime.snapshot().getJSONObject("active").getString("id"));
+                f.runtime.drained(source.id); f.flush();
+                f.takeClientTarget(target).done(200, Fixture.inputContext(target), null); f.flushEvents();
+                JSONObject opened = f.openThreads.poll(10, TimeUnit.SECONDS); assertNotNull(opened); assertEquals(target, opened.getString("threadId"));
+                assertTrue(f.speech.transcriptions.isEmpty()); assertTrue(f.openThreads.isEmpty());
+                if (listen) assertEquals("saved_recording_pending", f.lastError().getString("code"));
+            }
+        }
+    }
+
     @Test public void foregroundNavigationSurvivesListenBlockersAndPreparationFailures() throws Exception {
-        for (String blocker : new String[] { "saved", "held", "manual_ineligible", "readiness_lost", "preflight" }) {
+        for (String blocker : new String[] { "saved", "held", "loading", "operation", "storage", "manual_ineligible", "readiness_lost", "preflight" }) {
             try (Fixture f = new Fixture(false, false)) {
                 f.readyClientVoice("input"); f.foreground(f.target);
                 if (blocker.equals("saved") || blocker.equals("held")) {
                     f.savedRecording(blocker.equals("held"), true, false);
                     if (blocker.equals("held")) f.settings(NativeVoiceJson.object("keepListeningByDefault", true));
                 }
+                if (blocker.equals("loading") || blocker.equals("operation") || blocker.equals("storage")) f.onOwner(() ->
+                    set(f.runtime, blocker.equals("loading") ? "dictationLoading" : blocker.equals("operation") ? "dictationOperationPending" : "dictationStorageError", true));
                 f.holdRecordingPreflight = blocker.equals("preflight");
                 String target = UUID.randomUUID().toString(); JSONObject command = f.clientSwitch(target, true);
                 assertEquals("accepted", f.clientCommand(command).getString("status")); f.settleClientSwitch(command, null);
@@ -2011,6 +2048,8 @@ public class NativeVoiceRuntimeTest {
                 f.flushEvents(); JSONObject opened = f.openThreads.poll(10, TimeUnit.SECONDS); assertNotNull(blocker, opened);
                 assertEquals(target, opened.getString("threadId")); assertTrue(f.openThreads.isEmpty());
                 assertTrue(f.runtime.snapshot().isNull("active")); assertTrue(f.speech.transcriptions.isEmpty());
+                if (blocker.equals("loading") || blocker.equals("operation")) assertEquals("recording_operation_pending", f.lastError().getString("code"));
+                if (blocker.equals("storage")) assertEquals("dictation_storage_unavailable", f.lastError().getString("code"));
             }
         }
     }
