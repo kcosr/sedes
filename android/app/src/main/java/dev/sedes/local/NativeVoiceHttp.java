@@ -70,10 +70,12 @@ final class NativeVoiceHttp {
         });
         return call;
     }
-    Call events(String origin, String credential, Stream listener) {
-        Request.Builder builder = new Request.Builder().url(NativeVoiceSettings.origin(origin) + "/api/application/events")
+    Call events(String origin, String credential, String voiceStreamId, Stream listener) {
+        Request.Builder builder = new Request.Builder().url(NativeVoiceSettings.origin(origin) + "/api/application/events?voiceStreamId=" + voiceStreamId)
             .header("Accept", "text/event-stream").header("Cache-Control", "no-cache");
         if (credential != null) builder.header("Authorization", "Bearer " + credential);
+        if (registrationToken != null && origin.equals(registrationOrigin) && java.util.Objects.equals(credential, registrationCredential))
+            builder.header("X-Sedes-Client", registrationToken);
         Call call = streams.newCall(builder.build());
         call.enqueue(new Callback() {
             public void onFailure(Call call, IOException error) { listener.closed("stream_unavailable"); }

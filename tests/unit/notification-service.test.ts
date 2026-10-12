@@ -6,7 +6,7 @@ import { notificationDeliveryMigration } from "../../src/server/db/migrations/13
 import { partialNotificationDeliveryMigration } from "../../src/server/db/migrations/139-partial-notification-delivery.js";
 import { notificationPathlessScriptDeliveryMigration } from "../../src/server/db/migrations/132-notification-pathless-script-delivery.js";
 import type { BoundedText } from "../../src/shared/protocol/payload.js";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -127,6 +127,41 @@ const flush = async () => {
 };
 
 describe("notification settings and passive hooks", () => {
+  it("reports only exact native streams actually handed a voice event, preserving subscriber order", async () => {
+    const { service } = fixture(); enable(service);
+    service.subscribe(scope, () => {}); // Ordinary browser/WebView: no playback barrier.
+    const token = "native-token";
+    const oldStream = randomUUID(), newStream = randomUUID();
+    service.subscribe(scope, () => {}, { connectionToken: token, voiceStreamId: oldStream });
+    service.subscribe(scope, () => {}, { connectionToken: token, voiceStreamId: newStream });
+    service.subscribe(other, () => {}, { connectionToken: "other-scope", voiceStreamId: randomUUID() });
+    const publication = await emitFresh(service, scope, event(), "stream-deliveries", "live");
+    expect(publication?.sourceEventId).toBe(createHash("sha256").update("stream-deliveries").digest("hex"));
+    expect(publication?.deliveries.map(({ connectionToken, voiceStreamId }) => ({ connectionToken, voiceStreamId }))).toEqual([
+      { connectionToken: token, voiceStreamId: oldStream }, { connectionToken: token, voiceStreamId: newStream },
+    ]);
+    expect(publication!.deliveries[1]!.subscriberSequence).toBeGreaterThan(publication!.deliveries[0]!.subscriberSequence);
+  });
+
+  it("never reports late, removed, failed, or synchronously closed streams as playback barriers", async () => {
+    const { service } = fixture(); enable(service);
+    service.subscribe(scope, () => {});
+    let remove!: () => void;
+    remove = service.subscribe(scope, frame => { if (frame.startsWith("event: notification\n")) remove(); },
+      { connectionToken: "self-closed", voiceStreamId: randomUUID() });
+    service.subscribe(scope, frame => { if (frame.startsWith("event: notification\n")) throw new Error("closed"); },
+      { connectionToken: "failed", voiceStreamId: randomUUID() });
+    const disconnect = service.subscribe(scope, () => {}, { connectionToken: "removed", voiceStreamId: randomUUID() });
+    const watermark = service.captureSubscriberWatermark();
+    let settle!: (target: undefined) => void;
+    const publication = emitFresh(service, scope, event(), "ending-streams", "live", undefined,
+      () => ({ settlement: new Promise(resolve => { settle = resolve; }) }), watermark);
+    disconnect();
+    service.subscribe(scope, () => {}, { connectionToken: "late", voiceStreamId: randomUUID() });
+    settle(undefined);
+    expect((await publication)?.deliveries).toEqual([]);
+  });
+
   it("suppresses superseded turn voice without suppressing scripts or invoking recognition context", async () => {
     vi.stubEnv("SEDES_DEBUG_DELIVERY", "1");
     const diagnostics = vi.spyOn(console, "error").mockImplementation(() => {});

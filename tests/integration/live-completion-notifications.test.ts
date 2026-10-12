@@ -9,7 +9,7 @@ import {
   type SubmissionCompletionObservationRecord,
 } from "../../src/server/db/repositories/submission-completion-repository.js";
 import { NotificationLifecycleObserver } from "../../src/server/domain/notification-lifecycle-observer.js";
-import { NotificationService } from "../../src/server/domain/notification-service.js";
+import { NotificationService, type VoiceNotificationPublication } from "../../src/server/domain/notification-service.js";
 import { TurnReplySpeechService } from "../../src/server/domain/turn-reply-speech-service.js";
 import type { executeNotificationScript } from "../../src/server/runtime/notification-script-executor.js";
 import { voiceNotificationSchema } from "../../src/shared/protocol/notification.js";
@@ -51,7 +51,7 @@ async function fixture(observeNotifications = true) {
   notifications = new NotificationService({
     repository: new NotificationRepository(harness.database), executor,
   });
-  const publications: Promise<string | undefined>[] = [];
+  const publications: Promise<VoiceNotificationPublication | undefined>[] = [];
   observer = new NotificationLifecycleObserver(harness.inventoryRepository, (scope, payload, key, provenance, result, _recognitionThreadId, subscriberWatermark, responseVoice) => {
     publications.push(notifications.emit(scope, payload, key, provenance, result, () =>
       harness.mutations.activity.notificationContext(scope, payload.thread!.id, payload.turn!.id), subscriberWatermark, responseVoice));

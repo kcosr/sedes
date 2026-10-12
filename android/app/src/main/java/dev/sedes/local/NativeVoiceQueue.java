@@ -144,6 +144,7 @@ final class NativeVoiceQueue {
     private int bytes;
     int size() { return pending.size(); }
     int bytes() { return bytes; }
+    boolean contains(String id) { for (Item item : pending) if (item.id.equals(id)) return true; return false; }
     boolean remember(String id) {
         if (!seen.add(id)) return false;
         remembered.addLast(id);

@@ -2326,6 +2326,16 @@ joining during observer or settlement waits. Voice never persists or replays
 offline notices. Do not infer freshness from an event
 timestamp or add a voice age cutoff. Explicit reply playback remains available.
 
+Deferred client controls wait only for playback delivered to their own current
+registration. Native notification subscriptions identify their stream with a
+UUID and the authenticated client connection token. Track successful deliveries
+to those exact streams; inventory subscriptions and other clients must never
+establish a playback barrier. Settlement carries the reply event and stream
+identity together, or two nulls when no playback was delivered. Notification
+stream loss releases undeliverable playback waits, while control-connection
+loss still retires pending commands. Benign notification drops release the
+barrier; a superseded source turn discards its deferred controls.
+
 Successful-turn notifications may opt into a separate immutable classified
 assistant-result snapshot captured alongside the callback aggregate. Keep the
 aggregate callback contract unchanged. Backend assistant items may carry
@@ -3190,8 +3200,9 @@ Files sidecar does not imply a provider transport.
 
 Sidecar stream consumers may drain buffered data after receiving a validated
 terminal. Replenishing credit on that exact completed registration is a no-op;
-unregistering an unfinished stream still rejects later credit. Preserve byte,
-sequence, and terminal validation. This shared transport rule applies to Pi,
+unregistering an unfinished stream still rejects later credit. A retired handle
+must neither credit nor unregister a replacement using the same stream ID.
+Preserve byte, sequence, and terminal validation. This shared transport rule applies to Pi,
 Codex, Claude, and OpenCode remote operations; Grok remains local-only.
 
 Environment availability may aggregate independent, typed backend and

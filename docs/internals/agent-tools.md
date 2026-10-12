@@ -330,17 +330,22 @@ condition and the actual state. Off stops immediately.
 End-interaction suppresses only this turn's automatic follow-up; it does not
 cancel the agent or change preferences. Switch-thread defaults to `listen: false`.
 With `listen: true`, Android requests one exact-target listen even with auto-listen
-disabled. In the background, it requires an existing ready native voice session
-and starts recognition without navigating now or when the app returns. A request
-accepted in the background remains voice-only even if the app resumes before
-execution. Background `listen: false` is a no-op; foreground navigation requires
-continued visibility. Neither operation enables voice or changes the pinned/default
-thread. Recording preferences, including Keep listening by default, still apply.
+disabled, waiting behind unrelated playback. It checks that target's current
+manual-input readiness before the cue, after the cue, and immediately before
+microphone capture. In the background, it requires an existing ready native
+voice session and starts recognition without navigating now or when the app
+returns. Backgrounding at acceptance or while a request is pending permanently
+makes it voice-only. Background `listen: false` is a no-op. Neither operation
+enables voice or changes the pinned/default thread. Recording preferences,
+including Keep listening by default, still apply.
 Accepted deferred actions are acknowledged before turn completion, then wait for
-the matching reply's actual audio drain. Silent replies do not require audio.
-Failed/interrupted turns, playback failure, manual supersession, expiry, and
-connection loss prevent deferred actions. Readiness and recording blockers are
-rechecked before recognition starts. Browser/Electron navigation works; voice,
+the matching reply's actual audio drain. The barrier names the exact event and
+native notification stream that received the reply; delivery to another client
+does not create a wait. Silent replies and benign notification drops release
+their barrier. Notification-stream loss releases undelivered playback waits;
+control-connection loss retires the command. Failed/interrupted or superseded
+turns, playback failure, manual supersession, and expiry prevent deferred actions.
+Browser/Electron navigation works; voice,
 voice settings, and replay report unsupported with a successful no-op.
 
 `client.replay_turn` queues one ended turn's reply for speech on the current

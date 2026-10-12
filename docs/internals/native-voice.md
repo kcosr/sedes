@@ -264,7 +264,9 @@ selections survive. The input journal holds at most 64 entries and 8 MiB.
 A server registration supplies the shared native/WebView client ID. Paired
 registrations use the authenticated management-client ID; authentication-off
 registrations receive temporary server IDs. Browser and Electron windows use
-the same registration API. There is no independently generated playback UUID.
+the same registration API. Native generates a separate `voiceStreamId` UUID
+for each notification connection; it identifies that delivery stream, not a
+client or principal.
 An in-memory server resume secret preserves the ID across reconnects within
 five minutes. Each successful reconnect refreshes the session and resumes enabled
 voice/recovery work; a temporary control-channel outage clears deferred actions
@@ -283,16 +285,23 @@ registration remain live while voice is Off. Old advisory origins retained in
 historical inputs do not become live client authority.
 
 Agent `client.switch_thread` requests share the existing turn-settlement and
-reply-drain queue. A background request with `listen: true` requires an already
-ready native voice session and starts one recognition on the exact target;
-`listen: false` remains a no-op. The runtime captures the voice-only disposition
-at acceptance, so returning to the foreground cannot turn it into navigation.
-That request never queues `openThread` or changes the default or pending in-app target.
-Visibility changes alone do not cancel that recognition request; explicit manual
-supersession, Off, expiry, and connection loss still do. Foreground navigation
-keeps its visibility fence. Native readiness and recording blockers are checked
-again at execution, and normal recording preferences, including Keep listening
-by default, remain in effect. No background service start is attempted.
+reply-drain queue. An explicit `listen: true` waits behind unrelated active
+playback, then starts one recognition on the exact requested thread using fresh
+manual-input readiness before the start cue, after the cue, and at recognition
+ready before microphone capture. It works independently of Auto-listen and
+requires an already ready native voice session. Normal recording preferences,
+including Keep listening by default, remain in effect; no background service
+start is attempted.
+
+A request accepted in the background, or one that becomes backgrounded while
+pending, permanently becomes voice-only. Returning to the foreground cannot
+restore navigation. That request never queues `openThread` or changes the
+default or pending in-app target; `listen: false` is a no-op. Visibility changes
+alone do not cancel an explicit listen. Manual supersession, Off, expiry, and
+control-connection loss still do. Notification-stream loss releases any wait
+for an undelivered reply, and ordinary filtered or dropped notifications release
+their playback barrier. A reply superseded by newer input discards the source
+turn's deferred actions before draining it.
 Agent `replay_turn` commands bypass that queue; see
 [Turn reply replay](#turn-reply-replay).
 
@@ -368,6 +377,23 @@ metadata. It is dropped only if its metadata alone exceeds the limit.
   required for every `turn.*` event and forbidden for other events. A turn's
   recognition target, when present, must name the payload's source thread.
 
+Android identifies each native connection with a fresh `voiceStreamId` UUID
+query parameter and its registered `X-Sedes-Client` connection token. The server
+checks the token against the authenticated principal and paired client; only
+an Android registration with voice capability can claim a voice stream.
+Ordinary inventory streams may omit the parameter and do not establish native
+playback delivery.
+
+The server records only successful notification deliveries to the captured
+native streams. A `turn_settled` command carries both `replyEventId` and
+`replyStreamId`, or both as null when that client received no native playback.
+For overlapping streams of one current client registration, only its newest
+delivered stream establishes the barrier. Native waits only for that exact
+event/stream pair; receipt by another client or an inventory stream cannot make
+an explicit listen wait. A retired notification stream cannot leave a barrier
+waiting for an event that will never arrive. The control connection separately
+owns the lifetime of deferred commands.
+
 These frames have no SSE `id`, replay entry, projection fold, or inventory
 checkpoint. Policy is subscribed and delivered before voice. If policy cannot
 be read at subscription, that stream carries inventory without a transient
@@ -423,7 +449,7 @@ old target stale rather than granting access to the newer work.
 
 ### Automatic turn freshness
 
-Client protocol 152 requires a nonnegative safe-integer `userInputRevision` in
+Client protocol 153 requires a nonnegative safe-integer `userInputRevision` in
 `input-context` and automatic turn notification envelopes. This is a durable
 tenant-, principal-, and thread-scoped counter, independent of the broader
 activity token. Fresh composer, direct-input, and nonblocking question-response

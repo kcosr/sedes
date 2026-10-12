@@ -1653,6 +1653,7 @@ async function fixture(
     withHost(test).set("X-CSRF-Token", "normalized-csrf");
   return {
     app,
+    notifications,
     questions,
     questionDispatch,
     drain,
@@ -5140,6 +5141,41 @@ describe("normalized HTTP application contract", () => {
         .expect(({ body }) => expect(body.error.code).toBe("internal_error"));
     } finally {
       capture.mockRestore();
+      current.close();
+    }
+  });
+
+  it("binds native voice streams to exact Android registration and rejects malformed or foreign authority", async () => {
+    const current = await fixture();
+    const server = current.app.listen(0, "127.0.0.1");
+    try {
+      await new Promise<void>((resolve, reject) => { server.once("listening", resolve); server.once("error", reject); });
+      const input = { platform: "android", capabilities: { navigate: true, voice: true, voiceSettings: true },
+        state: { runtime: { foreground: false, voiceReady: true, interactionActive: false }, settings: null } };
+      const register = async (body = input) => (await current.mutate(request(current.app).post("/api/client-registration")).send(body).expect(200)).body;
+      const native = await register();
+      const voiceStreamId = randomUUID();
+      const route = `/api/application/events?voiceStreamId=${voiceStreamId}`;
+      const subscribe = vi.spyOn(current.notifications, "subscribe");
+      await readFirstSseEvent(server, route, { "X-Sedes-Client": native.connectionToken });
+      expect(subscribe).toHaveBeenCalledWith(current.owner, expect.any(Function), {
+        connectionToken: native.connectionToken, voiceStreamId,
+      });
+      await current.withHost(request(current.app).get(route)).expect(503);
+      await current.withHost(request(current.app).get(route)).set("X-Sedes-Client", native.connectionToken)
+        .set("X-Test-Foreign-Principal", "yes").expect(503);
+      for (const invalid of ["bad", `${voiceStreamId}&voiceStreamId=${randomUUID()}`]) {
+        await current.withHost(request(current.app).get(`/api/application/events?voiceStreamId=${invalid}`))
+          .set("X-Sedes-Client", native.connectionToken).expect(400);
+      }
+      const browser = await register({ ...input, platform: "browser", capabilities: { navigate: true, voice: false, voiceSettings: false } });
+      await current.withHost(request(current.app).get(route)).set("X-Sedes-Client", browser.connectionToken).expect(400);
+      const silent = await register({ ...input, capabilities: { navigate: true, voice: false, voiceSettings: false } });
+      await current.withHost(request(current.app).get(route)).set("X-Sedes-Client", silent.connectionToken).expect(400);
+      await current.mutate(request(current.app).post("/api/client-registration")).send({ ...input, resumeToken: native.resumeToken }).expect(200);
+      await current.withHost(request(current.app).get(route)).set("X-Sedes-Client", native.connectionToken).expect(409);
+    } finally {
+      await closeHttpTestServer(server);
       current.close();
     }
   });

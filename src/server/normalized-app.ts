@@ -1495,6 +1495,10 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
       const untrack = dependencies.longLivedConnections?.track(response);
       if (untrack) response.once("close", untrack);
       const requestScope = await scope(request);
+      const voiceStream = query.voiceStreamId === undefined ? undefined : (() => {
+        if (!dependencies.clientControls) throw new ApiError(503, "client_controls_unavailable", "Client controls are unavailable.");
+        return dependencies.clientControls.voiceStream(requestScope, request.get("X-Sedes-Client"), clientIdentity(request)?.id, query.voiceStreamId);
+      })();
       const hub = dependencies.applicationSnapshots.hub(requestScope);
       const release = () =>
         dependencies.applicationSnapshots.release(requestScope);
@@ -1505,7 +1509,7 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
         (force) => dependencies.applicationSnapshots.checkpoint(requestScope, hub, force),
         {
           onReplay: () => dependencies.applicationSnapshots.resumed(requestScope, hub),
-          subscribeTransient: (listener) => dependencies.notifications.subscribe(requestScope, listener),
+          subscribeTransient: (listener) => dependencies.notifications.subscribe(requestScope, listener, voiceStream),
           ...(query.replayCursor
             ? { explicitReplayCursor: query.replayCursor }
             : {}),

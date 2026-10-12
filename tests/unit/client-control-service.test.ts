@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { ClientControlService, MAX_POLL_RESPONSE_BYTES } from "../../src/server/domain/client-control-service.js";
+import type { VoiceNotificationPublication } from "../../src/server/domain/notification-service.js";
 import type { AuthenticationClient } from "../../src/shared/authentication.js";
 import type { ClientCommand, ClientState } from "../../src/shared/protocol/client-controls.js";
+import { clientCommandSchema } from "../../src/shared/protocol/client-controls.js";
 import { serializedUtf8Bytes } from "../../src/shared/protocol/payload.js";
 
 const scope = { tenantId: "tenant", principalId: "principal" };
@@ -20,6 +22,64 @@ const replayTurn = (text: string, turnId = "ended-turn"): Omit<ClientCommand, "i
 });
 
 describe("registered client authority", () => {
+  it("admits voice streams only from the exact scoped Android voice registration", () => {
+    const service = fixture();
+    const browser = service.register(scope, undefined, registration);
+    const native = service.register(scope, undefined, { ...registration, platform: "android", capabilities: { navigate: true, voice: true, voiceSettings: true } });
+    const voiceStreamId = randomUUID();
+    expect(service.voiceStream(scope, native.connectionToken, undefined, voiceStreamId)).toEqual({ connectionToken: native.connectionToken, voiceStreamId });
+    expect(() => service.voiceStream(scope, browser.connectionToken, undefined, voiceStreamId)).toThrow("Android voice client");
+    expect(() => service.voiceStream({ ...scope, principalId: "foreign" }, native.connectionToken, undefined, voiceStreamId)).toThrow();
+    expect(() => service.voiceStream(scope, undefined, undefined, voiceStreamId)).toThrow();
+    const next = service.register(scope, undefined, { ...registration, platform: "android", resumeToken: native.resumeToken });
+    expect(() => service.voiceStream(scope, native.connectionToken, undefined, voiceStreamId)).toThrow();
+    expect(() => service.voiceStream(scope, next.connectionToken, undefined, voiceStreamId)).toThrow("Android voice client");
+    const paired = { id: randomUUID(), name: "Phone" } as AuthenticationClient;
+    const authenticated = service.register(scope, paired, { ...registration, platform: "android", capabilities: { navigate: true, voice: true, voiceSettings: true } });
+    expect(() => service.voiceStream(scope, authenticated.connectionToken, undefined, voiceStreamId)).toThrow();
+    expect(() => service.voiceStream(scope, authenticated.connectionToken, randomUUID(), voiceStreamId)).toThrow();
+    expect(service.voiceStream(scope, authenticated.connectionToken, paired.id, voiceStreamId).connectionToken).toBe(authenticated.connectionToken);
+  });
+
+  it.each(["other client", "unregistered stream", "replacement token", "newest exact stream"] as const)("selects a playback barrier only for %s", async kind => {
+    const service = fixture();
+    const nativeRegistration = { ...registration, platform: "android" as const, capabilities: { navigate: true, voice: true, voiceSettings: true } };
+    const native = service.register(scope, undefined, nativeRegistration);
+    const peer = service.register(scope, undefined, nativeRegistration);
+    const request = service.request(service.target(scope, native.clientId), {
+      action: "switch_thread", sourceThreadId: "source", sourceTurnId: "turn", threadId: randomUUID(), listen: true,
+    }, new AbortController().signal);
+    const command = (await poll(service, native.connectionToken)).commands[0]!;
+    await poll(service, native.connectionToken, [{ id: command.id, result: { status: "accepted", state } }], aborted());
+    await request;
+    const stream = randomUUID();
+    const deliveries = kind === "unregistered stream" ? [] : [
+      { connectionToken: kind === "other client" ? peer.connectionToken : kind === "replacement token" ? "obsolete-token" : native.connectionToken,
+        voiceStreamId: stream, subscriberSequence: 2 },
+      ...(kind === "newest exact stream" ? [{ connectionToken: native.connectionToken, voiceStreamId: randomUUID(), subscriberSequence: 1 }] : []),
+    ];
+    let publish!: (result: VoiceNotificationPublication) => void;
+    service.observeNotification(scope, "source", "turn", new Promise(resolve => { publish = resolve; }));
+    const complete = service.complete(scope, "source", "turn");
+    publish({ sourceEventId: "reply", deliveries }); await complete;
+    const settled = (await poll(service, native.connectionToken)).commands[0]!;
+    expect(settled).toMatchObject({ action: "turn_settled", replyEventId: kind === "newest exact stream" ? "reply" : null,
+      replyStreamId: kind === "newest exact stream" ? stream : null });
+    expect(clientCommandSchema.parse(settled)).toEqual(settled);
+  });
+
+  it("requires one strict nullable event/stream pair only on turn settlement", () => {
+    const command = { id: randomUUID(), action: "turn_settled", sourceThreadId: "source", sourceTurnId: "turn", expiresAt: 10 };
+    expect(clientCommandSchema.safeParse({ ...command, replyEventId: null, replyStreamId: null }).success).toBe(true);
+    expect(clientCommandSchema.safeParse({ ...command, replyEventId: "event", replyStreamId: randomUUID() }).success).toBe(true);
+    for (const fields of [{}, { replyEventId: null }, { replyStreamId: null }, { replyEventId: "event", replyStreamId: null },
+      { replyEventId: null, replyStreamId: randomUUID() }, { replyEventId: "", replyStreamId: randomUUID() },
+      { replyEventId: "event", replyStreamId: "bad-uuid" }]) {
+      expect(clientCommandSchema.safeParse({ ...command, ...fields }).success).toBe(false);
+    }
+    expect(clientCommandSchema.safeParse({ ...command, action: "switch_thread", replyEventId: null, replyStreamId: null }).success).toBe(false);
+  });
+
   it("registers anonymous clients independently without pairing and denies foreign principals and tokens", () => {
     const service = fixture();
     const first = service.register(scope, undefined, registration);
@@ -122,12 +182,14 @@ describe("registered client authority", () => {
     await requested;
     await service.complete(scope, "thread", "another-turn");
     expect(await poll(service, registered.connectionToken, [], abort.signal)).toEqual({ commands: [] });
-    let publish!: (id: string) => void;
+    let publish!: (publication: VoiceNotificationPublication) => void;
     service.observeNotification(scope, "thread", "turn", new Promise(resolve => { publish = resolve; }));
     const completing = service.complete(scope, "thread", "turn");
     const settled = poll(service, registered.connectionToken);
-    publish("reply-event"); await completing;
-    expect((await settled).commands).toEqual([{ ...commands[0], action: "turn_settled", replyEventId: "reply-event", expiresAt: expect.any(Number) }]);
+    const replyStreamId = randomUUID();
+    publish({ sourceEventId: "reply-event", deliveries: [{ connectionToken: registered.connectionToken, voiceStreamId: replyStreamId, subscriberSequence: 1 }] });
+    await completing;
+    expect((await settled).commands).toEqual([{ ...commands[0], action: "turn_settled", replyEventId: "reply-event", replyStreamId, expiresAt: expect.any(Number) }]);
   });
 
   it.each(["end_interaction", "switch_thread"] as const)("discards a superseded turn's deferred %s without settling it later", async action => {

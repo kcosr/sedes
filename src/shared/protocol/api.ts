@@ -909,6 +909,8 @@ export const applicationEventStreamQuerySchema = z
   .strictObject({
     replayCursor: applicationEventIdSchema.optional(),
     handshake: z.literal("authoritative_replacement").optional(),
+    /** One Android native voice event-stream attempt, bound by X-Sedes-Client. */
+    voiceStreamId: z.uuid().optional(),
   })
   .superRefine((query, context) => {
     if (query.replayCursor && query.handshake) {

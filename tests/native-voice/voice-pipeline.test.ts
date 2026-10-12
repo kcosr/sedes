@@ -218,7 +218,8 @@ describe("native voice production pipeline with loopback providers", () => {
     }
   });
 
-  it("routes a real native client tool to the submitting registration and settles it with the published reply", async () => {
+  it.each(["browser observer", "native voice stream"] as const)(
+    "routes a real native client tool and settles it against its own %s", async recipient => {
     const threadId = await app.createThread("Client control source");
     const destination = await app.createThread("Client control destination");
     const policy = (await app.thread(threadId)).agentTools;
@@ -233,17 +234,28 @@ describe("native voice production pipeline with loopback providers", () => {
     await app.waitFor(async () => (await app.thread(threadId)).runState === "idle");
     const nativeTool = app.model.requests.flatMap(request => request.toolNames).find(name => name.endsWith("_sedes_act"));
     expect(nativeTool).toBeDefined();
-    const state = { runtime: { foreground: true, voiceReady: false, interactionActive: false }, settings: null };
+    const native = recipient === "native voice stream";
+    const state = { runtime: { foreground: true, voiceReady: native, interactionActive: native }, settings: native ? {
+      revision: 0, voice: { audioMode: "speak", voiceThreadId: threadId, pinDefaultVoiceThread: false,
+        autoListen: false, onlyVoiceThread: false, ignoreOtherDevices: false, followComposerMode: true },
+    } : null };
     const registration = registeredClientSchema.parse(await app.json("/api/client-registration", "POST", {
-      platform: "browser", capabilities: { navigate: true, voice: false, voiceSettings: false }, state,
+      platform: native ? "android" : "browser", capabilities: { navigate: true, voice: native, voiceSettings: native }, state,
     }));
     const clientHeaders = { "X-Sedes-Client": registration.connectionToken };
     const feed = await voiceFeed(app);
+    const voiceStreamId = native ? randomUUID() : undefined;
+    let nativeFeed: Awaited<ReturnType<typeof voiceFeed>> | undefined;
     try {
+      if (voiceStreamId) nativeFeed = await voiceFeed(app, undefined, {
+        connectionToken: registration.connectionToken, voiceStreamId,
+      });
+      const voiceSubscriber = nativeFeed;
       await waitForSpeech(() => feed.frames.find(frame => frame.event === "notification_policy"));
-      const marker = "Switch this client after the reply";
+      if (voiceSubscriber) await waitForSpeech(() => voiceSubscriber.frames.find(frame => frame.event === "notification_policy"));
+      const marker = `Switch this client after the reply with ${recipient}`;
       app.model.callToolNextStream(marker, nativeTool!, { toolId: "client.switch_thread", schemaVersion: 2,
-        input: { threadId: destination, listen: false } });
+        input: { threadId: destination, listen: native } });
       const receipt = directInputReceiptSchema.parse(await app.json(`/api/threads/${threadId}/inputs`, "POST", {
         mutationId: randomUUID(), text: marker, runningPolicy: { mode: "queue" },
       }, clientHeaders));
@@ -251,7 +263,7 @@ describe("native voice production pipeline with loopback providers", () => {
       const delivery = clientPollResultSchema.parse(await app.json("/api/client-controls/poll", "POST", { state, acknowledgements: [] }, clientHeaders));
       expect(delivery.commands).toHaveLength(1);
       const command = delivery.commands[0]!;
-      expect(command).toMatchObject({ action: "switch_thread", sourceThreadId: threadId, threadId: destination, listen: false });
+      expect(command).toMatchObject({ action: "switch_thread", sourceThreadId: threadId, threadId: destination, listen: native });
       expect(feed.frames.some(frame => frame.event === "notification" && frame.value.payload?.turn?.id === command.sourceTurnId)).toBe(false);
       const settlementRequestedAt = Date.now();
       const settlement = clientPollResultSchema.parse(await app.json("/api/client-controls/poll", "POST", {
@@ -260,14 +272,23 @@ describe("native voice production pipeline with loopback providers", () => {
       expect(settlement.commands).toHaveLength(1);
       const reply = voiceNotificationSchema.parse((await waitForSpeech(() => feed.frames.find(frame =>
         frame.event === "notification" && frame.value.payload?.turn?.id === command.sourceTurnId))).value);
-      expect(settlement.commands[0]).toMatchObject({ ...command, action: "turn_settled", replyEventId: reply.sourceEventId, expiresAt: expect.any(Number) });
+      if (voiceSubscriber) {
+        const nativeReply = voiceNotificationSchema.parse((await waitForSpeech(() => voiceSubscriber.frames.find(frame =>
+          frame.event === "notification" && frame.value.payload?.turn?.id === command.sourceTurnId))).value);
+        expect(nativeReply.sourceEventId).toBe(reply.sourceEventId);
+      }
+      expect(settlement.commands[0]).toMatchObject({ ...command, action: "turn_settled",
+        replyEventId: native ? reply.sourceEventId : null, replyStreamId: voiceStreamId ?? null, expiresAt: expect.any(Number) });
       expect(settlement.commands[0]!.expiresAt).toBeLessThan(command.expiresAt);
       expect(settlement.commands[0]!.expiresAt).toBeGreaterThanOrEqual(settlementRequestedAt + 3_600_000);
       expect(settlement.commands[0]!.expiresAt).toBeLessThanOrEqual(Date.now() + 3_600_000);
       expect(reply.origin).toEqual({ clientId: registration.clientId });
       expect(reply.userInputRevision).toBe(2);
       await app.waitFor(async () => (await app.thread(threadId)).runState === "idle");
-    } finally { await feed.close(); }
+    } finally {
+      await nativeFeed?.close();
+      await feed.close();
+    }
   });
 
   it.skipIf(!androidSerial).each([
@@ -606,9 +627,13 @@ async function transcribeFixtureAudio(speech: Awaited<ReturnType<typeof startOpe
   } finally { socket.terminate(); }
 }
 
-export async function voiceFeed(app: OpenCodeProductionFixture, onFrame?: (frame: VoiceFrame) => void) {
+export async function voiceFeed(app: OpenCodeProductionFixture, onFrame?: (frame: VoiceFrame) => void,
+  nativeStream?: { readonly connectionToken: string; readonly voiceStreamId: string }) {
   const controller = new AbortController();
-  const response = await fetch(`${app.url}/api/application/events`, { headers: { Authorization: `Bearer ${app.credential}` }, signal: controller.signal });
+  const endpoint = new URL("/api/application/events", app.url);
+  if (nativeStream) endpoint.searchParams.set("voiceStreamId", nativeStream.voiceStreamId);
+  const response = await fetch(endpoint, { headers: { Authorization: `Bearer ${app.credential}`,
+    ...(nativeStream ? { "X-Sedes-Client": nativeStream.connectionToken } : {}) }, signal: controller.signal });
   if (!response.ok || !response.body) throw new Error(`SSE open failed: ${response.status}`);
   const frames: VoiceFrame[] = [];
   const reader = response.body.getReader();

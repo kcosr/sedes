@@ -14,7 +14,7 @@ User-facing changes are collected here before release. See the
   ([#73](https://github.com/kcosr/sedes/pull/73))
 
 - Upgrade browser and packaged clients together with the server for client
-  protocol **152**. Rebuild and upgrade execution sidecars and local workers;
+  protocol **153**. Rebuild and upgrade execution sidecars and local workers;
   older compiled runtime contracts are rejected. Notification scripts now use
   payload version **5**: update separately copied hooks with the server and
   review Script/Voice event and reply-phase settings.
@@ -124,6 +124,10 @@ User-facing changes are collected here before release. See the
 
 - Automatic turn voice notices skip speech and follow-up recording when a newer
   message has been sent in the same thread. See [voice behavior](docs/operator/clients/voice.md).
+
+- Agent-requested thread switches can listen on their requested thread after
+  current playback, even with Auto-listen off. Backgrounding a pending switch
+  keeps it from navigating when the app resumes. See [agent voice controls](docs/operator/clients/voice.md#agent-controls).
 
 - Images, Mermaid diagrams, and HTML previews share compact fullscreen
   [zoom controls](docs/user/files-and-context.md#view-images-and-diagrams).

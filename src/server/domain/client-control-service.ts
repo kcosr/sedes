@@ -8,6 +8,7 @@ import {
 import { serializedUtf8Bytes } from "../../shared/protocol/payload.js";
 import type { RequestScope } from "../identity/identity-provider.js";
 import { DomainError } from "./errors.js";
+import type { VoiceNotificationPublication, VoiceStreamRecipient } from "./notification-service.js";
 
 type Registration = {
   session: ClientSession;
@@ -35,7 +36,7 @@ export class ClientControlService {
   readonly #clients = new Map<string, Registration>();
   readonly #sessions = new Map<string, ClientSession>();
   readonly #replaced = new Map<string, number>();
-  readonly #notifications = new Map<string, Promise<string | undefined>>();
+  readonly #notifications = new Map<string, Promise<VoiceNotificationPublication | undefined>>();
   readonly #timer: ReturnType<typeof setInterval>;
   constructor(readonly now: () => number = Date.now) {
     this.#timer = setInterval(() => this.#prune(), 5_000);
@@ -84,6 +85,15 @@ export class ClientControlService {
 
   origin(scope: RequestScope, token: string | undefined, authenticatedId: string | undefined) {
     return { clientId: this.authenticate(scope, token, authenticatedId).clientId };
+  }
+
+  voiceStream(scope: RequestScope, token: string | undefined, authenticatedId: string | undefined,
+    voiceStreamId: string): VoiceStreamRecipient {
+    const client = this.authenticate(scope, token, authenticatedId);
+    if (client.platform !== "android" || !client.capabilities.voice) {
+      throw new DomainError("invalid_transition", "Only an Android voice client can identify a voice stream.");
+    }
+    return { connectionToken: client.token, voiceStreamId };
   }
 
   async poll(scope: RequestScope, token: string | undefined, authenticatedId: string | undefined,
@@ -176,7 +186,7 @@ export class ClientControlService {
     return { client: this.describe(client), ...result };
   }
 
-  observeNotification(scope: RequestScope, threadId: string, turnId: string, publication: Promise<string | undefined>) {
+  observeNotification(scope: RequestScope, threadId: string, turnId: string, publication: Promise<VoiceNotificationPublication | undefined>) {
     const key = scopeKey(scope) + turnKey(threadId, turnId);
     this.#notifications.set(key, publication);
     // This map only bridges synchronous lifecycle notification and completion observation.
@@ -184,14 +194,20 @@ export class ClientControlService {
   }
 
   async complete(scope: RequestScope, threadId: string, turnId: string, outcome = "completed", superseded = false) {
-    const replyEventId = await this.#notifications.get(scopeKey(scope) + turnKey(threadId, turnId));
+    const publication = await this.#notifications.get(scopeKey(scope) + turnKey(threadId, turnId));
     for (const client of this.#clients.values()) {
       if (!sameScope(scope, client.scope)) continue;
       const key = turnKey(threadId, turnId);
       const deferred = client.deferred.get(key);
       client.deferred.delete(key);
       if (!deferred || deferred.expiresAt <= this.now() || outcome !== "completed" || superseded) continue;
-      client.commands.push({ ...deferred, action: "turn_settled", replyEventId: replyEventId ?? null, expiresAt: this.now() + 3_600_000 });
+      // Overlapping reconnects may both receive a frame. Only the newest stream
+      // of this exact registration can become this client's playback barrier.
+      const delivery = publication?.deliveries.reduce<(VoiceNotificationPublication["deliveries"][number]) | undefined>(
+        (latest, candidate) => candidate.connectionToken === client.token &&
+          (!latest || candidate.subscriberSequence > latest.subscriberSequence) ? candidate : latest, undefined);
+      client.commands.push({ ...deferred, action: "turn_settled", replyEventId: delivery ? publication!.sourceEventId : null,
+        replyStreamId: delivery?.voiceStreamId ?? null, expiresAt: this.now() + 3_600_000 });
       client.wake?.();
     }
   }

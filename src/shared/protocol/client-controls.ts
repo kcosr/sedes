@@ -51,10 +51,20 @@ export const clientCommandSchema = z.strictObject({
   listen: z.boolean().optional(),
   expectedRevision: z.number().int().nonnegative().optional(),
   patch: clientVoicePatchSchema.optional(),
-  replyEventId: z.string().max(128).nullable().optional(),
+  replyEventId: z.string().min(1).max(128).nullable().optional(),
+  replyStreamId: z.uuid().nullable().optional(),
   /** `replay_turn` only: the ended application turn whose reply native queues, as the turn footer's speaker does. */
   turnId: z.string().min(1).max(160).optional(),
   assistantResult: selectedAssistantResultSchema.optional(),
+}).superRefine((command, context) => {
+  if (command.action === "turn_settled") {
+    if (command.replyEventId === undefined || command.replyStreamId === undefined ||
+        (command.replyEventId === null) !== (command.replyStreamId === null)) {
+      context.addIssue({ code: "custom", path: ["replyStreamId"], message: "Turn settlement requires an event/stream pair, or two nulls." });
+    }
+  } else if (command.replyEventId !== undefined || command.replyStreamId !== undefined) {
+    context.addIssue({ code: "custom", path: ["replyStreamId"], message: "Only turn settlement carries a reply event/stream pair." });
+  }
 });
 export const clientPollRequestSchema = z.strictObject({
   state: clientStateSchema,

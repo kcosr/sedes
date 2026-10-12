@@ -29,14 +29,21 @@ An end-interaction or thread switch waits for the turn to complete and the reply
 to finish playing.
 Switching can request one listen even with Auto-listen disabled, but it does not
 turn voice on or change the default/pin. Recording preferences, including **Keep
-listening by default**, still apply.
+listening by default**, still apply. If another reply is playing, that explicit
+listen waits for it to finish. The requested thread is checked for ordinary
+input readiness before the start cue, after the cue, and before the microphone
+opens.
 
 While Android is in the background, a switch with `listen: true` can start
 recognition on the requested thread if the native voice session is already ready.
 It leaves the screen alone, even if you reopen the app before the request runs.
-A background switch without listening does nothing. Navigation requires the app
-to remain in the foreground. Manual actions and closed or replaced connections
-supersede pending actions. Actions have a 24-hour turn-completion limit and a
+A request accepted in the foreground also becomes voice-only if the app goes
+into the background while it waits; returning to the app never restores its
+navigation. A background switch without listening does nothing. Manual actions
+and closed or replaced control connections supersede pending actions. Losing
+only the notification connection releases a wait for playback that can no
+longer arrive. A superseded source reply cancels its pending switch instead of
+starting another listen. Actions have a 24-hour turn-completion limit and a
 separate one-hour reply-playback limit after completion. Browser and Electron
 clients support navigation and report voice controls as unavailable.
 
