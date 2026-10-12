@@ -18,7 +18,7 @@ User-facing changes are collected here before release. See the
   older compiled runtime contracts are rejected. Notification scripts now use
   payload version **5**: update separately copied hooks with the server and
   review Script/Voice event and reply-phase settings.
-  ([#9](https://github.com/kcosr/sedes/pull/9), [#10](https://github.com/kcosr/sedes/pull/10), [#12](https://github.com/kcosr/sedes/pull/12), [#15](https://github.com/kcosr/sedes/pull/15), [#17](https://github.com/kcosr/sedes/pull/17), [#38](https://github.com/kcosr/sedes/pull/38), [#44](https://github.com/kcosr/sedes/pull/44), [#45](https://github.com/kcosr/sedes/pull/45), [#73](https://github.com/kcosr/sedes/pull/73))
+  ([#9](https://github.com/kcosr/sedes/pull/9), [#10](https://github.com/kcosr/sedes/pull/10), [#12](https://github.com/kcosr/sedes/pull/12), [#15](https://github.com/kcosr/sedes/pull/15), [#17](https://github.com/kcosr/sedes/pull/17), [#38](https://github.com/kcosr/sedes/pull/38), [#44](https://github.com/kcosr/sedes/pull/44), [#45](https://github.com/kcosr/sedes/pull/45), [#73](https://github.com/kcosr/sedes/pull/73), [#75](https://github.com/kcosr/sedes/pull/75))
 
 - Claude requires Claude Code **2.1.287 or newer** on every execution host
   and uses Agent SDK 0.3.287. See the
@@ -55,25 +55,18 @@ User-facing changes are collected here before release. See the
 
 ### Added
 
-- A device-local default thread is shared by quick navigation and Android
-  voice. Choose it in General settings or a thread's context menu; it appears
-  above Pinned as a compact row whose home icon changes to the normal activity
-  or unread indicator, and opens with Ctrl/Command+Shift+H. The selection
-  survives Managed Local restarts, resolves older forks for navigation and
-  voice, and preserves access to the default thread's runs and forks. Snoozed
-  or unavailable defaults remain in the ordinary thread lists, and background
-  updates do not interrupt navigation to a resolved default.
+- A device-local default thread unifies quick navigation and Android voice.
+  Choose it in General settings or a thread's context menu; it appears above
+  Pinned with activity and unread status, and opens with Ctrl/Command+Shift+H.
+  ([#75](https://github.com/kcosr/sedes/pull/75))
 
-- Agents can publish interactive [HTML previews](docs/user/html-previews.md)
-  from files or inline HTML, with captured local images, immutable revisions,
-  optional viewport dimensions, and compact revision/refresh controls. They
-  load as they approach view on all clients; an interaction toggle keeps
-  inline pages from interrupting chat scrolling. A thread's Pages library
-  retains previews beyond the currently loaded chat history.
-
-- An optional [server preview browser](docs/operator/page-previews.md) lets
-  agents inspect screenshots and console output before publishing. Publishing
-  and viewing do not require the browser installation.
+- Agents can publish revisioned [HTML previews](docs/user/html-previews.md)
+  from files or inline HTML, with local images, optional viewport dimensions,
+  fullscreen viewing, and a thread Pages library. Previews load automatically;
+  tap to interact in chat while fullscreen and library views accept input
+  immediately. An optional [server preview browser](docs/operator/page-previews.md)
+  provides screenshots and console output for agents before publishing.
+  ([#75](https://github.com/kcosr/sedes/pull/75))
 
 - Codex **Partial** replies appear inline, with a separate notification section
   for Script and Voice delivery, initially off. Partial text can also be selected
@@ -124,15 +117,12 @@ User-facing changes are collected here before release. See the
 
 ### Changed
 
-- Chat header options omit the static descriptions beneath Environment
-  variables and Published pages. Agent tools shows only Off or the enabled count.
-
-- Images and Mermaid diagrams support inline pinch zoom and pan, with an
-  explicit expand control. Inline images share the assistant message column's
-  width, with the existing height limit. Expanded images, diagrams, and HTML previews share
-  a floating bottom zoom bar with **Fit** and **1:1**. Escape closes an open
-  zoom menu before closing the viewer. See
-  [media viewing](docs/user/files-and-context.md#view-images-and-diagrams).
+- Images, Mermaid diagrams, and HTML previews share compact fullscreen
+  [zoom controls](docs/user/files-and-context.md#view-images-and-diagrams).
+  Images and diagrams support inline pinch zoom and pan, and images use the
+  assistant column's width. Chat header options are more compact, and Escape
+  exits sidebar search without clearing its filter.
+  ([#75](https://github.com/kcosr/sedes/pull/75))
 
 - Voice keeps the last reply target after playback ends, even while another thread
   is open. Idle **Next** returns to the viewed thread; navigating to a different
@@ -177,27 +167,6 @@ User-facing changes are collected here before release. See the
   ([#73](https://github.com/kcosr/sedes/pull/73))
 
 ### Fixed
-
-- Escape exits sidebar search without clearing its text or filter.
-
-- Recent HTML previews stay loaded briefly when scrolling away and back, and
-  inactive previews avoid nested scrolling. Inline image and Mermaid
-  zoom gestures remain available after scrolling, without an inline zoom toolbar.
-  HTML preview controls appear in a fullscreen header with large touch targets
-  and right-aligned revision and refresh controls;
-  a finger toggle or stationary tap enables inline interaction on desktop and
-  mobile, while fullscreen previews and the Pages library accept input immediately.
-  Revision controls show the current and total count only for pages with multiple
-  revisions. The library lists titles without revision labels and keeps its
-  viewer size stable while long pages scroll inside it. Fullscreen auto-height
-  pages fit the available width, and closing the viewer restores the original
-  revision in chat. A tap that stops scrolling leaves inline interaction off;
-  interrupted-preview recovery survives Managed Local restarts.
-  Clipped SVG content no longer makes previews excessively tall, positioned
-  content remains visible, and fullscreen media surrounds match the chat
-  background. Mermaid diagrams magnify beyond their original size, and touching
-  elsewhere stops a preview's scrolling momentum.
-  Composer effort visibility updates before the changed send controls paint.
 
 - Automation details link consistently to the Automations list and expose
   **Open thread** beside it. Queue/Steer choices open directly above their button.
