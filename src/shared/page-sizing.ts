@@ -36,13 +36,13 @@ export function stabilizePageHeight(previous: PageSizingState | undefined, measu
 }
 
 /** Install before authored scripts. Captured globals remain usable when an
- * authored script declares its own parent, Math, Promise, or browser helpers.
+ * authored script declares its own parent, Math, Promise, WeakMap, or browser helpers.
  * The preview browser also installs this before navigation, so it is idempotent. */
 export const PAGE_MEASUREMENT_INSTALL_SOURCE = `(function(host){
 "use strict";
 const define=host.Object.defineProperty,descriptor=host.Object.getOwnPropertyDescriptor;
 if(descriptor(host,"__sedesMeasurePage")&&descriptor(host,"__sedesSettlePage"))return;
-const document=host.document,Math=host.Math,parseFloat=host.parseFloat;
+const document=host.document,Math=host.Math,parseFloat=host.parseFloat,WeakMap=host.WeakMap;
 const getComputedStyle=host.getComputedStyle.bind(host),requestAnimationFrame=host.requestAnimationFrame.bind(host),Promise=host.Promise;
 const measure=()=>{
 const root=document.documentElement,body=document.body;
@@ -56,7 +56,7 @@ naturalHeight=body.getBoundingClientRect().bottom+host.scrollY+margin;
 // is outside the clipping ancestor (CSS 2.1 11.1.1). Retain separate bounds for
 // normal flow and each positioning containing block, including transformed or
 // contained blocks, so escaping a clip does not discard applicable outer clips.
-const bounds=new host.WeakMap(),unclipped={flow:Infinity,absolute:Infinity,fixed:Infinity};
+const bounds=new WeakMap(),unclipped={flow:Infinity,absolute:Infinity,fixed:Infinity};
 const fixedContainer=(element,style)=>{
 if(style.display==="contents")return false;
 const changed=name=>style[name]&&style[name]!=="none";

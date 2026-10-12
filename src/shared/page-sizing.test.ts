@@ -56,6 +56,7 @@ function measureContent(
   elements: { bottom: number; overflow?: string; parent?: number; style?: Record<string, string> }[],
   scrollHeight = 600,
   styles: { body?: Record<string, string>; root?: Record<string, string> } = {},
+  authoredScript?: string,
 ): PageMeasurement {
   const body: MeasuredElement & { scrollWidth: number; querySelectorAll(): MeasuredElement[] } = {
     parentElement: null,
@@ -78,10 +79,22 @@ function measureContent(
     requestAnimationFrame: () => 0,
   };
   runInNewContext(`(${PAGE_MEASUREMENT_INSTALL_SOURCE})(host)`, { host });
+  if (authoredScript) runInNewContext(authoredScript, host);
   return (host as typeof host & { __sedesMeasurePage(): PageMeasurement }).__sedesMeasurePage();
 }
 
 describe("authored page measurements", () => {
+  it.each([
+    ["a global function declaration", 'function WeakMap() { throw new Error("authored WeakMap called"); }'],
+    ["a global property assignment", "globalThis.WeakMap = undefined;"],
+  ])("keeps measuring after authored code replaces WeakMap with %s", (_description, authoredScript) => {
+    expect(measureContent([
+      { bottom: 350, overflow: "hidden" },
+      { bottom: 10_000, parent: 0 },
+      { bottom: 485 },
+    ], 600, {}, authoredScript)).toEqual(measurement(600, 485, 768));
+  });
+
   it.each(["hidden", "clip", "auto", "scroll"])("excludes descendants clipped by overflow %s", (overflow) => {
     // Like Three.js SVGRenderer: the path geometry can extend far beyond
     // the stage even though none of it paints outside the clipped viewport.
