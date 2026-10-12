@@ -334,6 +334,7 @@ test("published HTML keeps revisions, target viewport, local images, and host is
       exact: true,
     });
     await expect(library).toBeVisible();
+    await overlaySettled(library);
     await expect(
       pageDocument(library).getByRole("heading", {
         name: "Long library example",
@@ -387,12 +388,16 @@ test("published HTML keeps revisions, target viewport, local images, and host is
     expect(Math.abs(compactBox.height - libraryBox.height)).toBeLessThanOrEqual(
       1,
     );
+    expect(Math.abs(compactBox.x - libraryBox.x)).toBeLessThanOrEqual(1);
+    expect(Math.abs(compactBox.y - libraryBox.y)).toBeLessThanOrEqual(1);
     expect(
       Math.abs(compactViewerBox.width - viewerBox.width),
     ).toBeLessThanOrEqual(1);
     expect(
       Math.abs(compactViewerBox.height - viewerBox.height),
     ).toBeLessThanOrEqual(1);
+    expect(Math.abs(compactViewerBox.x - viewerBox.x)).toBeLessThanOrEqual(1);
+    expect(Math.abs(compactViewerBox.y - viewerBox.y)).toBeLessThanOrEqual(1);
     await libraryList
       .getByRole("button", { name: "Inbox mockup", exact: true })
       .click();
