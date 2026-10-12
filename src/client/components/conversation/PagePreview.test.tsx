@@ -3,7 +3,7 @@ import {
   act,
   cleanup,
   fireEvent,
-  render,
+  render as renderView,
   screen,
   waitFor,
   within,
@@ -12,6 +12,16 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PageRevision, PageRevisionPage } from "../../../shared/protocol/pages.js";
 import { PagePreview } from "./PagePreview.js";
+import { connectionScope, ConnectionScopeProvider } from "../../app/connection-scope.js";
+
+const scope = connectionScope("test", window.location.origin, "test-principal");
+function render(ui: React.ReactNode) {
+  return renderView(ui, {
+    wrapper: ({ children }) => (
+      <ConnectionScopeProvider scope={scope}>{children}</ConnectionScopeProvider>
+    ),
+  });
+}
 
 const safety = vi.hoisted(() => ({ supports: vi.fn(), android: vi.fn() }));
 vi.mock("../../app/page-safety.js", () => ({
@@ -199,6 +209,8 @@ describe("published page preview", () => {
   });
 
   it("activates only for a short stationary tap, never a drag, scroll, wheel or canceled gesture", async () => {
+    let now = 1000;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
     const { container } = render(<PagePreview page={original} services={services()} />);
     const frame = await waitForFrame(container);
     const viewport = container.querySelector(".page-frame-viewport")!;
@@ -217,9 +229,82 @@ describe("published page preview", () => {
     expect(frame).toHaveAttribute("inert");
     pointer("pointerdown"); pointer("pointerup", 20, 20, 700);
     expect(frame).toHaveAttribute("inert");
+    now += 300;
     pointer("pointerdown"); pointer("pointerup");
     expect(frame).not.toHaveAttribute("inert");
     expect(screen.getByRole("button", { name: "Done interacting with preview" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("uses a stationary tap after recent scrolling only to stop the fling", async () => {
+    let now = 1000;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    const { container } = render(<PagePreview page={original} services={services()} />);
+    const frame = await waitForFrame(container);
+    const viewport = container.querySelector(".page-frame-viewport")!;
+    const tap = () => {
+      fireEvent.pointerDown(viewport, { pointerId: 1, isPrimary: true, button: 0, clientX: 20, clientY: 20 });
+      fireEvent.pointerUp(viewport, { pointerId: 1, isPrimary: true, button: 0, clientX: 20, clientY: 20 });
+    };
+    fireEvent.scroll(container);
+    now += 16;
+    tap();
+    expect(frame).toHaveAttribute("inert");
+    expect(screen.getByRole("button", { name: "Interact with preview" })).toHaveAttribute("aria-pressed", "false");
+    now += 300;
+    tap();
+    expect(frame).not.toHaveAttribute("inert");
+  });
+
+  it.each([
+    { viewport: { width: 1440 }, percentage: "44%", canvasHeight: 1333 },
+    { viewport: {}, percentage: "100%", canvasHeight: 3000 },
+  ])("fits an auto-height fullscreen page to width ($percentage)", async ({ viewport, percentage, canvasHeight }) => {
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(640);
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(400);
+    render(<PagePreview page={{ ...original, viewport }} services={services()} />);
+    expandPage();
+    const dialog = await screen.findByRole("dialog");
+    const frame = await waitForFrame(dialog);
+    sendFrameMessage(frame, "sedes:page-size", { height: 3000 });
+    expect(within(dialog).getByRole("button", { name: `Zoom percentage: ${percentage}` })).toBeInTheDocument();
+    const canvas = dialog.querySelector<HTMLElement>(".page-frame-canvas")!;
+    expect(Number.parseFloat(canvas.style.height)).toBeCloseTo(canvasHeight, -1);
+    expect(Number.parseFloat(canvas.style.height)).toBeGreaterThan(400);
+  });
+
+  it("fits an explicitly authored fullscreen height to the available viewport", async () => {
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(640);
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(400);
+    render(<PagePreview page={{ ...original, viewport: { width: 1440, height: 1000 } }} services={services()} />);
+    expandPage();
+    const dialog = await screen.findByRole("dialog");
+    await waitForFrame(dialog);
+    expect(within(dialog).getByRole("button", { name: "Zoom percentage: 34%" })).toBeInTheDocument();
+    expect(dialog.querySelector<HTMLElement>(".page-frame-canvas")!.style.height).toBe("336px");
+  });
+
+  it("restores the pinned publication after closing an older fullscreen revision", async () => {
+    const published = { ...original, revision: 3, title: "Published third" };
+    const api = services();
+    api.listPageRevisions.mockResolvedValue({ items: [published] });
+    api.getPageRevision.mockImplementation(async (_id, revision) => ({ ...original, revision, title: `Version ${revision}` }));
+    const { container } = render(<PagePreview page={published} services={api} />);
+    await waitForFrame(container);
+    expandPage(published.title);
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(await within(dialog).findByRole("button", { name: "Previous page revision" }));
+    await within(dialog).findByText("2/3");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Previous page revision" }));
+    await within(dialog).findByText("1/3");
+    await waitFor(() => expect(dialog.querySelector("iframe")).toHaveAttribute("title", "Version 1 · Revision 1"));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    const frame = await waitForFrame(container);
+    expect(frame).toHaveAttribute("title", "Published third · Revision 3");
+    expect(api.createPageRenderAdmission).toHaveBeenLastCalledWith(published.pageId, 3, expect.any(AbortSignal));
+    expect(screen.getByRole("group", { name: "Published third", exact: true })).toHaveAttribute("data-page-revision", "3");
+    expandPage(published.title);
+    await screen.findByLabelText("Revision 3 of 3");
   });
 
   it("shows only maximize and interaction inline and keeps revision controls in the fullscreen header", async () => {

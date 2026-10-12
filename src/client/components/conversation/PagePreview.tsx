@@ -25,6 +25,7 @@ import {
   usePageFrameAdmission,
 } from "./page-frame-lifecycle.js";
 import { supportsSafePageFrames } from "../../app/page-safety.js";
+import { useConnectionScope } from "../../app/connection-scope.js";
 import {
   PageFrameRecoveryAttempt,
   pageFrameNeedsActivation,
@@ -295,7 +296,7 @@ export function PagePreview({
         data-interacting={interacting ? "true" : undefined}
         aria-busy={loading}
         role="group"
-        aria-label={selected.title}
+        aria-label={page.title}
       >
         <div className="page-preview-controls">
           <Button
@@ -321,7 +322,7 @@ export function PagePreview({
             ref={expandButton}
             size="icon-xs"
             variant="outline"
-            aria-label={`Expand page: ${selected.title}`}
+            aria-label={`Expand page: ${page.title}`}
             aria-haspopup="dialog"
             title="Expand preview"
             onClick={() => {
@@ -338,8 +339,8 @@ export function PagePreview({
           </p>
         ) : null}
         <PageFrame
-          key={`${selected.pageId}:${selected.revision}`}
-          page={selected}
+          key={`${page.pageId}:${page.revision}`}
+          page={page}
           createAdmission={services.createPageRenderAdmission}
           enabled={!expanded}
           interactive={interacting}
@@ -353,6 +354,7 @@ export function PagePreview({
         onOpenChange={(value) => {
           setExpanded(value);
           deactivate();
+          if (!value) returnToPublishedRevision();
         }}
       >
         <DialogContent
@@ -390,11 +392,17 @@ function PageFrame({
   readonly expanded?: boolean;
   readonly fitHeight?: boolean;
 }): React.JSX.Element {
+  const connection = useConnectionScope();
+  const recoveryKey = pageFrameRecoveryKey(connection, page);
   const host = useRef<HTMLDivElement>(null);
   const frame = useRef<HTMLIFrameElement>(null);
   const tap = useRef<{ id: number; x: number; y: number; time: number } | undefined>(undefined);
+  const lastScroll = useRef(-Infinity);
   useEffect(() => {
-    const cancel = () => { tap.current = undefined; };
+    const cancel = () => {
+      tap.current = undefined;
+      lastScroll.current = performance.now();
+    };
     window.addEventListener("scroll", cancel, true);
     window.addEventListener("wheel", cancel, true);
     return () => {
@@ -427,7 +435,7 @@ function PageFrame({
   );
   const fitted = pageFrameLayout(page.viewport, width, height);
   const fitScale =
-    expanded && fitHeight && availableHeight > 0
+    expanded && fitHeight && page.viewport.height !== undefined && availableHeight > 0
       ? Math.min(
           fitted.scale,
           Math.max(1, availableHeight - 64) / fitted.height,
@@ -507,7 +515,6 @@ function PageFrame({
         controller.signal,
       );
       if (controller.signal.aborted) return;
-      const recoveryKey = pageFrameRecoveryKey(admission.url, page);
       activeRecoveryKey.current = recoveryKey;
       if (!manualActivation.current && pageFrameNeedsActivation(recoveryKey)) {
         setNeedsActivation(true);
@@ -542,6 +549,7 @@ function PageFrame({
     page.pageId,
     page.revision,
     page.threadId,
+    recoveryKey,
   ]);
 
   useLayoutEffect(() => {
@@ -625,7 +633,10 @@ function PageFrame({
         onPointerDown={(event) => {
           tap.current = undefined;
           if (interactive || !ready || !event.isPrimary || event.button !== 0 ||
-              (event.target as Element).closest("button")) return;
+              (event.target as Element).closest("button") ||
+              // A stationary touch can be the gesture that stops a fling.
+              // It must not also enable the document underneath that touch.
+              performance.now() - lastScroll.current < 250) return;
           tap.current = { id: event.pointerId, x: event.clientX, y: event.clientY, time: event.timeStamp };
         }}
         onPointerMove={(event) => {
