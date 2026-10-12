@@ -125,9 +125,8 @@ describe("ZoomablePreview", () => {
     expect(pointer("pointerMove", 1, 0, 30)).toBe(false);
     pointer("pointerDown", 2, 100, 30);
     pointer("pointerMove", 2, 150, 30);
-    expect(
-      screen.getByRole("button", { name: "Zoom percentage: 150%" }),
-    ).toBeVisible();
+    expect(container.querySelector(".zoomable-preview-canvas")).toHaveStyle({ width: "150%" });
+    expect(screen.queryByRole("group", { name: "Image controls" })).toBeNull();
     expect(gesture).toHaveBeenCalled();
     pointer("pointerUp", 2, 150, 30);
     const before = viewport.scrollLeft;
@@ -143,20 +142,19 @@ describe("ZoomablePreview", () => {
       scrollWidth: { configurable: true, value: 200 },
       scrollHeight: { configurable: true, value: 200 },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Fit to view" }));
-    // Controls stay until an explicit tap; returning to fit is not a dismissal.
-    expect(screen.getByRole("group", { name: "Image controls" })).toBeVisible();
+    fireEvent.keyDown(viewport, { key: "0" });
+    expect(container.querySelector(".zoomable-preview-canvas")).toHaveStyle({ width: "100%" });
     fireEvent.click(viewport);
     expect(screen.queryByRole("group", { name: "Image controls" })).toBeNull();
   });
 
-  it("toggles inline controls on deliberate taps and owns touch gestures from fit", () => {
+  it("keeps inline controls hidden after taps and owns touch gestures from fit", () => {
     render(<ZoomablePreview controlsLabel="Inline controls" interactionMode="inline" resetLabel="Reset" title="Image" viewportLabel="Inline"><img alt="" /></ZoomablePreview>);
     const viewport = screen.getByRole("region", { name: "Inline" });
     expect(viewport).toHaveAttribute("data-gesture-zoom", "true");
     expect(screen.queryByRole("group", { name: "Inline controls" })).toBeNull();
     fireEvent.click(viewport);
-    expect(screen.getByRole("group", { name: "Inline controls" })).toBeVisible();
+    expect(screen.queryByRole("group", { name: "Inline controls" })).toBeNull();
     fireEvent.click(viewport);
     expect(screen.queryByRole("group", { name: "Inline controls" })).toBeNull();
   });

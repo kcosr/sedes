@@ -187,15 +187,23 @@ describe("published page preview", () => {
     ).toBeNull();
   });
 
-  it("keeps chrome in the compact menu and returns to the published revision", async () => {
+  it("expands an inline header without remounting the page and returns to the published revision", async () => {
     const api = services();
     const { container } = render(
       <PagePreview page={original} services={api} />,
     );
-    await waitForFrame(container);
+    const initialFrame = await waitForFrame(container);
     expect(container.querySelector(".wb-media-frame-header")).toBeNull();
     expect(container.querySelector(".page-frame-size")).toBeNull();
     expect(screen.queryByText("HTML preview")).toBeNull();
+    openDetails();
+    const header = container.querySelector(".wb-media-frame-header");
+    expect(header).toBeInTheDocument();
+    expect(within(header as HTMLElement).getByRole("toolbar", { name: "Page actions" })).toBeInTheDocument();
+    expect(container.querySelector("iframe")).toBe(initialFrame);
+    fireEvent.click(screen.getByRole("button", { name: "Hide page details" }));
+    expect(container.querySelector(".wb-media-frame-header")).toBeNull();
+    expect(container.querySelector("iframe")).toBe(initialFrame);
     openDetails();
     fireEvent.click(screen.getByRole("button", { name: "Next page revision" }));
     const originalButton = await screen.findByRole("button", {
@@ -393,6 +401,7 @@ describe("published page preview", () => {
     openDetails();
     fireEvent.click(screen.getByRole("button", { name: "Expand page: Phone" }));
     const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveClass("media-preview-dialog");
     const frame = await waitForFrame(dialog);
     expect(frame).not.toHaveAttribute("inert");
     expect(dialog.querySelector(".page-frame-toolbar")).toBeNull();

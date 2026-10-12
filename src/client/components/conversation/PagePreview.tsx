@@ -2,6 +2,7 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
+  ChevronUp,
   Ellipsis,
   Maximize2,
   Pointer,
@@ -9,6 +10,7 @@ import {
 } from "lucide-react";
 import {
   useCallback,
+  useId,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -20,7 +22,6 @@ import { MediaFrame } from "../../workbench/components/MediaFrame.js";
 import { MediaZoomControls } from "../../workbench/components/MediaZoomControls.js";
 import { Button } from "../ui/button.js";
 import { Dialog, DialogContent, DialogTitle } from "../ui/dialog.js";
-import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover.js";
 import type { ItemRenderContext } from "./types.js";
 import { pageFrameLayout, pageFrameMessage } from "./page-frame-layout.js";
 import {
@@ -67,7 +68,7 @@ export function PagePreview({
 }): React.JSX.Element {
   const [selected, setSelected] = useState(page);
   const [expanded, setExpanded] = useState(false);
-  const [menuOpen, setMenuOpen] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const [interacting, setInteracting] = useState(false);
   const [refreshVersion, setRefreshVersion] = useState(0);
   const [latestRevision, setLatestRevision] = useState<number>();
@@ -75,6 +76,11 @@ export function PagePreview({
   const [error, setError] = useState("");
   const abort = useRef<AbortController | undefined>(undefined);
   const menuButton = useRef<HTMLButtonElement>(null);
+  const detailsId = useId();
+  const detailsRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    if (detailsOpen) detailsRef.current?.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus();
+  }, [detailsOpen]);
   const touchInput = useSyncExternalStore(
     subscribeTouchInput,
     readTouchInput,
@@ -132,10 +138,112 @@ export function PagePreview({
     }
   };
 
+  const hideDetails = () => {
+    setDetailsOpen(false);
+    requestAnimationFrame(() => menuButton.current?.focus());
+  };
+  const headerActions = detailsOpen ? (
+    <div id={detailsId} ref={detailsRef} className="page-preview-header-actions" role="toolbar" aria-label="Page actions"
+      onKeyDown={event => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); hideDetails(); } }}>
+      <div
+        className="page-preview-revisions"
+        role="group"
+        aria-label="Page revision controls"
+      >
+        <Button
+          aria-label="Previous page revision"
+          title="Previous revision"
+          disabled={
+            loading ||
+            selected.revision <= 1 ||
+            !services.listPageRevisions ||
+            !services.getPageRevision
+          }
+          onClick={() => void navigateRevision(-1)}
+          size="icon-xs"
+          variant="ghost"
+        >
+          <ChevronLeft />
+        </Button>
+        {selected.revision === page.revision ? (
+          <span
+            aria-live="polite"
+            aria-label={`Revision ${selected.revision}`}
+            className="page-revision-label"
+          >
+            v{selected.revision}
+          </span>
+        ) : (
+          <Button
+            className="page-revision-label"
+            variant="ghost"
+            size="xs"
+            aria-label={`Return to published revision ${page.revision}`}
+            title={`Published here as revision ${page.revision}; return to it`}
+            onClick={() => setSelected(page)}
+          >
+            v{selected.revision}
+          </Button>
+        )}
+        <Button
+          aria-label={
+            latestRevision !== undefined &&
+            selected.revision >= latestRevision
+              ? "Check for a newer page revision"
+              : "Next page revision"
+          }
+          title="Next revision"
+          disabled={
+            loading ||
+            !services.listPageRevisions ||
+            !services.getPageRevision
+          }
+          onClick={() => void navigateRevision(1)}
+          size="icon-xs"
+          variant="ghost"
+        >
+          <ChevronRight />
+        </Button>
+      </div>
+      <span
+        className="page-preview-header-separator"
+        aria-hidden="true"
+      />
+      <Button
+        aria-label={`Expand page: ${selected.title}`}
+        title="Expand preview"
+        onClick={() => {
+          setDetailsOpen(false);
+          setExpanded(true);
+          deactivate();
+        }}
+        size="icon-xs"
+        variant="ghost"
+      >
+        <Maximize2 />
+      </Button>
+      <Button
+        aria-label="Refresh page preview"
+        title="Refresh preview"
+        onClick={() => {
+          setRefreshVersion((value) => value + 1);
+        }}
+        size="icon-xs"
+        variant="ghost"
+      >
+        <RotateCcw />
+      </Button>
+      <Button size="icon-xs" variant="ghost" aria-label="Hide page details" title="Hide page details"
+        aria-expanded={true} aria-controls={detailsId} onClick={hideDetails}><ChevronUp /></Button>
+    </div>
+  ) : undefined;
+
   return (
     <>
       <MediaFrame
         className="page-preview"
+        title={detailsOpen ? selected.title : undefined}
+        actions={headerActions}
         data-page-id={page.pageId}
         data-page-revision={page.revision}
         data-interacting={touchInput && interacting ? "true" : undefined}
@@ -165,119 +273,16 @@ export function PagePreview({
               {interacting ? <Check /> : <Pointer />}
             </Button>
           ) : null}
-          <Popover open={menuOpen} onOpenChange={setMenuOpen}>
-            <PopoverTrigger asChild>
-              <Button
-                ref={menuButton}
-                size="icon-xs"
-                variant="outline"
-                aria-label={`Page details: ${selected.title}`}
-                title="Page details"
-              >
-                <Ellipsis />
-              </Button>
-            </PopoverTrigger>
-            <PopoverContent
-              align="end"
-              className="page-preview-menu"
-              onCloseAutoFocus={(event) => {
-                if (expanded) event.preventDefault();
-              }}
-            >
-              <span className="page-preview-name" title={selected.title}>
-                {selected.title}
-              </span>
-              <div
-                className="page-preview-revisions"
-                role="group"
-                aria-label="Page revision controls"
-              >
-                <Button
-                  aria-label="Previous page revision"
-                  title="Previous revision"
-                  disabled={
-                    loading ||
-                    selected.revision <= 1 ||
-                    !services.listPageRevisions ||
-                    !services.getPageRevision
-                  }
-                  onClick={() => void navigateRevision(-1)}
-                  size="icon-xs"
-                  variant="ghost"
-                >
-                  <ChevronLeft />
-                </Button>
-                {selected.revision === page.revision ? (
-                  <span
-                    aria-live="polite"
-                    aria-label={`Revision ${selected.revision}`}
-                    className="page-revision-label"
-                  >
-                    v{selected.revision}
-                  </span>
-                ) : (
-                  <Button
-                    className="page-revision-label"
-                    variant="ghost"
-                    size="xs"
-                    aria-label={`Return to published revision ${page.revision}`}
-                    title={`Published here as revision ${page.revision}; return to it`}
-                    onClick={() => setSelected(page)}
-                  >
-                    v{selected.revision}
-                  </Button>
-                )}
-                <Button
-                  aria-label={
-                    latestRevision !== undefined &&
-                    selected.revision >= latestRevision
-                      ? "Check for a newer page revision"
-                      : "Next page revision"
-                  }
-                  title="Next revision"
-                  disabled={
-                    loading ||
-                    !services.listPageRevisions ||
-                    !services.getPageRevision
-                  }
-                  onClick={() => void navigateRevision(1)}
-                  size="icon-xs"
-                  variant="ghost"
-                >
-                  <ChevronRight />
-                </Button>
-              </div>
-              <span
-                className="page-preview-menu-separator"
-                aria-hidden="true"
-              />
-              <Button
-                aria-label={`Expand page: ${selected.title}`}
-                title="Expand preview"
-                onClick={() => {
-                  setMenuOpen(false);
-                  setExpanded(true);
-                  deactivate();
-                }}
-                size="icon-xs"
-                variant="ghost"
-              >
-                <Maximize2 />
-              </Button>
-              <Button
-                aria-label="Refresh page preview"
-                title="Refresh preview"
-                onClick={() => {
-                  setRefreshVersion((value) => value + 1);
-                  setMenuOpen(false);
-                }}
-                size="icon-xs"
-                variant="ghost"
-              >
-                <RotateCcw />
-              </Button>
-            </PopoverContent>
-          </Popover>
+          {!detailsOpen ? <Button
+            ref={menuButton}
+            size="icon-xs"
+            variant="outline"
+            aria-label={`Page details: ${selected.title}`}
+            aria-expanded={false}
+            aria-controls={detailsId}
+            title="Page details"
+            onClick={() => setDetailsOpen(true)}
+          ><Ellipsis /></Button> : null}
         </div>
         {error ? (
           <p className="page-preview-error" role="alert">
@@ -303,6 +308,7 @@ export function PagePreview({
       >
         <DialogContent
           size="viewer"
+          className="media-preview-dialog"
           layer="over-dialog"
           returnFocusRef={menuButton}
           aria-describedby={undefined}

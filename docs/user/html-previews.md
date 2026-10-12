@@ -31,7 +31,8 @@ current or earlier revision. File publications return their original source
 path; inline publications return their saved HTML so the agent can revise
 and republish it without relying on its previous chat context.
 
-Open the preview's ellipsis and use the previous and next arrows around the
+Tap the preview's ellipsis to expand a header above the page, then use the
+previous and next arrows around the
 version indicator to browse that page's revisions. Browsing does not change
 the saved conversation or the revision originally published there. While
 browsing another revision, select the `vN` indicator to return to the revision
@@ -88,10 +89,9 @@ viewer's size limits.
 
 Images and Mermaid diagrams also support pinch zoom and pan inline. At normal
 size, a one-finger gesture scrolls the conversation; when zoomed, dragging pans
-the media. Tap inline media to show or hide its zoom controls; a pinch also
-shows them, and they remain visible until dismissed with another tap. The
-expanded viewer always shows its controls. Use the explicit expand control to
-open that larger viewer.
+the media. Inline images and diagrams have no floating zoom toolbar. Use the
+explicit expand control for the larger viewer and its zoom controls. Unused
+space around expanded content matches the chat background.
 
 Recently visible HTML previews stay loaded for up to 30 seconds after scrolling
 away. At most four page frames remain active; visible previews take priority

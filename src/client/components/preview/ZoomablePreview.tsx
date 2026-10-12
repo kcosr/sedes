@@ -163,7 +163,6 @@ export function ZoomablePreview({
   const pinchRef = useRef<PinchState | undefined>(undefined);
   const scrollTouch = useRef<{ pointerId: number; y: number; time: number; velocity: number; moved: boolean } | undefined>(undefined);
   const scrollMomentum = useRef<number | undefined>(undefined);
-  const [controlsVisible, setControlsVisible] = useState(false);
   useEffect(() => () => { if (scrollMomentum.current !== undefined) cancelAnimationFrame(scrollMomentum.current); }, []);
   const stopMomentum = () => {
     if (scrollMomentum.current !== undefined) cancelAnimationFrame(scrollMomentum.current);
@@ -308,7 +307,6 @@ export function ZoomablePreview({
     if (touches.length >= 2) {
       const [first, second] = touches;
       scrollTouch.current = undefined;
-      setControlsVisible(true);
       pinchRef.current = {
         firstPointerId: first![0],
         secondPointerId: second![0],
@@ -403,7 +401,7 @@ export function ZoomablePreview({
       {toolbarActions ? (
         <div className="zoomable-preview-actions">{toolbarActions}</div>
       ) : null}
-      {!inline || controlsVisible ? (
+      {!inline ? (
         <MediaZoomControls
           label={controlsLabel}
           zoomPercent={Math.round(actualScale * 100)}
@@ -417,10 +415,11 @@ export function ZoomablePreview({
         />
       ) : null}
       <p className="sr-only" id={instructionsId}>
-        {popupInteractions
-          ? "Use the zoom controls, pinch, or Control- or Command-scroll to zoom. Drag, scroll, or use the arrow keys to pan overflowing content. Press 0 to reset the view."
-          : "Use the zoom controls to zoom. Drag, scroll, or use the arrow keys to pan overflowing content. Press 0 to reset the view."}
-        {inline ? " Tap to show or hide zoom controls." : null}
+        {inline
+          ? "Pinch or Control- or Command-scroll to zoom. Drag to pan zoomed content. Expand for zoom controls. Press 0 to reset the view."
+          : popupInteractions
+            ? "Use the zoom controls, pinch, or Control- or Command-scroll to zoom. Drag, scroll, or use the arrow keys to pan overflowing content. Press 0 to reset the view."
+            : "Use the zoom controls to zoom. Drag, scroll, or use the arrow keys to pan overflowing content. Press 0 to reset the view."}
         <span>{resetLabel} returns to fit size.</span>
       </p>
       <div
@@ -442,7 +441,6 @@ export function ZoomablePreview({
             event.stopPropagation();
             return;
           }
-          if (inline) setControlsVisible(value => !value);
         }}
         onKeyDown={(event) => {
           if (event.ctrlKey || event.metaKey || event.altKey) return;

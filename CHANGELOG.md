@@ -173,7 +173,9 @@ User-facing changes are collected here before release. See the
 
 - Recent HTML previews stay loaded briefly when scrolling away and back, and
   inactive touch previews avoid nested scrolling. Inline image and Mermaid
-  zoom gestures remain available after scrolling; tap to show or hide controls.
+  zoom gestures remain available after scrolling, without an inline zoom toolbar.
+  HTML preview controls expand into a header, and fullscreen media surrounds
+  match the chat background.
   Composer effort visibility updates before the changed send controls paint.
 
 - Automation details link consistently to the Automations list and expose

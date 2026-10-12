@@ -397,7 +397,7 @@ function ExpandableImage({
           </Button>
         </DialogTrigger>
       </div>
-      <DialogContent size="viewer" aria-describedby={undefined}>
+      <DialogContent size="viewer" className="media-preview-dialog" aria-describedby={undefined}>
         <DialogTitle className="sr-only">{previewLabel}</DialogTitle>
         <div className="image-preview-interactions" {...imageInteractions}>
           <ZoomablePreview

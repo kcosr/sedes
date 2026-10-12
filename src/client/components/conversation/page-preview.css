@@ -41,30 +41,34 @@
 .page-preview[data-interacting="true"] {
   border-color: var(--border);
 }
-.page-preview-menu {
-  flex-direction: row;
-  align-items: center;
+/* Details expand in the frame's ordinary header, never over the document. */
+.page-preview > .wb-media-frame-header {
+  --wb-media-header-background: var(--background);
+  --wb-media-header-padding: var(--space-2);
   gap: var(--space-1);
-  width: min(350px, calc(100vw - 24px));
-  padding: var(--space-2);
-  border-radius: var(--radius-card);
-  overflow: visible;
 }
-.page-preview-name {
-  flex: 1;
+.page-preview .wb-media-frame-labels {
+  flex: 1 1 auto;
   min-width: 0;
+}
+.page-preview .wb-media-frame-title {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: var(--text-meta);
-  font-weight: var(--weight-medium);
+}
+.page-preview-header-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  max-width: 100%;
 }
 .page-preview-revisions {
   display: flex;
   flex-shrink: 0;
   align-items: center;
 }
-.page-preview-menu > button {
+.page-preview-header-actions > button {
   flex-shrink: 0;
 }
 .page-revision-label {
@@ -79,7 +83,7 @@
   font-variant-numeric: tabular-nums;
   color: var(--muted-foreground);
 }
-.page-preview-menu-separator {
+.page-preview-header-separator {
   width: 1px;
   height: var(--space-4);
   background: var(--border-soft);
@@ -148,7 +152,7 @@
     width: 36px;
     height: 36px;
   }
-  .page-preview-menu button {
+  .page-preview-header-actions button {
     min-width: 30px;
     min-height: 36px;
   }
@@ -172,4 +176,10 @@
 }
 .markdown .mermaid-diagram.conversation-media-frame > .wb-media-frame-body {
   padding: var(--space-3);
+}
+
+/* Letterboxed space belongs to the app, not the authored page or image. */
+.media-preview-dialog[data-slot="dialog-content"],
+.page-frame-expanded {
+  background: var(--background);
 }

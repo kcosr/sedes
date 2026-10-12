@@ -7,7 +7,7 @@
   min-width: 0;
   min-height: 0;
   --wb-media-border: var(--border);
-  --wb-media-background: var(--popover);
+  --wb-media-background: var(--background);
   --wb-media-color: var(--foreground);
   --wb-media-muted: var(--muted-foreground);
 }
@@ -27,6 +27,7 @@
 }
 
 .zoomable-preview-viewport {
+  background: var(--background);
   display: flex;
   flex: 1 1 0;
   min-width: 0;
