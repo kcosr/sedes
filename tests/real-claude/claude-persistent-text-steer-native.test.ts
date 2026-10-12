@@ -13,7 +13,7 @@ import { readClaudeSessionMessages } from "../../src/server/backends/claude/clau
 import { ClaudePersistentRuntimeClient } from "../../src/server/backends/claude/runtime/claude-remote-runtime-client.js";
 import { ClaudePersistentRuntimeRegistry } from "../../src/server/backends/claude/runtime/claude-persistent-runtime-registry.js";
 import { registerClaudePersistentRuntimeHost } from "../../src/server/backends/claude/runtime/claude-sidecar-runtime.js";
-import { claudeRuntimeModelInfoSchema, claudeRuntimeSlashCommandSchema } from "../../src/server/backends/claude/worker/claude-runtime-v3.js";
+import { claudeRuntimeModelInfoSchema, claudeRuntimeSlashCommandSchema } from "../../src/server/backends/claude/worker/claude-runtime-v4.js";
 import { LocalEnvironmentChannelProvider } from "../../src/server/execution/local-environment-channel.js";
 import { PersistentSidecarServiceRegistry } from "../../src/server/sidecar/persistent-sidecar-service-registry.js";
 import type { SidecarRuntimeLease, SidecarRuntimeProvider } from "../../src/server/sidecar/runtime-channel.js";

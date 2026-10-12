@@ -27,11 +27,15 @@ import {
   claudeRuntimeQueryInterruptDispositionRequestSchema,
   claudeRuntimeQueryOpenRequestSchema,
   claudeRuntimeQuerySendRequestSchema,
+  claudeRuntimeQueryCompactRequestSchema,
+  claudeRuntimeCompactResponseSchema,
+  claudeRuntimeCompactDispositionResponseSchema,
+  claudeRuntimeQueryCompactOperation,
   claudeRuntimeSessionMessagesResponseSchema,
   claudeRuntimeWorkerOperations,
-  registerClaudeRuntimeV3HostOperations,
-  registerClaudeRuntimeV3WorkerOperations,
-} from "../../src/server/backends/claude/worker/claude-runtime-v3.js";
+  registerClaudeRuntimeV4HostOperations,
+  registerClaudeRuntimeV4WorkerOperations,
+} from "../../src/server/backends/claude/worker/claude-runtime-v4.js";
 import {
   ClaudeRuntimeWorkerHost,
   type ClaudeRuntimeWorkerProtocolPeer,
@@ -47,7 +51,23 @@ const context = () => ({
   signal: new AbortController().signal,
 });
 
-describe("claude_runtime@3 protocol", () => {
+describe("claude_runtime@4 protocol", () => {
+  it("keeps compaction instructions and auxiliary receipts in a strict dedicated wire", () => {
+    const request = { queryId: QUERY_ID, operationId: OPERATION_ID, instructions: "preserve tasks" };
+    expect(claudeRuntimeQueryCompactRequestSchema.parse(request)).toEqual(request);
+    for (const invalid of [{ ...request, operationId: "invalid" }, { ...request, instructions: "x".repeat(65_537) },
+      { ...request, content: "/compact" }, { ...request, principalId: "browser" }]) {
+      expect(claudeRuntimeQueryCompactRequestSchema.safeParse(invalid).success).toBe(false);
+    }
+    expect(claudeRuntimeCompactResponseSchema.parse({ outcome: "noop", message: "Error: No messages to compact" }))
+      .toEqual({ outcome: "noop", message: "Error: No messages to compact" });
+    expect(claudeRuntimeCompactResponseSchema.safeParse({ outcome: "compacted", nativeResult: {} }).success).toBe(false);
+    expect(claudeRuntimeCompactResponseSchema.safeParse({ outcome: "accepted" }).success).toBe(false);
+    expect(claudeRuntimeCompactDispositionResponseSchema.parse({ outcome: "unknown", pending: false }))
+      .toEqual({ outcome: "unknown", pending: false });
+    expect(claudeRuntimeCompactDispositionResponseSchema.safeParse({ outcome: "unknown" }).success).toBe(false);
+    expect(claudeRuntimeQueryCompactOperation.maximumDeadlineMilliseconds).toBe(600_000);
+  });
   it("names exactly one query and one input identity when withdrawing input", () => {
     const queryId = randomUUID(), operationId = randomUUID();
     expect(claudeRuntimeQueryCancelInputRequestSchema.parse({ queryId, operationId })).toEqual({ queryId, operationId });
@@ -104,7 +124,7 @@ describe("claude_runtime@3 protocol", () => {
   it("publishes one exact closed worker inventory and the parked reverse operation", () => {
     const workerRegistry = new SidecarOperationRegistry();
     const noHandler = vi.fn(async () => ({})) as never;
-    registerClaudeRuntimeV3WorkerOperations(workerRegistry, {
+    registerClaudeRuntimeV4WorkerOperations(workerRegistry, {
       initialize: noHandler,
       probe: noHandler,
       listSessions: noHandler,
@@ -114,6 +134,8 @@ describe("claude_runtime@3 protocol", () => {
       renameSession: noHandler,
       openQuery: noHandler,
       sendQuery: noHandler,
+      compactQuery: noHandler,
+      compactDisposition: noHandler,
       interruptQuery: noHandler,
     interruptDisposition: noHandler,
       cancelQueryInput: noHandler,
@@ -126,10 +148,12 @@ describe("claude_runtime@3 protocol", () => {
     expect(workerRegistry.capabilities()).toEqual([
       {
         capabilityId: "claude_runtime",
-        majorVersion: 3,
+        majorVersion: 4,
         operations: [
           "query.cancel_input",
           "query.close",
+          "query.compact",
+          "query.compact_disposition",
           "query.context_usage",
           "query.interrupt",
           "query.interrupt_disposition",
@@ -148,19 +172,19 @@ describe("claude_runtime@3 protocol", () => {
         ],
       },
     ]);
-    expect(claudeRuntimeWorkerOperations).toHaveLength(17);
+    expect(claudeRuntimeWorkerOperations).toHaveLength(19);
     expect(claudeRuntimeQueryContextUsageOperation.maximumDeadlineMilliseconds).toBe(5_000);
     expect(claudeRuntimeQueryContextUsageOperation.responseSchema.safeParse({ usedTokens: 1, windowTokens: 100, percent: 1, categories: [] }).success).toBe(false);
 
     const hostRegistry = new SidecarOperationRegistry();
-    registerClaudeRuntimeV3HostOperations(hostRegistry, {
+    registerClaudeRuntimeV4HostOperations(hostRegistry, {
       canUseTool: noHandler,
       acknowledgePermissionResponse: noHandler,
     });
     expect(hostRegistry.capabilities()).toEqual([
       {
         capabilityId: "claude_runtime",
-        majorVersion: 3,
+        majorVersion: 4,
         operations: ["query.can_use_tool", "query.permission_response_ack"],
       },
     ]);

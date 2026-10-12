@@ -262,6 +262,8 @@ interface ParsedSessionMessage {
   readonly compactSummary?: true;
   /** Visible input converted from a queued-command attachment. */
   readonly queuedCommand?: true;
+  /** Provider-proven local command bookkeeping, never an ordinary user turn. */
+  readonly completedLocalCommand?: true;
 }
 
 interface ProjectedTimeline {
@@ -820,7 +822,7 @@ function buildTimeline(
       }
       continue;
     }
-    if (!message.mainThread || message.type === "system") continue;
+    if (!message.mainThread || message.type === "system" || message.completedLocalCommand) continue;
     const content = parseMessageContent(message.message, message.type);
     if (message.compactSummary) {
       compactions += 1;
@@ -1546,6 +1548,7 @@ function parseMessages(
       ...(timestamp !== undefined ? { timestamp } : {}),
       ...(type === "user" && candidate.isCompactSummary === true ? { compactSummary: true as const } : {}),
       ...(type === "user" && candidate.isQueuedCommand === true ? { queuedCommand: true as const } : {}),
+      ...(type === "user" && candidate.isCompletedLocalCommand === true ? { completedLocalCommand: true as const } : {}),
     });
   }
   return result;
@@ -1833,7 +1836,7 @@ export function nextClaudeUserMessageOrdinal(
 ): number {
   let hasTurn = false;
   return parseMessages(value).filter((message) => {
-    if (!message.mainThread || message.type === "system" || message.compactSummary) return false;
+    if (!message.mainThread || message.type === "system" || message.compactSummary || message.completedLocalCommand) return false;
     const content = parseMessageContent(message.message, message.type);
     if (isResumeClosure(message, content)) return false;
     if (hasTurn && isInterruptionMarker(message, content, isApplicationInputOperation)) return false;

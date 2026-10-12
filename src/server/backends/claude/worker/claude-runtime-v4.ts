@@ -13,9 +13,10 @@ import {
 
 import { CLAUDE_HISTORY_PAGE_MESSAGES } from "../claude-session-history.js";
 import { CLAUDE_CONTEXT_USAGE_TIMEOUT_MS, claudeContextUsageSchema } from "../claude-context-usage.js";
+import { claudeCompactUsageReceiptSchema } from "../claude-compact-usage-receipt.js";
 
 export const CLAUDE_RUNTIME_CAPABILITY_ID = "claude_runtime" as const;
-export const CLAUDE_RUNTIME_MAJOR_VERSION = 3 as const;
+export const CLAUDE_RUNTIME_MAJOR_VERSION = 4 as const;
 // HSC1's current frame ceiling is a little over 96 MiB. Keep enough room for
 // the request/event envelope and JSON escaping rather than treating the whole
 // transport frame as provider payload authority.
@@ -232,6 +233,7 @@ export const claudeRuntimeSessionMessageSchema = z.strictObject({
   timestamp: z.iso.datetime().optional(),
   /** Claude Code's compaction summary; the SDK carries it on history rows. */
   isCompactSummary: z.literal(true).optional(),
+  isCompletedLocalCommand: z.literal(true).optional(),
   /** Visible queued input converted from its attachment row; visibility alone is not consumption. */
   isQueuedCommand: z.literal(true).optional(),
 });
@@ -366,6 +368,25 @@ export const claudeRuntimeQuerySendRequestSchema = z.strictObject({
 });
 export const claudeRuntimeQuerySendResponseSchema = z.strictObject({
   accepted: z.literal(true),
+});
+export const claudeRuntimeQueryCompactRequestSchema = z.strictObject({
+  queryId: uuidSchema, operationId: uuidSchema,
+  instructions: z.string().max(65_536).refine(value => !value.includes("\0")).optional(),
+});
+export const claudeRuntimeCompactResultSchema = z.strictObject({
+  outcome: z.enum(["compacted", "noop"]), message: boundedStringSchema.optional(),
+  nativeResult: claudeCompactUsageReceiptSchema.optional(),
+});
+export const claudeRuntimeCompactResponseSchema = z.union([
+  claudeRuntimeCompactResultSchema,
+  z.strictObject({
+    outcome: z.literal("failed"), code: boundedStringSchema,
+    crossedSubmissionBoundary: z.boolean(), nativeResult: claudeCompactUsageReceiptSchema.optional(),
+  }),
+]);
+export const claudeRuntimeCompactDispositionResponseSchema = z.strictObject({
+  outcome: z.enum(["accepted", "not_applied", "unknown"]), pending: z.boolean(),
+  nativeResult: claudeCompactUsageReceiptSchema.optional(),
 });
 const queryIdRequestSchema = z.strictObject({ queryId: uuidSchema });
 export const claudeRuntimeQueryContextUsageRequestSchema = queryIdRequestSchema;
@@ -574,6 +595,16 @@ export const claudeRuntimeQuerySendOperation = operation({
   maximumDeadlineMilliseconds: 30_000,
   lane: "operation",
 });
+export const claudeRuntimeQueryCompactOperation = operation({
+  operation: "query.compact", requestSchema: claudeRuntimeQueryCompactRequestSchema,
+  responseSchema: claudeRuntimeCompactResponseSchema,
+  maximumDeadlineMilliseconds: 600_000, lane: "operation",
+});
+export const claudeRuntimeQueryCompactDispositionOperation = operation({
+  operation: "query.compact_disposition", requestSchema: claudeRuntimeQueryCompactRequestSchema,
+  responseSchema: claudeRuntimeCompactDispositionResponseSchema,
+  maximumDeadlineMilliseconds: 30_000, lane: "operation",
+});
 export const claudeRuntimeQueryInterruptOperation = operation({
   operation: "query.interrupt",
   requestSchema: claudeRuntimeQueryInterruptRequestSchema,
@@ -655,6 +686,8 @@ export const claudeRuntimeWorkerOperations = Object.freeze([
   claudeRuntimeSessionRenameOperation,
   claudeRuntimeQueryOpenOperation,
   claudeRuntimeQuerySendOperation,
+  claudeRuntimeQueryCompactOperation,
+  claudeRuntimeQueryCompactDispositionOperation,
   claudeRuntimeQueryInterruptOperation,
   claudeRuntimeQueryInterruptDispositionOperation,
   claudeRuntimeQueryCancelInputOperation,
@@ -676,7 +709,7 @@ type HandlerFor<Definition> = Definition extends {
   ? SidecarOperationHandler<Request, Response>
   : never;
 
-export interface ClaudeRuntimeV3WorkerHandlers {
+export interface ClaudeRuntimeV4WorkerHandlers {
   readonly initialize: HandlerFor<typeof claudeRuntimeInitializeOperation>;
   readonly probe: HandlerFor<typeof claudeRuntimeProbeOperation>;
   readonly listSessions: HandlerFor<typeof claudeRuntimeSessionListOperation>;
@@ -692,6 +725,8 @@ export interface ClaudeRuntimeV3WorkerHandlers {
   >;
   readonly openQuery: HandlerFor<typeof claudeRuntimeQueryOpenOperation>;
   readonly sendQuery: HandlerFor<typeof claudeRuntimeQuerySendOperation>;
+  readonly compactQuery: HandlerFor<typeof claudeRuntimeQueryCompactOperation>;
+  readonly compactDisposition: HandlerFor<typeof claudeRuntimeQueryCompactDispositionOperation>;
   readonly interruptQuery: HandlerFor<
     typeof claudeRuntimeQueryInterruptOperation
   >;
@@ -712,9 +747,9 @@ export interface ClaudeRuntimeV3WorkerHandlers {
   readonly closeQuery: HandlerFor<typeof claudeRuntimeQueryCloseOperation>;
 }
 
-export function registerClaudeRuntimeV3WorkerOperations(
+export function registerClaudeRuntimeV4WorkerOperations(
   registry: SidecarOperationRegistry,
-  handlers: ClaudeRuntimeV3WorkerHandlers,
+  handlers: ClaudeRuntimeV4WorkerHandlers,
 ): void {
   registry.register(claudeRuntimeInitializeOperation, handlers.initialize);
   registry.register(claudeRuntimeProbeOperation, handlers.probe);
@@ -734,6 +769,8 @@ export function registerClaudeRuntimeV3WorkerOperations(
   );
   registry.register(claudeRuntimeQueryOpenOperation, handlers.openQuery);
   registry.register(claudeRuntimeQuerySendOperation, handlers.sendQuery);
+  registry.register(claudeRuntimeQueryCompactOperation, handlers.compactQuery);
+  registry.register(claudeRuntimeQueryCompactDispositionOperation, handlers.compactDisposition);
   registry.register(claudeRuntimeQueryContextUsageOperation, handlers.contextUsage);
   registry.register(
     claudeRuntimeQueryInterruptOperation,
@@ -759,7 +796,7 @@ export function registerClaudeRuntimeV3WorkerOperations(
   registry.register(claudeRuntimeQueryCloseOperation, handlers.closeQuery);
 }
 
-export function registerClaudeRuntimeV3HostOperations(
+export function registerClaudeRuntimeV4HostOperations(
   registry: SidecarOperationRegistry,
   handlers: {
     readonly canUseTool: HandlerFor<typeof claudeRuntimeCanUseToolOperation>;

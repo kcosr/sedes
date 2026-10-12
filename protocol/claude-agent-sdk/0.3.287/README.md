@@ -45,9 +45,9 @@ qualification was installed separately from the SDK.
   contract.
 
 The normalized skill alias metadata requires client protocol 132. Claude
-worker capability `claude_runtime@3` and persistent sidecar capability
-`claude_persistent_runtime@4` fence older catalogs that do not preserve builtin
-classification and older history behavior. Existing sidecars must be upgraded
+worker capability `claude_runtime@4` and persistent sidecar capability
+`claude_persistent_runtime@5` fence older catalogs that do not preserve builtin
+classification, current history behavior, and manual compaction receipts. Existing sidecars must be upgraded
 through their normal active-work-protected lifecycle.
 
 ## Permission initialization

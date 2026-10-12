@@ -1,6 +1,6 @@
 import { backgroundActivitySchema } from "../../../../shared/protocol/background-activity.js";
 import { z } from "zod";
-import * as worker from "../worker/claude-runtime-v3.js";
+import * as worker from "../worker/claude-runtime-v4.js";
 
 /** Resident sessions plus running fork launches, per persistent runtime. */
 export const CLAUDE_PERSISTENT_MAXIMUM_SESSIONS = 32;
@@ -27,6 +27,8 @@ export const claudePersistentCommandSchema = z.discriminatedUnion("action", [
   command("open", claudePersistentOpenRequestSchema).extend({ replay: z.enum(["full", "unacknowledged"]) }),
   command("fork", worker.claudeRuntimeForkRequestSchema),
   command("send", worker.claudeRuntimeQuerySendRequestSchema),
+  command("compact", worker.claudeRuntimeQueryCompactRequestSchema.extend({ startupProbeUuid: z.string().uuid() })),
+  command("compact_disposition", worker.claudeRuntimeQueryCompactRequestSchema.extend({ startupProbeUuid: z.string().uuid() })),
   command("interrupt", worker.claudeRuntimeQueryInterruptRequestSchema.extend({ startupProbeUuid: z.string().uuid() })),
   command("interrupt_disposition", worker.claudeRuntimeQueryInterruptDispositionRequestSchema.extend({ startupProbeUuid: z.string().uuid() })),
   command("set_model", worker.claudeRuntimeQuerySetModelRequestSchema),
@@ -62,12 +64,21 @@ export const claudePersistentSendResponseSchema = z.discriminatedUnion("accepted
 ]);
 export const claudePersistentAttachmentSchema = z.strictObject({
   queryId: z.string().uuid(), startupProbeUuid: z.string().uuid(), reattached: z.boolean(),
+  throughSequence: z.number().int().nonnegative(),
   initialization: worker.claudeRuntimeInitializationSchema,
   failureCode: id.nullable(),
   backgroundActivity: backgroundActivitySchema,
   pendingBackgroundTaskIds: z.array(z.string().min(1).max(512)).max(8192),
   confirmedEffort: z.enum(["low", "medium", "high", "xhigh", "max"]).nullable().optional(),
   events: z.array(claudePersistentEventSchema).max(8192),
+});
+/** The result cannot precede application of the owner's ordered event cut. */
+export const claudePersistentCompactResponseSchema = z.strictObject({
+  response: worker.claudeRuntimeCompactResponseSchema,
+  throughSequence: z.number().int().nonnegative(),
+});
+export const claudePersistentCompactDispositionResponseSchema = worker.claudeRuntimeCompactDispositionResponseSchema.extend({
+  throughSequence: z.number().int().nonnegative(),
 });
 /**
  * `cancelled`: Claude admitted the input, then withdrew it with a `cancelled`

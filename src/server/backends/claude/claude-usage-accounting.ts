@@ -1,6 +1,7 @@
 import { nativeUsageMoney } from "../../usage/native-money.js";
 import { createHash } from "node:crypto";
 import type { SDKResultMessage, SessionMessage } from "@anthropic-ai/claude-agent-sdk";
+import type { ClaudeCompactUsageReceipt } from "./claude-compact-usage-receipt.js";
 import type { BackendTurn } from "../../../shared/protocol/backend.js";
 import type { UsageModel } from "../../../shared/protocol/usage-accounting.js";
 import type { ConversationBinding } from "../contracts.js";
@@ -36,7 +37,7 @@ const baseFact = {
  * the confirmed `model`; other models in the pipeline (helpers, subagents) are
  * not attributed that effort.
  */
-export function claudePipelineObservation(message: SDKResultMessage, reasoningEffort: string | null = null, model: string | null = null): UsageObservation | undefined {
+export function claudePipelineObservation(message: SDKResultMessage | ClaudeCompactUsageReceipt, reasoningEffort: string | null = null, model: string | null = null): UsageObservation | undefined {
   if ("startup_failure_reason" in message && message.startup_failure_reason) return;
   const facts: UsageFact[] = Object.entries(message.modelUsage).map(([model, usage]) => ({
     ...baseFact, id: `model:${model}`, kind: "cumulative", coverageDomain: "claude_query_pipeline",
@@ -60,7 +61,7 @@ export function claudePipelineObservation(message: SDKResultMessage, reasoningEf
  * totals the query started from: zero for a new session, and the transcript's
  * saved totals for a resumed or forked one.
  */
-export function claudeStartupResult(message: SDKResultMessage, startupMessageUuid: string): boolean {
+export function claudeStartupResult(message: SDKResultMessage | ClaudeCompactUsageReceipt, startupMessageUuid: string): boolean {
   const ids = claudeResultUserMessageIds(message), usage = message.usage;
   return ids.length === 1 && ids[0] === startupMessageUuid && message.subtype === "success" && !message.is_error && message.num_turns === 0 &&
     [usage.input_tokens, usage.output_tokens, usage.cache_read_input_tokens, usage.cache_creation_input_tokens].every((value) => !value);
@@ -158,7 +159,7 @@ export class ClaudeUsageAccounting {
     }
     flush();
   }
-  pipeline(message: SDKResultMessage, reasoningEffort: string | null = null, model: string | null = null): void {
+  pipeline(message: SDKResultMessage | ClaudeCompactUsageReceipt, reasoningEffort: string | null = null, model: string | null = null): void {
     try {
       const observation = claudePipelineObservation(message, reasoningEffort, model);
       if (!observation) { this.#query?.gap("capture_gap"); return; }

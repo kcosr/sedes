@@ -152,6 +152,28 @@ function setModel(
 }
 
 describe("ClaudeThreadActionPersistence", () => {
+  it("routes scoped compaction without changing application settings or inventory", () => {
+    const { database, settings, persistence } = fixture("low");
+    const before = settings.get(scope, applicationThreadId);
+    expect(persistence.driverAction({ action: "compact", instructions: "Keep the test plan." }, "compact-a"))
+      .toEqual({ action: "compact", instructions: "Keep the test plan.", applicationOperationId: "compact-a" });
+    persistence.persistAccepted(scope, applicationThreadId, {
+      mutationId: "compact-a", expectedThreadRevision: 1, settingsGuard: { kind: "proven_applied" },
+      operation: { action: "compact" }, now: 2,
+    });
+    expect(settings.get(scope, applicationThreadId)).toEqual(before);
+    expect(database.prepare("SELECT revision FROM application_threads WHERE id = ?").get(applicationThreadId))
+      .toEqual({ revision: 1 });
+    expect(database.prepare("SELECT inventory_generation FROM principal_generations").get())
+      .toEqual({ inventory_generation: 0 });
+    for (const wrongScope of [{ ...scope, tenantId: "tenant-b" }, { ...scope, principalId: "principal-b" }]) {
+      expect(() => persistence.persistAccepted(wrongScope, applicationThreadId, {
+        mutationId: "compact-a", expectedThreadRevision: 1, settingsGuard: { kind: "proven_applied" },
+        operation: { action: "compact" }, now: 2,
+      })).toThrow();
+    }
+  });
+
   it("preserves a compatible effort when the model changes", () => {
     const { settings, modelEfforts, persistence } = fixture("high");
     modelEfforts.replace(applicationThreadId, connectionProfileId, [

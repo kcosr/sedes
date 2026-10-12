@@ -436,10 +436,19 @@ the SSH carrier; it does not verify a remote SSH server or login.
 
 That bounded live gate verifies text streaming, persistence, usage, and reopen;
 it deliberately does not claim live coverage for native image input, semantic
-tool projection, subagents, or skills. Those paths use deterministic
-official-SDK-shaped unit, integration, and browser fixtures. Manual compaction
-remains intentionally unsupported. A separately reviewed, capacity-bounded
-live canary still requires explicit authorization.
+tool projection, subagents, skills, or manual compaction. Those paths use
+deterministic official-SDK-shaped unit, integration, and browser fixtures.
+A separately reviewed, capacity-bounded live canary still requires explicit
+authorization.
+
+The focused `claude-manual-compaction-live.test.ts` gate separately requires
+`SEDES_REAL_CLAUDE=1`, subscription authentication, and exactly
+`claude-sonnet-5-5` with low effort. It disables tools, MCP servers, hooks,
+plugins, and setting sources; bounds the session budget and duration; and
+verifies manual compaction, a following prompt, and native resume. It retains
+the disposable native history. This is distinct from
+`claude-compaction-native.test.ts`, which verifies the SDK and CLI against an
+isolated loopback API without authenticated provider capacity.
 
 The Grok gate uses the production owned-stdio runtime, curated child
 environment, native HOME/GROK_HOME account state, and cached-token

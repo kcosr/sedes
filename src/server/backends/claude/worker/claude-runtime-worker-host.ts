@@ -20,6 +20,7 @@ import { snapshotBoundedJson } from "../../../provider-protocol/json/bounded-jso
 import type { ClaudeSdkFacade } from "../claude-sdk-facade.js";
 import { probeClaudeSdkDirect } from "../claude-sdk-probe.js";
 import { ClaudeSdkSession } from "../claude-sdk-session.js";
+import { ClaudeRuntimeCompactError } from "../claude-compact-operation.js";
 import {
   CLAUDE_QUERY_NOT_LAUNCHED_CODE_PREFIX,
   claudeLaunchRefusal,
@@ -35,8 +36,8 @@ import {
   claudeRuntimePermissionResponseAckOperation,
   claudeRuntimeQueryFailedEventSchema,
   claudeRuntimeQueryMessageEventSchema,
-  type ClaudeRuntimeV3WorkerHandlers,
-} from "./claude-runtime-v3.js";
+  type ClaudeRuntimeV4WorkerHandlers,
+} from "./claude-runtime-v4.js";
 import type { ClaudeQueryProcessScope } from "./tracked-claude-sdk-facade.js";
 
 export interface ClaudeRuntimeWorkerProtocolPeer {
@@ -89,12 +90,12 @@ type RuntimeConfiguration = {
 /**
  * Provider-private owner for all SDK and native-store work in one worker
  * generation. The main server communicates with this host only through the
- * closed claude_runtime@3 binding.
+ * closed claude_runtime@4 binding.
  */
 export class ClaudeRuntimeWorkerHost {
-  readonly handlers: ClaudeRuntimeV3WorkerHandlers;
+  readonly handlers: ClaudeRuntimeV4WorkerHandlers;
   readonly #sdk: ClaudeSdkFacade;
-  readonly #history = new ClaudeHistoryPager<Awaited<ReturnType<ClaudeRuntimeV3WorkerHandlers["getSessionMessages"]>>["messages"][number]>();
+  readonly #history = new ClaudeHistoryPager<Awaited<ReturnType<ClaudeRuntimeV4WorkerHandlers["getSessionMessages"]>>["messages"][number]>();
   readonly #peer: ClaudeRuntimeWorkerProtocolPeer;
   readonly #maximumQueries: number;
   readonly #queries = new Map<string, ActiveQuery>();
@@ -123,7 +124,7 @@ export class ClaudeRuntimeWorkerHost {
       (() => ({ sdk: options.sdk, settled: async () => undefined }));
     this.#peer = options.peer;
     this.#maximumQueries = maximumQueries;
-    const handlers: ClaudeRuntimeV3WorkerHandlers = {
+    const handlers: ClaudeRuntimeV4WorkerHandlers = {
       initialize: async (request, context) =>
         await this.#initialize(request, context.signal),
       probe: async ({ cwd }, context) => await this.#probe(cwd, context.signal),
@@ -145,6 +146,18 @@ export class ClaudeRuntimeWorkerHost {
       openQuery: async (request, context) =>
         await this.#openQuery(request, context.signal),
       sendQuery: (request) => this.#sendQuery(request),
+      compactQuery: async ({ queryId, ...input }) => {
+        try {
+          const result = await this.#query(queryId).session.compact(input);
+          return result;
+        } catch (error) {
+          if (!(error instanceof ClaudeRuntimeCompactError)) throw error;
+          return { outcome: "failed" as const, code: error.backendCode ?? "claude_compact_failed",
+            crossedSubmissionBoundary: error.crossedSubmissionBoundary,
+            ...(error.nativeResult ? { nativeResult: error.nativeResult } : {}) };
+        }
+      },
+      compactDisposition: async ({ queryId, ...input }) => this.#query(queryId).session.reconcileCompact(input),
       interruptQuery: async (request, context) => {
         context.signal.throwIfAborted();
         return await this.#interruptQuery(request);
@@ -217,7 +230,7 @@ export class ClaudeRuntimeWorkerHost {
   }
 
   async #listSessions(
-    request: Parameters<ClaudeRuntimeV3WorkerHandlers["listSessions"]>[0],
+    request: Parameters<ClaudeRuntimeV4WorkerHandlers["listSessions"]>[0],
   ) {
     this.#assertOpen();
     const sessions = await this.#sdk.listSessions(
@@ -228,7 +241,7 @@ export class ClaudeRuntimeWorkerHost {
   }
 
   async #getSessionInfo(
-    request: Parameters<ClaudeRuntimeV3WorkerHandlers["getSessionInfo"]>[0],
+    request: Parameters<ClaudeRuntimeV4WorkerHandlers["getSessionInfo"]>[0],
   ) {
     this.#assertOpen();
     const session = await this.#sdk.getSessionInfo(
@@ -240,7 +253,7 @@ export class ClaudeRuntimeWorkerHost {
   }
 
   async #getSessionMessages(
-    request: Parameters<ClaudeRuntimeV3WorkerHandlers["getSessionMessages"]>[0],
+    request: Parameters<ClaudeRuntimeV4WorkerHandlers["getSessionMessages"]>[0],
   ) {
     this.#assertOpen();
     const { sessionId, offset: _offset, limit: _limit, cursor: _cursor, maintenance: _maintenance, ...options } = request;
@@ -281,7 +294,7 @@ export class ClaudeRuntimeWorkerHost {
   }
 
   async #renameSession(
-    request: Parameters<ClaudeRuntimeV3WorkerHandlers["renameSession"]>[0],
+    request: Parameters<ClaudeRuntimeV4WorkerHandlers["renameSession"]>[0],
   ) {
     this.#assertOpen();
     await this.#sdk.renameSession(
@@ -294,7 +307,7 @@ export class ClaudeRuntimeWorkerHost {
   }
 
   async #openQuery(
-    request: Parameters<ClaudeRuntimeV3WorkerHandlers["openQuery"]>[0],
+    request: Parameters<ClaudeRuntimeV4WorkerHandlers["openQuery"]>[0],
     signal: AbortSignal,
   ) {
     this.#assertOpen();
@@ -471,7 +484,7 @@ export class ClaudeRuntimeWorkerHost {
   }
 
   async #sendQuery(
-    request: Parameters<ClaudeRuntimeV3WorkerHandlers["sendQuery"]>[0],
+    request: Parameters<ClaudeRuntimeV4WorkerHandlers["sendQuery"]>[0],
   ) {
     this.#assertOpen();
     if (
@@ -597,7 +610,7 @@ export class ClaudeRuntimeWorkerHost {
   }
 
   async #initialize(
-    request: Parameters<ClaudeRuntimeV3WorkerHandlers["initialize"]>[0],
+    request: Parameters<ClaudeRuntimeV4WorkerHandlers["initialize"]>[0],
     signal: AbortSignal,
   ): Promise<{ readonly initialized: true; readonly configDirectory: string }> {
     this.#assertOpen();

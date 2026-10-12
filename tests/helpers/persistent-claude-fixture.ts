@@ -22,6 +22,8 @@ export class FakePersistentClaudeSession implements ClaudeOwnedRuntimeSession {
   readonly safeSkills = [];
   readonly start = vi.fn(async () => this.initialization);
   readonly send = vi.fn<ClaudeRuntimeSession["send"]>();
+  readonly compact = vi.fn<ClaudeRuntimeSession["compact"]>(async () => ({ outcome: "compacted" }));
+  readonly reconcileCompact = vi.fn<ClaudeRuntimeSession["reconcileCompact"]>(async () => ({ outcome: "unknown", pending: true }));
   readonly interrupt = vi.fn(async () => undefined);
   readonly cancelQueuedInput = vi.fn<ClaudeOwnedRuntimeSession["cancelQueuedInput"]>(async () => false);
   readonly setModel = vi.fn(async () => undefined);

@@ -36,6 +36,7 @@ import type {
   ClaudeRuntimeForkResult,
 } from "./claude-runtime-client.js";
 import { runClaudeForkLaunch } from "./claude-fork-launch.js";
+import { ClaudeRuntimeCompactError } from "./claude-compact-operation.js";
 import { ClaudeRuntimeWorkerClient } from "./claude-runtime-worker-client.js";
 import type { ClaudeSafeSkill } from "./claude-skills.js";
 import type { ClaudeSdkSessionInitialization } from "./claude-sdk-session.js";
@@ -45,7 +46,7 @@ import {
   claudeRuntimeCanUseToolOperation,
   claudeRuntimeHostOperations,
   claudeRuntimeWorkerOperations,
-} from "./worker/claude-runtime-v3.js";
+} from "./worker/claude-runtime-v4.js";
 import { CLAUDE_RUNTIME_WORKER_CLEANUP_PROVEN_FAILURE_EXIT_CODE } from "./worker/claude-outer-process-supervisor.js";
 
 export interface ClaudeManagedRuntimeOwnerOptions {
@@ -553,6 +554,15 @@ class DeferredManagedClaudeSession implements ClaudeOwnedRuntimeSession {
   send(input: Parameters<ClaudeRuntimeSession["send"]>[0]): void | Promise<void> { return this.#ready().send(input); }
   interrupt(input: Parameters<ClaudeRuntimeSession["interrupt"]>[0]): Promise<SDKControlInterruptResponse | undefined> { return this.#ready().interrupt(input); }
   async reconcileInterrupt(input: Parameters<ClaudeRuntimeSession["interrupt"]>[0]): Promise<"accepted" | "unknown"> { return await this.#ready().reconcileInterrupt?.(input) ?? "unknown"; }
+  async compact(input: Parameters<ClaudeRuntimeSession["compact"]>[0]) {
+    let session: ClaudeOwnedRuntimeSession;
+    try { session = this.#delegate ?? this.#ready(); }
+    catch { throw new ClaudeRuntimeCompactError("claude_compact_local_admission_refused", false); }
+    // Existing delegates own their exact dispatched IDs, including after close.
+    return await session.compact(input);
+  }
+  async reconcileCompact(input: Parameters<ClaudeRuntimeSession["reconcileCompact"]>[0]) { return await this.#ready().reconcileCompact(input); }
+  async flushMessages() { await this.#ready().flushMessages?.(); }
   cancelQueuedInput(operationId: string, input?: Parameters<ClaudeOwnedRuntimeSession["cancelQueuedInput"]>[1]): Promise<boolean> { return this.#ready().cancelQueuedInput(operationId, input); }
   setModel(model?: string): Promise<void> { return this.#ready().setModel(model); }
   setEffort(effort?: EffortLevel): Promise<void> { return this.#ready().setEffort(effort); }

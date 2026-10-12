@@ -27,9 +27,10 @@ import {
   resolveClaudeSafeSkills,
   type ClaudeSafeSkill,
 } from "./claude-skills.js";
-import type { ClaudeRuntimeAgentToolMcp } from "./worker/claude-runtime-v3.js";
+import type { ClaudeRuntimeAgentToolMcp } from "./worker/claude-runtime-v4.js";
 import { CLAUDE_FORK_LAUNCH_PERMISSION_MODE } from "./claude-fork-launch.js";
 import { CLAUDE_CONTEXT_USAGE_TIMEOUT_MS, projectClaudeContextUsage, waitClaudeContextUsage, type ClaudeContextUsage } from "./claude-context-usage.js";
+import { ClaudeCompactOperations, ClaudeRuntimeCompactError, type ClaudeRuntimeCompactInput } from "./claude-compact-operation.js";
 
 const CLAUDE_SETTING_SOURCES = ["user", "project", "local"] as const;
 
@@ -196,6 +197,7 @@ interface Deferred<T> {
 
 /** Owns one official-SDK query and its Claude Code subprocess. */
 export class ClaudeSdkSession {
+  readonly #compactOperations = new ClaudeCompactOperations();
   readonly #interruptOperations = new ClaudeInterruptOperations<SDKControlInterruptResponse | undefined>();
   readonly #options: ClaudeSdkSessionOptions;
   readonly #input = new ClaudeInputQueue<SDKUserMessage>(16);
@@ -460,6 +462,7 @@ export class ClaudeSdkSession {
     readonly shouldQuery?: boolean;
     readonly priority?: "next";
   }): void {
+    if (this.#compactOperations.busy) throw new ClaudeRuntimeCompactError("claude_compact_busy", false);
     if (!this.#query || !this.#initialization || this.closed) {
       throw new Error("claude_sdk_session_not_ready");
     }
@@ -476,6 +479,21 @@ export class ClaudeSdkSession {
       ...(input.priority ? { priority: input.priority } : {}),
       origin: { kind: "human" },
     });
+  }
+
+  compact(input: ClaudeRuntimeCompactInput) {
+    if (!this.#query || !this.#initialization || this.closed) {
+      return Promise.reject(new ClaudeRuntimeCompactError("claude_sdk_session_not_ready", false));
+    }
+    return this.#compactOperations.run(input, content => this.#input.push({
+      type: "user", session_id: this.#options.sessionId, parent_tool_use_id: null,
+      uuid: input.operationId as SDKUserMessage["uuid"], message: { role: "user", content },
+      origin: { kind: "human" },
+    }));
+  }
+
+  async reconcileCompact(input: ClaudeRuntimeCompactInput) {
+    return this.#compactOperations.reconcile(input);
   }
 
   async interrupt(input: InterruptConversationInput): Promise<SDKControlInterruptResponse | undefined> {
@@ -627,6 +645,7 @@ export class ClaudeSdkSession {
           this.#commands = message.commands;
           this.#safeSkills = [];
         }
+        if (await this.#compactOperations.consume(message, async () => { await this.#options.onMessage(message); })) continue;
         await this.#options.onMessage(message);
       }
       if (this.#closed) return;
@@ -656,6 +675,7 @@ export class ClaudeSdkSession {
   #terminate(error: unknown): void {
     if (this.#closed) return;
     this.#closed = true;
+    this.#compactOperations.ownerLost();
     this.#input.close();
     this.#abortController.abort(error);
     this.#startupBarrier?.resolve();

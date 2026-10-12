@@ -23,6 +23,7 @@ import { PersistentSidecarServiceRegistry } from "../../src/server/sidecar/persi
 import { createSidecarAbandonmentArchive, type SidecarAbandonmentRecord } from "../../src/server/sidecar/sidecar-abandonment-archive.js";
 import type { SidecarRuntimeLease, SidecarRuntimeProvider } from "../../src/server/sidecar/runtime-channel.js";
 import { createFakePersistentClaudeRuntime, FakePersistentClaudeSession } from "../helpers/persistent-claude-fixture.js";
+import { ClaudeRuntimeCompactError, type ClaudeRuntimeCompactResult } from "../../src/server/backends/claude/claude-compact-operation.js";
 
 const scope = { tenantId: "tenant", principalId: "principal", executionEnvironmentId: "ssh-environment", backendInstanceId: "claude-remote" };
 const configuration = { ...scope, executablePath: "/provider/claude", configDirectory: "/provider/.claude", initializationTimeoutMs: 5_000 };
@@ -33,6 +34,7 @@ afterEach(async () => { vi.restoreAllMocks(); vi.unstubAllEnvs(); for (const cle
 async function fixture(options: {
   readonly validateAgentToolMcp?: (agentToolMcp: NonNullable<ClaudeRuntimeSessionOptions["agentToolMcp"]>) => void;
   readonly detachedSessionTtlMs?: number;
+  readonly maximumCompactReceiptBytes?: number;
 } = {}) {
   const native = createFakePersistentClaudeRuntime();
   const archive = vi.fn(async (_record: unknown) => {});
@@ -48,6 +50,7 @@ async function fixture(options: {
     createRuntime,
     ...(options.validateAgentToolMcp ? { validateAgentToolMcp: options.validateAgentToolMcp } : {}),
     ...(options.detachedSessionTtlMs !== undefined ? { detachedSessionTtlMs: options.detachedSessionTtlMs } : {}),
+    ...(options.maximumCompactReceiptBytes !== undefined ? { maximumCompactReceiptBytes: options.maximumCompactReceiptBytes } : {}),
   });
   let current: SidecarRuntimeLease | undefined;
   const sidecarRuntime: SidecarRuntimeProvider = {
@@ -218,6 +221,303 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
     await expect(session.contextUsage()).rejects.toThrow("sidecar_operation_failed");
     expect(native.closed).toBe(false);
     expect(await session.contextUsage()).toEqual(context);
+  });
+
+  it("replays one exact compaction receipt after carrier loss and replacement main without sending a user turn", async () => {
+    const f = await fixture(); const carrier = await f.attach(); const client = f.client();
+    const id = randomUUID(); const session = client.createSession(sessionOptions(id));
+    await session.start();
+    const native = f.sessions[0]!;
+    let finish!: (result: ClaudeRuntimeCompactResult) => void;
+    native.compact.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const input = { operationId: randomUUID(), instructions: "Keep the pending investigation." };
+    const lost = expect(session.compact(input)).rejects.toThrow();
+    await vi.waitFor(() => expect(native.compact).toHaveBeenCalledExactlyOnceWith(input));
+    const host = f.hosts.ensure(configuration, carrier.lease.controllerEpoch);
+    expect(host.snapshot().blockers).toContain("active_work");
+    await carrier.close();
+    await lost;
+    const boundary = { type: "system", subtype: "compact_boundary", uuid: randomUUID(), session_id: id,
+      compact_metadata: { trigger: "manual", pre_tokens: 40_000 } } as SDKMessage;
+    const summary = { type: "user", uuid: randomUUID(), session_id: id, parent_tool_use_id: null,
+      isSynthetic: true, isCompactSummary: true, message: { role: "user", content: "Retained investigation summary." } } as SDKMessage;
+    await native.emit(boundary); await native.emit(summary);
+    const result: ClaudeRuntimeCompactResult = { outcome: "compacted" };
+    finish(result);
+    await vi.waitFor(() => expect(host.snapshot().blockers).not.toContain("active_work"));
+    const nextCarrier = await f.attach(); const messages = vi.fn();
+    const restored = f.client().createSession(sessionOptions(id, { launch: "resume", onMessage: messages }));
+    await restored.start();
+    expect(await restored.reconcileCompact(input)).toEqual({ outcome: "accepted", pending: false });
+    expect(await restored.compact(input)).toEqual(result);
+    expect(messages.mock.calls.map(([message]) => message)).toEqual([boundary, summary]);
+    expect(native.compact).toHaveBeenCalledOnce();
+    expect(native.send).not.toHaveBeenCalled();
+    expect(f.sessions).toHaveLength(1);
+    await expect(nextCarrier.connection.execute({ action: "compact", runtimeId: host.runtimeId,
+      controllerEpoch: nextCarrier.lease.controllerEpoch, request: { queryId: id, startupProbeUuid: native.startupProbeUuid,
+        ...input, instructions: "Changed operation payload" } })).resolves.toMatchObject({ response: { outcome: "failed", code: "claude_compact_operation_conflict", crossedSubmissionBoundary: true } });
+    expect(await restored.reconcileCompact({ ...input, instructions: "Changed operation payload" })).toEqual({ outcome: "unknown", pending: true });
+    expect(native.compact).toHaveBeenCalledOnce();
+  });
+
+  it("retains a no-op and its spend across idle query retirement and rejects wrong owner authority", async () => {
+    const f = await fixture(); const carrier = await f.attach();
+    const id = randomUUID(); const session = f.client().createSession(sessionOptions(id));
+    await session.start(); const native = f.sessions[0]!;
+    const input = { operationId: randomUUID() };
+    const nativeResult: NonNullable<ClaudeRuntimeCompactResult["nativeResult"]> = { type: "result", subtype: "success", uuid: randomUUID(), session_id: id,
+      user_message_uuid: input.operationId, user_message_uuids: [input.operationId], is_error: false, num_turns: 0,
+      total_cost_usd: 0.001, modelUsage: {}, usage: { input_tokens: 12, output_tokens: 3,
+        cache_creation_input_tokens: 0, cache_read_input_tokens: 0 } };
+    native.compact.mockResolvedValueOnce({ outcome: "noop", message: "Not enough history to compact.", nativeResult });
+    const result = await session.compact(input);
+    const host = f.hosts.ensure(configuration, carrier.lease.controllerEpoch);
+    const authority = { runtimeId: host.runtimeId, controllerEpoch: carrier.lease.controllerEpoch };
+    await expect(carrier.connection.execute({ ...authority, action: "compact", request: {
+      queryId: id, startupProbeUuid: randomUUID(), operationId: randomUUID(),
+    } })).resolves.toMatchObject({ response: { outcome: "failed", code: "claude_compact_owner_changed", crossedSubmissionBoundary: false } });
+    await expect(carrier.connection.execute({ ...authority, action: "compact_disposition", request: {
+      queryId: id, startupProbeUuid: randomUUID(), ...input,
+    } })).resolves.toMatchObject({ outcome: "unknown" });
+    expect(() => f.hosts.ensure({ ...configuration, principalId: "another-principal" }, carrier.lease.controllerEpoch)).toThrow("claude_persistent_configuration_scope_denied");
+    await session.close({ reason: "evicted" });
+    expect(native.closed).toBe(true);
+    await expect(carrier.connection.execute({ ...authority, action: "compact", request: {
+      queryId: id, startupProbeUuid: native.startupProbeUuid, ...input,
+    } })).resolves.toMatchObject({ response: result, throughSequence: 0 });
+    await expect(carrier.connection.execute({ ...authority, action: "compact_disposition", request: {
+      queryId: id, startupProbeUuid: native.startupProbeUuid, ...input,
+    } })).resolves.toMatchObject({ outcome: "accepted", pending: false, nativeResult });
+    await expect(carrier.connection.execute({ ...authority, action: "compact", request: {
+      queryId: id, startupProbeUuid: randomUUID(), ...input,
+    } })).resolves.toMatchObject({ response: { outcome: "failed", crossedSubmissionBoundary: true } });
+    expect(f.sessions).toHaveLength(1); expect(native.compact).toHaveBeenCalledOnce();
+    const restored = f.client().createSession(sessionOptions(id, { launch: "resume" }));
+    await restored.start();
+    expect(f.sessions).toHaveLength(2);
+    host.freezeAdmission();
+    await expect(carrier.connection.execute({ ...authority, action: "compact", request: {
+      queryId: id, startupProbeUuid: native.startupProbeUuid, ...input,
+    } })).resolves.toMatchObject({ response: result });
+    await expect(carrier.connection.execute({ ...authority, action: "compact_disposition", request: {
+      queryId: id, startupProbeUuid: native.startupProbeUuid, ...input,
+    } })).resolves.toMatchObject({ outcome: "accepted", pending: false, nativeResult });
+    await expect(carrier.connection.execute({ ...authority, action: "compact", request: {
+      queryId: id, startupProbeUuid: randomUUID(), ...input,
+    } })).resolves.toMatchObject({ response: { outcome: "failed", crossedSubmissionBoundary: true } });
+    host.restoreAdmission();
+    expect(await restored.reconcileCompact(input)).toEqual({ outcome: "accepted", pending: false, nativeResult });
+    expect(await restored.compact(input)).toEqual(result);
+    expect(native.compact).toHaveBeenCalledOnce();
+    expect(f.sessions[1]!.compact).not.toHaveBeenCalled();
+    expect(f.sessions.every(query => query.send.mock.calls.length === 0)).toBe(true);
+  });
+
+  it("fences an uncertain compaction without converting owner failure into non-admission", async () => {
+    const f = await fixture(); const carrier = await f.attach();
+    const id = randomUUID(); const session = f.client().createSession(sessionOptions(id));
+    await session.start(); const native = f.sessions[0]!;
+    native.compact.mockRejectedValueOnce(new ClaudeRuntimeCompactError("claude_compact_owner_lost", true));
+    const input = { operationId: randomUUID() };
+    await expect(session.compact(input)).rejects.toMatchObject({ crossedSubmissionBoundary: true });
+    expect(await session.reconcileCompact(input)).toEqual({ outcome: "unknown", pending: true });
+    await expect(session.compact(input)).rejects.toMatchObject({ crossedSubmissionBoundary: true });
+    expect(native.compact).toHaveBeenCalledOnce();
+    const host = f.hosts.ensure(configuration, carrier.lease.controllerEpoch);
+    expect(host.snapshot().blockers).toEqual(expect.arrayContaining(["active_work", "unsettled_outcome"]));
+    await expect(session.compact({ operationId: randomUUID() })).rejects.toMatchObject({ backendCode: "claude_compact_busy", crossedSubmissionBoundary: false });
+    await expect(session.send({ operationId: randomUUID(), content: "Do not resend while uncertain." })).rejects.toMatchObject({ crossedSubmissionBoundary: false, backendCode: "claude_persistent_query_busy" });
+    expect(native.compact).toHaveBeenCalledOnce(); expect(native.send).not.toHaveBeenCalled();
+    await session.close({ reason: "evicted" });
+    expect(native.closed).toBe(false);
+  });
+
+  it("remembers a positively refused compaction as not applied", async () => {
+    const f = await fixture(); await f.attach();
+    const id = randomUUID(); const session = f.client().createSession(sessionOptions(id));
+    await session.start(); const native = f.sessions[0]!;
+    await session.send({ operationId: randomUUID(), content: "An active native turn" });
+    const input = { operationId: randomUUID() };
+    await expect(session.compact(input)).rejects.toMatchObject({ backendCode: "claude_compact_busy", crossedSubmissionBoundary: false });
+    expect(await session.reconcileCompact(input)).toEqual({ outcome: "not_applied", pending: false });
+    expect(native.compact).not.toHaveBeenCalled();
+  });
+
+  it("recovers late exact completion after losing the managed worker response without dispatching again", async () => {
+    const f = await fixture(); const carrier = await f.attach();
+    const id = randomUUID(); const session = f.client().createSession(sessionOptions(id));
+    await session.start(); const native = f.sessions[0]!;
+    const input = { operationId: randomUUID(), instructions: "Keep the accepted plan." };
+    let retained: ClaudeRuntimeCompactResult | undefined;
+    const dispatched: string[] = [];
+    native.compact.mockImplementation(async request => {
+      if (retained) return retained;
+      dispatched.push(request.operationId);
+      throw new Error("managed_worker_response_lost");
+    });
+    native.reconcileCompact.mockImplementation(async () => ({ outcome: retained ? "accepted" : "unknown", pending: !retained }));
+    await expect(session.compact(input)).rejects.toMatchObject({ crossedSubmissionBoundary: true });
+    expect(await session.reconcileCompact(input)).toEqual({ outcome: "unknown", pending: true });
+    expect(dispatched).toEqual([input.operationId]);
+    await native.emit({ type: "system", subtype: "compact_boundary", uuid: randomUUID(), session_id: id,
+      compact_metadata: { trigger: "manual", pre_tokens: 30_000 } } as SDKMessage);
+    await native.emit({ type: "user", uuid: randomUUID(), session_id: id, parent_tool_use_id: null,
+      isSynthetic: true, isCompactSummary: true, message: { role: "user", content: "Accepted plan summary." } } as SDKMessage);
+    retained = { outcome: "compacted" };
+    expect(await session.reconcileCompact(input)).toEqual({ outcome: "accepted", pending: false });
+    expect(await session.compact(input)).toEqual(retained);
+    await session.flushMessages!();
+    expect(dispatched).toEqual([input.operationId]);
+    expect(native.compact).toHaveBeenCalledTimes(2); // native admission, then exact retained-result read
+    expect(native.send).not.toHaveBeenCalled();
+    const host = f.hosts.ensure(configuration, carrier.lease.controllerEpoch);
+    expect(host.snapshot().blockers).toEqual([]);
+  });
+
+  it("releases the live fence after exact terminal-unknown evidence while preserving failed spend across retirement", async () => {
+    const f = await fixture(); const carrier = await f.attach();
+    const id = randomUUID(); const session = f.client().createSession(sessionOptions(id));
+    await session.start(); const native = f.sessions[0]!;
+    const input = { operationId: randomUUID() };
+    const nativeResult: NonNullable<ClaudeRuntimeCompactResult["nativeResult"]> = { type: "result", subtype: "error_during_execution",
+      is_error: true, num_turns: 0, uuid: randomUUID(), session_id: id, user_message_uuid: input.operationId,
+      total_cost_usd: 0.001, modelUsage: {}, usage: { input_tokens: 12, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 } };
+    native.compact.mockRejectedValueOnce(new ClaudeRuntimeCompactError("claude_compact_failed", true, nativeResult));
+    native.reconcileCompact.mockResolvedValue({ outcome: "unknown", pending: false, nativeResult });
+    await expect(session.compact(input)).rejects.toMatchObject({ crossedSubmissionBoundary: true, nativeResult });
+    expect(await session.reconcileCompact(input)).toEqual({ outcome: "unknown", pending: false, nativeResult });
+    const host = f.hosts.ensure(configuration, carrier.lease.controllerEpoch);
+    expect(host.snapshot().blockers).toEqual([]);
+    expect(await session.compact({ operationId: randomUUID() })).toEqual({ outcome: "compacted" });
+    await session.close({ reason: "evicted" }); expect(native.closed).toBe(true);
+    const restored = f.client().createSession(sessionOptions(id, { launch: "resume" })); await restored.start();
+    expect(await restored.reconcileCompact(input)).toEqual({ outcome: "unknown", pending: false, nativeResult });
+    await expect(restored.compact(input)).rejects.toMatchObject({ crossedSubmissionBoundary: true, nativeResult });
+    expect(f.sessions[1]!.compact).not.toHaveBeenCalled(); expect(native.compact).toHaveBeenCalledTimes(2);
+  });
+
+  it("remembers a scoped frozen-admission refusal and never redispatches its operation after admission resumes", async () => {
+    const f = await fixture(); const carrier = await f.attach();
+    const id = randomUUID(); const session = f.client().createSession(sessionOptions(id)); await session.start();
+    const native = f.sessions[0]!; const host = f.hosts.ensure(configuration, carrier.lease.controllerEpoch);
+    const input = { operationId: randomUUID() };
+    host.freezeAdmission();
+    await expect(session.compact(input)).rejects.toMatchObject({ backendCode: "claude_persistent_admission_frozen", crossedSubmissionBoundary: false });
+    expect(await session.reconcileCompact(input)).toEqual({ outcome: "not_applied", pending: false });
+    host.restoreAdmission();
+    await expect(session.compact(input)).rejects.toMatchObject({ crossedSubmissionBoundary: false });
+    expect(native.compact).not.toHaveBeenCalled();
+    await expect(host.execute({ action: "compact", runtimeId: randomUUID(), controllerEpoch: carrier.lease.controllerEpoch,
+      request: { queryId: id, startupProbeUuid: native.startupProbeUuid, operationId: randomUUID() } }, () => {})).rejects.toThrow("claude_persistent_runtime_unknown");
+    await expect(host.execute({ action: "compact", runtimeId: host.runtimeId, controllerEpoch: carrier.lease.controllerEpoch + 1,
+      request: { queryId: id, startupProbeUuid: native.startupProbeUuid, operationId: randomUUID() } }, () => {})).rejects.toThrow("sidecar_controller_stale");
+    expect(native.compact).not.toHaveBeenCalled();
+    expect(await session.compact({ operationId: randomUUID() })).toEqual({ outcome: "compacted" });
+  });
+
+  it.each(["cwd", "authority"] as const)("cannot use an ended receipt from another %s to bypass frozen admission", async scopeChange => {
+    const f = await fixture(); const carrier = await f.attach(); const id = randomUUID();
+    const first = f.client().createSession(sessionOptions(id)); await first.start();
+    const original = f.sessions[0]!; const input = { operationId: randomUUID(), instructions: "Retain the original scope." };
+    expect(await first.compact(input)).toEqual({ outcome: "compacted" });
+    await first.close({ reason: "evicted" });
+    const restored = f.client().createSession(sessionOptions(id, { launch: "resume", ...(scopeChange === "cwd"
+      ? { cwd: "/another-workspace" }
+      : { canUseTool: async () => ({ behavior: "deny" as const, message: "Scoped test policy" }) }) }));
+    await restored.start(); const current = f.sessions[1]!;
+    const host = f.hosts.ensure(configuration, carrier.lease.controllerEpoch); host.freezeAdmission();
+    const authority = { runtimeId: host.runtimeId, controllerEpoch: carrier.lease.controllerEpoch };
+    const request = { queryId: id, startupProbeUuid: current.startupProbeUuid, ...input };
+    await expect(carrier.connection.execute({ ...authority, action: "compact", request })).resolves.toMatchObject({
+      response: { outcome: "failed", crossedSubmissionBoundary: true, code: "claude_persistent_admission_frozen" } });
+    expect(await restored.reconcileCompact(input)).toEqual({ outcome: "unknown", pending: true });
+    host.restoreAdmission();
+    await expect(carrier.connection.execute({ ...authority, action: "compact", request })).resolves.toMatchObject({
+      response: { outcome: "failed", crossedSubmissionBoundary: true, code: "claude_compact_owner_changed" } });
+    expect(current.compact).not.toHaveBeenCalled(); expect(original.compact).toHaveBeenCalledOnce();
+    expect(await restored.compact({ operationId: randomUUID() })).toEqual({ outcome: "compacted" });
+    expect(current.compact).toHaveBeenCalledOnce();
+  });
+
+  it("classifies missing-query and scoped stopped-runtime refusals as pre-native failures", async () => {
+    const f = await fixture(); const carrier = await f.attach(); const host = f.hosts.ensure(configuration, carrier.lease.controllerEpoch);
+    const authority = { runtimeId: host.runtimeId, controllerEpoch: carrier.lease.controllerEpoch };
+    const request = { queryId: randomUUID(), startupProbeUuid: randomUUID(), operationId: randomUUID() };
+    await expect(carrier.connection.execute({ ...authority, action: "compact", request })).resolves.toMatchObject({
+      response: { outcome: "failed", code: "claude_persistent_session_not_found", crossedSubmissionBoundary: false } });
+    await host.stop();
+    await expect(host.execute({ ...authority, action: "compact", request: { ...request, operationId: randomUUID() } }, () => {})).resolves.toMatchObject({
+      response: { outcome: "failed", code: "claude_persistent_runtime_unavailable", crossedSubmissionBoundary: false } });
+    expect(f.sessions).toHaveLength(0);
+  });
+
+  it("admits idle foreground compaction while native background agents remain active", async () => {
+    const f = await fixture(); const carrier = await f.attach();
+    const id = randomUUID(); const session = f.client().createSession(sessionOptions(id)); await session.start();
+    const native = f.sessions[0]!;
+    await native.emit({ type: "system", subtype: "background_tasks_changed", uuid: randomUUID(), session_id: id,
+      tasks: [{ task_id: "background-child", task_type: "local_agent", description: "Independent investigation" }] } as SDKMessage);
+    await session.flushMessages!();
+    const host = f.hosts.ensure(configuration, carrier.lease.controllerEpoch);
+    expect(host.snapshot().blockers).toContain("active_work");
+    const input = { operationId: randomUUID() };
+    expect(await session.compact(input)).toEqual({ outcome: "compacted" });
+    expect(native.compact).toHaveBeenCalledExactlyOnceWith(input);
+    expect(host.snapshot().blockers).toContain("active_work");
+  });
+
+  it("keeps background-agent permission waits separate from idle foreground compaction admission", async () => {
+    const f = await fixture(); const carrier = await f.attach();
+    let decide!: (value: { behavior: "deny"; message: string }) => void;
+    const id = randomUUID(); const session = f.client().createSession(sessionOptions(id, {
+      canUseTool: async () => new Promise(resolve => { decide = resolve; }),
+    })); await session.start();
+    const native = f.sessions[0]!; const abort = new AbortController();
+    const permission = native.options.canUseTool!("Read", {}, { requestId: "child-permission", toolUseID: "child-tool",
+      agentID: "background-child", signal: abort.signal });
+    await vi.waitFor(() => expect(decide).toBeTypeOf("function"));
+    const host = f.hosts.ensure(configuration, carrier.lease.controllerEpoch);
+    expect(host.snapshot().blockers).toContain("pending_interaction");
+    const input = { operationId: randomUUID() };
+    expect(await session.compact(input)).toEqual({ outcome: "compacted" });
+    expect(native.compact).toHaveBeenCalledExactlyOnceWith(input);
+    decide({ behavior: "deny", message: "Test completed." }); await permission;
+    await native.options.onPermissionResponseDelivered!({ requestId: "child-permission", toolUseID: "child-tool" });
+    await session.flushMessages!();
+  });
+
+  it("keeps lightweight refused identities without consuming the full terminal-receipt capacity", async () => {
+    const f = await fixture(); await f.attach();
+    const id = randomUUID(); const session = f.client().createSession(sessionOptions(id)); await session.start();
+    const native = f.sessions[0]!; const sendId = randomUUID();
+    await session.send({ operationId: sendId, content: "Foreground work" });
+    const first = { operationId: randomUUID(), instructions: "Keep the accepted plan." };
+    for (let index = 0; index < 300; index++) {
+      await expect(session.compact(index ? { ...first, operationId: randomUUID() } : first)).rejects.toMatchObject({ crossedSubmissionBoundary: false, backendCode: "claude_compact_busy" });
+    }
+    expect(native.compact).not.toHaveBeenCalled();
+    await native.emit({ type: "result", subtype: "success", uuid: randomUUID(), session_id: id,
+      user_message_uuid: sendId, user_message_uuids: [sendId], result: "Complete", num_turns: 1 } as unknown as SDKMessage);
+    await session.flushMessages!();
+    expect(await session.compact({ operationId: randomUUID() })).toEqual({ outcome: "compacted" });
+    await expect(session.compact(first)).rejects.toMatchObject({ crossedSubmissionBoundary: false, backendCode: "claude_compact_busy" });
+    expect(native.compact).toHaveBeenCalledOnce();
+  });
+
+  it("reserves aggregate terminal-receipt capacity before a second session can dispatch", async () => {
+    const f = await fixture({ maximumCompactReceiptBytes: 256 * 1024 }); await f.attach();
+    const first = f.client().createSession(sessionOptions(randomUUID())); await first.start();
+    const second = f.client().createSession(sessionOptions(randomUUID())); await second.start();
+    let finish!: (value: ClaudeRuntimeCompactResult) => void;
+    f.sessions[0]!.compact.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const result = first.compact({ operationId: randomUUID() });
+    await vi.waitFor(() => expect(f.sessions[0]!.compact).toHaveBeenCalledOnce());
+    await expect(second.compact({ operationId: randomUUID() })).rejects.toMatchObject({ crossedSubmissionBoundary: false, backendCode: "claude_compact_receipt_capacity" });
+    expect(f.sessions[1]!.compact).not.toHaveBeenCalled();
+    finish({ outcome: "compacted" }); expect(await result).toEqual({ outcome: "compacted" });
+    expect(await second.compact({ operationId: randomUUID() })).toEqual({ outcome: "compacted" });
+    expect(f.sessions[1]!.compact).toHaveBeenCalledOnce();
   });
 
   const agentToolMcp: NonNullable<ClaudeRuntimeSessionOptions["agentToolMcp"]> = {

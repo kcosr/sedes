@@ -7,7 +7,7 @@ import { openCodeToolInvokeOperation } from "../../src/server/backends/opencode/
 import { sedesMcpInvocationResult } from "../../src/internal/agent-tool-mcp/mcp-tool-projection.js";
 import { decodeCodexC2Notification } from "../../src/server/backends/codex/codex-c2-protocol.js";
 import { codexRuntimeEventSchema } from "../../src/server/backends/codex/runtime/codex-runtime-wire.js";
-import { claudeRuntimeQueryMessageEventSchema } from "../../src/server/backends/claude/worker/claude-runtime-v3.js";
+import { claudeRuntimeQueryMessageEventSchema } from "../../src/server/backends/claude/worker/claude-runtime-v4.js";
 import { claudePersistentEventSchema } from "../../src/server/backends/claude/runtime/claude-persistent-runtime-wire.js";
 import { SedesToolHttpClient } from "../../src/cli/sedes-tool-api-client.js";
 

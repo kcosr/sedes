@@ -8,7 +8,7 @@ import type { ClaudeRuntimeSessionOptions } from "../../src/server/backends/clau
 import {
   claudeRuntimeCanUseToolOperation,
   claudeRuntimePermissionResponseAckOperation,
-} from "../../src/server/backends/claude/worker/claude-runtime-v3.js";
+} from "../../src/server/backends/claude/worker/claude-runtime-v4.js";
 
 const SESSION_ID = "11111111-1111-4111-8111-111111111111";
 const STARTUP_UUID = "22222222-2222-4222-8222-222222222222";
@@ -16,6 +16,98 @@ const STARTUP_UUID = "22222222-2222-4222-8222-222222222222";
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllEnvs(); });
 
 describe("ClaudeRuntimeWorkerClient query-open cleanup", () => {
+  it.each(["unstarted", "closed", "invalid"])("refuses %s compaction before dispatch", async state => {
+    const dispatches = vi.fn();
+    const peer = fakePeer(async (operation, _signal, request) => {
+      if (operation === "runtime.initialize") return { initialized: true, configDirectory: "/config" };
+      if (operation === "query.open") return openedResponse("2.1.287", (request as { queryId: string }).queryId);
+      if (operation === "query.close") return { closed: true };
+      if (operation === "query.compact") { dispatches(); return { outcome: "noop" }; }
+      throw new Error(`unexpected:${operation}`);
+    });
+    const client = clientFor(peer);
+    const session = client.createSession(sessionOptions());
+    if (state !== "unstarted") await session.start();
+    if (state === "closed") await session.close();
+    await expect(session.compact({ operationId: state === "invalid" ? "not-a-uuid" : STARTUP_UUID })).rejects.toMatchObject({
+      backendCode: "claude_compact_local_admission_refused", crossedSubmissionBoundary: false });
+    expect(dispatches).not.toHaveBeenCalled();
+    if (state !== "closed") await session.close();
+  });
+
+  it.each(["transport", "response"])("keeps a post-dispatch %s failure uncertain, including after close", async failure => {
+    const dispatches = vi.fn();
+    const peer = fakePeer(async (operation, _signal, request) => {
+      if (operation === "runtime.initialize") return { initialized: true, configDirectory: "/config" };
+      if (operation === "query.open") return openedResponse("2.1.287", (request as { queryId: string }).queryId);
+      if (operation === "query.close") return { closed: true };
+      if (operation === "query.compact") {
+        dispatches();
+        if (failure === "transport") throw new Error("lost response");
+        return { outcome: "compacted", nativeResult: {} };
+      }
+      throw new Error(`unexpected:${operation}`);
+    });
+    const session = clientFor(peer).createSession(sessionOptions());
+    await session.start();
+    const input = { operationId: STARTUP_UUID };
+    await expect(session.compact(input)).rejects.not.toMatchObject({ crossedSubmissionBoundary: false });
+    expect(dispatches).toHaveBeenCalledOnce();
+    await session.close();
+    await expect(session.compact(input)).rejects.toMatchObject({ crossedSubmissionBoundary: true });
+    await expect(session.compact({ operationId: "44444444-4444-4444-8444-444444444444" })).rejects.toMatchObject({ crossedSubmissionBoundary: false });
+    expect(dispatches).toHaveBeenCalledOnce();
+  });
+  it("uses dedicated exact-operation compaction and reconciliation requests", async () => {
+    const requests: { operation: string; request: unknown }[] = [];
+    let queryId = "";
+    const peer = fakePeer(async (operation, _signal, request) => {
+      if (operation === "runtime.initialize") return { initialized: true, configDirectory: "/config" };
+      if (operation === "query.open") {
+        queryId = (request as { queryId: string }).queryId;
+        return openedResponse("2.1.287", queryId);
+      }
+      if (operation === "query.compact") { requests.push({ operation, request }); return { outcome: "noop", message: "Not enough messages to compact." }; }
+      if (operation === "query.compact_disposition") { requests.push({ operation, request }); return { outcome: "accepted", pending: false }; }
+      if (operation === "query.close") return { closed: true };
+      throw new Error(`unexpected:${operation}`);
+    });
+    const client = new ClaudeRuntimeWorkerClient({ peer, hostRegistry: new SidecarOperationRegistry(), executablePath: "/bin/claude",
+      configDirectory: "/config", initializationTimeoutMs: 1_000 });
+    const session = client.createSession(sessionOptions());
+    await session.start();
+    const input = { operationId: "44444444-4444-4444-8444-444444444444", instructions: "Keep the open task" };
+    await expect(session.compact(input)).resolves.toMatchObject({ outcome: "noop" });
+    const compactCall = vi.mocked(peer.call).mock.calls.find(([definition]) => definition.operation === "query.compact");
+    expect(compactCall?.[2]).toEqual({ deadlineMilliseconds: 600_000 });
+    await expect(session.reconcileCompact(input)).resolves.toEqual({ outcome: "accepted", pending: false });
+    expect(requests).toEqual([
+      { operation: "query.compact", request: { queryId, ...input } },
+      { operation: "query.compact_disposition", request: { queryId, ...input } },
+    ]);
+    await session.close();
+  });
+
+  it.each(["session", "operation"])("rejects an auxiliary native compact receipt for the wrong %s", async mismatch => {
+    const operationId = "44444444-4444-4444-8444-444444444444";
+    const peer = fakePeer(async (operation, _signal, request) => {
+      if (operation === "runtime.initialize") return { initialized: true, configDirectory: "/config" };
+      if (operation === "query.open") return openedResponse("2.1.287", (request as { queryId: string }).queryId);
+      if (operation === "query.compact") return { outcome: "compacted", nativeResult: { type: "result",
+        subtype: "success", is_error: false, num_turns: 0, uuid: STARTUP_UUID, total_cost_usd: 0,
+        usage: { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }, modelUsage: {},
+        session_id: mismatch === "session" ? STARTUP_UUID : SESSION_ID,
+        user_message_uuid: mismatch === "operation" ? STARTUP_UUID : operationId } };
+      if (operation === "query.close") return { closed: true };
+      throw new Error(`unexpected:${operation}`);
+    });
+    const client = new ClaudeRuntimeWorkerClient({ peer, hostRegistry: new SidecarOperationRegistry(), executablePath: "/bin/claude",
+      configDirectory: "/config", initializationTimeoutMs: 1_000 });
+    const session = client.createSession(sessionOptions());
+    await session.start();
+    await expect(session.compact({ operationId })).rejects.toMatchObject({ backendCode: "claude_compact_result_identity_mismatch", crossedSubmissionBoundary: true });
+    await session.close();
+  });
   it("resolves startup secrets on the owner host before the sanitized worker initializes", async () => {
     vi.stubEnv("PROJECT_PROVIDER_SECRET", "owner-secret");
     let request: unknown;
