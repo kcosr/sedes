@@ -127,7 +127,8 @@ User-facing changes are collected here before release. See the
 
 - Images and Mermaid diagrams support inline pinch zoom and pan, with an
   explicit expand control. Expanded images, diagrams, and HTML previews share
-  a floating bottom zoom bar with **Fit** and **1:1**. See
+  a floating bottom zoom bar with **Fit** and **1:1**. Escape closes an open
+  zoom menu before closing the viewer. See
   [media viewing](docs/user/files-and-context.md#view-images-and-diagrams).
 
 - Voice keeps the last reply target after playback ends, even while another thread

@@ -40,12 +40,36 @@ export function MediaZoomControls({
 
   useEffect(() => {
     if (!presetsOpen) return;
+    const root = rootRef.current;
+    const document = root?.ownerDocument;
+    const view = document?.defaultView;
+    if (!root || !document || !view) return;
+    const isInside = (target: EventTarget | null) =>
+      target instanceof view.Node && root.contains(target);
     const closeOutside = (event: PointerEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+      if (!isInside(event.target)) setOpen(false);
+    };
+    // Host dialogs may dismiss in document capture, before React handlers run.
+    // Handle this local interaction earlier, but only while focus is ours.
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (
+        event.key !== "Escape" ||
+        event.defaultPrevented ||
+        event.isComposing ||
+        !isInside(event.target)
+      )
+        return;
+      event.preventDefault();
+      event.stopPropagation();
+      setOpen(false);
+      percentageRef.current?.focus({ preventScroll: true });
     };
     document.addEventListener("pointerdown", closeOutside, true);
-    return () =>
+    view.addEventListener("keydown", closeOnEscape, true);
+    return () => {
       document.removeEventListener("pointerdown", closeOutside, true);
+      view.removeEventListener("keydown", closeOnEscape, true);
+    };
   }, [presetsOpen]);
 
   return (
@@ -56,14 +80,6 @@ export function MediaZoomControls({
       aria-label={label}
       onBlur={(event) => {
         if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false);
-      }}
-      onKeyDown={(event) => {
-        if (event.key === "Escape" && presetsOpen) {
-          event.preventDefault();
-          event.stopPropagation();
-          setOpen(false);
-          percentageRef.current?.focus();
-        }
       }}
     >
       <button

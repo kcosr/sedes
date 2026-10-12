@@ -8,6 +8,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PageRevision, PageRevisionPage } from "../../../shared/protocol/pages.js";
 import { PagePreview } from "./PagePreview.js";
@@ -265,6 +266,28 @@ describe("published page preview", () => {
     await waitFor(() => expect(api.createPageRenderAdmission).toHaveBeenCalledTimes(admissionsBeforeRefresh + 1));
     await waitFor(() => expect(dialog.querySelector("iframe")).not.toBe(frame));
     expect(container.querySelector(".page-preview")).toHaveAttribute("data-page-revision", "1");
+  });
+
+  it("closes zoom presets before the fullscreen Radix dialog and restores focus at each Escape", async () => {
+    const user = userEvent.setup();
+    const { container } = render(<PagePreview page={original} services={services()} />);
+    await waitForFrame(container);
+    const expand = screen.getByRole("button", { name: "Expand page: Phone" });
+    await user.click(expand);
+    const dialog = await screen.findByRole("dialog");
+    await waitForFrame(dialog);
+    const controls = within(dialog).getByRole("group", { name: "Page zoom controls" });
+    const percentage = within(controls).getByRole("button", { name: /Zoom percentage:/ });
+    await user.click(percentage);
+    const presets = within(dialog).getByRole("group", { name: "Zoom presets" });
+    act(() => within(presets).getByRole("button", { name: "100%" }).focus());
+    await user.keyboard("{Escape}");
+    expect(screen.getByRole("dialog")).toBe(dialog);
+    expect(within(dialog).queryByRole("group", { name: "Zoom presets" })).toBeNull();
+    expect(percentage).toHaveFocus();
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(expand).toHaveFocus());
   });
 
   it("fails closed before minting on an unsafe native host", async () => {

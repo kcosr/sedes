@@ -1,5 +1,5 @@
 {
-  "commit": "189ff5a112c560fa18dccf1114399335046fe23a",
+  "commit": "cec859dd5b8856153725bc713bccf3eb027242e1",
   "files": {
     ".gitattributes": "b204f987d9c4231fe20681f6c0c36db0f558a3ff0b4e9a1072881864c43ade29",
     "components/AppShell.tsx": "159b387b5536761e536c785122900856820f4eab1cfad1366b3e6d9b8e3dd121",
@@ -15,7 +15,7 @@
     "components/List.tsx": "d4f18c6e04a18dc5e006a70929fc94dcd211003728f134eaad6c8b2fa2bac8e4",
     "components/Main.tsx": "69f69acfe831443e9a489e3377fe838dfedb9c0cadd535bf4bf0019c2cd0bad3",
     "components/MediaFrame.tsx": "969ce74332aac8b9afef81e0676eeeb6861391f332cb3020224db94f3495ad8a",
-    "components/MediaZoomControls.tsx": "7d12ebdba093510e194ca6f996c262bb5f4f54085ec364e4bffe2fd6dc9282eb",
+    "components/MediaZoomControls.tsx": "d19af8984dfca1425042f3059a951672d64121fbd07700a06fb5eb5960edefa7",
     "components/Modal.tsx": "bd62400e5acc404f3ce3635ac1eeef0e88807cb6f2cf8d0d2d4f750c369e1361",
     "components/Pager.tsx": "ad268b94525c0391eab301cea54b3b8302dc347736c851ebaa109594c5e827e8",
     "components/Pages.tsx": "3679126b1b026ad541a4abd77cc605929e27c3c8dec84e2f1b0f7aead610cefc",
