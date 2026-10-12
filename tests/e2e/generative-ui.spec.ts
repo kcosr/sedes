@@ -213,18 +213,11 @@ test("published HTML keeps revisions, target viewport, local images, and host is
         name: "Return to published revision 2",
       }),
     ).toBeVisible();
-    await revisionDialog
-      .getByRole("button", {
-        name: "Return to published revision 2",
-        exact: true,
-      })
-      .click();
-    await expect(
-      revisionFrame.getByRole("heading", { name: "Inbox two" }),
-    ).toBeVisible();
-
     await revisionDialog.getByRole("button", { name: "Close", exact: true }).click();
     await expect(revisionDialog).toBeHidden();
+    await expect(
+      pageDocument(secondCard).getByRole("heading", { name: "Inbox two" }),
+    ).toBeVisible();
     await page.setViewportSize({ width: 360, height: 900 });
     await firstCard.scrollIntoViewIfNeeded();
     await expect(firstFrame.locator("#layout")).toHaveText(
@@ -244,6 +237,13 @@ test("published HTML keeps revisions, target viewport, local images, and host is
     );
     await expect(expanded.locator(".page-frame-document")).not.toHaveAttribute("inert", "");
     await expect(expanded.getByRole("button", { name: /interact.*preview/i })).toHaveCount(0);
+    const percentage = expanded.getByRole("button", { name: /^Zoom percentage:/ });
+    await percentage.click();
+    await expect(expanded.getByRole("group", { name: "Zoom presets" })).toBeVisible();
+    await percentage.press("Escape");
+    await expect(expanded).toBeVisible();
+    await expect(expanded.getByRole("group", { name: "Zoom presets" })).toHaveCount(0);
+    await expect(percentage).toBeFocused();
     await pageDocument(expanded).getByRole("button", { name: "Clicks: 0" }).click();
     await expect(pageDocument(expanded).getByRole("button", { name: "Clicks: 1" })).toBeVisible();
     const initialScale = await expanded
@@ -316,11 +316,26 @@ test("published HTML keeps revisions, target viewport, local images, and host is
         .getByRole("img", { name: "Saved local logo" })
         .evaluate((image) => (image as HTMLImageElement).naturalWidth),
     ).toBe(1);
-    await publish(page, threadId, {
+    const longPage = await publish(page, threadId, {
       html: '<!doctype html><style>body{margin:0;height:2200px;background:#eef2ff}</style><h1>Long library example</h1>',
       title: "Long example",
       viewport: { width: 390 },
     });
+    const longCard = pageCard(page, longPage.title, 1);
+    await longCard.scrollIntoViewIfNeeded();
+    const longViewer = await expandPage(page, longCard);
+    await expect(pageDocument(longViewer).getByRole("heading", { name: "Long library example" })).toBeVisible();
+    const longFrame = longViewer.locator(".page-frame-document");
+    await expect.poll(async () => (await longFrame.boundingBox())?.width).toBe(390);
+    await longViewer.getByRole("button", { name: "Zoom out", exact: true }).click();
+    await longViewer.getByRole("button", { name: "Fit to view" }).click();
+    await expect.poll(async () => (await longFrame.boundingBox())?.width).toBe(390);
+    await expect.poll(() => longViewer.locator(".page-frame-viewport").evaluate(
+      (element) => element.scrollHeight > element.clientHeight,
+    )).toBe(true);
+    await capture(page, testInfo, "generative-ui-fullscreen-auto-height.png");
+    await longViewer.getByRole("button", { name: "Close", exact: true }).click();
+    await expect(longViewer).toBeHidden();
     await page
       .getByRole("button", { name: "Thread actions", exact: true })
       .click();
@@ -413,8 +428,19 @@ test("published HTML keeps revisions, target viewport, local images, and host is
     ).toBeVisible();
     await capture(page, testInfo, "generative-ui-saved-pages.png");
     await library.getByRole("button", { name: "Close", exact: true }).click();
-    await expect(library).toBeHidden();
+    // Closing motion restores focus after the dialog becomes visually hidden;
+    // wait for that restoration before intentionally scrolling the transcript.
+    await expect(library).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Thread actions", exact: true })).toBeFocused();
+    // Reader input relinquishes the streaming transcript's live-edge follow.
+    // A programmatic scroll alone deliberately does not change that ownership.
+    const messages = page.getByRole("region", { name: "Messages", exact: true });
+    const beforeReaderScroll = await messages.evaluate((element) => element.scrollTop);
+    await messages.hover({ position: { x: 10, y: 10 } });
+    await page.mouse.wheel(0, -120);
+    await expect.poll(() => messages.evaluate((element) => element.scrollTop)).toBeLessThan(beforeReaderScroll);
     await firstCard.scrollIntoViewIfNeeded();
+    await expect(firstCard).toBeInViewport();
     await expect(
       firstFrame.getByRole("heading", { name: "Inbox one" }),
     ).toBeVisible();
@@ -640,7 +666,7 @@ test.describe("mobile inline preview interaction", () => {
       await capture(page, testInfo, "generative-ui-inline-diagram-zoom.png");
 
       const saved = await publish(page, threadId, {
-        title: "Mobile touch preview",
+        title: "Mobile touch preview with a longer heading",
         viewport: { width: 360, height: 1100 },
         html: '<!doctype html><html><body style="margin:0;padding:24px;background:#eceef8;min-height:1100px;font:16px system-ui"><h1>Touch preview</h1><button id="tap" style="padding:18px">Taps: 0</button><p>Swipe this preview to scroll the conversation.</p><script>let taps=0;document.querySelector("#tap").onclick=()=>document.querySelector("#tap").textContent="Taps: "+(++taps)</script></body></html>',
       });
@@ -702,7 +728,10 @@ test.describe("mobile inline preview interaction", () => {
         .getByRole("button", { name: "Done interacting with preview" })
         .tap();
       await expect(frame).toHaveAttribute("inert", "");
-      await expandPage(page, card);
+      const mobileViewer = await expandPage(page, card);
+      const headerBox = (await mobileViewer.locator(".page-preview-fullscreen-header").boundingBox())!;
+      const actionsBox = (await mobileViewer.getByRole("toolbar", { name: "Page actions" }).boundingBox())!;
+      expect(actionsBox.x).toBeGreaterThan(headerBox.x + headerBox.width / 2);
       await capture(page, testInfo, "generative-ui-mobile-details.png");
     } finally {
       await page.request.post("/__e2e/pi/mermaid/release/closed");

@@ -37,7 +37,8 @@ Maximize the preview to see its header, then use the previous and next arrows
 around the version indicator to browse that page's revisions. Browsing does not change
 the saved conversation or the revision originally published there. While
 browsing another revision, select the revision indicator to return to the revision
-published at that position in chat. Open **Pages** in the thread header to find
+published at that position in chat. Closing the viewer restores that original
+revision in the inline card. Open **Pages** in the thread header to find
 published documents even when their original chat turn is outside the loaded
 history or has been compacted by the provider.
 The library orders documents by their first publication, newest first; later
@@ -60,7 +61,7 @@ is deleted.
 
 Inline HTML previews initially let gestures scroll the conversation on both desktop
 and mobile. Tap or click the preview, or use its finger icon, to enable input.
-Dragging, scrolling, and long presses do not enable interaction. The activating
+Dragging, scrolling, stopping a scroll, and long presses do not enable interaction. The activating
 tap only changes modes; tap again to use the page's controls. Use the checkmark
 to return to conversation scrolling. Expanded previews and the Pages library
 accept input immediately and have no interaction toggle. The page still loads
@@ -71,8 +72,9 @@ automatically. Use **Retry** to try that revision again. This protects against
 repeated failures after a restart. If the browser cannot store recovery state,
 a preview also requires an explicit retry. Closing a responsive preview
 normally does not require a retry. Recovery state is local to this browser and
-scoped to the server origin, thread, page, and revision; another device keeps
-its own state.
+scoped to the connection, signed-in identity, thread, page, and revision. The
+managed local desktop connection keeps its scope across restarts; another
+device keeps its own state.
 
 ## Layout and zoom
 
@@ -90,7 +92,9 @@ Use the maximize icon to open the expanded viewer. HTML pages, images, and
 Mermaid diagrams share a floating zoom bar at the bottom: minus, percentage,
 plus, **Fit**, and **1:1**. Zoom changes the displayed scale, not the document's
 saved viewport. Very tall content and large canvases remain bounded by the
-viewer's size limits.
+viewer's size limits. In fullscreen, pages without an explicit height fit the
+viewer's width and scroll vertically; pages with an explicit height fit the
+complete canvas.
 
 Images and Mermaid diagrams also support pinch zoom and pan inline. At normal
 size, a one-finger gesture scrolls the conversation; when zoomed, dragging pans

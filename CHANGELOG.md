@@ -60,7 +60,9 @@ User-facing changes are collected here before release. See the
   above Pinned as a compact row whose home icon changes to the normal activity
   or unread indicator, and opens with Ctrl/Command+Shift+H. The selection
   survives Managed Local restarts, resolves older forks for navigation and
-  voice, and preserves access to the default thread's runs and forks.
+  voice, and preserves access to the default thread's runs and forks. Snoozed
+  or unavailable defaults remain in the ordinary thread lists, and background
+  updates do not interrupt navigation to a resolved default.
 
 - Agents can publish interactive [HTML previews](docs/user/html-previews.md)
   from files or inline HTML, with captured local images, immutable revisions,
@@ -186,7 +188,10 @@ User-facing changes are collected here before release. See the
   mobile, while fullscreen previews and the Pages library accept input immediately.
   Revision controls show the current and total count only for pages with multiple
   revisions. The library lists titles without revision labels and keeps its
-  viewer size stable while long pages scroll inside it.
+  viewer size stable while long pages scroll inside it. Fullscreen auto-height
+  pages fit the available width, and closing the viewer restores the original
+  revision in chat. A tap that stops scrolling leaves inline interaction off;
+  interrupted-preview recovery survives Managed Local restarts.
   Clipped SVG content no longer makes previews excessively tall, positioned
   content remains visible, and fullscreen media surrounds match the chat
   background. Mermaid diagrams magnify beyond their original size, and touching

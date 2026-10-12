@@ -221,6 +221,7 @@ import type { RequestScope } from "../../src/server/identity/identity-provider.j
 import { SingleUserIdentityProvider } from "../../src/server/identity/identity-provider.js";
 import { threadAgentToolPolicyReaderDependencies } from "../support/thread-agent-tool-policy.js";
 import { createNormalizedApp } from "../../src/server/normalized-app.js";
+import { deriveClientNavigationNamespace } from "../../src/server/authentication/authentication-admission.js";
 import { unavailableAgentToolRouterDependencies } from "../support/agent-tool-http.js";
 import { PrincipalAgentToolClientService } from "../../src/server/agent-tools/application/principal-agent-tool-client-service.js";
 import { DatabaseAgentToolSourceAuthority } from "../../src/server/agent-tools/application/database-agent-tool-source-authority.js";
@@ -6092,6 +6093,13 @@ async function main(): Promise<void> {
       response.json({ connected: input.connected });
     } catch (error) { next(error); }
   });
+  // The scripted host skips pairing but retains production's server-derived
+  // principal namespace for durable client state such as preview recovery.
+  app.get("/api/auth/status", (_request, response) => response.json({
+    required: false,
+    authenticated: false,
+    navigationNamespace: deriveClientNavigationNamespace(new Uint8Array(32).fill(0x45), scope),
+  }));
   app.use(
     createNormalizedApp({
       usage,

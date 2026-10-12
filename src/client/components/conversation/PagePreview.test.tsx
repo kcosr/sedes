@@ -302,7 +302,7 @@ describe("published page preview", () => {
     const frame = await waitForFrame(container);
     expect(frame).toHaveAttribute("title", "Published third · Revision 3");
     expect(api.createPageRenderAdmission).toHaveBeenLastCalledWith(published.pageId, 3, expect.any(AbortSignal));
-    expect(screen.getByRole("group", { name: "Published third", exact: true })).toHaveAttribute("data-page-revision", "3");
+    expect(screen.getByRole("group", { name: /^Published third$/ })).toHaveAttribute("data-page-revision", "3");
     expandPage(published.title);
     await screen.findByLabelText("Revision 3 of 3");
   });

@@ -562,11 +562,12 @@ can hold up to 50 stashes.
 
 Agents with the Pages tools enabled can publish interactive HTML previews in
 chat. Each changed publication adds a new saved revision. Previews load as
-they approach view; the top-right ellipsis reveals revision, maximize, and
-refresh controls. On touch devices, use the hand icon to interact with inline
-HTML and the checkmark to return to scrolling chat. Open **Pages** in the
-thread header to find all its published documents. See [HTML previews](html-previews.md) for editing, sizing, images,
-and the optional screenshot tool.
+they approach view. Use the hand icon or a stationary tap to interact with
+inline HTML, and the checkmark to return to scrolling chat. The maximize
+button opens a viewer with revision and refresh controls. Fullscreen previews
+and **Pages** in the thread header accept input immediately. See
+[HTML previews](html-previews.md) for editing, sizing, images, and the optional
+screenshot tool.
 
 Consecutive reasoning and tool work is grouped into an **Activity** row so
 commands, file operations, searches, and tool calls do not overwhelm the
