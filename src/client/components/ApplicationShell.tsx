@@ -1,6 +1,5 @@
-import { canUseDefaultThread, useDefaultThread, DefaultThreadResolutionProvider, defaultThreadChoices } from "../app/default-thread.js";
-import { installDefaultThreadShortcut } from "../app/default-thread-shortcut.js";
-import { openThreadRoute } from "../workspace-panels/thread-panel-navigation.js";
+import { useDefaultThread, DefaultThreadResolutionProvider, defaultThreadChoices } from "../app/default-thread.js";
+import { installDefaultThreadShortcut, openDefaultThread } from "../app/default-thread-shortcut.js";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type {
@@ -111,11 +110,7 @@ function ApplicationShellContent({
   }, [applicationStore, state.status]);
   const defaultThread = useDefaultThread();
   useEffect(() => installDefaultThreadShortcut(window, () => {
-    if (defaultThread?.resolving) return;
-    const thread = defaultThread?.thread;
-    if (thread && canUseDefaultThread(thread)) openThreadRoute(thread.id);
-    else navigate(settingsPath("general"));
-    setDrawerOpen(false);
+    if (openDefaultThread(defaultThread)) setDrawerOpen(false);
   }), [defaultThread?.thread, defaultThread?.resolving]);
   const route = useRoute();
   const [drawerOpen, setDrawerOpen] = useState(false);

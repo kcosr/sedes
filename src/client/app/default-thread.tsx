@@ -2,16 +2,12 @@ import { createContext, useContext, useEffect, useMemo, useState, useSyncExterna
 import type { NormalizedApplicationThreadSummary } from "../../shared/protocol/application.js";
 import type { NativeVoiceStore } from "../voice/NativeVoiceStore.js";
 import { nativeThreadTitle } from "../voice/native-voice-plugin.js";
-import { ELECTRON_LOCAL_CONNECTION_PROFILE_ID } from "./electron-connections.js";
+import { connectionScopeKey, type ConnectionScope } from "./connection-scope.js";
+import { ApiError } from "../api/ApiClient.js";
 import { useApplicationStore, type ApplicationClientStore } from "../stores/ApplicationClientStore.js";
 
-export interface DefaultThreadScope { profileId: string; serverKey: string; identity: string }
-/** Managed Local's transport port changes each launch; its profile and authenticated identity do not. */
-export function defaultThreadScope(profileId: string, serverOrigin: string, identity: string): DefaultThreadScope {
-  return { profileId, serverKey: profileId === ELECTRON_LOCAL_CONNECTION_PROFILE_ID ? "electron-managed-local" : serverOrigin, identity };
-}
-export function defaultThreadStorageKey(scope: DefaultThreadScope): string {
-  return `sedes.default-thread.v1:${JSON.stringify([scope.profileId, scope.serverKey, scope.identity])}`;
+export function defaultThreadStorageKey(scope: ConnectionScope): string {
+  return `sedes.default-thread.v1:${connectionScopeKey(scope)}`;
 }
 export function canUseDefaultThread(thread: NormalizedApplicationThreadSummary): boolean {
   return thread.available && (thread.inventoryState === "active" || thread.inventoryState === "settled");
@@ -25,33 +21,62 @@ interface DefaultThreadControls {
   setThread(thread: NormalizedApplicationThreadSummary | null): Promise<void>;
 }
 const Context = createContext<DefaultThreadControls | null>(null);
+const ScopeContext = createContext("");
 export const useDefaultThread = () => useContext(Context);
 
 /** Resolve a saved ID outside the bounded bootstrap without attaching its backend. */
 export function DefaultThreadResolutionProvider({ store, children }: { store: ApplicationClientStore; children: ReactNode }) {
   const selection = useDefaultThread();
+  const scopeKey = useContext(ScopeContext);
   const application = useApplicationStore(store);
   const threadId = selection?.threadId;
   const inventoryThread = application.snapshot?.threads.find(thread => thread.id === threadId);
+  const hasInventoryThread = inventoryThread !== undefined;
+  const [refresh, setRefresh] = useState(0);
   const [resolution, setResolution] = useState<{
-    store: ApplicationClientStore; id: string; thread?: NormalizedApplicationThreadSummary; pending: boolean; error?: string;
+    store: ApplicationClientStore; scopeKey: string; id: string;
+    thread?: NormalizedApplicationThreadSummary; pending: boolean; error?: string;
   }>();
   useEffect(() => {
-    if (!threadId || inventoryThread || application.status !== "ready" || !application.authoritative) {
+    if (!threadId) return;
+    const refresh = () => { if (document.visibilityState !== "hidden") setRefresh(value => value + 1); };
+    const unsubscribe = store.normalized.subscribeThreadSummaryChanges(changed => {
+      if (changed === undefined || changed === threadId) setRefresh(value => value + 1);
+    });
+    window.addEventListener("focus", refresh);
+    window.addEventListener("online", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      unsubscribe();
+      window.removeEventListener("focus", refresh);
+      window.removeEventListener("online", refresh);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+  }, [store, scopeKey, threadId]);
+  useEffect(() => {
+    if (!threadId || hasInventoryThread) {
       setResolution(undefined);
       return;
     }
+    if (application.status !== "ready" || !application.authoritative || application.connection !== "connected") return;
     const controller = new AbortController();
-    setResolution(current => ({ store, id: threadId, thread: current?.store === store && current.id === threadId ? current.thread : undefined, pending: true }));
+    const matches = (current: typeof resolution) => current?.store === store && current.scopeKey === scopeKey && current.id === threadId;
+    setResolution(current => ({ store, scopeKey, id: threadId, thread: matches(current) ? current!.thread : undefined, pending: true }));
     void store.api.readThreadSummary(threadId, controller.signal).then(thread => {
-      if (!controller.signal.aborted) setResolution({ store, id: threadId, thread, pending: false });
-    }).catch(() => {
-      if (!controller.signal.aborted) setResolution({ store, id: threadId, pending: false, error: "The default thread is unavailable." });
+      if (!controller.signal.aborted) setResolution({ store, scopeKey, id: threadId, thread, pending: false });
+    }).catch(error => {
+      if (controller.signal.aborted) return;
+      const inaccessible = error instanceof ApiError && [401, 403, 404].includes(error.status);
+      setResolution(current => ({ store, scopeKey, id: threadId,
+        thread: !inaccessible && matches(current) ? current!.thread : undefined,
+        pending: false,
+        error: inaccessible ? "The default thread is unavailable." : "Could not refresh the default thread.",
+      }));
     });
     return () => controller.abort();
-  }, [store, threadId, inventoryThread, application.status, application.authoritative, application.connection, application.snapshot?.threads]);
+  }, [store, scopeKey, threadId, hasInventoryThread, application.status, application.authoritative, application.connection, refresh]);
   if (!selection) return children;
-  const current = resolution?.store === store && resolution.id === threadId ? resolution : undefined;
+  const current = resolution?.store === store && resolution.scopeKey === scopeKey && resolution.id === threadId ? resolution : undefined;
   return <Context.Provider value={{ ...selection,
     thread: inventoryThread ?? current?.thread,
     resolving: Boolean(threadId && !inventoryThread && (!current || current.pending)),
@@ -68,11 +93,11 @@ export function defaultThreadChoices(threads: readonly NormalizedApplicationThre
  * Desktop/browser never mirror another device's selection or a voice setting.
  */
 export function DefaultThreadProvider({ scope, native, children }: {
-  scope: DefaultThreadScope; native?: NativeVoiceStore; children: ReactNode;
+  scope: ConnectionScope; native?: NativeVoiceStore; children: ReactNode;
 }) {
-  return native
+  return <ScopeContext.Provider value={connectionScopeKey(scope)}>{native
     ? <NativeDefaultThread native={native}>{children}</NativeDefaultThread>
-    : <LocalDefaultThread key={defaultThreadStorageKey(scope)} scope={scope}>{children}</LocalDefaultThread>;
+    : <LocalDefaultThread key={defaultThreadStorageKey(scope)} scope={scope}>{children}</LocalDefaultThread>}</ScopeContext.Provider>;
 }
 function NativeDefaultThread({ native, children }: { native: NativeVoiceStore; children: ReactNode }) {
   const state = useSyncExternalStore(native.subscribe, native.getSnapshot, native.getSnapshot);
@@ -87,7 +112,7 @@ function NativeDefaultThread({ native, children }: { native: NativeVoiceStore; c
   }), [native, state]);
   return <Context.Provider value={value}>{children}</Context.Provider>;
 }
-function LocalDefaultThread({ scope, children }: { scope: DefaultThreadScope; children: ReactNode }) {
+function LocalDefaultThread({ scope, children }: { scope: ConnectionScope; children: ReactNode }) {
   const key = defaultThreadStorageKey(scope);
   const [threadId, setThreadId] = useState<string | null>(() => {
     try { return localStorage.getItem(key) || null; } catch { return null; }

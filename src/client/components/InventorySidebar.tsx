@@ -433,9 +433,10 @@ export function InventorySidebar({
   const defaultThreadId = defaultThread?.threadId;
   const defaultSummary = state.snapshot?.threads.find(thread => thread.id === defaultThreadId) ?? defaultThread?.thread;
   const usableDefault = defaultSummary && canUseDefaultThread(defaultSummary) ? defaultSummary : undefined;
-  const snapshot = useMemo(() => state.snapshot && defaultThreadId
-    ? { ...state.snapshot, threads: state.snapshot.threads.filter((thread) => thread.id !== defaultThreadId) }
-    : state.snapshot, [state.snapshot, defaultThreadId]);
+  const displayedDefaultId = usableDefault?.id;
+  const snapshot = useMemo(() => state.snapshot && displayedDefaultId
+    ? { ...state.snapshot, threads: state.snapshot.threads.filter((thread) => thread.id !== displayedDefaultId) }
+    : state.snapshot, [state.snapshot, displayedDefaultId]);
   const projects = snapshot?.projects ?? [];
   const workspaces = snapshot?.workspaces ?? [];
   const environments = snapshot?.environments ?? [];
@@ -620,14 +621,14 @@ export function InventorySidebar({
   }, [snapshot?.tasks]);
   const threads = useMemo(
     () =>
-      filterThreadsBySidebarScope(state.visibleThreads, workspaces, scope).filter((thread) => thread.id !== defaultThreadId).filter(
+      filterThreadsBySidebarScope(state.visibleThreads, workspaces, scope).filter((thread) => thread.id !== displayedDefaultId).filter(
         (thread) =>
           !viewPreferences.hasOpenTasks || taskSummaryByThreadId.has(thread.id),
       ),
     [
       scope,
       state.visibleThreads,
-      defaultThreadId,
+      displayedDefaultId,
       workspaces,
       viewPreferences.hasOpenTasks,
       taskSummaryByThreadId,
@@ -637,13 +638,13 @@ export function InventorySidebar({
     () =>
       allDescendants.filter(
         ({ thread }) =>
-          thread.id !== defaultThreadId &&
+          thread.id !== displayedDefaultId &&
           filterThreadsBySidebarScope([thread], workspaces, scope).length > 0 &&
           (!viewPreferences.hasOpenTasks || taskSummaryByThreadId.has(thread.id)),
       ),
     [
       allDescendants,
-      defaultThreadId,
+      displayedDefaultId,
       scope,
       workspaces,
       viewPreferences.hasOpenTasks,

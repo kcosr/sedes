@@ -3,10 +3,12 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { afterEach, expect, it, vi } from "vitest";
 import type { NativeVoiceStore } from "../voice/NativeVoiceStore.js";
 import type { NormalizedApplicationThreadSummary } from "../../shared/protocol/application.js";
-import { DefaultThreadProvider, DefaultThreadResolutionProvider, defaultThreadChoices, defaultThreadScope, defaultThreadStorageKey, useDefaultThread } from "./default-thread.js";
+import { DefaultThreadProvider, DefaultThreadResolutionProvider, defaultThreadChoices, defaultThreadStorageKey, useDefaultThread } from "./default-thread.js";
 import type { ApplicationClientState, ApplicationClientStore } from "../stores/ApplicationClientStore.js";
 import { voiceRecordingTarget } from "../voice/voice-recording-target.js";
 import { voiceSettings, voiceSnapshot } from "../voice/native-voice-test-fixture.js";
+import { ApiError } from "../api/ApiClient.js";
+import { connectionScope } from "./connection-scope.js";
 import { ELECTRON_LOCAL_CONNECTION_PROFILE_ID } from "./electron-connections.js";
 
 afterEach(() => { cleanup(); localStorage.clear(); });
@@ -14,20 +16,22 @@ const scope = { profileId: "desktop", serverKey: "https://sedes.example", identi
 const thread = { id: "thread-one", title: { text: "Assistant" }, available: true, inventoryState: "active" } as NormalizedApplicationThreadSummary;
 
 it("keeps Managed Local selection across transport ports while separating other profiles and identities", () => {
-  const local = (port: number, identity = "alice") => defaultThreadScope(ELECTRON_LOCAL_CONNECTION_PROFILE_ID, `http://127.0.0.1:${port}`, identity);
+  const local = (port: number, identity = "alice") => connectionScope(ELECTRON_LOCAL_CONNECTION_PROFILE_ID, `http://127.0.0.1:${port}`, identity);
   expect(defaultThreadStorageKey(local(31001))).toBe(defaultThreadStorageKey(local(31002)));
   expect(defaultThreadStorageKey(local(31001, "bob"))).not.toBe(defaultThreadStorageKey(local(31001)));
-  expect(defaultThreadStorageKey(defaultThreadScope("direct", "http://127.0.0.1:31001", "alice")))
-    .not.toBe(defaultThreadStorageKey(defaultThreadScope("direct", "http://127.0.0.1:31002", "alice")));
+  expect(defaultThreadStorageKey(connectionScope("direct", "http://127.0.0.1:31001", "alice")))
+    .not.toBe(defaultThreadStorageKey(connectionScope("direct", "http://127.0.0.1:31002", "alice")));
 });
 
 function resolutionStore(readThreadSummary: ApplicationClientStore["api"]["readThreadSummary"]) {
   const listeners = new Set<() => void>();
+  const summaryListeners = new Set<(id: string | undefined) => void>();
   let state = { status: "ready", authoritative: true, connection: "connected", snapshot: { threads: [] } } as unknown as ApplicationClientState;
   const store = { api: { readThreadSummary }, getSnapshot: () => state,
+    normalized: { subscribeThreadSummaryChanges: (listener: (id: string | undefined) => void) => { summaryListeners.add(listener); return () => summaryListeners.delete(listener); } },
     subscribe: (listener: () => void) => { listeners.add(listener); return () => listeners.delete(listener); },
   } as unknown as ApplicationClientStore;
-  return { store, publish(threads: readonly NormalizedApplicationThreadSummary[]) {
+  return { store, changed(id?: string) { act(() => summaryListeners.forEach(listener => listener(id))); }, publish(threads: readonly NormalizedApplicationThreadSummary[]) {
     state = { ...state, snapshot: { ...state.snapshot!, threads: [...threads] } };
     act(() => listeners.forEach(listener => listener()));
   }};
@@ -56,9 +60,51 @@ it("resolves an older fork after reload for navigation and voice, preferring fre
 });
 it("does not use a removed or inaccessible default", async () => {
   localStorage.setItem(defaultThreadStorageKey(scope), thread.id);
-  render(resolvedView(resolutionStore(vi.fn().mockRejectedValue(new Error("not_found"))).store));
+  render(resolvedView(resolutionStore(vi.fn().mockRejectedValue(new ApiError(404, "not_found", "Thread not found.", false))).store));
   await waitFor(() => expect(screen.getByTestId("resolving")).toHaveTextContent("false"));
   expect(screen.getByTestId("resolved")).toHaveTextContent("none");
+  expect(screen.getByTestId("voice-target")).toHaveTextContent("none");
+});
+it("ignores unrelated inventory array churn and refreshes on targeted invalidation", async () => {
+  localStorage.setItem(defaultThreadStorageKey(scope), thread.id);
+  const read = vi.fn().mockResolvedValue(thread);
+  const fixture = resolutionStore(read);
+  render(resolvedView(fixture.store));
+  await waitFor(() => expect(screen.getByTestId("resolved")).toHaveTextContent("Assistant:active"));
+  const other = { ...thread, id: "other", title: { text: "Unrelated" } };
+  for (let index = 0; index < 5; index++) {
+    fixture.publish([{ ...other }]);
+    fixture.changed(other.id);
+  }
+  expect(read).toHaveBeenCalledTimes(1);
+  fixture.changed();
+  await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+});
+it("keeps the known default usable while refreshing and after a transient failure", async () => {
+  localStorage.setItem(defaultThreadStorageKey(scope), thread.id);
+  let fail!: (error: Error) => void;
+  const read = vi.fn().mockResolvedValueOnce(thread)
+    .mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = reject; }));
+  const fixture = resolutionStore(read);
+  render(resolvedView(fixture.store));
+  await waitFor(() => expect(screen.getByTestId("resolved")).toHaveTextContent("Assistant:active"));
+  fixture.changed(thread.id);
+  expect(screen.getByTestId("resolving")).toHaveTextContent("true");
+  expect(screen.getByTestId("voice-target")).toHaveTextContent(thread.id);
+  await act(async () => fail(new ApiError(503, "unavailable", "Try again.", true)));
+  expect(screen.getByTestId("resolving")).toHaveTextContent("false");
+  expect(screen.getByTestId("resolved")).toHaveTextContent("Assistant:active");
+  expect(screen.getByTestId("voice-target")).toHaveTextContent(thread.id);
+});
+it.each([401, 403, 404])("drops a previously known default when its refresh returns %i", async (status) => {
+  localStorage.setItem(defaultThreadStorageKey(scope), thread.id);
+  const read = vi.fn().mockResolvedValueOnce(thread)
+    .mockRejectedValueOnce(new ApiError(status, "not_found", "Unavailable.", false));
+  const fixture = resolutionStore(read);
+  render(resolvedView(fixture.store));
+  await waitFor(() => expect(screen.getByTestId("resolved")).toHaveTextContent("Assistant:active"));
+  fixture.changed(thread.id);
+  await waitFor(() => expect(screen.getByTestId("resolved")).toHaveTextContent("none"));
   expect(screen.getByTestId("voice-target")).toHaveTextContent("none");
 });
 it("fences a same-ID response to its connection store and aborts the old request", async () => {

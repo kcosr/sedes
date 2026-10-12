@@ -61,6 +61,13 @@ export class NormalizedApplicationStore {
   readonly #workpadListeners = new Set<
     (change: WorkpadChangeNotification | undefined) => void
   >();
+  readonly #threadSummaryListeners = new Set<(threadId: string | undefined) => void>();
+
+  /** Invalidates independently loaded summaries; undefined covers replacement or location availability changes. */
+  subscribeThreadSummaryChanges = (listener: (threadId: string | undefined) => void): (() => void) => {
+    this.#threadSummaryListeners.add(listener);
+    return () => { this.#threadSummaryListeners.delete(listener); };
+  };
 
   subscribeWorkpadChanges = (
     listener: (change: WorkpadChangeNotification | undefined) => void,
@@ -138,6 +145,7 @@ export class NormalizedApplicationStore {
       // A replacement may follow a replay gap or server restart. Separately
       // loaded documents must reconcile even when no change events survived.
       this.#notifyWorkpads(undefined);
+      this.#notifyThreadSummaries(undefined);
       return { kind: "applied" };
     }
 
@@ -287,6 +295,10 @@ export class NormalizedApplicationStore {
       return this.#invalidate("application_inventory_reference_invalid");
     }
     this.#replaceState({ ...this.#state, snapshot: validated.data });
+    if (event.type === "thread_upsert") this.#notifyThreadSummaries(event.thread.id);
+    else if (event.type === "thread_remove") this.#notifyThreadSummaries(event.threadId);
+    else if (event.type === "environment_upsert" || event.type === "environment_remove" ||
+      event.type === "workspace_upsert" || event.type === "workspace_remove") this.#notifyThreadSummaries(undefined);
     return { kind: "applied" };
   }
 
@@ -304,6 +316,10 @@ export class NormalizedApplicationStore {
 
   #notifyWorkpads(change: WorkpadChangeNotification | undefined): void {
     for (const listener of this.#workpadListeners) listener(change);
+  }
+
+  #notifyThreadSummaries(threadId: string | undefined): void {
+    for (const listener of this.#threadSummaryListeners) listener(threadId);
   }
 }
 

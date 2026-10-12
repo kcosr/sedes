@@ -5322,6 +5322,21 @@ describe("sidebar footer Automations", () => {
 
 
 describe("shared default thread shelf", () => {
+  it.each(["project", "time", "state", "none"] as const)("keeps an unusable default in ordinary inventory and search in %s", (groupBy) => {
+    seedViewPreferences({ groupBy });
+    const target = makeThread("default", "Default target", { inventoryState: "snoozed" });
+    const options = { defaultThreadId: target.id };
+    const view = renderSidebar([target], options);
+    expect(screen.getByText("Default target")).toBeVisible();
+    expect(screen.queryByTestId("default-thread-row")).not.toBeInTheDocument();
+    view.rerenderSidebar(makeState([target], { ...options, search: "Default target" }));
+    expect(screen.getByText("Default target")).toBeVisible();
+    const unavailable = { ...target, inventoryState: "active" as const, available: false };
+    view.rerenderSidebar(makeState([unavailable], { ...options, search: "Default target" }));
+    expect(screen.getByText("Default target")).toBeVisible();
+    expect(screen.queryByTestId("default-thread-row")).not.toBeInTheDocument();
+  });
+
   it.each(["project", "time", "state", "none"] as const)("counts a loaded default child before offering more forks in %s", (groupBy) => {
     seedViewPreferences({ groupBy });
     const parent = makeThread("parent", "Fork source");
