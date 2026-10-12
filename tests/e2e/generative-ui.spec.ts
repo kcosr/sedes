@@ -131,7 +131,8 @@ test("published HTML keeps revisions, target viewport, local images, and host is
       "allow-scripts",
     );
     await expect(firstCard.locator("iframe")).toHaveAttribute("inert", "");
-    await firstCard.getByRole("button", { name: "Interact with preview", exact: true }).click();
+    await firstCard.locator(".page-frame-viewport").click({ position: { x: 20, y: 20 } });
+    await expect(firstCard.locator("iframe")).not.toHaveAttribute("inert", "");
     await firstFrame.getByRole("button", { name: "Clicks: 0" }).click();
     await expect(
       firstFrame.getByRole("button", { name: "Clicks: 1" }),
@@ -728,6 +729,10 @@ test.describe("mobile inline preview interaction", () => {
         .getByRole("button", { name: "Done interacting with preview" })
         .tap();
       await expect(frame).toHaveAttribute("inert", "");
+      await card.locator(".page-frame-viewport").tap({ position: { x: 20, y: 20 } });
+      await expect(frame).not.toHaveAttribute("inert", "");
+      await expect(pageDocument(card).getByRole("button", { name: "Taps: 1" })).toBeVisible();
+      await card.getByRole("button", { name: "Done interacting with preview" }).tap();
       const mobileViewer = await expandPage(page, card);
       const headerBox = (await mobileViewer.locator(".page-preview-fullscreen-header").boundingBox())!;
       const actionsBox = (await mobileViewer.getByRole("toolbar", { name: "Page actions" }).boundingBox())!;

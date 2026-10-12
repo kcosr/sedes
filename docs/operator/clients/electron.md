@@ -33,8 +33,10 @@ Saved revisions contain authored content rather than a frozen copy of the
 trusted wrapper; the server applies current host security code when serving
 them. All clients load page previews automatically when in or near view unless
 that local browser recorded a failed render or an attempt interrupted before
-cleanup for the same server origin, thread, page, and revision. Such a card
-requires a manual **Retry** action, as does unavailable recovery storage.
+cleanup for the same connection profile, server, signed-in identity, thread,
+page, and revision. Managed Local uses a stable server identity, so changing
+its local port on restart preserves this protection. Such a card requires a
+manual **Retry** action, as does unavailable recovery storage.
 Closing or unloading a responsive preview clears that attempt's pending marker.
 Origin and native API isolation do not promise a separate renderer process or
 CPU budget. A script that does not yield can freeze its renderer, and a

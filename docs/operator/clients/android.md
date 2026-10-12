@@ -52,8 +52,9 @@ render or an attempt interrupted before cleanup requires explicit **Retry**
 instead of loading again automatically. Unavailable recovery storage also
 requires explicit retry. Closing or unloading a responsive preview clears
 that attempt's pending marker. This record is local to the browser and scoped
-to the server origin, thread, page, and revision; other devices retain their
-own decisions.
+to the connection profile, server origin, signed-in identity, thread, page,
+and revision; other devices retain their own decisions. On desktop, Managed
+Local uses a stable server identity so its recovery state survives restarts.
 
 The Android application WebView rejects all `addJavascriptInterface`
 registrations, including the legacy Capacitor bridge and the built-in raw
