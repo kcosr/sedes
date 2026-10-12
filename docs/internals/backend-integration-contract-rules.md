@@ -3188,6 +3188,12 @@ Backend connectivity and workspace file access are separate capabilities of an
 execution environment. A working SSH carrier does not imply file access, and a
 Files sidecar does not imply a provider transport.
 
+Sidecar stream consumers may drain buffered data after receiving a validated
+terminal. Replenishing credit on that exact completed registration is a no-op;
+unregistering an unfinished stream still rejects later credit. Preserve byte,
+sequence, and terminal validation. This shared transport rule applies to Pi,
+Codex, Claude, and OpenCode remote operations; Grok remains local-only.
+
 Environment availability may aggregate independent, typed backend and
 operations-carrier observations only at the execution-environment scope. Keep
 backend scopes exact; never invent a synthetic backend identity for shared

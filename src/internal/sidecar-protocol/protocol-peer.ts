@@ -405,18 +405,25 @@ export class SidecarProtocolPeer {
     if (this.#incomingStreams.has(input.streamId)) {
       throw new Error("sidecar_stream_already_registered");
     }
+    let terminalReceived = false;
     this.#incomingStreams.set(input.streamId, {
       capabilityId: input.capabilityId,
       majorVersion: input.majorVersion,
       terminalSchema: input.terminalSchema as z.ZodType<unknown>,
       onData: input.onData,
-      onTerminal: input.onTerminal as (payload: unknown) => void,
+      onTerminal: (payload: unknown) => {
+        terminalReceived = true;
+        input.onTerminal(payload as Payload);
+      },
       expectedSequence: 0,
       remainingCredit: input.initialCreditBytes,
     });
     return Object.freeze({
       addCredit: async (bytes: number) => {
         validateStreamCredit(bytes);
+        // A queued consumer can finish reading data after the terminal retired
+        // this registration. No producer remains to receive its final credit.
+        if (terminalReceived) return;
         const stream = this.#incomingStreams.get(input.streamId);
         if (!stream) throw new Error("sidecar_stream_not_registered");
         if (stream.remainingCredit + bytes > Number.MAX_SAFE_INTEGER) {

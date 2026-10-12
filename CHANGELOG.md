@@ -176,6 +176,9 @@ User-facing changes are collected here before release. See the
 
 ### Fixed
 
+- File-backed HTML previews survive downloads that finish before capture
+  consumes their buffered bytes, instead of returning a generic tool failure.
+
 - Automation details link consistently to the Automations list and expose
   **Open thread** beside it. Queue/Steer choices open directly above their button.
   ([#74](https://github.com/kcosr/sedes/pull/74))
