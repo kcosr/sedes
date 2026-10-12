@@ -179,7 +179,8 @@ User-facing changes are collected here before release. See the
 - Recent HTML previews stay loaded briefly when scrolling away and back, and
   inactive previews avoid nested scrolling. Inline image and Mermaid
   zoom gestures remain available after scrolling, without an inline zoom toolbar.
-  HTML preview controls appear in a fullscreen header with large touch targets;
+  HTML preview controls appear in a fullscreen header with large touch targets
+  and right-aligned revision and refresh controls;
   a finger toggle or stationary tap enables inline interaction on desktop and
   mobile, while fullscreen previews accept input immediately.
   Clipped SVG content no longer makes previews excessively tall, positioned

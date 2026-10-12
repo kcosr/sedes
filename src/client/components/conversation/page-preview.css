@@ -67,6 +67,7 @@
   height: auto;
 }
 .page-preview-header-actions {
+  margin-inline-start: auto;
   display: flex;
   align-items: center;
   gap: var(--space-1);
