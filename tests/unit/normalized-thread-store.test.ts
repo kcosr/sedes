@@ -77,6 +77,7 @@ function snapshot(): NormalizedThreadSnapshot {
     stashes: [],
     composerCommands: [],
     agentTools: {
+      runtimeAvailability: { availability: "available" },
       enabled: false,
       accessBoundary: "environment",
       groups: [],

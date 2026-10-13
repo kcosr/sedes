@@ -919,6 +919,7 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
     const cliEnvironment = await this.#acquireAgentToolCliEnvironment(
       input.scope,
       input.applicationThreadId,
+      input.applicationOperationId,
     );
     let matchedNotificationThreadId: string | undefined;
     let contradictoryNotificationHistoryMode = false;
@@ -1688,6 +1689,7 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
     const cliEnvironment = await this.#acquireAgentToolCliEnvironment(
       input.scope,
       input.childApplicationThreadId,
+      input.applicationOperationId,
     );
     const forkMarker = codexForkCreationMarker({
       ...this.#correlationScope(input.sourceBinding.backendConversationId),
@@ -2671,13 +2673,13 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
   async #acquireAgentToolCliEnvironment(
     scope: CreateConversationInput["scope"],
     applicationThreadId: string,
-    signal?: AbortSignal,
+    creationOperationId: string,
   ): Promise<CodexAgentToolCliEnvironmentResolution> {
     try {
       return await this.#agentToolCliEnvironment.acquire(
         scope,
         applicationThreadId,
-        signal ? { signal } : undefined,
+        { creationOperationId },
       );
     } catch (error) {
       this.#reportError(error);

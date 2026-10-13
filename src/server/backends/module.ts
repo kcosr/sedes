@@ -27,6 +27,19 @@ import type { BackendModelPolicy } from "./model-policy.js";
 import type { AutomationExecutionPolicy } from "../runtime/automation-execution-policy.js";
 import type { AgentToolSourceCapabilityIssuer } from "../agent-tools/application/database-agent-tool-source-authority.js";
 import type { BoundedDisplayText } from "../../shared/protocol/payload.js";
+import type { AgentToolPresentation } from "../../shared/protocol/conversation.js";
+
+export type BackendAgentToolRuntimeAvailability =
+  | { readonly availability: "available" }
+  | { readonly availability: "unavailable"; readonly reason: string };
+
+export interface BackendAgentToolRuntimeContext {
+  readonly scope: RequestScope;
+  readonly applicationThreadId: string;
+  readonly presentation: AgentToolPresentation;
+  readonly backendConversationId?: string;
+  readonly isolatedWorkspace: boolean;
+}
 
 export interface InstallationAdvisoryContribution {
   /** Stable within its contribution source and safe for use in a normalized ID. */
@@ -168,6 +181,8 @@ export interface BackendRuntimeRecoveryContext {
 }
 
 export interface BackendModuleRuntime {
+  /** Read-only eligibility; must never acquire a runtime or start provider work. */
+  agentToolRuntimeAvailability?(input: BackendAgentToolRuntimeContext): BackendAgentToolRuntimeAvailability;
   /** Current safe diagnostic from lazy runtime checks; reading must not start work. */
   runtimeDiagnostic?(): BackendRuntimeDiagnostic | undefined;
   /** Trusted per-input approval provenance for restart-safe CLI source references. */
@@ -265,6 +280,8 @@ export type AgentToolCliRuntimeResolution =
 
 /** Environment-owned lifecycle seam for a managed CLI endpoint. */
 export interface AgentToolCliRuntimeProvider {
+  /** Current known capability, without acquiring or starting an execution host. */
+  inspect?(): { readonly availability: "available" } | Extract<AgentToolCliRuntimeResolution, { readonly availability: "unavailable" }>;
   acquire(options?: {
     readonly signal?: AbortSignal;
   }): Promise<AgentToolCliRuntimeResolution>;

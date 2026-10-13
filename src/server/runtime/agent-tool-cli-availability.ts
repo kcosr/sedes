@@ -22,6 +22,7 @@ type ManagedAgentToolCliSidecarSession = Readonly<{
 }>;
 
 type ManagedAgentToolCliSidecarRuntime = Readonly<{
+  canAcquireCapability(capabilityId: string, majorVersion: number): boolean;
   acquireAgentTools(
     scope: RequestScope,
     executionEnvironmentId: string,
@@ -98,6 +99,9 @@ export function managedSshAgentToolCliAvailability(input: {
   return Object.freeze({
     availability: "managed" as const,
     provider: Object.freeze({
+      inspect: () => input.runtime.canAcquireCapability("agent_tools_cli", 4)
+        ? { availability: "available" as const }
+        : { availability: "unavailable" as const, reason: "sidecar_unavailable" as const },
       acquire: async (options?: {
         readonly signal?: AbortSignal;
       }): Promise<AgentToolCliRuntimeResolution> => {

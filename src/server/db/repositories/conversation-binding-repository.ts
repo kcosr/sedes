@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
 import { DomainError } from "../../domain/errors.js";
+import { ConversationCreationProvenanceRepository } from "./conversation-creation-provenance-repository.js";
 import type { RequestScope } from "../../identity/identity-provider.js";
 
 export type ConversationTarget = {
@@ -618,6 +619,9 @@ export class ConversationBindingRepository {
             "The thread is already bound to a different conversation.",
           );
         }
+        new ConversationCreationProvenanceRepository(this.database).recordVerifiedBinding(
+          scope, applicationThreadId, input.attemptId, input.boundAt,
+        );
         return existing;
       }
       if (target.backingState !== "creating") {
@@ -675,6 +679,9 @@ export class ConversationBindingRepository {
         }
         throw error;
       }
+      new ConversationCreationProvenanceRepository(this.database).recordVerifiedBinding(
+        scope, applicationThreadId, input.attemptId, input.boundAt,
+      );
       return this.getBinding(scope, applicationThreadId)!;
     })();
   }
@@ -732,6 +739,9 @@ export class ConversationBindingRepository {
         );
       }
       if (attempt.phase === "bound") {
+        new ConversationCreationProvenanceRepository(this.database).recordVerifiedBinding(
+          scope, applicationThreadId, input.attemptId, input.acceptedAt,
+        );
         return binding;
       }
       if (attempt.phase !== "accepted_unpersisted") {
@@ -740,6 +750,9 @@ export class ConversationBindingRepository {
           "The creation attempt cannot complete first-send acceptance.",
         );
       }
+      new ConversationCreationProvenanceRepository(this.database).recordVerifiedBinding(
+        scope, applicationThreadId, input.attemptId, input.acceptedAt,
+      );
       const changed = this.database
         .prepare(
           `
@@ -883,6 +896,9 @@ export class ConversationBindingRepository {
             now: input.acceptedAt,
             lastActivityAt: input.acceptedAt,
           });
+          new ConversationCreationProvenanceRepository(this.database).recordVerifiedBinding(
+            scope, applicationThreadId, input.attemptId, input.acceptedAt,
+          );
           if (attempt.creationKind === "fork") {
             this.#commitPreparedForkOrigin(
               scope,
@@ -899,6 +915,9 @@ export class ConversationBindingRepository {
             "The completed creation binding does not match this attempt.",
           );
         }
+        new ConversationCreationProvenanceRepository(this.database).recordVerifiedBinding(
+          scope, applicationThreadId, input.attemptId, input.acceptedAt,
+        );
         if (attempt.creationKind === "fork") {
           this.#assertCommittedForkOrigin(
             scope,
@@ -1037,6 +1056,9 @@ export class ConversationBindingRepository {
         now: input.acceptedAt,
         lastActivityAt: input.acceptedAt,
       });
+      new ConversationCreationProvenanceRepository(this.database).recordVerifiedBinding(
+        scope, applicationThreadId, input.attemptId, input.acceptedAt,
+      );
       if (attempt.creationKind === "fork") {
         this.#commitPreparedForkOrigin(
           scope,

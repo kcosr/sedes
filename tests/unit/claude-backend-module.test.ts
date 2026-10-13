@@ -263,6 +263,9 @@ describe("ClaudeBackendModule", () => {
         expect(acquireRecovery).toHaveBeenCalledOnce();
       }
       const runtime = prepared.createRuntime(context);
+      expect(runtime.agentToolRuntimeAvailability?.({ scope, applicationThreadId: "thread", isolatedWorkspace: false,
+        presentation: { surface: "native", mode: "individual" } })).toMatchObject({ availability: "unavailable", reason: expect.stringContaining("endpoint") });
+      expect(sdk.createQuery).not.toHaveBeenCalled();
 
       await runtime.start();
       expect(sdk.createQuery).not.toHaveBeenCalled();

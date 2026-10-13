@@ -60,6 +60,7 @@ class GrokBackendModuleRuntime implements BackendModuleRuntime {
   readonly discovery;
   readonly installationAdvisories;
   readonly savedAgents;
+  readonly agentToolRuntimeAvailability: NonNullable<BackendModuleRuntime["agentToolRuntimeAvailability"]>;
   readonly automationExecutionPolicy = new GrokAutomationExecutionPolicy();
   readonly managedProviderTerminals = unsupportedManagedTerminals;
   #closed = false;
@@ -74,6 +75,10 @@ class GrokBackendModuleRuntime implements BackendModuleRuntime {
   }) {
     this.scope = input.context.scope;
     this.instance = input.context.instance;
+    this.agentToolRuntimeAvailability = ({ presentation }) => presentation.surface === "cli" &&
+      input.context.environmentOperations.environmentKind === "local" && input.context.agentToolCli.availability === "available"
+      ? { availability: "available" }
+      : { availability: "unavailable", reason: "Grok supports Sedes tools through a local CLI endpoint. Select CLI tools and restore the local endpoint." };
     const installationAdvisories = new GrokRuntimeAdvisorySource();
     this.installationAdvisories = installationAdvisories;
     const preparedConnections = new Map(

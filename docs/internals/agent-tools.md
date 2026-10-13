@@ -443,6 +443,28 @@ discover the live catalog because enabled IDs and versions are thread-specific.
 
 ## Compiled backend presentation dispositions
 
+The normalized tool policy separates saved grants from `runtimeAvailability`.
+The latter is a read-only, scoped backend contribution using current known
+configuration and runtime facts; rendering settings never starts a provider.
+Unavailable eligibility does not remove saved IDs or alter the selected
+presentation. Pi, Claude and Grok retain their existing surface and topology
+rules. Codex additionally requires enabled network access and verified Sedes
+creation; OpenCode requires an exact verified created root and retains its
+namespace, native receipt, source and owned-CLI restrictions.
+
+`conversation_creation_provenance` records verified native identity in the
+binding transaction, independently of first-input acceptance. Force reset leaves
+this record intact while making the abandoned attempt immutable and unavailable
+for replay. Codex fresh create/fork injection instead checks the exact active
+creation operation, before a native binding exists. Migration records only
+unambiguous matching non-abandoned creations; older abandoned creations require
+the bounded [operator repair](../operator/operations.md#repair-tool-eligibility-after-force-reset).
+OpenCode's private created-root check combines the durable proof with its
+accepted native receipt and settings snapshot; changing those facts fails
+closed. The offline repair retains a fingerprinted audit receipt and never
+grants tools to an imported or merely bound session.
+
+
 Presentation has two independent dimensions:
 
 - **Surface** selects the provider-facing mechanism: `native` tools or the

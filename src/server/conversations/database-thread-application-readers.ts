@@ -27,6 +27,7 @@ import {
 import type { ValidatedWorkspace } from "../execution/contracts.js";
 import type { DatabaseConversationTargetStore } from "./database-conversation-adapters.js";
 import { boundDisplayText } from "./payload-policy.js";
+import type { ThreadAgentToolRuntimeAvailabilityReader } from "./thread-agent-tool-runtime-availability.js";
 import {
   latestAutomationRunJoin,
   projectThreadAutomationSummary,
@@ -116,6 +117,7 @@ export class DatabaseThreadApplicationInventoryReader implements ThreadApplicati
   readonly #completion: SubmissionCompletionRepository;
   readonly #agentTools: ThreadAgentToolPolicyRepository;
   readonly #agentToolCatalog: ThreadAgentToolCatalogReader;
+  readonly #agentToolRuntimeAvailability: ThreadAgentToolRuntimeAvailabilityReader;
   readonly #bindings: ConversationBindingRepository;
   readonly #directoryBrowsingAvailability: (
     scope: RequestScope,
@@ -129,6 +131,7 @@ export class DatabaseThreadApplicationInventoryReader implements ThreadApplicati
     readonly completion: SubmissionCompletionRepository;
     readonly agentTools: ThreadAgentToolPolicyRepository;
     readonly agentToolCatalog: ThreadAgentToolCatalogReader;
+    readonly agentToolRuntimeAvailability: ThreadAgentToolRuntimeAvailabilityReader;
     readonly directoryBrowsingAvailability: (
       scope: RequestScope,
       environmentId: string,
@@ -148,6 +151,7 @@ export class DatabaseThreadApplicationInventoryReader implements ThreadApplicati
     this.#completion = input.completion;
     this.#agentTools = input.agentTools;
     this.#agentToolCatalog = input.agentToolCatalog;
+    this.#agentToolRuntimeAvailability = input.agentToolRuntimeAvailability;
     this.#directoryBrowsingAvailability = input.directoryBrowsingAvailability;
     this.#executionWorkspaces = input.executionWorkspaces;
     this.#bindings = new ConversationBindingRepository(this.#database);
@@ -301,6 +305,11 @@ export class DatabaseThreadApplicationInventoryReader implements ThreadApplicati
       })),
       agentTools: {
         enabled: agentTools.enabled,
+        runtimeAvailability: this.#agentToolRuntimeAvailability.read(
+          scope,
+          applicationThreadId,
+          agentTools.presentation,
+        ),
         accessBoundary: agentTools.accessBoundary,
         groups: [...agentToolCatalog.groups]
           .sort(

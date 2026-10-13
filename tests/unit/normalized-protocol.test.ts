@@ -975,6 +975,7 @@ describe("workspace-file write protocol", () => {
 describe("normalized conversation protocol", () => {
   it("validates one current agent-tool policy and idle mutation shape", () => {
     const policy = {
+      runtimeAvailability: { availability: "available" },
       enabled: true,
       groups: [
         {
@@ -1007,6 +1008,11 @@ describe("normalized conversation protocol", () => {
       revision: 2,
     };
     expect(normalizedThreadAgentToolPolicySchema.parse(policy)).toEqual(policy);
+    expect(normalizedThreadAgentToolPolicySchema.safeParse({ ...policy, runtimeAvailability: undefined }).success).toBe(false);
+    expect(normalizedThreadAgentToolPolicySchema.safeParse({ ...policy, runtimeAvailability: { availability: "unavailable" } }).success).toBe(false);
+    expect(normalizedThreadAgentToolPolicySchema.safeParse({ ...policy, runtimeAvailability: {
+      availability: "unavailable", reason: { text: "Enable network access." },
+    } }).success).toBe(true);
     expect(
       normalizedThreadAgentToolPolicySchema.safeParse({
         ...policy,
@@ -2068,6 +2074,7 @@ describe("normalized conversation protocol", () => {
         argumentHint: display,
       })),
       agentTools: {
+        runtimeAvailability: { availability: "available" },
         enabled: false,
         groups: [
           {

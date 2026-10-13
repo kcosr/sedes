@@ -195,6 +195,7 @@ function snapshot(): NormalizedThreadSnapshot {
     stashes: [],
     composerCommands: [],
     agentTools: {
+      runtimeAvailability: { availability: "available" },
       enabled: false,
       accessBoundary: "environment",
       groups: [],
@@ -3534,6 +3535,7 @@ describe("ThreadClientStore normalized operations", () => {
     ready.capabilities = { ...ready.capabilities, runState: "idle" };
     delete ready.activeTurnId;
     ready.agentTools = {
+      runtimeAvailability: { availability: "available" },
       enabled: true,
       accessBoundary: "environment",
       groups: [

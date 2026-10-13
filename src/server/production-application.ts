@@ -101,6 +101,7 @@ import {
   createPrincipalAgentToolClientEligibility,
   createThreadAgentToolPolicyDependencies,
 } from "./conversations/thread-agent-tool-policy-dependencies.js";
+import { DatabaseThreadAgentToolRuntimeAvailabilityReader } from "./conversations/thread-agent-tool-runtime-availability.js";
 import { prepareBackendNormalizedDatabase } from "./db/backend-normalized-startup.js";
 import { AutomationRepository } from "./db/repositories/automation-repository.js";
 import { BackendCheckpointRepository } from "./db/repositories/backend-checkpoint-repository.js";
@@ -1175,6 +1176,11 @@ export async function startProductionApplication(
       completion,
       agentTools: agentToolPolicies,
       agentToolCatalog: agentToolPolicyDependencies.catalog,
+      agentToolRuntimeAvailability: new DatabaseThreadAgentToolRuntimeAvailabilityReader({
+        inventory: inventoryRepository,
+        runtimes: runtimeModules.runtimes,
+        executionWorkspaces: piSandboxExecutionWorkspaces,
+      }),
       directoryBrowsingAvailability: (requestScope, environmentId) =>
         execution!.directoryBrowsingAvailability(requestScope, environmentId),
       executionWorkspaces: piSandboxExecutionWorkspaces,

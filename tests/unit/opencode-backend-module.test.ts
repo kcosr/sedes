@@ -19,6 +19,7 @@ import { OpenCodeInputObserver } from "../../src/server/backends/opencode/openco
 import { OpenCodeInputEvidenceRepository } from "../../src/server/backends/opencode/opencode-input-evidence.js";
 import { runWithOpenCodeInvocation } from "../../src/server/backends/opencode/opencode-tool-invocation.js";
 import { OpenCodeThreadRepository } from "../../src/server/backends/opencode/opencode-thread-repository.js";
+import { ConversationCreationProvenanceRepository } from "../../src/server/db/repositories/conversation-creation-provenance-repository.js";
 import { OpenCodeConversationBackendDriver } from "../../src/server/backends/opencode/opencode-conversation-driver.js";
 import { planBackendNativeStores } from "../../src/server/runtime/backend-module-startup.js";
 
@@ -157,6 +158,7 @@ async function persistedInvocationFixture() {
       provisional_opaque_binding_detail,prepared_at,external_call_started_at,accepted_at,reconciled_at)
     VALUES (?,?,?,'creation-attempt','creation',?,?,?,'first_input','composer','initial input',1,?,'bound',?,?,100,101,102,103)`)
     .run(scope.tenantId, scope.principalId, thread.id, instance.id, connection.id, environmentId, wire.sessionID, wire.sessionID, target.opaqueBindingDetail);
+  database.transaction(() => new ConversationCreationProvenanceRepository(database).recordVerifiedBinding(scope, thread.id, "creation-attempt", 103))();
   expect(repository.hasCreatedRoot(scope, thread.id, wire.sessionID)).toBe(true);
   const lease = owner.acquire(openCodeRuntimeTarget(target));
   const observer = new OpenCodeInputObserver(driver.input, target, owner, lease, client.lifetime);
@@ -194,6 +196,10 @@ describe("OpenCode compiled module", () => {
       backend: { ...configured.backend, moduleConfiguration: { connection: { ownership: "owned", channel: { type: "process_stdio" } } } } });
     const runtime = prepared.createRuntime(fixture.value);
     expect(() => runtime.driverFactory).toThrow("opencode_module_not_started");
+    expect(runtime.agentToolRuntimeAvailability?.({ scope, applicationThreadId: "thread", isolatedWorkspace: false,
+      presentation: { surface: "native", mode: "progressive" } })).toEqual({ availability: "available" });
+    expect(runtime.agentToolRuntimeAvailability?.({ scope, applicationThreadId: "thread", backendConversationId: "session", isolatedWorkspace: false,
+      presentation: { surface: "native", mode: "progressive" } })).toMatchObject({ availability: "unavailable" });
     expect(factory.create).not.toHaveBeenCalled();
     await runtime.start();
     expect(factory.create.mock.calls[0]![0].nativeStorePath).toBeUndefined();
@@ -224,6 +230,9 @@ describe("OpenCode compiled module", () => {
     const exact = runWithOpenCodeInvocation(f.stamp, () => f.runtime.agentToolAccessDecisionAuthority!(f.source));
     f.database.prepare("UPDATE conversation_bindings SET backend_conversation_id='ses_replaced' WHERE application_thread_id=?")
       .run(f.source.sourceThreadId);
+    expect(f.runtime.agentToolRuntimeAvailability?.({ scope: f.source.scope, applicationThreadId: f.source.sourceThreadId,
+      backendConversationId: "ses_replaced", isolatedWorkspace: false, presentation: { surface: "native", mode: "progressive" } }))
+      .toMatchObject({ availability: "unavailable", reason: expect.stringContaining("verified Sedes-created") });
     await expect(exact.acquire(new AbortController().signal)).rejects.toBeDefined();
     expect(f.factory).toHaveBeenCalledOnce(); expect(f.owner.start).toHaveBeenCalledOnce();
     expect(f.owner.admitToolSession).not.toHaveBeenCalled();

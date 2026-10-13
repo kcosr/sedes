@@ -1588,9 +1588,24 @@ export type AgentToolAccessBoundary = z.infer<
   typeof agentToolAccessBoundarySchema
 >;
 
+export const threadAgentToolRuntimeAvailabilitySchema = z.discriminatedUnion(
+  "availability",
+  [
+    z.strictObject({ availability: z.literal("available") }),
+    z.strictObject({
+      availability: z.literal("unavailable"),
+      reason: boundedDisplayTextSchema,
+    }),
+  ],
+);
+export type ThreadAgentToolRuntimeAvailability = z.infer<
+  typeof threadAgentToolRuntimeAvailabilitySchema
+>;
+
 export const normalizedThreadAgentToolPolicySchema = z
   .strictObject({
     enabled: z.boolean(),
+    runtimeAvailability: threadAgentToolRuntimeAvailabilitySchema,
     accessBoundary: agentToolAccessBoundarySchema,
     groups: z.array(normalizedThreadAgentToolGroupSchema).max(64),
     presentation: agentToolPresentationSchema,

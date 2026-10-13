@@ -3477,6 +3477,18 @@ inspection.
 
 ## Agent tools and managed terminals
 
+Keep saved grants distinct from current runtime eligibility. Every compiled
+backend contributes read-only eligibility for the exact thread and presentation;
+rendering that state must not launch or acquire a provider. Unknown runtime
+authority and archived threads remain unavailable without erasing saved grants.
+Codex and OpenCode require immutable verified native-creation provenance matched
+to the current scoped binding. Force reset abandons the input operation, not
+the verified creation identity. Fresh Codex create/fork admission checks its
+exact active operation before a binding exists. Pi, Claude and Grok retain
+their existing source and presentation rules. Repairs must validate retained
+backend evidence, preserve abandonment receipts, and never replay input or
+change the thread's lifecycle as a side effect.
+
 Agent tools use the normalized, principal-scoped contract in
 [Agent tools](agent-tools.md). Eligibility is checked at execution time against
 the current thread, backend generation, effective policy revision, and tool

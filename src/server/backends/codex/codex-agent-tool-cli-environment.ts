@@ -75,7 +75,7 @@ export interface CodexAgentToolCliEnvironmentProvider {
   acquire(
     scope: ExecutionScope,
     applicationThreadId: string,
-    options?: { readonly signal?: AbortSignal },
+    options?: { readonly signal?: AbortSignal; readonly creationOperationId?: string },
   ): Promise<CodexAgentToolCliEnvironmentResolution>;
 }
 
@@ -90,8 +90,8 @@ export const unavailableCodexAgentToolCliEnvironmentProvider: CodexAgentToolCliE
 
 /**
  * Principal-scoped eligibility for Codex agent-tool CLI injection. A durable
- * Sedes creation attempt distinguishes local application-created threads
- * from imported native threads. Network-disabled policy remains unavailable
+ * verified creation identity distinguishes application-created threads from
+ * imported native threads independently of first-input recovery. Network-disabled policy remains unavailable
  * for every endpoint until the remote Unix-socket sandbox behavior is live
  * verified.
  */
@@ -140,7 +140,7 @@ export class DatabaseCodexAgentToolCliEnvironmentProvider implements CodexAgentT
   async acquire(
     scope: ExecutionScope,
     applicationThreadId: string,
-    options?: { readonly signal?: AbortSignal },
+    options?: { readonly signal?: AbortSignal; readonly creationOperationId?: string },
   ): Promise<CodexAgentToolCliEnvironmentResolution> {
     assertApplicationThreadId(applicationThreadId);
     if (this.#runtimeUnavailableReason) {
@@ -149,23 +149,67 @@ export class DatabaseCodexAgentToolCliEnvironmentProvider implements CodexAgentT
         reason: this.#runtimeUnavailableReason,
       });
     }
-    const row = this.#database
+    const row = this.#readEligibility(scope, applicationThreadId, options?.creationOperationId);
+    if (!row || row.sedesCreated !== 1) {
+      return Object.freeze({
+        availability: "unavailable",
+        reason: row ? "imported_thread" : "unverifiable_thread_context",
+      });
+    }
+    if (row.networkAccess !== "enabled") {
+      return Object.freeze({ availability: "unavailable", reason: "network_disabled" });
+    }
+    const policy = this.#agentTools.readPolicy({
+      scope: Object.freeze({ ...scope }), sourceThreadId: applicationThreadId,
+      sourceWorkspaceId: row.workspaceId, sourceEnvironmentId: row.environmentId, backendKind: "codex_app_server",
+    });
+    return this.#acquireRuntime(scope, applicationThreadId, row, policy, options);
+  }
+
+  /** Read-only eligibility; never starts a sidecar, session, or MCP process. */
+  inspect(scope: ExecutionScope, applicationThreadId: string): { readonly availability: "available" } |
+    { readonly availability: "unavailable"; readonly reason: CodexAgentToolCliEnvironmentUnavailableReason } {
+    if (this.#runtimeUnavailableReason) return { availability: "unavailable", reason: this.#runtimeUnavailableReason };
+    const row = this.#readEligibility(scope, applicationThreadId);
+    if (!row) return { availability: "unavailable", reason: "unverifiable_thread_context" };
+    if (row.sedesCreated !== 1 && row.backingState !== "unbound") return { availability: "unavailable",
+      reason: row.backingState === "bound" ? "imported_thread" : "unverifiable_thread_context" };
+    if (row.networkAccess !== "enabled") return { availability: "unavailable", reason: "network_disabled" };
+    return { availability: "available" };
+  }
+
+  #readEligibility(scope: ExecutionScope, applicationThreadId: string, creationOperationId?: string) {
+    return this.#database
       .prepare(
         `
           SELECT settings.desired_network_access AS networkAccess,
             thread.workspace_id AS workspaceId,
             thread.environment_id AS environmentId,
-            EXISTS (
+            thread.backing_state AS backingState,
+            (EXISTS (
+              SELECT 1 FROM conversation_creation_provenance AS proof
+              JOIN conversation_bindings AS binding
+                ON binding.tenant_id=proof.tenant_id AND binding.owner_principal_id=proof.owner_principal_id
+                AND binding.application_thread_id=proof.application_thread_id
+                AND binding.backend_instance_id=proof.backend_instance_id AND binding.connection_profile_id=proof.connection_profile_id
+                AND binding.execution_environment_id=proof.execution_environment_id AND binding.backend_conversation_id=proof.backend_conversation_id
+              WHERE proof.tenant_id=thread.tenant_id AND proof.owner_principal_id=thread.owner_principal_id
+                AND proof.application_thread_id=thread.id AND proof.backend_instance_id=thread.backend_instance_id
+                AND proof.connection_profile_id=thread.connection_profile_id AND proof.execution_environment_id=thread.environment_id
+            ) OR EXISTS (
               SELECT 1
               FROM conversation_creation_attempts AS attempt
               WHERE attempt.tenant_id = thread.tenant_id
                 AND attempt.owner_principal_id = thread.owner_principal_id
                 AND attempt.application_thread_id = thread.id
                 AND attempt.backend_instance_id = thread.backend_instance_id
+                AND attempt.connection_profile_id = thread.connection_profile_id
+                AND attempt.execution_environment_id = thread.environment_id
+                AND attempt.mutation_id = ?
                 AND attempt.creation_kind IN ('first_input', 'fork')
                 AND attempt.force_reset_at IS NULL
-                AND attempt.phase <> 'aborted_unpersisted'
-            ) AS sedesCreated
+                AND attempt.phase IN ('external_call_started', 'recovery_required')
+            )) AS sedesCreated
           FROM application_threads AS thread
           JOIN codex_thread_execution_settings AS settings
             ON settings.tenant_id = thread.tenant_id
@@ -176,6 +220,7 @@ export class DatabaseCodexAgentToolCliEnvironmentProvider implements CodexAgentT
         `,
       )
       .get(
+        creationOperationId ?? null,
         scope.tenantId,
         scope.principalId,
         applicationThreadId,
@@ -186,27 +231,14 @@ export class DatabaseCodexAgentToolCliEnvironmentProvider implements CodexAgentT
           readonly sedesCreated: 0 | 1;
           readonly workspaceId: string;
           readonly environmentId: string;
+          readonly backingState: string;
         }
       | undefined;
-    if (!row || row.sedesCreated !== 1) {
-      return Object.freeze({
-        availability: "unavailable",
-        reason: row ? "imported_thread" : "unverifiable_thread_context",
-      });
-    }
-    if (row.networkAccess !== "enabled") {
-      return Object.freeze({
-        availability: "unavailable",
-        reason: "network_disabled",
-      });
-    }
-    const policy = this.#agentTools.readPolicy({
-      scope: Object.freeze({ ...scope }),
-      sourceThreadId: applicationThreadId,
-      sourceWorkspaceId: row.workspaceId,
-      sourceEnvironmentId: row.environmentId,
-      backendKind: "codex_app_server",
-    });
+  }
+
+  async #acquireRuntime(scope: ExecutionScope, applicationThreadId: string,
+    row: { workspaceId: string; environmentId: string },
+    policy: ReturnType<BackendAgentToolFacade["readPolicy"]>, options?: { readonly signal?: AbortSignal }) {
     const surface = policy.presentation.surface;
     let runtimeResolution: AgentToolCliRuntimeResolution | undefined;
     try {

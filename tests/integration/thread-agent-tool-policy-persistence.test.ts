@@ -5,6 +5,8 @@ import {
   directThreadExecutionWorkspaceReader,
 } from "../../src/server/conversations/database-thread-application-readers.js";
 import { createThreadAgentToolPolicyDependencies } from "../../src/server/conversations/thread-agent-tool-policy-dependencies.js";
+import { DatabaseThreadAgentToolRuntimeAvailabilityReader } from "../../src/server/conversations/thread-agent-tool-runtime-availability.js";
+import type { BackendModuleRuntime } from "../../src/server/backends/module.js";
 import { openOverlayDatabaseConnection } from "../../src/server/db/database.js";
 import { deriveConnectionProfileId } from "../../src/server/db/connection-profile-id.js";
 import {
@@ -173,6 +175,89 @@ function fixture(): {
 }
 
 describe("thread agent tool policy persistence", () => {
+  it("projects runtime and archived-thread denials independently of saved grants and catalog availability", async () => {
+    const value = fixture();
+    try {
+      const dependencies = createThreadAgentToolPolicyDependencies();
+      const policies = new ThreadAgentToolPolicyRepository(value.database, dependencies.eligibility);
+      policies.update(value.scope, value.codexThreadId, {
+        expectedRevision: 0, enabled: true, enabledToolIds: ["agent.context"],
+        presentation: { surface: "native", mode: "individual" }, accessBoundary: "environment", now: 500,
+      });
+      const inventory = new InventoryRepository(value.database);
+      const calls: string[] = [];
+      let eligible = false;
+      const backendId = inventory.getThread(value.scope, value.codexThreadId).thread.backendInstanceId;
+      const runtime = {
+        scope: value.scope,
+        instance: { id: backendId, tenantId: value.scope.tenantId, enabled: true },
+        agentToolRuntimeAvailability: ({ applicationThreadId }: { applicationThreadId: string }) => {
+          calls.push(applicationThreadId);
+          return eligible ? { availability: "available" as const } : {
+            availability: "unavailable" as const, reason: "Enable network access in this thread's execution settings.",
+          };
+        },
+      } as unknown as BackendModuleRuntime;
+      const availability = new DatabaseThreadAgentToolRuntimeAvailabilityReader({
+        inventory, runtimes: new Map([[backendId, runtime]]), executionWorkspaces: directThreadExecutionWorkspaceReader,
+      });
+      const reader = new DatabaseThreadApplicationInventoryReader({
+        inventory, queue: new QueuedInputRepository(value.database), completion: new SubmissionCompletionRepository(value.database),
+        agentTools: policies, agentToolCatalog: dependencies.catalog, agentToolRuntimeAvailability: availability,
+        directoryBrowsingAvailability: () => "unavailable", executionWorkspaces: directThreadExecutionWorkspaceReader,
+      });
+      const denied = await reader.getAuthorized(value.scope, value.codexThreadId);
+      expect(denied.agentTools).toMatchObject({ enabled: true, revision: 1,
+        presentation: { surface: "native", mode: "individual" },
+        runtimeAvailability: { availability: "unavailable", reason: { text: expect.stringContaining("Enable network access") } },
+      });
+      expect(denied.agentTools.groups.flatMap(group => group.tools).find(tool => tool.id === "agent.context"))
+        .toMatchObject({ enabled: true, available: true });
+      eligible = true;
+      const restored = await reader.getAuthorized(value.scope, value.codexThreadId);
+      expect(restored.agentTools).toEqual({ ...denied.agentTools, runtimeAvailability: { availability: "available" } });
+      expect(calls).toEqual([value.codexThreadId, value.codexThreadId]);
+      expect(() => availability.read({ ...value.scope, principalId: "different-principal" }, value.codexThreadId,
+        { surface: "native", mode: "individual" })).toThrow(/not found/i);
+      expect(calls).toHaveLength(2);
+      value.database.prepare("UPDATE thread_principal_state SET inventory_state = 'archived' WHERE tenant_id = ? AND principal_id = ? AND thread_id = ?")
+        .run(value.scope.tenantId, value.scope.principalId, value.codexThreadId);
+      const archived = await reader.getAuthorized(value.scope, value.codexThreadId);
+      expect(archived.agentTools).toEqual({ ...restored.agentTools, runtimeAvailability: {
+        availability: "unavailable", reason: { text: "This thread is archived. Restore it to use Sedes tools." },
+      } });
+      expect(calls).toHaveLength(2);
+      value.database.prepare("UPDATE thread_principal_state SET inventory_state = 'active' WHERE tenant_id = ? AND principal_id = ? AND thread_id = ?")
+        .run(value.scope.tenantId, value.scope.principalId, value.codexThreadId);
+      expect((await reader.getAuthorized(value.scope, value.codexThreadId)).agentTools).toEqual(restored.agentTools);
+      expect(calls).toHaveLength(3);
+    } finally { value.database.close(); }
+  });
+
+  it("fails closed for unavailable, cross-scope, or disabled backend runtime contributions", () => {
+    const value = fixture();
+    try {
+      const inventory = new InventoryRepository(value.database);
+      const backendId = inventory.getThread(value.scope, value.codexThreadId).thread.backendInstanceId;
+      const runtimes = new Map<string, BackendModuleRuntime>();
+      const reader = new DatabaseThreadAgentToolRuntimeAvailabilityReader({
+        inventory, runtimes, executionWorkspaces: directThreadExecutionWorkspaceReader,
+      });
+      const read = () => reader.read(value.scope, value.codexThreadId, { surface: "native", mode: "individual" });
+      expect(read()).toMatchObject({ availability: "unavailable" });
+      const runtime = { scope: { ...value.scope, principalId: "other" }, instance: { id: backendId, tenantId: value.scope.tenantId, enabled: true },
+        agentToolRuntimeAvailability: () => { throw new Error("must not call wrong-scope backend"); },
+      } as unknown as BackendModuleRuntime;
+      runtimes.set(backendId, runtime);
+      expect(read()).toMatchObject({ availability: "unavailable" });
+      runtimes.set(backendId, { scope: value.scope, instance: { id: backendId, tenantId: value.scope.tenantId, enabled: true } } as BackendModuleRuntime);
+      expect(read()).toMatchObject({ availability: "unavailable" });
+      value.database.prepare("UPDATE agent_connection_profiles SET enabled = 0 WHERE tenant_id = ? AND owner_principal_id = ? AND backend_instance_id = ?")
+        .run(value.scope.tenantId, value.scope.principalId, backendId);
+      expect(read()).toMatchObject({ availability: "unavailable", reason: { text: expect.stringContaining("disabled") } });
+    } finally { value.database.close(); }
+  });
+
   it("backfills every thread disabled with a backend-appropriate mode", () => {
     const value = fixture();
     try {
@@ -355,6 +440,7 @@ describe("thread agent tool policy persistence", () => {
           dependencies.eligibility,
         ),
         agentToolCatalog: dependencies.catalog,
+        agentToolRuntimeAvailability: { read: () => ({ availability: "available" }) },
         directoryBrowsingAvailability: () => "unavailable",
         executionWorkspaces: directThreadExecutionWorkspaceReader,
       });
@@ -545,6 +631,7 @@ describe("thread agent tool policy persistence", () => {
         completion: new SubmissionCompletionRepository(value.database),
         agentTools: repository,
         agentToolCatalog: dependencies.catalog,
+        agentToolRuntimeAvailability: { read: () => ({ availability: "available" }) },
         directoryBrowsingAvailability: () => "unavailable",
         executionWorkspaces: directThreadExecutionWorkspaceReader,
       });

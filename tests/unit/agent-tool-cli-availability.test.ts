@@ -9,6 +9,30 @@ import {
 } from "../../src/server/runtime/agent-tool-cli-availability.js";
 
 describe("agent tool CLI availability", () => {
+  it("projects managed capability loss without acquiring a sidecar or a tool lease", () => {
+    let available = true;
+    let acquired = false;
+    const availability = managedSshAgentToolCliAvailability({
+      scope: { tenantId: "tenant", principalId: "principal" },
+      executionEnvironmentId: "environment",
+      runtime: {
+        canAcquireCapability: (id, version) => {
+          expect([id, version]).toEqual(["agent_tools_cli", 4]);
+          return available;
+        },
+        acquireAgentTools: async () => {
+          acquired = true;
+          throw new Error("Read-only inspection must not acquire a lease.");
+        },
+      },
+    });
+    if (availability.availability !== "managed") throw new Error("unreachable");
+    expect(availability.provider.inspect?.()).toEqual({ availability: "available" });
+    available = false;
+    expect(availability.provider.inspect?.()).toEqual({ availability: "unavailable", reason: "sidecar_unavailable" });
+    expect(acquired).toBe(false);
+  });
+
   it("resolves source and compiled modules to the build-owned provider bin", () => {
     const repository = path.resolve("/tmp/sedes-agent-tools-test");
     expect(
@@ -67,6 +91,7 @@ describe("agent tool CLI availability", () => {
     let releases = 0;
     const closed = Promise.resolve({ reason: "test" });
     const runtime = {
+      canAcquireCapability: () => true,
       acquireAgentTools: async () => ({
         session: {
           closed,
@@ -109,6 +134,7 @@ describe("agent tool CLI availability", () => {
       scope: { tenantId: "tenant-1", principalId: "principal-1" },
       executionEnvironmentId: "environment-1",
       runtime: {
+        canAcquireCapability: () => true,
         acquireAgentTools: async () => ({
           session: { closed: Promise.resolve() },
           release: () => {
@@ -148,6 +174,7 @@ describe("agent tool CLI availability", () => {
       scope: { tenantId: "tenant-1", principalId: "principal-1" },
       executionEnvironmentId: "environment-1",
       runtime: {
+        canAcquireCapability: () => true,
         acquireAgentTools: async () => ({
           session: { closed: Promise.resolve(), agentToolCli },
           release: () => {

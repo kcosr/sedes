@@ -143,6 +143,8 @@ describe("GrokBackendModule", () => {
           reason: "cli_unavailable",
         },
       });
+      expect(runtime.agentToolRuntimeAvailability?.({ scope, applicationThreadId: "thread", isolatedWorkspace: false,
+        presentation: { surface: "native", mode: "individual" } })).toMatchObject({ availability: "unavailable", reason: expect.stringContaining("local CLI") });
       await runtime.start();
       expect(runtime.driverFactory.creationIdentity?.assignment).toBe(
         "provider",

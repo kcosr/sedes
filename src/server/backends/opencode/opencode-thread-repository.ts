@@ -1,4 +1,5 @@
 import type Database from "better-sqlite3";
+import { ConversationCreationProvenanceRepository } from "../../db/repositories/conversation-creation-provenance-repository.js";
 import { z } from "zod";
 import { DomainError } from "../../domain/errors.js";
 import type { RequestScope } from "../../identity/identity-provider.js";
@@ -245,11 +246,27 @@ export class OpenCodeThreadRepository {
 
   /** Exact private root-creation provenance, shared by tools and zero-baseline usage. */
   hasCreatedRoot(scope: RequestScope, applicationThreadId: string, sessionId: string): boolean {
+    return this.#hasCreatedRoot(scope, applicationThreadId, sessionId);
+  }
+
+  /** Offline repair validates native evidence without granting tool authority. */
+  verifyCreationRepairEvidence(scope: RequestScope, applicationThreadId: string, sessionId: string, attemptId: string): boolean {
+    return this.#hasCreatedRoot(scope, applicationThreadId, sessionId, attemptId);
+  }
+
+  #hasCreatedRoot(scope: RequestScope, applicationThreadId: string, sessionId: string, repairAttemptId?: string): boolean {
     this.#assertScope(scope);
     const target = this.#target(scope, applicationThreadId);
     let bound = this.getBinding(scope, applicationThreadId);
+    let provenAttemptId: string | null = null;
     if (bound) {
       if (parseOpenCodeBindingDetail(bound).sessionId !== sessionId) return false;
+      if (repairAttemptId !== undefined) provenAttemptId = repairAttemptId;
+      else {
+        const provenance = new ConversationCreationProvenanceRepository(this.database);
+        if (!provenance.matchesBinding(scope, applicationThreadId, { backendInstanceId: this.#backendInstanceId, backendConversationId: sessionId })) return false;
+        provenAttemptId = provenance.get(scope, applicationThreadId)!.attemptId;
+      }
     } else {
       try { bound = serializeOpenCodeBindingDetail(this.requireProvisionalBinding(scope, applicationThreadId, sessionId).detail); }
       catch { return false; }
@@ -268,9 +285,10 @@ export class OpenCodeThreadRepository {
         AND attempt.backend_instance_id=receipt.backend_instance_id AND attempt.connection_profile_id=receipt.connection_profile_id
         AND attempt.execution_environment_id=receipt.execution_environment_id AND attempt.creation_kind='first_input'
         AND attempt.backend_creation_correlation=receipt.native_session_id AND attempt.provisional_backend_conversation_id=receipt.native_session_id
-        AND attempt.force_reset_at IS NULL AND attempt.phase IN ('conversation_identified','first_submission_started','accepted_unpersisted','recovery_required','bound') LIMIT 2`)
+        AND (attempt.attempt_id=? OR (? IS NULL AND attempt.force_reset_at IS NULL))
+        AND attempt.phase IN ('conversation_identified','first_submission_started','accepted_unpersisted','recovery_required','bound') LIMIT 2`)
       .all(scope.tenantId, scope.principalId, applicationThreadId, this.#backendInstanceId, target.connectionProfileId,
-        target.executionEnvironmentId, this.#nativeNamespaceKey, sessionId) as Pick<ActiveAttempt, "mutationId" | "detail" | "sourceKind" | "automationId" | "automationRunId">[];
+        target.executionEnvironmentId, this.#nativeNamespaceKey, sessionId, provenAttemptId, provenAttemptId) as Pick<ActiveAttempt, "mutationId" | "detail" | "sourceKind" | "automationId" | "automationRunId">[];
     if (rows.length !== 1 || rows[0]!.detail !== bound) return false;
     const receipt = this.readOperation(scope, applicationThreadId, rows[0]!.mutationId, "create");
     return !!receipt && receipt.disposition === "accepted" && JSON.stringify(receipt.requestSource) === JSON.stringify(attemptSource(rows[0]!));

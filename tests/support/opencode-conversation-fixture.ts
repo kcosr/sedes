@@ -59,6 +59,9 @@ export function createOpenCodeConversationFixture(input: {
     CREATE TABLE application_threads (tenant_id TEXT,owner_principal_id TEXT,id TEXT,backend_instance_id TEXT,connection_profile_id TEXT,environment_id TEXT,workspace_id TEXT, backing_state TEXT DEFAULT 'bound', PRIMARY KEY(tenant_id,owner_principal_id,id), UNIQUE(tenant_id,owner_principal_id,id,backend_instance_id,connection_profile_id,environment_id));
     CREATE TABLE conversation_bindings (tenant_id TEXT,owner_principal_id TEXT,application_thread_id TEXT,backend_instance_id TEXT,connection_profile_id TEXT,execution_environment_id TEXT,backend_conversation_id TEXT,
       UNIQUE(tenant_id,owner_principal_id,application_thread_id,backend_instance_id,connection_profile_id,execution_environment_id));
+    CREATE TABLE conversation_creation_provenance (tenant_id TEXT,owner_principal_id TEXT,application_thread_id TEXT,
+      backend_instance_id TEXT,connection_profile_id TEXT,execution_environment_id TEXT,backend_conversation_id TEXT,
+      attempt_id TEXT,creation_kind TEXT,verified_at INTEGER,evidence_kind TEXT);
   `);
   database.prepare("INSERT INTO agent_backend_instances VALUES (?,?,?)").run(scope.tenantId, backend, "opencode");
   database.prepare("INSERT INTO agent_connection_profiles VALUES (?,?,?,?)").run(scope.tenantId, scope.principalId, connectionID, "opencode_http");

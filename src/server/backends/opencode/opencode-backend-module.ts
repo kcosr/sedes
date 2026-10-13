@@ -5,6 +5,7 @@ import { OpenCodeUsageAccounting } from "./opencode-usage-accounting.js";
 import { OpenCodeAgentTools } from "./opencode-agent-tools.js";
 import type { TrustedAgentToolSource } from "../../agent-tools/adapters/backend-facade.js";
 import { randomUUID } from "node:crypto";
+import { DomainError } from "../../domain/errors.js";
 import { configurationFingerprint } from "../../config/configuration-fingerprint.js";
 import { backendStartupEnvironmentVariables } from "../../environment-variables/runtime-environment.js";
 import { ManagedTerminalCarrierError } from "../../terminal/managed-terminal-carrier.js";
@@ -264,6 +265,31 @@ class OpenCodeModuleRuntime implements BackendModuleRuntime {
   }
 
   agentToolAccessDecisionAuthority(source: TrustedAgentToolSource) { return this.#tools.accessDecisionAuthority(source); }
+
+  agentToolRuntimeAvailability: NonNullable<BackendModuleRuntime["agentToolRuntimeAvailability"]> = ({ scope, applicationThreadId, presentation, backendConversationId }) => {
+    const unavailable = (reason: string) => ({ availability: "unavailable" as const, reason });
+    const cli = this.context.agentToolCli;
+    if (presentation.surface === "cli" && (this.configuration.connection.ownership !== "owned" || cli.availability === "unavailable" ||
+        (cli.availability === "managed" && cli.provider.inspect?.().availability !== "available"))) {
+      return unavailable("Sedes CLI tools require an owned OpenCode server and an available CLI endpoint. Choose Native tools or restore the owned server endpoint.");
+    }
+    if (presentation.surface === "native" && presentation.mode !== "progressive") {
+      return unavailable("OpenCode Native tools require Progressive presentation.");
+    }
+    if (backendConversationId) {
+      if (!this.#namespace) return unavailable("The OpenCode runtime is unavailable. Reconnect the backend to check Sedes tool access.");
+      const repository = new OpenCodeThreadRepository({ database: this.context.database, scope: this.scope,
+        backendInstanceId: this.instance.id, nativeNamespaceKey: this.#namespace });
+      let createdRoot = false;
+      try { createdRoot = repository.hasCreatedRoot(scope, applicationThreadId, backendConversationId); }
+      catch (error) { if (!(error instanceof DomainError) || error.code !== "conflict") throw error; }
+      if (!createdRoot) {
+        return unavailable("Sedes tools require a verified Sedes-created OpenCode root session. Create a new thread in Sedes, or repair its verified creation provenance.");
+      }
+    }
+    const diagnostic = this.#tools.diagnostic(applicationThreadId) ?? (presentation.surface === "cli" ? this.#executionEnvironment.diagnostic(applicationThreadId) : undefined);
+    return diagnostic ? unavailable(diagnostic) : { availability: "available" };
+  };
   runtimeDiagnostic() { return this.#closed ? undefined : this.#healthDiagnostic; }
 
   #invocationTarget(source: TrustedAgentToolSource) {

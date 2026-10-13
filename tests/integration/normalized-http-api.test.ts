@@ -290,6 +290,7 @@ function threadSnapshot(
     })),
     composerCommands: [],
     agentTools: {
+      runtimeAvailability: { availability: "available" },
       enabled: false,
       accessBoundary: "environment",
       groups: [

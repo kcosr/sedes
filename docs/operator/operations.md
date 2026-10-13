@@ -1243,6 +1243,48 @@ because the old HTTP connection disappeared. Use **Force reset…** only after
 reviewing the preview and accepting that it abandons Sedes blockers without
 stopping or rewriting provider state.
 
+### Repair tool eligibility after force reset
+
+Sedes preserves verified native creation identity independently of an abandoned
+first input. Codex and OpenCode use this identity when deciding whether a bound
+session may receive Sedes tools. Imported Codex and OpenCode sessions remain ineligible. Saved
+grants are retained when runtime eligibility is unavailable; tool settings show
+the reason separately. Availability describes current known eligibility, not
+proof that an external provider has applied a new catalog.
+
+For an older affected session, upgrade and migrate the database, back up the
+state directory, and stop the Sedes server. Use the installed `sedes` CLI as
+the server account with explicit database, tenant, principal, thread and native
+session identities. This command defaults to a read-only preview and never
+migrates a database:
+
+```sh
+sedes repair creation-provenance --database /absolute/path/to/overlay.sqlite \
+  --tenant TENANT_ID --principal PRINCIPAL_ID --thread THREAD_ID \
+  --native-session NATIVE_SESSION_ID
+```
+
+The preview accepts only one matching abandoned creation with a verified native
+identity and the exact current binding. Codex validates its retained native
+identity; OpenCode additionally requires its accepted create receipt, namespace,
+source and settings evidence. A mismatch, ambiguous record, or imported session
+cannot be overridden. Keep the returned fingerprint and repeat with
+`--apply --server-stopped --expected-fingerprint FINGERPRINT`. The explicit
+`--server-stopped` flag is the operator's assertion that the server is stopped;
+the command does not stop a service. It rechecks the evidence in one transaction
+and writes only creation provenance and an audit receipt. It does not change
+grants, clear force-reset receipts, replay input, attach a provider, or restore an
+archived thread. Do not edit these tables manually.
+
+Restart Sedes after repair. For an active thread, wait for idle and use the
+ordinary tool-policy update to retire its runtime and apply its saved catalog
+on the next attachment. For an archived thread, leave catalog refresh deferred
+until the user explicitly restores it. Close managed terminals first; active
+turns, goals, unresolved output and unproven cleanup prevent refresh. Codex
+external clients must also release their native subscription or they can keep
+the previous catalog loaded. Verify actual native catalog exposure separately;
+an eligibility check alone does not perform a provider call.
+
 ### Deeper latency diagnosis
 
 Use only the implemented opt-in flags described in

@@ -141,6 +141,7 @@ class ClaudeBackendModuleRuntime implements BackendModuleRuntime {
   readonly installationAdvisories;
   readonly savedAgents;
   readonly automationExecutionPolicy;
+  readonly agentToolRuntimeAvailability: NonNullable<BackendModuleRuntime["agentToolRuntimeAvailability"]>;
   readonly managedProviderTerminals = unsupportedManagedTerminals;
   readonly #runtimeClient: ClaudeRuntimeClient;
   readonly #closeRuntimeClient: () => void | Promise<void>;
@@ -155,6 +156,10 @@ class ClaudeBackendModuleRuntime implements BackendModuleRuntime {
   ) {
     this.scope = context.scope;
     this.instance = context.instance;
+    this.agentToolRuntimeAvailability = () => (context.agentToolCli.availability === "available" ||
+      (context.agentToolCli.availability === "managed" && context.agentToolCli.provider.inspect?.().availability === "available"))
+      ? { availability: "available" }
+      : { availability: "unavailable", reason: "Sedes tools require the CLI endpoint on this execution host. Restore that endpoint and reconnect the backend." };
     this.#runtimeClient = runtimeClient;
     this.#closeRuntimeClient = closeRuntimeClient;
     const preparedConnections = new Map(

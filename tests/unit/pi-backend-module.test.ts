@@ -172,6 +172,10 @@ describe("Pi backend module", () => {
       },
     } satisfies BackendModuleRuntimeContext;
     const runtime = prepared.createRuntime(context);
+    expect(runtime.agentToolRuntimeAvailability?.({ scope, applicationThreadId: "thread", isolatedWorkspace: false,
+      presentation: { surface: "native", mode: "individual" } })).toEqual({ availability: "available" });
+    expect(runtime.agentToolRuntimeAvailability?.({ scope, applicationThreadId: "thread", isolatedWorkspace: true,
+      presentation: { surface: "cli", mode: "progressive" } })).toMatchObject({ availability: "unavailable", reason: expect.stringContaining("isolated") });
 
     expect(runtime.savedAgents).toMatchObject({
       typeId: "pi",

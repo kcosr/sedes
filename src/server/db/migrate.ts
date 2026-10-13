@@ -1,5 +1,6 @@
 import { htmlPagesMigration } from "./migrations/140-html-pages.js";
 import { userInputRevisionMigration } from "./migrations/141-user-input-revision.js";
+import { conversationCreationProvenanceMigration } from "./migrations/142-conversation-creation-provenance.js";
 import { durableUsageAccountingMigration } from "./migrations/110-durable-usage-accounting.js";
 import { usageGapSessionScopeMigration } from "./migrations/111-usage-gap-session-scope.js";
 import { usageSubagentsMigration } from "./migrations/112-usage-subagents.js";
@@ -296,6 +297,7 @@ export const backendNormalizedMigrations = [
   partialNotificationDeliveryMigration,
   htmlPagesMigration,
   userInputRevisionMigration,
+  conversationCreationProvenanceMigration,
 ] as const;
 
 export type DatabaseMigration = {
