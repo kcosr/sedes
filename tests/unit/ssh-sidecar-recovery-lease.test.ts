@@ -289,7 +289,7 @@ describe("recovery attachment ownership", () => {
   it("rejects extra authority, obsolete majors, duplicates, unpaired tools and wrong scope before transport", async () => {
     const value = fixture([]);
     const signal = new AbortController().signal;
-    const invalid: unknown[] = [[{ capabilityId: "agent_tools_cli", majorVersion: 4 }], [{ capabilityId: "composer_attachments", majorVersion: 1 }],
+    const invalid: unknown[] = [[{ capabilityId: "agent_tools_cli", majorVersion: 5 }], [{ capabilityId: "composer_attachments", majorVersion: 1 }],
       [{ capabilityId: "workspace_files", majorVersion: 6 }], [{ capabilityId: "workspace_tools", majorVersion: 2 }],
       [{ capabilityId: "workspace_context", majorVersion: 1 }], [{ capabilityId: "workspace_files", majorVersion: 8 }, { capabilityId: "workspace_files", majorVersion: 8 }]];
     for (const required of invalid) await expect(value.owner.acquireRecovery(scope, "remote", signal, required as readonly SidecarAuthorizedCapability[])).rejects.toThrow("sidecar_recovery_capabilities_invalid");

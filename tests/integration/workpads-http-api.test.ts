@@ -82,6 +82,25 @@ function fixture() {
 }
 
 describe("Workpads HTTP", () => {
+  it("preserves the 256K boundary and explains rejected content and serialized revisions", async () => {
+    const f = fixture();
+    try {
+      const content = "文".repeat(262_144);
+      const created = await f.mutate("post", "/api/workpads").send({ title: "Large", scope: { kind: "global" }, content }).expect(201);
+      const path = `/api/workpads/${created.body.workpad.id}`;
+      expect((await f.get(path).expect(200)).body.workpad.content).toBe(content);
+      const tooLong = await f.mutate("patch", path).send({ expectedRevision: 0, edit: { kind: "append", text: "x" } }).expect(400);
+      expect(tooLong.body.error.message).toContain("262,144");
+      const malformed = await f.mutate("put", `${path}/draft`).send({ expectedRevision: 0, baseRevision: 0, content: "broken\uD800" }).expect(400);
+      expect(malformed.body.error.message).toContain("valid Unicode");
+      const escaped = await f.mutate("post", "/api/workpads").send({ title: "Escaping", scope: { kind: "global" }, content: "\u0000".repeat(262_144) }).expect(400);
+      expect(escaped.body.error.message).toContain("revision size limit");
+      expect((await f.get(path)).body.workpad.revision).toBe(0);
+      expect((await f.get(`${path}/revisions`)).body.items).toHaveLength(1);
+      expect((await f.get(`${path}/draft`)).body.draft.revision).toBe(0);
+    } finally { f.database.close(); }
+  });
+
   it("persists revisions and shared drafts, rejects stale writes, and protects history by current ownership", async () => {
     const f = fixture();
     try {

@@ -1,5 +1,5 @@
 export * from "./contracts.js";
-export * from "./agent-tools-v4.js";
+export * from "./agent-tools-v5.js";
 export * from "./control-v2.js";
 export * from "./composer-attachments-v1.js";
 export * from "./directory-browser-v1.js";

@@ -408,7 +408,7 @@ export async function createExecutionEnvironmentRuntime(
         capabilityId === "workspace_files"
           ? ({ capabilityId, majorVersion: 8 } as const)
           : capabilityId === "agent_tools_cli"
-            ? ({ capabilityId, majorVersion: 4 } as const)
+            ? ({ capabilityId, majorVersion: 5 } as const)
             : capabilityId === "workspace_tools"
               ? ({ capabilityId, majorVersion: 2 } as const)
             : capabilityId === "interactive_terminal"

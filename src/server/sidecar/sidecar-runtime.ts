@@ -70,7 +70,7 @@ export type SidecarAuthorizedCapability =
   | Readonly<{ readonly capabilityId: "interactive_terminal"; readonly majorVersion: 2 }>
   | Readonly<{
       readonly capabilityId: "agent_tools_cli";
-      readonly majorVersion: 4;
+      readonly majorVersion: 5;
     }>;
 
 export type SidecarRuntimeCapability = Readonly<{
@@ -224,7 +224,7 @@ export class SidecarRuntimeOwner<Session extends SidecarRuntimeSession> {
               : capabilityId === "workspace_tools"
                 ? 2
               : capabilityId === "agent_tools_cli"
-                ? 4
+                ? 5
                 : capabilityId === "interactive_terminal" ? 2 : 1),
       ) ||
       input.authorizedCapabilities.some(

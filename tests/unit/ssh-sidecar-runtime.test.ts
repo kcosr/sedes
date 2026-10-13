@@ -90,7 +90,7 @@ function fixture(
       { capabilityId: "workspace_files", majorVersion: 8 },
       ...(options.terminal ? [{ capabilityId: "interactive_terminal" as const, majorVersion: 2 as const }] : []),
       ...(options.agentTools
-        ? ([{ capabilityId: "agent_tools_cli", majorVersion: 4 }] as const)
+        ? ([{ capabilityId: "agent_tools_cli", majorVersion: 5 }] as const)
         : []),
     ],
     activeEnvironmentConfigurationRevision: () => environmentRevision,

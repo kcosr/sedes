@@ -187,6 +187,12 @@ User-facing changes are collected here before release. See the
 - Claude reports organization-policy startup failures clearly and recognizes
   subagent replies without attributing them to pending parent-thread input.
 
+- Agents can read and update Workpads up to the existing 262,144-unit text
+  limit across Native and CLI surfaces. Size and Unicode errors explain the
+  rejected edit without committing it. Rebuild CLI executables and execution
+  sidecars together for the updated private tool protocols. See
+  [Workpad limits](docs/user/workpads.md#edit-and-save).
+
 - HTML previews publish successfully from workspace files even when downloads
   complete immediately. ([#77](https://github.com/kcosr/sedes/pull/77))
 

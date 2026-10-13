@@ -301,6 +301,7 @@ import {
 } from "./terminal/managed-terminal-carrier.js";
 import {
   createAgentToolRouter,
+  agentToolInvocationBodyParser,
   type AgentToolRouterDependencies,
 } from "./agent-tools/http/agent-tool-router.js";
 import {
@@ -870,6 +871,7 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
     }),
   );
   app.use("/api/workpads", express.json({ limit: "2mb", strict: true }));
+  app.use("/api/agent-tool-invocations", agentToolInvocationBodyParser());
   app.use("/api/configuration", express.json({ limit: "600kb", strict: true }));
   app.use("/api/threads/:threadId/inputs", express.json({ limit: MAX_DIRECT_INPUT_REQUEST_BYTES, strict: true, type: "application/json" }));
   app.use("/api/workpads", (_request, response, next) => {

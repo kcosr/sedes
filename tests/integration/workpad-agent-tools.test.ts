@@ -5,6 +5,8 @@ import { DatabaseAgentToolSourceAuthority } from "../../src/server/agent-tools/a
 import { AgentToolEnvironmentAuthorityResolver, createTrustedEnvironmentAuthorityGrant } from "../../src/server/agent-tools/environment/environment-authority.js";
 import type { TrustedToolInvocationContext } from "../../src/server/agent-tools/contracts/agent-tool-contracts.js";
 import { AgentToolRegistry } from "../../src/server/agent-tools/registry/agent-tool-registry.js";
+import { CanonicalInlineAgentToolService } from "../../src/server/agent-tools/invocation/canonical-inline-agent-tool-service.js";
+import { createAgentToolInvocationRequestSchema, agentToolInvocationResultSchema } from "../../src/internal/agent-tool-cli-protocol/contracts.js";
 
 import { describe, expect, it } from "vitest";
 import { parseResolvedBackendConfiguration } from "../support/resolved-backend-configuration.js";
@@ -141,10 +143,42 @@ function toolsFixture() {
     expect(registry.validatesOutput(id, 2, result)).toBe(true);
     return result as any;
   };
-  return { ...f, definitions, registry, invoke, context };
+  return { ...f, definitions, registry, invoke, context, service };
 }
 
 describe("canonical Workpad tools", () => {
+  it.each(["pi_sdk", "mcp", "http", "cli"] as const)("round-trips large writes and reads on %s with actionable atomic rejection", async adapter => {
+    const f = toolsFixture();
+    try {
+      const canonical = new CanonicalInlineAgentToolService({ application: {} as never, workpads: f.service });
+      const invoke = async (toolId: string, input: unknown) => {
+        const request = createAgentToolInvocationRequestSchema.parse({ toolId, schemaVersion: 2, requestId: "request", input });
+        const context = f.context(toolId, input);
+        const result = await canonical.invoke<any>(request, { ...context, scope: f.scope, adapter, signal: context.abortSignal });
+        return agentToolInvocationResultSchema.parse(result);
+      };
+      const content = "x".repeat(65_536);
+      const created = await invoke("workpad.create", { title: "Large", scope: { kind: "global" }, content });
+      if (created.state !== "completed") throw new Error("Expected completed creation");
+      const id = (created.output as any).workpad.id;
+      const appended = await invoke("workpad.update", { workpadId: id, expectedRevision: 0, edit: { kind: "append", text: "x".repeat(262_144 - content.length) } });
+      expect(appended).toMatchObject({ state: "completed", output: { workpad: { revision: 1, content: "x".repeat(262_144) } } });
+      expect(await invoke("workpad.get", { workpadId: id })).toMatchObject({ state: "completed", output: { workpad: { revision: 1 } } });
+      await expect(invoke("workpad.update", { workpadId: id, expectedRevision: 1, edit: { kind: "append", text: "x" } })).rejects.toMatchObject({ code: "invalid_input", message: expect.stringContaining("262,144") });
+      expect(f.workpads.get(f.scope, id)).toMatchObject({ revision: 1, content: "x".repeat(262_144) });
+      expect(f.workpads.revisions(f.scope, id).items).toHaveLength(2);
+      await expect(invoke("workpad.create", { title: "Escaping", scope: { kind: "global" }, content: "\u0000".repeat(262_144) })).rejects.toMatchObject({ code: "invalid_input", message: expect.stringContaining("2 MiB") });
+      expect(f.workpads.list(f.scope, { scope: { kind: "global" } }).items).toHaveLength(1);
+      const escaped = await invoke("workpad.create", { title: "Bounded input", scope: { kind: "global" }, content: "\u0000".repeat(100_000) });
+      if (escaped.state !== "completed") throw new Error("Expected completed creation");
+      const escapedId = (escaped.output as any).workpad.id;
+      await expect(invoke("workpad.update", { workpadId: escapedId, expectedRevision: 0, edit: {
+        kind: "patch", edits: [{ oldText: "\u0000".repeat(100_000), newText: "\u0000".repeat(262_144) }],
+      } })).rejects.toMatchObject({ code: "invalid_input", message: expect.stringContaining("too large") });
+      expect(f.workpads.get(f.scope, escapedId).revision).toBe(0);
+    } finally { f.database.close(); }
+  });
+
   it("creates, reads and edits across threads with trusted attribution and atomic expected revisions", async () => {
     const f = toolsFixture();
     try {

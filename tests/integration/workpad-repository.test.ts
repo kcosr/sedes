@@ -112,6 +112,43 @@ function fixture(latestVersion = backendNormalizedMigrations.at(-1)!.version) {
 const errorCode = (code: string) => expect.objectContaining({ code });
 
 describe("WorkpadRepository", () => {
+  it("keeps the 256K limit, validates combined edits before writing, and reports Unicode errors", () => {
+    const f = fixture();
+    try {
+      const content = "🙂".repeat(131_072);
+      const pad = f.workpads.create(f.scope, { title: "Limit", scope: { kind: "global" }, content });
+      expect(f.workpads.get(f.scope, pad.id).content).toBe(content);
+      const tooLong = /Workpad content is too long/u;
+      for (const edit of [
+        { kind: "append" as const, text: "x" },
+        { kind: "replace" as const, content: `${content}x` },
+        { kind: "patch" as const, edits: [{ oldText: content, newText: `${content}x` }] },
+      ]) expect(() => f.workpads.update(f.scope, pad.id, { expectedRevision: 0, edit })).toThrow(tooLong);
+      expect(() => f.workpads.saveDraft(f.scope, pad.id, { expectedRevision: 0, baseRevision: 0, content: `${content}x` })).toThrow(tooLong);
+      expect(() => f.workpads.update(f.scope, pad.id, { expectedRevision: 0, edit: { kind: "replace", content: "broken\uDC00" } })).toThrow("valid Unicode");
+      expect(f.workpads.get(f.scope, pad.id)).toMatchObject({ revision: 0, content });
+      expect(f.workpads.revisions(f.scope, pad.id).items).toHaveLength(1);
+      expect(f.workpads.getDraft(f.scope, pad.id)).toMatchObject({ revision: 0, content });
+    } finally { f.database.close(); }
+  });
+
+  it("rolls back serialized revision overflow, including draft commits and creation", () => {
+    const f = fixture();
+    try {
+      const content = "文".repeat(262_144);
+      const pad = f.workpads.create(f.scope, { title: "Byte limit", scope: { kind: "global" }, content });
+      const replacement = "字".repeat(262_144);
+      expect(() => f.workpads.update(f.scope, pad.id, { expectedRevision: 0, title: "Changed", edit: { kind: "replace", content: replacement } })).toThrow("revision size limit");
+      const draft = f.workpads.saveDraft(f.scope, pad.id, { expectedRevision: 0, baseRevision: 0, content: replacement });
+      expect(() => f.workpads.commitDraft(f.scope, pad.id, { expectedDraftRevision: draft.revision, expectedRevision: 0 })).toThrow("revision size limit");
+      expect(f.workpads.get(f.scope, pad.id)).toMatchObject({ revision: 0, title: "Byte limit", content });
+      expect(f.workpads.getDraft(f.scope, pad.id)).toMatchObject({ revision: draft.revision, content: replacement });
+      expect(f.workpads.revisions(f.scope, pad.id).items).toHaveLength(1);
+      expect(() => f.workpads.create(f.scope, { title: "Escaping", scope: { kind: "global" }, content: "\u0000".repeat(262_144) })).toThrow("revision size limit");
+      expect(f.workpads.list(f.scope, { scope: { kind: "global" } }).items).toHaveLength(1);
+    } finally { f.database.close(); }
+  });
+
   it("fences retries and no-op replacements without creating duplicate revisions", () => {
     const f = fixture();
     try {

@@ -36,16 +36,16 @@ describe("agent-tool model content", () => {
     expect(agentToolInvocationResultSchema.safeParse({ invocationId: "cancelled", state: "cancelled", error: { code: "cancelled", message: "Stopped", retryable: false }, modelContent: [image] }).success).toBe(false);
   });
 
-  it("requires v4 local transport and rejects stale v3 frames", () => {
-    const request = { protocolVersion: 4, requestId: "10000000-0000-4000-8000-000000000001", sourceCapability: "a".repeat(48), operation: { type: "list" } };
+  it("requires v5 local transport and rejects stale v4 frames", () => {
+    const request = { protocolVersion: 5, requestId: "10000000-0000-4000-8000-000000000001", sourceCapability: "a".repeat(48), operation: { type: "list" } };
     expect(agentToolCliRequestSchema.safeParse(request).success).toBe(true);
-    expect(agentToolCliRequestSchema.safeParse({ ...request, protocolVersion: 3 }).success).toBe(false);
+    expect(agentToolCliRequestSchema.safeParse({ ...request, protocolVersion: 4 }).success).toBe(false);
   });
 
   it("requires the media-aware OpenCode bridge handshake", () => {
-    const hello = { protocolVersion: 2, streamID: "10000000-0000-4000-8000-000000000001", catalog: [] };
+    const hello = { protocolVersion: 3, streamID: "10000000-0000-4000-8000-000000000001", catalog: [] };
     expect(opencodeMcpHello.safeParse(hello).success).toBe(true);
-    expect(opencodeMcpHello.safeParse({ ...hello, protocolVersion: 1 }).success).toBe(false);
+    expect(opencodeMcpHello.safeParse({ ...hello, protocolVersion: 2 }).success).toBe(false);
     expect(opencodeMcpHello.safeParse({ streamID: hello.streamID, catalog: [] }).success).toBe(false);
   });
 });

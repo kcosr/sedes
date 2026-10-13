@@ -3528,7 +3528,7 @@ alternate source claims, and to exactly one presentation, CLI or MCP. Derive
 the calling adapter from the resolved reference, never from a request field,
 so the CLI and `sedes mcp` share routes and relay frames without either
 satisfying the other's surface. The remote relay uses only the
-strict `agent_tools_cli@4` contract advertised for the enabled
+strict `agent_tools_cli@5` contract advertised for the enabled
 `agent_tools_cli` capability; unsupported or stale versions fail closed.
 Discovery may retain a bounded transport deadline, but invocation
 must propagate caller abort so an indefinitely waiting approval is not turned

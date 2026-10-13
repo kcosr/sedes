@@ -134,6 +134,11 @@ Mac) commits your changes as one revision; **Done editing** (the check) leaves
 the synced draft available for later. **Discard draft…** in the workpad's
 **⋯** resets it to the saved document after you confirm.
 
+Workpads hold up to 262,144 UTF-16 units of text; emoji can count as two units.
+Saved revisions also have a 2 MiB limit including attribution and added or
+removed text. If an edit reaches that limit, save smaller changes or split the
+notes into separate workpads. A rejected save preserves your working draft.
+
 Agents continue reading and editing the saved document while your draft is
 open. If that document changes, choose **Review changes** to compare your
 starting version and the latest version alongside your editable draft.

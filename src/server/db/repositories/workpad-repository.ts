@@ -5,6 +5,7 @@ import {
   createWorkpadRequestSchema, updateWorkpadRequestSchema, listWorkpadsRequestSchema,
   saveWorkpadDraftRequestSchema, commitWorkpadDraftRequestSchema, workpadSchema, workpadSummarySchema, workpadRevisionSummarySchema,
   workpadRevisionSchema, workpadDraftSchema, workpadScopeSchema, workpadCountsRequestSchema,
+  workpadContentSchema,
   type Workpad, type WorkpadScope, type WorkpadAuthor, type WorkpadAttributionSpan,
   type WorkpadChange, type WorkpadRevision, type WorkpadRevisionPage,
   type CreateWorkpadRequest, type UpdateWorkpadRequest, type ListWorkpadsRequest,
@@ -12,6 +13,9 @@ import {
   type CommitWorkpadDraftRequest, type WorkpadCounts, type WorkpadCountsRequest,
 } from "../../../shared/protocol/workpads.js";
 import { DomainError } from "../../domain/errors.js";
+import { parseWorkpadValue as parse, WorkpadValidationError } from "../../domain/workpad-validation.js";
+import { isBoundedAgentToolOutput } from "../../../internal/agent-tool-cli-protocol/contracts.js";
+import { AGENT_TOOL_MAXIMUM_HTTP_TOOL_OUTPUT_BYTES } from "../../agent-tools/contracts/agent-tool-transport-limits.js";
 import type { RequestScope } from "../../identity/identity-provider.js";
 
 export type WorkpadActor = { kind: "user" } | { kind: "agent"; threadId: string } | { kind: "tool_client"; clientId: string };
@@ -29,10 +33,13 @@ export type WorkpadListAuthority = {
 const notFound = () => new DomainError("not_found", "The workpad was not found.");
 const conflict = () => new DomainError("conflict", "The workpad changed. Read its latest revision before editing.");
 const draftConflict = () => new DomainError("draft_revision_conflict", "The workpad draft changed on another client. Read the latest draft before saving.");
-function parse<T>(schema: { safeParse(input: unknown): { success: true; data: T } | { success: false } }, input: unknown): T {
-  const result = schema.safeParse(input);
-  if (!result.success) throw new DomainError("bad_request", "Invalid workpad request.");
-  return result.data;
+/** Check every supported tool carrier before a transaction can commit a write. */
+function assertToolRepresentation(pad: Workpad): void {
+  const { attribution: _attribution, ...document } = pad;
+  const output = { workpad: document };
+  if (!isBoundedAgentToolOutput(output) || Buffer.byteLength(JSON.stringify(output), "utf8") > AGENT_TOOL_MAXIMUM_HTTP_TOOL_OUTPUT_BYTES) {
+    throw new WorkpadValidationError("This workpad exceeds the agent-tool response limit. Shorten the content before saving.");
+  }
 }
 function stamp(now: number): string { return new Date(now).toISOString(); }
 function validRevision(value: number): void {
@@ -106,7 +113,7 @@ export function attributeWorkpadEdit(previous: Pick<Workpad, "content" | "attrib
   // A deterministic budget avoids server-load-dependent provenance. Explicit
   // patch/append operations bypass inference and preserve exact match identity.
   const parts = operations ?? inferTextOperations(previous.content, content);
-  if (!parts) throw new DomainError("bad_request", "This edit changes too many separate passages to preserve attribution. Save smaller groups of changes or split the workpad.");
+  if (!parts) throw new WorkpadValidationError("This edit changes too many separate passages to preserve attribution. Save smaller groups of changes or split the workpad.");
   const attribution: WorkpadAttributionSpan[] = [];
   const changes: WorkpadChange[] = [];
   let oldOffset = 0;
@@ -227,6 +234,7 @@ export class WorkpadRepository {
       const content = request.content ?? "";
       const pad: Workpad = { id, title: request.title, scope: request.scope, content, revision: 0, createdAt: date, updatedAt: date, archivedAt: null, author,
         attribution: content ? [{ start: 0, end: content.length, revision: 0, author, createdAt: date }] : [] };
+      assertToolRepresentation(pad);
       this.database.prepare("INSERT INTO workpads(tenant_id,owner_principal_id,id,scope_kind,project_id,thread_id,title,revision,archived_at,created_at,updated_at,document_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)").run(scope.tenantId, scope.principalId, id, ...scopeColumns(pad.scope), pad.title, 0, null, date, date, JSON.stringify(pad));
       this.#writeRevision(scope, pad, content ? [{ kind: "added", text: content, offset: 0 }] : []);
       this.database.prepare("INSERT INTO workpad_drafts(tenant_id,owner_principal_id,workpad_id,revision,base_revision,content,updated_at) VALUES(?,?,?,0,0,?,?)").run(scope.tenantId, scope.principalId, id, content, date);
@@ -237,7 +245,7 @@ export class WorkpadRepository {
     const revision: WorkpadRevision = { workpadId: pad.id, revision: pad.revision, title: pad.title, content: pad.content, scope: pad.scope, archivedAt: pad.archivedAt, author: pad.author, attribution: pad.attribution, changes, createdAt: pad.updatedAt };
     const serialized = JSON.stringify(revision);
     if (Buffer.byteLength(serialized, "utf8") > 2_097_152) {
-      throw new DomainError("bad_request", "This edit exceeds the workpad revision size limit. Split this document into smaller workpads.");
+      throw new WorkpadValidationError("This edit exceeds the workpad revision size limit (2 MiB, including changed text and attribution). Save smaller edits or split this document into smaller workpads.");
     }
     this.database.prepare("INSERT INTO workpad_revisions(tenant_id,owner_principal_id,workpad_id,revision,document_json) VALUES(?,?,?,?,?)").run(scope.tenantId, scope.principalId, pad.id, pad.revision, serialized);
   }
@@ -282,6 +290,7 @@ export class WorkpadRepository {
         for (const edit of edits.reverse()) content = content.slice(0, edit.start) + edit.newText + content.slice(edit.end);
       }
       const title = request.title ?? previous.title;
+      parse(workpadContentSchema, content);
       const target = request.scope ?? previous.scope;
       const archivedAt = request.archived === undefined ? previous.archivedAt : request.archived ? previous.archivedAt ?? stamp(now) : null;
       if (content === previous.content && title === previous.title && sameScope(target, previous.scope) && archivedAt === previous.archivedAt) return this.#present(scope, previous);
@@ -289,9 +298,10 @@ export class WorkpadRepository {
       const { attribution, changes } = attributeWorkpadEdit(previous, content, previous.revision + 1, author, date, operations);
       const candidate = { ...previous, title, scope: target, archivedAt, content, attribution, author, revision: previous.revision + 1, updatedAt: date };
       if (candidate.attribution.length > 4_096 || Buffer.byteLength(JSON.stringify(candidate), "utf8") > 2_097_152) {
-        throw new DomainError("bad_request", "This edit exceeds the workpad attribution limit. Split this document into smaller workpads.");
+        throw new WorkpadValidationError("This edit exceeds the workpad attribution limit (4,096 spans or 2 MiB of document data). Split this document into smaller workpads.");
       }
       const pad = parse(workpadSchema, candidate);
+      assertToolRepresentation(pad);
       const changed = this.database.prepare("UPDATE workpads SET scope_kind=?,project_id=?,thread_id=?,title=?,revision=?,archived_at=?,updated_at=?,document_json=? WHERE tenant_id=? AND owner_principal_id=? AND id=? AND revision=?").run(...scopeColumns(target), title, pad.revision, archivedAt, date, JSON.stringify(pad), scope.tenantId, scope.principalId, id, request.expectedRevision);
       if (changed.changes !== 1) throw conflict();
       this.#writeRevision(scope, pad, changes);

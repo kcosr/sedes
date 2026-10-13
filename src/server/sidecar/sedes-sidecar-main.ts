@@ -96,7 +96,7 @@ const enabledSedesCapabilities = Object.freeze([
   Object.freeze({ capabilityId: "runtime_bodies", majorVersion: 1, operations: Object.freeze(["body.offer"]) }),
   Object.freeze({
     capabilityId: "agent_tools_cli",
-    majorVersion: 4,
+    majorVersion: 5,
     operations: Object.freeze([
       agentToolsDescribeOperation.operation,
       agentToolsCatalogOperation.operation,
@@ -278,7 +278,7 @@ async function main(): Promise<void> {
           : request.operation === "describe" ? { type: "describe", toolIds: request.toolIds }
           : { type: "invoke", request: request.request };
         try {
-          return (await relayAgentToolRequest(attachment, { protocolVersion: 4, requestId: randomUUID(), sourceCapability, operation }, signal, stamp)).value;
+          return (await relayAgentToolRequest(attachment, { protocolVersion: 5, requestId: randomUUID(), sourceCapability, operation }, signal, stamp)).value;
         } catch (error) {
           if (error instanceof AgentToolCliIngressError) throw new BackendAgentToolRequestError(error.toolError);
           throw error;
