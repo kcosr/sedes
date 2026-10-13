@@ -5,6 +5,7 @@ import { errorMiddleware } from "../../src/server/http/errors.js";
 import type { AuthenticationAdmission } from "../../src/server/authentication/authentication-admission.js";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
+import type { Duplex } from "node:stream";
 import { WebSocket } from "ws";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -429,25 +430,41 @@ describe("application terminal carrier", () => {
 
   it("closes a viewer whose outbound WebSocket buffer exceeds the bound", async () => {
     const fixture = await createFixture();
+    const upgradedSocket = new Promise<Duplex>((resolve) => {
+      fixture.server.once("upgrade", (_request, socket) => resolve(socket));
+    });
     const viewer = await open(fixture, issue(fixture));
     await waitFor(() => fixture.service.emit !== undefined);
-    const socket = (viewer as unknown as {
-      _socket: { pause(): void; resume(): void };
-    })._socket;
-    socket.pause();
+    const socket = await upgradedSocket;
     const closed = nextClose(viewer);
     const data = Buffer.alloc(100 * 1024, 120).toString("base64url");
-    for (let seq = 1; seq <= 40 && viewer.readyState === WebSocket.OPEN; seq += 1) {
-      fixture.service.emit?.({
-        v: 2,
-        type: "output",
-        terminalId,
-        incarnationId,
-        seq,
-        data,
-      });
+    const emit = (seq: number) => fixture.service.emit!({
+      v: 2,
+      type: "output",
+      terminalId,
+      incarnationId,
+      seq,
+      data,
+    });
+    // Pausing the client leaves its kernel receive buffer available. Cork the
+    // actual server socket instead, so the real WebSocket bufferedAmount grows
+    // deterministically. This spy observes the original getter without mocking
+    // its value or the production 512 KiB limit.
+    const buffered = vi.spyOn(WebSocket.prototype, "bufferedAmount", "get");
+    socket.cork();
+    try {
+      for (let seq = 1; seq <= 6; seq += 1) emit(seq);
+      const sender = buffered.mock.contexts[0] as WebSocket;
+      expect(sender).toBeInstanceOf(WebSocket);
+      expect(sender).not.toBe(viewer);
+      expect(sender.readyState).toBe(WebSocket.OPEN);
+      expect(sender.bufferedAmount).toBeGreaterThan(512 * 1024);
+      emit(7);
+      expect(sender.readyState).toBe(WebSocket.CLOSING);
+    } finally {
+      socket.uncork();
+      buffered.mockRestore();
     }
-    socket.resume();
     await expect(closed).resolves.toMatchObject({ code: 1013 });
   });
 
