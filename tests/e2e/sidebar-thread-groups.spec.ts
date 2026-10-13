@@ -244,6 +244,13 @@ test("dragging individual threads creates a group and adds to its stack", async 
   await expect(message).toBeFocused();
   const targetOption = page.getByRole("option", { name: "Drag target group", exact: true });
   await expect(targetOption).toBeVisible();
+  await expect(targetOption.locator('[data-glyph="draft"]')).toBeVisible();
+  await expect(targetOption).toHaveAccessibleDescription("Draft");
+  const draftGlyph = targetOption.locator('[data-glyph="draft"]');
+  const draftColor = await draftGlyph.evaluate((element) => getComputedStyle(element).color);
+  await expect(draftGlyph.locator("svg")).toHaveCSS("color", draftColor);
+  await expect(draftGlyph.locator("svg")).toHaveCSS("width", "14px");
+  await expect(draftGlyph.locator("svg")).toHaveCSS("height", "14px");
   await expect(targetOption.locator('[data-backend-brand="pi"]')).toBeVisible();
   await expect(page.getByRole("dialog", { name: "Reference a thread" })).not.toContainText(targetId);
   await expect(page.getByRole("dialog", { name: "Reference a thread" }).getByRole("searchbox", { name: "Search threads" })).toHaveCount(0);
@@ -329,6 +336,27 @@ test("dragging individual threads creates a group and adds to its stack", async 
   await page.keyboard.press("Escape");
   await expect(picker).toBeHidden();
   await expect(message).toBeFocused();
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`/threads/${sourceId}`);
+  await fillAndPersistDraft(page, "Fail with a visible model configuration diagnostic");
+  await sendCurrentDraft(page);
+  await expect(page.locator(".thread-notice.error").filter({ hasText: "The configured model is unavailable." })).toBeVisible();
+  await page.goto(`/threads/${thirdId}`);
+  await message.fill("Compare ");
+  await message.pressSequentially("@source");
+  const failedOption = page.getByRole("option", { name: "Drag source thread", exact: true });
+  await expect(failedOption).toHaveAccessibleDescription("Failed");
+  const failedGlyph = failedOption.locator('[data-glyph="failed"]');
+  const failedColor = await failedGlyph.evaluate((element) => getComputedStyle(element).color);
+  await expect(failedGlyph.locator("svg")).toHaveCSS("color", failedColor);
+  await expect(failedGlyph.locator("svg")).toHaveCSS("width", "14px");
+  await expect(failedGlyph.locator("svg")).toHaveCSS("height", "14px");
+  await expect(message).toBeFocused();
+  await capture(page, testInfo, "thread-reference-failed-status-desktop.png");
+  await message.press("Enter");
+  await expect(message).toHaveValue("Compare ");
+  await expect(composer.getByRole("list", { name: "Referenced threads" })).toContainText("Drag source thread");
 });
 
 test("thread groups stack on desktop and open as a member sheet on mobile", async ({

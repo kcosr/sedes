@@ -84,7 +84,8 @@ Drag an individual sidebar thread into the message composer, or type **@** and
 choose an active thread. Each selection appears as a removable
 chip above the message; up to eight threads can be referenced in one prompt.
 The picker includes the active threads currently loaded in your inventory.
-It shows each thread's provider icon and title. Type after **@** to filter by
+It shows the same status indicator as the sidebar, followed by each thread's
+provider icon and title. Type after **@** to filter by
 thread title or provider name. Focus stays in the composer on desktop and
 mobile. Arrow keys move between results, Enter selects, and Escape closes
 the picker while retaining the typed text.

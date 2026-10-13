@@ -64,7 +64,8 @@ User-facing changes are collected here before release. See the
   Reference threads in a prompt by dragging them into the composer or choosing
   them with **@**; references survive drafts, stashes, and queued delivery.
   Type after **@** to filter suggestions by thread title or provider, with
-  provider icons, keyboard selection, and focus retained in the composer.
+  sidebar status indicators, provider icons, keyboard selection, and focus
+  retained in the composer.
 
 - Claude threads support **Compact context** while idle, with retained earlier
   turns, expandable summaries, session statistics, and recovery for uncertain

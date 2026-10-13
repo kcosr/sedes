@@ -3,11 +3,13 @@ import type { NormalizedApplicationThreadSummary } from "../../../shared/index.j
 import { Popover, PopoverAnchor, PopoverContent } from "@client/components/ui/popover";
 import { menuEmptyClass, menuRowClass } from "@client/components/ui/floating";
 import { BackendBrandIcon } from "../brand-icons.js";
+import { flatRowGlyphIcon, flatRowGlyphKind, flatRowGlyphLabel } from "./FlatThreadRow.js";
 
-export function ComposerThreadPicker({ open, onOpenChange, threads, onSelect, anchor, listId, selectedIndex, onSelectedIndexChange }: {
+export function ComposerThreadPicker({ open, onOpenChange, threads, backgroundWorkCurrent, onSelect, anchor, listId, selectedIndex, onSelectedIndexChange }: {
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
   readonly threads: readonly NormalizedApplicationThreadSummary[];
+  readonly backgroundWorkCurrent: boolean;
   readonly onSelect: (thread: NormalizedApplicationThreadSummary) => void;
   readonly anchor: RefObject<HTMLTextAreaElement | null>;
   readonly listId: string;
@@ -41,16 +43,25 @@ export function ComposerThreadPicker({ open, onOpenChange, threads, onSelect, an
         }}
         onCloseAutoFocus={(event) => { event.preventDefault(); if (restoreComposerFocus.current) anchor.current?.focus({ preventScroll: true }); }}>
         <div ref={list} id={listId} role="listbox" aria-label="Matching threads" className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain p-(--menu-panel-padding)">
-          {threads.map((thread, index) => (
-            <button key={thread.id} id={`${listId}-${index}`} role="option" aria-selected={index === selectedIndex} type="button" tabIndex={-1}
+          {threads.map((thread, index) => {
+            const glyphKind = flatRowGlyphKind(thread, backgroundWorkCurrent);
+            const glyphLabel = glyphKind === "idle" ? undefined : flatRowGlyphLabel(thread, backgroundWorkCurrent);
+            const title = thread.title.text.trim() || "Untitled thread";
+            const statusId = `${listId}-${index}-status`;
+            return <button key={thread.id} id={`${listId}-${index}`} role="option" aria-selected={index === selectedIndex} type="button" tabIndex={-1}
+              aria-label={title} aria-describedby={glyphLabel ? statusId : undefined}
               className={`${menuRowClass} ${index === selectedIndex ? "bg-accent" : ""}`}
               onMouseDown={(event) => event.preventDefault()}
               onPointerMove={(event) => { if (event.pointerType === "mouse") onSelectedIndexChange(index); }}
               onClick={() => chooseThread(thread)}>
+              <span className="flat-row-glyph" data-glyph={glyphLabel ? glyphKind : undefined} aria-hidden="true" title={glyphLabel}>
+                {glyphLabel ? flatRowGlyphIcon(glyphKind) : null}
+              </span>
               <BackendBrandIcon brand={thread.backend.brand} size={15} className="shrink-0" data-backend-brand={thread.backend.brand} aria-hidden="true" />
-              <span className="min-w-0 flex-1 truncate text-left">{thread.title.text.trim() || "Untitled thread"}</span>
-            </button>
-          ))}
+              <span className="min-w-0 flex-1 truncate text-left">{title}</span>
+              {glyphLabel && <span id={statusId} className="sr-only">{glyphLabel}</span>}
+            </button>;
+          })}
           {threads.length === 0 && <p className={menuEmptyClass} role="status">No matching active threads</p>}
         </div>
       </PopoverContent>

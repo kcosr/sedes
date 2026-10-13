@@ -3373,6 +3373,7 @@ export function Composer({
                       open={active && threadPickerOpen}
                       onOpenChange={(open) => { if (!open) closeThreadPicker(); }}
                       threads={threadChoices}
+                      backgroundWorkCurrent={application.authoritative && application.connection === "connected"}
                       listId={threadListId}
                       selectedIndex={threadChoiceIndex}
                       onSelectedIndexChange={setThreadChoiceIndex}

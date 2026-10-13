@@ -699,6 +699,8 @@ function TaskDragTestSource({ task }: { readonly task: AssociatedTask }) {
 const referencedThread = {
   id: "616946aa-4574-41f7-bd70-d3a9edd56dbd", title: { text: "Other thread" },
   backend: { brand: "claude" },
+  runState: "idle", backingState: "bound", automation: null,
+  attention: { wake: false, automationContext: null, unseenCompletion: false, queueFailure: false },
   inventoryState: "active", groupId: null, groupAssignmentRevision: 0,
 } as NormalizedApplicationThreadSummary;
 const selectedThreadReference = { threadId: referencedThread.id, title: referencedThread.title.text };
@@ -724,6 +726,72 @@ function ThreadDragTestSource() {
 }
 
 describe("thread references", () => {
+  it("updates the sidebar status indicator before the provider icon using the shared priority", async () => {
+    const store = new FakeComposerStore(snapshot(), "Keep this text");
+    const backgroundWork = { agents: 1, commands: 1, other: 0 };
+    const attention = { ...referencedThread.attention, unseenCompletion: true };
+    const automation = {
+      status: "enabled", runMode: "same_thread", scheduleKind: "interval",
+      schedule: { kind: "interval", anchorAt: "2026-10-13T00:00:00.000Z", everySeconds: 3600 },
+      misfirePolicy: "coalesce", promptPreview: "Review", revision: 0, runsRevision: 0, hasPrecheck: false,
+    } as const;
+    const active = { ...referencedThread, runState: "running" as const, backgroundWork, attention, automation };
+    const view = render(<Composer store={store as unknown as ThreadClientStore} applicationStore={referenceApplication([active]).store} />);
+    const input = await openReferenceSuggestions();
+    const assertStatus = (kind: string, label: string) => {
+      const option = screen.getByRole("option", { name: "Other thread" });
+      expect(option.firstElementChild).toHaveAttribute("data-glyph", kind);
+      expect(option.children[1]).toHaveAttribute("data-backend-brand", "claude");
+      expect(option).toHaveAccessibleDescription(label);
+      expect(input).toHaveFocus();
+      expect(input).toHaveValue("@Keep this text");
+    };
+    const update = (thread: NormalizedApplicationThreadSummary) => view.rerender(
+      <Composer store={store as unknown as ThreadClientStore} applicationStore={referenceApplication([thread]).store} />,
+    );
+    assertStatus("running", "Running");
+    update({ ...active, runState: "failed" });
+    assertStatus("failed", "Failed");
+    update({ ...active, runState: "waiting_for_approval" });
+    assertStatus("waiting", "Waiting for approval");
+    const completed = { ...active, runState: "idle" as const };
+    update(completed);
+    assertStatus("unseen", "Finished while you were away · 1 subagent, 1 command still running");
+    const acknowledged = { ...completed, attention: referencedThread.attention };
+    update(acknowledged);
+    assertStatus("background-agents", "Background work · 1 subagent, 1 command");
+    update({ ...acknowledged, backgroundWork: { agents: 0, commands: 1, other: 0 } });
+    assertStatus("background-commands", "Background command running");
+    update({ ...acknowledged, backgroundWork: { agents: 0, commands: 0, other: 0 } });
+    assertStatus("automation", "Automation");
+    update({ ...acknowledged, backgroundWork: { agents: 0, commands: 0, other: 0 }, automation: { ...automation, status: "paused" } });
+    assertStatus("automation-paused", "Automation not started");
+  });
+
+  it.each([
+    { connection: "reconnecting" as const, authoritative: true },
+    { connection: "connected" as const, authoritative: false },
+  ])("hides stale background activity while retaining unacknowledged completion: %j", async (availability) => {
+    const store = new FakeComposerStore(snapshot(), "Ask");
+    const background = { ...referencedThread, backgroundWork: { agents: 1, commands: 1, other: 0 } };
+    const application = (thread: NormalizedApplicationThreadSummary) => {
+      const app = referenceApplication([thread]);
+      vi.spyOn(app.store, "getSnapshot").mockReturnValue({ ...app.store.getSnapshot(), ...availability });
+      return app.store;
+    };
+    const view = render(<Composer store={store as unknown as ThreadClientStore} applicationStore={application(background)} />);
+    const input = await openReferenceSuggestions();
+    const option = screen.getByRole("option", { name: "Other thread" });
+    expect(option.firstElementChild).toBeEmptyDOMElement();
+    expect(option).not.toHaveAccessibleDescription();
+    view.rerender(<Composer store={store as unknown as ThreadClientStore} applicationStore={application({
+      ...background, attention: { ...background.attention, unseenCompletion: true },
+    })} />);
+    expect(screen.getByRole("option", { name: "Other thread" })).toHaveAccessibleDescription("Finished while you were away");
+    expect(screen.getByRole("option", { name: "Other thread" }).firstElementChild).toHaveAttribute("data-glyph", "unseen");
+    expect(input).toHaveFocus();
+  });
+
   it("shows provider icons and navigates @ suggestions in the composer, wrapping both ways", async () => {
     vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })));
     const second = { ...referencedThread, id: "616946aa-4574-41f7-bd70-d3a9edd56dbe", title: { text: "Second thread" }, backend: { ...referencedThread.backend, brand: "codex" as const } };
@@ -737,7 +805,9 @@ describe("thread references", () => {
     const dialog = screen.getByRole("dialog", { name: "Reference a thread" });
     expect(dialog).not.toHaveTextContent(referencedThread.id);
     const first = within(dialog).getByRole("option", { name: "Other thread" });
-    expect(first.firstElementChild).toHaveAttribute("data-backend-brand", "claude");
+    expect(first.firstElementChild).toHaveClass("flat-row-glyph");
+    expect(first.firstElementChild).toBeEmptyDOMElement();
+    expect(first.children[1]).toHaveAttribute("data-backend-brand", "claude");
     await userEvent.keyboard("{ArrowDown}{ArrowDown}");
     const last = within(dialog).getByRole("option", { name: "Third thread" });
     expect(last).toHaveAttribute("aria-selected", "true");
