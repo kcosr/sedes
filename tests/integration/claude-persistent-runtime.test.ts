@@ -1969,7 +1969,7 @@ describe("native next over persistent replacement carriers", () => {
     await session.send({ operationId: steerId, priority: "next", content: "Parent correction" });
     const native = f.sessions[0]!;
     const host = f.hosts.get(f.services.status().resources[0]!.resourceId);
-    for (const childIdentity of [{ parent_tool_use_id: "child-agent-launch" }, { parent_tool_use_id: null, subagent_type: "Explore" }]) {
+    for (const childIdentity of [{ parent_tool_use_id: "child-agent-launch" }, { parent_tool_use_id: null, subagent_type: "Explore" }, { parent_tool_use_id: null, agent_id: "resumed-child-agent" }]) {
       await native.emit({ type: "assistant", uuid: randomUUID(), session_id: sessionId, ...childIdentity,
         message: { role: "assistant", content: [{ type: "tool_use", id: "child-read", name: "Read", input: {} }], stop_reason: "tool_use", usage: {} },
       } as unknown as SDKMessage);
