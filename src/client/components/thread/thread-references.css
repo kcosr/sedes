@@ -66,3 +66,64 @@
   font-weight: var(--weight-semibold);
   pointer-events: none;
 }
+
+.skill-popover.composer-thread-picker {
+  width: min(var(--radix-popover-trigger-width), var(--radix-popover-content-available-width));
+}
+
+.composer-thread-picker-list {
+  container: composer-thread-picker / inline-size;
+}
+
+.composer-thread-picker-row {
+  display: grid;
+  grid-template-columns: 16px 16px minmax(0, 1fr) minmax(0, 150px) minmax(0, 154px);
+}
+
+.composer-thread-picker-title,
+.composer-thread-picker-location {
+  min-width: 0;
+}
+
+.composer-thread-picker-location {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted-foreground-2);
+  font-size: var(--text-meta);
+}
+
+.composer-thread-picker-location > svg {
+  width: 13px;
+  height: 13px;
+  color: inherit;
+}
+
+@container composer-thread-picker (max-width: 620px) {
+  .composer-thread-picker-row {
+    grid-template-columns: 16px 16px minmax(0, 1fr) minmax(0, 1.12fr);
+    grid-template-rows: 20px 18px;
+    row-gap: 1px;
+    padding-block: 6px;
+  }
+
+  .composer-thread-picker-row > .flat-row-glyph,
+  .composer-thread-picker-row > [data-backend-brand] {
+    grid-row: 1;
+  }
+
+  .composer-thread-picker-title {
+    grid-column: 3 / 5;
+    grid-row: 1;
+  }
+
+  .composer-thread-picker-project {
+    grid-column: 3;
+    grid-row: 2;
+  }
+
+  .composer-thread-picker-environment {
+    grid-column: 4;
+    grid-row: 2;
+  }
+}

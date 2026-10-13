@@ -141,7 +141,9 @@ import {
   splitThreadReferenceText,
 } from "../../../shared/thread-references.js";
 import { ThreadReferenceChips } from "./ThreadReferenceChips.js";
-import { ComposerThreadPicker } from "./ComposerThreadPicker.js";
+import { ComposerThreadPicker, type ThreadReferenceLocation } from "./ComposerThreadPicker.js";
+import { describeProjectLocations } from "../../app/project-locations.js";
+import { environmentDisplayLabel } from "../../app/sidebar-scope-presentation.js";
 
 export const OPEN_PROMPTS_SETTINGS_EVENT = "sedes-open-settings-prompts";
 
@@ -1315,9 +1317,26 @@ export function Composer({
     ...(application.snapshot?.threads ?? []),
   ].map((thread) => [thread.id, thread])).values()].filter((thread) =>
     thread.id !== store.threadId && thread.inventoryState !== "archived");
+  const referenceLocations = useMemo(() => {
+    const catalog = application.snapshot;
+    const locations = new Map<string, ThreadReferenceLocation>();
+    if (!catalog || referenceThreads.length === 0) return locations;
+    const projects = describeProjectLocations(catalog);
+    const environments = new Map(catalog.environments.map((environment) => [environment.id, environment]));
+    for (const workspace of catalog.workspaces) {
+      const environment = environments.get(workspace.environmentId);
+      locations.set(workspace.id, {
+        project: projects.projectFolderLabel(workspace.id),
+        environment: environment && environmentDisplayLabel(environment, catalog.environments),
+      });
+    }
+    return locations;
+  }, [application.snapshot, referenceThreads.length]);
   const threadChoices = referenceThreads.filter((thread) =>
     !threadReferenceText.references.some(({ threadId }) => threadId === thread.id) &&
-    matchesSearchQuery(threadQuery, [thread.title.text, thread.backend.brand]),
+    matchesSearchQuery(threadQuery, [thread.title.text, thread.backend.brand,
+      referenceLocations.get(thread.workspaceId)?.project ?? "",
+      referenceLocations.get(thread.workspaceId)?.environment ?? ""]),
   ).slice(0, 30);
   const taskProjectionChecking = !application.authoritative;
   const missingTaskReferences = taskProjectionChecking
@@ -1562,7 +1581,11 @@ export function Composer({
     const match = caret === undefined ? null : /(?:^|\s)@([^\s@]{0,120})$/u.exec(body.slice(0, caret));
     if (dismissedMention.current !== undefined && body[dismissedMention.current] !== "@") dismissedMention.current = undefined;
     if (!match || caret === undefined || tuiActive || !active || effectiveDisabled || mentionComposing.current) {
-      if (mentionRange.current) closeThreadPicker();
+      if (mentionRange.current) {
+        const start = mentionRange.current.start;
+        closeThreadPicker();
+        if (body[start] !== "@") dismissedMention.current = undefined;
+      }
       return;
     }
     const start = caret - match[1]!.length - 1;
@@ -3373,6 +3396,7 @@ export function Composer({
                       open={active && threadPickerOpen}
                       onOpenChange={(open) => { if (!open) closeThreadPicker(); }}
                       threads={threadChoices}
+                      locations={referenceLocations}
                       backgroundWorkCurrent={application.authoritative && application.connection === "connected"}
                       listId={threadListId}
                       selectedIndex={threadChoiceIndex}

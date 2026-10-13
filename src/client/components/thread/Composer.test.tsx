@@ -698,6 +698,7 @@ function TaskDragTestSource({ task }: { readonly task: AssociatedTask }) {
 
 const referencedThread = {
   id: "616946aa-4574-41f7-bd70-d3a9edd56dbd", title: { text: "Other thread" },
+  workspaceId: "reference-workspace",
   backend: { brand: "claude" },
   runState: "idle", backingState: "bound", automation: null,
   attention: { wake: false, automationContext: null, unseenCompletion: false, queueFailure: false },
@@ -705,8 +706,15 @@ const referencedThread = {
 } as NormalizedApplicationThreadSummary;
 const selectedThreadReference = { threadId: referencedThread.id, title: referencedThread.title.text };
 
-function referenceApplication(threads = [referencedThread], descendants: readonly NormalizedApplicationThreadSummary[] = []) {
-  const snapshot = { threads, groups: [], tasks: [], workspaces: [] } as unknown as NormalizedApplicationSnapshot;
+const referenceCatalog = {
+  projects: [{ id: "reference-project", name: "Sedes", revision: 0 }],
+  workspaces: [{ id: "reference-workspace", projectId: "reference-project", environmentId: "reference-environment", label: { text: "Sedes" }, displayPath: { text: "/work/sedes" }, available: true }],
+  environments: [{ id: "reference-environment", kind: "local", label: { text: "Local" }, available: true }],
+};
+const referenceLocationDescription = "Project: Sedes. Environment: Local";
+
+function referenceApplication(threads = [referencedThread], descendants: readonly NormalizedApplicationThreadSummary[] = [], catalog = referenceCatalog) {
+  const snapshot = { threads, groups: [], tasks: [], ...catalog } as unknown as NormalizedApplicationSnapshot;
   const state = { status: "ready", connection: "connected", authoritative: true, search: "", visibleThreads: [], snapshot, descendantPages: { loaded: { descendants: descendants.map((thread) => ({ thread })) } } };
   return { snapshot, store: { getSnapshot: () => state, subscribe: () => () => undefined } as unknown as ApplicationClientStore };
 }
@@ -726,6 +734,76 @@ function ThreadDragTestSource() {
 }
 
 describe("thread references", () => {
+  it("distinguishes repeated titles by project and environment while retaining the selected thread identity", async () => {
+    const first = { ...referencedThread, title: { text: "Speech next" } };
+    const second = { ...first, id: "616946aa-4574-41f7-bd70-d3a9edd56dbe", workspaceId: "speech-workspace" };
+    const catalog = {
+      projects: [...referenceCatalog.projects, { id: "speech-project", name: "Speech", revision: 0 }],
+      environments: [...referenceCatalog.environments, { id: "speech-environment", kind: "ssh", label: { text: "aw-personal" }, available: true }],
+      workspaces: [...referenceCatalog.workspaces, { id: "speech-workspace", projectId: "speech-project", environmentId: "speech-environment", label: { text: "Speech" }, displayPath: { text: "/work/speech" }, available: true }],
+    };
+    const store = new FakeComposerStore(snapshot(), "Ask");
+    render(<Composer store={store as unknown as ThreadClientStore} applicationStore={referenceApplication([first, second], [], catalog).store} />);
+    const input = await openReferenceSuggestions();
+    const options = screen.getAllByRole("option", { name: "Speech next" });
+    expect(options[0]).toHaveAccessibleDescription(referenceLocationDescription);
+    expect(options[1]).toHaveAccessibleDescription("Project: Speech. Environment: aw-personal");
+    expect(options[1]).toHaveAttribute("title", "Speech next · Speech · aw-personal");
+    expect(within(options[1]!).getByText("Speech")).toBeVisible();
+    expect(within(options[1]!).getByText("aw-personal")).toBeVisible();
+    await userEvent.keyboard("{ArrowDown}{Enter}");
+    await waitFor(() => expect(screen.getByRole("list", { name: "Referenced threads" })).toBeVisible());
+    expect(input).toHaveFocus();
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await waitFor(() => expect(store.deliver).toHaveBeenCalled());
+    expect(splitThreadReferenceText(store.deliver.mock.calls[0]![1].text).references).toEqual([
+      { threadId: second.id, title: "Speech next" },
+    ]);
+  });
+
+  it.each(["sEdEs", "LOCAL"])("filters @ suggestions by the displayed project or environment: %s", async (query) => {
+    render(<Composer store={new FakeComposerStore(snapshot(), "Ask") as unknown as ThreadClientStore} applicationStore={referenceApplication().store} />);
+    const input = await openReferenceSuggestions(query);
+    expect(screen.getByRole("option", { name: "Other thread" })).toHaveAccessibleDescription(referenceLocationDescription);
+    expect(input).toHaveFocus();
+  });
+
+  it("reopens suggestions for a fresh @ after deleting an active mention at the same position", async () => {
+    render(<Composer store={new FakeComposerStore(snapshot(), "Ask") as unknown as ThreadClientStore} applicationStore={referenceApplication().store} />);
+    const input = await openReferenceSuggestions("Local");
+    expect(screen.getByRole("option", { name: "Other thread" })).toBeVisible();
+    await userEvent.keyboard("{Backspace>6}");
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Reference a thread" })).not.toBeInTheDocument());
+    expect(input).toHaveValue("Ask");
+    await userEvent.keyboard("@Sedes");
+    expect(input).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("option", { name: "Other thread" })).toBeVisible();
+    expect(input).toHaveFocus();
+    await userEvent.keyboard("{Enter}");
+    expect(screen.getByRole("list", { name: "Referenced threads" })).toHaveTextContent("Other thread");
+    expect(input).toHaveValue("Ask");
+  });
+
+  it("uses sidebar folder hints and updates labels and matching after the catalog changes", async () => {
+    const catalog = {
+      ...referenceCatalog,
+      workspaces: [...referenceCatalog.workspaces, { ...referenceCatalog.workspaces[0]!, id: "context-workspace", label: { text: "sedes-context" }, displayPath: { text: "/work/sedes-context" } }],
+    };
+    const thread = { ...referencedThread, workspaceId: "context-workspace" };
+    const store = new FakeComposerStore(snapshot(), "Ask");
+    const view = render(<Composer store={store as unknown as ThreadClientStore} applicationStore={referenceApplication([thread], [], catalog).store} />);
+    await openReferenceSuggestions("sedes-context");
+    expect(screen.getByRole("option", { name: "Other thread" })).toHaveAccessibleDescription("Project: Sedes › sedes-context. Environment: Local");
+    view.rerender(<Composer store={store as unknown as ThreadClientStore} applicationStore={referenceApplication([thread], [], {
+      ...catalog,
+      projects: [{ ...catalog.projects[0]!, name: "Renamed project" }],
+      environments: [{ ...catalog.environments[0]!, label: { text: "Renamed environment" } }],
+    }).store} />);
+    expect(screen.getByRole("option", { name: "Other thread" })).toHaveAccessibleDescription("Project: Renamed project › sedes-context. Environment: Renamed environment");
+    await userEvent.keyboard("{Backspace>13}Renamed");
+    expect(screen.getByRole("option", { name: "Other thread" })).toBeVisible();
+  });
+
   it("updates the sidebar status indicator before the provider icon using the shared priority", async () => {
     const store = new FakeComposerStore(snapshot(), "Keep this text");
     const backgroundWork = { agents: 1, commands: 1, other: 0 };
@@ -742,7 +820,7 @@ describe("thread references", () => {
       const option = screen.getByRole("option", { name: "Other thread" });
       expect(option.firstElementChild).toHaveAttribute("data-glyph", kind);
       expect(option.children[1]).toHaveAttribute("data-backend-brand", "claude");
-      expect(option).toHaveAccessibleDescription(label);
+      expect(option).toHaveAccessibleDescription(`${label}. ${referenceLocationDescription}`);
       expect(input).toHaveFocus();
       expect(input).toHaveValue("@Keep this text");
     };
@@ -783,11 +861,11 @@ describe("thread references", () => {
     const input = await openReferenceSuggestions();
     const option = screen.getByRole("option", { name: "Other thread" });
     expect(option.firstElementChild).toBeEmptyDOMElement();
-    expect(option).not.toHaveAccessibleDescription();
+    expect(option).toHaveAccessibleDescription(referenceLocationDescription);
     view.rerender(<Composer store={store as unknown as ThreadClientStore} applicationStore={application({
       ...background, attention: { ...background.attention, unseenCompletion: true },
     })} />);
-    expect(screen.getByRole("option", { name: "Other thread" })).toHaveAccessibleDescription("Finished while you were away");
+    expect(screen.getByRole("option", { name: "Other thread" })).toHaveAccessibleDescription(`Finished while you were away. ${referenceLocationDescription}`);
     expect(screen.getByRole("option", { name: "Other thread" }).firstElementChild).toHaveAttribute("data-glyph", "unseen");
     expect(input).toHaveFocus();
   });

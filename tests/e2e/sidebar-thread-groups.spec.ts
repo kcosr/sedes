@@ -50,6 +50,70 @@ async function currentSnapshot(page: Page) {
   return normalizedApplicationSnapshotSchema.parse(await response.json());
 }
 
+async function pickerContext(page: Page, threadId: string) {
+  const snapshot = await currentSnapshot(page);
+  const thread = snapshot.threads.find(({ id }) => id === threadId);
+  const workspace = snapshot.workspaces.find(({ id }) => id === thread?.workspaceId);
+  const project = snapshot.projects.find(({ id }) => id === workspace?.projectId);
+  const environment = snapshot.environments.find(({ id }) => id === workspace?.environmentId);
+  if (!project || !environment) throw new Error("thread_picker_context_missing");
+  return { project, environment: environment.label.text };
+}
+
+async function expectPickerContextLayout(
+  option: Locator,
+  context: { readonly project: string; readonly environment: string },
+  layout: "columns" | "two-lines",
+): Promise<void> {
+  const project = option.locator(".composer-thread-picker-project");
+  const environment = option.locator(".composer-thread-picker-environment");
+  await expect(project).toHaveText(context.project);
+  await expect(project).toHaveAttribute("title", context.project);
+  await expect(environment).toHaveText(context.environment);
+  await expect(environment).toHaveAttribute("title", context.environment);
+  const geometry = await option.evaluate((element) => {
+    const box = (selector: string) => {
+      const target = element.querySelector<HTMLElement>(selector);
+      if (!target) throw new Error(`thread_picker_geometry_missing:${selector}`);
+      const bounds = target.getBoundingClientRect();
+      return {
+        left: bounds.left,
+        right: bounds.right,
+        top: bounds.top,
+        bottom: bounds.bottom,
+        center: bounds.top + bounds.height / 2,
+        clientWidth: target.clientWidth,
+        scrollWidth: target.scrollWidth,
+      };
+    };
+    const row = element.getBoundingClientRect();
+    return {
+      row: { left: row.left, right: row.right },
+      title: box(".composer-thread-picker-title"),
+      project: box(".composer-thread-picker-project"),
+      projectText: box(".composer-thread-picker-project > .truncate"),
+      environment: box(".composer-thread-picker-environment"),
+      status: box(".flat-row-glyph"),
+      provider: box("[data-backend-brand]"),
+    };
+  });
+  expect(geometry.status.right).toBeLessThanOrEqual(geometry.provider.left);
+  expect(geometry.provider.right).toBeLessThanOrEqual(geometry.title.left);
+  expect(Math.abs(geometry.title.center - geometry.provider.center)).toBeLessThanOrEqual(2);
+  expect(Math.abs(geometry.project.center - geometry.environment.center)).toBeLessThanOrEqual(2);
+  expect(geometry.project.right).toBeLessThanOrEqual(geometry.environment.left);
+  expect(geometry.project.left).toBeGreaterThanOrEqual(geometry.row.left);
+  expect(geometry.environment.right).toBeLessThanOrEqual(geometry.row.right);
+  expect(geometry.projectText.scrollWidth).toBeGreaterThan(geometry.projectText.clientWidth);
+  if (layout === "columns") {
+    expect(Math.abs(geometry.title.center - geometry.project.center)).toBeLessThanOrEqual(2);
+    expect(geometry.title.right).toBeLessThanOrEqual(geometry.project.left);
+  } else {
+    expect(geometry.project.top).toBeGreaterThanOrEqual(geometry.title.bottom);
+    expect(Math.abs(geometry.title.left - geometry.project.left)).toBeLessThanOrEqual(1);
+  }
+}
+
 async function assignGroup(
   page: Page,
   firstThreadId: string,
@@ -213,150 +277,202 @@ test("dragging individual threads creates a group and adds to its stack", async 
   const sourceId = await createNamedDraft(page, "Drag source thread");
   const targetId = await createNamedDraft(page, "Drag target group");
   const thirdId = await createNamedDraft(page, "Add third thread");
-  const sidebar = page.getByTestId("desktop-sidebar");
-  await chooseThreadGroups(page, sidebar);
-  const source = sidebar.locator(`[data-thread-id="${sourceId}"]`);
-  const target = sidebar.locator(`[data-thread-id="${targetId}"]`);
-  await expect(source).toHaveAttribute("draggable", "true");
-  const composer = page.getByTestId("composer");
-  await source.dragTo(composer);
-  await expect(composer.getByRole("list", { name: "Referenced threads" })).toContainText("Drag source thread");
-  await composer.getByRole("button", { name: "Remove thread: Drag source thread" }).click();
-  const message = composer.getByRole("textbox");
-  await message.fill("Compare ");
-  await expect(composer.getByRole("button", { name: "Reference a thread", exact: true })).toHaveCount(0);
-  await message.pressSequentially("@");
-  const desktopPicker = page.getByRole("dialog", { name: "Reference a thread" });
-  const choices = desktopPicker.getByRole("option");
-  await expect(choices.nth(2)).toBeVisible();
-  await message.press("ArrowDown");
-  await message.press("ArrowDown");
-  await expect(choices.nth(2)).toHaveAttribute("aria-selected", "true");
-  await expect(message).toBeFocused();
-  await message.press("ArrowUp");
-  await expect(choices.nth(1)).toHaveAttribute("aria-selected", "true");
-  await capture(page, testInfo, "thread-reference-composer-picker-desktop.png");
-  await page.keyboard.press("Escape");
-  await expect(message).toBeFocused();
-  await expect(message).toHaveValue("Compare @");
-  await message.fill("Compare ");
-  await message.pressSequentially("@target");
-  await expect(message).toBeFocused();
-  const targetOption = page.getByRole("option", { name: "Drag target group", exact: true });
-  await expect(targetOption).toBeVisible();
-  await expect(targetOption.locator('[data-glyph="draft"]')).toBeVisible();
-  await expect(targetOption).toHaveAccessibleDescription("Draft");
-  const draftGlyph = targetOption.locator('[data-glyph="draft"]');
-  const draftColor = await draftGlyph.evaluate((element) => getComputedStyle(element).color);
-  await expect(draftGlyph.locator("svg")).toHaveCSS("color", draftColor);
-  await expect(draftGlyph.locator("svg")).toHaveCSS("width", "14px");
-  await expect(draftGlyph.locator("svg")).toHaveCSS("height", "14px");
-  await expect(targetOption.locator('[data-backend-brand="pi"]')).toBeVisible();
-  await expect(page.getByRole("dialog", { name: "Reference a thread" })).not.toContainText(targetId);
-  await expect(page.getByRole("dialog", { name: "Reference a thread" }).getByRole("searchbox", { name: "Search threads" })).toHaveCount(0);
-  await message.press("Enter");
-  await expect(message).toHaveValue("Compare ");
-  await expect(composer.getByRole("list", { name: "Referenced threads" })).toContainText("Drag target group");
-  await capture(page, testInfo, "thread-reference-composer.png");
-  await source.dragTo(target);
-  const dialog = page.getByRole("dialog", { name: "New group", exact: true });
-  await expect(dialog).toBeVisible();
-  await expect(dialog.getByRole("textbox", { name: "Group name" })).toHaveValue("Drag target group");
-  await expect(dialog).toContainText("Creates a group with these 2 threads in it.");
-  await capture(page, testInfo, "thread-drag-new-group.png");
-  const created = page.waitForResponse((response) =>
-    response.request().method() === "PATCH" && response.url().endsWith(`/api/threads/${targetId}/group`) && response.status() === 200);
-  await dialog.getByRole("button", { name: "Create", exact: true }).click();
-  const groupId = threadGroupMutationResultSchema.parse(await (await created).json()).groupId!;
-  await expect(dialog).toBeHidden();
-  const stack = sidebar.locator(`[data-testid="thread-group-stack"][data-group-id="${groupId}"]`);
-  await expect(stack).toBeVisible();
-  await expect(stack).toHaveAttribute("draggable", "false");
-
-  // A concurrent group change must be visible inside the viewport, including
-  // when the application shell clips its contents to the screen height.
-  const assignmentRoute = `**/api/threads/${thirdId}/group`;
-  browserDiagnostics.allowedConsoleErrors.push(/^Failed to load resource: the server responded with a status of 409 \(Conflict\)$/u);
-  await page.route(assignmentRoute, async (route) => {
-    await route.fulfill({
-      status: 409,
-      contentType: "application/json",
-      body: JSON.stringify({ error: {
-        code: "group_assignment_revision_conflict",
-        message: "The thread group changed in another client.",
-        retryable: false,
-      } }),
+  const initialContext = await pickerContext(page, targetId);
+  const projectName = "Reference selector interface preview with a deliberately long project name";
+  const session = await currentSession(page);
+  try {
+    const renamed = await page.request.patch(`/api/projects/${initialContext.project.id}`, {
+      headers: { "Content-Type": "application/json", "X-CSRF-Token": session.csrfToken },
+      data: { name: projectName, expectedRevision: initialContext.project.revision },
     });
-  });
-  const conflict = page.waitForResponse((response) => response.request().method() === "PATCH" && response.url().endsWith(`/api/threads/${thirdId}/group`) && response.status() === 409);
-  await sidebar.locator(`[data-thread-id="${thirdId}"]`).dragTo(stack);
-  await conflict;
-  const dropError = page.getByRole("alert", { name: "Thread drop failed" });
-  await expect(dropError).toContainText("The thread group changed in another client.");
-  expect((await currentSnapshot(page)).threads.find(({ id }) => id === thirdId)?.groupId).toBeNull();
-  for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
-    await page.setViewportSize(viewport);
-    await expect(dropError).toBeVisible();
-    const bounds = await dropError.boundingBox();
-    expect(bounds).not.toBeNull();
-    expect(bounds!.x).toBeGreaterThanOrEqual(0);
-    expect(bounds!.y).toBeGreaterThanOrEqual(0);
-    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(viewport.width);
-    expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(viewport.height);
-    await capture(page, testInfo, `thread-drag-conflict-${viewport.width}.png`);
-  }
-  await dropError.getByRole("button", { name: "Dismiss" }).click();
-  await expect(dropError).toBeHidden();
-  await page.setViewportSize({ width: 1440, height: 900 });
-  await page.unroute(assignmentRoute);
-  await sidebar.locator(`[data-thread-id="${thirdId}"]`).dragTo(stack);
-  await expect.poll(async () => {
-    const snapshot = await currentSnapshot(page);
-    return snapshot.groups.find(({ id }) => id === groupId)?.memberCount;
-  }).toBe(3);
-  await stack.hover();
-  const roster = page.getByTestId("thread-group-roster");
-  await expect(roster.getByTestId("thread-group-member")).toHaveCount(3);
-  await capture(page, testInfo, "thread-drag-group-members.png");
-  await message.click();
-  await page.setViewportSize({ width: 390, height: 844 });
-  await page.getByRole("button", { name: "Thread actions", exact: true }).click();
-  await expect(page.getByRole("menuitem", { name: "Reference a thread…" })).toHaveCount(0);
-  await page.keyboard.press("Escape");
-  await message.fill("Compare ");
-  await message.pressSequentially("@source");
-  const picker = page.getByRole("dialog", { name: "Reference a thread" });
-  await expect(picker).toBeVisible();
-  await expect(picker.getByRole("option", { name: "Drag source thread", exact: true })).toBeVisible();
-  await expect(picker.getByRole("searchbox", { name: "Search threads" })).toHaveCount(0);
-  await expect(message).toBeFocused();
-  await expect(picker.getByRole("option")).toHaveCount(1);
-  await expectNoPageOverflow(page);
-  await capture(page, testInfo, "thread-reference-composer-picker-mobile.png");
-  await page.keyboard.press("Escape");
-  await expect(picker).toBeHidden();
-  await expect(message).toBeFocused();
+    expect(renamed.status()).toBe(200);
+    const context = { project: projectName, environment: initialContext.environment };
+    const sidebar = page.getByTestId("desktop-sidebar");
+    await chooseThreadGroups(page, sidebar);
+    const source = sidebar.locator(`[data-thread-id="${sourceId}"]`);
+    const target = sidebar.locator(`[data-thread-id="${targetId}"]`);
+    await expect(source).toHaveAttribute("draggable", "true");
+    const composer = page.getByTestId("composer");
+    await source.dragTo(composer);
+    await expect(composer.getByRole("list", { name: "Referenced threads" })).toContainText("Drag source thread");
+    await composer.getByRole("button", { name: "Remove thread: Drag source thread" }).click();
+    const message = composer.getByRole("textbox");
+    await message.fill("Compare ");
+    await expect(composer.getByRole("button", { name: "Reference a thread", exact: true })).toHaveCount(0);
+    await message.pressSequentially("@");
+    const desktopPicker = page.getByRole("dialog", { name: "Reference a thread" }).and(page.locator('[data-state="open"]'));
+    const choices = desktopPicker.getByRole("option");
+    await expect(choices.nth(2)).toBeVisible();
+    await message.press("ArrowDown");
+    await message.press("ArrowDown");
+    await expect(choices.nth(2)).toHaveAttribute("aria-selected", "true");
+    await expect(message).toBeFocused();
+    await message.press("ArrowUp");
+    await expect(choices.nth(1)).toHaveAttribute("aria-selected", "true");
+    const desktopList = desktopPicker.locator(".composer-thread-picker-list");
+    expect((await desktopList.boundingBox())!.width).toBeGreaterThan(620);
+    await expectPickerContextLayout(choices.nth(1), context, "columns");
+    const projectColumns = await choices.evaluateAll((rows) => rows.map((row) =>
+      row.querySelector(".composer-thread-picker-project")!.getBoundingClientRect().left));
+    expect(Math.max(...projectColumns) - Math.min(...projectColumns)).toBeLessThanOrEqual(1);
+    await capture(page, testInfo, "thread-reference-composer-picker-desktop.png");
+    await page.setViewportSize({ width: 900, height: 900 });
+    await expect(sidebar).toBeVisible();
+    await expect.poll(async () => (await desktopList.boundingBox())!.width).toBeLessThanOrEqual(620);
+    await expectPickerContextLayout(choices.nth(1), context, "two-lines");
+    await expect(message).toBeFocused();
+    await expectNoPageOverflow(page);
+    await capture(page, testInfo, "thread-reference-composer-picker-narrow-desktop.png");
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await expect.poll(async () => (await desktopList.boundingBox())!.width).toBeGreaterThan(620);
+    await page.keyboard.press("Escape");
+    await expect(message).toBeFocused();
+    await expect(message).toHaveValue("Compare @");
+    await message.fill("Compare ");
+    await message.fill("Compare @interface");
+    await expect(desktopPicker.getByRole("option")).toHaveCount(3);
+    await expect(desktopPicker.getByRole("option", { name: "Drag target group", exact: true })).toBeVisible();
+    await expect(message).toBeFocused();
+    await message.fill(`Compare @${context.environment}`);
+    await expect(desktopPicker.getByRole("option")).toHaveCount(3);
+    await expect(desktopPicker.getByRole("option", { name: "Drag target group", exact: true })).toBeVisible();
+    await expect(message).toBeFocused();
+    await message.fill("Compare ");
+    await message.pressSequentially("@target");
+    await expect(message).toBeFocused();
+    const targetOption = desktopPicker.getByRole("option", { name: "Drag target group", exact: true });
+    await expect(targetOption).toBeVisible();
+    await expect(targetOption.locator('[data-glyph="draft"]')).toBeVisible();
+    await expect(targetOption).toHaveAccessibleDescription(`Draft. Project: ${context.project}. Environment: ${context.environment}`);
+    const draftGlyph = targetOption.locator('[data-glyph="draft"]');
+    const draftColor = await draftGlyph.evaluate((element) => getComputedStyle(element).color);
+    await expect(draftGlyph.locator("svg")).toHaveCSS("color", draftColor);
+    await expect(draftGlyph.locator("svg")).toHaveCSS("width", "14px");
+    await expect(draftGlyph.locator("svg")).toHaveCSS("height", "14px");
+    await expect(targetOption.locator('[data-backend-brand="pi"]')).toBeVisible();
+    await expect(desktopPicker).not.toContainText(targetId);
+    await expect(desktopPicker.getByRole("searchbox", { name: "Search threads" })).toHaveCount(0);
+    await expect(message).toHaveAttribute("aria-expanded", "true");
+    await expect(targetOption).toHaveAttribute("aria-selected", "true");
+    await message.press("Enter");
+    await expect(message).toHaveValue("Compare ");
+    await expect(composer.getByRole("list", { name: "Referenced threads" })).toContainText("Drag target group");
+    await capture(page, testInfo, "thread-reference-composer.png");
+    await source.dragTo(target);
+    const dialog = page.getByRole("dialog", { name: "New group", exact: true });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByRole("textbox", { name: "Group name" })).toHaveValue("Drag target group");
+    await expect(dialog).toContainText("Creates a group with these 2 threads in it.");
+    await capture(page, testInfo, "thread-drag-new-group.png");
+    const created = page.waitForResponse((response) =>
+      response.request().method() === "PATCH" && response.url().endsWith(`/api/threads/${targetId}/group`) && response.status() === 200);
+    await dialog.getByRole("button", { name: "Create", exact: true }).click();
+    const groupId = threadGroupMutationResultSchema.parse(await (await created).json()).groupId!;
+    await expect(dialog).toBeHidden();
+    const stack = sidebar.locator(`[data-testid="thread-group-stack"][data-group-id="${groupId}"]`);
+    await expect(stack).toBeVisible();
+    await expect(stack).toHaveAttribute("draggable", "false");
 
-  await page.setViewportSize({ width: 1440, height: 900 });
-  await page.goto(`/threads/${sourceId}`);
-  await fillAndPersistDraft(page, "Fail with a visible model configuration diagnostic");
-  await sendCurrentDraft(page);
-  await expect(page.locator(".thread-notice.error").filter({ hasText: "The configured model is unavailable." })).toBeVisible();
-  await page.goto(`/threads/${thirdId}`);
-  await message.fill("Compare ");
-  await message.pressSequentially("@source");
-  const failedOption = page.getByRole("option", { name: "Drag source thread", exact: true });
-  await expect(failedOption).toHaveAccessibleDescription("Failed");
-  const failedGlyph = failedOption.locator('[data-glyph="failed"]');
-  const failedColor = await failedGlyph.evaluate((element) => getComputedStyle(element).color);
-  await expect(failedGlyph.locator("svg")).toHaveCSS("color", failedColor);
-  await expect(failedGlyph.locator("svg")).toHaveCSS("width", "14px");
-  await expect(failedGlyph.locator("svg")).toHaveCSS("height", "14px");
-  await expect(message).toBeFocused();
-  await capture(page, testInfo, "thread-reference-failed-status-desktop.png");
-  await message.press("Enter");
-  await expect(message).toHaveValue("Compare ");
-  await expect(composer.getByRole("list", { name: "Referenced threads" })).toContainText("Drag source thread");
+    // A concurrent group change must be visible inside the viewport, including
+    // when the application shell clips its contents to the screen height.
+    const assignmentRoute = `**/api/threads/${thirdId}/group`;
+    browserDiagnostics.allowedConsoleErrors.push(/^Failed to load resource: the server responded with a status of 409 \(Conflict\)$/u);
+    await page.route(assignmentRoute, async (route) => {
+      await route.fulfill({
+        status: 409,
+        contentType: "application/json",
+        body: JSON.stringify({ error: {
+          code: "group_assignment_revision_conflict",
+          message: "The thread group changed in another client.",
+          retryable: false,
+        } }),
+      });
+    });
+    const conflict = page.waitForResponse((response) => response.request().method() === "PATCH" && response.url().endsWith(`/api/threads/${thirdId}/group`) && response.status() === 409);
+    await sidebar.locator(`[data-thread-id="${thirdId}"]`).dragTo(stack);
+    await conflict;
+    const dropError = page.getByRole("alert", { name: "Thread drop failed" });
+    await expect(dropError).toContainText("The thread group changed in another client.");
+    expect((await currentSnapshot(page)).threads.find(({ id }) => id === thirdId)?.groupId).toBeNull();
+    for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+      await page.setViewportSize(viewport);
+      await expect(dropError).toBeVisible();
+      const bounds = await dropError.boundingBox();
+      expect(bounds).not.toBeNull();
+      expect(bounds!.x).toBeGreaterThanOrEqual(0);
+      expect(bounds!.y).toBeGreaterThanOrEqual(0);
+      expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(viewport.width);
+      expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(viewport.height);
+      await capture(page, testInfo, `thread-drag-conflict-${viewport.width}.png`);
+    }
+    await dropError.getByRole("button", { name: "Dismiss" }).click();
+    await expect(dropError).toBeHidden();
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.unroute(assignmentRoute);
+    await sidebar.locator(`[data-thread-id="${thirdId}"]`).dragTo(stack);
+    await expect.poll(async () => {
+      const snapshot = await currentSnapshot(page);
+      return snapshot.groups.find(({ id }) => id === groupId)?.memberCount;
+    }).toBe(3);
+    await stack.hover();
+    const roster = page.getByTestId("thread-group-roster");
+    await expect(roster.getByTestId("thread-group-member")).toHaveCount(3);
+    await capture(page, testInfo, "thread-drag-group-members.png");
+    await message.click();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.getByRole("button", { name: "Thread actions", exact: true }).click();
+    await expect(page.getByRole("menuitem", { name: "Reference a thread…" })).toHaveCount(0);
+    await page.keyboard.press("Escape");
+    await message.fill("Compare ");
+    await message.pressSequentially("@source");
+    const picker = page.getByRole("dialog", { name: "Reference a thread" }).and(page.locator('[data-state="open"]'));
+    await expect(picker).toBeVisible();
+    const mobileOption = picker.getByRole("option", { name: "Drag source thread", exact: true });
+    await expect(mobileOption).toBeVisible();
+    expect((await picker.locator(".composer-thread-picker-list").boundingBox())!.width).toBeLessThanOrEqual(620);
+    await expectPickerContextLayout(mobileOption, context, "two-lines");
+    await expect(picker.getByRole("searchbox", { name: "Search threads" })).toHaveCount(0);
+    await expect(message).toBeFocused();
+    await expect(picker.getByRole("option")).toHaveCount(1);
+    await expectNoPageOverflow(page);
+    await capture(page, testInfo, "thread-reference-composer-picker-mobile.png");
+    await page.keyboard.press("Escape");
+    await expect(picker).toBeHidden();
+    await expect(message).toBeFocused();
+
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(`/threads/${sourceId}`);
+    await fillAndPersistDraft(page, "Fail with a visible model configuration diagnostic");
+    await sendCurrentDraft(page);
+    await expect(page.locator(".thread-notice.error").filter({ hasText: "The configured model is unavailable." })).toBeVisible();
+    await page.goto(`/threads/${thirdId}`);
+    await message.fill("Compare ");
+    await message.pressSequentially("@source");
+    const failedOption = desktopPicker.getByRole("option", { name: "Drag source thread", exact: true });
+    await expect(failedOption).toHaveAccessibleDescription(`Failed. Project: ${context.project}. Environment: ${context.environment}`);
+    const failedGlyph = failedOption.locator('[data-glyph="failed"]');
+    const failedColor = await failedGlyph.evaluate((element) => getComputedStyle(element).color);
+    await expect(failedGlyph.locator("svg")).toHaveCSS("color", failedColor);
+    await expect(failedGlyph.locator("svg")).toHaveCSS("width", "14px");
+    await expect(failedGlyph.locator("svg")).toHaveCSS("height", "14px");
+    await expect(message).toBeFocused();
+    await capture(page, testInfo, "thread-reference-failed-status-desktop.png");
+    await message.press("Enter");
+    await expect(message).toHaveValue("Compare ");
+    await expect(composer.getByRole("list", { name: "Referenced threads" })).toContainText("Drag source thread");
+  } finally {
+    // This spec reuses its server across cases; restore shared project context
+    // even when a layout assertion fails before the reference journey finishes.
+    const project = (await currentSnapshot(page)).projects.find(({ id }) => id === initialContext.project.id);
+    if (!project) throw new Error("thread_picker_project_restore_missing");
+    if (project.name !== initialContext.project.name) {
+      const restored = await page.request.patch(`/api/projects/${project.id}`, {
+        headers: { "Content-Type": "application/json", "X-CSRF-Token": session.csrfToken },
+        data: { name: initialContext.project.name, expectedRevision: project.revision },
+      });
+      expect(restored.status()).toBe(200);
+    }
+  }
 });
 
 test("thread groups stack on desktop and open as a member sheet on mobile", async ({

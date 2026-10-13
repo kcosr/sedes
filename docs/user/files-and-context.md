@@ -85,8 +85,12 @@ choose an active thread. Each selection appears as a removable
 chip above the message; up to eight threads can be referenced in one prompt.
 The picker includes the active threads currently loaded in your inventory.
 It shows the same status indicator as the sidebar, followed by each thread's
-provider icon and title. Type after **@** to filter by
-thread title or provider name. Focus stays in the composer on desktop and
+provider icon and title, with project and environment names in aligned columns
+when the popup is wide and on a compact second line when it is narrow. Long
+names truncate independently; hover to see their full names. Project labels
+include folder hints when needed to distinguish locations, as in the sidebar.
+Type after **@** to filter by thread title, provider, project, or environment.
+Focus stays in the composer on desktop and
 mobile. Arrow keys move between results, Enter selects, and Escape closes
 the picker while retaining the typed text.
 
