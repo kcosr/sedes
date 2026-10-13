@@ -240,7 +240,7 @@ describe("Pi SDK remote workspace context", () => {
         expect(read).toHaveBeenCalledTimes(2);
         await expect(access(semanticCwd)).rejects.toThrow();
       } finally {
-        session?.dispose();
+        await session?.dispose();
       }
     },
   );

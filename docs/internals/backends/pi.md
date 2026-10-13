@@ -48,6 +48,13 @@ application-reserved native identity, creates and binds the Pi session, applies
 the selected settings and first input, and retains exact recovery state when
 persistence cannot be proven.
 
+Before disposing any SDK session, including transient catalogue sessions and
+failed startup or reload sessions, await the native `session_shutdown` event
+with reason `quit` while its extension context remains valid. Then dispose the
+native session even if shutdown fails. Cleanup is asynchronous and idempotent;
+owners await it before releasing workspace authority. Native `dispose()` alone
+invalidates extension contexts without giving extensions time to stop timers.
+
 Only native sessions whose canonical workspace matches an explicitly
 remembered project are eligible for discovery and import.
 

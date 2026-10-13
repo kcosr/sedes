@@ -3477,6 +3477,12 @@ inspection.
 
 ## Agent tools and managed terminals
 
+Provider teardown must await provider-native extension cleanup before
+invalidating contexts or releasing execution authority. Pi implements this
+through its native shutdown event for temporary and retained SDK sessions.
+Codex, Claude, Grok, and OpenCode retain their existing owned-runtime shutdown
+contracts; this Pi event is not part of the normalized backend protocol.
+
 Keep saved grants distinct from current runtime eligibility. Every compiled
 backend contributes read-only eligibility for the exact thread and presentation;
 rendering that state must not launch or acquire a provider. Unknown runtime

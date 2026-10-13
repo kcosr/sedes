@@ -205,6 +205,11 @@ User-facing changes are collected here before release. See the
 
 ### Fixed
 
+- Pi sessions await extension shutdown before disposal, preventing retained
+  extension timers from crashing the server during catalogue reads or
+  reconnects. Deploy and restart the server; no sidecar upgrade is required.
+  ([#78](https://github.com/kcosr/sedes/pull/78))
+
 - Remote Codex, Claude, and OpenCode CLI tool settings retain correct
   availability after sidecar connection and reconnection. Deploy and restart
   the server; this fix does not require a sidecar upgrade.

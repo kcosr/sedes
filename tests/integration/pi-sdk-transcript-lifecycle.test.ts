@@ -39,7 +39,7 @@ afterEach(async () => {
   for (const session of sessions.splice(0)) {
     session.clearQueue();
     await session.abort();
-    session.dispose();
+    await session.dispose();
   }
   vi.restoreAllMocks();
   await Promise.all(
@@ -368,7 +368,7 @@ describe("Pi 0.86 transcript and lifecycle compatibility", () => {
     );
     assertPrivateProjection(f.reserved.manager);
 
-    source.session.dispose();
+    await source.session.dispose();
     sessions.splice(sessions.indexOf(source.session), 1);
     const reopenedManager = await f.store.open(
       f.workspace,
