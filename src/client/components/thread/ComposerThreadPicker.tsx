@@ -69,11 +69,13 @@ export function ComposerThreadPicker({ open, onOpenChange, threads, locations, b
               </span>
               <BackendBrandIcon brand={thread.backend.brand} size={15} className="shrink-0" data-backend-brand={thread.backend.brand} aria-hidden="true" />
               <span className="composer-thread-picker-title truncate">{title}</span>
-              <span className="composer-thread-picker-project composer-thread-picker-location" title={location?.project}>
-                {location?.project && <><Folder size={13} aria-hidden="true" /><span className="truncate">{location.project}</span></>}
-              </span>
-              <span className="composer-thread-picker-environment composer-thread-picker-location" title={location?.environment}>
-                {location?.environment && <><Server size={12} aria-hidden="true" /><span className="truncate">{location.environment}</span></>}
+              <span className="composer-thread-picker-context">
+                <span className="composer-thread-picker-project composer-thread-picker-location" title={location?.project}>
+                  {location?.project && <><Folder size={13} aria-hidden="true" /><span className="truncate">{location.project}</span></>}
+                </span>
+                <span className="composer-thread-picker-environment composer-thread-picker-location" title={location?.environment}>
+                  {location?.environment && <><Server size={12} aria-hidden="true" /><span className="truncate">{location.environment}</span></>}
+                </span>
               </span>
               {description && <span id={descriptionId} className="sr-only">{description}</span>}
             </button>;

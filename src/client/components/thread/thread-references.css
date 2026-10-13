@@ -77,12 +77,21 @@
 
 .composer-thread-picker-row {
   display: grid;
-  grid-template-columns: 16px 16px minmax(0, 1fr) minmax(0, 150px) minmax(0, 154px);
+  grid-template-columns: 16px 16px minmax(0, max-content) minmax(0, max-content);
 }
 
 .composer-thread-picker-title,
 .composer-thread-picker-location {
   min-width: 0;
+}
+
+.composer-thread-picker-context {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, max-content));
+  min-width: 0;
+  align-items: center;
+  gap: 12px;
+  margin-left: 4px;
 }
 
 .composer-thread-picker-location {
@@ -101,7 +110,7 @@
 
 @container composer-thread-picker (max-width: 620px) {
   .composer-thread-picker-row {
-    grid-template-columns: 16px 16px minmax(0, 1fr) minmax(0, 1.12fr);
+    grid-template-columns: 16px 16px minmax(0, 1fr);
     grid-template-rows: 20px 18px;
     row-gap: 1px;
     padding-block: 6px;
@@ -113,17 +122,14 @@
   }
 
   .composer-thread-picker-title {
-    grid-column: 3 / 5;
+    grid-column: 3;
     grid-row: 1;
   }
 
-  .composer-thread-picker-project {
+  .composer-thread-picker-context {
     grid-column: 3;
     grid-row: 2;
-  }
-
-  .composer-thread-picker-environment {
-    grid-column: 4;
-    grid-row: 2;
+    gap: 10px;
+    margin-left: 0;
   }
 }

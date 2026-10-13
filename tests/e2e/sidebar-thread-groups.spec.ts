@@ -6,6 +6,7 @@ import {
   taskMutationResultSchema,
   threadGroupMutationResultSchema,
 } from "../../src/shared/index.js";
+import { configurationSnapshotSchema } from "../../src/shared/protocol/configuration-admin.js";
 import { expect, test } from "./fixtures";
 import {
   openSettingsPage,
@@ -57,13 +58,41 @@ async function pickerContext(page: Page, threadId: string) {
   const project = snapshot.projects.find(({ id }) => id === workspace?.projectId);
   const environment = snapshot.environments.find(({ id }) => id === workspace?.environmentId);
   if (!project || !environment) throw new Error("thread_picker_context_missing");
-  return { project, environment: environment.label.text };
+  return { project, environment: environment.label.text, environmentId: environment.id };
+}
+
+async function renameEnvironment(page: Page, environmentId: string, label: string, csrfToken: string): Promise<void> {
+  const response = await page.request.get("/api/configuration");
+  expect(response.ok()).toBe(true);
+  const snapshot = configurationSnapshotSchema.parse(await response.json());
+  const environment = snapshot.configuration.executionEnvironments.find(({ id }) => id === environmentId);
+  if (!environment) throw new Error("thread_picker_environment_missing");
+  if (environment.label === label) return;
+  const saved = await page.request.put("/api/configuration", {
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrfToken },
+    data: {
+      mutationId: randomUUID(),
+      expectedRevision: snapshot.revision,
+      configuration: {
+        ...snapshot.configuration,
+        executionEnvironments: snapshot.configuration.executionEnvironments.map((entry) =>
+          entry.id === environmentId ? { ...entry, label } : entry),
+      },
+    },
+  });
+  expect(saved.status()).toBe(200);
 }
 
 async function expectPickerContextLayout(
   option: Locator,
   context: { readonly project: string; readonly environment: string },
-  layout: "columns" | "two-lines",
+  layout: "flow" | "two-lines",
+  options: {
+    readonly requireProjectTruncation?: boolean;
+    readonly requireEnvironmentTruncation?: boolean;
+    readonly environmentFullyVisible?: boolean;
+    readonly compactLabels?: boolean;
+  } = {},
 ): Promise<void> {
   const project = option.locator(".composer-thread-picker-project");
   const environment = option.locator(".composer-thread-picker-environment");
@@ -76,6 +105,8 @@ async function expectPickerContextLayout(
       const target = element.querySelector<HTMLElement>(selector);
       if (!target) throw new Error(`thread_picker_geometry_missing:${selector}`);
       const bounds = target.getBoundingClientRect();
+      const text = document.createRange();
+      text.selectNodeContents(target);
       return {
         left: bounds.left,
         right: bounds.right,
@@ -84,15 +115,18 @@ async function expectPickerContextLayout(
         center: bounds.top + bounds.height / 2,
         clientWidth: target.clientWidth,
         scrollWidth: target.scrollWidth,
+        textRight: text.getBoundingClientRect().right,
       };
     };
     const row = element.getBoundingClientRect();
     return {
       row: { left: row.left, right: row.right },
       title: box(".composer-thread-picker-title"),
+      context: box(".composer-thread-picker-context"),
       project: box(".composer-thread-picker-project"),
       projectText: box(".composer-thread-picker-project > .truncate"),
       environment: box(".composer-thread-picker-environment"),
+      environmentText: box(".composer-thread-picker-environment > .truncate"),
       status: box(".flat-row-glyph"),
       provider: box("[data-backend-brand]"),
     };
@@ -101,13 +135,39 @@ async function expectPickerContextLayout(
   expect(geometry.provider.right).toBeLessThanOrEqual(geometry.title.left);
   expect(Math.abs(geometry.title.center - geometry.provider.center)).toBeLessThanOrEqual(2);
   expect(Math.abs(geometry.project.center - geometry.environment.center)).toBeLessThanOrEqual(2);
-  expect(geometry.project.right).toBeLessThanOrEqual(geometry.environment.left);
+  const locationGap = geometry.environment.left - geometry.project.right;
+  expect(locationGap).toBeGreaterThanOrEqual(8);
+  expect(locationGap).toBeLessThanOrEqual(16);
   expect(geometry.project.left).toBeGreaterThanOrEqual(geometry.row.left);
   expect(geometry.environment.right).toBeLessThanOrEqual(geometry.row.right);
-  expect(geometry.projectText.scrollWidth).toBeGreaterThan(geometry.projectText.clientWidth);
-  if (layout === "columns") {
-    expect(Math.abs(geometry.title.center - geometry.project.center)).toBeLessThanOrEqual(2);
-    expect(geometry.title.right).toBeLessThanOrEqual(geometry.project.left);
+  if (options.environmentFullyVisible ?? true) {
+    expect(geometry.environmentText.scrollWidth).toBeLessThanOrEqual(geometry.environmentText.clientWidth);
+  }
+  if (options.requireProjectTruncation) {
+    expect(geometry.projectText.scrollWidth).toBeGreaterThan(geometry.projectText.clientWidth);
+    expect(geometry.row.right - geometry.environment.right).toBeLessThanOrEqual(12);
+  }
+  if (options.compactLabels) {
+    expect(geometry.projectText.scrollWidth).toBeLessThanOrEqual(geometry.projectText.clientWidth);
+    expect(geometry.environment.left - geometry.projectText.textRight).toBeLessThanOrEqual(16);
+  }
+  if (options.requireEnvironmentTruncation) {
+    expect(geometry.environmentText.scrollWidth).toBeGreaterThan(geometry.environmentText.clientWidth);
+    expect(geometry.row.right - geometry.environment.right).toBeLessThanOrEqual(12);
+  }
+  if (layout === "flow") {
+    if (geometry.projectText.scrollWidth > geometry.projectText.clientWidth || geometry.environmentText.scrollWidth > geometry.environmentText.clientWidth) {
+      // Ellipsis must use the row's available space rather than an arbitrary
+      // field cap that clips a label while leaving room unused on its right.
+      expect(geometry.row.right - geometry.context.right).toBeLessThanOrEqual(12);
+    }
+    expect(Math.abs(geometry.title.center - geometry.context.center)).toBeLessThanOrEqual(2);
+    const contextGap = geometry.project.left - geometry.title.right;
+    expect(contextGap).toBeGreaterThanOrEqual(8);
+    expect(contextGap).toBeLessThanOrEqual(16);
+    if (options.compactLabels) {
+      expect(geometry.project.left - geometry.title.textRight).toBeLessThanOrEqual(16);
+    }
   } else {
     expect(geometry.project.top).toBeGreaterThanOrEqual(geometry.title.bottom);
     expect(Math.abs(geometry.title.left - geometry.project.left)).toBeLessThanOrEqual(1);
@@ -280,6 +340,7 @@ test("dragging individual threads creates a group and adds to its stack", async 
   const initialContext = await pickerContext(page, targetId);
   const projectName = "Reference selector interface preview with a deliberately long project name";
   const session = await currentSession(page);
+  let environmentNeedsRestore = false;
   try {
     const renamed = await page.request.patch(`/api/projects/${initialContext.project.id}`, {
       headers: { "Content-Type": "application/json", "X-CSRF-Token": session.csrfToken },
@@ -311,15 +372,12 @@ test("dragging individual threads creates a group and adds to its stack", async 
     await expect(choices.nth(1)).toHaveAttribute("aria-selected", "true");
     const desktopList = desktopPicker.locator(".composer-thread-picker-list");
     expect((await desktopList.boundingBox())!.width).toBeGreaterThan(620);
-    await expectPickerContextLayout(choices.nth(1), context, "columns");
-    const projectColumns = await choices.evaluateAll((rows) => rows.map((row) =>
-      row.querySelector(".composer-thread-picker-project")!.getBoundingClientRect().left));
-    expect(Math.max(...projectColumns) - Math.min(...projectColumns)).toBeLessThanOrEqual(1);
+    await expectPickerContextLayout(choices.nth(1), context, "flow");
     await capture(page, testInfo, "thread-reference-composer-picker-desktop.png");
     await page.setViewportSize({ width: 900, height: 900 });
     await expect(sidebar).toBeVisible();
     await expect.poll(async () => (await desktopList.boundingBox())!.width).toBeLessThanOrEqual(620);
-    await expectPickerContextLayout(choices.nth(1), context, "two-lines");
+    await expectPickerContextLayout(choices.nth(1), context, "two-lines", { requireProjectTruncation: true });
     await expect(message).toBeFocused();
     await expectNoPageOverflow(page);
     await capture(page, testInfo, "thread-reference-composer-picker-narrow-desktop.png");
@@ -430,7 +488,7 @@ test("dragging individual threads creates a group and adds to its stack", async 
     const mobileOption = picker.getByRole("option", { name: "Drag source thread", exact: true });
     await expect(mobileOption).toBeVisible();
     expect((await picker.locator(".composer-thread-picker-list").boundingBox())!.width).toBeLessThanOrEqual(620);
-    await expectPickerContextLayout(mobileOption, context, "two-lines");
+    await expectPickerContextLayout(mobileOption, context, "two-lines", { requireProjectTruncation: true });
     await expect(picker.getByRole("searchbox", { name: "Search threads" })).toHaveCount(0);
     await expect(message).toBeFocused();
     await expect(picker.getByRole("option")).toHaveCount(1);
@@ -439,6 +497,61 @@ test("dragging individual threads creates a group and adds to its stack", async 
     await page.keyboard.press("Escape");
     await expect(picker).toBeHidden();
     await expect(message).toBeFocused();
+
+    // Short context stays adjacent too; restore the shared fixture before
+    // checking the natural text gaps so a stretched column cannot pass.
+    const currentProject = (await pickerContext(page, targetId)).project;
+    const restored = await page.request.patch(`/api/projects/${currentProject.id}`, {
+      headers: { "Content-Type": "application/json", "X-CSRF-Token": session.csrfToken },
+      data: { name: initialContext.project.name, expectedRevision: currentProject.revision },
+    });
+    expect(restored.status()).toBe(200);
+    const shortContext = { project: initialContext.project.name, environment: initialContext.environment };
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await message.fill("Compare ");
+    await message.pressSequentially("@source");
+    const shortOption = desktopPicker.getByRole("option", { name: "Drag source thread", exact: true });
+    await expect(shortOption).toBeVisible();
+    await expectPickerContextLayout(shortOption, shortContext, "flow", { compactLabels: true });
+    await expect(message).toHaveAttribute("aria-expanded", "true");
+    await expect(message).toBeFocused();
+    await capture(page, testInfo, "thread-reference-composer-picker-short-desktop.png");
+    await page.keyboard.press("Escape");
+    await expect(desktopPicker).toBeHidden();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await message.fill("Compare ");
+    await message.pressSequentially("@source");
+    const shortMobileOption = picker.getByRole("option", { name: "Drag source thread", exact: true });
+    await expect(shortMobileOption).toBeVisible();
+    await expect.poll(async () => (await desktopList.boundingBox())!.width).toBeLessThanOrEqual(620);
+    await expectPickerContextLayout(shortMobileOption, shortContext, "two-lines", { compactLabels: true });
+    await expect(message).toHaveAttribute("aria-expanded", "true");
+    await expect(message).toBeFocused();
+    await expectNoPageOverflow(page);
+    await capture(page, testInfo, "thread-reference-composer-picker-short-mobile.png");
+    await page.keyboard.press("Escape");
+    await expect(picker).toBeHidden();
+
+    // A long environment uses the space a short project leaves available.
+    // Only its presentation label changes; the same execution host is retained.
+    const longEnvironmentName = "Development machine for thread reference interface layout qualification";
+    environmentNeedsRestore = true;
+    await renameEnvironment(page, initialContext.environmentId, longEnvironmentName, session.csrfToken);
+    await message.fill("Compare ");
+    await message.pressSequentially("@source");
+    const longEnvironmentOption = picker.getByRole("option", { name: "Drag source thread", exact: true });
+    await expect(longEnvironmentOption).toBeVisible();
+    await expectPickerContextLayout(longEnvironmentOption,
+      { project: shortContext.project, environment: longEnvironmentName }, "two-lines",
+      { compactLabels: true, environmentFullyVisible: false, requireEnvironmentTruncation: true });
+    await expect(message).toHaveAttribute("aria-expanded", "true");
+    await expect(message).toBeFocused();
+    await expectNoPageOverflow(page);
+    await capture(page, testInfo, "thread-reference-composer-picker-long-environment-mobile.png");
+    await page.keyboard.press("Escape");
+    await expect(picker).toBeHidden();
+    await renameEnvironment(page, initialContext.environmentId, initialContext.environment, session.csrfToken);
+    environmentNeedsRestore = false;
 
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto(`/threads/${sourceId}`);
@@ -449,7 +562,7 @@ test("dragging individual threads creates a group and adds to its stack", async 
     await message.fill("Compare ");
     await message.pressSequentially("@source");
     const failedOption = desktopPicker.getByRole("option", { name: "Drag source thread", exact: true });
-    await expect(failedOption).toHaveAccessibleDescription(`Failed. Project: ${context.project}. Environment: ${context.environment}`);
+    await expect(failedOption).toHaveAccessibleDescription(`Failed. Project: ${shortContext.project}. Environment: ${shortContext.environment}`);
     const failedGlyph = failedOption.locator('[data-glyph="failed"]');
     const failedColor = await failedGlyph.evaluate((element) => getComputedStyle(element).color);
     await expect(failedGlyph.locator("svg")).toHaveCSS("color", failedColor);
@@ -461,6 +574,9 @@ test("dragging individual threads creates a group and adds to its stack", async 
     await expect(message).toHaveValue("Compare ");
     await expect(composer.getByRole("list", { name: "Referenced threads" })).toContainText("Drag source thread");
   } finally {
+    if (environmentNeedsRestore) {
+      await renameEnvironment(page, initialContext.environmentId, initialContext.environment, session.csrfToken);
+    }
     // This spec reuses its server across cases; restore shared project context
     // even when a layout assertion fails before the reference journey finishes.
     const project = (await currentSnapshot(page)).projects.find(({ id }) => id === initialContext.project.id);

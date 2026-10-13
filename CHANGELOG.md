@@ -66,8 +66,9 @@ User-facing changes are collected here before release. See the
   them with **@**; references survive drafts, stashes, and queued delivery.
   Type after **@** to filter by title, provider, project, or environment, with
   sidebar status indicators, provider icons, keyboard selection, and focus
-  retained in the composer. Suggestions show aligned project and environment
-  columns in wide popups and compact second-line labels in narrow ones.
+  retained in the composer. Suggestions keep project and environment labels
+  together after the title in wide popups and on a compact second line in
+  narrow ones.
   ([#78](https://github.com/kcosr/sedes/pull/78))
 
 - Claude threads support **Compact context** while idle, with retained earlier
