@@ -13,7 +13,8 @@ import { ConversationCreationProvenanceRepository } from "../../src/server/db/re
 import { ThreadForceResetRepository } from "../../src/server/db/repositories/thread-force-reset-repository.js";
 import { DatabaseCodexAgentToolCliEnvironmentProvider, withCodexAgentToolCliEnvironment } from "../../src/server/backends/codex/codex-agent-tool-cli-environment.js";
 import { serializeCodexBindingDetail } from "../../src/server/backends/codex/codex-binding-codec.js";
-import { runCreationProvenanceCli, verifyCreationRepair } from "../../src/cli/creation-provenance-cli.js";
+import { runCreationProvenanceCli } from "../../src/cli/creation-provenance-cli.js";
+import { compiledBackendModuleCatalog } from "../../src/server/backends/compiled-module-catalog.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -77,12 +78,15 @@ function fixture(migrateLatest = true, filename = ":memory:") {
     runtime: { availability: "available", endpoint: "http://127.0.0.1:4784", executableDirectory: "/tmp/sedes/bin", inheritedPath: "/bin" },
     sourceCapabilities: { issue: () => "scoped-test-capability-00000000000000000000000000000000" }, agentTools: { readPolicy: () => ({ enabled: true,
       presentation: { surface, mode: "individual" }, accessBoundary: "environment", enabledToolIds: ["agent.context"] }) } });
-  return { database, scope, threadId, nativeId, bindings, creation, prepare, identify, bind, abandon, provider };
+  return { database, scope, threadId, nativeId, detail, bindings, creation, prepare, identify, bind, abandon, provider };
 }
 
 describe("durable verified creation identity", () => {
   it.each(["native", "cli"] as const)("retains %s tools after unresolved first-send force reset without replay", async surface => {
-    const f = fixture(); f.prepare();
+    const f = fixture();
+    expect(f.provider(surface).inspect(f.scope, f.threadId)).toEqual({ availability: "available" });
+    f.prepare();
+    expect(f.provider(surface).inspect(f.scope, f.threadId)).toEqual({ availability: "available" });
     expect(await f.provider(surface).acquire(f.scope, f.threadId)).toMatchObject({ availability: "unavailable" });
     const initial = await f.provider(surface).acquire(f.scope, f.threadId, { creationOperationId: "create-operation" });
     expect(initial.availability).toBe("available"); if (initial.availability === "available") initial.release();
@@ -110,6 +114,23 @@ describe("durable verified creation identity", () => {
     expect(await f.provider("native").acquire(f.scope, f.threadId)).toMatchObject({ availability: "unavailable", reason: "imported_thread" });
   });
 
+  it("does not advertise an abandoned unbound creation as available", () => {
+    const f = fixture(); f.prepare();
+    expect(f.provider("native").inspect(f.scope, f.threadId)).toEqual({ availability: "available" });
+    f.creation.markRecoveryRequired(f.scope, f.threadId, "attempt", { expected: "external_call_started", diagnostic: "Unknown create", now: 60 });
+    const resets = new ThreadForceResetRepository(f.database);
+    resets.forceReset(f.scope, f.threadId, { expectedBlockerFingerprint: resets.impact(f.scope, f.threadId).blockerFingerprint, mutationId: "reset", now: 70 });
+    expect(f.provider("native").inspect(f.scope, f.threadId)).toMatchObject({ availability: "unavailable" });
+    expect(new ConversationCreationProvenanceRepository(f.database).isCreationInProgress(f.scope, f.threadId)).toBe(false);
+  });
+
+  it("registers repair only for a backend with a reachable bound abandoned creation", () => {
+    expect(compiledBackendModuleCatalog.creationProvenanceRepairForBackendKind("codex_app_server")).toBeDefined();
+    for (const kind of ["pi", "claude_agent_sdk", "grok_build", "opencode"] as const) {
+      expect(compiledBackendModuleCatalog.creationProvenanceRepairForBackendKind(kind)).toBeUndefined();
+    }
+  });
+
   it.each(["identified", "mismatched_native", "unidentified", "imported"] as const)(
     "migrates only verified existing identity: %s", kind => {
       const f = fixture(false);
@@ -133,18 +154,24 @@ describe("durable verified creation identity", () => {
       FROM application_threads WHERE id=?`).run(f.nativeId, f.threadId);
     f.abandon();
     applyDatabaseMigrations(f.database, backendNormalizedMigrations);
-    const repository = new ConversationCreationProvenanceRepository(f.database);
+    const repository = new ConversationCreationProvenanceRepository(f.database, compiledBackendModuleCatalog);
     expect(repository.get(f.scope, f.threadId)).toBeUndefined();
     const stale = repository.previewRepair(f.scope, f.threadId, f.nativeId);
-    expect(verifyCreationRepair(f.database, stale)).toBe(true);
+    expect(stale.backendEvidence).toContain("provisional_opaque_binding_detail");
     f.database.prepare("UPDATE thread_principal_state SET inventory_state='archived' WHERE thread_id=?").run(f.threadId);
     expect(() => repository.applyRepair(f.scope, f.threadId, { expectedNativeSessionId: f.nativeId,
-      expectedFingerprint: stale.fingerprint, now: 200, repairId: "stale", verify: row => verifyCreationRepair(f.database, row) })).toThrow("changed after preview");
+      expectedFingerprint: stale.fingerprint, now: 200, repairId: "stale" })).toThrow("changed after preview");
     const evidence = repository.previewRepair(f.scope, f.threadId, f.nativeId);
+    const binding = f.bindings.getBinding(f.scope, f.threadId)!;
+    f.database.prepare(`INSERT INTO codex_binding_details VALUES (?,?,?,?,?,?,?)`).run(f.scope.tenantId, f.scope.principalId,
+      f.threadId, binding.backendInstanceId, binding.connectionProfileId, binding.executionEnvironmentId, f.detail);
+    expect(() => repository.applyRepair(f.scope, f.threadId, { expectedNativeSessionId: f.nativeId,
+      expectedFingerprint: evidence.fingerprint, now: 200, repairId: "changed-private-evidence" })).toThrow("changed after preview");
+    const currentEvidence = repository.previewRepair(f.scope, f.threadId, f.nativeId);
     const attempt = f.database.prepare("SELECT * FROM conversation_creation_attempts").get();
     const thread = f.database.prepare("SELECT * FROM application_threads").get();
     const result = repository.applyRepair(f.scope, f.threadId, { expectedNativeSessionId: f.nativeId,
-      expectedFingerprint: evidence.fingerprint, now: 200, repairId: "repair", verify: row => verifyCreationRepair(f.database, row) });
+      expectedFingerprint: currentEvidence.fingerprint, now: 200, repairId: "repair" });
     expect(result.inventoryState).toBe("archived");
     expect(repository.matchesBinding(f.scope, f.threadId)).toBe(true);
     expect(f.database.prepare("SELECT * FROM conversation_creation_attempts").get()).toEqual(attempt);
@@ -152,6 +179,7 @@ describe("durable verified creation identity", () => {
     expect(f.database.prepare("SELECT count(*) AS n FROM conversation_creation_provenance_repairs").get()).toEqual({ n: 1 });
     expect(() => repository.previewRepair(f.scope, f.threadId, "another-session")).toThrow("exact verified creation");
     expect(() => repository.previewRepair({ ...f.scope, principalId: "another-principal" }, f.threadId, f.nativeId)).toThrow();
+    f.database.prepare("DELETE FROM codex_binding_details WHERE application_thread_id=?").run(f.threadId);
     f.database.prepare("DELETE FROM conversation_bindings WHERE application_thread_id=?").run(f.threadId);
     expect(repository.get(f.scope, f.threadId)).toBeUndefined();
     expect(f.database.prepare("SELECT count(*) AS n FROM conversation_creation_provenance_repairs").get()).toEqual({ n: 1 });

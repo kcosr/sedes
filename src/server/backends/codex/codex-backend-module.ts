@@ -6,6 +6,7 @@ import { CodexRemoteRuntimeSupervisor } from "./runtime/codex-remote-runtime-sup
 import { CodexRuntimeReceiptStore } from "./runtime/codex-runtime-receipt-store.js";
 import { createCodexRuntimeTransport } from "./runtime/codex-runtime-transport.js";
 import { createHash } from "node:crypto";
+import { codexCreationProvenanceRepair } from "./codex-creation-provenance-repair.js";
 import { homedir } from "node:os";
 import path from "node:path";
 import { pathForRemoteRoot } from "../../execution/remote-path.js";
@@ -439,6 +440,7 @@ class CodexBackendModuleRuntime implements BackendModuleRuntime {
     if (result.availability === "unavailable") {
       const reasons = {
         imported_thread: "Sedes tools require verified Sedes creation for this session. Create a new thread in Sedes, or repair its verified creation provenance.",
+        creation_recovery: "Resolve or discard this thread's unfinished creation before using Sedes tools.",
         network_disabled: "Sedes tools require network access. Enable network access in this thread's execution settings.",
         remote_environment: "Sedes tools require a supported CLI endpoint on this execution host. Restore the endpoint and reconnect the backend.",
         cli_unavailable: "The Sedes CLI endpoint is unavailable. Restore it and reconnect the backend.",
@@ -1363,6 +1365,7 @@ function externalDiscoveryNamespaceKey(
 }
 
 export class CodexBackendModule implements BackendModule {
+  readonly creationProvenanceRepair = codexCreationProvenanceRepair;
   readonly startupPolicy = "composition_only" as const;
   readonly remoteRuntimeCapabilities = Object.freeze([{ capabilityId: "codex_runtime", majorVersion: 1, operations: ["runtime.ensure", "runtime.lookup", "runtime.execute"] }, codexManagedTuiCapability]);
   readonly backendKind = "codex_app_server" as const;

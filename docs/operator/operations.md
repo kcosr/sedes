@@ -1246,8 +1246,8 @@ stopping or rewriting provider state.
 ### Repair tool eligibility after force reset
 
 Sedes preserves verified native creation identity independently of an abandoned
-first input. Codex and OpenCode use this identity when deciding whether a bound
-session may receive Sedes tools. Imported Codex and OpenCode sessions remain ineligible. Saved
+first input. Codex uses this identity when deciding whether a recovered bound
+session may receive Sedes tools. Imported Codex sessions remain ineligible. Saved
 grants are retained when runtime eligibility is unavailable; tool settings show
 the reason separately. Availability describes current known eligibility, not
 proof that an external provider has applied a new catalog.
@@ -1265,9 +1265,12 @@ sedes repair creation-provenance --database /absolute/path/to/overlay.sqlite \
 ```
 
 The preview accepts only one matching abandoned creation with a verified native
-identity and the exact current binding. Codex validates its retained native
-identity; OpenCode additionally requires its accepted create receipt, namespace,
-source and settings evidence. A mismatch, ambiguous record, or imported session
+identity and the exact current binding. The compiled backend's repair adapter
+validates its retained native evidence; currently only Codex has a reachable
+bound-but-abandoned creation and supports this repair. OpenCode commits its
+binding together with completed creation, and force reset skips that completed
+attempt, so it has no corresponding repair. Pi, Claude and Grok likewise have
+no repair adapter. A mismatch, ambiguous record, or imported session
 cannot be overridden. Keep the returned fingerprint and repeat with
 `--apply --server-stopped --expected-fingerprint FINGERPRINT`. The explicit
 `--server-stopped` flag is the operator's assertion that the server is stopped;

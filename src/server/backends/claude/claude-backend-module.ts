@@ -459,6 +459,7 @@ class PreparedClaudeBackendModule implements PreparedBackendModule {
 }
 
 export class ClaudeBackendModule implements BackendModule {
+  readonly creationProvenanceRepair = undefined;
   readonly startupPolicy = "composition_only" as const;
   readonly remoteRuntimeCapabilities = Object.freeze([Object.freeze({
     capabilityId: "claude_persistent_runtime", majorVersion: 5,

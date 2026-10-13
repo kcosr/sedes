@@ -322,6 +322,7 @@ class PreparedPiBackendModule implements PreparedBackendModule {
 }
 
 export class PiBackendModule implements BackendModule {
+  readonly creationProvenanceRepair = undefined;
   readonly startupPolicy = "composition_only" as const;
   readonly backendKind = "pi" as const;
   readonly connectionKinds = ["pi_sdk"] as const;

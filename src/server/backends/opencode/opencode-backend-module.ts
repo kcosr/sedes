@@ -3,6 +3,7 @@ import { recoverOpenCodeRuntimeAdministration } from "./opencode-runtime-adminis
 import { openCodeRuntimeOperations } from "./opencode-runtime-wire.js";
 import { OpenCodeUsageAccounting } from "./opencode-usage-accounting.js";
 import { OpenCodeAgentTools } from "./opencode-agent-tools.js";
+import { ConversationCreationProvenanceRepository } from "../../db/repositories/conversation-creation-provenance-repository.js";
 import type { TrustedAgentToolSource } from "../../agent-tools/adapters/backend-facade.js";
 import { randomUUID } from "node:crypto";
 import { DomainError } from "../../domain/errors.js";
@@ -44,6 +45,8 @@ const managedTerminals = Object.freeze({
 
 /** Stock OpenCode v2 with private HTTP/SSE protocol and resident runtime ownership. */
 export class OpenCodeBackendModule implements BackendModule {
+  // First-input acceptance and binding commit together; force reset skips bound attempts.
+  readonly creationProvenanceRepair = undefined;
   readonly startupPolicy = "connect_provider" as const;
   readonly runtimeDiagnostic = openCodeRuntimeDiagnostic;
   readonly backendKind = "opencode" as const;
@@ -276,6 +279,13 @@ class OpenCodeModuleRuntime implements BackendModuleRuntime {
     if (presentation.surface === "native" && presentation.mode !== "progressive") {
       return unavailable("OpenCode Native tools require Progressive presentation.");
     }
+    if (!backendConversationId) {
+      const target = new ConversationBindingRepository(this.context.database).getTarget(scope, applicationThreadId);
+      if (target.backingState !== "unbound" &&
+          !new ConversationCreationProvenanceRepository(this.context.database).isCreationInProgress(scope, applicationThreadId, "first_input")) {
+        return unavailable("Sedes tools are unavailable while this session requires creation recovery. Resolve or discard its unfinished creation first.");
+      }
+    }
     if (backendConversationId) {
       if (!this.#namespace) return unavailable("The OpenCode runtime is unavailable. Reconnect the backend to check Sedes tool access.");
       const repository = new OpenCodeThreadRepository({ database: this.context.database, scope: this.scope,
@@ -284,7 +294,7 @@ class OpenCodeModuleRuntime implements BackendModuleRuntime {
       try { createdRoot = repository.hasCreatedRoot(scope, applicationThreadId, backendConversationId); }
       catch (error) { if (!(error instanceof DomainError) || error.code !== "conflict") throw error; }
       if (!createdRoot) {
-        return unavailable("Sedes tools require a verified Sedes-created OpenCode root session. Create a new thread in Sedes, or repair its verified creation provenance.");
+        return unavailable("Sedes tools require a verified Sedes-created OpenCode root session. Create a new thread in Sedes.");
       }
     }
     const diagnostic = this.#tools.diagnostic(applicationThreadId) ?? (presentation.surface === "cli" ? this.#executionEnvironment.diagnostic(applicationThreadId) : undefined);

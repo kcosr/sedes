@@ -52,20 +52,6 @@ describe("OpenCode CLI source admission and reusable creation provenance", () =>
     expect(f.issue).not.toHaveBeenCalled();
 
   });
-  it("retains exact accepted creation identity after first-input force reset", () => {
-    const f = fixture(); f.seed();
-    f.database.exec("UPDATE conversation_creation_attempts SET force_reset_at=1");
-    expect(f.repository.hasCreatedRoot(scope, threadID, f.target.binding.backendConversationId)).toBe(true);
-    expect(f.cli.plan(f.context, f.target)).toBeDefined();
-  });
-  it("verifies retained repair evidence without granting authority before a proof is recorded", () => {
-    const f = fixture(); f.seed();
-    f.database.exec("UPDATE conversation_creation_attempts SET force_reset_at=1; DELETE FROM conversation_creation_provenance");
-    expect(f.repository.hasCreatedRoot(scope, threadID, f.target.binding.backendConversationId)).toBe(false);
-    expect(f.repository.verifyCreationRepairEvidence(scope, threadID, f.target.binding.backendConversationId, "creation-attempt")).toBe(true);
-    expect(f.repository.verifyCreationRepairEvidence(scope, threadID, f.target.binding.backendConversationId, "foreign-attempt")).toBe(false);
-    expect(f.repository.verifyCreationRepairEvidence(scope, threadID, "ses_foreign", "creation-attempt")).toBe(false);
-  });
   it.each(["attempt_target", "attempt_source", "attempt_detail", "snapshot", "receipt_namespace"])("rejects changed %s creation proof", mutation => {
     const f = fixture(); f.seed();
     if (mutation === "attempt_target") f.database.exec("UPDATE conversation_creation_attempts SET connection_profile_id='foreign'");
@@ -74,7 +60,6 @@ describe("OpenCode CLI source admission and reusable creation provenance", () =>
     if (mutation === "snapshot") f.database.exec("DELETE FROM opencode_operation_settings_snapshots");
     if (mutation === "receipt_namespace") f.database.exec("UPDATE opencode_operation_receipts SET native_namespace_key='foreign'");
     expect(f.repository.hasCreatedRoot(scope, threadID, f.target.binding.backendConversationId)).toBe(false);
-    expect(f.repository.verifyCreationRepairEvidence(scope, threadID, f.target.binding.backendConversationId, "creation-attempt")).toBe(false);
     expect(f.cli.plan(f.context, f.target)).toBeUndefined(); expect(f.issue).not.toHaveBeenCalled();
     expect(f.cli.diagnostic(threadID)).toBeDefined();
   });

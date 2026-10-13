@@ -246,27 +246,15 @@ export class OpenCodeThreadRepository {
 
   /** Exact private root-creation provenance, shared by tools and zero-baseline usage. */
   hasCreatedRoot(scope: RequestScope, applicationThreadId: string, sessionId: string): boolean {
-    return this.#hasCreatedRoot(scope, applicationThreadId, sessionId);
-  }
-
-  /** Offline repair validates native evidence without granting tool authority. */
-  verifyCreationRepairEvidence(scope: RequestScope, applicationThreadId: string, sessionId: string, attemptId: string): boolean {
-    return this.#hasCreatedRoot(scope, applicationThreadId, sessionId, attemptId);
-  }
-
-  #hasCreatedRoot(scope: RequestScope, applicationThreadId: string, sessionId: string, repairAttemptId?: string): boolean {
     this.#assertScope(scope);
     const target = this.#target(scope, applicationThreadId);
     let bound = this.getBinding(scope, applicationThreadId);
     let provenAttemptId: string | null = null;
     if (bound) {
       if (parseOpenCodeBindingDetail(bound).sessionId !== sessionId) return false;
-      if (repairAttemptId !== undefined) provenAttemptId = repairAttemptId;
-      else {
-        const provenance = new ConversationCreationProvenanceRepository(this.database);
-        if (!provenance.matchesBinding(scope, applicationThreadId, { backendInstanceId: this.#backendInstanceId, backendConversationId: sessionId })) return false;
-        provenAttemptId = provenance.get(scope, applicationThreadId)!.attemptId;
-      }
+      const provenance = new ConversationCreationProvenanceRepository(this.database);
+      if (!provenance.matchesBinding(scope, applicationThreadId, { backendInstanceId: this.#backendInstanceId, backendConversationId: sessionId })) return false;
+      provenAttemptId = provenance.get(scope, applicationThreadId)!.attemptId;
     } else {
       try { bound = serializeOpenCodeBindingDetail(this.requireProvisionalBinding(scope, applicationThreadId, sessionId).detail); }
       catch { return false; }

@@ -2,6 +2,7 @@ import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { AGENT_TOOL_CLI_CAPABILITY } from "../../src/internal/agent-tool-cli-protocol/capability.js";
 import {
   bundledAgentToolCliDirectory,
   managedSshAgentToolCliAvailability,
@@ -17,8 +18,8 @@ describe("agent tool CLI availability", () => {
       executionEnvironmentId: "environment",
       runtime: {
         canAcquireCapability: (id, version) => {
-          expect([id, version]).toEqual(["agent_tools_cli", 4]);
-          return available;
+          const grants = available ? [AGENT_TOOL_CLI_CAPABILITY] : [];
+          return grants.some(capability => capability.capabilityId === id && capability.majorVersion === version);
         },
         acquireAgentTools: async () => {
           acquired = true;

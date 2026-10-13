@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { AGENT_TOOL_CLI_CAPABILITY } from "../../internal/agent-tool-cli-protocol/capability.js";
 import { environmentVariablesResolveOperation } from "../../internal/sidecar-protocol/environment-variables-v1.js";
 import { resolveEnvironmentVariables } from "../environment-variables/runtime-environment.js";
 import { createHash, randomUUID } from "node:crypto";
@@ -95,8 +96,7 @@ const enabledSedesCapabilities = Object.freeze([
     operations: Object.freeze([openCodeToolInvokeOperation.operation]) }),
   Object.freeze({ capabilityId: "runtime_bodies", majorVersion: 1, operations: Object.freeze(["body.offer"]) }),
   Object.freeze({
-    capabilityId: "agent_tools_cli",
-    majorVersion: 5,
+    ...AGENT_TOOL_CLI_CAPABILITY,
     operations: Object.freeze([
       agentToolsDescribeOperation.operation,
       agentToolsCatalogOperation.operation,

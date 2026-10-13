@@ -20,6 +20,9 @@ import { OpenCodeInputEvidenceRepository } from "../../src/server/backends/openc
 import { runWithOpenCodeInvocation } from "../../src/server/backends/opencode/opencode-tool-invocation.js";
 import { OpenCodeThreadRepository } from "../../src/server/backends/opencode/opencode-thread-repository.js";
 import { ConversationCreationProvenanceRepository } from "../../src/server/db/repositories/conversation-creation-provenance-repository.js";
+import { ConversationCreationRepository } from "../../src/server/db/repositories/conversation-creation-repository.js";
+import { ThreadForceResetRepository } from "../../src/server/db/repositories/thread-force-reset-repository.js";
+import { ConversationOperationRepository } from "../../src/server/db/repositories/conversation-operation-repository.js";
 import { OpenCodeConversationBackendDriver } from "../../src/server/backends/opencode/opencode-conversation-driver.js";
 import { planBackendNativeStores } from "../../src/server/runtime/backend-module-startup.js";
 
@@ -196,8 +199,6 @@ describe("OpenCode compiled module", () => {
       backend: { ...configured.backend, moduleConfiguration: { connection: { ownership: "owned", channel: { type: "process_stdio" } } } } });
     const runtime = prepared.createRuntime(fixture.value);
     expect(() => runtime.driverFactory).toThrow("opencode_module_not_started");
-    expect(runtime.agentToolRuntimeAvailability?.({ scope, applicationThreadId: "thread", isolatedWorkspace: false,
-      presentation: { surface: "native", mode: "progressive" } })).toEqual({ availability: "available" });
     expect(runtime.agentToolRuntimeAvailability?.({ scope, applicationThreadId: "thread", backendConversationId: "session", isolatedWorkspace: false,
       presentation: { surface: "native", mode: "progressive" } })).toMatchObject({ availability: "unavailable" });
     expect(factory.create).not.toHaveBeenCalled();
@@ -218,6 +219,45 @@ describe("OpenCode compiled module", () => {
     expect(f.wire.requests.slice(before).filter(request => request.method !== "GET")).toEqual([]);
     expect(f.wire.requests.slice(before).some(request => request.pathname === `/api/session/${f.wire.sessionID}`)).toBe(true);
     approval.release();
+  });
+
+  it("reports a current creation but denies abandoned unbound creation without native calls", async () => {
+    const f = await persistedInvocationFixture();
+    const scope = f.source.scope;
+    const thread = new ConversationBindingRepository(f.database).createUnboundThread(scope, {
+      workspaceId: f.target.workspace.summary.id, connectionProfileId: f.target.binding.connectionProfileId, title: "New root", now: 200,
+    });
+    const inspection = { scope, applicationThreadId: thread.id, isolatedWorkspace: false,
+      presentation: { surface: "native" as const, mode: "progressive" as const } };
+    const before = f.wire.requests.length;
+    expect(f.runtime.agentToolRuntimeAvailability?.(inspection)).toEqual({ availability: "available" });
+    const creation = new ConversationCreationRepository(f.database);
+    creation.prepare(scope, thread.id, { attemptId: "fresh-attempt", mutationId: "fresh-create", expectedThreadRevision: 0,
+      creationKind: "first_input", sourceKind: "direct_input", initialInputText: "new request", initialAttachmentIds: [],
+      backendCreationCorrelation: "ses_fresh", now: 210 });
+    creation.markExternalCallStarted(scope, thread.id, "fresh-attempt", 220);
+    expect(f.runtime.agentToolRuntimeAvailability?.(inspection)).toEqual({ availability: "available" });
+    creation.markRecoveryRequired(scope, thread.id, "fresh-attempt", { expected: "external_call_started", diagnostic: "Unknown creation", now: 230 });
+    const resets = new ThreadForceResetRepository(f.database);
+    resets.forceReset(scope, thread.id, { expectedBlockerFingerprint: resets.impact(scope, thread.id).blockerFingerprint, mutationId: "fresh-reset", now: 240 });
+    expect(f.runtime.agentToolRuntimeAvailability?.(inspection)).toMatchObject({ availability: "unavailable" });
+    expect(f.wire.requests.length).toBe(before);
+  });
+
+  it("preserves completed OpenCode creation when force-resetting a later operation", async () => {
+    const f = await persistedInvocationFixture();
+    const scope = f.source.scope;
+    const threadId = f.source.sourceThreadId;
+    new ConversationOperationRepository(f.database).prepareInterrupt(scope, threadId, { operationId: "later-stop", now: 200 });
+    const resets = new ThreadForceResetRepository(f.database);
+    resets.forceReset(scope, threadId, { expectedBlockerFingerprint: resets.impact(scope, threadId).blockerFingerprint,
+      mutationId: "reset-later-operation", now: 210 });
+    expect(f.database.prepare(`SELECT phase, force_reset_at FROM conversation_creation_attempts
+      WHERE application_thread_id=?`).get(threadId)).toEqual({ phase: "bound", force_reset_at: null });
+    expect(new OpenCodeBackendModule().creationProvenanceRepair).toBeUndefined();
+    expect(f.runtime.agentToolRuntimeAvailability?.({ scope, applicationThreadId: threadId,
+      backendConversationId: f.target.binding.backendConversationId, isolatedWorkspace: false,
+      presentation: { surface: "native", mode: "progressive" } })).toEqual({ availability: "available" });
   });
 
   it("denies a mismatched invocation stamp and a changed persisted native binding", async () => {

@@ -3,10 +3,8 @@ import { parseArgs } from "node:util";
 import { randomUUID } from "node:crypto";
 import Database from "better-sqlite3";
 import type { SedesCliIo } from "./sedes-cli.js";
-import { ConversationCreationProvenanceRepository, type CreationProvenanceRepairEvidence } from "../server/db/repositories/conversation-creation-provenance-repository.js";
-import { verifyCodexCreationProvenanceRepair } from "../server/backends/codex/codex-creation-provenance-repair.js";
-import { parseOpenCodeBindingDetail } from "../server/backends/opencode/opencode-binding-detail.js";
-import { OpenCodeThreadRepository } from "../server/backends/opencode/opencode-thread-repository.js";
+import { ConversationCreationProvenanceRepository } from "../server/db/repositories/conversation-creation-provenance-repository.js";
+import { compiledBackendModuleCatalog } from "../server/backends/compiled-module-catalog.js";
 
 const usage = `Usage: sedes repair creation-provenance --database ABSOLUTE_PATH --tenant ID --principal ID --thread ID --native-session ID
   [--apply --server-stopped --expected-fingerprint SHA256]
@@ -15,21 +13,6 @@ Default: read-only evidence preview. Apply requires a stopped server and the exa
 preview fingerprint. Only provenance and its audit receipt are written. No input
 is replayed and no thread is restored, attached, or unarchived.
 `;
-
-export function verifyCreationRepair(database: Database.Database, evidence: CreationProvenanceRepairEvidence): boolean {
-  if (evidence.backendKind === "codex_app_server") return verifyCodexCreationProvenanceRepair(evidence);
-  if (evidence.backendKind === "opencode") {
-    try {
-      const detail = parseOpenCodeBindingDetail(evidence.detail);
-      return new OpenCodeThreadRepository({ database,
-        scope: { tenantId: evidence.tenantId, principalId: evidence.ownerPrincipalId },
-        backendInstanceId: evidence.backendInstanceId, nativeNamespaceKey: detail.nativeNamespaceKey,
-      }).verifyCreationRepairEvidence({ tenantId: evidence.tenantId, principalId: evidence.ownerPrincipalId },
-        evidence.applicationThreadId, evidence.backendConversationId, evidence.attemptId);
-    } catch { return false; }
-  }
-  return false;
-}
 
 export async function runCreationProvenanceCli(args: readonly string[], io: SedesCliIo = process): Promise<number> {
   if ((args.length === 1 && ["--help", "-h"].includes(args[0]!)) ||
@@ -55,12 +38,11 @@ export async function runCreationProvenanceCli(args: readonly string[], io: Sede
       throw new Error("Upgrade and migrate this Sedes database before using creation-provenance repair. This command never migrates a database.");
     }
     const scope = { tenantId: values.tenant, principalId: values.principal };
-    const repository = new ConversationCreationProvenanceRepository(database);
+    const repository = new ConversationCreationProvenanceRepository(database, compiledBackendModuleCatalog);
     const evidence = repository.previewRepair(scope, values.thread, values["native-session"]);
-    if (!verifyCreationRepair(database, evidence)) throw new Error("The retained backend creation evidence does not verify this exact binding.");
     if (values.apply) repository.applyRepair(scope, values.thread, {
       expectedNativeSessionId: values["native-session"], expectedFingerprint: values["expected-fingerprint"]!,
-      now: Date.now(), repairId: randomUUID(), verify: current => verifyCreationRepair(database!, current),
+      now: Date.now(), repairId: randomUUID(),
     });
     io.stdout.write(`${JSON.stringify({ status: values.apply ? "repaired" : "dry_run", threadId: evidence.applicationThreadId,
       nativeSessionId: evidence.backendConversationId, backendInstanceId: evidence.backendInstanceId,

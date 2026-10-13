@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import type Database from "better-sqlite3";
 import type { RequestScope } from "../../identity/identity-provider.js";
 import { DomainError } from "../../domain/errors.js";
+import type { BackendKind } from "../../backends/contracts.js";
+import type { BackendCreationProvenanceRepairRegistry } from "../../backends/creation-provenance-repair.js";
 
 export interface ConversationCreationProvenance {
   readonly tenantId: string;
@@ -16,10 +18,8 @@ export interface ConversationCreationProvenance {
 }
 
 export interface CreationProvenanceRepairEvidence extends ConversationCreationProvenance {
-  readonly backendKind: string;
+  readonly backendKind: BackendKind;
   readonly mutationId: string;
-  readonly detail: string;
-  readonly boundDetail: string | null;
   readonly forceResetAt: number;
   readonly phase: string;
   readonly inventoryState: string;
@@ -40,12 +40,27 @@ const columns = `proof.tenant_id AS tenantId, proof.owner_principal_id AS ownerP
 
 /** Native creation identity outlives the operation that submits its first input. */
 export class ConversationCreationProvenanceRepository {
-  constructor(readonly database: Database.Database) {}
+  constructor(readonly database: Database.Database, readonly repairAdapters?: BackendCreationProvenanceRepairRegistry) {}
 
   get(scope: RequestScope, applicationThreadId: string): ConversationCreationProvenance | undefined {
     return this.database.prepare(`SELECT ${columns} FROM conversation_creation_provenance AS proof
       WHERE proof.tenant_id=? AND proof.owner_principal_id=? AND proof.application_thread_id=?`)
       .get(scope.tenantId, scope.principalId, applicationThreadId) as ConversationCreationProvenance | undefined;
+  }
+
+  /** Read-only preparation state, not native identity or mutation authority. */
+  isCreationInProgress(scope: RequestScope, applicationThreadId: string, kind?: "first_input" | "fork"): boolean {
+    const rows = this.database.prepare(`SELECT attempt.attempt_id FROM application_threads AS thread
+      JOIN conversation_creation_attempts AS attempt ON attempt.tenant_id=thread.tenant_id
+        AND attempt.owner_principal_id=thread.owner_principal_id AND attempt.application_thread_id=thread.id
+        AND attempt.backend_instance_id=thread.backend_instance_id AND attempt.connection_profile_id=thread.connection_profile_id
+        AND attempt.execution_environment_id=thread.environment_id
+      WHERE thread.tenant_id=? AND thread.owner_principal_id=? AND thread.id=? AND thread.backing_state='creating'
+        AND attempt.force_reset_at IS NULL
+        AND (? IS NULL OR attempt.creation_kind=?)
+        AND attempt.phase IN ('prepared','external_call_started','conversation_identified','first_submission_started','accepted_unpersisted') LIMIT 2`)
+      .all(scope.tenantId, scope.principalId, applicationThreadId, kind ?? null, kind ?? null);
+    return rows.length === 1;
   }
 
   matchesBinding(scope: RequestScope, applicationThreadId: string,
@@ -93,8 +108,7 @@ export class ConversationCreationProvenanceRepository {
       binding.application_thread_id AS applicationThreadId,binding.backend_instance_id AS backendInstanceId,
       binding.connection_profile_id AS connectionProfileId,binding.execution_environment_id AS executionEnvironmentId,
       binding.backend_conversation_id AS backendConversationId,attempt.attempt_id AS attemptId,attempt.creation_kind AS creationKind,
-      backend.kind AS backendKind,attempt.mutation_id AS mutationId,attempt.provisional_opaque_binding_detail AS detail,
-      CASE backend.kind WHEN 'codex_app_server' THEN codex.opaque_binding_detail WHEN 'opencode' THEN opencode.opaque_binding_detail END AS boundDetail,
+      backend.kind AS backendKind,attempt.mutation_id AS mutationId,
       attempt.force_reset_at AS forceResetAt,attempt.phase,inventory.inventory_state AS inventoryState,
       thread.workspace_id AS workspaceId,workspace.canonical_path AS canonicalWorkspacePath,
       profile.kind AS connectionKind,thread.backing_state AS backingState
@@ -114,44 +128,27 @@ export class ConversationCreationProvenanceRepository {
         AND attempt.application_thread_id=binding.application_thread_id AND attempt.backend_instance_id=binding.backend_instance_id
         AND attempt.connection_profile_id=binding.connection_profile_id AND attempt.execution_environment_id=binding.execution_environment_id
         AND attempt.provisional_backend_conversation_id=binding.backend_conversation_id
-      LEFT JOIN codex_binding_details AS codex ON codex.tenant_id=binding.tenant_id AND codex.owner_principal_id=binding.owner_principal_id
-        AND codex.application_thread_id=binding.application_thread_id
-      LEFT JOIN opencode_binding_details AS opencode ON opencode.tenant_id=binding.tenant_id AND opencode.owner_principal_id=binding.owner_principal_id
-        AND opencode.application_thread_id=binding.application_thread_id
       WHERE binding.tenant_id=? AND binding.owner_principal_id=? AND binding.application_thread_id=? AND binding.backend_conversation_id=?
-        AND backend.kind IN ('codex_app_server','opencode') AND attempt.force_reset_at IS NOT NULL
+        AND attempt.force_reset_at IS NOT NULL
         AND attempt.phase IN ('conversation_identified','first_submission_started','accepted_unpersisted','recovery_required')
         AND attempt.provisional_opaque_binding_detail IS NOT NULL AND attempt.external_call_started_at IS NOT NULL LIMIT 2`)
       .all(scope.tenantId, scope.principalId, applicationThreadId, expectedNativeSessionId) as Omit<CreationProvenanceRepairEvidence, "fingerprint" | "backendEvidence">[];
     if (rows.length !== 1) throw new DomainError("conflict", "Repair requires one exact verified creation and current native binding.");
     const row = rows[0]!;
-    const attempt = this.database.prepare(`SELECT * FROM conversation_creation_attempts
-      WHERE tenant_id=? AND owner_principal_id=? AND application_thread_id=? AND attempt_id=?`)
-      .get(scope.tenantId, scope.principalId, applicationThreadId, row.attemptId);
-    const backendEvidence = row.backendKind === "opencode"
-      ? JSON.stringify({
-          attempt,
-          receipt: this.database.prepare(`SELECT * FROM opencode_operation_receipts WHERE tenant_id=?
-            AND owner_principal_id=? AND application_thread_id=? AND application_operation_id=?`)
-            .get(scope.tenantId, scope.principalId, applicationThreadId, row.mutationId) ?? null,
-          settings: this.database.prepare(`SELECT * FROM opencode_operation_settings_snapshots WHERE tenant_id=?
-            AND owner_principal_id=? AND application_thread_id=? AND application_operation_id=? AND operation_kind='create'`)
-            .get(scope.tenantId, scope.principalId, applicationThreadId, row.mutationId) ?? null,
-          binding: this.database.prepare(`SELECT * FROM opencode_binding_details WHERE tenant_id=?
-            AND owner_principal_id=? AND application_thread_id=?`).get(scope.tenantId, scope.principalId, applicationThreadId) ?? null,
-        })
-      : JSON.stringify({ attempt });
+    const adapter = this.repairAdapters?.creationProvenanceRepairForBackendKind(row.backendKind);
+    if (!adapter) throw new DomainError("invalid_transition", "This backend has no supported abandoned-creation repair.");
+    const backendEvidence = adapter.collectVerifiedEvidence({ database: this.database, scope, ...row });
+    if (backendEvidence === undefined) throw new DomainError("conflict", "The retained backend creation evidence does not verify this exact binding.");
     const evidence = { ...row, backendEvidence };
     return { ...evidence, fingerprint: createHash("sha256").update(JSON.stringify(evidence)).digest("hex") };
   }
 
   applyRepair(scope: RequestScope, applicationThreadId: string, input: {
     readonly expectedNativeSessionId: string; readonly expectedFingerprint: string; readonly now: number; readonly repairId: string;
-    readonly verify: (evidence: CreationProvenanceRepairEvidence) => boolean;
   }): CreationProvenanceRepairEvidence {
     return this.database.transaction(() => {
       const evidence = this.previewRepair(scope, applicationThreadId, input.expectedNativeSessionId);
-      if (evidence.fingerprint !== input.expectedFingerprint || !input.verify(evidence)) {
+      if (evidence.fingerprint !== input.expectedFingerprint) {
         throw new DomainError("conflict", "The native creation evidence is invalid or changed after preview.");
       }
       if (this.get(scope, applicationThreadId)) throw new DomainError("conflict", "This thread already has creation provenance.");

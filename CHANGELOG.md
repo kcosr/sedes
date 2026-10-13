@@ -201,7 +201,7 @@ User-facing changes are collected here before release. See the
   sidecars together for the updated private tool protocols. See
   [Workpad limits](docs/user/workpads.md#edit-and-save).
 
-- Codex and OpenCode retain verified Sedes creation identity after first-input
+- Codex retains verified Sedes creation identity after first-input
   force reset, so recovered sessions keep tool eligibility without replaying
   abandoned input. Tool settings show current backend eligibility separately
   from saved grants, and eligibility updates preserve live transcript streams

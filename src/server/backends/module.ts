@@ -316,6 +316,8 @@ export interface BackendRuntimeDiagnostic {
  * they are not discovered or downloaded at runtime.
  */
 export interface BackendModule {
+  /** Omitted when this backend has no reachable abandoned-creation binding to repair. */
+  readonly creationProvenanceRepair?: import("./creation-provenance-repair.js").BackendCreationProvenanceRepairAdapter;
   /** Provider I/O starts only after HTTP and host carriers are ready. */
   readonly startupPolicy: "composition_only" | "connect_provider";
   /** Map only known private failures to safe Settings diagnostics. */

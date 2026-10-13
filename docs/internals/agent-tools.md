@@ -461,11 +461,16 @@ this record intact while making the abandoned attempt immutable and unavailable
 for replay. Codex fresh create/fork injection instead checks the exact active
 creation operation, before a native binding exists. Migration records only
 unambiguous matching non-abandoned creations; older abandoned creations require
-the bounded [operator repair](../operator/operations.md#repair-tool-eligibility-after-force-reset).
+the bounded Codex [operator repair](../operator/operations.md#repair-tool-eligibility-after-force-reset).
 OpenCode's private created-root check combines the durable proof with its
 accepted native receipt and settings snapshot; changing those facts fails
-closed. The offline repair retains a fingerprinted audit receipt and never
-grants tools to an imported or merely bound session.
+closed. OpenCode binds only with completed creation, which force reset does not
+abandon; no OpenCode repair is implemented or required. The repair registry
+delegates private evidence collection and verification to compiled backend
+adapters; shared SQL and the CLI do not interpret provider details. The offline
+Codex repair retains a fingerprinted audit receipt and never grants tools to an
+imported or merely bound session. A current creation may advertise eligibility
+before native identity exists; abandoned or unresolved unbound creation cannot.
 
 
 Presentation has two independent dimensions:

@@ -282,6 +282,7 @@ class PreparedGrokBackendModule implements PreparedBackendModule {
 }
 
 export class GrokBackendModule implements BackendModule {
+  readonly creationProvenanceRepair = undefined;
   readonly startupPolicy = "composition_only" as const;
   readonly backendKind = "grok_build" as const;
   readonly connectionKinds = ["grok_acp"] as const;

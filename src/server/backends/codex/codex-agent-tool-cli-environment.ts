@@ -1,4 +1,5 @@
 import type { ResolvedEnvironmentVariables } from "../../environment-variables/runtime-environment.js";
+import { ConversationCreationProvenanceRepository } from "../../db/repositories/conversation-creation-provenance-repository.js";
 import { normalizedAbsolutePath } from "../../../shared/absolute-path.js";
 import { isAgentToolCliEndpoint } from "../../../internal/agent-tool-cli-protocol/local-endpoint.js";
 import { pathForRemoteRoot } from "../../execution/remote-path.js";
@@ -40,6 +41,7 @@ const SEDES_MCP_TOOL_TIMEOUT_SECONDS = 86_400;
 
 export type CodexAgentToolCliEnvironmentUnavailableReason =
   | "imported_thread"
+  | "creation_recovery"
   | "remote_environment"
   | "network_disabled"
   | "presentation_unavailable"
@@ -172,8 +174,9 @@ export class DatabaseCodexAgentToolCliEnvironmentProvider implements CodexAgentT
     if (this.#runtimeUnavailableReason) return { availability: "unavailable", reason: this.#runtimeUnavailableReason };
     const row = this.#readEligibility(scope, applicationThreadId);
     if (!row) return { availability: "unavailable", reason: "unverifiable_thread_context" };
-    if (row.sedesCreated !== 1 && row.backingState !== "unbound") return { availability: "unavailable",
-      reason: row.backingState === "bound" ? "imported_thread" : "unverifiable_thread_context" };
+    if (row.sedesCreated !== 1 && row.backingState !== "unbound" &&
+      !new ConversationCreationProvenanceRepository(this.#database).isCreationInProgress(scope, applicationThreadId)) return { availability: "unavailable",
+      reason: row.backingState === "bound" ? "imported_thread" : "creation_recovery" };
     if (row.networkAccess !== "enabled") return { availability: "unavailable", reason: "network_disabled" };
     return { availability: "available" };
   }

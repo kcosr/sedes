@@ -1,4 +1,5 @@
 import { randomBytes, randomUUID } from "node:crypto";
+import { AGENT_TOOL_CLI_CAPABILITY } from "../../internal/agent-tool-cli-protocol/capability.js";
 import type { SidecarCapabilityInventory } from "../../internal/sidecar-protocol/control-v2.js";
 import { SIDECAR_WIRE_VERSION } from "../../internal/sidecar-protocol/envelopes.js";
 import {
@@ -70,7 +71,7 @@ export type SidecarAuthorizedCapability =
   | Readonly<{ readonly capabilityId: "interactive_terminal"; readonly majorVersion: 2 }>
   | Readonly<{
       readonly capabilityId: "agent_tools_cli";
-      readonly majorVersion: 5;
+      readonly majorVersion: typeof AGENT_TOOL_CLI_CAPABILITY.majorVersion;
     }>;
 
 export type SidecarRuntimeCapability = Readonly<{
@@ -224,7 +225,7 @@ export class SidecarRuntimeOwner<Session extends SidecarRuntimeSession> {
               : capabilityId === "workspace_tools"
                 ? 2
               : capabilityId === "agent_tools_cli"
-                ? 5
+                ? AGENT_TOOL_CLI_CAPABILITY.majorVersion
                 : capabilityId === "interactive_terminal" ? 2 : 1),
       ) ||
       input.authorizedCapabilities.some(
