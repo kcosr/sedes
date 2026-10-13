@@ -14,7 +14,7 @@ User-facing changes are collected here before release. See the
   ([#73](https://github.com/kcosr/sedes/pull/73))
 
 - Upgrade browser and packaged clients together with the server for client
-  protocol **153**. Rebuild and upgrade execution sidecars and local workers;
+  protocol **154**. Rebuild and upgrade execution sidecars and local workers;
   older compiled runtime contracts are rejected. Notification scripts now use
   payload version **5**: update separately copied hooks with the server and
   review Script/Voice event and reply-phase settings.
