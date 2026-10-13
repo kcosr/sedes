@@ -1236,7 +1236,7 @@ describe("ThreadContextMenu content per thread state", () => {
       expect(name).toHaveAccessibleDescription("A group with this name already exists."),
     );
     expect(createThreadGroup).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "thread-1" }),
+      [expect.objectContaining({ id: "thread-1" })],
       "Review backend contract",
     );
   });
@@ -1536,14 +1536,14 @@ describe("searchable Move to group", () => {
       within(groups).getAllByRole("menuitem").map((row) => row.textContent),
     ).toEqual(["Create group “Design review”", "New group…", "Remove from group"]);
     await userEvent.click(create);
-    expect(createThreadGroup).toHaveBeenCalledExactlyOnceWith(thread, "Design review");
+    expect(createThreadGroup).toHaveBeenCalledExactlyOnceWith([thread], "Design review");
     expect(assignThreadGroup).not.toHaveBeenCalled();
     await waitFor(() => expect(groups).not.toBeInTheDocument());
 
     // Enter from the search takes the Create row too.
     groups = await openGroups(trigger);
     await userEvent.type(within(groups).getByRole("searchbox", { name: "Search groups" }), "Ops{Enter}");
-    expect(createThreadGroup).toHaveBeenLastCalledWith(thread, "Ops");
+    expect(createThreadGroup).toHaveBeenLastCalledWith([thread], "Ops");
     expect(createThreadGroup).toHaveBeenCalledTimes(2);
   });
 
@@ -1603,7 +1603,7 @@ describe("searchable Move to group", () => {
     ).toEqual(["Cancel", "Create"]);
     await userEvent.clear(name);
     await userEvent.type(name, "  Ops rotation {Enter}");
-    expect(createThreadGroup).toHaveBeenCalledExactlyOnceWith(thread, "Ops rotation");
+    expect(createThreadGroup).toHaveBeenCalledExactlyOnceWith([thread], "Ops rotation");
     expect(assignThreadGroup).not.toHaveBeenCalled();
     await waitFor(() => expect(dialog).not.toBeInTheDocument());
   });
@@ -1675,7 +1675,7 @@ describe("searchable Move to group", () => {
     await drillIn(sheet, "Move to group");
     await userEvent.type(within(sheet).getByRole("searchbox", { name: "Search groups" }), "Ops");
     await userEvent.click(within(sheet).getByRole("menuitem", { name: "Create group “Ops”" }));
-    expect(createThreadGroup).toHaveBeenCalledExactlyOnceWith(thread, "Ops");
+    expect(createThreadGroup).toHaveBeenCalledExactlyOnceWith([thread], "Ops");
     await waitFor(() => expect(sheet).not.toBeInTheDocument());
 
     sheet = await openTouchSheet(trigger);

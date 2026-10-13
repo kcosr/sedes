@@ -3,6 +3,7 @@ import { projectQueuedInputPresentation, projectQueuedInputSummaries } from "../
 import type { QueuedInputRecord } from "../../src/server/db/repositories/queued-input-repository.js";
 import { queuedInputPresentationSchema } from "../../src/shared/protocol/api.js";
 import { MAXIMUM_MESSAGE_ITEM_BYTES } from "../../src/shared/protocol/payload.js";
+import { formatThreadReferenceText } from "../../src/shared/thread-references.js";
 
 function queued(
   input: Partial<QueuedInputRecord> &
@@ -56,6 +57,20 @@ function queued(
 }
 
 describe("queued input projection", () => {
+  it.each(["pending", "retry_wait", "uncertain"] as const)("preserves thread references for %s while keeping previews readable", (state) => {
+    const references = [{ threadId: "616946aa-4574-41f7-bd70-d3a9edd56dbd", title: "Related work" }];
+    const text = formatThreadReferenceText("Read this thread first.", references);
+    const record = queued({ id: "reference", sequence: 1, state, text,
+      applicationThreadId: "88b72554-a697-4ebc-9d96-b2ab09343f13",
+      deliveryMode: state === "uncertain" ? "submit" : null,
+    });
+    expect(projectQueuedInputSummaries([record])[0]?.preview.text).toBe("Read this thread first.");
+    expect(projectQueuedInputPresentation(record, 1, record.mutationId).content).toEqual([
+      { kind: "text", text: { text } },
+    ]);
+    const referenceOnly = { ...record, text: formatThreadReferenceText("", references) };
+    expect(projectQueuedInputSummaries([referenceOnly])[0]?.preview.text).toBe("Referenced thread: Related work");
+  });
   it.each([65_536, 65_537, 262_144])("projects truthful composer restoration availability for %i UTF-8 bytes", bytes => {
     const text = "é".repeat(Math.floor(bytes / 2)) + (bytes % 2 ? "x" : "");
     const [summary] = projectQueuedInputSummaries([queued({ id: "large-input", sequence: 1, text })]);

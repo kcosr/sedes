@@ -75,6 +75,21 @@ checkout can instead be forgotten. Either operation clears any thread
 preferences that pointed at it; a complete discovery of an externally removed
 worktree also clears the stale preference and Files falls back to Primary.
 
+## Reference another thread
+
+Drag an individual sidebar thread into the message composer, or type **@** and
+choose an active thread. **Reference a thread** beside the skill button opens
+the same searchable picker without typing. Each selection appears as a removable
+chip above the message; up to eight threads can be referenced in one prompt.
+The picker includes the active threads currently loaded in your inventory.
+
+The agent receives the selected Sedes thread IDs and quoted titles followed by
+your message. Referencing a thread does not copy its messages or grant access:
+the agent still needs the appropriate Sedes tools and permission to read or
+interact with it. References remain in saved drafts, stashes, queued inputs,
+and retries. In a sent message, click a reference to open that thread.
+Switch from TUI to Chat to send references.
+
 ## Read, preview, and download
 
 Sedes can:

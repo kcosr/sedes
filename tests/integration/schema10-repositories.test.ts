@@ -251,13 +251,77 @@ function operatorBackend<T extends { readonly protocolRelease: string }>(
 }
 
 describe("persistent thread groups", () => {
+  it("creates a group with all selected members atomically and replays the same receipt", () => {
+    const fixture = createFixture();
+    try {
+      const groups = new ThreadGroupRepository(fixture.database);
+      const input = {
+        name: "Together",
+        members: [
+          { threadId: fixture.threadId, expectedRevision: 0 },
+          { threadId: fixture.secondThreadId, expectedRevision: 0 },
+        ],
+        mutationId: "group-two-members",
+        now: 400,
+      };
+      const created = groups.createAndAssign(fixture.scope, fixture.threadId, input);
+      expect(groups.list(fixture.scope)).toMatchObject([{ id: created.groupId, memberCount: 2 }]);
+      for (const member of input.members) {
+        expect(groups.getAssignment(fixture.scope, member.threadId)).toMatchObject({ groupId: created.groupId, revision: 1 });
+      }
+      expect(groups.createAndAssign(fixture.scope, fixture.threadId, {
+        ...input, members: [...input.members].reverse(), now: 999,
+      })).toEqual({ ...created, replayed: true });
+      expect(groups.list(fixture.scope)).toHaveLength(1);
+      expect(() => groups.createAndAssign(fixture.scope, fixture.threadId, {
+        ...input, members: [input.members[0]!],
+      })).toThrowError(expect.objectContaining({ code: "conflict" }));
+    } finally {
+      fixture.database.close();
+    }
+  });
+
+  it("rejects stale, unavailable, duplicate, and unscoped members without partial creation", () => {
+    const fixture = createFixture();
+    try {
+      const groups = new ThreadGroupRepository(fixture.database);
+      const first = { threadId: fixture.threadId, expectedRevision: 0 };
+      const input = { name: "Atomic", mutationId: "atomic-group", now: 400 };
+      for (const member of [
+        { threadId: fixture.secondThreadId, expectedRevision: 1 },
+        { threadId: "missing-thread", expectedRevision: 0 },
+      ]) {
+        expect(() => groups.createAndAssign(fixture.scope, fixture.threadId, { ...input, members: [first, member] })).toThrow();
+        expect(groups.list(fixture.scope)).toEqual([]);
+        expect(groups.getAssignment(fixture.scope, fixture.threadId)).toMatchObject({ groupId: null, revision: 0 });
+      }
+      for (const members of [[], [first, first], [{ threadId: fixture.secondThreadId, expectedRevision: 0 }]]) {
+        expect(() => groups.createAndAssign(fixture.scope, fixture.threadId, { ...input, members })).toThrowError(expect.objectContaining({ code: "bad_request" }));
+      }
+      for (const scope of [
+        { ...fixture.scope, principalId: "another-principal" },
+        { ...fixture.scope, tenantId: "another-tenant" },
+      ]) {
+        expect(() => groups.createAndAssign(scope, fixture.threadId, { ...input, members: [first] })).toThrowError(expect.objectContaining({ code: "not_found" }));
+      }
+      expect(groups.list(fixture.scope)).toEqual([]);
+      // Reusing an ID from a rejected transaction succeeds: no receipt or group escaped.
+      groups.createAndAssign(fixture.scope, fixture.threadId, {
+        ...input, members: [first, { threadId: fixture.secondThreadId, expectedRevision: 0 }],
+      });
+      expect(groups.list(fixture.scope)).toMatchObject([{ memberCount: 2 }]);
+    } finally {
+      fixture.database.close();
+    }
+  });
+
   it("keeps empty groups, preserves archived membership, and deletes explicitly", () => {
     const fixture = createFixture();
     try {
       const groups = new ThreadGroupRepository(fixture.database);
       const created = groups.createAndAssign(fixture.scope, fixture.threadId, {
         name: "Design",
-        expectedRevision: 0,
+        members: [{ threadId: fixture.threadId, expectedRevision: 0 }],
         mutationId: "group-create",
         now: 400,
       });
@@ -277,7 +341,7 @@ describe("persistent thread groups", () => {
       expect(() =>
         groups.createAndAssign(fixture.scope, fixture.threadId, {
           name: " design ",
-          expectedRevision: 2,
+          members: [{ threadId: fixture.threadId, expectedRevision: 2 }],
           mutationId: "group-duplicate",
           now: 420,
         }),
@@ -328,7 +392,7 @@ describe("persistent thread groups", () => {
       const groups = new ThreadGroupRepository(fixture.database);
       const createInput = {
         name: "Reusable",
-        expectedRevision: 0,
+        members: [{ threadId: fixture.threadId, expectedRevision: 0 }],
         mutationId: "group-replay-create",
         now: 450,
       } as const;
@@ -408,7 +472,7 @@ describe("persistent thread groups", () => {
       expect(() =>
         groups.createAndAssign(fixture.scope, fixture.threadId, {
           name: "\uFDFA".repeat(120),
-          expectedRevision: 0,
+          members: [{ threadId: fixture.threadId, expectedRevision: 0 }],
           mutationId: "group-expanded-name",
           now: 500,
         }),
@@ -419,7 +483,7 @@ describe("persistent thread groups", () => {
         fixture.secondThreadId,
         {
           name: "Temporary child",
-          expectedRevision: 0,
+          members: [{ threadId: fixture.secondThreadId, expectedRevision: 0 }],
           mutationId: "group-hard-delete",
           now: 510,
         },
@@ -459,7 +523,7 @@ describe("persistent thread groups", () => {
       const groups = new ThreadGroupRepository(fixture.database);
       groups.createAndAssign(fixture.scope, fixture.threadId, {
         name: "Private",
-        expectedRevision: 0,
+        members: [{ threadId: fixture.threadId, expectedRevision: 0 }],
         mutationId: "group-private",
         now: 500,
       });

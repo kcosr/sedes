@@ -49,6 +49,9 @@ import {
   useTaskDrag,
 } from "../../tasks/task-drag.js";
 import type { NormalizedApplicationSnapshot } from "../../../shared/index.js";
+import type { NormalizedApplicationThreadSummary } from "../../../shared/index.js";
+import { ThreadDragProvider, useThreadDrag } from "../../threads/thread-drag.js";
+import { formatThreadReferenceText, splitThreadReferenceText } from "../../../shared/thread-references.js";
 
 import {
   clearDiagnostics,
@@ -691,6 +694,159 @@ function TaskDragTestSource({ task }: { readonly task: AssociatedTask }) {
     </button>
   );
 }
+
+const referencedThread = {
+  id: "616946aa-4574-41f7-bd70-d3a9edd56dbd", title: { text: "Other thread" },
+  inventoryState: "active", groupId: null, groupAssignmentRevision: 0,
+} as NormalizedApplicationThreadSummary;
+const selectedThreadReference = { threadId: referencedThread.id, title: referencedThread.title.text };
+
+function referenceApplication(threads = [referencedThread], descendants: readonly NormalizedApplicationThreadSummary[] = []) {
+  const snapshot = { threads, groups: [], tasks: [], workspaces: [] } as unknown as NormalizedApplicationSnapshot;
+  const state = { status: "ready", connection: "connected", authoritative: true, search: "", visibleThreads: [], snapshot, descendantPages: { loaded: { descendants: descendants.map((thread) => ({ thread })) } } };
+  return { snapshot, store: { getSnapshot: () => state, subscribe: () => () => undefined } as unknown as ApplicationClientStore };
+}
+
+function ThreadDragTestSource() {
+  const drag = useThreadDrag();
+  return <button draggable onDragStart={(event) => drag?.beginThreadDrag(referencedThread.id, event.dataTransfer)}
+    onDragEnd={() => drag?.endThreadDrag()}>Drag thread</button>;
+}
+
+describe("thread references", () => {
+  it("prefers current archived state over a stale loaded descendant", async () => {
+    const store = new FakeComposerStore(snapshot(), "Ask");
+    const current = { ...referencedThread, inventoryState: "archived" as const };
+    render(<Composer store={store as unknown as ThreadClientStore} applicationStore={referenceApplication([current], [referencedThread]).store} />);
+    fireEvent.click(screen.getByRole("button", { name: "Reference a thread" }));
+    expect(await screen.findByText("No matching active threads")).toBeInTheDocument();
+  });
+  it.each(["", "x".repeat(1024)])("bounds imported thread titles before creating a reference", async (title) => {
+    const store = new FakeComposerStore(snapshot(), "Ask");
+    render(<Composer store={store as unknown as ThreadClientStore} applicationStore={referenceApplication([{ ...referencedThread, title: { text: title } }]).store} />);
+    fireEvent.click(screen.getByRole("button", { name: "Reference a thread" }));
+    const dialog = await screen.findByRole("dialog", { name: "Reference a thread" });
+    fireEvent.click(within(dialog).getByRole("button", { name: new RegExp(referencedThread.id) }));
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await waitFor(() => expect(store.deliver).toHaveBeenCalled());
+    expect(splitThreadReferenceText(store.deliver.mock.calls[0]![1].text).references[0]!.title).toBe(title ? title.slice(0, 512) : "Untitled thread");
+  });
+  it("restores chips and edits only the body while delivering the exact reference text", async () => {
+    const value = formatThreadReferenceText("Original body", [selectedThreadReference]);
+    const store = new FakeComposerStore(snapshot(), value);
+    render(<Composer store={store as unknown as ThreadClientStore} applicationStore={referenceApplication().store} />);
+    expect(screen.getByRole("textbox")).toHaveValue("Original body");
+    expect(screen.getByRole("list", { name: "Referenced threads" })).toHaveTextContent("Other thread");
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "Changed body" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await waitFor(() => expect(store.deliver).toHaveBeenCalled());
+    expect(store.deliver.mock.calls[0]![1].text).toBe(formatThreadReferenceText("Changed body", [selectedThreadReference]));
+  });
+
+  it("permits a reference-only prompt and removes the last chip without leaving hidden content", () => {
+    const store = new FakeComposerStore(snapshot(), formatThreadReferenceText("", [selectedThreadReference]));
+    render(<Composer store={store as unknown as ThreadClientStore} applicationStore={referenceApplication().store} />);
+    expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Remove thread: Other thread" }));
+    expect(screen.queryByRole("list", { name: "Referenced threads" })).not.toBeInTheDocument();
+    expect(screen.getByRole("textbox")).toHaveValue("");
+    expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
+  });
+
+  it("selects an @ reference by keyboard and preserves the text after the caret", async () => {
+    const store = new FakeComposerStore(snapshot(), "Compare  and keep this");
+    render(<Composer store={store as unknown as ThreadClientStore} applicationStore={referenceApplication().store} />);
+    const input = screen.getByRole("textbox");
+    fireEvent.change(input, { target: { value: "Compare @Other and keep this", selectionStart: 14, selectionEnd: 14 } });
+    const search = await screen.findByRole("searchbox", { name: "Search threads" });
+    expect(search).toHaveValue("Other");
+    fireEvent.keyDown(search, { key: "Enter" });
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Reference a thread" })).not.toBeInTheDocument());
+    expect(input).toHaveValue("Compare  and keep this");
+    expect(screen.getByRole("list", { name: "Referenced threads" })).toHaveTextContent("Other thread");
+  });
+
+  it("does not treat email text as a mention and Escape leaves a cancelled mention unchanged", async () => {
+    const store = new FakeComposerStore(snapshot(), "");
+    render(<Composer store={store as unknown as ThreadClientStore} applicationStore={referenceApplication().store} />);
+    const input = screen.getByRole("textbox");
+    fireEvent.change(input, { target: { value: "user@example.com" } });
+    expect(screen.queryByRole("dialog", { name: "Reference a thread" })).not.toBeInTheDocument();
+    fireEvent.change(input, { target: { value: "Ask @Other" } });
+    const search = await screen.findByRole("searchbox", { name: "Search threads" });
+    fireEvent.keyDown(search, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Reference a thread" })).not.toBeInTheDocument());
+    expect(input).toHaveValue("Ask @Other");
+    expect(screen.queryByRole("list", { name: "Referenced threads" })).not.toBeInTheDocument();
+  });
+
+  it("copies a thread drag into the composer without grouping or navigating", () => {
+    const store = new FakeComposerStore(snapshot(), "Keep body");
+    const application = referenceApplication();
+    render(<ThreadDragProvider store={application.store} snapshot={application.snapshot}>
+      <ThreadDragTestSource /><Composer store={store as unknown as ThreadClientStore} applicationStore={application.store} />
+    </ThreadDragProvider>);
+    const values = new Map<string, string>();
+    const types: string[] = [];
+    const transfer = { types, items: [], files: [], setData: (type: string, value: string) => { types.push(type); values.set(type, value); }, getData: (type: string) => values.get(type) ?? "" } as unknown as DataTransfer;
+    fireEvent.dragStart(screen.getByRole("button", { name: "Drag thread" }), { dataTransfer: transfer });
+    const composer = screen.getByTestId("composer");
+    fireEvent.dragEnter(composer, { dataTransfer: transfer });
+    expect(composer).toHaveClass("thread-drag-active");
+    fireEvent.drop(composer, { dataTransfer: transfer });
+    expect(screen.getByRole("list", { name: "Referenced threads" })).toHaveTextContent("Other thread");
+    expect(screen.getByRole("textbox")).toHaveValue("Keep body");
+    expect(store.deliver).not.toHaveBeenCalled();
+  });
+
+  it("retains reference bytes when stashing and restores their chips", async () => {
+    const value = formatThreadReferenceText("Saved body", [selectedThreadReference]);
+    const store = new FakeComposerStore(snapshot(), value);
+    render(<Composer store={store as unknown as ThreadClientStore} applicationStore={referenceApplication().store} />);
+    fireEvent.click(screen.getByRole("button", { name: "Stash prompt" }));
+    await waitFor(() => expect(store.stash).toHaveBeenCalledOnce());
+    expect(store.stash.mock.calls[0]![0].text).toBe(value);
+    expect(screen.queryByRole("list", { name: "Referenced threads" })).not.toBeInTheDocument();
+    act(() => store.replaceDraft({ text: value, revision: 3 }));
+    await waitFor(() => expect(screen.getByRole("list", { name: "Referenced threads" })).toHaveTextContent("Other thread"));
+    expect(screen.getByRole("textbox")).toHaveValue("Saved body");
+  });
+
+  it("retains reference bytes in an active-turn Queue submission", async () => {
+    const active = snapshot("running");
+    active.capabilities.deliveryModes = [{ id: "queue", steerTarget: null, label: { text: "Queue" }, available: true }];
+    const value = formatThreadReferenceText("Queue body", [selectedThreadReference]);
+    const store = new FakeComposerStore(active, value);
+    render(<Composer store={store as unknown as ThreadClientStore} applicationStore={referenceApplication().store} />);
+    fireEvent.click(screen.getByRole("button", { name: "Queue" }));
+    await waitFor(() => expect(store.deliver).toHaveBeenCalled());
+    expect(store.deliver.mock.calls[0]![0]).toBe("queue");
+    expect(store.deliver.mock.calls[0]![1].text).toBe(value);
+  });
+
+  it("uses visible body indexes when adding a saved prompt at the caret", async () => {
+    const value = formatThreadReferenceText("BeforeAfter", [selectedThreadReference]);
+    const store = new FakeComposerStore(snapshot(), value);
+    render(<Composer store={store as unknown as ThreadClientStore} applicationStore={applicationStoreWithPrompts()} />);
+    const input = screen.getByRole("textbox") as HTMLTextAreaElement;
+    input.setSelectionRange(6, 6);
+    fireEvent.click(screen.getByRole("button", { name: "Open saved prompts" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Add prompt to composer: Review changes" }));
+    expect(input).toHaveValue("Before\n\nReview the current changes.\n\nAfter");
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await waitFor(() => expect(store.deliver).toHaveBeenCalled());
+    expect(splitThreadReferenceText(store.deliver.mock.calls[0]![1].text).references).toEqual([selectedThreadReference]);
+  });
+
+  it("requires Chat for thread references instead of dropping them in TUI", () => {
+    const store = new FakeComposerStore(snapshot(), formatThreadReferenceText("Ask", [selectedThreadReference]));
+    render(<CodexTuiTerminalControlContext.Provider value={tuiControl()}>
+      <Composer store={store as unknown as ThreadClientStore} />
+    </CodexTuiTerminalControlContext.Provider>);
+    expect(screen.getByText("Switch to Chat to send thread references.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Send draft to TUI" })).toBeDisabled();
+  });
+});
 
 describe("task references", () => {
   const task: AssociatedTask = {

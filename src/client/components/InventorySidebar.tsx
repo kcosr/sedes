@@ -209,6 +209,7 @@ import {
 import { ThreadGroupRoster } from "./thread/ThreadGroupRoster.js";
 import { ThreadStackActionDialog } from "./thread/ThreadStackActionDialog.js";
 import { useTaskDrag } from "../tasks/task-drag.js";
+import { useThreadDrag } from "../threads/thread-drag.js";
 import {
   environmentTintStyle,
   resolveEnvironmentPaletteTones,
@@ -430,6 +431,7 @@ export function InventorySidebar({
   scrollPosition?: { current: number };
 }): React.JSX.Element {
   const defaultThread = useDefaultThread();
+  const threadDrag = useThreadDrag();
   const defaultThreadId = defaultThread?.threadId;
   const defaultSummary = state.snapshot?.threads.find(thread => thread.id === defaultThreadId) ?? defaultThread?.thread;
   const usableDefault = defaultSummary && canUseDefaultThread(defaultSummary) ? defaultSummary : undefined;
@@ -1782,7 +1784,11 @@ export function InventorySidebar({
               {usableDefault ? (
                 <ThreadContextMenu thread={usableDefault} store={store} threadRegistry={threadRegistry} onNavigate={onNavigate}>
                   <div className={`thread-row compact ${selectedThreadId === usableDefault.id ? "selected" : ""} ${usableDefault.attention.unseenCompletion ? "flat-row-unseen" : ""}`}
-                    data-thread-id={usableDefault.id} data-testid="default-thread-row">
+                    data-thread-id={usableDefault.id} data-testid="default-thread-row"
+                    data-thread-drop-kind="thread"
+                    draggable={threadDrag !== undefined}
+                    onDragStart={(event) => { event.stopPropagation(); threadDrag?.beginThreadDrag(usableDefault.id, event.dataTransfer); }}
+                    onDragEnd={() => threadDrag?.endThreadDrag()}>
                     <button className="thread-row-link" aria-current={selectedThreadId === usableDefault.id ? "page" : undefined}
                       onClick={() => { openThreadRoute(usableDefault.id); onNavigate(); }}>
                       <DefaultThreadIndicator thread={usableDefault} />
@@ -2673,6 +2679,7 @@ function ThreadStackItem({
   ) => React.ReactNode;
 }): React.JSX.Element {
   const taskDrag = useTaskDrag();
+  const threadDrag = useThreadDrag();
   const [open, setOpen] = useState(false);
   const [autoFocusMembers, setAutoFocusMembers] = useState(false);
   const [stackMenuOpen, setStackMenuOpen] = useState(false);
@@ -2729,8 +2736,8 @@ function ThreadStackItem({
     [],
   );
   useEffect(() => {
-    if (taskDrag?.activeTaskId === undefined) cancelTaskDragOpen();
-  }, [taskDrag?.activeTaskId]);
+    if (taskDrag?.activeTaskId === undefined && threadDrag?.activeThreadId === undefined) cancelTaskDragOpen();
+  }, [taskDrag?.activeTaskId, threadDrag?.activeThreadId]);
   const cancelClose = () => {
     if (closeTimer.current === undefined) return;
     window.clearTimeout(closeTimer.current);
@@ -3045,7 +3052,7 @@ function ThreadStackItem({
         },
         onPointerLeave: scheduleClose,
         onDragEnter: (event) => {
-          if (!taskDrag?.isTaskDrag(event.dataTransfer)) return;
+          if (!taskDrag?.isTaskDrag(event.dataTransfer) && !threadDrag?.isThreadDrag(event.dataTransfer)) return;
           cancelClose();
           if (open || taskDragOpenTimer.current !== undefined) return;
           taskDragOpenTimer.current = window.setTimeout(() => {
@@ -3055,7 +3062,7 @@ function ThreadStackItem({
           }, 180);
         },
         onDragLeave: (event) => {
-          if (!taskDrag?.isTaskDrag(event.dataTransfer)) return;
+          if (!taskDrag?.isTaskDrag(event.dataTransfer) && !threadDrag?.isThreadDrag(event.dataTransfer)) return;
           if (
             event.currentTarget.contains(event.relatedTarget as Node | null)
           ) {
@@ -3105,16 +3112,16 @@ function ThreadStackItem({
         onPointerEnter={cancelClose}
         onPointerLeave={scheduleClose}
         onDragEnter={(event) => {
-          if (!taskDrag?.isTaskDrag(event.dataTransfer)) return;
+          if (!taskDrag?.isTaskDrag(event.dataTransfer) && !threadDrag?.isThreadDrag(event.dataTransfer)) return;
           cancelTaskDragOpen();
           cancelClose();
         }}
         onDragOver={(event) => {
-          if (!taskDrag?.isTaskDrag(event.dataTransfer)) return;
+          if (!taskDrag?.isTaskDrag(event.dataTransfer) && !threadDrag?.isThreadDrag(event.dataTransfer)) return;
           cancelClose();
         }}
         onDragLeave={(event) => {
-          if (!taskDrag?.isTaskDrag(event.dataTransfer)) return;
+          if (!taskDrag?.isTaskDrag(event.dataTransfer) && !threadDrag?.isThreadDrag(event.dataTransfer)) return;
           if (
             event.currentTarget.contains(event.relatedTarget as Node | null)
           ) {
@@ -3650,6 +3657,7 @@ function FlatRowItemContent(
     getClickNamesToFilter,
   );
   const quickSwitchHint = useSidebarQuickSwitchHint(thread.id);
+  const threadDrag = useThreadDrag();
   const actionPending = useRef(false);
   const [pendingAction, setPendingAction] = useState<"quick" | "archive">();
   const [pinPending, setPinPending] = useState(false);
@@ -4033,6 +4041,14 @@ function FlatRowItemContent(
     className: ["flat-list-item", containerClassName].filter(Boolean).join(" "),
     "data-testid": containerTestId,
     "data-thread-id": thread.id,
+    "data-thread-drop-kind": stackGroupId ? "group" : stackProjectId ? undefined : "thread",
+    draggable: !stackFace && !renaming && threadDrag !== undefined,
+    onDragStart: (event: React.DragEvent<HTMLElement>) => {
+      if (stackFace || renaming || !threadDrag) { event.preventDefault(); return; }
+      event.stopPropagation();
+      threadDrag.beginThreadDrag(thread.id, event.dataTransfer);
+    },
+    onDragEnd: () => threadDrag?.endThreadDrag(),
     "data-group-id": stackGroupId,
     "data-project-id": stackProjectId,
     "data-representative-thread-id": representativeThreadId,
@@ -4445,6 +4461,7 @@ function ThreadRow({
 }): React.JSX.Element {
   const backgroundWorkCurrent = useContext(SidebarBackgroundWorkCurrentContext);
   const quickSwitchHint = useSidebarQuickSwitchHint(thread.id);
+  const threadDrag = useThreadDrag();
   const [renaming, setRenaming] = useState(false);
   const [renameTitle, setRenameTitle] = useState("");
   const [renameError, setRenameError] = useState("");
@@ -4682,6 +4699,11 @@ function ThreadRow({
       className={`thread-row ${selected ? "selected" : ""} ${compact ? "compact" : ""}`}
       data-testid="thread-row"
       data-selected={selected ? "true" : "false"}
+      data-thread-drop-id={thread.id}
+      data-thread-drop-kind="thread"
+      draggable={!renaming && threadDrag !== undefined}
+      onDragStart={(event) => { event.stopPropagation(); threadDrag?.beginThreadDrag(thread.id, event.dataTransfer); }}
+      onDragEnd={() => threadDrag?.endThreadDrag()}
     >
       {renaming ? (
         <form

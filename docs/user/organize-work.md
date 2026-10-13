@@ -269,6 +269,14 @@ thread out of its current Group, and **New group…** opens a small dialog that
 asks only for the **Group name** (prefilled with your search) and creates the
 Group with this thread in it. Typing a search never changes membership.
 
+On desktop, drag an individual thread onto a Group stack or a grouped thread
+to move it into that Group. Drop onto an ungrouped thread to open **New group**,
+prefilled with the target thread's title; creating it groups both threads in
+one operation. Dropping onto the same thread or Group leaves membership
+unchanged. Project stacks do not accept grouping drops. Open a stack's roster
+to drag an individual member; the stack face itself does not drag all members.
+The context menu remains available for keyboard and touch interaction.
+
 Select a Group in Scope to filter to it. From that Scope menu you can rename or
 delete the selected Group. Deleting a populated Group requires confirmation
 and leaves its threads ungrouped; it does not delete or archive them. Empty

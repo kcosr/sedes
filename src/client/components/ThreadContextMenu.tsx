@@ -648,7 +648,7 @@ export function ThreadContextMenu({
           mutateGroup(() => store.assignThreadGroup(thread, groupId))
         }
         onCreate={(name) =>
-          mutateGroup(() => store.createThreadGroup(thread, name))
+          mutateGroup(() => store.createThreadGroup([thread], name))
         }
         onNewGroup={(name) => afterSheet(() => openNewGroup(name))}
         onRemove={() => mutateGroup(() => store.removeThreadGroup(thread))}
@@ -955,7 +955,7 @@ export function ThreadContextMenu({
           onOpenChange={(open) => {
             if (!open) setNewGroupName(undefined);
           }}
-          onCreate={(name) => store.createThreadGroup(thread, name)}
+          onCreate={(name) => store.createThreadGroup([thread], name)}
         />
       )}
       {!thread.available && (

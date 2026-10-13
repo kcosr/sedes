@@ -74,7 +74,7 @@ async function assignGroup(
       data: {
         action: "create",
         name,
-        expectedRevision: first.groupAssignmentRevision,
+        members: [{ threadId: firstThreadId, expectedRevision: first.groupAssignmentRevision }],
         mutationId: randomUUID(),
       },
     },
@@ -206,6 +206,54 @@ async function chooseThreadGroups(page: Page, sidebar: Locator): Promise<void> {
   await expect(page.getByRole("menu", { name: "View options" })).toBeHidden();
   await expect(sidebar.getByTestId("view-options-trigger")).toBeVisible();
 }
+
+test("dragging individual threads creates a group and adds to its stack", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openSedesWorkspace(page);
+  const sourceId = await createNamedDraft(page, "Drag source thread");
+  const targetId = await createNamedDraft(page, "Drag target group");
+  const thirdId = await createNamedDraft(page, "Add third thread");
+  const sidebar = page.getByTestId("desktop-sidebar");
+  await chooseThreadGroups(page, sidebar);
+  const source = sidebar.locator(`[data-thread-id="${sourceId}"]`);
+  const target = sidebar.locator(`[data-thread-id="${targetId}"]`);
+  await expect(source).toHaveAttribute("draggable", "true");
+  const composer = page.getByTestId("composer");
+  await source.dragTo(composer);
+  await expect(composer.getByRole("list", { name: "Referenced threads" })).toContainText("Drag source thread");
+  await composer.getByRole("button", { name: "Remove thread: Drag source thread" }).click();
+  await composer.getByRole("textbox", { name: "Message Pi" }).fill("Compare @");
+  const threadSearch = page.getByRole("searchbox", { name: "Search threads" });
+  await expect(threadSearch).toBeFocused();
+  await threadSearch.fill("Drag target group");
+  await threadSearch.press("Enter");
+  await expect(composer.getByRole("textbox", { name: "Message Pi" })).toHaveValue("Compare ");
+  await expect(composer.getByRole("list", { name: "Referenced threads" })).toContainText("Drag target group");
+  await capture(page, testInfo, "thread-reference-composer.png");
+  await source.dragTo(target);
+  const dialog = page.getByRole("dialog", { name: "New group", exact: true });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole("textbox", { name: "Group name" })).toHaveValue("Drag target group");
+  await expect(dialog).toContainText("Creates a group with these 2 threads in it.");
+  await capture(page, testInfo, "thread-drag-new-group.png");
+  const created = page.waitForResponse((response) =>
+    response.request().method() === "PATCH" && response.url().endsWith(`/api/threads/${targetId}/group`) && response.status() === 200);
+  await dialog.getByRole("button", { name: "Create", exact: true }).click();
+  const groupId = threadGroupMutationResultSchema.parse(await (await created).json()).groupId!;
+  await expect(dialog).toBeHidden();
+  const stack = sidebar.locator(`[data-testid="thread-group-stack"][data-group-id="${groupId}"]`);
+  await expect(stack).toBeVisible();
+  await expect(stack).toHaveAttribute("draggable", "false");
+  await sidebar.locator(`[data-thread-id="${thirdId}"]`).dragTo(stack);
+  await expect.poll(async () => {
+    const snapshot = await currentSnapshot(page);
+    return snapshot.groups.find(({ id }) => id === groupId)?.memberCount;
+  }).toBe(3);
+  await stack.hover();
+  const roster = page.getByTestId("thread-group-roster");
+  await expect(roster.getByTestId("thread-group-member")).toHaveCount(3);
+  await capture(page, testInfo, "thread-drag-group-members.png");
+});
 
 test("thread groups stack on desktop and open as a member sheet on mobile", async ({
   page,

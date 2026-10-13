@@ -7,6 +7,15 @@ export const threadGroupNameSchema = z
   .transform((value) => value.normalize("NFKC").trim())
   .pipe(z.string().min(1).max(120));
 
+export const MAXIMUM_NEW_THREAD_GROUP_MEMBERS = 100;
+export const threadGroupCreationMembersSchema = z.array(z.strictObject({
+  threadId: threadIdSchema,
+  expectedRevision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+})).min(1).max(MAXIMUM_NEW_THREAD_GROUP_MEMBERS).refine(
+  (members) => new Set(members.map(({ threadId }) => threadId)).size === members.length,
+  { message: "A thread may only appear once in a group creation request." },
+);
+
 export const normalizedThreadGroupSchema = z.strictObject({
   id: threadGroupIdSchema,
   name: threadGroupNameSchema,
@@ -28,11 +37,7 @@ export const updateThreadGroupAssignmentRequestSchema = z.discriminatedUnion(
     z.strictObject({
       action: z.literal("create"),
       name: threadGroupNameSchema,
-      expectedRevision: z
-        .number()
-        .int()
-        .nonnegative()
-        .max(Number.MAX_SAFE_INTEGER),
+      members: threadGroupCreationMembersSchema,
       mutationId: mutationIdSchema,
     }),
     z.strictObject({

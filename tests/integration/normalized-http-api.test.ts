@@ -2254,7 +2254,7 @@ describe("normalized HTTP application contract", () => {
         .send({
           action: "create",
           name: "Design",
-          expectedRevision: 0,
+          members: [{ threadId, expectedRevision: 0 }],
           mutationId: randomUUID(),
         })
         .expect(200);

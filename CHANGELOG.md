@@ -55,6 +55,10 @@ User-facing changes are collected here before release. See the
 
 ### Added
 
+- Drag individual threads into Groups or onto another thread to create a Group.
+  Reference threads in a prompt by dragging them into the composer or choosing
+  them with **@**; references survive drafts, stashes, and queued delivery.
+
 - Claude threads support **Compact context** while idle, with retained earlier
   turns, expandable summaries, session statistics, and recovery for uncertain
   outcomes. See [manual compaction](docs/operator/backends/claude.md#manual-compaction).

@@ -17,6 +17,7 @@ import {
 } from "./ConversationItemView";
 import { MarkdownContent } from "./MarkdownContent";
 import { WorkspaceFileLinkProvider } from "../../workspace-files/workspace-file-link-routing.js";
+import { formatThreadReferenceText, THREAD_REFERENCE_HEADER } from "../../../shared/thread-references.js";
 
 const androidImageActions = vi.hoisted(() => ({
   available: false,
@@ -830,6 +831,18 @@ describe("normalized conversation renderers", () => {
     expect(screen.getByText("Here's the test")).toBeInTheDocument();
     expect(container).not.toHaveTextContent("$keel-local");
     expect(container).not.toHaveTextContent("[Skill:");
+  });
+
+  it("presents selected thread references as escaped links without hiding ordinary malformed text", () => {
+    const reference = { threadId: "616946aa-4574-41f7-bd70-d3a9edd56dbd", title: '<img src=x> "Related"' };
+    const body = `${THREAD_REFERENCE_HEADER}\nThis is ordinary text, not a reference block.`;
+    const { container } = render(<ConversationItemView item={{ ...common, kind: "user_message", content: [
+      { kind: "text", text: { text: formatThreadReferenceText(body, [reference]) } },
+    ] }} />);
+    expect(screen.getByRole("link", { name: reference.title })).toHaveAttribute("href", `/threads/${reference.threadId}`);
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.querySelector("[data-conversation-message-text]")?.textContent).toBe(body);
+    expect(container).not.toHaveTextContent('"threadReferences"');
   });
 
   it("presents authenticated callback input as a collapsed agent-result disclosure", () => {

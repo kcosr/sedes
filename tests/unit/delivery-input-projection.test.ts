@@ -12,6 +12,7 @@ import {
 import { DomainError } from "../../src/server/domain/errors.js";
 import type { SubmitTurnInput } from "../../src/server/backends/contracts.js";
 import type { ApplicationSubmitTurnInput } from "../../src/server/conversations/delivery-input-projection.js";
+import { formatThreadReferenceText, splitThreadReferenceText } from "../../src/shared/thread-references.js";
 
 const task: MaterializedTaskContext = {
   id: "8af900ae-8495-48f7-9d3f-9e322892ada1",
@@ -61,6 +62,19 @@ function snapshotWithTasks(taskContexts: readonly MaterializedTaskContext[]) {
 }
 
 describe("common delivery input projection", () => {
+  it("keeps user-selected thread text intact through provider input and canonical history with Tasks and attachments", () => {
+    const references = [{ threadId: "616946aa-4574-41f7-bd70-d3a9edd56dbd", title: "Other thread" }];
+    const text = formatThreadReferenceText("Summarize the findings.", references);
+    const input = {
+      applicationOperationId: "operation-1", mutationId: "mutation-1", source: { kind: "user" },
+      reconciliationToken: "token-1", text, contextExcerpts: [], taskContexts: [task], attachments: [],
+    } as SubmitTurnInput;
+    expect(backendDeliveryInput(input).text).toBe(renderTaskContextsForModel([task], text));
+    const snapshot = { ...snapshotWithTasks([task]), text };
+    const history = canonicalUserMessageContent({ snapshot, providerContent: [] });
+    expect(history).toContainEqual({ kind: "text", text: { text } });
+    expect(splitThreadReferenceText(history.find((part) => part.kind === "text")!.text.text)).toEqual({ text: "Summarize the findings.", references });
+  });
   it("renders deterministic Task-only and mixed model input without backend security framing", () => {
     const taskOnly = renderTaskContextsForModel([task], "");
     expect(taskOnly).toContain("Sedes Tasks selected for this message:");

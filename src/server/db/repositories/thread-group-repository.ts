@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
 import type { RequestScope } from "../../identity/identity-provider.js";
 import { DomainError } from "../../domain/errors.js";
+import { MAXIMUM_NEW_THREAD_GROUP_MEMBERS } from "../../../shared/protocol/thread-groups.js";
 
 export interface ThreadGroupRecord {
   readonly tenantId: string;
@@ -173,17 +174,32 @@ export class ThreadGroupRepository {
     threadId: string,
     input: {
       readonly name: string;
-      readonly expectedRevision: number;
+      readonly members: readonly {
+        readonly threadId: string;
+        readonly expectedRevision: number;
+      }[];
       readonly mutationId: string;
       readonly now: number;
     },
   ): MutationResult {
     const normalized = normalizeName(input.name);
+    if (
+      input.members.length < 1 ||
+      input.members.length > MAXIMUM_NEW_THREAD_GROUP_MEMBERS ||
+      new Set(input.members.map((member) => member.threadId)).size !== input.members.length ||
+      !input.members.some((member) => member.threadId === threadId) ||
+      input.members.some((member) => !Number.isSafeInteger(member.expectedRevision) || member.expectedRevision < 0)
+    ) {
+      throw new DomainError("bad_request", "Provide distinct group members including the target thread, with their current revisions.");
+    }
+    const members = input.members
+      .map(({ threadId: memberId, expectedRevision }) => ({ threadId: memberId, expectedRevision }))
+      .sort((left, right) => left.threadId.localeCompare(right.threadId));
     const requestFingerprint = fingerprint([
       "create_thread_group",
       threadId,
       normalized.name,
-      input.expectedRevision,
+      members,
     ]);
     return this.database.transaction(() => {
       const replay = this.#replay(
@@ -193,7 +209,9 @@ export class ThreadGroupRepository {
         requestFingerprint,
       );
       if (replay) return replay;
-      this.#assertAssignmentRevision(scope, threadId, input.expectedRevision);
+      for (const member of members) {
+        this.#assertAssignmentRevision(scope, member.threadId, member.expectedRevision);
+      }
       const groupId = randomUUID();
       try {
         this.database
@@ -223,8 +241,10 @@ export class ThreadGroupRepository {
         }
         throw error;
       }
-      this.#writeAssignment(scope, threadId, groupId, input.now);
-      this.#bumpAssignmentRevision(scope, threadId, input.expectedRevision);
+      for (const member of members) {
+        this.#writeAssignment(scope, member.threadId, groupId, input.now);
+        this.#bumpAssignmentRevision(scope, member.threadId, member.expectedRevision);
+      }
       this.#bumpGeneration(scope);
       const result = { groupId, threadId };
       this.#insertReceipt(

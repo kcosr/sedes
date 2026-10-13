@@ -1,0 +1,5 @@
+[data-thread-drop-target="true"] {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+  border-radius: var(--radius);
+}
