@@ -23,12 +23,17 @@ export function ComposerThreadPicker({ open, onOpenChange, query, onQueryChange,
 }): React.JSX.Element {
   const search = useRef<HTMLInputElement>(null);
   const list = useRef<HTMLDivElement>(null);
+  const restoreComposerFocus = useRef(false);
   const focus = usePickerFocus(search);
   const virtualAnchor = useMemo(() => ({ current: {
     getBoundingClientRect: () => anchor.current?.getBoundingClientRect() ?? new DOMRect(),
     get contextElement() { return anchor.current ?? undefined; },
   } }), [anchor]);
   const rows = () => Array.from(list.current?.querySelectorAll<HTMLButtonElement>("button") ?? []);
+  const chooseThread = (thread: NormalizedApplicationThreadSummary) => {
+    restoreComposerFocus.current = true;
+    onSelect(thread);
+  };
   return (
     <Popover open={open} onOpenChange={onOpenChange}>
       <PopoverAnchor virtualRef={virtualAnchor} />
@@ -40,15 +45,17 @@ export function ComposerThreadPicker({ open, onOpenChange, query, onQueryChange,
       </PopoverTrigger>
       <PopoverContent side="top" align="start" sideOffset={8} role="dialog" aria-label="Reference a thread"
         className="skill-popover max-h-[min(var(--radix-popover-content-available-height),440px,70dvh)] gap-0 overflow-hidden p-0"
-        onOpenAutoFocus={(event) => { if (inline) event.preventDefault(); else focus.onOpenAutoFocus(event); }}
+        onOpenAutoFocus={(event) => { restoreComposerFocus.current = false; if (inline) event.preventDefault(); else focus.onOpenAutoFocus(event); }}
+        onEscapeKeyDown={() => { restoreComposerFocus.current = true; }}
         onInteractOutside={(event) => {
           if (inline && (event.target === anchor.current || event.detail.originalEvent.target === anchor.current)) event.preventDefault();
+          else restoreComposerFocus.current = false;
         }}
-        onCloseAutoFocus={(event) => { event.preventDefault(); anchor.current?.focus({ preventScroll: true }); }}>
+        onCloseAutoFocus={(event) => { event.preventDefault(); if (restoreComposerFocus.current) anchor.current?.focus({ preventScroll: true }); }}>
         {!inline && <SearchableSelectSearch ref={search} type="search" value={query} aria-label="Search threads" placeholder="Search active threads"
           onChange={(event) => onQueryChange(event.target.value)} onKeyDown={(event) => {
             if ((event.key === "ArrowDown" || event.key === "ArrowUp") && moveListFocus(rows(), event.key)) event.preventDefault();
-            if (event.key === "Enter" && threads[0]) { event.preventDefault(); onSelect(threads[0]); }
+            if (event.key === "Enter" && threads[0]) { event.preventDefault(); chooseThread(threads[0]); }
           }} />}
         <div ref={list} id={listId} role="listbox" aria-label="Matching threads" className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain p-(--menu-panel-padding)"
           onKeyDown={(event) => { if (moveListFocus(rows(), event.key)) event.preventDefault(); }}>
@@ -56,7 +63,7 @@ export function ComposerThreadPicker({ open, onOpenChange, query, onQueryChange,
             <button key={thread.id} id={`${listId}-${index}`} role="option" aria-selected={index === selectedIndex} type="button"
               className={`${menuRowClass} ${index === selectedIndex ? "bg-accent" : ""}`}
               onMouseDown={(event) => { if (inline) event.preventDefault(); }}
-              onPointerMove={() => onSelectedIndexChange(index)} onClick={() => onSelect(thread)}>
+              onPointerMove={() => onSelectedIndexChange(index)} onClick={() => chooseThread(thread)}>
               <span className="min-w-0 flex-1 text-left"><span className="block truncate">{thread.title.text}</span>
                 <span className="block truncate text-xs text-muted-foreground">{thread.id}</span></span>
             </button>

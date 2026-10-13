@@ -8708,7 +8708,7 @@ tr.diff-hunk td {
 }
 
 /* The skill picker (ui/popover) reads as a near-full-width companion to
-   the input: the trigger sits 9px inside the composer card, and the far
+   the input: its anchor sits 9px inside the composer card, and the far
    edge keeps the same inset. */
 .skill-popover {
   width: min(

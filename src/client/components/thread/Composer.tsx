@@ -407,6 +407,7 @@ export function Composer({
   const skillSearchRef = useRef<HTMLInputElement>(null);
   const skillPickerFocus = usePickerFocus(skillSearchRef);
   const skillList = useRef<HTMLDivElement>(null);
+  const composerTools = useRef<HTMLDivElement>(null);
   const [skillQuery, setSkillQuery] = useState("");
   const [skills, setSkills] = useState<readonly ComposerSkillDescriptor[]>([]);
   const [skillsLoading, setSkillsLoading] = useState(false);
@@ -3389,7 +3390,7 @@ export function Composer({
                   </div>
                 )}
                 <div className="composer-footer" ref={composerFooterRef}>
-                  <div className="composer-tools">
+                  <div className="composer-tools" ref={composerTools}>
                     <ComposerThreadPicker
                       anchor={textarea}
                       open={active && threadPickerOpen}
@@ -3411,6 +3412,7 @@ export function Composer({
                         if (!open) setSkillQuery("");
                       }}
                     >
+                      <PopoverAnchor virtualRef={composerTools} />
                       <PopoverTrigger asChild>
                         <button
                           type="button"

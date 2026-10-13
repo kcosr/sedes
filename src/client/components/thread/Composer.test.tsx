@@ -732,6 +732,25 @@ describe("thread references", () => {
     act(() => openThreadReferencePicker("current-thread"));
     expect(screen.queryByRole("dialog", { name: "Reference a thread" })).not.toBeInTheDocument();
   });
+
+  it.each([false, true])("preserves an outside input's focus when dismissing the reference picker, inline %s", async (inline) => {
+    const store = new FakeComposerStore(snapshot(), "");
+    render(<><input aria-label="Sidebar search" /><Composer store={store as unknown as ThreadClientStore} applicationStore={referenceApplication().store} /></>);
+    const input = screen.getByRole("textbox", { name: "Message Pi" });
+    if (inline) {
+      input.focus();
+      await userEvent.keyboard("@Other");
+    } else {
+      await userEvent.click(screen.getByRole("button", { name: "Reference a thread" }));
+    }
+    expect(await screen.findByRole("dialog", { name: "Reference a thread" })).toBeVisible();
+    const focus = vi.spyOn(input, "focus");
+    const outside = screen.getByRole("textbox", { name: "Sidebar search" });
+    await userEvent.click(outside);
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Reference a thread" })).not.toBeInTheDocument());
+    expect(outside).toHaveFocus();
+    expect(focus).not.toHaveBeenCalled();
+  });
   it("prefers current archived state over a stale loaded descendant", async () => {
     const store = new FakeComposerStore(snapshot(), "Ask");
     const current = { ...referencedThread, inventoryState: "archived" as const };

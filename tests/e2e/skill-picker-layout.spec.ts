@@ -33,8 +33,23 @@ test("skill picker nearly spans the composer on desktop and mobile", async ({
   await capture(page, testInfo, "skill-picker-wide-desktop.png");
   await page.keyboard.press("Escape");
 
+  await page.getByRole("button", { name: "Reference a thread", exact: true }).click();
+  const references = page.getByRole("dialog", { name: "Reference a thread", exact: true });
+  await expect(references).toBeVisible();
+  const sidebarSearch = page.getByTestId("desktop-sidebar").getByRole("searchbox", { name: "Search threads", exact: true });
+  await sidebarSearch.click();
+  await expect(references).toBeHidden();
+  await expect(sidebarSearch).toBeFocused();
+
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto(threadPath);
   await expectNearFullComposerWidth(page);
   await capture(page, testInfo, "skill-picker-wide-mobile.png");
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Thread actions", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Reference a thread…" }).click();
+  await expect(references).toBeVisible();
+  await page.getByText("This thread is ready", { exact: true }).click();
+  await expect(references).toBeHidden();
+  await expect(page.getByTestId("composer").getByRole("textbox")).not.toBeFocused();
 });
