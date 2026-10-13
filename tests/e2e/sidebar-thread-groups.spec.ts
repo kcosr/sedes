@@ -207,7 +207,7 @@ async function chooseThreadGroups(page: Page, sidebar: Locator): Promise<void> {
   await expect(sidebar.getByTestId("view-options-trigger")).toBeVisible();
 }
 
-test("dragging individual threads creates a group and adds to its stack", async ({ page }, testInfo) => {
+test("dragging individual threads creates a group and adds to its stack", async ({ page, browserDiagnostics }, testInfo) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await openSedesWorkspace(page);
   const sourceId = await createNamedDraft(page, "Drag source thread");
@@ -245,6 +245,43 @@ test("dragging individual threads creates a group and adds to its stack", async 
   const stack = sidebar.locator(`[data-testid="thread-group-stack"][data-group-id="${groupId}"]`);
   await expect(stack).toBeVisible();
   await expect(stack).toHaveAttribute("draggable", "false");
+
+  // A concurrent group change must be visible inside the viewport, including
+  // when the application shell clips its contents to the screen height.
+  const assignmentRoute = `**/api/threads/${thirdId}/group`;
+  browserDiagnostics.allowedConsoleErrors.push(/^Failed to load resource: the server responded with a status of 409 \(Conflict\)$/u);
+  await page.route(assignmentRoute, async (route) => {
+    await route.fulfill({
+      status: 409,
+      contentType: "application/json",
+      body: JSON.stringify({ error: {
+        code: "group_assignment_revision_conflict",
+        message: "The thread group changed in another client.",
+        retryable: false,
+      } }),
+    });
+  });
+  const conflict = page.waitForResponse((response) => response.request().method() === "PATCH" && response.url().endsWith(`/api/threads/${thirdId}/group`) && response.status() === 409);
+  await sidebar.locator(`[data-thread-id="${thirdId}"]`).dragTo(stack);
+  await conflict;
+  const dropError = page.getByRole("alert", { name: "Thread drop failed" });
+  await expect(dropError).toContainText("The thread group changed in another client.");
+  expect((await currentSnapshot(page)).threads.find(({ id }) => id === thirdId)?.groupId).toBeNull();
+  for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+    await page.setViewportSize(viewport);
+    await expect(dropError).toBeVisible();
+    const bounds = await dropError.boundingBox();
+    expect(bounds).not.toBeNull();
+    expect(bounds!.x).toBeGreaterThanOrEqual(0);
+    expect(bounds!.y).toBeGreaterThanOrEqual(0);
+    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(viewport.width);
+    expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(viewport.height);
+    await capture(page, testInfo, `thread-drag-conflict-${viewport.width}.png`);
+  }
+  await dropError.getByRole("button", { name: "Dismiss" }).click();
+  await expect(dropError).toBeHidden();
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.unroute(assignmentRoute);
   await sidebar.locator(`[data-thread-id="${thirdId}"]`).dragTo(stack);
   await expect.poll(async () => {
     const snapshot = await currentSnapshot(page);

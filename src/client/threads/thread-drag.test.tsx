@@ -70,12 +70,19 @@ describe("thread grouping drag", () => {
   it.each([
     new ApiError(409, "group_assignment_revision_conflict", "The thread group changed in another client.", false),
     new Error("The connection was lost."),
-  ])("shows a visible toast when grouping fails: %s", async (failure) => {
+  ])("shows a dismissible alert without taking focus when grouping fails: %s", async (failure) => {
     const { start, assignThreadGroup } = setup();
     assignThreadGroup.mockRejectedValueOnce(failure);
+    const focused = screen.getByRole("button", { name: "Target" });
+    focused.focus();
     fireEvent.drop(screen.getByTestId("group"), { dataTransfer: start() });
-    const message = await screen.findByText(failure.message);
-    expect(message.closest(".wb-toast--error")).toBeVisible();
+    const alert = await screen.findByRole("alert", { name: "Thread drop failed" });
+    expect(alert).toHaveTextContent(failure.message);
+    expect(alert).toBeVisible();
+    expect(alert.parentElement).toBe(document.body);
+    expect(focused).toHaveFocus();
+    await userEvent.click(within(alert).getByRole("button", { name: "Dismiss" }));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("joins the target row's current group even when it changed during the drag", async () => {

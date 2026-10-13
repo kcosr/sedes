@@ -2,11 +2,13 @@ import {
   createContext, useCallback, useContext, useEffect, useMemo, useRef, useState,
   type ReactNode,
 } from "react";
+import { createPortal } from "react-dom";
 import type { NormalizedApplicationSnapshot, NormalizedApplicationThreadSummary } from "../../shared/index.js";
 import type { ApplicationClientStore } from "../stores/ApplicationClientStore.js";
 import { ApiError } from "../api/ApiClient.js";
 import { NewGroupDialog } from "../components/MoveToGroupMenu.js";
-import { ToastProvider, useToast } from "../workbench/components/Toast.js";
+import { Button } from "../components/ui/button.js";
+import { DialogAlert } from "../components/ui/dialog.js";
 import "./thread-drag.css";
 
 export const THREAD_DRAG_MIME = "application/x-sedes-thread+json";
@@ -44,17 +46,13 @@ interface ThreadDragProviderProps {
   readonly children: ReactNode;
 }
 
-export function ThreadDragProvider(props: ThreadDragProviderProps): React.JSX.Element {
-  return <ToastProvider><ThreadDragStateProvider {...props} /></ToastProvider>;
-}
-
-function ThreadDragStateProvider({ store, snapshot, children }: ThreadDragProviderProps): React.JSX.Element {
-  const toast = useToast();
+export function ThreadDragProvider({ store, snapshot, children }: ThreadDragProviderProps): React.JSX.Element {
   const [active, setActive] = useState<ThreadDragPayload>();
   const activeRef = useRef<ThreadDragPayload | undefined>(undefined);
   const [pendingGroup, setPendingGroup] = useState<PendingGroup>();
   const returnFocusRef = useRef<HTMLElement | null>(null);
   const [announcement, setAnnouncement] = useState("");
+  const [error, setError] = useState<string>();
   const highlightRef = useRef<HTMLElement | undefined>(undefined);
   const mutationIds = useRef(new Map<string, string>());
 
@@ -66,8 +64,8 @@ function ThreadDragStateProvider({ store, snapshot, children }: ThreadDragProvid
 
   const announce = useCallback((message: string, error = false) => {
     setAnnouncement(error ? "" : message);
-    if (error) toast(message, { tone: "error" });
-  }, [toast]);
+    setError(error ? message : undefined);
+  }, []);
 
   const highlight = useCallback((element?: HTMLElement) => {
     if (highlightRef.current === element) return;
@@ -201,6 +199,16 @@ function ThreadDragStateProvider({ store, snapshot, children }: ThreadDragProvid
   return <ThreadDragContext.Provider value={controller}>
     {children}
     <p className="sr-only" role="status" aria-live="polite">{announcement}</p>
+    {error && createPortal(
+      <DialogAlert
+        className="thread-drag-error"
+        tone="danger"
+        aria-label="Thread drop failed"
+        title="Thread drop failed"
+        action={<Button variant="outline" size="sm" onClick={() => setError(undefined)}>Dismiss</Button>}
+      >{error}</DialogAlert>,
+      document.body,
+    )}
     <NewGroupDialog
       open={pendingGroup !== undefined}
       initialName={pendingGroup?.initialName ?? ""}
