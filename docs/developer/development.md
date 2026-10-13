@@ -422,7 +422,7 @@ SEDES_REAL_CLAUDE_CONFIG_DIRECTORY=/absolute/provider-home \
 ```
 
 It requires a logged-in first-party `claude.ai` subscription with a nonempty
-subscription type and no API-key override, exactly one `claude-sonnet-5`/low
+subscription type and no API-key override, exactly one `claude-sonnet-5-5`/low
 catalog entry, `dontAsk`, an empty tool list, and no MCP servers. It creates two
 disposable provider sessions and retains their native history. The Native MCP
 file adds a third: the production `ClaudeSdkSession` with no built-in tools,

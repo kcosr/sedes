@@ -14,7 +14,7 @@ import { ClaudeSdkSession } from "../../src/server/backends/claude/claude-sdk-se
 import type { ConfigurationDocument } from "../../src/shared/protocol/configuration-admin.js";
 import { startLiveAgentToolListener } from "../helpers/live-agent-tool-listener.js";
 
-const REQUIRED_MODEL = "claude-sonnet-5";
+const REQUIRED_MODEL = "claude-sonnet-5-5";
 const MODEL_TURN_TIMEOUT_MS = 240_000;
 const environmentId = "019196f7-a0a8-7bc4-a89b-8cf013978405";
 const temporaryRoots: string[] = [];

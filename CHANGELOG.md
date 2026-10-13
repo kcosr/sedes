@@ -21,7 +21,7 @@ User-facing changes are collected here before release. See the
   ([#9](https://github.com/kcosr/sedes/pull/9), [#10](https://github.com/kcosr/sedes/pull/10), [#12](https://github.com/kcosr/sedes/pull/12), [#15](https://github.com/kcosr/sedes/pull/15), [#17](https://github.com/kcosr/sedes/pull/17), [#38](https://github.com/kcosr/sedes/pull/38), [#44](https://github.com/kcosr/sedes/pull/44), [#45](https://github.com/kcosr/sedes/pull/45), [#73](https://github.com/kcosr/sedes/pull/73), [#75](https://github.com/kcosr/sedes/pull/75), [#77](https://github.com/kcosr/sedes/pull/77))
 
 - Claude requires Claude Code **2.1.287 or newer** on every execution host
-  and uses Agent SDK 0.3.287. See the
+  and uses Agent SDK 0.3.296 (tested with Claude Code 2.1.296). See the
   [Claude upgrade requirements](docs/operator/backends/claude.md).
   ([#29](https://github.com/kcosr/sedes/pull/29))
 
@@ -183,6 +183,9 @@ User-facing changes are collected here before release. See the
   ([#73](https://github.com/kcosr/sedes/pull/73))
 
 ### Fixed
+
+- Claude reports organization-policy startup failures clearly and recognizes
+  subagent replies without attributing them to pending parent-thread input.
 
 - HTML previews publish successfully from workspace files even when downloads
   complete immediately. ([#77](https://github.com/kcosr/sedes/pull/77))

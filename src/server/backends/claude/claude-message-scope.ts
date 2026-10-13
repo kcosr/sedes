@@ -11,5 +11,6 @@ export function claudeMessageHasVisibleExternalOrigin(origin: unknown): boolean 
 export function claudeMessageIsChildOwned(message: SDKMessage): boolean {
   return (message.type === "user" || message.type === "assistant" || message.type === "stream_event") &&
     (typeof message.parent_tool_use_id === "string" && message.parent_tool_use_id.length > 0 ||
+     "agent_id" in message && typeof message.agent_id === "string" && message.agent_id.length > 0 ||
      "subagent_type" in message && typeof message.subagent_type === "string" && message.subagent_type.length > 0);
 }

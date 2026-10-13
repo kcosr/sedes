@@ -47,7 +47,7 @@ const fixtures: readonly CompatibilityPolicyFixture[] = [
     minimum: CLAUDE_CODE_MINIMUM_VERSION,
     belowMinimum: "2.1.286",
     testedThrough: CLAUDE_CODE_TESTED_THROUGH_VERSION,
-    compatibleNewer: "2.1.288",
+    compatibleNewer: "2.1.297",
     assess(version) {
       const verified = verifyClaudeRuntimeVersion(version);
       return {

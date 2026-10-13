@@ -3716,6 +3716,8 @@ const startupFailureMessages: Record<SDKStartupFailureReason, string> = {
   org_pin_api_key_conflict: "Claude organization policy conflicts with the configured API key.",
   org_verify_failed: "Claude could not verify the required organization.",
   org_pin_mismatch: "Claude is signed into a different organization than required.",
+  org_config_required_unavailable: "Required Claude organization configuration is unavailable.",
+  org_config_refused: "Claude organization configuration was refused.",
   managed_settings_invalid: "Claude managed settings are invalid.",
   remote_settings_required_unavailable: "Required Claude remote settings are unavailable.",
   gateway_signin_required: "Claude gateway sign-in is required.",

@@ -13,7 +13,7 @@ import { ClaudeSdkSession } from "../../src/server/backends/claude/claude-sdk-se
 
 const MODEL = "claude-sonnet-5-5";
 const EFFORT = "low";
-const CLI_RELEASE = "2.1.287";
+const CLI_RELEASE = "2.1.296";
 
 /** Native authentication remains real; only tools and user configuration are disabled. */
 class BoundedLiveCompactionSdk extends OfficialClaudeSdkFacade {
@@ -119,7 +119,7 @@ it.runIf(process.env.SEDES_REAL_CLAUDE === "1")("live manual compaction retains 
     onMessage: () => {}, onFailure: error => { failures.push(error); },
   });
   try {
-    expect(CLAUDE_AGENT_SDK_RELEASE).toBe("0.3.287");
+    expect(CLAUDE_AGENT_SDK_RELEASE).toBe("0.3.296");
     const preflight = await bounded(probeClaudeSdkDirect({ sdk, executablePath, cwd, environment,
       timeoutMs: 30_000, signal: abortController.signal }));
     expect(preflight.cliRelease).toBe(CLI_RELEASE);

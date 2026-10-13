@@ -64,16 +64,22 @@ test.describe.serial("blocking interaction panel", () => {
   }, testInfo) => {
     codexThreadPath = await openImportedCodexThread(page);
     const threadId = threadIdFromPath(codexThreadPath);
-    await startCodexFixtureTurn(page, "Exercise the decision takeover");
-
     const composer = page.getByTestId("composer").locator("textarea");
     const retainedDraft = "Keep this draft while approval is open";
-    await fillDraft(page, composer, retainedDraft);
-    await composer.focus();
-
-    const [requestId] = await openScenario(page, threadId, "decision_standard");
     const dialog = page.getByRole("dialog", { name: "Command approval" });
-    await expect(dialog).toBeVisible();
+    let requestId: number;
+    // Draft persistence can outlast the fixture's normal 2.6-second turn.
+    // Keep it alive until the pending interaction owns the completion gate.
+    expect((await page.request.post("/__e2e/codex/turn-completion/arm")).ok()).toBe(true);
+    try {
+      await startCodexFixtureTurn(page, "Exercise the decision takeover");
+      await fillDraft(page, composer, retainedDraft);
+      await composer.focus();
+      [requestId] = await openScenario(page, threadId, "decision_standard");
+      await expect(dialog).toBeVisible();
+    } finally {
+      expect((await page.request.post("/__e2e/codex/turn-completion/reset")).ok()).toBe(true);
+    }
     await expect(
       page.getByRole("button", { name: "Stop", exact: true }),
     ).toBeVisible();

@@ -634,7 +634,7 @@ describe("ClaudeSdkSession", () => {
   it("accepts a newer compatible stream release and reports it", async () => {
     const onFailure = vi.fn();
     const onNewerVersion = vi.fn();
-    const fixture = fakeQuery({ streamRelease: "2.1.288" });
+    const fixture = fakeQuery({ streamRelease: "2.1.297" });
     const session = new ClaudeSdkSession({
       sdk: fixture.sdk,
       executablePath: "/usr/local/bin/claude",
@@ -649,12 +649,12 @@ describe("ClaudeSdkSession", () => {
     });
 
     await expect(session.start()).resolves.toMatchObject({
-      cliRelease: "2.1.288",
+      cliRelease: "2.1.297",
     });
     expect(session.closed).toBe(false);
     expect(onNewerVersion).toHaveBeenCalledWith({
-      testedThroughVersion: "2.1.287",
-      observedVersion: "2.1.288",
+      testedThroughVersion: "2.1.296",
+      observedVersion: "2.1.297",
     });
     expect(onFailure).not.toHaveBeenCalled();
     await session.close();
@@ -666,8 +666,8 @@ describe("ClaudeSdkSession", () => {
     const observation = advisories.beginObservation("conversation_session");
     const onFailure = vi.fn();
     const fixture = fakeQuery({
-      cliRelease: "2.1.288",
-      streamRelease: "2.1.288",
+      cliRelease: "2.1.297",
+      streamRelease: "2.1.297",
       messages: [systemInitMessage("2.1.240")],
     });
     const session = new ClaudeSdkSession({
@@ -700,8 +700,8 @@ describe("ClaudeSdkSession", () => {
     const advisories = new ClaudeRuntimeInstallationAdvisories();
     const observation = advisories.beginObservation("conversation_session");
     const fixture = fakeQuery({
-      cliRelease: "2.1.288",
-      streamRelease: "2.1.288",
+      cliRelease: "2.1.297",
+      streamRelease: "2.1.297",
       streamError: new Error("claude_unrelated_stream_failure"),
     });
     const session = new ClaudeSdkSession({
@@ -719,7 +719,7 @@ describe("ClaudeSdkSession", () => {
 
     await session.start();
     await vi.waitFor(() => expect(session.closed).toBe(true));
-    expect(advisories.active()[0]?.message.text).toContain("Running 2.1.288");
+    expect(advisories.active()[0]?.message.text).toContain("Running 2.1.297");
     vi.restoreAllMocks();
   });
 
@@ -857,7 +857,7 @@ describe("ClaudeSdkSession", () => {
     });
     const fixture = fakeQuery({
       streamGate,
-      streamRelease: "2.1.288",
+      streamRelease: "2.1.297",
     });
     const onNewerVersion = vi.fn();
     const session = new ClaudeSdkSession({
@@ -891,8 +891,8 @@ describe("ClaudeSdkSession", () => {
     expect(outcome).toBe("resolved");
     expect(session.closed).toBe(false);
     expect(onNewerVersion).toHaveBeenCalledWith({
-      testedThroughVersion: "2.1.287",
-      observedVersion: "2.1.288",
+      testedThroughVersion: "2.1.296",
+      observedVersion: "2.1.297",
     });
     await session.close();
   });

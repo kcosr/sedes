@@ -1,11 +1,12 @@
 /**
  * Sticky runtime floor for the one reviewed Claude SDK protocol profile.
  * The 2.1.287 floor qualifies queued-input history, detached continuations,
- * permission initialization, and stream completion with SDK 0.3.287.
+ * permission initialization, and stream completion. SDK 0.3.296 retains
+ * this independently qualified native floor.
  */
 export const CLAUDE_CODE_MINIMUM_VERSION = "2.1.287";
 /** Newest Claude Code release exercised against this profile. */
-export const CLAUDE_CODE_TESTED_THROUGH_VERSION = "2.1.287";
+export const CLAUDE_CODE_TESTED_THROUGH_VERSION = "2.1.296";
 /** Stable releases with known contract defects, independent of ordering. */
 export const CLAUDE_CODE_EXCLUDED_VERSIONS: readonly string[] = Object.freeze(
   [],

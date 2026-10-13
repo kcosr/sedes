@@ -358,7 +358,7 @@ async function manualCompactingRun(scenario: "success" | "empty" | "failure" | "
   }, 30_000);
   const bounded = <T>(work: Promise<T>): Promise<T> => Promise.race([work, deadline]);
   try {
-    expect(CLAUDE_AGENT_SDK_RELEASE).toBe("0.3.287");
+    expect(CLAUDE_AGENT_SDK_RELEASE).toBe("0.3.296");
     await bounded(session.start());
     // The production startup marker must not perform a model call.
     expect(requests).toBe(0);
