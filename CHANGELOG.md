@@ -203,6 +203,11 @@ User-facing changes are collected here before release. See the
 
 ### Fixed
 
+- Remote Codex, Claude, and OpenCode CLI tool settings retain correct
+  availability after sidecar connection and reconnection. Deploy and restart
+  the server; this fix does not require a sidecar upgrade.
+  ([#78](https://github.com/kcosr/sedes/pull/78))
+
 - Claude reports organization-policy startup failures clearly and recognizes
   subagent replies without attributing them to pending parent-thread input.
   ([#78](https://github.com/kcosr/sedes/pull/78))

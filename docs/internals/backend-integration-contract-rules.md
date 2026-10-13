@@ -3489,6 +3489,14 @@ their existing source and presentation rules. Repairs must validate retained
 backend evidence, preserve abandonment receipts, and never replay input or
 change the thread's lifecycle as a side effect.
 
+Managed CLI eligibility uses the granted, handshake-verified tool endpoint;
+the reverse Sedes tool relay is not part of the sidecar's forward operation
+inventory. Preserve that evidence through idle retirement and refresh it on
+normal reconnection, while continuing to deny disconnected or ungranted
+hosts. Codex and Claude use this endpoint check for their tool presentations,
+and OpenCode uses it for CLI tools. Pi Native tools and local Grok tools retain
+their existing eligibility rules.
+
 Agent tools use the normalized, principal-scoped contract in
 [Agent tools](agent-tools.md). Eligibility is checked at execution time against
 the current thread, backend generation, effective policy revision, and tool

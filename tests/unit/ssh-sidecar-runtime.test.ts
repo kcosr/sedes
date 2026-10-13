@@ -1,4 +1,5 @@
 import { SshInteractiveTerminalProvider } from "../../src/server/execution/ssh-interactive-terminal-provider.js";
+import { managedSshAgentToolCliAvailability } from "../../src/server/runtime/agent-tool-cli-availability.js";
 import { describe, expect, it, vi } from "vitest";
 import { SIDECAR_WIRE_VERSION } from "../../src/internal/sidecar-protocol/envelopes.js";
 import type { SidecarServiceStatus } from "../../src/internal/sidecar-protocol/service-management-v1.js";
@@ -47,6 +48,7 @@ function fixture(
     readonly sessionCloseError?: Error;
     readonly sessionCloseGate?: Promise<void>;
     readonly agentTools?: boolean;
+    readonly agentToolCliSupported?: boolean;
     readonly terminal?: boolean;
     readonly terminalSupported?: boolean;
     readonly isTransportAvailable?: () => boolean;
@@ -73,6 +75,7 @@ function fixture(
       options.sessionCloseError,
       options.sessionCloseGate,
       options.terminalSupported === true,
+      options.agentTools === true && options.agentToolCliSupported !== false,
     );
     sessions.push(session);
     return session;
@@ -327,6 +330,61 @@ describe("SidecarRuntimeOwner", () => {
       await value.owner.disconnect();
       expect(value.owner.canAcquireCapability("interactive_terminal", 2)).toBe(false);
       await expect(value.owner.acquireOperation(scope, environmentId, new AbortController().signal)).rejects.toThrow("sidecar_unavailable");
+    } finally { await value.owner.close(); vi.useRealTimers(); }
+  });
+
+  it.each(["ssh_stdio", "outbound_websocket"])("retains verified agent-tool endpoint availability after %s attachment and reconnection", async transportKind => {
+    vi.useFakeTimers();
+    let connected = true;
+    const value = fixture({ agentTools: true, idleMilliseconds: 5000, transportKind, isTransportAvailable: () => connected });
+    const cli = managedSshAgentToolCliAvailability({ scope, executionEnvironmentId: environmentId, runtime: value.owner });
+    if (cli.availability !== "managed") throw new Error("Expected managed CLI");
+    try {
+      const first = await value.owner.acquireOperation(scope, environmentId, new AbortController().signal);
+      expect(first.session.negotiatedCapabilities.some(capability => capability.capabilityId === "agent_tools_cli")).toBe(false);
+      expect(cli.provider.inspect?.()).toEqual({ availability: "available" });
+      expect(value.owner.activeAgentToolLeaseCount).toBe(0);
+      expect(value.owner.canAcquireCapability("agent_tools_cli", 99)).toBe(false);
+      first.release();
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(first.session.close).toHaveBeenCalledWith("sidecar_idle_expired");
+      expect(cli.provider.inspect?.()).toEqual({ availability: "available" });
+      expect(value.startSession).toHaveBeenCalledOnce();
+      connected = false;
+      expect(cli.provider.inspect?.()).toEqual({ availability: "unavailable", reason: "sidecar_unavailable" });
+      connected = true;
+      const second = await value.owner.acquireOperation(scope, environmentId, new AbortController().signal);
+      expect(second.carrierGeneration).toBe(2);
+      expect(cli.provider.inspect?.()).toEqual({ availability: "available" });
+      second.release();
+      await value.owner.disconnect();
+      expect(cli.provider.inspect?.()).toEqual({ availability: "unavailable", reason: "sidecar_unavailable" });
+    } finally { await value.owner.close(); vi.useRealTimers(); }
+  });
+
+  it("denies agent-tool capability without a grant or verified endpoint metadata", async () => {
+    const ungranted = fixture();
+    const missingEndpoint = fixture({ agentTools: true, agentToolCliSupported: false });
+    try {
+      expect(ungranted.owner.canAcquireCapability("agent_tools_cli", 6)).toBe(false);
+      const lease = await missingEndpoint.owner.acquireOperation(scope, environmentId, new AbortController().signal);
+      expect(missingEndpoint.owner.canAcquireCapability("agent_tools_cli", 6)).toBe(false);
+      lease.release();
+    } finally { await ungranted.owner.close(); await missingEndpoint.owner.close(); }
+  });
+
+  it("refreshes agent-tool endpoint evidence on a replacement carrier", async () => {
+    vi.useFakeTimers();
+    const value = fixture({ agentTools: true, idleMilliseconds: 5000 });
+    try {
+      const first = await value.owner.acquireOperation(scope, environmentId, new AbortController().signal);
+      expect(value.owner.canAcquireCapability("agent_tools_cli", 6)).toBe(true);
+      first.release();
+      await vi.advanceTimersByTimeAsync(5000);
+      value.startSession.mockResolvedValueOnce(new FakeSession());
+      const second = await value.owner.acquireOperation(scope, environmentId, new AbortController().signal);
+      expect(value.owner.canAcquireCapability("agent_tools_cli", 6)).toBe(false);
+      second.release();
     } finally { await value.owner.close(); vi.useRealTimers(); }
   });
 
@@ -943,6 +1001,7 @@ describe("SidecarRuntimeOwner", () => {
 
 class FakeSession implements SidecarRuntimeSession {
   readonly negotiatedCapabilities: SidecarRuntimeSession["negotiatedCapabilities"];
+  readonly agentToolCli: SidecarRuntimeSession["agentToolCli"];
   readonly #closed = deferred<void>();
   readonly #closeError: Error | undefined;
   readonly #closeGate: Promise<void> | undefined;
@@ -953,8 +1012,13 @@ class FakeSession implements SidecarRuntimeSession {
     if (this.#closeError) throw this.#closeError;
   });
 
-  constructor(closeError?: Error, closeGate?: Promise<void>, terminalSupported = false) {
+  constructor(closeError?: Error, closeGate?: Promise<void>, terminalSupported = false, agentToolCliSupported = false) {
     this.negotiatedCapabilities = [{ capabilityId: "workspace_files", majorVersion: 8, operations: ["root.open"] }, ...(terminalSupported ? [{ capabilityId: "interactive_terminal", majorVersion: 2, operations: ["terminal.prepare"] }] : [])];
+    this.agentToolCli = agentToolCliSupported ? {
+      endpoint: "unix:///run/user/1000/sedes-agent-tools.sock",
+      executableDirectory: installation.executableDirectory,
+      inheritedPath: "/usr/bin:/bin",
+    } : undefined;
     this.#closeError = closeError;
     this.#closeGate = closeGate;
   }

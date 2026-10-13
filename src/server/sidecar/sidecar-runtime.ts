@@ -1,6 +1,6 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { AGENT_TOOL_CLI_CAPABILITY } from "../../internal/agent-tool-cli-protocol/capability.js";
-import type { SidecarCapabilityInventory } from "../../internal/sidecar-protocol/control-v2.js";
+import type { SidecarAgentToolCliMetadata, SidecarCapabilityInventory } from "../../internal/sidecar-protocol/control-v2.js";
 import { SIDECAR_WIRE_VERSION } from "../../internal/sidecar-protocol/envelopes.js";
 import {
   SidecarFrameWriteError,
@@ -36,6 +36,7 @@ export class SidecarSessionCleanupError extends Error {
 
 export interface SidecarRuntimeSession {
   readonly negotiatedCapabilities: readonly SidecarCapabilityInventory[];
+  readonly agentToolCli?: SidecarAgentToolCliMetadata;
   readonly closed: Promise<unknown>;
   close(reason: string): Promise<void>;
 }
@@ -176,6 +177,7 @@ export class SidecarRuntimeOwner<Session extends SidecarRuntimeSession> {
   readonly #retiringSessions = new Set<Promise<void>>();
   readonly #sessionRetirements = new WeakMap<Session, Promise<void>>();
   #lastNegotiatedCapabilities: readonly SidecarCapabilityInventory[] | undefined;
+  #lastAgentToolCliAvailable: boolean | undefined;
   readonly #recoverySessions = new Set<Session>();
   readonly #recoveryReferences = new Map<Session, () => SidecarRuntimeLease<Session>>();
   #automaticRecovery: AutomaticRecoveryAttachment<Session> | undefined;
@@ -279,6 +281,9 @@ export class SidecarRuntimeOwner<Session extends SidecarRuntimeSession> {
   canAcquireCapability(capabilityId: string, majorVersion: number): boolean {
     if (this.#closed || this.#intentionallyDisconnected || this.#retirementFailure !== undefined || !this.#isTransportAvailable()) return false;
     if (!this.#authorizedCapabilities.some(capability => capability.capabilityId === capabilityId && capability.majorVersion === majorVersion)) return false;
+    // Agent tools use the reverse Sedes route, not the sidecar's forward
+    // operation inventory. Its endpoint metadata is verified during hello.
+    if (capabilityId === AGENT_TOOL_CLI_CAPABILITY.capabilityId) return this.#lastAgentToolCliAvailable !== false;
     return this.#lastNegotiatedCapabilities === undefined || this.#lastNegotiatedCapabilities.some(capability => capability.capabilityId === capabilityId && capability.majorVersion === majorVersion);
   }
 
@@ -761,6 +766,7 @@ export class SidecarRuntimeOwner<Session extends SidecarRuntimeSession> {
       const owned = Object.freeze({ session, carrierGeneration, serviceStatus: launched.serviceStatus });
       this.#current = owned;
       this.#lastNegotiatedCapabilities = session.negotiatedCapabilities;
+      this.#lastAgentToolCliAvailable = session.agentToolCli !== undefined;
       const readyPublication = this.#publishLifecycleEvidence({
         availability: "available",
       });

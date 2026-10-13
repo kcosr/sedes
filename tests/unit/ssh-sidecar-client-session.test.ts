@@ -610,6 +610,7 @@ describe("SidecarClientSession", () => {
       }
       const session = await started;
       expect(session.agentToolCli).toEqual(metadata);
+      expect(session.negotiatedCapabilities.some(capability => capability.capabilityId === "agent_tools_cli")).toBe(false);
       await expect(
         sidecar.call(agentToolsCatalogOperation, {
           sourceCapability: "c".repeat(48),
