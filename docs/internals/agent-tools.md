@@ -945,7 +945,7 @@ Sedes adds CLI variables, so injection cannot discard its normal `HOME`,
 Codex over SSH can use CLI presentation only when the environment explicitly
 enables `agent_tools_cli` and the sidecar advertises `agent_tools_cli@5`.
 Sedes deploys one owner-only Unix socket beside the managed sidecar, and the
-sidecar relays the strict v4 agent-tool protocol over its current persistent-service
+sidecar relays the strict v5 agent-tool protocol over its current persistent-service
 connection. Codex and sidecar health remain independent. Missing
 capability, unavailable sidecar, imported thread, disabled network policy, or
 unverifiable environment isolation fails closed. Network access is currently

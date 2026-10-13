@@ -13,9 +13,9 @@ const cleanups: (() => Promise<unknown>)[] = [];
 afterEach(async () => { for (const close of cleanups.splice(0).reverse()) await close(); });
 const tools = new CanonicalInlineAgentToolService({ application: { readThreadStatus: async () => undefined } });
 const catalog = tools.catalogSummaries("mcp", "thread_agent");
-async function fixture(invoke: Parameters<OpenCodeMcpIngress["admit"]>[0]["invoke"]) {
+async function fixture(invoke: Parameters<OpenCodeMcpIngress["admit"]>[0]["invoke"], toolCatalog = catalog) {
   const ingress = new OpenCodeMcpIngress(); cleanups.push(() => ingress.close());
-  const channel = await ingress.admit({ catalog, invoke });
+  const channel = await ingress.admit({ catalog: toolCatalog, invoke });
   const input = new PassThrough(); const replies: any[] = []; let stdout = "", stderr = "";
   const result = runSedesOpenCodeMcp([], { environment: { ...channel.environment }, input,
     output: { write: text => { stdout += text; for (const line of text.trim().split("\n")) replies.push(JSON.parse(line)); return true; }, once: () => {} },
@@ -30,6 +30,42 @@ const call = (sessionID?: string) => ({ name: "sedes_catalog", arguments: { acti
   ...(sessionID ? { _meta: { "ai.opencode/sessionID": sessionID } } : {}) });
 
 describe("OpenCode per-call MCP bridge", () => {
+  it.each([
+    { name: "65,537 ASCII units", content: "x".repeat(65_537) },
+    { name: "262,144 emoji units", content: "🙂".repeat(131_072) },
+    { name: "262,144 escaped control units", content: "\u0000".repeat(262_144) },
+  ])("carries Workpad create, update and get through real Native ingress: $name", async ({ content }) => {
+    const workpadTools = new CanonicalInlineAgentToolService({ application: {} as never, workpads: {} as never });
+    const seen: string[] = [];
+    let current = content;
+    let revision = 0;
+    const pad = () => ({ id: "pad", title: "Large", scope: { kind: "global" }, revision,
+      author: { kind: "user", name: "You", nameSnapshot: "You", threadId: null, clientId: null },
+      createdAt: "2026-10-13T00:00:00.000Z", updatedAt: "2026-10-13T00:00:00.000Z", archivedAt: null, content: current });
+    const f = await fixture(async request => {
+      if (request.operation === "describe") return { tools: workpadTools.describeMany("mcp", "thread_agent", request.toolIds) };
+      if (request.operation !== "invoke") throw new Error("Unexpected request");
+      seen.push(request.request.toolId);
+      const input = request.request.input as { content?: string; edit?: { content: string } };
+      if (request.request.toolId === "workpad.create") expect(input.content).toBe(content);
+      if (request.request.toolId === "workpad.update") { expect(input.edit?.content).toBe(content); current = input.edit!.content; revision++; }
+      return { invocationId: "workpad-result", state: "completed", output: { workpad: pad() } };
+    }, workpadTools.catalogSummaries("mcp", "thread_agent"));
+    for (const [index, toolId, input] of [
+      [2, "workpad.create", { title: "Large", scope: { kind: "global" }, content }],
+      [3, "workpad.update", { workpadId: "pad", expectedRevision: 0, edit: { kind: "replace", content } }],
+      [4, "workpad.get", { workpadId: "pad" }],
+    ] as const) {
+      f.send(index, "tools/call", { name: toolId === "workpad.get" ? "sedes_read" : "sedes_act",
+        arguments: { toolId, schemaVersion: 2, input }, _meta: { "ai.opencode/sessionID": "ses_workpad" } });
+      const response = await f.reply(index);
+      expect(response.result.isError).toBeUndefined();
+      expect(response.result.structuredContent).toEqual({ workpad: pad() });
+    }
+    expect(seen).toEqual(["workpad.create", "workpad.update", "workpad.get"]);
+    expect(f.stderr()).toBe("");
+  });
+
   it("preserves maximum preview PNG and escaped console through real private HTTP and MCP framing", async () => {
     const maximum = maximumPreviewResult();
     const pageTools = new CanonicalInlineAgentToolService({ application: { readThreadStatus: async () => undefined }, pages: {} as never });
@@ -107,6 +143,20 @@ describe("OpenCode per-call MCP bridge", () => {
         input: { chunks: Array.from({ length: 65 }, () => "x".repeat(65_536)) },
       } }) });
       expect(oversized.status).toBe(503); await oversized.body?.cancel();
+      for (const request of [
+        { toolId: "fixture.write", schemaVersion: 1, requestId: "generic-string", input: { content: "x".repeat(65_537) } },
+        { toolId: "workpad.create", schemaVersion: 2, requestId: "unknown-field", input: {
+          title: "Notes", scope: { kind: "global" }, content: "x".repeat(262_144), unknown: "x".repeat(65_537),
+        } },
+        { toolId: "workpad.create", schemaVersion: 2, requestId: "over-limit", input: {
+          title: "Notes", scope: { kind: "global" }, content: "x".repeat(262_145),
+        } },
+      ]) {
+        const rejected = await fetch(`${endpoint}/tools`, { method: "POST", headers: {
+          authorization, "content-type": "application/json", "x-sedes-stream": hello.streamID,
+        }, body: JSON.stringify({ operation: "invoke", sessionID: "ses_a", request }) });
+        expect(rejected.status).toBe(503); await rejected.body?.cancel();
+      }
       expect(invoke).not.toHaveBeenCalled();
     } finally { lifetime.abort(); await reader.cancel().catch(() => undefined); }
   });

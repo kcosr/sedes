@@ -147,7 +147,7 @@ function toolsFixture() {
 }
 
 describe("canonical Workpad tools", () => {
-  it.each(["pi_sdk", "mcp", "http", "cli"] as const)("round-trips large writes and reads on %s with actionable atomic rejection", async adapter => {
+  it.each(["pi_sdk", "mcp", "http", "cli"] as const)("keeps canonical Workpad writes transportable for %s with actionable atomic rejection", async adapter => {
     const f = toolsFixture();
     try {
       const canonical = new CanonicalInlineAgentToolService({ application: {} as never, workpads: f.service });
