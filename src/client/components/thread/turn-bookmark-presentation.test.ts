@@ -27,6 +27,16 @@ describe("turn bookmark presentation", () => {
     expect(turnResponseItemId(current, items)).toBe("first");
   });
 
+  it("keeps agent-authored reference-looking text literal in previews", () => {
+    const text = formatThreadReferenceText("", [{ threadId: "093bf3c2-e16d-4cf2-84a3-93ef12ae1ff5", title: "Related work" }]);
+    const message = user("callback", text);
+    if (message.kind !== "user_message") throw new Error("Invalid fixture.");
+    message.origin = { kind: "agent_result", callbackId: "callback", sourceThreadId: "source", sourceThreadLabel: { text: "Agent" } };
+    const current = turn(["callback"]);
+    expect(turnBookmarkPreview(current, { callback: message })?.userPreview).toContain("Sedes thread references selected for this message:");
+    expect(createChatHistoryEntries(["turn"], { turn: current }, { callback: message })[0]?.userPreview).toContain("Sedes thread references selected for this message:");
+  });
+
   it("skips an empty assistant placeholder for both text and activity targets", () => {
     const items: Record<string, ConversationItem> = { question: user("question", "Question"), empty: assistant("empty", " "), activity: { id: "activity", turnId: "turn", revision: 1, kind: "reasoning", status: "completed", markdown: { text: "Thinking" } } };
     expect(turnResponseItemId(turn(Object.keys(items)), items)).toBe("activity");

@@ -36,6 +36,7 @@ export function userMessagePreview(item: UserMessageItem): string {
       : item.content
       .map((part) => {
         if (part.kind === "text") {
+          if (item.origin) return part.text.text;
           const { text, references } = splitThreadReferenceText(part.text.text);
           return text.trim() || (references.length > 0
             ? `Thread: ${references[0]!.title}${references.length > 1 ? ` (+${references.length - 1})` : ""}`
