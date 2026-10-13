@@ -70,8 +70,8 @@ final class NativeVoiceHttp {
         });
         return call;
     }
-    Call events(String origin, String credential, Stream listener) {
-        Request.Builder builder = new Request.Builder().url(NativeVoiceSettings.origin(origin) + "/api/application/events")
+    Call events(String origin, String credential, String voiceStreamId, Stream listener) {
+        Request.Builder builder = new Request.Builder().url(NativeVoiceSettings.origin(origin) + "/api/application/events?voiceStreamId=" + voiceStreamId)
             .header("Accept", "text/event-stream").header("Cache-Control", "no-cache");
         if (credential != null) builder.header("Authorization", "Bearer " + credential);
         Call call = streams.newCall(builder.build());

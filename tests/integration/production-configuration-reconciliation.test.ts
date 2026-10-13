@@ -612,7 +612,9 @@ describe("production configuration reconciliation", () => {
     expect(connect).not.toHaveBeenCalled();
     expect(acquire).not.toHaveBeenCalled();
     expect(stop).not.toHaveBeenCalled();
-  });
+    // Two production boots, persisted settings edits, and retained-runtime
+    // recovery need the same bounded budget as the other restart cases.
+  }, 15_000);
 
   it("keeps owned startup changes pending until an explicit backend restart", async () => {
     const { service, scope, environmentId, snapshot } = await fixture();

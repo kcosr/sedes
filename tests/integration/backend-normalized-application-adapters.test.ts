@@ -770,6 +770,8 @@ describe("backend-normalized application adapters", () => {
           resolved_steer_target_json: resolved_steer_turn_id === null ? null : JSON.stringify({ kind: "turn", turnId: resolved_steer_turn_id }),
           // Migration 118 records no reason for failures that predate it.
           failure_reason: null,
+          // Migration 141 classifies this ordinary historical input as user-written.
+          is_user_input: 1,
         };
       });
       const beforeCompletion = current.database.prepare("SELECT * FROM submission_completion_observations").all();

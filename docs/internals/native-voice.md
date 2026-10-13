@@ -150,12 +150,13 @@ recording start validates the exact target's normalized input context and projec
 its required canonical `threadTitle` (a string up to 4,096 UTF-16 units, including
 blank) into native nullable, trimmed, 512-unit target metadata without splitting
 a surrogate pair. It never substitutes the spoken source thread for a different
-automatic recognition destination. When enabled, only a new idle headset or
-notification start enters a separate `announcing` phase. The initiating control,
-not foreground visibility, selects this behavior. A separate start after speech
-ends announces again, without a recency timer. In-app manual starts,
-`recordDuringPlayback`, automatic follow-ups, and agent-directed recording skip
-the announcement. The phase
+automatic recognition destination. When enabled, a new idle headset or
+notification start enters a separate `announcing` phase. Explicit agent-directed
+listening also announces when its request is voice-only or has lost its original
+foreground navigation context. Foreground agent requests remain silent. A separate
+start after speech ends announces again, without a recency timer. In-app manual
+starts, `recordDuringPlayback`, and automatic follow-ups skip the announcement.
+The phase
 speaks “Replying to {title}.” before the existing recognition start cue and capture
 sequence. Blank titles use “Untitled thread”; spoken titles compact whitespace
 and controls and are limited to 160 Unicode code points with an ellipsis.
@@ -264,12 +265,17 @@ selections survive. The input journal holds at most 64 entries and 8 MiB.
 A server registration supplies the shared native/WebView client ID. Paired
 registrations use the authenticated management-client ID; authentication-off
 registrations receive temporary server IDs. Browser and Electron windows use
-the same registration API. There is no independently generated playback UUID.
+the same registration API. Native generates a separate `voiceStreamId` UUID
+for each notification connection; it identifies that delivery stream, not a
+client or principal.
 An in-memory server resume secret preserves the ID across reconnects within
 five minutes. Each successful reconnect refreshes the session and resumes enabled
 voice/recovery work; a temporary control-channel outage clears deferred actions
-without cancelling active capture or playback. Replaced paired windows stop
-reclaiming the connection automatically and expose an explicit reconnect action.
+without replacing a healthy notification stream or cancelling active capture
+or playback. The stream keeps its policy and existing turn audience across
+control retries; it reconnects only after its own connection is lost.
+Replaced paired windows stop reclaiming the connection automatically and expose
+an explicit reconnect action.
 Reattaching the WebView preserves the native binding during a control outage.
 Inputs prepared in that live process wait for registration before transmission;
 an explicit `client_registration_required` response also proves no admission
@@ -283,16 +289,29 @@ registration remain live while voice is Off. Old advisory origins retained in
 historical inputs do not become live client authority.
 
 Agent `client.switch_thread` requests share the existing turn-settlement and
-reply-drain queue. A background request with `listen: true` requires an already
-ready native voice session and starts one recognition on the exact target;
-`listen: false` remains a no-op. The runtime captures the voice-only disposition
-at acceptance, so returning to the foreground cannot turn it into navigation.
-That request never queues `openThread` or changes the default or pending in-app target.
-Visibility changes alone do not cancel that recognition request; explicit manual
-supersession, Off, expiry, and connection loss still do. Foreground navigation
-keeps its visibility fence. Native readiness and recording blockers are checked
-again at execution, and normal recording preferences, including Keep listening
-by default, remain in effect. No background service start is attempted.
+reply-drain queue. An explicit `listen: true` waits behind unrelated active
+playback, then starts one recognition on the exact requested thread using fresh
+manual-input readiness before the start cue, after the cue, and at recognition
+ready before microphone capture. It works independently of Auto-listen and
+requires an already ready native voice session. Normal recording preferences,
+including Keep listening by default, remain in effect; no background service
+start is attempted.
+When the destination is valid, a foreground request can still navigate if
+recording is blocked. Manual supersession and the background navigation fence
+continue to apply.
+Accepting that explicit listen reserves the next automatic-listening slot even
+while its source turn is still running. Existing playback can drain, but an
+automatic notice does not start recognition ahead of the accepted request.
+
+A request accepted in the background, or one that becomes backgrounded while
+pending, permanently becomes voice-only. Returning to the foreground cannot
+restore navigation. That request never queues `openThread` or changes the
+default or pending in-app target; `listen: false` is a no-op. Visibility changes
+alone do not cancel an explicit listen. Manual supersession, Off, expiry, and
+control-connection loss still do. Notification-stream loss releases any wait
+for an undelivered reply, and ordinary filtered or dropped notifications release
+their playback barrier. A reply superseded by newer input discards the source
+turn's deferred actions before draining it.
 Agent `replay_turn` commands bypass that queue; see
 [Turn reply replay](#turn-reply-replay).
 
@@ -364,7 +383,40 @@ metadata. It is dropped only if its metadata alone exceeds the limit.
 
 - `notification_policy`: `{ generation, settings }`.
 - `notification`: `{ payload, sourceEventId, voice, generation, origin?,
-  recognitionTarget?, subjectId? }`.
+  recognitionTarget?, subjectId?, userInputRevision? }`. `userInputRevision` is
+  required for every `turn.*` event and forbidden for other events. A turn's
+  recognition target, when present, must name the payload's source thread.
+
+Native identifies each notification connection with a fresh `voiceStreamId`
+UUID query parameter. The stream uses ordinary application-SSE principal
+authentication and is independent of client-control registration. It does not
+require `X-Sedes-Client`. The server admits at most 128 identified voice streams
+per principal and rejects excess subscriptions before sending response headers.
+Ordinary inventory streams omit the parameter and keep their existing behavior.
+
+The server records only the UUIDs of captured native streams that actually
+received a notification; it retains no client-control token or subscriber
+sequence in the publication result. A `turn_settled` command requires
+`replyEventId` and `replyStreamIds`, listing every successful native delivery
+within that principal. No native delivery, and browser-only recipients, use
+null and an empty array.
+
+Native keeps the event ID to await any matching locally queued or playing item,
+including an item received on an older stream. Otherwise it waits for an
+undelivered reply only if `replyStreamIds` contains its current `voiceStreamId`.
+Another stream's delivery cannot create that wait. A retired notification
+stream releases its undelivered playback barriers. The control connection
+separately owns the lifetime of deferred commands.
+
+A failed, interrupted, or superseded source turn produces an internal
+`turn_cancelled` command naming the original accepted command ID. Browser and
+native clients remove that exact pending action. Native then releases its
+listening reservation and drains the queue, so the action cannot block voice
+until the turn-completion deadline expires.
+Timed-out or aborted deferred requests also retain bounded cancellation
+records: at most 128 retired command IDs per client for five minutes. A late accepted
+acknowledgement triggers `turn_cancelled` for that exact ID, retiring any orphan
+client action created after the original request ended.
 
 These frames have no SSE `id`, replay entry, projection fold, or inventory
 checkpoint. Policy is subscribed and delivered before voice. If policy cannot
@@ -386,7 +438,10 @@ first save or silence change creates the row and advances the generation.
 Native treats a closed stream as unknown policy. It clears queued notices,
 cancels automatic work whose recognition has not finalized, forgets the last
 policy generation, and waits for new policy on reconnect. It never requests
-missed notifications. The server ends its inventory handshake with an
+missed notifications. An invalid native notification or policy frame ends that
+stream and releases its undelivered playback barriers rather than leaving the
+connection waiting for an event it discarded. The server ends its inventory
+handshake with an
 `application-live` frame, after any transient frames queued during the
 handshake. If no valid policy has arrived 2 seconds after that frame, native
 treats the stream as failed and reports `notification_policy_unavailable`. A
@@ -418,6 +473,63 @@ completion. Waiting continues while an in-place replacement snapshot is
 installed. Authority loss, a failed replacement, or timeout produces an
 announcement without a recognition target. A newer activity token leaves the
 old target stale rather than granting access to the newer work.
+
+### Automatic turn freshness
+
+Client protocol 153 requires a nonnegative safe-integer `userInputRevision` in
+`input-context` and automatic turn notification envelopes. This is a durable
+tenant-, principal-, and thread-scoped counter, independent of the broader
+activity token. Fresh composer, direct-input, and nonblocking question-response
+admissions advance it in their admission transaction; composer and direct-input
+first sends do the same. Mutation replay, explicit retry, restored drafts,
+cancellation, lifecycle changes, interaction responses, automation, agent and
+Tool-client messages, completion callbacks, and forks do not advance it.
+
+The queued row retains its user-message classification. The actor manager
+captures the current revision and supersession synchronously when it first
+observes completion or live progress, before delayed persistence and notification
+callbacks. Completion identities retain their first capture together with the
+voice audience watermark. Pending or retry-wait user messages supersede the
+response. A dispatching or uncertain user Steer also supersedes it unless its
+reconciliation token appears in that response's complete correlation set.
+In-flight Submit is excluded because the source turn's own input can still be
+awaiting acknowledgement. This uses normalized application observations for
+Pi, Codex, Claude, Grok, and OpenCode; provider protocols are unchanged.
+
+A response superseded at capture still reaches its script hook, but produces no
+voice frame. Its deferred switch/end-interaction commands are explicitly retired
+on the client through `turn_cancelled`.
+Otherwise the frame keeps the captured revision even if another message is
+admitted while publication waits. Missing recognition authority does not remove
+playback freshness. Before first speech, native reads the source thread's
+`input-context`; a greater current revision silently drops the entire item with
+`superseded_by_input`. The notification ID remains deduplicated, the source
+turn's deferred actions are discarded before reply-drain bookkeeping, and the
+next item drains. Reserving a turn item invalidates idle controls without
+replacing the retained voice destination; only authorized playback adopts its
+source, including when speech proceeds after a temporary read failure. Unpinning
+during validation cannot retain an unplayed source. A 404 drops the item;
+authentication loss uses normal
+disconnect handling. A temporary or server failure allows speech to proceed.
+
+Automatic recording keeps the existing activity-token, source-turn, policy,
+and eligibility checks and also checks the message revision before its start
+cue, after the cue, and after recognition-session readiness immediately before
+microphone start. The original automatic-start identity survives default Keep
+listening adoption. Stale or ineligible startup discards its unused journal,
+including an empty adopted slot, without a failure cue or interruption record.
+Context failure and arming timeout use the same pre-audio cleanup and report
+their normal error. Manual starts, replay, client-directed starts, and recovery
+retries do not acquire this automatic gate.
+
+The checks establish freshness at the server read, not an atomic audio-start
+precondition. Input admitted after the last read can still race playback or
+microphone startup. Started playback continues; captured user speech keeps its
+normal admission semantics. An input withdrawn after completion still leaves
+the older notice superseded. An already accepted input in an overlapping newer
+provider turn can precede capture and leave an old announcement playable without
+recognition authority. No source-turn history ledger is inferred to close that
+case.
 
 ## Turn reply replay
 
@@ -530,7 +642,7 @@ queued it. The bridge still treats a duplicate as success.
 ## Activity authority and live progress
 
 `GET /api/threads/:threadId/input-context` returns current non-attaching runtime
-authority, activity token, run state, automatic- and manual-listen eligibility, and any
+authority, activity token, user-input revision, run state, automatic- and manual-listen eligibility, and any
 available normalized steering target. Reading it never attaches a backend.
 
 Activity tokens are independent of inventory revisions. Admission and lifecycle
@@ -760,8 +872,21 @@ held capture policy must succeed before the microphone starts; unavailable
 storage or a saved recording occupying the slot blocks capture. Preference
 edits affect future recordings, while the infinity control changes only the
 current recording. The strict settings contract requires the field.
-Freezing an enabled default immediately clears automatic-policy and client-action
-authority, before asynchronous preflight or adoption can race a policy change.
+Freezing an enabled default selects held capture. Manual, replay, and non-turn
+starts clear all pending client actions and reset submission signalling before
+asynchronous preflight or adoption. Automatic turn starts defer that global
+reset until the final gate succeeds and microphone ownership begins; an obsolete
+start discards only its source turn's actions and preserves unrelated actions and
+submission signalling. An automatic start
+retains its original freshness and current notification-policy checks until
+microphone startup; default adoption cannot authorize an obsolete turn's
+recording. After microphone ownership is established, the adopted recording
+remains independent of automatic notification policy.
+Operational preflight, journal, and recognition startup failures, including an
+arming timeout before the ready gate starts, discard their empty recording while
+preserving the ordinary failure cue and report. Stale or ineligible gate results
+remain quiet; context-read errors and an arming timeout during the ready gate
+report the failure without a cue or an empty interrupted recording.
 An unresolved retained dictation blocks default-held manual and automatic starts
 before target validation or the start cue, and makes `actions.canStart` false.
 

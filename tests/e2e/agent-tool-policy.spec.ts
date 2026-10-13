@@ -181,7 +181,7 @@ test.describe.serial("agent tool policy", () => {
     await page.reload();
     await page.getByRole("button", { name: "Thread actions" }).click();
     const persistedSummary = page.getByRole("menuitem", {
-      name: /^Agent tools…\s*1 enabled · Allow without asking/,
+      name: /^Agent tools…\s*1 enabled$/,
     });
     await expect(persistedSummary).toBeVisible();
     await persistedSummary.click();

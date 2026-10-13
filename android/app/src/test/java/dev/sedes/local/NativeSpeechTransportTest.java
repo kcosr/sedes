@@ -174,9 +174,9 @@ public class NativeSpeechTransportTest {
 
     @Test(timeout = 10000) public void preparedNotificationChunksReachTheSpeechProvider() throws Exception {
         String markdown = "# Answer\n\nRead [the guide][ref].\n\n```\nfoo_bar * 2\n```\n\n[ref]: https://example.test/hidden";
-        JSONObject envelope = NativeVoiceJson.object("sourceEventId", "formatted", "generation", 1, "voice", "speak",
+        JSONObject envelope = NativeVoiceJson.object("sourceEventId", "formatted", "generation", 1, "voice", "speak", "userInputRevision", 0,
             "payload", NativeVoiceJson.object("schemaVersion", 5, "notificationId", "formatted", "event", "turn.completed",
-                "occurredAt", "2026-10-04T00:00:00Z", "title", "Completed", "message", "Context",
+                "occurredAt", "2026-10-04T00:00:00Z", "title", "Completed", "message", "Context", "thread", NativeVoiceJson.object("id", "thread-a", "title", "Thread A"),
                 "assistantResult", NativeVoiceJson.object("final", NativeVoiceJson.object("text", markdown))));
         String expected = "Answer\n\nRead the guide.\n\nfoo_bar * 2";
         for (boolean cleanup : new boolean[] { true, false }) {

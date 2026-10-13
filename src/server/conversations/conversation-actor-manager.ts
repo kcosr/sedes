@@ -28,6 +28,7 @@ import { recordVoiceDiagnostic } from "../diagnostics/voice-diagnostics.js";
 import type { PagePublicationAnchor } from "../../shared/protocol/pages.js";
 import type { PagePublication } from "./page-publication-projection.js";
 import { DomainError } from "../domain/errors.js";
+import type { CapturedResponseVoiceContext, ResponseVoiceFreshness } from "./response-voice-freshness.js";
 
 export interface AcquireConversationActorInput {
   readonly scope: ExecutionScope;
@@ -101,11 +102,13 @@ export type AuthoritativeCompletionObserver = (
   applicationThreadId: string,
   input: {
     readonly backendCorrelation: string;
+    readonly backendCorrelations: readonly string[];
     readonly backendTurnId: string;
     readonly applicationTurnId: string;
     readonly completionIdentity: string;
     readonly provenance: "live" | "recovered";
     readonly voiceSubscriberWatermark?: number;
+    readonly responseVoice?: ResponseVoiceFreshness;
     readonly outcome: "completed" | "interrupted" | "failed";
     readonly result: BoundedText;
     readonly classifiedResult: ClassifiedAssistantResult | null;
@@ -131,6 +134,7 @@ export type LiveProgressObserver = (
     readonly applicationItemId: string;
     readonly phase: "provisional" | "partial";
     readonly backendCorrelations: readonly string[];
+    readonly responseVoice?: ResponseVoiceFreshness;
     readonly text: BoundedText;
   },
 ) => void;
@@ -299,7 +303,7 @@ export class ConversationActorManager {
   readonly #retentionMilliseconds: number;
   readonly #runtimeBudget: number;
   readonly #onAuthoritativeCompletion?: AuthoritativeCompletionObserver;
-  readonly #captureCompletionVoiceSubscriberWatermark?: () => number;
+  readonly #captureResponseVoiceContext?: (scope: ExecutionScope, threadId: string, backendCorrelations: readonly string[]) => CapturedResponseVoiceContext;
   readonly #onAuthoritativeSubmission?: AuthoritativeSubmissionObserver;
   readonly #onLiveProgress?: LiveProgressObserver;
   readonly #entries = new Map<string, ActorEntry>();
@@ -317,7 +321,7 @@ export class ConversationActorManager {
     readonly retentionMilliseconds: number;
     readonly runtimeBudget: number;
     readonly onAuthoritativeCompletion?: AuthoritativeCompletionObserver;
-    readonly captureCompletionVoiceSubscriberWatermark?: () => number;
+    readonly captureResponseVoiceContext?: (scope: ExecutionScope, threadId: string, backendCorrelations: readonly string[]) => CapturedResponseVoiceContext;
     readonly onAuthoritativeSubmission?: AuthoritativeSubmissionObserver;
     readonly onLiveProgress?: LiveProgressObserver;
     readonly onNonblockingQuestions?: NonblockingQuestionObserver;
@@ -328,7 +332,7 @@ export class ConversationActorManager {
     this.#deliveryInputSnapshots = input.deliveryInputSnapshots;
     this.#pagePublications = input.pagePublications;
     this.#onAuthoritativeCompletion = input.onAuthoritativeCompletion;
-    this.#captureCompletionVoiceSubscriberWatermark = input.captureCompletionVoiceSubscriberWatermark;
+    this.#captureResponseVoiceContext = input.captureResponseVoiceContext;
     this.#onAuthoritativeSubmission = input.onAuthoritativeSubmission;
     this.#onLiveProgress = input.onLiveProgress;
     this.#onNonblockingQuestions = input.onNonblockingQuestions;
@@ -1398,7 +1402,7 @@ export class ConversationActorManager {
     );
     let actor: ConversationActor | undefined;
     let observationChain = Promise.resolve();
-    const completionVoiceWatermarks = new Map<string, number>();
+    const completionVoiceContexts = new Map<string, CapturedResponseVoiceContext | undefined>();
     try {
       const handle = await input.driver.attach({
         scope: input.scope,
@@ -1453,16 +1457,16 @@ export class ConversationActorManager {
           : {}),
         initialObserver: (event) => {
           onStateChanged();
-          let voiceSubscriberWatermark: number | undefined;
+          let responseVoice: CapturedResponseVoiceContext | undefined;
           if (event.type === "authoritative_completion") {
-            if (event.provenance === "live" && this.#captureCompletionVoiceSubscriberWatermark) {
-              voiceSubscriberWatermark = completionVoiceWatermarks.get(event.completionIdentity);
-              if (voiceSubscriberWatermark === undefined) {
-                try { voiceSubscriberWatermark = this.#captureCompletionVoiceSubscriberWatermark(); }
-                catch { voiceSubscriberWatermark = 0; }
-                completionVoiceWatermarks.set(event.completionIdentity, voiceSubscriberWatermark);
-                if (completionVoiceWatermarks.size > 512) {
-                  completionVoiceWatermarks.delete(completionVoiceWatermarks.keys().next().value!);
+            if (event.provenance === "live" && this.#captureResponseVoiceContext) {
+              responseVoice = completionVoiceContexts.get(event.completionIdentity);
+              if (!completionVoiceContexts.has(event.completionIdentity)) {
+                try { responseVoice = this.#captureResponseVoiceContext(input.scope, input.binding.applicationThreadId, event.backendCorrelations); }
+                catch { /* Voice capture is passive; durable completion must continue. */ }
+                completionVoiceContexts.set(event.completionIdentity, responseVoice);
+                if (completionVoiceContexts.size > 512) {
+                  completionVoiceContexts.delete(completionVoiceContexts.keys().next().value!);
                 }
               }
             }
@@ -1474,6 +1478,9 @@ export class ConversationActorManager {
             });
           }
           if (event.type === "live_progress" && this.#onLiveProgress) {
+            try { responseVoice = this.#captureResponseVoiceContext?.(input.scope, input.binding.applicationThreadId, event.backendCorrelations); }
+            catch { /* Do not affect provider progress. */ }
+            const progressVoice = responseVoice;
             // Preceding submission observers establish durable admission first.
             // Delayed observers must never revive progress after the live turn ends.
             observationChain = observationChain.then(() => {
@@ -1481,7 +1488,11 @@ export class ConversationActorManager {
               if (signal.aborted || !timeline || timeline.runState !== "running" ||
                   timeline.activeTurnId !== event.applicationTurnId ||
                   timeline.turnsById[event.applicationTurnId]?.status !== "in_progress") return;
-              this.#onLiveProgress?.(input.scope, input.binding.applicationThreadId, event);
+              this.#onLiveProgress?.(input.scope, input.binding.applicationThreadId, {
+                ...event, ...(progressVoice ? { responseVoice: {
+                  userInputRevision: progressVoice.userInputRevision, superseded: progressVoice.superseded,
+                } } : {}),
+              });
             }).catch(() => undefined);
           }
           if (
@@ -1505,10 +1516,13 @@ export class ConversationActorManager {
                         {
                           backendCorrelation: event.backendCorrelation,
                           backendTurnId: event.backendTurnId,
+                          backendCorrelations: event.backendCorrelations,
                           applicationTurnId: event.applicationTurnId,
                           completionIdentity: event.completionIdentity,
                           provenance: event.provenance,
-                          ...(voiceSubscriberWatermark === undefined ? {} : { voiceSubscriberWatermark }),
+                          ...(responseVoice ? { voiceSubscriberWatermark: responseVoice.subscriberWatermark, responseVoice: {
+                            userInputRevision: responseVoice.userInputRevision, superseded: responseVoice.superseded,
+                          } } : {}),
                           outcome: event.outcome,
                           result: event.result,
                           classifiedResult: event.classifiedResult,

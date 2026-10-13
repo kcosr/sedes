@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { ClientControlService, MAX_POLL_RESPONSE_BYTES } from "../../src/server/domain/client-control-service.js";
+import type { VoiceNotificationPublication } from "../../src/server/domain/notification-service.js";
 import type { AuthenticationClient } from "../../src/shared/authentication.js";
 import type { ClientCommand, ClientState } from "../../src/shared/protocol/client-controls.js";
+import { clientCommandSchema, MAX_REPLY_STREAM_IDS } from "../../src/shared/protocol/client-controls.js";
 import { serializedUtf8Bytes } from "../../src/shared/protocol/payload.js";
 
 const scope = { tenantId: "tenant", principalId: "principal" };
@@ -20,6 +22,44 @@ const replayTurn = (text: string, turnId = "ended-turn"): Omit<ClientCommand, "i
 });
 
 describe("registered client authority", () => {
+  it.each(["voice client", "no native recipients", "browser"] as const)("publishes complete recipient streams for a %s", async kind => {
+    const service = fixture();
+    const nativeRegistration = { ...registration, platform: "android" as const, capabilities: { navigate: true, voice: true, voiceSettings: true } };
+    const native = service.register(scope, undefined, kind === "browser" ? registration : nativeRegistration);
+    const request = service.request(service.target(scope, native.clientId), {
+      action: "switch_thread", sourceThreadId: "source", sourceTurnId: "turn", threadId: randomUUID(), listen: true,
+    }, new AbortController().signal);
+    const command = (await poll(service, native.connectionToken)).commands[0]!;
+    await poll(service, native.connectionToken, [{ id: command.id, result: { status: "accepted", state } }], aborted());
+    await request;
+    const voiceStreamIds = kind === "no native recipients" ? [] : [randomUUID(), randomUUID()];
+    let publish!: (result: VoiceNotificationPublication) => void;
+    service.observeNotification(scope, "source", "turn", new Promise(resolve => { publish = resolve; }));
+    const complete = service.complete(scope, "source", "turn");
+    publish({ sourceEventId: "reply", voiceStreamIds }); await complete;
+    const settled = (await poll(service, native.connectionToken)).commands[0]!;
+    expect(settled).toMatchObject({ action: "turn_settled", replyEventId: kind === "voice client" ? "reply" : null,
+      replyStreamIds: kind === "voice client" ? voiceStreamIds : [] });
+    expect(clientCommandSchema.parse(settled)).toEqual(settled);
+  });
+
+  it("requires complete bounded unique recipient streams only on turn settlement", () => {
+    const command = { id: randomUUID(), action: "turn_settled", sourceThreadId: "source", sourceTurnId: "turn", expiresAt: 10 };
+    expect(clientCommandSchema.safeParse({ ...command, replyEventId: null, replyStreamIds: [] }).success).toBe(true);
+    expect(clientCommandSchema.safeParse({ ...command, replyEventId: "event", replyStreamIds: Array.from({ length: MAX_REPLY_STREAM_IDS }, () => randomUUID()) }).success).toBe(true);
+    const id = randomUUID();
+    for (const fields of [{}, { replyEventId: null }, { replyStreamIds: [] }, { replyEventId: "event", replyStreamIds: [] },
+      { replyEventId: null, replyStreamIds: [randomUUID()] }, { replyEventId: "", replyStreamIds: [randomUUID()] },
+      { replyEventId: "event", replyStreamIds: ["bad-uuid"] }, { replyEventId: "event", replyStreamIds: [id, id] },
+      { replyEventId: "event", replyStreamIds: Array.from({ length: MAX_REPLY_STREAM_IDS + 1 }, () => randomUUID()) },
+      { replyEventId: "event", replyStreamIds: [id], replyStreamId: id }]) {
+      expect(clientCommandSchema.safeParse({ ...command, ...fields }).success).toBe(false);
+    }
+    expect(clientCommandSchema.safeParse({ ...command, action: "switch_thread", replyEventId: null, replyStreamIds: [] }).success).toBe(false);
+    expect(clientCommandSchema.safeParse({ ...command, action: "turn_cancelled" }).success).toBe(true);
+    expect(clientCommandSchema.safeParse({ ...command, action: "turn_cancelled", replyEventId: null, replyStreamIds: [] }).success).toBe(false);
+  });
+
   it("registers anonymous clients independently without pairing and denies foreign principals and tokens", () => {
     const service = fixture();
     const first = service.register(scope, undefined, registration);
@@ -95,6 +135,110 @@ describe("registered client authority", () => {
     await vi.advanceTimersByTimeAsync(25_000); await result;
   });
 
+  it.each(["end_interaction", "switch_thread"] as const)("cancels a delivered %s when its caller aborts and cancels its late acceptance", async action => {
+    const service = fixture();
+    const registered = service.register(scope, undefined, registration);
+    const abort = new AbortController();
+    const requested = service.request(service.target(scope, registered.clientId), {
+      action, sourceThreadId: "thread", sourceTurnId: "turn",
+      ...(action === "switch_thread" ? { threadId: randomUUID(), listen: true } : {}),
+    }, abort.signal);
+    const failed = expect(requested).rejects.toMatchObject({ code: "operation_outcome_uncertain" });
+    const original = (await poll(service, registered.connectionToken)).commands[0]!;
+    abort.abort(); await failed;
+    expect((await poll(service, registered.connectionToken)).commands).toEqual([
+      { ...original, action: "turn_cancelled", expiresAt: expect.any(Number) },
+    ]);
+    const late = await poll(service, registered.connectionToken, [{ id: original.id, result: { status: "accepted", state } }]);
+    expect(late.commands).toEqual([{ ...original, action: "turn_cancelled", expiresAt: expect.any(Number) }]);
+    await service.complete(scope, "thread", "turn");
+    expect(await poll(service, registered.connectionToken, [], aborted())).toEqual({ commands: [] });
+  });
+
+  it("removes an aborted command before delivery without queuing a cancellation", async () => {
+    const service = fixture();
+    const registered = service.register(scope, undefined, registration);
+    const abort = new AbortController();
+    const requested = service.request(service.target(scope, registered.clientId), {
+      action: "switch_thread", sourceThreadId: "thread", sourceTurnId: "turn", threadId: randomUUID(), listen: true,
+    }, abort.signal);
+    const failed = expect(requested).rejects.toMatchObject({ code: "operation_outcome_uncertain" });
+    abort.abort(); await failed;
+    expect(await poll(service, registered.connectionToken, [], aborted())).toEqual({ commands: [] });
+  });
+
+  it("cancels timed-out delivered actions and ignores late acknowledgements on other registrations", async () => {
+    vi.useFakeTimers();
+    const service = fixture();
+    const registered = service.register(scope, undefined, registration);
+    const peer = service.register(scope, undefined, registration);
+    const requested = service.request(service.target(scope, registered.clientId), {
+      action: "switch_thread", sourceThreadId: "thread", sourceTurnId: "turn", threadId: randomUUID(), listen: true,
+    }, new AbortController().signal);
+    const failed = expect(requested).rejects.toMatchObject({ code: "operation_outcome_uncertain" });
+    const original = (await poll(service, registered.connectionToken)).commands[0]!;
+    await vi.advanceTimersByTimeAsync(25_000); await failed;
+    expect((await poll(service, registered.connectionToken)).commands[0]).toMatchObject({ id: original.id, action: "turn_cancelled" });
+    const acknowledgement = [{ id: original.id, result: { status: "accepted" as const, state } }];
+    expect(await poll(service, peer.connectionToken, acknowledgement, aborted())).toEqual({ commands: [] });
+    expect((await poll(service, registered.connectionToken, acknowledgement)).commands[0]).toMatchObject({ id: original.id, action: "turn_cancelled" });
+    const replacement = service.register(scope, undefined, { ...registration, resumeToken: registered.resumeToken });
+    expect(await poll(service, replacement.connectionToken, acknowledgement, aborted())).toEqual({ commands: [] });
+  });
+
+  it.each(["settings.update", "replay_turn"] as const)("does not cancel a delivered immediate %s after its caller gives up", async action => {
+    const service = fixture();
+    const registered = service.register(scope, undefined, registration);
+    const abort = new AbortController();
+    const requested = service.request(service.target(scope, registered.clientId), action === "replay_turn" ? replayTurn("Done.") : {
+      action, sourceThreadId: "thread", sourceTurnId: "turn", expectedRevision: 0, patch: { audioMode: "off" },
+    }, abort.signal);
+    const failed = expect(requested).rejects.toMatchObject({ code: "operation_outcome_uncertain" });
+    const original = (await poll(service, registered.connectionToken)).commands[0]!;
+    abort.abort(); await failed;
+    expect(await poll(service, registered.connectionToken, [{ id: original.id, result: { status: "accepted", state } }], aborted())).toEqual({ commands: [] });
+  });
+
+  it("bounds retired command memory and releases it after cancellation acknowledgement", async () => {
+    const service = fixture();
+    const registered = service.register(scope, undefined, registration);
+    const originals: ClientCommand[] = [];
+    for (let index = 0; index < 129; index++) {
+      const abort = new AbortController();
+      const requested = service.request(service.target(scope, registered.clientId), {
+        action: "switch_thread", sourceThreadId: "thread", sourceTurnId: `turn-${index}`, threadId: randomUUID(), listen: true,
+      }, abort.signal);
+      const failed = expect(requested).rejects.toMatchObject({ code: "operation_outcome_uncertain" });
+      originals.push((await poll(service, registered.connectionToken)).commands[0]!);
+      abort.abort(); await failed;
+      await poll(service, registered.connectionToken);
+    }
+    expect(await poll(service, registered.connectionToken, [{ id: originals[0]!.id, result: { status: "accepted", state } }], aborted())).toEqual({ commands: [] });
+    const latest = originals.at(-1)!;
+    expect((await poll(service, registered.connectionToken, [{ id: latest.id, result: { status: "accepted", state } }])).commands[0]).toMatchObject({ id: latest.id, action: "turn_cancelled" });
+    await poll(service, registered.connectionToken, [{ id: latest.id, result: { status: "applied", state } }], aborted());
+    expect(await poll(service, registered.connectionToken, [{ id: latest.id, result: { status: "accepted", state } }], aborted())).toEqual({ commands: [] });
+  });
+
+  it("expires retired commands while a registration stays live", async () => {
+    vi.useFakeTimers();
+    const service = fixture();
+    const registered = service.register(scope, undefined, registration);
+    const abort = new AbortController();
+    const requested = service.request(service.target(scope, registered.clientId), {
+      action: "end_interaction", sourceThreadId: "thread", sourceTurnId: "turn",
+    }, abort.signal);
+    const failed = expect(requested).rejects.toMatchObject({ code: "operation_outcome_uncertain" });
+    const original = (await poll(service, registered.connectionToken)).commands[0]!;
+    abort.abort(); await failed;
+    await poll(service, registered.connectionToken);
+    for (let index = 0; index < 16; index++) {
+      await vi.advanceTimersByTimeAsync(20_000);
+      await poll(service, registered.connectionToken, [], aborted());
+    }
+    expect(await poll(service, registered.connectionToken, [{ id: original.id, result: { status: "accepted", state } }], aborted())).toEqual({ commands: [] });
+  });
+
   it("delivers a command once, waits for its client acknowledgement, and identifies its target", async () => {
     const service = fixture();
     const registered = service.register(scope, undefined, registration);
@@ -112,7 +256,7 @@ describe("registered client authority", () => {
 
   it("settles only the captured turn after publication, keeping the playback event identity", async () => {
     const service = fixture();
-    const registered = service.register(scope, undefined, registration);
+    const registered = service.register(scope, undefined, { ...registration, platform: "android", capabilities: { navigate: true, voice: true, voiceSettings: true } });
     const requested = service.request(service.target(scope, registered.clientId), {
       action: "switch_thread", sourceThreadId: "thread", sourceTurnId: "turn", threadId: randomUUID(), listen: true,
     }, new AbortController().signal);
@@ -122,12 +266,76 @@ describe("registered client authority", () => {
     await requested;
     await service.complete(scope, "thread", "another-turn");
     expect(await poll(service, registered.connectionToken, [], abort.signal)).toEqual({ commands: [] });
-    let publish!: (id: string) => void;
+    let publish!: (publication: VoiceNotificationPublication) => void;
     service.observeNotification(scope, "thread", "turn", new Promise(resolve => { publish = resolve; }));
     const completing = service.complete(scope, "thread", "turn");
     const settled = poll(service, registered.connectionToken);
-    publish("reply-event"); await completing;
-    expect((await settled).commands).toEqual([{ ...commands[0], action: "turn_settled", replyEventId: "reply-event", expiresAt: expect.any(Number) }]);
+    const replyStreamIds = [randomUUID()];
+    publish({ sourceEventId: "reply-event", voiceStreamIds: replyStreamIds });
+    await completing;
+    expect((await settled).commands).toEqual([{ ...commands[0], action: "turn_settled", replyEventId: "reply-event", replyStreamIds, expiresAt: expect.any(Number) }]);
+  });
+
+  it.each([
+    { action: "end_interaction", outcome: "completed", superseded: true },
+    { action: "end_interaction", outcome: "failed", superseded: false },
+    { action: "end_interaction", outcome: "interrupted", superseded: false },
+    { action: "switch_thread", outcome: "completed", superseded: true },
+    { action: "switch_thread", outcome: "failed", superseded: false },
+    { action: "switch_thread", outcome: "interrupted", superseded: false },
+  ] as const)("cancels accepted $action on outcome $outcome (superseded: $superseded)", async ({ action, outcome, superseded }) => {
+    const service = fixture();
+    const registered = service.register(scope, undefined, registration);
+    const requested = service.request(service.target(scope, registered.clientId), {
+      action, sourceThreadId: "thread", sourceTurnId: "turn",
+      ...(action === "switch_thread" ? { threadId: randomUUID(), listen: true } : {}),
+    }, new AbortController().signal);
+    const { commands } = await poll(service, registered.connectionToken);
+    await poll(service, registered.connectionToken, [{ id: commands[0]!.id, result: { status: "accepted", state } }], aborted());
+    await requested;
+    await service.complete(scope, "thread", "turn", outcome, superseded);
+    const cancelled = (await poll(service, registered.connectionToken)).commands;
+    expect(cancelled).toEqual([{ ...commands[0], action: "turn_cancelled", expiresAt: expect.any(Number) }]);
+    expect(clientCommandSchema.parse(cancelled[0])).toEqual(cancelled[0]);
+    // A repeated completion must not revive the discarded request.
+    await service.complete(scope, "thread", "turn");
+    expect(await poll(service, registered.connectionToken, [], aborted())).toEqual({ commands: [] });
+  });
+
+  it("cancels an accepted action without waiting for source voice publication", async () => {
+    const service = fixture();
+    const registered = service.register(scope, undefined, registration);
+    const requested = service.request(service.target(scope, registered.clientId), {
+      action: "switch_thread", sourceThreadId: "thread", sourceTurnId: "turn", threadId: randomUUID(), listen: true,
+    }, new AbortController().signal);
+    const { commands } = await poll(service, registered.connectionToken);
+    await poll(service, registered.connectionToken, [{ id: commands[0]!.id, result: { status: "accepted", state } }], aborted());
+    await requested;
+    let publish!: (publication: undefined) => void;
+    service.observeNotification(scope, "thread", "turn", new Promise(resolve => { publish = resolve; }));
+    try {
+      await service.complete(scope, "thread", "turn", "failed");
+      expect((await poll(service, registered.connectionToken)).commands).toEqual([
+        { ...commands[0], action: "turn_cancelled", expiresAt: expect.any(Number) },
+      ]);
+    } finally { publish(undefined); }
+  });
+
+  it("keeps another principal's deferred action when a superseded completion arrives", async () => {
+    const service = fixture();
+    const registered = service.register(scope, undefined, registration);
+    const requested = service.request(service.target(scope, registered.clientId), {
+      action: "end_interaction", sourceThreadId: "thread", sourceTurnId: "turn",
+    }, new AbortController().signal);
+    const { commands } = await poll(service, registered.connectionToken);
+    await poll(service, registered.connectionToken, [{ id: commands[0]!.id, result: { status: "accepted", state } }], aborted());
+    await requested;
+    await service.complete({ ...scope, principalId: "foreign" }, "thread", "turn", "completed", true);
+    expect(await poll(service, registered.connectionToken, [], aborted())).toEqual({ commands: [] });
+    await service.complete(scope, "thread", "turn");
+    expect((await poll(service, registered.connectionToken)).commands).toEqual([
+      expect.objectContaining({ id: commands[0]!.id, action: "turn_settled" }),
+    ]);
   });
 
   it("retains deferred actions across long turns and starts a separate playback deadline at settlement", async () => {
@@ -148,7 +356,7 @@ describe("registered client authority", () => {
     expect(settled.commands[0]).toMatchObject({ id: commands[0]!.id, action: "turn_settled", expiresAt: now + 3_600_000 });
   });
 
-  it("does not replay accepted actions into a replacement connection", async () => {
+  it.each(["completed", "failed"])("does not replay accepted actions into a replacement connection on %s", async outcome => {
     const service = fixture();
     const registered = service.register(scope, undefined, registration);
     const requested = service.request(service.target(scope, registered.clientId), {
@@ -158,9 +366,8 @@ describe("registered client authority", () => {
     const abort = new AbortController(); abort.abort();
     await poll(service, registered.connectionToken, [{ id: commands[0]!.id, result: { status: "accepted", state } }], abort.signal);
     await requested;
-    service.close();
-    const next = service.register(scope, undefined, registration);
-    await service.complete(scope, "thread", "turn");
+    const next = service.register(scope, undefined, { ...registration, resumeToken: registered.resumeToken });
+    await service.complete(scope, "thread", "turn", outcome);
     expect(await poll(service, next.connectionToken, [], abort.signal)).toEqual({ commands: [] });
   });
 

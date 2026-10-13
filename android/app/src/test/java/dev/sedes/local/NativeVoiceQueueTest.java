@@ -17,6 +17,7 @@ public class NativeVoiceQueueTest {
                 "thread", NativeVoiceJson.object("id", "thread-a", "title", "Thread A"),
                 "assistantResult", NativeVoiceJson.object("final", NativeVoiceJson.object("text", text))));
         if (subject != null) NativeVoiceJson.put(result, "subjectId", subject);
+        if (event.startsWith("turn.")) NativeVoiceJson.put(result, "userInputRevision", 0);
         if (event.equals("turn.progress") || event.equals("turn.partial") || event.endsWith(".requested")) NativeVoiceJson.put(result, "voice", "speak");
         if (event.equals("turn.progress") || event.equals("turn.partial")) NativeVoiceJson.put(result.optJSONObject("payload"), "progress",
             NativeVoiceJson.object("itemId", id, "phase", event.equals("turn.partial") ? "partial" : "provisional", "text", text));
@@ -34,6 +35,55 @@ public class NativeVoiceQueueTest {
         assertFalse(new NativeVoiceQueue.Item(completion, settings("input").patch(1, NativeVoiceJson.object("autoListen", false))).followUp);
         NativeVoiceJson.put(completion, "voice", "speak");
         assertFalse(new NativeVoiceQueue.Item(completion, settings("input")).followUp);
+    }
+    @Test public void turnWatermarkIsRequiredSafeAndRetainedThroughSettingsRebuilds() {
+        for (String event : new String[] { "turn.progress", "turn.partial", "turn.completed", "turn.failed", "turn.interrupted" }) {
+            JSONObject source = envelope("fresh", event, "Reply", null);
+            NativeVoiceJson.put(source, "userInputRevision", 9007199254740991L);
+            NativeVoiceQueue.Item notice = new NativeVoiceQueue.Item(source, settings("speak"));
+            assertEquals(9007199254740991L, notice.userInputRevision);
+            assertEquals(notice.userInputRevision, notice.rebuild(settings("input")).userInputRevision);
+            source.remove("userInputRevision");
+            assertThrows(IllegalArgumentException.class, () -> new NativeVoiceQueue.Item(source, settings("speak")));
+            for (Object invalid : new Object[] { JSONObject.NULL, "1", -1, .5, 9007199254740992L }) {
+                NativeVoiceJson.put(source, "userInputRevision", invalid);
+                assertThrows(IllegalArgumentException.class, () -> new NativeVoiceQueue.Item(source, settings("speak")));
+            }
+        }
+        JSONObject other = envelope("attention", "automation.started", "Started", null);
+        NativeVoiceJson.put(other, "userInputRevision", 0);
+        assertThrows(IllegalArgumentException.class, () -> new NativeVoiceQueue.Item(other, settings("speak")));
+    }
+    @Test public void turnRecognitionMustShareItsSourceThreadButAttentionMayUseAnotherThread() {
+        JSONObject turn = envelope("completion", "turn.completed", "Reply", null);
+        NativeVoiceJson.put(turn.optJSONObject("recognitionTarget"), "threadId", "thread-b");
+        assertEquals("invalid_recognitionTarget", assertThrows(IllegalArgumentException.class, () -> new NativeVoiceQueue.Item(turn, settings("speak"))).getMessage());
+        JSONObject attention = envelope("automation", "automation.started", "Started", null);
+        NativeVoiceJson.put(attention.optJSONObject("recognitionTarget"), "threadId", "thread-b");
+        assertEquals("thread-b", new NativeVoiceQueue.Item(attention, settings("speak")).targetId());
+    }
+    @Test public void speechSupersessionTracksOnlyLaterUserAdmissionAndNeverReplaysOrAttention() {
+        JSONObject source = envelope("completion", "turn.completed", "Reply", null); NativeVoiceJson.put(source, "userInputRevision", 7);
+        NativeVoiceQueue.Item notice = new NativeVoiceQueue.Item(source, settings("speak"));
+        JSONObject context = NativeVoiceJson.object("userInputRevision", 7, "activityToken", "changed-by-runtime", "automaticListenEligible", false);
+        assertFalse(notice.supersededByInput(context));
+        NativeVoiceJson.put(context, "userInputRevision", 8); assertTrue(notice.supersededByInput(context));
+        NativeVoiceJson.put(context, "userInputRevision", 6); assertFalse(notice.supersededByInput(context));
+        NativeVoiceJson.put(context, "userInputRevision", 99);
+        assertFalse(new NativeVoiceQueue.Item(envelope("attention", "thread.woke", "Wake", null), settings("speak")).supersededByInput(context));
+        assertFalse(replay("historical", "Read again", settings("speak")).supersededByInput(context));
+    }
+    @Test public void automaticRecognitionRequiresOriginalAuthorityAndUnsupersededInput() {
+        NativeVoiceQueue.Item notice = new NativeVoiceQueue.Item(envelope("completion", "turn.completed", "Reply", null), settings("speak"));
+        JSONObject context = NativeVoiceJson.object("userInputRevision", 0, "activityToken", "epoch-1", "automaticListenEligible", true, "authority", "current");
+        assertTrue(NativeVoiceRuntime.automaticContextCurrent(notice, context));
+        NativeVoiceJson.put(context, "userInputRevision", 1); assertFalse(NativeVoiceRuntime.automaticContextCurrent(notice, context));
+        NativeVoiceJson.put(context, "userInputRevision", 0); NativeVoiceJson.put(context, "activityToken", "another-epoch");
+        assertFalse(NativeVoiceRuntime.automaticContextCurrent(notice, context));
+        NativeVoiceJson.put(context, "activityToken", "epoch-1"); NativeVoiceJson.put(context, "authority", "unavailable");
+        assertFalse(NativeVoiceRuntime.automaticContextCurrent(notice, context));
+        NativeVoiceJson.put(context, "authority", "current"); NativeVoiceJson.put(context, "automaticListenEligible", false);
+        assertFalse(NativeVoiceRuntime.automaticContextCurrent(notice, context));
     }
     @Test public void partialAnswerSpeaksOnceWithoutOpeningFollowupListening() {
         JSONObject source = envelope("partial-1", "turn.partial", "**First finding confirmed.**", null);
@@ -225,7 +275,7 @@ public class NativeVoiceQueueTest {
     }
     private static int utf8(String value) { return value.getBytes(java.nio.charset.StandardCharsets.UTF_8).length; }
     private static JSONObject wire(String payload) throws Exception {
-        return NativeVoiceJson.object("sourceEventId", "fitted", "generation", 1, "voice", "speak", "payload", new JSONObject(payload));
+        return NativeVoiceJson.object("sourceEventId", "fitted", "generation", 1, "voice", "speak", "userInputRevision", 0, "payload", new JSONObject(payload));
     }
     @Test public void payloadSizeMatchesServerJsonStringifyMeasure() throws Exception {
         String mixed = payloadJson(ESCAPED_PREFIX + "tail");

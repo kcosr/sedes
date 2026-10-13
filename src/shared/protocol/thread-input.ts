@@ -61,6 +61,7 @@ export const threadInputContextSchema = z.strictObject({
   /** Current scoped display text; renames do not change activity authority. */
   threadTitle: boundedDisplayTextSchema.shape.text,
   activityToken: z.string().min(1).max(160),
+  userInputRevision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   authority: z.enum(["current", "unbound", "unavailable"]),
   runState: threadRunStateSchema.nullable(),
   sourceTurnId: applicationTurnIdSchema.optional(),

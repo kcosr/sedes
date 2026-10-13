@@ -29,13 +29,15 @@ final class NativeVoiceQueue {
         /** A local replay's validated speakReply request; null for a server notification. */
         final JSONObject request;
         final long policyGeneration;
+        /** User admission watermark for automatic turn notices; other notices and replays have none. */
+        final long userInputRevision;
         boolean followUp, followUpCancelled;
         final int bytes;
         /** Notifications are automatic. A replay is user-requested: notification filters and cancellation do not apply. */
         final boolean automatic;
         Item(JSONObject envelope, NativeVoiceSettings settings) {
             this.envelope = NativeVoiceJson.copy(envelope); request = null; automatic = true;
-            NativeVoiceJson.keys(envelope, "payload", "sourceEventId", "voice", "generation", "origin", "recognitionTarget", "subjectId");
+            NativeVoiceJson.keys(envelope, "payload", "sourceEventId", "voice", "generation", "origin", "recognitionTarget", "subjectId", "userInputRevision");
             id = NativeVoiceJson.string(envelope, "sourceEventId", 512);
             policyGeneration = NativeVoiceJson.integer(envelope, "generation", 0, Long.MAX_VALUE);
             JSONObject payload = NativeVoiceJson.requiredObject(envelope, "payload");
@@ -53,6 +55,13 @@ final class NativeVoiceQueue {
             if (thread != null) { NativeVoiceJson.keys(thread, "id", "title"); NativeVoiceProtocol.text(thread, "title", 65536); }
             threadId = thread == null ? null : NativeVoiceJson.string(thread, "id", 512);
             threadTitle = thread == null ? null : thread.optString("title", "");
+            if (event.startsWith("turn.")) {
+                if (threadId == null) throw new IllegalArgumentException("invalid_threadId");
+                userInputRevision = NativeVoiceJson.integer(envelope, "userInputRevision", 0, 9007199254740991L);
+            } else {
+                if (envelope.has("userInputRevision")) throw new IllegalArgumentException("invalid_userInputRevision");
+                userInputRevision = -1;
+            }
             JSONObject source = NativeVoiceProtocol.optionalObject(envelope, "origin");
             if (source != null) NativeVoiceJson.keys(source, "clientId");
             origin = source == null ? null : NativeVoiceJson.string(source, "clientId", 512);
@@ -61,6 +70,7 @@ final class NativeVoiceQueue {
                 NativeVoiceJson.keys(recognition, "threadId", "activityToken", "sourceTurnId");
                 NativeVoiceJson.string(recognition, "threadId", 512); NativeVoiceJson.string(recognition, "activityToken", 512);
                 if (recognition.has("sourceTurnId")) NativeVoiceJson.string(recognition, "sourceTurnId", 512);
+                if (userInputRevision >= 0 && !threadId.equals(recognition.optString("threadId"))) throw new IllegalArgumentException("invalid_recognitionTarget");
             }
             target = recognition == null ? null : NativeVoiceJson.copy(recognition);
             JSONObject progress = NativeVoiceProtocol.optionalObject(payload, "progress");
@@ -88,7 +98,7 @@ final class NativeVoiceQueue {
         private Item(String id, JSONObject request, String threadTitle, NativeVoiceSettings settings) {
             this.id = id; this.request = request; this.threadTitle = threadTitle;
             envelope = null; event = REPLAY; threadId = request.optString("threadId");
-            subject = null; origin = null; target = null; policyGeneration = -1; automatic = false;
+            subject = null; origin = null; target = null; policyGeneration = -1; userInputRevision = -1; automatic = false;
             // Notification follow-up authority does not apply to a replay. The runtime evaluates
             // current Auto-listen and fresh manual-input readiness after replay playback ends.
             followUp = false;
@@ -106,6 +116,10 @@ final class NativeVoiceQueue {
             return request == null ? new Item(envelope, settings) : new Item(id, request, threadTitle, settings);
         }
         boolean isReplay() { return request != null; }
+        boolean hasInputRevision() { return userInputRevision >= 0; }
+        boolean supersededByInput(JSONObject context) {
+            return hasInputRevision() && context.optLong("userInputRevision", -1) > userInputRevision;
+        }
         /** A turn's replay is queued or playing at most once at a time. */
         String replayIdentity() { return request == null ? null : threadId + "\n" + request.optString("turnId"); }
         String targetId() { return target == null ? null : target.optString("threadId", null); }
@@ -130,6 +144,7 @@ final class NativeVoiceQueue {
     private int bytes;
     int size() { return pending.size(); }
     int bytes() { return bytes; }
+    boolean contains(String id) { for (Item item : pending) if (item.id.equals(id)) return true; return false; }
     boolean remember(String id) {
         if (!seen.add(id)) return false;
         remembered.addLast(id);

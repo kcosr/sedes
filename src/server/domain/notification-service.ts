@@ -23,6 +23,8 @@ import {
   selectAssistantResult,
 } from "./assistant-result-selection.js";
 import { DomainError } from "./errors.js";
+import type { ResponseVoiceFreshness } from "../conversations/response-voice-freshness.js";
+import { MAX_REPLY_STREAM_IDS } from "../../shared/protocol/client-controls.js";
 
 const MAX_CONCURRENT = 4;
 const MAX_PENDING = 64;
@@ -38,7 +40,13 @@ export type VoiceNotificationContext = {
   /** The epoch and recipients are captured before waiting for terminal settlement. */
   readonly settlement?: Promise<VoiceRecognitionTarget | undefined>;
 };
-type Subscriber = { readonly scope: RequestScope; readonly listener: (frame: string) => void; readonly sequence: number };
+export type VoiceStreamReservation = { readonly voiceStreamId: string; readonly release: () => void };
+export type VoiceNotificationPublication = {
+  readonly sourceEventId: string;
+  readonly voiceStreamIds: readonly string[];
+};
+type Subscriber = { readonly scope: RequestScope; readonly listener: (frame: string) => void; readonly sequence: number;
+  readonly voiceStream?: VoiceStreamReservation };
 const sameScope = (left: RequestScope, right: RequestScope) =>
   left.tenantId === right.tenantId && left.principalId === right.principalId;
 
@@ -51,6 +59,7 @@ export class NotificationService {
   >();
   readonly #cwd = process.cwd();
   readonly #subscribers = new Set<Subscriber>();
+  readonly #voiceStreams = new Map<VoiceStreamReservation, { readonly scope: RequestScope; subscriber?: Subscriber }>();
   readonly #deferred = new Map<object, RequestScope>();
   #subscriberSequence = 0;
   #closed = false;
@@ -74,8 +83,27 @@ export class NotificationService {
     return this.#subscriberSequence;
   }
 
+  /** Reserve before response headers so every delivered native stream fits the reply receipt. */
+  reserveVoiceStream(scope: RequestScope, voiceStreamId: string): VoiceStreamReservation {
+    if (this.#closed || [...this.#voiceStreams.values()].filter(stream => sameScope(scope, stream.scope)).length >= MAX_REPLY_STREAM_IDS) {
+      throw new DomainError("runtime_unavailable", "Native voice stream capacity is unavailable. Retry shortly.", true);
+    }
+    const reservation: VoiceStreamReservation = { voiceStreamId, release: () => {
+      const stream = this.#voiceStreams.get(reservation);
+      if (!stream) return;
+      this.#voiceStreams.delete(reservation);
+      if (stream.subscriber) this.#removeSubscriber(stream.subscriber, "unsubscribed");
+    } };
+    this.#voiceStreams.set(reservation, { scope: { ...scope } });
+    return reservation;
+  }
+
   /** Subscribe and deliver policy synchronously; this lane has no replay or inventory cursor. */
-  subscribe(scope: RequestScope, listener: (frame: string) => void): () => void {
+  subscribe(scope: RequestScope, listener: (frame: string) => void, voiceStream?: VoiceStreamReservation): () => void {
+    const reserved = voiceStream ? this.#voiceStreams.get(voiceStream) : undefined;
+    if (voiceStream && (!reserved || !sameScope(scope, reserved.scope) || reserved.subscriber)) {
+      throw new DomainError("invalid_transition", "The native voice stream reservation is unavailable.");
+    }
     let policy: NotificationDispatchSettings;
     try { policy = this.input.repository.readDispatch(scope); } catch {
       // No policy, no lane: the stream keeps inventory and never receives voice frames.
@@ -83,7 +111,9 @@ export class NotificationService {
       return () => {};
     }
     if (this.#closed) return () => {};
-    const subscriber = { scope: { ...scope }, listener, sequence: ++this.#subscriberSequence };
+    const subscriber: Subscriber = { scope: { ...scope }, listener, sequence: ++this.#subscriberSequence,
+      ...(voiceStream ? { voiceStream } : {}) };
+    if (reserved) reserved.subscriber = subscriber;
     this.#subscribers.add(subscriber);
     recordVoiceDiagnostic("voice_lane_subscribed", { applicationStreamCount: this.#subscriberCount(scope) });
     this.#deliver(subscriber, "notification_policy", policy);
@@ -152,7 +182,8 @@ export class NotificationService {
     assistantResult?: ClassifiedAssistantResult,
     voiceContext?: () => VoiceNotificationContext,
     subscriberWatermark?: number,
-  ): Promise<string | undefined> {
+    responseVoice?: ResponseVoiceFreshness,
+  ): Promise<VoiceNotificationPublication | undefined> {
     const sourceEventId = createHash("sha256").update(eventKey).digest("hex");
     let claimed = false;
     let scriptQueued = false;
@@ -178,11 +209,13 @@ export class NotificationService {
       if (dispatch.settings.silenced) { decision("silenced"); return; }
       const channels = dispatch.settings.delivery[event.event];
       const script = channels.script && this.#pending.length < MAX_PENDING;
+      const superseded = event.event.startsWith("turn.") && responseVoice?.superseded === true;
       // Completion recipients must also predate the first live observation.
-      const recipients = provenance !== "live" || channels.voice === "none" ? []
+      const recipients = provenance !== "live" || channels.voice === "none" || superseded ? []
         : [...this.#subscribers].filter((subscriber) => sameScope(scope, subscriber.scope) &&
           (subscriberWatermark === undefined || subscriber.sequence <= subscriberWatermark));
       const suppressionReason = provenance !== "live" ? "recovered"
+        : superseded ? "superseded_by_input"
         : channels.voice === "none" ? "voice_disabled" : !recipients.length ? "no_recipients" : undefined;
       if (!script && !recipients.length) { decision(suppressionReason, 0, channels.voice); return; }
       const payload = notificationPayload(event, dispatch.settings, assistantResult);
@@ -194,7 +227,7 @@ export class NotificationService {
       }
       decision(suppressionReason, recipients.length, channels.voice);
       if (recipients.length) {
-        return this.#voice(scope, sourceEventId, payload, channels.voice, dispatch.generation, recipients, voiceContext);
+        return this.#voice(scope, sourceEventId, payload, channels.voice, dispatch.generation, recipients, voiceContext, responseVoice);
       }
     } catch {
       decision("processing_failed");
@@ -207,6 +240,7 @@ export class NotificationService {
     this.#pending.length = 0;
     this.#deferred.clear();
     for (const subscriber of this.#subscribers) this.#removeSubscriber(subscriber, "service_closed");
+    for (const reservation of this.#voiceStreams.keys()) reservation.release();
     for (const controller of this.#active.keys()) controller.abort();
     await Promise.allSettled(this.#active.values());
   }
@@ -220,12 +254,14 @@ export class NotificationService {
     generation: number,
     recipients: readonly Subscriber[],
     voiceContext: (() => VoiceNotificationContext) | undefined,
-  ): Promise<string | undefined> {
+    responseVoice: ResponseVoiceFreshness | undefined,
+  ): Promise<VoiceNotificationPublication | undefined> {
     try {
       const { settlement, ...context } = voiceContext?.() ?? {};
       const envelope = {
         payload, sourceEventId,
         voice, generation, ...context,
+        ...(payload.event.startsWith("turn.") && responseVoice ? { userInputRevision: responseVoice.userInputRevision } : {}),
       };
       const publish = (recognitionTarget: VoiceRecognitionTarget | undefined) => {
         const staleGeneration = !this.#closed && this.input.repository.readDispatch(scope).generation !== generation;
@@ -237,13 +273,17 @@ export class NotificationService {
         const value = voiceNotificationSchema.parse({ ...envelope, recognitionTarget });
         let attemptedCount = 0;
         let deliveredCount = 0;
+        const voiceStreamIds = new Set<string>();
         for (const recipient of recipients) {
           if (!this.#subscribers.has(recipient)) continue;
           attemptedCount++;
-          if (this.#deliver(recipient, "notification", value)) deliveredCount++;
+          if (this.#deliver(recipient, "notification", value)) {
+            deliveredCount++;
+            if (recipient.voiceStream) voiceStreamIds.add(recipient.voiceStream.voiceStreamId);
+          }
         }
         recordVoiceDiagnostic("voice_published", { sourceEventId, recipientCount: recipients.length, attemptedCount, deliveredCount, staleGeneration: false });
-        return envelope.sourceEventId;
+        return { sourceEventId: envelope.sourceEventId, voiceStreamIds: [...voiceStreamIds] };
       };
       if (!settlement) return publish(context.recognitionTarget);
       // Bound transient waiting independently from script capacity.
@@ -357,12 +397,17 @@ export class NotificationService {
 
   #removeSubscriber(subscriber: Subscriber, reason: "unsubscribed" | "listener_failed" | "service_closed"): void {
     if (!this.#subscribers.delete(subscriber)) return;
+    subscriber.voiceStream?.release();
     recordVoiceDiagnostic("voice_lane_unsubscribed", { reason, applicationStreamCount: this.#subscriberCount(subscriber.scope) });
   }
 
   #deliver(subscriber: Subscriber, event: string, data: unknown): boolean {
     if (!this.#subscribers.has(subscriber)) return false;
-    try { subscriber.listener(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); return true; }
+    try {
+      subscriber.listener(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+      // A bounded stream may close synchronously when the frame overflows.
+      return this.#subscribers.has(subscriber);
+    }
     catch { this.#removeSubscriber(subscriber, "listener_failed"); return false; }
   }
 

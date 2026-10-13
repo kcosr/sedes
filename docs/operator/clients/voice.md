@@ -29,16 +29,26 @@ An end-interaction or thread switch waits for the turn to complete and the reply
 to finish playing.
 Switching can request one listen even with Auto-listen disabled, but it does not
 turn voice on or change the default/pin. Recording preferences, including **Keep
-listening by default**, still apply.
+listening by default**, still apply. If another reply is playing, that explicit
+listen waits for it to finish. The requested thread is checked for ordinary
+input readiness before the start cue, after the cue, and before the microphone
+opens. A valid foreground destination can still open when recording is blocked.
 
 While Android is in the background, a switch with `listen: true` can start
 recognition on the requested thread if the native voice session is already ready.
 It leaves the screen alone, even if you reopen the app before the request runs.
-A background switch without listening does nothing. Navigation requires the app
-to remain in the foreground. Manual actions and closed or replaced connections
-supersede pending actions. Actions have a 24-hour turn-completion limit and a
+A request accepted in the foreground also becomes voice-only if the app goes
+into the background while it waits; returning to the app never restores its
+navigation. A background switch without listening does nothing. Manual actions
+and closed or replaced control connections supersede pending actions. Losing
+only the notification connection releases a wait for playback that can no
+longer arrive. A superseded source reply cancels its pending switch instead of
+starting another listen. Actions have a 24-hour turn-completion limit and a
 separate one-hour reply-playback limit after completion. Browser and Electron
 clients support navigation and report voice controls as unavailable.
+Retrying the client-control connection keeps a healthy notification connection,
+its policy, and current speech intact. A late acceptance of a cancelled or
+timed-out request is cancelled explicitly so it cannot reserve another listen.
 
 With **Replay turn reply** ticked in the same group, the agent can queue an
 ended turn's reply on the current device, as if you had tapped that turn's
@@ -173,6 +183,19 @@ speak-only when Speak is enabled. They never answer a structured form with free 
 Input does not require hearing a response before an eligible completion opens
 the microphone. Explicit reply playback, optional recording-destination
 announcements, and recording cues remain available independently of automatic speech.
+
+Automatic turn notices check for newer messages before speaking. A typed or
+recognized message accepted by Sedes in the same thread, including a queued
+message or one sent from another device, supersedes the older notice and its
+automatic recording. A follow-up queued before the reply completes can suppress
+that reply's voice notice too. Steering already associated with the responding
+turn preserves its reply. Unsent drafts and unfinished recordings do not count.
+
+A reply that has started playing continues; Sedes checks again before the
+recording cue and microphone startup. Explicit **Play response aloud**, manual
+recording, and question or approval notices keep their own behavior. If Sedes
+temporarily cannot answer the pre-speech check, the reply may still play;
+automatic recording always requires a successful current-target check.
 
 Fresh completion settings select Final and Unclassified response text.
 Provisional and Partial completion text are optional and can repeat their live
@@ -524,9 +547,11 @@ could not be routed.
 on, a new recording started from the headset or notification while idle begins
 with “Replying to {thread title}.” using the current title of the thread that
 will receive it. This also applies to a separate start just after playback ends.
-In-app starts, interrupting playback to reply, and automatic follow-up recordings
-skip the announcement. The initiating control determines this behavior, even if
-the app is visible when a headset or notification start is used.
+Explicit agent requests to listen on a thread also announce when accepted
+in the background or when the app leaves their original foreground context before
+recording starts. In-app starts, foreground agent requests, interrupting playback
+to reply, and automatic follow-up recordings skip the announcement. Headset and
+notification starts announce even if the app is visible.
 Long titles are shortened and blank
 titles are announced as “Untitled thread”. The title finishes playing before the
 usual start cue and microphone preparation. The input shows **Announcing thread…**

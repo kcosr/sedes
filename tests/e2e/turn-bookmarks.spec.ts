@@ -1,4 +1,5 @@
 import { expect, test } from "./fixtures";
+import type { BrowserContext } from "@playwright/test";
 import {
   capture,
   createDraftThread,
@@ -71,204 +72,210 @@ test("turn bookmarks persist, preview both sides, navigate, and synchronize", as
 
   // Keep a second live client open before mutation so the assertion below
   // proves application-state publication rather than bootstrap persistence.
-  const peer = await page.context().newPage();
-  await peer.goto(threadPath);
-  await expect(
-    peer.getByRole("textbox", { name: "Message Scripted agent" }),
-  ).toBeVisible();
-  const peerFirstTurn = peer
-    .locator('.conversation-turn[data-turn-status="completed"]')
-    .first();
-  await expect(
-    peerFirstTurn.getByRole("button", { name: "Bookmark turn" }),
-  ).toBeEnabled();
-  const selectedDesktopThread = page
-    .getByTestId("desktop-sidebar")
-    .locator('[data-testid="thread-row"][data-selected="true"]');
-  const desktopBookmarkIndicator = selectedDesktopThread.locator(
-    '[data-chip="bookmarks"]',
-  );
-  await expect(desktopBookmarkIndicator).toHaveCount(0);
+  // Independent clients need independent HTTP connection pools: each holds
+  // application/thread event streams and a client-control long poll.
+  const peerContext = await browser.newContext({ viewport: { width: 1280, height: 720 } });
+  let mobileContext: BrowserContext | undefined;
+  try {
+    const peer = await peerContext.newPage();
+    await peer.goto(threadPath);
+    await expect(
+      peer.getByRole("textbox", { name: "Message Scripted agent" }),
+    ).toBeVisible();
+    const peerFirstTurn = peer
+      .locator('.conversation-turn[data-turn-status="completed"]')
+      .first();
+    await expect(
+      peerFirstTurn.getByRole("button", { name: "Bookmark turn" }),
+    ).toBeEnabled();
+    const selectedDesktopThread = page
+      .getByTestId("desktop-sidebar")
+      .locator('[data-testid="thread-row"][data-selected="true"]');
+    const desktopBookmarkIndicator = selectedDesktopThread.locator(
+      '[data-chip="bookmarks"]',
+    );
+    await expect(desktopBookmarkIndicator).toHaveCount(0);
 
-  await firstTurn.hover();
-  const bookmarkToggle = firstTurn.getByRole("button", {
-    name: "Bookmark turn",
-  });
-  await expect(bookmarkToggle).toBeEnabled();
-  await bookmarkToggle.click();
-  await expect(
-    firstTurn.getByRole("button", { name: "Remove turn bookmark" }),
-  ).toHaveAttribute("aria-pressed", "true");
-  await expect(
-    page.getByRole("button", { name: "Bookmarks, 1" }),
-  ).toBeVisible();
-  await expect(desktopBookmarkIndicator).toHaveAccessibleName(
-    "1 bookmarked turn",
-  );
-  await expect(
-    desktopBookmarkIndicator.locator(".status-chip-count"),
-  ).toHaveCount(0);
+    await firstTurn.hover();
+    const bookmarkToggle = firstTurn.getByRole("button", {
+      name: "Bookmark turn",
+    });
+    await expect(bookmarkToggle).toBeEnabled();
+    await bookmarkToggle.click();
+    await expect(
+      firstTurn.getByRole("button", { name: "Remove turn bookmark" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    await expect(
+      page.getByRole("button", { name: "Bookmarks, 1" }),
+    ).toBeVisible();
+    await expect(desktopBookmarkIndicator).toHaveAccessibleName(
+      "1 bookmarked turn",
+    );
+    await expect(
+      desktopBookmarkIndicator.locator(".status-chip-count"),
+    ).toHaveCount(0);
 
-  await expect(peer.getByRole("button", { name: "Bookmarks, 1" })).toBeVisible({
-    timeout: 10_000,
-  });
-  await expect(
-    peerFirstTurn.getByRole("button", { name: "Remove turn bookmark" }),
-  ).toHaveAttribute("aria-pressed", "true");
+    await expect(peer.getByRole("button", { name: "Bookmarks, 1" })).toBeVisible({
+      timeout: 10_000,
+    });
+    await expect(
+      peerFirstTurn.getByRole("button", { name: "Remove turn bookmark" }),
+    ).toHaveAttribute("aria-pressed", "true");
 
-  await page.getByRole("button", { name: "Bookmarks, 1" }).click();
-  const desktopBookmarks = page.getByRole("dialog", { name: "Bookmarks" });
-  await expect(desktopBookmarks).toBeVisible();
-  await expect(
-    desktopBookmarks.locator('[data-slot="turn-bookmark-item-title"]'),
-  ).toContainText(prompts[0]!);
-  await expect(
-    desktopBookmarks.locator('[data-slot="turn-bookmark-item-description"]'),
-  ).toContainText(`deterministic normalized result for ${prompts[0]}`);
-  await capture(page, testInfo, "turn-bookmarks-desktop-populated.png");
+    await page.getByRole("button", { name: "Bookmarks, 1" }).click();
+    const desktopBookmarks = page.getByRole("dialog", { name: "Bookmarks" });
+    await expect(desktopBookmarks).toBeVisible();
+    await expect(
+      desktopBookmarks.locator('[data-slot="turn-bookmark-item-title"]'),
+    ).toContainText(prompts[0]!);
+    await expect(
+      desktopBookmarks.locator('[data-slot="turn-bookmark-item-description"]'),
+    ).toContainText(`deterministic normalized result for ${prompts[0]}`);
+    await capture(page, testInfo, "turn-bookmarks-desktop-populated.png");
 
-  await desktopBookmarks.locator('[data-slot="turn-bookmark-link"]').click();
-  await expect(page).toHaveURL(
-    new RegExp(
-      `${threadPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`,
-    ),
-  );
-  await expect(page.locator(".source-turn-highlight")).toHaveAttribute(
-    "data-turn-id",
-    firstTurnId!,
-  );
-  await expect(page.locator(".source-turn-highlight")).toBeFocused();
-  await expect(
-    page.getByRole("button", { name: "Return to latest" }),
-  ).toHaveCount(0);
-  await expect(
-    page.getByRole("textbox", { name: "Message Scripted agent" }),
-  ).toBeEnabled();
-  await page.getByTestId("thread-target-context").click();
-  await expect(page.locator(".source-turn-highlight")).toHaveCount(0);
+    await desktopBookmarks.locator('[data-slot="turn-bookmark-link"]').click();
+    await expect(page).toHaveURL(
+      new RegExp(
+        `${threadPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`,
+      ),
+    );
+    await expect(page.locator(".source-turn-highlight")).toHaveAttribute(
+      "data-turn-id",
+      firstTurnId!,
+    );
+    await expect(page.locator(".source-turn-highlight")).toBeFocused();
+    await expect(
+      page.getByRole("button", { name: "Return to latest" }),
+    ).toHaveCount(0);
+    await expect(
+      page.getByRole("textbox", { name: "Message Scripted agent" }),
+    ).toBeEnabled();
+    await page.getByTestId("thread-target-context").click();
+    await expect(page.locator(".source-turn-highlight")).toHaveCount(0);
 
-  await page.reload();
-  await expect(
-    page.getByRole("button", { name: "Bookmarks, 1" }),
-  ).toBeVisible();
-  await page.getByRole("button", { name: "Bookmarks, 1" }).click();
-  await expect(page.locator('[data-slot="turn-bookmark-item-title"]')).toContainText(
-    prompts[0]!,
-  );
-  await page.keyboard.press("Escape");
+    await page.reload();
+    await expect(
+      page.getByRole("button", { name: "Bookmarks, 1" }),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Bookmarks, 1" }).click();
+    await expect(page.locator('[data-slot="turn-bookmark-item-title"]')).toContainText(
+      prompts[0]!,
+    );
+    await page.keyboard.press("Escape");
 
-  const mobileContext = await browser.newContext({
-    viewport: { width: 390, height: 844 },
-    hasTouch: true,
-    isMobile: true,
-  });
-  const mobilePage = await mobileContext.newPage();
-  await mobilePage.goto(threadPath);
-  await mobilePage
-    .getByRole("button", { name: "Open thread navigation" })
-    .click();
-  const mobileNavigation = mobilePage.getByRole("dialog", {
-    name: "Thread navigation",
-  });
-  const selectedMobileThread = mobileNavigation.locator(
-    '[data-selected="true"]',
-  );
-  await expect(selectedMobileThread).toBeVisible();
-  await expect(
-    selectedMobileThread.getByRole("img", { name: "1 bookmarked turn" }),
-  ).toBeVisible();
-  await expect(
-    selectedMobileThread.locator(
-      ".flat-row-bookmark-indicator .flat-row-indicator-count",
-    ),
-  ).toHaveCount(0);
-  await mobilePage.keyboard.press("Escape");
-  const mobileTrigger = mobilePage.getByRole("button", {
-    name: "Bookmarks, 1",
-  });
-  await expect(mobileTrigger).toBeVisible();
-  await mobileTrigger.click();
-  const dialog = mobilePage.getByRole("dialog", { name: "Bookmarks" });
-  await expect(dialog).toBeVisible();
-  await overlaySettled(dialog);
-  await expect(dialog.locator('[data-slot="turn-bookmark-item-title"]')).toContainText(
-    prompts[0]!,
-  );
-  await expect(
-    dialog.locator('[data-slot="turn-bookmark-item-description"]'),
-  ).toContainText("deterministic normalized result");
-  const [dialogBox, linkBox, removeBox] = await Promise.all([
-    dialog.boundingBox(),
-    dialog.locator('[data-slot="turn-bookmark-link"]').boundingBox(),
-    dialog
+    mobileContext = await browser.newContext({
+      viewport: { width: 390, height: 844 },
+      hasTouch: true,
+      isMobile: true,
+    });
+    const mobilePage = await mobileContext.newPage();
+    await mobilePage.goto(threadPath);
+    await mobilePage
+      .getByRole("button", { name: "Open thread navigation" })
+      .click();
+    const mobileNavigation = mobilePage.getByRole("dialog", {
+      name: "Thread navigation",
+    });
+    const selectedMobileThread = mobileNavigation.locator(
+      '[data-selected="true"]',
+    );
+    await expect(selectedMobileThread).toBeVisible();
+    await expect(
+      selectedMobileThread.getByRole("img", { name: "1 bookmarked turn" }),
+    ).toBeVisible();
+    await expect(
+      selectedMobileThread.locator(
+        ".flat-row-bookmark-indicator .flat-row-indicator-count",
+      ),
+    ).toHaveCount(0);
+    await mobilePage.keyboard.press("Escape");
+    const mobileTrigger = mobilePage.getByRole("button", {
+      name: "Bookmarks, 1",
+    });
+    await expect(mobileTrigger).toBeVisible();
+    await mobileTrigger.click();
+    const dialog = mobilePage.getByRole("dialog", { name: "Bookmarks" });
+    await expect(dialog).toBeVisible();
+    await overlaySettled(dialog);
+    await expect(dialog.locator('[data-slot="turn-bookmark-item-title"]')).toContainText(
+      prompts[0]!,
+    );
+    await expect(
+      dialog.locator('[data-slot="turn-bookmark-item-description"]'),
+    ).toContainText("deterministic normalized result");
+    const [dialogBox, linkBox, removeBox] = await Promise.all([
+      dialog.boundingBox(),
+      dialog.locator('[data-slot="turn-bookmark-link"]').boundingBox(),
+      dialog
+        .getByRole("button", { name: `Remove bookmark: ${prompts[0]}` })
+        .boundingBox(),
+    ]);
+    expect(dialogBox).not.toBeNull();
+    expect(dialogBox!.width).toBeLessThanOrEqual(390);
+    expect(linkBox).not.toBeNull();
+    expect(linkBox!.height).toBeGreaterThanOrEqual(44);
+    expect(removeBox).not.toBeNull();
+    expect(removeBox!.width).toBeGreaterThanOrEqual(44);
+    expect(removeBox!.height).toBeGreaterThanOrEqual(44);
+    await expectNoPageOverflow(mobilePage);
+    await capture(mobilePage, testInfo, "turn-bookmarks-mobile-sheet.png");
+
+    await dialog.locator('[data-slot="turn-bookmark-link"]').click();
+    await expect(dialog).toBeHidden();
+    await expect(mobilePage).toHaveURL(
+      new RegExp(
+        `${threadPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`,
+      ),
+    );
+    await expect(mobilePage.locator(".source-turn-highlight")).toHaveAttribute(
+      "data-turn-id",
+      firstTurnId!,
+    );
+    await expect(mobilePage.locator(".source-turn-highlight")).toBeFocused();
+    await mobilePage.getByTestId("thread-context").click();
+    await expect(mobilePage.locator(".source-turn-highlight")).toHaveCount(0);
+
+    await mobileTrigger.click();
+    await expect(dialog).toBeVisible();
+    await dialog
       .getByRole("button", { name: `Remove bookmark: ${prompts[0]}` })
-      .boundingBox(),
-  ]);
-  expect(dialogBox).not.toBeNull();
-  expect(dialogBox!.width).toBeLessThanOrEqual(390);
-  expect(linkBox).not.toBeNull();
-  expect(linkBox!.height).toBeGreaterThanOrEqual(44);
-  expect(removeBox).not.toBeNull();
-  expect(removeBox!.width).toBeGreaterThanOrEqual(44);
-  expect(removeBox!.height).toBeGreaterThanOrEqual(44);
-  await expectNoPageOverflow(mobilePage);
-  await capture(mobilePage, testInfo, "turn-bookmarks-mobile-sheet.png");
+      .click();
+    await expect(dialog).toContainText(
+      "Bookmark a user message to find that turn here.",
+    );
+    await mobilePage.keyboard.press("Escape");
+    await expect(
+      mobilePage.getByRole("button", { name: "Bookmarks", exact: true }),
+    ).toBeVisible();
+    await expect(
+      peer.getByRole("button", { name: "Bookmarks", exact: true }),
+    ).toBeVisible({
+      timeout: 10_000,
+    });
+    await expect(
+      peerFirstTurn.getByRole("button", { name: "Bookmark turn" }),
+    ).toHaveAttribute("aria-pressed", "false");
+    await expect(desktopBookmarkIndicator).toHaveCount(0);
+    await mobilePage
+      .getByRole("button", { name: "Open thread navigation" })
+      .click();
+    await expect(selectedMobileThread).toBeVisible();
+    await expect(
+      selectedMobileThread.getByRole("img", { name: /bookmarked turn/ }),
+    ).toHaveCount(0);
+    await mobilePage.keyboard.press("Escape");
 
-  await dialog.locator('[data-slot="turn-bookmark-link"]').click();
-  await expect(dialog).toBeHidden();
-  await expect(mobilePage).toHaveURL(
-    new RegExp(
-      `${threadPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`,
-    ),
-  );
-  await expect(mobilePage.locator(".source-turn-highlight")).toHaveAttribute(
-    "data-turn-id",
-    firstTurnId!,
-  );
-  await expect(mobilePage.locator(".source-turn-highlight")).toBeFocused();
-  await mobilePage.getByTestId("thread-context").click();
-  await expect(mobilePage.locator(".source-turn-highlight")).toHaveCount(0);
-
-  await mobileTrigger.click();
-  await expect(dialog).toBeVisible();
-  await dialog
-    .getByRole("button", { name: `Remove bookmark: ${prompts[0]}` })
-    .click();
-  await expect(dialog).toContainText(
-    "Bookmark a user message to find that turn here.",
-  );
-  await mobilePage.keyboard.press("Escape");
-  await expect(
-    mobilePage.getByRole("button", { name: "Bookmarks", exact: true }),
-  ).toBeVisible();
-  await expect(
-    peer.getByRole("button", { name: "Bookmarks", exact: true }),
-  ).toBeVisible({
-    timeout: 10_000,
-  });
-  await expect(
-    peerFirstTurn.getByRole("button", { name: "Bookmark turn" }),
-  ).toHaveAttribute("aria-pressed", "false");
-  await expect(desktopBookmarkIndicator).toHaveCount(0);
-  await mobilePage
-    .getByRole("button", { name: "Open thread navigation" })
-    .click();
-  await expect(selectedMobileThread).toBeVisible();
-  await expect(
-    selectedMobileThread.getByRole("img", { name: /bookmarked turn/ }),
-  ).toHaveCount(0);
-  await mobilePage.keyboard.press("Escape");
-
-  await mobilePage.reload();
-  await expect(
-    mobilePage.getByRole("button", { name: "Bookmarks", exact: true }),
-  ).toBeVisible();
-  await mobilePage
-    .getByRole("button", { name: "Bookmarks", exact: true })
-    .click();
-  await expect(
-    mobilePage.getByRole("dialog", { name: "Bookmarks" }),
-  ).toContainText("Bookmark a user message to find that turn here.");
-  await mobileContext.close();
-  await peer.close();
+    await mobilePage.reload();
+    await expect(
+      mobilePage.getByRole("button", { name: "Bookmarks", exact: true }),
+    ).toBeVisible();
+    await mobilePage
+      .getByRole("button", { name: "Bookmarks", exact: true })
+      .click();
+    await expect(
+      mobilePage.getByRole("dialog", { name: "Bookmarks" }),
+    ).toContainText("Bookmark a user message to find that turn here.");
+  } finally {
+    await Promise.all([mobileContext?.close(), peerContext.close()]);
+  }
 });

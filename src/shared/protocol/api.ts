@@ -909,6 +909,8 @@ export const applicationEventStreamQuerySchema = z
   .strictObject({
     replayCursor: applicationEventIdSchema.optional(),
     handshake: z.literal("authoritative_replacement").optional(),
+    /** One native voice event-stream attempt, independent of control registration. */
+    voiceStreamId: z.uuid().optional(),
   })
   .superRefine((query, context) => {
     if (query.replayCursor && query.handshake) {

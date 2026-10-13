@@ -5,7 +5,8 @@ import type { ClientCommand } from "../../shared/protocol/client-controls.js";
 import { navigate as navigateRoute } from "../app/router.js";
 
 const command = (patch: Partial<ClientCommand> = {}): ClientCommand => ({ id: "action", action: "switch_thread", sourceThreadId: "source",
-  sourceTurnId: "turn", threadId: "target", listen: false, expiresAt: Date.now() + 120000, ...patch });
+  sourceTurnId: "turn", threadId: "target", listen: false, expiresAt: Date.now() + 120000,
+  ...(patch.action === "turn_settled" ? { replyEventId: null, replyStreamIds: [] } : {}), ...patch });
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
 describe("browser client controls", () => {
   it("resumes the same anonymous session after an outage without replaying pending navigation", async () => {
@@ -73,6 +74,19 @@ describe("browser client controls", () => {
     client.execute(command({ action: "turn_settled" }));
     expect(navigate).toHaveBeenCalledExactlyOnceWith("target");
     expect(client.execute({ ...replay, expiresAt: 0 })).toMatchObject({ status: "noop", reason: "expired" });
+    client.close();
+  });
+  it("cancels only the exact accepted action without navigating or reviving it", () => {
+    const navigate = vi.fn(); const client = new ClientControlConnection({ baseUrl: null }, navigate);
+    expect(client.execute(command())).toMatchObject({ status: "accepted" });
+    for (const mismatch of [{ id: "another" }, { sourceThreadId: "another-thread" }, { sourceTurnId: "another-turn" }]) {
+      expect(client.execute(command({ action: "turn_cancelled", ...mismatch }))).toMatchObject({ status: "noop", reason: "superseded" });
+    }
+    expect(client.execute(command({ action: "turn_cancelled" }))).toMatchObject({ status: "applied", reason: "source_turn_cancelled" });
+    expect(navigate).not.toHaveBeenCalled();
+    expect(client.execute(command({ action: "turn_settled" }))).toMatchObject({ status: "noop", reason: "superseded" });
+    expect(client.execute(command({ action: "turn_cancelled" }))).toMatchObject({ status: "noop", reason: "superseded" });
+    expect(navigate).not.toHaveBeenCalled();
     client.close();
   });
   it("drops expired, disconnected, manually superseded, and background navigation", () => {

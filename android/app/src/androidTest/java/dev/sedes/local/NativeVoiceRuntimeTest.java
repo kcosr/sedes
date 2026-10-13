@@ -31,6 +31,356 @@ import org.junit.Test;
 
 /** Exercises the actual owner-thread cancellation and encrypted admission journal without audio. */
 public class NativeVoiceRuntimeTest {
+    @Test public void automaticSpeechChecksUserAdmissionBeforePlaybackWithoutUsingListenAuthority() throws Exception {
+        for (String response : new String[] { "fresh", "stale", "network", "server", "rate_limited", "missing", "malformed" }) {
+            try (Fixture f = new Fixture(false, false)) {
+                f.readyClientVoice("speak"); f.settings(NativeVoiceJson.object("speechContent", "messages"));
+                f.policy(true, false, "speak"); f.holdPlaybackValidation = true;
+                String id = f.receiveReply("Old answer", false);
+                Object original = field(f.runtime, "active");
+                JSONObject envelope = NativeVoiceJson.copy(((NativeVoiceQueue.Item) field(original, "notification")).envelope);
+                assertEquals("synthesizing", f.runtime.snapshot().getString("phase")); assertTrue(f.speech.speechRequests.isEmpty());
+                NativeVoiceHttp.Result validation = f.takeClientTarget(f.target);
+                f.replay(false, f.target, "explicit-next", "Next explicit answer");
+                JSONObject context = Fixture.inputContext(f.target);
+                NativeVoiceJson.put(context, "activityToken", "unrelated-runtime-change");
+                if (response.equals("stale")) NativeVoiceJson.put(context, "userInputRevision", 1);
+                if (response.equals("malformed")) context.remove("userInputRevision");
+                validation.done(response.equals("network") ? 0 : response.equals("server") ? 503 : response.equals("rate_limited") ? 429 : response.equals("missing") ? 404 : 200,
+                    response.equals("network") || response.equals("server") || response.equals("missing") ? null : context, null); f.flush();
+                SpeechJob spoken = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(response, spoken);
+                boolean skips = response.equals("stale") || response.equals("missing") || response.equals("malformed");
+                assertEquals(response, skips ? "Next explicit answer" : "Old answer", spoken.text);
+                if (skips) {
+                    assertTrue(f.speech.transcriptions.isEmpty()); assertTrue(f.cues.isEmpty()); assertEquals(0, f.queued());
+                    f.onOwner(() -> f.invoke("receive", new Class<?>[] { String.class, JSONObject.class }, "notification", envelope)); f.flush();
+                    assertEquals("A skipped notification stays deduplicated", 0, f.queued()); assertTrue(f.speech.speechRequests.isEmpty());
+                    if (response.equals("stale")) assertEquals(1, f.runtime.snapshot().getJSONObject("queue").getJSONObject("droppedReasons").getInt("superseded_by_input"));
+                }
+                assertEquals(response.equals("malformed") ? 1 : 0, f.runtime.snapshot().getJSONArray("errors").length());
+                if (response.equals("malformed")) assertEquals("invalid_input_context", f.lastError().getString("code"));
+                assertEquals(0, f.inputAttempts.get());
+            }
+        }
+    }
+    @Test public void supersededSpeechDiscardsOnlyItsSourceActionsBeforeReplyDrain() throws Exception {
+        try (Fixture f = new Fixture(false, false)) {
+            f.readyClientVoice("speak"); f.foreground(f.target); f.policy(true, false, "speakThenListen"); f.holdPlaybackValidation = true;
+            JSONObject old = f.clientSwitch(UUID.randomUUID().toString(), true);
+            assertEquals("accepted", f.clientCommand(old).getString("status"));
+            JSONObject other = f.clientSwitch(UUID.randomUUID().toString(), false); NativeVoiceJson.put(other, "sourceTurnId", "different-turn");
+            assertEquals("accepted", f.clientCommand(other).getString("status"));
+            String id = f.receiveClientTurnNotice("turn.completed");
+            assertEquals("accepted", f.settleClientSwitch(old, id).getString("status"));
+            JSONObject context = Fixture.inputContext(f.target); NativeVoiceJson.put(context, "userInputRevision", 1);
+            f.takeClientTarget(f.target).done(200, context, null); f.flush();
+            assertEquals(java.util.Collections.singleton(other.getString("id")), f.stagedClientActions());
+            assertTrue(f.openThreads.isEmpty()); assertTrue(f.contexts.isEmpty()); assertTrue(f.speech.speechRequests.isEmpty());
+            assertTrue(f.speech.transcriptions.isEmpty()); assertTrue(f.runtime.snapshot().isNull("active"));
+        }
+    }
+    @Test public void automaticPlaybackRetainsItsDestinationOnlyWhenFreshnessPermitsSpeech() throws Exception {
+        for (String outcome : new String[] { "stale", "fresh", "temporary_failure" }) {
+            try (Fixture f = new Fixture(false, false)) {
+                f.readyClientVoice("speak"); f.settings(NativeVoiceJson.object("pinDefaultVoiceThread", false, "speechContent", "messages"));
+                f.policy(true, false, "speak"); f.holdPlaybackValidation = true;
+                String previousThread = UUID.randomUUID().toString();
+                f.replay(false, previousThread, "previous-turn", "Previous reply");
+                SpeechJob previous = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(previous);
+                JSONObject retained = f.runtime.snapshot().getJSONObject("retainedVoiceTarget");
+                f.receiveReply("Next automatic reply", false);
+                assertEquals(1, f.queued()); assertEquals(previousThread, f.runtime.snapshot().getJSONObject("retainedVoiceTarget").getString("threadId"));
+                f.runtime.drained(previous.id); f.flush();
+                JSONObject pending = f.runtime.snapshot(); assertEquals("synthesizing", pending.getString("phase"));
+                assertEquals(previousThread, pending.getJSONObject("retainedVoiceTarget").getString("threadId"));
+                assertEquals(retained.get("threadTitle"), pending.getJSONObject("retainedVoiceTarget").get("threadTitle"));
+                assertTrue("Reservation still fences older idle controls", retainedRevision(pending) > retained.getLong("revision"));
+                f.onOwner(() -> f.invoke("retainCurrentVoiceTarget", new Class<?>[0]));
+                assertEquals("An unpin-style refresh cannot retain unvalidated speech", previousThread,
+                    f.runtime.snapshot().getJSONObject("retainedVoiceTarget").getString("threadId"));
+                JSONObject current = Fixture.inputContext(f.target);
+                if (outcome.equals("stale")) NativeVoiceJson.put(current, "userInputRevision", 1);
+                f.takeClientTarget(f.target).done(outcome.equals("temporary_failure") ? 503 : 200,
+                    outcome.equals("temporary_failure") ? null : current, null); f.flush();
+                if (outcome.equals("stale")) {
+                    assertTrue(f.runtime.snapshot().isNull("active")); assertEquals("idle", f.runtime.snapshot().getString("phase"));
+                    assertEquals(previousThread, f.runtime.snapshot().getJSONObject("retainedVoiceTarget").getString("threadId"));
+                    assertTrue(f.speech.speechRequests.isEmpty());
+                } else {
+                    SpeechJob next = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(next);
+                    assertEquals("Next automatic reply", next.text);
+                    assertEquals(f.target, f.runtime.snapshot().getJSONObject("retainedVoiceTarget").getString("threadId"));
+                }
+                assertEquals(0, f.queued()); assertTrue(f.speech.transcriptions.isEmpty()); assertTrue(f.cues.isEmpty());
+                assertEquals(0, f.runtime.snapshot().getJSONArray("errors").length());
+            }
+        }
+    }
+    @Test public void unpinningDuringPlaybackFreshnessCannotRetainTheUnvalidatedSource() throws Exception {
+        for (boolean stale : new boolean[] { false, true }) {
+            try (Fixture f = new Fixture(false, false)) {
+                f.readyClientVoice("speak"); f.settings(NativeVoiceJson.object("pinDefaultVoiceThread", false));
+                String previousThread = UUID.randomUUID().toString(); f.idleReplay(previousThread, "previous-turn"); f.foreground(previousThread);
+                assertEquals(previousThread, f.runtime.snapshot().getJSONObject("retainedVoiceTarget").getString("threadId"));
+                f.settings(NativeVoiceJson.object("pinDefaultVoiceThread", true));
+                f.policy(true, false, "speak"); f.holdPlaybackValidation = true; f.receiveReply("Automatic reply", false);
+                f.settings(NativeVoiceJson.object("pinDefaultVoiceThread", false));
+                assertTrue("Unpinning cannot adopt a turn whose playback is still being checked", f.runtime.snapshot().isNull("retainedVoiceTarget"));
+                JSONObject current = Fixture.inputContext(f.target); if (stale) NativeVoiceJson.put(current, "userInputRevision", 1);
+                f.takeClientTarget(f.target).done(200, current, null); f.flush();
+                assertEquals(stale ? previousThread : f.target, f.runtime.snapshot().getJSONObject("retainedVoiceTarget").getString("threadId"));
+                if (stale) { assertTrue(f.runtime.snapshot().isNull("active")); assertTrue(f.speech.speechRequests.isEmpty()); }
+                else assertNotNull(f.speech.speechRequests.poll(10, TimeUnit.SECONDS));
+                assertTrue(f.speech.transcriptions.isEmpty()); assertTrue(f.cues.isEmpty());
+            }
+        }
+    }
+    @Test public void playbackValidationCannotReviveAnInteractionAfterStopOrDisconnect() throws Exception {
+        for (String cancel : new String[] { "stopCurrentInteraction", "skipCurrentPlayback", "disconnect" }) {
+            try (Fixture f = new Fixture(false, false)) {
+                f.readyClientVoice("speak"); f.policy(true, false, "speak"); f.holdPlaybackValidation = true;
+                f.receiveReply("Must never play", false); NativeVoiceHttp.Result pending = f.takeClientTarget(f.target);
+                okhttp3.Call call = (okhttp3.Call) field(field(f.runtime, "active"), "inputContextRequest");
+                assertNull(f.command(cancel, new JSONObject())); assertTrue(call.isCanceled());
+                pending.done(200, Fixture.inputContext(f.target), null); f.flush();
+                assertTrue(f.runtime.snapshot().isNull("active")); assertTrue(f.speech.speechRequests.isEmpty()); assertTrue(f.speech.transcriptions.isEmpty());
+            }
+        }
+    }
+    @Test public void autoListenOffSettingsEditsKeepPendingSpeechAndSuppressOnlyItsFollowup() throws Exception {
+        for (boolean initiallyListening : new boolean[] { false, true }) {
+            try (Fixture f = new Fixture(false, false)) {
+                f.readyClientVoice("speak"); f.settings(NativeVoiceJson.object("autoListen", initiallyListening, "speechContent", "messages"));
+                f.policy(true, false, "speakThenListen"); f.holdPlaybackValidation = true;
+                f.receiveReply("Advisory answer", true);
+                Object original = field(f.runtime, "active"); NativeVoiceHttp.Result validation = f.takeClientTarget(f.target);
+                okhttp3.Call call = (okhttp3.Call) field(original, "inputContextRequest");
+                assertEquals("synthesizing", f.runtime.snapshot().getString("phase"));
+                f.settings(initiallyListening ? NativeVoiceJson.object("autoListen", false)
+                    : NativeVoiceJson.object("ttsGain", 55, "pinDefaultVoiceThread", false));
+                assertSame("A speech preparation is independent of Auto-listen", original, field(f.runtime, "active"));
+                assertFalse(call.isCanceled()); assertFalse((boolean) field(original, "followUp"));
+                validation.done(200, Fixture.inputContext(f.target), null); f.flush();
+                SpeechJob speech = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(speech); assertEquals("Advisory answer", speech.text);
+                f.runtime.drained(speech.id); f.flush();
+                assertTrue(f.runtime.snapshot().isNull("active")); assertTrue(f.contexts.isEmpty());
+                assertTrue(f.speech.transcriptions.isEmpty()); assertTrue(f.cues.isEmpty()); assertEquals(0, f.inputAttempts.get());
+            }
+        }
+    }
+    @Test public void playbackControlsFenceThePendingSpeechCheckAndPreserveTheirQueueSemantics() throws Exception {
+        for (String action : new String[] { "stop", "next", "record", "headset_skip", "headset_off", "headset_on" }) {
+            try (Fixture f = new Fixture(false, false)) {
+                f.readyClientVoice("speak"); f.settings(NativeVoiceJson.object("autoListen", action.equals("headset_on")));
+                f.policy(true, false, "speak"); f.holdPlaybackValidation = true;
+                f.receiveReply("Must never play", false); NativeVoiceHttp.Result pending = f.takeClientTarget(f.target);
+                Object original = field(f.runtime, "active"); okhttp3.Call call = (okhttp3.Call) field(original, "inputContextRequest");
+                JSONObject prepared = f.runtime.snapshot(); assertEquals("synthesizing", prepared.getString("phase"));
+                assertTrue(prepared.getJSONObject("active").isNull("recognitionThreadId"));
+                assertEquals(f.target, NativeVoiceRuntimeService.notificationTarget(prepared).getString("threadId"));
+                assertTrue(prepared.getJSONObject("actions").getBoolean("canSkip"));
+                assertTrue(prepared.getJSONObject("actions").getBoolean("canRecordDuringPlayback"));
+                f.replay(false, UUID.randomUUID().toString(), "queued-explicit", "Queued explicit answer"); assertEquals(1, f.queued());
+                if (action.equals("stop")) assertNull(f.command("stopPlayback", new JSONObject()));
+                else if (action.equals("next")) assertNull(f.command("skipCurrentPlayback", new JSONObject()));
+                else if (action.equals("record")) assertNull(f.command("recordDuringPlayback", new JSONObject()));
+                else f.capturedAction(action.equals("headset_skip") ? "headset_skip" : "headset", prepared);
+                f.flush(); assertTrue(call.isCanceled());
+                Object replacement = field(f.runtime, "active"); pending.done(200, Fixture.inputContext(f.target), null); f.flush();
+                assertSame("A late freshness read cannot change the replacement", replacement, field(f.runtime, "active"));
+                boolean records = action.equals("record") || action.equals("headset_on");
+                if (records) {
+                    assertNotNull(replacement); assertEquals("manual", f.runtime.snapshot().getJSONObject("active").getString("eventKind"));
+                    assertEquals(f.target, f.runtime.snapshot().getJSONObject("active").getString("recognitionThreadId"));
+                    assertEquals("validating", f.runtime.snapshot().getString("phase")); assertEquals(1, f.queued());
+                    assertTrue(f.speech.speechRequests.isEmpty());
+                    for (int validation = 0; validation < 2; validation++) {
+                        f.takeClientTarget(f.target).done(200, Fixture.inputContext(f.target), null); f.flush();
+                    }
+                    RecognitionJob capture = f.speech.transcriptions.poll(10, TimeUnit.SECONDS); assertNotNull(capture);
+                    assertTrue("Explicit Record has no automatic ready gate", f.contexts.isEmpty());
+                } else if (action.equals("stop")) {
+                    assertNull(replacement); assertEquals(0, f.queued()); assertTrue(f.speech.speechRequests.isEmpty()); assertTrue(f.speech.transcriptions.isEmpty());
+                } else {
+                    SpeechJob next = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(next); assertEquals("Queued explicit answer", next.text);
+                    assertEquals(0, f.queued()); assertTrue(f.speech.speechRequests.isEmpty()); assertTrue(f.speech.transcriptions.isEmpty());
+                }
+                assertEquals(0, f.inputAttempts.get()); assertEquals(0, f.runtime.snapshot().getJSONArray("errors").length());
+            }
+        }
+    }
+    @Test public void laterAdmissionAfterSpeechOrDuringTheCueSkipsAutomaticListening() throws Exception {
+        for (boolean duringCue : new boolean[] { false, true }) {
+            try (Fixture f = new Fixture(false, false)) {
+                f.readyClientVoice("speak"); f.settings(NativeVoiceJson.object("autoListen", true, "recognitionCues", true)); f.policy(true, false, "speakThenListen");
+                NativeVoiceAudio.setTestCuePlayer((id, kind, gain) -> f.cues.add(new Cue(id, kind, gain)));
+                f.receiveReply("Completed answer", true);
+                SpeechJob spoken = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(spoken);
+                f.runtime.drained(spoken.id); f.flush(); JSONObject fresh = f.automaticContext();
+                NativeVoiceHttp.Result pending = f.takeClientTarget(f.target);
+                if (duringCue) {
+                    pending.done(200, fresh, null); f.flush(); Cue cue = f.cue(NativeVoiceCue.Kind.START);
+                    f.runtime.drained(cue.id); f.flush(); pending = f.takeClientTarget(f.target);
+                }
+                NativeVoiceJson.put(fresh, "userInputRevision", 1); pending.done(200, fresh, null); f.flush();
+                assertTrue(f.runtime.snapshot().isNull("active")); assertTrue(f.speech.transcriptions.isEmpty()); assertTrue(f.cues.isEmpty());
+                assertEquals(1, f.runtime.snapshot().getJSONObject("queue").getJSONObject("droppedReasons").getInt("superseded_by_input"));
+                assertEquals(0, f.runtime.snapshot().getJSONArray("errors").length());
+            }
+        }
+    }
+    @Test public void automaticReadyGateQuietlyRemovesEmptyOrdinaryAndDefaultHeldRecordings() throws Exception {
+        for (boolean held : new boolean[] { false, true }) for (String refusal : new String[] { "stale", "ineligible", "unavailable", "timeout" }) {
+            try (Fixture f = new Fixture(false, false)) {
+                RecognitionJob recognition = f.automaticBeforeAudio(held);
+                Object original = field(f.runtime, "active"); String recordingId = (String) field(original, "recordingId");
+                assertEquals(held, (boolean) field(original, "adopted")); assertEquals(!held, (boolean) field(original, "automatic"));
+                assertTrue((boolean) field(original, "automaticStart")); assertNull(field(f.runtime, "captureOwner"));
+                f.replay(false, f.target, "next-explicit", "Next explicit answer");
+                int closes = f.speech.closeCalls.get(); recognition.ready(); recognition.ready(); f.flush();
+                NativeVoiceHttp.Result gate = f.takeClientTarget(f.target);
+                assertTrue("Duplicate ready must not open another GET", f.contexts.isEmpty());
+                okhttp3.Call call = (okhttp3.Call) field(original, "inputContextRequest"); JSONObject current = f.automaticContext();
+                if (refusal.equals("timeout")) f.onOwner(() -> f.invoke("failActive", new Class<?>[] { String.class }, "recognition_capture_timeout"));
+                else {
+                    if (refusal.equals("stale")) NativeVoiceJson.put(current, "userInputRevision", 1);
+                    if (refusal.equals("ineligible")) NativeVoiceJson.put(current, "automaticListenEligible", false);
+                    gate.done(refusal.equals("unavailable") ? 503 : 200, refusal.equals("unavailable") ? null : current, null);
+                }
+                f.flush(); f.assertRecordingDiscarded(recordingId);
+                assertTrue(recognition.cancelled); assertTrue(f.speech.closeCalls.get() > closes); assertNull(field(f.runtime, "captureOwner"));
+                assertTrue(f.runtime.snapshot().isNull("recordingRecovery")); assertEquals(0L, (long) field(original, "longDictationDeadline"));
+                assertTrue(f.cues.isEmpty()); assertEquals(0, f.inputAttempts.get());
+                SpeechJob next = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(refusal, next); assertEquals("Next explicit answer", next.text);
+                boolean failure = refusal.equals("unavailable") || refusal.equals("timeout");
+                assertEquals(failure ? 1 : 0, f.runtime.snapshot().getJSONArray("errors").length());
+                if (failure) assertEquals(refusal.equals("timeout") ? "recognition_capture_timeout" : "target_unavailable", f.lastError().getString("code"));
+                if (refusal.equals("timeout")) { assertTrue(call.isCanceled()); gate.done(200, current, null); f.flush(); assertNull(field(f.runtime, "captureOwner")); }
+            }
+        }
+    }
+    @Test public void automaticOperationalStartupFailuresKeepFailureFeedbackAndDiscardEmptyRecordings() throws Exception {
+        for (boolean held : new boolean[] { false, true }) for (String stage : new String[] { "preflight", "journal", "handshake", "arming_timeout" }) {
+            try (Fixture f = new Fixture(false, false)) {
+                f.readyClientVoice("input"); f.settings(NativeVoiceJson.object("autoListen", true, "keepListeningByDefault", held, "recognitionCues", true));
+                f.policy(true, false, "speakThenListen"); f.holdRecordingPreflight = true;
+                NativeVoiceAudio.setTestCuePlayer((id, kind, gain) -> f.cues.add(new Cue(id, kind, gain)));
+                f.receiveReply("Automatic follow-up", true);
+                f.takeClientTarget(f.target).done(200, f.automaticContext(), null); f.flush();
+                Cue start = f.cue(NativeVoiceCue.Kind.START); f.runtime.drained(start.id); f.flush();
+                f.takeClientTarget(f.target).done(200, f.automaticContext(), null); f.flush();
+                NativeSpeechCatalog.PreflightResult preflight = f.preflights.poll(10, TimeUnit.SECONDS); assertNotNull(preflight);
+                Object original = field(f.runtime, "active"); String recordingId = (String) field(original, "recordingId");
+                String expected = stage.equals("preflight") ? "speech_capabilities_unavailable" : stage.equals("journal") ? "dictation_storage_unavailable"
+                    : stage.equals("handshake") ? "speech_unauthorized" : "recognition_capture_timeout";
+                if (stage.equals("preflight")) preflight.done(null, expected);
+                else {
+                    if (stage.equals("journal")) f.storageFaults().arm("before_write", "manifest.enc");
+                    preflight.done(NativeSpeechCapabilities.hosted("gpt-live-transcribe"), null);
+                    if (!stage.equals("journal")) {
+                        RecognitionJob transport = f.speech.transcriptions.poll(10, TimeUnit.SECONDS); assertNotNull(transport);
+                        assertFalse((boolean) field(original, "readyValidationStarted"));
+                        if (stage.equals("handshake")) transport.listener.failed(transport.id, null,
+                            new NativeSpeechTransport.Failure(NativeSpeechTransport.Kind.AUTHENTICATION, expected, 401));
+                        else f.onOwner(() -> f.invoke("failActive", new Class<?>[] { String.class }, expected));
+                    }
+                }
+                Cue failure = f.cue(NativeVoiceCue.Kind.FAILURE); f.flush();
+                assertNull(field(f.runtime, "captureOwner")); assertTrue(f.runtime.snapshot().isNull("recordingRecovery"));
+                f.runtime.drained(failure.id); f.flush(); f.assertRecordingDiscarded(recordingId);
+                assertTrue(f.runtime.snapshot().isNull("active")); assertEquals(expected, f.lastError().getString("code"));
+                assertEquals(1, f.runtime.snapshot().getJSONArray("errors").length()); assertTrue(f.cues.isEmpty());
+                assertEquals(0, f.inputAttempts.get()); assertEquals(0L, (long) field(original, "longDictationDeadline"));
+            }
+        }
+    }
+    @Test public void automaticDefaultHeldStartPreservesUnrelatedActionsAndSubmissionAuthorityUntilItsReadyGatePasses() throws Exception {
+        for (boolean stale : new boolean[] { false, true }) {
+            try (Fixture f = new Fixture(false, false)) {
+                f.readyClientVoice("input"); f.settings(NativeVoiceJson.object("autoListen", true, "keepListeningByDefault", true));
+                f.policy(true, false, "speakThenListen"); f.foreground(f.target); f.holdReadyValidation = true;
+                Object submissionContext = field(f.runtime, "inputSubmissionContext");
+                JSONObject unrelated = f.clientSwitch(UUID.randomUUID().toString(), false);
+                NativeVoiceJson.put(unrelated, "sourceTurnId", "another-turn");
+                assertEquals("accepted", f.clientCommand(unrelated).getString("status"));
+                String noticeId = f.receiveReply("Automatic held follow-up", true);
+                for (int validation = 0; validation < 2; validation++) {
+                    f.takeClientTarget(f.target).done(200, f.automaticContext(), null); f.flush();
+                }
+                RecognitionJob recognition = f.speech.transcriptions.poll(10, TimeUnit.SECONDS); assertNotNull(recognition);
+                Object original = field(f.runtime, "active"); String recordingId = (String) field(original, "recordingId");
+                assertEquals(java.util.Collections.singleton(unrelated.getString("id")), f.stagedClientActions());
+                assertSame(submissionContext, field(f.runtime, "inputSubmissionContext"));
+                JSONObject source = f.clientSwitch(UUID.randomUUID().toString(), false); NativeVoiceJson.put(source, "sourceTurnId", "unrelated-turn");
+                assertEquals("accepted", f.clientCommand(source).getString("status"));
+                assertEquals("accepted", f.settleClientSwitch(source, noticeId).getString("status"));
+                assertEquals("Settling source actions during the gate cannot clear unrelated ones", 2, f.stagedClientActions().size());
+                assertSame(submissionContext, field(f.runtime, "inputSubmissionContext"));
+                recognition.ready(); f.flush(); NativeVoiceHttp.Result gate = f.takeClientTarget(f.target);
+                JSONObject current = f.automaticContext();
+                if (stale) {
+                    NativeVoiceJson.put(current, "userInputRevision", 1); gate.done(200, current, null); f.flush(); f.assertRecordingDiscarded(recordingId);
+                    assertEquals(java.util.Collections.singleton(unrelated.getString("id")), f.stagedClientActions());
+                    assertSame(submissionContext, field(f.runtime, "inputSubmissionContext"));
+                    assertTrue(f.runtime.snapshot().isNull("active")); assertNull(field(f.runtime, "captureOwner")); assertTrue(f.contexts.isEmpty());
+                } else {
+                    CountDownLatch firstSample = new CountDownLatch(1), release = new CountDownLatch(1);
+                    NativeVoiceAudio.setTestSource(() -> {
+                        firstSample.countDown(); try { release.await(10, TimeUnit.SECONDS); } catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); }
+                        return captureFrame(1000);
+                    });
+                    try {
+                        gate.done(200, current, null); assertTrue(firstSample.await(10, TimeUnit.SECONDS)); f.flush();
+                        assertSame(original, field(f.runtime, "captureOwner")); assertTrue(f.stagedClientActions().isEmpty());
+                        assertNotSame(submissionContext, field(f.runtime, "inputSubmissionContext"));
+                        assertNull(f.command("stopCurrentInteraction", new JSONObject()));
+                    } finally { release.countDown(); }
+                }
+                assertEquals(0, f.inputAttempts.get()); assertEquals(0, f.runtime.snapshot().getJSONArray("errors").length());
+            }
+        }
+    }
+    @Test public void stopPolicyAndAutoListenEditsFenceAReadyGateAfterDefaultHeldAdoption() throws Exception {
+        for (String cancellation : new String[] { "stop", "policy", "auto_listen", "off", "disconnect" }) {
+            try (Fixture f = new Fixture(false, false)) {
+                RecognitionJob recognition = f.automaticBeforeAudio(true); Object original = field(f.runtime, "active");
+                String recordingId = (String) field(original, "recordingId"); recognition.ready(); f.flush();
+                NativeVoiceHttp.Result gate = f.takeClientTarget(f.target); JSONObject fresh = f.automaticContext();
+                okhttp3.Call call = (okhttp3.Call) field(original, "inputContextRequest");
+                if (cancellation.equals("stop")) assertNull(f.command("stopCurrentInteraction", new JSONObject()));
+                else if (cancellation.equals("policy")) f.policy(true, true, "speakThenListen");
+                else if (cancellation.equals("auto_listen")) f.settings(NativeVoiceJson.object("autoListen", false));
+                else if (cancellation.equals("off")) f.settings(NativeVoiceJson.object("audioMode", "off"));
+                else assertNull(f.command("disconnect", new JSONObject()));
+                gate.done(200, fresh, null); recognition.ready(); f.flush(); f.assertRecordingDiscarded(recordingId);
+                assertTrue(call.isCanceled()); assertTrue(recognition.cancelled); assertNull(field(f.runtime, "captureOwner"));
+                assertTrue(f.runtime.snapshot().isNull("active")); assertTrue(f.runtime.snapshot().isNull("recordingRecovery"));
+                assertEquals(0, f.runtime.snapshot().getJSONArray("errors").length()); assertTrue(f.cues.isEmpty());
+            }
+        }
+    }
+    @Test public void freshReadyGateStartsAudioOnceAndEstablishedDefaultHeldCaptureRemainsIndependent() throws Exception {
+        try (Fixture f = new Fixture(false, false)) {
+            RecognitionJob recognition = f.automaticBeforeAudio(true); Object original = field(f.runtime, "active");
+            CountDownLatch firstSample = new CountDownLatch(1), releaseSample = new CountDownLatch(1); AtomicInteger reads = new AtomicInteger();
+            NativeVoiceAudio.setTestSource(() -> {
+                reads.incrementAndGet(); firstSample.countDown();
+                try { releaseSample.await(10, TimeUnit.SECONDS); } catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); }
+                return captureFrame(1000);
+            });
+            try {
+                recognition.ready(); recognition.ready(); f.flush(); NativeVoiceHttp.Result gate = f.takeClientTarget(f.target);
+                assertTrue(f.contexts.isEmpty()); assertNull(field(f.runtime, "captureOwner"));
+                gate.done(200, f.automaticContext(), null); assertTrue(firstSample.await(10, TimeUnit.SECONDS)); f.flush();
+                assertSame(original, field(f.runtime, "captureOwner")); assertEquals("listening", f.runtime.snapshot().getString("phase"));
+                recognition.ready(); f.flush(); assertTrue(f.contexts.isEmpty()); assertEquals(1, reads.get());
+                f.policy(true, true, "speakThenListen"); f.settings(NativeVoiceJson.object("autoListen", false));
+                assertSame("Established held capture retains manual independence", original, field(f.runtime, "active"));
+                assertFalse(recognition.cancelled); assertSame(original, field(f.runtime, "captureOwner"));
+                assertNull(f.command("stopCurrentInteraction", new JSONObject()));
+            } finally { releaseSample.countDown(); }
+        }
+    }
     @Test public void unsentInputWaitsForRegistrationWithoutBecomingUncertain() throws Exception {
         for (boolean cancel : new boolean[] { false, true }) {
             try (Fixture f = new Fixture(false, false)) {
@@ -1169,10 +1519,10 @@ public class NativeVoiceRuntimeTest {
                 f.readyClientVoice("speak"); f.policy(true, false, "speak");
                 String target = UUID.randomUUID().toString(); JSONObject command = f.clientSwitch(target, true);
                 assertEquals("accepted", f.clientCommand(command).getString("status"));
-                String queued = null;
+                String queued = null; SpeechJob playback = null;
                 NativeDictationStore.Recording saved = null;
                 if (blocker.equals("busy")) {
-                    queued = f.receiveReply(); assertNotNull(f.speech.speechRequests.poll(10, TimeUnit.SECONDS));
+                    queued = f.receiveReply(); playback = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(playback);
                 } else {
                     saved = f.savedRecording(blocker.equals("held_slot"), blocker.equals("saved"), blocker.equals("held_slot"));
                     if (blocker.equals("held_slot")) {
@@ -1192,13 +1542,261 @@ public class NativeVoiceRuntimeTest {
                 assertTrue(f.contexts.isEmpty()); assertTrue(f.speech.transcriptions.isEmpty()); assertTrue(f.openThreads.isEmpty());
                 if (blocker.equals("busy")) {
                     assertEquals(queued, f.runtime.snapshot().getJSONObject("active").getString("id"));
-                    assertEquals("voice_busy", f.lastError().getString("code"));
+                    assertEquals(0, f.runtime.snapshot().getJSONArray("errors").length());
+                    assertTrue(f.stagedClientActions().contains(command.getString("id")));
+                    f.runtime.drained(playback.id); f.flush(); f.completeClientTarget(target);
+                    assertTrue(f.stagedClientActions().isEmpty());
                 } else {
                     assertTrue(f.runtime.snapshot().isNull("active"));
                     assertEquals(saved.id, f.runtime.snapshot().getJSONObject("recordingRecovery").getString("recordingId"));
                     if (blocker.equals("held_slot")) assertEquals("saved_recording_pending", f.lastError().getString("code"));
                     else assertEquals("Blocked dictation quietly retires pending actions", 0, f.runtime.snapshot().getJSONArray("errors").length());
                 }
+            }
+        }
+    }
+
+    @Test public void backgroundListenQueuesBehindUnrelatedPlaybackAndItsOwnReply() throws Exception {
+        for (boolean autoListen : new boolean[] { false, true }) try (Fixture f = new Fixture(false, false)) {
+            f.readyClientVoice("speak"); f.settings(NativeVoiceJson.object("autoListen", autoListen)); f.policy(true, false, "speakThenListen");
+            f.receiveReply("Unrelated answer", true);
+            SpeechJob unrelated = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(unrelated);
+            String target = UUID.randomUUID().toString(); JSONObject command = f.clientSwitch(target, true);
+            assertEquals("accepted", f.clientCommand(command).getString("status"));
+            String reply = f.receiveClientTurnNotice("turn.completed"); f.settleClientSwitch(command, reply);
+            assertTrue(f.contexts.isEmpty()); f.runtime.drained(unrelated.id); f.flush();
+            SpeechJob source = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(source);
+            assertEquals(reply, f.runtime.snapshot().getJSONObject("active").getString("id"));
+            assertTrue("The unrelated automatic follow-up cannot steal this explicit destination", f.speech.transcriptions.isEmpty());
+            f.runtime.drained(source.id); f.flush(); f.completeClientTarget(target);
+            assertEquals(target, f.runtime.snapshot().getJSONObject("active").getString("recognitionThreadId"));
+            assertTrue(f.openThreads.isEmpty()); assertTrue(f.stagedClientActions().isEmpty());
+        }
+    }
+
+    @Test public void unsettledExplicitListenKeepsItsPlaceBeforeUnrelatedDefaultHeldFollowup() throws Exception {
+        try (Fixture f = new Fixture(false, false)) {
+            f.readyClientVoice("speak"); f.settings(NativeVoiceJson.object("autoListen", true, "keepListeningByDefault", true));
+            f.policy(true, false, "speakThenListen");
+            f.receiveReply("Unrelated answer", true);
+            SpeechJob unrelated = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(unrelated);
+            String target = UUID.randomUUID().toString(); JSONObject command = f.clientSwitch(target, true);
+            assertEquals("accepted", f.clientCommand(command).getString("status"));
+            f.runtime.drained(unrelated.id); f.flush();
+            assertTrue("Unsettled explicit intent prevents unrelated automatic capture", f.runtime.snapshot().isNull("active"));
+            assertTrue(f.speech.transcriptions.isEmpty()); assertTrue(f.contexts.isEmpty());
+            assertTrue(f.stagedClientActions().contains(command.getString("id")));
+            String reply = f.receiveClientTurnNotice("turn.completed");
+            SpeechJob source = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(source);
+            f.settleClientSwitch(command, reply); f.runtime.drained(source.id); f.flush(); f.completeClientTarget(target);
+            JSONObject active = f.runtime.snapshot().getJSONObject("active");
+            assertEquals(target, active.getString("recognitionThreadId"));
+            assertTrue(active.getJSONObject("recording").getBoolean("keepListening")); assertTrue(f.openThreads.isEmpty());
+        }
+    }
+
+    @Test public void terminalSourceCancellationRevokesOnlyItsMatchingPendingListen() throws Exception {
+        try (Fixture f = new Fixture(false, false)) {
+            f.readyClientVoice("speak"); f.settings(NativeVoiceJson.object("autoListen", true)); f.policy(true, false, "speakThenListen");
+            f.receiveReply("Unrelated answer", true);
+            SpeechJob unrelated = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(unrelated);
+            JSONObject command = f.clientSwitch(UUID.randomUUID().toString(), true); f.clientCommand(command);
+            JSONObject cancellation = NativeVoiceJson.copy(command); NativeVoiceJson.put(cancellation, "action", "turn_cancelled");
+            NativeVoiceJson.put(cancellation, "sourceTurnId", "wrong-source");
+            assertEquals("noop", f.clientCommand(cancellation).getString("status"));
+            assertTrue(f.stagedClientActions().contains(command.getString("id")));
+            NativeVoiceJson.put(cancellation, "sourceTurnId", command.getString("sourceTurnId"));
+            JSONObject result = f.clientCommand(cancellation);
+            assertEquals("applied", result.getString("status")); assertEquals("source_turn_cancelled", result.getString("reason"));
+            assertTrue(f.stagedClientActions().isEmpty());
+            f.runtime.drained(unrelated.id); f.flush();
+            assertEquals("validating", f.runtime.snapshot().getString("phase"));
+            assertEquals(f.target, f.runtime.snapshot().getJSONObject("active").getString("recognitionThreadId"));
+            assertEquals("noop", f.settleClientSwitch(command, null).getString("status"));
+            assertTrue("Late settlement cannot restore the cancelled destination", f.speech.transcriptions.isEmpty());
+        }
+    }
+
+    @Test public void benignSourceQueueDropsReleaseTheExplicitListen() throws Exception {
+        for (String drop : new String[] { "filter", "overflow", "presentation" }) try (Fixture f = new Fixture(false, false)) {
+            f.readyClientVoice("speak"); f.policy(true, false, "speak");
+            String other = UUID.randomUUID().toString(); f.receiveNotice(other, null);
+            SpeechJob unrelated = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(unrelated);
+            String target = UUID.randomUUID().toString(); JSONObject command = f.clientSwitch(target, true);
+            assertEquals("accepted", f.clientCommand(command).getString("status"));
+            if (drop.equals("overflow")) for (int i = 0; i < NativeVoiceQueue.MAX_ITEMS; i++) f.receiveNotice(other, null);
+            String reply = f.receiveClientTurnNotice("turn.completed"); f.settleClientSwitch(command, reply);
+            if (drop.equals("filter")) f.settings(NativeVoiceJson.object("voiceThreadId", other, "onlyVoiceThread", true));
+            if (drop.equals("presentation")) f.settings(NativeVoiceJson.object("audioMode", "input"));
+            f.runtime.drained(unrelated.id); f.flush(); f.completeClientTarget(target);
+            assertEquals(target, f.runtime.snapshot().getJSONObject("active").getString("recognitionThreadId"));
+            assertTrue(f.openThreads.isEmpty()); assertTrue(f.stagedClientActions().isEmpty());
+        }
+    }
+
+    @Test public void duplicateQueuedSourceDoesNotReleaseItsPlaybackBarrier() throws Exception {
+        try (Fixture f = new Fixture(false, false)) {
+            f.readyClientVoice("speak"); f.policy(true, false, "speak");
+            f.receiveNotice(UUID.randomUUID().toString(), null);
+            SpeechJob unrelated = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(unrelated);
+            String target = UUID.randomUUID().toString(); JSONObject command = f.clientSwitch(target, true);
+            f.clientCommand(command); String reply = f.receiveClientTurnNotice("turn.completed"); f.settleClientSwitch(command, reply);
+            f.onOwner(() -> {
+                NativeVoiceQueue queue = (NativeVoiceQueue) field(f.runtime, "queue");
+                java.util.ArrayDeque<?> pending = (java.util.ArrayDeque<?>) field(queue, "pending");
+                queue.add((NativeVoiceQueue.Item) pending.getLast());
+            });
+            f.runtime.drained(unrelated.id); f.flush();
+            SpeechJob source = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(source);
+            assertEquals(reply, f.runtime.snapshot().getJSONObject("active").getString("id")); assertTrue(f.contexts.isEmpty());
+            f.runtime.drained(source.id); f.flush(); f.completeClientTarget(target);
+        }
+    }
+
+    @Test public void controlRetryOrReplacementPreservesHealthySpeechStreamAndQueuedReply() throws Exception {
+        for (boolean reconnect : new boolean[] { false, true }) try (Fixture f = new Fixture(false, false)) {
+            f.readyClientVoice("speak"); f.policy(true, false, "speak");
+            okhttp3.Call stream = new okhttp3.OkHttpClient().newCall(new okhttp3.Request.Builder().url(f.origin + "/api/application/events").build());
+            f.onOwner(() -> set(f.runtime, "stream", stream));
+            String first = f.receiveReply("First answer", false);
+            SpeechJob playing = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(playing);
+            String next = f.receiveReply("Answer from the already-running turn", false);
+            f.onOwner(() -> {
+                f.runtime.clientDisconnected();
+                if (reconnect) f.runtime.clientRegistered(f.request.getJSONObject("origin").getString("clientId"), "renewed-control-token");
+                else f.runtime.clientReplaced();
+            }); f.flush();
+            assertSame(stream, field(f.runtime, "stream")); assertFalse(stream.isCanceled());
+            assertEquals(f.voiceStream, field(f.runtime, "voiceStreamId")); assertTrue((boolean) field(f.runtime, "policyKnown"));
+            assertEquals(first, f.runtime.snapshot().getJSONObject("active").getString("id")); assertEquals(1, f.queued());
+            f.runtime.drained(playing.id); f.flush();
+            SpeechJob queued = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(queued);
+            assertEquals(next, f.runtime.snapshot().getJSONObject("active").getString("id"));
+            f.runtime.drained(queued.id); f.flush(); assertTrue(f.runtime.snapshot().isNull("active"));
+        }
+    }
+
+    @Test public void settlementDeliveredOnlyToOtherStreamsDoesNotWaitLocally() throws Exception {
+        try (Fixture f = new Fixture(false, false)) {
+            f.readyClientVoice("input"); String target = UUID.randomUUID().toString();
+            JSONObject command = f.clientSwitch(target, true); f.clientCommand(command);
+            JSONObject settlement = NativeVoiceJson.object("id", command.optString("id"), "action", "turn_settled",
+                "sourceThreadId", f.target, "sourceTurnId", "client-source-turn", "expiresAt", command.optLong("expiresAt"),
+                "replyEventId", "received-on-other-device", "replyStreamIds", new JSONArray().put(UUID.randomUUID().toString()));
+            assertEquals("accepted", f.clientCommand(settlement).getString("status")); f.completeClientTarget(target);
+            assertEquals(target, f.runtime.snapshot().getJSONObject("active").getString("recognitionThreadId"));
+        }
+    }
+
+    @Test public void lateSettlementForLostStreamDoesNotWaitForAnUnreceivedReply() throws Exception {
+        for (boolean settleBeforeLoss : new boolean[] { false, true }) try (Fixture f = new Fixture(false, false)) {
+            f.readyClientVoice("input");
+            String target = UUID.randomUUID().toString(); JSONObject command = f.clientSwitch(target, true);
+            f.clientCommand(command);
+            if (settleBeforeLoss) { f.settleClientSwitch(command, "not-received"); assertTrue(f.contexts.isEmpty()); }
+            f.onOwner(() -> f.invoke("closeEvents", new Class<?>[0])); f.flush();
+            if (!settleBeforeLoss) f.settleClientSwitch(command, "not-received");
+            f.completeClientTarget(target); assertTrue(f.openThreads.isEmpty());
+        }
+    }
+
+    @Test public void clientReadyGateSurvivesAutomaticPolicyChangesAndRejectsChangedManualAuthority() throws Exception {
+        for (boolean held : new boolean[] { false, true }) for (boolean current : new boolean[] { false, true }) {
+            try (Fixture f = new Fixture(false, false)) {
+                f.readyClientVoice("input"); f.settings(NativeVoiceJson.object("autoListen", true, "keepListeningByDefault", held));
+                AtomicInteger reads = new AtomicInteger(); NativeVoiceAudio.setTestSource(() -> { reads.incrementAndGet(); return captureFrame(0); });
+                f.holdReadyValidation = true;
+                String target = UUID.randomUUID().toString(); JSONObject command = f.clientSwitch(target, true);
+                f.clientCommand(command); f.settleClientSwitch(command, null); RecognitionJob recognition = f.completeClientTarget(target);
+                String recording = f.runtime.snapshot().getJSONObject("active").getJSONObject("recording").getString("id");
+                f.settings(NativeVoiceJson.object("autoListen", false)); f.policy(true, false, "speak");
+                recognition.ready(); f.flush(); NativeVoiceHttp.Result gate = f.takeClientTarget(target);
+                JSONObject value = Fixture.inputContext(target);
+                if (!current) NativeVoiceJson.put(value, "activityToken", "new-manual-epoch");
+                gate.done(200, value, null); f.flush();
+                if (current) {
+                    assertNotNull(field(f.runtime, "captureOwner")); assertEquals(target, f.runtime.snapshot().getJSONObject("active").getString("recognitionThreadId"));
+                } else {
+                    assertTrue(f.runtime.snapshot().isNull("active")); assertTrue(f.runtime.snapshot().isNull("recordingRecovery"));
+                    assertEquals(0, reads.get()); f.assertRecordingDiscarded(recording);
+                }
+                assertTrue(f.openThreads.isEmpty());
+            }
+        }
+    }
+
+    @Test public void backgroundTargetAnnouncementAndCueKeepManualAuthorityFresh() throws Exception {
+        try (Fixture f = new Fixture(false, false)) {
+            f.readyClientVoice("input"); f.settings(NativeVoiceJson.object("announceRecordingThread", true, "recognitionCues", true));
+            NativeVoiceAudio.setTestCuePlayer((id, kind, gain) -> f.cues.add(new Cue(id, kind, gain)));
+            String target = UUID.randomUUID().toString(); JSONObject command = f.clientSwitch(target, true);
+            f.clientCommand(command); f.settleClientSwitch(command, null);
+            f.takeClientTarget(target).done(200, Fixture.inputContext(target), null); f.flush();
+            SpeechJob announcement = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(announcement);
+            assertTrue(announcement.text.contains("Current server title")); f.runtime.drained(announcement.id); f.flush();
+            Cue cue = f.cue(NativeVoiceCue.Kind.START); f.runtime.drained(cue.id); f.flush();
+            JSONObject changed = Fixture.inputContext(target); NativeVoiceJson.put(changed, "manualListenEligible", false);
+            f.takeClientTarget(target).done(200, changed, null); f.flush();
+            assertTrue(f.runtime.snapshot().isNull("active")); assertTrue(f.speech.transcriptions.isEmpty()); assertTrue(f.openThreads.isEmpty());
+        }
+    }
+
+    @Test public void supersededQueuedSourceCancelsItsExplicitListen() throws Exception {
+        try (Fixture f = new Fixture(false, false)) {
+            f.readyClientVoice("speak"); f.policy(true, false, "speak");
+            f.receiveNotice(UUID.randomUUID().toString(), null);
+            SpeechJob unrelated = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(unrelated);
+            String target = UUID.randomUUID().toString(); JSONObject command = f.clientSwitch(target, true);
+            f.clientCommand(command); f.holdPlaybackValidation = true;
+            String reply = f.receiveClientTurnNotice("turn.completed"); f.settleClientSwitch(command, reply);
+            f.runtime.drained(unrelated.id); f.flush();
+            JSONObject newer = Fixture.inputContext(f.target); NativeVoiceJson.put(newer, "userInputRevision", 1);
+            f.takeClientTarget(f.target).done(200, newer, null); f.flush();
+            assertTrue(f.runtime.snapshot().isNull("active")); assertTrue(f.stagedClientActions().isEmpty());
+            assertTrue(f.speech.speechRequests.isEmpty()); assertTrue(f.speech.transcriptions.isEmpty()); assertTrue(f.contexts.isEmpty());
+        }
+    }
+
+    @Test public void cancelledClientReadyGateCannotOpenTheMicrophoneOrRestoreAnEmptyHeldSlot() throws Exception {
+        for (String cancellation : new String[] { "stop", "navigation", "registration" }) try (Fixture f = new Fixture(false, false)) {
+            f.readyClientVoice("input"); f.settings(NativeVoiceJson.object("keepListeningByDefault", true));
+            AtomicInteger reads = new AtomicInteger(); NativeVoiceAudio.setTestSource(() -> { reads.incrementAndGet(); return captureFrame(0); });
+            f.holdReadyValidation = true;
+            String target = UUID.randomUUID().toString(); JSONObject command = f.clientSwitch(target, true);
+            f.clientCommand(command); f.settleClientSwitch(command, null); RecognitionJob recognition = f.completeClientTarget(target);
+            String recording = f.runtime.snapshot().getJSONObject("active").getJSONObject("recording").getString("id");
+            recognition.ready(); f.flush(); NativeVoiceHttp.Result gate = f.takeClientTarget(target);
+            f.cancelClientSwitch(cancellation); gate.done(200, Fixture.inputContext(target), null); recognition.ready(); f.flush();
+            assertEquals(0, reads.get()); assertTrue(f.runtime.snapshot().isNull("active"));
+            assertTrue(f.runtime.snapshot().isNull("recordingRecovery")); f.assertRecordingDiscarded(recording);
+            assertTrue(f.openThreads.isEmpty());
+        }
+    }
+
+    @Test public void settlementRequiresPairedEventAndStreamFieldsOnlyOnSettlement() throws Exception {
+        for (String invalid : new String[] { "missing_event", "missing_stream", "null_event", "null_stream", "invalid_stream", "duplicate_streams", "too_many_streams", "legacy_singular", "not_settlement" }) {
+            try (Fixture f = new Fixture(false, false)) {
+                f.readyClientVoice("input"); JSONObject command = f.clientSwitch(UUID.randomUUID().toString(), true);
+                f.clientCommand(command);
+                JSONObject settled = NativeVoiceJson.object("id", command.optString("id"), "action", "turn_settled",
+                    "sourceThreadId", f.target, "sourceTurnId", "client-source-turn", "expiresAt", command.optLong("expiresAt"),
+                    "replyEventId", "reply", "replyStreamIds", new JSONArray().put(f.voiceStream));
+                if (invalid.equals("missing_event")) settled.remove("replyEventId");
+                if (invalid.equals("missing_stream")) settled.remove("replyStreamIds");
+                if (invalid.equals("null_event")) NativeVoiceJson.put(settled, "replyEventId", null);
+                if (invalid.equals("null_stream")) NativeVoiceJson.put(settled, "replyStreamIds", new JSONArray());
+                if (invalid.equals("invalid_stream")) NativeVoiceJson.put(settled, "replyStreamIds", new JSONArray().put("not-a-uuid"));
+                if (invalid.equals("duplicate_streams")) NativeVoiceJson.put(settled, "replyStreamIds", new JSONArray().put(f.voiceStream).put(f.voiceStream));
+                if (invalid.equals("too_many_streams")) {
+                    JSONArray ids = new JSONArray(); for (int i = 0; i < 129; i++) ids.put(f.voiceStream);
+                    NativeVoiceJson.put(settled, "replyStreamIds", ids);
+                }
+                if (invalid.equals("legacy_singular")) {
+                    settled.remove("replyStreamIds"); NativeVoiceJson.put(settled, "replyStreamId", f.voiceStream);
+                }
+                if (invalid.equals("not_settlement")) NativeVoiceJson.put(settled, "action", "end_interaction");
+                assertEquals(invalid, "failed", f.clientCommand(settled).getString("status"));
+                assertTrue(f.contexts.isEmpty()); assertTrue(f.speech.transcriptions.isEmpty());
             }
         }
     }
@@ -1330,7 +1928,7 @@ public class NativeVoiceRuntimeTest {
                 f.holdRecordingPreflight = !stage.equals("adopted");
                 String target = UUID.randomUUID().toString(); JSONObject command = f.clientSwitch(target, true);
                 assertEquals("accepted", f.clientCommand(command).getString("status")); f.settleClientSwitch(command, null);
-                f.takeClientTarget(target).done(200, Fixture.inputContext(target), null); f.flush();
+                f.validateClientTarget(target);
                 String recordingId = f.runtime.snapshot().getJSONObject("active").getJSONObject("recording").getString("id");
                 NativeSpeechCatalog.PreflightResult preflight = null; RecognitionJob recognition = null;
                 if (stage.equals("adopted")) {
@@ -1387,6 +1985,95 @@ public class NativeVoiceRuntimeTest {
         }
     }
 
+    @Test public void retainedHandedOffRecordingDoesNotBypassSourcePlaybackBeforeNavigation() throws Exception {
+        for (boolean listen : new boolean[] { false, true }) for (boolean queued : new boolean[] { false, true }) {
+            try (Fixture f = new Fixture(false, false)) {
+                f.readyClientVoice("speak"); NativeDictationStore.Recording saved = f.savedRecording(true, false);
+                AtomicReference<NativeDictationStore.Recording> handedOff = new AtomicReference<>();
+                f.onStore(() -> {
+                    f.dictations.saveFinalRequest(f.binding, saved.id, NativeVoiceJson.object("mutationId", saved.mutationId, "text", saved.text,
+                        "origin", NativeVoiceJson.object("clientId", f.request.getJSONObject("origin").getString("clientId")),
+                        "runningPolicy", NativeVoiceJson.object("mode", "queue")));
+                    handedOff.set(f.dictations.markHandedOff(f.binding, saved.id));
+                });
+                f.onOwner(() -> set(f.runtime, "retainedDictation", handedOff.get()));
+                f.settings(NativeVoiceJson.object("audioMode", "speak", "autoListen", false, "keepListeningByDefault", true));
+                f.policy(true, false, "speak"); f.foreground(f.target);
+                SpeechJob earlier = null;
+                if (queued) { f.receiveReply("Earlier reply", false); earlier = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(earlier); }
+                String reply = f.receiveClientTurnNotice("turn.completed");
+                SpeechJob source = queued ? null : f.speech.speechRequests.poll(10, TimeUnit.SECONDS);
+                String target = UUID.randomUUID().toString(); JSONObject command = f.clientSwitch(target, listen);
+                assertEquals("accepted", f.clientCommand(command).getString("status")); f.settleClientSwitch(command, reply);
+                f.flushEvents(); assertTrue(f.contexts.isEmpty()); assertTrue(f.openThreads.isEmpty());
+                if (queued) {
+                    f.runtime.drained(earlier.id); f.flush(); source = f.speech.speechRequests.poll(10, TimeUnit.SECONDS);
+                    assertTrue(f.contexts.isEmpty()); assertTrue(f.openThreads.isEmpty());
+                }
+                assertNotNull(source); assertEquals(reply, f.runtime.snapshot().getJSONObject("active").getString("id"));
+                f.runtime.drained(source.id); f.flush();
+                f.takeClientTarget(target).done(200, Fixture.inputContext(target), null); f.flushEvents();
+                JSONObject opened = f.openThreads.poll(10, TimeUnit.SECONDS); assertNotNull(opened); assertEquals(target, opened.getString("threadId"));
+                assertTrue(f.speech.transcriptions.isEmpty()); assertTrue(f.openThreads.isEmpty());
+                if (listen) assertEquals("saved_recording_pending", f.lastError().getString("code"));
+            }
+        }
+    }
+
+    @Test public void foregroundNavigationSurvivesListenBlockersAndPreparationFailures() throws Exception {
+        for (String blocker : new String[] { "saved", "held", "loading", "operation", "storage", "manual_ineligible", "readiness_lost", "preflight" }) {
+            try (Fixture f = new Fixture(false, false)) {
+                f.readyClientVoice("input"); f.foreground(f.target);
+                if (blocker.equals("saved") || blocker.equals("held")) {
+                    f.savedRecording(blocker.equals("held"), true, false);
+                    if (blocker.equals("held")) f.settings(NativeVoiceJson.object("keepListeningByDefault", true));
+                }
+                if (blocker.equals("loading") || blocker.equals("operation") || blocker.equals("storage")) f.onOwner(() ->
+                    set(f.runtime, blocker.equals("loading") ? "dictationLoading" : blocker.equals("operation") ? "dictationOperationPending" : "dictationStorageError", true));
+                f.holdRecordingPreflight = blocker.equals("preflight");
+                String target = UUID.randomUUID().toString(); JSONObject command = f.clientSwitch(target, true);
+                assertEquals("accepted", f.clientCommand(command).getString("status")); f.settleClientSwitch(command, null);
+                try (MainBlock delayedNavigation = new MainBlock()) {
+                    if (blocker.equals("preflight")) {
+                        f.validateClientTarget(target);
+                        NativeSpeechCatalog.PreflightResult preflight = f.preflights.poll(10, TimeUnit.SECONDS); assertNotNull(preflight);
+                        preflight.done(null, "speech_network_error"); f.flush();
+                    } else {
+                        NativeVoiceHttp.Result validation = f.takeClientTarget(target);
+                        if (blocker.equals("readiness_lost")) f.onOwner(() -> set(f.runtime, "speechCredential", null));
+                        JSONObject context = Fixture.inputContext(target);
+                        if (blocker.equals("manual_ineligible")) NativeVoiceJson.put(context, "manualListenEligible", false);
+                        validation.done(200, context, null); f.flush();
+                    }
+                    assertTrue(f.speech.transcriptions.isEmpty());
+                }
+                f.flushEvents(); JSONObject opened = f.openThreads.poll(10, TimeUnit.SECONDS); assertNotNull(blocker, opened);
+                assertEquals(target, opened.getString("threadId")); assertTrue(f.openThreads.isEmpty());
+                assertTrue(f.runtime.snapshot().isNull("active")); assertTrue(f.speech.transcriptions.isEmpty());
+                if (blocker.equals("loading") || blocker.equals("operation")) assertEquals("recording_operation_pending", f.lastError().getString("code"));
+                if (blocker.equals("storage")) assertEquals("dictation_storage_unavailable", f.lastError().getString("code"));
+            }
+        }
+    }
+
+    @Test public void malformedReplyRetiresItsStreamBarrierAndStartsTheExplicitTarget() throws Exception {
+        try (Fixture f = new Fixture(false, false)) {
+            f.readyClientVoice("input");
+            String target = UUID.randomUUID().toString(); JSONObject command = f.clientSwitch(target, true);
+            f.clientCommand(command); f.settleClientSwitch(command, "malformed-reply");
+            assertTrue(f.contexts.isEmpty());
+            long generation = (long) field(f.runtime, "streamGeneration");
+            JSONObject invalid = NativeVoiceJson.object("sourceEventId", "malformed-reply", "payload", NativeVoiceJson.object("schemaVersion", -1));
+            f.onOwner(() -> f.invoke("receive", new Class<?>[] { String.class, JSONObject.class }, "notification", invalid)); f.flush();
+            assertTrue((long) field(f.runtime, "streamGeneration") > generation);
+            assertNotEquals(f.voiceStream, field(f.runtime, "voiceStreamId"));
+            f.completeClientTarget(target);
+            assertEquals(target, f.runtime.snapshot().getJSONObject("active").getString("recognitionThreadId"));
+            assertTrue(f.openThreads.isEmpty());
+            assertEquals("invalid_notification_frame", f.lastError().getString("code"));
+        }
+    }
+
     @Test public void foregroundClientSwitchStillNavigatesAndOptionallyListens() throws Exception {
         for (String action : new String[] { "navigate", "listen", "voice_off" }) {
             try (Fixture f = new Fixture(false, false)) {
@@ -1400,7 +2087,7 @@ public class NativeVoiceRuntimeTest {
                 f.takeClientTarget(target).done(200, Fixture.inputContext(target), null); f.flushEvents();
                 JSONObject opened = f.openThreads.poll(10, TimeUnit.SECONDS); assertNotNull(opened);
                 assertEquals(target, opened.getString("threadId")); assertTrue(f.openThreads.isEmpty());
-                if (action.equals("listen")) f.completeClientTarget(target);
+                if (action.equals("listen")) { f.foreground(target); f.completeClientTarget(target); }
                 else { assertTrue(f.runtime.snapshot().isNull("active")); assertTrue(f.contexts.isEmpty()); }
                 assertTrue(f.speech.transcriptions.isEmpty());
             }
@@ -1421,15 +2108,43 @@ public class NativeVoiceRuntimeTest {
         }
     }
 
-    @Test public void foregroundClientSwitchIsDiscardedWhenHiddenAndNeverReplaysOnResume() throws Exception {
-        try (Fixture f = new Fixture(false, false)) {
-            f.readyClientVoice("input"); f.foreground(f.target);
-            JSONObject command = f.clientSwitch(UUID.randomUUID().toString(), true);
-            assertEquals("accepted", f.clientCommand(command).getString("status"));
-            f.runtime.nativeVisibility(false); f.flush(); f.settleClientSwitch(command, null);
-            f.foreground(f.target); f.flushEvents();
-            assertTrue(f.openThreads.isEmpty()); assertTrue(f.runtime.snapshot().isNull("active"));
-            assertTrue(f.contexts.isEmpty()); assertTrue(f.speech.transcriptions.isEmpty());
+    @Test public void delayedForegroundNavigationSurvivesOnlyItsOwnHeldCaptureReset() throws Exception {
+        for (boolean hidden : new boolean[] { false, true }) try (Fixture f = new Fixture(false, false)) {
+            f.readyClientVoice("input"); f.settings(NativeVoiceJson.object("keepListeningByDefault", true)); f.foreground(f.target);
+            NativeVoiceAudio.setTestSource(() -> captureFrame(0));
+            String target = UUID.randomUUID().toString(); JSONObject command = f.clientSwitch(target, true);
+            f.clientCommand(command);
+            try (MainBlock delayed = new MainBlock()) {
+                f.settleClientSwitch(command, null); RecognitionJob recognition = f.completeClientTarget(target);
+                if (hidden) { f.runtime.nativeVisibility(false); f.flush(); f.foreground(f.target); }
+                recognition.ready(); f.flush();
+                assertNotNull("Held capture reached the microphone before main dispatched navigation", field(f.runtime, "captureOwner"));
+                assertTrue(f.openThreads.isEmpty());
+            }
+            f.flushEvents();
+            if (hidden) assertTrue("A real visibility change still permanently suppresses navigation", f.openThreads.isEmpty());
+            else {
+                JSONObject opened = f.openThreads.poll(10, TimeUnit.SECONDS); assertNotNull(opened);
+                assertEquals(target, opened.getString("threadId")); assertTrue(f.openThreads.isEmpty());
+            }
+        }
+    }
+
+    @Test public void foregroundListenSurvivesHidingWithoutDeferredNavigation() throws Exception {
+        for (boolean settled : new boolean[] { false, true }) for (boolean autoListen : new boolean[] { false, true }) {
+            try (Fixture f = new Fixture(false, false)) {
+                f.readyClientVoice("speak"); f.settings(NativeVoiceJson.object("autoListen", autoListen)); f.foreground(f.target);
+                String target = UUID.randomUUID().toString(); JSONObject command = f.clientSwitch(target, true);
+                assertEquals("accepted", f.clientCommand(command).getString("status"));
+                NativeVoiceHttp.Result pending = null;
+                if (settled) { f.settleClientSwitch(command, null); pending = f.takeClientTarget(target); }
+                f.runtime.nativeVisibility(false); f.flush(); f.foreground(f.target); f.flushEvents();
+                if (!settled) f.settleClientSwitch(command, null);
+                else { pending.done(200, Fixture.inputContext(target), null); f.flush(); }
+                f.completeClientTarget(target); f.flushEvents();
+                assertEquals(target, f.runtime.snapshot().getJSONObject("active").getString("recognitionThreadId"));
+                assertTrue("Returning to the app cannot restore suppressed navigation", f.openThreads.isEmpty());
+            }
         }
     }
 
@@ -1670,7 +2385,7 @@ public class NativeVoiceRuntimeTest {
             assertEquals("speaking", f.runtime.snapshot().getString("phase")); assertFalse(speech.cancelled);
             assertTrue((boolean) field(item, "followUp"));
             f.runtime.drained(playback); f.flush();
-            JSONObject context = NativeVoiceJson.object("threadId", f.target, "threadTitle", "Current server title", "activityToken", "automatic-retry-epoch",
+            JSONObject context = NativeVoiceJson.object("threadId", f.target, "threadTitle", "Current server title", "activityToken", "automatic-retry-epoch", "userInputRevision", 0,
                 "authority", "current", "runState", "idle", "automaticListenEligible", true, "manualListenEligible", true,
                 "steer", NativeVoiceJson.object("availability", "unavailable"));
             for (int validation = 0; validation < 2; validation++) {
@@ -2298,7 +3013,7 @@ public class NativeVoiceRuntimeTest {
                 }
                 f.runtime.failed(focusOwner, "audio_focus_lost"); f.flush();
                 assertTrue("Held focus loss must cancel pending validation", f.runtime.snapshot().isNull("active"));
-                JSONObject context = NativeVoiceJson.object("threadId", f.target, "threadTitle", "Current server title", "activityToken", "automatic-retry-epoch",
+                JSONObject context = NativeVoiceJson.object("threadId", f.target, "threadTitle", "Current server title", "activityToken", "automatic-retry-epoch", "userInputRevision", 0,
                     "authority", "current", "runState", "idle", "automaticListenEligible", true, "manualListenEligible", true,
                     "steer", NativeVoiceJson.object("availability", "unavailable"));
                 NativeVoiceProtocol.inputContext(context);
@@ -2421,7 +3136,7 @@ public class NativeVoiceRuntimeTest {
                 if (selectedMode.equals("steer")) {
                     NativeVoiceHttp.Result context = f.contexts.poll(10, TimeUnit.SECONDS); assertNotNull(context);
                     f.settings(NativeVoiceJson.object("ttsModel", "replacement-tts"));
-                    context.done(200, NativeVoiceJson.object("threadId", f.target, "threadTitle", "Current server title", "activityToken", "epoch",
+                    context.done(200, NativeVoiceJson.object("threadId", f.target, "threadTitle", "Current server title", "activityToken", "epoch", "userInputRevision", 0,
                         "authority", "current", "runState", "running", "automaticListenEligible", false, "manualListenEligible", true,
                         "steer", NativeVoiceJson.object("availability", "available", "target",
                             NativeVoiceJson.object("kind", "turn", "turnId", "current-turn"))), null);
@@ -2575,8 +3290,8 @@ public class NativeVoiceRuntimeTest {
         }
     }
 
-    @Test public void defaultHeldOwnershipSurvivesPolicyChangesWhilePreflightIsBlocked() throws Exception {
-        try (Fixture f = new Fixture(false, false)) {
+    @Test public void defaultHeldPreflightKeepsItsAutomaticAuthorityAndFencesCancelledCallbacks() throws Exception {
+        for (String cancellation : new String[] { "auto_listen", "stream_loss" }) try (Fixture f = new Fixture(false, false)) {
             f.automaticRecognizing(false); Object active = field(f.runtime, "active");
             f.settings(NativeVoiceJson.object("keepListeningByDefault", true)); f.holdRecordingPreflight = true;
             Object navigation = field(f.runtime, "inputSubmissionContext");
@@ -2587,13 +3302,18 @@ public class NativeVoiceRuntimeTest {
             });
             NativeSpeechCatalog.PreflightResult preflight = f.preflights.poll(10, TimeUnit.SECONDS); assertNotNull(preflight);
             assertFalse((boolean) field(active, "automatic")); assertTrue((boolean) field(active, "defaultHeld"));
-            assertFalse((boolean) field(active, "adopted")); assertNotSame(navigation, field(f.runtime, "inputSubmissionContext"));
-            f.settings(NativeVoiceJson.object("autoListen", false));
-            f.onOwner(() -> f.invoke("streamFailed", new Class<?>[] { String.class }, "network_unavailable"));
-            assertSame(active, field(f.runtime, "active")); assertFalse((boolean) field(active, "stopped"));
+            assertFalse((boolean) field(active, "adopted"));
+            assertSame("An unvalidated held start cannot supersede navigation", navigation, field(f.runtime, "inputSubmissionContext"));
+            String recording = (String) field(active, "recordingId");
+            if (cancellation.equals("auto_listen")) f.settings(NativeVoiceJson.object("autoListen", false));
+            else f.onOwner(() -> f.invoke("streamFailed", new Class<?>[] { String.class }, "network_unavailable"));
+            assertTrue(f.runtime.snapshot().isNull("active")); assertTrue((boolean) field(active, "stopped"));
+            assertSame(navigation, field(f.runtime, "inputSubmissionContext"));
             preflight.done(NativeSpeechCapabilities.hosted("gpt-live-transcribe"), null);
-            assertNotNull(f.speech.transcriptions.poll(10, TimeUnit.SECONDS)); f.flush();
-            assertSame(active, field(f.runtime, "active")); assertTrue((boolean) field(active, "keepListening"));
+            f.flush(); f.assertRecordingDiscarded(recording);
+            assertTrue(f.runtime.snapshot().isNull("active")); assertTrue(f.speech.transcriptions.isEmpty());
+            assertNull(field(f.runtime, "captureOwner")); assertTrue(f.runtime.snapshot().isNull("recordingRecovery"));
+            assertSame(navigation, field(f.runtime, "inputSubmissionContext"));
         }
     }
 
@@ -3866,7 +4586,9 @@ public class NativeVoiceRuntimeTest {
             f.readyClientVoice("speak"); f.foreground(f.target);
             f.replay(false, f.target, "unrelated-playback", "Current reply");
             SpeechJob reply = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(reply);
-            JSONObject command = f.clientSwitch(UUID.randomUUID().toString(), true);
+            // Listening waits for playback to drain. Navigation-only handoffs can already be
+            // in flight while Stop is pressed, and must retain these cancellation fences.
+            JSONObject command = f.clientSwitch(UUID.randomUUID().toString(), false);
             assertEquals("accepted", f.clientCommand(command).getString("status")); f.settleClientSwitch(command, null);
             String destination = command.getString("threadId"); NativeVoiceHttp.Result validation = f.takeClientTarget(destination);
             CountDownLatch entered = new CountDownLatch(1), release = new CountDownLatch(1);
@@ -3893,6 +4615,23 @@ public class NativeVoiceRuntimeTest {
             assertTrue(f.openThreads.isEmpty()); assertTrue(f.contexts.isEmpty()); assertTrue(f.speech.transcriptions.isEmpty());
             assertTrue(f.runtime.snapshot().isNull("active")); assertEquals(0, f.inputAttempts.get());
             assertEquals(0, f.runtime.snapshot().getJSONArray("errors").length());
+        }
+    }
+
+    @Test public void playbackStopCancelsAgentListeningBeforeItsPlaybackBarrierDrains() throws Exception {
+        try (Fixture f = new Fixture(false, false)) {
+            f.readyClientVoice("speak"); f.foreground(f.target);
+            f.replay(false, f.target, "unrelated-playback", "Current reply");
+            SpeechJob reply = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(reply);
+            JSONObject command = f.clientSwitch(UUID.randomUUID().toString(), true);
+            assertEquals("accepted", f.clientCommand(command).getString("status")); f.settleClientSwitch(command, null);
+            assertEquals(java.util.Collections.singleton(command.getString("id")), f.stagedClientActions());
+            assertTrue("Listening cannot validate ahead of the active playback", f.contexts.isEmpty());
+            assertNull(f.command("stopPlayback", new JSONObject())); assertTrue(reply.cancelled);
+            f.runtime.drained(reply.id); f.flushEvents();
+            assertTrue(f.stagedClientActions().isEmpty()); assertTrue(f.openThreads.isEmpty());
+            assertTrue(f.contexts.isEmpty()); assertTrue(f.speech.transcriptions.isEmpty());
+            assertTrue(f.runtime.snapshot().isNull("active")); assertEquals(0, f.inputAttempts.get());
         }
     }
 
@@ -4288,7 +5027,8 @@ public class NativeVoiceRuntimeTest {
                     assertNotNull(f.speech.speechRequests.poll(10, TimeUnit.SECONDS));
                     assertNull(f.command("recordDuringPlayback", new JSONObject()));
                 } else {
-                    f.runtime.unobserve(f.submissionObserver); JSONObject command = f.clientSwitch(f.target, true);
+                    f.foreground(f.target);
+                    JSONObject command = f.clientSwitch(f.target, true);
                     assertEquals("accepted", f.clientCommand(command).getString("status"));
                     assertEquals("accepted", f.settleClientSwitch(command, null).getString("status"));
                 }
@@ -4346,14 +5086,16 @@ public class NativeVoiceRuntimeTest {
     }
 
     @Test public void onlySeparateBackgroundStartsAnnounceTheirExactCurrentDestination() throws Exception {
-        for (String source : new String[] { "headset", "start", "app", "client", "replay", "notification", "record" }) {
+        for (String source : new String[] { "headset", "start", "app", "client", "client_foreground", "replay", "notification", "record" }) {
             try (Fixture f = new Fixture(false, false)) {
                 f.readyClientVoice("speak"); f.settings(NativeVoiceJson.object("announceRecordingThread", true, "autoListen", true));
                 String spokenThread = UUID.randomUUID().toString(), destination = f.target;
                 if (source.equals("headset") || source.equals("start")) { f.runtime.notificationAction(source); f.flush(); }
                 else if (source.equals("app")) assertNull(f.command("startManualListen", NativeVoiceJson.object("threadId", destination)));
-                else if (source.equals("client")) {
-                    f.runtime.unobserve(f.submissionObserver); JSONObject command = f.clientSwitch(destination, true);
+                else if (source.equals("client") || source.equals("client_foreground")) {
+                    if (source.equals("client_foreground")) f.foreground(f.target);
+                    else f.runtime.unobserve(f.submissionObserver);
+                    JSONObject command = f.clientSwitch(destination, true);
                     assertEquals("accepted", f.clientCommand(command).getString("status"));
                     assertEquals("accepted", f.settleClientSwitch(command, null).getString("status"));
                 } else {
@@ -4369,13 +5111,13 @@ public class NativeVoiceRuntimeTest {
                     NativeVoiceJson.put(current, "sourceTurnId", "notice-turn");
                 }
                 f.takeClientTarget(destination).done(200, current, null); f.flush();
-                boolean background = source.equals("headset") || source.equals("start");
+                boolean background = source.equals("headset") || source.equals("start") || source.equals("client");
                 if (background) {
                     SpeechJob announcement = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(source, announcement);
                     assertEquals("Replying to Fresh " + source + ".", announcement.text);
                 } else {
                     assertTrue("This start must remain silent: " + source, f.speech.speechRequests.isEmpty());
-                    if (!source.equals("app") && !source.equals("client")) { f.takeClientTarget(destination).done(200, current, null); f.flush(); }
+                    if (!source.equals("app")) { f.takeClientTarget(destination).done(200, current, null); f.flush(); }
                     assertNotNull(source, f.speech.transcriptions.poll(10, TimeUnit.SECONDS));
                 }
                 JSONObject state = f.runtime.snapshot();
@@ -5163,6 +5905,7 @@ public class NativeVoiceRuntimeTest {
         final String profile = "voice-runtime-test-" + UUID.randomUUID(), origin = "http://127.0.0.1:65124";
         final String binding = NativeVoiceStore.binding(profile, origin, IDENTITY);
         final String mutation = UUID.randomUUID().toString(), target = UUID.randomUUID().toString();
+        final String voiceStream = UUID.randomUUID().toString();
         final JSONObject request = NativeVoiceJson.object("mutationId", mutation, "text", "A deliberate voice input",
             "origin", NativeVoiceJson.object("clientId", UUID.randomUUID().toString()), "runningPolicy", NativeVoiceJson.object("mode", "queue"));
         final JSONObject entry = NativeVoiceJson.object("mutationId", mutation, "threadId", target, "request", request,
@@ -5186,7 +5929,7 @@ public class NativeVoiceRuntimeTest {
         final Handler owner;
         RecognitionJob synthetic;
         long policyGeneration;
-        volatile boolean holdRecordingPreflight;
+        volatile boolean holdRecordingPreflight, holdPlaybackValidation, holdReadyValidation;
         final BlockingQueue<NativeSpeechCatalog.PreflightResult> preflights = new LinkedBlockingQueue<>();
 
         Fixture(boolean automatic, boolean retargeted) throws Exception { this(automatic, retargeted, false); }
@@ -5216,7 +5959,23 @@ public class NativeVoiceRuntimeTest {
                         "connectionToken", "runtime-registered-connection-token", "resumeToken", "runtime-registered-resume-token-value"), null);
                     else if (path.equals("/api/client-controls/poll")) { /* Retain the idle control poll. */ }
                     else if (path.endsWith("/input-context")) {
-                        contextTargets.add(path.substring("/api/threads/".length(), path.length() - "/input-context".length())); contexts.add(result);
+                        String contextThread = path.substring("/api/threads/".length(), path.length() - "/input-context".length());
+                        Object current = fixtureField(runtime, "active");
+                        NativeVoiceQueue.Item notice = current == null ? null : (NativeVoiceQueue.Item) fixtureField(current, "notification");
+                        boolean playbackGate = notice != null && notice.hasInputRevision() &&
+                            fixtureField(runtime, "phase").equals("synthesizing") && !(boolean) fixtureField(current, "playbackTargetAccepted");
+                        boolean readyGate = current != null && (boolean) fixtureField(current, "readyValidationStarted") &&
+                            fixtureField(runtime, "phase").equals("arming");
+                        if (playbackGate && !holdPlaybackValidation || readyGate && !holdReadyValidation) {
+                            JSONObject fresh = inputContext(contextThread);
+                            if (notice != null) NativeVoiceJson.put(fresh, "userInputRevision", notice.userInputRevision);
+                            if (readyGate && notice != null) {
+                                NativeVoiceJson.put(fresh, "automaticListenEligible", true);
+                                NativeVoiceJson.put(fresh, "activityToken", notice.target.optString("activityToken"));
+                                if (notice.target.has("sourceTurnId")) NativeVoiceJson.put(fresh, "sourceTurnId", notice.target.optString("sourceTurnId"));
+                            }
+                            result.done(200, fresh, null);
+                        } else { contextTargets.add(contextThread); contexts.add(result); }
                     }
                     else if (path.startsWith("/api/input-receipts/")) {
                         receiptReads.incrementAndGet(); result.done(200, NativeVoiceJson.copy(receiptResponse.get()), null);
@@ -5295,6 +6054,7 @@ public class NativeVoiceRuntimeTest {
                     "speechProvider", "server", "speechEndpoint", "http://127.0.0.1:9/v1", "recognitionCues", false,
                     "autoListen", false, "pinDefaultVoiceThread", true, "voiceThreadId", target, "voiceThreadTitle", "Other default")));
                 set(runtime, "speechCredential", "fixture-speech-token"); set(runtime, "speech", speech);
+                set(runtime, "voiceStreamId", voiceStream);
                 invoke("publish", new Class<?>[0]);
             });
             assertTrue(runtime.snapshot().getJSONObject("actions").getBoolean("canStart"));
@@ -5311,18 +6071,47 @@ public class NativeVoiceRuntimeTest {
         JSONObject settleClientSwitch(JSONObject command, String reply) throws Exception {
             return clientCommand(NativeVoiceJson.object("id", command.getString("id"), "action", "turn_settled",
                 "sourceThreadId", command.getString("sourceThreadId"), "sourceTurnId", command.getString("sourceTurnId"),
-                "replyEventId", reply, "expiresAt", command.getLong("expiresAt")));
+                "replyEventId", reply, "replyStreamIds", reply == null ? new JSONArray() : new JSONArray().put(voiceStream), "expiresAt", command.getLong("expiresAt")));
         }
         static JSONObject inputContext(String target) {
-            return NativeVoiceJson.object("threadId", target, "threadTitle", "Current server title", "activityToken", "client-switch-epoch", "authority", "current",
+            return NativeVoiceJson.object("threadId", target, "threadTitle", "Current server title", "activityToken", "client-switch-epoch", "userInputRevision", 0, "authority", "current",
                 "runState", "idle", "automaticListenEligible", false, "manualListenEligible", true, "steer", NativeVoiceJson.object("availability", "unavailable"));
+        }
+        JSONObject automaticContext() throws Exception {
+            NativeVoiceQueue.Item notice = (NativeVoiceQueue.Item) field(field(runtime, "active"), "notification");
+            JSONObject value = inputContext(notice.targetId());
+            NativeVoiceJson.put(value, "userInputRevision", notice.userInputRevision);
+            NativeVoiceJson.put(value, "automaticListenEligible", true);
+            NativeVoiceJson.put(value, "activityToken", notice.target.optString("activityToken"));
+            if (notice.target.has("sourceTurnId")) NativeVoiceJson.put(value, "sourceTurnId", notice.target.optString("sourceTurnId"));
+            return value;
+        }
+        RecognitionJob automaticBeforeAudio(boolean held) throws Exception {
+            readyClientVoice("input"); settings(NativeVoiceJson.object("autoListen", true, "keepListeningByDefault", held));
+            policy(true, false, "speakThenListen"); holdReadyValidation = true;
+            receiveReply("Automatic follow-up", true);
+            for (int validation = 0; validation < 2; validation++) {
+                takeClientTarget(target).done(200, automaticContext(), null); flush();
+            }
+            RecognitionJob recognition = speech.transcriptions.poll(10, TimeUnit.SECONDS); assertNotNull(recognition);
+            assertEquals("arming", runtime.snapshot().getString("phase"));
+            return recognition;
         }
         NativeVoiceHttp.Result takeClientTarget(String target) throws Exception {
             NativeVoiceHttp.Result validation = contexts.poll(10, TimeUnit.SECONDS); assertNotNull("Expected target validation", validation);
             assertEquals(target, contextTargets.poll(10, TimeUnit.SECONDS)); return validation;
         }
-        RecognitionJob completeClientTarget(String target) throws Exception {
+        void validateClientTarget(String target) throws Exception {
+            Object active = field(runtime, "active");
+            boolean firstClient = (boolean) field(active, "clientListenStart") && field(active, "manualActivityToken") == null;
             takeClientTarget(target).done(200, inputContext(target), null); flush();
+            if (firstClient && !((NativeVoiceSettings) field(runtime, "settings")).flag("recognitionCues") &&
+                !field(runtime, "phase").equals("announcing")) {
+                takeClientTarget(target).done(200, inputContext(target), null); flush();
+            }
+        }
+        RecognitionJob completeClientTarget(String target) throws Exception {
+            validateClientTarget(target);
             RecognitionJob recognition = speech.transcriptions.poll(10, TimeUnit.SECONDS);
             assertNotNull("The validated target must open one recognition session", recognition);
             assertTrue("Only one recognition session starts", speech.transcriptions.isEmpty());
@@ -5332,7 +6121,7 @@ public class NativeVoiceRuntimeTest {
             String id = UUID.randomUUID().toString();
             onOwner(() -> {
                 NativeVoiceSettings configured = (NativeVoiceSettings) field(runtime, "settings");
-                NativeVoiceQueue.Item notification = new NativeVoiceQueue.Item(NativeVoiceJson.object("sourceEventId", id,
+                NativeVoiceQueue.Item notification = new NativeVoiceQueue.Item(NativeVoiceJson.object("sourceEventId", id, "userInputRevision", 0,
                     "generation", 1, "voice", "speakThenListen",
                     "recognitionTarget", NativeVoiceJson.object("threadId", target, "activityToken", "source-epoch", "sourceTurnId", "client-source-turn"),
                     "payload", NativeVoiceJson.object("schemaVersion", 5, "notificationId", id, "event", "turn.completed",
@@ -5354,7 +6143,7 @@ public class NativeVoiceRuntimeTest {
                 "thread", NativeVoiceJson.object("id", target, "title", "Other thread"),
                 "turn", NativeVoiceJson.object("id", "unrelated-turn", "outcome", "completed"));
             if (text != null) NativeVoiceJson.put(payload, "assistantResult", NativeVoiceJson.object("final", NativeVoiceJson.object("text", text)));
-            JSONObject frame = NativeVoiceJson.object("sourceEventId", id, "generation", policyGeneration, "voice", followUp ? "speakThenListen" : "speak", "payload", payload);
+            JSONObject frame = NativeVoiceJson.object("sourceEventId", id, "userInputRevision", 0, "generation", policyGeneration, "voice", followUp ? "speakThenListen" : "speak", "payload", payload);
             if (followUp) NativeVoiceJson.put(frame, "recognitionTarget", NativeVoiceJson.object("threadId", target,
                 "activityToken", "queued-reply-epoch", "sourceTurnId", "unrelated-turn"));
             onOwner(() -> invoke("receive", new Class<?>[] { String.class, JSONObject.class }, "notification", frame)); flush();
@@ -5363,7 +6152,7 @@ public class NativeVoiceRuntimeTest {
         /** A completion notice on any thread, optionally started by another device. */
         void receiveNotice(String threadId, String originClientId) throws Exception {
             String id = UUID.randomUUID().toString();
-            JSONObject frame = NativeVoiceJson.object("sourceEventId", id, "generation", policyGeneration, "voice", "speak",
+            JSONObject frame = NativeVoiceJson.object("sourceEventId", id, "userInputRevision", 0, "generation", policyGeneration, "voice", "speak",
                 "payload", NativeVoiceJson.object("schemaVersion", 5, "notificationId", id, "event", "turn.completed",
                     "occurredAt", "2026-10-08T00:00:00Z", "title", "Automatic notice", "message", "Filtered by automatic voice",
                     "thread", NativeVoiceJson.object("id", threadId, "title", "Notice thread"),
@@ -5374,7 +6163,7 @@ public class NativeVoiceRuntimeTest {
         void receiveThreadlessNotice() throws Exception {
             String id = UUID.randomUUID().toString();
             JSONObject frame = NativeVoiceJson.object("sourceEventId", id, "generation", policyGeneration, "voice", "speak",
-                "payload", NativeVoiceJson.object("schemaVersion", 5, "notificationId", id, "event", "turn.completed",
+                "payload", NativeVoiceJson.object("schemaVersion", 5, "notificationId", id, "event", "automation.started",
                     "occurredAt", "2026-10-10T00:00:00Z", "title", "Threadless notice", "message", "General update"));
             onOwner(() -> invoke("receive", new Class<?>[] { String.class, JSONObject.class }, "notification", frame)); flush();
         }
@@ -5382,7 +6171,7 @@ public class NativeVoiceRuntimeTest {
             String id = UUID.randomUUID().toString();
             JSONObject turn = NativeVoiceJson.object("id", "client-source-turn");
             if (event.equals("turn.completed")) NativeVoiceJson.put(turn, "outcome", "completed");
-            JSONObject frame = NativeVoiceJson.object("sourceEventId", id, "generation", policyGeneration,
+            JSONObject frame = NativeVoiceJson.object("sourceEventId", id, "userInputRevision", 0, "generation", policyGeneration,
                 "voice", event.equals("turn.completed") ? "speakThenListen" : "speak",
                 "recognitionTarget", NativeVoiceJson.object("threadId", target, "activityToken", "source-epoch", "sourceTurnId", "client-source-turn"),
                 "payload", NativeVoiceJson.object("schemaVersion", 5, "notificationId", id, "event", event,
@@ -5395,12 +6184,14 @@ public class NativeVoiceRuntimeTest {
         }
         void receiveFollowupNotice(String spokenThread, String automaticTarget) throws Exception {
             String id = UUID.randomUUID().toString();
-            JSONObject frame = NativeVoiceJson.object("sourceEventId", id, "generation", policyGeneration, "voice", "speakThenListen",
+            boolean completion = spokenThread.equals(automaticTarget) || ((NativeVoiceSettings) field(runtime, "settings")).mode().equals("input");
+            JSONObject frame = NativeVoiceJson.object("sourceEventId", id, "userInputRevision", 0, "generation", policyGeneration, "voice", "speakThenListen",
                 "recognitionTarget", NativeVoiceJson.object("threadId", automaticTarget, "activityToken", "historical-notice-epoch", "sourceTurnId", "notice-turn"),
-                "payload", NativeVoiceJson.object("schemaVersion", 5, "notificationId", id, "event", "turn.completed",
+                "payload", NativeVoiceJson.object("schemaVersion", 5, "notificationId", id, "event", completion ? "turn.completed" : "automation.started",
                     "occurredAt", "2026-10-10T00:00:00Z", "title", "Completed", "message", "Spoken answer",
-                    "thread", NativeVoiceJson.object("id", spokenThread, "title", "Spoken thread"),
+                    "thread", NativeVoiceJson.object("id", completion ? automaticTarget : spokenThread, "title", "Spoken thread"),
                     "turn", NativeVoiceJson.object("id", "notice-turn", "outcome", "completed")));
+            if (!completion) frame.remove("userInputRevision");
             onOwner(() -> invoke("receive", new Class<?>[] { String.class, JSONObject.class }, "notification", frame)); flush();
         }
         /** The bridge's speakReply through the owner-thread command path; returns its error code or null. */
@@ -5491,7 +6282,7 @@ public class NativeVoiceRuntimeTest {
                 NativeVoiceSettings settings = (NativeVoiceSettings) field(runtime, "settings");
                 String id = UUID.randomUUID().toString();
                 NativeVoiceQueue.Item notification = new NativeVoiceQueue.Item(NativeVoiceJson.object(
-                    "sourceEventId", id, "generation", policyGeneration, "voice", "speakThenListen",
+                    "sourceEventId", id, "userInputRevision", 0, "generation", policyGeneration, "voice", "speakThenListen",
                     "recognitionTarget", NativeVoiceJson.object("threadId", target, "activityToken", "automatic-retry-epoch"),
                     "payload", NativeVoiceJson.object("schemaVersion", 5, "notificationId", id, "event", "turn.completed",
                         "occurredAt", "2026-10-04T00:00:00Z", "title", "Completed", "message", "Ready for a reply",
@@ -5674,6 +6465,7 @@ public class NativeVoiceRuntimeTest {
         final BlockingQueue<SpeechJob> speechRequests = new LinkedBlockingQueue<>();
         final BlockingQueue<RecognitionJob> transcriptions = new LinkedBlockingQueue<>();
         NativeVoiceRuntime runtime;
+        final AtomicInteger closeCalls = new AtomicInteger();
         SpeechFake() { super(new Config("http://127.0.0.1:9/v1", null, "fixture-stt", "fixture-tts", "fixture-voice", 1), android.os.SystemClock::elapsedRealtime); }
         @Override Request speak(String id, String text, SpeechListener listener) {
             SpeechJob job = new SpeechJob(id, text, listener); speechRequests.add(job); return job;
@@ -5684,7 +6476,7 @@ public class NativeVoiceRuntimeTest {
             catch (Exception error) { throw new AssertionError(error); }
             transcriptions.add(job); return job;
         }
-        @Override public void close() { /* Each fake job has its own cancellation flag. */ }
+        @Override public void close() { closeCalls.incrementAndGet(); }
     }
     /** Holds real discovery responses so settings edits can race a live OkHttp callback deterministically. */
     private static final class CatalogPeer implements AutoCloseable {
@@ -5801,6 +6593,9 @@ public class NativeVoiceRuntimeTest {
         long deadline = android.os.SystemClock.elapsedRealtime() + 10000;
         while (request.commits == 0 && android.os.SystemClock.elapsedRealtime() < deadline) Thread.sleep(10);
         fixture.flush(); assertEquals("Local capture never committed: " + fixture.runtime.snapshot(), 1, request.commits);
+    }
+    private static Object fixtureField(Object target, String name) {
+        try { return field(target, name); } catch (Exception error) { throw new AssertionError(error); }
     }
     private static Object field(Object target, String name) throws Exception {
         Field field = target.getClass().getDeclaredField(name); field.setAccessible(true); return field.get(target);

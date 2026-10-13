@@ -2090,6 +2090,26 @@ input/recovery, cached presentation settings, and normalized blocking
 interactions. This shared contract applies to all five backends; steering still
 uses each backend's declared target and delivery capabilities.
 
+Automatic turn speech uses a separate durable, scoped `userInputRevision`.
+Advance it only for fresh user-written composer, direct-input, and nonblocking
+question-response admission, including first sends, within the admission
+transaction. Preserve a queued row's classification on retry; replay, retry,
+restore, cancellation, agent/Tool-client input, callbacks, automation, forks,
+and lifecycle changes do not advance it. Capture the revision and queued-user
+supersession synchronously at the normalized response event, before delayed
+observers, and retain the first completion capture with its audience watermark.
+Use the response's complete correlation set to distinguish pending or
+unassociated user Steers from Steers already associated with that response.
+Supersession suppresses voice only and retires that source turn's deferred
+client actions. Keep script delivery independent. The wire revision is required
+for turn notices even when automatic-listen authority is absent; their optional
+recognition target must name the same source thread. Native validates it before
+playback and automatic microphone startup while retaining activity-token
+readiness. Pi, Codex, Claude, Grok, and OpenCode implement this through the shared
+application admission and actor-observation paths. Pi/Codex use turn Steer,
+Claude/OpenCode use conversation Steer, and Grok keeps shared Submit/Queue with
+Steer unsupported. No provider-native correlation escapes into browser DTOs.
+
 The required input-context `threadTitle` is current principal-scoped display
 text from the application title overlay, normalized by the same
 `boundDisplayText` projection as thread summaries. Preserve its empty-text
@@ -2305,6 +2325,26 @@ subscriber sequence watermark survives delayed acceptance and excludes streams
 joining during observer or settlement waits. Voice never persists or replays
 offline notices. Do not infer freshness from an event
 timestamp or add a voice age cutoff. Explicit reply playback remains available.
+
+Native notification subscriptions use ordinary principal authentication and a
+stream UUID independently of client-control registration. Admit at most 128
+identified streams per principal before sending headers; ordinary inventory
+subscriptions retain their existing behavior. Publication results contain only
+UUIDs of streams that actually received the notice, never control tokens or
+subscriber sequences. Settlement carries the reply event and all delivered
+native stream UUIDs, or null and an empty array. A client waits for matching
+local playback or its own current stream's unseen event, never for another
+stream's delivery. Healthy SSE and its audience survive control retries;
+notification loss or an invalid native frame releases undeliverable playback
+waits, while control-connection loss still retires pending commands. Benign
+notification drops release the barrier. Failed, interrupted, and superseded
+source turns send explicit
+`turn_cancelled` commands for their accepted client-action IDs. Clients retire
+those exact actions and release any reserved listening slot; server-only
+deletion would leave the client waiting until expiry.
+An aborted or timed-out deferred request needs an exact-ID cancellation if its
+acceptance arrives late. Retain at most 128 retired IDs per client for five
+minutes so bounded request cleanup also retires orphan client reservations.
 
 Successful-turn notifications may opt into a separate immutable classified
 assistant-result snapshot captured alongside the callback aggregate. Keep the
@@ -3167,6 +3207,13 @@ Do not advertise a checkpoint after an invisible or uncopyable leaf.
 Backend connectivity and workspace file access are separate capabilities of an
 execution environment. A working SSH carrier does not imply file access, and a
 Files sidecar does not imply a provider transport.
+
+Sidecar stream consumers may drain buffered data after receiving a validated
+terminal. Replenishing credit on that exact completed registration is a no-op;
+unregistering an unfinished stream still rejects later credit. A retired handle
+must neither credit nor unregister a replacement using the same stream ID.
+Preserve byte, sequence, and terminal validation. This shared transport rule applies to Pi,
+Codex, Claude, and OpenCode remote operations; Grok remains local-only.
 
 Environment availability may aggregate independent, typed backend and
 operations-carrier observations only at the execution-environment scope. Keep

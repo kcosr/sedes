@@ -6,7 +6,7 @@ import { notificationDeliveryMigration } from "../../src/server/db/migrations/13
 import { partialNotificationDeliveryMigration } from "../../src/server/db/migrations/139-partial-notification-delivery.js";
 import { notificationPathlessScriptDeliveryMigration } from "../../src/server/db/migrations/132-notification-pathless-script-delivery.js";
 import type { BoundedText } from "../../src/shared/protocol/payload.js";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -115,11 +115,169 @@ const voiceFrames = (frames: readonly string[]) => frames
 function enable(service: NotificationService) {
   return service.update(scope, { ...config, delivery: config.delivery });
 }
+/** These synthetic turn events are observed at user-input revision zero. */
+function emitFresh(service: NotificationService, ...args: Parameters<NotificationService["emit"]>) {
+  if (args[1].event.startsWith("turn.") && args[7] === undefined) {
+    args[7] = { userInputRevision: 0, superseded: false };
+  }
+  return service.emit(...args);
+}
 const flush = async () => {
   for (let i = 0; i < 8; i += 1) await Promise.resolve();
 };
 
 describe("notification settings and passive hooks", () => {
+  it("reports only native streams actually handed a voice event in the same scope", async () => {
+    const { service } = fixture(); enable(service);
+    service.subscribe(scope, () => {}); // Ordinary browser/WebView: no playback barrier.
+    const oldStream = randomUUID(), newStream = randomUUID();
+    service.subscribe(scope, () => {}, service.reserveVoiceStream(scope, oldStream));
+    service.subscribe(scope, () => {}, service.reserveVoiceStream(scope, newStream));
+    service.subscribe(other, () => {}, service.reserveVoiceStream(other, randomUUID()));
+    const publication = await emitFresh(service, scope, event(), "stream-deliveries", "live");
+    expect(publication?.sourceEventId).toBe(createHash("sha256").update("stream-deliveries").digest("hex"));
+    expect(publication?.voiceStreamIds).toEqual([oldStream, newStream]);
+  });
+
+  it("never reports late, removed, failed, or synchronously closed streams as playback barriers", async () => {
+    const { service } = fixture(); enable(service);
+    service.subscribe(scope, () => {});
+    let remove!: () => void;
+    remove = service.subscribe(scope, frame => { if (frame.startsWith("event: notification\n")) remove(); },
+      service.reserveVoiceStream(scope, randomUUID()));
+    service.subscribe(scope, frame => { if (frame.startsWith("event: notification\n")) throw new Error("closed"); },
+      service.reserveVoiceStream(scope, randomUUID()));
+    const disconnect = service.subscribe(scope, () => {}, service.reserveVoiceStream(scope, randomUUID()));
+    const watermark = service.captureSubscriberWatermark();
+    let settle!: (target: undefined) => void;
+    const publication = emitFresh(service, scope, event(), "ending-streams", "live", undefined,
+      () => ({ settlement: new Promise(resolve => { settle = resolve; }) }), watermark);
+    disconnect();
+    service.subscribe(scope, () => {}, service.reserveVoiceStream(scope, randomUUID()));
+    settle(undefined);
+    expect((await publication)?.voiceStreamIds).toEqual([]);
+  });
+
+  it("bounds native stream admission per principal without truncating delivery receipts", async () => {
+    const { service, database } = fixture(); enable(service);
+    const foreign = { ...scope, principalId: "foreign" };
+    database.prepare("INSERT INTO principals VALUES (?, ?)").run(foreign.tenantId, foreign.principalId);
+    service.subscribe(scope, () => {});
+    const streams = Array.from({ length: 128 }, () => service.reserveVoiceStream(scope, randomUUID()));
+    expect(() => service.reserveVoiceStream(scope, randomUUID())).toThrow("capacity");
+    for (const stream of streams) service.subscribe(scope, () => {}, stream);
+    expect((await emitFresh(service, scope, event(), "all-native-streams", "live"))?.voiceStreamIds).toEqual(streams.map(stream => stream.voiceStreamId));
+    const otherStream = service.reserveVoiceStream(other, randomUUID());
+    expect(() => service.subscribe(scope, () => {}, otherStream)).toThrow("reservation");
+    service.subscribe(other, () => {}, otherStream);
+    const foreignStream = service.reserveVoiceStream(foreign, randomUUID());
+    expect(() => service.subscribe(scope, () => {}, foreignStream)).toThrow("reservation");
+    service.subscribe(foreign, () => {}, foreignStream);
+    expect(() => service.subscribe(other, () => {}, otherStream)).toThrow("reservation");
+    streams[0]!.release(); streams[0]!.release();
+    const replacement = service.reserveVoiceStream(scope, randomUUID());
+    expect(() => service.reserveVoiceStream(scope, randomUUID())).toThrow("capacity");
+    const unsubscribe = service.subscribe(scope, () => {}, replacement);
+    unsubscribe(); unsubscribe();
+    service.reserveVoiceStream(scope, randomUUID()).release();
+    await service.close();
+    expect(() => service.reserveVoiceStream(scope, randomUUID())).toThrow("capacity");
+  });
+
+  it("releases failed and closed native streams without reviving an old reservation", () => {
+    const { service } = fixture();
+    const released = service.reserveVoiceStream(scope, randomUUID());
+    released.release();
+    expect(() => service.subscribe(scope, () => {}, released)).toThrow("reservation");
+    const failed = service.reserveVoiceStream(scope, randomUUID());
+    service.subscribe(scope, () => { throw new Error("stream closed"); }, failed);
+    expect(() => service.subscribe(scope, () => {}, failed)).toThrow("reservation");
+    const active = service.reserveVoiceStream(scope, randomUUID());
+    const frames: string[] = [];
+    service.subscribe(scope, frame => frames.push(frame), active);
+    active.release();
+    service.setSilenced(scope, true);
+    expect(frames).toHaveLength(1);
+  });
+
+  it("suppresses superseded turn voice without suppressing scripts or invoking recognition context", async () => {
+    vi.stubEnv("SEDES_DEBUG_DELIVERY", "1");
+    const diagnostics = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const { service, executor } = fixture();
+      enable(service);
+      const frames: string[] = [];
+      service.subscribe(scope, frame => frames.push(frame));
+      const context = vi.fn(() => ({}));
+      const captured = { userInputRevision: 4, superseded: true };
+      await service.emit(scope, event(), "superseded-turn", "live", undefined, context, undefined, captured);
+      await service.emit(scope, event(), "superseded-turn", "live", undefined, context, undefined, captured);
+      await flush();
+      expect(executor).toHaveBeenCalledOnce();
+      expect(voiceFrames(frames)).toEqual([]);
+      expect(context).not.toHaveBeenCalled();
+      const records = diagnostics.mock.calls.map(([line]) => JSON.parse(String(line).slice("[delivery-voice] ".length)));
+      expect(records).toContainEqual(expect.objectContaining({ event: "voice_decision", suppressionReason: "superseded_by_input" }));
+    } finally { diagnostics.mockRestore(); vi.unstubAllEnvs(); }
+  });
+
+  it("retains freshness authority on announce-only turns without a recognition target", async () => {
+    const { service } = fixture();
+    enable(service);
+    const frames: string[] = [];
+    service.subscribe(scope, frame => frames.push(frame));
+    await service.emit(scope, event(), "announce-only", "live", undefined, () => ({}), undefined,
+      { userInputRevision: 12, superseded: false });
+    const [voice] = voiceFrames(frames);
+    expect(voice).toMatchObject({ userInputRevision: 12, payload: { event: "turn.completed" } });
+    expect(voice).not.toHaveProperty("recognitionTarget");
+  });
+
+  it("fails turn voice closed when the early freshness capture is unavailable while retaining its script", async () => {
+    const { service, executor } = fixture();
+    enable(service);
+    const frames: string[] = [];
+    service.subscribe(scope, frame => frames.push(frame));
+    await service.emit(scope, event(), "uncaptured-turn", "live");
+    await flush();
+    expect(executor).toHaveBeenCalledOnce();
+    expect(voiceFrames(frames)).toEqual([]);
+  });
+
+  it.each(["turn.progress", "turn.partial"] as const)("suppresses superseded %s voice while retaining its independent script", async kind => {
+    const { service, executor } = fixture();
+    service.update(scope, { ...config, delivery: scriptDelivery([kind]) });
+    const frames: string[] = [];
+    service.subscribe(scope, frame => frames.push(frame));
+    const payload: NotificationEventPayload = kind === "turn.progress" ? progress() : {
+      ...progress(), event: kind, progress: { phase: "partial", itemId: "partial", text: "An early answer" },
+    };
+    await service.emit(scope, payload, "superseded-progress", "live", undefined, undefined, undefined,
+      { userInputRevision: 2, superseded: true });
+    await flush();
+    expect(executor).toHaveBeenCalledOnce();
+    expect(voiceFrames(frames)).toEqual([]);
+  });
+
+  it("requires a safe integer freshness revision on turn envelopes and forbids it on attention notices", () => {
+    const turn = { payload: { ...event(), schemaVersion: 5, notificationId: "notification" },
+      sourceEventId: "source", generation: 1, voice: "speak", userInputRevision: 0 };
+    expect(voiceNotificationSchema.safeParse(turn).success).toBe(true);
+    const { userInputRevision: _revision, ...missing } = turn;
+    expect(voiceNotificationSchema.safeParse(missing).success).toBe(false);
+    for (const userInputRevision of [-1, 0.5, "0", null, Number.MAX_SAFE_INTEGER + 1]) {
+      expect(voiceNotificationSchema.safeParse({ ...turn, userInputRevision }).success).toBe(false);
+    }
+    expect(voiceNotificationSchema.safeParse({ ...turn, userInputRevision: Number.MAX_SAFE_INTEGER }).success).toBe(true);
+    const attention = { ...missing, payload: { ...turn.payload, event: "input.requested", turn: undefined,
+      interaction: { id: "interaction", kind: "text_input" } } };
+    expect(voiceNotificationSchema.safeParse(attention).success).toBe(true);
+    expect(voiceNotificationSchema.safeParse({ ...attention, userInputRevision: 0 }).success).toBe(false);
+    const recognitionTarget = { threadId: "thread", activityToken: "token", sourceTurnId: "turn" };
+    expect(voiceNotificationSchema.safeParse({ ...turn, recognitionTarget }).success).toBe(true);
+    expect(voiceNotificationSchema.safeParse({ ...turn, recognitionTarget: { ...recognitionTarget, threadId: "foreign-thread" } }).success).toBe(false);
+  });
+
   it("migrates script selections without changing existing phases, silence or event consumption", () => {
     const { service, database, repository } = fixture();
     enable(service);
@@ -192,7 +350,7 @@ describe("notification settings and passive hooks", () => {
     service.subscribe(scope, frame => first.push(frame));
     expect(first[0]).toContain("event: notification_policy\n");
     service.update(scope, { ...config, scriptPath: "", delivery: scriptDelivery([]) });
-    service.emit(scope, event(), "voice-only", "live");
+    emitFresh(service, scope, event(), "voice-only", "live");
     expect(first.map(frame => frame.split("\n")[0])).toEqual([
       "event: notification_policy", "event: notification_policy", "event: notification",
     ]);
@@ -203,9 +361,9 @@ describe("notification settings and passive hooks", () => {
     expect(later.mock.calls[0]![0]).toContain("event: notification_policy");
     expect(executor).not.toHaveBeenCalled();
     service.setSilenced(scope, true);
-    service.emit(scope, event(1002), "muted", "live");
+    emitFresh(service, scope, event(1002), "muted", "live");
     service.setSilenced(scope, false);
-    service.emit(scope, event(1002), "muted", "live");
+    emitFresh(service, scope, event(1002), "muted", "live");
     expect(first.filter(frame => frame.startsWith("event: notification\n"))).toHaveLength(1);
   });
 
@@ -220,17 +378,17 @@ describe("notification settings and passive hooks", () => {
         ...event(), event: `turn.${outcome}`, turn: { id: "turn", outcome },
       };
       const context = vi.fn(() => ({}));
-      await service.emit(scope, recovered, "recovered", "recovered", undefined, context);
+      await emitFresh(service, scope, recovered, "recovered", "recovered", undefined, context);
       await flush();
       expect(executor).toHaveBeenCalledOnce();
       expect(voiceFrames(frames)).toHaveLength(0);
       expect(context).not.toHaveBeenCalled();
-      await service.emit(scope, recovered, "recovered", "live", undefined, context);
+      await emitFresh(service, scope, recovered, "recovered", "live", undefined, context);
       await flush();
       expect(executor).toHaveBeenCalledOnce();
       expect(voiceFrames(frames)).toHaveLength(0);
       expect(context).not.toHaveBeenCalled();
-      await service.emit(scope, recovered, "new-live", "live", undefined, context);
+      await emitFresh(service, scope, recovered, "new-live", "live", undefined, context);
       expect(voiceFrames(frames)).toHaveLength(1);
       expect(context).toHaveBeenCalledOnce();
     },
@@ -240,13 +398,13 @@ describe("notification settings and passive hooks", () => {
     const { service, executor } = fixture();
     service.update(scope, { ...config, delivery: scriptDelivery([]) });
     const context = vi.fn(() => ({}));
-    await service.emit(scope, event(), "offline", "live", undefined, context);
+    await emitFresh(service, scope, event(), "offline", "live", undefined, context);
     const frames: string[] = [];
     service.subscribe(scope, frame => frames.push(frame));
-    await service.emit(scope, event(), "offline", "live", undefined, context);
+    await emitFresh(service, scope, event(), "offline", "live", undefined, context);
     expect(voiceFrames(frames)).toHaveLength(0);
     expect(context).not.toHaveBeenCalled();
-    await service.emit(scope, event(), "online", "live", undefined, context);
+    await emitFresh(service, scope, event(), "online", "live", undefined, context);
     expect(voiceFrames(frames)).toHaveLength(1);
     expect(executor).not.toHaveBeenCalled();
   });
@@ -259,7 +417,7 @@ describe("notification settings and passive hooks", () => {
     const watermark = service.captureSubscriberWatermark();
     service.subscribe(scope, frame => later.push(frame));
 
-    await service.emit(scope, event(), "captured-audience", "live", undefined, undefined, watermark);
+    await emitFresh(service, scope, event(), "captured-audience", "live", undefined, undefined, watermark);
     expect(voiceFrames(earlier)).toHaveLength(1);
     expect(voiceFrames(later)).toHaveLength(0);
     expect(later).toHaveLength(1);
@@ -280,7 +438,7 @@ describe("notification settings and passive hooks", () => {
     service.subscribe(scope, frame => later.push(frame));
     service.subscribe(other, frame => unrelated.push(frame));
 
-    await service.emit(scope, progress(), "unwatermarked-progress", "live");
+    await emitFresh(service, scope, progress(), "unwatermarked-progress", "live");
     expect(voiceFrames(earlier)).toHaveLength(1);
     expect(voiceFrames(later)).toHaveLength(1);
     expect(voiceFrames(unrelated)).toHaveLength(0);
@@ -298,7 +456,7 @@ describe("notification settings and passive hooks", () => {
       service.subscribe(scope, frame => frames.push(frame));
       const context = vi.fn(() => ({}));
 
-      await service.emit(scope, event(), "empty-audience", "live", undefined, context, watermark);
+      await emitFresh(service, scope, event(), "empty-audience", "live", undefined, context, watermark);
       expect(voiceFrames(frames)).toHaveLength(0);
       expect(context).not.toHaveBeenCalled();
       const records = output.mock.calls.map(([line]) => JSON.parse(String(line).slice("[delivery-voice] ".length)));
@@ -319,8 +477,8 @@ describe("notification settings and passive hooks", () => {
       const { service } = fixture();
       service.update(scope, { ...config, delivery: scriptDelivery([]) });
       service.subscribe(scope, () => {});
-      await service.emit(scope, { ...event(), message: "private text" }, "private event key", "recovered");
-      await service.emit(scope, event(), "live event key", "live");
+      await emitFresh(service, scope, { ...event(), message: "private text" }, "private event key", "recovered");
+      await emitFresh(service, scope, event(), "live event key", "live");
       const records = output.mock.calls.map(([line]) => JSON.parse(String(line).slice("[delivery-voice] ".length)));
       expect(records).toContainEqual(expect.objectContaining({
         event: "voice_decision", provenance: "recovered", claimed: true,
@@ -344,7 +502,7 @@ describe("notification settings and passive hooks", () => {
     const speech = vi.fn(), wrongScope = vi.fn();
     service.subscribe(scope, speech);
     service.subscribe(other, wrongScope);
-    for (let index = 0; index < 100; index++) service.emit(scope, event(1001 + index), `burst-${index}`, "live");
+    for (let index = 0; index < 100; index++) emitFresh(service, scope, event(1001 + index), `burst-${index}`, "live");
     await flush();
     expect(speech).toHaveBeenCalledTimes(101);
     expect(wrongScope).toHaveBeenCalledOnce();
@@ -362,7 +520,7 @@ describe("notification settings and passive hooks", () => {
     const disconnect = service.subscribe(scope, departed);
     let settle!: (target: VoiceRecognitionTarget | undefined) => void;
     const settlement = new Promise<VoiceRecognitionTarget | undefined>(resolve => { settle = resolve; });
-    service.emit(scope, event(), "deferred", "live", undefined, () => ({ settlement }));
+    emitFresh(service, scope, event(), "deferred", "live", undefined, () => ({ settlement }));
     disconnect();
     service.subscribe(scope, later);
     settle({ threadId: "thread", activityToken: "original-token", sourceTurnId: "turn" });
@@ -372,7 +530,7 @@ describe("notification settings and passive hooks", () => {
     expect(departed).toHaveBeenCalledOnce();
     expect(later).toHaveBeenCalledOnce();
     let settleOld!: (target: VoiceRecognitionTarget | undefined) => void;
-    service.emit(scope, event(1003), "obsolete", "live", undefined, () => ({ settlement: new Promise(resolve => { settleOld = resolve; }) }));
+    emitFresh(service, scope, event(1003), "obsolete", "live", undefined, () => ({ settlement: new Promise(resolve => { settleOld = resolve; }) }));
     service.setSilenced(scope, true);
     settleOld({ threadId: "thread", activityToken: "obsolete" });
     await flush();
@@ -391,7 +549,7 @@ describe("notification settings and passive hooks", () => {
     expect(onError.mock.calls).toEqual([["Notification policy could not be read; voice notifications are unavailable on this stream."]]);
     expect(() => unsubscribe()).not.toThrow();
     database.prepare("UPDATE principal_notification_settings SET config_json = ?").run(saved);
-    service.emit(scope, event(), "after-repair", "live");
+    emitFresh(service, scope, event(), "after-repair", "live");
     await flush();
     expect(executor).toHaveBeenCalledOnce();
     expect(listener).not.toHaveBeenCalled();
@@ -403,14 +561,14 @@ describe("notification settings and passive hooks", () => {
     const frames: string[] = [];
     service.subscribe(scope, frame => frames.push(frame));
     const context = vi.fn(() => ({ origin: { clientId: "phone" } }));
-    service.emit(scope, progress(), "progress-key", "live", undefined, context);
+    emitFresh(service, scope, progress(), "progress-key", "live", undefined, context);
     await flush();
     expect(executor).toHaveBeenCalledOnce();
     const payload = executor.mock.calls[0]![0].payload;
     expect(payload).toEqual({ ...progress(), schemaVersion: 5, notificationId: expect.any(String) });
     expect(notificationPayloadSchema.parse(payload)).toEqual(payload);
     expect(voiceFrames(frames)).toEqual([{
-      payload, voice: "speak", generation: expect.any(Number), origin: { clientId: "phone" },
+      payload, voice: "speak", generation: expect.any(Number), origin: { clientId: "phone" }, userInputRevision: 0,
       sourceEventId: createHash("sha256").update("progress-key").digest("hex"),
     }]);
     expect(context).toHaveBeenCalledOnce();
@@ -424,8 +582,8 @@ describe("notification settings and passive hooks", () => {
     service.subscribe(scope, frame => frames.push(frame));
     const partial: NotificationEventPayload = { ...progress(), event: "turn.partial",
       progress: { phase: "partial", itemId: "partial-1", text: "First substantive answer." } };
-    service.emit(scope, partial, "partial-item", "live");
-    service.emit(scope, partial, "partial-item", "live");
+    emitFresh(service, scope, partial, "partial-item", "live");
+    emitFresh(service, scope, partial, "partial-item", "live");
     await flush();
     expect(executor).toHaveBeenCalledOnce();
     expect(voiceFrames(frames)).toEqual([expect.objectContaining({ voice: "speak",
@@ -433,15 +591,15 @@ describe("notification settings and passive hooks", () => {
     expect(voiceFrames(frames)[0]).not.toHaveProperty("recognitionTarget");
     expect(executor.mock.calls[0]![0].payload).not.toHaveProperty("assistantResult");
     const result = { provisional: null, partial: { text: "First substantive answer." }, final: { text: "Finished." }, unclassified: null };
-    service.emit(scope, event(1002), "completion", "live", result);
+    emitFresh(service, scope, event(1002), "completion", "live", result);
     await flush();
     expect(executor).toHaveBeenCalledTimes(2);
     expect(voiceFrames(frames).map(frame => frame.payload.event)).toEqual(["turn.partial", "turn.completed"]);
     expect(executor.mock.calls[1]![0].payload.assistantResult).toEqual({ partial: result.partial, final: result.final });
     const reconnected: string[] = [];
     service.subscribe(scope, frame => reconnected.push(frame));
-    service.emit(scope, partial, "partial-item", "live");
-    service.emit(scope, event(1002), "completion", "recovered", result);
+    emitFresh(service, scope, partial, "partial-item", "live");
+    emitFresh(service, scope, event(1002), "completion", "recovered", result);
     await flush();
     expect(executor).toHaveBeenCalledTimes(2);
     expect(voiceFrames(reconnected)).toEqual([]);
@@ -455,17 +613,17 @@ describe("notification settings and passive hooks", () => {
       progress: { phase: "partial", itemId: "partial-1", text: "Answer so far." } };
     expect(service.read(scope).delivery["turn.partial"]).toEqual({ script: false, voice: "none" });
     service.update(scope, { ...config, delivery: scriptDelivery(["turn.progress"]) });
-    service.emit(scope, partial, "disabled-partial", "live");
-    service.emit(scope, progress(), "enabled-progress", "live");
+    emitFresh(service, scope, partial, "disabled-partial", "live");
+    emitFresh(service, scope, progress(), "enabled-progress", "live");
     await flush();
     expect(executor.mock.calls.map(call => call[0].payload.event)).toEqual(["turn.progress"]);
     expect(voiceFrames(frames).map(frame => frame.payload.event)).toEqual(["turn.progress"]);
     service.update(scope, { ...config, expectedRevision: 1, delivery: {
       ...scriptDelivery([]), "turn.progress": { script: false, voice: "none" }, "turn.partial": { script: true, voice: "speak" },
     } });
-    service.emit(scope, partial, "disabled-partial", "live");
-    service.emit(scope, progress(), "now-disabled-progress", "live");
-    service.emit(scope, partial, "enabled-partial", "live");
+    emitFresh(service, scope, partial, "disabled-partial", "live");
+    emitFresh(service, scope, progress(), "now-disabled-progress", "live");
+    emitFresh(service, scope, partial, "enabled-partial", "live");
     await flush();
     expect(executor.mock.calls.map(call => call[0].payload.event)).toEqual(["turn.progress", "turn.partial"]);
     expect(voiceFrames(frames).map(frame => frame.payload.event)).toEqual(["turn.progress", "turn.partial"]);
@@ -478,7 +636,7 @@ describe("notification settings and passive hooks", () => {
     expect(notificationPayloadSchema.safeParse({ ...payload, progress: { ...payload.progress, phase: phase === "partial" ? "provisional" : "partial" } }).success).toBe(false);
     expect(notificationPayloadSchema.safeParse({ ...payload, progress: undefined }).success).toBe(false);
     expect(notificationPayloadSchema.safeParse({ ...payload, event: "turn.completed" }).success).toBe(false);
-    const voice = { payload, voice: "speak", sourceEventId: "event", generation: 1 };
+    const voice = { payload, voice: "speak", sourceEventId: "event", generation: 1, userInputRevision: 0 };
     expect(voiceNotificationSchema.safeParse(voice).success).toBe(true);
     expect(voiceNotificationSchema.safeParse({ ...voice, voice: "speakThenListen" }).success).toBe(false);
   });
@@ -491,7 +649,7 @@ describe("notification settings and passive hooks", () => {
     service.update(scope, { ...config, delivery: scriptDelivery(["turn.progress"]) });
     const frames: string[] = [];
     service.subscribe(scope, frame => frames.push(frame));
-    service.emit(scope, { ...progress(source), message: "m".repeat(50_000) }, "large-progress", "live");
+    emitFresh(service, scope, { ...progress(source), message: "m".repeat(50_000) }, "large-progress", "live");
     await flush();
     const payload = executor.mock.calls[0]![0].payload;
     const text = payload.progress!.text;
@@ -511,7 +669,7 @@ describe("notification settings and passive hooks", () => {
     service.update(scope, { ...config, delivery: scriptDelivery(["turn.progress"]) });
     const frames: string[] = [];
     service.subscribe(scope, frame => frames.push(frame));
-    service.emit(scope, { ...progress(), message: "m".repeat(65_536) }, "oversized-metadata", "live");
+    emitFresh(service, scope, { ...progress(), message: "m".repeat(65_536) }, "oversized-metadata", "live");
     await flush();
     expect(executor).not.toHaveBeenCalled();
     expect(voiceFrames(frames)).toEqual([]);
@@ -527,7 +685,7 @@ describe("notification settings and passive hooks", () => {
     service.update(scope, { ...config, delivery: scriptDelivery(["turn.progress"]) });
     const frames: string[] = [];
     service.subscribe(scope, frame => frames.push(frame));
-    service.emit(scope, payload, "voice-failure", "live", undefined, context);
+    emitFresh(service, scope, payload, "voice-failure", "live", undefined, context);
     await flush();
     expect(executor).toHaveBeenCalledOnce();
     expect(executor.mock.calls[0]![0].payload.progress).toEqual(payload.progress);
@@ -547,23 +705,23 @@ describe("notification settings and passive hooks", () => {
     };
     const voiceOnly = { ...config, scriptPath: "", assistantResultPhases: ["final"] as NotificationAssistantResultPhase[], delivery: scriptDelivery([]) };
     service.update(scope, { ...voiceOnly, enabled: false });
-    service.emit(scope, event(1001), "disabled", "live", unread, context);
+    emitFresh(service, scope, event(1001), "disabled", "live", unread, context);
     service.update(scope, { ...voiceOnly, expectedRevision: 1 });
-    service.emit(scope, event(1002), "no-recipient", "live", unread, context);
+    emitFresh(service, scope, event(1002), "no-recipient", "live", unread, context);
     const frames: string[] = [];
     service.subscribe(scope, frame => frames.push(frame));
     service.update(scope, { ...voiceOnly, expectedRevision: 2, delivery: { ...scriptDelivery([]), "turn.completed": { script: false, voice: "none" } } });
-    service.emit(scope, event(1003), "voice-none", "live", unread, context);
+    emitFresh(service, scope, event(1003), "voice-none", "live", unread, context);
     service.update(scope, { ...voiceOnly, expectedRevision: 3 });
     service.setSilenced(scope, true);
-    service.emit(scope, event(1004), "silenced", "live", unread, context);
+    emitFresh(service, scope, event(1004), "silenced", "live", unread, context);
     service.setSilenced(scope, false);
-    service.emit(scope, event(1004), "silenced", "live", unread, context);
+    emitFresh(service, scope, event(1004), "silenced", "live", unread, context);
     expect(context).not.toHaveBeenCalled();
     expect(onError).not.toHaveBeenCalled();
     service.update(scope, { ...voiceOnly, expectedRevision: 4, assistantResultPhases: [] });
-    service.emit(scope, event(1005), "admitted", "live", unread, context);
-    service.emit(scope, event(1005), "admitted", "live", unread, context);
+    emitFresh(service, scope, event(1005), "admitted", "live", unread, context);
+    emitFresh(service, scope, event(1005), "admitted", "live", unread, context);
     await flush();
     expect(context).toHaveBeenCalledOnce();
     expect(voiceFrames(frames).map(frame => frame.voice)).toEqual(["speakThenListen"]);
@@ -670,7 +828,7 @@ describe("notification settings and passive hooks", () => {
         throw new Error("must not inspect response");
       },
     };
-    service.emit(scope, event(), "opt-out", "live", result);
+    emitFresh(service, scope, event(), "opt-out", "live", result);
     await flush();
     expect(executor).toHaveBeenCalledOnce();
     expect(executor.mock.calls[0]![0].payload).not.toHaveProperty(
@@ -698,7 +856,7 @@ describe("notification settings and passive hooks", () => {
       assistantResultPhases: ["final"],
     });
     const classified = { partial: null, provisional: null, final: result, unclassified: null };
-    service.emit(scope, event(), "included", "live", classified);
+    emitFresh(service, scope, event(), "included", "live", classified);
     await flush();
     expect(executor.mock.calls[0]![0].payload.assistantResult).toEqual(
       { final: result },
@@ -719,7 +877,7 @@ describe("notification settings and passive hooks", () => {
       assistantResultPhases,
     });
     const result = { partial: { text: "Partial answer" }, provisional: { text: "Progress" }, final: null, unclassified: { text: "Unknown" } };
-    service.emit(scope, event(), "selection", "live", result);
+    emitFresh(service, scope, event(), "selection", "live", result);
     await flush();
     const payload = executor.mock.calls[0]![0].payload;
     if (assistantResultPhases.length === 0) {
@@ -741,7 +899,7 @@ describe("notification settings and passive hooks", () => {
       final,
       get unclassified(): BoundedText { throw new Error("must not read unclassified"); },
     };
-    service.emit(scope, event(), "selected-only", "live", result);
+    emitFresh(service, scope, event(), "selected-only", "live", result);
     final.text = "Changed after completion";
     await flush();
     expect(executor).toHaveBeenCalledOnce();
@@ -759,7 +917,7 @@ describe("notification settings and passive hooks", () => {
       get final(): BoundedText { throw new Error("must not inspect"); },
       get unclassified(): BoundedText { throw new Error("must not inspect"); },
     };
-    service.emit(scope, event(), "empty-selection", "live", result);
+    emitFresh(service, scope, event(), "empty-selection", "live", result);
     await flush();
     expect(executor).toHaveBeenCalledOnce();
     expect(executor.mock.calls[0]![0].payload).not.toHaveProperty("assistantResult");
@@ -774,7 +932,7 @@ describe("notification settings and passive hooks", () => {
         delivery: scriptDelivery([kind]),
         assistantResultPhases: ["final"],
       });
-      service.emit(scope, { ...event(), event: kind }, "other-kind", "live", {
+      emitFresh(service, scope, { ...event(), event: kind }, "other-kind", "live", {
         partial: null, provisional: null, final: { text: "Private response" }, unclassified: null,
       });
       await flush();
@@ -806,7 +964,7 @@ describe("notification settings and passive hooks", () => {
           originalBytes: 90_000,
         },
       };
-      service.emit(
+      emitFresh(service,
         scope,
         { ...event(), message: "m".repeat(45_000) },
         "large-response", "live",
@@ -843,7 +1001,7 @@ describe("notification settings and passive hooks", () => {
     service.update(scope, {
       ...config, delivery: config.delivery, assistantResultPhases: ["provisional", "final", "unclassified"],
     });
-    service.emit(scope, { ...event(), message: "m".repeat(60_000) }, "priority", "live", {
+    emitFresh(service, scope, { ...event(), message: "m".repeat(60_000) }, "priority", "live", {
       partial: { text: "Substantive answer" }, final: { text: "Final answer" }, provisional: { text: "p".repeat(10_000) }, unclassified: { text: "u".repeat(10_000) },
     });
     await flush();
@@ -870,7 +1028,7 @@ describe("notification settings and passive hooks", () => {
         notificationId: "0".repeat(36),
       }),
     );
-    service.emit(
+    emitFresh(service,
       scope,
       { ...metadata, message: "m".repeat(65_536 - overhead) },
       "full-metadata", "live",
@@ -890,7 +1048,7 @@ describe("notification settings and passive hooks", () => {
       delivery: config.delivery,
       assistantResultPhases: ["final"],
     });
-    service.emit(scope, event(), "pending", "live", { partial: null, provisional: null, final: { text: "Private response" }, unclassified: null });
+    emitFresh(service, scope, event(), "pending", "live", { partial: null, provisional: null, final: { text: "Private response" }, unclassified: null });
     service.update(scope, {
       ...config,
       delivery: config.delivery,
@@ -898,7 +1056,7 @@ describe("notification settings and passive hooks", () => {
     });
     await flush();
     expect(executor).not.toHaveBeenCalled();
-    service.emit(scope, event(1002), "new", "live", { partial: null, provisional: null, final: { text: "Private response" }, unclassified: null });
+    emitFresh(service, scope, event(1002), "new", "live", { partial: null, provisional: null, final: { text: "Private response" }, unclassified: null });
     await flush();
     expect(executor).toHaveBeenCalledOnce();
     expect(executor.mock.calls[0]![0].payload).not.toHaveProperty(
@@ -914,7 +1072,7 @@ describe("notification settings and passive hooks", () => {
     const result = {
       partial: null, provisional: { text: "Progress" }, final: { text: "Done" }, unclassified: null,
     };
-    service.emit(scope, event(), "queued-selection", "live", result);
+    emitFresh(service, scope, event(), "queued-selection", "live", result);
     // A repository-level update also invalidates pending work in the service.
     repository.update(scope, {
       ...config, expectedRevision: 1, delivery: config.delivery,
@@ -922,8 +1080,8 @@ describe("notification settings and passive hooks", () => {
     }, 1000);
     await flush();
     expect(executor).not.toHaveBeenCalled();
-    service.emit(scope, event(), "queued-selection", "live", result);
-    service.emit(scope, event(1002), "new-selection", "live", result);
+    emitFresh(service, scope, event(), "queued-selection", "live", result);
+    emitFresh(service, scope, event(1002), "new-selection", "live", result);
     await flush();
     expect(executor).toHaveBeenCalledOnce();
     expect(executor.mock.calls[0]![0].payload.assistantResult).toEqual({
@@ -1032,8 +1190,8 @@ describe("notification settings and passive hooks", () => {
       .mockResolvedValue({ ...success, success: false, exitCode: 1 });
     const { service } = fixture(executor);
     enable(service);
-    service.emit(scope, event(), "one", "live");
-    service.emit(scope, event(), "one", "live");
+    emitFresh(service, scope, event(), "one", "live");
+    emitFresh(service, scope, event(), "one", "live");
     await flush();
     expect(executor).toHaveBeenCalledTimes(1);
     expect(executor.mock.calls[0]![0]).toMatchObject({
@@ -1045,7 +1203,7 @@ describe("notification settings and passive hooks", () => {
         notificationId: expect.any(String),
       },
     });
-    service.emit(scope, event(), "one", "live");
+    emitFresh(service, scope, event(), "one", "live");
     await flush();
     expect(executor).toHaveBeenCalledTimes(1);
   });
@@ -1053,18 +1211,18 @@ describe("notification settings and passive hooks", () => {
   it("suppresses historical events, muted events and pending work without a resume backlog", async () => {
     const { service, executor, setNow } = fixture();
     enable(service);
-    service.emit(scope, event(999), "historical", "live");
-    service.emit(scope, event(1001), "pending", "live");
+    emitFresh(service, scope, event(999), "historical", "live");
+    emitFresh(service, scope, event(1001), "pending", "live");
     service.setSilenced(scope, true);
-    service.emit(scope, event(1002), "muted", "live");
+    emitFresh(service, scope, event(1002), "muted", "live");
     setNow(1003);
     service.setSilenced(scope, false);
     await flush();
-    service.emit(scope, event(1002), "muted", "live");
-    service.emit(scope, event(1001), "pending", "live");
+    emitFresh(service, scope, event(1002), "muted", "live");
+    emitFresh(service, scope, event(1001), "pending", "live");
     await flush();
     expect(executor).not.toHaveBeenCalled();
-    service.emit(scope, event(1004), "new", "live");
+    emitFresh(service, scope, event(1004), "new", "live");
     await flush();
     expect(executor).toHaveBeenCalledTimes(1);
   });
@@ -1072,7 +1230,7 @@ describe("notification settings and passive hooks", () => {
   it("discards pending work on config edits and never sends events to a replacement script", async () => {
     const { service, executor } = fixture();
     enable(service);
-    service.emit(scope, event(), "old", "live");
+    emitFresh(service, scope, event(), "old", "live");
     service.update(scope, {
       ...config,
       delivery: config.delivery,
@@ -1081,7 +1239,7 @@ describe("notification settings and passive hooks", () => {
     });
     await flush();
     expect(executor).not.toHaveBeenCalled();
-    service.emit(scope, event(), "old", "live");
+    emitFresh(service, scope, event(), "old", "live");
     await flush();
     expect(executor).not.toHaveBeenCalled();
   });
@@ -1102,7 +1260,7 @@ describe("notification settings and passive hooks", () => {
     const { service } = fixture(executor);
     enable(service);
     for (let index = 0; index < 100; index += 1)
-      service.emit(scope, event(), String(index), "live");
+      emitFresh(service, scope, event(), String(index), "live");
     await flush();
     expect(executor).toHaveBeenCalledTimes(4);
     service.setSilenced(scope, true);
@@ -1163,13 +1321,13 @@ describe("notification settings and passive hooks", () => {
     disposals.push(() => service.close());
     enable(service);
     expect(() =>
-      service.emit(
+      emitFresh(service,
         { tenantId: "missing", principalId: "missing" },
         event(),
         "wrong-scope", "live",
       ),
     ).not.toThrow();
-    service.emit(scope, event(), "failed", "live");
+    emitFresh(service, scope, event(), "failed", "live");
     await flush();
     expect(executor).toHaveBeenCalledTimes(1);
     expect(onError).toHaveBeenCalledTimes(2);

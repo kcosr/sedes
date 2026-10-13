@@ -14,11 +14,11 @@ User-facing changes are collected here before release. See the
   ([#73](https://github.com/kcosr/sedes/pull/73))
 
 - Upgrade browser and packaged clients together with the server for client
-  protocol **151**. Rebuild and upgrade execution sidecars and local workers;
+  protocol **153**. Rebuild and upgrade execution sidecars and local workers;
   older compiled runtime contracts are rejected. Notification scripts now use
   payload version **5**: update separately copied hooks with the server and
   review Script/Voice event and reply-phase settings.
-  ([#9](https://github.com/kcosr/sedes/pull/9), [#10](https://github.com/kcosr/sedes/pull/10), [#12](https://github.com/kcosr/sedes/pull/12), [#15](https://github.com/kcosr/sedes/pull/15), [#17](https://github.com/kcosr/sedes/pull/17), [#38](https://github.com/kcosr/sedes/pull/38), [#44](https://github.com/kcosr/sedes/pull/44), [#45](https://github.com/kcosr/sedes/pull/45), [#73](https://github.com/kcosr/sedes/pull/73), [#75](https://github.com/kcosr/sedes/pull/75))
+  ([#9](https://github.com/kcosr/sedes/pull/9), [#10](https://github.com/kcosr/sedes/pull/10), [#12](https://github.com/kcosr/sedes/pull/12), [#15](https://github.com/kcosr/sedes/pull/15), [#17](https://github.com/kcosr/sedes/pull/17), [#38](https://github.com/kcosr/sedes/pull/38), [#44](https://github.com/kcosr/sedes/pull/44), [#45](https://github.com/kcosr/sedes/pull/45), [#73](https://github.com/kcosr/sedes/pull/73), [#75](https://github.com/kcosr/sedes/pull/75), [#77](https://github.com/kcosr/sedes/pull/77))
 
 - Claude requires Claude Code **2.1.287 or newer** on every execution host
   and uses Agent SDK 0.3.287. See the
@@ -122,6 +122,17 @@ User-facing changes are collected here before release. See the
 
 ### Changed
 
+- Automatic turn voice notices skip speech and follow-up recording when a newer
+  message has been sent in the same thread. See [voice behavior](docs/operator/clients/voice.md).
+  ([#77](https://github.com/kcosr/sedes/pull/77))
+
+- Agent-requested listening waits for playback and uses the requested thread
+  even with Auto-listen off. Background handoffs preserve the viewed thread and
+  draft, and announce their destination when recording-thread announcements are
+  enabled. Stop and superseded source replies cancel pending handoffs.
+  See [agent voice controls](docs/operator/clients/voice.md#agent-controls).
+  ([#77](https://github.com/kcosr/sedes/pull/77))
+
 - Images, Mermaid diagrams, and HTML previews share compact fullscreen
   [zoom controls](docs/user/files-and-context.md#view-images-and-diagrams).
   Images and diagrams support inline pinch zoom and pan, and images use the
@@ -172,6 +183,9 @@ User-facing changes are collected here before release. See the
   ([#73](https://github.com/kcosr/sedes/pull/73))
 
 ### Fixed
+
+- HTML previews publish successfully from workspace files even when downloads
+  complete immediately. ([#77](https://github.com/kcosr/sedes/pull/77))
 
 - Automation details link consistently to the Automations list and expose
   **Open thread** beside it. Queue/Steer choices open directly above their button.

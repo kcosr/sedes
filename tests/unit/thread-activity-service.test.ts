@@ -89,6 +89,20 @@ describe("thread activity authority", { timeout: 30_000 }, () => {
     } finally { activity.close(); }
   });
 
+  it("requires a safe integer user-input revision independently of runtime authority", async () => {
+    const { activity } = service(() => undefined);
+    try {
+      const context = await activity.capture(h.scope, threadId);
+      expect(context.userInputRevision).toBe(1);
+      const { userInputRevision: _revision, ...missing } = context;
+      expect(threadInputContextSchema.safeParse(missing).success).toBe(false);
+      for (const userInputRevision of [-1, 0.5, "1", null, Number.MAX_SAFE_INTEGER + 1]) {
+        expect(threadInputContextSchema.safeParse({ ...context, userInputRevision }).success).toBe(false);
+      }
+      expect(threadInputContextSchema.safeParse({ ...context, userInputRevision: Number.MAX_SAFE_INTEGER }).success).toBe(true);
+    } finally { activity.close(); }
+  });
+
   it.each(["unbound", "dormant", "current", "refused"] as const)("refreshes the scoped %s thread title without changing input authority or attaching a provider", async state => {
     const id = state === "unbound" ? (await h.lifecycle.createServerDraft(h.scope, {
       workspaceId: h.workspaceRecord.id, connectionProfileId: h.connection.id,

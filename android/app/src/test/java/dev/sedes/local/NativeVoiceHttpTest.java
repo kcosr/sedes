@@ -21,15 +21,22 @@ public class NativeVoiceHttpTest {
         BlockingQueue<String> events = new LinkedBlockingQueue<>();
         try (ServerSocket server = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
             server.setSoTimeout(5000);
-            Call call = new NativeVoiceHttp().events("http://127.0.0.1:" + server.getLocalPort(), null, new NativeVoiceHttp.Stream() {
+            String origin = "http://127.0.0.1:" + server.getLocalPort();
+            String stream = "2f6b360b-d9f1-4311-a239-6bfa129c2bd6";
+            NativeVoiceHttp http = new NativeVoiceHttp();
+            http.clientRegistration(origin, null, "native-connection");
+            Call call = http.events(origin, null, stream, new NativeVoiceHttp.Stream() {
                 public void live() { events.add("live"); }
                 public void frame(String event, JSONObject value) { events.add(event + ":" + value.optLong("generation")); }
                 public void closed(String failure) { events.add("closed:" + failure); }
             });
             try (Socket socket = server.accept()) {
                 BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.US_ASCII));
-                String request = in.readLine(); assertTrue(request, request.startsWith("GET /api/application/events "));
-                for (String line = in.readLine(); line != null && !line.isEmpty(); line = in.readLine()) {}
+                String request = in.readLine(); assertTrue(request, request.startsWith("GET /api/application/events?voiceStreamId=" + stream + " "));
+                boolean registered = false;
+                for (String line = in.readLine(); line != null && !line.isEmpty(); line = in.readLine())
+                    if (line.equals("X-Sedes-Client: native-connection")) registered = true;
+                assertFalse("Notification streams must survive control registration loss", registered);
                 OutputStream out = socket.getOutputStream();
                 out.write(("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream; charset=utf-8\r\nConnection: close\r\n\r\n" +
                     "event: application\nid: 1\ndata: {\"type\":\"snapshot\"}\n\n").getBytes(StandardCharsets.UTF_8)); out.flush();

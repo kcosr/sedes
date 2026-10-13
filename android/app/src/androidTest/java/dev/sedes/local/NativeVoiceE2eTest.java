@@ -350,7 +350,7 @@ public class NativeVoiceE2eTest {
                     String retarget = "button[aria-label^=\"Change recording thread\"]:not(:disabled):not([aria-disabled=\"true\"])";
                     waitJs("document.querySelector(" + JSONObject.quote(retarget) + ") !== null", 15000);
                     click(retarget);
-                    clickTextIn("[role=\"dialog\"] ul[aria-label=\"Voice threads\"]", args.getString("secondThreadTitle", second));
+                    clickTextIn("[role=\"dialog\"] ul[aria-label=\"Threads\"]", args.getString("secondThreadTitle", second));
                     await(() -> second.equals(runtime.snapshot().optJSONObject("active").optString("recognitionThreadId")), 10000, "retarget applied");
                     screenshot("retargeted");
                 }
@@ -462,7 +462,8 @@ public class NativeVoiceE2eTest {
             else assertTrue("Capture did not traverse the deterministic audio source", supplied.get() > 0);
             if (scenario.equals("cycle") || scenario.equals("record") || scenario.equals("background-switch")) {
                 assertTrue(runtime.snapshot().getJSONObject("settings").getBoolean("announceRecordingThread"));
-                assertFalse("Only idle notification or headset starts announce the target", phases.contains("announcing"));
+                assertEquals("Explicit background agent starts announce; automatic and playback-reply starts stay silent",
+                    scenario.equals("background-switch"), phases.contains("announcing"));
             }
             if (mode.equals("speak") && !scenario.equals("stop")) assertTrue("No actual AudioTrack playback phase", phases.contains("speaking"));
             // Report observations, not expectations; the host harness asserts them.

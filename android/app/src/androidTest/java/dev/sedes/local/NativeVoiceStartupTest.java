@@ -202,7 +202,7 @@ public class NativeVoiceStartupTest {
                 f.runtime.nativeVisibility(true); f.flush();
                 if (mode.equals("off")) assertTrue(f.starts.isEmpty());
                 else assertTrue(f.accepted(f.start()));
-                NativeVoiceJson.put(command, "action", "turn_settled"); NativeVoiceJson.put(command, "replyEventId", null);
+                NativeVoiceJson.put(command, "action", "turn_settled"); NativeVoiceJson.put(command, "replyEventId", null); NativeVoiceJson.put(command, "replyStreamIds", new org.json.JSONArray());
                 assertEquals("superseded", f.clientCommand(command).getString("reason"));
                 assertTrue("Restoring a saved mode must not replay the rejected recognition", f.runtime.snapshot().isNull("active"));
             }
@@ -395,8 +395,8 @@ public class NativeVoiceStartupTest {
         Object navigation = new Object();
         JSONObject command = new JSONObject("{\"id\":\"action\",\"action\":\"switch_thread\",\"sourceThreadId\":\"source\",\"sourceTurnId\":\"turn\",\"replyEventId\":null,\"expiresAt\":120000}");
         queue.stage(command, navigation, false, 0);
-        queue.settle("action", NativeVoiceJson.nullableString(command, "replyEventId", 128), 120000);
-        assertEquals(1, queue.takeReady(1, true, null, null, navigation).size());
+        queue.settle("action", NativeVoiceJson.nullableString(command, "replyEventId", 128), null, 120000);
+        assertEquals(1, queue.takeReady(1, true, "stream", false, null, null, navigation, id -> false).size());
     }
 
     @Test public void clientPollRefreshesSessionAndResumesIdentityAfterCsrfRejection() throws Exception {

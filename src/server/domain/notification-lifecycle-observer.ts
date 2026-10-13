@@ -8,6 +8,7 @@ import type {
 import type { SubmissionCompletionObservationRecord } from "../db/repositories/submission-completion-repository.js";
 import { SubmissionCompletionRepository } from "../db/repositories/submission-completion-repository.js";
 import type { LiveProgressObserver } from "../conversations/conversation-actor-manager.js";
+import type { ResponseVoiceFreshness } from "../conversations/response-voice-freshness.js";
 import type { RequestScope } from "../identity/identity-provider.js";
 import type { AutomationRunLifecycleObserver } from "./automation-service.js";
 
@@ -23,6 +24,7 @@ export class NotificationLifecycleObserver {
       assistantResult?: ClassifiedAssistantResult,
       recognitionThreadId?: string | null,
       subscriberWatermark?: number,
+      responseVoice?: ResponseVoiceFreshness,
     ) => void,
   ) {}
 
@@ -36,7 +38,8 @@ export class NotificationLifecycleObserver {
         occurredAt: new Date().toISOString(), title: input.phase === "partial" ? "Partial answer" : "Agent progress",
         message: context.thread.title, ...context, turn: { id: input.applicationTurnId },
         progress: { phase: input.phase, itemId: input.applicationItemId, ...input.text },
-      }, JSON.stringify(["progress", threadId, input.applicationTurnId, input.applicationItemId]), "live");
+      }, JSON.stringify(["progress", threadId, input.applicationTurnId, input.applicationItemId]), "live",
+      undefined, undefined, undefined, input.responseVoice);
     } catch { /* Passive progress cannot affect provider work. */ }
   }
 
@@ -100,6 +103,7 @@ export class NotificationLifecycleObserver {
     observation: SubmissionCompletionObservationRecord,
     provenance: "live" | "recovered",
     subscriberWatermark?: number,
+    responseVoice?: ResponseVoiceFreshness,
   ): void {
     if (
       observation.tenantId !== scope.tenantId ||
@@ -137,6 +141,7 @@ export class NotificationLifecycleObserver {
         observation.classifiedResult ?? undefined,
         undefined,
         subscriberWatermark,
+        responseVoice,
       );
     } catch {
       // Notifications are best effort and must never disrupt conversation work.

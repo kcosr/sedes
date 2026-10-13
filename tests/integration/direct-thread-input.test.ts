@@ -113,7 +113,7 @@ describe("direct thread input admission", { timeout: 30_000 }, () => {
       await settled(h, id);
       const context = await h.mutations.inputContext(h.scope, id);
       expect(context).toMatchObject({
-        authority: "current", automaticListenEligible: true,
+        authority: "current", automaticListenEligible: true, userInputRevision: 1,
       });
       await vi.waitFor(() => expect(contexts.length).toBeGreaterThan(0));
       expect(contexts[0]).toMatchObject({ origin, recognitionTarget: {
@@ -680,7 +680,9 @@ describe("direct thread input admission", { timeout: 30_000 }, () => {
       vi.restoreAllMocks();
       // Newer work still invalidates the old target.
       await h.mutations.admitInput(h.scope, id, request("Next turn"));
-      expect((await h.mutations.inputContext(h.scope, id)).activityToken).not.toBe(context.activityToken);
+      const next = await h.mutations.inputContext(h.scope, id);
+      expect(next.activityToken).not.toBe(context.activityToken);
+      expect(next.userInputRevision).toBe(context.userInputRevision + 1);
       // The queued submit dispatches after admission returns; wait for its own completion.
       await vi.waitFor(() => expect(completed.some(turnId => turnId !== context.sourceTurnId)).toBe(true), { timeout: 15_000 });
       await settled(h, id);

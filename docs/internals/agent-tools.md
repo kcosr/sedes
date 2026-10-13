@@ -310,6 +310,10 @@ instead of repeatedly replacing each other. Silent registrations expire after
 45 seconds. Deferred actions wait for their exact turn for at most 24 hours,
 then receive a separate one-hour playback deadline at settlement. Commands are
 never persisted for replay. An unacknowledged write reports an uncertain outcome.
+For timed-out or aborted deferred requests, the server retains at most 128
+retired command IDs per client for five minutes. A late accepted acknowledgement
+receives an exact-ID `turn_cancelled` command so it cannot leave an orphaned
+listening reservation.
 One poll response carries at most 64 commands and 768 KiB of serialized
 `{ commands }`, under native's 1 MiB response limit. Commands that do not fit
 stay queued, in order, for the next poll; the first pending command is always
@@ -330,17 +334,33 @@ condition and the actual state. Off stops immediately.
 End-interaction suppresses only this turn's automatic follow-up; it does not
 cancel the agent or change preferences. Switch-thread defaults to `listen: false`.
 With `listen: true`, Android requests one exact-target listen even with auto-listen
-disabled. In the background, it requires an existing ready native voice session
-and starts recognition without navigating now or when the app returns. A request
-accepted in the background remains voice-only even if the app resumes before
-execution. Background `listen: false` is a no-op; foreground navigation requires
-continued visibility. Neither operation enables voice or changes the pinned/default
-thread. Recording preferences, including Keep listening by default, still apply.
+disabled, waiting behind unrelated playback. It checks that target's current
+manual-input readiness before the cue, after the cue, and immediately before
+microphone capture. In the background, it requires an existing ready native
+voice session and starts recognition without navigating now or when the app
+returns. Backgrounding at acceptance or while a request is pending permanently
+makes it voice-only. Background `listen: false` is a no-op. Neither operation
+enables voice or changes the pinned/default thread. Recording preferences,
+including Keep listening by default, still apply.
+If its destination is valid, a foreground switch can still navigate when
+listening is blocked; manual supersession and the background fence still
+prevent navigation.
 Accepted deferred actions are acknowledged before turn completion, then wait for
-the matching reply's actual audio drain. Silent replies do not require audio.
-Failed/interrupted turns, playback failure, manual supersession, expiry, and
-connection loss prevent deferred actions. Readiness and recording blockers are
-rechecked before recognition starts. Browser/Electron navigation works; voice,
+the matching reply's actual audio drain. An accepted explicit listen reserves
+the next automatic-listening slot while the source turn runs. Settlement names
+the reply event and all native stream UUIDs that received it within the
+principal. Native waits for matching local playback, or an unseen event for its
+current stream, never for another stream's delivery. Silent replies and benign
+notification drops release their barrier. Notification-stream loss or an
+invalid native frame releases undelivered playback waits;
+control-connection loss retires the command. Failed/interrupted or superseded
+turns explicitly retire the client's matching accepted action through the
+internal `turn_cancelled` command, releasing any listening reservation. Playback
+failure, manual supersession, and expiry also prevent deferred actions.
+The notification SSE connection uses principal authentication independently of
+client-control registration, so control retries preserve healthy speech and
+policy delivery.
+Browser/Electron navigation works; voice,
 voice settings, and replay report unsupported with a successful no-op.
 
 `client.replay_turn` queues one ended turn's reply for speech on the current

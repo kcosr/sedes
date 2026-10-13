@@ -71,6 +71,14 @@ export class ClientControlConnection {
     if (command.action === "settings.update") return result("noop", "voice_settings_unsupported");
     if (command.action === "end_interaction") return result("noop", "no_active_voice_interaction");
     if (command.action === "replay_turn") return result("noop", "voice_unsupported");
+    if (command.action === "turn_cancelled") {
+      const pending = this.#deferred.get(command.id);
+      if (!pending || pending.command.sourceThreadId !== command.sourceThreadId || pending.command.sourceTurnId !== command.sourceTurnId) {
+        return result("noop", "superseded");
+      }
+      this.#deferred.delete(command.id);
+      return result("applied", "source_turn_cancelled");
+    }
     if (command.action === "switch_thread") {
       if (!this.state().runtime.foreground) return result("noop", "client_in_background");
       for (const [id, pending] of this.#deferred) {

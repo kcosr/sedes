@@ -40,6 +40,7 @@ function queued(state: QueuedInputRecord["state"]): QueuedInputRecord {
     requestedThreadRevision: null,
     requestedDraftRevision: null,
     triggerKind: "automation",
+    isUserInput: 0,
     sourceAutomationId: "automation-1",
     sourceAutomationRunId: "run-1",
     initiatingAgentThreadId: null,
