@@ -32,6 +32,7 @@ const groupIds = new Set([
   "tasks",
   "workpads",
   "pages",
+  "images",
   "automations",
   "research",
 ]);

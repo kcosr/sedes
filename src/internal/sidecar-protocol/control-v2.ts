@@ -50,7 +50,7 @@ const identifierSchema = z
   .min(1)
   .max(120)
   .regex(/^[a-z][a-z0-9_.-]*$/u);
-const AGENT_TOOLS_CLI_V5_OPERATIONS = Object.freeze([
+const AGENT_TOOLS_CLI_V6_OPERATIONS = Object.freeze([
   "catalog.describe",
   "catalog.list",
   "tool.invoke",
@@ -387,7 +387,7 @@ export function registerControlV2Operations(
     const agentToolCliAccepted = sedesCapabilities.some(
       (capability) =>
         capability.capabilityId === "agent_tools_cli" &&
-        capability.majorVersion === 5,
+        capability.majorVersion === 6,
     );
     if (agentToolCliAccepted && !registration.prepareSedesCapabilities) {
       throw new SidecarOperationError("sidecar_agent_tool_cli_not_ready");
@@ -550,8 +550,8 @@ function capabilityInventories(
       result.has(key) ||
       !canonicalOperations(parsed.operations) ||
       (parsed.capabilityId === "agent_tools_cli" &&
-        (parsed.majorVersion !== 5 ||
-          !equalOperations(parsed.operations, AGENT_TOOLS_CLI_V5_OPERATIONS)))
+        (parsed.majorVersion !== 6 ||
+          !equalOperations(parsed.operations, AGENT_TOOLS_CLI_V6_OPERATIONS)))
     ) {
       throw new Error("sidecar_control_registration_invalid");
     }

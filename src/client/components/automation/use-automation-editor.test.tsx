@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
-import { act, renderHook, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "../../api/ApiClient.js";
 import {
   automationStore,
@@ -13,6 +13,8 @@ import { AUTOMATION_PREVIEW_COUNT, useAutomationEditor } from "./use-automation-
 import { useAutomationThread } from "./use-automation-thread.js";
 
 const options = { canCloneOnRun: true };
+
+afterEach(cleanup);
 
 /** The fixture thread's editor, fed as the page feeds it: from its live summary. */
 function useEditor(fixture: ReturnType<typeof automationStore>, editorOptions: { readonly canCloneOnRun: boolean }) {

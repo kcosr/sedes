@@ -95,14 +95,16 @@ export class OutputArtifactService implements OutputArtifactPublisher {
   async publishCapturedImage(
     input: PublishOutputImageInput,
     assertPublicationAllowed: () => void,
+    onRecorded?: (descriptor: OutputImageArtifactDescriptor) => void,
   ): Promise<OutputImageArtifactDescriptor> {
     assertPublicationAllowed();
-    return this.#publish(input, assertPublicationAllowed);
+    return this.#publish(input, assertPublicationAllowed, onRecorded);
   }
 
   async #publish(
     input: PublishOutputImageInput,
     assertPublicationAllowed?: () => void,
+    onRecorded?: (descriptor: OutputImageArtifactDescriptor) => void,
   ): Promise<OutputImageArtifactDescriptor> {
     const keyHash = publicationKeyHash(input.publicationKey);
     if (!OUTPUT_IMAGE_MEDIA_TYPES.includes(input.mediaType)) {
@@ -176,7 +178,7 @@ export class OutputArtifactService implements OutputArtifactPublisher {
       assertDescriptorMatches(descriptor, identity);
       return descriptor;
     }
-    const publication = this.#publishImage(input, keyHash, identity, assertPublicationAllowed);
+    const publication = this.#publishImage(input, keyHash, identity, assertPublicationAllowed, onRecorded);
     this.#publications.set(publicationIdentity, publication);
     try {
       const descriptor = await publication;
@@ -198,6 +200,7 @@ export class OutputArtifactService implements OutputArtifactPublisher {
       sha256: string;
     }>,
     assertPublicationAllowed?: () => void,
+    onRecorded?: (descriptor: OutputImageArtifactDescriptor) => void,
   ): Promise<OutputImageArtifactDescriptor> {
     const blobIdentity = `${input.scope.tenantId}\0${input.scope.principalId}\0${identity.sha256}`;
     return await this.#withBlobOperation(blobIdentity, async () => {
@@ -222,6 +225,7 @@ export class OutputArtifactService implements OutputArtifactPublisher {
           ...identity,
           now: input.now ?? Date.now(),
           ...(assertPublicationAllowed ? { assertPublicationAllowed } : {}),
+          ...(onRecorded ? { onRecorded } : {}),
         });
       } catch (error) {
         if (!this.persistence.isBlobReferenced(input.scope, identity.sha256)) {

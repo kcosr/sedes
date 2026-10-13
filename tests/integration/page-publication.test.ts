@@ -106,7 +106,7 @@ async function fixture() {
       environments: { acquireLease: async () => ({ scope, workspace: validatedWorkspace,
         environment: { id: environment.id, label: "Local", availability: "available", diagnosticCode: null, revision: 0 }, release: async () => {} }) } as never,
       attachmentDelivery: {} as never, retentionMilliseconds: 60_000, runtimeBudget: 2,
-      pagePublications: (requestedScope, threadId, turnIds) => repository.publications(requestedScope, threadId, turnIds),
+      applicationPublications: (requestedScope, threadId, turnIds) => repository.publications(requestedScope, threadId, turnIds),
     });
     acquired = await actors.acquire({ scope, binding, workspace: validatedWorkspace, opaqueBindingDetail: "test",
       driver: { attach: async () => handle } as never }, { idleRelease: "retain" });
@@ -120,7 +120,7 @@ async function fixture() {
     return content;
   });
   const pages = new PageService({ repository, inventory, files: { readAbsoluteFile: filesRead },
-    onPublished: (requestedScope, page) => actors.refreshPagePublications(requestedScope, page.threadId) });
+    onPublished: (requestedScope, page) => actors.refreshApplicationPublications(requestedScope, page.threadId) });
   const sourceAuthority = new DatabaseAgentToolSourceAuthority(database, new Uint8Array(32).fill(7));
   const application = new DatabaseAgentToolApplicationReader(database, identity,
     { snapshot: async () => ({ thread: { inventoryState: "active", runState: "running" } }) } as never, sourceAuthority);
@@ -130,7 +130,7 @@ async function fixture() {
     presentation: { surface: "cli", mode: "individual" }, accessBoundary: "thread",
     enabledToolIds: ["page.publish", "page.get", "page.list", "page.revisions", "page.preview"], now: 300 });
   const canonical = new CanonicalInlineAgentToolService({ application,
-    pages: new PageAgentToolService({ pages, capturePublication: (requestedScope, threadId) => actors.capturePagePublication(requestedScope, threadId) }) });
+    pages: new PageAgentToolService({ pages, capturePublication: (requestedScope, threadId) => actors.captureApplicationPublication(requestedScope, threadId) }) });
   cleanups.push(async () => { await canonical.close(); });
   const scoped = new SourceScopedAgentToolService(canonical, policies, new AgentToolEnvironmentAuthorityResolver(sourceAuthority), sourceAuthority,
     { acquireAgentToolApprovalAuthority: async () => { throw new Error("same-thread pages must not request approval"); } },

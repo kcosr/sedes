@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentToolInvocationResultSchema, agentToolCliRequestSchema, AgentToolCliFrameDecoder, encodeAgentToolCliFrame } from "../../src/internal/agent-tool-cli-protocol/index.js";
+import { agentToolCatalogResponseSchema, agentToolInvocationResultSchema, agentToolCliRequestSchema, AgentToolCliFrameDecoder, encodeAgentToolCliFrame } from "../../src/internal/agent-tool-cli-protocol/index.js";
 import { agentToolModelContentsSchema, AGENT_TOOL_MODEL_IMAGE_MAXIMUM_BYTES } from "../../src/internal/agent-tool-cli-protocol/model-content.js";
 import { opencodeMcpHello } from "../../src/internal/opencode-mcp/contracts.js";
 
@@ -36,16 +36,24 @@ describe("agent-tool model content", () => {
     expect(agentToolInvocationResultSchema.safeParse({ invocationId: "cancelled", state: "cancelled", error: { code: "cancelled", message: "Stopped", retryable: false }, modelContent: [image] }).success).toBe(false);
   });
 
-  it("requires v5 local transport and rejects stale v4 frames", () => {
-    const request = { protocolVersion: 5, requestId: "10000000-0000-4000-8000-000000000001", sourceCapability: "a".repeat(48), operation: { type: "list" } };
+  it("requires v6 local transport and rejects the previous v5 frames", () => {
+    const request = { protocolVersion: 6, requestId: "10000000-0000-4000-8000-000000000001", sourceCapability: "a".repeat(48), operation: { type: "list" } };
     expect(agentToolCliRequestSchema.safeParse(request).success).toBe(true);
-    expect(agentToolCliRequestSchema.safeParse({ ...request, protocolVersion: 4 }).success).toBe(false);
+    expect(agentToolCliRequestSchema.safeParse({ ...request, protocolVersion: 5 }).success).toBe(false);
   });
 
-  it("requires the media-aware OpenCode bridge handshake", () => {
-    const hello = { protocolVersion: 3, streamID: "10000000-0000-4000-8000-000000000001", catalog: [] };
+  it("requires the image-catalog-aware OpenCode bridge handshake", () => {
+    const hello = { protocolVersion: 4, streamID: "10000000-0000-4000-8000-000000000001", catalog: [] };
     expect(opencodeMcpHello.safeParse(hello).success).toBe(true);
-    expect(opencodeMcpHello.safeParse({ ...hello, protocolVersion: 2 }).success).toBe(false);
+    expect(opencodeMcpHello.safeParse({ ...hello, protocolVersion: 3 }).success).toBe(false);
     expect(opencodeMcpHello.safeParse({ streamID: hello.streamID, catalog: [] }).success).toBe(false);
+  });
+
+  it("carries the closed Images catalog group across both private transports", () => {
+    const tool = { id: "image.show", schemaVersion: 1, label: "Show image", description: "Show a retained image in chat.",
+      group: { id: "images", order: 10 }, effects: { application: "write", modelUsage: "none", external: "none" } };
+    expect(agentToolCatalogResponseSchema.safeParse({ tools: [tool] }).success).toBe(true);
+    expect(opencodeMcpHello.safeParse({ protocolVersion: 4, streamID: "10000000-0000-4000-8000-000000000001", catalog: [tool] }).success).toBe(true);
+    expect(agentToolCatalogResponseSchema.safeParse({ tools: [{ ...tool, group: { id: "unknown", order: 10 } }] }).success).toBe(false);
   });
 });

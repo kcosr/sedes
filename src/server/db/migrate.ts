@@ -1,3 +1,4 @@
+import { shownImagesMigration } from "./migrations/143-shown-images.js";
 import { htmlPagesMigration } from "./migrations/140-html-pages.js";
 import { userInputRevisionMigration } from "./migrations/141-user-input-revision.js";
 import { conversationCreationProvenanceMigration } from "./migrations/142-conversation-creation-provenance.js";
@@ -298,6 +299,7 @@ export const backendNormalizedMigrations = [
   htmlPagesMigration,
   userInputRevisionMigration,
   conversationCreationProvenanceMigration,
+  shownImagesMigration,
 ] as const;
 
 export type DatabaseMigration = {

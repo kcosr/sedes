@@ -48,7 +48,7 @@ import type {
 import { DeferredProductionOperations } from "../../src/server/production-application.js";
 import type { DeliveryInputSnapshotRepository } from "../../src/server/db/repositories/delivery-input-snapshot-repository.js";
 import { ActorBackedThreadApplicationConversationReader } from "../../src/server/conversations/thread-application-service.js";
-import type { PagePublication } from "../../src/server/conversations/page-publication-projection.js";
+import type { PagePublication } from "../../src/server/conversations/application-publication-projection.js";
 
 const scope = {
   tenantId: "tenant-1",
@@ -306,7 +306,7 @@ function fixture(
   runtimeBudget = 8,
   onLiveProgress?: LiveProgressObserver,
   captureResponseVoiceContext?: NonNullable<ConstructorParameters<typeof ConversationActorManager>[0]["captureResponseVoiceContext"]>,
-  pagePublications?: (requestedScope: typeof scope, threadId: string, turnIds: readonly string[]) => readonly PagePublication[],
+  applicationPublications?: (requestedScope: typeof scope, threadId: string, turnIds: readonly string[]) => readonly PagePublication[],
 ) {
   const closeOrder: string[] = [];
   const handle = new FakeHandle(closeOrder);
@@ -372,7 +372,7 @@ function fixture(
     ...(onAuthoritativeSubmission ? { onAuthoritativeSubmission } : {}),
     ...(onLiveProgress ? { onLiveProgress } : {}),
     ...(captureResponseVoiceContext ? { captureResponseVoiceContext } : {}),
-    ...(pagePublications ? { pagePublications } : {}),
+    ...(applicationPublications ? { applicationPublications } : {}),
   });
   const manager = {
     acquire: (
@@ -401,7 +401,7 @@ describe("page publication turn authority", () => {
   it("forks the native source revision independently of visible page revisions", async () => {
     const prior = new ConversationProjector({ backendInstanceId: binding.backendInstanceId, bindingIdentity: binding.applicationThreadId });
     prior.replace(snapshot("running"), -1);
-    const publications: PagePublication[] = [{ anchor: prior.capturePagePublicationAnchor()!, invocationId: "trusted", page: {
+    const publications: PagePublication[] = [{ anchor: prior.captureApplicationPublicationAnchor()!, invocationId: "trusted", page: {
       pageId: "33333333-3333-4333-8333-333333333333", threadId: binding.applicationThreadId, revision: 1,
       title: "Preview", viewport: {}, createdAt: "2026-10-11T12:00:00.000Z", sha256: "a".repeat(64), byteSize: 123,
     } }];
@@ -424,12 +424,12 @@ describe("page publication turn authority", () => {
     current.handle.establishmentSnapshots[0] = snapshot("running");
     const acquired = await current.manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver: current.driver });
     try {
-      const publication = current.actorManager.capturePagePublication(scope, binding.applicationThreadId);
+      const publication = current.actorManager.captureApplicationPublication(scope, binding.applicationThreadId);
       expect(publication.anchor.turnId).toBe(projectedTurnId);
       expect(publication.anchor.afterItemId).toMatch(/^item_/);
       expect(() => publication.assertCurrent()).not.toThrow();
-      expect(() => current.actorManager.capturePagePublication({ ...scope, principalId: "other" }, binding.applicationThreadId)).toThrow();
-      expect(() => current.actorManager.capturePagePublication(scope, "other-thread")).toThrow();
+      expect(() => current.actorManager.captureApplicationPublication({ ...scope, principalId: "other" }, binding.applicationThreadId)).toThrow();
+      expect(() => current.actorManager.captureApplicationPublication(scope, "other-thread")).toThrow();
       current.handle.emit(0, { type: "item_completed", item: snapshot().itemsById["item-1"]! }, 0);
       current.handle.emit(0, { type: "turn_completed", turn: snapshot().turnsById["turn-1"]! }, 1);
       await vi.waitFor(() => expect(acquired.actor.timeline.turnsById[projectedTurnId]?.status).toBe("completed"));
@@ -452,18 +452,18 @@ describe("page publication turn authority", () => {
     const events: ConversationActorEvent[] = [];
     const unsubscribe = acquired.actor.subscribe(event => events.push(event));
     try {
-      const capture = current.actorManager.capturePagePublication(scope, binding.applicationThreadId);
+      const capture = current.actorManager.captureApplicationPublication(scope, binding.applicationThreadId);
       publications.push({ anchor: capture.anchor, invocationId: "trusted-invocation", page: {
         pageId: "33333333-3333-4333-8333-333333333333", threadId: binding.applicationThreadId, revision: 1,
         title: "Preview", viewport: {}, createdAt: "2026-10-11T12:00:00.000Z", sha256: "a".repeat(64), byteSize: 123,
       } });
-      await current.actorManager.refreshPagePublications(scope, binding.applicationThreadId);
+      await current.actorManager.refreshApplicationPublications(scope, binding.applicationThreadId);
       expect(Object.values(acquired.actor.timeline.itemsById).filter(item => item.kind === "page")).toHaveLength(1);
       await vi.waitFor(() => expect(events.some(event => event.type === "projection_events" && event.events.some(entry =>
         entry.type === "item_upsert" && entry.item.kind === "page"))).toBe(true));
       expect(events.find(event => event.type === "projection_events" && event.events.some(entry => entry.type === "item_upsert" && entry.item.kind === "page")))
         .toMatchObject({ type: "projection_events", events: [{ type: "item_upsert", item: { kind: "page" } }, { type: "turn_upsert" }] });
-      await current.actorManager.refreshPagePublications(scope, binding.applicationThreadId);
+      await current.actorManager.refreshApplicationPublications(scope, binding.applicationThreadId);
       expect(Object.values(acquired.actor.timeline.itemsById).filter(item => item.kind === "page")).toHaveLength(1);
     } finally { unsubscribe(); acquired.release(); await current.manager.close(); }
   });
@@ -478,10 +478,10 @@ describe("page publication turn authority", () => {
     let copies: ReturnType<typeof vi.spyOn> | undefined;
     try {
       if (withPage) {
-        publications.push({ anchor: current.actorManager.capturePagePublication(scope, binding.applicationThreadId).anchor,
+        publications.push({ anchor: current.actorManager.captureApplicationPublication(scope, binding.applicationThreadId).anchor,
           invocationId: "trusted", page: { pageId: "33333333-3333-4333-8333-333333333333", threadId: binding.applicationThreadId,
             revision: 1, title: "Preview", viewport: {}, createdAt: "2026-10-11T12:00:00.000Z", sha256: "a".repeat(64), byteSize: 123 } });
-        await current.actorManager.refreshPagePublications(scope, binding.applicationThreadId);
+        await current.actorManager.refreshApplicationPublications(scope, binding.applicationThreadId);
       }
       events.length = 0;
       copies = vi.spyOn(ConversationProjector.prototype, "timeline");

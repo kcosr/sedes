@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { agentToolsInvokeOperation } from "../../../internal/sidecar-protocol/agent-tools-v5.js";
+import { agentToolsInvokeOperation } from "../../../internal/sidecar-protocol/agent-tools-v6.js";
 import { defineSidecarOperation } from "../../../internal/sidecar-protocol/operation-registry.js";
 import { openCodeToolInvocationStampSchema } from "./opencode-tool-invocation.js";
 

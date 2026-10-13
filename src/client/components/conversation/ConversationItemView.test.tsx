@@ -293,7 +293,12 @@ describe("normalized conversation renderers", () => {
     );
   });
 
-  it("loads and opens a durable image artifact from the full preview surface", async () => {
+  it.each([
+    { origin: "generated", title: "Generated chart" },
+    { origin: "shown", title: "Results chart" },
+    { origin: "shown", title: undefined },
+  ] as const)("loads and opens a durable $origin image with title $title", async ({ origin, title }) => {
+    const label = title ?? "chart.png";
     const intersection = installIntersectionObserver();
     const content = new Blob(
       [
@@ -317,12 +322,12 @@ describe("normalized conversation renderers", () => {
         item={{
           ...common,
           kind: "image",
-          origin: { kind: "generated" },
+          origin: { kind: origin },
           image: {
             representation: "artifact",
             artifactId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
             mimeType: "image/png",
-            alt: { text: "Generated chart" },
+            ...(title ? { alt: { text: title } } : {}),
             fileName: { text: "chart.png" },
             byteSize: content.size,
             sha256: "a".repeat(64),
@@ -343,14 +348,15 @@ describe("normalized conversation renderers", () => {
     );
     await waitFor(() =>
       expect(
-        screen.getByRole("img", { name: "Generated chart" }),
+        screen.getByRole("img", { name: label }),
       ).toHaveAttribute("src", "blob:generated-image"),
     );
-    const image = screen.getByRole("img", { name: "Generated chart" });
+    const image = screen.getByRole("img", { name: label });
     const expand = screen.getByRole("button", {
-      name: "Expand image: Generated chart",
+      name: `Expand image: ${label}`,
     });
     expect(image).toBeVisible();
+    expect(screen.queryByText(/^Viewed image/)).toBeNull();
     expect(expand).not.toContainElement(image);
     expect(
       screen.queryByRole("button", { name: /^Zoom percentage:/ }),
@@ -359,7 +365,7 @@ describe("normalized conversation renderers", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
 
     fireEvent.click(expand);
-    expect(screen.getByRole("dialog")).toBeVisible();
+    expect(screen.getByRole("dialog", { name: `Image preview: ${label}` })).toBeVisible();
     expect(
       screen.getByRole("button", { name: /^Zoom percentage:/ }),
     ).toHaveTextContent("100%");

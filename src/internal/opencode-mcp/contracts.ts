@@ -7,7 +7,7 @@ export const OPENCODE_MCP_CREDENTIAL = "SEDES_OPENCODE_MCP_CREDENTIAL";
 export const OPENCODE_MCP_HEARTBEAT_MS = 500;
 export const OPENCODE_MCP_WATCHDOG_MS = 3_000;
 export const OPENCODE_MCP_STARTUP_MS = 10_000;
-export const OPENCODE_MCP_PROTOCOL_VERSION = 3;
+export const OPENCODE_MCP_PROTOCOL_VERSION = 4;
 // Preserve the canonical 4 MiB result/input budget plus transport envelopes in
 // both directions, including replies produced after a side-effecting tool ran.
 export const OPENCODE_MCP_MAXIMUM_BYTES = SEDES_MCP_MAXIMUM_INBOUND_LINE_BYTES;

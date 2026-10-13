@@ -951,6 +951,7 @@ async function assertUnavailableTargetResponse(
         body: JSON.stringify({
           environmentId: LOCAL_EXECUTION_ENVIRONMENT_ID,
           path: workspacePath,
+          project: { kind: "new", name: "Lifecycle test" },
         }),
         signal: AbortSignal.timeout(5_000),
       },

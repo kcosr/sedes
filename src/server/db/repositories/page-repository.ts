@@ -1,16 +1,17 @@
 import { createHash, randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
 import { MAXIMUM_NORMALIZED_TIMELINE_ITEMS } from "../../../shared/protocol/conversation.js";
-import { pageIdSchema, pagePublicationAnchorSchema, pageRevisionSchema, type PagePublicationAnchor,
-  type PagePublicationResult, type PageRevision, type PageRevisionPage, type PageViewport } from "../../../shared/protocol/pages.js";
+import { pageIdSchema, pageRevisionSchema, type PagePublicationResult, type PageRevision, type PageRevisionPage, type PageViewport } from "../../../shared/protocol/pages.js";
+import { applicationPublicationAnchorSchema, type ApplicationPublicationAnchor } from "../../../shared/protocol/application-publications.js";
 import { DomainError } from "../../domain/errors.js";
 import type { RequestScope } from "../../identity/identity-provider.js";
+import { nextApplicationPublicationTime } from "./application-publication-clock.js";
 
 export interface PreparedPage {
   readonly sourceHtml: string; readonly escapedHtml: string; readonly bootstrapOffset: number;
   readonly sha256: string; readonly byteSize: number;
 }
-export interface PagePublication { readonly page: PageRevision; readonly invocationId: string; readonly anchor: PagePublicationAnchor; }
+export interface PagePublication { readonly page: PageRevision; readonly invocationId: string; readonly anchor: ApplicationPublicationAnchor; }
 export type PageReadOptions = { readonly limit?: number; readonly cursor?: string };
 interface Row { descriptor_json: string; source_path: string | null; source_html: string; escaped_html: string; bootstrap_offset: number; invocation_id: string; anchor_json: string | null; }
 interface ListRow { descriptor_json: string; created_at: number; id: string; }
@@ -83,14 +84,14 @@ export class PageRepository {
     // their maximum publications. The paginated page library retains all revisions.
     return (this.database.prepare(`SELECT descriptor_json,invocation_id,anchor_json FROM html_page_revisions WHERE tenant_id=? AND owner_principal_id=? AND thread_id=? AND anchor_turn_id IS NOT NULL${filter} ORDER BY rowid LIMIT ${MAXIMUM_NORMALIZED_TIMELINE_ITEMS}`)
       .all(scope.tenantId, scope.principalId, threadId, ...(turnIds ?? [])) as Row[]).map(row => ({
-      page: rowPage(row), invocationId: row.invocation_id, anchor: pagePublicationAnchorSchema.parse(JSON.parse(row.anchor_json!)),
+      page: rowPage(row), invocationId: row.invocation_id, anchor: applicationPublicationAnchorSchema.parse(JSON.parse(row.anchor_json!)),
     }));
   }
 
   publish(scope: RequestScope, threadId: string, input: {
     readonly title: string; readonly viewport: PageViewport; readonly path?: string;
     readonly pageId?: string; readonly expectedRevision?: number; readonly prepared: PreparedPage;
-    readonly invocationId: string; readonly anchor?: PagePublicationAnchor; readonly assertCurrent?: () => void;
+    readonly invocationId: string; readonly anchor?: ApplicationPublicationAnchor; readonly assertCurrent?: () => void;
   }, now = Date.now()): PagePublicationResult {
     return this.database.transaction(() => {
       input.assertCurrent?.();
@@ -106,6 +107,7 @@ export class PageRepository {
           .get(scope.tenantId, scope.principalId, threadId, input.anchor.turnId) as { count: number };
         if (count.count >= 1000) throw new DomainError("bad_request", "This turn has reached its page publication limit.");
       }
+      now = nextApplicationPublicationTime(this.database, scope, threadId, now);
       const descriptor = pageRevisionSchema.parse({ pageId: previous?.pageId ?? randomUUID(), threadId,
         revision: (previous?.revision ?? 0) + 1, title: input.title, viewport: input.viewport,
         createdAt: new Date(now).toISOString(), sha256: input.prepared.sha256, byteSize: input.prepared.byteSize });
@@ -119,7 +121,7 @@ export class PageRepository {
       this.database.prepare(`INSERT INTO html_page_revisions(tenant_id,owner_principal_id,thread_id,page_id,revision,descriptor_json,source_path,source_html,escaped_html,bootstrap_offset,invocation_id,anchor_turn_id,anchor_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`)
         .run(scope.tenantId, scope.principalId, threadId, descriptor.pageId, descriptor.revision, JSON.stringify(descriptor),
           input.path ?? null, input.prepared.sourceHtml, input.prepared.escapedHtml, input.prepared.bootstrapOffset, input.invocationId,
-          input.anchor?.turnId ?? null, input.anchor ? JSON.stringify(pagePublicationAnchorSchema.parse(input.anchor)) : null);
+          input.anchor?.turnId ?? null, input.anchor ? JSON.stringify(applicationPublicationAnchorSchema.parse(input.anchor)) : null);
       return { page: descriptor, changed: true };
     })();
   }

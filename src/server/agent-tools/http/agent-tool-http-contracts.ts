@@ -122,6 +122,7 @@ const agentToolContractArtifactBaseSchema = z.strictObject({
       "tasks",
       "workpads",
       "pages",
+      "images",
       "automations",
       "research",
     ]),

@@ -240,7 +240,7 @@ it("exits on a silent lifetime watchdog without waiting for stdin EOF", async ()
   try {
     const input = new PassThrough(); let stdout = "";
     const wire = new ReadableStream<Uint8Array>({ start(controller) {
-      controller.enqueue(Buffer.from(`${JSON.stringify({ protocolVersion: 3, streamID: "00000000-0000-4000-8000-000000000001", catalog: [] })}\n`));
+      controller.enqueue(Buffer.from(`${JSON.stringify({ protocolVersion: 4, streamID: "00000000-0000-4000-8000-000000000001", catalog: [] })}\n`));
     } });
     const running = runSedesOpenCodeMcp([], { input, environment: { SEDES_OPENCODE_MCP_ENDPOINT: "http://127.0.0.1:4096", SEDES_OPENCODE_MCP_CREDENTIAL: "a".repeat(43) },
       fetch: vi.fn(async () => new Response(wire, { headers: { "content-type": "application/x-ndjson" } })),

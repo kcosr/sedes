@@ -11,7 +11,6 @@ import {
   type ThreadForkSourceCapability,
   type ThreadCheckpoint,
   type RuntimeNotice,
-  type PageItem,
 } from "../../shared/protocol/conversation.js";
 import {
   EventHub,
@@ -25,7 +24,7 @@ import {
 } from "../../shared/protocol/payload.js";
 import { SerializedMailbox } from "../conversations/serialized-mailbox.js";
 import { sameAgentToolPolicyRevision } from "../../shared/agent-tool-policy.js";
-import { fitPageItemsToSnapshot, type PageProjectionInput } from "../conversations/page-publication-projection.js";
+import { fitApplicationItemsToSnapshot, isApplicationPublicationItem, type ApplicationPublicationItem, type ApplicationProjectionInput } from "../conversations/application-publication-projection.js";
 
 export interface ThreadEventSubscription {
   readonly watermark: number;
@@ -70,8 +69,8 @@ export class ThreadEventHub {
   #sourceItemCount = 0;
   #snapshotBytes = 0;
   #snapshotItemCount = 0;
-  #visiblePageIds: ReadonlySet<string> = new Set();
-  #sourcePages: ReadonlyMap<string, PageItem> = new Map();
+  #visibleApplicationIds: ReadonlySet<string> = new Set();
+  #sourcePages: ReadonlyMap<string, ApplicationPublicationItem> = new Map();
   #checkpoint?: ThreadCheckpoint;
   #notices: readonly RuntimeNotice[] = [];
   #capabilityThreadRevision = 0;
@@ -154,7 +153,7 @@ export class ThreadEventHub {
   /** A native item and its owning turn must reach a capacity reset together. */
   publishBatch(events: readonly ItemTurnEvent[]): readonly ThreadEventEnvelope[] {
     if (events.some(event => event.type !== "item_upsert" && event.type !== "turn_upsert")) throw new Error("thread_projection_item_turn_batch_required");
-    if (events.length < 2 || (this.#sourcePages.size === 0 && !events.some(event => event.type === "item_upsert" && event.item.kind === "page"))) {
+    if (events.length < 2 || (this.#sourcePages.size === 0 && !events.some(event => event.type === "item_upsert" && isApplicationPublicationItem(event.item)))) {
       return events.map(event => this.publish(event));
     }
     if (!this.#sourceSnapshot) throw new Error("thread_projection_snapshot_required");
@@ -166,11 +165,11 @@ export class ThreadEventHub {
     let publishedBytes = this.#snapshotBytes;
     let publishedCount = this.#snapshotItemCount;
     let prefixOverflow = false;
-    let expectedPageIds = this.#visiblePageIds;
-    for (const event of events) if (event.type === "item_upsert" && event.item.kind === "page" && !this.#sourcePages.has(event.item.id)) expectedPageIds = new Set([...expectedPageIds, event.item.id]);
-    const allSourcePagesVisible = this.#sourcePages.size === this.#visiblePageIds.size;
+    let expectedPageIds = this.#visibleApplicationIds;
+    for (const event of events) if (event.type === "item_upsert" && isApplicationPublicationItem(event.item) && !this.#sourcePages.has(event.item.id)) expectedPageIds = new Set([...expectedPageIds, event.item.id]);
+    const allSourcePagesVisible = this.#sourcePages.size === this.#visibleApplicationIds.size;
     const pending: { event: ItemTurnEvent; source: NormalizedThreadSnapshot; bytes: number; itemCount: number;
-      pages: ReadonlyMap<string, PageItem>; published: NormalizedThreadSnapshot; publishedBytes: number; publishedCount: number }[] = [];
+      pages: ReadonlyMap<string, ApplicationPublicationItem>; published: NormalizedThreadSnapshot; publishedBytes: number; publishedCount: number }[] = [];
     for (const raw of events) {
       const event = normalizedThreadEventSchema.parse(raw);
       if ((event.type !== "item_upsert" && event.type !== "turn_upsert") || event.generation !== this.#projectionGeneration) throw new Error("thread_projection_item_turn_batch_required");
@@ -179,7 +178,7 @@ export class ThreadEventHub {
       bytes += snapshotFieldByteDelta(source, next, event, itemCount, nextCount);
       itemCount = nextCount;
       source = next;
-      pages = nextPageItems(pages, event);
+      pages = nextApplicationPublicationItems(pages, event);
       const visibleEvent = allSourcePagesVisible ? event : visibleTurnEvent(event, pages, expectedPageIds);
       if (allSourcePagesVisible) {
         published = source;
@@ -197,20 +196,20 @@ export class ThreadEventHub {
       }
       pending.push({ event: visibleEvent, source, bytes, itemCount, pages, published, publishedBytes, publishedCount });
     }
-    const fitted = fitPageItemsToSnapshot(source, bytes, pages, itemCount);
+    const fitted = fitApplicationItemsToSnapshot(source, bytes, pages, itemCount);
     if (fitted.serializedBytes > MAXIMUM_NORMALIZED_SNAPSHOT_OR_PAGE_BYTES ||
-      itemCount - pages.size + fitted.pageIds.size > MAXIMUM_NORMALIZED_TIMELINE_ITEMS) throw new Error("thread_projection_snapshot_limit_exceeded");
-    const omittedPageEvent = events.some(event => event.type === "item_upsert" && event.item.kind === "page" && !fitted.pageIds.has(event.item.id));
-    if (prefixOverflow || omittedPageEvent || !samePageIds(fitted.pageIds, expectedPageIds)) {
+      itemCount - pages.size + fitted.applicationIds.size > MAXIMUM_NORMALIZED_TIMELINE_ITEMS) throw new Error("thread_projection_snapshot_limit_exceeded");
+    const omittedPageEvent = events.some(event => event.type === "item_upsert" && isApplicationPublicationItem(event.item) && !fitted.applicationIds.has(event.item.id));
+    if (prefixOverflow || omittedPageEvent || !samePageIds(fitted.applicationIds, expectedPageIds)) {
       const event = normalizedThreadEventSchema.parse({ type: "snapshot", generation: events[0]!.generation, snapshot: fitted.snapshot });
       this.#sourceSnapshot = source;
       this.#sourceSnapshotBytes = bytes;
       this.#sourceItemCount = itemCount;
       this.#sourcePages = pages;
-      this.#visiblePageIds = fitted.pageIds;
+      this.#visibleApplicationIds = fitted.applicationIds;
       this.#snapshot = fitted.snapshot;
       this.#snapshotBytes = fitted.serializedBytes;
-      this.#snapshotItemCount = itemCount - pages.size + fitted.pageIds.size;
+      this.#snapshotItemCount = itemCount - pages.size + fitted.applicationIds.size;
       this.#checkpoint = undefined;
       return [envelope(this.#hub.publish(event.type, event))];
     }
@@ -222,15 +221,15 @@ export class ThreadEventHub {
       this.#snapshot = step.published;
       this.#snapshotBytes = step.publishedBytes;
       this.#snapshotItemCount = step.publishedCount;
-      if (step.event.type === "item_upsert" && step.event.item.kind === "page" && !this.#visiblePageIds.has(step.event.item.id)) {
-        this.#visiblePageIds = new Set([...this.#visiblePageIds, step.event.item.id]);
+      if (step.event.type === "item_upsert" && isApplicationPublicationItem(step.event.item) && !this.#visibleApplicationIds.has(step.event.item.id)) {
+        this.#visibleApplicationIds = new Set([...this.#visibleApplicationIds, step.event.item.id]);
       }
       this.#checkpoint = undefined;
       return envelope(this.#hub.publish(step.event.type, step.event));
     });
   }
 
-  publish(rawEvent: NormalizedThreadEvent, sourceTimeline?: PageProjectionInput): ThreadEventEnvelope {
+  publish(rawEvent: NormalizedThreadEvent, sourceTimeline?: ApplicationProjectionInput): ThreadEventEnvelope {
     const priorGeneration = this.#projectionGeneration;
     const priorCapabilityRevision = this.#snapshot?.capabilities.revision;
     let event: NormalizedThreadEvent;
@@ -243,15 +242,15 @@ export class ThreadEventHub {
       } : rawEvent.snapshot;
       const bytes = serializedUtf8Bytes(sourceSnapshot);
       const itemCount = Object.keys(sourceSnapshot.itemsById).length;
-      const pages = new Map(Object.entries(sourceSnapshot.itemsById).filter((entry): entry is [string, PageItem] => entry[1].kind === "page"));
-      const fitted = fitPageItemsToSnapshot(sourceSnapshot, bytes, pages, itemCount);
+      const pages = new Map(Object.entries(sourceSnapshot.itemsById).filter((entry): entry is [string, ApplicationPublicationItem] => isApplicationPublicationItem(entry[1])));
+      const fitted = fitApplicationItemsToSnapshot(sourceSnapshot, bytes, pages, itemCount);
       event = normalizedThreadEventSchema.parse({ ...rawEvent, snapshot: fitted.snapshot });
       this.#sourceSnapshot = fitted.snapshot === sourceSnapshot && event.type === "snapshot" ? event.snapshot : sourceSnapshot;
       this.#sourceSnapshotBytes = bytes;
       this.#sourceItemCount = itemCount;
       this.#snapshotBytes = fitted.serializedBytes;
-      this.#snapshotItemCount = itemCount - pages.size + fitted.pageIds.size;
-      this.#visiblePageIds = fitted.pageIds;
+      this.#snapshotItemCount = itemCount - pages.size + fitted.applicationIds.size;
+      this.#visibleApplicationIds = fitted.applicationIds;
       this.#sourcePages = pages;
     } else {
       event = normalizedThreadEventSchema.parse(rawEvent);
@@ -278,29 +277,29 @@ export class ThreadEventHub {
       const nextSource = applyIncremental(source, event);
       const itemCount = nextItemCount(source!, event, this.#sourceItemCount);
       const sourceBytes = this.#sourceSnapshotBytes + snapshotFieldByteDelta(source!, nextSource, event, this.#sourceItemCount, itemCount);
-      const pages = nextPageItems(this.#sourcePages, event);
-      const unchangedVisiblePages = event.type === "item_upsert" && event.item.kind !== "page" &&
-        Object.hasOwn(source!.itemsById, event.item.id) && pages === this.#sourcePages && pages.size === this.#visiblePageIds.size &&
+      const pages = nextApplicationPublicationItems(this.#sourcePages, event);
+      const unchangedVisiblePages = event.type === "item_upsert" && !isApplicationPublicationItem(event.item) &&
+        Object.hasOwn(source!.itemsById, event.item.id) && pages === this.#sourcePages && pages.size === this.#visibleApplicationIds.size &&
         sourceBytes <= MAXIMUM_NORMALIZED_SNAPSHOT_OR_PAGE_BYTES && itemCount <= MAXIMUM_NORMALIZED_TIMELINE_ITEMS;
       const fitted = unchangedVisiblePages
-        ? { snapshot: nextSource, serializedBytes: sourceBytes, pageIds: this.#visiblePageIds }
-        : fitPageItemsToSnapshot(nextSource, sourceBytes, pages, itemCount);
+        ? { snapshot: nextSource, serializedBytes: sourceBytes, applicationIds: this.#visibleApplicationIds }
+        : fitApplicationItemsToSnapshot(nextSource, sourceBytes, pages, itemCount);
       if (event.type === "history_prepend" && (
-        itemCount - pages.size + fitted.pageIds.size > MAXIMUM_NORMALIZED_TIMELINE_ITEMS ||
+        itemCount - pages.size + fitted.applicationIds.size > MAXIMUM_NORMALIZED_TIMELINE_ITEMS ||
         fitted.serializedBytes > MAXIMUM_NORMALIZED_SNAPSHOT_OR_PAGE_BYTES
       )) throw new Error("thread_projection_history_limit_exceeded");
       if (fitted.serializedBytes > MAXIMUM_NORMALIZED_SNAPSHOT_OR_PAGE_BYTES ||
-        itemCount - pages.size + fitted.pageIds.size > MAXIMUM_NORMALIZED_TIMELINE_ITEMS) {
+        itemCount - pages.size + fitted.applicationIds.size > MAXIMUM_NORMALIZED_TIMELINE_ITEMS) {
         throw new Error("thread_projection_snapshot_limit_exceeded");
       }
-      let expectedPageIds = this.#visiblePageIds;
+      let expectedPageIds = this.#visibleApplicationIds;
       if (event.type === "history_prepend") {
-        const added = Object.values(event.page.itemsById).filter(item => item.kind === "page");
+        const added = Object.values(event.page.itemsById).filter(item => isApplicationPublicationItem(item));
         if (added.length) expectedPageIds = new Set([...expectedPageIds, ...added.map(item => item.id)]);
       }
-      const membershipChanged = !samePageIds(fitted.pageIds, expectedPageIds);
-      const hiddenPageItem = event.type === "item_upsert" && event.item.kind === "page" && !fitted.pageIds.has(event.item.id);
-      if (membershipChanged || hiddenPageItem) {
+      const membershipChanged = !samePageIds(fitted.applicationIds, expectedPageIds);
+      const hiddenApplicationPublicationItem = event.type === "item_upsert" && isApplicationPublicationItem(event.item) && !fitted.applicationIds.has(event.item.id);
+      if (membershipChanged || hiddenApplicationPublicationItem) {
         // A complete reset clears removed items, and includes both newly
         // admitted page items and every changed turn in one consistent frame.
         event = normalizedThreadEventSchema.parse({ type: "snapshot", generation: event.generation, snapshot: fitted.snapshot });
@@ -311,8 +310,8 @@ export class ThreadEventHub {
       this.#sourceSnapshotBytes = sourceBytes;
       this.#sourceItemCount = itemCount;
       this.#snapshotBytes = fitted.serializedBytes;
-      this.#snapshotItemCount = itemCount - pages.size + fitted.pageIds.size;
-      this.#visiblePageIds = fitted.pageIds;
+      this.#snapshotItemCount = itemCount - pages.size + fitted.applicationIds.size;
+      this.#visibleApplicationIds = fitted.applicationIds;
       this.#sourcePages = pages;
       this.#snapshot = fitted.snapshot;
       if (event.type === "snapshot") {
@@ -474,21 +473,21 @@ function nextItemCount(snapshot: NormalizedThreadSnapshot, event: Exclude<Normal
   return count;
 }
 
-function nextPageItems(pages: ReadonlyMap<string, PageItem>, event: Exclude<NormalizedThreadEvent, { type: "snapshot" }>): ReadonlyMap<string, PageItem> {
-  if (event.type === "item_upsert" && (event.item.kind === "page" || pages.has(event.item.id))) {
+function nextApplicationPublicationItems(pages: ReadonlyMap<string, ApplicationPublicationItem>, event: Exclude<NormalizedThreadEvent, { type: "snapshot" }>): ReadonlyMap<string, ApplicationPublicationItem> {
+  if (event.type === "item_upsert" && (isApplicationPublicationItem(event.item) || pages.has(event.item.id))) {
     const next = new Map(pages);
-    if (event.item.kind === "page") next.set(event.item.id, event.item);
+    if (isApplicationPublicationItem(event.item)) next.set(event.item.id, event.item);
     else next.delete(event.item.id);
     return next;
   }
   if (event.type === "history_prepend") {
-    const added = Object.values(event.page.itemsById).filter((item): item is PageItem => item.kind === "page");
+    const added = Object.values(event.page.itemsById).filter((item): item is ApplicationPublicationItem => isApplicationPublicationItem(item));
     return added.length ? new Map([...pages, ...added.map(item => [item.id, item] as const)]) : pages;
   }
   return pages;
 }
 
-function visibleTurnEvent(event: ItemTurnEvent, pages: ReadonlyMap<string, PageItem>, visible: ReadonlySet<string>): ItemTurnEvent {
+function visibleTurnEvent(event: ItemTurnEvent, pages: ReadonlyMap<string, ApplicationPublicationItem>, visible: ReadonlySet<string>): ItemTurnEvent {
   if (event.type !== "turn_upsert") return event;
   const orderedItemIds = event.turn.orderedItemIds.filter(id => !pages.has(id) || visible.has(id));
   const removed = event.turn.orderedItemIds.length - orderedItemIds.length;

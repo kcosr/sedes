@@ -128,6 +128,7 @@ export const agentToolCatalogSummarySchema: z.ZodType<AgentToolCatalogSummary> =
         "tasks",
         "workpads",
         "pages",
+        "images",
         "automations",
         "research",
       ]),

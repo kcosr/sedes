@@ -5,7 +5,7 @@ import {
   agentToolCliRequestSchema, agentToolInvocationResultSchema, createAgentToolInvocationRequestSchema,
   AgentToolCliFrameDecoder, encodeAgentToolCliFrame, isBoundedAgentToolJson,
 } from "../../src/internal/agent-tool-cli-protocol/index.js";
-import { agentToolsInvokeOperation } from "../../src/internal/sidecar-protocol/agent-tools-v5.js";
+import { agentToolsInvokeOperation } from "../../src/internal/sidecar-protocol/agent-tools-v6.js";
 import { openCodeToolInvokeOperation } from "../../src/server/backends/opencode/opencode-tool-relay-wire.js";
 import { opencodeMcpRequest } from "../../src/internal/opencode-mcp/contracts.js";
 import { sedesMcpInvocationResult } from "../../src/internal/agent-tool-mcp/mcp-tool-projection.js";
@@ -57,7 +57,7 @@ describe("Workpad transport bounds", () => {
     expect(createAgentToolInvocationRequestSchema.safeParse(call).success).toBe(true);
     expect(agentToolsInvokeOperation.requestSchema.safeParse({ ...call, sourceCapability }).success).toBe(true);
     expect(opencodeMcpRequest.safeParse({ operation: "invoke", sessionID: "ses_test", request: call }).success).toBe(true);
-    const frame = { protocolVersion: 5, requestId: id, sourceCapability, operation: { type: "invoke", request: call } };
+    const frame = { protocolVersion: 6, requestId: id, sourceCapability, operation: { type: "invoke", request: call } };
     expect(agentToolCliRequestSchema.safeParse(frame).success).toBe(true);
     expect(new AgentToolCliFrameDecoder().push(encodeAgentToolCliFrame(frame))).toEqual(frame);
     const result = completed({ workpad: document(content) });

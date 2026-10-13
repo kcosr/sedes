@@ -34,7 +34,7 @@ const toolIdsSchema = z
 
 export const agentToolsCatalogOperation = defineSidecarOperation({
   capabilityId: "agent_tools_cli",
-  majorVersion: 5,
+  majorVersion: 6,
   operation: "catalog.list",
   lane: "operation",
   maximumDeadlineMilliseconds: 30_000,
@@ -53,7 +53,7 @@ export const agentToolsCatalogOperation = defineSidecarOperation({
 
 export const agentToolsDescribeOperation = defineSidecarOperation({
   capabilityId: "agent_tools_cli",
-  majorVersion: 5,
+  majorVersion: 6,
   operation: "catalog.describe",
   lane: "operation",
   maximumDeadlineMilliseconds: 30_000,
@@ -72,7 +72,7 @@ export const agentToolsDescribeOperation = defineSidecarOperation({
 
 export const agentToolsInvokeOperation = defineSidecarOperation({
   capabilityId: "agent_tools_cli",
-  majorVersion: 5,
+  majorVersion: 6,
   operation: "tool.invoke",
   lane: "operation",
   maximumDeadlineMilliseconds: "caller_abort",
@@ -88,7 +88,7 @@ export const agentToolsInvokeOperation = defineSidecarOperation({
   ]),
 });
 
-export const agentToolsV5Operations = Object.freeze([
+export const agentToolsV6Operations = Object.freeze([
   agentToolsCatalogOperation,
   agentToolsDescribeOperation,
   agentToolsInvokeOperation,

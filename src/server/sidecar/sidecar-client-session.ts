@@ -5,7 +5,7 @@ import {
   SidecarOperationRegistry,
   SidecarProtocolPeer,
   SidecarTransportCleanupError,
-  agentToolsV5Operations,
+  agentToolsV6Operations,
   controlGoAwayOperation,
   controlHelloOperation,
   controlPingOperation,
@@ -531,7 +531,7 @@ function validateAuthorizedCapabilities(
             : capability.capabilityId === "workspace_tools"
               ? 2
             : capability.capabilityId === "agent_tools_cli"
-              ? 5
+              ? 6
               : capability.capabilityId === "interactive_terminal" ? 2 : 1) ||
         capability.capabilityId !==
           order.filter((id) =>
@@ -558,7 +558,7 @@ function validateSedesCapabilities(
   runtimeAuthorized: boolean,
   openCodeToolsAuthorized: boolean,
 ): readonly SidecarCapabilityInventory[] {
-  const expectedOperations = agentToolsV5Operations
+  const expectedOperations = agentToolsV6Operations
     .map(({ operation }) => operation)
     .sort();
   const selected = capabilities.filter((capability) => capability.capabilityId !== "runtime_bodies" || runtimeAuthorized);
@@ -569,7 +569,7 @@ function validateSedesCapabilities(
         capabilityId === "runtime_bodies" ? runtimeAuthorized && majorVersion === 1 && JSON.stringify(operations) === JSON.stringify([sidecarRuntimeBodyOffer.operation]) :
         capabilityId === "opencode_tools" ? openCodeToolsAuthorized && majorVersion === 3 && JSON.stringify(operations) === JSON.stringify(["tools.invoke"]) :
         capabilityId === "agent_tools_cli" && agentToolCliAuthorized &&
-        majorVersion === 5 &&
+        majorVersion === 6 &&
         JSON.stringify([...operations].sort()) ===
           JSON.stringify(expectedOperations),
     );

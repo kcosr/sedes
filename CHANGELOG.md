@@ -14,7 +14,8 @@ User-facing changes are collected here before release. See the
   ([#73](https://github.com/kcosr/sedes/pull/73))
 
 - Upgrade browser and packaged clients together with the server for client
-  protocol **154**. Rebuild and upgrade execution sidecars and local workers;
+  protocol **155**. Rebuild and upgrade execution sidecars and local workers
+  for agent-tool CLI/relay protocol **6** and OpenCode MCP protocol **4**;
   older compiled runtime contracts are rejected. Notification scripts now use
   payload version **5**: update separately copied hooks with the server and
   review Script/Voice event and reply-phase settings.
@@ -54,6 +55,10 @@ User-facing changes are collected here before release. See the
   `remind`. ([#58](https://github.com/kcosr/sedes/pull/58), [#61](https://github.com/kcosr/sedes/pull/61))
 
 ### Added
+
+- Agents can show PNG, JPEG, GIF, and WebP image files directly in chat with
+  `image.show`. Sedes retains the captured image after its source changes or
+  disappears; enable **Show image** in the thread’s **Images** tools.
 
 - Drag individual threads into Groups or onto another thread to create a Group.
   Reference threads in a prompt by dragging them into the composer or choosing

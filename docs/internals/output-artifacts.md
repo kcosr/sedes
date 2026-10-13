@@ -1,12 +1,12 @@
 # Provider output artifacts
 
-Provider output artifacts are immutable image results produced by a backend
-after model work has begun. They are separate from
+Output artifacts are immutable images produced by a backend or captured by the
+application's `image.show` tool after model work has begun. They are separate from
 [composer attachments](composer-attachments.md), which are user-selected input
 captured before provider delivery, and from bounded images embedded in a
 normalized tool-result card.
 
-The current durable output-artifact implementation is deliberately narrow. It
+The provider capture implementation is deliberately narrow. It
 supports completed Codex `imageGeneration` items whose reviewed native result
 contains an in-band PNG, snapshots of files named by completed Codex
 `imageView` items, exact completed Grok `ImageGen` or `ImageEdit` tool
@@ -23,6 +23,7 @@ the contributor requirements that apply when extending this contract, see the
 
 - [Normalized contract](#normalized-contract)
 - [Ownership and access](#ownership-and-access)
+- [Explicit image display](#explicit-image-display)
 - [Codex byte authority](#codex-byte-authority-and-topology)
 - [Codex viewed-image capture](#codex-viewed-image-capture)
 - [Claude and Pi viewed images](#claude-and-pi-viewed-images)
@@ -49,6 +50,8 @@ history pages, and SSE carry the same descriptor-only representation.
 
 Every image item, retained or unavailable, also declares its `origin`:
 
+- `{ kind: "shown" }` for a retained source-file snapshot explicitly displayed
+  by `image.show`; these are standalone inline images, not provider image reads;
 - `{ kind: "generated" }` for provider-generated output: Codex
   `imageGeneration` and Grok `ImageGen` or `ImageEdit`;
 - `{ kind: "viewed", capture: "provider_input" }` for the exact in-band bytes
@@ -59,7 +62,7 @@ Every image item, retained or unavailable, also declares its `origin`:
 
 The browser pairs a `viewed_image` row with the image that directly follows it
 only when that image's origin kind is `viewed`, so a generated image is never
-disclosed by a view. Client protocol 126 requires the field.
+disclosed by a view. Client protocol 155 adds the `shown` origin.
 
 A `viewed_image` row is `streaming` while a provider read runs (labeled
 **Working…**), then `completed`, `failed`, or `interrupted`. A failed row
@@ -107,6 +110,30 @@ SHA-256 digest, `private, max-age=3600, immutable` caching, `nosniff`, and an
 inline filename derived from the artifact ID and canonical MIME extension.
 `HEAD` and conditional `304` responses close the retained file handle without
 sending a body.
+
+## Explicit image display
+
+`image.show` reads one supported image through the authenticated source thread's
+Files service. A durable receipt binds the scoped request ID, input fingerprint,
+exact native binding, output-artifact association, and current application turn
+anchor. The artifact association and display receipt commit atomically. A retry
+with the same request and input returns the capture without reopening the file;
+new requests capture the file again. Source-file paths never enter normalized
+image items. The optional title and sanitized basename are display metadata.
+
+The active actor/control/turn lease, Files environment, native binding, and
+cancellation are checked before and after I/O and at commit. Capture has bounded
+concurrency and duration. The common application-publication projection places
+the descriptor in live, restored, and paginated history within existing item and
+byte budgets, without changing provider-owned transcript or fork authority.
+Missing anchors are not guessed, and images have no Pages catalog or revisions.
+The tool returns JSON metadata only; no model-media content is generated.
+
+The canonical operation is shared by each backend's already supported Native or
+CLI surfaces: Pi Native/CLI (SSH Native only), Codex and Claude Native MCP/CLI,
+Grok local CLI, and OpenCode local Native Progressive/CLI. It does not enable
+Grok Native, unsupported remote presentations, or provider-generated-image
+capabilities. Each thread must explicitly grant the newly added tool.
 
 ## Ownership and access
 

@@ -4,6 +4,8 @@ import { CanonicalAgentToolRequestError } from "./canonical-agent-tool-request-e
 export { CanonicalAgentToolRequestError } from "./canonical-agent-tool-request-error.js";
 import type { WorkpadAgentToolService } from "../tools/workpad-agent-tool-service.js";
 import type { PageAgentToolService } from "../tools/page-agent-tool-service.js";
+import type { ImageShowAgentToolService } from "../tools/image-show-agent-tool-service.js";
+import { ImageShowError } from "../../output-artifacts/image-show-error.js";
 import { randomUUID } from "node:crypto";
 import { ZodError } from "zod";
 import { deterministicJson } from "../../canonical-json.js";
@@ -229,6 +231,11 @@ function admittedEffects(definition: AgentToolDefinition): boolean {
 export function mapAgentToolDomainError(
   cause: DomainError,
 ): CanonicalAgentToolRequestError {
+  if (cause instanceof ImageShowError) {
+    const code = cause.code === "bad_request" ? "invalid_input" : cause.code === "not_found"
+      ? "not_found" : cause.code === "conflict" ? "conflict" : "unavailable";
+    return new CanonicalAgentToolRequestError(code, cause.message, cause.retryable);
+  }
   if (cause instanceof WorkpadValidationError) return new CanonicalAgentToolRequestError("invalid_input", cause.message);
   switch (cause.code) {
     case "bad_request":
@@ -303,6 +310,7 @@ export class CanonicalInlineAgentToolService {
     readonly management?: AgentManagementService;
     readonly workpads?: WorkpadAgentToolService;
     readonly pages?: PageAgentToolService;
+    readonly images?: ImageShowAgentToolService;
     readonly automations?: AutomationAgentToolService;
     readonly threadCreation?: AgentThreadCreationService;
     readonly savedAgents?: SavedAgentCanonicalToolService;

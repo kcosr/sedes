@@ -31,6 +31,12 @@ import { PageRepository } from "../../src/server/db/repositories/page-repository
 import { PageService } from "../../src/server/pages/page-service.js";
 import { PagePreviewBrowser } from "../../src/server/pages/preview-browser.js";
 import { PageAgentToolService } from "../../src/server/agent-tools/tools/page-agent-tool-service.js";
+import { ImageShowAgentToolService } from "../../src/server/agent-tools/tools/image-show-agent-tool-service.js";
+import { ImageShowRepository } from "../../src/server/db/repositories/image-show-repository.js";
+import { OutputImageArtifactRepository } from "../../src/server/db/repositories/output-image-artifact-repository.js";
+import { ImageShowService } from "../../src/server/output-artifacts/image-show-service.js";
+import { OutputArtifactService } from "../../src/server/output-artifacts/service.js";
+import { OutputArtifactBlobStore } from "../../src/server/output-artifacts/blob-store.js";
 
 export interface ObservedAgentToolRequest {
   readonly method: string;
@@ -55,6 +61,8 @@ export async function startLiveAgentToolListener(input: {
   readonly pages?: boolean;
   /** Exact test-owned source files; contents are never included in the prompt. */
   readonly pageSourceFiles?: readonly string[];
+  /** Enable image.show for exact test-owned image paths, with real retained artifact storage. */
+  readonly imageSourceFiles?: readonly string[];
 }) {
   const database = openOverlayDatabaseConnection(
     path.join(input.root, "state", "overlay.sqlite"),
@@ -94,6 +102,13 @@ export async function startLiveAgentToolListener(input: {
     title: "Live agent-tool source",
     now: 300,
   });
+  if (input.imageSourceFiles) {
+    // Provider wiring is tested independently of the actor lifecycle here.
+    // The private fixture binding lets image.show fence its real durable receipt.
+    new ConversationBindingRepository(database).bindDiscoveredConversation(scope, thread.id, {
+      backendConversationId: "live-image-tool-source", now: 301,
+    });
+  }
   const sources = new DatabaseAgentToolSourceAuthority(
     database,
     new Uint8Array(32).fill(7),
@@ -133,12 +148,31 @@ export async function startLiveAgentToolListener(input: {
     preview: async request => { const { png, imageWidth, imageHeight, ...metadata } = await preview.render(request);
       return { ...metadata, screenshot: { mimeType: "image/png", data: png.toString("base64"), width: imageWidth, height: imageHeight } }; },
   }) : undefined;
+  const imageRepository = input.imageSourceFiles ? new ImageShowRepository(database) : undefined;
+  const outputArtifacts = imageRepository ? new OutputArtifactService(new OutputArtifactBlobStore(input.root),
+    new OutputImageArtifactRepository(database)) : undefined;
+  await outputArtifacts?.initialize();
+  const images = imageRepository && outputArtifacts ? new ImageShowService({ repository: imageRepository, artifacts: outputArtifacts,
+    inventory, bindings: new ConversationBindingRepository(database), files: {
+      readAbsoluteFile: async (requestScope, threadId, filePath, maximumBytes, signal) => {
+        if (requestScope.tenantId !== scope.tenantId || requestScope.principalId !== scope.principalId || threadId !== thread.id ||
+          !input.imageSourceFiles?.includes(filePath)) throw new Error("live_fixture_image_source_not_allowed");
+        const bytes = await readFile(filePath, { signal });
+        if (bytes.length > maximumBytes) throw new Error("live_fixture_image_source_too_large");
+        return bytes;
+      },
+    } }) : undefined;
+  const imageTools = images ? new ImageShowAgentToolService({ images,
+    capturePublication: () => ({ anchor: { turnId: "live-image-tool-turn" }, assertCurrent: () => undefined }),
+  }) : undefined;
+  const canonical = new CanonicalInlineAgentToolService({
+    application,
+    ...(pageTools ? { pages: pageTools } : {}),
+    ...(imageTools ? { images: imageTools } : {}),
+    invocationId: () => "live-agent-tool-invocation",
+  });
   const scopedTools = new SourceScopedAgentToolService(
-    new CanonicalInlineAgentToolService({
-      application,
-      ...(pageTools ? { pages: pageTools } : {}),
-      invocationId: () => "live-agent-tool-invocation",
-    }),
+    canonical,
     policies,
     new AgentToolEnvironmentAuthorityResolver(sources),
     sources,
@@ -212,6 +246,8 @@ export async function startLiveAgentToolListener(input: {
     workspaceId: workspace.id,
     observed,
     pages: pageService,
+    imagePublications: () => imageRepository?.publications(scope, thread.id) ?? [],
+    outputArtifacts,
     scope,
     issue: (presentation: "cli" | "mcp") =>
       sources.issue(trustedSource, "management_http", presentation),
@@ -221,6 +257,8 @@ export async function startLiveAgentToolListener(input: {
           server.close((error) => (error ? reject(error) : resolve())),
         );
       }
+      await canonical.close();
+      await images?.close();
       database.close();
     },
   };

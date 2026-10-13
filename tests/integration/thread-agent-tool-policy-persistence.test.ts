@@ -494,6 +494,7 @@ describe("thread agent tool policy persistence", () => {
         "page.list",
         "page.get",
         "page.revisions",
+        "image.show",
         "automation.get",
         "automation.runs",
         "automation.create",

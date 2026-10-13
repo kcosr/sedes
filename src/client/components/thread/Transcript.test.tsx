@@ -4911,7 +4911,7 @@ function asyncQuestionItem(turnId: string): ConversationItem {
 }
 
 describe("Transcript viewed images", () => {
-  it("discloses a captured viewed image inside its row between activity groups", () => {
+  it.each(["generated", "shown"] as const)("discloses a captured viewed image but keeps a following %s image inline", (inlineOrigin) => {
     const snapshot = makeSnapshot(["turn-1"], false);
     snapshot.turnsById["turn-1"] = {
       ...snapshot.turnsById["turn-1"]!,
@@ -4961,14 +4961,14 @@ describe("Transcript viewed images", () => {
         revision: 1,
         fileName: { text: "unavailable.png" },
       },
-      // Pairing keys on origin, so a generated image is never disclosed by a view.
+      // Pairing keys on origin, so generated and explicitly shown images stay inline.
       "generated-1": {
         id: "generated-1",
         turnId: "turn-1",
         kind: "image",
         status: "completed",
         revision: 1,
-        origin: { kind: "generated" },
+        origin: { kind: inlineOrigin },
         image: {
           representation: "artifact",
           artifactId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",

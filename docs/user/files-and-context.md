@@ -1,5 +1,8 @@
 # Files and context
 
+Agents can also [show an image file directly in chat](images.md). The image is
+captured from the thread's Files environment and retained with the conversation.
+
 The Files panel lets you inspect the current project without leaving Sedes.
 Composer attachments and context excerpts are separate ways to bring file or
 transcript material into a conversation.

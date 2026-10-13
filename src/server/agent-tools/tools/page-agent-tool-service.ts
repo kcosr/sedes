@@ -1,6 +1,6 @@
 import { z } from "zod";
-import { pageIdSchema, pageRevisionNumberSchema, pageSourceSchema, pageViewportSchema, publishPageRequestSchema,
-  type PagePublicationAnchor } from "../../../shared/protocol/pages.js";
+import { pageIdSchema, pageRevisionNumberSchema, pageSourceSchema, pageViewportSchema, publishPageRequestSchema } from "../../../shared/protocol/pages.js";
+import { type ApplicationPublicationAnchor } from "../../../shared/protocol/application-publications.js";
 import { DomainError } from "../../domain/errors.js";
 import type { RequestScope } from "../../identity/identity-provider.js";
 import type { PageService } from "../../pages/page-service.js";
@@ -21,7 +21,7 @@ export interface PagePreviewResult {
 export class PageAgentToolService {
   constructor(readonly dependencies: {
     pages: PageService;
-    capturePublication: (scope: RequestScope, threadId: string) => { anchor: PagePublicationAnchor; assertCurrent: () => void };
+    capturePublication: (scope: RequestScope, threadId: string) => { anchor: ApplicationPublicationAnchor; assertCurrent: () => void };
     preview?: (input: { html: string; width?: number; height?: number; signal?: AbortSignal }) => Promise<PagePreviewResult>;
   }) {}
 

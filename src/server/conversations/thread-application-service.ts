@@ -1,5 +1,5 @@
 import { initialThreadSettingsReady, threadInputDeliveryAvailability } from "./thread-input-readiness.js";
-import { fitPageItemsToSnapshot } from "./page-publication-projection.js";
+import { fitApplicationItemsToSnapshot } from "./application-publication-projection.js";
 import type { UsageService } from "../usage/usage-service.js";
 import { createHash } from "node:crypto";
 import type { BackendCapabilityDocument } from "../../shared/protocol/backend.js";
@@ -783,7 +783,7 @@ export class ThreadApplicationService {
       ...(recovery ? { recovery } : {}),
       attention: inventory.attention,
     };
-    const snapshot = normalizedThreadSnapshotSchema.parse(fitPageItemsToSnapshot({
+    const snapshot = normalizedThreadSnapshotSchema.parse(fitApplicationItemsToSnapshot({
       ...snapshotWithoutHistory,
       history: historyOperational ? this.#history!.window(
         scope,

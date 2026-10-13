@@ -6,8 +6,8 @@ import type {
 } from "../../src/shared/protocol/conversation.js";
 import { MAXIMUM_NORMALIZED_TIMELINE_TURNS, normalizedThreadSnapshotSchema, pageItemSchema, type PageItem } from "../../src/shared/protocol/conversation.js";
 import { ThreadEventHub } from "../../src/server/events/thread-event-hub.js";
-import { fitPageItemsToSnapshot } from "../../src/server/conversations/page-publication-projection.js";
-import * as pageProjection from "../../src/server/conversations/page-publication-projection.js";
+import { fitApplicationItemsToSnapshot } from "../../src/server/conversations/application-publication-projection.js";
+import * as pageProjection from "../../src/server/conversations/application-publication-projection.js";
 import { MAXIMUM_NORMALIZED_SNAPSHOT_OR_PAGE_BYTES, serializedUtf8Bytes } from "../../src/shared/protocol/payload.js";
 import * as payload from "../../src/shared/protocol/payload.js";
 import { NormalizedThreadStore } from "../../src/client/stores/NormalizedThreadStore.js";
@@ -41,6 +41,24 @@ function snapshotAtPageBoundary(): { native: NormalizedThreadSnapshot; source: N
     "preview-turn": { ...native.turnsById["preview-turn"]!, revision: 1, orderedItemIds: [item.id, page.id] },
   } } };
 }
+
+it("fits shown images at snapshot limits and reveals their retained descriptor on capacity recovery", () => {
+  const { native, source } = snapshotAtPageBoundary();
+  const page = previewItem();
+  const shown = { id: "shown-image", turnId: page.turnId, kind: "image" as const, revision: 0, status: "completed" as const,
+    origin: { kind: "shown" as const }, image: { representation: "artifact" as const,
+      artifactId: "33333333-3333-4333-8333-333333333333", mimeType: "image/png" as const, byteSize: 25, sha256: "b".repeat(64) } };
+  delete source.itemsById[page.id]; source.itemsById[shown.id] = shown;
+  source.turnsById[page.turnId] = { ...source.turnsById[page.turnId]!, orderedItemIds: ["native-answer", shown.id] };
+  const fitted = fitApplicationItemsToSnapshot(source).snapshot;
+  expect(fitted.itemsById).toEqual(native.itemsById);
+  const hub = new ThreadEventHub();
+  hub.publish({ type: "snapshot", generation: "shown", snapshot: fitted }, source);
+  const recovered = hub.publish({ type: "stashes_changed", generation: "shown", stashes: [] });
+  expect(recovered.event.type).toBe("snapshot");
+  expect(hub.snapshot!.itemsById[shown.id]).toEqual(shown);
+  expect(hub.snapshot!.turnsById[page.turnId]!.orderedItemIds).toEqual(["native-answer", shown.id]);
+});
 
 function snapshot(): NormalizedThreadSnapshot {
   return {
@@ -313,7 +331,7 @@ describe("ThreadEventHub", () => {
     const hub = new ThreadEventHub();
     const store = new NormalizedThreadStore();
     store.apply(hub.publish({ type: "snapshot", generation: "pair", snapshot: initial }));
-    const fitting = vi.spyOn(pageProjection, "fitPageItemsToSnapshot");
+    const fitting = vi.spyOn(pageProjection, "fitApplicationItemsToSnapshot");
     let published: readonly ThreadEventEnvelope[];
     try {
       published = hub.publishBatch([
@@ -395,7 +413,7 @@ describe("ThreadEventHub", () => {
     const { native, source } = snapshotAtPageBoundary();
     expect(normalizedThreadSnapshotSchema.safeParse(native).success).toBe(true);
     expect(normalizedThreadSnapshotSchema.safeParse(source).success).toBe(false);
-    const fitted = fitPageItemsToSnapshot(source).snapshot;
+    const fitted = fitApplicationItemsToSnapshot(source).snapshot;
     expect(fitted.itemsById).toEqual(native.itemsById);
     expect(fitted.turnsById).toEqual(native.turnsById);
     const hub = new ThreadEventHub();
@@ -440,7 +458,7 @@ describe("ThreadEventHub", () => {
     const hub = new ThreadEventHub();
     hub.publish({ type: "snapshot", generation: "stream", snapshot: base });
     const serialization = vi.spyOn(payload, "serializedUtf8Bytes");
-    const fitting = vi.spyOn(pageProjection, "fitPageItemsToSnapshot");
+    const fitting = vi.spyOn(pageProjection, "fitApplicationItemsToSnapshot");
     try {
       for (let revision = 1; revision <= 20; revision++) hub.publish({ type: "item_upsert", generation: "stream",
         item: { ...streaming, revision, markdown: { text: "delta".repeat(revision) } } });

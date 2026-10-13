@@ -3549,7 +3549,7 @@ alternate source claims, and to exactly one presentation, CLI or MCP. Derive
 the calling adapter from the resolved reference, never from a request field,
 so the CLI and `sedes mcp` share routes and relay frames without either
 satisfying the other's surface. The remote relay uses only the
-strict `agent_tools_cli@5` contract advertised for the enabled
+strict `agent_tools_cli@6` contract advertised for the enabled
 `agent_tools_cli` capability; unsupported or stale versions fail closed.
 Discovery may retain a bounded transport deadline, but invocation
 must propagate caller abort so an indefinitely waiting approval is not turned
@@ -3770,6 +3770,20 @@ Presentation turn revisions include visible pages;
 fork capabilities and `thread.messages` retain the native source revision,
 derived by subtracting referenced page items. Validate that relationship with
 the referenced items in snapshots, history pages, and incremental stores.
+
+Explicit image display uses the same application-publication projection and
+native-revision accounting. `image.show` reads through the source thread's
+admitted Files service and atomically retains an artifact and immutable display
+receipt bound to the scoped request ID, input, exact native binding, and active
+turn anchor. Replays return that capture without rereading the source; new
+requests create new captures. Check the active turn lease and Files authority
+before and after I/O and at commit. Never infer publication from provider text.
+Shown images have normalized origin `shown`, remain source-thread-owned across
+forks, share the existing item and byte budgets, and are not Pages entries.
+The tool returns bounded metadata only, with no `modelContent`; it does not
+change provider-generated-image capabilities. Expose it only through already
+supported canonical tool surfaces and explicit grants. See
+[Explicit image display](output-artifacts.md#explicit-image-display).
 
 Persist only immutable authored content, never a copy of trusted host scripts.
 During import, use the already parsed HTML document to compute an insertion

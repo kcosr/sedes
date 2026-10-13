@@ -1,3 +1,6 @@
+import { ImageShowRepository } from "./db/repositories/image-show-repository.js";
+import { ImageShowService } from "./output-artifacts/image-show-service.js";
+import { ImageShowAgentToolService } from "./agent-tools/tools/image-show-agent-tool-service.js";
 import { ClientControlToolService } from "./agent-tools/tools/client-control-tools.js";
 import { ClientControlService } from "./domain/client-control-service.js";
 import type { BackendRuntimeDiagnostic } from "./backends/module.js";
@@ -725,6 +728,11 @@ export async function startProductionApplication(
     );
     resources.defer("workspace file watchers", () => workspaceFiles.close());
     const bindings = new ConversationBindingRepository(database);
+    const imageShowRepository = new ImageShowRepository(database);
+    const images = new ImageShowService({ repository: imageShowRepository, artifacts: outputArtifacts,
+      files: workspaceFiles, inventory: inventoryRepository, bindings,
+      onShown: (eventScope, threadId) => actors!.refreshApplicationPublications(eventScope, threadId) });
+    resources.defer("shown image capture", () => images.close(), { mode: "ownership_critical" });
     const viewedImageCapture = new ViewedImageCaptureService({
       artifacts: outputArtifacts, files: workspaceFiles, bindings, inventory: inventoryRepository,
     });
@@ -1041,7 +1049,8 @@ export async function startProductionApplication(
       AuthoritativeCompletionObserver | undefined;
     const pageRepository = new PageRepository(database);
     actors = new ConversationActorManager({
-      pagePublications: (eventScope, threadId, turnIds) => pageRepository.publications(eventScope, threadId, turnIds),
+      applicationPublications: (eventScope, threadId, turnIds) => [
+        ...pageRepository.publications(eventScope, threadId, turnIds), ...imageShowRepository.publications(eventScope, threadId, turnIds)],
       onLiveProgress: (eventScope, threadId, input) => notificationLifecycle.progress(eventScope, threadId, input),
       environments: execution,
       attachmentDelivery,
@@ -1374,6 +1383,7 @@ export async function startProductionApplication(
           let operation = change;
           for (const row of rows.reverse()) {
             viewedImageCapture.cancelThread(scope, row.id);
+            images.cancelThread(scope, row.id);
             const next = operation;
             operation = () => runtimes!.runWithRuntimeRetired(scope, row.id, next);
           }
@@ -1596,7 +1606,7 @@ export async function startProductionApplication(
     });
     const pages = new PageService({
       repository: pageRepository, files: workspaceFiles, inventory: inventoryRepository,
-      onPublished: (eventScope, page) => actors!.refreshPagePublications(eventScope, page.threadId),
+      onPublished: (eventScope, page) => actors!.refreshApplicationPublications(eventScope, page.threadId),
     });
     forks.bindTaskPublications(tasks);
     const threadArchives = new ThreadArchiveService({
@@ -1821,9 +1831,11 @@ export async function startProductionApplication(
     const canonicalAgentTools = new CanonicalInlineAgentToolService({
       clientControls: clientControlTools,
       workpads: new WorkpadAgentToolService({ workpads, authorityReader: agentToolSources }),
+      images: new ImageShowAgentToolService({ images,
+        capturePublication: (eventScope, threadId) => actors!.captureApplicationPublication(eventScope, threadId) }),
       pages: new PageAgentToolService({
         pages,
-        capturePublication: (eventScope, threadId) => actors!.capturePagePublication(eventScope, threadId),
+        capturePublication: (eventScope, threadId) => actors!.captureApplicationPublication(eventScope, threadId),
         preview: async (input) => {
           try {
             const { png, imageWidth, imageHeight, ...result } = await pagePreview.render(input);
@@ -2378,6 +2390,7 @@ export async function startProductionApplication(
     };
     const withdrawEnvironmentRuntime = async (id: string): Promise<void> => {
       viewedImageCapture.cancelEnvironment(scope, id);
+      images.cancelEnvironment(scope, id);
       const current = environmentRuntimes.get(id);
       if (!current) return;
       await terminalService.detachEnvironment(scope, id);
@@ -2542,6 +2555,7 @@ export async function startProductionApplication(
             let operation = async () => { await effect?.(); return change(); };
             for (const preview of previews.reverse()) {
               viewedImageCapture.cancelThread(scope, preview.id);
+              images.cancelThread(scope, preview.id);
               const next = operation;
               operation = () => runtimes!.runWithRuntimeDetached(scope, preview.id, preview.evidence, next);
             }
@@ -2566,7 +2580,7 @@ export async function startProductionApplication(
         const threadIds = selected.flatMap(id => (database!.prepare(`SELECT id FROM application_threads
           WHERE tenant_id = ? AND owner_principal_id = ? AND backend_instance_id = ? ORDER BY id`)
           .all(scope.tenantId, scope.principalId, id) as {id: string}[]).map(row => row.id));
-        for (const threadId of threadIds) viewedImageCapture.cancelThread(scope, threadId);
+        for (const threadId of threadIds) { viewedImageCapture.cancelThread(scope, threadId); images.cancelThread(scope, threadId); }
         let value!: Result;
         let effectSucceeded = false;
         return await runtimes!.runWithRuntimesStopped(scope, threadIds, async () => {
@@ -2993,6 +3007,7 @@ export async function startProductionApplication(
         const result = hostPairings.revoke(candidate, request);
         authentication.revokeConnector(result.pairing.connectorId);
         viewedImageCapture.cancelEnvironment(candidate, result.pairing.executionEnvironmentId);
+        images.cancelEnvironment(candidate, result.pairing.executionEnvironmentId);
         return result;
       }),
       reapprove: (candidate, request) => applyPairingMutation(candidate, () => hostPairings.reapprove(candidate, request)),

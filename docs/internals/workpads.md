@@ -186,8 +186,8 @@ the invocation envelope while retaining the 256 KiB ingress cap for other tools.
 The repository checks the projected tool result before committing, and tool
 rejections retain actionable content, revision-byte, and attribution diagnostics.
 Rebuild CLI executables and sidecars together: the local protocol and
-`agent_tools_cli` capability are version 5; OpenCode's private tool relay and
-MCP bridge handshake are version 3. Stale private protocols fail closed.
+`agent_tools_cli` capability are version 6; OpenCode's private tool relay remains
+version 3, and its MCP bridge handshake is version 4. Stale private protocols fail closed.
 
 ## Deletion
 

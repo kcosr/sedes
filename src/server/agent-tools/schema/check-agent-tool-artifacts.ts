@@ -1,5 +1,6 @@
 import type { WorkpadAgentToolService } from "../tools/workpad-agent-tool-service.js";
 import type { PageAgentToolService } from "../tools/page-agent-tool-service.js";
+import type { ImageShowAgentToolService } from "../tools/image-show-agent-tool-service.js";
 import { readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -107,6 +108,7 @@ function definitions(): readonly AgentToolDefinition[] {
     application: artifactReader,
     workpads: unavailableDomainService<WorkpadAgentToolService>("workpad_service"),
     pages: unavailableDomainService<PageAgentToolService>("page_service"),
+    images: unavailableDomainService<ImageShowAgentToolService>("image_service"),
     management: artifactManagement,
     automations: artifactAutomations,
     threadCreation: artifactThreadCreation,

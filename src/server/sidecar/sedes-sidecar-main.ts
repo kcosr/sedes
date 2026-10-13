@@ -278,7 +278,7 @@ async function main(): Promise<void> {
           : request.operation === "describe" ? { type: "describe", toolIds: request.toolIds }
           : { type: "invoke", request: request.request };
         try {
-          return (await relayAgentToolRequest(attachment, { protocolVersion: 5, requestId: randomUUID(), sourceCapability, operation }, signal, stamp)).value;
+          return (await relayAgentToolRequest(attachment, { protocolVersion: 6, requestId: randomUUID(), sourceCapability, operation }, signal, stamp)).value;
         } catch (error) {
           if (error instanceof AgentToolCliIngressError) throw new BackendAgentToolRequestError(error.toolError);
           throw error;

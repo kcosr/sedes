@@ -109,6 +109,7 @@ export class OutputImageArtifactRepository implements OutputArtifactPersistence 
       sha256: string;
       now: number;
       assertPublicationAllowed?: () => void;
+      onRecorded?: (descriptor: OutputImageArtifactDescriptor) => void;
     }>,
   ): OutputImageArtifactDescriptor {
     return this.database.transaction(() => {
@@ -179,6 +180,7 @@ export class OutputImageArtifactRepository implements OutputArtifactPersistence 
           "The output artifact publication identity is already in use.",
         );
       }
+      input.onRecorded?.(stored);
       return stored;
     })();
   }
