@@ -1252,8 +1252,8 @@ grants are retained when runtime eligibility is unavailable; tool settings show
 the reason separately. Availability describes current known eligibility, not
 proof that an external provider has applied a new catalog.
 
-For an older affected session, upgrade and migrate the database, back up the
-state directory, and stop the Sedes server. Use the installed `sedes` CLI as
+For an older affected session, back up the state directory before upgrading
+and migrating the database, then stop the Sedes server. Use the installed `sedes` CLI as
 the server account with explicit database, tenant, principal, thread and native
 session identities. This command defaults to a read-only preview and never
 migrates a database:
