@@ -23,6 +23,7 @@ import { PolicyCheckedAgentToolHttpService } from "../../src/server/agent-tools/
 import { CanonicalInlineAgentToolService } from "../../src/server/agent-tools/invocation/canonical-inline-agent-tool-service.js";
 import type { ConfigurationDocument } from "../../src/shared/protocol/configuration-admin.js";
 import { initializeDatabaseConfigurationFixture } from "../support/database-configuration-fixture.js";
+import { codexValidationStderr } from "../support/codex-validation-stderr.js";
 import type { AppConfig } from "../../src/server/config/config.js";
 import { createThreadAgentToolPolicyDependencies } from "../../src/server/conversations/thread-agent-tool-policy-dependencies.js";
 import { openOverlayDatabaseConnection } from "../../src/server/db/database.js";
@@ -490,7 +491,16 @@ describe("real Codex Sedes CLI skill", () => {
           timeoutMilliseconds: 340_000,
         });
 
-        expect(execution.stderr).toBe("");
+        const stderr = codexValidationStderr(
+          execution.stderr,
+          process.env.SEDES_ALLOW_CODEX_ARG0_CLEANUP_WARNING === "1",
+        );
+        if (stderr !== execution.stderr) {
+          console.warn(
+            "Codex validation allowed the known arg0 cleanup permission warning (SEDES_ALLOW_CODEX_ARG0_CLEANUP_WARNING=1).",
+          );
+        }
+        expect(stderr).toBe("");
         const events = parseJsonLines(execution.stdout);
         expect(events.length).toBeGreaterThan(0);
         for (const event of events) {
