@@ -498,15 +498,17 @@ test("dragging individual threads creates a group and adds to its stack", async 
     await expect(picker).toBeHidden();
     await expect(message).toBeFocused();
 
-    // Short context stays adjacent too; restore the shared fixture before
-    // checking the natural text gaps so a stretched column cannot pass.
+    // Use a deterministic short label: the shared project's initial name
+    // depends on the checkout directory and may itself require truncation.
+    // The finally block restores the shared fixture's original project name.
+    const shortProjectName = "Selector";
     const currentProject = (await pickerContext(page, targetId)).project;
     const restored = await page.request.patch(`/api/projects/${currentProject.id}`, {
       headers: { "Content-Type": "application/json", "X-CSRF-Token": session.csrfToken },
-      data: { name: initialContext.project.name, expectedRevision: currentProject.revision },
+      data: { name: shortProjectName, expectedRevision: currentProject.revision },
     });
     expect(restored.status()).toBe(200);
-    const shortContext = { project: initialContext.project.name, environment: initialContext.environment };
+    const shortContext = { project: shortProjectName, environment: initialContext.environment };
     await page.setViewportSize({ width: 1440, height: 900 });
     await message.fill("Compare ");
     await message.pressSequentially("@source");
