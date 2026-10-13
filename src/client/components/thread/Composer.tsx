@@ -3034,11 +3034,13 @@ export function Composer({
                     const thread = threadDrag.resolveDraggedThread(event.dataTransfer);
                     threadDrag.endThreadDrag();
                     if (!thread) {
-                      threadDrag.announce("That thread is no longer available to reference.", true);
+                      const message = "That thread is no longer available to reference.";
+                      setPromptInputError(message);
+                      threadDrag.announce(message);
                       return;
                     }
                     const added = stageThreadReference(thread);
-                    threadDrag.announce(added ? `Referenced “${thread.title.text}” in the prompt.` : "The thread could not be added to this prompt.", !added);
+                    threadDrag.announce(added ? `Referenced “${thread.title.text}” in the prompt.` : "The thread could not be added to this prompt.");
                     return;
                   }
                   if (taskDrag?.isTaskDrag(event.dataTransfer)) {

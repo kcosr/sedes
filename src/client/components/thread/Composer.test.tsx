@@ -885,6 +885,32 @@ describe("thread references", () => {
     expect(store.deliver).not.toHaveBeenCalled();
   });
 
+  it.each(["duplicate", "removed"] as const)("keeps a rejected %s reference drop error inside the composer", (reason) => {
+    const initialText = reason === "duplicate" ? formatThreadReferenceText("Keep body", [selectedThreadReference]) : "Keep body";
+    const store = new FakeComposerStore(snapshot(), initialText);
+    const application = referenceApplication();
+    render(<ThreadDragProvider store={application.store} snapshot={application.snapshot}>
+      <ThreadDragTestSource /><Composer store={store as unknown as ThreadClientStore} applicationStore={application.store} />
+    </ThreadDragProvider>);
+    const values = new Map<string, string>();
+    const types: string[] = [];
+    const transfer = { types, items: [], files: [], setData: (type: string, value: string) => { types.push(type); values.set(type, value); }, getData: (type: string) => values.get(type) ?? "" } as unknown as DataTransfer;
+    fireEvent.dragStart(screen.getByRole("button", { name: "Drag thread" }), { dataTransfer: transfer });
+    if (reason === "removed") {
+      const state = application.store.getSnapshot();
+      vi.spyOn(application.store, "getSnapshot").mockReturnValue({ ...state, snapshot: { ...application.snapshot, threads: [] } });
+    }
+    const composer = screen.getByTestId("composer");
+    fireEvent.drop(composer, { dataTransfer: transfer });
+    const message = reason === "duplicate" ? "That thread is already referenced." : "That thread is no longer available to reference.";
+    expect(within(composer).getByRole("alert")).toHaveTextContent(message);
+    expect(screen.queryByRole("alert", { name: "Thread drop failed" })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("alert")).toHaveLength(1);
+    expect(screen.getAllByRole("status").some((status) => status.textContent?.includes(reason === "duplicate" ? "The thread could not be added to this prompt." : message))).toBe(true);
+    expect(screen.getByRole("textbox")).toHaveValue("Keep body");
+    expect(store.deliver).not.toHaveBeenCalled();
+  });
+
   it("retains reference bytes when stashing and restores their chips", async () => {
     const value = formatThreadReferenceText("Saved body", [selectedThreadReference]);
     const store = new FakeComposerStore(snapshot(), value);
