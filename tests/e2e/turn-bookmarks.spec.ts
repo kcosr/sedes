@@ -186,8 +186,10 @@ test("turn bookmarks persist, preview both sides, navigate, and synchronize", as
     await page.getByRole("button", { name: "Bookmarks, 1" }).click();
     await page.locator('[data-slot="turn-bookmark-link"]').click();
     await expectResponsePosition(page, firstTurnId!);
-    await page.getByRole("button", { name: "Return to latest" }).click();
+    await page.getByRole("button", { name: "Return to latest" }).focus();
+    await page.keyboard.press("Enter");
     await expect(page.getByTestId("seek-spacer")).toHaveCSS("height", "0px");
+    await expect(page.locator(".source-turn-highlight")).toHaveCount(0);
 
     mobileContext = await browser.newContext({
       viewport: { width: 390, height: 844 },
@@ -264,6 +266,9 @@ test("turn bookmarks persist, preview both sides, navigate, and synchronize", as
     expect(footerBookmarkBox!.height).toBeGreaterThanOrEqual(44);
     await expectNoPageOverflow(mobilePage);
     await capture(mobilePage, testInfo, "turn-bookmarks-mobile-footer.png");
+    await mobilePage.locator(".source-turn-highlight").press("End");
+    await expect(mobilePage.getByTestId("seek-spacer")).toHaveCSS("height", "0px");
+    await expect(mobilePage.getByRole("button", { name: "Jump to latest" })).toHaveCount(0);
     await mobilePage.getByTestId("thread-context").click();
     await expect(mobilePage.locator(".source-turn-highlight")).toHaveCount(0);
 

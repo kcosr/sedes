@@ -121,6 +121,13 @@ const scrollIntentKeys = new Set([
   "PageDown",
   " ",
 ]);
+const keyboardControlSelector = [
+  "button, input, textarea, select, a[href], summary, audio, video",
+  '[contenteditable]:not([contenteditable="false"]), [tabindex]:not([tabindex="-1"])',
+  '[role="button"], [role="link"], [role="textbox"], [role="combobox"], [role="menuitem"]',
+  '[role="slider"], [role="spinbutton"], [role="checkbox"], [role="radio"], [role="switch"]',
+  '[role="listbox"], [role="menu"], [role="tree"], [role="grid"], [role="tablist"]',
+].join(", ");
 
 export function Transcript({
   ref,
@@ -870,8 +877,8 @@ export function Transcript({
   };
 
   useEffect(() => {
-    if (focusTurnId) setLocallySelectedTurnId(undefined);
-  }, [focusTurnId, store]);
+    setLocallySelectedTurnId(undefined);
+  }, [focusTurnId, focusResponse, store]);
 
   useEffect(() => {
     if (!locallySelectedTurnId) return;
@@ -1934,7 +1941,13 @@ export function Transcript({
             if (!measureLiveEdge()) wasAtLiveEdge.current = false;
           }}
           onKeyDown={(event) => {
-            if (event.target !== event.currentTarget) return;
+            if (event.defaultPrevented) return;
+            // Bookmark navigation focuses the turn, so its reading keys bubble
+            // here. Controls and editors keep their own keyboard behavior.
+            const control = event.target instanceof Element
+              ? event.target.closest(keyboardControlSelector)
+              : null;
+            if (control && control !== event.currentTarget) return;
             if (event.key === "End") {
               event.preventDefault();
               setLocallySelectedTurnId(undefined);
@@ -2461,7 +2474,7 @@ function findSeekTarget(
     if (!turn) return null;
     return (identity.itemId ? turn.querySelector<HTMLElement>(
       `[data-item-id="${CSS.escape(identity.itemId)}"], [data-activity-first-item-id="${CSS.escape(identity.itemId)}"]`,
-    ) : null) ?? turn.querySelector<HTMLElement>(".turn-fork-footer");
+    ) : null) ?? findTextlessResponseTarget(turn);
   }
   if (identity.operationId) {
     const byOperation = element.querySelector<HTMLElement>(
@@ -2479,5 +2492,11 @@ function findTurnResponseTarget(turn: HTMLElement): HTMLElement {
   const item = itemId ? turn.querySelector<HTMLElement>(
     `[data-item-id="${CSS.escape(itemId)}"], [data-activity-first-item-id="${CSS.escape(itemId)}"]`,
   ) : null;
-  return item ?? turn.querySelector<HTMLElement>(".turn-fork-footer") ?? turn;
+  return item ?? findTextlessResponseTarget(turn);
+}
+
+function findTextlessResponseTarget(turn: HTMLElement): HTMLElement {
+  return turn.querySelector<HTMLElement>(".turn-failure-details")
+    ?? turn.querySelector<HTMLElement>(".turn-fork-footer")
+    ?? turn;
 }

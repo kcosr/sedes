@@ -653,9 +653,9 @@ while its turn is still running.
 
 Select a bookmark to jump to the first assistant text in that turn, even when
 it is outside the currently loaded history window. If the turn has no response
-text, the bookmark opens its activity or empty response footer instead. Remove
-a bookmark from the turn itself or from the Bookmarks list. Bookmarks follow the user across browsers, and sidebar rows
-show their count.
+text, the bookmark opens its activity, failure details, or empty response footer
+instead. Remove a bookmark from the turn itself or from the Bookmarks list.
+Bookmarks follow the user across browsers, and sidebar rows show their count.
 
 Bookmarks mark turns in the current thread; they do not copy content, change
 provider history, or create a global bookmark library.
