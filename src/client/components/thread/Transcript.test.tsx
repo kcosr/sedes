@@ -1432,7 +1432,7 @@ describe("Transcript history positioning", () => {
     ).toBeInTheDocument();
   });
 
-  it("keeps an earlier completed fork action without a running-turn footer", () => {
+  it("keeps an earlier fork action when the running turn has no durable user message", () => {
     const snapshot = makeSnapshot(["turn-1", "turn-2"], false);
     snapshot.forkSource = {
       selectedCompletedTurn: { available: true },
