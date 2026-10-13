@@ -60,65 +60,10 @@ function isCanonicalRootSchema(value: unknown): boolean {
   }
 }
 
-export function isBoundedAgentToolJson(value: unknown): boolean {
-  const pending: Array<{ readonly value: unknown; readonly depth: number }> = [
-    { value, depth: 0 },
-  ];
-  let nodes = 0;
-  while (pending.length > 0) {
-    const current = pending.pop()!;
-    nodes += 1;
-    if (
-      nodes > agentToolTransportLimits.maximumJsonNodes ||
-      current.depth > agentToolTransportLimits.maximumJsonDepth
-    ) {
-      return false;
-    }
-    if (
-      current.value === null ||
-      typeof current.value === "boolean" ||
-      (typeof current.value === "number" && Number.isFinite(current.value))
-    ) {
-      continue;
-    }
-    if (typeof current.value === "string") {
-      if (current.value.length > 65_536) return false;
-      continue;
-    }
-    if (typeof current.value !== "object") return false;
-    if (Array.isArray(current.value)) {
-      if (current.value.length > 1_024) return false;
-      for (const child of current.value) {
-        pending.push({ value: child, depth: current.depth + 1 });
-      }
-      continue;
-    }
-    if (
-      Object.getPrototypeOf(current.value) !== Object.prototype ||
-      Object.getOwnPropertySymbols(current.value).length > 0
-    ) {
-      return false;
-    }
-    const keys = Object.keys(current.value);
-    if (keys.length > 256 || keys.some((key) => key.length > 256)) return false;
-    for (const key of keys) {
-      const descriptor = Object.getOwnPropertyDescriptor(current.value, key);
-      if (!descriptor || !("value" in descriptor)) return false;
-      pending.push({ value: descriptor.value, depth: current.depth + 1 });
-    }
-  }
-  return true;
-}
-
 const canonicalRootSchema = z.custom(
   isCanonicalRootSchema,
   "A canonical agent-tool JSON Schema is required.",
 );
-const boundedJsonSchema = z.custom(
-  isBoundedAgentToolJson,
-  "A bounded JSON value is required.",
-);
-
 const agentToolContractArtifactBaseSchema = z.strictObject({
   artifactVersion: z.literal(2),
   id: toolIdSchema,
@@ -177,6 +122,7 @@ const agentToolContractArtifactBaseSchema = z.strictObject({
       "tasks",
       "workpads",
       "pages",
+      "images",
       "automations",
       "research",
     ]),

@@ -22,6 +22,7 @@ import type {
 } from "../../stores/ThreadClientStore.js";
 import { PendingInputStrip } from "./PendingInputStrip.js";
 import { largeDirectInputText } from "../../../../tests/support/large-direct-input.js";
+import { formatThreadReferenceText, THREAD_REFERENCE_HEADER } from "../../../shared/thread-references.js";
 
 afterEach(() => {
   cleanup();
@@ -319,6 +320,21 @@ function renderStrip(
 }
 
 describe("PendingInputStrip", () => {
+  it.each(["queue", "steer"] as const)("shows selected-reference bodies and title-only fallbacks in local %s previews", (mode) => {
+    const references = [{ threadId: "616946aa-4574-41f7-bd70-d3a9edd56dbd", title: "Related thread" }];
+    const value = formatThreadReferenceText("The visible request", references);
+    const local = transfer("reference-preview", mode);
+    local.captured.text = value;
+    const store = new FakeStripStore(snapshot([]));
+    store.setTransfers([local]);
+    const view = renderStrip(store);
+    expect(view.container).toHaveTextContent("The visible request");
+    expect(view.container).not.toHaveTextContent(THREAD_REFERENCE_HEADER);
+    expect(local.captured.text).toBe(value);
+    act(() => store.setTransfers([{ ...local, captured: { ...local.captured, text: formatThreadReferenceText("", references) } }]));
+    expect(view.container).toHaveTextContent("Referenced thread: Related thread");
+    expect(view.container).not.toHaveTextContent('"threadReferences"');
+  });
   it("keeps queue recovery visible with later messages and clears it only after reconciliation", async () => {
     const store = new FakeStripStore(snapshot([queued("head", 1, "uncertain"), queued("later", 2, "pending")]));
     const { input } = renderStrip(store);

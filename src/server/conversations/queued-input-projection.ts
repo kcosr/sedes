@@ -1,4 +1,5 @@
 import type { QueuedInputSummary } from "../../shared/protocol/conversation.js";
+import { splitThreadReferenceText } from "../../shared/thread-references.js";
 import { MAXIMUM_DRAFT_BYTES, OVERSIZED_COMPOSER_RESTORE_REASON } from "../../shared/protocol/context-excerpts.js";
 import {
   queuedInputPresentationSchema,
@@ -26,8 +27,12 @@ const projectedQueueStates = new Set<QueuedInputRecord["state"]>([
 ]);
 
 function queuedInputPreview(item: QueuedInputRecord) {
-  const text = item.text.trim();
+  const references = splitThreadReferenceText(item.text);
+  const text = references.text.trim();
   if (text.length > 0) return boundDisplayText(text, QUEUE_PREVIEW_LIMITS);
+  if (references.references.length > 0) {
+    return boundDisplayText(`Referenced thread: ${references.references[0]!.title}${references.references.length > 1 ? ` · +${references.references.length - 1}` : ""}`, QUEUE_PREVIEW_LIMITS);
+  }
   const taskCount = item.taskContexts.length;
   if (taskCount > 0) {
     const firstTitle = item.taskContexts[0]!.title.trim();

@@ -89,6 +89,8 @@ export interface OutputArtifactPersistence {
       now: number;
       /** Synchronous authority validation inside the publication transaction. */
       assertPublicationAllowed?: () => void;
+      /** Joins application metadata to the same artifact transaction. */
+      onRecorded?: (descriptor: OutputImageArtifactDescriptor) => void;
     }>,
   ): OutputImageArtifactDescriptor;
 

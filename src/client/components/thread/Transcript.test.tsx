@@ -521,6 +521,171 @@ describe("Transcript history positioning", () => {
     expect(fake.seekHistoryTurn).not.toHaveBeenCalled();
   });
 
+  it.each(["text", "activity", "failure", "empty"] as const)("seeks the response %s rather than the user prompt", (kind) => {
+    vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: true })));
+    const snapshot = userMessageSnapshot(["turn-1"]);
+    snapshot.itemsById.reasoning = { id: "reasoning", turnId: "turn-1", revision: 1, kind: "reasoning", status: "completed", markdown: { text: "Thinking" } };
+    snapshot.itemsById.reply = { id: "reply", turnId: "turn-1", revision: 1, kind: "assistant_message", status: "completed", markdown: { text: "Response" } };
+    snapshot.turnsById["turn-1"]!.orderedItemIds = ["turn-1-user", ...((kind === "text" || kind === "activity") ? ["reasoning"] : []), ...(kind === "text" ? ["reply"] : [])];
+    if (kind === "failure") {
+      snapshot.turnsById["turn-1"] = { ...snapshot.turnsById["turn-1"]!, status: "failed", failure: { message: { text: "Model unavailable" } } };
+    }
+    const fake = new FakeTranscriptStore(snapshot);
+    const transcript = createRef<TranscriptHandle>();
+    render(<Transcript ref={transcript} store={fake as unknown as ThreadClientStore} />);
+    const viewport = screen.getByRole("region", { name: "Messages" });
+    const turn = document.querySelector<HTMLElement>('[data-turn-id="turn-1"]')!;
+    const anchor = kind === "text" ? turn.querySelector('[data-item-id="reply"]')!
+      : kind === "activity" ? turn.querySelector('[data-activity-first-item-id="reasoning"]')!
+      : kind === "failure" ? turn.querySelector(".turn-failure-details")!
+      : turn.querySelector("footer")!;
+    const scrollTo = vi.fn();
+    Object.defineProperties(viewport, {
+      clientHeight: { configurable: true, value: 300 },
+      scrollHeight: { configurable: true, value: 900 },
+      getBoundingClientRect: { configurable: true, value: () => ({ top: 40 }) },
+      scrollTo: { configurable: true, value: scrollTo },
+    });
+    vi.spyOn(turn, "getBoundingClientRect").mockReturnValue({ top: 80 } as DOMRect);
+    vi.spyOn(anchor, "getBoundingClientRect").mockReturnValue({ top: 240 } as DOMRect);
+    act(() => expect(transcript.current!.seekTurn("turn-1", "response")).toBe(true));
+    expect(scrollTo).toHaveBeenLastCalledWith(expect.objectContaining({ top: 184 }));
+    expect(turn).toHaveFocus();
+    act(() => expect(transcript.current!.seekTurn("turn-1")).toBe(true));
+    expect(scrollTo).toHaveBeenLastCalledWith(expect.objectContaining({ top: 24 }));
+  });
+
+  it.each(["End", "PageDown", " "])("releases a response reservation through %s from the focused turn", (key) => {
+    vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: true })));
+    const snapshot = userMessageSnapshot(["turn-1"]);
+    snapshot.itemsById.reply = { id: "reply", turnId: "turn-1", revision: 1, kind: "assistant_message", status: "completed", markdown: { text: "Short response" } };
+    snapshot.turnsById["turn-1"]!.orderedItemIds.push("reply");
+    const transcript = createRef<TranscriptHandle>();
+    render(<Transcript ref={transcript} store={new FakeTranscriptStore(snapshot) as unknown as ThreadClientStore} />);
+    const viewport = screen.getByRole("region", { name: "Messages" });
+    Object.defineProperties(viewport, {
+      clientHeight: { configurable: true, value: 300 },
+      scrollHeight: { configurable: true, value: 300 },
+      getBoundingClientRect: { configurable: true, value: () => ({ top: 40 }) },
+      scrollTo: { configurable: true, value: vi.fn() },
+    });
+    vi.spyOn(document.querySelector('[data-item-id="reply"]')!, "getBoundingClientRect").mockReturnValue({ top: 140 } as DOMRect);
+    // Publish the mocked viewport size before exercising a reader scroll.
+    fireEvent.scroll(viewport);
+    act(() => expect(transcript.current!.seekTurn("turn-1", "response")).toBe(true));
+    expect(screen.getByTestId("seek-spacer").style.height).toMatch(/100cqh\s*-\s*216px/);
+    expect(viewport.scrollTo).toHaveBeenCalledWith(expect.objectContaining({ top: 84 }));
+    // The bookmark focuses the section, so scrolling keys originate there.
+    const selectedTurn = document.querySelector<HTMLElement>('[data-turn-id="turn-1"]')!;
+    expect(selectedTurn).toHaveFocus();
+    fireEvent.keyDown(selectedTurn, { key });
+    if (key !== "End") fireEvent.scroll(viewport);
+    expect(screen.getByTestId("seek-spacer").style.height).toBe("0px");
+    expect(screen.queryByRole("button", { name: "Jump to latest" })).toBeNull();
+  });
+
+  it("leaves interactive descendants in charge of their scrolling keys", () => {
+    vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: true })));
+    const snapshot = userMessageSnapshot(["turn-1"]);
+    const transcript = createRef<TranscriptHandle>();
+    render(<Transcript ref={transcript} store={new FakeTranscriptStore(snapshot) as unknown as ThreadClientStore} />);
+    const viewport = screen.getByRole("region", { name: "Messages" });
+    Object.defineProperties(viewport, {
+      clientHeight: { configurable: true, value: 300 },
+      scrollHeight: { configurable: true, value: 300 },
+      getBoundingClientRect: { configurable: true, value: () => ({ top: 0 }) },
+      scrollTo: { configurable: true, value: vi.fn() },
+    });
+    fireEvent.scroll(viewport);
+    const selectedTurn = document.querySelector<HTMLElement>('[data-turn-id="turn-1"]')!;
+    vi.spyOn(selectedTurn.querySelector("footer")!, "getBoundingClientRect").mockReturnValue({ top: 100 } as DOMRect);
+    for (const control of [document.createElement("button"), document.createElement("textarea"), Object.assign(document.createElement("div"), { contentEditable: "true" })]) {
+      if (control.tagName === "DIV") control.setAttribute("contenteditable", "true");
+      selectedTurn.append(control);
+      act(() => transcript.current!.seekTurn("turn-1", "response"));
+      fireEvent.keyDown(control, { key: "End" });
+      fireEvent.keyDown(control, { key: "PageDown" });
+      fireEvent.scroll(viewport);
+      expect(screen.getByTestId("seek-spacer").style.height).not.toBe("0px");
+      control.remove();
+    }
+  });
+
+  it("clears the reselected response highlight when its focused route is left without a pointer", () => {
+    vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: true })));
+    const snapshot = userMessageSnapshot(["turn-1"]);
+    const fake = new FakeTranscriptStore(snapshot);
+    const transcript = createRef<TranscriptHandle>();
+    const view = render(<Transcript ref={transcript} store={fake as unknown as ThreadClientStore} focusTurnId="turn-1" focusResponse />);
+    const viewport = screen.getByRole("region", { name: "Messages" });
+    Object.defineProperty(viewport, "scrollTo", { configurable: true, value: vi.fn() });
+    act(() => transcript.current!.seekTurn("turn-1", "response"));
+    const selectedTurn = document.querySelector<HTMLElement>('[data-turn-id="turn-1"]')!;
+    expect(selectedTurn).toHaveClass("source-turn-highlight");
+    view.rerender(<Transcript ref={transcript} store={fake as unknown as ThreadClientStore} />);
+    expect(selectedTurn).not.toHaveClass("source-turn-highlight");
+    expect(selectedTurn).not.toHaveAttribute("aria-label", "Selected turn");
+    expect(selectedTurn).not.toHaveAttribute("tabindex");
+  });
+
+  it("keeps a selected response in view when an unarmed user message arrives", () => {
+    const flushFrames = controllableAnimationFrames();
+    vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: true })));
+    const snapshot = userMessageSnapshot(["turn-1"]);
+    snapshot.itemsById.reply = { id: "reply", turnId: "turn-1", revision: 1, kind: "assistant_message", status: "completed", markdown: { text: "Selected response" } };
+    snapshot.turnsById["turn-1"]!.orderedItemIds.push("reply");
+    const fake = new FakeTranscriptStore(snapshot);
+    const transcript = createRef<TranscriptHandle>();
+    render(<Transcript ref={transcript} store={fake as unknown as ThreadClientStore} />);
+    const viewport = screen.getByRole("region", { name: "Messages" });
+    const scrollTo = vi.fn();
+    Object.defineProperties(viewport, {
+      clientHeight: { configurable: true, value: 300 },
+      scrollHeight: { configurable: true, value: 900 },
+      getBoundingClientRect: { configurable: true, value: () => ({ top: 0 }) },
+      scrollTo: { configurable: true, value: scrollTo },
+    });
+    act(flushFrames);
+    viewport.scrollTop = 184;
+    vi.spyOn(document.querySelector('[data-item-id="reply"]')!, "getBoundingClientRect").mockReturnValue({ top: 16 } as DOMRect);
+    act(() => transcript.current!.seekTurn("turn-1", "response"));
+    scrollTo.mockClear();
+    const updated = userMessageSnapshot(["turn-2"]);
+    updated.orderedTurnIds.unshift("turn-1");
+    updated.turnsById["turn-1"] = snapshot.turnsById["turn-1"]!;
+    updated.itemsById = { ...snapshot.itemsById, ...updated.itemsById };
+    act(() => fake.replaceSnapshot(updated));
+    act(flushFrames);
+    expect(scrollTo).not.toHaveBeenCalled();
+    expect(viewport.scrollTop).toBe(184);
+  });
+
+  it("seeks an unloaded response after targeted history loads without changing source-turn navigation", async () => {
+    const flushFrames = controllableAnimationFrames();
+    vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: true })));
+    const fake = new FakeTranscriptStore(userMessageSnapshot(["turn-3"]));
+    const page = historyPage(["turn-1"]);
+    page.itemsById["turn-1-message"] = { id: "turn-1-message", turnId: "turn-1", revision: 1, kind: "user_message", status: "completed", content: [{ kind: "text", text: { text: "Question" } }] };
+    page.itemsById.reply = { id: "reply", turnId: "turn-1", revision: 1, kind: "assistant_message", status: "completed", markdown: { text: "Response" } };
+    page.turnsById["turn-1"]!.orderedItemIds = ["turn-1-message", "reply"];
+    fake.seekHistoryTurn.mockResolvedValueOnce({ status: "found", targetTurnId: "turn-1", page });
+    render(<Transcript store={fake as unknown as ThreadClientStore} focusTurnId="turn-1" focusResponse />);
+    await waitFor(() => expect(document.querySelector('[data-item-id="reply"]')).toBeInTheDocument());
+    const viewport = screen.getByRole("region", { name: "Messages" });
+    const reply = document.querySelector<HTMLElement>('[data-item-id="reply"]')!;
+    Object.defineProperties(viewport, {
+      clientHeight: { configurable: true, value: 300 },
+      scrollHeight: { configurable: true, value: 900 },
+      getBoundingClientRect: { configurable: true, value: () => ({ top: 40 }) },
+      scrollTo: { configurable: true, value: ({ top }: ScrollToOptions) => { viewport.scrollTop = top ?? 0; } },
+    });
+    vi.spyOn(reply, "getBoundingClientRect").mockImplementation(() => ({ top: 240 - viewport.scrollTop } as DOMRect));
+    act(flushFrames);
+    expect(viewport.scrollTop).toBe(184);
+    expect(document.querySelector('[data-turn-id="turn-1"]')).toHaveFocus();
+    expect(fake.seekHistoryTurn).toHaveBeenCalledExactlyOnceWith("turn-1");
+  });
+
   it.each([
     { partial: "Partial response", complete: "Partial response completed.", completedPreview: "Partial response completed." },
     { partial: "See [the docs](https://example.invalid/partial", complete: "See [the docs](https://example.invalid/docs) for details", completedPreview: "See the docs for details" },
@@ -529,7 +694,10 @@ describe("Transcript history positioning", () => {
     snapshot.turnsById["turn-1"] = { ...snapshot.turnsById["turn-1"]!, status: "in_progress" };
     const fake = new FakeTranscriptStore(snapshot);
     render(<Transcript store={fake as unknown as ThreadClientStore} />);
-    fireEvent.click(screen.getByRole("button", { name: "Bookmark turn" }));
+    const bookmarkButton = screen.getByRole("button", { name: "Bookmark response" });
+    expect(bookmarkButton.closest("footer")).not.toBeNull();
+    expect(bookmarkButton.closest('[data-item-kind="user_message"]')).toBeNull();
+    fireEvent.click(bookmarkButton);
     expect(fake.setTurnBookmarked).toHaveBeenLastCalledWith({
       turnId: "turn-1", bookmarked: true,
       preview: { userPreview: "Prompt turn-1", assistantPreview: null, responseState: "no_response" },
@@ -549,7 +717,7 @@ describe("Transcript history positioning", () => {
       markdown: { text: "Thinking about the reply" },
     };
     act(() => fake.replaceSnapshot(thinking));
-    fireEvent.click(screen.getByRole("button", { name: "Bookmark turn" }));
+    fireEvent.click(screen.getByRole("button", { name: "Bookmark response" }));
     expect(fake.setTurnBookmarked).toHaveBeenLastCalledWith({
       turnId: "turn-1", bookmarked: true,
       preview: { userPreview: "Prompt turn-1", assistantPreview: null, responseState: "no_response" },
@@ -562,7 +730,7 @@ describe("Transcript history positioning", () => {
       status: "streaming", revision: 1, markdown: { text: partial },
     };
     act(() => fake.replaceSnapshot(replying));
-    fireEvent.click(screen.getByRole("button", { name: "Bookmark turn" }));
+    fireEvent.click(screen.getByRole("button", { name: "Bookmark response" }));
     expect(fake.setTurnBookmarked).toHaveBeenCalledWith({
       turnId: "turn-1", bookmarked: true,
       preview: { userPreview: "Prompt turn-1", assistantPreview: partial, responseState: "responded" },
@@ -574,7 +742,7 @@ describe("Transcript history positioning", () => {
     // An existing bookmark stays removable even if the active projection no
     // longer contains the reply that originally made the turn eligible.
     act(() => fake.replaceSnapshot(snapshot));
-    fireEvent.click(screen.getByRole("button", { name: "Remove turn bookmark" }));
+    fireEvent.click(screen.getByRole("button", { name: "Remove response bookmark" }));
     expect(fake.setTurnBookmarked).toHaveBeenLastCalledWith({ turnId: "turn-1", bookmarked: false });
     expect(fake.refreshTurnBookmarkPreview).not.toHaveBeenCalled();
 
@@ -606,7 +774,7 @@ describe("Transcript history positioning", () => {
     snapshot.turnsById["turn-1"] = { ...snapshot.turnsById["turn-1"]!, status };
     const fake = new FakeTranscriptStore(snapshot);
     render(<Transcript store={fake as unknown as ThreadClientStore} />);
-    fireEvent.click(screen.getByRole("button", { name: "Bookmark turn" }));
+    fireEvent.click(screen.getByRole("button", { name: "Bookmark response" }));
     expect(fake.setTurnBookmarked).toHaveBeenCalledWith({
       turnId: "turn-1", bookmarked: true,
       preview: { userPreview: "Prompt turn-1", assistantPreview: null, responseState: "no_response" },
@@ -615,7 +783,7 @@ describe("Transcript history positioning", () => {
       turnId: "turn-1", userPreview: "Prompt turn-1", assistantPreview: "Earlier reply",
       responseState: "responded", createdAt: 1,
     }] }));
-    expect(screen.getByRole("button", { name: "Remove turn bookmark" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Remove response bookmark" })).toBeEnabled();
     expect(fake.refreshTurnBookmarkPreview).not.toHaveBeenCalled();
   });
 
@@ -683,7 +851,7 @@ describe("Transcript history positioning", () => {
     );
 
     act(() => fake.replaceBookmarkState({ bookmarkStatus: "error" }));
-    const toggle = screen.getByRole("button", { name: "Bookmark turn" });
+    const toggle = screen.getByRole("button", { name: "Bookmark response" });
     expect(toggle).toBeDisabled();
     expect(container.querySelector(".turn-bookmark-spinner")).toBeNull();
 
@@ -1264,7 +1432,7 @@ describe("Transcript history positioning", () => {
     ).toBeInTheDocument();
   });
 
-  it("keeps an earlier completed fork action without a running-turn footer", () => {
+  it("keeps an earlier fork action when the running turn has no durable user message", () => {
     const snapshot = makeSnapshot(["turn-1", "turn-2"], false);
     snapshot.forkSource = {
       selectedCompletedTurn: { available: true },
@@ -1752,7 +1920,7 @@ describe("Transcript server-admitted submissions", () => {
     expect(row).not.toHaveTextContent(/Sending|Checking delivery|Sent|Message preview/);
     expect(row?.querySelector('[role="status"]')).toBeNull();
     expect(screen.queryByText("This thread is ready")).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Bookmark turn" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Bookmark response" })).not.toBeInTheDocument();
   });
 
   it("withholds a bounded queue preview so the first bubble contains the complete submitted text", () => {
@@ -2026,7 +2194,7 @@ describe("Transcript optimistic idle submission", () => {
       ),
     ).toHaveLength(1);
     expect(screen.getAllByText("Immediate prompt")).toHaveLength(1);
-    expect(screen.queryByRole("button", { name: "Bookmark turn" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Bookmark response" })).toBeNull();
   });
 
   it("keeps anchored optimistic submissions ahead of later authoritative output in sequence order", () => {
@@ -4582,6 +4750,7 @@ function makeSnapshot(
     stashes: [],
     composerCommands: [],
     agentTools: {
+      runtimeAvailability: { availability: "available" },
       enabled: false,
       accessBoundary: "environment",
       groups: [],
@@ -4742,7 +4911,7 @@ function asyncQuestionItem(turnId: string): ConversationItem {
 }
 
 describe("Transcript viewed images", () => {
-  it("discloses a captured viewed image inside its row between activity groups", () => {
+  it.each(["generated", "shown"] as const)("discloses a captured viewed image but keeps a following %s image inline", (inlineOrigin) => {
     const snapshot = makeSnapshot(["turn-1"], false);
     snapshot.turnsById["turn-1"] = {
       ...snapshot.turnsById["turn-1"]!,
@@ -4792,14 +4961,14 @@ describe("Transcript viewed images", () => {
         revision: 1,
         fileName: { text: "unavailable.png" },
       },
-      // Pairing keys on origin, so a generated image is never disclosed by a view.
+      // Pairing keys on origin, so generated and explicitly shown images stay inline.
       "generated-1": {
         id: "generated-1",
         turnId: "turn-1",
         kind: "image",
         status: "completed",
         revision: 1,
-        origin: { kind: "generated" },
+        origin: { kind: inlineOrigin },
         image: {
           representation: "artifact",
           artifactId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",

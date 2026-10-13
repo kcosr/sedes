@@ -21,7 +21,7 @@ import type { SidecarRuntimeLease, SidecarRuntimeProvider } from "../../src/serv
 import { claudeTranscriptContentFingerprint, verifyClaudeForkChild } from "../../src/server/backends/claude/claude-fork-lineage.js";
 import { claudeResumableHistoryStart } from "../../src/server/backends/claude/claude-history-projector.js";
 
-const MODEL = "claude-sonnet-5";
+const MODEL = "claude-sonnet-5-5";
 const TIMEOUT = 240_000;
 const scope = {
   tenantId: "real-claude-persistent-tenant",
@@ -135,7 +135,7 @@ describe.sequential("real Claude persistent runtime with local SSH carrier stand
       expect(probe.account.subscriptionType).toBeTruthy();
       const eligible = probe.models.filter(model =>
         (model.resolvedModel ?? model.value) === MODEL && model.supportedEffortLevels?.includes("low"));
-      expect(eligible, "REAL_CLAUDE_BLOCKER: exactly one Sonnet 5/low catalog entry required").toHaveLength(1);
+      expect(eligible, "REAL_CLAUDE_BLOCKER: exactly one Sonnet 5.5/low catalog entry required").toHaveLength(1);
       expect((await readAudit(auditPath)).some(entry => entry.authVerified)).toBe(true);
 
       const sessionId = randomUUID();
@@ -361,7 +361,7 @@ OfficialClaudeSdkFacade.prototype.createQuery = function (input) {
     options.settings?.disableAllHooks === true && typeof options.canUseTool === "function" && !options.allowDangerouslySkipPermissions;
   if (options.persistSession !== false && (options.model !== ${JSON.stringify(MODEL)} || options.effort !== "low" ||
       options.permissionMode !== (fork ? "default" : "dontAsk") || (fork && !lockedDown))) {
-    throw new Error("REAL_CLAUDE_BLOCKER: Sonnet 5 low dontAsk (or a locked-down default fork launch) required");
+    throw new Error("REAL_CLAUDE_BLOCKER: Sonnet 5.5 low dontAsk (or a locked-down default fork launch) required");
   }
   liveAudit({ persistent: options.persistSession !== false, pid: process.pid, model: options.model, effort: options.effort, permissionMode: options.permissionMode, toolsDisabled: true, ...(fork ? { fork, lockedDown } : {}) });
   const nativeQuery = originalLiveQuery.call(this, { ...input, options });

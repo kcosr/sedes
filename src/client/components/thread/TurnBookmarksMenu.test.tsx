@@ -151,7 +151,7 @@ describe("turn bookmarks menu", () => {
 
     rerender(<TurnBookmarksMenu {...props} bookmarks={[]} status="ready" />);
     expect(
-      screen.getByText("Bookmark a user message to find that turn here."),
+      screen.getByText("Bookmark a response to find it here."),
     ).toBeVisible();
 
     rerender(

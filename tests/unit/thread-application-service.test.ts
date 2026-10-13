@@ -95,6 +95,7 @@ function inventory(
       },
     ],
     agentTools: {
+      runtimeAvailability: { availability: "available" },
       enabled: false,
       accessBoundary: "environment",
       groups: [

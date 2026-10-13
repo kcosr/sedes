@@ -797,7 +797,6 @@ export const ThreadHeader = memo(function ThreadHeader({
                       <DropdownMenuSeparator />
                     </>
                   )}
-                  {/* On narrow phones the header's toolbar toggle lives here. */}
                   {narrowHeader && (
                     <>
                       <DropdownMenuCheckboxItem

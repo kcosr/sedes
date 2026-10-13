@@ -2,12 +2,11 @@ import { z } from "zod";
 import {
   agentToolCatalogSummarySchema,
   agentToolCliErrorSchema,
-  agentToolCliIdentifierSchema,
   agentToolCliToolIdSchema,
   agentToolCliTransportLimits,
   agentToolDescriptionSchema,
   agentToolInvocationResultSchema,
-  isBoundedAgentToolJson,
+  createAgentToolInvocationRequestSchema,
 } from "../agent-tool-cli-protocol/index.js";
 import { defineSidecarOperation } from "./operation-registry.js";
 
@@ -32,14 +31,10 @@ const toolIdsSchema = z
       context.addIssue({ code: "custom", message: "Tool IDs must be unique." });
     }
   });
-const boundedInputSchema = z.custom(
-  isBoundedAgentToolJson,
-  "A bounded JSON value is required.",
-);
 
 export const agentToolsCatalogOperation = defineSidecarOperation({
   capabilityId: "agent_tools_cli",
-  majorVersion: 4,
+  majorVersion: 6,
   operation: "catalog.list",
   lane: "operation",
   maximumDeadlineMilliseconds: 30_000,
@@ -58,7 +53,7 @@ export const agentToolsCatalogOperation = defineSidecarOperation({
 
 export const agentToolsDescribeOperation = defineSidecarOperation({
   capabilityId: "agent_tools_cli",
-  majorVersion: 4,
+  majorVersion: 6,
   operation: "catalog.describe",
   lane: "operation",
   maximumDeadlineMilliseconds: 30_000,
@@ -77,16 +72,12 @@ export const agentToolsDescribeOperation = defineSidecarOperation({
 
 export const agentToolsInvokeOperation = defineSidecarOperation({
   capabilityId: "agent_tools_cli",
-  majorVersion: 4,
+  majorVersion: 6,
   operation: "tool.invoke",
   lane: "operation",
   maximumDeadlineMilliseconds: "caller_abort",
-  requestSchema: z.strictObject({
+  requestSchema: createAgentToolInvocationRequestSchema.safeExtend({
     sourceCapability: sourceCapabilitySchema,
-    toolId: agentToolCliToolIdSchema,
-    schemaVersion: z.number().int().positive().max(1_000_000),
-    requestId: agentToolCliIdentifierSchema,
-    input: boundedInputSchema,
   }),
   responseSchema: z.discriminatedUnion("outcome", [
     z.strictObject({
@@ -97,7 +88,7 @@ export const agentToolsInvokeOperation = defineSidecarOperation({
   ]),
 });
 
-export const agentToolsV4Operations = Object.freeze([
+export const agentToolsV6Operations = Object.freeze([
   agentToolsCatalogOperation,
   agentToolsDescribeOperation,
   agentToolsInvokeOperation,

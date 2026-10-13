@@ -14,16 +14,17 @@ User-facing changes are collected here before release. See the
   ([#73](https://github.com/kcosr/sedes/pull/73))
 
 - Upgrade browser and packaged clients together with the server for client
-  protocol **153**. Rebuild and upgrade execution sidecars and local workers;
+  protocol **155**. Rebuild and upgrade execution sidecars and local workers
+  for agent-tool CLI/relay protocol **6** and OpenCode MCP protocol **4**;
   older compiled runtime contracts are rejected. Notification scripts now use
   payload version **5**: update separately copied hooks with the server and
   review Script/Voice event and reply-phase settings.
-  ([#9](https://github.com/kcosr/sedes/pull/9), [#10](https://github.com/kcosr/sedes/pull/10), [#12](https://github.com/kcosr/sedes/pull/12), [#15](https://github.com/kcosr/sedes/pull/15), [#17](https://github.com/kcosr/sedes/pull/17), [#38](https://github.com/kcosr/sedes/pull/38), [#44](https://github.com/kcosr/sedes/pull/44), [#45](https://github.com/kcosr/sedes/pull/45), [#73](https://github.com/kcosr/sedes/pull/73), [#75](https://github.com/kcosr/sedes/pull/75), [#77](https://github.com/kcosr/sedes/pull/77))
+  ([#9](https://github.com/kcosr/sedes/pull/9), [#10](https://github.com/kcosr/sedes/pull/10), [#12](https://github.com/kcosr/sedes/pull/12), [#15](https://github.com/kcosr/sedes/pull/15), [#17](https://github.com/kcosr/sedes/pull/17), [#38](https://github.com/kcosr/sedes/pull/38), [#44](https://github.com/kcosr/sedes/pull/44), [#45](https://github.com/kcosr/sedes/pull/45), [#73](https://github.com/kcosr/sedes/pull/73), [#75](https://github.com/kcosr/sedes/pull/75), [#77](https://github.com/kcosr/sedes/pull/77), [#78](https://github.com/kcosr/sedes/pull/78))
 
 - Claude requires Claude Code **2.1.287 or newer** on every execution host
-  and uses Agent SDK 0.3.287. See the
+  and uses Agent SDK 0.3.296 (tested with Claude Code 2.1.296). See the
   [Claude upgrade requirements](docs/operator/backends/claude.md).
-  ([#29](https://github.com/kcosr/sedes/pull/29))
+  ([#29](https://github.com/kcosr/sedes/pull/29), [#78](https://github.com/kcosr/sedes/pull/78))
 
 - Back up the full state directory before upgrading: database migrations are
   one-way. Existing locations are grouped into projects, and location-owned
@@ -54,6 +55,21 @@ User-facing changes are collected here before release. See the
   `remind`. ([#58](https://github.com/kcosr/sedes/pull/58), [#61](https://github.com/kcosr/sedes/pull/61))
 
 ### Added
+
+- Agents can show PNG, JPEG, GIF, and WebP image files directly in chat with
+  `image.show`. Sedes retains the captured image after its source changes or
+  disappears; enable **Show image** in the thread’s **Images** tools.
+  ([#78](https://github.com/kcosr/sedes/pull/78))
+
+- Drag individual threads into Groups or onto another thread to create a Group.
+  Reference threads in a prompt by dragging them into the composer or choosing
+  them with **@**; references survive drafts, stashes, and queued delivery.
+  Type after **@** to filter by title, provider, project, or environment, with
+  sidebar status indicators, provider icons, keyboard selection, and focus
+  retained in the composer. Suggestions keep project and environment labels
+  together after the title in wide popups and on a compact second line in
+  narrow ones.
+  ([#78](https://github.com/kcosr/sedes/pull/78))
 
 - Claude threads support **Compact context** while idle, with retained earlier
   turns, expandable summaries, session statistics, and recovery for uncertain
@@ -122,6 +138,11 @@ User-facing changes are collected here before release. See the
 
 ### Changed
 
+- Bookmarks now sit in the assistant response footer and jump to the start of
+  its text. Response previews include the whole turn, including replies after
+  steering or question answers.
+  ([#78](https://github.com/kcosr/sedes/pull/78))
+
 - Automatic turn voice notices skip speech and follow-up recording when a newer
   message has been sent in the same thread. See [voice behavior](docs/operator/clients/voice.md).
   ([#77](https://github.com/kcosr/sedes/pull/77))
@@ -183,6 +204,35 @@ User-facing changes are collected here before release. See the
   ([#73](https://github.com/kcosr/sedes/pull/73))
 
 ### Fixed
+
+- Pi sessions await extension shutdown before disposal, preventing retained
+  extension timers from crashing the server during catalogue reads or
+  reconnects. Deploy and restart the server; no sidecar upgrade is required.
+  ([#78](https://github.com/kcosr/sedes/pull/78))
+
+- Remote Codex, Claude, and OpenCode CLI tool settings retain correct
+  availability after sidecar connection and reconnection. Deploy and restart
+  the server; this fix does not require a sidecar upgrade.
+  ([#78](https://github.com/kcosr/sedes/pull/78))
+
+- Claude reports organization-policy startup failures clearly and recognizes
+  subagent replies without attributing them to pending parent-thread input.
+  ([#78](https://github.com/kcosr/sedes/pull/78))
+
+- Agents can read and update Workpads up to the existing 262,144-unit text
+  limit across Native and CLI surfaces. Size and Unicode errors explain the
+  rejected edit without committing it. Rebuild CLI executables and execution
+  sidecars together for the updated private tool protocols. See
+  [Workpad limits](docs/user/workpads.md#edit-and-save).
+  ([#78](https://github.com/kcosr/sedes/pull/78))
+
+- Codex retains verified Sedes creation identity after first-input
+  force reset, so recovered sessions keep tool eligibility without replaying
+  abandoned input. Tool settings show current backend eligibility separately
+  from saved grants, and eligibility updates preserve live transcript streams
+  without changing the saved policy revision. Existing affected sessions have an audited
+  [offline repair](docs/operator/operations.md#repair-tool-eligibility-after-force-reset).
+  ([#78](https://github.com/kcosr/sedes/pull/78))
 
 - HTML previews publish successfully from workspace files even when downloads
   complete immediately. ([#77](https://github.com/kcosr/sedes/pull/77))

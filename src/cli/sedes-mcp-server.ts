@@ -7,6 +7,7 @@ import {
 import { AGENT_TOOL_MAXIMUM_DESCRIPTION_IDS } from "../server/agent-tools/contracts/agent-tool-transport-limits.js";
 import { compileCanonicalAgentToolSchema } from "../server/agent-tools/schema/canonical-json-schema.js";
 import { deterministicJson } from "../server/canonical-json.js";
+import { workpadInputContentError } from "../internal/agent-tool-cli-protocol/workpad-content.js";
 import { SedesToolApiError, type SedesToolClient } from "./sedes-tool-client.js";
 import {
   callToolParamsSchema,
@@ -484,6 +485,8 @@ export class SedesMcpServer {
     version: SedesMcpProtocolVersion,
     signal: AbortSignal,
   ): Promise<SedesMcpCallToolResult> {
+    const contentError = workpadInputContentError(description.id, input);
+    if (contentError) return sedesMcpToolError({ code: "invalid_input", message: contentError, retryable: false });
     const validator = compileCanonicalAgentToolSchema(description.inputSchema);
     if (!validator.check(input)) {
       return sedesMcpInputSchemaError(validator.errors());

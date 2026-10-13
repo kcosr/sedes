@@ -9,6 +9,7 @@ import {
   useEffect,
   useId,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type RefObject,
@@ -24,6 +25,7 @@ import {
   type ComposerSkillDescriptor,
   type ComposerAttachmentDescriptor,
   type ComposerTaskReference,
+  type NormalizedApplicationThreadSummary,
   COMPOSER_ATTACHMENT_LIMITS,
 } from "../../../shared/index.js";
 import { hasDeliverableComposerInput } from "../../../shared/index.js";
@@ -76,7 +78,7 @@ import {
   PopoverTitle,
   PopoverTrigger,
 } from "@client/components/ui/popover";
-import { SearchableSelectSearch } from "@client/components/ui/searchable-select";
+import { matchesSearchQuery, SearchableSelectSearch } from "@client/components/ui/searchable-select";
 import { moveListFocus } from "@client/lib/list-focus";
 import { cn } from "@client/lib/utils";
 import { ProviderFeatureComposerActions } from "../../provider-features/registry.js";
@@ -131,6 +133,17 @@ import {
 import { useTouchDensity } from "../../app/use-touch-density.js";
 import { useTaskDrag } from "../../tasks/task-drag.js";
 import { OPEN_OVERLAY_SELECTOR } from "../../app/android-back.js";
+import { useThreadDrag } from "../../threads/thread-drag.js";
+import {
+  formatThreadReferenceText,
+  MAXIMUM_THREAD_REFERENCES,
+  replaceThreadReferenceBody,
+  splitThreadReferenceText,
+} from "../../../shared/thread-references.js";
+import { ThreadReferenceChips } from "./ThreadReferenceChips.js";
+import { ComposerThreadPicker, type ThreadReferenceLocation } from "./ComposerThreadPicker.js";
+import { describeProjectLocations } from "../../app/project-locations.js";
+import { environmentDisplayLabel } from "../../app/sidebar-scope-presentation.js";
 
 export const OPEN_PROMPTS_SETTINGS_EVENT = "sedes-open-settings-prompts";
 
@@ -395,6 +408,7 @@ export function Composer({
   const skillSearchRef = useRef<HTMLInputElement>(null);
   const skillPickerFocus = usePickerFocus(skillSearchRef);
   const skillList = useRef<HTMLDivElement>(null);
+  const composerTools = useRef<HTMLDivElement>(null);
   const [skillQuery, setSkillQuery] = useState("");
   const [skills, setSkills] = useState<readonly ComposerSkillDescriptor[]>([]);
   const [skillsLoading, setSkillsLoading] = useState(false);
@@ -402,6 +416,7 @@ export function Composer({
   const terminalControl = useContext(CodexTuiTerminalControlContext);
   const composerDraftCoordinator = useComposerDraftCoordinator();
   const taskDrag = useTaskDrag();
+  const threadDrag = useThreadDrag();
   const mobileTerminalLayout = useMediaQuery(MOBILE_TUI_MEDIA_QUERY);
   const mobileComposerLayout = useTouchDensity();
   const [tuiSubmissionError, setTuiSubmissionError] = useState<string>();
@@ -409,9 +424,20 @@ export function Composer({
   const [promptInputError, setPromptInputError] = useState<string>();
   const [attachmentDragActive, setAttachmentDragActive] = useState(false);
   const [taskDragActive, setTaskDragActive] = useState(false);
+  const [threadDragActive, setThreadDragActive] = useState(false);
+  const [threadPickerOpen, setThreadPickerOpen] = useState(false);
+  const [threadQuery, setThreadQuery] = useState("");
+  const [threadChoiceIndex, setThreadChoiceIndex] = useState(0);
+  const threadListId = useId();
+  const mentionRange = useRef<{ start: number; end: number; text: string } | undefined>(undefined);
+  const mentionComposing = useRef(false);
+  const dismissedMention = useRef<number | undefined>(undefined);
   useEffect(() => {
     if (taskDrag?.activeTaskId === undefined) setTaskDragActive(false);
   }, [taskDrag?.activeTaskId]);
+  useEffect(() => {
+    if (threadDrag?.activeThreadId === undefined) setThreadDragActive(false);
+  }, [threadDrag?.activeThreadId]);
   const [showPromptsTab, setShowPromptsTab] = useState(getShowPromptsTab);
   const [promptsPlacement, setPromptsPlacementState] =
     useState(getPromptsPlacement);
@@ -427,6 +453,8 @@ export function Composer({
   // the server is known to hold; `lastSavedText` recognizes our own saves'
   // draft_changed echoes so they cannot trip the conflict banner.
   const [text, setText] = useState(initiallyVisibleDraft?.text ?? "");
+  const threadReferenceText = useMemo(() => splitThreadReferenceText(text), [text]);
+  const composerText = threadReferenceText.text;
   const [selectedSkillId, setSelectedSkillId] = useState(
     initiallyVisibleDraft?.selectedSkillId,
   );
@@ -616,7 +644,7 @@ export function Composer({
     );
   }, [attachments, attachmentUploads.retainLocalFiles]);
   const commands = snapshot?.composerCommands ?? [];
-  const commandMatches = matchingCommands(text, commands);
+  const commandMatches = threadReferenceText.references.length === 0 ? matchingCommands(composerText, commands) : [];
   const effectiveActiveCommandIndex = Math.min(
     activeCommandIndex,
     Math.max(0, commandMatches.length - 1),
@@ -625,6 +653,7 @@ export function Composer({
   const commandMenuOpen =
     !disabled &&
     !skillPickerOpen &&
+    !threadPickerOpen &&
     commandMatches.length > 0 &&
     dismissedCommandDraft !== text;
 
@@ -1077,12 +1106,12 @@ export function Composer({
   }, [skillPickerOpen, selectedSkillId, loadSkills]);
 
   useEffect(() => {
-    const query = skillTriggerQuery(text);
+    const query = skillTriggerQuery(composerText);
     if (query === undefined) return;
     skillPickerFocus.requestSearchFocus();
     setSkillQuery(query);
     setSkillPickerOpen(true);
-  }, [text]);
+  }, [composerText]);
 
   // Flush on unmount (covers thread switches), and let the store preflight
   // operations that must not strand unsaved text (move_draft).
@@ -1283,6 +1312,32 @@ export function Composer({
   const currentTasks = new Map(
     (application.snapshot?.tasks ?? []).map((task) => [task.id, task]),
   );
+  const referenceThreads = [...new Map([
+    ...Object.values(application.descendantPages ?? {}).flatMap((page) => page.descendants.map(({ thread }) => thread)),
+    ...(application.snapshot?.threads ?? []),
+  ].map((thread) => [thread.id, thread])).values()].filter((thread) =>
+    thread.id !== store.threadId && thread.inventoryState !== "archived");
+  const referenceLocations = useMemo(() => {
+    const catalog = application.snapshot;
+    const locations = new Map<string, ThreadReferenceLocation>();
+    if (!catalog || referenceThreads.length === 0) return locations;
+    const projects = describeProjectLocations(catalog);
+    const environments = new Map(catalog.environments.map((environment) => [environment.id, environment]));
+    for (const workspace of catalog.workspaces) {
+      const environment = environments.get(workspace.environmentId);
+      locations.set(workspace.id, {
+        project: projects.projectFolderLabel(workspace.id),
+        environment: environment && environmentDisplayLabel(environment, catalog.environments),
+      });
+    }
+    return locations;
+  }, [application.snapshot, referenceThreads.length]);
+  const threadChoices = referenceThreads.filter((thread) =>
+    !threadReferenceText.references.some(({ threadId }) => threadId === thread.id) &&
+    matchesSearchQuery(threadQuery, [thread.title.text, thread.backend.brand,
+      referenceLocations.get(thread.workspaceId)?.project ?? "",
+      referenceLocations.get(thread.workspaceId)?.environment ?? ""]),
+  ).slice(0, 30);
   const taskProjectionChecking = !application.authoritative;
   const missingTaskReferences = taskProjectionChecking
     ? []
@@ -1515,6 +1570,108 @@ export function Composer({
     return true;
   }, []);
 
+  const closeThreadPicker = () => {
+    if (mentionRange.current) dismissedMention.current = mentionRange.current.start;
+    mentionRange.current = undefined;
+    setThreadPickerOpen(false);
+    setThreadQuery("");
+  };
+
+  const updateInlineMention = (body: string, caret: number | undefined, typed: boolean) => {
+    const match = caret === undefined ? null : /(?:^|\s)@([^\s@]{0,120})$/u.exec(body.slice(0, caret));
+    if (dismissedMention.current !== undefined && body[dismissedMention.current] !== "@") dismissedMention.current = undefined;
+    if (!match || caret === undefined || tuiActive || !active || effectiveDisabled || mentionComposing.current) {
+      if (mentionRange.current) {
+        const start = mentionRange.current.start;
+        closeThreadPicker();
+        if (body[start] !== "@") dismissedMention.current = undefined;
+      }
+      return;
+    }
+    const start = caret - match[1]!.length - 1;
+    if (dismissedMention.current === start || (!typed && mentionRange.current?.start !== start)) return;
+    mentionRange.current = { start, end: caret, text: body.slice(start, caret) };
+    setThreadQuery(match[1]!);
+    setThreadChoiceIndex(0);
+    setThreadPickerOpen(true);
+  };
+
+  useEffect(() => {
+    const range = mentionRange.current;
+    if (threadPickerOpen && range && composerText.slice(range.start, range.end) !== range.text) closeThreadPicker();
+  }, [composerText, threadPickerOpen]);
+
+  const stageThreadReference = (thread: NormalizedApplicationThreadSummary): boolean => {
+    const availability = contextExcerptStagingSnapshot();
+    if (!availability.available || queueRestoreRunning.current) {
+      setPromptInputError(availability.reason ?? "Wait for the current composer action to finish.");
+      return false;
+    }
+    if (!application.authoritative) {
+      setPromptInputError("Wait for the thread inventory to finish loading.");
+      return false;
+    }
+    // A browser drag or picker entry never supplies resource authority. Only
+    // the current scoped inventory supplies an ID/title to this user input.
+    const current = referenceThreads.find(({ id }) => id === thread.id);
+    if (!current || current.id === store.threadId || current.inventoryState === "archived") {
+      setPromptInputError("That thread is no longer available to reference.");
+      return false;
+    }
+    const parsed = splitThreadReferenceText(textRef.current);
+    if (parsed.references.some(({ threadId }) => threadId === current.id)) {
+      setPromptInputError("That thread is already referenced.");
+      return false;
+    }
+    if (parsed.references.length >= MAXIMUM_THREAD_REFERENCES) {
+      setPromptInputError(`A message can reference at most ${MAXIMUM_THREAD_REFERENCES} threads.`);
+      return false;
+    }
+    const range = threadPickerOpen ? mentionRange.current : undefined;
+    const body = range
+      ? `${parsed.text.slice(0, range.start)}${parsed.text.slice(range.end)}`
+      : parsed.text;
+    // Imported/provider titles use a wider display bound than a reference.
+    // Keep its exact ID and a bounded label, without splitting a surrogate pair.
+    const title = (current.title.text.trim() || "Untitled thread")
+      .slice(0, 512).replace(/[\uD800-\uDBFF]$/, "");
+    const next = formatThreadReferenceText(body, [...parsed.references, {
+      threadId: current.id,
+      title,
+    }]);
+    const checked = normalizedDraftSchema.safeParse({
+      ...currentDraftValue(), text: next, revision: syncedDraft.current?.revision ?? 0,
+    });
+    if (!checked.success) {
+      setPromptInputError(checked.error.issues[0]?.message ?? "The thread reference does not fit in this draft.");
+      return false;
+    }
+    textRef.current = next;
+    dirtyRef.current = true;
+    setText(next);
+    setDirty(true);
+    setPromptInputError(undefined);
+    closeThreadPicker();
+    dismissedMention.current = undefined;
+    requestAnimationFrame(() => {
+      textarea.current?.focus();
+      if (range) textarea.current?.setSelectionRange(range.start, range.start);
+    });
+    return true;
+  };
+
+  const removeThreadReference = (threadId: string) => {
+    if (!contextExcerptStagingSnapshot().available || queueRestoreRunning.current) return;
+    const parsed = splitThreadReferenceText(textRef.current);
+    const next = formatThreadReferenceText(parsed.text, parsed.references.filter((reference) => reference.threadId !== threadId));
+    textRef.current = next;
+    dirtyRef.current = true;
+    setText(next);
+    setDirty(true);
+    setPromptInputError(undefined);
+    requestAnimationFrame(() => textarea.current?.focus());
+  };
+
   const excerptDeliveryAvailable = availableDeliveryModes.some(
     ({ id, available }) => available && id === promptDeliveryMode,
   );
@@ -1651,7 +1808,8 @@ export function Composer({
     if (!availability.available || !syncedDraft.current || draftMutationRunning.current || queueRestoreRunning.current ||
         attachmentUploadsRef.current.length > 0 || state.pendingComposerTransfers.length > 0)
       throw new Error(availability.reason ?? "Wait for the current composer action to finish.");
-    const next = textRef.current.length ? `${textRef.current}\n\n${addition}` : addition;
+    const current = splitThreadReferenceText(textRef.current).text;
+    const next = replaceThreadReferenceBody(textRef.current, current.length ? `${current}\n\n${addition}` : addition);
     const parsed = normalizedDraftSchema.safeParse({
       text: next, selectedSkillId: selectedSkillIdRef.current, contextExcerpts: contextExcerptsRef.current,
       attachments: attachmentsRef.current, taskReferences: taskReferencesRef.current,
@@ -1714,7 +1872,9 @@ export function Composer({
   const showKeyBar = tuiActive && mobileTerminalLayout;
   const tuiInputAvailable = tuiActive && terminalControl.inputAvailable;
   const tuiStructuredInputReason =
-    contextExcerpts.length > 0
+    threadReferenceText.references.length > 0
+      ? "Switch to Chat to send thread references."
+      : contextExcerpts.length > 0
       ? "Switch to Chat to send context excerpts."
       : attachments.length > 0 || attachmentUploadPending
         ? "Switch to Chat to send attachments."
@@ -2203,7 +2363,7 @@ export function Composer({
   ): { readonly value: DraftValue; readonly caret: number } | undefined => {
     setPromptInputError(undefined);
     const target = textarea.current;
-    const current = textRef.current;
+    const current = splitThreadReferenceText(textRef.current).text;
     const start = target?.selectionStart ?? current.length;
     const end = target?.selectionEnd ?? start;
     const before = current.slice(0, start);
@@ -2213,7 +2373,7 @@ export function Composer({
     const insertion = `${leading}${prompt.prompt}${trailing}`;
     const next = `${before}${insertion}${after}`;
     const value: DraftValue = {
-      text: next,
+      text: replaceThreadReferenceBody(textRef.current, next),
       ...(selectedSkillIdRef.current
         ? { selectedSkillId: selectedSkillIdRef.current }
         : {}),
@@ -2461,7 +2621,7 @@ export function Composer({
 
   const chooseCommand = (command: ComposerCommandDescriptor) => {
     if (queueRestoreRunning.current) return;
-    setText(`${command.invocation} `);
+    setText(replaceThreadReferenceBody(textRef.current, `${command.invocation} `));
     setDirty(true);
     requestAnimationFrame(() => textarea.current?.focus());
   };
@@ -2475,8 +2635,8 @@ export function Composer({
 
   const chooseSkill = (skill: ComposerSkillDescriptor) => {
     if (queueRestoreRunning.current) return;
-    const triggerQuery = skillTriggerQuery(textRef.current);
-    if (triggerQuery !== undefined) setText("");
+    const triggerQuery = skillTriggerQuery(splitThreadReferenceText(textRef.current).text);
+    if (triggerQuery !== undefined) setText(replaceThreadReferenceBody(textRef.current, ""));
     setSelectedSkillId(skill.id);
     setDirty(true);
     setSkillPickerOpen(false);
@@ -2792,10 +2952,16 @@ export function Composer({
               <div
                 className={`composer ${draftEditingDisabled ? "disabled" : ""}${
                   attachmentDragActive ? " attachment-drag-active" : ""
-                }${taskDragActive ? " task-drag-active" : ""}`}
+                }${taskDragActive ? " task-drag-active" : ""}${threadDragActive ? " thread-drag-active" : ""}`}
                 data-testid="composer"
                 data-task-drop-surface="composer"
                 onDragEnter={(event) => {
+                  if (threadDrag?.isThreadDrag(event.dataTransfer)) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    setThreadDragActive(true);
+                    return;
+                  }
                   if (taskDrag?.isTaskDrag(event.dataTransfer)) {
                     event.preventDefault();
                     event.stopPropagation();
@@ -2812,6 +2978,12 @@ export function Composer({
                   setAttachmentDragActive(true);
                 }}
                 onDragOver={(event) => {
+                  if (threadDrag?.isThreadDrag(event.dataTransfer)) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    event.dataTransfer.dropEffect = "copy";
+                    return;
+                  }
                   if (taskDrag?.isTaskDrag(event.dataTransfer)) {
                     event.preventDefault();
                     event.stopPropagation();
@@ -2828,6 +3000,11 @@ export function Composer({
                   event.dataTransfer.dropEffect = "copy";
                 }}
                 onDragLeave={(event) => {
+                  if (threadDrag?.isThreadDrag(event.dataTransfer)) {
+                    event.stopPropagation();
+                    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setThreadDragActive(false);
+                    return;
+                  }
                   if (taskDrag?.isTaskDrag(event.dataTransfer)) {
                     event.stopPropagation();
                     if (
@@ -2848,6 +3025,22 @@ export function Composer({
                   }
                 }}
                 onDrop={(event) => {
+                  if (threadDrag?.isThreadDrag(event.dataTransfer)) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    setThreadDragActive(false);
+                    const thread = threadDrag.resolveDraggedThread(event.dataTransfer);
+                    threadDrag.endThreadDrag();
+                    if (!thread) {
+                      const message = "That thread is no longer available to reference.";
+                      setPromptInputError(message);
+                      threadDrag.announce(message);
+                      return;
+                    }
+                    const added = stageThreadReference(thread);
+                    threadDrag.announce(added ? `Referenced “${thread.title.text}” in the prompt.` : "The thread could not be added to this prompt.");
+                    return;
+                  }
                   if (taskDrag?.isTaskDrag(event.dataTransfer)) {
                     event.preventDefault();
                     event.stopPropagation();
@@ -2891,6 +3084,7 @@ export function Composer({
                     ? "Send to TUI"
                     : `Message ${snapshot.capabilities.backend.label.text}`}
                 </label>
+                <ThreadReferenceChips references={threadReferenceText.references} onRemove={removeThreadReference} />
                 {selectedSkillId && (
                   <div
                     className="composer-skill-chip"
@@ -3012,15 +3206,17 @@ export function Composer({
                   }
                   id={composerId}
                   rows={1}
-                  value={text}
+                  value={composerText}
                   disabled={draftEditingDisabled || queueRestorePending}
                   aria-autocomplete="list"
                   aria-controls={
-                    commandMenuOpen ? "composer-command-menu" : undefined
+                    threadPickerOpen ? threadListId : commandMenuOpen ? "composer-command-menu" : undefined
                   }
-                  aria-expanded={commandMenuOpen}
+                  aria-expanded={commandMenuOpen || threadPickerOpen}
                   aria-activedescendant={
-                    commandMenuOpen && activeCommand
+                    threadPickerOpen && threadChoices[threadChoiceIndex]
+                      ? `${threadListId}-${threadChoiceIndex}`
+                      : commandMenuOpen && activeCommand
                       ? commandOptionId(
                           activeCommand,
                           effectiveActiveCommandIndex,
@@ -3046,12 +3242,16 @@ export function Composer({
                       traceComposerInput("composition_update_discarded");
                       // Composition input is not always cancelable. Restore the
                       // accepted draft synchronously without changing focus.
-                      event.currentTarget.value = textRef.current;
+                      event.currentTarget.value = splitThreadReferenceText(textRef.current).text;
                       return;
                     }
                     traceComposerInput("change_accepted");
-                    textRef.current = event.target.value;
-                    setText(event.target.value);
+                    const next = replaceThreadReferenceBody(textRef.current, event.target.value);
+                    textRef.current = next;
+                    setText(next);
+                    updateInlineMention(event.target.value,
+                      event.currentTarget.selectionStart === event.currentTarget.selectionEnd ? event.currentTarget.selectionStart : undefined,
+                      input instanceof InputEvent && input.inputType === "insertText" && !input.isComposing);
                     setDirty(true);
                     if (tuiActive) setTuiSubmissionError(undefined);
                   }}
@@ -3060,13 +3260,32 @@ export function Composer({
                       terminalControl.blurTerminal();
                     }
                   }}
+                  onSelect={(event) => {
+                    if (mentionRange.current) updateInlineMention(event.currentTarget.value,
+                      event.currentTarget.selectionStart === event.currentTarget.selectionEnd ? event.currentTarget.selectionStart : undefined, false);
+                  }}
+                  onCompositionStart={() => { mentionComposing.current = true; if (mentionRange.current) closeThreadPicker(); }}
+                  onCompositionEnd={() => { mentionComposing.current = false; }}
                   onPaste={(event) => {
                     const files = Array.from(event.clipboardData.files);
                     if (files.length > 0) addAttachmentFiles(files);
                   }}
                   onKeyDown={(event) => {
                     if (
-                      commandMenuOpen &&
+                      threadPickerOpen && !event.nativeEvent.isComposing &&
+                      (event.key === "ArrowDown" || event.key === "ArrowUp") && threadChoices.length > 0
+                    ) {
+                      event.preventDefault();
+                      setThreadChoiceIndex((index) => (index + (event.key === "ArrowDown" ? 1 : -1) + threadChoices.length) % threadChoices.length);
+                    } else if (threadPickerOpen && !event.nativeEvent.isComposing &&
+                      (event.key === "Enter" || event.key === "Tab") && !event.shiftKey && threadChoices[threadChoiceIndex]) {
+                      event.preventDefault();
+                      stageThreadReference(threadChoices[threadChoiceIndex]!);
+                    } else if (threadPickerOpen && event.key === "Escape") {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      closeThreadPicker();
+                    } else if (commandMenuOpen &&
                       (event.key === "ArrowDown" || event.key === "ArrowUp")
                     ) {
                       event.preventDefault();
@@ -3171,7 +3390,19 @@ export function Composer({
                   </div>
                 )}
                 <div className="composer-footer" ref={composerFooterRef}>
-                  <div className="composer-tools">
+                  <div className="composer-tools" ref={composerTools}>
+                    <ComposerThreadPicker
+                      anchor={textarea}
+                      open={active && threadPickerOpen}
+                      onOpenChange={(open) => { if (!open) closeThreadPicker(); }}
+                      threads={threadChoices}
+                      locations={referenceLocations}
+                      backgroundWorkCurrent={application.authoritative && application.connection === "connected"}
+                      listId={threadListId}
+                      selectedIndex={threadChoiceIndex}
+                      onSelectedIndexChange={setThreadChoiceIndex}
+                      onSelect={(thread) => { stageThreadReference(thread); }}
+                    />
                     <Popover
                       open={active && skillPickerOpen}
                       onOpenChange={(open) => {
@@ -3179,6 +3410,7 @@ export function Composer({
                         if (!open) setSkillQuery("");
                       }}
                     >
+                      <PopoverAnchor virtualRef={composerTools} />
                       <PopoverTrigger asChild>
                         <button
                           type="button"
@@ -4013,8 +4245,10 @@ function mergeAuthoritativeTaskReferences(
 }
 
 function stashPreviewLabel(stash: NormalizedStash): string {
-  const text = stash.text.replace(/\s+/g, " ").trim();
+  const references = splitThreadReferenceText(stash.text);
+  const text = references.text.replace(/\s+/g, " ").trim();
   if (text) return text;
+  if (references.references.length) return `Referenced thread: ${references.references[0]!.title}`;
   if (stash.contextExcerpts.length) {
     return `${stash.contextExcerpts.length} context ${stash.contextExcerpts.length === 1 ? "excerpt" : "excerpts"}`;
   }

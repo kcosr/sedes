@@ -1,12 +1,17 @@
 import { z } from "zod";
 import { taskScopeSchema } from "./tasks.js";
+import {
+  WORKPAD_CONTENT_MAX_CHARACTERS, WORKPAD_CONTENT_LENGTH_MESSAGE,
+  WORKPAD_CONTENT_UNICODE_MESSAGE, hasWellFormedWorkpadContent,
+} from "../workpad-content-limits.js";
 
-export const WORKPAD_CONTENT_MAX_CHARACTERS = 262_144;
+export { WORKPAD_CONTENT_MAX_CHARACTERS } from "../workpad-content-limits.js";
 export const workpadIdSchema = z.string().min(1).max(128);
 export const workpadScopeSchema = taskScopeSchema;
 export type WorkpadScope = z.infer<typeof workpadScopeSchema>;
 const revision = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
-const text = z.string().max(WORKPAD_CONTENT_MAX_CHARACTERS).refine(value => !/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(value), "Text must be well-formed UTF-16.");
+export const workpadContentSchema = z.string().max(WORKPAD_CONTENT_MAX_CHARACTERS, WORKPAD_CONTENT_LENGTH_MESSAGE)
+  .refine(hasWellFormedWorkpadContent, WORKPAD_CONTENT_UNICODE_MESSAGE);
 const title = z.string().trim().min(1).max(240);
 const authorName = z.string().min(1).max(240);
 export const workpadAuthorSchema = z.discriminatedUnion("kind", [
@@ -21,7 +26,7 @@ export const workpadAttributionSpanSchema = z.strictObject({
 }).refine(span => span.end > span.start, "Attribution spans must have positive length.");
 export type WorkpadAttributionSpan = z.infer<typeof workpadAttributionSpanSchema>;
 export const workpadChangeSchema = z.strictObject({
-  kind: z.enum(["added", "removed"]), text, offset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+  kind: z.enum(["added", "removed"]), text: workpadContentSchema, offset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
 });
 export type WorkpadChange = z.infer<typeof workpadChangeSchema>;
 export const workpadSummarySchema = z.strictObject({
@@ -30,20 +35,20 @@ export const workpadSummarySchema = z.strictObject({
   author: workpadAuthorSchema,
 });
 export type WorkpadSummary = z.infer<typeof workpadSummarySchema>;
-export const workpadSchema = workpadSummarySchema.extend({ content: text, attribution: z.array(workpadAttributionSpanSchema).max(4_096) });
+export const workpadSchema = workpadSummarySchema.extend({ content: workpadContentSchema, attribution: z.array(workpadAttributionSpanSchema).max(4_096) });
 export type Workpad = z.infer<typeof workpadSchema>;
 export const workpadRevisionSchema = z.strictObject({
-  workpadId: workpadIdSchema, revision, title, content: text, scope: workpadScopeSchema,
+  workpadId: workpadIdSchema, revision, title, content: workpadContentSchema, scope: workpadScopeSchema,
   archivedAt: z.iso.datetime().nullable(), author: workpadAuthorSchema,
   createdAt: z.iso.datetime(), attribution: z.array(workpadAttributionSpanSchema).max(4_096), changes: z.array(workpadChangeSchema),
 });
 export type WorkpadRevision = z.infer<typeof workpadRevisionSchema>;
-export const createWorkpadRequestSchema = z.strictObject({ title, scope: workpadScopeSchema, content: text.optional() });
+export const createWorkpadRequestSchema = z.strictObject({ title, scope: workpadScopeSchema, content: workpadContentSchema.optional() });
 export type CreateWorkpadRequest = z.infer<typeof createWorkpadRequestSchema>;
 export const workpadContentEditSchema = z.discriminatedUnion("kind", [
-  z.strictObject({ kind: z.literal("replace"), content: text }),
-  z.strictObject({ kind: z.literal("append"), text }),
-  z.strictObject({ kind: z.literal("patch"), edits: z.array(z.strictObject({ oldText: text.refine(value => value.length > 0), newText: text })).min(1).max(100) }),
+  z.strictObject({ kind: z.literal("replace"), content: workpadContentSchema }),
+  z.strictObject({ kind: z.literal("append"), text: workpadContentSchema }),
+  z.strictObject({ kind: z.literal("patch"), edits: z.array(z.strictObject({ oldText: workpadContentSchema.refine(value => value.length > 0), newText: workpadContentSchema })).min(1).max(100) }),
 ]);
 export type WorkpadContentEdit = z.infer<typeof workpadContentEditSchema>;
 export const updateWorkpadRequestSchema = z.strictObject({
@@ -84,11 +89,11 @@ export type WorkpadRevisionSummary = z.infer<typeof workpadRevisionSummarySchema
 export const workpadRevisionPageSchema = z.strictObject({ items: z.array(workpadRevisionSummarySchema), nextCursor: z.string().optional() });
 export type WorkpadRevisionPage = z.infer<typeof workpadRevisionPageSchema>;
 export const workpadDraftSchema = z.strictObject({
-  workpadId: workpadIdSchema, revision, baseRevision: revision, content: text,
+  workpadId: workpadIdSchema, revision, baseRevision: revision, content: workpadContentSchema,
   updatedAt: z.iso.datetime(),
 });
 export type WorkpadDraft = z.infer<typeof workpadDraftSchema>;
-export const saveWorkpadDraftRequestSchema = z.strictObject({ expectedRevision: revision, baseRevision: revision, content: text });
+export const saveWorkpadDraftRequestSchema = z.strictObject({ expectedRevision: revision, baseRevision: revision, content: workpadContentSchema });
 export type SaveWorkpadDraftRequest = z.infer<typeof saveWorkpadDraftRequestSchema>;
 export const commitWorkpadDraftRequestSchema = z.strictObject({ expectedDraftRevision: revision, expectedRevision: revision });
 export type CommitWorkpadDraftRequest = z.infer<typeof commitWorkpadDraftRequestSchema>;

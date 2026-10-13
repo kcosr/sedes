@@ -392,7 +392,7 @@ function scriptedSessionFactory(
         availableModels: async () => [{ provider: "test", id: "model", name: "Test model" }],
         providerDisplayName: () => "Test Provider",
         catalog: () => ({ models: [], commands: [], skills: [], notices: [] }),
-        dispose() {
+        async dispose() {
           listeners.clear();
         },
       };

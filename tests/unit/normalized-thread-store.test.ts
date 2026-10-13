@@ -77,6 +77,7 @@ function snapshot(): NormalizedThreadSnapshot {
     stashes: [],
     composerCommands: [],
     agentTools: {
+      runtimeAvailability: { availability: "available" },
       enabled: false,
       accessBoundary: "environment",
       groups: [],
@@ -1639,6 +1640,21 @@ describe("NormalizedThreadStore", () => {
       kind: "resnapshot_required",
       reason: "invalid_thread_event",
     });
+  });
+
+  it("accepts runtime eligibility changes without relaxing the saved tool-policy revision", () => {
+    const store = new NormalizedThreadStore();
+    const base = snapshot();
+    store.apply(envelope(1, { type: "snapshot", generation: "projection-1", snapshot: base }));
+    const agentTools = { ...base.agentTools, runtimeAvailability: {
+      availability: "unavailable" as const, reason: { text: "Execution host disconnected." },
+    } };
+    expect(store.apply(envelope(2, { type: "application_state_changed", generation: "projection-1",
+      state: { ...applicationState(base), agentTools } }))).toEqual({ kind: "applied" });
+    expect(store.state.snapshot?.agentTools).toEqual(agentTools);
+    expect(store.apply(envelope(3, { type: "application_state_changed", generation: "projection-1",
+      state: { ...applicationState(base), agentTools: { ...base.agentTools, enabled: !base.agentTools.enabled } } })))
+      .toEqual({ kind: "resnapshot_required", reason: "agent_tool_policy_revision_conflict" });
   });
 
   it("requires monotonic agent-tool policy revisions in application state", () => {

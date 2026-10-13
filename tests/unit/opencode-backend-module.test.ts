@@ -19,6 +19,10 @@ import { OpenCodeInputObserver } from "../../src/server/backends/opencode/openco
 import { OpenCodeInputEvidenceRepository } from "../../src/server/backends/opencode/opencode-input-evidence.js";
 import { runWithOpenCodeInvocation } from "../../src/server/backends/opencode/opencode-tool-invocation.js";
 import { OpenCodeThreadRepository } from "../../src/server/backends/opencode/opencode-thread-repository.js";
+import { ConversationCreationProvenanceRepository } from "../../src/server/db/repositories/conversation-creation-provenance-repository.js";
+import { ConversationCreationRepository } from "../../src/server/db/repositories/conversation-creation-repository.js";
+import { ThreadForceResetRepository } from "../../src/server/db/repositories/thread-force-reset-repository.js";
+import { ConversationOperationRepository } from "../../src/server/db/repositories/conversation-operation-repository.js";
 import { OpenCodeConversationBackendDriver } from "../../src/server/backends/opencode/opencode-conversation-driver.js";
 import { planBackendNativeStores } from "../../src/server/runtime/backend-module-startup.js";
 
@@ -157,6 +161,7 @@ async function persistedInvocationFixture() {
       provisional_opaque_binding_detail,prepared_at,external_call_started_at,accepted_at,reconciled_at)
     VALUES (?,?,?,'creation-attempt','creation',?,?,?,'first_input','composer','initial input',1,?,'bound',?,?,100,101,102,103)`)
     .run(scope.tenantId, scope.principalId, thread.id, instance.id, connection.id, environmentId, wire.sessionID, wire.sessionID, target.opaqueBindingDetail);
+  database.transaction(() => new ConversationCreationProvenanceRepository(database).recordVerifiedBinding(scope, thread.id, "creation-attempt", 103))();
   expect(repository.hasCreatedRoot(scope, thread.id, wire.sessionID)).toBe(true);
   const lease = owner.acquire(openCodeRuntimeTarget(target));
   const observer = new OpenCodeInputObserver(driver.input, target, owner, lease, client.lifetime);
@@ -194,6 +199,8 @@ describe("OpenCode compiled module", () => {
       backend: { ...configured.backend, moduleConfiguration: { connection: { ownership: "owned", channel: { type: "process_stdio" } } } } });
     const runtime = prepared.createRuntime(fixture.value);
     expect(() => runtime.driverFactory).toThrow("opencode_module_not_started");
+    expect(runtime.agentToolRuntimeAvailability?.({ scope, applicationThreadId: "thread", backendConversationId: "session", isolatedWorkspace: false,
+      presentation: { surface: "native", mode: "progressive" } })).toMatchObject({ availability: "unavailable" });
     expect(factory.create).not.toHaveBeenCalled();
     await runtime.start();
     expect(factory.create.mock.calls[0]![0].nativeStorePath).toBeUndefined();
@@ -214,6 +221,45 @@ describe("OpenCode compiled module", () => {
     approval.release();
   });
 
+  it("reports a current creation but denies abandoned unbound creation without native calls", async () => {
+    const f = await persistedInvocationFixture();
+    const scope = f.source.scope;
+    const thread = new ConversationBindingRepository(f.database).createUnboundThread(scope, {
+      workspaceId: f.target.workspace.summary.id, connectionProfileId: f.target.binding.connectionProfileId, title: "New root", now: 200,
+    });
+    const inspection = { scope, applicationThreadId: thread.id, isolatedWorkspace: false,
+      presentation: { surface: "native" as const, mode: "progressive" as const } };
+    const before = f.wire.requests.length;
+    expect(f.runtime.agentToolRuntimeAvailability?.(inspection)).toEqual({ availability: "available" });
+    const creation = new ConversationCreationRepository(f.database);
+    creation.prepare(scope, thread.id, { attemptId: "fresh-attempt", mutationId: "fresh-create", expectedThreadRevision: 0,
+      creationKind: "first_input", sourceKind: "direct_input", initialInputText: "new request", initialAttachmentIds: [],
+      backendCreationCorrelation: "ses_fresh", now: 210 });
+    creation.markExternalCallStarted(scope, thread.id, "fresh-attempt", 220);
+    expect(f.runtime.agentToolRuntimeAvailability?.(inspection)).toEqual({ availability: "available" });
+    creation.markRecoveryRequired(scope, thread.id, "fresh-attempt", { expected: "external_call_started", diagnostic: "Unknown creation", now: 230 });
+    const resets = new ThreadForceResetRepository(f.database);
+    resets.forceReset(scope, thread.id, { expectedBlockerFingerprint: resets.impact(scope, thread.id).blockerFingerprint, mutationId: "fresh-reset", now: 240 });
+    expect(f.runtime.agentToolRuntimeAvailability?.(inspection)).toMatchObject({ availability: "unavailable" });
+    expect(f.wire.requests.length).toBe(before);
+  });
+
+  it("preserves completed OpenCode creation when force-resetting a later operation", async () => {
+    const f = await persistedInvocationFixture();
+    const scope = f.source.scope;
+    const threadId = f.source.sourceThreadId;
+    new ConversationOperationRepository(f.database).prepareInterrupt(scope, threadId, { operationId: "later-stop", now: 200 });
+    const resets = new ThreadForceResetRepository(f.database);
+    resets.forceReset(scope, threadId, { expectedBlockerFingerprint: resets.impact(scope, threadId).blockerFingerprint,
+      mutationId: "reset-later-operation", now: 210 });
+    expect(f.database.prepare(`SELECT phase, force_reset_at FROM conversation_creation_attempts
+      WHERE application_thread_id=?`).get(threadId)).toEqual({ phase: "bound", force_reset_at: null });
+    expect(new OpenCodeBackendModule().creationProvenanceRepair).toBeUndefined();
+    expect(f.runtime.agentToolRuntimeAvailability?.({ scope, applicationThreadId: threadId,
+      backendConversationId: f.target.binding.backendConversationId, isolatedWorkspace: false,
+      presentation: { surface: "native", mode: "progressive" } })).toEqual({ availability: "available" });
+  });
+
   it("denies a mismatched invocation stamp and a changed persisted native binding", async () => {
     const f = await persistedInvocationFixture();
     const before = f.wire.requests.length;
@@ -224,6 +270,9 @@ describe("OpenCode compiled module", () => {
     const exact = runWithOpenCodeInvocation(f.stamp, () => f.runtime.agentToolAccessDecisionAuthority!(f.source));
     f.database.prepare("UPDATE conversation_bindings SET backend_conversation_id='ses_replaced' WHERE application_thread_id=?")
       .run(f.source.sourceThreadId);
+    expect(f.runtime.agentToolRuntimeAvailability?.({ scope: f.source.scope, applicationThreadId: f.source.sourceThreadId,
+      backendConversationId: "ses_replaced", isolatedWorkspace: false, presentation: { surface: "native", mode: "progressive" } }))
+      .toMatchObject({ availability: "unavailable", reason: expect.stringContaining("verified Sedes-created") });
     await expect(exact.acquire(new AbortController().signal)).rejects.toBeDefined();
     expect(f.factory).toHaveBeenCalledOnce(); expect(f.owner.start).toHaveBeenCalledOnce();
     expect(f.owner.admitToolSession).not.toHaveBeenCalled();

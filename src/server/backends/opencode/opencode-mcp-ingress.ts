@@ -2,7 +2,7 @@ import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { BackendAgentToolRequestError } from "../../agent-tools/adapters/backend-facade.js";
-import { agentToolCatalogResponseSchema, agentToolDescriptionsResponseSchema, agentToolInvocationResultSchema, isBoundedAgentToolJson } from "../../../internal/agent-tool-cli-protocol/contracts.js";
+import { agentToolCatalogResponseSchema, agentToolDescriptionsResponseSchema, agentToolInvocationResultSchema } from "../../../internal/agent-tool-cli-protocol/contracts.js";
 import type { AgentToolCatalogSummary } from "../../agent-tools/contracts/agent-tool-contracts.js";
 import { OPENCODE_MCP_CREDENTIAL, OPENCODE_MCP_ENDPOINT, OPENCODE_MCP_HEARTBEAT_MS,
   OPENCODE_MCP_MAXIMUM_BYTES, OPENCODE_MCP_STARTUP_MS, OPENCODE_MCP_PROTOCOL_VERSION, opencodeMcpRequest, type OpenCodeMcpRequest } from "../../../internal/opencode-mcp/contracts.js";
@@ -146,7 +146,9 @@ async function readBody(request: IncomingMessage, signal: AbortSignal): Promise<
     signal.throwIfAborted();
     for await (const value of request) { signal.throwIfAborted(); const chunk = Buffer.from(value); bytes += chunk.length;
       if (bytes > OPENCODE_MCP_MAXIMUM_BYTES) throw new Error("opencode_mcp_request_limit"); chunks.push(chunk); }
-    const value: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-    if (!isBoundedAgentToolJson(value)) throw new Error("opencode_mcp_request_limit"); return value;
+    // The exact private request schema validates metadata and delegates invoke
+    // content to the canonical tool-aware bounds. A generic whole-body string
+    // check here would reject valid Workpad text before that schema can run.
+    return JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
   } finally { signal.removeEventListener("abort", abort); }
 }

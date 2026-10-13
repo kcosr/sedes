@@ -596,7 +596,7 @@ function fakeSessionFactory(
         providerDisplayName: (providerId) =>
           providerId === "test" ? "Test Provider" : undefined,
         catalog: () => ({ models: [], commands: [], skills: [], notices: [] }),
-        dispose() {
+        async dispose() {
           listeners.clear();
         },
       };
@@ -4645,9 +4645,9 @@ describe("Pi conversation backend driver", () => {
               order.push("abort");
               throw closeFailure;
             },
-            dispose() {
+            async dispose() {
               dispose();
-              session.dispose();
+              await session.dispose();
             },
           };
         },
@@ -7212,7 +7212,7 @@ describe("Pi conversation backend driver", () => {
             const originalDispose = session.dispose.bind(session);
             const failedSession: PiSdkSession = {
               ...session,
-              dispose() {
+              async dispose() {
                 dispose();
                 originalDispose();
               },

@@ -373,6 +373,15 @@ Important opt-ins include:
   `SEDES_REAL_CODEX_SSH_WORKSPACE`, plus
   `SEDES_REAL_CODEX_SSH_MODEL=gpt-5.6-luna` for SSH UDS.
 
+If a container prevents Codex from cleaning its own stale `arg0` temporary
+directories, the CLI skill test can opt in to
+`SEDES_ALLOW_CODEX_ARG0_CLEANUP_WARNING=1`. This permits only the exact stderr
+line `WARNING: failed to clean up stale arg0 temp dirs: Permission denied (os error 13)`
+and reports when it was ignored. Strict stderr checking remains the default;
+all other diagnostics, process exit status, command sequencing, source
+identity, HTTP calls, and result assertions remain enforced. This test-only
+setting neither changes Codex permissions nor repairs its temporary files.
+
 The persistent-runtime canary uses a disposable bundled sidecar around an
 existing authenticated UDS provider. It creates one Luna-low, read-only thread,
 disconnects during streaming, reopens the application receipt database, and
@@ -422,7 +431,7 @@ SEDES_REAL_CLAUDE_CONFIG_DIRECTORY=/absolute/provider-home \
 ```
 
 It requires a logged-in first-party `claude.ai` subscription with a nonempty
-subscription type and no API-key override, exactly one `claude-sonnet-5`/low
+subscription type and no API-key override, exactly one `claude-sonnet-5-5`/low
 catalog entry, `dontAsk`, an empty tool list, and no MCP servers. It creates two
 disposable provider sessions and retains their native history. The Native MCP
 file adds a third: the production `ClaudeSdkSession` with no built-in tools,

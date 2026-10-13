@@ -550,14 +550,17 @@ export type CompactionItem = z.infer<typeof compactionItemSchema>;
 export type NoticeItem = z.infer<typeof noticeItemSchema>;
 export type ConversationItem = z.infer<typeof conversationItemSchema>;
 
-/** Application pages advance presentation revisions, not the provider fork boundary. */
+/** Application publications advance presentation revisions, not the provider fork boundary. */
 export function conversationTurnSourceRevision(
   turn: Pick<ConversationTurn, "revision" | "orderedItemIds">,
   itemsById: Readonly<Record<string, ConversationItem>>,
 ): number {
-  let pages = 0;
-  for (const id of turn.orderedItemIds) if (itemsById[id]?.kind === "page") pages++;
-  return turn.revision - pages;
+  let publications = 0;
+  for (const id of turn.orderedItemIds) {
+    const item = itemsById[id];
+    if (item?.kind === "page" || (item?.kind === "image" && item.origin.kind === "shown")) publications++;
+  }
+  return turn.revision - publications;
 }
 
 export const conversationHistoryWindowSchema = z.discriminatedUnion(
@@ -1588,9 +1591,24 @@ export type AgentToolAccessBoundary = z.infer<
   typeof agentToolAccessBoundarySchema
 >;
 
+export const threadAgentToolRuntimeAvailabilitySchema = z.discriminatedUnion(
+  "availability",
+  [
+    z.strictObject({ availability: z.literal("available") }),
+    z.strictObject({
+      availability: z.literal("unavailable"),
+      reason: boundedDisplayTextSchema,
+    }),
+  ],
+);
+export type ThreadAgentToolRuntimeAvailability = z.infer<
+  typeof threadAgentToolRuntimeAvailabilitySchema
+>;
+
 export const normalizedThreadAgentToolPolicySchema = z
   .strictObject({
     enabled: z.boolean(),
+    runtimeAvailability: threadAgentToolRuntimeAvailabilitySchema,
     accessBoundary: agentToolAccessBoundarySchema,
     groups: z.array(normalizedThreadAgentToolGroupSchema).max(64),
     presentation: agentToolPresentationSchema,

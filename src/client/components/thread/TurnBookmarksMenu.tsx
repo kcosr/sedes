@@ -76,7 +76,7 @@ function BookmarkList({
   if (bookmarks.length === 0) {
     return (
       <p className={cn(menuEmptyClass, "m-0")}>
-        Bookmark a user message to find that turn here.
+        Bookmark a response to find it here.
       </p>
     );
   }

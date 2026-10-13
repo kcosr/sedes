@@ -49,7 +49,7 @@ function configuration(
     backend: {
       id: "claude-local",
       kind: "claude_agent_sdk" as const,
-      protocolRelease: "0.3.287",
+      protocolRelease: "0.3.296",
       enabled: true,
       modelPolicy: { type: "catalog" as const },
       moduleConfiguration: {
@@ -183,7 +183,7 @@ describe("ClaudeBackendModule", () => {
         label: "Claude",
         enabled: true,
         configurationRevision: 0,
-        protocolRelease: "0.3.287",
+        protocolRelease: "0.3.296",
       };
       const connection = {
         id: "claude-connection",
@@ -263,6 +263,9 @@ describe("ClaudeBackendModule", () => {
         expect(acquireRecovery).toHaveBeenCalledOnce();
       }
       const runtime = prepared.createRuntime(context);
+      expect(runtime.agentToolRuntimeAvailability?.({ scope, applicationThreadId: "thread", isolatedWorkspace: false,
+        presentation: { surface: "native", mode: "individual" } })).toMatchObject({ availability: "unavailable", reason: expect.stringContaining("endpoint") });
+      expect(sdk.createQuery).not.toHaveBeenCalled();
 
       await runtime.start();
       expect(sdk.createQuery).not.toHaveBeenCalled();
@@ -328,7 +331,7 @@ describe("ClaudeBackendModule", () => {
         label: "Claude",
         enabled: true,
         configurationRevision: 0,
-        protocolRelease: "0.3.287",
+        protocolRelease: "0.3.296",
       };
       const connection = {
         id: "claude-connection",

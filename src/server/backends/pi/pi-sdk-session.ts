@@ -1,6 +1,7 @@
 import { mergeResolvedEnvironment, type ResolvedEnvironmentVariables } from "../../environment-variables/runtime-environment.js";
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
+import { disposePiSession } from "./pi-session-disposal.js";
 import {
   createAgentSessionFromServices,
   createAgentSessionServices,
@@ -142,7 +143,7 @@ export interface PiSdkSession {
     readonly text: string;
     readonly expandPromptTemplates: boolean;
   }>;
-  dispose(): void;
+  dispose(): Promise<void>;
 }
 
 export interface PiSteerAdmission {
@@ -600,6 +601,7 @@ class DefaultPiSdkSession implements PiSdkSession {
   readonly #extensions: LoadExtensionsResult;
   readonly #diagnosticNotices: readonly { readonly text: string }[];
   readonly #ready: Promise<void>;
+  #disposal: Promise<void> | undefined;
   readonly #fence: PiSdkSessionFence;
   readonly #prePromptRefresh?: () => Promise<void>;
   readonly #remoteResourceLoader: RemotePiResourceLoader | undefined;
@@ -892,10 +894,12 @@ class DefaultPiSdkSession implements PiSdkSession {
       this.#remoteResourceLoader?.skillContentSha256(filePath),
     );
   }
-  dispose(): void {
-    if (this.#fence.invalidate()) {
-      this.#session.dispose();
-    }
+  dispose(): Promise<void> {
+    this.#fence.invalidate();
+    this.#disposal ??= this.#ready
+      .then(() => undefined, () => undefined)
+      .then(() => disposePiSession(this.#session));
+    return this.#disposal;
   }
 }
 
@@ -1085,7 +1089,7 @@ export class DefaultPiSdkSessionFactory implements PiSdkSessionFactory {
         trustedBuiltinOverrides,
       );
     } catch (error) {
-      if (fence.invalidate()) result.session.dispose();
+      if (fence.invalidate()) await disposePiSession(result.session);
       throw error;
     }
     const ready = result.session
@@ -1122,7 +1126,7 @@ export class DefaultPiSdkSessionFactory implements PiSdkSessionFactory {
               );
             } catch (error) {
               if (fence.invalidate()) {
-                result.session.dispose();
+                await disposePiSession(result.session);
               }
               throw error;
             } finally {
@@ -1131,9 +1135,9 @@ export class DefaultPiSdkSessionFactory implements PiSdkSessionFactory {
           },
         },
       })
-      .catch((error: unknown) => {
+      .catch(async (error: unknown) => {
         if (fence.invalidate()) {
-          result.session.dispose();
+          await disposePiSession(result.session);
         }
         throw error;
       });
@@ -1160,7 +1164,7 @@ export class DefaultPiSdkSessionFactory implements PiSdkSessionFactory {
                 trustedBuiltinOverrides,
               );
             } catch (error) {
-              if (fence.invalidate()) result.session.dispose();
+              if (fence.invalidate()) await disposePiSession(result.session);
               throw error;
             }
           }

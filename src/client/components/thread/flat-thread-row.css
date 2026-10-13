@@ -160,6 +160,13 @@
   color: var(--muted-foreground-2);
 }
 
+/* State glyphs keep their sidebar size and semantic color inside menu rows. */
+.flat-row-glyph:where([data-glyph]) > svg {
+  width: 14px;
+  height: 14px;
+  color: inherit;
+}
+
 .flat-row-brand {
   display: grid;
   flex: 0 0 auto;

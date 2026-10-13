@@ -6,8 +6,10 @@ import { CodexRemoteRuntimeSupervisor } from "./runtime/codex-remote-runtime-sup
 import { CodexRuntimeReceiptStore } from "./runtime/codex-runtime-receipt-store.js";
 import { createCodexRuntimeTransport } from "./runtime/codex-runtime-transport.js";
 import { createHash } from "node:crypto";
+import { codexCreationProvenanceRepair } from "./codex-creation-provenance-repair.js";
 import { homedir } from "node:os";
 import path from "node:path";
+import { pathForRemoteRoot } from "../../execution/remote-path.js";
 import type {
   BackendDiscoveryAdapter,
   BackendModule,
@@ -180,6 +182,7 @@ class CodexBackendModuleRuntime implements BackendModuleRuntime {
   readonly savedAgents;
   readonly automationExecutionPolicy;
   readonly installationAdvisories = new CodexInstallationAdvisorySource();
+  readonly #agentToolEnvironment: DatabaseCodexAgentToolCliEnvironmentProvider;
   readonly #context: BackendModuleRuntimeContext;
   readonly #prepared: PreparedCodexBackendConfiguration;
   readonly #environment: Readonly<Record<string, string | undefined>>;
@@ -328,6 +331,22 @@ class CodexBackendModuleRuntime implements BackendModuleRuntime {
         }),
     });
     this.managedProviderTerminals = this.#managedTui;
+    this.#agentToolEnvironment = new DatabaseCodexAgentToolCliEnvironmentProvider(
+        {
+          database: input.context.database,
+          backendInstanceId: input.context.instance.id,
+          runtime: input.context.agentToolCli,
+          sourceCapabilities: input.context.agentToolSourceCapabilities,
+          agentTools: input.context.agentTools,
+          ...(input.prepared.configuration.connection.ownership === "owned" ? {
+            appliedOwnedPath: async () => {
+              if (remoteSupervisor) return await remoteSupervisor.appliedOwnedPath();
+              if (this.#appliedOwnedPath === undefined) throw new Error("codex_owned_environment_unavailable");
+              return this.#appliedOwnedPath;
+            },
+          } : {}),
+        },
+      );
     this.driverFactory = new CodexBackendDriverFactory({
       onError: error => attachmentDiagnostic("codex_backend_observer_failed", {
         backendInstanceId: input.context.instance.id,
@@ -347,22 +366,7 @@ class CodexBackendModuleRuntime implements BackendModuleRuntime {
       executionSettings,
       outputArtifacts: input.context.outputArtifacts,
       viewedImageCapture: input.context.viewedImageCapture,
-      agentToolCliEnvironment: new DatabaseCodexAgentToolCliEnvironmentProvider(
-        {
-          database: input.context.database,
-          backendInstanceId: input.context.instance.id,
-          runtime: input.context.agentToolCli,
-          sourceCapabilities: input.context.agentToolSourceCapabilities,
-          agentTools: input.context.agentTools,
-          ...(input.prepared.configuration.connection.ownership === "owned" ? {
-            appliedOwnedPath: async () => {
-              if (remoteSupervisor) return await remoteSupervisor.appliedOwnedPath();
-              if (this.#appliedOwnedPath === undefined) throw new Error("codex_owned_environment_unavailable");
-              return this.#appliedOwnedPath;
-            },
-          } : {}),
-        },
-      ),
+      agentToolCliEnvironment: this.#agentToolEnvironment,
       composerSkillPreferences: new PrincipalApplicationPreferenceRepository(
         input.context.database,
       ),
@@ -426,6 +430,31 @@ class CodexBackendModuleRuntime implements BackendModuleRuntime {
       },
     } satisfies BackendDiscoveryAdapter;
   }
+
+  agentToolRuntimeAvailability: NonNullable<BackendModuleRuntime["agentToolRuntimeAvailability"]> = ({ scope, applicationThreadId, presentation }) => {
+    const runtime = this.#context.agentToolCli;
+    if (runtime.availability === "managed" && runtime.provider.inspect?.().availability !== "available") {
+      return { availability: "unavailable", reason: "The execution-host CLI endpoint is unavailable or has not been verified. Reconnect the execution host to restore Sedes tools." };
+    }
+    const result = this.#agentToolEnvironment.inspect(scope, applicationThreadId);
+    if (result.availability === "unavailable") {
+      const reasons = {
+        imported_thread: "Sedes tools require verified Sedes creation for this session. Create a new thread in Sedes, or repair its verified creation provenance.",
+        creation_recovery: "Resolve or discard this thread's unfinished creation before using Sedes tools.",
+        network_disabled: "Sedes tools require network access. Enable network access in this thread's execution settings.",
+        remote_environment: "Sedes tools require a supported CLI endpoint on this execution host. Restore the endpoint and reconnect the backend.",
+        cli_unavailable: "The Sedes CLI endpoint is unavailable. Restore it and reconnect the backend.",
+        sidecar_unavailable: "The execution-host sidecar is unavailable. Reconnect it to restore Sedes tools.",
+        presentation_unavailable: "This Sedes tool presentation is unavailable on the execution host. Choose CLI tools.",
+        unverifiable_thread_context: "Sedes cannot verify this thread's tool eligibility. Reconnect the backend or create a new Sedes thread.",
+      };
+      return { availability: "unavailable", reason: reasons[result.reason] };
+    }
+    if (presentation.surface === "native" && runtime.availability === "available" && pathForRemoteRoot(runtime.executableDirectory).sep === "\\") {
+      return { availability: "unavailable", reason: "Native Sedes tools are unavailable on Windows. Choose CLI tools." };
+    }
+    return result;
+  };
 
   async startupEnvironmentState(): Promise<"not_started" | "started" | "unknown"> {
     if (this.#context.sidecarRuntime) return this.#supervisor.client.lifecycleSnapshot().state === "ready" ? "started" : "unknown";
@@ -1336,6 +1365,7 @@ function externalDiscoveryNamespaceKey(
 }
 
 export class CodexBackendModule implements BackendModule {
+  readonly creationProvenanceRepair = codexCreationProvenanceRepair;
   readonly startupPolicy = "composition_only" as const;
   readonly remoteRuntimeCapabilities = Object.freeze([{ capabilityId: "codex_runtime", majorVersion: 1, operations: ["runtime.ensure", "runtime.lookup", "runtime.execute"] }, codexManagedTuiCapability]);
   readonly backendKind = "codex_app_server" as const;

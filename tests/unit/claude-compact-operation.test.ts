@@ -32,6 +32,7 @@ describe("Claude's dedicated compact operation journal", () => {
     expect(operations.reconcile(input)).toEqual({ outcome: "unknown", pending: true });
     await consume(boundary());
     expect(await consume(frame({ ...summary, origin: { kind: "peer", peer_id: "external" } }))).toBe(false);
+    expect(await consume(frame({ ...summary, agent_id: "child-agent" }))).toBe(false);
     let settle = false;
     void pending.then(() => { settle = true; });
     let release!: () => void;

@@ -11,6 +11,7 @@ import {
 } from "../../server/agent-tools/contracts/agent-tool-transport-limits.js";
 import { normalizeCanonicalAgentToolSchema } from "../../server/agent-tools/schema/canonical-json-schema.js";
 import { agentToolModelContentsSchema } from "./model-content.js";
+import { isWorkpadInputContentPath, workpadInputContentError, workpadToolContentSchema, workpadToolOutputSchema } from "./workpad-content.js";
 
 export const agentToolCliTransportLimits = Object.freeze({
   maximumCatalogTools: 256,
@@ -30,9 +31,9 @@ export const agentToolCliToolIdSchema = z
   .max(128)
   .regex(/^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/);
 
-export function isBoundedAgentToolJson(value: unknown): boolean {
-  const pending: Array<{ readonly value: unknown; readonly depth: number }> = [
-    { value, depth: 0 },
+export function isBoundedAgentToolJson(value: unknown, contentPath?: (path: readonly string[]) => boolean): boolean {
+  const pending: Array<{ readonly value: unknown; readonly depth: number; readonly path: readonly string[] }> = [
+    { value, depth: 0, path: [] },
   ];
   let nodes = 0;
   while (pending.length > 0) {
@@ -52,14 +53,16 @@ export function isBoundedAgentToolJson(value: unknown): boolean {
       continue;
     }
     if (typeof current.value === "string") {
-      if (current.value.length > 65_536) return false;
+      if (contentPath?.(current.path)) {
+        if (!workpadToolContentSchema.safeParse(current.value).success) return false;
+      } else if (current.value.length > 65_536) return false;
       continue;
     }
     if (typeof current.value !== "object") return false;
     if (Array.isArray(current.value)) {
       if (current.value.length > 1_024) return false;
-      for (const child of current.value) {
-        pending.push({ value: child, depth: current.depth + 1 });
+      for (let index = 0; index < current.value.length; index++) {
+        pending.push({ value: current.value[index], depth: current.depth + 1, path: [...current.path, String(index)] });
       }
       continue;
     }
@@ -74,7 +77,7 @@ export function isBoundedAgentToolJson(value: unknown): boolean {
     for (const key of keys) {
       const descriptor = Object.getOwnPropertyDescriptor(current.value, key);
       if (!descriptor || !("value" in descriptor)) return false;
-      pending.push({ value: descriptor.value, depth: current.depth + 1 });
+      pending.push({ value: descriptor.value, depth: current.depth + 1, path: [...current.path, key] });
     }
   }
   return true;
@@ -88,12 +91,20 @@ const canonicalRootSchema = z.custom((value) => {
     return false;
   }
 }, "A canonical agent-tool JSON Schema is required.");
+export function isBoundedAgentToolOutput(value: unknown): boolean {
+  if (isBoundedAgentToolJson(value)) return true;
+  // Prove plain, bounded JSON before schema parsing can inspect properties.
+  return isBoundedAgentToolJson(value,
+    path => path.length === 2 && path[0] === "workpad" && path[1] === "content") &&
+    workpadToolOutputSchema.safeParse(value).success;
+}
+
 const boundedJsonSchema = z.custom<CanonicalJsonValue>(
-  isBoundedAgentToolJson,
+  value => isBoundedAgentToolJson(value),
   "A bounded JSON value is required.",
 );
-const boundedUnknownJsonSchema = z.custom(
-  isBoundedAgentToolJson,
+const boundedOutputJsonSchema = z.custom<CanonicalJsonValue>(
+  isBoundedAgentToolOutput,
   "A bounded JSON value is required.",
 );
 const effectsSchema = z.strictObject({
@@ -117,6 +128,7 @@ export const agentToolCatalogSummarySchema: z.ZodType<AgentToolCatalogSummary> =
         "tasks",
         "workpads",
         "pages",
+        "images",
         "automations",
         "research",
       ]),
@@ -199,7 +211,12 @@ export const createAgentToolInvocationRequestSchema = z.strictObject({
   toolId: agentToolCliToolIdSchema,
   schemaVersion: z.number().int().positive().max(1_000_000),
   requestId: agentToolCliIdentifierSchema,
-  input: boundedUnknownJsonSchema,
+  input: z.unknown(),
+}).superRefine((request, context) => {
+  const contentError = workpadInputContentError(request.toolId, request.input);
+  if (contentError || !isBoundedAgentToolJson(request.input, path => isWorkpadInputContentPath(request.toolId, path))) {
+    context.addIssue({ code: "custom", path: ["input"], message: contentError ?? "A bounded JSON value is required." });
+  }
 });
 export const agentToolCliErrorSchema = z.strictObject({
   code: z.enum([
@@ -225,7 +242,7 @@ export const agentToolInvocationResultSchema: z.ZodType<
   z.strictObject({
     invocationId: agentToolCliIdentifierSchema,
     state: z.literal("completed"),
-    output: boundedJsonSchema,
+    output: boundedOutputJsonSchema,
     modelContent: agentToolModelContentsSchema.optional(),
   }),
   z.strictObject({

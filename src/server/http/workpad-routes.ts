@@ -18,6 +18,7 @@ import {
 } from "../../shared/protocol/workpads.js";
 import type { WorkpadService } from "../domain/workpad-service.js";
 import type { RequestScope } from "../identity/identity-provider.js";
+import { parseWorkpadValue } from "../domain/workpad-validation.js";
 
 interface WorkpadRoutes {
   get(path: string, ...handlers: RequestHandler[]): void;
@@ -77,7 +78,7 @@ export function registerWorkpadRoutes(
   });
   routes.post("/api/workpads", async (request, response) => {
     const owner = await scope(request);
-    const workpad = await service.create(owner, createWorkpadRequestSchema.parse(request.body));
+    const workpad = await service.create(owner, parseWorkpadValue(createWorkpadRequestSchema, request.body));
     response.status(201).json({ workpad: workpadSchema.parse(workpad) });
   });
   routes.get("/api/workpads/:workpadId", async (request, response) => {
@@ -88,7 +89,7 @@ export function registerWorkpadRoutes(
   routes.patch("/api/workpads/:workpadId", async (request, response) => {
     const owner = await scope(request);
     const { workpadId } = pathSchema.parse(request.params);
-    const workpad = await service.update(owner, workpadId, updateWorkpadRequestSchema.parse(request.body));
+    const workpad = await service.update(owner, workpadId, parseWorkpadValue(updateWorkpadRequestSchema, request.body));
     response.json({ workpad: workpadSchema.parse(workpad) });
   });
   routes.delete("/api/workpads/:workpadId", async (request, response) => {
@@ -115,7 +116,7 @@ export function registerWorkpadRoutes(
   routes.put("/api/workpads/:workpadId/draft", async (request, response) => {
     const owner = await scope(request);
     const { workpadId } = pathSchema.parse(request.params);
-    response.json({ draft: workpadDraftSchema.parse(await service.saveDraft(owner, workpadId, saveWorkpadDraftRequestSchema.parse(request.body))) });
+    response.json({ draft: workpadDraftSchema.parse(await service.saveDraft(owner, workpadId, parseWorkpadValue(saveWorkpadDraftRequestSchema, request.body))) });
   });
   routes.delete("/api/workpads/:workpadId/draft", async (request, response) => {
     const owner = await scope(request);

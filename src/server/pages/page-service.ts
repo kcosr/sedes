@@ -1,4 +1,5 @@
-import { pageSourceSchema, publishPageRequestSchema, type PagePublicationAnchor, type PageRevision, type PageSource, type PublishPageRequest } from "../../shared/protocol/pages.js";
+import { pageSourceSchema, publishPageRequestSchema, type PageRevision, type PageSource, type PublishPageRequest } from "../../shared/protocol/pages.js";
+import { type ApplicationPublicationAnchor } from "../../shared/protocol/application-publications.js";
 import type { InventoryRepository } from "../db/repositories/inventory-repository.js";
 import { PageRepository, type PageReadOptions } from "../db/repositories/page-repository.js";
 import { DomainError } from "../domain/errors.js";
@@ -6,7 +7,7 @@ import type { WorkspaceFileService } from "../domain/workspace-file-service.js";
 import type { RequestScope } from "../identity/identity-provider.js";
 import { importHtmlPage, importInlineHtmlPage } from "./html-import.js";
 
-export type PagePublicationAuthority = { readonly invocationId: string; readonly anchor?: PagePublicationAnchor; readonly assertCurrent?: () => void; };
+export type PagePublicationAuthority = { readonly invocationId: string; readonly anchor?: ApplicationPublicationAnchor; readonly assertCurrent?: () => void; };
 
 /** Principal-owned thread pages. Import is bounded, cancellable, and fenced before commit. */
 export class PageService {

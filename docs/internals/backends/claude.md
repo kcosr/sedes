@@ -28,7 +28,7 @@ The shared backend rules remain normative. Read this page together with
 
 ## Runtime and session ownership
 
-The exact-pinned `@anthropic-ai/claude-agent-sdk` 0.3.287 package runs in one
+The exact-pinned `@anthropic-ai/claude-agent-sdk` 0.3.296 package runs in one
 digest-verified local provider worker or a backend-private persistent runtime
 hosted by the SSH or outbound sidecar. The Claude worker requires Node.js
 24.18+ and POSIX process-group supervision; native Windows Claude is
@@ -1412,7 +1412,7 @@ Stop also withdraws every input Sedes sent that Claude has not started:
   main's attachments, so it withdraws every such input it holds when it
   handles the `interrupt` command, including a steer an earlier main
   attachment sent that the replacement never saw; main sends no withdrawal of
-  its own. The pinned SDK 0.3.287 implements the request as
+  its own. The pinned SDK 0.3.296 implements the request as
   `Query.cancelAsyncMessage`, although its declaration omits the method. It
   crosses the worker protocol as `query.cancel_input`. Then the owner sends
   the plain interrupt. A failed request proves nothing and does not block
@@ -1563,4 +1563,4 @@ changes. The authorization and safety guidance for the real suite remains in
 the [operator guide](../../operator/backends/claude.md#opt-in-live-verification).
 
 Release-specific native qualification and the distinction between native and
-synthetic evidence are recorded in the [SDK 0.3.287 evidence](../../../protocol/claude-agent-sdk/0.3.287/README.md).
+synthetic evidence are recorded in the [SDK 0.3.296 evidence](../../../protocol/claude-agent-sdk/0.3.296/README.md).

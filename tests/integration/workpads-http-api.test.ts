@@ -11,21 +11,25 @@ import { directThreadExecutionWorkspaceLifecycle } from "../../src/server/pi-san
 import { unavailableAgentToolRouterDependencies } from "../support/agent-tool-http.js";
 import { savedAgentDatabase } from "../support/saved-agent-fixture.js";
 import { unavailableTurnBookmarks } from "../support/unavailable-turn-bookmarks.js";
+import type { AgentToolRouterDependencies } from "../../src/server/agent-tools/http/agent-tool-router.js";
+import { CanonicalInlineAgentToolService, mapAgentToolDomainError } from "../../src/server/agent-tools/invocation/canonical-inline-agent-tool-service.js";
+import { DomainError } from "../../src/server/domain/errors.js";
+import { createWorkpadRequestSchema, updateWorkpadRequestSchema } from "../../src/shared/protocol/workpads.js";
+import { runSedesCli } from "../../src/cli/sedes-cli.js";
 
-function fixture() {
+function fixture(agentTools: AgentToolRouterDependencies = unavailableAgentToolRouterDependencies()) {
   const { database, scope } = savedAgentDatabase();
   let activeScope = scope;
   const unused = () => {
     throw new Error("route_not_configured_for_test");
   };
+  const workpads = new WorkpadService(new WorkpadRepository(database),
+    { publishWorkpadChange: vi.fn().mockResolvedValue(undefined), handoffThreadChange: vi.fn() });
   const app = createNormalizedApp({
     usage: new UsageService(database, {enabled: true}),
     questions: {} as never,
     cannedPrompts: {} as never,
-    workpads: new WorkpadService(
-      new WorkpadRepository(database),
-      { publishWorkpadChange: vi.fn().mockResolvedValue(undefined), handoffThreadChange: vi.fn() },
-    ),
+    workpads,
     turnBookmarks: unavailableTurnBookmarks(),
     workspaceDiffReviews: {} as never,
     config: {
@@ -68,7 +72,7 @@ function fixture() {
     execution: {} as never,
     automations: {} as never,
     automationPrechecks: {} as never,
-    agentTools: unavailableAgentToolRouterDependencies(),
+    agentTools,
     lineage: {
       forkManual: unused,
       updatePlacement: unused,
@@ -78,10 +82,95 @@ function fixture() {
   const get = (path: string) => request(app).get(path).set("Host", "127.0.0.1:4783");
   const mutate = (method: "post" | "put" | "patch" | "delete", path: string) =>
     request(app)[method](path).set("Host", "127.0.0.1:4783").set("X-CSRF-Token", "canned-prompts-csrf");
-  return { database, scope, app, get, mutate, changeOwner: () => { activeScope = { ...scope, principalId: "another-user" }; } };
+  return { database, scope, app, get, mutate, workpads, changeOwner: () => { activeScope = { ...scope, principalId: "another-user" }; } };
 }
 
 describe("Workpads HTTP", () => {
+  it("runs the CLI through real normalized HTTP at the 256K boundary and preserves rejection details", async () => {
+    const baseDependencies = unavailableAgentToolRouterDependencies();
+    const descriptions = new CanonicalInlineAgentToolService({ application: {} as never, workpads: {} as never });
+    let f: ReturnType<typeof fixture>;
+    let calls = 0;
+    // Keep this a carrier test: the client authority seam delegates to the real
+    // Workpad service/database, while policy and attribution have separate tests.
+    const dependencies: AgentToolRouterDependencies = { ...baseDependencies, clients: { ...baseDependencies.clients,
+      catalogSummaries: () => descriptions.catalogSummaries("cli", "principal_client"),
+      describeMany: (_credential, ids) => descriptions.describeMany("cli", "principal_client", ids),
+      invoke: async (_credential, request) => {
+        calls++;
+        try {
+          const raw = request.input as { workpadId: string; revision?: number };
+          const { workpadId: _id, ...update } = raw;
+          const pad = request.toolId === "workpad.create"
+            ? await f.workpads.create(f.scope, createWorkpadRequestSchema.parse(request.input))
+            : request.toolId === "workpad.update"
+              ? await f.workpads.update(f.scope, raw.workpadId, updateWorkpadRequestSchema.parse(update))
+              : raw.revision === undefined ? f.workpads.get(f.scope, raw.workpadId) : f.workpads.revision(f.scope, raw.workpadId, raw.revision);
+          const { attribution: _attribution, ...document } = pad;
+          const { changes: _changes, ...output } = document as typeof document & { changes?: unknown };
+          return { invocationId: `http-${calls}`, state: "completed", output: { workpad: output } };
+        } catch (error) { if (error instanceof DomainError) throw mapAgentToolDomainError(error); throw error; }
+      },
+    } };
+    f = fixture(dependencies);
+    const server = f.app.listen(0, "127.0.0.1");
+    await new Promise<void>(resolve => server.once("listening", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Missing HTTP address");
+    const environment = { SEDES_AGENT_TOOL_ENDPOINT: `http://127.0.0.1:${address.port}`, SEDES_AGENT_TOOL_CLI_MODE: "progressive",
+      SEDES_AGENT_TOOL_CLIENT_TOKEN: `hatc1_10000000-0000-4000-8000-000000000001_1_${"a".repeat(43)}` };
+    const invoke = async (toolId: string, input: unknown) => {
+      let stdout = "", stderr = "";
+      const status = await runSedesCli(["tool", "invoke", toolId, "--input-file", "-", "--json"], {
+        environment, readStdin: async () => JSON.stringify(input),
+        io: { stdout: { write: text => { stdout += text; } }, stderr: { write: text => { stderr += text; } } },
+      });
+      return { status, stdout, stderr };
+    };
+    try {
+      for (const content of ["🙂".repeat(131_072), "文".repeat(262_144)]) {
+        const created = await invoke("workpad.create", { title: "CLI large", scope: { kind: "global" }, content });
+        expect(created.status, created.stderr).toBe(0);
+        const id = JSON.parse(created.stdout).workpad.id;
+        const replacement = `AB${content.slice(2)}`;
+        const updated = await invoke("workpad.update", { workpadId: id, expectedRevision: 0, edit: { kind: "replace", content: replacement } });
+        expect(updated.status, updated.stderr).toBe(0);
+        expect(JSON.parse(updated.stdout).workpad).toMatchObject({ revision: 1, content: replacement });
+        const read = await invoke("workpad.get", { workpadId: id });
+        expect(read.status, read.stderr).toBe(0);
+        expect(JSON.parse(read.stdout).workpad.content).toBe(replacement);
+        expect((await f.get(`/api/workpads/${id}`)).body.workpad.content).toBe(replacement);
+      }
+      const before = calls;
+      const rejected = await invoke("workpad.create", { title: "Too long", scope: { kind: "global" }, content: "x".repeat(262_145) });
+      expect(rejected.status).toBe(2); expect(rejected.stderr).toContain("262,144"); expect(calls).toBe(before);
+      const escaped = await invoke("workpad.create", { title: "Escaping", scope: { kind: "global" }, content: "\u0000".repeat(262_144) });
+      expect(escaped.status).toBe(1); expect(escaped.stderr).toContain("2 MiB"); expect(calls).toBe(before + 1);
+      expect(f.workpads.list(f.scope, { scope: { kind: "global" } }).items).toHaveLength(2);
+    } finally {
+      server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); f.database.close();
+    }
+  });
+
+  it("preserves the 256K boundary and explains rejected content and serialized revisions", async () => {
+    const f = fixture();
+    try {
+      const content = "文".repeat(262_144);
+      const created = await f.mutate("post", "/api/workpads").send({ title: "Large", scope: { kind: "global" }, content }).expect(201);
+      const path = `/api/workpads/${created.body.workpad.id}`;
+      expect((await f.get(path).expect(200)).body.workpad.content).toBe(content);
+      const tooLong = await f.mutate("patch", path).send({ expectedRevision: 0, edit: { kind: "append", text: "x" } }).expect(400);
+      expect(tooLong.body.error.message).toContain("262,144");
+      const malformed = await f.mutate("put", `${path}/draft`).send({ expectedRevision: 0, baseRevision: 0, content: "broken\uD800" }).expect(400);
+      expect(malformed.body.error.message).toContain("valid Unicode");
+      const escaped = await f.mutate("post", "/api/workpads").send({ title: "Escaping", scope: { kind: "global" }, content: "\u0000".repeat(262_144) }).expect(400);
+      expect(escaped.body.error.message).toContain("revision size limit");
+      expect((await f.get(path)).body.workpad.revision).toBe(0);
+      expect((await f.get(`${path}/revisions`)).body.items).toHaveLength(1);
+      expect((await f.get(`${path}/draft`)).body.draft.revision).toBe(0);
+    } finally { f.database.close(); }
+  });
+
   it("persists revisions and shared drafts, rejects stale writes, and protects history by current ownership", async () => {
     const f = fixture();
     try {

@@ -15,10 +15,6 @@ export const pageViewportSchema = z.strictObject({
   height: z.number().int().min(100).max(8192).optional(),
 });
 export type PageViewport = z.infer<typeof pageViewportSchema>;
-export const pagePublicationAnchorSchema = z.strictObject({
-  turnId: z.string().min(1).max(160), afterItemId: z.string().min(1).max(160).optional(),
-});
-export type PagePublicationAnchor = z.infer<typeof pagePublicationAnchorSchema>;
 /** Immutable presentation metadata. Paths and document bytes never enter history. */
 export const pageRevisionSchema = z.strictObject({
   pageId: pageIdSchema,

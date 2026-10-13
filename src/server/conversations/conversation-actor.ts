@@ -60,7 +60,7 @@ import {
 } from "./completion-result-projection.js";
 import type { BoundedText } from "../../shared/protocol/payload.js";
 import { boundText } from "./payload-policy.js";
-import type { PagePublicationAnchor } from "../../shared/protocol/pages.js";
+import type { ApplicationPublicationAnchor } from "../../shared/protocol/application-publications.js";
 
 export const DEFAULT_PROJECTION_UPDATE_INTERVAL_MILLISECONDS = 50;
 export const DEFAULT_MAXIMUM_PENDING_PROJECTION_ITEMS = 512;
@@ -399,15 +399,15 @@ export class ConversationActor {
     return this.#projector.timeline();
   }
 
-  capturePagePublicationAnchor(): PagePublicationAnchor | undefined {
+  captureApplicationPublicationAnchor(): ApplicationPublicationAnchor | undefined {
     const observed = this.peekInputState();
     if (!observed?.authoritative || observed.settled) return undefined;
-    return this.#projector.capturePagePublicationAnchor();
+    return this.#projector.captureApplicationPublicationAnchor();
   }
 
   /** Application-only publication uses the same mailbox/event rail as native projection. */
-  refreshPagePublications(): Promise<void> {
-    return this.#enqueue(() => this.#applyProjection(this.#projector.refreshPagePublications()));
+  refreshApplicationPublications(): Promise<void> {
+    return this.#enqueue(() => this.#applyProjection(this.#projector.refreshApplicationPublications()));
   }
 
   /** Main-turn readiness is independent of background work and cleanup safety. */

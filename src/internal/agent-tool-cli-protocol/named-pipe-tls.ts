@@ -1,7 +1,7 @@
 import { createConnection, type Socket } from "node:net";
 import tls from "node:tls";
 
-const IDENTITY = "sedes-agent-tools-v4";
+const IDENTITY = "sedes-agent-tools-v6";
 // PSK authenticates both ends and encrypts credentials even if another local
 // account can enumerate or impersonate the named pipe. No certificate fallback.
 const TLS_OPTIONS = {

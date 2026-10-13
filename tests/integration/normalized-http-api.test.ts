@@ -290,6 +290,7 @@ function threadSnapshot(
     })),
     composerCommands: [],
     agentTools: {
+      runtimeAvailability: { availability: "available" },
       enabled: false,
       accessBoundary: "environment",
       groups: [
@@ -2254,7 +2255,7 @@ describe("normalized HTTP application contract", () => {
         .send({
           action: "create",
           name: "Design",
-          expectedRevision: 0,
+          members: [{ threadId, expectedRevision: 0 }],
           mutationId: randomUUID(),
         })
         .expect(200);

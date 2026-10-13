@@ -305,7 +305,7 @@ describe("probeClaudeSdk", () => {
   });
 
   it("accepts a newer CLI release and reports the compatibility warning", async () => {
-    const sdk = facade("2.1.288");
+    const sdk = facade("2.1.297");
     const onNewerVersion = vi.fn();
     await expect(
       probeClaudeSdkDirect({
@@ -316,10 +316,10 @@ describe("probeClaudeSdk", () => {
         environment: { HOME: "/operator", CLAUDE_CONFIG_DIR: "/claude" },
         onNewerVersion,
       }),
-    ).resolves.toMatchObject({ cliRelease: "2.1.288" });
+    ).resolves.toMatchObject({ cliRelease: "2.1.297" });
     expect(onNewerVersion).toHaveBeenCalledWith({
-      testedThroughVersion: "2.1.287",
-      observedVersion: "2.1.288",
+      testedThroughVersion: "2.1.296",
+      observedVersion: "2.1.297",
     });
   });
 
@@ -343,7 +343,7 @@ describe("probeClaudeSdk", () => {
   });
 
   it("accepts a newer compatible streamed CLI release", async () => {
-    const sdk = facade("2.1.287", "2.1.288");
+    const sdk = facade("2.1.287", "2.1.297");
     const onNewerVersion = vi.fn();
     await expect(
       probeClaudeSdkDirect({
@@ -356,14 +356,14 @@ describe("probeClaudeSdk", () => {
       }),
     ).resolves.toMatchObject({ cliRelease: "2.1.287" });
     expect(onNewerVersion).toHaveBeenCalledWith({
-      testedThroughVersion: "2.1.287",
-      observedVersion: "2.1.288",
+      testedThroughVersion: "2.1.296",
+      observedVersion: "2.1.297",
     });
   });
 
   it.each([
     ["2.1.240", "claude_cli_release_below_minimum"],
-    ["2.1.288-beta.1", "claude_cli_release_prerelease_unsupported"],
+    ["2.1.297-beta.1", "claude_cli_release_prerelease_unsupported"],
   ])(
     "retains incompatible streamed CLI release %s during cleanup",
     async (streamRelease, expectedError) => {

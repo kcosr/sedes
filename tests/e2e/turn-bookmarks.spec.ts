@@ -1,5 +1,5 @@
 import { expect, test } from "./fixtures";
-import type { BrowserContext } from "@playwright/test";
+import type { BrowserContext, Page } from "@playwright/test";
 import {
   capture,
   createDraftThread,
@@ -9,6 +9,16 @@ import {
   overlaySettled,
   sendCurrentDraft,
 } from "./helpers";
+
+async function expectResponsePosition(page: Page, turnId: string): Promise<void> {
+  await expect.poll(() => page.locator(".message-viewport").evaluate((viewport, id) => {
+    const turn = viewport.querySelector<HTMLElement>(`[data-turn-id="${CSS.escape(id)}"]`)!;
+    const reply = turn.querySelector<HTMLElement>(`[data-item-id="${CSS.escape(turn.dataset.responseItemId!)}"]`)!;
+    const targetTop = viewport.scrollTop + reply.getBoundingClientRect().top - viewport.getBoundingClientRect().top;
+    const destination = Math.max(0, targetTop - 16);
+    return Math.abs(viewport.scrollTop - destination);
+  }, turnId)).toBeLessThanOrEqual(1);
+}
 
 test("turn bookmarks persist, preview both sides, navigate, and synchronize", async ({
   browser,
@@ -31,8 +41,11 @@ test("turn bookmarks persist, preview both sides, navigate, and synchronize", as
         const activeTurn = page.locator('.conversation-turn[data-turn-status="in_progress"]');
         await expect(activeTurn.locator('[data-item-kind="user_message"]')).toBeVisible();
         await expect(activeTurn.locator('[data-item-kind="assistant_message"]')).toContainText("I found", { timeout: 12_000 });
-        await activeTurn.getByRole("button", { name: "Bookmark turn" }).click();
-        await expect(activeTurn.getByRole("button", { name: "Remove turn bookmark" })).toBeEnabled();
+        const activeBookmark = activeTurn.locator("footer").getByRole("button", { name: "Bookmark response" });
+        await expect(activeTurn.locator('[data-item-kind="user_message"]').getByRole("button", { name: "Bookmark response" })).toHaveCount(0);
+        await activeBookmark.click();
+        await capture(page, testInfo, "turn-bookmarks-streaming-footer.png");
+        await expect(activeTurn.getByRole("button", { name: "Remove response bookmark" })).toBeEnabled();
         await page.getByRole("button", { name: "Bookmarks, 1" }).click();
         await expect(page.locator('[data-slot="turn-bookmark-item-description"]')).toContainText("I found");
         await expect(page.locator('[data-slot="turn-bookmark-item-description"]')).not.toContainText("deterministic normalized result");
@@ -53,7 +66,7 @@ test("turn bookmarks persist, preview both sides, navigate, and synchronize", as
         `deterministic normalized result for ${prompt}`,
       );
       await page.keyboard.press("Escape");
-      await page.getByRole("button", { name: "Remove turn bookmark" }).click();
+      await page.getByRole("button", { name: "Remove response bookmark" }).click();
       await expect(page.getByRole("button", { name: "Bookmarks", exact: true })).toBeVisible();
     }
   }
@@ -86,7 +99,7 @@ test("turn bookmarks persist, preview both sides, navigate, and synchronize", as
       .locator('.conversation-turn[data-turn-status="completed"]')
       .first();
     await expect(
-      peerFirstTurn.getByRole("button", { name: "Bookmark turn" }),
+      peerFirstTurn.getByRole("button", { name: "Bookmark response" }),
     ).toBeEnabled();
     const selectedDesktopThread = page
       .getByTestId("desktop-sidebar")
@@ -98,12 +111,12 @@ test("turn bookmarks persist, preview both sides, navigate, and synchronize", as
 
     await firstTurn.hover();
     const bookmarkToggle = firstTurn.getByRole("button", {
-      name: "Bookmark turn",
+      name: "Bookmark response",
     });
     await expect(bookmarkToggle).toBeEnabled();
     await bookmarkToggle.click();
     await expect(
-      firstTurn.getByRole("button", { name: "Remove turn bookmark" }),
+      firstTurn.getByRole("button", { name: "Remove response bookmark" }),
     ).toHaveAttribute("aria-pressed", "true");
     await expect(
       page.getByRole("button", { name: "Bookmarks, 1" }),
@@ -119,7 +132,7 @@ test("turn bookmarks persist, preview both sides, navigate, and synchronize", as
       timeout: 10_000,
     });
     await expect(
-      peerFirstTurn.getByRole("button", { name: "Remove turn bookmark" }),
+      peerFirstTurn.getByRole("button", { name: "Remove response bookmark" }),
     ).toHaveAttribute("aria-pressed", "true");
 
     await page.getByRole("button", { name: "Bookmarks, 1" }).click();
@@ -144,6 +157,7 @@ test("turn bookmarks persist, preview both sides, navigate, and synchronize", as
       firstTurnId!,
     );
     await expect(page.locator(".source-turn-highlight")).toBeFocused();
+    await expectResponsePosition(page, firstTurnId!);
     await expect(
       page.getByRole("button", { name: "Return to latest" }),
     ).toHaveCount(0);
@@ -162,6 +176,20 @@ test("turn bookmarks persist, preview both sides, navigate, and synchronize", as
       prompts[0]!,
     );
     await page.keyboard.press("Escape");
+
+    await page.goto(`${threadPath}#turn=${encodeURIComponent(firstTurnId!)}&response`);
+    await expect(page.locator(".source-turn-highlight")).toHaveAttribute("data-turn-id", firstTurnId!);
+    await expectResponsePosition(page, firstTurnId!);
+    // Re-selecting the same focused bookmark must perform a new seek even
+    // though its route and turn identity have not changed.
+    await page.locator(".message-viewport").evaluate(viewport => { viewport.scrollTop = 0; });
+    await page.getByRole("button", { name: "Bookmarks, 1" }).click();
+    await page.locator('[data-slot="turn-bookmark-link"]').click();
+    await expectResponsePosition(page, firstTurnId!);
+    await page.getByRole("button", { name: "Return to latest" }).focus();
+    await page.keyboard.press("Enter");
+    await expect(page.getByTestId("seek-spacer")).toHaveCSS("height", "0px");
+    await expect(page.locator(".source-turn-highlight")).toHaveCount(0);
 
     mobileContext = await browser.newContext({
       viewport: { width: 390, height: 844 },
@@ -232,6 +260,15 @@ test("turn bookmarks persist, preview both sides, navigate, and synchronize", as
       firstTurnId!,
     );
     await expect(mobilePage.locator(".source-turn-highlight")).toBeFocused();
+    await expectResponsePosition(mobilePage, firstTurnId!);
+    const footerBookmarkBox = await mobilePage.locator(".source-turn-highlight footer").getByRole("button", { name: "Remove response bookmark" }).boundingBox();
+    expect(footerBookmarkBox!.width).toBeGreaterThanOrEqual(44);
+    expect(footerBookmarkBox!.height).toBeGreaterThanOrEqual(44);
+    await expectNoPageOverflow(mobilePage);
+    await capture(mobilePage, testInfo, "turn-bookmarks-mobile-footer.png");
+    await mobilePage.locator(".source-turn-highlight").press("End");
+    await expect(mobilePage.getByTestId("seek-spacer")).toHaveCSS("height", "0px");
+    await expect(mobilePage.getByRole("button", { name: "Jump to latest" })).toHaveCount(0);
     await mobilePage.getByTestId("thread-context").click();
     await expect(mobilePage.locator(".source-turn-highlight")).toHaveCount(0);
 
@@ -241,7 +278,7 @@ test("turn bookmarks persist, preview both sides, navigate, and synchronize", as
       .getByRole("button", { name: `Remove bookmark: ${prompts[0]}` })
       .click();
     await expect(dialog).toContainText(
-      "Bookmark a user message to find that turn here.",
+      "Bookmark a response to find it here.",
     );
     await mobilePage.keyboard.press("Escape");
     await expect(
@@ -253,7 +290,7 @@ test("turn bookmarks persist, preview both sides, navigate, and synchronize", as
       timeout: 10_000,
     });
     await expect(
-      peerFirstTurn.getByRole("button", { name: "Bookmark turn" }),
+      peerFirstTurn.getByRole("button", { name: "Bookmark response" }),
     ).toHaveAttribute("aria-pressed", "false");
     await expect(desktopBookmarkIndicator).toHaveCount(0);
     await mobilePage
@@ -274,7 +311,7 @@ test("turn bookmarks persist, preview both sides, navigate, and synchronize", as
       .click();
     await expect(
       mobilePage.getByRole("dialog", { name: "Bookmarks" }),
-    ).toContainText("Bookmark a user message to find that turn here.");
+    ).toContainText("Bookmark a response to find it here.");
   } finally {
     await Promise.all([mobileContext?.close(), peerContext.close()]);
   }

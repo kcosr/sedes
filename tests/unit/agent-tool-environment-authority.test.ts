@@ -134,7 +134,7 @@ const grantAuthority = {
 
 describe("agent-tool environment authority", () => {
   it("declares an explicit disposition for the complete canonical catalog", () => {
-    expect(CANONICAL_AGENT_TOOL_MANIFEST_ENTRIES).toHaveLength(49);
+    expect(CANONICAL_AGENT_TOOL_MANIFEST_ENTRIES).toHaveLength(50);
     expect(
       CANONICAL_AGENT_TOOL_MANIFEST_ENTRIES.every(
         ({ environmentAuthority }) => environmentAuthority.kind.length > 0,
@@ -149,6 +149,7 @@ describe("agent-tool environment authority", () => {
   });
 
   it.each([
+    ["image.show", { path: "/remote/chart.png", title: "Results" }],
     ["page.publish", { path: "/remote/mockup.html", title: "Preview" }],
     ["page.publish", { html: "<h1>Inline preview</h1>", title: "Preview" }],
     ["page.preview", { path: "/remote/mockup.html" }],

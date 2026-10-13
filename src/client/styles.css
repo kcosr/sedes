@@ -5677,63 +5677,14 @@ textarea:disabled {
   margin: 14px 0 4px auto;
 }
 
-.bookmarked-user-message-wrap {
-  position: relative;
-}
-
-.turn-bookmark-toggle {
-  position: absolute;
-  top: -9px;
-  right: -9px;
-  display: inline-flex;
-  width: 27px;
-  height: 27px;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--background);
-  box-shadow: var(--elevation-1);
-  color: var(--muted-foreground-2);
-  opacity: 0;
-  transition:
-    opacity var(--motion-fast),
-    color var(--motion-fast),
-    background var(--motion-fast);
-}
-
-.conversation-item:hover .turn-bookmark-toggle,
-.conversation-item:focus-within .turn-bookmark-toggle,
-.turn-bookmark-toggle[aria-pressed="true"] {
-  opacity: 1;
-}
-
 .turn-bookmark-toggle[aria-pressed="true"] {
   background: color-mix(in oklch, var(--primary), var(--background) 88%);
   color: var(--primary);
 }
 
-.turn-bookmark-toggle:hover:not(:disabled),
-.turn-bookmark-toggle:focus-visible {
-  color: var(--foreground);
-  opacity: 1;
-  outline: 2px solid var(--ring);
-  outline-offset: 1px;
-}
-
 .turn-bookmark-toggle:disabled {
   cursor: wait;
   opacity: 0.62;
-}
-
-@media (pointer: coarse) {
-  .turn-bookmark-toggle {
-    top: -12px;
-    right: -12px;
-    width: 44px;
-    height: 44px;
-    opacity: 1;
-  }
 }
 
 .turn-bookmark-spinner {
@@ -8757,7 +8708,7 @@ tr.diff-hunk td {
 }
 
 /* The skill picker (ui/popover) reads as a near-full-width companion to
-   the input: the trigger sits 9px inside the composer card, and the far
+   the input: its anchor sits 9px inside the composer card, and the far
    edge keeps the same inset. */
 .skill-popover {
   width: min(

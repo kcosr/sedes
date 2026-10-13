@@ -46,6 +46,7 @@ class PiBackendModuleRuntime implements BackendModuleRuntime {
   readonly discovery;
   readonly savedAgents;
   readonly automationExecutionPolicy;
+  readonly agentToolRuntimeAvailability: NonNullable<BackendModuleRuntime["agentToolRuntimeAvailability"]>;
   readonly installationAdvisories = NO_ACTIVE_BACKEND_INSTALLATION_ADVISORIES;
   readonly managedProviderTerminals = Object.freeze({
     async authorizeAdmission(): Promise<never> {
@@ -75,6 +76,13 @@ class PiBackendModuleRuntime implements BackendModuleRuntime {
   ) {
     this.scope = context.scope;
     this.instance = context.instance;
+    this.agentToolRuntimeAvailability = ({ presentation, isolatedWorkspace }) => {
+      if (presentation.surface === "native") return { availability: "available" };
+      if (isolatedWorkspace) return { availability: "unavailable", reason: "Sedes CLI tools are unavailable in an isolated workspace. Choose Native tools." };
+      return context.environmentOperations.environmentKind === "local" && context.agentToolCli.availability === "available"
+        ? { availability: "available" }
+        : { availability: "unavailable", reason: "Sedes CLI tools require an available local CLI endpoint. Choose Native tools or restore the local endpoint." };
+    };
     const pi = new PiConversationRepository(context.database);
     this.automationExecutionPolicy = new PiAutomationExecutionPolicy(
       pi,
@@ -314,6 +322,7 @@ class PreparedPiBackendModule implements PreparedBackendModule {
 }
 
 export class PiBackendModule implements BackendModule {
+  readonly creationProvenanceRepair = undefined;
   readonly startupPolicy = "composition_only" as const;
   readonly backendKind = "pi" as const;
   readonly connectionKinds = ["pi_sdk"] as const;

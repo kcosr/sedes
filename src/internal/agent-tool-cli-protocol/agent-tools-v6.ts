@@ -14,7 +14,7 @@ import {
   createAgentToolInvocationRequestSchema,
 } from "./contracts.js";
 
-export const AGENT_TOOL_CLI_PROTOCOL_VERSION = 4 as const;
+export const AGENT_TOOL_CLI_PROTOCOL_VERSION = 6 as const;
 
 const transportRequestIdSchema = z.uuid();
 const sourceCapabilitySchema = z

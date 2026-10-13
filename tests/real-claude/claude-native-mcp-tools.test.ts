@@ -14,7 +14,7 @@ import { ClaudeSdkSession } from "../../src/server/backends/claude/claude-sdk-se
 import type { ConfigurationDocument } from "../../src/shared/protocol/configuration-admin.js";
 import { startLiveAgentToolListener } from "../helpers/live-agent-tool-listener.js";
 
-const REQUIRED_MODEL = "claude-sonnet-5";
+const REQUIRED_MODEL = "claude-sonnet-5-5";
 const MODEL_TURN_TIMEOUT_MS = 240_000;
 const environmentId = "019196f7-a0a8-7bc4-a89b-8cf013978405";
 const temporaryRoots: string[] = [];
@@ -93,9 +93,10 @@ class SedesOnlyClaudeSdkFacade extends OfficialClaudeSdkFacade {
 
 describe.sequential("real Claude Native Sedes MCP tools", () => {
   it.each([
-    { label: "fresh-thread agent context", previewPage: false },
-    { label: "established-thread page preview", previewPage: true },
-  ])("calls native Sedes tools with $label", async ({ previewPage }) => {
+    { label: "fresh-thread agent context", previewPage: false, showImage: false },
+    { label: "established-thread page preview", previewPage: true, showImage: false },
+    { label: "established-thread image show", previewPage: false, showImage: true },
+  ])("calls native Sedes tools with $label", async ({ previewPage, showImage }) => {
     const root = await mkdtemp(path.join(os.tmpdir(), "sedes-real-claude-mcp-"));
     temporaryRoots.push(root);
     const workspacePath = path.join(root, "workspace");
@@ -104,6 +105,9 @@ describe.sequential("real Claude Native Sedes MCP tools", () => {
     const visualCode = randomBytes(4).toString("hex").toUpperCase();
     const sourcePath = path.join(workspace, "preview.html");
     if (previewPage) await writeFile(sourcePath, `<!doctype html><html><body style="margin:0;background:white;color:black"><p style="margin:24px;font:72px monospace">${visualCode}</p></body></html>`);
+    const imagePath = path.join(workspace, "shown.png");
+    const imageBytes = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a/i8AAAAASUVORK5CYII=", "base64");
+    if (showImage) await writeFile(imagePath, imageBytes);
     const executablePath = process.env.SEDES_REAL_CLAUDE_EXECUTABLE ?? "claude";
     const environment = Object.freeze({
       ...process.env,
@@ -134,9 +138,10 @@ describe.sequential("real Claude Native Sedes MCP tools", () => {
       environmentId,
       targetId: "claude-local",
       presentation: { surface: "native", mode: "individual" },
-      enabledToolIds: ["agent.context", "thread.status", ...(previewPage ? ["page.publish", "page.preview"] : [])],
+      enabledToolIds: ["agent.context", "thread.status", ...(previewPage ? ["page.publish", "page.preview"] : []), ...(showImage ? ["image.show"] : [])],
       pages: previewPage,
       ...(previewPage ? { pageSourceFiles: [sourcePath] } : {}),
+      ...(showImage ? { imageSourceFiles: [imagePath] } : {}),
     });
     const reference = listener.issue("mcp");
     const messages: SDKMessage[] = [];
@@ -197,6 +202,7 @@ describe.sequential("real Claude Native Sedes MCP tools", () => {
           "mcp__sedes__sedes_agent_context",
           "mcp__sedes__sedes_thread_status",
           ...(previewPage ? ["mcp__sedes__sedes_page_publish", "mcp__sedes__sedes_page_preview"] : []),
+          ...(showImage ? ["mcp__sedes__sedes_image_show"] : []),
         ]),
       );
       // The CLI arguments carry only a placeholder for the reference.
@@ -205,7 +211,7 @@ describe.sequential("real Claude Native Sedes MCP tools", () => {
       );
 
       let greetingResult: SDKMessage | undefined;
-      if (previewPage) {
+      if (previewPage || showImage) {
         // A real first user turn consumes startup metadata. The actual page
         // request is a distinct human turn, never an automatic retry.
         session.send({ operationId: randomUUID(), content: "Hello. Please reply READY without using tools." });
@@ -220,6 +226,8 @@ describe.sequential("real Claude Native Sedes MCP tools", () => {
         content:
           previewPage
             ? `Please publish an HTML page titled Live preview using path ${JSON.stringify(sourcePath)} with a 600 by 240 viewport. Then use the page preview tool on that same path and viewport. Read the eight-character code visible in the returned screenshot; do not read the source through any other tool. Finally read the agent context. Reply with its threadId and a separate line IMAGE_CODE= followed by the exact screenshot code.`
+            : showImage
+              ? `Call mcp__sedes__sedes_image_show exactly once with ${JSON.stringify({ path: imagePath, title: "Live retained image" })}. This displays the file to the user and returns metadata only; do not try to inspect its pixels. Then call mcp__sedes__sedes_agent_context exactly once with an empty object and reply with only its threadId.`
             : "Call the mcp__sedes__sedes_agent_context tool exactly once with an empty object, then reply with only the threadId value it returned.",
       });
       await waitForTurn();
@@ -234,7 +242,8 @@ describe.sequential("real Claude Native Sedes MCP tools", () => {
             )
           : [],
       );
-      const expectedTools = [...(previewPage ? ["mcp__sedes__sedes_page_publish", "mcp__sedes__sedes_page_preview"] : []), "mcp__sedes__sedes_agent_context"];
+      const expectedTools = [...(previewPage ? ["mcp__sedes__sedes_page_publish", "mcp__sedes__sedes_page_preview"] : []),
+        ...(showImage ? ["mcp__sedes__sedes_image_show"] : []), "mcp__sedes__sedes_agent_context"];
       if (toolUses.length === 0) {
         const terminal = turn.find(message => message.type === "result" && message.num_turns > 0);
         const diagnostic = terminal?.type === "result" ? { subtype: terminal.subtype,
@@ -261,6 +270,21 @@ describe.sequential("real Claude Native Sedes MCP tools", () => {
         expect(JSON.stringify(previewResult.content)).toContain("image/png");
         expect(JSON.stringify(previewResult.content)).toContain('"type":"image"');
         expect(listener.pages!.list(listener.scope, listener.threadId).items).toHaveLength(1);
+      }
+      if (showImage) {
+        const imageUse = toolUses.find(use => use.name === "mcp__sedes__sedes_image_show")!;
+        const imageResult = toolResults.find(result => result.tool_use_id === imageUse.id)!;
+        expect(JSON.stringify(imageResult.content)).not.toContain('"type":"image"');
+        expect(JSON.stringify(imageResult.content)).not.toContain(imageBytes.toString("base64"));
+        expect(JSON.stringify(imageResult.content)).toContain("Live retained image");
+        const publications = listener.imagePublications();
+        expect(publications).toHaveLength(1);
+        const image = publications[0]!.image;
+        expect(image).toMatchObject({ representation: "artifact", mimeType: "image/png", alt: { text: "Live retained image" } });
+        if (image.representation !== "artifact") throw new Error("live_image_not_retained");
+        await rm(imagePath);
+        const retained = await listener.outputArtifacts!.openImage(listener.scope, listener.threadId, image.artifactId);
+        try { expect(await retained.handle.readFile()).toEqual(imageBytes); } finally { await retained.handle.close(); }
       }
       const contextUse = toolUses.find(use => use.name === "mcp__sedes__sedes_agent_context")!;
       const contextResult = toolResults.find(result => result.tool_use_id === contextUse.id)!;

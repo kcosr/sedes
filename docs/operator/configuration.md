@@ -555,10 +555,10 @@ home on the execution host. For SSH or outbound, these environment values belong
 remote account, never the main Sedes account. The Agent SDK is bundled with
 Sedes; no SDK directory setting or separate SDK install is needed.
 
-Claude backends use the compiled `0.3.287` Agent SDK profile and declare a
+Claude backends use the compiled `0.3.296` Agent SDK profile and declare a
 top-level model policy using model IDs and/or reasoning efforts, never
 `providerIds`. The external CLI must be a stable Claude Code release at or
-above 2.1.287. Sedes is tested through 2.1.287 and reports a newer admitted
+above 2.1.287. Sedes is tested through 2.1.296 and reports a newer admitted
 release as newer than tested. The backend
 `permissionPolicy.allowedModes` is a
 closed nonempty allowlist drawn from `default`, `acceptEdits`, `dontAsk`,

@@ -17,7 +17,7 @@ const roots: string[] = [];
 const sessions: PiSdkSession[] = [];
 
 afterEach(async () => {
-  for (const session of sessions.splice(0)) session.dispose();
+  for (const session of sessions.splice(0)) await session.dispose();
   vi.restoreAllMocks();
   await Promise.all(
     roots.splice(0).map((root) => rm(root, { recursive: true, force: true })),

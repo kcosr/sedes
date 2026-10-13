@@ -616,26 +616,33 @@ export class ApplicationClientStore {
   }
 
   createThreadGroup(
-    thread: NormalizedApplicationThreadSummary,
+    threads: readonly NormalizedApplicationThreadSummary[],
     name: string,
+    mutationId: string = crypto.randomUUID(),
   ): Promise<unknown> {
-    return this.api.mutateThreadGroup(thread.id, {
+    const first = threads[0];
+    if (!first) return Promise.reject(new Error("Select at least one thread."));
+    return this.api.mutateThreadGroup(first.id, {
       action: "create",
       name,
-      expectedRevision: thread.groupAssignmentRevision,
-      mutationId: crypto.randomUUID(),
+      members: threads.map((thread) => ({
+        threadId: thread.id,
+        expectedRevision: thread.groupAssignmentRevision,
+      })),
+      mutationId,
     });
   }
 
   assignThreadGroup(
     thread: NormalizedApplicationThreadSummary,
     groupId: string,
+    mutationId: string = crypto.randomUUID(),
   ): Promise<unknown> {
     return this.api.mutateThreadGroup(thread.id, {
       action: "assign",
       groupId,
       expectedRevision: thread.groupAssignmentRevision,
-      mutationId: crypto.randomUUID(),
+      mutationId,
     });
   }
 

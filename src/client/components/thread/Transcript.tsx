@@ -34,7 +34,7 @@ import {
   defaultItemRenderContext,
   type ItemRenderContext,
 } from "../conversation/types.js";
-import { ArrowDown, Bookmark, LoaderCircle } from "lucide-react";
+import { ArrowDown } from "lucide-react";
 import { Button } from "@client/components/ui/button";
 import { SedesMark } from "../brand-icons.js";
 import {
@@ -44,6 +44,7 @@ import {
 } from "../../app/diagnostics.js";
 import { getDiagnosticCategoryEnabled } from "../../app/settings.js";
 import { currentFailedTurn, TurnFailureDetails } from "./ThreadFailureNotice.js";
+import { turnBookmarkPreview, turnResponseItemId } from "./turn-bookmark-presentation.js";
 import { TurnForkDivider } from "./TurnForkDivider.js";
 import { ChatViewVisibilityContext } from "./chat-view-visibility.js";
 import { useSmoothStreaming } from "../../app/use-smooth-streaming.js";
@@ -87,7 +88,7 @@ export type TranscriptHandle = {
    * Seeks a turn that is already rendered in the ordinary transcript.
    * Returns false when the caller must fall back to targeted history lookup.
    */
-  readonly seekTurn: (turnId: string) => boolean;
+  readonly seekTurn: (turnId: string, target?: "turn" | "response") => boolean;
 };
 
 export type TranscriptProps = {
@@ -95,6 +96,7 @@ export type TranscriptProps = {
   readonly store: ThreadClientStore;
   readonly seekRequest?: React.RefObject<TranscriptSeekRequest | null>;
   readonly focusTurnId?: string;
+  readonly focusResponse?: boolean;
   readonly onReturnToLive?: () => void;
   readonly onHistoryPresentationChange?: (
     presentation: TranscriptHistoryPresentation,
@@ -119,12 +121,20 @@ const scrollIntentKeys = new Set([
   "PageDown",
   " ",
 ]);
+const keyboardControlSelector = [
+  "button, input, textarea, select, a[href], summary, audio, video",
+  '[contenteditable]:not([contenteditable="false"]), [tabindex]:not([tabindex="-1"])',
+  '[role="button"], [role="link"], [role="textbox"], [role="combobox"], [role="menuitem"]',
+  '[role="slider"], [role="spinbutton"], [role="checkbox"], [role="radio"], [role="switch"]',
+  '[role="listbox"], [role="menu"], [role="tree"], [role="grid"], [role="tablist"]',
+].join(", ");
 
 export function Transcript({
   ref,
   store,
   seekRequest,
   focusTurnId,
+  focusResponse = false,
   onReturnToLive,
   onHistoryPresentationChange,
   findContentRef,
@@ -180,6 +190,7 @@ export function Transcript({
     | {
         readonly itemId: string;
         readonly operationId?: string;
+        readonly responseTurnId?: string;
         readerScrolled: boolean;
         readerBottomSide?: -1 | 0 | 1;
       }
@@ -377,36 +388,24 @@ export function Transcript({
     () => new Set(pendingBookmarkTurnIds),
     [pendingBookmarkTurnIds],
   );
-  const historyEntriesByItemId = useMemo(
-    () => new Map(historyEntries.map((entry) => [entry.itemId, entry])),
-    [historyEntries],
+  const bookmarkPreviews = useMemo(
+    () => new Map(turnIds.map(id => {
+      const turn = viewTurnsById?.[id];
+      return [id, turn && viewItemsById ? turnBookmarkPreview(turn, viewItemsById) : undefined];
+    })),
+    [turnIds, viewTurnsById, viewItemsById],
   );
   useEffect(() => {
     if (!authoritative || bookmarkStatus !== "ready") return;
     for (const bookmark of bookmarks) {
       const turn = viewTurnsById?.[bookmark.turnId];
       if (!turn || turn.status === "in_progress") continue;
-      const firstUserItemId = turn.orderedItemIds.find(
-        (itemId) => viewItemsById?.[itemId]?.kind === "user_message",
-      );
-      const entry = firstUserItemId
-        ? historyEntriesByItemId.get(firstUserItemId)
-        : undefined;
+      const entry = bookmarkPreviews.get(turn.id);
       if (!entry) continue;
       // Bounded history may omit replies. Missing text must not erase a saved
       // response preview from a more complete projection.
-      if (entry.responseState !== "available" && bookmark.assistantPreview !== null) {
-        continue;
-      }
-      const preview = {
-        userPreview: bookmark.userPreview,
-        assistantPreview:
-          entry.responseState === "available" ? entry.assistantPreview : null,
-        responseState:
-          entry.responseState === "available"
-            ? ("responded" as const)
-            : ("no_response" as const),
-      };
+      if (entry.responseState !== "responded" && bookmark.assistantPreview !== null) continue;
+      const preview = { ...entry, userPreview: bookmark.userPreview };
       if (
         bookmark.userPreview === preview.userPreview &&
         bookmark.assistantPreview === preview.assistantPreview &&
@@ -422,7 +421,7 @@ export function Transcript({
     authoritative,
     bookmarkStatus,
     bookmarks,
-    historyEntriesByItemId,
+    bookmarkPreviews,
     store,
     viewItemsById,
     viewTurnsById,
@@ -851,7 +850,7 @@ export function Transcript({
     }
   };
 
-  const seekLoadedTurn = (turnId: string): boolean => {
+  const seekLoadedTurn = (turnId: string, targetPart: "turn" | "response" = "turn"): boolean => {
     const element = viewport.current;
     const target = element?.querySelector<HTMLElement>(
       `[data-turn-id="${CSS.escape(turnId)}"]`,
@@ -862,8 +861,9 @@ export function Transcript({
     releaseSeekPin("bookmark_navigation");
     const viewportRect = element.getBoundingClientRect();
     const targetTop =
-      element.scrollTop + target.getBoundingClientRect().top - viewportRect.top;
+      element.scrollTop + (targetPart === "response" ? findTurnResponseTarget(target) : target).getBoundingClientRect().top - viewportRect.top;
     const destination = Math.max(0, targetTop - seekTopOffset);
+    if (targetPart === "response") reserveResponseSeek(element, target, destination);
     element.scrollTo({
       top: destination,
       behavior: navigationScrollBehavior(element, destination),
@@ -877,8 +877,8 @@ export function Transcript({
   };
 
   useEffect(() => {
-    if (focusTurnId) setLocallySelectedTurnId(undefined);
-  }, [focusTurnId, store]);
+    setLocallySelectedTurnId(undefined);
+  }, [focusTurnId, focusResponse, store]);
 
   useEffect(() => {
     if (!locallySelectedTurnId) return;
@@ -1027,13 +1027,26 @@ export function Transcript({
     return true;
   };
 
+  /** Reader-selected responses need room even when little content follows. */
+  const reserveResponseSeek = (element: HTMLElement, turn: HTMLElement, top: number) => {
+    seekPin.current = {
+      itemId: turn.dataset.responseItemId ?? "",
+      responseTurnId: turn.dataset.turnId!,
+      readerScrolled: false,
+    };
+    // Unlike Send's temporary pin, a bookmark keeps Jump to latest available.
+    setSeekPinHeld(false);
+    const contentHeight = element.scrollHeight - measureSeekSpacerHeight();
+    setSeekSpacerHeight(Math.max(0, top + element.clientHeight - contentHeight));
+  };
+
   /**
    * Keeps the seek reservation exactly large enough that the pinned message
    * can sit at the viewport top: as the streaming reply grows, the spacer
    * shrinks by the same amount (total scroll height stays put, so the reader
    * sees the reply fill the blank space without any scrollbar churn). Once an
    * untouched reply consumes the reservation, hand ownership back to the live
-   * edge so later growth follows normally. A reader who already scrolled keeps
+   * edge so later growth follows normally. Bookmarks retain reader ownership. A reader who already scrolled keeps
    * control and retains the existing natural-bottom release lifecycle.
    */
   const syncSeekSpacer = () => {
@@ -1048,11 +1061,13 @@ export function Transcript({
     traceSeek("content_resize_observed");
     const spacerHeight = measureSeekSpacerHeight();
     const contentHeight = element.scrollHeight - spacerHeight;
-    const top = Math.max(0, target.offsetTop - seekTopOffset);
+    const top = Math.max(0, pin.responseTurnId
+      ? element.scrollTop + target.getBoundingClientRect().top - element.getBoundingClientRect().top - seekTopOffset
+      : target.offsetTop - seekTopOffset);
     const needed = Math.max(0, top + element.clientHeight - contentHeight);
     if (needed !== spacerHeight) setSeekSpacerHeight(needed);
     traceSeek("seek_spacer_synchronized", { neededSpacerHeight: needed });
-    if (needed === 0 && !pin.readerScrolled) {
+    if (needed === 0 && !pin.readerScrolled && !pin.responseTurnId) {
       releaseSeekPin("reservation_consumed");
       wasAtLiveEdge.current = true;
       setAtLiveEdge(true);
@@ -1478,13 +1493,14 @@ export function Transcript({
   }, [historyEntryKey]);
 
   useEffect(() => {
+    if (seekPin.current?.responseTurnId) releaseSeekPin("response_focus_changed");
     focusAttemptTarget.current = undefined;
     handledFocusTarget.current = undefined;
     setFocusPage(undefined);
     setFocusDiagnostic(undefined);
     setFocusRetryable(false);
     setFocusStatus(focusTurnId ? "loading" : "idle");
-  }, [activityDetail, focusTurnId, store]);
+  }, [activityDetail, focusTurnId, focusResponse, store]);
 
   useEffect(() => {
     if (!focusTurnId || !snapshot) {
@@ -1494,7 +1510,7 @@ export function Transcript({
     const targetTurn = viewTurnsById?.[focusTurnId];
     if (targetTurn) {
       setFocusStatus("found");
-      const handlingKey = `${activityDetail}:${focusTurnId}:${focusRetryNonce}`;
+      const handlingKey = `${activityDetail}:${focusTurnId}:${focusResponse}:${focusRetryNonce}`;
       if (handledFocusTarget.current === handlingKey) return;
       const frame = requestAnimationFrame(() => {
         const element = viewport.current;
@@ -1504,7 +1520,11 @@ export function Transcript({
         if (!element || !target) return;
         handledFocusTarget.current = handlingKey;
         releaseSeekPin("source_turn_focus");
-        const top = Math.max(0, target.offsetTop - 24);
+        const anchor = focusResponse ? findTurnResponseTarget(target) : target;
+        const top = Math.max(0, focusResponse
+          ? element.scrollTop + anchor.getBoundingClientRect().top - element.getBoundingClientRect().top - seekTopOffset
+          : target.offsetTop - 24);
+        if (focusResponse) reserveResponseSeek(element, target, top);
         animateSeekScroll(element, top, () =>
           target.focus({ preventScroll: true }),
         );
@@ -1517,7 +1537,7 @@ export function Transcript({
       setFocusStatus("loading");
       return;
     }
-    const attemptKey = `${activityDetail}:${focusTurnId}:${focusRetryNonce}`;
+    const attemptKey = `${activityDetail}:${focusTurnId}:${focusResponse}:${focusRetryNonce}`;
     if (focusAttemptTarget.current === attemptKey) return;
     focusAttemptTarget.current = attemptKey;
     setFocusStatus("loading");
@@ -1550,6 +1570,7 @@ export function Transcript({
     connection,
     focusRetryNonce,
     focusTurnId,
+    focusResponse,
     snapshot,
     store,
     viewTurnsById,
@@ -1654,8 +1675,12 @@ export function Transcript({
       // pending seek: the send's user message can become resolvable on a
       // revision tick after its append tick (see takeSeekTarget).
       const seekTarget = takeSeekTarget();
+      // An armed local Send can replace any pin; unarmed input must preserve
+      // a reader-selected bookmark when another client or agent adds a message.
       if (seekTarget) beginSeek(seekTarget);
-      else if (appendedUserItemId && seekPin.current) {
+      else if (
+        appendedUserItemId && seekPin.current && !seekPin.current.responseTurnId
+      ) {
         const readerScrolled = seekPin.current.readerScrolled;
         releaseSeekPin("non_armed_next_send");
         if (!readerScrolled) {
@@ -1916,7 +1941,13 @@ export function Transcript({
             if (!measureLiveEdge()) wasAtLiveEdge.current = false;
           }}
           onKeyDown={(event) => {
-            if (event.target !== event.currentTarget) return;
+            if (event.defaultPrevented) return;
+            // Bookmark navigation focuses the turn, so its reading keys bubble
+            // here. Controls and editors keep their own keyboard behavior.
+            const control = event.target instanceof Element
+              ? event.target.closest(keyboardControlSelector)
+              : null;
+            if (control && control !== event.currentTarget) return;
             if (event.key === "End") {
               event.preventDefault();
               setLocallySelectedTurnId(undefined);
@@ -1985,12 +2016,8 @@ export function Transcript({
               const turn = viewTurnsById?.[turnId];
               if (!turn) return null;
               const lastItemId = turn.orderedItemIds.at(-1);
-              const firstUserItemId = turn.orderedItemIds.find(
-                (itemId) => viewItemsById?.[itemId]?.kind === "user_message",
-              );
-              const bookmarkEntry = firstUserItemId
-                ? historyEntriesByItemId.get(firstUserItemId)
-                : undefined;
+              const bookmarkPreview = bookmarkPreviews.get(turn.id);
+              const responseItemId = viewItemsById ? turnResponseItemId(turn, viewItemsById) : undefined;
               const selected =
                 (turn.id === focusTurnId && focusStatus === "found") ||
                 turn.id === locallySelectedTurnId;
@@ -2001,6 +2028,7 @@ export function Transcript({
                     selected ? " source-turn-highlight" : ""
                   }`}
                   data-turn-id={turn.id}
+                  data-response-item-id={responseItemId}
                   data-turn-status={turn.status}
                   data-latest-completed-turn={
                     turn.id === latestCompletedTurnId ? "true" : undefined
@@ -2092,29 +2120,6 @@ export function Transcript({
                                 )
                               }
                               context={itemRenderContext}
-                              {...(firstUserItemId === item.id &&
-                              bookmarkEntry
-                                ? {
-                                    bookmarkTurnId: turn.id,
-                                    bookmarkBookmarked: bookmarkedTurnIds.has(
-                                      turn.id,
-                                    ),
-                                    bookmarkDisabled:
-                                      bookmarkStatus !== "ready",
-                                    bookmarkPending:
-                                      pendingBookmarkTurnIdSet.has(turn.id),
-                                    bookmarkUserPreview:
-                                      bookmarkEntry.userPreview,
-                                    bookmarkAssistantPreview:
-                                      bookmarkEntry.responseState ===
-                                      "available"
-                                        ? bookmarkEntry.assistantPreview
-                                        : null,
-                                    bookmarkResponseState:
-                                      bookmarkEntry.responseState,
-                                    bookmarkStore: store,
-                                  }
-                                : {})}
                             />
                           ) : (
                             <ConversationItemView
@@ -2142,6 +2147,14 @@ export function Transcript({
                   {currentFailureTurnId !== turn.id && <TurnFailureDetails turn={turn} />}
                   <TurnForkDivider
                     turn={turn}
+                    bookmark={bookmarkPreview ? {
+                      turnId: turn.id,
+                      preview: bookmarkPreview,
+                      bookmarked: bookmarkedTurnIds.has(turn.id),
+                      disabled: bookmarkStatus !== "ready",
+                      pending: pendingBookmarkTurnIdSet.has(turn.id),
+                      store,
+                    } : undefined}
                     copyText={
                       turn.orderedItemIds
                         .flatMap((itemId) => {
@@ -2394,27 +2407,11 @@ const TranscriptUserMessage = memo(function TranscriptUserMessage({
   transfer,
   suppressLiveAnnouncement = false,
   context = defaultItemRenderContext,
-  bookmarkTurnId,
-  bookmarkBookmarked = false,
-  bookmarkDisabled = false,
-  bookmarkPending = false,
-  bookmarkUserPreview,
-  bookmarkAssistantPreview,
-  bookmarkResponseState,
-  bookmarkStore,
 }: {
   readonly item?: UserMessageItem;
   readonly transfer?: TranscriptSubmission;
   readonly suppressLiveAnnouncement?: boolean;
   readonly context?: ItemRenderContext;
-  readonly bookmarkTurnId?: string;
-  readonly bookmarkBookmarked?: boolean;
-  readonly bookmarkDisabled?: boolean;
-  readonly bookmarkPending?: boolean;
-  readonly bookmarkUserPreview?: string;
-  readonly bookmarkAssistantPreview?: string | null;
-  readonly bookmarkResponseState?: ChatHistoryEntry["responseState"];
-  readonly bookmarkStore?: ThreadClientStore;
 }): React.JSX.Element | null {
   if (!item && !transfer) return null;
   const operationId = item?.deliveryOperationId ?? transfer?.operationId;
@@ -2439,7 +2436,7 @@ const TranscriptUserMessage = memo(function TranscriptUserMessage({
       }
       aria-live={!provisional && suppressLiveAnnouncement ? "off" : undefined}
     >
-      <div className="bookmarked-user-message-wrap">
+      <div>
         <UserMessagePresentation
           content={item?.content ?? optimisticUserContent(transfer!)}
           context={context}
@@ -2463,55 +2460,6 @@ const TranscriptUserMessage = memo(function TranscriptUserMessage({
             {submissionNotices.join(" · ")}
           </div>
         )}
-        {bookmarkTurnId &&
-          bookmarkStore &&
-          bookmarkUserPreview !== undefined &&
-          bookmarkResponseState !== undefined && (
-            <button
-              type="button"
-              className="turn-bookmark-toggle"
-              aria-label={
-                bookmarkBookmarked ? "Remove turn bookmark" : "Bookmark turn"
-              }
-              aria-pressed={bookmarkBookmarked}
-              title={bookmarkBookmarked ? "Remove bookmark" : "Bookmark turn"}
-              disabled={bookmarkDisabled || bookmarkPending}
-              onClick={() => {
-                void bookmarkStore
-                  .setTurnBookmarked(
-                    bookmarkBookmarked
-                      ? { turnId: bookmarkTurnId, bookmarked: false }
-                      : {
-                          turnId: bookmarkTurnId,
-                          bookmarked: true,
-                          preview: {
-                            userPreview: bookmarkUserPreview,
-                            assistantPreview: bookmarkAssistantPreview ?? null,
-                            responseState:
-                              bookmarkResponseState === "available"
-                                ? "responded"
-                                : "no_response",
-                          },
-                        },
-                  )
-                  .catch(() => undefined);
-              }}
-            >
-              {bookmarkPending ? (
-                <LoaderCircle
-                  className="turn-bookmark-spinner"
-                  size={16}
-                  aria-hidden="true"
-                />
-              ) : (
-                <Bookmark
-                  size={16}
-                  fill={bookmarkBookmarked ? "currentColor" : "none"}
-                  aria-hidden="true"
-                />
-              )}
-            </button>
-          )}
       </div>
     </div>
   );
@@ -2519,8 +2467,15 @@ const TranscriptUserMessage = memo(function TranscriptUserMessage({
 
 function findSeekTarget(
   element: HTMLElement,
-  identity: { readonly itemId: string; readonly operationId?: string },
+  identity: { readonly itemId: string; readonly operationId?: string; readonly responseTurnId?: string },
 ): HTMLElement | null {
+  if (identity.responseTurnId) {
+    const turn = element.querySelector<HTMLElement>(`[data-turn-id="${CSS.escape(identity.responseTurnId)}"]`);
+    if (!turn) return null;
+    return (identity.itemId ? turn.querySelector<HTMLElement>(
+      `[data-item-id="${CSS.escape(identity.itemId)}"], [data-activity-first-item-id="${CSS.escape(identity.itemId)}"]`,
+    ) : null) ?? findTextlessResponseTarget(turn);
+  }
   if (identity.operationId) {
     const byOperation = element.querySelector<HTMLElement>(
       `[data-delivery-operation-id="${CSS.escape(identity.operationId)}"]`,
@@ -2530,4 +2485,18 @@ function findSeekTarget(
   return element.querySelector<HTMLElement>(
     `[data-item-id="${CSS.escape(identity.itemId)}"]`,
   );
+}
+
+function findTurnResponseTarget(turn: HTMLElement): HTMLElement {
+  const itemId = turn.dataset.responseItemId;
+  const item = itemId ? turn.querySelector<HTMLElement>(
+    `[data-item-id="${CSS.escape(itemId)}"], [data-activity-first-item-id="${CSS.escape(itemId)}"]`,
+  ) : null;
+  return item ?? findTextlessResponseTarget(turn);
+}
+
+function findTextlessResponseTarget(turn: HTMLElement): HTMLElement {
+  return turn.querySelector<HTMLElement>(".turn-failure-details")
+    ?? turn.querySelector<HTMLElement>(".turn-fork-footer")
+    ?? turn;
 }

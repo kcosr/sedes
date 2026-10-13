@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { materializeToolModelContent } from "../internal/agent-tool-cli-protocol/local-media-files.js";
 import { readFile } from "node:fs/promises";
 import { deterministicJson } from "../server/canonical-json.js";
+import { workpadInputContentError } from "../internal/agent-tool-cli-protocol/workpad-content.js";
 import { compileCanonicalAgentToolSchema } from "../server/agent-tools/schema/canonical-json-schema.js";
 import { AGENT_TOOL_MAXIMUM_DESCRIPTION_IDS } from "../server/agent-tools/contracts/agent-tool-transport-limits.js";
 import {
@@ -389,6 +390,8 @@ export async function runSedesCli(
       const tool = tools[0]!;
       const validator = compileCanonicalAgentToolSchema(tool.inputSchema);
       const serialized = deterministicJson(input);
+      const contentError = workpadInputContentError(tool.id, input);
+      if (contentError) throw new SedesCliUsageError(contentError);
       if (!validator.check(input)) {
         throw new SedesCliUsageError(
           "The tool input does not match its current canonical schema.",
@@ -436,6 +439,8 @@ export async function runSedesCli(
       resolved.arguments,
       readers,
     );
+    const contentError = workpadInputContentError(tool.id, dynamic.input);
+    if (contentError) throw new SedesCliUsageError(contentError);
     if (
       !compileCanonicalAgentToolSchema(tool.inputSchema).check(dynamic.input)
     ) {

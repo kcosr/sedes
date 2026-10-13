@@ -395,7 +395,7 @@ describe("backend-normalized application adapters", () => {
         backendConversationId: `group-inventory-native-${index}`, now: 600 + index,
       });
       const group = groups.createAndAssign(current.scope, current.threadId, {
-        name: "Inventory group", expectedRevision: 0, mutationId: "create-inventory-group", now: 700,
+        name: "Inventory group", members: [{ threadId: current.threadId, expectedRevision: 0 }], mutationId: "create-inventory-group", now: 700,
       });
       groups.assign(current.scope, other.id, {
         groupId: group.groupId, expectedRevision: 0, mutationId: "assign-second-group-member", now: 701,
@@ -614,7 +614,7 @@ describe("backend-normalized application adapters", () => {
         expect(hub.currentCheckpoint()?.event.snapshot.threads.some(({ id }) => id === "structure-child-0000")).toBe(false);
         const groupService = new ThreadGroupService(groups, boundary);
         const group = await groupService.updateAssignment(current.scope, "structure-child-0000", {
-          action: "create", name: "Retained forks", expectedRevision: 0, mutationId: "group-omitted-fork",
+          action: "create", name: "Retained forks", members: [{ threadId: "structure-child-0000", expectedRevision: 0 }], mutationId: "group-omitted-fork",
         }, 4_004);
         await boundary.flush();
         expect(hub.currentCheckpoint()?.event.snapshot).toEqual(await application.capture(current.scope));

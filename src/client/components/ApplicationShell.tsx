@@ -60,6 +60,7 @@ import type { WorkspacePanelTenantRegistry } from "../workspace-panels/registry"
 import { installThreadPanelOpenRequestListener } from "../workspace-panels/thread-panel-navigation.js";
 import { ComposerDraftProvider } from "../context-excerpts/coordinator.js";
 import { TaskDragProvider } from "../tasks/task-drag.js";
+import { ThreadDragProvider } from "../threads/thread-drag.js";
 import {
   ElectronConnectionRecovery,
   type ElectronConnectionSettingsControls,
@@ -385,6 +386,7 @@ function ApplicationShellContent({
     );
 
   return (
+    <ThreadDragProvider store={applicationStore} snapshot={state.snapshot}>
     <TaskDragProvider store={applicationStore} snapshot={state.snapshot}>
       <div
         className="application-shell"
@@ -521,6 +523,7 @@ function ApplicationShellContent({
         </NavigationControlsContext.Provider>
       </div>
     </TaskDragProvider>
+    </ThreadDragProvider>
   );
 }
 

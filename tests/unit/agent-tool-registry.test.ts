@@ -1,5 +1,6 @@
 import type { WorkpadAgentToolService } from "../../src/server/agent-tools/tools/workpad-agent-tool-service.js";
 import type { PageAgentToolService } from "../../src/server/agent-tools/tools/page-agent-tool-service.js";
+import type { ImageShowAgentToolService } from "../../src/server/agent-tools/tools/image-show-agent-tool-service.js";
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -128,6 +129,7 @@ describe("AgentToolRegistry", () => {
       "tasks",
       "workpads",
       "pages",
+      "images",
       "automations",
       "research",
     ]);
@@ -144,7 +146,7 @@ describe("AgentToolRegistry", () => {
         ({ id, schemaVersion }) => `${id}@${schemaVersion}`,
       ),
     );
-    expect(CANONICAL_AGENT_TOOL_MANIFEST_ENTRIES).toHaveLength(49);
+    expect(CANONICAL_AGENT_TOOL_MANIFEST_ENTRIES).toHaveLength(50);
   });
 
   it("assembles the complete production catalog only with every domain adapter", () => {
@@ -163,6 +165,7 @@ describe("AgentToolRegistry", () => {
       threadWorktrees,
       workpads: {} as WorkpadAgentToolService,
       pages: {} as PageAgentToolService,
+      images: {} as ImageShowAgentToolService,
     });
 
     expect(definitions.map(({ id }) => id)).toEqual(
@@ -216,10 +219,11 @@ describe("AgentToolRegistry", () => {
       threadWorktrees,
       workpads: {} as WorkpadAgentToolService,
       pages: {} as PageAgentToolService,
+      images: {} as ImageShowAgentToolService,
     });
     const summaries = canonical.catalogSummaries("cli", "thread_agent");
 
-    expect(summaries).toHaveLength(49);
+    expect(summaries).toHaveLength(50);
     expect(
       Buffer.byteLength(JSON.stringify({ tools: summaries }), "utf8"),
     ).toBeLessThanOrEqual(AGENT_TOOL_MAXIMUM_CATALOG_SUMMARY_BYTES);
@@ -292,6 +296,7 @@ describe("AgentToolRegistry", () => {
       threadWorktrees,
       workpads: {} as WorkpadAgentToolService,
       pages: {} as PageAgentToolService,
+      images: {} as ImageShowAgentToolService,
     });
     const invocable = definitions
       .filter(({ deployment }) => deployment?.eligible === true)
@@ -357,6 +362,7 @@ describe("AgentToolRegistry", () => {
       threadWorktrees,
       workpads: {} as WorkpadAgentToolService,
       pages: {} as PageAgentToolService,
+      images: {} as ImageShowAgentToolService,
     });
     for (const definition of definitions) {
       expect(definition.execution.uncertainExternalOutcome, definition.id).toBe(

@@ -40,14 +40,14 @@ import {
   canonicalUserMessageContent,
   type DeliveryInputSnapshotResolver,
 } from "./delivery-input-projection.js";
-import type { PagePublicationAnchor } from "../../shared/protocol/pages.js";
+import type { ApplicationPublicationAnchor } from "../../shared/protocol/application-publications.js";
 import {
-  projectPagePublications,
-  preparePagePublications,
-  type PagePublication,
-  type PagePublicationResolver,
-  type PreparedPagePublications,
-} from "./page-publication-projection.js";
+  projectApplicationPublications,
+  prepareApplicationPublications,
+  type ApplicationPublication,
+  type ApplicationPublicationResolver,
+  type PreparedApplicationPublications,
+} from "./application-publication-projection.js";
 
 const phaseOrder = new Map<string, number>([
   ["arguments_streaming", 0],
@@ -76,7 +76,7 @@ export interface ResolvedApplicationTurnLocator {
   readonly turn: ConversationTurn;
 }
 
-interface PageOverlay {
+interface ApplicationOverlay {
   readonly placementRevision: number;
   readonly turns: ReadonlyMap<string, ConversationTurn>;
   readonly items: Readonly<Record<string, ConversationItem>>;
@@ -288,11 +288,11 @@ export class ConversationProjector {
   readonly #backendInstanceId: string;
   readonly #bindingIdentity: string;
   readonly #resolveDeliveryInputSnapshot?: DeliveryInputSnapshotResolver;
-  readonly #resolvePagePublications?: PagePublicationResolver;
-  #pagePublications: PreparedPagePublications = preparePagePublications([]);
-  #visiblePageIds: ReadonlySet<string> = new Set();
-  #pageOverlay?: PageOverlay;
-  #pagePlacementRevision = 0;
+  readonly #resolveApplicationPublications?: ApplicationPublicationResolver;
+  #applicationPublications: PreparedApplicationPublications = prepareApplicationPublications([]);
+  #visibleApplicationIds: ReadonlySet<string> = new Set();
+  #applicationOverlay?: ApplicationOverlay;
+  #applicationPlacementRevision = 0;
   #generation = randomUUID();
   #lastHandleSequence = -1;
   #backendTurns = new Map<string, BackendTurn>();
@@ -314,12 +314,12 @@ export class ConversationProjector {
     readonly backendInstanceId: string;
     readonly bindingIdentity: string;
     readonly resolveDeliveryInputSnapshot?: DeliveryInputSnapshotResolver;
-    readonly resolvePagePublications?: PagePublicationResolver;
+    readonly resolveApplicationPublications?: ApplicationPublicationResolver;
   }) {
     this.#backendInstanceId = input.backendInstanceId;
     this.#bindingIdentity = input.bindingIdentity;
     this.#resolveDeliveryInputSnapshot = input.resolveDeliveryInputSnapshot;
-    this.#resolvePagePublications = input.resolvePagePublications;
+    this.#resolveApplicationPublications = input.resolveApplicationPublications;
   }
 
   replace(
@@ -405,13 +405,13 @@ export class ConversationProjector {
     this.#runState = runState;
     this.#backgroundActivity = boundedSnapshot.backgroundActivity;
     this.#activeTurnId = activeTurnId;
-    this.#pagePublications = preparePagePublications(this.#resolvePagePublications?.(orderedTurnIds) ?? []);
-    this.#pageOverlay = undefined;
+    this.#applicationPublications = prepareApplicationPublications(this.#resolveApplicationPublications?.(orderedTurnIds) ?? []);
+    this.#applicationOverlay = undefined;
     if (!this.#refreshTimelineBytes()) {
       throw new Error("normalized_timeline_limit_exceeded");
     }
     this.#invalidated = false;
-    this.#visiblePageIds = this.#ensurePageOverlay().ids;
+    this.#visibleApplicationIds = this.#ensureApplicationOverlay().ids;
     return this.timeline();
   }
 
@@ -484,16 +484,16 @@ export class ConversationProjector {
       return result;
     }
     this.#lastHandleSequence = input.handleSequence;
-    if (result.kind === "events" && this.#pagePublications.count > 0) {
-      const overlay = this.#ensurePageOverlay();
+    if (result.kind === "events" && this.#applicationPublications.count > 0) {
+      const overlay = this.#ensureApplicationOverlay();
       const visible = overlay.ids;
-      if (visible !== this.#visiblePageIds &&
-          (visible.size !== this.#visiblePageIds.size || [...this.#visiblePageIds].some(id => !visible.has(id)))) {
+      if (visible !== this.#visibleApplicationIds &&
+          (visible.size !== this.#visibleApplicationIds.size || [...this.#visibleApplicationIds].some(id => !visible.has(id)))) {
         // Capacity changes can remove or reveal a page on any turn. Replace
         // the generation so item membership and all affected turns agree.
         return this.#invalidate("page_overlay_capacity_changed");
       }
-      this.#visiblePageIds = visible;
+      this.#visibleApplicationIds = visible;
       result = { kind: "events", events: result.events.map((event) =>
         event.type === "turn_upsert"
           ? { ...event, turn: overlay.turns.get(event.turn.id) ?? event.turn }
@@ -524,42 +524,42 @@ export class ConversationProjector {
       ...(this.#backgroundActivity ? { backgroundActivity: this.#backgroundActivity } : {}),
       ...(this.#activeTurnId ? { activeTurnId: this.#activeTurnId } : {}),
     };
-    if (this.#pagePublications.count === 0) return timeline;
-    const overlay = this.#ensurePageOverlay();
+    if (this.#applicationPublications.count === 0) return timeline;
+    const overlay = this.#ensureApplicationOverlay();
     for (const [id, turn] of overlay.turns) turnsById[id] = turn;
     Object.assign(itemsById, overlay.items);
     return timeline;
   }
 
-  #ensurePageOverlay(): PageOverlay {
+  #ensureApplicationOverlay(): ApplicationOverlay {
     const baseBytes = this.#timelineBytes + serializedUtf8Bytes({ generation: this.#generation, runState: this.#runState,
       ...(this.#backgroundActivity ? { backgroundActivity: this.#backgroundActivity } : {}),
       ...(this.#activeTurnId ? { activeTurnId: this.#activeTurnId } : {}) }) - 1;
-    const cached = this.#pageOverlay;
+    const cached = this.#applicationOverlay;
     if (cached && cached.nativeItemCount === this.#items.size &&
-        cached.placementRevision === this.#pagePlacementRevision &&
-        (cached.baseBytes === baseBytes || (cached.ids.size === this.#pagePublications.count &&
+        cached.placementRevision === this.#applicationPlacementRevision &&
+        (cached.baseBytes === baseBytes || (cached.ids.size === this.#applicationPublications.count &&
           baseBytes + cached.bytes <= MAXIMUM_NORMALIZED_SNAPSHOT_OR_PAGE_BYTES))) {
       cached.baseBytes = baseBytes;
       return cached;
     }
-    const nativeTurns = new Map([...this.#pagePublications.byTurn.keys()].map(id => [id, this.#turns.get(id)]));
+    const nativeTurns = new Map([...this.#applicationPublications.byTurn.keys()].map(id => [id, this.#turns.get(id)]));
     const turnsById = Object.fromEntries([...nativeTurns].filter((entry): entry is [string, ConversationTurn] => entry[1] !== undefined));
     // Placement needs only anchored turns. Native item_ identifiers cannot
     // collide with page_ identifiers; full native counts/bytes stay in baseline.
     const base = { orderedTurnIds: Object.keys(turnsById), turnsById, itemsById: {} };
-    const projected = projectPagePublications(base, this.#pagePublications, this.#stableItemIds(), {
+    const projected = projectApplicationPublications(base, this.#applicationPublications, this.#stableItemIds(), {
       itemCount: this.#items.size, serializedBytes: baseBytes,
     });
     const ids = new Set(Object.keys(projected.itemsById));
     const bytes = serializedUtf8Bytes(projected) - serializedUtf8Bytes(base) + (ids.size > 0 && this.#items.size > 0 ? 1 : 0);
-    return this.#pageOverlay = { placementRevision: this.#pagePlacementRevision,
+    return this.#applicationOverlay = { placementRevision: this.#applicationPlacementRevision,
       turns: new Map(Object.entries(projected.turnsById).filter(([id, turn]) => turn !== turnsById[id])),
       items: projected.itemsById, ids, bytes, nativeItemCount: this.#items.size, baseBytes };
   }
 
   /** Captured by the authenticated source's active actor, never by a provider result parser. */
-  capturePagePublicationAnchor(): PagePublicationAnchor | undefined {
+  captureApplicationPublicationAnchor(): ApplicationPublicationAnchor | undefined {
     const turnId = this.#activeTurnId;
     const turn = turnId ? this.#turns.get(turnId) : undefined;
     if (this.#runState !== "running" || !turnId || turn?.status !== "in_progress") return undefined;
@@ -571,20 +571,20 @@ export class ConversationProjector {
     return { turnId, afterItemId: this.#durableItemId(lastItem) };
   }
 
-  refreshPagePublications(): ProjectionApplication {
+  refreshApplicationPublications(): ProjectionApplication {
     if (this.#invalidated) return { kind: "resnapshot_required", reason: "projector_invalidated" };
-    const before = this.#ensurePageOverlay();
-    this.#pagePublications = preparePagePublications(this.#resolvePagePublications?.(this.#orderedTurnIds) ?? []);
-    this.#pageOverlay = undefined;
-    const after = this.#ensurePageOverlay();
+    const before = this.#ensureApplicationOverlay();
+    this.#applicationPublications = prepareApplicationPublications(this.#resolveApplicationPublications?.(this.#orderedTurnIds) ?? []);
+    this.#applicationOverlay = undefined;
+    const after = this.#ensureApplicationOverlay();
     const visible = after.ids;
-    if ([...this.#visiblePageIds].some(id => !visible.has(id))) {
+    if ([...this.#visibleApplicationIds].some(id => !visible.has(id))) {
       return this.#invalidate("page_overlay_capacity_changed");
     }
-    this.#visiblePageIds = visible;
+    this.#visibleApplicationIds = visible;
     const events: ProjectedThreadEvent[] = [];
     for (const item of Object.values(after.items)) {
-      if (item.kind === "page" && !before.items[item.id]) {
+      if (!before.items[item.id]) {
         events.push({ type: "item_upsert", generation: this.#generation, item });
       }
     }
@@ -785,8 +785,8 @@ export class ConversationProjector {
         ? { previousCursor: boundedPage.previousCursor }
         : {}),
     });
-    const publications = preparePagePublications(this.#resolvePagePublications?.(orderedTurnIds) ?? []);
-    const projectedPage = projectPagePublications(basePage, publications, new Map());
+    const publications = prepareApplicationPublications(this.#resolveApplicationPublications?.(orderedTurnIds) ?? []);
+    const projectedPage = projectApplicationPublications(basePage, publications, new Map());
     return historyPageSchema.parse({ ...projectedPage, forksByTurnId: Object.fromEntries(
       projectedPage.orderedTurnIds.map(turnId => [turnId, projectedTurnForkCapability({
         turn: projectedPage.turnsById[turnId]!, branching: context.branching, sourceRunState: context.sourceRunState,
@@ -873,7 +873,7 @@ export class ConversationProjector {
     }
     this.#turnRevisions.set(turnId, turn.revision);
     this.#turns.set(turnId, turn);
-    if (this.#pagePublications.byTurn.has(turnId)) this.#pagePlacementRevision++;
+    if (this.#applicationPublications.byTurn.has(turnId)) this.#applicationPlacementRevision++;
     if (!this.#refreshTimelineBytes()) {
       return this.#invalidate("normalized_timeline_limit_exceeded");
     }
@@ -982,7 +982,7 @@ export class ConversationProjector {
     if (turnChanged) {
       const nextTurn = candidateTurn;
       this.#turns.set(turnId, nextTurn);
-      if (this.#pagePublications.byTurn.has(turnId)) this.#pagePlacementRevision++;
+      if (this.#applicationPublications.byTurn.has(turnId)) this.#applicationPlacementRevision++;
       turnByteDelta =
         serializedUtf8Bytes(nextTurn) - serializedUtf8Bytes(priorProjectedTurn);
       this.#turnRevisions.set(turnId, nextTurn.revision);

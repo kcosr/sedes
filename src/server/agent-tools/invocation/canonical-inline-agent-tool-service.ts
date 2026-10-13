@@ -4,10 +4,13 @@ import { CanonicalAgentToolRequestError } from "./canonical-agent-tool-request-e
 export { CanonicalAgentToolRequestError } from "./canonical-agent-tool-request-error.js";
 import type { WorkpadAgentToolService } from "../tools/workpad-agent-tool-service.js";
 import type { PageAgentToolService } from "../tools/page-agent-tool-service.js";
+import type { ImageShowAgentToolService } from "../tools/image-show-agent-tool-service.js";
+import { ImageShowError } from "../../output-artifacts/image-show-error.js";
 import { randomUUID } from "node:crypto";
 import { ZodError } from "zod";
 import { deterministicJson } from "../../canonical-json.js";
 import { DomainError } from "../../domain/errors.js";
+import { WorkpadValidationError } from "../../domain/workpad-validation.js";
 import { BackendError } from "../../backends/contracts.js";
 import { projectRemovalAdmissionError } from "../../db/project-removal-errors.js";
 import type { RequestScope } from "../../identity/identity-provider.js";
@@ -29,6 +32,7 @@ import type {
 } from "../contracts/agent-tool-contracts.js";
 import { AgentToolOutput, assertTrustedAgentToolAuthority } from "../contracts/agent-tool-contracts.js";
 import { agentToolModelContentsSchema } from "../../../internal/agent-tool-cli-protocol/model-content.js";
+import { workpadInputContentError } from "../../../internal/agent-tool-cli-protocol/workpad-content.js";
 import type { TrustedEnvironmentAuthorityGrant } from "../environment/environment-authority.js";
 import { createTrustedCapabilityAccess } from "../contracts/agent-tool-contracts.js";
 import {
@@ -227,6 +231,12 @@ function admittedEffects(definition: AgentToolDefinition): boolean {
 export function mapAgentToolDomainError(
   cause: DomainError,
 ): CanonicalAgentToolRequestError {
+  if (cause instanceof ImageShowError) {
+    const code = cause.code === "bad_request" ? "invalid_input" : cause.code === "not_found"
+      ? "not_found" : cause.code === "conflict" ? "conflict" : "unavailable";
+    return new CanonicalAgentToolRequestError(code, cause.message, cause.retryable);
+  }
+  if (cause instanceof WorkpadValidationError) return new CanonicalAgentToolRequestError("invalid_input", cause.message);
   switch (cause.code) {
     case "bad_request":
       return new CanonicalAgentToolRequestError(
@@ -300,6 +310,7 @@ export class CanonicalInlineAgentToolService {
     readonly management?: AgentManagementService;
     readonly workpads?: WorkpadAgentToolService;
     readonly pages?: PageAgentToolService;
+    readonly images?: ImageShowAgentToolService;
     readonly automations?: AutomationAgentToolService;
     readonly threadCreation?: AgentThreadCreationService;
     readonly savedAgents?: SavedAgentCanonicalToolService;
@@ -417,6 +428,8 @@ export class CanonicalInlineAgentToolService {
         "The tool is not exposed here.",
       );
     }
+    const contentError = workpadInputContentError(request.toolId, request.input);
+    if (contentError) throw new CanonicalAgentToolRequestError("invalid_input", contentError);
     if (
       !this.registry.validatesInput(
         definition.id,

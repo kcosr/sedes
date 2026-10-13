@@ -1,0 +1,135 @@
+.thread-reference-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0;
+}
+
+.composer > .thread-reference-list {
+  margin: 10px 15px 0;
+}
+
+.thread-reference-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  padding: 3px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--muted);
+  font-size: var(--text-meta);
+}
+
+.thread-reference-chip > span,
+.thread-reference-chip > a {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-reference-chip > svg,
+.thread-reference-chip > button {
+  flex-shrink: 0;
+}
+
+.thread-reference-chip > button {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+}
+
+.thread-reference-chip > button:hover {
+  background: var(--hover);
+}
+
+.composer.thread-drag-active {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--primary) 18%, transparent);
+}
+
+.composer.thread-drag-active::after {
+  content: "Reference thread in prompt";
+  position: absolute;
+  inset: 6px;
+  z-index: calc(var(--z-sticky) + 3);
+  display: grid;
+  place-items: center;
+  border: 1px dashed var(--primary);
+  border-radius: calc(var(--radius-card) - 3px);
+  background: color-mix(in oklch, var(--card) 88%, transparent);
+  color: var(--foreground);
+  font-size: var(--text-meta);
+  font-weight: var(--weight-semibold);
+  pointer-events: none;
+}
+
+.skill-popover.composer-thread-picker {
+  width: min(var(--radix-popover-trigger-width), var(--radix-popover-content-available-width));
+}
+
+.composer-thread-picker-list {
+  container: composer-thread-picker / inline-size;
+}
+
+.composer-thread-picker-row {
+  display: grid;
+  grid-template-columns: 16px 16px minmax(0, max-content) minmax(0, max-content);
+}
+
+.composer-thread-picker-title,
+.composer-thread-picker-location {
+  min-width: 0;
+}
+
+.composer-thread-picker-context {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, max-content));
+  min-width: 0;
+  align-items: center;
+  gap: 12px;
+  margin-left: 4px;
+}
+
+.composer-thread-picker-location {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted-foreground-2);
+  font-size: var(--text-meta);
+}
+
+.composer-thread-picker-location > svg {
+  width: 13px;
+  height: 13px;
+  color: inherit;
+}
+
+@container composer-thread-picker (max-width: 620px) {
+  .composer-thread-picker-row {
+    grid-template-columns: 16px 16px minmax(0, 1fr);
+    grid-template-rows: 20px 18px;
+    row-gap: 1px;
+    padding-block: 6px;
+  }
+
+  .composer-thread-picker-row > .flat-row-glyph,
+  .composer-thread-picker-row > [data-backend-brand] {
+    grid-row: 1;
+  }
+
+  .composer-thread-picker-title {
+    grid-column: 3;
+    grid-row: 1;
+  }
+
+  .composer-thread-picker-context {
+    grid-column: 3;
+    grid-row: 2;
+    gap: 10px;
+    margin-left: 0;
+  }
+}

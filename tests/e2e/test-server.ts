@@ -175,6 +175,8 @@ import { LocalExecutionAttachmentStager } from "../../src/server/composer-attach
 import { ComposerAttachmentService } from "../../src/server/composer-attachments/service.js";
 import { OutputArtifactBlobStore } from "../../src/server/output-artifacts/blob-store.js";
 import { OutputArtifactService } from "../../src/server/output-artifacts/service.js";
+import { ImageShowService } from "../../src/server/output-artifacts/image-show-service.js";
+import { ImageShowRepository } from "../../src/server/db/repositories/image-show-repository.js";
 import { PageRepository } from "../../src/server/db/repositories/page-repository.js";
 import { PageService } from "../../src/server/pages/page-service.js";
 import { TaskRepository } from "../../src/server/db/repositories/task-repository.js";
@@ -4376,6 +4378,7 @@ async function main(): Promise<void> {
     new WorkspaceDiffReviewRepository(database),
   );
   const pageRepository = new PageRepository(database);
+  const imageShowRepository = new ImageShowRepository(database);
   const bindings = new ConversationBindingRepository(database);
   viewedImageCapture = new ViewedImageCaptureService({ artifacts: outputArtifacts,
     files: workspaceFiles, bindings, inventory: inventoryRepository });
@@ -4546,7 +4549,10 @@ async function main(): Promise<void> {
   let observeAuthoritativeCompletion:
     AuthoritativeCompletionObserver | undefined;
   const actors = new ConversationActorManager({
-    pagePublications: (pageScope, threadId, turnIds) => pageRepository.publications(pageScope, threadId, turnIds),
+    applicationPublications: (publicationScope, threadId, turnIds) => [
+      ...pageRepository.publications(publicationScope, threadId, turnIds),
+      ...imageShowRepository.publications(publicationScope, threadId, turnIds),
+    ],
     onLiveProgress: (eventScope, threadId, input) => notificationLifecycle.progress(eventScope, threadId, input),
     environments: execution,
     attachmentDelivery,
@@ -4575,7 +4581,15 @@ async function main(): Promise<void> {
     repository: pageRepository,
     files: workspaceFiles,
     inventory: inventoryRepository,
-    onPublished: (pageScope, page) => actors.refreshPagePublications(pageScope, page.threadId),
+    onPublished: (pageScope, page) => actors.refreshApplicationPublications(pageScope, page.threadId),
+  });
+  const imageShow = new ImageShowService({
+    repository: imageShowRepository,
+    artifacts: outputArtifacts,
+    files: workspaceFiles,
+    inventory: inventoryRepository,
+    bindings,
+    onShown: (imageScope, threadId) => actors.refreshApplicationPublications(imageScope, threadId),
   });
   const environmentVariables = new EnvironmentVariablesService(database, configurationFixture.repository);
   const lifecycle = new ConversationLifecycleService({
@@ -6071,8 +6085,18 @@ async function main(): Promise<void> {
   // current-turn fencing, projection, and the public delivery routes are real.
   app.post("/__e2e/threads/:threadId/pages", express.json({ limit: "2mb" }), async (request, response, next) => {
     try {
-      const publication = actors.capturePagePublication(scope, request.params.threadId);
+      const publication = actors.captureApplicationPublication(scope, request.params.threadId);
       response.json(await pages.publish(scope, request.params.threadId, request.body, { invocationId: randomUUID(), ...publication }));
+    } catch (error) { next(error); }
+  });
+  // The same substitution exercises image capture, retained bytes, scoped
+  // publication, and delivery without asking the scripted provider to use a tool.
+  app.post("/__e2e/threads/:threadId/images", express.json({ limit: "16kb" }), async (request, response, next) => {
+    try {
+      response.json(await imageShow.show(scope, request.params.threadId, request.body, {
+        invocationId: randomUUID(),
+        capture: () => actors.captureApplicationPublication(scope, request.params.threadId),
+      }));
     } catch (error) { next(error); }
   });
   let pageNavigationSinkHits = 0;
@@ -6266,6 +6290,7 @@ async function main(): Promise<void> {
       await authoritativeCompletionFollowUp.close();
       await completionCallbackDispatcher.close();
       await mutations.close();
+      await imageShow.close();
       releaseViewedImageRead?.();
       await viewedImageCapture.close();
       await runtimes.close();

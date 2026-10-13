@@ -36,6 +36,7 @@ export type NormalizedImage = z.infer<typeof normalizedImageSchema>;
  */
 export const imageItemOriginSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("generated") }),
+  z.strictObject({ kind: z.literal("shown") }),
   z.strictObject({
     kind: z.literal("viewed"),
     capture: z.enum(["provider_input", "file_snapshot"]),

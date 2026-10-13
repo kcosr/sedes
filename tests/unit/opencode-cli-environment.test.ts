@@ -10,7 +10,7 @@ function fixture(availability: AgentToolCliAvailability = { availability: "avail
   f.database.exec(`CREATE TABLE conversation_creation_attempts (tenant_id TEXT,owner_principal_id TEXT,application_thread_id TEXT,
     backend_instance_id TEXT,connection_profile_id TEXT,execution_environment_id TEXT,mutation_id TEXT,phase TEXT,
     backend_creation_correlation TEXT,provisional_backend_conversation_id TEXT,provisional_opaque_binding_detail TEXT,
-    source_kind TEXT,source_automation_id TEXT,source_automation_run_id TEXT,creation_kind TEXT,force_reset_at INTEGER)`);
+    source_kind TEXT,source_automation_id TEXT,source_automation_run_id TEXT,creation_kind TEXT,force_reset_at INTEGER,attempt_id TEXT)`);
   const issue = vi.fn(() => "exact-thread-reference");
   const policy = { enabled: true, presentation: { surface: "cli" as "cli" | "native", mode: "progressive" as "progressive" | "individual" },
     accessBoundary: "thread" as const, enabledToolIds: ["agent.context"] };
@@ -23,9 +23,12 @@ function fixture(availability: AgentToolCliAvailability = { availability: "avail
       executionEnvironmentId: f.context.connection.executionEnvironmentId, requestFingerprint: "a".repeat(64), requestSource: { kind: "user" }, deadlineAt: null }, 1);
     f.repository.markDispatched(scope, threadID, "creation", "create", 2);
     f.repository.recordOutcome(scope, threadID, "creation", "create", { expected: "dispatched", disposition: "accepted", nativeEvidenceFingerprint: "b".repeat(64), now: 3 });
-    f.database.prepare(`INSERT INTO conversation_creation_attempts VALUES (?,?,?,?,?,?,?,'bound',?,?,?,'composer',NULL,NULL,'first_input',NULL)`)
+    f.database.prepare(`INSERT INTO conversation_creation_attempts VALUES (?,?,?,?,?,?,?,'bound',?,?,?,'composer',NULL,NULL,'first_input',NULL,'creation-attempt')`)
       .run(scope.tenantId, scope.principalId, threadID, f.context.instance.id, f.context.connection.id, f.context.connection.executionEnvironmentId,
         "creation", f.target.binding.backendConversationId, f.target.binding.backendConversationId, f.target.opaqueBindingDetail);
+    f.database.prepare(`INSERT INTO conversation_creation_provenance VALUES (?,?,?,?,?,?,?,'creation-attempt','first_input',3,'binding')`)
+      .run(scope.tenantId, scope.principalId, threadID, f.context.instance.id, f.context.connection.id,
+        f.context.connection.executionEnvironmentId, f.target.binding.backendConversationId);
   };
   return { ...f, cli, issue, policy, seed };
 }
@@ -49,9 +52,8 @@ describe("OpenCode CLI source admission and reusable creation provenance", () =>
     expect(f.issue).not.toHaveBeenCalled();
 
   });
-  it.each(["reset", "attempt_target", "attempt_source", "attempt_detail", "snapshot", "receipt_namespace"])("rejects changed %s creation proof", mutation => {
+  it.each(["attempt_target", "attempt_source", "attempt_detail", "snapshot", "receipt_namespace"])("rejects changed %s creation proof", mutation => {
     const f = fixture(); f.seed();
-    if (mutation === "reset") f.database.exec("UPDATE conversation_creation_attempts SET force_reset_at=1");
     if (mutation === "attempt_target") f.database.exec("UPDATE conversation_creation_attempts SET connection_profile_id='foreign'");
     if (mutation === "attempt_source") f.database.exec("UPDATE conversation_creation_attempts SET source_kind='automation',source_automation_id='automation',source_automation_run_id='run'");
     if (mutation === "attempt_detail") f.database.exec("UPDATE conversation_creation_attempts SET provisional_opaque_binding_detail='{}'");

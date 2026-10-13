@@ -1,3 +1,4 @@
+import { TurnBookmarkAction, type TurnBookmarkActionProps } from "./TurnBookmarkAction.js";
 import { TurnSpeakAction } from "./TurnSpeakAction.js";
 import { TurnUsageAction } from "./TurnUsageAction.js";
 import { runThreadFork } from "../../operations/thread-creation.js";
@@ -68,6 +69,7 @@ export const TurnForkDivider = memo(function TurnForkDivider({
   authoritative,
   store,
   copyText,
+  bookmark,
 }: {
   readonly turn: ConversationTurn;
   readonly turnNumber?: number;
@@ -77,6 +79,7 @@ export const TurnForkDivider = memo(function TurnForkDivider({
   readonly authoritative: boolean;
   readonly store: ThreadClientStore;
   readonly copyText?: string;
+  readonly bookmark?: TurnBookmarkActionProps;
 }): React.JSX.Element | null {
   // Hooks stay above the eligibility returns: a live turn completing must not
   // change the hook count between renders.
@@ -99,7 +102,7 @@ export const TurnForkDivider = memo(function TurnForkDivider({
     [completedAt, status, turnNumber],
   );
 
-  if (!time) return null;
+  if (!time && !bookmark) return null;
 
   const throughput = turn.throughput
     ? (turn.throughput.outputTokens / (turn.throughput.requestDurationMs / 1000)).toFixed(1)
@@ -130,7 +133,7 @@ export const TurnForkDivider = memo(function TurnForkDivider({
     attempt?.phase === "request_failed" && !attempt.retryable;
   const actionLabel = pending
     ? "Creating fork…"
-    : `Fork from here, ${time.short}`;
+    : `Fork from here, ${time?.short}`;
 
   const activate = (restart = false, explicitRecoveryRetry = false) => {
     if (
@@ -149,7 +152,7 @@ export const TurnForkDivider = memo(function TurnForkDivider({
   return (
     <footer
       className="turn-fork-footer"
-      data-active={usageOpen || pending || Boolean(attempt) ? "true" : undefined}
+      data-active={usageOpen || pending || Boolean(attempt) || bookmark?.bookmarked || bookmark?.pending ? "true" : undefined}
       data-testid={`turn-fork-${turn.id}`}
     >
       {throughput !== undefined && (
@@ -165,14 +168,15 @@ export const TurnForkDivider = memo(function TurnForkDivider({
         </>
       )}
       <div className="turn-fork-controls">
-        <time
+        {time && <time
           className="turn-fork-time"
           dateTime={turn.completedAt}
           title={time.full}
         >
           {time.short}
-        </time>
-        {copyText && (
+        </time>}
+        {bookmark && <TurnBookmarkAction {...bookmark} />}
+        {time && copyText && (
           <>
             <button
               type="button"
@@ -204,8 +208,10 @@ export const TurnForkDivider = memo(function TurnForkDivider({
             </span>
           </>
         )}
-        <TurnSpeakAction store={store} turnId={turn.id} copyText={copyText} />
-        <TurnUsageAction cache={store.usage} turn={turn} onOpenChange={setUsageOpen} />
+        {time && <>
+          <TurnSpeakAction store={store} turnId={turn.id} copyText={copyText} />
+          <TurnUsageAction cache={store.usage} turn={turn} onOpenChange={setUsageOpen} />
+        </>}
         {turn.status === "completed" && <button
           type="button"
           className="turn-fork-action"
@@ -232,7 +238,7 @@ export const TurnForkDivider = memo(function TurnForkDivider({
       </div>
       {turn.status === "completed" && <span id={`turn-fork-description-${turn.id}`} className="sr-only">
         {unavailableReason ??
-          `Creates a new thread that includes this completed turn (${time.full}) and excludes every later turn.`}
+          `Creates a new thread that includes this completed turn (${time?.full}) and excludes every later turn.`}
       </span>}
       {turn.status === "completed" && attempt && attempt.phase !== "pending" && (
         <div
@@ -288,4 +294,20 @@ export const TurnForkDivider = memo(function TurnForkDivider({
       )}
     </footer>
   );
+}, (previous, next) => {
+  const { bookmark: before, ...beforeFooter } = previous;
+  const { bookmark: after, ...afterFooter } = next;
+  // Streaming replaces the preview map; unchanged completed footers keep their
+  // memo boundary even when their equivalent bookmark props are reconstructed.
+  return Object.keys(beforeFooter).length === Object.keys(afterFooter).length &&
+    Object.keys(beforeFooter).every(key => Object.is(
+      beforeFooter[key as keyof typeof beforeFooter],
+      afterFooter[key as keyof typeof afterFooter],
+    )) && (before === after || Boolean(before && after &&
+      before.turnId === after.turnId && before.store === after.store &&
+      before.bookmarked === after.bookmarked && before.disabled === after.disabled &&
+      before.pending === after.pending &&
+      before.preview.userPreview === after.preview.userPreview &&
+      before.preview.assistantPreview === after.preview.assistantPreview &&
+      before.preview.responseState === after.preview.responseState));
 });

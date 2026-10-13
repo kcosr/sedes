@@ -270,12 +270,21 @@ The canonical catalog groups operations under:
   reply;
 - **Agents** — saved Agent discovery and revision-checked management;
 - **Tasks** — bounded reads and revision-checked mutation; and
+- **Images** — retain an image file and show it inline in the source conversation;
 - **Automations** — definition/history reads and guarded scheduling controls;
 - **Research** — current public information through an installation-owned
   provider process.
 
 `thread.status@3` and `thread.list@6` include the current principal's read-only
 `pinned` flag. There is no thread-pin mutation tool.
+
+`image.show@1` reads an absolute PNG, JPEG, GIF, or WebP path through the source
+thread's Files access and retains a snapshot for inline display. Its optional
+title is display metadata. The result contains bounded artifact metadata only;
+the tool does not return model image blocks or create a Pages entry. The Images
+grant is explicit, and the tool uses only already supported Native and CLI
+presentations. See [Show image files in chat](../user/images.md) and
+[Explicit image display](output-artifacts.md#explicit-image-display).
 
 ### Client controls
 
@@ -443,6 +452,36 @@ discover the live catalog because enabled IDs and versions are thread-specific.
 
 ## Compiled backend presentation dispositions
 
+The normalized tool policy separates saved grants from `runtimeAvailability`.
+The latter is a read-only, scoped backend contribution using current known
+configuration and runtime facts; rendering settings never starts a provider.
+Unavailable eligibility does not remove saved IDs or alter the selected
+presentation. Runtime eligibility may change at the same saved policy revision;
+server replay and client projection enforce revision monotonicity on the
+policy independently. A delayed overlay cannot replace newer retained runtime
+eligibility. Pi, Claude and Grok retain their existing surface and topology
+rules. Codex additionally requires enabled network access and verified Sedes
+creation; OpenCode requires an exact verified created root and retains its
+namespace, native receipt, source and owned-CLI restrictions.
+
+`conversation_creation_provenance` records verified native identity in the
+binding transaction, independently of first-input acceptance. Force reset leaves
+this record intact while making the abandoned attempt immutable and unavailable
+for replay. Codex fresh create/fork injection instead checks the exact active
+creation operation, before a native binding exists. Migration records only
+unambiguous matching non-abandoned creations; older abandoned creations require
+the bounded Codex [operator repair](../operator/operations.md#repair-tool-eligibility-after-force-reset).
+OpenCode's private created-root check combines the durable proof with its
+accepted native receipt and settings snapshot; changing those facts fails
+closed. OpenCode binds only with completed creation, which force reset does not
+abandon; no OpenCode repair is implemented or required. The repair registry
+delegates private evidence collection and verification to compiled backend
+adapters; shared SQL and the CLI do not interpret provider details. The offline
+Codex repair retains a fingerprinted audit receipt and never grants tools to an
+imported or merely bound session. A current creation may advertise eligibility
+before native identity exists; abandoned or unresolved unbound creation cannot.
+
+
 Presentation has two independent dimensions:
 
 - **Surface** selects the provider-facing mechanism: `native` tools or the
@@ -501,8 +540,9 @@ The shared CLI implements both CLI modes for every supported row: local Pi,
 Codex, Claude, Grok, and OpenCode, plus the admitted Codex and Claude remote relays. It does not
 add a CLI path to the intentionally unsupported Pi-SSH or Grok-SSH topologies.
 The owner-only local CLI frame and managed relay capability use
-`agent_tools_cli@4`, which carries bounded model media separately from JSON
-output. Stale peers fail closed and must be upgraded together.
+`agent_tools_cli@6`, which admits the closed Images catalog group and carries
+bounded model media separately from JSON output. Stale peers fail closed and
+must be upgraded together.
 The in-memory conformance backend exercises normalized catalog,
 admission, and invocation behavior without creating a production presentation
 contract. Missing presentation eligibility must omit or disable the surface;
@@ -726,13 +766,16 @@ into a native multimodal tool. This is
 transient model-visible content, independent of durable page revisions and
 output-artifact publication.
 
-The sidecar's `agent_tools_cli@4` and OpenCode's private `opencode_tools@2`
+The sidecar's `agent_tools_cli@6` and OpenCode's private `opencode_tools@3`
 reverse operation carry the same validated result. Their exact capability
 versions are negotiated before dispatch; there is no fallback to the earlier
 media-free contracts. OpenCode's ephemeral local MCP bridge additionally
-requires handshake protocol version 2 and validates every reply against its
+requires handshake protocol version 4 and validates every reply against its
 operation's exact schema, preserving PNG fields above the generic JSON string
-limit without widening ordinary output or input strings.
+limit. Workpad content uses its existing 262,144-unit allowance in narrowly
+validated document/edit fields; ordinary output and input strings retain their
+65,536-unit limit. Rebuild Sedes CLI executables and execution sidecars together
+when upgrading these private contracts.
 
 The selected CLI mode is injected as `SEDES_AGENT_TOOL_CLI_MODE` for a managed
 thread-agent process. It is a deterministic presentation hint, not a security
@@ -886,7 +929,7 @@ references for one thread and ingress differ, and the server derives the
 calling adapter (`cli` for discovery and `http` for invocation over HTTP,
 `cli` over the relay, or `mcp`) from the reference rather than from the
 request. Both presentations therefore share the same routes and
-`agent_tools_cli@4` frames without a wire discriminator, and admission rejects
+`agent_tools_cli@6` frames without a wire discriminator, and admission rejects
 a reference whose presentation does not match the thread's current surface.
 CLI references keep the bytes issued before MCP presentation existed.
 
@@ -915,16 +958,16 @@ Sedes adds CLI variables, so injection cannot discard its normal `HOME`,
 `PATH`, or external login.
 
 Codex over SSH can use CLI presentation only when the environment explicitly
-enables `agent_tools_cli` and the sidecar advertises `agent_tools_cli@4`.
+enables `agent_tools_cli` and the sidecar advertises `agent_tools_cli@6`.
 Sedes deploys one owner-only Unix socket beside the managed sidecar, and the
-sidecar relays the strict v4 agent-tool protocol over its current persistent-service
+sidecar relays the strict v6 agent-tool protocol over its current persistent-service
 connection. Codex and sidecar health remain independent. Missing
 capability, unavailable sidecar, imported thread, disabled network policy, or
 unverifiable environment isolation fails closed. Network access is currently
 still required for this admission even though the agent endpoint itself is a
 Unix socket.
 
-Claude over SSH or an outbound connection uses the same independently admitted `agent_tools_cli@4` relay
+Claude over SSH or an outbound connection uses the same independently admitted `agent_tools_cli@6` relay
 with its exact thread/query context. The sidecar retains the provider query
 when main disconnects, but tool invocation still needs current main-server
 authority and fails closed while that connection is absent. Remote Grok

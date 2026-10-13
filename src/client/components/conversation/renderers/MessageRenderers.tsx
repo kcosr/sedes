@@ -17,6 +17,8 @@ import {
 } from "../../../context-excerpts/ConversationMessageSelectionSurface.js";
 import { DurableAttachmentCard } from "../../../attachments/AttachmentCards.js";
 import { MessageTaskCard } from "./MessageTaskCard.js";
+import { splitThreadReferenceText } from "../../../../shared/thread-references.js";
+import { ThreadReferenceChips } from "../../thread/ThreadReferenceChips.js";
 
 export const userMessageRenderer: ConversationItemRenderer<UserMessageItem> = {
   kind: "user_message",
@@ -129,11 +131,7 @@ export function UserMessagePresentation({
       {content.map((part, index) =>
         part.kind === "skill" ||
         part.kind === "context_excerpt" ? null : part.kind === "text" ? (
-          <div className="streaming-text" key={index}>
-            <span {...conversationMessageSelectableTextProps}>
-              {part.text.text}
-            </span>
-          </div>
+          <ReferencedUserText key={index} text={part.text.text} parseReferences={origin === undefined} />
         ) : part.kind === "attachment" ? (
           <DurableAttachmentCard
             key={index}
@@ -214,6 +212,14 @@ export function UserMessagePresentation({
       {presentation}
     </article>
   );
+}
+
+function ReferencedUserText({ text, parseReferences }: { readonly text: string; readonly parseReferences: boolean }): React.JSX.Element {
+  const parsed = parseReferences ? splitThreadReferenceText(text) : { text, references: [] };
+  return <div className="streaming-text">
+    <ThreadReferenceChips references={parsed.references} />
+    <span {...conversationMessageSelectableTextProps}>{parsed.text}</span>
+  </div>;
 }
 
 function agentInputPreview(

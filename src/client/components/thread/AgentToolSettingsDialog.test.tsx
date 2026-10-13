@@ -83,6 +83,7 @@ function policySnapshot(
       ],
     },
     agentTools: {
+      runtimeAvailability: { availability: "available" },
       enabled: input.enabled ?? true,
       groups: [
         {
@@ -278,6 +279,29 @@ describe("AgentToolSettingsDialog", () => {
     expect(
       agentToolPolicySummary(policySnapshot({ enabled: false }).agentTools),
     ).toBe("Off");
+  });
+
+  it("explains runtime denial while retaining editable saved grants", async () => {
+    const snapshot = policySnapshot({ presentationSurface: "cli" });
+    snapshot.agentTools.runtimeAvailability = {
+      availability: "unavailable",
+      reason: { text: "Enable network access in this thread's execution settings." },
+    };
+    const { setAgentToolPolicy } = subject(snapshot);
+    expect(screen.getByRole("status")).toHaveTextContent("Enable network access");
+    expect(screen.getByRole("status")).toHaveTextContent("Your saved tool selections are retained");
+    expect(agentToolPolicySummary(snapshot.agentTools)).toBe("Unavailable");
+    expect(screen.getByRole("switch", { name: "Enable agent tools" })).toBeChecked();
+    const grant = screen.getByRole("checkbox", { name: "Agent context" });
+    expect(grant).toBeChecked();
+    expect(grant).toBeEnabled();
+    fireEvent.click(grant);
+    fireEvent.click(screen.getByRole("button", { name: /^Save$/ }));
+    await waitFor(() => expect(setAgentToolPolicy).toHaveBeenCalledWith(expect.objectContaining({
+      enabled: true,
+      enabledToolIds: [],
+      presentation: { surface: "cli", mode: "progressive" },
+    })));
   });
 
   it("shows visible canonical descriptions and effect copy", () => {

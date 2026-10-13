@@ -282,6 +282,7 @@ export function NewGroupDialog({
   onCreate,
   contentRef,
   returnFocusRef,
+  memberCount = 1,
 }: {
   readonly open: boolean;
   readonly initialName: string;
@@ -291,6 +292,7 @@ export function NewGroupDialog({
   readonly onCreate: (name: string) => Promise<unknown>;
   readonly contentRef?: RefObject<HTMLDivElement | null>;
   readonly returnFocusRef?: RefObject<HTMLElement | null>;
+  readonly memberCount?: number;
 }): React.JSX.Element {
   const [name, setName] = useState(initialName);
   const [error, setError] = useState<string>();
@@ -352,7 +354,7 @@ export function NewGroupDialog({
       >
         <DialogHeader>
           <DialogTitle>New group</DialogTitle>
-          <DialogDescription>Creates a group with this thread in it.</DialogDescription>
+          <DialogDescription>{memberCount === 1 ? "Creates a group with this thread in it." : `Creates a group with these ${memberCount} threads in it.`}</DialogDescription>
         </DialogHeader>
         <form
           className="contents"

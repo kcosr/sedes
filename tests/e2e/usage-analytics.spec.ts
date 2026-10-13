@@ -86,7 +86,10 @@ test("completed turn throughput stays left aligned and survives browser reload",
     await expect(assistant).toHaveAttribute("data-item-status", "streaming");
     await expect(turn).toHaveAttribute("data-turn-status", "in_progress");
     await expect(turn.locator(".turn-throughput")).toHaveCount(0);
-    await expect(turn.locator("footer")).toHaveCount(0);
+    const activeFooter = turn.locator("footer");
+    await expect(activeFooter.getByRole("button", { name: "Bookmark response" })).toBeEnabled();
+    await expect(activeFooter.locator("time")).toHaveCount(0);
+    await expect(activeFooter.getByRole("button", { name: /Fork from here|Copy response|Turn usage and cost|Play response aloud/ })).toHaveCount(0);
     await capture(page, testInfo, "turn-throughput-streaming.png");
 
     expect((await page.request.post("/__e2e/pi/throughput/release")).status()).toBe(204);

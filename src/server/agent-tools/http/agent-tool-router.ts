@@ -18,6 +18,27 @@ import type {
 } from "./agent-tool-http-service.js";
 import type { PrincipalAgentToolClientService } from "../application/principal-agent-tool-client-service.js";
 import type { HttpRequestOperationGate } from "../../runtime/application-shutdown.js";
+import { isWorkpadWriteTool, workpadInputContentError } from "../../../internal/agent-tool-cli-protocol/workpad-content.js";
+
+/** Preserve the ordinary 256 KiB ingress cap except for declared Workpad writes. */
+export function agentToolInvocationBodyParser(): RequestHandler {
+  const lengths = new WeakMap<object, number>();
+  const parse = express.json({
+    limit: 2 * 1024 * 1024 + 4096,
+    strict: true,
+    type: "application/json",
+    verify: (request, _response, body) => { lengths.set(request, body.byteLength); },
+  });
+  return (request, response, next) => parse(request, response, error => {
+    const bytes = lengths.get(request) ?? 0;
+    lengths.delete(request);
+    if (error) return next(error);
+    if (bytes > 256 * 1024 && !isWorkpadWriteTool(request.body?.toolId)) {
+      return next(Object.assign(new Error("The request body exceeded the allowed size."), { type: "entity.too.large" }));
+    }
+    next();
+  });
+}
 
 const sourceCapabilitySchema = z
   .string()
@@ -223,7 +244,7 @@ function handler(
           response,
           new CanonicalAgentToolRequestError(
             "invalid_input",
-            "The request did not match the expected contract.",
+            workpadInputContentError(request.body?.toolId, request.body?.input) ?? "The request did not match the expected contract.",
           ),
         );
         return;

@@ -1,7 +1,7 @@
 # Claude backend
 
 Sedes integrates Claude through the exact-pinned
-`@anthropic-ai/claude-agent-sdk` 0.3.287 package in a managed local
+`@anthropic-ai/claude-agent-sdk` 0.3.296 package in a managed local
 worker or persistent SSH/outbound sidecar and an operator-selected Claude Code
 executable. Claude Code owns authentication and native conversation history; Sedes provides its normalized thread workflow, durable controls, and
 recovery records.
@@ -114,17 +114,18 @@ explicitly enable them; their IDs and native session bindings are retained.
 
 ## Version compatibility
 
-Sedes pins one SDK profile: `@anthropic-ai/claude-agent-sdk` 0.3.287. It admits
+Sedes pins one SDK profile: `@anthropic-ai/claude-agent-sdk` 0.3.296. It admits
 stable Claude Code releases at or above 2.1.287, except for explicitly excluded
 known-bad releases.
 
-The minimum and tested-through release are both 2.1.287. This upgrade adopts
-SDK 0.3.287 history and command-catalog behavior and qualifies the matching
-CLI for queued input, detached continuations, permission initialization, and
-stream completion. Older runtimes fail admission; no older parser is retained.
+The minimum release remains 2.1.287; the tested-through release is 2.1.296.
+SDK 0.3.296 adds a pre-prompt CLI version in the initialization response,
+organization-policy startup failures, and explicit subagent message identity.
+Sedes retains its existing startup and fork behavior; upgrading the SDK alone
+does not remove the startup marker. Releases below the minimum fail admission.
 
 Sedes' startup message still reaches the model with the first prompt after
-each start, on the reviewed 2.1.287 release. Claude Code labels
+each start, on the reviewed 2.1.287 and 2.1.296 releases. Claude Code labels
 it `[MESSAGE FROM NON-USER SOURCE - NOT USER INPUT]`, followed by Sedes'
 marker "Sedes session start marker. It contains no request." Earlier builds
 sent no text, which Claude Code shows as "(no content)". Claude sometimes takes
@@ -140,17 +141,18 @@ live tests on 2.1.283 used `claude-sonnet-5` at low effort:
 Only the first prompt after a start carries the label. If Claude refuses it,
 send the prompt again.
 
-Update Claude Code on every execution host, local and remote, before
-upgrading Sedes. An older release now fails backend startup with a runtime
-version error.
+Claude Code 2.1.287 remains admitted on local and remote execution hosts.
+For the newest reviewed runtime behavior, update the selected executable to
+2.1.296. A release below 2.1.287 fails backend startup with a runtime version
+error.
 
-The reviewed runtime baseline is Claude Code 2.1.287. A newer admitted stable
+The reviewed runtime baseline is Claude Code 2.1.296. A newer admitted stable
 release produces a structured advisory while continuing to use the pinned
 SDK profile and behavioral checks. This warning is not an authentication
 failure. Prereleases and releases older than 2.1.287 fail closed. The minimum
 runtime does not move merely because a future SDK package bundles a newer CLI,
 and protocol or behavioral incompatibility still fails closed. The pinned SDK
-package bundles Claude Code 2.1.287; Sedes never runs it, removes it at
+package bundles Claude Code 2.1.296; Sedes never runs it, removes it at
 install, and always uses the operator-installed executable.
 
 Upgrade local worker artifacts and persistent sidecars with this server:
@@ -516,7 +518,7 @@ workspace, and do not use sensitive files merely to validate connectivity.
 | Authentication is rejected despite a working interactive CLI | Run the configured executable's `auth status` as the selected local or remote execution account. Confirm first-party `claude.ai` subscription login, remove active API-key overrides, and verify the selected provider home and the environment visible to that account.                                                                                                              |
 | SSH runtime does not reconnect                              | Check the environment connection preference, exact SSH alias and account, remote Node installation, sidecar compatibility, and ownership/recovery status. Use **Connect** after intentional Disconnect; do not substitute local provider paths. |
 | Runtime version is rejected                                  | Use a stable Claude Code release at or above 2.1.287. Prereleases and explicitly excluded releases fail closed.                                                                                                                                                                                                                    |
-| Runtime is newer than tested                                 | This is advisory for an otherwise admitted stable release. Pin 2.1.287 for the reviewed baseline or deliberately run the opt-in real-Claude gate before adopting the newer CLI.                                                                                                                                                    |
+| Runtime is newer than tested                                 | This is advisory for an otherwise admitted stable release. Pin 2.1.296 for the reviewed baseline or deliberately run the opt-in real-Claude gate before adopting the newer CLI.                                                                                                                                                    |
 | No models or efforts are selectable                          | Confirm native initialization and catalog success, then inspect `modelPolicy`. Claude matchers use model IDs and efforts; `providerIds` are invalid.                                                                                                                                                                               |
 | Initialization times out on a healthy installation           | Investigate slow CLI startup first. If appropriate, increase `initializationTimeoutMs` within its supported one-to-120-second range; do not hide authentication or version failures with a longer timeout.                                                                                                                         |
 | The worker reports query capacity exceeded                   | The fixed 32-query worker guard indicates that too many Claude queries remain resident in one execution environment. Close or archive idle threads and inspect runtime retirement if capacity does not recover. Attaching the same native session twice is denied independently.                                                   |

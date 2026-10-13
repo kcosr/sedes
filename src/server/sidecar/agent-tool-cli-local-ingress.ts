@@ -52,7 +52,7 @@ export class AgentToolCliIngressError extends Error {
 }
 
 /**
- * Private sidecar-local ingress for the narrow agent_tools_cli@4 protocol.
+ * Private sidecar-local ingress for the narrow agent_tools_cli@6 protocol.
  * It owns no Sedes repository, HTTP listener, Codex channel, or SSH carrier.
  */
 export class AgentToolCliLocalIngress {

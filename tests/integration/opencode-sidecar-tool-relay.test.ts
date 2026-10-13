@@ -18,7 +18,7 @@ const stamp: OpenCodeToolInvocationStamp = { authority: { ...source.scope, execu
   session: { applicationThreadId: "thread", nativeSessionID: "ses_fixture", bindingFingerprint: "binding" } },
   journalId: "journal", throughSequence: 1, nativeContinuity: "continuity", inputId: "msg_input", authorityEpoch: 1, nativeConnected: true };
 function request(): AgentToolCliRequest {
-  return { protocolVersion: 4, requestId: randomUUID(), sourceCapability: "source-capability-1234567890abcdefghijklmnop",
+  return { protocolVersion: 6, requestId: randomUUID(), sourceCapability: "source-capability-1234567890abcdefghijklmnop",
     operation: { type: "invoke", request: { toolId: "agent.context", schemaVersion: 3, requestId: randomUUID(), input: {} } } };
 }
 async function fixture(presentation: "mcp" | "cli" = "mcp", openCodeTools = true) {

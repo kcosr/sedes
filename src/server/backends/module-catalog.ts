@@ -71,6 +71,10 @@ export class BackendModuleCatalog {
     return this.#byBackendKind.get(kind);
   }
 
+  creationProvenanceRepairForBackendKind(kind: BackendKind) {
+    return this.requireModule(kind).creationProvenanceRepair;
+  }
+
   moduleForConnectionKind(kind: ConnectionKind): BackendModule | undefined {
     return this.#byConnectionKind.get(kind);
   }

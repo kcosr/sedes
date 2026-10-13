@@ -41,7 +41,7 @@ import { createFakeAgentToolSourceCapabilities } from "../helpers/fake-agent-too
 import { claudeSkillInvocationsMigration } from "../../src/server/db/migrations/072-claude-skill-invocations.js";
 import type { BackendAgentToolFacade } from "../../src/server/agent-tools/adapters/backend-facade.js";
 
-const REQUIRED_MODEL = "claude-sonnet-5";
+const REQUIRED_MODEL = "claude-sonnet-5-5";
 const REQUIRED_EFFORT = "low";
 const MODEL_TURN_TIMEOUT_MS = 240_000;
 const DEFAULT_EXECUTABLE = "claude";
@@ -75,7 +75,7 @@ const instance: AgentBackendInstance = {
   label: "Real Claude",
   enabled: true,
   configurationRevision: 1,
-  protocolRelease: "0.3.287",
+  protocolRelease: "0.3.296",
 };
 
 const connection: AgentConnectionProfile = {
@@ -141,7 +141,7 @@ class ToolDisabledOfficialClaudeSdkFacade extends OfficialClaudeSdkFacade {
 }
 
 describe.sequential("real Claude subscription driver", () => {
-  it("streams, persists, projects usage, and reopens one disposable Sonnet 5 low-effort session", async () => {
+  it("streams, persists, projects usage, and reopens one disposable Sonnet 5.5 low-effort session", async () => {
     const root = await mkdtemp(
       path.join(os.tmpdir(), "sedes-real-claude-driver-"),
     );

@@ -155,7 +155,10 @@ test.describe.serial("normalized lineage browser journeys", () => {
       const runningUsageButton = page.locator('[data-turn-status="in_progress"]')
         .getByRole("button", { name: "Turn usage and cost" });
       await expect(runningUsageButton).toHaveCount(0);
-      await expect(page.locator('[data-turn-status="in_progress"] footer')).toHaveCount(0);
+      const activeFooter = page.locator('[data-turn-status="in_progress"] footer');
+      await expect(activeFooter.getByRole("button", { name: "Bookmark response" })).toBeEnabled();
+      await expect(activeFooter.locator("time, .turn-throughput")).toHaveCount(0);
+      await expect(activeFooter.getByRole("button", { name: /Fork from here|Copy response|Turn usage and cost|Play response aloud/ })).toHaveCount(0);
       await expect(page.getByText("Current turn", { exact: true })).toHaveCount(0);
       await capture(page, testInfo, "running-turn-actions.png");
 

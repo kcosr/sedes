@@ -86,6 +86,24 @@ describe("TurnForkDivider", () => {
     expect(view.container.querySelector("footer")).toBeNull();
   });
 
+  it("offers only the bookmark action in a running turn footer", () => {
+    const setTurnBookmarked = vi.fn(async () => undefined);
+    const store = { forkTurn: vi.fn(), setTurnBookmarked } as unknown as ThreadClientStore;
+    const preview = { userPreview: "Question", assistantPreview: null, responseState: "no_response" as const };
+    const props = { turn: { ...turn, status: "in_progress" as const }, capability, attempt: undefined, connected: true, authoritative: true, store, copyText: "Partial reply", bookmark: { turnId: turn.id, preview, bookmarked: false, disabled: false, pending: false, store } };
+    const view = render(<TurnForkDivider {...props} />);
+    const bookmark = screen.getByRole("button", { name: "Bookmark response" });
+    expect(bookmark.closest("footer")).not.toBeNull();
+    expect(screen.queryByRole("button", { name: "Copy response" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Fork from here/ })).toBeNull();
+    expect(view.container.querySelector("time")).toBeNull();
+    fireEvent.click(bookmark);
+    expect(setTurnBookmarked).toHaveBeenCalledWith({ turnId: turn.id, bookmarked: true, preview });
+    view.rerender(<TurnForkDivider {...props} bookmark={{ ...props.bookmark, bookmarked: true, pending: true }} />);
+    expect(screen.getByRole("button", { name: "Remove response bookmark" })).toBeDisabled();
+    expect(view.container.querySelector("footer")).toHaveAttribute("data-active", "true");
+  });
+
   it("shows a measurement added to an already completed turn with the same completion time", () => {
     const props = {
       turn,

@@ -236,7 +236,7 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
     await page
       .getByRole("option", { name: /Careful reviewer updated/ })
       .click();
-    await expect(page.getByRole("status")).toContainText(
+    await expect(page.getByRole("dialog", { name: "New thread", exact: true }).getByRole("status")).toContainText(
       "Sedes tools: Allow without asking.",
     );
     await page.getByRole("button", { name: /1 effective variables/ }).click();
@@ -652,7 +652,7 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
     );
     await page.getByRole("combobox", { name: "Agent" }).click();
     await page.getByRole("option", { name: /Health probe/ }).click();
-    await expect(page.getByRole("status")).toContainText("Runs on Pi SDK.");
+    await expect(page.getByRole("dialog", { name: "New thread", exact: true }).getByRole("status")).toContainText("Runs on Pi SDK.");
     await expect(
       page.getByRole("combobox", { name: "Target", exact: true }),
     ).toContainText("Pi SDK");

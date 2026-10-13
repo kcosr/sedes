@@ -120,6 +120,14 @@ changed tokens to the new editor. An update exceeding all three budgets is
 rejected rather than resetting existing provenance. Content and attribution size limits also reject
 oversized updates atomically.
 
+Content and human drafts allow at most 262,144 UTF-16 code units, matching the
+browser's textarea limit; supplementary characters such as emoji use two units.
+Unpaired surrogates are rejected. The current document and each revision have
+separate 2 MiB serialized JSON limits, and attribution allows 4,096 spans.
+Revision JSON includes content, added/removed text, and attribution: JSON escaping
+or a large replacement can reach the byte limit before the text limit. A rejected
+commit retains its draft and leaves the document and revision history unchanged.
+
 The client renders Markdown, optionally mapping visible text to source spans.
 Unlike chat and Markdown file previews, a workpad renders each soft line break
 (a single newline inside a paragraph) as a line break, through the
@@ -166,6 +174,20 @@ Sedes service through native and CLI adapters. A `project` scope in their
 input defaults to the caller's project. Agents access committed state, not human drafts.
 Listing and history are paginated. Caller-supplied filesystem paths are not
 interpreted as server-side content authority.
+
+All five backends share these Workpad limits. Pi Native invokes the canonical
+service directly; Codex, Claude, and OpenCode Native use MCP; Grok has no Native
+surface. Every backend's admitted CLI surface uses the same canonical tools.
+The tool transport's ordinary 65,536-unit string bound remains in force except
+for declared Workpad content/edit passages and fully validated Workpad result
+envelopes. Metadata and unrelated tool strings retain their existing bounds.
+Workpad writes accept 2 MiB of canonical input; HTTP reserves another 4 KiB for
+the invocation envelope while retaining the 256 KiB ingress cap for other tools.
+The repository checks the projected tool result before committing, and tool
+rejections retain actionable content, revision-byte, and attribution diagnostics.
+Rebuild CLI executables and sidecars together: the local protocol and
+`agent_tools_cli` capability are version 6; OpenCode's private tool relay remains
+version 3, and its MCP bridge handshake is version 4. Stale private protocols fail closed.
 
 ## Deletion
 

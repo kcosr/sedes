@@ -1,6 +1,7 @@
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
+import { shownImagesMigration } from "../../src/server/db/migrations/143-shown-images.js";
 import { htmlPagesMigration } from "../../src/server/db/migrations/140-html-pages.js";
 import { PageRepository } from "../../src/server/db/repositories/page-repository.js";
 import { PageService } from "../../src/server/pages/page-service.js";
@@ -13,10 +14,12 @@ function fixture() {
   const database = new Database(":memory:"); databases.push(database);
   database.pragma("foreign_keys = ON");
   database.exec(`CREATE TABLE principals(tenant_id TEXT,id TEXT,PRIMARY KEY(tenant_id,id));
+    CREATE TABLE output_image_artifacts(tenant_id TEXT,owner_principal_id TEXT,id TEXT,PRIMARY KEY(tenant_id,owner_principal_id,id));
     CREATE TABLE application_threads(tenant_id TEXT,owner_principal_id TEXT,id TEXT,PRIMARY KEY(tenant_id,owner_principal_id,id));
     INSERT INTO principals VALUES('tenant','principal');
     INSERT INTO application_threads VALUES('tenant','principal','thread'),('tenant','principal','other');`);
   database.exec(htmlPagesMigration.sql);
+  database.exec(shownImagesMigration.sql);
   return { database, repository: new PageRepository(database) };
 }
 function input(html = "<html><body>first</body></html>", invocationId = "first") {

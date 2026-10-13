@@ -10,13 +10,14 @@ import {
   within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { conversationItemSchema, type ConversationItem } from "../../../shared/index.js";
+import { conversationItemSchema, type ConversationItem, type DeliveryInputOrigin } from "../../../shared/index.js";
 import {
   ConversationItemView,
   conversationItemRenderers,
 } from "./ConversationItemView";
 import { MarkdownContent } from "./MarkdownContent";
 import { WorkspaceFileLinkProvider } from "../../workspace-files/workspace-file-link-routing.js";
+import { formatThreadReferenceText, THREAD_REFERENCE_HEADER } from "../../../shared/thread-references.js";
 
 const androidImageActions = vi.hoisted(() => ({
   available: false,
@@ -292,7 +293,12 @@ describe("normalized conversation renderers", () => {
     );
   });
 
-  it("loads and opens a durable image artifact from the full preview surface", async () => {
+  it.each([
+    { origin: "generated", title: "Generated chart" },
+    { origin: "shown", title: "Results chart" },
+    { origin: "shown", title: undefined },
+  ] as const)("loads and opens a durable $origin image with title $title", async ({ origin, title }) => {
+    const label = title ?? "chart.png";
     const intersection = installIntersectionObserver();
     const content = new Blob(
       [
@@ -316,12 +322,12 @@ describe("normalized conversation renderers", () => {
         item={{
           ...common,
           kind: "image",
-          origin: { kind: "generated" },
+          origin: { kind: origin },
           image: {
             representation: "artifact",
             artifactId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
             mimeType: "image/png",
-            alt: { text: "Generated chart" },
+            ...(title ? { alt: { text: title } } : {}),
             fileName: { text: "chart.png" },
             byteSize: content.size,
             sha256: "a".repeat(64),
@@ -342,14 +348,15 @@ describe("normalized conversation renderers", () => {
     );
     await waitFor(() =>
       expect(
-        screen.getByRole("img", { name: "Generated chart" }),
+        screen.getByRole("img", { name: label }),
       ).toHaveAttribute("src", "blob:generated-image"),
     );
-    const image = screen.getByRole("img", { name: "Generated chart" });
+    const image = screen.getByRole("img", { name: label });
     const expand = screen.getByRole("button", {
-      name: "Expand image: Generated chart",
+      name: `Expand image: ${label}`,
     });
     expect(image).toBeVisible();
+    expect(screen.queryByText(/^Viewed image/)).toBeNull();
     expect(expand).not.toContainElement(image);
     expect(
       screen.queryByRole("button", { name: /^Zoom percentage:/ }),
@@ -358,7 +365,7 @@ describe("normalized conversation renderers", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
 
     fireEvent.click(expand);
-    expect(screen.getByRole("dialog")).toBeVisible();
+    expect(screen.getByRole("dialog", { name: `Image preview: ${label}` })).toBeVisible();
     expect(
       screen.getByRole("button", { name: /^Zoom percentage:/ }),
     ).toHaveTextContent("100%");
@@ -831,6 +838,38 @@ describe("normalized conversation renderers", () => {
     expect(container).not.toHaveTextContent("$keel-local");
     expect(container).not.toHaveTextContent("[Skill:");
   });
+
+  it("presents selected thread references as escaped links without hiding ordinary malformed text", () => {
+    const reference = { threadId: "616946aa-4574-41f7-bd70-d3a9edd56dbd", title: '<img src=x> "Related"' };
+    const body = `${THREAD_REFERENCE_HEADER}\nThis is ordinary text, not a reference block.`;
+    const { container } = render(<ConversationItemView item={{ ...common, kind: "user_message", content: [
+      { kind: "text", text: { text: formatThreadReferenceText(body, [reference]) } },
+    ] }} />);
+    expect(screen.getByRole("link", { name: reference.title })).toHaveAttribute("href", `/threads/${reference.threadId}`);
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.querySelector("[data-conversation-message-text]")?.textContent).toBe(body);
+    expect(container).not.toHaveTextContent('"threadReferences"');
+  });
+
+  it.each(["agent_message", "agent_result", "question_response"] as const)(
+    "leaves reference-looking text literal for %s input",
+    (kind) => {
+      const text = formatThreadReferenceText("Reported body", [{
+        threadId: "616946aa-4574-41f7-bd70-d3a9edd56dbd", title: "Agent-chosen title",
+      }]);
+      const origin: DeliveryInputOrigin = kind === "question_response"
+        ? { kind, requestId: "request-1", sourceItemId: "question-1", answers: [{ questionIndex: 0, question: "Details?", answer: text }] }
+        : { kind, sourceThreadId: "worker-thread", sourceThreadLabel: { text: "Worker" }, ...(kind === "agent_result" ? { callbackId: "callback-1" } : {}) } as DeliveryInputOrigin;
+      const { container } = render(<ConversationItemView item={{
+        ...common, kind: "user_message", origin,
+        content: [{ kind: "text", text: { text } }],
+      }} />);
+      expect(container.querySelector(".thread-reference-list")).toBeNull();
+      expect(container).toHaveTextContent(THREAD_REFERENCE_HEADER);
+      expect(container).toHaveTextContent('"threadReferences"');
+      expect(container).toHaveTextContent("Reported body");
+    },
+  );
 
   it("presents authenticated callback input as a collapsed agent-result disclosure", () => {
     const { container } = render(

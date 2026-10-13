@@ -1570,7 +1570,7 @@ export class PiConversationBackendDriver implements ConversationBackendDriver {
         };
       } finally {
         interactions.close();
-        session.dispose();
+        await session.dispose();
       }
     });
   }
@@ -1820,7 +1820,7 @@ export class PiConversationBackendDriver implements ConversationBackendDriver {
       throw mappedError(cause);
     }
     if (session.sessionId !== input.binding.backendConversationId) {
-      session.dispose();
+      await session.dispose();
       interactions.close();
       await resolvedWorkspace.release();
       throw error(
@@ -1890,7 +1890,7 @@ export class PiConversationBackendDriver implements ConversationBackendDriver {
       input.onControlReady?.(handle.control);
       return handle;
     } catch (cause) {
-      session.dispose();
+      await session.dispose();
       interactions.close();
       await resolvedWorkspace.release();
       throw mappedError(cause);
@@ -4123,7 +4123,7 @@ class PiConversationHandle implements ConversationHandle {
     }
     this.#listeners.clear();
     try {
-      this.#session.dispose();
+      await this.#session.dispose();
     } catch (cause) {
       captureFailure(cause);
     }

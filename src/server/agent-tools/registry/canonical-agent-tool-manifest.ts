@@ -104,6 +104,7 @@ export const CANONICAL_AGENT_TOOL_GROUPS = Object.freeze([
     order: 55,
   }),
   Object.freeze({ id: "pages" as const, label: "Pages", description: "Publish and preview self-contained HTML documents.", order: 57 }),
+  Object.freeze({ id: "images" as const, label: "Images", description: "Show retained image files in the conversation.", order: 58 }),
   Object.freeze({
     id: "automations" as const,
     label: "Automations",
@@ -119,6 +120,12 @@ export const CANONICAL_AGENT_TOOL_GROUPS = Object.freeze([
 ] satisfies readonly CanonicalAgentToolGroup[]);
 
 export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
+  "image.show": threadOnlyManifestEntry({
+    id: "image.show", schemaVersion: 1, environmentAuthority: { kind: "source_only" },
+    description: "Show an image file in this conversation. Read a PNG, JPEG, GIF, or WebP from an absolute path in this thread's execution environment and retain a snapshot in chat, even if the source changes or is deleted. Optional title describes the image. Uses existing Files access and image size limits. Returns image metadata; it does not send image bytes to the model or create a Pages entry. Requires the originating active turn.",
+    catalog: { groupId: "images", label: "Show image", order: 10 },
+    effects: { application: "write", modelUsage: "none", external: "none" },
+  }),
   "page.publish": threadOnlyManifestEntry({
     id: "page.publish", schemaVersion: 1, environmentAuthority: { kind: "source_only" },
     description: "Publish an interactive HTML preview. Provide exactly one source: path to an HTML file in this thread's execution environment (up to 1 MiB), or html text (up to 65,536 characters). CSS and JavaScript must be inline. File sources capture referenced local PNG, JPEG, GIF and WebP images; html text requires embedded data images. HTTP resources are unsupported. Omit viewport dimensions for fluid layout, or specify width and optionally height for a fixed mock-up. To update a page pass its pageId and expectedRevision; each changed publication preserves earlier versions and appends a preview.",

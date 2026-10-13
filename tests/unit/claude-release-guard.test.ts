@@ -11,11 +11,11 @@ import {
 describe("Claude runtime release guard", () => {
   it("declares an independent floor, tested-through release, and exclusions", () => {
     expect(CLAUDE_CODE_MINIMUM_VERSION).toBe("2.1.287");
-    expect(CLAUDE_CODE_TESTED_THROUGH_VERSION).toBe("2.1.287");
+    expect(CLAUDE_CODE_TESTED_THROUGH_VERSION).toBe("2.1.296");
     expect(CLAUDE_CODE_EXCLUDED_VERSIONS).toEqual([]);
   });
 
-  it.each(["2.1.287", "2.1.287+vendor.1"])(
+  it.each(["2.1.287", "2.1.287+vendor.1", "2.1.295", "2.1.296", "2.1.296+vendor.1"])(
     "accepts supported runtime %s without a warning",
     (version) => {
       const onNewerVersion = vi.fn();
@@ -37,7 +37,7 @@ describe("Claude runtime release guard", () => {
     },
   );
 
-  it.each(["2.1.288", "2.2.0", "3.0.0", "99.0.0"])(
+  it.each(["2.1.297", "2.2.0", "3.0.0", "99.0.0"])(
     "accepts newer stable runtime %s with a warning",
     (version) => {
       const onNewerVersion = vi.fn();
@@ -47,7 +47,7 @@ describe("Claude runtime release guard", () => {
       });
       expect(onNewerVersion).toHaveBeenCalledOnce();
       expect(onNewerVersion).toHaveBeenCalledWith({
-        testedThroughVersion: "2.1.287",
+        testedThroughVersion: "2.1.296",
         observedVersion: version,
       });
     },
@@ -106,7 +106,7 @@ describe("Claude runtime release guard", () => {
       .spyOn(process, "emitWarning")
       .mockImplementation(() => undefined);
     const warning = {
-      testedThroughVersion: "2.1.287",
+      testedThroughVersion: "2.1.296",
       observedVersion: "2.99.0+test-warning",
     };
 
@@ -118,7 +118,7 @@ describe("Claude runtime release guard", () => {
       expect.stringContaining("2.99.0+test-warning"),
       {
         code: "SEDES_CLAUDE_RUNTIME_NEWER_THAN_TESTED",
-        detail: "testedThrough=2.1.287;observed=2.99.0+test-warning",
+        detail: "testedThrough=2.1.296;observed=2.99.0+test-warning",
       },
     );
     emitWarning.mockRestore();

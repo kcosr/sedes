@@ -161,6 +161,7 @@ describe("Sedes CLI", () => {
       management: {} as NonNullable<Dependencies["management"]>,
       workpads: {} as NonNullable<Dependencies["workpads"]>,
       pages: {} as NonNullable<Dependencies["pages"]>,
+      images: {} as NonNullable<Dependencies["images"]>,
       automations: {} as NonNullable<Dependencies["automations"]>,
       threadCreation: {} as NonNullable<Dependencies["threadCreation"]>,
       savedAgents: {} as NonNullable<Dependencies["savedAgents"]>,

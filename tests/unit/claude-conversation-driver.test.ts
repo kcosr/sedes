@@ -68,7 +68,7 @@ const instance: AgentBackendInstance = {
   label: "Claude",
   enabled: true,
   configurationRevision: 1,
-  protocolRelease: "0.3.287",
+  protocolRelease: "0.3.296",
 };
 const connection: AgentConnectionProfile = {
   id: "claude-profile-1",

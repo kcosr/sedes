@@ -12,6 +12,7 @@ export function threadAgentToolPolicyReaderDependencies(
       dependencies.eligibility,
     ),
     agentToolCatalog: dependencies.catalog,
+    agentToolRuntimeAvailability: { read: () => ({ availability: "available" as const }) },
     agentToolEligibility: dependencies.eligibility,
   } as const;
 }

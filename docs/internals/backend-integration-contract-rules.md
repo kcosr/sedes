@@ -2896,6 +2896,15 @@ command and tool statuses have no interrupted value, and ACP tool statuses
 have no cancelled value), so an aborted call keeps the provider's reported
 outcome. The in-memory conformance backend keeps the statuses it scripts.
 
+User-selected thread references are bounded canonical plain text (Sedes UUID
+and JSON-quoted display title) in the existing input text contract. Pi, Codex,
+Claude, Grok, and OpenCode preserve that text through the shared delivery path;
+it grants no tool or resource authority and includes no referenced transcript.
+Draft, stash, queue, retry, and immutable source snapshots retain the exact text.
+Only exact canonical blocks are rendered as chips; malformed, unknown, and
+code-fenced text remains visible. Provider-native thread IDs never substitute
+for Sedes IDs. TUI submission of reference chips is explicitly unavailable.
+
 Text, context excerpts, attachments, and structured Task references are
 normalized application input, not provider-native IDs or browser-selected
 paths. Before provider delivery, the application materializes one immutable,
@@ -3468,6 +3477,32 @@ inspection.
 
 ## Agent tools and managed terminals
 
+Provider teardown must await provider-native extension cleanup before
+invalidating contexts or releasing execution authority. Pi implements this
+through its native shutdown event for temporary and retained SDK sessions.
+Codex, Claude, Grok, and OpenCode retain their existing owned-runtime shutdown
+contracts; this Pi event is not part of the normalized backend protocol.
+
+Keep saved grants distinct from current runtime eligibility. Every compiled
+backend contributes read-only eligibility for the exact thread and presentation;
+rendering that state must not launch or acquire a provider. Unknown runtime
+authority and archived threads remain unavailable without erasing saved grants.
+Codex and OpenCode require immutable verified native-creation provenance matched
+to the current scoped binding. Force reset abandons the input operation, not
+the verified creation identity. Fresh Codex create/fork admission checks its
+exact active operation before a binding exists. Pi, Claude and Grok retain
+their existing source and presentation rules. Repairs must validate retained
+backend evidence, preserve abandonment receipts, and never replay input or
+change the thread's lifecycle as a side effect.
+
+Managed CLI eligibility uses the granted, handshake-verified tool endpoint;
+the reverse Sedes tool relay is not part of the sidecar's forward operation
+inventory. Preserve that evidence through idle retirement and refresh it on
+normal reconnection, while continuing to deny disconnected or ungranted
+hosts. Codex and Claude use this endpoint check for their tool presentations,
+and OpenCode uses it for CLI tools. Pi Native tools and local Grok tools retain
+their existing eligibility rules.
+
 Agent tools use the normalized, principal-scoped contract in
 [Agent tools](agent-tools.md). Eligibility is checked at execution time against
 the current thread, backend generation, effective policy revision, and tool
@@ -3528,7 +3563,7 @@ alternate source claims, and to exactly one presentation, CLI or MCP. Derive
 the calling adapter from the resolved reference, never from a request field,
 so the CLI and `sedes mcp` share routes and relay frames without either
 satisfying the other's surface. The remote relay uses only the
-strict `agent_tools_cli@4` contract advertised for the enabled
+strict `agent_tools_cli@6` contract advertised for the enabled
 `agent_tools_cli` capability; unsupported or stale versions fail closed.
 Discovery may retain a bounded transport deadline, but invocation
 must propagate caller abort so an indefinitely waiting approval is not turned
@@ -3749,6 +3784,20 @@ Presentation turn revisions include visible pages;
 fork capabilities and `thread.messages` retain the native source revision,
 derived by subtracting referenced page items. Validate that relationship with
 the referenced items in snapshots, history pages, and incremental stores.
+
+Explicit image display uses the same application-publication projection and
+native-revision accounting. `image.show` reads through the source thread's
+admitted Files service and atomically retains an artifact and immutable display
+receipt bound to the scoped request ID, input, exact native binding, and active
+turn anchor. Replays return that capture without rereading the source; new
+requests create new captures. Check the active turn lease and Files authority
+before and after I/O and at commit. Never infer publication from provider text.
+Shown images have normalized origin `shown`, remain source-thread-owned across
+forks, share the existing item and byte budgets, and are not Pages entries.
+The tool returns bounded metadata only, with no `modelContent`; it does not
+change provider-generated-image capabilities. Expose it only through already
+supported canonical tool surfaces and explicit grants. See
+[Explicit image display](output-artifacts.md#explicit-image-display).
 
 Persist only immutable authored content, never a copy of trusted host scripts.
 During import, use the already parsed HTML document to compute an insertion

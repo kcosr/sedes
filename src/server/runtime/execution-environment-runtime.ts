@@ -1,4 +1,5 @@
 import { execFile as execFileCallback } from "node:child_process";
+import { AGENT_TOOL_CLI_CAPABILITY } from "../../internal/agent-tool-cli-protocol/capability.js";
 import { constants as fsConstants } from "node:fs";
 import { access, realpath, stat } from "node:fs/promises";
 import path from "node:path";
@@ -408,7 +409,7 @@ export async function createExecutionEnvironmentRuntime(
         capabilityId === "workspace_files"
           ? ({ capabilityId, majorVersion: 8 } as const)
           : capabilityId === "agent_tools_cli"
-            ? ({ capabilityId, majorVersion: 4 } as const)
+            ? AGENT_TOOL_CLI_CAPABILITY
             : capabilityId === "workspace_tools"
               ? ({ capabilityId, majorVersion: 2 } as const)
             : capabilityId === "interactive_terminal"

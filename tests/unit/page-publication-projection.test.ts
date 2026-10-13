@@ -1,16 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
 import { ConversationProjector, projectedTurnForkCapability } from "../../src/server/conversations/conversation-projector.js";
-import { pagePublicationItemId, preparePagePublications, projectPagePublications as applyPreparedPublications, type PageProjectionInput, type PagePublication } from "../../src/server/conversations/page-publication-projection.js";
+import { pagePublicationItemId, prepareApplicationPublications, projectApplicationPublications as applyPreparedPublications, type ApplicationProjectionInput, type PagePublication } from "../../src/server/conversations/application-publication-projection.js";
 import { projectConversationItemActivity } from "../../src/server/conversations/thread-activity-projection.js";
 import { backendItemSchema, type BackendConversationSnapshot, type BackendItem } from "../../src/shared/protocol/backend.js";
 import { conversationTurnSourceRevision, historyPageSchema, MAXIMUM_NORMALIZED_ITEMS_PER_TURN, MAXIMUM_NORMALIZED_TIMELINE_ITEMS, type ConversationItem, type ConversationTurn } from "../../src/shared/protocol/conversation.js";
 import { MAXIMUM_MESSAGE_ITEM_BYTES, MAXIMUM_NORMALIZED_SNAPSHOT_OR_PAGE_BYTES, serializedUtf8Bytes } from "../../src/shared/protocol/payload.js";
 import * as payload from "../../src/shared/protocol/payload.js";
-import * as pageProjection from "../../src/server/conversations/page-publication-projection.js";
+import * as pageProjection from "../../src/server/conversations/application-publication-projection.js";
 import { pageRevisionSchema } from "../../src/shared/protocol/pages.js";
+import type { ImagePublication } from "../../src/server/conversations/application-publication-projection.js";
 
-function projectPagePublications<T extends PageProjectionInput>(timeline: T, publications: readonly PagePublication[], stableIds: ReadonlyMap<string, string>): T {
-  return applyPreparedPublications(timeline, preparePagePublications(publications), stableIds);
+function projectApplicationPublications<T extends ApplicationProjectionInput>(timeline: T, publications: readonly PagePublication[], stableIds: ReadonlyMap<string, string>): T {
+  return applyPreparedPublications(timeline, prepareApplicationPublications(publications), stableIds);
 }
 
 const source = (): BackendConversationSnapshot => ({
@@ -27,6 +28,48 @@ const page = (revision = 1): PagePublication["page"] => ({
 });
 const historyContext = { branching: { availability: "unavailable" as const, reason: { text: "No forks" } }, sourceRunState: "running" as const };
 
+function shownImage(anchor: ImagePublication["anchor"]): ImagePublication {
+  return { anchor, invocationId: "shown-invocation", createdAt: "2026-10-11T12:00:00.001Z",
+    image: { representation: "artifact", artifactId: "33333333-3333-4333-8333-333333333333", mimeType: "image/png",
+      byteSize: 25, sha256: "b".repeat(64), fileName: { text: "image.png" }, alt: { text: "Results" } } };
+}
+
+describe("application shown-image projection", () => {
+  it.each(["pi", "codex", "claude", "grok", "opencode"])("joins retained images and pages to exact %s turn anchors, including reload", backendInstanceId => {
+    const publications: Array<PagePublication | ImagePublication> = [];
+    const projector = new ConversationProjector({ backendInstanceId, bindingIdentity: "thread", resolveApplicationPublications: () => publications });
+    const initial = projector.replace(source(), -1);
+    const anchor = projector.captureApplicationPublicationAnchor()!;
+    publications.push(shownImage(anchor), { page: page(), invocationId: "page-invocation", anchor });
+    const events = projector.refreshApplicationPublications();
+    expect(events.kind).toBe("events");
+    const first = projector.timeline();
+    const turn = first.turnsById[anchor.turnId]!;
+    expect(turn.orderedItemIds.slice(-2)).toEqual([pagePublicationItemId(page()), "shown_image_33333333-3333-4333-8333-333333333333"]);
+    expect(first.itemsById[turn.orderedItemIds.at(-1)!]).toMatchObject({ kind: "image", origin: { kind: "shown" },
+      image: { representation: "artifact", alt: { text: "Results" } } });
+    expect(projector.refreshApplicationPublications()).toEqual({ kind: "events", events: [] });
+    const restored = new ConversationProjector({ backendInstanceId, bindingIdentity: "thread", resolveApplicationPublications: () => publications });
+    restored.replace(source(), -1);
+    expect(restored.timeline().turnsById[anchor.turnId]!.orderedItemIds).toEqual(turn.orderedItemIds);
+    expect(initial.activeTurnId).toBe(anchor.turnId);
+    expect(conversationTurnSourceRevision(turn, first.itemsById)).toBe(initial.turnsById[anchor.turnId]!.revision);
+  });
+
+  it("omits images with missing anchors and fits them to the same bounded item budget as pages", () => {
+    const near = denseTimeline(10);
+    const turnId = near.orderedTurnIds.at(-1)!;
+    const anchor = { turnId, afterItemId: near.turnsById[turnId]!.orderedItemIds.at(-1)! };
+    const image = shownImage(anchor);
+    const prepared = prepareApplicationPublications([image, { ...image, image: { ...image.image, artifactId: "44444444-4444-4444-8444-444444444444" }, invocationId: "missing", anchor: { turnId, afterItemId: "absent" } }]);
+    const result = applyPreparedPublications(near, prepared, new Map(), { itemCount: MAXIMUM_NORMALIZED_TIMELINE_ITEMS - 1, serializedBytes: serializedUtf8Bytes(near) });
+    expect(Object.keys(result.itemsById)).toHaveLength(11);
+    expect(Object.values(result.itemsById).filter(item => item.kind === "image")).toHaveLength(1);
+    const full = denseTimeline(MAXIMUM_NORMALIZED_TIMELINE_ITEMS);
+    expect(applyPreparedPublications(full, prepared, new Map())).toBe(full);
+  });
+});
+
 function denseTimeline(itemCount: number): { orderedTurnIds: string[]; turnsById: Record<string, ConversationTurn>; itemsById: Record<string, ConversationItem> } {
   const turnsById: Record<string, ConversationTurn> = {};
   const itemsById: Record<string, ConversationItem> = {};
@@ -40,7 +83,7 @@ function denseTimeline(itemCount: number): { orderedTurnIds: string[]; turnsById
   return { orderedTurnIds: Object.keys(turnsById), turnsById, itemsById };
 }
 
-function publicationFor(timeline: PageProjectionInput, revision = 1): PagePublication {
+function publicationFor(timeline: ApplicationProjectionInput, revision = 1): PagePublication {
   const turnId = timeline.orderedTurnIds.at(-1)!;
   return { page: page(revision), invocationId: `invocation-${revision}`,
     anchor: { turnId, afterItemId: timeline.turnsById[turnId]!.orderedItemIds.at(-1)! } };
@@ -49,23 +92,23 @@ function publicationFor(timeline: PageProjectionInput, revision = 1): PagePublic
 describe("application page publication projection", () => {
   it.each(["pi", "codex", "claude", "grok", "opencode"])("appends immutable revisions on %s without reading provider tool JSON", backendInstanceId => {
     const publications: PagePublication[] = [];
-    const projector = new ConversationProjector({ backendInstanceId, bindingIdentity: "thread", resolvePagePublications: () => publications });
+    const projector = new ConversationProjector({ backendInstanceId, bindingIdentity: "thread", resolveApplicationPublications: () => publications });
     const initial = projector.replace(source(), -1);
-    const anchor = projector.capturePagePublicationAnchor()!;
+    const anchor = projector.captureApplicationPublicationAnchor()!;
     publications.push({ page: page(), invocationId: "trusted-invocation-1", anchor });
-    const update = projector.refreshPagePublications();
+    const update = projector.refreshApplicationPublications();
     expect(update).toMatchObject({ kind: "events", events: [
       { type: "item_upsert", item: { kind: "page", page: page() } },
       { type: "turn_upsert", turn: { orderedItemIds: [Object.keys(initial.itemsById)[0], pagePublicationItemId(page())] } },
     ] });
     publications.push({ page: page(2), invocationId: "trusted-invocation-2", anchor });
-    projector.refreshPagePublications();
+    projector.refreshApplicationPublications();
     const published = projector.timeline();
     expect(published.turnsById[anchor.turnId]!.orderedItemIds).toEqual([
       Object.keys(initial.itemsById)[0], pagePublicationItemId(page()), pagePublicationItemId(page(2)),
     ]);
     expect(published.itemsById[pagePublicationItemId(page())]).toMatchObject({ page: { revision: 1 } });
-    expect(projector.refreshPagePublications()).toEqual({ kind: "events", events: [] });
+    expect(projector.refreshApplicationPublications()).toEqual({ kind: "events", events: [] });
     expect(projectConversationItemActivity(published.itemsById[pagePublicationItemId(page())]!, "summary"))
       .toEqual(published.itemsById[pagePublicationItemId(page())]);
     const { runState: _run, activeBackendTurnId: _active, ...history } = source();
@@ -76,22 +119,22 @@ describe("application page publication projection", () => {
     expect(projector.sourceTurnRevision(anchor.turnId)).toBe(0);
     expect(projector.resolveCurrentTurn(anchor.turnId)?.turn.revision).toBe(0);
     expect(projector.resolveHistoryTurn(history, anchor.turnId)?.turn.revision).toBe(0);
-    const restarted = new ConversationProjector({ backendInstanceId, bindingIdentity: "thread", resolvePagePublications: () => publications });
+    const restarted = new ConversationProjector({ backendInstanceId, bindingIdentity: "thread", resolveApplicationPublications: () => publications });
     expect(restarted.replace(source(), -1).itemsById).toEqual(published.itemsById);
   });
 
   it("keeps a live provisional tool anchor at the same native item after a cold projection", () => {
     const publications: PagePublication[] = [];
-    const projector = new ConversationProjector({ backendInstanceId: "pi", bindingIdentity: "thread", resolvePagePublications: () => publications });
+    const projector = new ConversationProjector({ backendInstanceId: "pi", bindingIdentity: "thread", resolveApplicationPublications: () => publications });
     projector.replace(source(), -1);
     const tool: BackendItem = { backendItemId: "native-tool", backendTurnId: "native-turn", semanticKind: "tool", sourceOrder: 1,
       status: "streaming", phase: "preflight_or_executing", toolName: { text: "sedes_page_publish" }, title: { text: "Publish page" }, category: "other" };
     projector.apply({ handleSequence: 0, event: { type: "item_started", item: tool } });
     const liveTool = projector.itemForBackendId(tool.backendItemId)!;
-    const anchor = projector.capturePagePublicationAnchor()!;
+    const anchor = projector.captureApplicationPublicationAnchor()!;
     expect(anchor.afterItemId).not.toBe(liveTool.id);
     publications.push({ page: page(), invocationId: "trusted", anchor });
-    projector.refreshPagePublications();
+    projector.refreshApplicationPublications();
     expect(projector.timeline().turnsById[anchor.turnId]!.orderedItemIds.slice(-2))
       .toEqual([liveTool.id, pagePublicationItemId(page())]);
     const cold = source();
@@ -104,16 +147,16 @@ describe("application page publication projection", () => {
 
   it("never renders provider-authored page descriptors or pages whose original anchor disappeared", () => {
     const publications: PagePublication[] = [];
-    const projector = new ConversationProjector({ backendInstanceId: "codex", bindingIdentity: "thread", resolvePagePublications: () => publications });
+    const projector = new ConversationProjector({ backendInstanceId: "codex", bindingIdentity: "thread", resolveApplicationPublications: () => publications });
     const native = source();
     native.itemsById["native-user"] = { backendItemId: "native-user", backendTurnId: "native-turn", semanticKind: "assistant_message", status: "completed", sourceOrder: 0,
       markdown: { text: JSON.stringify({ page: page(), invocationId: "not-a-receipt" }) } };
     projector.replace(native, -1);
     expect(Object.values(projector.timeline().itemsById).some(item => item.kind === "page")).toBe(false);
-    const anchor = projector.capturePagePublicationAnchor()!;
+    const anchor = projector.captureApplicationPublicationAnchor()!;
     publications.push({ page: page(), invocationId: "trusted", anchor: { ...anchor, afterItemId: "missing" } });
     publications.push({ page: page(2), invocationId: "trusted-2", anchor: { turnId: "other-thread-turn" } });
-    expect(projector.refreshPagePublications()).toEqual({ kind: "events", events: [] });
+    expect(projector.refreshApplicationPublications()).toEqual({ kind: "events", events: [] });
     expect(Object.values(projector.timeline().itemsById).some(item => item.kind === "page")).toBe(false);
     expect(backendItemSchema.safeParse({ backendItemId: "spoof", backendTurnId: "native-turn", semanticKind: "page",
       status: "completed", sourceOrder: 1, page: page() }).success).toBe(false);
@@ -121,11 +164,11 @@ describe("application page publication projection", () => {
 
   it("does not erase page occurrences on later native turn/item updates", () => {
     const publications: PagePublication[] = [];
-    const projector = new ConversationProjector({ backendInstanceId: "codex", bindingIdentity: "thread", resolvePagePublications: () => publications });
+    const projector = new ConversationProjector({ backendInstanceId: "codex", bindingIdentity: "thread", resolveApplicationPublications: () => publications });
     projector.replace(source(), -1);
-    const anchor = projector.capturePagePublicationAnchor()!;
+    const anchor = projector.captureApplicationPublicationAnchor()!;
     publications.push({ page: page(), invocationId: "trusted", anchor });
-    projector.refreshPagePublications();
+    projector.refreshApplicationPublications();
     const assistant: BackendItem = { backendItemId: "reply", backendTurnId: "native-turn", semanticKind: "assistant_message", sourceOrder: 1,
       status: "completed", markdown: { text: "Ready" } };
     const result = projector.apply({ handleSequence: 0, event: { type: "item_completed", item: assistant } });
@@ -137,9 +180,9 @@ describe("application page publication projection", () => {
 
   it("leaves pages in the library when provider items consume the per-turn capacity", () => {
     const full = denseTimeline(MAXIMUM_NORMALIZED_ITEMS_PER_TURN);
-    expect(projectPagePublications(full, [publicationFor(full)], new Map())).toBe(full);
+    expect(projectApplicationPublications(full, [publicationFor(full)], new Map())).toBe(full);
     const near = denseTimeline(MAXIMUM_NORMALIZED_ITEMS_PER_TURN - 1);
-    const result = projectPagePublications(near, [publicationFor(near), publicationFor(near, 2)], new Map());
+    const result = projectApplicationPublications(near, [publicationFor(near), publicationFor(near, 2)], new Map());
     expect(result.turnsById[near.orderedTurnIds[0]!]!.orderedItemIds).toHaveLength(MAXIMUM_NORMALIZED_ITEMS_PER_TURN);
     expect(result.itemsById[pagePublicationItemId(page())]).toBeDefined();
     expect(result.itemsById[pagePublicationItemId(page(2))]).toBeUndefined();
@@ -148,12 +191,12 @@ describe("application page publication projection", () => {
 
   it("does not exceed the whole-timeline item ceiling or remove any native item", () => {
     const near = denseTimeline(MAXIMUM_NORMALIZED_TIMELINE_ITEMS - 1);
-    const result = projectPagePublications(near, [publicationFor(near), publicationFor(near, 2)], new Map());
+    const result = projectApplicationPublications(near, [publicationFor(near), publicationFor(near, 2)], new Map());
     expect(Object.keys(result.itemsById)).toHaveLength(MAXIMUM_NORMALIZED_TIMELINE_ITEMS);
     expect(result.itemsById[pagePublicationItemId(page())]).toBeDefined();
     expect(result.itemsById[pagePublicationItemId(page(2))]).toBeUndefined();
     const full = denseTimeline(MAXIMUM_NORMALIZED_TIMELINE_ITEMS);
-    expect(projectPagePublications(full, [publicationFor(full)], new Map())).toBe(full);
+    expect(projectApplicationPublications(full, [publicationFor(full)], new Map())).toBe(full);
     expect(Object.keys(near.itemsById)).toHaveLength(MAXIMUM_NORMALIZED_TIMELINE_ITEMS - 1);
   });
 
@@ -171,9 +214,9 @@ describe("application page publication projection", () => {
     second.markdown.text = "b".repeat(8 * 1_024 * 1_024);
     third.markdown.text = "c".repeat(MAXIMUM_NORMALIZED_SNAPSHOT_OR_PAGE_BYTES - overhead - first.markdown.text.length - second.markdown.text.length - 32);
     expect(serializedUtf8Bytes(near)).toBe(MAXIMUM_NORMALIZED_SNAPSHOT_OR_PAGE_BYTES - 32);
-    expect(projectPagePublications(near, [publicationFor(near)], new Map())).toBe(near);
+    expect(projectApplicationPublications(near, [publicationFor(near)], new Map())).toBe(near);
     third.markdown.text = third.markdown.text.slice(0, -2_000);
-    const result = projectPagePublications(near, [publicationFor(near), publicationFor(near, 2)], new Map());
+    const result = projectApplicationPublications(near, [publicationFor(near), publicationFor(near, 2)], new Map());
     expect(Object.values(result.itemsById).filter(item => item.kind === "page")).toHaveLength(2);
     expect(serializedUtf8Bytes(result)).toBeLessThanOrEqual(MAXIMUM_NORMALIZED_SNAPSHOT_OR_PAGE_BYTES);
     expect(result.itemsById["item-0"]).toBe(first);
@@ -194,15 +237,15 @@ describe("application page publication projection", () => {
     const finalize = (value: typeof history) => ({ ...value, forksByTurnId: { [turnId]: {
       ...value.forksByTurnId[turnId]!, expectedTurnRevision: conversationTurnSourceRevision(value.turnsById[turnId]!, value.itemsById),
     } } });
-    const cost = serializedUtf8Bytes(finalize(projectPagePublications(history, publications, new Map()))) - serializedUtf8Bytes(history);
+    const cost = serializedUtf8Bytes(finalize(projectApplicationPublications(history, publications, new Map()))) - serializedUtf8Bytes(history);
     const messages = Object.values(history.itemsById).filter(item => item.kind === "assistant_message");
     messages[0]!.markdown.text = "a".repeat(MAXIMUM_MESSAGE_ITEM_BYTES - 512);
     messages[1]!.markdown.text = "b".repeat(8 * 1_024 * 1_024);
     messages[2]!.markdown.text = "c".repeat(MAXIMUM_NORMALIZED_SNAPSHOT_OR_PAGE_BYTES - cost + 1 - serializedUtf8Bytes(history));
     // The presentation advances 9 -> 10 while fork authority remains at source revision 9.
-    expect(projectPagePublications(history, publications, new Map())).toBe(history);
+    expect(projectApplicationPublications(history, publications, new Map())).toBe(history);
     messages[2]!.markdown.text = messages[2]!.markdown.text.slice(0, -1);
-    const projected = finalize(projectPagePublications(history, publications, new Map()));
+    const projected = finalize(projectApplicationPublications(history, publications, new Map()));
     expect(projected.turnsById[turnId]!.revision).toBe(10);
     expect(projected.forksByTurnId[turnId]!.expectedTurnRevision).toBe(9);
     expect(serializedUtf8Bytes(projected)).toBe(MAXIMUM_NORMALIZED_SNAPSHOT_OR_PAGE_BYTES);
@@ -219,11 +262,11 @@ describe("application page publication projection", () => {
         status: "completed", tone: "info", text: { text: "Native" } };
     }
     const publications: PagePublication[] = [];
-    const projector = new ConversationProjector({ backendInstanceId: "codex", bindingIdentity: "thread", resolvePagePublications: () => publications });
+    const projector = new ConversationProjector({ backendInstanceId: "codex", bindingIdentity: "thread", resolveApplicationPublications: () => publications });
     projector.replace(native, -1);
-    const anchor = projector.capturePagePublicationAnchor()!;
+    const anchor = projector.captureApplicationPublicationAnchor()!;
     publications.push({ page: page(), invocationId: "trusted", anchor });
-    projector.refreshPagePublications();
+    projector.refreshApplicationPublications();
     expect(projector.timeline().itemsById[pagePublicationItemId(page())]).toBeDefined();
     const previousGeneration = projector.generation;
     const item: BackendItem = { backendItemId: "native-final", backendTurnId: "native-turn", semanticKind: "notice",
@@ -238,7 +281,7 @@ describe("application page publication projection", () => {
     expect(rebuilt.turnsById[anchor.turnId]!.orderedItemIds).toHaveLength(MAXIMUM_NORMALIZED_ITEMS_PER_TURN);
     expect(rebuilt.itemsById[pagePublicationItemId(page())]).toBeUndefined();
     expect(Object.keys(rebuilt.itemsById)).toHaveLength(MAXIMUM_NORMALIZED_ITEMS_PER_TURN);
-    expect(projector.refreshPagePublications()).toEqual({ kind: "events", events: [] });
+    expect(projector.refreshApplicationPublications()).toEqual({ kind: "events", events: [] });
     expect(projector.apply({ handleSequence: 1, event: { type: "run_state_changed", state: "running", activeBackendTurnId: "native-turn" } }))
       .toMatchObject({ kind: "events" });
     const { runState: _run, activeBackendTurnId: _active, ...history } = native;
@@ -259,9 +302,9 @@ describe("application page publication projection", () => {
     messages[1]!.markdown.text = "b".repeat(8 * 1_024 * 1_024);
     messages[2]!.markdown.text = "c".repeat(MAXIMUM_NORMALIZED_SNAPSHOT_OR_PAGE_BYTES - 32 - serializedUtf8Bytes(base));
     const publication = publicationFor(base);
-    const shared = projectPagePublications(base, [publication], new Map());
+    const shared = projectApplicationPublications(base, [publication], new Map());
     expect(shared).toBe(base);
-    const targeted = projectPagePublications({ orderedTurnIds: ["last-turn"],
+    const targeted = projectApplicationPublications({ orderedTurnIds: ["last-turn"],
       turnsById: { "last-turn": base.turnsById["last-turn"]! }, itemsById: { "item-2": base.itemsById["item-2"]! } }, [publication], new Map());
     expect(targeted.turnsById["last-turn"]!.revision).toBe(1);
     for (const timeline of [shared, targeted]) {
@@ -276,11 +319,11 @@ describe("application page publication projection", () => {
     if (user?.semanticKind !== "user_message") throw new Error("fixture");
     user.content = [{ kind: "text", text: { text: "x".repeat(4 * 1_024 * 1_024) } }];
     const publications: PagePublication[] = [];
-    const projector = new ConversationProjector({ backendInstanceId: "pi", bindingIdentity: "thread", resolvePagePublications: () => publications });
+    const projector = new ConversationProjector({ backendInstanceId: "pi", bindingIdentity: "thread", resolveApplicationPublications: () => publications });
     projector.replace(native, -1);
     if (withPage) {
-      publications.push({ page: page(), invocationId: "trusted", anchor: projector.capturePagePublicationAnchor()! });
-      projector.refreshPagePublications();
+      publications.push({ page: page(), invocationId: "trusted", anchor: projector.captureApplicationPublicationAnchor()! });
+      projector.refreshApplicationPublications();
     }
     projector.apply({ handleSequence: 0, event: { type: "item_started", item: {
       backendItemId: "streaming-answer", backendTurnId: "native-turn", semanticKind: "assistant_message", status: "streaming",
@@ -288,7 +331,7 @@ describe("application page publication projection", () => {
     } } });
     const bytes = vi.spyOn(payload, "serializedUtf8Bytes");
     const parsing = vi.spyOn(pageRevisionSchema, "parse");
-    const placement = vi.spyOn(pageProjection, "projectPagePublications");
+    const placement = vi.spyOn(pageProjection, "projectApplicationPublications");
     const timeline = vi.spyOn(projector, "timeline");
     try {
       for (let index = 0; index < 100; index++) expect(Boolean(projector.timeline().itemsById[pagePublicationItemId(page())])).toBe(withPage);
@@ -307,18 +350,18 @@ describe("application page publication projection", () => {
 
   it("replaces the generation when a previously omitted page becomes visible during another turn's update", () => {
     let admit = false;
-    const actual = pageProjection.projectPagePublications;
-    const gate = vi.spyOn(pageProjection, "projectPagePublications").mockImplementation((timeline, publications, stable, baseline) =>
+    const actual = pageProjection.projectApplicationPublications;
+    const gate = vi.spyOn(pageProjection, "projectApplicationPublications").mockImplementation((timeline, publications, stable, baseline) =>
       admit ? actual(timeline, publications, stable, baseline) : timeline);
     try {
       const native = source();
       const publications: PagePublication[] = [];
-      const projector = new ConversationProjector({ backendInstanceId: "pi", bindingIdentity: "thread", resolvePagePublications: () => publications });
+      const projector = new ConversationProjector({ backendInstanceId: "pi", bindingIdentity: "thread", resolveApplicationPublications: () => publications });
       projector.replace(native, -1);
       const generation = projector.generation;
-      const anchor = projector.capturePagePublicationAnchor()!;
+      const anchor = projector.captureApplicationPublicationAnchor()!;
       publications.push({ page: page(), invocationId: "trusted", anchor });
-      expect(projector.refreshPagePublications()).toEqual({ kind: "events", events: [] });
+      expect(projector.refreshApplicationPublications()).toEqual({ kind: "events", events: [] });
       admit = true;
       const otherTurn = { backendTurnId: "other-turn", status: "completed" as const, endedBy: "agent_settled" as const, orderedBackendItemIds: [] };
       expect(projector.apply({ handleSequence: 0, event: { type: "turn_completed", turn: otherTurn } })).toEqual({
@@ -330,7 +373,7 @@ describe("application page publication projection", () => {
       expect(rebuilt.generation).not.toBe(generation);
       expect(rebuilt.itemsById[pagePublicationItemId(page())]).toBeDefined();
       expect(rebuilt.turnsById[anchor.turnId]!.orderedItemIds).toContain(pagePublicationItemId(page()));
-      expect(projector.refreshPagePublications()).toEqual({ kind: "events", events: [] });
+      expect(projector.refreshApplicationPublications()).toEqual({ kind: "events", events: [] });
     } finally { gate.mockRestore(); }
   });
 });

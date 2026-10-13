@@ -1,0 +1,200 @@
+{
+  "schemaVersion": 1,
+  "sdkRelease": "0.3.296",
+  "reviewedOn": "2026-10-13",
+  "platform": "linux/x64",
+  "runtimePolicy": {
+    "minimum": "2.1.287",
+    "testedThrough": "2.1.296",
+    "excludedVersions": []
+  },
+  "sdkArtifact": {
+    "package": "@anthropic-ai/claude-agent-sdk",
+    "version": "0.3.296",
+    "resolved": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk/-/claude-agent-sdk-0.3.296.tgz",
+    "integrity": "sha512-Y+cZ2BT8X94mQ9GJOVyIqhjC/nWGvwozUVLjdkzX7aSt+zuo5tgk7Hdv9V7tEUQ9fKnEuiL6moYNWDeHqCD4Lw==",
+    "bundledClaudeCodeVersion": "2.1.296",
+    "bundledExecutableUsedBySedes": false,
+    "declarationsSha256": "fc2866dfe2c01468edb19b1d94f26156bfacecdf1e7f1452b276ed2f8cc0b08f",
+    "toolDeclarationsSha256": "63e378f4585427786c6cd0e876f094c8ade8d284d86554ef44f83a5cdf396cfb"
+  },
+  "nativeArtifacts": [
+    {
+      "package": "@anthropic-ai/claude-code-linux-x64",
+      "version": "2.1.296",
+      "resolved": "https://registry.npmjs.org/@anthropic-ai/claude-code-linux-x64/-/claude-code-linux-x64-2.1.296.tgz",
+      "integrity": "sha512-+m01urgelnI+VJxPaKPEK0wixgq42uZ8PeCaUk5tX/8YoDBvSmC/REVQG2jQfJAr8dxunpjJ600FvLrcj1WWTw==",
+      "tarballSha256": "eef5a2e2b09a5e7d2ce784d1b3ba335ae7fc6c7f6256c802a0ebf2c21e4fd0e1",
+      "executableRelativePath": "claude",
+      "executableSha256": "24972e3bc859fab2b46ed4c1e51f7d6130f06d3bd550811a114640de3370d0de",
+      "reportedVersion": "2.1.296 (Claude Code)",
+      "qualification": "loopback_fixture_and_authenticated"
+    },
+    {
+      "package": "@anthropic-ai/claude-code-linux-x64",
+      "version": "2.1.287",
+      "resolved": "https://registry.npmjs.org/@anthropic-ai/claude-code-linux-x64/-/claude-code-linux-x64-2.1.287.tgz",
+      "integrity": "sha512-Q31ekN28viVjgfDuZKXUR5vxIBgUYoLGe+cRmjx/f01omqFDMi6IrgmcK5pWMnRbu/cjsTA/zO+bVES5oY3XUg==",
+      "tarballSha256": "348090e889baacf20e6665fd236e2bc617767eb733407151128efd0281a06111",
+      "executableRelativePath": "claude",
+      "executableSha256": "3920489a5109cff5786a1a392c25277408ff22bc796d5edb9c16a60e5a1718f0",
+      "reportedVersion": "2.1.287 (Claude Code)",
+      "qualification": "loopback_fixture"
+    }
+  ],
+  "verification": {
+    "date": "2026-10-13",
+    "typecheck": "passed",
+    "build": "passed",
+    "licenseInventory": "regenerated and check passed",
+    "defaultSuite": {
+      "passed": 16044,
+      "failed": 2,
+      "skipped": 53,
+      "files": 1014,
+      "passedFiles": 1004,
+      "failedFiles": 2,
+      "skippedFiles": 8,
+      "seconds": 651.56,
+      "failures": [
+        "The unchanged supplemental-file-root HTTP case exceeded its five-second timeout and then reported ENOTEMPTY during fixture cleanup.",
+        "The unchanged principal-scoped Codex SSH runtime lifecycle case exceeded its timeout."
+      ],
+      "isolatedReruns": "Both failed cases passed without changing their test or production code, as recorded below; the initial full run was not clean.",
+      "sandboxLimit": "SEDES_SKIP_SANDBOX_TESTS=1 omitted real Bubblewrap launches because this container denies required nested sandbox operations."
+    },
+    "focusedUnit": {
+      "files": 4,
+      "passed": 264,
+      "failed": 0
+    },
+    "nativeMinimum": {
+      "sdkRelease": "0.3.296",
+      "runtimeVersion": "2.1.287",
+      "files": 10,
+      "passed": 33,
+      "failed": 0,
+      "seconds": 49.479,
+      "provider": "isolated_loopback_fixture"
+    },
+    "nativeLatest": {
+      "sdkRelease": "0.3.296",
+      "runtimeVersion": "2.1.296",
+      "files": 10,
+      "passed": 33,
+      "failed": 0,
+      "provider": "isolated_loopback_fixture"
+    },
+    "realClaudeCombinedRun": {
+      "files": 15,
+      "passed": 39,
+      "failed": 2,
+      "seconds": 201.42,
+      "coverage": "33 isolated loopback cases and 8 authenticated cases",
+      "failures": "The production-driver and persistent-runtime cases stopped at the old Sonnet 5 model-catalog gate before prompting; both passed the exact Sonnet 5.5 rerun recorded below."
+    },
+    "browser": {
+      "initialRun": {
+        "files": 48,
+        "cases": 141,
+        "passed": 132,
+        "failed": 3,
+        "didNotRun": 6,
+        "seconds": 687.64
+      },
+      "initialFailures": [
+        "Blocking interactions: the fixture turn completed before the approval was opened; six dependent serial cases did not run.",
+        "Workpads: the full case exceeded 60 seconds near its final API 404 checks.",
+        "Sidebar execution scope: project-management exceeded 60 seconds while a changing option visibility delayed a click."
+      ],
+      "unchangedReruns": {
+        "workpads": {
+          "passed": 1,
+          "failed": 0,
+          "testSeconds": 48.6,
+          "fileSeconds": 57.371
+        },
+        "sidebarExecutionScope": {
+          "passed": 3,
+          "failed": 0,
+          "testSeconds": 33.4,
+          "fileSeconds": 40.843
+        },
+        "combinedSeconds": 59.173
+      },
+      "claudeJourney": {
+        "passed": 2,
+        "failed": 0,
+        "fileSeconds": 50.149,
+        "screenshotsInspected": [
+          "claude-parity-streaming-tools.png",
+          "claude-skill-alias-search.png",
+          "claude-manual-compaction-restored-stats.png"
+        ]
+      },
+      "coverageAcrossInitialAndReruns": {
+        "uniqueCasesPassed": 141,
+        "limitation": "All unique cases passed across the original run, the repaired blocking-interaction file, and unchanged Workpads/sidebar reruns; there was no single clean full run."
+      },
+      "timingLimit": "Concurrent suites and other shared-host work; the full run exceeded the 200-second prebuilt guidance and is not a quiet-host performance comparison."
+    },
+    "blockingInteractionsBrowser": {
+      "initialFailure": "The fixture's 2.6-second Codex turn completed while the test persisted its retained draft; opening the approval then returned e2e_interaction_turn_not_active.",
+      "repair": "Hold fixture turn completion until the approval is visible, using the existing completion gate; application behavior and assertions are unchanged.",
+      "rerun": {
+        "passed": 7,
+        "failed": 0,
+        "fileSeconds": 77.308,
+        "totalSeconds": 78.57,
+        "screenshotsInspected": [
+          "blocking-decision-menu-desktop.png",
+          "blocking-decision-chat-desktop.png"
+        ]
+      },
+      "timingLimit": "Shared host with concurrent default-suite and browser work; exceeds the 55-second job guidance and is not a quiet-host comparison."
+    },
+    "supplementalFileRootIsolatedRerun": {
+      "initialFailure": "The unchanged HTTP supplemental-file-root case exceeded its 5-second timeout during the full suite.",
+      "passed": 1,
+      "skipped": 75,
+      "totalSeconds": 33.13,
+      "testSeconds": 2.5,
+      "changedCode": false
+    },
+    "sshLifecycleIsolatedRerun": {
+      "initialFailure": "The unchanged principal-scoped Codex SSH runtime lifecycle case exceeded its timeout during the full suite.",
+      "passed": 1,
+      "skipped": 4,
+      "totalSeconds": 65.61,
+      "testSeconds": 41.41,
+      "changedCode": false
+    },
+    "authenticatedProvider": {
+      "runtimeVersion": "2.1.296",
+      "model": "claude-sonnet-5-5",
+      "effort": "low",
+      "initialPreflightFailures": {
+        "tests": 2,
+        "reason": "The exact older Sonnet 5 model was absent from the current authenticated model catalog; both gates failed before prompting."
+      },
+      "currentModelRerun": {
+        "files": 2,
+        "passed": 2,
+        "failed": 0,
+        "seconds": 67.64,
+        "coverage": "production driver streaming, persistence, usage and reopen; persistent runtime continued work and reattachment"
+      },
+      "coverageAcrossInitialAndRerun": {
+        "passed": 8,
+        "limitation": "All authenticated cases passed across the initial run and two corrected-model reruns; a single clean full-suite run was not performed."
+      }
+    }
+  },
+  "limitations": [
+    "Default-suite and browser coverage required isolated reruns; neither initial full run was clean.",
+    "The existing model-visible startup marker and observed startup-label refusals are unchanged.",
+    "No native macOS or Windows runtime qualification.",
+    "No actual SSH carrier or outbound execution-host deployment qualification.",
+    "Loopback provider fixtures do not qualify model behavior, live account restrictions, or real provider limits."
+  ]
+}

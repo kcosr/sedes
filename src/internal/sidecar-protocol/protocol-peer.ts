@@ -1034,7 +1034,7 @@ export class SidecarProtocolPeer {
     const agentToolCliAccepted = hello.sedesCapabilities.some(
       (capability) =>
         capability.capabilityId === "agent_tools_cli" &&
-        capability.majorVersion === 4,
+        capability.majorVersion === 6,
     );
     if (agentToolCliAccepted !== Boolean(hello.agentToolCli)) {
       throw new Error("sidecar_protocol_agent_tool_cli_metadata_mismatch");

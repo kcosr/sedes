@@ -180,6 +180,7 @@ function needsNativeToolConfirmation(
 
 export function agentToolPolicySummary(policy: AgentToolPolicy): string {
   if (!policy.enabled) return "Off";
+  if (policy.runtimeAvailability.availability === "unavailable") return "Unavailable";
   return `${enabledToolIds(policy).length} enabled`;
 }
 
@@ -398,6 +399,13 @@ export function AgentToolSettingsDialog({
         </DialogHeader>
 
         <DialogBody>
+        {policy.runtimeAvailability.availability === "unavailable" && (
+          <p role="status">
+            <strong>Sedes tools are unavailable for this thread.</strong>{" "}
+            {policy.runtimeAvailability.reason.text}{" "}
+            Your saved tool selections are retained and can still be changed.
+          </p>
+        )}
         <div className="agent-tool-dialog-global">
           <label className="agent-tool-dialog-setting">
             <span>

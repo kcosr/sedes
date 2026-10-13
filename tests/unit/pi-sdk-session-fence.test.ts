@@ -272,6 +272,7 @@ describe("Pi SDK session reload fence", () => {
       clearQueue,
       abort,
       reload,
+      extensionRunner: { hasHandlers: () => false },
       dispose,
       getAllTools: () =>
         retainedTool
@@ -462,6 +463,7 @@ describe("Pi SDK session reload fence", () => {
           },
         },
       ],
+      extensionRunner: { hasHandlers: () => false },
       dispose,
     } as unknown as AgentSession;
     sdk.createSettingsManager.mockReturnValue({});
@@ -532,6 +534,7 @@ describe("Pi SDK session reload fence", () => {
               },
             ]
           : [],
+      extensionRunner: { hasHandlers: () => false },
       dispose,
     } as unknown as AgentSession;
     const services = {

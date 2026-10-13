@@ -7,6 +7,7 @@ import type {
   AgentToolCliRuntimeResolution,
 } from "../backends/module.js";
 import type { RequestScope } from "../identity/identity-provider.js";
+import { AGENT_TOOL_CLI_CAPABILITY } from "../../internal/agent-tool-cli-protocol/capability.js";
 
 const AGENT_TOOL_CLI_EXECUTABLE = "sedes";
 const MAXIMUM_UNIX_SOCKET_PATH_BYTES = 107;
@@ -22,6 +23,7 @@ type ManagedAgentToolCliSidecarSession = Readonly<{
 }>;
 
 type ManagedAgentToolCliSidecarRuntime = Readonly<{
+  canAcquireCapability(capabilityId: string, majorVersion: number): boolean;
   acquireAgentTools(
     scope: RequestScope,
     executionEnvironmentId: string,
@@ -98,6 +100,9 @@ export function managedSshAgentToolCliAvailability(input: {
   return Object.freeze({
     availability: "managed" as const,
     provider: Object.freeze({
+      inspect: () => input.runtime.canAcquireCapability(AGENT_TOOL_CLI_CAPABILITY.capabilityId, AGENT_TOOL_CLI_CAPABILITY.majorVersion)
+        ? { availability: "available" as const }
+        : { availability: "unavailable" as const, reason: "sidecar_unavailable" as const },
       acquire: async (options?: {
         readonly signal?: AbortSignal;
       }): Promise<AgentToolCliRuntimeResolution> => {
