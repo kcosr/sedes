@@ -574,6 +574,38 @@ describe("Transcript history positioning", () => {
     expect(screen.getByTestId("seek-spacer").style.height).toBe("0px");
   });
 
+  it("keeps a selected response in view when an unarmed user message arrives", () => {
+    const flushFrames = controllableAnimationFrames();
+    vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: true })));
+    const snapshot = userMessageSnapshot(["turn-1"]);
+    snapshot.itemsById.reply = { id: "reply", turnId: "turn-1", revision: 1, kind: "assistant_message", status: "completed", markdown: { text: "Selected response" } };
+    snapshot.turnsById["turn-1"]!.orderedItemIds.push("reply");
+    const fake = new FakeTranscriptStore(snapshot);
+    const transcript = createRef<TranscriptHandle>();
+    render(<Transcript ref={transcript} store={fake as unknown as ThreadClientStore} />);
+    const viewport = screen.getByRole("region", { name: "Messages" });
+    const scrollTo = vi.fn();
+    Object.defineProperties(viewport, {
+      clientHeight: { configurable: true, value: 300 },
+      scrollHeight: { configurable: true, value: 900 },
+      getBoundingClientRect: { configurable: true, value: () => ({ top: 0 }) },
+      scrollTo: { configurable: true, value: scrollTo },
+    });
+    act(flushFrames);
+    viewport.scrollTop = 184;
+    vi.spyOn(document.querySelector('[data-item-id="reply"]')!, "getBoundingClientRect").mockReturnValue({ top: 16 } as DOMRect);
+    act(() => transcript.current!.seekTurn("turn-1", "response"));
+    scrollTo.mockClear();
+    const updated = userMessageSnapshot(["turn-2"]);
+    updated.orderedTurnIds.unshift("turn-1");
+    updated.turnsById["turn-1"] = snapshot.turnsById["turn-1"]!;
+    updated.itemsById = { ...snapshot.itemsById, ...updated.itemsById };
+    act(() => fake.replaceSnapshot(updated));
+    act(flushFrames);
+    expect(scrollTo).not.toHaveBeenCalled();
+    expect(viewport.scrollTop).toBe(184);
+  });
+
   it("seeks an unloaded response after targeted history loads without changing source-turn navigation", async () => {
     const flushFrames = controllableAnimationFrames();
     vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: true })));

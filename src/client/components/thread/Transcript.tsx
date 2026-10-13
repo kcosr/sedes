@@ -1668,8 +1668,12 @@ export function Transcript({
       // pending seek: the send's user message can become resolvable on a
       // revision tick after its append tick (see takeSeekTarget).
       const seekTarget = takeSeekTarget();
+      // An armed local Send can replace any pin; unarmed input must preserve
+      // a reader-selected bookmark when another client or agent adds a message.
       if (seekTarget) beginSeek(seekTarget);
-      else if (appendedUserItemId && seekPin.current) {
+      else if (
+        appendedUserItemId && seekPin.current && !seekPin.current.responseTurnId
+      ) {
         const readerScrolled = seekPin.current.readerScrolled;
         releaseSeekPin("non_armed_next_send");
         if (!readerScrolled) {

@@ -148,11 +148,16 @@ export function ThreadView({
   );
   const seekBookmarkTurn = useCallback(
     (turnId: string) => {
-      if (!focusTurnId && transcript.current?.seekTurn(turnId, "response")) return true;
+      // Selecting the same routed bookmark again must still perform a seek.
+      const alreadyShowingResponse = focusTurnId === turnId && focusResponse;
+      if (
+        (!focusTurnId || alreadyShowingResponse) &&
+        transcript.current?.seekTurn(turnId, "response")
+      ) return true;
       navigate(threadTurnPath(threadId, turnId, "response"));
       return false;
     },
-    [focusTurnId, threadId],
+    [focusTurnId, focusResponse, threadId],
   );
 
   useEffect(() => {

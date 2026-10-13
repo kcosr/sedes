@@ -180,6 +180,12 @@ test("turn bookmarks persist, preview both sides, navigate, and synchronize", as
     await page.goto(`${threadPath}#turn=${encodeURIComponent(firstTurnId!)}&response`);
     await expect(page.locator(".source-turn-highlight")).toHaveAttribute("data-turn-id", firstTurnId!);
     await expectResponsePosition(page, firstTurnId!);
+    // Re-selecting the same focused bookmark must perform a new seek even
+    // though its route and turn identity have not changed.
+    await page.locator(".message-viewport").evaluate(viewport => { viewport.scrollTop = 0; });
+    await page.getByRole("button", { name: "Bookmarks, 1" }).click();
+    await page.locator('[data-slot="turn-bookmark-link"]').click();
+    await expectResponsePosition(page, firstTurnId!);
     await page.getByRole("button", { name: "Return to latest" }).click();
     await expect(page.getByTestId("seek-spacer")).toHaveCSS("height", "0px");
 

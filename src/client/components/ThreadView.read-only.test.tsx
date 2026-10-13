@@ -506,6 +506,40 @@ describe("ThreadView background activity", () => {
   });
 });
 
+describe("ThreadView response bookmarks", () => {
+  it("re-seeks the same bookmarked response while its focused route is already open", async () => {
+    vi.stubGlobal("requestAnimationFrame", vi.fn(() => 0));
+    const base = makeSnapshot("interactive", "idle");
+    const snapshot: NormalizedThreadSnapshot = {
+      ...base, interactions: [], queue: [], orderedTurnIds: ["bookmarked-turn"],
+      turnsById: { "bookmarked-turn": { id: "bookmarked-turn", revision: 1, status: "completed", orderedItemIds: ["question", "reply"] } },
+      itemsById: {
+        question: { id: "question", turnId: "bookmarked-turn", revision: 1, kind: "user_message", status: "completed", content: [{ kind: "text", text: { text: "Saved question" } }] },
+        reply: { id: "reply", turnId: "bookmarked-turn", revision: 1, kind: "assistant_message", status: "completed", markdown: { text: "Saved answer" } },
+      },
+    };
+    const state = fixture(snapshot, [], { bookmarks: [{ turnId: "bookmarked-turn", userPreview: "Saved question", assistantPreview: "Saved answer", responseState: "responded", createdAt: 1 }] });
+    render(<ThreadView threadId={snapshot.thread.id} visible focusTurnId="bookmarked-turn" focusResponse registry={state.registry} applicationStore={state.applicationStore} />);
+    const viewport = screen.getByRole("region", { name: "Messages" });
+    const scrollTo = vi.fn(({ top }: ScrollToOptions) => { viewport.scrollTop = top ?? 0; });
+    Object.defineProperties(viewport, {
+      clientHeight: { configurable: true, value: 300 },
+      scrollHeight: { configurable: true, value: 1000 },
+      getBoundingClientRect: { configurable: true, value: () => ({ top: 0 }) },
+      scrollTo: { configurable: true, value: scrollTo },
+    });
+    vi.spyOn(document.querySelector('[data-item-id="reply"]')!, "getBoundingClientRect").mockImplementation(() => ({ top: 500 - viewport.scrollTop } as DOMRect));
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      viewport.scrollTop = 120;
+      fireEvent.scroll(viewport);
+      scrollTo.mockClear();
+      fireEvent.click(screen.getByRole("button", { name: "Bookmarks, 1" }));
+      fireEvent.click(within(screen.getByRole("dialog", { name: "Bookmarks" })).getByText("Saved question"));
+      await waitFor(() => expect(scrollTo).toHaveBeenCalledWith(expect.objectContaining({ top: 484 })));
+    }
+  });
+});
+
 describe("ThreadView message keyboard navigation", () => {
   function mount(visible = true) {
     const base = makeSnapshot("interactive", "idle");
