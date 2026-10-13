@@ -201,6 +201,24 @@ function applicationState(
 }
 
 describe("ThreadEventHub", () => {
+  it("publishes runtime tool eligibility changes at one saved policy revision through server and client", () => {
+    const initial = snapshot();
+    const hub = new ThreadEventHub();
+    const store = new NormalizedThreadStore();
+    store.apply(hub.publish({ type: "snapshot", generation: "tool-runtime", snapshot: initial }));
+    const unavailable = { availability: "unavailable" as const, reason: { text: "Execution host disconnected." } };
+    for (const runtimeAvailability of [unavailable, initial.agentTools.runtimeAvailability]) {
+      const agentTools = { ...initial.agentTools, runtimeAvailability,
+        presentation: { mode: initial.agentTools.presentation.mode, surface: initial.agentTools.presentation.surface } };
+      const event = hub.publish({ type: "application_state_changed", generation: "tool-runtime",
+        state: { ...applicationState(hub.snapshot!), agentTools } });
+      expect(store.apply(event)).toEqual({ kind: "applied" });
+      expect(hub.snapshot?.agentTools.runtimeAvailability).toEqual(runtimeAvailability);
+      expect(store.state.snapshot?.agentTools).toEqual(agentTools);
+      expect(hub.snapshot?.agentTools.revision).toBe(initial.agentTools.revision);
+    }
+  });
+
   it("retains notices and pending capability authority across a page-fit reset, then accepts a fresh same-generation capability identity", () => {
     const { source } = snapshotAtPageBoundary();
     source.thread.runState = source.runState = source.capabilities.runState = "running";

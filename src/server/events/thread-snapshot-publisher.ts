@@ -9,6 +9,7 @@ import type {
   ThreadEventEnvelope,
 } from "../../shared/protocol/conversation.js";
 import { SerializedMailbox } from "../conversations/serialized-mailbox.js";
+import { sameAgentToolPolicyRevision } from "../../shared/agent-tool-policy.js";
 
 function publicationKey(
   scope: RequestScope,
@@ -183,6 +184,7 @@ export class ThreadSnapshotPublisher {
               // after Stop or archive). Other projection fields stay exactly
               // as observed.
               await quiet.hub.serializeApplicationPublication(async () => {
+                const priorPolicy = quiet.hub.snapshot?.agentTools;
                 const overlay = await this.application.retainedOverlay(
                   scope,
                   applicationThreadId,
@@ -190,9 +192,13 @@ export class ThreadSnapshotPublisher {
                 const generation = quiet.hub.projectionGeneration;
                 const current = quiet.hub.snapshot;
                 if (generation && current?.thread.backingState === "bound") {
-                  // A slower capture never replaces a newer retained policy.
+                  // A slower capture never replaces a newer retained policy
+                  // or runtime eligibility. Equal saved revisions may refresh
+                  // eligibility only while the captured policy is still current.
                   const agentTools =
-                    overlay.agentTools.revision > current.agentTools.revision
+                    overlay.agentTools.revision > current.agentTools.revision ||
+                    (priorPolicy === current.agentTools &&
+                      sameAgentToolPolicyRevision(overlay.agentTools, current.agentTools))
                       ? overlay.agentTools
                       : current.agentTools;
                   for (const event of ThreadSnapshotPublisher.applicationChangeIncrementals(

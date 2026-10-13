@@ -447,7 +447,10 @@ The normalized tool policy separates saved grants from `runtimeAvailability`.
 The latter is a read-only, scoped backend contribution using current known
 configuration and runtime facts; rendering settings never starts a provider.
 Unavailable eligibility does not remove saved IDs or alter the selected
-presentation. Pi, Claude and Grok retain their existing surface and topology
+presentation. Runtime eligibility may change at the same saved policy revision;
+server replay and client projection enforce revision monotonicity on the
+policy independently. A delayed overlay cannot replace newer retained runtime
+eligibility. Pi, Claude and Grok retain their existing surface and topology
 rules. Codex additionally requires enabled network access and verified Sedes
 creation; OpenCode requires an exact verified created root and retains its
 namespace, native receipt, source and owned-CLI restrictions.

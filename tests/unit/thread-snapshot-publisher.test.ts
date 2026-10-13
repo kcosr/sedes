@@ -368,6 +368,42 @@ describe("ThreadSnapshotPublisher", () => {
     expect(retainedOverlay).not.toHaveBeenCalled();
   });
 
+  it("refreshes dormant tool eligibility at the same saved revision without reopening the provider", async () => {
+    const initial = snapshot();
+    const fixture = retainedPolicyFixture(initial);
+    const unavailable = { ...initial.agentTools, runtimeAvailability: {
+      availability: "unavailable" as const, reason: { text: "Execution host disconnected." },
+    } };
+    fixture.agentToolPolicy.mockResolvedValueOnce(unavailable).mockResolvedValueOnce(initial.agentTools);
+    await fixture.publisher.publish(scope, "thread-1");
+    expect(fixture.hub.snapshot?.agentTools).toEqual(unavailable);
+    await fixture.publisher.publish(scope, "thread-1");
+    expect(fixture.hub.snapshot?.agentTools).toEqual(initial.agentTools);
+    expect(fixture.received.mock.calls.map(([event]) => event.event.type)).toEqual(["application_state_changed", "application_state_changed"]);
+    expect(fixture.acquire).not.toHaveBeenCalled();
+    fixture.subscription.close(); await fixture.publisher.close();
+  });
+
+  it("does not replace newer runtime eligibility with an older equal-revision overlay capture", async () => {
+    const initial = snapshot();
+    const fixture = retainedPolicyFixture(initial);
+    const captured = deferred<NormalizedThreadSnapshot["agentTools"]>();
+    fixture.agentToolPolicy.mockImplementationOnce(() => captured.promise);
+    const publication = fixture.publisher.publish(scope, "thread-1");
+    await vi.waitFor(() => expect(fixture.agentToolPolicy).toHaveBeenCalledOnce());
+    const agentTools = { ...initial.agentTools, runtimeAvailability: {
+      availability: "unavailable" as const, reason: { text: "Newer unavailable evidence." },
+    } };
+    fixture.hub.publish({ type: "application_state_changed", generation: "generation-1",
+      state: { ...applicationState(initial), agentTools } });
+    fixture.received.mockClear();
+    captured.resolve(initial.agentTools); await publication;
+    expect(fixture.hub.snapshot?.agentTools).toEqual(agentTools);
+    expect(fixture.received).not.toHaveBeenCalled();
+    expect(fixture.acquire).not.toHaveBeenCalled();
+    fixture.subscription.close(); await fixture.publisher.close();
+  });
+
   it.each(["idle", "stopped", "archived"] as const)(
     "publishes successive tool policy revisions to a retained %s thread without reopening its provider",
     async (state) => {

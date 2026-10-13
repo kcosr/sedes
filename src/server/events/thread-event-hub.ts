@@ -24,6 +24,7 @@ import {
   serializedUtf8Bytes,
 } from "../../shared/protocol/payload.js";
 import { SerializedMailbox } from "../conversations/serialized-mailbox.js";
+import { sameAgentToolPolicyRevision } from "../../shared/agent-tool-policy.js";
 import { fitPageItemsToSnapshot, type PageProjectionInput } from "../conversations/page-publication-projection.js";
 
 export interface ThreadEventSubscription {
@@ -546,16 +547,19 @@ function sameValue(left: unknown, right: unknown): boolean {
  * hub, which would poison the retained replay suffix for every future
  * attach. Fail closed so the publisher's recovery path replaces the
  * projection instead of retaining a corrupted history.
+ * Independently changing runtime fields must be excluded by a caller-supplied
+ * equality function; they are not governed by a saved policy revision.
  */
-function assertRevisionMonotonic(
-  prior: { readonly revision: number } | undefined,
-  next: { readonly revision: number },
+function assertRevisionMonotonic<T extends { readonly revision: number }>(
+  prior: T | undefined,
+  next: T,
   regressedCode: string,
   conflictCode: string,
+  equal: (left: T, right: T) => boolean = sameValue,
 ): void {
   if (!prior) return;
   if (next.revision < prior.revision) throw new Error(regressedCode);
-  if (next.revision === prior.revision && !sameValue(prior, next)) {
+  if (next.revision === prior.revision && !equal(prior, next)) {
     throw new Error(conflictCode);
   }
 }
@@ -863,6 +867,7 @@ function applyIncremental(
         event.state.agentTools,
         "thread_projection_agent_tool_revision_regressed",
         "thread_projection_agent_tool_revision_conflict",
+        sameAgentToolPolicyRevision,
       );
       assertProviderFeatureProjectionMonotonic(snapshot, event.state);
       next = {

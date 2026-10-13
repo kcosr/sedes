@@ -204,7 +204,8 @@ User-facing changes are collected here before release. See the
 - Codex and OpenCode retain verified Sedes creation identity after first-input
   force reset, so recovered sessions keep tool eligibility without replaying
   abandoned input. Tool settings show current backend eligibility separately
-  from saved grants. Existing affected sessions have an audited
+  from saved grants, and eligibility updates preserve live transcript streams
+  without changing the saved policy revision. Existing affected sessions have an audited
   [offline repair](docs/operator/operations.md#repair-tool-eligibility-after-force-reset).
 
 - HTML previews publish successfully from workspace files even when downloads

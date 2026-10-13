@@ -16,6 +16,7 @@ import {
   MAXIMUM_NORMALIZED_SNAPSHOT_OR_PAGE_BYTES,
   serializedUtf8Bytes,
 } from "../../shared/protocol/payload.js";
+import { sameAgentToolPolicyRevision } from "../../shared/agent-tool-policy.js";
 
 export interface NormalizedThreadState {
   readonly authoritative: boolean;
@@ -712,6 +713,7 @@ export class NormalizedThreadStore {
         const agentToolRevision = revisionResult(
           snapshot.agentTools,
           event.state.agentTools,
+          sameAgentToolPolicyRevision,
         );
         if (agentToolRevision) {
           return this.#invalidate(
@@ -1096,12 +1098,13 @@ function recordMapByteDelta(
 function revisionResult<T extends { readonly revision: number }>(
   prior: T | undefined,
   next: T,
+  equal: (left: T, right: T) => boolean = sameValue,
 ): string | undefined {
   if (!prior) return undefined;
   if (next.revision < prior.revision) {
     return "entity_revision_regressed";
   }
-  if (next.revision === prior.revision && !sameValue(prior, next)) {
+  if (next.revision === prior.revision && !equal(prior, next)) {
     return "entity_revision_conflict";
   }
   return undefined;
