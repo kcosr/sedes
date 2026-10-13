@@ -78,7 +78,7 @@ import {
   PopoverTitle,
   PopoverTrigger,
 } from "@client/components/ui/popover";
-import { SearchableSelectSearch } from "@client/components/ui/searchable-select";
+import { matchesSearchQuery, SearchableSelectSearch } from "@client/components/ui/searchable-select";
 import { moveListFocus } from "@client/lib/list-focus";
 import { cn } from "@client/lib/utils";
 import { ProviderFeatureComposerActions } from "../../provider-features/registry.js";
@@ -429,7 +429,7 @@ export function Composer({
   const [inlineMention, setInlineMention] = useState(false);
   const [threadChoiceIndex, setThreadChoiceIndex] = useState(0);
   const threadListId = useId();
-  const mentionRange = useRef<{ start: number; end: number } | undefined>(undefined);
+  const mentionRange = useRef<{ start: number; end: number; text: string } | undefined>(undefined);
   const mentionComposing = useRef(false);
   const dismissedMention = useRef<number | undefined>(undefined);
   useEffect(() => {
@@ -1319,7 +1319,7 @@ export function Composer({
     thread.id !== store.threadId && thread.inventoryState !== "archived");
   const threadChoices = referenceThreads.filter((thread) =>
     !threadReferenceText.references.some(({ threadId }) => threadId === thread.id) &&
-    `${thread.title.text} ${thread.id}`.toLocaleLowerCase().includes(threadQuery.trim().toLocaleLowerCase()),
+    matchesSearchQuery(threadQuery, [thread.title.text, thread.backend.brand, thread.id]),
   ).slice(0, 30);
   const taskProjectionChecking = !application.authoritative;
   const missingTaskReferences = taskProjectionChecking
@@ -1570,7 +1570,7 @@ export function Composer({
     }
     const start = caret - match[1]!.length - 1;
     if (dismissedMention.current === start || (!typed && mentionRange.current?.start !== start)) return;
-    mentionRange.current = { start, end: caret };
+    mentionRange.current = { start, end: caret, text: body.slice(start, caret) };
     setInlineMention(true);
     setThreadQuery(match[1]!);
     setThreadChoiceIndex(0);
@@ -1579,8 +1579,8 @@ export function Composer({
 
   useEffect(() => {
     const range = mentionRange.current;
-    if (inlineMention && range && composerText.slice(range.start, range.end) !== `@${threadQuery}`) closeThreadPicker();
-  }, [composerText, inlineMention, threadQuery]);
+    if (inlineMention && range && composerText.slice(range.start, range.end) !== range.text) closeThreadPicker();
+  }, [composerText, inlineMention]);
 
   const stageThreadReference = (thread: NormalizedApplicationThreadSummary): boolean => {
     const availability = contextExcerptStagingSnapshot();

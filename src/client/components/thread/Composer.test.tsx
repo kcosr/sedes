@@ -699,6 +699,7 @@ function TaskDragTestSource({ task }: { readonly task: AssociatedTask }) {
 
 const referencedThread = {
   id: "616946aa-4574-41f7-bd70-d3a9edd56dbd", title: { text: "Other thread" },
+  backend: { brand: "claude" },
   inventoryState: "active", groupId: null, groupAssignmentRevision: 0,
 } as NormalizedApplicationThreadSummary;
 const selectedThreadReference = { threadId: referencedThread.id, title: referencedThread.title.text };
@@ -716,6 +717,68 @@ function ThreadDragTestSource() {
 }
 
 describe("thread references", () => {
+  it("opens desktop search with provider icons and keyboard selection, without displaying thread IDs", async () => {
+    vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })));
+    const second = { ...referencedThread, id: "616946aa-4574-41f7-bd70-d3a9edd56dbe", title: { text: "Second thread" }, backend: { ...referencedThread.backend, brand: "codex" as const } };
+    const store = new FakeComposerStore(snapshot(), "Keep this text");
+    render(<Composer store={store as unknown as ThreadClientStore} applicationStore={referenceApplication([referencedThread, second]).store} />);
+    await userEvent.click(screen.getByRole("button", { name: "Reference a thread" }));
+    const search = await screen.findByRole("searchbox", { name: "Search threads" });
+    await waitFor(() => expect(search).toHaveFocus());
+    const dialog = screen.getByRole("dialog", { name: "Reference a thread" });
+    expect(dialog).not.toHaveTextContent(referencedThread.id);
+    const first = within(dialog).getByRole("option", { name: "Other thread" });
+    expect(first.firstElementChild).toHaveAttribute("data-backend-brand", "claude");
+    await userEvent.keyboard("{ArrowDown}{ArrowDown}");
+    const choice = within(dialog).getByRole("option", { name: "Second thread" });
+    expect(choice).toHaveFocus();
+    expect(choice).toHaveAttribute("aria-selected", "true");
+    await userEvent.keyboard("{Enter}");
+    await waitFor(() => expect(dialog).not.toBeInTheDocument());
+    expect(screen.getByRole("list", { name: "Referenced threads" })).toHaveTextContent("Second thread");
+    expect(screen.getByRole("textbox")).toHaveValue("Keep this text");
+  });
+
+  it("shows mobile search without autofocus and filters after an explicit tap", async () => {
+    render(<Composer store={new FakeComposerStore(snapshot(), "Ask") as unknown as ThreadClientStore} applicationStore={referenceApplication().store} />);
+    await userEvent.click(screen.getByRole("button", { name: "Reference a thread" }));
+    const search = await screen.findByRole("searchbox", { name: "Search threads" });
+    expect(search).toBeVisible();
+    expect(search).not.toHaveFocus();
+    await userEvent.type(search, "missing");
+    expect(search).toHaveFocus();
+    expect(screen.getByText("No matching active threads")).toBeVisible();
+    await userEvent.clear(search);
+    await userEvent.type(search, "thread other CLAUDE");
+    expect(screen.getByRole("option", { name: "Other thread" })).toBeVisible();
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Reference a thread" })).not.toBeInTheDocument());
+    expect(screen.getByRole("textbox")).toHaveValue("Ask");
+  });
+
+  it("searches an inline mention independently while preserving its original caret range", async () => {
+    const other = { ...referencedThread, id: "616946aa-4574-41f7-bd70-d3a9edd56dbe", title: { text: "Selected instead" } };
+    const store = new FakeComposerStore(snapshot(), "Compare  and keep this");
+    render(<Composer store={store as unknown as ThreadClientStore} applicationStore={referenceApplication([referencedThread, other]).store} />);
+    const input = screen.getByRole("textbox") as HTMLTextAreaElement;
+    input.focus();
+    input.setSelectionRange(8, 8);
+    await userEvent.keyboard("@Other");
+    const search = screen.getByRole("searchbox", { name: "Search threads" });
+    await userEvent.clear(search);
+    await userEvent.type(search, "Selected");
+    expect(input).toHaveValue("Compare @Other and keep this");
+    expect(screen.getByRole("option", { name: "Selected instead" })).toBeVisible();
+    await userEvent.keyboard("{Enter}");
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Reference a thread" })).not.toBeInTheDocument());
+    expect(input).toHaveValue("Compare  and keep this");
+    await waitFor(() => {
+      expect(input).toHaveFocus();
+      expect(input.selectionStart).toBe(8);
+    });
+    expect(screen.getByRole("list", { name: "Referenced threads" })).toHaveTextContent("Selected instead");
+  });
+
   it("opens the picker from the matching thread menu and returns focus to the composer", async () => {
     const store = new FakeComposerStore(snapshot(), "Keep this text");
     Object.defineProperty(store, "threadId", { value: "current-thread" });
@@ -763,7 +826,7 @@ describe("thread references", () => {
     render(<Composer store={store as unknown as ThreadClientStore} applicationStore={referenceApplication([{ ...referencedThread, title: { text: title } }]).store} />);
     fireEvent.click(screen.getByRole("button", { name: "Reference a thread" }));
     const dialog = await screen.findByRole("dialog", { name: "Reference a thread" });
-    fireEvent.click(within(dialog).getByRole("option", { name: new RegExp(referencedThread.id) }));
+    fireEvent.click(within(dialog).getByRole("option"));
     fireEvent.click(screen.getByRole("button", { name: "Send message" }));
     await waitFor(() => expect(store.deliver).toHaveBeenCalled());
     expect(splitThreadReferenceText(store.deliver.mock.calls[0]![1].text).references[0]!.title).toBe(title ? title.slice(0, 512) : "Untitled thread");
@@ -799,7 +862,8 @@ describe("thread references", () => {
     await userEvent.keyboard("@Other");
     expect(await screen.findByRole("option", { name: /Other thread/ })).toBeVisible();
     expect(input).toHaveFocus();
-    expect(screen.queryByRole("searchbox", { name: "Search threads" })).not.toBeInTheDocument();
+    expect(screen.getByRole("searchbox", { name: "Search threads" })).toBeVisible();
+    expect(screen.getByRole("searchbox", { name: "Search threads" })).not.toHaveFocus();
     await userEvent.keyboard("{Enter}");
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Reference a thread" })).not.toBeInTheDocument());
     expect(input).toHaveValue("Compare  and keep this");

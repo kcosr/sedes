@@ -86,6 +86,10 @@ the same searchable picker without typing. When toolbar space is tight, use
 **Thread actions → Reference a thread** or type **@**. Each selection appears as a removable
 chip above the message; up to eight threads can be referenced in one prompt.
 The picker includes the active threads currently loaded in your inventory.
+It shows each thread's provider icon and title. Search is focused when you open
+the menu on desktop; on mobile, tap search to start typing. Arrow keys move
+between results, Enter selects, and Escape closes the picker. Typing **@** in
+the message keeps focus there, with search also available in the picker.
 
 The agent receives the selected Sedes thread IDs and quoted titles followed by
 your message. Referencing a thread does not copy its messages or grant access:

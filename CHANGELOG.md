@@ -63,6 +63,8 @@ User-facing changes are collected here before release. See the
 - Drag individual threads into Groups or onto another thread to create a Group.
   Reference threads in a prompt by dragging them into the composer or choosing
   them with **@**; references survive drafts, stashes, and queued delivery.
+  The searchable picker shows provider icons and thread titles, with keyboard
+  selection and desktop search autofocus; mobile search opens on an explicit tap.
 
 - Claude threads support **Compact context** while idle, with retained earlier
   turns, expandable summaries, session statistics, and recovery for uncertain

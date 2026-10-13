@@ -1,4 +1,4 @@
-import { useMemo, useRef, type RefObject } from "react";
+import { useEffect, useMemo, useRef, type RefObject } from "react";
 import { MessagesSquare } from "lucide-react";
 import type { NormalizedApplicationThreadSummary } from "../../../shared/index.js";
 import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from "@client/components/ui/popover";
@@ -6,6 +6,7 @@ import { SearchableSelectSearch } from "@client/components/ui/searchable-select"
 import { menuEmptyClass, menuRowClass } from "@client/components/ui/floating";
 import { moveListFocus } from "@client/lib/list-focus";
 import { usePickerFocus } from "../../lib/use-picker-focus.js";
+import { BackendBrandIcon } from "../brand-icons.js";
 
 export function ComposerThreadPicker({ open, onOpenChange, query, onQueryChange, threads, disabled, onSelect, inline, anchor, listId, selectedIndex, onSelectedIndexChange }: {
   readonly open: boolean;
@@ -30,6 +31,9 @@ export function ComposerThreadPicker({ open, onOpenChange, query, onQueryChange,
     get contextElement() { return anchor.current ?? undefined; },
   } }), [anchor]);
   const rows = () => Array.from(list.current?.querySelectorAll<HTMLButtonElement>("button") ?? []);
+  useEffect(() => {
+    if (open) rows()[selectedIndex]?.scrollIntoView?.({ block: "nearest" });
+  }, [open, selectedIndex]);
   const chooseThread = (thread: NormalizedApplicationThreadSummary) => {
     restoreComposerFocus.current = true;
     onSelect(thread);
@@ -52,20 +56,23 @@ export function ComposerThreadPicker({ open, onOpenChange, query, onQueryChange,
           else restoreComposerFocus.current = false;
         }}
         onCloseAutoFocus={(event) => { event.preventDefault(); if (restoreComposerFocus.current) anchor.current?.focus({ preventScroll: true }); }}>
-        {!inline && <SearchableSelectSearch ref={search} type="search" value={query} aria-label="Search threads" placeholder="Search active threads"
+        <SearchableSelectSearch ref={search} type="search" value={query} aria-label="Search threads" placeholder="Search active threads"
+          aria-controls={listId}
           onChange={(event) => onQueryChange(event.target.value)} onKeyDown={(event) => {
+            if (event.nativeEvent.isComposing) return;
             if ((event.key === "ArrowDown" || event.key === "ArrowUp") && moveListFocus(rows(), event.key)) event.preventDefault();
-            if (event.key === "Enter" && threads[0]) { event.preventDefault(); chooseThread(threads[0]); }
-          }} />}
+            if (event.key === "Enter" && threads[selectedIndex]) { event.preventDefault(); chooseThread(threads[selectedIndex]); }
+          }} />
         <div ref={list} id={listId} role="listbox" aria-label="Matching threads" className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain p-(--menu-panel-padding)"
           onKeyDown={(event) => { if (moveListFocus(rows(), event.key)) event.preventDefault(); }}>
           {threads.map((thread, index) => (
             <button key={thread.id} id={`${listId}-${index}`} role="option" aria-selected={index === selectedIndex} type="button"
               className={`${menuRowClass} ${index === selectedIndex ? "bg-accent" : ""}`}
+              onFocus={() => onSelectedIndexChange(index)}
               onMouseDown={(event) => { if (inline) event.preventDefault(); }}
               onPointerMove={() => onSelectedIndexChange(index)} onClick={() => chooseThread(thread)}>
-              <span className="min-w-0 flex-1 text-left"><span className="block truncate">{thread.title.text}</span>
-                <span className="block truncate text-xs text-muted-foreground">{thread.id}</span></span>
+              <BackendBrandIcon brand={thread.backend.brand} size={15} className="shrink-0" data-backend-brand={thread.backend.brand} aria-hidden="true" />
+              <span className="min-w-0 flex-1 truncate text-left">{thread.title.text.trim() || "Untitled thread"}</span>
             </button>
           ))}
           {threads.length === 0 && <p className={menuEmptyClass} role="status">No matching active threads</p>}
