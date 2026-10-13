@@ -11,8 +11,7 @@ import {
 } from "../../server/agent-tools/contracts/agent-tool-transport-limits.js";
 import { normalizeCanonicalAgentToolSchema } from "../../server/agent-tools/schema/canonical-json-schema.js";
 import { agentToolModelContentsSchema } from "./model-content.js";
-import { workpadContentSchema } from "../../shared/protocol/workpads.js";
-import { isWorkpadInputContentPath, workpadInputContentError, workpadToolOutputSchema } from "./workpad-content.js";
+import { isWorkpadInputContentPath, workpadInputContentError, workpadToolContentSchema, workpadToolOutputSchema } from "./workpad-content.js";
 
 export const agentToolCliTransportLimits = Object.freeze({
   maximumCatalogTools: 256,
@@ -55,7 +54,7 @@ export function isBoundedAgentToolJson(value: unknown, contentPath?: (path: read
     }
     if (typeof current.value === "string") {
       if (contentPath?.(current.path)) {
-        if (!workpadContentSchema.safeParse(current.value).success) return false;
+        if (!workpadToolContentSchema.safeParse(current.value).success) return false;
       } else if (current.value.length > 65_536) return false;
       continue;
     }

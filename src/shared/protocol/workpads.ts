@@ -1,14 +1,17 @@
 import { z } from "zod";
 import { taskScopeSchema } from "./tasks.js";
+import {
+  WORKPAD_CONTENT_MAX_CHARACTERS, WORKPAD_CONTENT_LENGTH_MESSAGE,
+  WORKPAD_CONTENT_UNICODE_MESSAGE, hasWellFormedWorkpadContent,
+} from "../workpad-content-limits.js";
 
-export const WORKPAD_CONTENT_MAX_CHARACTERS = 262_144;
+export { WORKPAD_CONTENT_MAX_CHARACTERS } from "../workpad-content-limits.js";
 export const workpadIdSchema = z.string().min(1).max(128);
 export const workpadScopeSchema = taskScopeSchema;
 export type WorkpadScope = z.infer<typeof workpadScopeSchema>;
 const revision = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
-export const workpadContentSchema = z.string().max(WORKPAD_CONTENT_MAX_CHARACTERS,
-  "Workpad content is too long (maximum 262,144 UTF-16 units).")
-  .refine(value => !/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(value), "Workpad content must contain valid Unicode text.");
+export const workpadContentSchema = z.string().max(WORKPAD_CONTENT_MAX_CHARACTERS, WORKPAD_CONTENT_LENGTH_MESSAGE)
+  .refine(hasWellFormedWorkpadContent, WORKPAD_CONTENT_UNICODE_MESSAGE);
 const title = z.string().trim().min(1).max(240);
 const authorName = z.string().min(1).max(240);
 export const workpadAuthorSchema = z.discriminatedUnion("kind", [

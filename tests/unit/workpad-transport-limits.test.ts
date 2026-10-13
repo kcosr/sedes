@@ -13,7 +13,8 @@ import { agentToolInvocationBodyParser } from "../../src/server/agent-tools/http
 import { errorMiddleware } from "../../src/server/http/errors.js";
 import { generatedAgentToolArtifacts } from "../../src/server/agent-tools/schema/check-agent-tool-artifacts.js";
 import { compileCanonicalAgentToolSchema } from "../../src/server/agent-tools/schema/canonical-json-schema.js";
-import { WORKPAD_CONTENT_MAX_CHARACTERS } from "../../src/shared/protocol/workpads.js";
+import { WORKPAD_CONTENT_MAX_CHARACTERS, workpadSchema, workpadRevisionSchema } from "../../src/shared/protocol/workpads.js";
+import { workpadToolOutputSchema } from "../../src/internal/agent-tool-cli-protocol/workpad-content.js";
 
 const maximum = WORKPAD_CONTENT_MAX_CHARACTERS;
 const stamp = "2026-10-13T00:00:00.000Z";
@@ -26,6 +27,30 @@ const invocation = (input: unknown, toolId = "workpad.create") => ({ toolId, sch
 const completed = (output: unknown) => ({ invocationId: id, state: "completed" as const, output });
 
 describe("Workpad transport bounds", () => {
+  it("keeps private execution-host DTOs aligned with current and historical application projections", () => {
+    const variants: Record<string, unknown>[] = [
+      {}, { scope: { kind: "project", projectId: id } }, { scope: { kind: "thread", threadId: id } },
+      { author: { ...author, kind: "agent", threadId: id } },
+      { author: { ...author, kind: "tool_client", clientId: id } },
+      { title: " " }, { title: "x".repeat(241) }, { revision: -1 }, { revision: Number.MAX_SAFE_INTEGER + 1 },
+      { scope: { kind: "project", projectId: "not-a-uuid" } },
+      { scope: { kind: "global", threadId: id } },
+      { author: { ...author, threadId: id } }, { author: { ...author, name: "" } },
+      { author: { ...author, nameSnapshot: "x".repeat(241) } },
+      { createdAt: "yesterday" }, { archivedAt: 123 }, { content: "broken\uD800" },
+      { content: "x".repeat(maximum + 1) }, { extra: true }, { attribution: [] }, { changes: [] },
+    ];
+    const current = workpadSchema.omit({ attribution: true });
+    const historical = workpadRevisionSchema.omit({ attribution: true, changes: true });
+    for (const variant of variants) {
+      const candidate = { ...document("x".repeat(maximum)), ...variant };
+      const { id: workpadId, updatedAt: _updatedAt, ...revision } = candidate;
+      const past = { ...revision, workpadId };
+      expect(workpadToolOutputSchema.safeParse({ workpad: candidate }).success).toBe(current.safeParse(candidate).success);
+      expect(workpadToolOutputSchema.safeParse({ workpad: past }).success).toBe(historical.safeParse(past).success);
+    }
+  });
+
   it.each(["x", "文", "\u0000"])("round-trips the full 256K body through each shared carrier (%j)", character => {
     const content = character.repeat(maximum);
     const call = invocation({ title: "Notes", scope: { kind: "global" }, content });

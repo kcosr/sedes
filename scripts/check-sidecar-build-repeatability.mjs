@@ -27,6 +27,7 @@ const canonicalInputs = {
   "src/cli/sedes-mcp-server.ts": {},
   "src/cli/sedes-opencode-mcp.ts": {},
   "src/cli/sedes-tool-local-client.ts": {},
+  "src/shared/workpad-content-limits.ts": {},
   "src/server/composer-attachments/execution-attachment-staging-engine.ts": {},
   "src/server/workspace-files/workspace-files-engine.ts": {},
   "src/server/workspace-files/workspace-file-policy.ts": {},
@@ -48,6 +49,7 @@ const canonicalOutputInputs = {
   "src/cli/sedes-mcp-server.ts": { bytesInOutput: 1 },
   "src/cli/sedes-opencode-mcp.ts": { bytesInOutput: 1 },
   "src/cli/sedes-tool-local-client.ts": { bytesInOutput: 1 },
+  "src/shared/workpad-content-limits.ts": { bytesInOutput: 1 },
   "src/server/composer-attachments/execution-attachment-staging-engine.ts": {
     bytesInOutput: 1,
   },
@@ -127,6 +129,8 @@ expectOwnershipFailure(
   "sidecar_build_shared_source_not_emitted",
 );
 for (const forbiddenSource of [
+  "src/shared/protocol/tasks.ts",
+  "src/shared/protocol/workpads.ts",
   "src/server/db/repositories/inventory-repository.ts",
   "src/server/backends/opencode/opencode-backend-module.ts",
   "src/server/backends/opencode/opencode-thread-repository.ts",

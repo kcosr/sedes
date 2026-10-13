@@ -1,13 +1,38 @@
 import { z } from "zod";
 import {
-  workpadContentSchema, workpadSchema, workpadRevisionSchema,
-} from "../../shared/protocol/workpads.js";
+  WORKPAD_CONTENT_MAX_CHARACTERS, WORKPAD_CONTENT_LENGTH_MESSAGE,
+  WORKPAD_CONTENT_UNICODE_MESSAGE, hasWellFormedWorkpadContent,
+} from "../../shared/workpad-content-limits.js";
+
+export const workpadToolContentSchema = z.string().max(WORKPAD_CONTENT_MAX_CHARACTERS, WORKPAD_CONTENT_LENGTH_MESSAGE)
+  .refine(hasWellFormedWorkpadContent, WORKPAD_CONTENT_UNICODE_MESSAGE);
+
+// Private transport DTOs deliberately do not import application Workpad/Task
+// protocols into an execution host. Parity tests cover the projected schemas.
+const identifier = z.string().min(1).max(128);
+const name = z.string().min(1).max(240);
+const author = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("user"), threadId: z.null(), clientId: z.null(), name, nameSnapshot: name }),
+  z.strictObject({ kind: z.literal("agent"), threadId: identifier, clientId: z.null(), name, nameSnapshot: name }),
+  z.strictObject({ kind: z.literal("tool_client"), threadId: z.null(), clientId: identifier, name, nameSnapshot: name }),
+]);
+const snapshot = {
+  title: z.string().trim().min(1).max(240),
+  scope: z.discriminatedUnion("kind", [
+    z.strictObject({ kind: z.literal("global") }),
+    z.strictObject({ kind: z.literal("project"), projectId: z.uuid() }),
+    z.strictObject({ kind: z.literal("thread"), threadId: z.uuid() }),
+  ]),
+  revision: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+  archivedAt: z.iso.datetime().nullable(), createdAt: z.iso.datetime(), author,
+  content: workpadToolContentSchema,
+};
 
 /** Only canonical Workpad bodies receive the existing 256K document allowance. */
 export const workpadToolOutputSchema = z.strictObject({
   workpad: z.union([
-    workpadSchema.omit({ attribution: true }),
-    workpadRevisionSchema.omit({ attribution: true, changes: true }),
+    z.strictObject({ ...snapshot, id: identifier, updatedAt: z.iso.datetime() }),
+    z.strictObject({ ...snapshot, workpadId: identifier }),
   ]),
 });
 
@@ -47,7 +72,7 @@ export function workpadInputContentError(toolId: string, input: unknown): string
   }
   for (const text of texts) {
     if (typeof text !== "string") continue; // Canonical schemas diagnose wrong types.
-    const result = workpadContentSchema.safeParse(text);
+    const result = workpadToolContentSchema.safeParse(text);
     if (!result.success) return result.error.issues[0]!.message;
   }
   return undefined;
