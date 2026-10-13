@@ -222,12 +222,13 @@ test("dragging individual threads creates a group and adds to its stack", async 
   await source.dragTo(composer);
   await expect(composer.getByRole("list", { name: "Referenced threads" })).toContainText("Drag source thread");
   await composer.getByRole("button", { name: "Remove thread: Drag source thread" }).click();
-  await composer.getByRole("textbox", { name: "Message Pi" }).fill("Compare @");
-  const threadSearch = page.getByRole("searchbox", { name: "Search threads" });
-  await expect(threadSearch).toBeFocused();
-  await threadSearch.fill("Drag target group");
-  await threadSearch.press("Enter");
-  await expect(composer.getByRole("textbox", { name: "Message Pi" })).toHaveValue("Compare ");
+  const message = composer.getByRole("textbox");
+  await message.fill("Compare ");
+  await message.pressSequentially("@target");
+  await expect(message).toBeFocused();
+  await expect(page.getByRole("option", { name: new RegExp(targetId) })).toBeVisible();
+  await message.press("Enter");
+  await expect(message).toHaveValue("Compare ");
   await expect(composer.getByRole("list", { name: "Referenced threads" })).toContainText("Drag target group");
   await capture(page, testInfo, "thread-reference-composer.png");
   await source.dragTo(target);
@@ -253,6 +254,18 @@ test("dragging individual threads creates a group and adds to its stack", async 
   const roster = page.getByTestId("thread-group-roster");
   await expect(roster.getByTestId("thread-group-member")).toHaveCount(3);
   await capture(page, testInfo, "thread-drag-group-members.png");
+  await message.click();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole("button", { name: "Thread actions", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Reference a thread…" }).click();
+  const picker = page.getByRole("dialog", { name: "Reference a thread" });
+  await expect(picker).toBeVisible();
+  await expect(picker.getByRole("option", { name: new RegExp(sourceId) })).toBeVisible();
+  await expectNoPageOverflow(page);
+  await capture(page, testInfo, "thread-reference-mobile-menu.png");
+  await page.keyboard.press("Escape");
+  await expect(picker).toBeHidden();
+  await expect(message).toBeFocused();
 });
 
 test("thread groups stack on desktop and open as a member sheet on mobile", async ({

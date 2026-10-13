@@ -67,6 +67,17 @@ describe("thread grouping drag", () => {
     expect(screen.getByText("idle")).toBeInTheDocument();
   });
 
+  it.each([
+    new ApiError(409, "group_assignment_revision_conflict", "The thread group changed in another client.", false),
+    new Error("The connection was lost."),
+  ])("shows a visible toast when grouping fails: %s", async (failure) => {
+    const { start, assignThreadGroup } = setup();
+    assignThreadGroup.mockRejectedValueOnce(failure);
+    fireEvent.drop(screen.getByTestId("group"), { dataTransfer: start() });
+    const message = await screen.findByText(failure.message);
+    expect(message.closest(".wb-toast--error")).toBeVisible();
+  });
+
   it("joins the target row's current group even when it changed during the drag", async () => {
     const { state, start, assignThreadGroup } = setup();
     const transfer = start();

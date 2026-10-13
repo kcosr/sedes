@@ -6,6 +6,7 @@ import type { NormalizedApplicationSnapshot, NormalizedApplicationThreadSummary 
 import type { ApplicationClientStore } from "../stores/ApplicationClientStore.js";
 import { ApiError } from "../api/ApiClient.js";
 import { NewGroupDialog } from "../components/MoveToGroupMenu.js";
+import { ToastProvider, useToast } from "../workbench/components/Toast.js";
 import "./thread-drag.css";
 
 export const THREAD_DRAG_MIME = "application/x-sedes-thread+json";
@@ -37,17 +38,23 @@ type PendingGroup = {
   readonly initialName: string;
 };
 
-export function ThreadDragProvider({ store, snapshot, children }: {
+interface ThreadDragProviderProps {
   readonly store: ApplicationClientStore;
   readonly snapshot: NormalizedApplicationSnapshot;
   readonly children: ReactNode;
-}): React.JSX.Element {
+}
+
+export function ThreadDragProvider(props: ThreadDragProviderProps): React.JSX.Element {
+  return <ToastProvider><ThreadDragStateProvider {...props} /></ToastProvider>;
+}
+
+function ThreadDragStateProvider({ store, snapshot, children }: ThreadDragProviderProps): React.JSX.Element {
+  const toast = useToast();
   const [active, setActive] = useState<ThreadDragPayload>();
   const activeRef = useRef<ThreadDragPayload | undefined>(undefined);
   const [pendingGroup, setPendingGroup] = useState<PendingGroup>();
   const returnFocusRef = useRef<HTMLElement | null>(null);
   const [announcement, setAnnouncement] = useState("");
-  const [announcementError, setAnnouncementError] = useState(false);
   const highlightRef = useRef<HTMLElement | undefined>(undefined);
   const mutationIds = useRef(new Map<string, string>());
 
@@ -58,9 +65,9 @@ export function ThreadDragProvider({ store, snapshot, children }: {
   }, [store]);
 
   const announce = useCallback((message: string, error = false) => {
-    setAnnouncement(message);
-    setAnnouncementError(error);
-  }, []);
+    setAnnouncement(error ? "" : message);
+    if (error) toast(message, { tone: "error" });
+  }, [toast]);
 
   const highlight = useCallback((element?: HTMLElement) => {
     if (highlightRef.current === element) return;
@@ -193,7 +200,7 @@ export function ThreadDragProvider({ store, snapshot, children }: {
 
   return <ThreadDragContext.Provider value={controller}>
     {children}
-    <p className="sr-only" role={announcementError ? "alert" : "status"} aria-live="polite">{announcement}</p>
+    <p className="sr-only" role="status" aria-live="polite">{announcement}</p>
     <NewGroupDialog
       open={pendingGroup !== undefined}
       initialName={pendingGroup?.initialName ?? ""}

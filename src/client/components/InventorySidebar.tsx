@@ -210,6 +210,7 @@ import { ThreadGroupRoster } from "./thread/ThreadGroupRoster.js";
 import { ThreadStackActionDialog } from "./thread/ThreadStackActionDialog.js";
 import { useTaskDrag } from "../tasks/task-drag.js";
 import { useThreadDrag } from "../threads/thread-drag.js";
+import { matchesTouchDensity, useTouchDensity } from "../app/use-touch-density.js";
 import {
   environmentTintStyle,
   resolveEnvironmentPaletteTones,
@@ -432,6 +433,7 @@ export function InventorySidebar({
 }): React.JSX.Element {
   const defaultThread = useDefaultThread();
   const threadDrag = useThreadDrag();
+  const touch = useTouchDensity();
   const defaultThreadId = defaultThread?.threadId;
   const defaultSummary = state.snapshot?.threads.find(thread => thread.id === defaultThreadId) ?? defaultThread?.thread;
   const usableDefault = defaultSummary && canUseDefaultThread(defaultSummary) ? defaultSummary : undefined;
@@ -1786,8 +1788,11 @@ export function InventorySidebar({
                   <div className={`thread-row compact ${selectedThreadId === usableDefault.id ? "selected" : ""} ${usableDefault.attention.unseenCompletion ? "flat-row-unseen" : ""}`}
                     data-thread-id={usableDefault.id} data-testid="default-thread-row"
                     data-thread-drop-kind="thread"
-                    draggable={threadDrag !== undefined}
-                    onDragStart={(event) => { event.stopPropagation(); threadDrag?.beginThreadDrag(usableDefault.id, event.dataTransfer); }}
+                    draggable={!touch && threadDrag !== undefined}
+                    onDragStart={(event) => {
+                      if (matchesTouchDensity()) { event.preventDefault(); return; }
+                      event.stopPropagation(); threadDrag?.beginThreadDrag(usableDefault.id, event.dataTransfer);
+                    }}
                     onDragEnd={() => threadDrag?.endThreadDrag()}>
                     <button className="thread-row-link" aria-current={selectedThreadId === usableDefault.id ? "page" : undefined}
                       onClick={() => { openThreadRoute(usableDefault.id); onNavigate(); }}>
@@ -3658,6 +3663,7 @@ function FlatRowItemContent(
   );
   const quickSwitchHint = useSidebarQuickSwitchHint(thread.id);
   const threadDrag = useThreadDrag();
+  const touch = useTouchDensity();
   const actionPending = useRef(false);
   const [pendingAction, setPendingAction] = useState<"quick" | "archive">();
   const [pinPending, setPinPending] = useState(false);
@@ -4042,9 +4048,9 @@ function FlatRowItemContent(
     "data-testid": containerTestId,
     "data-thread-id": thread.id,
     "data-thread-drop-kind": stackGroupId ? "group" : stackProjectId ? undefined : "thread",
-    draggable: !stackFace && !renaming && threadDrag !== undefined,
+    draggable: !touch && !stackFace && !renaming && threadDrag !== undefined,
     onDragStart: (event: React.DragEvent<HTMLElement>) => {
-      if (stackFace || renaming || !threadDrag) { event.preventDefault(); return; }
+      if (matchesTouchDensity() || stackFace || renaming || !threadDrag) { event.preventDefault(); return; }
       event.stopPropagation();
       threadDrag.beginThreadDrag(thread.id, event.dataTransfer);
     },
@@ -4462,6 +4468,7 @@ function ThreadRow({
   const backgroundWorkCurrent = useContext(SidebarBackgroundWorkCurrentContext);
   const quickSwitchHint = useSidebarQuickSwitchHint(thread.id);
   const threadDrag = useThreadDrag();
+  const touch = useTouchDensity();
   const [renaming, setRenaming] = useState(false);
   const [renameTitle, setRenameTitle] = useState("");
   const [renameError, setRenameError] = useState("");
@@ -4701,8 +4708,11 @@ function ThreadRow({
       data-selected={selected ? "true" : "false"}
       data-thread-drop-id={thread.id}
       data-thread-drop-kind="thread"
-      draggable={!renaming && threadDrag !== undefined}
-      onDragStart={(event) => { event.stopPropagation(); threadDrag?.beginThreadDrag(thread.id, event.dataTransfer); }}
+      draggable={!touch && !renaming && threadDrag !== undefined}
+      onDragStart={(event) => {
+        if (matchesTouchDensity()) { event.preventDefault(); return; }
+        event.stopPropagation(); threadDrag?.beginThreadDrag(thread.id, event.dataTransfer);
+      }}
       onDragEnd={() => threadDrag?.endThreadDrag()}
     >
       {renaming ? (

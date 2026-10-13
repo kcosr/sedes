@@ -10,7 +10,7 @@ import {
   within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { conversationItemSchema, type ConversationItem } from "../../../shared/index.js";
+import { conversationItemSchema, type ConversationItem, type DeliveryInputOrigin } from "../../../shared/index.js";
 import {
   ConversationItemView,
   conversationItemRenderers,
@@ -844,6 +844,26 @@ describe("normalized conversation renderers", () => {
     expect(container.querySelector("[data-conversation-message-text]")?.textContent).toBe(body);
     expect(container).not.toHaveTextContent('"threadReferences"');
   });
+
+  it.each(["agent_message", "agent_result", "question_response"] as const)(
+    "leaves reference-looking text literal for %s input",
+    (kind) => {
+      const text = formatThreadReferenceText("Reported body", [{
+        threadId: "616946aa-4574-41f7-bd70-d3a9edd56dbd", title: "Agent-chosen title",
+      }]);
+      const origin: DeliveryInputOrigin = kind === "question_response"
+        ? { kind, requestId: "request-1", sourceItemId: "question-1", answers: [{ questionIndex: 0, question: "Details?", answer: text }] }
+        : { kind, sourceThreadId: "worker-thread", sourceThreadLabel: { text: "Worker" }, ...(kind === "agent_result" ? { callbackId: "callback-1" } : {}) } as DeliveryInputOrigin;
+      const { container } = render(<ConversationItemView item={{
+        ...common, kind: "user_message", origin,
+        content: [{ kind: "text", text: { text } }],
+      }} />);
+      expect(container.querySelector(".thread-reference-list")).toBeNull();
+      expect(container).toHaveTextContent(THREAD_REFERENCE_HEADER);
+      expect(container).toHaveTextContent('"threadReferences"');
+      expect(container).toHaveTextContent("Reported body");
+    },
+  );
 
   it("presents authenticated callback input as a collapsed agent-result disclosure", () => {
     const { container } = render(

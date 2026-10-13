@@ -46,6 +46,7 @@ import {
   ChevronDown,
   CopyPlus,
   FolderInput,
+  MessagesSquare,
   FileCode,
   PanelTop,
   Pin,
@@ -131,6 +132,7 @@ import {
 } from "./thread-configuration-copy-labels.js";
 import { ThreadWorktreePicker } from "./ThreadWorktreePicker.js";
 import { useDelayedUnavailableConnection } from "../../app/use-delayed-connection-status.js";
+import { openThreadReferencePicker } from "../../threads/thread-reference-picker.js";
 
 const SHEET_DIALOG_HANDOFF_DELAY_MS = 260;
 const noProjects: NormalizedApplicationSnapshot["projects"] = [];
@@ -798,6 +800,13 @@ export const ThreadHeader = memo(function ThreadHeader({
                     </>
                   )}
                   {/* On narrow phones the header's toolbar toggle lives here. */}
+                  <DropdownMenuItem
+                    disabled={disabled || !active}
+                    onSelect={() => closeActionsBefore(() => openThreadReferencePicker(snapshot.thread.id))}
+                  >
+                    <MessagesSquare aria-hidden="true" />
+                    Reference a thread…
+                  </DropdownMenuItem>
                   {narrowHeader && (
                     <>
                       <DropdownMenuCheckboxItem

@@ -142,6 +142,7 @@ import {
 } from "../../../shared/thread-references.js";
 import { ThreadReferenceChips } from "./ThreadReferenceChips.js";
 import { ComposerThreadPicker } from "./ComposerThreadPicker.js";
+import { OPEN_THREAD_REFERENCE_PICKER_EVENT } from "../../threads/thread-reference-picker.js";
 
 export const OPEN_PROMPTS_SETTINGS_EVENT = "sedes-open-settings-prompts";
 
@@ -424,10 +425,12 @@ export function Composer({
   const [threadDragActive, setThreadDragActive] = useState(false);
   const [threadPickerOpen, setThreadPickerOpen] = useState(false);
   const [threadQuery, setThreadQuery] = useState("");
-  const [mentionCaret, setMentionCaret] = useState<number>();
+  const [inlineMention, setInlineMention] = useState(false);
+  const [threadChoiceIndex, setThreadChoiceIndex] = useState(0);
+  const threadListId = useId();
   const mentionRange = useRef<{ start: number; end: number } | undefined>(undefined);
   const mentionComposing = useRef(false);
-  const dismissedMention = useRef<string | undefined>(undefined);
+  const dismissedMention = useRef<number | undefined>(undefined);
   useEffect(() => {
     if (taskDrag?.activeTaskId === undefined) setTaskDragActive(false);
   }, [taskDrag?.activeTaskId]);
@@ -1109,17 +1112,6 @@ export function Composer({
     setSkillPickerOpen(true);
   }, [composerText]);
 
-  useEffect(() => {
-    if (!active || disabled || mentionCaret === undefined) return;
-    const beforeCaret = composerText.slice(0, mentionCaret);
-    const match = /(?:^|\s)@([^\s@]{0,120})$/u.exec(beforeCaret);
-    const key = `${composerText}\u0000${mentionCaret}`;
-    if (!match || dismissedMention.current === key) return;
-    mentionRange.current = { start: mentionCaret - match[1]!.length - 1, end: mentionCaret };
-    setThreadQuery(match[1]!);
-    setThreadPickerOpen(true);
-  }, [active, disabled, composerText, mentionCaret]);
-
   // Flush on unmount (covers thread switches), and let the store preflight
   // operations that must not strand unsaved text (move_draft).
   useEffect(() => {
@@ -1324,6 +1316,10 @@ export function Composer({
     ...(application.snapshot?.threads ?? []),
   ].map((thread) => [thread.id, thread])).values()].filter((thread) =>
     thread.id !== store.threadId && thread.inventoryState !== "archived");
+  const threadChoices = referenceThreads.filter((thread) =>
+    !threadReferenceText.references.some(({ threadId }) => threadId === thread.id) &&
+    `${thread.title.text} ${thread.id}`.toLocaleLowerCase().includes(threadQuery.trim().toLocaleLowerCase()),
+  ).slice(0, 30);
   const taskProjectionChecking = !application.authoritative;
   const missingTaskReferences = taskProjectionChecking
     ? []
@@ -1557,11 +1553,33 @@ export function Composer({
   }, []);
 
   const closeThreadPicker = () => {
-    dismissedMention.current = `${splitThreadReferenceText(textRef.current).text}\u0000${mentionCaret}`;
+    if (mentionRange.current) dismissedMention.current = mentionRange.current.start;
     mentionRange.current = undefined;
+    setInlineMention(false);
     setThreadPickerOpen(false);
     setThreadQuery("");
   };
+
+  const updateInlineMention = (body: string, caret: number | undefined, typed: boolean) => {
+    const match = caret === undefined ? null : /(?:^|\s)@([^\s@]{0,120})$/u.exec(body.slice(0, caret));
+    if (dismissedMention.current !== undefined && body[dismissedMention.current] !== "@") dismissedMention.current = undefined;
+    if (!match || caret === undefined || tuiActive || !active || effectiveDisabled || mentionComposing.current) {
+      if (mentionRange.current) closeThreadPicker();
+      return;
+    }
+    const start = caret - match[1]!.length - 1;
+    if (dismissedMention.current === start || (!typed && mentionRange.current?.start !== start)) return;
+    mentionRange.current = { start, end: caret };
+    setInlineMention(true);
+    setThreadQuery(match[1]!);
+    setThreadChoiceIndex(0);
+    setThreadPickerOpen(true);
+  };
+
+  useEffect(() => {
+    const range = mentionRange.current;
+    if (inlineMention && range && composerText.slice(range.start, range.end) !== `@${threadQuery}`) closeThreadPicker();
+  }, [composerText, inlineMention, threadQuery]);
 
   const stageThreadReference = (thread: NormalizedApplicationThreadSummary): boolean => {
     const availability = contextExcerptStagingSnapshot();
@@ -1614,7 +1632,7 @@ export function Composer({
     setDirty(true);
     setPromptInputError(undefined);
     closeThreadPicker();
-    setMentionCaret(undefined);
+    dismissedMention.current = undefined;
     requestAnimationFrame(() => {
       textarea.current?.focus();
       if (range) textarea.current?.setSelectionRange(range.start, range.start);
@@ -1633,6 +1651,27 @@ export function Composer({
     setPromptInputError(undefined);
     requestAnimationFrame(() => textarea.current?.focus());
   };
+
+  useEffect(() => {
+    const open = (event: Event) => {
+      const detail: unknown = (event as CustomEvent<unknown>).detail;
+      if (!active ||
+        typeof detail !== "object" || detail === null ||
+        (detail as { threadId?: unknown }).threadId !== store.threadId) return;
+      if (tuiActive) {
+        setTuiSubmissionError("Switch to Chat to reference a thread.");
+        return;
+      }
+      if (effectiveDisabled || !application.authoritative) return;
+      mentionRange.current = undefined;
+      setInlineMention(false);
+      setThreadQuery("");
+      setThreadChoiceIndex(0);
+      setThreadPickerOpen(true);
+    };
+    window.addEventListener(OPEN_THREAD_REFERENCE_PICKER_EVENT, open);
+    return () => window.removeEventListener(OPEN_THREAD_REFERENCE_PICKER_EVENT, open);
+  }, [active, tuiActive, effectiveDisabled, application.authoritative, store.threadId]);
 
   const excerptDeliveryAvailable = availableDeliveryModes.some(
     ({ id, available }) => available && id === promptDeliveryMode,
@@ -3170,11 +3209,13 @@ export function Composer({
                   disabled={draftEditingDisabled || queueRestorePending}
                   aria-autocomplete="list"
                   aria-controls={
-                    commandMenuOpen ? "composer-command-menu" : undefined
+                    inlineMention && threadPickerOpen ? threadListId : commandMenuOpen ? "composer-command-menu" : undefined
                   }
-                  aria-expanded={commandMenuOpen}
+                  aria-expanded={commandMenuOpen || (inlineMention && threadPickerOpen)}
                   aria-activedescendant={
-                    commandMenuOpen && activeCommand
+                    inlineMention && threadPickerOpen && threadChoices[threadChoiceIndex]
+                      ? `${threadListId}-${threadChoiceIndex}`
+                      : commandMenuOpen && activeCommand
                       ? commandOptionId(
                           activeCommand,
                           effectiveActiveCommandIndex,
@@ -3207,7 +3248,9 @@ export function Composer({
                     const next = replaceThreadReferenceBody(textRef.current, event.target.value);
                     textRef.current = next;
                     setText(next);
-                    setMentionCaret(!mentionComposing.current && event.currentTarget.selectionStart === event.currentTarget.selectionEnd ? event.currentTarget.selectionStart : undefined);
+                    updateInlineMention(event.target.value,
+                      event.currentTarget.selectionStart === event.currentTarget.selectionEnd ? event.currentTarget.selectionStart : undefined,
+                      input instanceof InputEvent && input.inputType === "insertText" && !input.isComposing);
                     setDirty(true);
                     if (tuiActive) setTuiSubmissionError(undefined);
                   }}
@@ -3217,17 +3260,31 @@ export function Composer({
                     }
                   }}
                   onSelect={(event) => {
-                    setMentionCaret(!mentionComposing.current && event.currentTarget.selectionStart === event.currentTarget.selectionEnd ? event.currentTarget.selectionStart : undefined);
+                    if (mentionRange.current) updateInlineMention(event.currentTarget.value,
+                      event.currentTarget.selectionStart === event.currentTarget.selectionEnd ? event.currentTarget.selectionStart : undefined, false);
                   }}
-                  onCompositionStart={() => { mentionComposing.current = true; setMentionCaret(undefined); }}
-                  onCompositionEnd={(event) => { mentionComposing.current = false; setMentionCaret(event.currentTarget.selectionStart); }}
+                  onCompositionStart={() => { mentionComposing.current = true; if (mentionRange.current) closeThreadPicker(); }}
+                  onCompositionEnd={() => { mentionComposing.current = false; }}
                   onPaste={(event) => {
                     const files = Array.from(event.clipboardData.files);
                     if (files.length > 0) addAttachmentFiles(files);
                   }}
                   onKeyDown={(event) => {
                     if (
-                      commandMenuOpen &&
+                      inlineMention && threadPickerOpen && !event.nativeEvent.isComposing &&
+                      (event.key === "ArrowDown" || event.key === "ArrowUp") && threadChoices.length > 0
+                    ) {
+                      event.preventDefault();
+                      setThreadChoiceIndex((index) => (index + (event.key === "ArrowDown" ? 1 : -1) + threadChoices.length) % threadChoices.length);
+                    } else if (inlineMention && threadPickerOpen && !event.nativeEvent.isComposing &&
+                      (event.key === "Enter" || event.key === "Tab") && !event.shiftKey && threadChoices[threadChoiceIndex]) {
+                      event.preventDefault();
+                      stageThreadReference(threadChoices[threadChoiceIndex]!);
+                    } else if (inlineMention && threadPickerOpen && event.key === "Escape") {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      closeThreadPicker();
+                    } else if (commandMenuOpen &&
                       (event.key === "ArrowDown" || event.key === "ArrowUp")
                     ) {
                       event.preventDefault();
@@ -3334,14 +3391,17 @@ export function Composer({
                 <div className="composer-footer" ref={composerFooterRef}>
                   <div className="composer-tools">
                     <ComposerThreadPicker
+                      anchor={textarea}
                       open={active && threadPickerOpen}
-                      onOpenChange={(open) => { if (open) { mentionRange.current = undefined; setThreadQuery(""); setThreadPickerOpen(true); } else closeThreadPicker(); }}
+                      onOpenChange={(open) => { if (open) { mentionRange.current = undefined; setInlineMention(false); setThreadQuery(""); setThreadChoiceIndex(0); setThreadPickerOpen(true); } else closeThreadPicker(); }}
                       query={threadQuery}
-                      onQueryChange={setThreadQuery}
-                      threads={referenceThreads}
-                      selectedIds={new Set(threadReferenceText.references.map(({ threadId }) => threadId))}
-                      focusSearch={mentionRange.current !== undefined}
-                      disabled={effectiveDisabled || draftConflict || queueRestorePending || !application.authoritative}
+                      onQueryChange={(query) => { setThreadQuery(query); setThreadChoiceIndex(0); }}
+                      threads={threadChoices}
+                      inline={inlineMention}
+                      listId={threadListId}
+                      selectedIndex={threadChoiceIndex}
+                      onSelectedIndexChange={setThreadChoiceIndex}
+                      disabled={tuiActive || effectiveDisabled || draftConflict || queueRestorePending || !application.authoritative}
                       onSelect={(thread) => { stageThreadReference(thread); }}
                     />
                     <Popover

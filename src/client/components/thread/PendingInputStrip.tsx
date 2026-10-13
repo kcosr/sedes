@@ -7,6 +7,7 @@ import {
   type ThreadClientStore,
 } from "../../stores/ThreadClientStore.js";
 import { selectTranscriptSubmissions } from "./submission-presentation.js";
+import { splitThreadReferenceText } from "../../../shared/thread-references.js";
 
 type RowAction = "delete" | "restore" | "steer" | "dismiss" | "copy";
 
@@ -54,8 +55,12 @@ function errorMessage(error: unknown): string {
 }
 
 function transferPreview(transfer: PendingComposerTransfer): string {
-  const text = transfer.captured.text.trim();
+  const references = splitThreadReferenceText(transfer.captured.text);
+  const text = references.text.trim();
   if (text) return text.slice(0, 240);
+  if (references.references.length > 0) {
+    return `Referenced thread: ${references.references[0]!.title}${references.references.length > 1 ? ` · +${references.references.length - 1}` : ""}`.slice(0, 240);
+  }
 
   const details: string[] = [];
   if (transfer.captured.selectedSkillId) {

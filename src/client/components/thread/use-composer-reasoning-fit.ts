@@ -22,8 +22,10 @@ export function useComposerReasoningFit() {
       const reasoning = tools.querySelector<HTMLElement>(
         '[data-setting-id="thinking_level"] > button',
       );
+      const reference = tools.querySelector<HTMLElement>("[data-composer-reference-trigger]");
       if (!reasoning) {
         footer.removeAttribute("data-reasoning-collapsed");
+        footer.removeAttribute("data-reference-collapsed");
         return;
       }
       // Do not remove the user's focus or an open picker's anchor. Its close
@@ -40,7 +42,14 @@ export function useComposerReasoningFit() {
       footer.setAttribute("data-reasoning-measuring", "");
       let overflow: boolean;
       try {
+        footer.removeAttribute("data-reference-collapsed");
         overflow = tools.scrollWidth > tools.clientWidth + 1;
+        // Keep the existing reasoning shortcut before the optional reference
+        // button. References remain available through @ and Thread actions.
+        if (overflow && reference && !reference.contains(document.activeElement)) {
+          footer.setAttribute("data-reference-collapsed", "");
+          overflow = tools.scrollWidth > tools.clientWidth + 1;
+        }
       } finally {
         footer.removeAttribute("data-reasoning-measuring");
       }
@@ -75,6 +84,7 @@ export function useComposerReasoningFit() {
       window.removeEventListener("resize", schedule);
       footer.removeAttribute("data-reasoning-measuring");
       footer.removeAttribute("data-reasoning-collapsed");
+      footer.removeAttribute("data-reference-collapsed");
     };
   }, [footer, reasoningPickerOpen]);
 

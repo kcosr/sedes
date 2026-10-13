@@ -43,6 +43,7 @@ import {
   TaskDragProvider,
   useTaskDrag,
 } from "../tasks/task-drag.js";
+import { ThreadDragProvider } from "../threads/thread-drag.js";
 
 type ThreadSummary = ApplicationClientState["visibleThreads"][number];
 type TaskSummary = NonNullable<
@@ -155,6 +156,7 @@ function makeThread(
 }
 
 interface StateOptions {
+  readonly withThreadDragProvider?: boolean;
   readonly defaultThreadId?: string;
   readonly search?: string;
   readonly environments?: NonNullable<
@@ -459,9 +461,14 @@ function renderSidebar(
   render(<ThreadArchiveOperationHost store={store} />);
   const defaultScope = { profileId: "desktop-test", serverKey: "https://example.test", identity: "user" };
   if (options.defaultThreadId) localStorage.setItem(defaultThreadStorageKey(defaultScope), options.defaultThreadId);
-  const wrap = (current: ApplicationClientState) => options.defaultThreadId
-    ? <DefaultThreadProvider scope={defaultScope}>{content(current)}</DefaultThreadProvider>
-    : content(current);
+  const wrap = (current: ApplicationClientState) => {
+    const sidebar = options.defaultThreadId
+      ? <DefaultThreadProvider scope={defaultScope}>{content(current)}</DefaultThreadProvider>
+      : content(current);
+    return options.withThreadDragProvider
+      ? <ThreadDragProvider store={store} snapshot={current.snapshot!}>{sidebar}</ThreadDragProvider>
+      : sidebar;
+  };
   const result = render(wrap(state));
   return {
     ...result,
@@ -474,6 +481,39 @@ function renderSidebar(
 }
 
 describe("sidebar disclosure persistence", () => {
+  it.each(["time", "project", "default"] as const)("disables HTML thread drag on touch for %s rows", (mode) => {
+    vi.stubGlobal("matchMedia", vi.fn(() => ({
+      matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn(),
+    })));
+    seedViewPreferences({ groupBy: mode === "default" ? "time" : mode });
+    const thread = makeThread("touch-thread", "Touch thread");
+    const view = renderSidebar([thread], {
+      withThreadDragProvider: true,
+      ...(mode === "default" ? { defaultThreadId: thread.id } : {}),
+    });
+    const row = view.container.querySelector<HTMLElement>(
+      '[data-thread-drop-id="touch-thread"], [data-thread-id="touch-thread"][draggable]',
+    );
+    expect(row).not.toBeNull();
+    expect(row).toHaveAttribute("draggable", "false");
+    const setData = vi.fn();
+    fireEvent.dragStart(row!, { dataTransfer: { setData } });
+    expect(setData).not.toHaveBeenCalled();
+  });
+
+  it.each(["time", "project", "default"] as const)("retains HTML thread drag on desktop for %s rows", (mode) => {
+    seedViewPreferences({ groupBy: mode === "default" ? "time" : mode });
+    const thread = makeThread("desktop-thread", "Desktop thread");
+    const view = renderSidebar([thread], {
+      withThreadDragProvider: true,
+      ...(mode === "default" ? { defaultThreadId: thread.id } : {}),
+    });
+    const row = view.container.querySelector<HTMLElement>(
+      '[data-thread-drop-id="desktop-thread"], [data-thread-id="desktop-thread"][draggable]',
+    );
+    expect(row).toHaveAttribute("draggable", "true");
+  });
+
   it.each(["time", "state", "none", "project"] as const)("keeps Add project visible in %s with scope collapsed", async (groupBy) => {
     seedViewPreferences({ groupBy, scopeCollapsed: true });
     const user = userEvent.setup();

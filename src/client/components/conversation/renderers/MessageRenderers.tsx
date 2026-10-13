@@ -131,7 +131,7 @@ export function UserMessagePresentation({
       {content.map((part, index) =>
         part.kind === "skill" ||
         part.kind === "context_excerpt" ? null : part.kind === "text" ? (
-          <ReferencedUserText key={index} text={part.text.text} />
+          <ReferencedUserText key={index} text={part.text.text} parseReferences={origin === undefined} />
         ) : part.kind === "attachment" ? (
           <DurableAttachmentCard
             key={index}
@@ -214,8 +214,8 @@ export function UserMessagePresentation({
   );
 }
 
-function ReferencedUserText({ text }: { readonly text: string }): React.JSX.Element {
-  const parsed = splitThreadReferenceText(text);
+function ReferencedUserText({ text, parseReferences }: { readonly text: string; readonly parseReferences: boolean }): React.JSX.Element {
+  const parsed = parseReferences ? splitThreadReferenceText(text) : { text, references: [] };
   return <div className="streaming-text">
     <ThreadReferenceChips references={parsed.references} />
     <span {...conversationMessageSelectableTextProps}>{parsed.text}</span>

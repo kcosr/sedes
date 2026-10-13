@@ -1,55 +1,67 @@
-import { useRef } from "react";
+import { useMemo, useRef, type RefObject } from "react";
 import { MessagesSquare } from "lucide-react";
 import type { NormalizedApplicationThreadSummary } from "../../../shared/index.js";
-import { Popover, PopoverContent, PopoverTrigger } from "@client/components/ui/popover";
+import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from "@client/components/ui/popover";
 import { SearchableSelectSearch } from "@client/components/ui/searchable-select";
 import { menuEmptyClass, menuRowClass } from "@client/components/ui/floating";
 import { moveListFocus } from "@client/lib/list-focus";
 import { usePickerFocus } from "../../lib/use-picker-focus.js";
 
-export function ComposerThreadPicker({ open, onOpenChange, query, onQueryChange, threads, selectedIds, disabled, onSelect, focusSearch }: {
+export function ComposerThreadPicker({ open, onOpenChange, query, onQueryChange, threads, disabled, onSelect, inline, anchor, listId, selectedIndex, onSelectedIndexChange }: {
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
   readonly query: string;
   readonly onQueryChange: (query: string) => void;
   readonly threads: readonly NormalizedApplicationThreadSummary[];
-  readonly selectedIds: ReadonlySet<string>;
   readonly disabled: boolean;
   readonly onSelect: (thread: NormalizedApplicationThreadSummary) => void;
-  readonly focusSearch: boolean;
+  readonly inline: boolean;
+  readonly anchor: RefObject<HTMLTextAreaElement | null>;
+  readonly listId: string;
+  readonly selectedIndex: number;
+  readonly onSelectedIndexChange: (index: number) => void;
 }): React.JSX.Element {
   const search = useRef<HTMLInputElement>(null);
   const list = useRef<HTMLDivElement>(null);
   const focus = usePickerFocus(search);
-  const needle = query.trim().toLocaleLowerCase();
-  const matching = threads.filter((thread) => !selectedIds.has(thread.id) &&
-    (!needle || `${thread.title.text} ${thread.id}`.toLocaleLowerCase().includes(needle))).slice(0, 30);
+  const virtualAnchor = useMemo(() => ({ current: {
+    getBoundingClientRect: () => anchor.current?.getBoundingClientRect() ?? new DOMRect(),
+    get contextElement() { return anchor.current ?? undefined; },
+  } }), [anchor]);
   const rows = () => Array.from(list.current?.querySelectorAll<HTMLButtonElement>("button") ?? []);
   return (
     <Popover open={open} onOpenChange={onOpenChange}>
+      <PopoverAnchor virtualRef={virtualAnchor} />
       <PopoverTrigger asChild>
-        <button type="button" className="skill-button" aria-label="Reference a thread" title="Reference a thread (@)"
+        <button type="button" className="skill-button" data-composer-reference-trigger="" aria-label="Reference a thread" title="Reference a thread (@)"
           disabled={disabled} onPointerDown={focus.onPointerDown} onKeyDown={focus.onKeyDown}>
           <MessagesSquare size={15} aria-hidden="true" />
         </button>
       </PopoverTrigger>
       <PopoverContent side="top" align="start" sideOffset={8} role="dialog" aria-label="Reference a thread"
         className="skill-popover max-h-[min(var(--radix-popover-content-available-height),440px,70dvh)] gap-0 overflow-hidden p-0"
-        onOpenAutoFocus={(event) => { if (focusSearch) focus.requestSearchFocus(); focus.onOpenAutoFocus(event); }}>
-        <SearchableSelectSearch ref={search} type="search" value={query} aria-label="Search threads" placeholder="Search active threads"
+        onOpenAutoFocus={(event) => { if (inline) event.preventDefault(); else focus.onOpenAutoFocus(event); }}
+        onInteractOutside={(event) => {
+          if (inline && (event.target === anchor.current || event.detail.originalEvent.target === anchor.current)) event.preventDefault();
+        }}
+        onCloseAutoFocus={(event) => { event.preventDefault(); anchor.current?.focus({ preventScroll: true }); }}>
+        {!inline && <SearchableSelectSearch ref={search} type="search" value={query} aria-label="Search threads" placeholder="Search active threads"
           onChange={(event) => onQueryChange(event.target.value)} onKeyDown={(event) => {
             if ((event.key === "ArrowDown" || event.key === "ArrowUp") && moveListFocus(rows(), event.key)) event.preventDefault();
-            if (event.key === "Enter" && matching[0]) { event.preventDefault(); onSelect(matching[0]); }
-          }} />
-        <div ref={list} className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain p-(--menu-panel-padding)"
+            if (event.key === "Enter" && threads[0]) { event.preventDefault(); onSelect(threads[0]); }
+          }} />}
+        <div ref={list} id={listId} role="listbox" aria-label="Matching threads" className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain p-(--menu-panel-padding)"
           onKeyDown={(event) => { if (moveListFocus(rows(), event.key)) event.preventDefault(); }}>
-          {matching.map((thread) => (
-            <button key={thread.id} type="button" className={menuRowClass} onClick={() => onSelect(thread)}>
+          {threads.map((thread, index) => (
+            <button key={thread.id} id={`${listId}-${index}`} role="option" aria-selected={index === selectedIndex} type="button"
+              className={`${menuRowClass} ${index === selectedIndex ? "bg-accent" : ""}`}
+              onMouseDown={(event) => { if (inline) event.preventDefault(); }}
+              onPointerMove={() => onSelectedIndexChange(index)} onClick={() => onSelect(thread)}>
               <span className="min-w-0 flex-1 text-left"><span className="block truncate">{thread.title.text}</span>
                 <span className="block truncate text-xs text-muted-foreground">{thread.id}</span></span>
             </button>
           ))}
-          {matching.length === 0 && <p className={menuEmptyClass} role="status">No matching active threads</p>}
+          {threads.length === 0 && <p className={menuEmptyClass} role="status">No matching active threads</p>}
         </div>
       </PopoverContent>
     </Popover>

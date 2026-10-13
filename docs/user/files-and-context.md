@@ -79,7 +79,8 @@ worktree also clears the stale preference and Files falls back to Primary.
 
 Drag an individual sidebar thread into the message composer, or type **@** and
 choose an active thread. **Reference a thread** beside the skill button opens
-the same searchable picker without typing. Each selection appears as a removable
+the same searchable picker without typing. When toolbar space is tight, use
+**Thread actions → Reference a thread** or type **@**. Each selection appears as a removable
 chip above the message; up to eight threads can be referenced in one prompt.
 The picker includes the active threads currently loaded in your inventory.
 

@@ -33,6 +33,7 @@ import type {
 import type { RegionId } from "../../workspace-panels/regions.js";
 import { setEnvironmentColorsEnabled } from "../../app/environment-palette.js";
 import { ThreadHeader } from "./ThreadHeader.js";
+import { OPEN_THREAD_REFERENCE_PICKER_EVENT } from "../../threads/thread-reference-picker.js";
 import {
   CONNECTION_INDICATOR_DELAY_MILLISECONDS,
 } from "../../app/use-delayed-connection-status.js";
@@ -1244,6 +1245,19 @@ describe("ThreadHeader agent tools", () => {
 });
 
 describe("ThreadHeader action menu", () => {
+  it("opens the active thread reference picker through Thread actions", async () => {
+    const requested = vi.fn();
+    window.addEventListener(OPEN_THREAD_REFERENCE_PICKER_EVENT, requested);
+    try {
+      renderHeader();
+      const menu = await openThreadActions();
+      await userEvent.click(within(menu).getByRole("menuitem", { name: "Reference a thread…" }));
+      await waitFor(() => expect(requested).toHaveBeenCalledOnce());
+      expect((requested.mock.calls[0]![0] as CustomEvent).detail.threadId).toBe("thread-1");
+    } finally {
+      window.removeEventListener(OPEN_THREAD_REFERENCE_PICKER_EVENT, requested);
+    }
+  });
   it("uses a bottom sheet on coarse pointers and closes it before dialogs", async () => {
     vi.stubGlobal(
       "matchMedia",
