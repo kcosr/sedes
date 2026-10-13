@@ -5,10 +5,6 @@
   margin: 8px 0;
 }
 
-.composer-footer[data-reference-collapsed] [data-composer-reference-trigger] {
-  display: none;
-}
-
 .composer > .thread-reference-list {
   margin: 10px 15px 0;
 }

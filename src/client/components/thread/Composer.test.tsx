@@ -53,7 +53,6 @@ import type { NormalizedApplicationSnapshot } from "../../../shared/index.js";
 import type { NormalizedApplicationThreadSummary } from "../../../shared/index.js";
 import { ThreadDragProvider, useThreadDrag } from "../../threads/thread-drag.js";
 import { formatThreadReferenceText, splitThreadReferenceText } from "../../../shared/thread-references.js";
-import { openThreadReferencePicker } from "../../threads/thread-reference-picker.js";
 
 import {
   clearDiagnostics,
@@ -710,6 +709,14 @@ function referenceApplication(threads = [referencedThread], descendants: readonl
   return { snapshot, store: { getSnapshot: () => state, subscribe: () => () => undefined } as unknown as ApplicationClientStore };
 }
 
+async function openReferenceSuggestions(query = "") {
+  const input = screen.getByRole("textbox") as HTMLTextAreaElement;
+  input.focus();
+  input.setSelectionRange(0, 0);
+  await userEvent.keyboard(`@${query}`);
+  return input;
+}
+
 function ThreadDragTestSource() {
   const drag = useThreadDrag();
   return <button draggable onDragStart={(event) => drag?.beginThreadDrag(referencedThread.id, event.dataTransfer)}
@@ -717,95 +724,90 @@ function ThreadDragTestSource() {
 }
 
 describe("thread references", () => {
-  it("opens desktop search with provider icons and keyboard selection, without displaying thread IDs", async () => {
+  it("shows provider icons and navigates @ suggestions in the composer, wrapping both ways", async () => {
     vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })));
     const second = { ...referencedThread, id: "616946aa-4574-41f7-bd70-d3a9edd56dbe", title: { text: "Second thread" }, backend: { ...referencedThread.backend, brand: "codex" as const } };
+    const third = { ...referencedThread, id: "616946aa-4574-41f7-bd70-d3a9edd56dbf", title: { text: "Third thread" } };
     const store = new FakeComposerStore(snapshot(), "Keep this text");
-    render(<Composer store={store as unknown as ThreadClientStore} applicationStore={referenceApplication([referencedThread, second]).store} />);
-    await userEvent.click(screen.getByRole("button", { name: "Reference a thread" }));
-    const search = await screen.findByRole("searchbox", { name: "Search threads" });
-    await waitFor(() => expect(search).toHaveFocus());
+    render(<Composer store={store as unknown as ThreadClientStore} applicationStore={referenceApplication([referencedThread, second, third]).store} />);
+    const input = await openReferenceSuggestions();
+    expect(input).toHaveFocus();
+    expect(screen.queryByRole("searchbox", { name: "Search threads" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Reference a thread" })).not.toBeInTheDocument();
     const dialog = screen.getByRole("dialog", { name: "Reference a thread" });
     expect(dialog).not.toHaveTextContent(referencedThread.id);
     const first = within(dialog).getByRole("option", { name: "Other thread" });
     expect(first.firstElementChild).toHaveAttribute("data-backend-brand", "claude");
     await userEvent.keyboard("{ArrowDown}{ArrowDown}");
+    const last = within(dialog).getByRole("option", { name: "Third thread" });
+    expect(last).toHaveAttribute("aria-selected", "true");
+    expect(input).toHaveAttribute("aria-activedescendant", last.id);
+    expect(input).toHaveFocus();
+    await userEvent.keyboard("{ArrowUp}");
     const choice = within(dialog).getByRole("option", { name: "Second thread" });
-    expect(choice).toHaveFocus();
     expect(choice).toHaveAttribute("aria-selected", "true");
+    expect(input).toHaveAttribute("aria-activedescendant", choice.id);
+    await userEvent.keyboard("{ArrowDown}{ArrowDown}");
+    expect(first).toHaveAttribute("aria-selected", "true");
+    expect(input).toHaveAttribute("aria-activedescendant", first.id);
+    await userEvent.keyboard("{ArrowUp}");
+    expect(last).toHaveAttribute("aria-selected", "true");
+    expect(input).toHaveAttribute("aria-activedescendant", last.id);
+    expect(input).toHaveFocus();
+    await userEvent.keyboard("{ArrowUp}");
     await userEvent.keyboard("{Enter}");
     await waitFor(() => expect(dialog).not.toBeInTheDocument());
     expect(screen.getByRole("list", { name: "Referenced threads" })).toHaveTextContent("Second thread");
     expect(screen.getByRole("textbox")).toHaveValue("Keep this text");
   });
 
-  it("shows mobile search without autofocus and filters after an explicit tap", async () => {
-    render(<Composer store={new FakeComposerStore(snapshot(), "Ask") as unknown as ThreadClientStore} applicationStore={referenceApplication().store} />);
-    await userEvent.click(screen.getByRole("button", { name: "Reference a thread" }));
-    const search = await screen.findByRole("searchbox", { name: "Search threads" });
-    expect(search).toBeVisible();
-    expect(search).not.toHaveFocus();
-    await userEvent.type(search, "missing");
-    expect(search).toHaveFocus();
+  it("keeps mouse hover and keyboard selection on the same row", async () => {
+    vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })));
+    const second = { ...referencedThread, id: "616946aa-4574-41f7-bd70-d3a9edd56dbe", title: { text: "Hovered thread" } };
+    render(<Composer store={new FakeComposerStore(snapshot(), "Keep this text") as unknown as ThreadClientStore} applicationStore={referenceApplication([referencedThread, second]).store} />);
+    const input = await openReferenceSuggestions();
+    const choice = screen.getByRole("option", { name: "Hovered thread" });
+    await userEvent.hover(choice);
+    expect(input).toHaveFocus();
+    expect(input).toHaveAttribute("aria-activedescendant", choice.id);
+    expect(choice).toHaveAttribute("aria-selected", "true");
+    await userEvent.keyboard("{Enter}");
+    expect(screen.getByRole("list", { name: "Referenced threads" })).toHaveTextContent("Hovered thread");
+    expect(screen.getByRole("textbox")).toHaveValue("Keep this text");
+  });
+
+  it("filters numeric mentions against visible thread details", async () => {
+    const wrongSprint = { ...referencedThread, id: "216946aa-4574-41f7-bd70-d3a9edd56dbd", title: { text: "Sprint 3 planning" } };
+    const desiredSprint = { ...referencedThread, id: "616946aa-4574-41f7-bd70-d3a9edd56dbe", title: { text: "Sprint 2 planning" } };
+    render(<Composer store={new FakeComposerStore(snapshot(), "Ask") as unknown as ThreadClientStore} applicationStore={referenceApplication([wrongSprint, desiredSprint]).store} />);
+    await openReferenceSuggestions("2");
+    expect(screen.queryByRole("option", { name: "Sprint 3 planning" })).not.toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Sprint 2 planning" })).toBeVisible();
+  });
+
+  it("keeps mobile filtering and focus in the composer", async () => {
+    render(<Composer store={new FakeComposerStore(snapshot(), "Ask ") as unknown as ThreadClientStore} applicationStore={referenceApplication().store} />);
+    const input = screen.getByRole("textbox") as HTMLTextAreaElement;
+    input.focus();
+    input.setSelectionRange(4, 4);
+    await userEvent.keyboard("@missing");
+    expect(input).toHaveFocus();
+    expect(screen.queryByRole("searchbox", { name: "Search threads" })).not.toBeInTheDocument();
     expect(screen.getByText("No matching active threads")).toBeVisible();
-    await userEvent.clear(search);
-    await userEvent.type(search, "thread other CLAUDE");
+    await userEvent.keyboard("{Backspace>7}CLAUDE");
     expect(screen.getByRole("option", { name: "Other thread" })).toBeVisible();
     await userEvent.keyboard("{Escape}");
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Reference a thread" })).not.toBeInTheDocument());
-    expect(screen.getByRole("textbox")).toHaveValue("Ask");
+    expect(input).toHaveFocus();
+    expect(input).toHaveValue("Ask @CLAUDE");
   });
 
-  it("searches an inline mention independently while preserving its original caret range", async () => {
-    const other = { ...referencedThread, id: "616946aa-4574-41f7-bd70-d3a9edd56dbe", title: { text: "Selected instead" } };
-    const store = new FakeComposerStore(snapshot(), "Compare  and keep this");
-    render(<Composer store={store as unknown as ThreadClientStore} applicationStore={referenceApplication([referencedThread, other]).store} />);
-    const input = screen.getByRole("textbox") as HTMLTextAreaElement;
-    input.focus();
-    input.setSelectionRange(8, 8);
-    await userEvent.keyboard("@Other");
-    const search = screen.getByRole("searchbox", { name: "Search threads" });
-    await userEvent.clear(search);
-    await userEvent.type(search, "Selected");
-    expect(input).toHaveValue("Compare @Other and keep this");
-    expect(screen.getByRole("option", { name: "Selected instead" })).toBeVisible();
-    await userEvent.keyboard("{Enter}");
-    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Reference a thread" })).not.toBeInTheDocument());
-    expect(input).toHaveValue("Compare  and keep this");
-    await waitFor(() => {
-      expect(input).toHaveFocus();
-      expect(input.selectionStart).toBe(8);
-    });
-    expect(screen.getByRole("list", { name: "Referenced threads" })).toHaveTextContent("Selected instead");
-  });
-
-  it("opens the picker from the matching thread menu and returns focus to the composer", async () => {
-    const store = new FakeComposerStore(snapshot(), "Keep this text");
-    Object.defineProperty(store, "threadId", { value: "current-thread" });
-    const application = referenceApplication().store;
-    const view = render(<Composer store={store as unknown as ThreadClientStore} applicationStore={application} />);
-    act(() => openThreadReferencePicker("another-thread"));
-    expect(screen.queryByRole("dialog", { name: "Reference a thread" })).not.toBeInTheDocument();
-    act(() => openThreadReferencePicker("current-thread"));
-    const search = await screen.findByRole("searchbox", { name: "Search threads" });
-    fireEvent.keyDown(search, { key: "Escape" });
-    await waitFor(() => expect(screen.getByRole("textbox")).toHaveFocus());
-    expect(screen.getByRole("textbox")).toHaveValue("Keep this text");
-    view.rerender(<Composer active={false} store={store as unknown as ThreadClientStore} applicationStore={application} />);
-    act(() => openThreadReferencePicker("current-thread"));
-    expect(screen.queryByRole("dialog", { name: "Reference a thread" })).not.toBeInTheDocument();
-  });
-
-  it.each([false, true])("preserves an outside input's focus when dismissing the reference picker, inline %s", async (inline) => {
+  it("preserves an outside input's focus when dismissing the reference picker", async () => {
     const store = new FakeComposerStore(snapshot(), "");
     render(<><input aria-label="Sidebar search" /><Composer store={store as unknown as ThreadClientStore} applicationStore={referenceApplication().store} /></>);
     const input = screen.getByRole("textbox", { name: "Message Pi" });
-    if (inline) {
-      input.focus();
-      await userEvent.keyboard("@Other");
-    } else {
-      await userEvent.click(screen.getByRole("button", { name: "Reference a thread" }));
-    }
+    input.focus();
+    await userEvent.keyboard("@Other");
     expect(await screen.findByRole("dialog", { name: "Reference a thread" })).toBeVisible();
     const focus = vi.spyOn(input, "focus");
     const outside = screen.getByRole("textbox", { name: "Sidebar search" });
@@ -818,13 +820,13 @@ describe("thread references", () => {
     const store = new FakeComposerStore(snapshot(), "Ask");
     const current = { ...referencedThread, inventoryState: "archived" as const };
     render(<Composer store={store as unknown as ThreadClientStore} applicationStore={referenceApplication([current], [referencedThread]).store} />);
-    fireEvent.click(screen.getByRole("button", { name: "Reference a thread" }));
+    await openReferenceSuggestions();
     expect(await screen.findByText("No matching active threads")).toBeInTheDocument();
   });
   it.each(["", "x".repeat(1024)])("bounds imported thread titles before creating a reference", async (title) => {
     const store = new FakeComposerStore(snapshot(), "Ask");
     render(<Composer store={store as unknown as ThreadClientStore} applicationStore={referenceApplication([{ ...referencedThread, title: { text: title } }]).store} />);
-    fireEvent.click(screen.getByRole("button", { name: "Reference a thread" }));
+    await openReferenceSuggestions();
     const dialog = await screen.findByRole("dialog", { name: "Reference a thread" });
     fireEvent.click(within(dialog).getByRole("option"));
     fireEvent.click(screen.getByRole("button", { name: "Send message" }));
@@ -862,12 +864,15 @@ describe("thread references", () => {
     await userEvent.keyboard("@Other");
     expect(await screen.findByRole("option", { name: /Other thread/ })).toBeVisible();
     expect(input).toHaveFocus();
-    expect(screen.getByRole("searchbox", { name: "Search threads" })).toBeVisible();
-    expect(screen.getByRole("searchbox", { name: "Search threads" })).not.toHaveFocus();
+    expect(screen.queryByRole("searchbox", { name: "Search threads" })).not.toBeInTheDocument();
     await userEvent.keyboard("{Enter}");
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Reference a thread" })).not.toBeInTheDocument());
     expect(input).toHaveValue("Compare  and keep this");
     expect(screen.getByRole("list", { name: "Referenced threads" })).toHaveTextContent("Other thread");
+    await waitFor(() => {
+      expect(input).toHaveFocus();
+      expect(input.selectionStart).toBe(8);
+    });
   });
 
   it("does not treat email text as a mention and Escape leaves a cancelled mention unchanged", async () => {
@@ -927,7 +932,7 @@ describe("thread references", () => {
     await userEvent.keyboard("npm i @types/node");
     expect(screen.getByRole("textbox")).toHaveValue("npm i @types/node");
     expect(screen.queryByRole("dialog", { name: "Reference a thread" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Reference a thread" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Reference a thread" })).not.toBeInTheDocument();
   });
 
   it("copies a thread drag into the composer without grouping or navigating", () => {

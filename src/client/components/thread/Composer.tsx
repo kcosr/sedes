@@ -142,7 +142,6 @@ import {
 } from "../../../shared/thread-references.js";
 import { ThreadReferenceChips } from "./ThreadReferenceChips.js";
 import { ComposerThreadPicker } from "./ComposerThreadPicker.js";
-import { OPEN_THREAD_REFERENCE_PICKER_EVENT } from "../../threads/thread-reference-picker.js";
 
 export const OPEN_PROMPTS_SETTINGS_EVENT = "sedes-open-settings-prompts";
 
@@ -426,7 +425,6 @@ export function Composer({
   const [threadDragActive, setThreadDragActive] = useState(false);
   const [threadPickerOpen, setThreadPickerOpen] = useState(false);
   const [threadQuery, setThreadQuery] = useState("");
-  const [inlineMention, setInlineMention] = useState(false);
   const [threadChoiceIndex, setThreadChoiceIndex] = useState(0);
   const threadListId = useId();
   const mentionRange = useRef<{ start: number; end: number; text: string } | undefined>(undefined);
@@ -1319,7 +1317,7 @@ export function Composer({
     thread.id !== store.threadId && thread.inventoryState !== "archived");
   const threadChoices = referenceThreads.filter((thread) =>
     !threadReferenceText.references.some(({ threadId }) => threadId === thread.id) &&
-    matchesSearchQuery(threadQuery, [thread.title.text, thread.backend.brand, thread.id]),
+    matchesSearchQuery(threadQuery, [thread.title.text, thread.backend.brand]),
   ).slice(0, 30);
   const taskProjectionChecking = !application.authoritative;
   const missingTaskReferences = taskProjectionChecking
@@ -1556,7 +1554,6 @@ export function Composer({
   const closeThreadPicker = () => {
     if (mentionRange.current) dismissedMention.current = mentionRange.current.start;
     mentionRange.current = undefined;
-    setInlineMention(false);
     setThreadPickerOpen(false);
     setThreadQuery("");
   };
@@ -1571,7 +1568,6 @@ export function Composer({
     const start = caret - match[1]!.length - 1;
     if (dismissedMention.current === start || (!typed && mentionRange.current?.start !== start)) return;
     mentionRange.current = { start, end: caret, text: body.slice(start, caret) };
-    setInlineMention(true);
     setThreadQuery(match[1]!);
     setThreadChoiceIndex(0);
     setThreadPickerOpen(true);
@@ -1579,8 +1575,8 @@ export function Composer({
 
   useEffect(() => {
     const range = mentionRange.current;
-    if (inlineMention && range && composerText.slice(range.start, range.end) !== range.text) closeThreadPicker();
-  }, [composerText, inlineMention]);
+    if (threadPickerOpen && range && composerText.slice(range.start, range.end) !== range.text) closeThreadPicker();
+  }, [composerText, threadPickerOpen]);
 
   const stageThreadReference = (thread: NormalizedApplicationThreadSummary): boolean => {
     const availability = contextExcerptStagingSnapshot();
@@ -1652,27 +1648,6 @@ export function Composer({
     setPromptInputError(undefined);
     requestAnimationFrame(() => textarea.current?.focus());
   };
-
-  useEffect(() => {
-    const open = (event: Event) => {
-      const detail: unknown = (event as CustomEvent<unknown>).detail;
-      if (!active ||
-        typeof detail !== "object" || detail === null ||
-        (detail as { threadId?: unknown }).threadId !== store.threadId) return;
-      if (tuiActive) {
-        setTuiSubmissionError("Switch to Chat to reference a thread.");
-        return;
-      }
-      if (effectiveDisabled || !application.authoritative) return;
-      mentionRange.current = undefined;
-      setInlineMention(false);
-      setThreadQuery("");
-      setThreadChoiceIndex(0);
-      setThreadPickerOpen(true);
-    };
-    window.addEventListener(OPEN_THREAD_REFERENCE_PICKER_EVENT, open);
-    return () => window.removeEventListener(OPEN_THREAD_REFERENCE_PICKER_EVENT, open);
-  }, [active, tuiActive, effectiveDisabled, application.authoritative, store.threadId]);
 
   const excerptDeliveryAvailable = availableDeliveryModes.some(
     ({ id, available }) => available && id === promptDeliveryMode,
@@ -3212,11 +3187,11 @@ export function Composer({
                   disabled={draftEditingDisabled || queueRestorePending}
                   aria-autocomplete="list"
                   aria-controls={
-                    inlineMention && threadPickerOpen ? threadListId : commandMenuOpen ? "composer-command-menu" : undefined
+                    threadPickerOpen ? threadListId : commandMenuOpen ? "composer-command-menu" : undefined
                   }
-                  aria-expanded={commandMenuOpen || (inlineMention && threadPickerOpen)}
+                  aria-expanded={commandMenuOpen || threadPickerOpen}
                   aria-activedescendant={
-                    inlineMention && threadPickerOpen && threadChoices[threadChoiceIndex]
+                    threadPickerOpen && threadChoices[threadChoiceIndex]
                       ? `${threadListId}-${threadChoiceIndex}`
                       : commandMenuOpen && activeCommand
                       ? commandOptionId(
@@ -3274,16 +3249,16 @@ export function Composer({
                   }}
                   onKeyDown={(event) => {
                     if (
-                      inlineMention && threadPickerOpen && !event.nativeEvent.isComposing &&
+                      threadPickerOpen && !event.nativeEvent.isComposing &&
                       (event.key === "ArrowDown" || event.key === "ArrowUp") && threadChoices.length > 0
                     ) {
                       event.preventDefault();
                       setThreadChoiceIndex((index) => (index + (event.key === "ArrowDown" ? 1 : -1) + threadChoices.length) % threadChoices.length);
-                    } else if (inlineMention && threadPickerOpen && !event.nativeEvent.isComposing &&
+                    } else if (threadPickerOpen && !event.nativeEvent.isComposing &&
                       (event.key === "Enter" || event.key === "Tab") && !event.shiftKey && threadChoices[threadChoiceIndex]) {
                       event.preventDefault();
                       stageThreadReference(threadChoices[threadChoiceIndex]!);
-                    } else if (inlineMention && threadPickerOpen && event.key === "Escape") {
+                    } else if (threadPickerOpen && event.key === "Escape") {
                       event.preventDefault();
                       event.stopPropagation();
                       closeThreadPicker();
@@ -3396,15 +3371,11 @@ export function Composer({
                     <ComposerThreadPicker
                       anchor={textarea}
                       open={active && threadPickerOpen}
-                      onOpenChange={(open) => { if (open) { mentionRange.current = undefined; setInlineMention(false); setThreadQuery(""); setThreadChoiceIndex(0); setThreadPickerOpen(true); } else closeThreadPicker(); }}
-                      query={threadQuery}
-                      onQueryChange={(query) => { setThreadQuery(query); setThreadChoiceIndex(0); }}
+                      onOpenChange={(open) => { if (!open) closeThreadPicker(); }}
                       threads={threadChoices}
-                      inline={inlineMention}
                       listId={threadListId}
                       selectedIndex={threadChoiceIndex}
                       onSelectedIndexChange={setThreadChoiceIndex}
-                      disabled={tuiActive || effectiveDisabled || draftConflict || queueRestorePending || !application.authoritative}
                       onSelect={(thread) => { stageThreadReference(thread); }}
                     />
                     <Popover
