@@ -15,6 +15,7 @@ export type Route =
       name: "thread";
       threadId: string;
       focusTurnId?: string;
+      focusResponse?: boolean;
     }
   | { name: "archived" }
   | { name: "usage" }
@@ -114,11 +115,11 @@ export function parseRoute(pathname: string, hash = ""): Route {
   const match = /^\/threads\/([^/]+)$/.exec(pathname);
   if (match?.[1]) {
     try {
-      const focusTurnId = parseTurnHash(hash);
+      const focus = parseTurnHash(hash);
       return {
         name: "thread",
         threadId: decodeURIComponent(match[1]),
-        ...(focusTurnId ? { focusTurnId } : {}),
+        ...focus,
       };
     } catch {
       return { name: "home" };
@@ -337,8 +338,8 @@ export function automationEditPath(threadId: string): string {
   return `${automationPath(threadId)}/edit`;
 }
 
-export function threadTurnPath(threadId: string, turnId: string): string {
-  return `${threadPath(threadId)}#turn=${encodeURIComponent(turnId)}`;
+export function threadTurnPath(threadId: string, turnId: string, target: "turn" | "response" = "turn"): string {
+  return `${threadPath(threadId)}#turn=${encodeURIComponent(turnId)}${target === "response" ? "&response" : ""}`;
 }
 
 /** Serialize a route back to the path navigate()/history expect. */
@@ -351,7 +352,7 @@ export function routePath(route: Route): string {
     return route.edit ? automationEditPath(route.threadId) : automationPath(route.threadId);
   }
   if (route.name === "settings") return settingsPath(route.page, route);
-  if (route.focusTurnId) return threadTurnPath(route.threadId, route.focusTurnId);
+  if (route.focusTurnId) return threadTurnPath(route.threadId, route.focusTurnId, route.focusResponse ? "response" : "turn");
   return threadPath(route.threadId);
 }
 
@@ -378,12 +379,14 @@ export function openExternal(url: string): void {
   window.open(parsed.href, "_blank", "noopener,noreferrer");
 }
 
-function parseTurnHash(hash: string): string | undefined {
-  const match = /^#turn=([^&]+)$/.exec(hash);
+function parseTurnHash(hash: string): { focusTurnId: string; focusResponse?: boolean } | undefined {
+  const match = /^#turn=([^&]+)(&response)?$/.exec(hash);
   if (!match?.[1]) return undefined;
   try {
     const turnId = decodeURIComponent(match[1]);
-    return turnId.length >= 1 && turnId.length <= 160 ? turnId : undefined;
+    return turnId.length >= 1 && turnId.length <= 160
+      ? { focusTurnId: turnId, ...(match[2] ? { focusResponse: true } : {}) }
+      : undefined;
   } catch {
     return undefined;
   }

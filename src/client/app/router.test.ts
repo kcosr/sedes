@@ -111,6 +111,16 @@ describe("automation routes", () => {
     });
   });
 
+  it("keeps response bookmark focus distinct from ordinary source-turn focus", () => {
+    const path = threadTurnPath("thread-1", "turn/1", "response");
+    expect(path).toBe("/threads/thread-1#turn=turn%2F1&response");
+    const route = parseRoute("/threads/thread-1", "#turn=turn%2F1&response");
+    expect(route).toEqual({ name: "thread", threadId: "thread-1", focusTurnId: "turn/1", focusResponse: true });
+    expect(routePath(route)).toBe(path);
+    expect(sameRoute(route, parseRoute("/threads/thread-1", "#turn=turn%2F1"))).toBe(false);
+    expect(parseRoute("/threads/thread-1", "#turn=turn%2F1&unknown")).toEqual({ name: "thread", threadId: "thread-1" });
+  });
+
   it("parses the automations list, page and editor routes", () => {
     const threadId = randomUUID();
 

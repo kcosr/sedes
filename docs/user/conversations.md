@@ -636,22 +636,25 @@ eligible only after confirmed provider history replaces it.
 
 ## Bookmark important turns
 
-Use **Bookmark turn** on the first user message of a turn. Running turns can be bookmarked before reply text arrives, including during
-thinking or tool activity. The response preview stays empty until reply text is
+Use **Bookmark response** in the footer below the assistant’s response. Running
+turns can be bookmarked before reply text arrives, including during thinking or
+tool activity. The response preview stays empty until reply text is
 available. Finished turns can also be bookmarked,
 including stopped or failed turns.
 
 The **Bookmarks** button in the thread header shows every saved turn with both
-the user prompt and assistant response preview. A bookmark made during a reply
+the initiating user prompt and a preview of the whole assistant response,
+including text after steering or question answers. A bookmark made during a reply
 initially saves the response so far. Its saved preview expands when more of the
 same reply is available in the loaded finished turn. It retains the saved text
 if loaded history omits or changes that text. If you leave before the turn
 finishes, reopening it allows the preview to expand. You can remove a bookmark
 while its turn is still running.
 
-Select a bookmark to jump to that turn, even when it is outside the currently
-loaded history window. Remove a bookmark from the turn itself or from the
-Bookmarks list. Bookmarks follow the user across browsers, and sidebar rows
+Select a bookmark to jump to the first assistant text in that turn, even when
+it is outside the currently loaded history window. If the turn has no response
+text, the bookmark opens its activity or empty response footer instead. Remove
+a bookmark from the turn itself or from the Bookmarks list. Bookmarks follow the user across browsers, and sidebar rows
 show their count.
 
 Bookmarks mark turns in the current thread; they do not copy content, change

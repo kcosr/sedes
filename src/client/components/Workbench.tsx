@@ -184,6 +184,7 @@ export function Workbench({
                 key={route.threadId}
                 threadId={route.threadId}
                 focusTurnId={route.focusTurnId}
+                focusResponse={route.focusResponse}
                 registry={threadRegistry}
                 applicationStore={applicationStore}
                 panelControls={panelControls}

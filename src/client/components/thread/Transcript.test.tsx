@@ -521,6 +521,85 @@ describe("Transcript history positioning", () => {
     expect(fake.seekHistoryTurn).not.toHaveBeenCalled();
   });
 
+  it.each(["text", "activity", "empty"] as const)("seeks the response %s rather than the user prompt", (kind) => {
+    vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: true })));
+    const snapshot = userMessageSnapshot(["turn-1"]);
+    snapshot.itemsById.reasoning = { id: "reasoning", turnId: "turn-1", revision: 1, kind: "reasoning", status: "completed", markdown: { text: "Thinking" } };
+    snapshot.itemsById.reply = { id: "reply", turnId: "turn-1", revision: 1, kind: "assistant_message", status: "completed", markdown: { text: "Response" } };
+    snapshot.turnsById["turn-1"]!.orderedItemIds = ["turn-1-user", ...(kind !== "empty" ? ["reasoning"] : []), ...(kind === "text" ? ["reply"] : [])];
+    const fake = new FakeTranscriptStore(snapshot);
+    const transcript = createRef<TranscriptHandle>();
+    render(<Transcript ref={transcript} store={fake as unknown as ThreadClientStore} />);
+    const viewport = screen.getByRole("region", { name: "Messages" });
+    const turn = document.querySelector<HTMLElement>('[data-turn-id="turn-1"]')!;
+    const anchor = kind === "text" ? turn.querySelector('[data-item-id="reply"]')!
+      : kind === "activity" ? turn.querySelector('[data-activity-first-item-id="reasoning"]')!
+      : turn.querySelector("footer")!;
+    const scrollTo = vi.fn();
+    Object.defineProperties(viewport, {
+      clientHeight: { configurable: true, value: 300 },
+      scrollHeight: { configurable: true, value: 900 },
+      getBoundingClientRect: { configurable: true, value: () => ({ top: 40 }) },
+      scrollTo: { configurable: true, value: scrollTo },
+    });
+    vi.spyOn(turn, "getBoundingClientRect").mockReturnValue({ top: 80 } as DOMRect);
+    vi.spyOn(anchor, "getBoundingClientRect").mockReturnValue({ top: 240 } as DOMRect);
+    act(() => expect(transcript.current!.seekTurn("turn-1", "response")).toBe(true));
+    expect(scrollTo).toHaveBeenLastCalledWith(expect.objectContaining({ top: 184 }));
+    expect(turn).toHaveFocus();
+    act(() => expect(transcript.current!.seekTurn("turn-1")).toBe(true));
+    expect(scrollTo).toHaveBeenLastCalledWith(expect.objectContaining({ top: 24 }));
+  });
+
+  it("reserves space so a short bookmarked response can reach the viewport top", () => {
+    vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: true })));
+    const snapshot = userMessageSnapshot(["turn-1"]);
+    snapshot.itemsById.reply = { id: "reply", turnId: "turn-1", revision: 1, kind: "assistant_message", status: "completed", markdown: { text: "Short response" } };
+    snapshot.turnsById["turn-1"]!.orderedItemIds.push("reply");
+    const transcript = createRef<TranscriptHandle>();
+    render(<Transcript ref={transcript} store={new FakeTranscriptStore(snapshot) as unknown as ThreadClientStore} />);
+    const viewport = screen.getByRole("region", { name: "Messages" });
+    Object.defineProperties(viewport, {
+      clientHeight: { configurable: true, value: 300 },
+      scrollHeight: { configurable: true, value: 300 },
+      getBoundingClientRect: { configurable: true, value: () => ({ top: 40 }) },
+      scrollTo: { configurable: true, value: vi.fn() },
+    });
+    vi.spyOn(document.querySelector('[data-item-id="reply"]')!, "getBoundingClientRect").mockReturnValue({ top: 140 } as DOMRect);
+    act(() => expect(transcript.current!.seekTurn("turn-1", "response")).toBe(true));
+    expect(screen.getByTestId("seek-spacer").style.height).toMatch(/100cqh\s*-\s*216px/);
+    expect(viewport.scrollTo).toHaveBeenCalledWith(expect.objectContaining({ top: 84 }));
+    // Explicitly returning to the live edge releases the response reservation.
+    fireEvent.keyDown(viewport, { key: "End" });
+    expect(screen.getByTestId("seek-spacer").style.height).toBe("0px");
+  });
+
+  it("seeks an unloaded response after targeted history loads without changing source-turn navigation", async () => {
+    const flushFrames = controllableAnimationFrames();
+    vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: true })));
+    const fake = new FakeTranscriptStore(userMessageSnapshot(["turn-3"]));
+    const page = historyPage(["turn-1"]);
+    page.itemsById["turn-1-message"] = { id: "turn-1-message", turnId: "turn-1", revision: 1, kind: "user_message", status: "completed", content: [{ kind: "text", text: { text: "Question" } }] };
+    page.itemsById.reply = { id: "reply", turnId: "turn-1", revision: 1, kind: "assistant_message", status: "completed", markdown: { text: "Response" } };
+    page.turnsById["turn-1"]!.orderedItemIds = ["turn-1-message", "reply"];
+    fake.seekHistoryTurn.mockResolvedValueOnce({ status: "found", targetTurnId: "turn-1", page });
+    render(<Transcript store={fake as unknown as ThreadClientStore} focusTurnId="turn-1" focusResponse />);
+    await waitFor(() => expect(document.querySelector('[data-item-id="reply"]')).toBeInTheDocument());
+    const viewport = screen.getByRole("region", { name: "Messages" });
+    const reply = document.querySelector<HTMLElement>('[data-item-id="reply"]')!;
+    Object.defineProperties(viewport, {
+      clientHeight: { configurable: true, value: 300 },
+      scrollHeight: { configurable: true, value: 900 },
+      getBoundingClientRect: { configurable: true, value: () => ({ top: 40 }) },
+      scrollTo: { configurable: true, value: ({ top }: ScrollToOptions) => { viewport.scrollTop = top ?? 0; } },
+    });
+    vi.spyOn(reply, "getBoundingClientRect").mockImplementation(() => ({ top: 240 - viewport.scrollTop } as DOMRect));
+    act(flushFrames);
+    expect(viewport.scrollTop).toBe(184);
+    expect(document.querySelector('[data-turn-id="turn-1"]')).toHaveFocus();
+    expect(fake.seekHistoryTurn).toHaveBeenCalledExactlyOnceWith("turn-1");
+  });
+
   it.each([
     { partial: "Partial response", complete: "Partial response completed.", completedPreview: "Partial response completed." },
     { partial: "See [the docs](https://example.invalid/partial", complete: "See [the docs](https://example.invalid/docs) for details", completedPreview: "See the docs for details" },
@@ -529,7 +608,10 @@ describe("Transcript history positioning", () => {
     snapshot.turnsById["turn-1"] = { ...snapshot.turnsById["turn-1"]!, status: "in_progress" };
     const fake = new FakeTranscriptStore(snapshot);
     render(<Transcript store={fake as unknown as ThreadClientStore} />);
-    fireEvent.click(screen.getByRole("button", { name: "Bookmark turn" }));
+    const bookmarkButton = screen.getByRole("button", { name: "Bookmark response" });
+    expect(bookmarkButton.closest("footer")).not.toBeNull();
+    expect(bookmarkButton.closest('[data-item-kind="user_message"]')).toBeNull();
+    fireEvent.click(bookmarkButton);
     expect(fake.setTurnBookmarked).toHaveBeenLastCalledWith({
       turnId: "turn-1", bookmarked: true,
       preview: { userPreview: "Prompt turn-1", assistantPreview: null, responseState: "no_response" },
@@ -549,7 +631,7 @@ describe("Transcript history positioning", () => {
       markdown: { text: "Thinking about the reply" },
     };
     act(() => fake.replaceSnapshot(thinking));
-    fireEvent.click(screen.getByRole("button", { name: "Bookmark turn" }));
+    fireEvent.click(screen.getByRole("button", { name: "Bookmark response" }));
     expect(fake.setTurnBookmarked).toHaveBeenLastCalledWith({
       turnId: "turn-1", bookmarked: true,
       preview: { userPreview: "Prompt turn-1", assistantPreview: null, responseState: "no_response" },
@@ -562,7 +644,7 @@ describe("Transcript history positioning", () => {
       status: "streaming", revision: 1, markdown: { text: partial },
     };
     act(() => fake.replaceSnapshot(replying));
-    fireEvent.click(screen.getByRole("button", { name: "Bookmark turn" }));
+    fireEvent.click(screen.getByRole("button", { name: "Bookmark response" }));
     expect(fake.setTurnBookmarked).toHaveBeenCalledWith({
       turnId: "turn-1", bookmarked: true,
       preview: { userPreview: "Prompt turn-1", assistantPreview: partial, responseState: "responded" },
@@ -574,7 +656,7 @@ describe("Transcript history positioning", () => {
     // An existing bookmark stays removable even if the active projection no
     // longer contains the reply that originally made the turn eligible.
     act(() => fake.replaceSnapshot(snapshot));
-    fireEvent.click(screen.getByRole("button", { name: "Remove turn bookmark" }));
+    fireEvent.click(screen.getByRole("button", { name: "Remove response bookmark" }));
     expect(fake.setTurnBookmarked).toHaveBeenLastCalledWith({ turnId: "turn-1", bookmarked: false });
     expect(fake.refreshTurnBookmarkPreview).not.toHaveBeenCalled();
 
@@ -606,7 +688,7 @@ describe("Transcript history positioning", () => {
     snapshot.turnsById["turn-1"] = { ...snapshot.turnsById["turn-1"]!, status };
     const fake = new FakeTranscriptStore(snapshot);
     render(<Transcript store={fake as unknown as ThreadClientStore} />);
-    fireEvent.click(screen.getByRole("button", { name: "Bookmark turn" }));
+    fireEvent.click(screen.getByRole("button", { name: "Bookmark response" }));
     expect(fake.setTurnBookmarked).toHaveBeenCalledWith({
       turnId: "turn-1", bookmarked: true,
       preview: { userPreview: "Prompt turn-1", assistantPreview: null, responseState: "no_response" },
@@ -615,7 +697,7 @@ describe("Transcript history positioning", () => {
       turnId: "turn-1", userPreview: "Prompt turn-1", assistantPreview: "Earlier reply",
       responseState: "responded", createdAt: 1,
     }] }));
-    expect(screen.getByRole("button", { name: "Remove turn bookmark" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Remove response bookmark" })).toBeEnabled();
     expect(fake.refreshTurnBookmarkPreview).not.toHaveBeenCalled();
   });
 
@@ -683,7 +765,7 @@ describe("Transcript history positioning", () => {
     );
 
     act(() => fake.replaceBookmarkState({ bookmarkStatus: "error" }));
-    const toggle = screen.getByRole("button", { name: "Bookmark turn" });
+    const toggle = screen.getByRole("button", { name: "Bookmark response" });
     expect(toggle).toBeDisabled();
     expect(container.querySelector(".turn-bookmark-spinner")).toBeNull();
 
@@ -1752,7 +1834,7 @@ describe("Transcript server-admitted submissions", () => {
     expect(row).not.toHaveTextContent(/Sending|Checking delivery|Sent|Message preview/);
     expect(row?.querySelector('[role="status"]')).toBeNull();
     expect(screen.queryByText("This thread is ready")).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Bookmark turn" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Bookmark response" })).not.toBeInTheDocument();
   });
 
   it("withholds a bounded queue preview so the first bubble contains the complete submitted text", () => {
@@ -2026,7 +2108,7 @@ describe("Transcript optimistic idle submission", () => {
       ),
     ).toHaveLength(1);
     expect(screen.getAllByText("Immediate prompt")).toHaveLength(1);
-    expect(screen.queryByRole("button", { name: "Bookmark turn" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Bookmark response" })).toBeNull();
   });
 
   it("keeps anchored optimistic submissions ahead of later authoritative output in sequence order", () => {

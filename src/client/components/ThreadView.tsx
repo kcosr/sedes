@@ -54,6 +54,7 @@ export function ThreadView({
   threadId,
   visible,
   focusTurnId,
+  focusResponse,
   registry,
   applicationStore,
   panelControls,
@@ -62,6 +63,7 @@ export function ThreadView({
   /** Whether this retained singleton is currently presented in the layout. */
   visible: boolean;
   focusTurnId?: string;
+  focusResponse?: boolean;
   registry: ThreadStoreRegistry;
   applicationStore: ApplicationClientStore;
   panelControls?: PanelChromeControls;
@@ -146,8 +148,8 @@ export function ThreadView({
   );
   const seekBookmarkTurn = useCallback(
     (turnId: string) => {
-      if (!focusTurnId && transcript.current?.seekTurn(turnId)) return true;
-      navigate(threadTurnPath(threadId, turnId));
+      if (!focusTurnId && transcript.current?.seekTurn(turnId, "response")) return true;
+      navigate(threadTurnPath(threadId, turnId, "response"));
       return false;
     },
     [focusTurnId, threadId],
@@ -666,6 +668,7 @@ export function ThreadView({
                   findViewportRef={findViewport}
                   seekRequest={seekRequest}
                   focusTurnId={focusTurnId}
+                  focusResponse={focusResponse}
                   onHistoryPresentationChange={updateHistoryPresentation}
                   onReturnToLive={() =>
                     navigate(threadPath(threadId), { replace: true })

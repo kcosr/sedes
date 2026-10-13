@@ -126,6 +126,10 @@ User-facing changes are collected here before release. See the
 
 ### Changed
 
+- Bookmarks now sit in the assistant response footer and jump to the start of
+  its text. Response previews include the whole turn, including replies after
+  steering or question answers.
+
 - Automatic turn voice notices skip speech and follow-up recording when a newer
   message has been sent in the same thread. See [voice behavior](docs/operator/clients/voice.md).
   ([#77](https://github.com/kcosr/sedes/pull/77))
