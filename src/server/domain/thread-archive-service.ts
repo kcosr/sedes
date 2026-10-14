@@ -75,6 +75,9 @@ export class ThreadArchiveService {
       readonly runtimes: Pick<ThreadRuntimeCoordinator, "captureLoadedState"> &
         ArchivedThreadRuntimeRetirement;
       readonly publications: Pick<InventoryService, "publishCommitted">;
+      readonly nativeArchive?: {
+        archive(scope: RequestScope, threadIds: readonly string[]): Promise<void>;
+      };
       readonly tasks: Pick<
         TaskRepository,
         | "listOpenThreadTaskFamilySummaries"
@@ -215,13 +218,18 @@ export class ThreadArchiveService {
       input,
     );
     if (replay) {
+      const archivedThreadIds = replay.states
+        .filter(({ inventoryState }) => inventoryState === "archived")
+        .map(({ threadId: replayThreadId }) => replayThreadId);
       await runWithArchivedThreadRuntimesRetired({
         scope,
-        threadIds: replay.states
-          .filter(({ inventoryState }) => inventoryState === "archived")
-          .map(({ threadId: replayThreadId }) => replayThreadId),
+        threadIds: archivedThreadIds,
         runtimes: this.input.runtimes,
-        operation: async () => undefined,
+        operation: async () => {
+          if (archivedThreadIds.length > 0) {
+            await this.input.nativeArchive?.archive(scope, archivedThreadIds);
+          }
+        },
       });
       await this.input.publications.publishCommitted(scope, replay.states, now);
       // Re-publishing the receipted moved tasks lets a retry recover task
@@ -260,8 +268,8 @@ export class ThreadArchiveService {
       scope,
       threadIds,
       runtimes: this.input.runtimes,
-      operation: async () =>
-        this.input.inventory.archiveThreads(scope, threadId, {
+      operation: async () => {
+        const committed = this.input.inventory.archiveThreads(scope, threadId, {
           ...input,
           expectedThreadIds: threadIds,
           blockedThreadIds: new Set(blocked.keys()),
@@ -283,7 +291,12 @@ export class ThreadArchiveService {
                     disposition,
                     now,
                   ),
-        }),
+        });
+        // Keep the maintenance fences through native synchronization. Include
+        // already-archived members so a manual retry can synchronize old rows.
+        await this.input.nativeArchive?.archive(scope, threadIds);
+        return committed;
+      },
     });
     await this.input.publications.publishCommitted(scope, result.states, now);
     for (const movedTaskId of result.movedTaskIds) {

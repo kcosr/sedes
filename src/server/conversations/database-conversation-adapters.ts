@@ -12,6 +12,7 @@ import type { ConversationCreationRepository } from "../db/repositories/conversa
 import type { ConversationOperationRepository } from "../db/repositories/conversation-operation-repository.js";
 import type { QueuedInputRepository } from "../db/repositories/queued-input-repository.js";
 import { InventoryRepository } from "../db/repositories/inventory-repository.js";
+import { NativeArchiveOperationRepository } from "../db/repositories/native-archive-operation-repository.js";
 import { DomainError } from "../domain/errors.js";
 import type {
   ExecutionEnvironmentProvider,
@@ -216,6 +217,7 @@ export class DatabaseConversationTargetStore {
   readonly #registry: AgentBackendRegistry;
   readonly #environments: ExecutionEnvironmentProvider;
   readonly #inventory: InventoryRepository;
+  readonly #nativeArchiveOperations: NativeArchiveOperationRepository;
   readonly #now: () => number;
   #workspacePublications?: WorkspaceApplicationPublication;
 
@@ -236,6 +238,7 @@ export class DatabaseConversationTargetStore {
     this.#registry = input.registry;
     this.#environments = input.environments;
     this.#inventory = new InventoryRepository(input.database);
+    this.#nativeArchiveOperations = new NativeArchiveOperationRepository(input.database);
     this.#now = input.now ?? Date.now;
   }
 
@@ -411,7 +414,11 @@ export class DatabaseConversationTargetStore {
       workspace,
       opaqueBindingDetail,
       driver,
-      access: this.#inventory.getThread(scope, applicationThreadId).inventory.inventoryState === "archived"
+      // Passive history cannot resume a native Goal while an earlier archive
+      // may still arrive through a remote carrier. The ordinary recovery/force
+      // reset surface remains available even after a local inventory restore.
+      access: this.#inventory.getThread(scope, applicationThreadId).inventory.inventoryState === "archived" ||
+        this.#nativeArchiveOperations.hasUncertain(scope, applicationThreadId)
         ? "history" : "execution",
     };
   }

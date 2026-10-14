@@ -137,7 +137,7 @@ for the parser and generation contract.
 | Authenticated WS/WSS        | Operator owns daemon/store; Sedes owns client                                | Local       | Loopback-only plaintext or platform-verified TLS plus per-generation bearer                 | Yes         | Local                        |
 | Persistent sidecar runtime | Sidecar owns its runtime/client; an external daemon remains operator-owned | SSH or outbound | Exact environment/service identity and provider transport admission on the execution host | Yes, for an external daemon when the sidecar negotiated managed-TUI operations | Separately granted operations |
 
-Sedes does not start, stop, restart, archive, or configure an external Codex
+Sedes does not start, stop, restart, or configure an external Codex
 daemon. It establishes availability through the normal connection and
 initialization handshake. Disconnecting a client does not prove that a
 provider turn was cancelled. External connections do not claim a Codex
@@ -332,8 +332,8 @@ back to the other.
 
 Idle Native tool-policy and presentation changes unsubscribe Sedes before the
 next resume rebuilds the tool catalog and shell environment. Remote persistent
-runtimes require Codex runtime protocol 3, which preserves newer settings
-notifications across an in-flight resume response; upgrade existing sidecars
+runtimes require Codex runtime protocol 4, which also invalidates retained attach
+metadata after native archive changes; upgrade existing sidecars
 before reconnecting. If another external client has the same native thread open,
 close that thread there first: Codex can otherwise keep the old configuration.
 A running Sedes-managed TUI blocks these changes; close it first. A bound
@@ -399,6 +399,41 @@ The following boundaries are intentionally unsupported:
 - durable promotion of ordinary tool-result images;
 - image-generation controls and a dedicated image download action; and
 - inference of native children or mutation outcomes from approximate matches.
+
+## Archiving conversations
+
+Archiving a Codex thread in Sedes also archives its native Codex conversation
+by default, including Codex-owned subagents. Ordinary Sedes forks are separate
+threads. Codex retains archived history; Sedes reads it by the saved native ID
+without resuming the agent. Restoring in Sedes unarchives the native root before
+execution resumes. Codex does not automatically restore its subagents.
+
+Set `SEDES_CODEX_ARCHIVE_SYNC=false` in the main server's environment and restart
+to disable future native archive requests. The default is `true`; these are the
+only accepted values. This installation-owned setting does not disable native
+inspection or restoration of conversations archived earlier. No client update
+is required, but upgrade Codex execution sidecars for runtime protocol **4**.
+
+Local archiving remains available when the provider is missing, removed, or
+unreachable. Native synchronization is best effort after the local commit;
+failures are logged and do not undo it. A local restore also remains available
+offline, and execution retries native restoration when the backend returns.
+If a sent native change has an unknown outcome, Sedes retains its existing
+recovery guard across server restarts. History stays passive and new work is
+blocked until the operator checks the provider and uses **Force reset** to
+abandon the uncertain operation. Repeating an archive request does not clear
+that guard; local archive and restore controls remain usable.
+The main server logs `[native-archive]` with the Sedes thread ID, action, native
+state, and whether it changed. A successful local archive response alone does
+not confirm the native operation. See [diagnostics](../../developer/diagnostics.md#native-archive-synchronization).
+
+Existing local archives are not swept automatically at startup or deployment.
+For a manually selected one-time sweep, submit fresh archive requests through
+the existing Sedes inventory API, using each still-archived thread's current
+revision. This safely repeats synchronization without restoring the thread or
+changing its inventory revision. Review native outcomes in the server log.
+Active discovery continues to exclude unknown native archives; known archived
+threads keep their bindings and remain readable and restorable.
 
 ## Safe verification
 

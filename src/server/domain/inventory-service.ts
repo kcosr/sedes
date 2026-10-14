@@ -48,6 +48,14 @@ export interface InventoryChangePublisher {
   ): void | Promise<void>;
 }
 
+export interface InventoryRestoreMaintenance {
+  run<Result>(
+    scope: RequestScope,
+    threadId: string,
+    operation: () => Promise<Result>,
+  ): Promise<Result>;
+}
+
 function assertBytes(value: string, maximum: number, label: string): void {
   if (Buffer.byteLength(value, "utf8") > maximum) {
     throw new DomainError(
@@ -96,6 +104,7 @@ export class InventoryService {
       scope: RequestScope,
       state: InventoryPrincipalStateRecord,
     ) => void,
+    readonly restoreMaintenance?: InventoryRestoreMaintenance,
   ) {
     this.#publisher = publisher;
   }
@@ -231,11 +240,18 @@ export class InventoryService {
         "Wake reminder",
       );
     }
-    const result = this.repository.transitionInventory(
-      scope,
-      applicationThreadId,
-      { ...input, now },
+    const transition = async () => this.repository.transitionInventory(
+      scope, applicationThreadId, { ...input, now },
     );
+    // A successful restore can be retried after execution has started. Only
+    // an actual archived-to-active transition needs to retire a runtime;
+    // receipt validation and already-active no-ops must leave that work alone.
+    const needsRestoreMaintenance = input.change.action === "restore" &&
+      this.restoreMaintenance &&
+      this.repository.getInventory(scope, applicationThreadId).inventoryState === "archived";
+    const result = needsRestoreMaintenance && this.restoreMaintenance
+      ? await this.restoreMaintenance.run(scope, applicationThreadId, transition)
+      : await transition();
     await this.publishCommitted(scope, [result.state], now);
     return result.state;
   }

@@ -634,7 +634,15 @@ function PageFrame({
             aria-label={response.phase === "retry" ? "Retry page response" : "Send page response"}
             disabled={response.phase === "sending" || (response.phase !== "retry" && (!responseReady || Boolean(responseServices.unavailableReason)))}
             title={responseServices.unavailableReason ?? "Send this page response to the conversation"}
-            onClick={() => void response.send(responseBridge.current)}
+            onClick={(event) => {
+              if (!expanded) {
+                onDeactivate();
+                // Touch browsers need an explicit focus transfer out of the
+                // frame so the chat regains its normal scrolling behavior.
+                event.currentTarget.focus({ preventScroll: true });
+              }
+              void response.send(responseBridge.current);
+            }}
           >
             <Send aria-hidden="true" />
             {response.phase === "retry" ? "Retry" : response.phase === "sending" ? "Sending…" : "Send"}

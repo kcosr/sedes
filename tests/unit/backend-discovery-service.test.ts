@@ -4,7 +4,13 @@ import {
   EXHAUSTIVE_DISCOVERY_SCAN,
   MAXIMUM_BOUNDED_RECENT_DISCOVERY_PAGES,
 } from "../../src/server/conversations/backend-discovery-service.js";
-import type { DiscoveredConversationPage } from "../../src/server/backends/contracts.js";
+import type {
+  DiscoveredConversationPage,
+  NativeConversationArchiveInput,
+  NativeConversationArchiveResult,
+} from "../../src/server/backends/contracts.js";
+import type { ConversationBindingRecord } from "../../src/server/db/repositories/conversation-binding-repository.js";
+import type { InventoryRepository } from "../../src/server/db/repositories/inventory-repository.js";
 import type { RequestScope } from "../../src/server/identity/identity-provider.js";
 
 const scope: RequestScope = {
@@ -13,7 +19,11 @@ const scope: RequestScope = {
 };
 const neverAbortedSignal = new AbortController().signal;
 
-function fixture(options: { readonly reservedForkChildren?: readonly string[] } = {}) {
+function fixture(options: {
+  readonly reservedForkChildren?: readonly string[];
+  readonly nativeArchive?: boolean;
+  readonly connectionProfileIds?: readonly string[];
+} = {}) {
   const database = {
     transaction: <Result>(operation: () => Result) => operation,
   };
@@ -23,7 +33,11 @@ function fixture(options: { readonly reservedForkChildren?: readonly string[] } 
         readonly cursor?: string;
       }) => Promise<DiscoveredConversationPage>
     >();
-  const finishDiscovery = vi.fn(() => []);
+  const finishDiscovery = vi.fn<InventoryRepository["finishDiscovery"]>(() => []);
+  const listDiscoveryAbsenceCandidates = vi.fn<InventoryRepository["listDiscoveryAbsenceCandidates"]>(() => []);
+  const nativeArchive = vi.fn<
+    (input: NativeConversationArchiveInput) => Promise<NativeConversationArchiveResult>
+  >();
   const markDiscoveredAvailable = vi.fn();
   const onThreadChanged = vi.fn(
     async (_scope: RequestScope, _applicationThreadId: string) => undefined,
@@ -44,6 +58,7 @@ function fixture(options: { readonly reservedForkChildren?: readonly string[] } 
       },
     })),
     markDiscoveredAvailable,
+    listDiscoveryAbsenceCandidates,
     finishDiscovery,
   };
   const service = new BackendDiscoveryService({
@@ -57,7 +72,7 @@ function fixture(options: { readonly reservedForkChildren?: readonly string[] } 
         workspace: {
           canonicalPath: "/workspace",
         },
-        driver: { discover },
+        driver: { discover, ...(options.nativeArchive ? { nativeArchive } : {}) },
       })),
     } as never,
     inventory: inventory as never,
@@ -94,6 +109,7 @@ function fixture(options: { readonly reservedForkChildren?: readonly string[] } 
       ],
     ]) as never,
     connectionProfileId: "connection-1",
+    ...(options.connectionProfileIds ? { connectionProfileIds: options.connectionProfileIds } : {}),
     onAncestryReconciliationConflict: () => undefined,
     onForkReconciliationError: () => undefined,
     onThreadChanged,
@@ -103,6 +119,8 @@ function fixture(options: { readonly reservedForkChildren?: readonly string[] } 
     isReservedForkChild,
     discover,
     finishDiscovery,
+    listDiscoveryAbsenceCandidates,
+    nativeArchive,
     markDiscoveredAvailable,
     onThreadChanged,
     recordImportedNativeOrigin,
@@ -124,6 +142,177 @@ function discoveredConversation(id: string) {
 }
 
 describe("BackendDiscoveryService scan policy", () => {
+  it("inspects omitted bindings through their own profile within a shared discovery namespace", async () => {
+    const current = fixture({
+      nativeArchive: true, connectionProfileIds: ["connection-1", "connection-2"],
+    });
+    const bindings = ["archived", "deleted"].map((name): ConversationBindingRecord => ({
+      tenantId: scope.tenantId, ownerPrincipalId: scope.principalId,
+      applicationThreadId: `application-${name}`, backendInstanceId: "backend-1",
+      connectionProfileId: "connection-2", executionEnvironmentId: "environment-1",
+      backendConversationId: `native-${name}`, createdAt: 500,
+    }));
+    const inspect = vi.fn(async (input: NativeConversationArchiveInput): Promise<NativeConversationArchiveResult> => {
+      expect(input.binding.connectionProfileId).toBe("connection-2");
+      return { state: input.binding.backendConversationId === "native-archived" ? "archived" : "missing", changed: false };
+    });
+    const discovery = vi.spyOn(current.service.input.targets, "discovery");
+    discovery.mockImplementation(async (_scope, input) => ({
+      connection: { id: input.connectionProfileId, executionEnvironmentId: "environment-1", backendInstanceId: "backend-1" },
+      workspace: { canonicalPath: "/workspace" },
+      driver: { discover: current.discover, nativeArchive: input.connectionProfileId === "connection-2" ? inspect : current.nativeArchive },
+    }) as never);
+    current.discover.mockResolvedValue({ conversations: [] });
+    current.listDiscoveryAbsenceCandidates.mockReturnValue(bindings);
+
+    await expect(current.service.discoverWorkspace(
+      scope, "workspace-1", EXHAUSTIVE_DISCOVERY_SCAN, neverAbortedSignal,
+    )).resolves.toMatchObject({ completion: "complete", missingReconciliation: "completed" });
+    expect(discovery.mock.calls).toEqual([
+      [scope, { connectionProfileId: "connection-1", workspaceId: "workspace-1" }],
+      [scope, { connectionProfileId: "connection-2", workspaceId: "workspace-1" }],
+    ]);
+    expect(current.nativeArchive).not.toHaveBeenCalled();
+    expect(inspect).toHaveBeenCalledTimes(2);
+    expect(inspect.mock.calls[0]![0].binding).toEqual({ ...bindings[0], createdAt: "1970-01-01T00:00:00.500Z" });
+    expect(current.finishDiscovery.mock.calls[0]?.[5]).toEqual(new Set(["native-archived"]));
+  });
+
+  it.each(["unavailable", "wrong_target"])("does not reconcile missing threads when the candidate's profile is %s", async (failure) => {
+    const current = fixture({ nativeArchive: true, connectionProfileIds: ["connection-1", "connection-2"] });
+    vi.spyOn(current.service.input.targets, "discovery").mockImplementation(async (_scope, input) => {
+      if (input.connectionProfileId === "connection-2" && failure === "unavailable") throw new Error("target_unavailable");
+      return {
+        connection: { id: input.connectionProfileId, backendInstanceId: "backend-1",
+          executionEnvironmentId: input.connectionProfileId === "connection-2" ? "other-environment" : "environment-1" },
+        workspace: { canonicalPath: "/workspace" },
+        driver: { discover: current.discover, nativeArchive: current.nativeArchive },
+      } as never;
+    });
+    current.discover.mockResolvedValue({ conversations: [] });
+    current.listDiscoveryAbsenceCandidates.mockReturnValue([{
+      tenantId: scope.tenantId, ownerPrincipalId: scope.principalId,
+      applicationThreadId: "known-thread", backendInstanceId: "backend-1",
+      connectionProfileId: "connection-2", executionEnvironmentId: "environment-1",
+      backendConversationId: "known-native-thread", createdAt: 500,
+    }]);
+    await expect(current.service.discoverWorkspace(scope, "workspace-1", EXHAUSTIVE_DISCOVERY_SCAN, neverAbortedSignal))
+      .resolves.toMatchObject({ completion: "partial", missingReconciliation: "not_performed", diagnostic: "provider_inspection_failed" });
+    expect(current.nativeArchive).not.toHaveBeenCalled();
+    expect(current.finishDiscovery).not.toHaveBeenCalled();
+  });
+
+  it.each(["archived", "active", "busy"] as const)(
+    "preserves a known visible thread that passive native inspection proves %s",
+    async (state) => {
+      const current = fixture({ nativeArchive: true });
+      const binding: ConversationBindingRecord = {
+        tenantId: scope.tenantId,
+        ownerPrincipalId: scope.principalId,
+        applicationThreadId: "known-application-thread",
+        backendInstanceId: "backend-1",
+        connectionProfileId: "connection-1",
+        executionEnvironmentId: "environment-1",
+        backendConversationId: "known-native-thread",
+        createdAt: 500,
+      };
+      current.discover.mockResolvedValue({ conversations: [] });
+      current.listDiscoveryAbsenceCandidates.mockReturnValue([binding]);
+      current.nativeArchive.mockResolvedValue({ state, changed: false });
+
+      await expect(current.service.discoverWorkspace(
+        scope, "workspace-1", EXHAUSTIVE_DISCOVERY_SCAN, neverAbortedSignal,
+      )).resolves.toEqual({
+        completion: "complete", missingReconciliation: "completed",
+        pagesScanned: 1, conversationsSeen: 0,
+      });
+
+      expect(current.listDiscoveryAbsenceCandidates).toHaveBeenCalledWith(
+        scope, "environment-1", "workspace-1", "backend-1", ["connection-1"],
+      );
+      expect(current.nativeArchive).toHaveBeenCalledExactlyOnceWith({
+        scope, binding: { ...binding, createdAt: "1970-01-01T00:00:00.500Z" },
+        workspace: { canonicalPath: "/workspace" }, action: "inspect", signal: neverAbortedSignal,
+      });
+      expect(current.finishDiscovery.mock.calls[0]?.[5]).toEqual(new Set(["known-native-thread"]));
+      expect(current.createUnboundThread).not.toHaveBeenCalled();
+      expect(current.markDiscoveredAvailable).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not enumerate or import unknown native archives or probe local archives", async () => {
+    const current = fixture({ nativeArchive: true });
+    current.discover.mockResolvedValue({ conversations: [] });
+    await current.service.discoverWorkspace(
+      scope, "workspace-1", EXHAUSTIVE_DISCOVERY_SCAN, neverAbortedSignal,
+    );
+    expect(current.nativeArchive).not.toHaveBeenCalled();
+    expect(current.createUnboundThread).not.toHaveBeenCalled();
+    expect(current.finishDiscovery.mock.calls[0]?.[5]).toEqual(new Set());
+  });
+
+  it("does not inspect omitted bindings during bounded startup discovery", async () => {
+    const current = fixture({ nativeArchive: true });
+    current.discover.mockResolvedValue({ conversations: [] });
+    await expect(current.service.discoverWorkspace(
+      scope, "workspace-1", { kind: "bounded_recent", maximumPages: 1 }, neverAbortedSignal,
+    )).resolves.toMatchObject({ missingReconciliation: "not_performed" });
+    expect(current.listDiscoveryAbsenceCandidates).not.toHaveBeenCalled();
+    expect(current.nativeArchive).not.toHaveBeenCalled();
+  });
+
+  it("does not make absence claims when cancelled during passive native inspection", async () => {
+    const current = fixture({ nativeArchive: true });
+    const controller = new AbortController();
+    current.discover.mockResolvedValue({ conversations: [] });
+    current.listDiscoveryAbsenceCandidates.mockReturnValue([{
+      tenantId: scope.tenantId, ownerPrincipalId: scope.principalId,
+      applicationThreadId: "known-application-thread", backendInstanceId: "backend-1",
+      connectionProfileId: "connection-1", executionEnvironmentId: "environment-1",
+      backendConversationId: "known-native-thread", createdAt: 500,
+    }]);
+    current.nativeArchive.mockImplementation(async () => {
+      controller.abort(new Error("shutdown"));
+      return { state: "missing", changed: false };
+    });
+    await expect(current.service.discoverWorkspace(
+      scope, "workspace-1", EXHAUSTIVE_DISCOVERY_SCAN, controller.signal,
+    )).resolves.toMatchObject({
+      completion: "partial", missingReconciliation: "not_performed", diagnostic: "cancelled",
+    });
+    expect(current.finishDiscovery).not.toHaveBeenCalled();
+  });
+
+  it.each(["missing", "unavailable", "disabled"] as const)(
+    "makes absence claims only after a conclusive native inspection: %s",
+    async (result) => {
+      const current = fixture({ nativeArchive: true });
+      current.discover.mockResolvedValue({ conversations: [] });
+      current.listDiscoveryAbsenceCandidates.mockReturnValue([{
+        tenantId: scope.tenantId, ownerPrincipalId: scope.principalId,
+        applicationThreadId: "known-application-thread", backendInstanceId: "backend-1",
+        connectionProfileId: "connection-1", executionEnvironmentId: "environment-1",
+        backendConversationId: "known-native-thread", createdAt: 500,
+      }]);
+      if (result === "unavailable") current.nativeArchive.mockRejectedValue(new Error("offline"));
+      else current.nativeArchive.mockResolvedValue({ state: result, changed: false });
+
+      const scan = await current.service.discoverWorkspace(
+        scope, "workspace-1", EXHAUSTIVE_DISCOVERY_SCAN, neverAbortedSignal,
+      );
+      if (result === "missing") {
+        expect(scan.missingReconciliation).toBe("completed");
+        expect(current.finishDiscovery.mock.calls[0]?.[5]).toEqual(new Set());
+      } else {
+        expect(scan).toMatchObject({
+          completion: "partial", missingReconciliation: "not_performed",
+          diagnostic: "provider_inspection_failed",
+        });
+        expect(current.finishDiscovery).not.toHaveBeenCalled();
+      }
+    },
+  );
+
   it("never imports the reserved native child of an unfinished or aborted fork", async () => {
     const current = fixture({ reservedForkChildren: ["reserved-child"] });
     current.discover.mockResolvedValueOnce({

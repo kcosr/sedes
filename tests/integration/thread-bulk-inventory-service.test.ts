@@ -51,7 +51,9 @@ const configuration = parseResolvedBackendConfiguration({
   defaultTargetId: "local-primary",
 });
 
-function fixture() {
+function fixture(nativeArchive?: {
+  archive(scope: { tenantId: string; principalId: string }, threadIds: readonly string[]): Promise<void>;
+}) {
   const database = openOverlayDatabase(":memory:");
   const scope = new SingleUserIdentityProvider(database).getScope();
   const legacy = new ThreadInventoryService(new OverlayRepository(database));
@@ -180,6 +182,7 @@ function fixture() {
       releaseProviderResidency: async () => undefined,
     },
     publications: { publishCommitted },
+    nativeArchive,
     tasks,
     taskPublications: { publishTaskChange },
     now: () => 500,
@@ -205,6 +208,32 @@ function fixture() {
 }
 
 describe("thread bulk inventory service", () => {
+  it("holds every target fence through native synchronization and releases them before publication", async () => {
+    const fenced = new Set<string>();
+    const archive = vi.fn(async (_scope, threadIds: readonly string[]) => {
+      expect([...fenced].sort()).toEqual([...threadIds].sort());
+      for (const id of threadIds) {
+        expect(current.inventory.getInventory(current.scope, id).inventoryState).toBe("archived");
+      }
+    });
+    const current = fixture({ archive });
+    current.runWithRuntimeRetired.mockImplementation(async (_scope, id, operation) => {
+      fenced.add(id);
+      try { return await operation(); } finally { fenced.delete(id); }
+    });
+    current.publishCommitted.mockImplementation(async () => { expect(fenced.size).toBe(0); });
+    try {
+      const ids = current.ids.slice(0, 2);
+      const impact = await current.service.impact(current.scope, { action: "archive", threadIds: ids });
+      await current.service.transition(current.scope, {
+        action: "archive", targets: impact.targets, mutationId: "bulk-native-archive-order",
+        expectedStashedPromptCount: 0, expectedOpenTaskCount: 0,
+      });
+      expect(archive).toHaveBeenCalledExactlyOnceWith(current.scope, ids);
+      expect(current.publishCommitted).toHaveBeenCalledOnce();
+    } finally { current.database.close(); }
+  });
+
   it.each([
     ["missing", "archive"], ["quarantined", "archive"], ["environment_unavailable", "archive"],
     ["missing", "settle"], ["quarantined", "settle"], ["environment_unavailable", "settle"],
@@ -450,7 +479,8 @@ describe("thread bulk inventory service", () => {
   });
 
   it("blocks bulk archive commit on unproven retirement and converges on receipt replay", async () => {
-    const current = fixture();
+    const archive = vi.fn(async () => undefined);
+    const current = fixture({ archive });
     try {
       const [first, second] = current.ids as [string, string, string];
       const impact = await current.service.impact(current.scope, {
@@ -489,6 +519,7 @@ describe("thread bulk inventory service", () => {
         ),
       ).toEqual(["active", "active"]);
       expect(current.publishCommitted).not.toHaveBeenCalled();
+      expect(archive).not.toHaveBeenCalled();
 
       current.runWithRuntimeRetired.mockImplementation(
         async (_scope, _threadId, operation) => operation(),
@@ -498,6 +529,7 @@ describe("thread bulk inventory service", () => {
       ).resolves.toEqual({ changedThreadIds: [second, first] });
       expect(current.runWithRuntimeRetired).toHaveBeenCalledTimes(3);
       expect(current.publishCommitted).toHaveBeenCalledTimes(1);
+      expect(archive).toHaveBeenCalledExactlyOnceWith(current.scope, [second, first]);
 
       current.inventory.transitionInventory(current.scope, first, {
         expectedRevision: 1,
@@ -508,6 +540,7 @@ describe("thread bulk inventory service", () => {
       await current.service.transition(current.scope, request);
       expect(current.runWithRuntimeRetired).toHaveBeenCalledTimes(4);
       expect(current.runWithRuntimeRetired.mock.calls.at(-1)?.[1]).toBe(second);
+      expect(archive).toHaveBeenLastCalledWith(current.scope, [second]);
     } finally {
       current.database.close();
     }

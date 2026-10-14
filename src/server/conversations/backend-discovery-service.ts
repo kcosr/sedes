@@ -52,7 +52,11 @@ export type BackendDiscoveryScanResult = Readonly<{
   missingReconciliation: "completed" | "not_performed";
   pagesScanned: number;
   conversationsSeen: number;
-  diagnostic?: "cursor_repeated" | "provider_page_failed" | "cancelled";
+  diagnostic?:
+    | "cursor_repeated"
+    | "provider_page_failed"
+    | "provider_inspection_failed"
+    | "cancelled";
 }>;
 
 function validateScanPolicy(policy: BackendDiscoveryScanPolicy): void {
@@ -525,6 +529,72 @@ export class BackendDiscoveryService {
         );
       }
     }
+    const reconciliationSeen = new Set(seen);
+    if (
+      !signal.aborted &&
+      policy.kind === "exhaustive" &&
+      cursor === undefined &&
+      scanFailure === undefined &&
+      target.driver.nativeArchive
+    ) {
+      const candidates = input.inventory.listDiscoveryAbsenceCandidates(
+        scope,
+        workspaceRecord.environmentId,
+        workspaceId,
+        target.connection.backendInstanceId,
+        input.connectionProfileIds ?? [input.connectionProfileId],
+      );
+      const inspectionTargets = new Map([[target.connection.id, target]]);
+      for (const binding of candidates) {
+        if (seen.has(binding.backendConversationId)) continue;
+        if (signal.aborted) return cancelledResult(pagesScanned, seen.size);
+        try {
+          // Listing is shared across the native namespace, but binding
+          // authority belongs to each thread's saved connection profile.
+          let inspectionTarget = inspectionTargets.get(binding.connectionProfileId);
+          if (!inspectionTarget) {
+            inspectionTarget = await input.targets.discovery(scope, {
+              connectionProfileId: binding.connectionProfileId,
+              workspaceId,
+            });
+            inspectionTargets.set(binding.connectionProfileId, inspectionTarget);
+          }
+          if (signal.aborted) return cancelledResult(pagesScanned, seen.size);
+          if (
+            inspectionTarget.connection.id !== binding.connectionProfileId ||
+            inspectionTarget.connection.backendInstanceId !== binding.backendInstanceId ||
+            inspectionTarget.connection.executionEnvironmentId !== binding.executionEnvironmentId ||
+            !inspectionTarget.driver.nativeArchive
+          ) throw new Error("discovery_inspection_target_mismatch");
+          // Active-only provider discovery omits native archives. Inspect
+          // only known visible bindings; never import native archives or
+          // restore execution merely to establish history availability.
+          const outcome = await inspectionTarget.driver.nativeArchive({
+            scope,
+            binding: {
+              ...binding,
+              createdAt: new Date(binding.createdAt).toISOString(),
+            },
+            workspace: inspectionTarget.workspace,
+            action: "inspect",
+            signal,
+          });
+          if (outcome.state === "disabled") {
+            scanFailure = "provider_inspection_failed";
+            break;
+          }
+          if (outcome.state !== "missing") {
+            reconciliationSeen.add(binding.backendConversationId);
+          }
+        } catch {
+          if (signal.aborted) return cancelledResult(pagesScanned, seen.size);
+          // An unavailable probe is not evidence of missing history. Keep
+          // every absence claim for a later complete, successful scan.
+          scanFailure = "provider_inspection_failed";
+          break;
+        }
+      }
+    }
     if (
       !signal.aborted &&
       policy.kind === "exhaustive" &&
@@ -537,7 +607,7 @@ export class BackendDiscoveryService {
         workspaceId,
         target.connection.backendInstanceId,
         input.connectionProfileIds ?? [input.connectionProfileId],
-        seen,
+        reconciliationSeen,
         this.#now(),
       )) {
         changed.add(missing.thread.id);

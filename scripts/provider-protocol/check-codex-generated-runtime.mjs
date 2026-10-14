@@ -9,13 +9,13 @@ const binding = await import(pathToFileURL(modulePath).href);
 if (binding.CODEX_APP_SERVER_RELEASE !== "0.162.1") {
   throw new Error("Built Codex binding selected the wrong release.");
 }
-if (binding.CODEX_CLIENT_REQUEST_METHODS.length !== 24) {
+if (binding.CODEX_CLIENT_REQUEST_METHODS.length !== 26) {
   throw new Error("Built Codex client-request registry is incomplete.");
 }
 if (binding.CODEX_SERVER_REQUEST_METHODS.length !== 10) {
   throw new Error("Built Codex server-request registry is incomplete.");
 }
-if (binding.CODEX_ADOPTED_SERVER_NOTIFICATION_METHODS.length !== 32) {
+if (binding.CODEX_ADOPTED_SERVER_NOTIFICATION_METHODS.length !== 34) {
   throw new Error("Built Codex adopted notification registry is incomplete.");
 }
 if (binding.CODEX_SERVER_NOTIFICATION_METHODS.length !== 86) {
@@ -39,6 +39,20 @@ if (encodedSettings.threadId !== "thread-1") {
   );
 }
 settings.decodeResult({});
+
+for (const method of ["thread/archive", "thread/unarchive"]) {
+  const codec = binding.defineCodexAppServerMethod({
+    method,
+    refineParams: (value) => value,
+    refineResult: (value) => value,
+  });
+  if (codec.encodeParams({ threadId: "thread-1" }).threadId !== "thread-1") {
+    throw new Error("Built Codex archive codec rejected its fixture.");
+  }
+}
+for (const method of ["thread/archived", "thread/unarchived"]) {
+  binding.decodeCodexServerNotificationParams(method, { threadId: "thread-1" });
+}
 
 binding.encodeCodexClientNotification("initialized");
 binding.decodeCodexServerRequestParams("attestation/generate", {});

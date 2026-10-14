@@ -14,6 +14,16 @@ const question = (id: string): CodexRuntimePendingRequest => ({
 const outcome = (operationId: string): CodexRuntimeCommand => ({ action: "outcome", authority, operationId });
 const reply = (requestId: string): CodexRuntimeCommand => ({ action: "respond", authority, input: { generation: 1, requestId, result: { answers: {} } } });
 
+it("fences native archive globally because it can affect spawned descendants", () => {
+  const order = new CodexRuntimeEventOrder();
+  const archive: Extract<CodexRuntimeCommand, { action: "submit" }> = {
+    ...submission("archive"), input: { ...submission("archive").input, method: "thread/archive", params: { threadId: "parent" } },
+  };
+  order.reserveSubmission(archive);
+  expect(order.commandAffinity(archive)).toBeUndefined();
+  expect(order.commandAffinity(outcome("archive"))).toBeUndefined();
+});
+
 it("bounds pending affinities and releases them on acknowledgement, rejection, request settlement, and detach", async () => {
   const order = new CodexRuntimeEventOrder();
   for (let index = 0; index < 128; index++) {

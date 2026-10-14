@@ -785,6 +785,27 @@ export interface ConversationBackendDriver {
   releaseConversationResidency?(
     input: ReleaseConversationResidencyInput,
   ): Promise<"released" | "busy" | "undelivered">;
+  /**
+   * Optional provider-owned archive synchronization. Inventory remains owned
+   * by Sedes; inspection and archived-history reads never restore execution.
+   * Backends without native archival deliberately omit this method.
+   */
+  nativeArchive?(
+    input: NativeConversationArchiveInput,
+  ): Promise<NativeConversationArchiveResult>;
+}
+
+export interface NativeConversationArchiveInput {
+  readonly scope: ExecutionScope;
+  readonly binding: ConversationBinding;
+  readonly workspace: ValidatedWorkspace;
+  readonly action: "inspect" | "archive" | "restore";
+  readonly signal?: AbortSignal;
+}
+
+export interface NativeConversationArchiveResult {
+  readonly state: "active" | "archived" | "missing" | "busy" | "disabled";
+  readonly changed: boolean;
 }
 
 export interface ReleaseConversationResidencyInput {

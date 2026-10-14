@@ -18,6 +18,8 @@ type EventAffinity = string | typeof catalogAffinity | undefined;
 // These reviewed methods affect one existing native thread. Creation/fork and
 // unclassified methods retain the runtime-wide fence rather than guessing an
 // affinity from an arbitrary field in a provider payload.
+// Native archive also retains that global fence: Codex cascades its effects to
+// spawned descendants, whose IDs are not present in the archive request.
 const threadMethods = new Set<CodexClientRequestMethod>([
   "thread/read", "thread/resume", "thread/turns/list", "thread/items/list",
   "thread/name/set", "thread/settings/update", "thread/goal/get",

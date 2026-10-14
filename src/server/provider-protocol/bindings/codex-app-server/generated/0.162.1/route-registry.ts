@@ -17,6 +17,8 @@ import type { ThreadSettingsUpdatedNotification as ExperimentalThreadSettingsUpd
 import type { ThreadStartParams as ExperimentalThreadStartParams } from "./experimental/v2/ThreadStartParams.js";
 import type { ThreadStartResponse as ExperimentalThreadStartResponse } from "./experimental/v2/ThreadStartResponse.js";
 import type { ThreadStartedNotification as ExperimentalThreadStartedNotification } from "./experimental/v2/ThreadStartedNotification.js";
+import type { ThreadUnarchiveParams as ExperimentalThreadUnarchiveParams } from "./experimental/v2/ThreadUnarchiveParams.js";
+import type { ThreadUnarchiveResponse as ExperimentalThreadUnarchiveResponse } from "./experimental/v2/ThreadUnarchiveResponse.js";
 import type { AccountUpdatedNotification as StableAccountUpdatedNotification } from "./stable/v2/AccountUpdatedNotification.js";
 import type { AgentMessageDeltaNotification as StableAgentMessageDeltaNotification } from "./stable/v2/AgentMessageDeltaNotification.js";
 import type { ApplyPatchApprovalParams as StableApplyPatchApprovalParams } from "./stable/ApplyPatchApprovalParams.js";
@@ -61,6 +63,9 @@ import type { ServerRequestResolvedNotification as StableServerRequestResolvedNo
 import type { SkillsChangedNotification as StableSkillsChangedNotification } from "./stable/v2/SkillsChangedNotification.js";
 import type { SkillsListParams as StableSkillsListParams } from "./stable/v2/SkillsListParams.js";
 import type { SkillsListResponse as StableSkillsListResponse } from "./stable/v2/SkillsListResponse.js";
+import type { ThreadArchiveParams as StableThreadArchiveParams } from "./stable/v2/ThreadArchiveParams.js";
+import type { ThreadArchiveResponse as StableThreadArchiveResponse } from "./stable/v2/ThreadArchiveResponse.js";
+import type { ThreadArchivedNotification as StableThreadArchivedNotification } from "./stable/v2/ThreadArchivedNotification.js";
 import type { ThreadCompactStartParams as StableThreadCompactStartParams } from "./stable/v2/ThreadCompactStartParams.js";
 import type { ThreadCompactStartResponse as StableThreadCompactStartResponse } from "./stable/v2/ThreadCompactStartResponse.js";
 import type { ThreadGoalClearParams as StableThreadGoalClearParams } from "./stable/v2/ThreadGoalClearParams.js";
@@ -85,6 +90,7 @@ import type { ThreadStatusChangedNotification as StableThreadStatusChangedNotifi
 import type { ThreadTokenUsageUpdatedNotification as StableThreadTokenUsageUpdatedNotification } from "./stable/v2/ThreadTokenUsageUpdatedNotification.js";
 import type { ThreadTurnsListParams as StableThreadTurnsListParams } from "./stable/v2/ThreadTurnsListParams.js";
 import type { ThreadTurnsListResponse as StableThreadTurnsListResponse } from "./stable/v2/ThreadTurnsListResponse.js";
+import type { ThreadUnarchivedNotification as StableThreadUnarchivedNotification } from "./stable/v2/ThreadUnarchivedNotification.js";
 import type { ThreadUnsubscribeParams as StableThreadUnsubscribeParams } from "./stable/v2/ThreadUnsubscribeParams.js";
 import type { ThreadUnsubscribeResponse as StableThreadUnsubscribeResponse } from "./stable/v2/ThreadUnsubscribeResponse.js";
 import type { ToolRequestUserInputParams as StableToolRequestUserInputParams } from "./stable/v2/ToolRequestUserInputParams.js";
@@ -119,6 +125,8 @@ import {
   validateExperimentalThreadStartParams,
   validateExperimentalThreadStartResponse,
   validateExperimentalThreadStartedNotification,
+  validateExperimentalThreadUnarchiveParams,
+  validateExperimentalThreadUnarchiveResponse,
   validateStableAccountLoginCompletedNotification,
   validateStableAccountRateLimitsUpdatedNotification,
   validateStableAccountUpdatedNotification,
@@ -193,6 +201,8 @@ import {
   validateStableSkillsListResponse,
   validateStableStrictReviewRequiredNotification,
   validateStableTerminalInteractionNotification,
+  validateStableThreadArchiveParams,
+  validateStableThreadArchiveResponse,
   validateStableThreadArchivedNotification,
   validateStableThreadAttachmentUpdatedNotification,
   validateStableThreadClosedNotification,
@@ -269,6 +279,8 @@ export interface CodexClientRequestMap {
   readonly "thread/turns/list": { readonly params: StableThreadTurnsListParams; readonly result: StableThreadTurnsListResponse; readonly stability: "stable" };
   readonly "thread/items/list": { readonly params: StableThreadItemsListParams; readonly result: StableThreadItemsListResponse; readonly stability: "stable" };
   readonly "thread/unsubscribe": { readonly params: StableThreadUnsubscribeParams; readonly result: StableThreadUnsubscribeResponse; readonly stability: "stable" };
+  readonly "thread/archive": { readonly params: StableThreadArchiveParams; readonly result: StableThreadArchiveResponse; readonly stability: "stable" };
+  readonly "thread/unarchive": { readonly params: ExperimentalThreadUnarchiveParams; readonly result: ExperimentalThreadUnarchiveResponse; readonly stability: "stable" };
   readonly "thread/start": { readonly params: ExperimentalThreadStartParams; readonly result: ExperimentalThreadStartResponse; readonly stability: "stable" };
   readonly "turn/start": { readonly params: StableTurnStartParams; readonly result: StableTurnStartResponse; readonly stability: "stable" };
   readonly "turn/steer": { readonly params: StableTurnSteerParams; readonly result: StableTurnSteerResponse; readonly stability: "stable" };
@@ -305,6 +317,8 @@ export interface CodexServerNotificationMap {
   readonly "warning": { readonly params: StableWarningNotification; readonly domain: "live_turns"; readonly use: "decoded" };
   readonly "error": { readonly params: StableErrorNotification; readonly domain: "live_turns"; readonly use: "decoded" };
   readonly "thread/status/changed": { readonly params: StableThreadStatusChangedNotification; readonly domain: "live_turns"; readonly use: "decoded" };
+  readonly "thread/archived": { readonly params: StableThreadArchivedNotification; readonly domain: "thread_history"; readonly use: "runtime_session_invalidation" };
+  readonly "thread/unarchived": { readonly params: StableThreadUnarchivedNotification; readonly domain: "thread_history"; readonly use: "runtime_session_invalidation" };
   readonly "thread/name/updated": { readonly params: StableThreadNameUpdatedNotification; readonly domain: "live_turns"; readonly use: "decoded" };
   readonly "thread/goal/updated": { readonly params: StableThreadGoalUpdatedNotification; readonly domain: "live_turns"; readonly use: "decoded" };
   readonly "thread/goal/cleared": { readonly params: StableThreadGoalClearedNotification; readonly domain: "live_turns"; readonly use: "decoded" };
@@ -449,6 +463,8 @@ export const codexClientRequestRegistry = Object.freeze({
   "thread/turns/list": Object.freeze({ params: validateStableThreadTurnsListParams, result: validateStableThreadTurnsListResponse, stability: "stable" }),
   "thread/items/list": Object.freeze({ params: validateStableThreadItemsListParams, result: validateStableThreadItemsListResponse, stability: "stable" }),
   "thread/unsubscribe": Object.freeze({ params: validateStableThreadUnsubscribeParams, result: validateStableThreadUnsubscribeResponse, stability: "stable" }),
+  "thread/archive": Object.freeze({ params: validateStableThreadArchiveParams, result: validateStableThreadArchiveResponse, stability: "stable" }),
+  "thread/unarchive": Object.freeze({ params: validateExperimentalThreadUnarchiveParams, result: validateExperimentalThreadUnarchiveResponse, stability: "stable" }),
   "thread/start": Object.freeze({ params: validateExperimentalThreadStartParams, result: validateExperimentalThreadStartResponse, stability: "stable" }),
   "turn/start": Object.freeze({ params: validateStableTurnStartParams, result: validateStableTurnStartResponse, stability: "stable" }),
   "turn/steer": Object.freeze({ params: validateStableTurnSteerParams, result: validateStableTurnSteerResponse, stability: "stable" }),
@@ -485,6 +501,8 @@ export const codexServerNotificationRegistry = Object.freeze({
   "warning": Object.freeze({ params: validateStableWarningNotification, domain: "live_turns", use: "decoded" }),
   "error": Object.freeze({ params: validateStableErrorNotification, domain: "live_turns", use: "decoded" }),
   "thread/status/changed": Object.freeze({ params: validateStableThreadStatusChangedNotification, domain: "live_turns", use: "decoded" }),
+  "thread/archived": Object.freeze({ params: validateStableThreadArchivedNotification, domain: "thread_history", use: "runtime_session_invalidation" }),
+  "thread/unarchived": Object.freeze({ params: validateStableThreadUnarchivedNotification, domain: "thread_history", use: "runtime_session_invalidation" }),
   "thread/name/updated": Object.freeze({ params: validateStableThreadNameUpdatedNotification, domain: "live_turns", use: "decoded" }),
   "thread/goal/updated": Object.freeze({ params: validateStableThreadGoalUpdatedNotification, domain: "live_turns", use: "decoded" }),
   "thread/goal/cleared": Object.freeze({ params: validateStableThreadGoalClearedNotification, domain: "live_turns", use: "decoded" }),

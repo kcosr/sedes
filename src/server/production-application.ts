@@ -184,6 +184,8 @@ import type { ThreadWorkspaceIsolationResolver } from "./execution/thread-worksp
 import { CompositeExecutionAttachmentStager } from "./composer-attachments/composite-execution-attachment-stager.js";
 import type { ExecutionAttachmentStager } from "./composer-attachments/execution-attachment-stager.js";
 import { ThreadArchiveService } from "./domain/thread-archive-service.js";
+import { ThreadNativeArchiveService } from "./domain/thread-native-archive-service.js";
+import { NativeArchiveOperationRepository } from "./db/repositories/native-archive-operation-repository.js";
 import { ThreadBulkInventoryService } from "./domain/thread-bulk-inventory-service.js";
 import { DomainError } from "./domain/errors.js";
 import { ThreadForceResetService } from "./domain/thread-force-reset-service.js";
@@ -1559,6 +1561,17 @@ export async function startProductionApplication(
       reportBackgroundError("Thread snapshot publication"),
     );
     threadSnapshots = activeThreadSnapshots;
+    const nativeArchive = new ThreadNativeArchiveService({
+      inventory: inventoryRepository,
+      targets: actorTargets,
+      operations: new NativeArchiveOperationRepository(database),
+      onError: (threadId, error) =>
+        reportBackgroundError(`Native archive synchronization for thread ${threadId}`)(error),
+      onResult: (threadId, action, result) => {
+        console.info(`[native-archive] ${JSON.stringify({ threadId, action, ...result })}`);
+      },
+    });
+    const inventoryRuntimes = runtimes;
     inventory = new InventoryService(
       inventoryRepository,
       {
@@ -1579,6 +1592,14 @@ export async function startProductionApplication(
       },
       (eventScope, state) =>
         notificationLifecycle.deadlineWake(eventScope, state),
+      {
+        run: (eventScope, threadId, operation) =>
+          inventoryRuntimes.runWithRuntimeRetired(eventScope, threadId, async () => {
+            const committed = await operation();
+            await nativeArchive.restore(eventScope, threadId);
+            return committed;
+          }),
+      },
     );
     const turnBookmarks = new ConversationTurnBookmarkService(
       turnBookmarkRepository,
@@ -1615,6 +1636,7 @@ export async function startProductionApplication(
       summaries: applicationThreadSummaries,
       runtimes,
       publications: inventory,
+      nativeArchive,
       tasks: taskRepository,
       taskPublications: tasks,
       executionWorkspaces: piSandboxLifecycle,
@@ -1624,6 +1646,7 @@ export async function startProductionApplication(
       summaries: applicationThreadSummaries,
       runtimes,
       publications: inventory,
+      nativeArchive,
       tasks: taskRepository,
       taskPublications: tasks,
     });
