@@ -285,6 +285,7 @@ test("native dictation keeps its controls reachable on narrow screens and retain
   await page.evaluate(() => window.__voiceFixture.holdRetarget());
   await targetThisThread.click();
   await expect(targetThisThread).toBeDisabled();
+  await expect(targetThisThread).toBeFocused();
   await expect(keep).toBeDisabled();
   await expect(send).toBeDisabled();
   await expect(cancel).toBeEnabled();
@@ -300,6 +301,7 @@ test("native dictation keeps its controls reachable on narrow screens and retain
   await page.evaluate(() => window.__voiceFixture.settleRetarget("Unable to persist the recording target."));
   await expect(toolbar.locator(".voice-card-title")).toHaveText("Unable to persist the recording target.");
   await expect(targetThisThread).toBeEnabled();
+  await expect(targetThisThread).toBeFocused();
   await expect(cancel).toBeEnabled();
   await expect(toolbar.locator(".voice-card-sub")).toHaveText("Listening");
   expect(await page.evaluate(() => ({ recording: window.__voiceFixture.state.active?.recording,
@@ -310,11 +312,14 @@ test("native dictation keeps its controls reachable on narrow screens and retain
   await targetThisThread.evaluate(button => {
     button.addEventListener("click", event => Reflect.set(window, "voiceShortcutClickAt", event.timeStamp), { once: true });
   });
-  await targetThisThread.click();
+  await targetThisThread.focus();
+  await targetThisThread.press("Enter");
   await expect(targetThisThread).toBeDisabled();
+  await expect(targetThisThread).toBeFocused();
   await expect(cancel).toBeEnabled();
   await page.evaluate(() => window.__voiceFixture.settleRetarget());
   await expect(targetThisThread).toHaveCount(0);
+  await expect(keep).toBeFocused();
   // A repeat tap in the shortcut's former position must not open the chooser or
   // navigate after the confirmed destination expands into the freed space.
   // Pin the repeat interval, while using the browser's actual hit target, so
@@ -328,6 +333,7 @@ test("native dictation keeps its controls reachable on narrow screens and retain
   await expect(page).toHaveURL(new RegExp(`${threadPath}$`, "u"));
   await expect(composer).toHaveValue(draft);
   await expect(composer).not.toBeFocused();
+  await expect(keep).toBeFocused();
   await expect(tile.locator(".lucide-mic")).toBeVisible();
   await expect(keep).toHaveAttribute("aria-pressed", "true");
   await expect(keep).toBeEnabled();
