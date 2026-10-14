@@ -102,15 +102,14 @@ export class NativeVoiceStore {
       claimed = nativeVoiceStateSchema.parse(await this.plugin.claimComposerHandoff(context));
       this.#accept(claimed);
     } catch (error) {
-      if (this.#matchesHandoff(event)) {
-        this.#error(error);
-        // A failed bridge response can still follow a successful native claim.
-        // No composer adopted it, so release only this live offer to recovery.
-        const message = (error instanceof Error ? error.message : "The composer handoff could not be confirmed.").slice(0, 1024);
-        try {
-          this.#acceptHandoffCompletion(event, await this.plugin.completeComposerHandoff({ ...context, outcome: "declined", message }));
-        } catch { /* An already cancelled offer needs no further action. */ }
-      }
+      if (this.#matchesHandoff(event)) this.#error(error);
+      // A failed bridge response can still follow a successful native claim.
+      // No composer adopted it, so release the original reservation even if
+      // this store was disposed or its connection changed while claiming.
+      const message = (error instanceof Error ? error.message : "The composer handoff could not be confirmed.").slice(0, 1024);
+      try {
+        this.#acceptHandoffCompletion(event, await this.plugin.completeComposerHandoff({ ...context, outcome: "declined", message }));
+      } catch { /* An already cancelled offer needs no further action. */ }
       return;
     }
     let outcome: "accepted" | "declined" = "declined";

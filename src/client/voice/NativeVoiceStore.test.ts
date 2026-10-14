@@ -433,6 +433,35 @@ describe("foreground submission to composer", () => {
     store.dispose();
   });
 
+  it.each([
+    ["disposal", "rejected"], ["disposal", "malformed"],
+    ["connection change", "rejected"], ["connection change", "malformed"],
+  ] as const)("releases the original unadopted reservation after %s and a %s claim response", async (change, failure) => {
+    const { store, plugin, listeners } = fixture();
+    await store.initialize();
+    let resolve!: (value: NativeVoiceState) => void;
+    let reject!: (error: Error) => void;
+    plugin.claimComposerHandoff.mockImplementationOnce(() => new Promise((success, rejected) => { resolve = success; reject = rejected; }));
+    plugin.completeComposerHandoff.mockResolvedValueOnce(snapshot({ profileId: "other-profile", connectionGeneration: 2 }));
+    const accept = vi.fn();
+    store.registerSubmissionComposer("named", accept);
+    listeners.get("composerHandoff")!(handoffEvent());
+    if (change === "disposal") store.dispose();
+    else listeners.get("stateChanged")!(snapshot({ connectionGeneration: 2, stateRevision: 3 }));
+    const before = store.getSnapshot();
+    if (failure === "rejected") reject(new Error("Claim response lost."));
+    else resolve({ version: 15 } as NativeVoiceState);
+    await vi.waitFor(() => expect(plugin.completeComposerHandoff).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      ...context, outcome: "declined", message: expect.any(String),
+    })));
+    expect(accept).not.toHaveBeenCalled();
+    expect(store.getSnapshot()).toBe(before);
+    expect(store.getSnapshot().error).toBeUndefined();
+    if (change === "connection change") expect(store.getSnapshot().native?.connectionGeneration).toBe(2);
+    expect(plugin.sendRecording).not.toHaveBeenCalled();
+    store.dispose();
+  });
+
   it("does not insert or send twice when native completion fails and the offer repeats", async () => {
     const { store, plugin, listeners } = fixture();
     await store.initialize();
