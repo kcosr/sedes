@@ -11,7 +11,7 @@ User-facing changes are collected here before release. See the
   **157** for Page responses and the updated native voice bridge. Rebuild
   Android with its bundled client. See [Page responses](docs/user/html-previews.md#send-a-page-response)
   and [voice input](docs/operator/clients/voice.md).
-  ([#81](https://github.com/kcosr/sedes/pull/81))
+  ([#81](https://github.com/kcosr/sedes/pull/81), [#83](https://github.com/kcosr/sedes/pull/83))
 
 ### Added
 
@@ -19,6 +19,7 @@ User-facing changes are collected here before release. See the
   Responses go to the page's thread, queue while it is busy, and remain in
   compact expandable chat cards with the exact submitted text and saved page
   revision. See [Page responses](docs/user/html-previews.md#send-a-page-response).
+  ([#83](https://github.com/kcosr/sedes/pull/83))
 
 - While Android voice is listening on another thread, **Target this thread**
   switches the entire unsent recording to the viewed thread without restarting
