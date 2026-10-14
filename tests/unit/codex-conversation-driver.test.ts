@@ -8850,6 +8850,143 @@ describe("CodexConversationHandle", () => {
     await handle.close();
   });
 
+  it("publishes MCP startup failures as bounded notices without exposing provider errors", async () => {
+    const harness = new RpcHarness();
+    const handle = await attachIdle(harness);
+    const established = await establish(harness, handle);
+    const snapshot = await handle.readCurrent();
+    const events: BackendConversationEvent[] = [];
+    established.subscribeFromNext(({ event }) => events.push(event));
+
+    harness.notify("mcpServer/startupStatus/updated", {
+      threadId: "thread-1", name: "node_repl", status: "failed",
+      error: "Cannot start C:\\private\\bridge.exe with token=private-secret",
+      failureReason: null,
+    });
+
+    expect(events).toEqual([{
+      type: "notice",
+      notice: {
+        id: expect.stringMatching(/^codex-mcp-startup:1:/u), tone: "warning",
+        message: { text: 'MCP server "node_repl" failed to start. Its tools are unavailable. Check the MCP configuration on the execution host.' },
+        createdAt: "2026-07-31T00:00:00.000Z",
+      },
+    }]);
+    expect(JSON.stringify(events)).not.toContain("private");
+    expect(await handle.readCurrent()).toEqual(snapshot);
+    expect(harness.retirements).toEqual([]);
+    harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+    await handle.close();
+  });
+
+  it("ignores unrelated, stale, malformed, and successful MCP startup advisories", async () => {
+    const harness = new RpcHarness();
+    const handle = await attachIdle(harness);
+    const established = await establish(harness, handle);
+    const snapshot = await handle.readCurrent();
+    const events: BackendConversationEvent[] = [];
+    established.subscribeFromNext(({ event }) => events.push(event));
+    const params = { threadId: "thread-1", name: "node_repl", status: "failed", error: null, failureReason: null };
+    for (const status of ["starting", "ready", "cancelled"]) {
+      harness.notify("mcpServer/startupStatus/updated", { ...params, status });
+    }
+    for (const threadId of ["unrelated-thread", null]) {
+      harness.notify("mcpServer/startupStatus/updated", { ...params, threadId });
+    }
+    harness.notify("mcpServer/startupStatus/updated", { threadId: "thread-1" });
+    harness.notify("mcpServer/startupStatus/updated", params, ++harness.sequence, false);
+    harness.notifyUndecodable("mcpServer/startupStatus/updated", "thread-1");
+    harness.facade.forwardNotification(1, {
+      kind: "decoded_notification", generation: 0, sequence: ++harness.sequence,
+      method: "mcpServer/startupStatus/updated",
+      params: decodeCodexServerNotificationParams("mcpServer/startupStatus/updated", params),
+    });
+    expect(events).toEqual([]);
+    expect(await handle.readCurrent()).toEqual(snapshot);
+    expect(harness.retirements).toEqual([]);
+    harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+    await handle.close();
+  });
+
+  it("uses a generic MCP startup warning when the configured server name cannot be displayed safely", async () => {
+    const harness = new RpcHarness();
+    const handle = await attachIdle(harness);
+    const established = await establish(harness, handle);
+    const snapshot = await handle.readCurrent();
+    const events: BackendConversationEvent[] = [];
+    established.subscribeFromNext(({ event }) => events.push(event));
+    const names = ["node repl", "_private", "", "x".repeat(129), "C:\\private\\secret", "node\nrepl"];
+    for (const name of names) {
+      harness.notify("mcpServer/startupStatus/updated", {
+        threadId: "thread-1", name, status: "failed", error: "private-error", failureReason: null,
+      });
+    }
+    expect(events).toHaveLength(names.length);
+    for (const event of events) {
+      expect(event).toMatchObject({
+        type: "notice",
+        notice: {
+          tone: "warning",
+          message: { text: "A configured MCP server failed to start. Its tools are unavailable. Check the MCP configuration on the execution host." },
+        },
+      });
+    }
+    expect(JSON.stringify(events)).not.toContain("private");
+    expect(await handle.readCurrent()).toEqual(snapshot);
+    expect(harness.retirements).toEqual([]);
+    harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+    await handle.close();
+  });
+
+  it("retains bounded MCP startup failure notices through resume without retrying history", async () => {
+    const harness = new RpcHarness();
+    const handle = await attachIdle(harness);
+    harness.after("thread/resume", () => {
+      for (let index = 0; index < 40; index += 1) {
+        harness.notify("mcpServer/startupStatus/updated", {
+          threadId: "thread-1", name: `server_${index}`, status: "failed", error: null, failureReason: null,
+        });
+      }
+      harness.notify("mcpServer/startupStatus/updated", {
+        threadId: "thread-1", name: "server_0", status: "ready", error: null, failureReason: null,
+      });
+      harness.notify("mcpServer/startupStatus/updated", {
+        threadId: "thread-1", name: "server_1", status: "failed", error: "private-secret", failureReason: null,
+      });
+    });
+    const established = await establish(harness, handle);
+    const events: BackendConversationEvent[] = [];
+    expect(events).toEqual([]);
+    established.subscribeFromNext(({ event }) => events.push(event));
+    expect(events).toHaveLength(31);
+    expect(events.every(({ type }) => type === "notice")).toBe(true);
+    const messages = events.flatMap((event) => event.type === "notice" ? [event.notice.message.text] : []);
+    expect(messages.some((message) => message.includes('"server_0"'))).toBe(false);
+    expect(messages.some((message) => message.includes('"server_32"'))).toBe(false);
+    expect(JSON.stringify(events)).not.toContain("private-secret");
+    expect(harness.calls.filter(({ method }) => method === "thread/resume")).toHaveLength(1);
+    expect(harness.retirements).toEqual([]);
+    harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+    await handle.close();
+  });
+
+  it("discards pending MCP startup failure notices when the daemon generation changes", async () => {
+    const harness = new RpcHarness();
+    const handle = await attachIdle(harness);
+    harness.after("thread/resume", () => {
+      harness.notify("mcpServer/startupStatus/updated", {
+        threadId: "thread-1", name: "node_repl", status: "failed", error: null, failureReason: null,
+      });
+    });
+    const established = await establish(harness, handle);
+    harness.lifecycle("ready", 2);
+    const events: BackendConversationEvent[] = [];
+    established.subscribeFromNext(({ event }) => events.push(event));
+    expect(events.filter(({ type }) => type === "notice")).toEqual([]);
+    harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+    await handle.close();
+  });
+
   it("publishes thread warnings as notices without invalidating the projection", async () => {
     const harness = new RpcHarness();
     const handle = await attachIdle(harness);
@@ -13244,7 +13381,11 @@ describe("CodexConversationHandle", () => {
     await handle.close();
   });
 
-  it("keeps path-native image delivery unchanged without reading canonical bytes", async () => {
+  it.each([
+    "/remote/workspace/.sedes-attachments/diagram.png",
+    String.raw`C:\Users\example\staged\diagram.png`,
+    String.raw`\\fileserver\share\staged\diagram.png`,
+  ])("keeps path-native image delivery at %s without reading canonical bytes", async (agentPath) => {
     const harness = new RpcHarness();
     const handle = await attachIdle(harness);
     await establish(harness, handle);
@@ -13267,7 +13408,7 @@ describe("CodexConversationHandle", () => {
       kind: "image" as const,
       fileName: "diagram.png",
       mediaType: "image/png" as const,
-      agentPath: "/remote/workspace/.sedes-attachments/diagram.png",
+      agentPath,
     };
     const read = vi.fn(async () => Buffer.from("unexpected"));
 
@@ -13303,7 +13444,13 @@ describe("CodexConversationHandle", () => {
     await handle.close();
   });
 
-  it("retains the staged image path for text-only Codex submit and steer", async () => {
+  it.each([
+    { kind: "image" as const, agentPath: "/remote/workspace/.sedes-attachments/diagram.png" },
+    { kind: "image" as const, agentPath: String.raw`C:\Users\example\staged\diagram.png` },
+    { kind: "image" as const, agentPath: String.raw`\\fileserver\share\staged\diagram.png` },
+    { kind: "file" as const, agentPath: String.raw`C:\Users\example\staged\notes.txt` },
+    { kind: "file" as const, agentPath: String.raw`\\fileserver\share\staged\notes.txt` },
+  ])("retains staged $kind path $agentPath for text-only Codex submit and steer", async ({ kind, agentPath }) => {
     const harness = new RpcHarness();
     const handle = await attachIdle(harness);
     await establish(harness, handle);
@@ -13321,13 +13468,9 @@ describe("CodexConversationHandle", () => {
         completedAt: null,
       },
     });
-    const imageAttachment = {
-      ...stagedAttachment,
-      kind: "image" as const,
-      fileName: "diagram.png",
-      mediaType: "image/png" as const,
-      agentPath: "/remote/workspace/.sedes-attachments/diagram.png",
-    };
+    const imageAttachment = kind === "image" ? {
+      ...stagedAttachment, kind, fileName: "diagram.png", mediaType: "image/png" as const, agentPath,
+    } : { ...stagedAttachment, agentPath };
 
     const submitted = await handle.submit({
       applicationOperationId: "text-only-image-submit",
@@ -13373,8 +13516,8 @@ describe("CodexConversationHandle", () => {
         attachments: [
           expect.objectContaining({
             id: imageAttachment.id,
-            kind: "image",
-            fileName: "diagram.png",
+            kind,
+            fileName: imageAttachment.fileName,
           }),
         ],
       });
@@ -13382,6 +13525,40 @@ describe("CodexConversationHandle", () => {
         false,
       );
     }
+    harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+    await handle.close();
+  });
+
+  it("rejects invalid attachment staging before submit or steer without leaving an uncertain operation", async () => {
+    const harness = new RpcHarness();
+    const handle = await attachIdle(harness);
+    await establish(harness, handle);
+    const input = {
+      applicationOperationId: "invalid-staging-submit", source: { kind: "user" as const },
+      mutationId: "invalid-staging-submit", reconciliationToken: "invalid-staging-submit",
+      taskContexts: [], contextExcerpts: [], text: "inspect",
+      attachments: [{ ...stagedAttachment, agentPath: String.raw`C:staged\notes.txt` }],
+    };
+    await expect(handle.submit(input)).rejects.toMatchObject({
+      category: "rejected", retryable: false, crossedSubmissionBoundary: false,
+      backendCode: "staged_attachment_invalid",
+    });
+    expect(harness.calls.some(({ method }) => method === "turn/start")).toBe(false);
+    harness.enqueue("model/list", { data: [nativeModel()], nextCursor: null });
+    harness.enqueue("turn/start", {
+      turn: { ...nativeTurn(1), items: [], rootTurnId: null, itemsView: "notLoaded", status: "inProgress", completedAt: null },
+    });
+    const accepted = await handle.submit({
+      ...input, attachments: [{ ...stagedAttachment, agentPath: String.raw`C:\Users\example\staged\notes.txt` }],
+    });
+    await expect(handle.steer({
+      ...input, applicationOperationId: "invalid-staging-steer", mutationId: "invalid-staging-steer",
+      reconciliationToken: "invalid-staging-steer", target: { kind: "turn", turnId: accepted.backendTurnId! },
+    })).rejects.toMatchObject({
+      category: "rejected", retryable: false, crossedSubmissionBoundary: false,
+    });
+    expect(harness.calls.filter(({ method }) => method === "turn/start")).toHaveLength(1);
+    expect(harness.calls.some(({ method }) => method === "turn/steer")).toBe(false);
     harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
     await handle.close();
   });
@@ -19608,6 +19785,29 @@ describe("Codex provider residency release for tool changes", () => {
 
 
 describe("Codex existing-owner Stop control", () => {
+  it("keeps confirmed Stop control after malformed MCP startup progress without reading metadata", async () => {
+    const harness = new RpcHarness();
+    const handle = await attachIdle(harness);
+    const activeTurn = { ...nativeTurn(1), status: "inProgress" as const, completedAt: null, durationMs: null };
+    const activeThread = nativeThread({ status: { type: "active", activeFlags: [] }, turns: [activeTurn] });
+    await establish(harness, handle, activeThread);
+    const callsBeforeProgress = harness.calls.length;
+    harness.notifyUndecodable("mcpServer/startupStatus/updated", "thread-1");
+    // Metadata is unavailable: Stop must retain the already confirmed turn.
+    harness.enqueue("thread/read", new Error("metadata_unavailable"));
+    harness.enqueue("turn/interrupt", {});
+    await expect(handle.interrupt({
+      applicationOperationId: "mcp-advisory-stop", deadlineAt: Date.now() + 30_000,
+    })).resolves.toBeUndefined();
+    expect(harness.calls.slice(callsBeforeProgress)).toEqual([
+      expect.objectContaining({
+        method: "turn/interrupt", params: { threadId: "thread-1", turnId: activeTurn.id },
+      }),
+    ]);
+    harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+    await handle.close();
+  });
+
   it("reads only a current turn shell and pauses Goal while transcript hydration is stalled", async () => {
     const harness = new RpcHarness();
     const goals = new CodexGoalSessionRegistry();

@@ -1,7 +1,8 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
+import { normalizedAbsolutePath } from "../../shared/absolute-path.js";
 import type { ComposerAttachmentDescriptor } from "../../shared/protocol/composer-attachments.js";
 import { composerAttachmentDescriptorSchema } from "../../shared/protocol/composer-attachments.js";
-import type { StagedComposerAttachment } from "./contracts.js";
+import { BackendError, type StagedComposerAttachment } from "./contracts.js";
 
 const VERSION_1_HEADER = '<sedes-staged-attachments version="1">';
 const VERSION_1_GUIDANCE =
@@ -38,7 +39,7 @@ export function stagedAttachmentManifest(input: {
   readonly attachments: readonly StagedComposerAttachment[];
 }): string {
   if (input.attachments.length === 0) {
-    throw new Error("staged_attachment_manifest_empty");
+    throw invalidAttachment(new Error("staged_attachment_manifest_empty"));
   }
   const payload = manifestPayload(input.attachments);
   const tag = authenticationTag(input.key, input.correlation, payload);
@@ -152,6 +153,18 @@ export function stagedAttachmentFingerprint(
 function manifestPayload(
   attachments: readonly StagedComposerAttachment[],
 ): string {
+  // All construction callers prepare provider input before dispatch. Report
+  // invalid staging evidence as a clean rejection, never uncertain delivery.
+  try {
+    return createManifestPayload(attachments);
+  } catch (error) {
+    throw invalidAttachment(error);
+  }
+}
+
+function createManifestPayload(
+  attachments: readonly StagedComposerAttachment[],
+): string {
   const entries = attachments.map((attachment) => {
     if (!validAgentPath(attachment.agentPath)) {
       throw new Error("staged_attachment_agent_path_invalid");
@@ -171,11 +184,21 @@ function manifestPayload(
 
 function validAgentPath(value: string): boolean {
   return (
-    value.startsWith("/") &&
     value.length <= 4_096 &&
-    !/[\0\r\n]/u.test(value) &&
-    !value.split("/").some((part) => part === "..")
+    normalizedAbsolutePath(value) &&
+    value !== "/" &&
+    !value.endsWith("\\")
   );
+}
+
+function invalidAttachment(cause: unknown): BackendError {
+  return new BackendError({
+    category: "rejected",
+    retryable: false,
+    crossedSubmissionBoundary: false,
+    backendCode: "staged_attachment_invalid",
+    safeMessage: "A staged attachment is invalid and could not be submitted.",
+  }, { cause });
 }
 
 function authenticationTag(

@@ -2,6 +2,7 @@ import type { SteerTarget } from "../../src/shared/protocol/conversation.js";
 import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { BackendError } from "../../src/server/backends/contracts.js";
+import { stagedAttachmentFingerprint } from "../../src/server/backends/staged-attachment-manifest.js";
 import type {
   SteerTurnInput,
   SteerTurnResult,
@@ -1275,6 +1276,34 @@ describe("QueuedInputDispatcher", () => {
         repository.get(fixture.scope, threadId, admitted.item.id).state,
       ).toBe("accepted");
       expect(drafts.get(fixture.scope, threadId)).toEqual(draft);
+    } finally {
+      await dispatcher.close();
+      fixture.database.close();
+    }
+  });
+
+  it("fails invalid staging evidence cleanly without reconciling provider acceptance", async () => {
+    const fixture = createFixture();
+    const repository = new QueuedInputRepository(fixture.database);
+    const [threadId] = fixture.threadIds;
+    const gateway = new FakeGateway();
+    const { dispatcher } = createDispatcher(repository, gateway, { now: { value: 600 } });
+    try {
+      enqueueUserWithAttachment(fixture, repository, threadId, "invalid-staging", 500);
+      gateway.submitBehaviors.push(input => {
+        stagedAttachmentFingerprint(input.attachments.map(attachment => ({
+          ...attachment, agentPath: String.raw`C:staged\private.bin`,
+        })));
+        throw new Error("Expected invalid staging evidence to be rejected.");
+      });
+      await dispatcher.recover(fixture.scope);
+      expect(repository.get(fixture.scope, threadId, "invalid-staging")).toMatchObject({
+        state: "failed", diagnostic: "A staged attachment is invalid and could not be submitted.",
+      });
+      await expect(dispatcher.reconcileUncertain(fixture.scope, threadId, "invalid-staging"))
+        .rejects.toThrow("queued_input_is_not_uncertain");
+      expect(gateway.reconciled).toEqual([]);
+      expect(gateway.submitted).toHaveLength(1);
     } finally {
       await dispatcher.close();
       fixture.database.close();

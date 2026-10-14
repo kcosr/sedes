@@ -10,20 +10,13 @@ const FIXED_NAMES = new Set([
 // Native Windows tools locate the account, configuration, temporary files, and
 // system executables through these values. They are account environment, not
 // provider credentials or process-loader overrides.
-const WINDOWS_NAMES = new Map([
-  ["SYSTEMROOT", "SystemRoot"],
-  ["WINDIR", "windir"],
-  ["COMSPEC", "ComSpec"],
-  ["USERPROFILE", "USERPROFILE"],
-  ["HOMEDRIVE", "HOMEDRIVE"],
-  ["HOMEPATH", "HOMEPATH"],
-  ["APPDATA", "APPDATA"],
-  ["LOCALAPPDATA", "LOCALAPPDATA"],
-  ["TEMP", "TEMP"],
-  ["TMP", "TMP"],
-  ["PATHEXT", "PATHEXT"],
-  ["USERNAME", "USERNAME"],
-]);
+export const WINDOWS_ACCOUNT_ENVIRONMENT_NAMES = Object.freeze([
+  "SystemRoot", "windir", "ComSpec", "USERPROFILE", "HOMEDRIVE", "HOMEPATH",
+  "APPDATA", "LOCALAPPDATA", "TEMP", "TMP", "PATHEXT", "USERNAME",
+] as const);
+const WINDOWS_NAMES = new Map<string, string>(
+  WINDOWS_ACCOUNT_ENVIRONMENT_NAMES.map(name => [name.toUpperCase(), name]),
+);
 const NAME = /^[A-Z_][A-Z0-9_]{0,63}$/u;
 const VALUE = /^[^\u0000\r\n]{0,4096}$/u;
 const LOCALE_VALUE = /^[A-Za-z0-9_@.+-]{1,128}$/u;

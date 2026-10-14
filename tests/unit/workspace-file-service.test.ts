@@ -275,6 +275,27 @@ describe("WorkspaceFileService", () => {
     expect(current.files.discoverFileLinkRoot).not.toHaveBeenCalled();
   });
 
+  it.each(["C:\\work\\project", "\\\\files.example\\share\\project"])(
+    "captures a native Windows file beneath %s through its execution-host provider",
+    async canonicalPath => {
+      const files = provider();
+      const absolutePath = `${canonicalPath}\\README.md`;
+      vi.mocked(files.resolveFileLink).mockImplementation(async (_scope, _target, reference) =>
+        reference.kind === "absolute" && reference.path === absolutePath ? "README.md" : undefined);
+      const current = fixture({ workspace: { ...primary, canonicalPath }, files });
+
+      expect(Buffer.from(await current.service.readAbsoluteFile(owner, "thread-1", absolutePath, 100)).toString()).toBe("read me");
+      expect(current.execution.validateWorkspace).toHaveBeenCalledWith(owner, primary.environmentId, canonicalPath);
+      expect(files.resolveFileLink).toHaveBeenCalledWith(owner, expect.objectContaining({
+        environmentId: primary.environmentId, canonicalPath, rootId: "primary",
+      }), { kind: "absolute", path: absolutePath }, expect.any(AbortSignal));
+      expect(files.withDownload).toHaveBeenCalledWith(owner, expect.objectContaining({
+        environmentId: primary.environmentId, canonicalPath, rootId: "primary",
+      }), { path: "README.md", expectedRevision: "revision-1" }, expect.any(Function), expect.any(AbortSignal));
+      expect(files.discoverFileLinkRoot).not.toHaveBeenCalled();
+    },
+  );
+
   it("does not download page bytes outside their declared size bound or from an unavailable environment", async () => {
     const current = fixture();
     await expect(current.service.readAbsoluteFile(owner, "thread-1", "/workspaces/one/README.md", 3)).rejects.toThrow("capture limit");
@@ -1918,6 +1939,51 @@ describe("WorkspaceFileService", () => {
     });
     expect(current.roots.create).toHaveBeenCalledOnce();
   });
+
+  it.each([
+    "/workspaces/.ssh",
+    "/workspaces/.env/production",
+    "C:\\Users\\alex\\.ssh",
+    "C:\\Users\\alex\\.AWS\\credentials",
+    "C:\\work\\.env\\production",
+    "\\\\files.example\\share\\.ssh",
+    "\\\\files.example\\share\\project\\.git",
+    "\\\\files.example\\share\\.gnupg\\private-keys",
+  ])("rejects sensitive supplemental root %s before provider validation or persistence", async canonicalPath => {
+    const current = fixture();
+    await expect(current.service.attachRoot(owner, primary.id, {
+      mutationId: "sensitive-root-attachment",
+      path: canonicalPath,
+      displayLabel: "Sensitive",
+    })).rejects.toMatchObject({ code: "invalid_transition" });
+    expect(current.execution.validateWorkspace).toHaveBeenCalledWith(owner, primary.environmentId, canonicalPath);
+    expect(current.files.validateRoot).not.toHaveBeenCalled();
+    expect(current.roots.create).not.toHaveBeenCalled();
+  });
+
+  it.each(["C:\\work\\context", "\\\\files.example\\share\\context"])(
+    "attaches an allowed native Windows supplemental root %s",
+    async canonicalPath => {
+      const current = fixture({ workspace: { ...primary, canonicalPath: "C:\\work\\project" } });
+      current.roots.create.mockImplementation((_scope, _workspaceId, input) => ({
+        rootId: "root-windows",
+        canonicalPath: (input as { canonicalPath: string }).canonicalPath,
+        displayLabel: (input as { resolvedDisplayLabel: string }).resolvedDisplayLabel,
+        sortOrder: 0,
+        availability: "available",
+        revision: 1,
+      }));
+      await expect(current.service.attachRoot(owner, primary.id, {
+        mutationId: "windows-root-attachment",
+        path: canonicalPath,
+      })).resolves.toMatchObject({ root: { rootId: "root-windows", displayLabel: "context", availability: "available" } });
+      expect(current.files.validateRoot).toHaveBeenCalledWith(owner, {
+        workspaceId: primary.id, environmentId: primary.environmentId,
+        rootKind: "supplemental", canonicalPath,
+      });
+      expect(current.roots.create).toHaveBeenCalledOnce();
+    },
+  );
 
   it("drains an authorized write before committing root deletion", async () => {
     const supplemental = {

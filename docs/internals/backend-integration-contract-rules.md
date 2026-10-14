@@ -2916,6 +2916,21 @@ for accepted or uncertain outcomes; remove it only after authoritative evidence
 proves non-acceptance. A backend must not create a second input snapshot,
 attachment or Task store, replay record, or security policy.
 
+Signed attachment carriers and replay fingerprints validate staged paths using
+the shared normalized absolute-path contract, including native Windows drive
+and UNC paths, independently of the main server's OS. Keep exact path spelling
+in signed payloads and reject ambiguous, relative, traversal, or control-character
+paths. Construction and fingerprint validation run before provider dispatch;
+failures are normalized clean rejections with `crossedSubmissionBoundary: false`,
+never evidence of an uncertain send. Codex uses these carriers for files and
+nonvision images alongside native image paths; Pi uses them with remote Windows
+workspaces and canonical image bytes. Claude and OpenCode use the same validated
+carriers on their supported POSIX execution hosts; native Windows execution is
+unsupported for both. Grok retains local POSIX attachment handling and does not
+consume this carrier. Pages and image tools read file references through the
+exact execution-host Files provider, with no main-host filesystem fallback.
+Supplemental Files root policy checks and labels use that root's path grammar.
+
 A delivery snapshot holds each Task, scope included, as it was at acceptance,
 in Task attachment format v1. Normalized `task_context` message parts, from backends and to the
 browser, carry only its scope-free display projection (`MessageTaskContext`:
@@ -3425,6 +3440,18 @@ kill-on-close ownership, and confirm all job processes have exited before
 reporting cleanup success. Parent-PID liveness and a successful signal request
 are not cleanup evidence. Keep supervision control separate from provider byte
 streams, authenticate it, and fail closed if its completion evidence is lost.
+
+Keep standard Windows account variables in an owned provider's explicit launch
+allowlist when its supported subprocesses require them. Resolve them on the
+execution host, canonicalize case-insensitive names, exclude ambiguous or
+malformed values, and preserve explicit startup-overlay precedence; never
+inherit another host's account, arbitrary credentials, or loader controls.
+Codex implements this for owned runtimes and managed TUI launches. Pi's
+existing account environment is unchanged; native Windows Claude and Grok
+remain unsupported, and OpenCode remains Linux-only. Provider startup failures
+can use existing normalized notices without treating an informational advisory
+as a transcript mutation; bind notices to the exact thread and generation and
+keep raw provider diagnostics private.
 
 These local filesystem and attachment primitives are shared by Pi, Codex,
 Claude, and Grok through execution-environment providers. They do not expand

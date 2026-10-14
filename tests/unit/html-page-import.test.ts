@@ -190,4 +190,24 @@ describe("HTML page capture", () => {
     expect(() => resolveLocalImagePath("/work/page.html", "file://host/share/logo.png")).toThrow("Network");
     expect(() => resolveLocalImagePath("/work/page.html", "https://example.test/logo.png")).toThrow("Network");
   });
+
+  it.each([
+    ["C:\\work\\page.html", "images/logo.png", "C:\\work\\images\\logo.png"],
+    ["C:\\work\\page.html", "file:///C:/assets/logo.png", "C:\\assets\\logo.png"],
+    ["\\\\files.example\\share\\work\\page.html", "images/logo.png", "\\\\files.example\\share\\work\\images\\logo.png"],
+    ["\\\\files.example\\share\\work\\page.html", "file://files.example/share/assets/logo.png", "\\\\files.example\\share\\assets\\logo.png"],
+  ])("captures Windows page %s with asset %s in its execution-host namespace", async (source, reference, imagePath) => {
+    const html = `<h1>Windows page</h1><img src="${reference}">`;
+    const reads: string[] = [];
+    const result = await importHtmlPage({ read: async candidate => {
+      reads.push(candidate);
+      if (candidate === source) return Buffer.from(html);
+      if (candidate === imagePath) return png;
+      throw new Error("Unexpected execution-host file path.");
+    } }, source);
+    expect(reads).toEqual([source, imagePath]);
+    expect(inner(result)).toContain("data:image/png;base64,");
+    expect(inner(result)).not.toContain(reference);
+    expect(result.sourceHtml).toBe(html);
+  });
 });

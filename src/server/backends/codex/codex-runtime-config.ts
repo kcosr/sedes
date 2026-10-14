@@ -2,6 +2,7 @@ import type { EnvironmentVariableOverrides } from "../../../shared/protocol/envi
 import { resolveEnvironmentVariables, mergeResolvedEnvironment } from "../../environment-variables/runtime-environment.js";
 import { homedir } from "node:os";
 import path from "node:path";
+import { WINDOWS_ACCOUNT_ENVIRONMENT_NAMES } from "../../sidecar/sanitized-sidecar-environment.js";
 import type {
   EnvironmentOwnedProcessChannel,
   ExecutionEnvironmentChannelProvider,
@@ -36,6 +37,9 @@ const FORWARDED_ENVIRONMENT_NAMES = [
 
 const VERSION_PROBE_TIMEOUT_MILLISECONDS = 5_000;
 const VERSION_PROBE_OUTPUT_BYTES = 4_096;
+const WINDOWS_ACCOUNT_NAMES = new Map<string, string>(
+  WINDOWS_ACCOUNT_ENVIRONMENT_NAMES.map(name => [name.toUpperCase(), name]),
+);
 
 export interface CodexRuntimeConfigurationInput {
   readonly startupEnvironmentVariables?: EnvironmentVariableOverrides;
@@ -221,11 +225,21 @@ function assertRuntimeScope(input: CodexRuntimeConfigurationInput): string {
 export function buildCodexLaunchEnvironment(
   environment: Readonly<Record<string, string | undefined>>,
   input: Readonly<{ home: string; codexHomeOverride?: string }>,
+  platform: NodeJS.Platform = process.platform,
 ): Readonly<Record<string, string>> {
   const childEnvironment: Record<string, string> = {};
-  for (const name of FORWARDED_ENVIRONMENT_NAMES) {
-    const value = environment[name];
-    if (value !== undefined) childEnvironment[name] = value;
+  const seen = new Set<string>();
+  for (const [sourceName, value] of Object.entries(environment)) {
+    const name = platform === "win32" ? sourceName.toUpperCase() : sourceName;
+    const accountName = platform === "win32" ? WINDOWS_ACCOUNT_NAMES.get(name) : undefined;
+    if (!accountName && !FORWARDED_ENVIRONMENT_NAMES.includes(name as typeof FORWARDED_ENVIRONMENT_NAMES[number])) continue;
+    const outputName = accountName ?? name;
+    // Windows keys are case insensitive. Ambiguous account values must not
+    // depend on the source object's insertion order.
+    if (seen.has(outputName)) { delete childEnvironment[outputName]; continue; }
+    seen.add(outputName);
+    if (value === undefined || (accountName && !/^[^\u0000\r\n]{0,4096}$/u.test(value))) continue;
+    childEnvironment[outputName] = value;
   }
   childEnvironment.HOME = input.home;
   if (input.codexHomeOverride !== undefined) {

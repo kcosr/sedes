@@ -54,6 +54,41 @@ describe("image.show canonical tool", () => {
     await expect(service.execute({ path: "/work/chart.png", threadId: "other" }, context)).rejects.toThrow();
   });
 
+  it.each([
+    "C:\\work\\chart.png",
+    "\\\\files\\share\\chart.png",
+  ])("preserves native Windows image path %s through the tool adapter", async nativePath => {
+    const capturePublication = vi.fn();
+    const show = vi.fn(async () => ({ image: { artifactId: "image" } }));
+    const service = new ImageShowAgentToolService({ images: { show } as never, capturePublication });
+    const context = { subject: { kind: "thread_agent", sourceThreadId: "source" },
+      tenantId: "tenant", principalId: "principal", requestId: "windows-request",
+      abortSignal: new AbortController().signal } as never;
+
+    await service.execute({ path: nativePath }, context);
+
+    expect(show).toHaveBeenCalledExactlyOnceWith({ tenantId: "tenant", principalId: "principal" },
+      "source", { path: nativePath }, { invocationId: "windows-request", capture: expect.any(Function) },
+      expect.any(AbortSignal));
+    expect(capturePublication).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "C:chart.png", "C:\\work\\..\\chart.png", "C:\\work\\chart.png:stream",
+    "\\\\?\\C:\\work\\chart.png", "\\\\files\\share\\..\\chart.png",
+  ])("rejects ambiguous Windows image path %s before source dispatch", async nativePath => {
+    const show = vi.fn();
+    const capturePublication = vi.fn();
+    const service = new ImageShowAgentToolService({ images: { show } as never, capturePublication });
+    const context = { subject: { kind: "thread_agent", sourceThreadId: "source" },
+      tenantId: "tenant", principalId: "principal", requestId: "invalid-windows-request" } as never;
+
+    await expect(service.execute({ path: nativePath }, context)).rejects.toThrow("normalized absolute");
+
+    expect(show).not.toHaveBeenCalled();
+    expect(capturePublication).not.toHaveBeenCalled();
+  });
+
   it.each(["unsupported", "invalid", "size", "unavailable", "changed", "busy", "cancelled", "request_conflict", "inactive_turn", "turn_limit", "retention_failed"] as const)(
     "preserves the fixed safe %s error at the canonical transport boundary", (reason) => {
       const error = new ImageShowError(reason);

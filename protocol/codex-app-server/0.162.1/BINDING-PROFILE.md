@@ -43,7 +43,8 @@ The adopted notification count includes four production consumers that were
 missing from the original feasibility inventory:
 
 - `account/updated` — lifecycle information intentionally ignored;
-- `mcpServer/startupStatus/updated` — startup progress intentionally ignored;
+- `mcpServer/startupStatus/updated` — failed startup produces a bounded,
+  thread- and generation-scoped warning; other progress is informational;
 - `skills/changed` — catalog-cache invalidation; and
 - `thread/started` — bounded create correlation.
 

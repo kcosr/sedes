@@ -1,5 +1,6 @@
 import { createHmac } from "node:crypto";
 import { describe, expect, it } from "vitest";
+import { BackendError } from "../../src/server/backends/contracts.js";
 import {
   inspectStagedAttachmentManifest,
   stagedAttachmentFingerprint,
@@ -18,13 +19,19 @@ const attachment = Object.freeze({
 });
 
 describe("provider-private staged attachment manifests", () => {
-  it("authenticates the exact staged path and projects only safe metadata", () => {
+  it.each([
+    attachment.agentPath,
+    String.raw`C:\Users\example\staged\diagram.png`,
+    String.raw`\\fileserver\share\staged\diagram.png`,
+  ])("authenticates the exact staged path %s and projects only safe metadata", (agentPath) => {
+    const staged = { ...attachment, agentPath };
     const value = stagedAttachmentManifest({
       key,
       correlation: "operation-1",
-      attachments: [attachment],
+      attachments: [staged],
     });
-    expect(value).toContain(attachment.agentPath);
+    expect(stagedAttachmentFingerprint([staged])).toContain(JSON.stringify(agentPath));
+    expect(value).toContain(JSON.stringify(agentPath));
     expect(value).toContain(attachment.sha256);
 
     const inspection = inspectStagedAttachmentManifest(value, {
@@ -44,7 +51,41 @@ describe("provider-private staged attachment manifests", () => {
       ],
     });
     expect(JSON.stringify(inspection)).not.toContain(attachment.sha256);
-    expect(JSON.stringify(inspection)).not.toContain(attachment.agentPath);
+    expect(JSON.stringify(inspection)).not.toContain(JSON.stringify(agentPath));
+  });
+
+  it.each([
+    "diagram.png", "/", "/staged/../diagram.png", "/staged//diagram.png",
+    "C:\\", String.raw`C:staged\diagram.png`, String.raw`C:\staged\..\diagram.png`,
+    String.raw`C:\staged\diagram.png:stream`, String.raw`C:\staged\NUL.png`,
+    String.raw`\\?\C:\staged\diagram.png`, String.raw`\\fileserver\share` + "\\",
+    "/staged/private\nsecret.png", "/staged/" + "x".repeat(4096),
+  ])("rejects malformed staging path %s before provider dispatch", (agentPath) => {
+    const staged = { ...attachment, agentPath };
+    for (const construct of [
+      () => stagedAttachmentFingerprint([staged]),
+      () => stagedAttachmentManifest({ key, correlation: "operation-1", attachments: [staged] }),
+    ]) {
+      expect(construct).toThrow(BackendError);
+      try { construct(); } catch (error) {
+        expect(error).toMatchObject({
+          category: "rejected", retryable: false, crossedSubmissionBoundary: false,
+          backendCode: "staged_attachment_invalid",
+        });
+        expect((error as BackendError).safeMessage).not.toContain(agentPath);
+      }
+    }
+  });
+
+  it("rejects invalid immutable staging evidence as clean pre-dispatch failures", () => {
+    for (const attachments of [
+      [{ ...attachment, sha256: "invalid" }],
+      [{ ...attachment, byteSize: -1 }],
+      [attachment, attachment],
+    ]) {
+      expect(() => stagedAttachmentFingerprint(attachments)).toThrow(BackendError);
+    }
+    expect(() => stagedAttachmentManifest({ key, correlation: "operation-1", attachments: [] })).toThrow(BackendError);
   });
 
   it("rejects changed correlation, path, digest, and lookalike framing", () => {
