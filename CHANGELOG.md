@@ -205,6 +205,10 @@ User-facing changes are collected here before release. See the
 
 ### Fixed
 
+- Android uses patched Capacitor 8.4.3 to block internal HTTP proxy navigation;
+  rebuild the Android client after upgrading. Pi resource globs use patched
+  brace-expansion 5.0.12.
+
 - Windows file and image attachments send without a false reconciliation
   requirement. Supplemental Files roots use Windows path rules for sensitive
   directory checks and labels. Deploy and restart the server; no client or
