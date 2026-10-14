@@ -55,8 +55,9 @@ changes to this record and PR references do not change the tested application.
 | Version, changelog, docs, agent-tool contracts, E2E timing manifest | Passed through typecheck/build |
 | Codex protocol/generated runtime, ACP, Grok static source/profile | Passed |
 | Sidecar, Pi worker, Claude worker build repeatability | Passed |
-| Production third-party notices | Passed after regeneration; 617 packages, 244 license texts |
-| Full deterministic unit/integration suite | Pending |
+| Production third-party notices | Passed after regeneration; 616 packages, 244 license texts; pruned Claude executables excluded independently of build host |
+| Notice generation regression | Passed; Linux/Windows fixture installs produce identical notices while retaining the SDK license |
+| Full deterministic unit/integration suite | 16,335 passed, 24 skipped, 3 timeout failures in 660.02s; all three unchanged cases passed in a single-worker recheck (24.46s), yielding 16,338 passing cases across the run and recheck |
 | Full coordinated browser E2E and screenshot review | Pending |
 | Android assembled-package/native-unit verification | Pending |
 | Electron packaged application verification | Pending |
@@ -121,7 +122,10 @@ SDK vendor patches, or postinstall rewrites were introduced.
 ## Review and publication
 
 The Windows fix was reviewed iteratively with Keel `claude-default` before PR
-#79 merged. Release preparation receives a separate review before publication.
+#79 merged. The separate release review found platform-dependent notices for
+Claude executables that packaging discards. The generator now excludes those
+packages, with a passing Linux/Windows fixture regression; follow-up review is
+pending. Release preparation is reviewed in [PR #80](https://github.com/kcosr/sedes/pull/80).
 Public issue/support/security destinations remain documented in
 [CONTRIBUTING](../CONTRIBUTING.md) and [SECURITY](../SECURITY.md); the source
 license is [LICENSE](../LICENSE), with dependencies in

@@ -187,6 +187,10 @@ function collectProductionClosure(root, installedIndex) {
 
   while (queue.length > 0) {
     const { from, name, via } = queue.pop();
+    // Packaging always removes the SDK's bundled Claude executables: operators
+    // supply Claude Code separately. Ignore them even after --ignore-scripts
+    // installs, so notices do not depend on which host optional package exists.
+    if (/^@anthropic-ai\/claude-agent-sdk-(linux|darwin|win32)-/u.test(name)) continue;
     // A workspace lockfile records its sibling @sedes/* workspaces as links to
     // first-party source, which carries no third-party notice.
     if (root.ownLockfile && name.startsWith("@sedes/")) continue;
