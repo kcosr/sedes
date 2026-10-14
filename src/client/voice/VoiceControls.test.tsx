@@ -1005,6 +1005,7 @@ describe("listening target shortcut", () => {
     expect(Array.from(card().querySelectorAll(".voice-card-actions > button"), value => value.getAttribute("aria-label")))
       .toEqual(["Keep listening", "Cancel voice recording", "Send voice recording"]);
     expect(screen.getByRole("button", { name: "Keep listening" })).toHaveAttribute("aria-pressed", String(keepListening));
+    expect(screen.getByRole("button", { name: "Keep listening" })).toHaveFocus();
     expect(within(card()).getByRole("status")).toHaveTextContent(`${title}. Listening`);
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(window.location.pathname).toBe(threadPath(target));
@@ -1079,17 +1080,21 @@ describe("listening target shortcut", () => {
     navigate(threadPath("named"), { replace: true });
     renderControls();
     const button = await screen.findByRole("button", { name: "Target this thread: Release review" });
+    button.focus();
     fireEvent.click(button);
-    expect(button).toBeDisabled();
+    expect(button).toHaveAttribute("aria-disabled", "true");
+    expect(button).toHaveFocus();
     fireEvent.click(button);
     expect(voice.fake.plugin.retargetActiveRecognition).toHaveBeenCalledOnce();
     expect(screen.getByRole("button", { name: "Keep listening" })).toHaveAttribute("aria-disabled", "true");
     expect(screen.getByRole("button", { name: "Send voice recording" })).toBeDisabled();
     act(() => voice.fake.emit("stateChanged", { ...initial, stateRevision: 2, actions: { ...initial.actions, canRetarget: false } }));
     expect(shortcut()).toBe(button);
-    expect(button).toBeDisabled();
+    expect(button).toHaveAttribute("aria-disabled", "true");
+    expect(button).toHaveFocus();
     const cancel = screen.getByRole("button", { name: "Cancel voice recording" });
     expect(cancel).toBeEnabled();
+    cancel.focus();
     fireEvent.click(cancel);
     await waitFor(() => expect(voice.fake.plugin.stopCurrentInteraction).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, interactionId: "item" }));
     await waitFor(() => expect(shortcut()).toBeNull());
@@ -1105,11 +1110,13 @@ describe("listening target shortcut", () => {
     navigate(threadPath("named"), { replace: true });
     renderControls();
     const button = await screen.findByRole("button", { name: "Target this thread: Release review" });
+    button.focus();
     fireEvent.click(button);
     act(() => voice.fake.emit("stateChanged", { ...initial, stateRevision: 2, actions: { ...initial.actions, canRetarget: false } }));
     await act(async () => { reject(new Error("That recording has ended.")); });
     expect(shortcut()).toBe(button);
-    expect(button).toBeDisabled();
+    expect(button).toHaveAttribute("aria-disabled", "true");
+    expect(button).toHaveFocus();
     expect(within(card()).getByRole("alert")).toHaveTextContent("That recording has ended.");
     expect(lines()[1]).toBe("Listening");
     expect(screen.getByRole("button", { name: "Cancel voice recording" })).toBeEnabled();
@@ -1119,6 +1126,50 @@ describe("listening target shortcut", () => {
     fireEvent.click(button);
     await waitFor(() => expect(shortcut()).toBeNull());
     expect(voice.fake.plugin.retargetActiveRecognition).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole("button", { name: "Keep listening" })).toHaveFocus();
+  });
+  it("does not steal focus after the user moves away before retarget confirmation", async () => {
+    const initial = listening({ recognitionThreadId: "long" });
+    voice.fake.plugin.setConnection.mockResolvedValue(initial);
+    let settle!: (value: NativeVoiceState) => void;
+    voice.fake.plugin.retargetActiveRecognition.mockImplementationOnce(() => new Promise(resolve => { settle = resolve; }));
+    navigate(threadPath("named"), { replace: true });
+    renderControls();
+    const button = await screen.findByRole("button", { name: "Target this thread: Release review" });
+    button.focus();
+    fireEvent.click(button);
+    const tile = screen.getByRole("button", { name: "Open voice controls" });
+    tile.focus();
+    await act(async () => { settle({ ...initial, stateRevision: 2,
+      active: { ...initial.active!, recognitionThreadId: "named", recognitionThreadTitle: "Release review" } }); });
+    expect(shortcut()).toBeNull();
+    expect(tile).toHaveFocus();
+  });
+  it.each(["route", "connection", "recording", "phase", "off"] as const)("does not move shortcut focus on %s interruption", async change => {
+    const initial = listening({ recognitionThreadId: "long" });
+    voice.fake.plugin.setConnection.mockResolvedValue(initial);
+    let settle!: (value: NativeVoiceState) => void;
+    voice.fake.plugin.retargetActiveRecognition.mockImplementationOnce(() => new Promise(resolve => { settle = resolve; }));
+    navigate(threadPath("named"), { replace: true });
+    renderControls(true);
+    const button = await screen.findByRole("button", { name: "Target this thread: Release review" });
+    const keep = screen.getByRole("button", { name: "Keep listening" });
+    button.focus();
+    fireEvent.click(button);
+    act(() => {
+      if (change === "route") navigate(threadPath("long"));
+      else voice.fake.emit("stateChanged", { ...initial, stateRevision: 3,
+        connectionGeneration: change === "connection" ? 2 : 1,
+        phase: change === "phase" ? "recognizing" : "listening",
+        settings: change === "off" ? voiceSettings({ audioMode: "off" }) : initial.settings,
+        active: { ...initial.active!, recognitionThreadId: "named", recording: { ...initial.active!.recording!,
+          id: change === "recording" ? "new-recording" : "recording" } } });
+    });
+    expect(shortcut()).toBeNull();
+    expect(keep).not.toHaveFocus();
+    await act(async () => { settle({ ...initial, stateRevision: 2,
+      active: { ...initial.active!, recognitionThreadId: "named", recognitionThreadTitle: "Release review" } }); });
+    expect(keep).not.toHaveFocus();
   });
   it.each(["connection", "recording"])("fences a stale rendered tap by its original %s identity", async change => {
     const initial = listening({ recognitionThreadId: "long" });
