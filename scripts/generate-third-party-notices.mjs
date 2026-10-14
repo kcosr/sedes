@@ -373,10 +373,10 @@ function renderNotices(packages, licenseTexts) {
   lines.push("there; `dependencies`, installed `optionalDependencies`, and required");
   lines.push("`peerDependencies` are followed transitively through nested `node_modules`.");
   lines.push("Each entry names the roots that ship it, so a package pinned at two versions");
-  lines.push("is listed once per version. Packages recorded in the lockfile");
-  lines.push("but absent from an installed tree (for example the platform-specific Claude");
-  lines.push("Code executable packages, which the `postinstall` step removes) are not part");
-  lines.push("of a built installation and are not listed.");
+  lines.push("is listed once per version. Absent optional packages are omitted.");
+  lines.push("Packaging always discards the Claude SDK's bundled platform executables;");
+  lines.push("operators supply Claude Code separately. Those executables are excluded");
+  lines.push("even when an install with ignored scripts leaves them present in the tree.");
   lines.push("");
   lines.push(
     "This file is generated. Run `npm run generate:third-party-notices` to refresh it",
