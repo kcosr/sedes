@@ -444,7 +444,8 @@ describe("native voice production pipeline with loopback providers", () => {
         } else if (playbackStop) {
           expect(evidence.playbackControl).toMatchObject({ action: "Stop", surface: scenario === "playback-stop-notification" ? "notification" : "card",
             sourceThreadId: threadId, autoListen: true, queuedBeforeStop: 1,
-            afterStop: { phase: "idle", active: null, queue: { count: 0 }, settings: { audioMode: "speak", autoListen: true } }, inputPresentationEvents: 0 });
+            afterStop: { phase: "idle", active: null, queue: { count: 0 }, retainedVoiceTarget: { threadId }, settings: { audioMode: "speak", autoListen: true } }, inputPresentationEvents: 0 });
+          expect(evidence.playbackControl.afterStop.idleTargetRevision).toBeGreaterThan(evidence.playbackControl.idleTargetRevisionBeforeStop);
           if (scenario === "playback-stop-notification") {
             expect(evidence.playbackControl.notification).toEqual({ title: threadTitle, status: "Speaking", stopLabel: "Stop", stopVisible: true, stopEnabled: true });
             expect(evidence.playbackControl.serviceDelivery).toBeGreaterThan(0);
