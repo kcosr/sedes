@@ -164,7 +164,9 @@ The `Android speak/playback-stop` and
 `Android speak/playback-stop-notification` scenarios press the card and
 expanded-notification **Stop** controls during playback with Auto-listen on and
 a replay queued. Both require an empty queue, no capture or input admission,
-and voice remaining enabled. The notification case delivers its actual
+voice remaining enabled, and an advanced idle-target revision with the viewed
+thread retained after Stop releases the playback destination. The notification
+case delivers its actual
 `PendingIntent` and waits for the service to handle it.
 The `Android speak/retained-target` scenario checks that the visible card and
 notification use the same destination and retain it after leaving the thread. It checks
@@ -196,6 +198,12 @@ scheduling and cancellation, notification/SSE lifecycle, recognition feedback
 cues, real AudioRecord, and AudioTrack streaming, focus, drain, underrun, and
 cancellation. JVM checks cannot execute these Android framework and Keystore
 paths.
+
+`NativeVoiceRuntimeTest` instrumentation covers playback Stop from the app and
+notification with empty and populated queues, different viewed and spoken
+threads, pinned defaults, and pending explicit choices. Background cases cover
+the saved default or no target. Delayed Stop checks cover cancellation across
+unsent follow-up boundaries; stale commands cannot release a newer destination.
 
 AudioTrack drain assertions use the actual written and playback-head frame
 counts captured before track release. A held, stopped track must not complete;

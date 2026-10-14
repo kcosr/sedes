@@ -29,6 +29,11 @@ User-facing changes are collected here before release. See the
 
 ### Changed
 
+- Android playback **Stop** now releases the retained voice destination as well
+  as clearing queued speech. The next recording honors an explicit choice or
+  pinned default, then the viewed thread or normal fallback. See
+  [voice controls](docs/operator/clients/voice.md#targeting-and-controls).
+
 - Idle voice **Next** is now the target icon labelled **Target this thread**, or
   **Release voice target** when no available thread is viewed. It still releases
   the retained destination; playback, headset, and notification Next are

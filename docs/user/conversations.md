@@ -51,9 +51,10 @@ The second line is the state, such as **Ready · Speak · Auto-listen on**,
 **Speaking** with the notice kind and queued count, or **Listening**. If voice
 needs to resume, the card offers **Resume**.
 
-Voice retains its last active thread after playback or recording ends, including
-Stop or Cancel. If B speaks while you view A, the idle card keeps B so **Start**
-can reply to B even with Auto-listen off. The idle target icon, immediately left
+Voice retains its last active thread after playback completes or recording ends,
+including recording **Cancel**. If B finishes speaking while you view A, the idle
+card keeps B so **Start** can reply to B even with Auto-listen off. Playback
+**Stop** releases that destination instead. The idle target icon, immediately left
 of Start, releases B and returns to A; with no viewed thread, it returns to the
 saved default or chooser. It is labelled **Target this thread** when the viewed
 thread can accept a recording, and **Release voice target** otherwise.
@@ -124,15 +125,20 @@ Auto-listen off. During speech, **Next** skips both the speech and its follow-up
 recording. While idle and showing a retained fallback, the target icon releases
 that thread; headset and notification Next do the same.
 Playback **Stop** in the app or notification cancels the interaction and clears
-queued speech and pending agent-requested voice actions. It leaves voice enabled
-and does not stop the agent. Headset Play/Pause and Next preserve queued speech.
+queued speech and pending agent-requested voice actions. It also releases the
+retained destination, even if the queue is empty. The next recording honors an
+explicit pending choice, then the pinned default, then the viewed thread or
+normal default/chooser. Stop leaves voice enabled without starting recording,
+navigating, changing the default or pinning, or stopping the agent. Headset
+Play/Pause and Next preserve queued speech.
 While voice is recording or recognizing, Stop becomes **Cancel**, which discards
 the recording unsent and preserves queued playback. During **Keep listening**,
 headset Play/Pause finishes transcription and sends the complete message. If the
 transcript is empty, the recording ends normally without sending. During ordinary
 recording, Play/Pause cancels and discards; headset Stop or on-screen **Cancel**
-always discards unsent recording. Play/Pause cancels microphone preparation and
-ignores repeated presses once any Send is finishing or sending. After cancellation
+always discards unsent recording and preserves the voice destination.
+Play/Pause cancels microphone preparation and ignores repeated presses once any
+Send is finishing or sending. After cancellation
 or an empty transcript, queued speech continues, or voice returns to idle if the
 queue is empty. **Off** clears
 the voice queue and hides the card unless **Show voice bar when off** is on in
