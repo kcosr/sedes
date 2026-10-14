@@ -31,6 +31,165 @@ import org.junit.Test;
 
 /** Exercises the actual owner-thread cancellation and encrypted admission journal without audio. */
 public class NativeVoiceRuntimeTest {
+    @Test public void foregroundFinalSpeechHandsOffThroughComposerWithoutNativeAdmission() throws Exception {
+        for (String mode : new String[] { "queue", "steer" }) {
+            try (Fixture f = new Fixture(false, false)) {
+                f.foregroundComposer(f.target, true, mode); String capture = f.recognizing(false, false, true);
+                String transcript = "  Supplemental speech\n完整🙂  ";
+                f.result(capture, true, transcript); f.flushEvents();
+                JSONObject offer = f.handoffs.poll(10, TimeUnit.SECONDS); assertNotNull(offer);
+                assertEquals(9, offer.length()); assertEquals(f.profile, offer.getString("profileId"));
+                assertEquals(f.origin, offer.getString("serverOrigin")); assertEquals(Fixture.IDENTITY, offer.getString("identity"));
+                assertEquals(f.runtime.snapshot().getLong("connectionGeneration"), offer.getLong("connectionGeneration"));
+                assertEquals(f.target, offer.getString("threadId")); assertEquals(transcript, offer.getString("text"));
+                assertEquals(mode, offer.getString("mode")); assertEquals(0, f.inputAttempts.get());
+                assertFalse("Snapshots do not expose the transcript", f.runtime.snapshot().toString().contains("Supplemental speech"));
+                String handoff = offer.getString("handoffId"), recording = offer.getString("recordingId");
+                assertEquals("composer_handoff_unclaimed", f.command("completeComposerHandoff",
+                    NativeVoiceJson.object("handoffId", handoff, "outcome", "accepted")));
+                assertNull(f.command("claimComposerHandoff", NativeVoiceJson.object("handoffId", handoff)));
+                assertEquals("composer_handoff_changed", f.command("claimComposerHandoff", NativeVoiceJson.object("handoffId", handoff)));
+                // Claimed ownership can complete after Android hides; it cannot produce a native fallback send.
+                f.runtime.nativeVisibility(false); f.flush();
+                assertNull(f.command("completeComposerHandoff", NativeVoiceJson.object("handoffId", handoff, "outcome", "accepted")));
+                f.flush(); assertTrue(f.runtime.snapshot().isNull("active")); assertTrue(f.runtime.snapshot().isNull("recordingRecovery"));
+                f.assertRecordingDiscarded(recording); assertEquals(0, f.inputAttempts.get()); assertTrue(f.submissions.isEmpty());
+                assertEquals("composer_handoff_changed", f.command("completeComposerHandoff",
+                    NativeVoiceJson.object("handoffId", handoff, "outcome", "accepted")));
+            }
+        }
+    }
+
+    @Test public void speechOutsideEligibleComposerKeepsTheNativeInputPath() throws Exception {
+        for (String context : new String[] { "background", "another_thread", "no_composer" }) {
+            try (Fixture f = new Fixture(false, false)) {
+                if (!context.equals("background")) f.foregroundComposer(context.equals("another_thread") ? UUID.randomUUID().toString() : f.target,
+                    !context.equals("no_composer"), "queue");
+                String capture = f.recognizing(false); f.result(capture, true, "Native-only speech");
+                assertNotNull(f.inputs.poll(10, TimeUnit.SECONDS)); f.flushEvents();
+                assertEquals(1, f.inputAttempts.get()); assertTrue(f.handoffs.isEmpty());
+                assertEquals("Native-only speech", f.lastRequest.get().getString("text"));
+            }
+        }
+    }
+
+    @Test public void declinedComposerOfferRetainsPreviouslyUnadoptedSpeechForManualRecovery() throws Exception {
+        for (boolean claimed : new boolean[] { false, true }) {
+            try (Fixture f = new Fixture(false, false)) {
+                f.foregroundComposer(f.target, true, "queue"); String capture = f.recognizing(false);
+                f.result(capture, true, "Preserve this speech"); f.flushEvents();
+                JSONObject offer = f.handoffs.poll(10, TimeUnit.SECONDS); assertNotNull(offer); String handoff = offer.getString("handoffId");
+                if (claimed) assertNull(f.command("claimComposerHandoff", NativeVoiceJson.object("handoffId", handoff)));
+                assertNull(f.command("completeComposerHandoff", NativeVoiceJson.object("handoffId", handoff, "outcome", "declined",
+                    "message", "Resolve the chat draft conflict first.")));
+                f.flush(); JSONObject recovery = f.runtime.snapshot().getJSONObject("recordingRecovery");
+                assertTrue(f.runtime.snapshot().isNull("active")); assertTrue(recovery.getBoolean("canSend"));
+                assertTrue(recovery.getBoolean("canCopyRecognizedText")); assertEquals(offer.getString("recordingId"), recovery.getString("recordingId"));
+                f.onStore(() -> { NativeDictationStore.Recording saved = f.dictations.get(f.binding, offer.getString("recordingId"));
+                    assertTrue(saved.adopted); assertEquals("Preserve this speech", saved.text); assertNull(saved.request); });
+                assertEquals(0, f.inputAttempts.get()); assertEquals(0, f.store.journal(f.binding).length());
+            }
+        }
+    }
+
+    @Test public void staleComposerClaimCannotFallBackToSendingSpeechAlone() throws Exception {
+        for (String change : new String[] { "native_hidden", "other_thread", "route_roundtrip", "composer_removed" }) {
+            try (Fixture f = new Fixture(false, false)) {
+                f.foregroundComposer(f.target, true, "queue"); String capture = f.recognizing(false);
+                f.result(capture, true, "Speech for the original draft"); f.flushEvents();
+                JSONObject offer = f.handoffs.poll(10, TimeUnit.SECONDS); assertNotNull(offer); String handoff = offer.getString("handoffId");
+                if (change.equals("native_hidden")) f.runtime.nativeVisibility(false);
+                else if (change.equals("composer_removed")) f.foregroundComposer(f.target, false, "queue");
+                else { f.foregroundComposer(UUID.randomUUID().toString(), true, "queue");
+                    if (change.equals("route_roundtrip")) f.foregroundComposer(f.target, true, "queue"); }
+                f.flush();
+                assertEquals("composer_handoff_unavailable", f.command("claimComposerHandoff", NativeVoiceJson.object("handoffId", handoff)));
+                assertNull(f.command("completeComposerHandoff", NativeVoiceJson.object("handoffId", handoff, "outcome", "declined")));
+                assertEquals(0, f.inputAttempts.get()); assertTrue(f.runtime.snapshot().getJSONObject("recordingRecovery").getBoolean("canCopyRecognizedText"));
+            }
+        }
+    }
+
+    @Test public void cancelledComposerHandoffAndLateCompletionCannotTouchANewerRecording() throws Exception {
+        try (Fixture f = new Fixture(false, false)) {
+            f.foregroundComposer(f.target, true, "queue"); String capture = f.recognizing(false);
+            f.result(capture, true, "Original speech"); f.flushEvents();
+            JSONObject oldOffer = f.handoffs.poll(10, TimeUnit.SECONDS); assertNotNull(oldOffer);
+            assertNull(f.command("claimComposerHandoff", NativeVoiceJson.object("handoffId", oldOffer.getString("handoffId"))));
+            assertNull(f.command("stopCurrentInteraction", new JSONObject())); f.flush();
+            assertTrue(f.runtime.snapshot().isNull("recordingRecovery"));
+            f.onOwner(() -> {
+                Constructor<?> constructor = Class.forName("dev.sedes.local.NativeVoiceRuntime$Active").getDeclaredConstructor(String.class, String.class);
+                constructor.setAccessible(true); set(f.runtime, "active", constructor.newInstance(f.target, "Target"));
+            });
+            capture = f.recognizing(false); String newer = f.runtime.snapshot().getJSONObject("active").getJSONObject("recording").getString("id");
+            assertNull(f.command("completeComposerHandoff",
+                NativeVoiceJson.object("handoffId", oldOffer.getString("handoffId"), "outcome", "accepted")));
+            f.flush();
+            assertEquals(newer, f.runtime.snapshot().getJSONObject("active").getJSONObject("recording").getString("id"));
+            f.onStore(() -> {
+                Method directory = NativeDictationStore.class.getDeclaredMethod("directory", String.class, String.class); directory.setAccessible(true);
+                assertFalse(((File) directory.invoke(f.dictations, f.binding, oldOffer.getString("recordingId"))).exists());
+                assertEquals(newer, f.dictations.get(f.binding, newer).id);
+            });
+            assertEquals("composer_handoff_changed", f.command("completeComposerHandoff",
+                NativeVoiceJson.object("handoffId", oldOffer.getString("handoffId"), "outcome", "accepted")));
+            assertEquals(0, f.inputAttempts.get());
+        }
+    }
+
+    @Test public void declinedClaimAfterVoiceOffRestoresOnlyTheOriginalRawRecovery() throws Exception {
+        try (Fixture f = new Fixture(false, false)) {
+            f.foregroundComposer(f.target, true, "queue"); String capture = f.recognizing(false);
+            f.result(capture, true, "Speech not yet adopted by the UI"); f.flushEvents();
+            JSONObject offer = f.handoffs.poll(10, TimeUnit.SECONDS); assertNotNull(offer);
+            assertNull(f.command("claimComposerHandoff", NativeVoiceJson.object("handoffId", offer.getString("handoffId"))));
+            f.settings(NativeVoiceJson.object("audioMode", "off")); f.flush();
+            assertTrue(f.runtime.snapshot().isNull("active")); assertTrue(f.runtime.snapshot().isNull("recordingRecovery"));
+            assertNull(f.command("completeComposerHandoff", NativeVoiceJson.object("handoffId", offer.getString("handoffId"), "outcome", "declined")));
+            JSONObject recovery = f.runtime.snapshot().getJSONObject("recordingRecovery");
+            assertEquals(offer.getString("recordingId"), recovery.getString("recordingId"));
+            assertTrue(recovery.getBoolean("canCopyRecognizedText")); assertEquals(0, f.inputAttempts.get());
+        }
+    }
+
+    @Test public void recognizedStopAndBlankSpeechNeverReachTheComposer() throws Exception {
+        for (String text : new String[] { "Stop", " \u00a0 " }) {
+            try (Fixture f = new Fixture(false, false)) {
+                f.foregroundComposer(f.target, true, "queue"); String capture = f.recognizing(false);
+                f.result(capture, true, text); f.flushEvents();
+                assertTrue(f.handoffs.isEmpty()); assertEquals(0, f.inputAttempts.get());
+            }
+        }
+    }
+
+    @Test public void explicitRecordingSendAlsoHandsOffAndKeepsLiteralStopText() throws Exception {
+        try (Fixture f = new Fixture(false, false)) {
+            f.foregroundComposer(f.target, true, "queue"); String capture = f.recognizing(false, true);
+            f.onOwner(() -> {
+                Object item = field(f.runtime, "active");
+                assertTrue(((NativeVoiceRecording) field(item, "recording")).accept(captureFrame(1000)));
+                set(f.runtime, "phase", "listening"); set(f.runtime, "captureOwner", item); f.invoke("publish", new Class<?>[0]);
+            });
+            String recording = f.runtime.snapshot().getJSONObject("active").getJSONObject("recording").getString("id");
+            assertNull(f.command("sendRecording", NativeVoiceJson.object("recordingId", recording)));
+            f.result(capture, true, "Stop"); f.flushEvents();
+            JSONObject offer = f.handoffs.poll(10, TimeUnit.SECONDS); assertNotNull(offer);
+            assertEquals("Stop", offer.getString("text")); assertEquals(recording, offer.getString("recordingId"));
+            assertEquals(0, f.inputAttempts.get());
+        }
+    }
+
+    @Test public void composerHandoffKeepsTheModeFrozenBeforeRecognitionFeedback() throws Exception {
+        try (Fixture f = new Fixture(false, false)) {
+            f.foregroundComposer(f.target, true, "steer"); String capture = f.recognizing(true, false, true);
+            f.result(capture, true, "Keep the frozen mode"); Cue cue = f.cue(NativeVoiceCue.Kind.SUCCESS);
+            f.foregroundComposer(f.target, true, "queue"); assertTrue(f.handoffs.isEmpty());
+            f.runtime.drained(cue.id); f.flushEvents(); JSONObject offer = f.handoffs.poll(10, TimeUnit.SECONDS); assertNotNull(offer);
+            assertEquals("steer", offer.getString("mode")); assertEquals(0, f.inputAttempts.get());
+        }
+    }
+
     @Test public void automaticSpeechChecksUserAdmissionBeforePlaybackWithoutUsingListenAuthority() throws Exception {
         for (String response : new String[] { "fresh", "stale", "network", "server", "rate_limited", "missing", "malformed" }) {
             try (Fixture f = new Fixture(false, false)) {
@@ -422,7 +581,8 @@ public class NativeVoiceRuntimeTest {
         try (Fixture f = new Fixture(false, false)) {
             f.onOwner(() -> set(f.runtime, "connectionGeneration", 2L));
             String[] actions = { "updateSettings", "startManualListen", "setNextRecordingTarget", "retargetActiveRecognition", "skipCurrentPlayback", "stopPlayback", "recordDuringPlayback",
-                "stopCurrentInteraction", "resumeInput", "discardInput", "disconnect", "setForegroundContext", "speakReply" };
+                "stopCurrentInteraction", "resumeInput", "discardInput", "disconnect", "setForegroundContext", "speakReply",
+                "claimComposerHandoff", "completeComposerHandoff" };
             for (String action : actions) {
                 JSONObject args = action.equals("updateSettings") ? NativeVoiceJson.object("expectedRevision", 0,
                     "patch", NativeVoiceJson.object("recognizeStopCommand", false)) : new JSONObject();
@@ -622,7 +782,7 @@ public class NativeVoiceRuntimeTest {
                 NativeVoiceHttp.Result reply = f.start();
                 switch (change) {
                     case "native_hidden": f.runtime.nativeVisibility(false); break;
-                    case "web_hidden": assertNull(f.command("setForegroundContext", NativeVoiceJson.object("visible", false))); break;
+                    case "web_hidden": assertNull(f.command("setForegroundContext", NativeVoiceJson.object("composerAvailable", false, "visible", false))); break;
                     case "other_thread": f.foreground(UUID.randomUUID().toString()); break;
                     case "generation": f.onOwner(() -> {
                         set(f.runtime, "connectionGeneration", f.runtime.snapshot().getLong("connectionGeneration") + 1);
@@ -907,14 +1067,14 @@ public class NativeVoiceRuntimeTest {
             f.readyClientVoice("speak"); f.settings(NativeVoiceJson.object("pinDefaultVoiceThread", false));
             String viewed = UUID.randomUUID().toString(), nextViewed = UUID.randomUUID().toString();
             f.foreground(viewed); f.idleReplay(f.target, "retained-turn");
-            assertNull(f.command("setForegroundContext", NativeVoiceJson.object("visible", true, "threadId", viewed,
+            assertNull(f.command("setForegroundContext", NativeVoiceJson.object("composerAvailable", false, "visible", true, "threadId", viewed,
                 "threadTitle", "Renamed viewed thread", "composerMode", "steer")));
             assertEquals(f.target, f.runtime.snapshot().getJSONObject("retainedVoiceTarget").getString("threadId"));
             // Settings has no viewed thread; returning to the same thread is not a new destination.
             f.foreground(null); f.foreground(viewed);
             assertEquals(f.target, f.runtime.snapshot().getJSONObject("retainedVoiceTarget").getString("threadId"));
             f.runtime.nativeVisibility(false); f.flush();
-            assertNull(f.command("setForegroundContext", NativeVoiceJson.object("visible", false, "threadId", null)));
+            assertNull(f.command("setForegroundContext", NativeVoiceJson.object("composerAvailable", false, "visible", false, "threadId", null)));
             f.foreground(viewed);
             JSONObject resumed = f.runtime.snapshot();
             assertEquals(f.target, resumed.getJSONObject("retainedVoiceTarget").getString("threadId"));
@@ -1941,8 +2101,8 @@ public class NativeVoiceRuntimeTest {
                         if (cancellation.equals("registration")) f.onOwner(f.runtime::clientDisconnected);
                         else {
                             f.runtime.nativeVisibility(true);
-                            assertNull(f.beginCommand("setForegroundContext", NativeVoiceJson.object("visible", true, "threadId", f.target)).await());
-                            assertNull(f.beginCommand("setForegroundContext", NativeVoiceJson.object("visible", true, "threadId", UUID.randomUUID().toString())).await());
+                            assertNull(f.beginCommand("setForegroundContext", NativeVoiceJson.object("composerAvailable", false, "visible", true, "threadId", f.target)).await());
+                            assertNull(f.beginCommand("setForegroundContext", NativeVoiceJson.object("composerAvailable", false, "visible", true, "threadId", UUID.randomUUID().toString())).await());
                         }
                         assertTrue("Cancellation releases the active slot while its writer is pending", f.runtime.snapshot().isNull("active"));
                     }
@@ -2191,10 +2351,11 @@ public class NativeVoiceRuntimeTest {
             JSONObject active = f.runtime.snapshot().getJSONObject("active");
             assertEquals(f.target, active.getString("recognitionThreadId")); assertEquals("Target", active.getString("recognitionThreadTitle"));
             String longTitle = new String(new char[513]).replace('\0', 'x');
-            assertEquals("invalid_threadTitle", f.command("setForegroundContext", NativeVoiceJson.object("visible", true, "threadId", other,
+            assertEquals("invalid_threadTitle", f.command("setForegroundContext", NativeVoiceJson.object("composerAvailable", false, "visible", true, "threadId", other,
                 "threadTitle", longTitle, "composerMode", "steer")));
-            assertEquals("invalid_composerMode", f.command("setForegroundContext", NativeVoiceJson.object("visible", true, "threadId", other,
+            assertEquals("invalid_composerMode", f.command("setForegroundContext", NativeVoiceJson.object("composerAvailable", false, "visible", true, "threadId", other,
                 "threadTitle", "Title", "composerMode", "interrupt")));
+            assertEquals("invalid_composerAvailable", f.command("setForegroundContext", NativeVoiceJson.object("visible", true, "threadId", other)));
             assertEquals("queue", field(f.runtime, "composerMode")); assertTrue(f.runtime.snapshot().getJSONObject("foreground").isNull("threadId"));
             assertNull(f.command("retargetActiveRecognition", NativeVoiceJson.object("threadId", other, "threadTitle", JSONObject.NULL)));
             assertEquals(other, f.runtime.snapshot().getJSONObject("active").getString("recognitionThreadId"));
@@ -4549,7 +4710,7 @@ public class NativeVoiceRuntimeTest {
     @Test public void playbackStopClearsMixedPendingSpeechAndDeferredAgentActionsWithoutDisablingVoice() throws Exception {
         for (String surface : new String[] { "app", "stop_playback" }) try (Fixture f = new Fixture(false, false)) {
             f.readyClientVoice("speak"); f.runtime.nativeVisibility(true);
-            assertNull(f.command("setForegroundContext", NativeVoiceJson.object("visible", true, "threadId", f.target, "threadTitle", "Source thread")));
+            assertNull(f.command("setForegroundContext", NativeVoiceJson.object("composerAvailable", false, "visible", true, "threadId", f.target, "threadTitle", "Source thread")));
             f.settings(NativeVoiceJson.object("autoListen", true, "pinDefaultVoiceThread", false)); f.policy(true, false, "speakThenListen");
             String destination = UUID.randomUUID().toString(); JSONObject command = f.clientSwitch(destination, true);
             assertEquals("accepted", f.clientCommand(command).getString("status"));
@@ -5310,7 +5471,7 @@ public class NativeVoiceRuntimeTest {
                 f.readyClientVoice("input");
                 f.settings(NativeVoiceJson.object("autoListen", false, "speechContent", "both"));
                 f.runtime.nativeVisibility(true);
-                assertNull(f.command("setForegroundContext", NativeVoiceJson.object("visible", true, "threadId", f.target, "threadTitle", "Visible thread")));
+                assertNull(f.command("setForegroundContext", NativeVoiceJson.object("composerAvailable", false, "visible", true, "threadId", f.target, "threadTitle", "Visible thread")));
                 f.replay(agent, f.target, "turn-1", "**Replayed** reply.");
                 SpeechJob job = f.speech.speechRequests.poll(10, TimeUnit.SECONDS); assertNotNull(end, job);
                 assertEquals("Replayed reply.", job.text);
@@ -5637,7 +5798,7 @@ public class NativeVoiceRuntimeTest {
             assertReplayTitle(f, other, null, null);
             assertReplayTitle(f, other, "Provided title", "Provided title");
             f.runtime.nativeVisibility(true);
-            assertNull(f.command("setForegroundContext", NativeVoiceJson.object("visible", true, "threadId", f.target, "threadTitle", "Visible thread")));
+            assertNull(f.command("setForegroundContext", NativeVoiceJson.object("composerAvailable", false, "visible", true, "threadId", f.target, "threadTitle", "Visible thread")));
             assertReplayTitle(f, f.target, null, "Visible thread");
             assertReplayTitle(f, f.target, JSONObject.NULL, "Visible thread");
             assertReplayTitle(f, f.target, " \t", "Visible thread");
@@ -5917,10 +6078,11 @@ public class NativeVoiceRuntimeTest {
         final BlockingQueue<NativeVoiceHttp.Result> authentications = new LinkedBlockingQueue<>();
         final BlockingQueue<String> contextTargets = new LinkedBlockingQueue<>();
         final BlockingQueue<Cue> cues = new LinkedBlockingQueue<>();
-        final BlockingQueue<JSONObject> submissions = new LinkedBlockingQueue<>(), openThreads = new LinkedBlockingQueue<>();
+        final BlockingQueue<JSONObject> submissions = new LinkedBlockingQueue<>(), openThreads = new LinkedBlockingQueue<>(), handoffs = new LinkedBlockingQueue<>();
         final NativeVoiceRuntime.Observer submissionObserver = (name, value) -> {
             if (name.equals("inputSubmitted")) submissions.add(NativeVoiceJson.copy(value));
             if (name.equals("openThread")) openThreads.add(NativeVoiceJson.copy(value));
+            if (name.equals("composerHandoff")) handoffs.add(NativeVoiceJson.copy(value));
         };
         final NativeVoiceRuntime runtime;
         final SpeechFake speech = new SpeechFake();
@@ -6247,7 +6409,12 @@ public class NativeVoiceRuntimeTest {
         }
         void foreground(String threadId) throws Exception {
             runtime.nativeVisibility(true);
-            assertNull(command("setForegroundContext", NativeVoiceJson.object("visible", true, "threadId", threadId)));
+            assertNull(command("setForegroundContext", NativeVoiceJson.object("composerAvailable", false, "visible", true, "threadId", threadId)));
+        }
+        void foregroundComposer(String threadId, boolean available, String mode) throws Exception {
+            runtime.nativeVisibility(true);
+            assertNull(command("setForegroundContext", NativeVoiceJson.object("visible", true, "threadId", threadId,
+                "composerAvailable", available, "composerMode", mode)));
         }
         NativeVoiceHttp.Result start() throws Exception {
             onOwner(() -> invoke("submit", new Class<?>[] { String.class, String.class, String.class, JSONObject.class, boolean.class }, binding, origin, null, entry, false));
