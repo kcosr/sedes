@@ -40,13 +40,13 @@ const BLOCKED_RUN_STATES = new Set<ThreadRunState>([
 
 function effectiveRunState(
   backingState: "unbound" | "creating" | "bound" | "creation_unknown",
-  available: boolean,
   loaded: ThreadRunState | undefined,
 ): ThreadRunState {
   if (backingState === "creating") return "starting";
   if (backingState === "creation_unknown") return "failed";
   if (backingState === "unbound") return "idle";
-  if (!available) return "disconnected";
+  // Only a loaded runtime can supply runtime activity; inventory availability
+  // also includes missing history and offline workspace/environment state.
   return loaded ?? "idle";
 }
 
@@ -304,7 +304,6 @@ export class ThreadBulkInventoryService {
               summary.backingState === "creating"
               ? "creation_unknown"
               : summary.backingState,
-            summary.available,
             loaded?.runState,
           );
           if (BLOCKED_RUN_STATES.has(state)) {

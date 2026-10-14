@@ -9,6 +9,7 @@ import {
 import { ConversationBindingRepository } from "../../src/server/db/repositories/conversation-binding-repository.js";
 import { QuestionRequestRepository } from "../../src/server/db/repositories/question-request-repository.js";
 import { InventoryRepository } from "../../src/server/db/repositories/inventory-repository.js";
+import { ProviderFeatureMutationRepository } from "../../src/server/db/repositories/provider-feature-mutation-repository.js";
 import { QueuedInputRepository } from "../../src/server/db/repositories/queued-input-repository.js";
 import { TaskRepository } from "../../src/server/db/repositories/task-repository.js";
 import { ThreadBulkInventoryService } from "../../src/server/domain/thread-bulk-inventory-service.js";
@@ -204,6 +205,57 @@ function fixture() {
 }
 
 describe("thread bulk inventory service", () => {
+  it.each([
+    ["missing", "archive"], ["quarantined", "archive"], ["environment_unavailable", "archive"],
+    ["missing", "settle"], ["quarantined", "settle"], ["environment_unavailable", "settle"],
+  ] as const)("changes dormant %s stack members to %s without changing provider evidence", async (availability, action) => {
+    const current = fixture();
+    try {
+      const ids = current.ids.slice(0, 2);
+      for (const id of ids) current.database.prepare(
+        "UPDATE application_threads SET availability = ? WHERE id = ?",
+      ).run(availability, id);
+      const impact = await current.service.impact(current.scope, { action, threadIds: ids });
+      expect(impact).toMatchObject({ available: true, blockers: { total: 0 } });
+      await current.service.transition(current.scope, {
+        action, targets: impact.targets,
+        mutationId: `bulk-${action}-${availability}`,
+        expectedStashedPromptCount: 0, expectedOpenTaskCount: 0,
+      });
+      for (const id of ids) {
+        expect(current.inventory.getInventory(current.scope, id).inventoryState).toBe(action === "archive" ? "archived" : "settled");
+        expect(current.inventory.getThread(current.scope, id).thread.availability).toBe(availability);
+      }
+    } finally { current.database.close(); }
+  });
+
+  it.each(["disconnected", "reconciling", "provider_work"] as const)("keeps unavailable stack members with %s blocked atomically", async (state) => {
+    const current = fixture();
+    try {
+      const ids = current.ids.slice(0, 2);
+      const unavailableId = ids[1]!;
+      current.database.prepare("UPDATE application_threads SET availability = 'quarantined' WHERE id = ?").run(unavailableId);
+      if (state === "provider_work") {
+        new ProviderFeatureMutationRepository(current.database).prepare(current.scope, {
+          applicationThreadId: unavailableId, mutationId: "bulk-unavailable-provider-work",
+          featureId: "execution-settings", schemaVersion: 1, actionId: "set-model",
+          requestFingerprint: "a".repeat(64), expectedThreadRevision: 0,
+          expectedFeatureRevision: 0, desiredPostcondition: { model: "test-model" }, now: 450,
+        });
+      } else current.runtimeStates.set(unavailableId, state);
+      const impact = await current.service.impact(current.scope, { action: "archive", threadIds: ids });
+      expect(impact).toMatchObject({
+        available: false, blockers: { total: 1, items: [{ threadId: unavailableId, reason: "active" }] },
+      });
+      await expect(current.service.transition(current.scope, {
+        action: "archive", targets: impact.targets,
+        mutationId: `bulk-archive-unavailable-${state}`,
+        expectedStashedPromptCount: 0, expectedOpenTaskCount: 0,
+      })).rejects.toMatchObject({ code: "invalid_transition" });
+      for (const id of ids) expect(current.inventory.getInventory(current.scope, id).inventoryState).toBe("active");
+    } finally { current.database.close(); }
+  });
+
   it("counts pending questions only in affected archive targets", async () => {
     const current = fixture();
     try {

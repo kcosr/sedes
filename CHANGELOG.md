@@ -64,8 +64,9 @@ User-facing changes are collected here before release. See the
 
 ### Fixed
 
-- Old threads can be archived when their backend is no longer registered,
-  while active work and unapplied provider output still block archival.
+- Old threads can be archived when their backend is no longer registered.
+  Unavailable saved conversations no longer appear active to archive and bulk
+  Park controls; active work and unresolved operations still block those actions.
 
 ### Removed
 

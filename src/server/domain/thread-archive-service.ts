@@ -41,13 +41,13 @@ type ImpactFacts = {
 
 function runState(
   backingState: "unbound" | "creating" | "bound" | "creation_unknown",
-  available: boolean,
   loaded: ThreadRunState | undefined,
 ): ThreadRunState {
   if (backingState === "creating") return "starting";
   if (backingState === "creation_unknown") return "failed";
   if (backingState === "unbound") return "idle";
-  if (!available) return "disconnected";
+  // Inventory availability is not evidence of active provider work. Missing
+  // history and offline environments must not invent a disconnected runtime.
   return loaded ?? "idle";
 }
 
@@ -412,7 +412,6 @@ export class ThreadArchiveService {
               summary.backingState === "creating"
               ? "creation_unknown"
               : summary.backingState,
-            summary.available,
             loaded?.runState,
           );
           if (!BLOCKED_RUN_STATES.has(state)) return;

@@ -260,6 +260,66 @@ function fixture() {
 }
 
 describe("thread family archive service", () => {
+  it.each([
+    ["missing", false], ["missing", true],
+    ["quarantined", false], ["quarantined", true],
+    ["environment_unavailable", false], ["environment_unavailable", true],
+  ] as const)("archives dormant %s threads with descendants=%s without changing provider evidence", async (availability, includeDescendants) => {
+    const current = fixture();
+    try {
+      const ids = [current.rootId, current.childId, current.grandchildId];
+      const setAvailability = current.database.prepare(
+        "UPDATE application_threads SET availability = ? WHERE id = ?",
+      );
+      for (const id of ids) setAvailability.run(availability, id);
+      await expect(current.service.impact(current.scope, current.rootId)).resolves.toMatchObject({
+        archiveOnly: { available: true }, archiveAll: { available: true },
+      });
+      await current.service.archive(current.scope, current.rootId, {
+        includeDescendants, expectedRevision: 0,
+        mutationId: `archive-${availability}-${includeDescendants}`,
+        executionWorkspaceDisposition: { kind: "keep" },
+      });
+      for (const id of ids) {
+        expect(current.inventory.getThread(current.scope, id).thread.availability).toBe(availability);
+        expect(current.inventory.getInventory(current.scope, id).inventoryState).toBe(
+          includeDescendants || id === current.rootId ? "archived" : "active",
+        );
+      }
+    } finally { current.database.close(); }
+  });
+
+  it.each(["disconnected", "reconciling"] as const)("keeps a quarantined thread with a loaded %s runtime blocked", async (state) => {
+    const current = fixture();
+    try {
+      current.database.prepare("UPDATE application_threads SET availability = 'quarantined' WHERE id = ?").run(current.rootId);
+      current.runtimeStates.set(current.rootId, state);
+      await expect(current.service.impact(current.scope, current.rootId)).resolves.toMatchObject({
+        archiveOnly: { available: false }, archiveAll: { available: false },
+      });
+      await expect(current.service.archive(current.scope, current.rootId, {
+        includeDescendants: false, expectedRevision: 0,
+        mutationId: `archive-loaded-${state}`, executionWorkspaceDisposition: { kind: "keep" },
+      })).rejects.toMatchObject({ code: "invalid_transition" });
+      expect(current.inventory.getInventory(current.scope, current.rootId).inventoryState).toBe("active");
+    } finally { current.database.close(); }
+  });
+
+  it("keeps a missing descendant with unresolved provider work blocked", async () => {
+    const current = fixture();
+    try {
+      current.database.prepare("UPDATE application_threads SET availability = 'missing' WHERE id = ?").run(current.grandchildId);
+      new ProviderFeatureMutationRepository(current.database).prepare(current.scope, {
+        applicationThreadId: current.grandchildId,
+        mutationId: "missing-descendant-provider-work", featureId: "execution-settings",
+        schemaVersion: 1, actionId: "set-model", requestFingerprint: "a".repeat(64),
+        expectedThreadRevision: 0, expectedFeatureRevision: 0,
+        desiredPostcondition: { model: "test-model" }, now: 450,
+      });
+      await expectDescendantReservationBlocks(current, "archive-missing-descendant-provider-work");
+    } finally { current.database.close(); }
+  });
+
   it("counts pending questions across the archive family and preserves them on restore", async () => {
     const current = fixture();
     try {
