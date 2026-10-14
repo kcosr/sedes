@@ -1,7 +1,8 @@
 import { z } from "zod";
 import { threadIdSchema } from "./protocol/domain.js";
+import { MAXIMUM_THREAD_INPUT_BYTES } from "./protocol/context-excerpts.js";
 
-export const MAXIMUM_THREAD_REFERENCES = 8;
+export const MAXIMUM_THREAD_REFERENCES = 16;
 export const THREAD_REFERENCE_HEADER =
   "Sedes thread references selected for this message:";
 
@@ -63,7 +64,10 @@ export function splitThreadReferenceText(value: string): {
   const pattern = /^Sedes thread references selected for this message:\n([^\n]*)\n\n/gm;
   const text = value.replace(pattern, (whole: string, json: string, offset: number) => {
     if (offset !== 0 && value.slice(offset - 2, offset) !== "\n\n") return whole;
-    if (json.length > 32_768) return whole;
+    // Escaped titles can exceed 32 KiB even within the reference count limit.
+    // Admit any block that can fit the composer's existing UTF-8 input budget;
+    // the complete input is byte-checked at draft and delivery admission.
+    if (json.length > MAXIMUM_THREAD_INPUT_BYTES) return whole;
     try {
       const parsed = referenceBlockSchema.safeParse(JSON.parse(json));
       if (!parsed.success || JSON.stringify(parsed.data) !== json) return whole;

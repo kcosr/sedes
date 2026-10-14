@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   SEDES_CLIENT_PROTOCOL_VERSION,
   MAXIMUM_THREAD_INPUT_BYTES,
-  MAXIMUM_COMPOSER_TASK_REFERENCES,
   apiErrorCodeSchema,
   backendItemSchema,
   composerTaskReferenceIdsSchema,
@@ -62,7 +61,7 @@ describe("composer Task reference protocol", () => {
     expect(composerTaskInputUtf8Bytes([])).toBe(0);
   });
   it("uses the current protocol version for the atomic normalized cutover", () => {
-    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(157);
+    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(158);
   });
 
   it("bounds ordered draft references and rejects duplicate Task ids", () => {
@@ -72,14 +71,13 @@ describe("composer Task reference protocol", () => {
     expect(
       composerTaskReferencesSchema.safeParse([reference, reference]).success,
     ).toBe(false);
-    expect(
-      composerTaskReferenceIdsSchema.safeParse(
-        Array.from(
-          { length: MAXIMUM_COMPOSER_TASK_REFERENCES + 1 },
-          (_, index) => `task-${index}`,
-        ),
-      ).success,
-    ).toBe(false);
+    const ids = Array.from({ length: 17 }, (_, index) =>
+      `10000000-0000-4000-8000-${String(index).padStart(12, "0")}`);
+    const references = ids.map(taskId => ({ ...reference, taskId }));
+    expect(composerTaskReferenceIdsSchema.parse(ids.slice(0, 16))).toEqual(ids.slice(0, 16));
+    expect(composerTaskReferencesSchema.parse(references.slice(0, 16))).toEqual(references.slice(0, 16));
+    expect(composerTaskReferenceIdsSchema.safeParse(ids).success).toBe(false);
+    expect(composerTaskReferencesSchema.safeParse(references).success).toBe(false);
   });
 
   it("requires task references in strict draft, stash, and save shapes", () => {

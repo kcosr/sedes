@@ -8,8 +8,9 @@ User-facing changes are collected here before release. See the
 ### Breaking Changes
 
 - Upgrade the server and browser/packaged clients together for client protocol
-  **157** for Page responses and the updated native voice bridge. Rebuild
-  Android with its bundled client. See [Page responses](docs/user/html-previews.md#send-a-page-response)
+  **158** for Page responses, larger composer reference lists, and the updated
+  native voice bridge. Rebuild Android with its bundled client. See
+  [Page responses](docs/user/html-previews.md#send-a-page-response)
   and [voice input](docs/operator/clients/voice.md).
   ([#81](https://github.com/kcosr/sedes/pull/81), [#83](https://github.com/kcosr/sedes/pull/83))
 
@@ -35,6 +36,12 @@ User-facing changes are collected here before release. See the
   ([#81](https://github.com/kcosr/sedes/pull/81))
 
 ### Changed
+
+- Composer prompts support up to 16 thread references and 16 Task references.
+  Long reference lists scroll above the message box; the shared 256 KiB input
+  budget still applies. See [thread references](docs/user/files-and-context.md#reference-another-thread)
+  and [Task references](docs/user/tasks-and-automations.md#add-a-task-to-a-prompt).
+  ([#83](https://github.com/kcosr/sedes/pull/83))
 
 - Android playback **Stop** now releases the retained voice destination as well
   as clearing queued speech. The next recording honors an explicit choice or

@@ -7,6 +7,9 @@
 
 .composer > .thread-reference-list {
   margin: 10px 15px 0;
+  max-height: min(132px, 18dvh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .thread-reference-chip {

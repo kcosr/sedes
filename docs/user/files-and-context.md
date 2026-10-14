@@ -82,7 +82,9 @@ worktree also clears the stale preference and Files falls back to Primary.
 
 Drag an individual sidebar thread into the message composer, or type **@** and
 choose an active thread. Each selection appears as a removable
-chip above the message; up to eight threads can be referenced in one prompt.
+chip above the message; up to 16 threads can be referenced in one prompt.
+Long chip lists scroll above the message box. Their IDs and titles count toward
+the shared 256 KiB input budget.
 The picker includes the active threads currently loaded in your inventory.
 It shows the same status indicator as the sidebar, followed by each thread's
 provider icon and title, with project and environment names together after the

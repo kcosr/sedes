@@ -88,7 +88,7 @@ export const taskSchema = z.strictObject({
 });
 export type Task = z.infer<typeof taskSchema>;
 
-export const MAXIMUM_COMPOSER_TASK_REFERENCES = 8;
+export const MAXIMUM_COMPOSER_TASK_REFERENCES = 16;
 
 /** Live task identity retained by a draft or stash until delivery. */
 export const composerTaskReferenceSchema = z.strictObject({
@@ -99,7 +99,10 @@ export type ComposerTaskReference = z.infer<typeof composerTaskReferenceSchema>;
 
 export const composerTaskReferencesSchema = z
   .array(composerTaskReferenceSchema)
-  .max(MAXIMUM_COMPOSER_TASK_REFERENCES)
+  .max(
+    MAXIMUM_COMPOSER_TASK_REFERENCES,
+    `A message can reference at most ${MAXIMUM_COMPOSER_TASK_REFERENCES} tasks.`,
+  )
   .superRefine((references, context) => {
     const seen = new Set<string>();
     for (let index = 0; index < references.length; index += 1) {
@@ -117,7 +120,10 @@ export const composerTaskReferencesSchema = z
 
 export const composerTaskReferenceIdsSchema = z
   .array(taskIdSchema)
-  .max(MAXIMUM_COMPOSER_TASK_REFERENCES)
+  .max(
+    MAXIMUM_COMPOSER_TASK_REFERENCES,
+    `A message can reference at most ${MAXIMUM_COMPOSER_TASK_REFERENCES} tasks.`,
+  )
   .refine((taskIds) => new Set(taskIds).size === taskIds.length, {
     message: "Composer task reference identifiers must be unique.",
   });

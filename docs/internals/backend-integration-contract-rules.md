@@ -2917,7 +2917,7 @@ command and tool statuses have no interrupted value, and ACP tool statuses
 have no cancelled value), so an aborted call keeps the provider's reported
 outcome. The in-memory conformance backend keeps the statuses it scripts.
 
-User-selected thread references are bounded canonical plain text (Sedes UUID
+Up to 16 user-selected thread references are bounded canonical plain text (Sedes UUID
 and JSON-quoted display title) in the existing input text contract. Pi, Codex,
 Claude, Grok, and OpenCode preserve that text through the shared delivery path;
 it grants no tool or resource authority and includes no referenced transcript.
@@ -2928,7 +2928,10 @@ for Sedes IDs. TUI submission of reference chips is explicitly unavailable.
 
 Text, context excerpts, attachments, and structured Task references are
 normalized application input, not provider-native IDs or browser-selected
-paths. Before provider delivery, the application materializes one immutable,
+paths. Composer inputs admit up to 16 unique Task references; their captured
+content shares the existing 256 KiB input budget with text and context. These
+count limits apply to all five backends through shared application validation.
+Before provider delivery, the application materializes one immutable,
 ordered delivery snapshot containing the original text, context, Task
 snapshots, and path-free attachment descriptors. That snapshot and its
 `deliveryOperationId` are authoritative for operation fingerprints, queues,

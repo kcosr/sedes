@@ -44,6 +44,7 @@ import type { RequestScope } from "../../src/server/identity/identity-provider.j
 import { SingleUserIdentityProvider } from "../../src/server/identity/identity-provider.js";
 import { presentTask } from "../../src/server/application/task-presentation.js";
 import { materializeTaskContext } from "../../src/server/domain/materialized-task-contexts.js";
+import { formatThreadReferenceText, splitThreadReferenceText } from "../../src/shared/thread-references.js";
 import {
   composerInputUtf8Bytes,
   MAXIMUM_THREAD_INPUT_BYTES,
@@ -2591,7 +2592,56 @@ describe("inactive schema-10 repositories", () => {
     }
   });
 
-  it("uses canonical multi-task byte accounting at the exact acceptance boundary", () => {
+  it("retains 16 thread and task references through draft, stash, queue, replay and restore", () => {
+    const fixture = createFixture();
+    try {
+      bindDiscovered(fixture);
+      const inventory = new InventoryRepository(fixture.database);
+      const service = new InventoryService(inventory, { publishMany() {}, publishApplicationThread() {} });
+      const tasks = new TaskRepository(fixture.database);
+      const selected = Array.from({ length: 16 }, (_, index) => tasks.create(fixture.scope, {
+        title: `Selected task ${index + 1}`, details: `Captured details ${index + 1}`,
+        scope: { kind: "global" }, mutationId: randomUUID(), now: 560 + index,
+      }));
+      const references = selected.map((_, index) => ({ threadId: randomUUID(), title: `Reference ${index + 1}` }));
+      const text = formatThreadReferenceText("Preserve these selections 🌍", references);
+      const saved = service.saveDraft(fixture.scope, fixture.threadId, {
+        text, contextExcerpts: [], attachmentIds: [], taskReferenceIds: selected.map(({ id }) => id),
+        expectedRevision: inventory.getDraft(fixture.scope, fixture.threadId).revision,
+      }, 580);
+      expect(inventory.getDraft(fixture.scope, fixture.threadId)).toEqual(saved);
+      const stashed = service.stashDraft(fixture.scope, fixture.threadId, {
+        expectedDraftRevision: saved.revision, mutationId: randomUUID(),
+      }, 581);
+      expect(stashed.stash).toMatchObject({ text, taskReferences: saved.taskReferences });
+      const restored = service.restoreStash(fixture.scope, fixture.threadId, stashed.stash.id, {
+        expectedDraftRevision: stashed.draft.revision, mutationId: randomUUID(),
+      }, 582);
+      const queue = new QueuedInputRepository(fixture.database);
+      const mutationId = randomUUID();
+      const expectedThreadRevision = threadRevision(fixture);
+      const accepted = queue.enqueue(fixture.scope, fixture.threadId, {
+        mutationId, text: restored.draft.text, contextExcerpts: [], attachmentIds: [],
+        taskReferences: restored.draft.taskReferences,
+        source: { kind: "composer", requestedDeliveryMode: "queue", resolvedDeliveryMode: "queue",
+          expectedThreadRevision, expectedDraftRevision: restored.draft.revision }, now: 583,
+      }).item;
+      expect(accepted.taskContexts.map(({ id }) => id)).toEqual(selected.map(({ id }) => id));
+      expect(queue.list(fixture.scope, fixture.threadId)[0]).toEqual(accepted);
+      expect(queue.findComposerDeliveryReplay(fixture.scope, fixture.threadId, {
+        mutationId, requestedDeliveryMode: "queue", expectedThreadRevision,
+        expectedDraftRevision: restored.draft.revision,
+      })).toEqual(accepted);
+      const recovered = queue.restoreIdempotently(fixture.scope, fixture.threadId, accepted.id, {
+        mutationId: randomUUID(), expectedThreadRevision: threadRevision(fixture),
+        expectedDraftRevision: inventory.getDraft(fixture.scope, fixture.threadId).revision, now: 584,
+      });
+      expect(recovered.draft.taskReferences).toEqual(saved.taskReferences);
+      expect(splitThreadReferenceText(recovered.draft.text)).toEqual({ text: "Preserve these selections 🌍", references });
+    } finally { fixture.database.close(); }
+  });
+
+  it("uses canonical 16-task byte accounting at the exact acceptance boundary", () => {
     for (const extraByte of [0, 1]) {
       const fixture = createFixture();
       try {
@@ -2599,13 +2649,13 @@ describe("inactive schema-10 repositories", () => {
         const tasks = new TaskRepository(fixture.database);
         const drafts = new ConversationDraftRepository(fixture.database);
         const queue = new QueuedInputRepository(fixture.database);
-        const taskContexts = ["first", "second", "third", "fourth"].map(
+        const taskContexts = Array.from({ length: 16 }, (_, index) => `task-${index + 1}`).map(
           (suffix, index) =>
             materializeTaskContext(
               presentTask(
                 tasks.create(fixture.scope, {
                   title: `Boundary ${suffix}`,
-                  details: `${suffix}:`.padEnd(49_000, "d"),
+                  details: `${suffix}:`.padEnd(12_250, "d"),
                   scope: { kind: "global" },
                   mutationId: `task-context-boundary-create-${suffix}`,
                   now: 590 + index,

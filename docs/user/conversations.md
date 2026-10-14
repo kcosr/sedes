@@ -366,7 +366,7 @@ The composer can contain:
 - one selected skill;
 - exact context excerpts captured from chat, files, Markdown, or diffs;
 - file or image attachments; and
-- up to eight structured Task references.
+- up to 16 structured Task references.
 
 The whole composer is saved on the server. Chat text has one 256 KiB UTF-8
 limit for draft save, Send, stash, and queue restoration, shared with voice

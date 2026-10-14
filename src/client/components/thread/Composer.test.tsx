@@ -1203,6 +1203,24 @@ describe("task references", () => {
     updatedAt: "2026-08-02T10:00:00.000Z",
   };
 
+  it.each([15, 16])("admits only the sixteenth task when the draft already has %i", async (count) => {
+    const existing = Array.from({ length: count }, (_, index) => ({
+      ...task, id: `10000000-0000-4000-8000-${String(index).padStart(12, "0")}`, title: `Task ${index + 1}`,
+    }));
+    const store = new FakeComposerStore(snapshot(), "Keep this text");
+    const taskReferences = existing.map(item => ({ taskId: item.id, titleSnapshot: item.title }));
+    store.replaceDraft({ text: "Keep this text", taskReferences, revision: 1 });
+    renderTaskComposer(store, [...existing, task]);
+    fireEvent.click(screen.getByRole("button", { name: "Attach task fixture" }));
+    expect(within(screen.getByRole("list", { name: "Attached tasks" })).getAllByRole("listitem")).toHaveLength(16);
+    expect(screen.getByRole("textbox")).toHaveValue("Keep this text");
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await waitFor(() => expect(store.deliver).toHaveBeenCalled());
+    expect(store.deliver.mock.calls[0]![1].taskReferences).toEqual(count === 15
+      ? [...taskReferences, { taskId: task.id, titleSnapshot: "Fallback title" }]
+      : taskReferences);
+  });
+
   it("copies a dragged task into the prompt without moving it", () => {
     const store = new FakeComposerStore(snapshot(), "keep this text");
     const taskStore = applicationStore([task]);
