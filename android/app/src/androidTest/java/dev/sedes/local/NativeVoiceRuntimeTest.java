@@ -41,7 +41,9 @@ public class NativeVoiceRuntimeTest {
                 assertEquals(9, offer.length()); assertEquals(f.profile, offer.getString("profileId"));
                 assertEquals(f.origin, offer.getString("serverOrigin")); assertEquals(Fixture.IDENTITY, offer.getString("identity"));
                 assertEquals(f.runtime.snapshot().getLong("connectionGeneration"), offer.getLong("connectionGeneration"));
-                assertEquals(f.target, offer.getString("threadId")); assertEquals(transcript, offer.getString("text"));
+                assertEquals(f.target, offer.getString("threadId"));
+                // Recording assembly trims segment boundaries before either Composer or native admission receives it.
+                assertEquals("Supplemental speech\n完整🙂", offer.getString("text"));
                 assertEquals(mode, offer.getString("mode")); assertEquals(0, f.inputAttempts.get());
                 assertFalse("Snapshots do not expose the transcript", f.runtime.snapshot().toString().contains("Supplemental speech"));
                 String handoff = offer.getString("handoffId"), recording = offer.getString("recordingId");
