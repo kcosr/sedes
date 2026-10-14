@@ -27,7 +27,7 @@ import type {
 import { DeliveryRecoveryRequiredError } from "../../stores/ThreadClientStore.js";
 import { Composer } from "./Composer.js";
 import { NativeVoiceStore } from "../../voice/NativeVoiceStore.js";
-import { fakeVoicePlugin, VOICE_CONNECTION } from "../../voice/native-voice-test-fixture.js";
+import { fakeVoicePlugin, voiceComposerHandoffSnapshot, VOICE_CONNECTION } from "../../voice/native-voice-test-fixture.js";
 const voiceForTests = vi.hoisted(() => ({ current: null as NativeVoiceStore | null }));
 vi.mock("../../voice/VoiceProvider.js", async importOriginal => ({
   ...await importOriginal<typeof import("../../voice/VoiceProvider.js")>(),
@@ -5915,6 +5915,22 @@ describe("foreground voice composer ownership", () => {
     offer(fake);
     await accepted(fake);
     await waitFor(() => expect(store.deliver).toHaveBeenCalledWith("submit", expect.objectContaining({ text: "Explain this" }), expect.any(String)));
+  });
+
+  it("leaves speech with native when the composer unmounts before its claim reply", async () => {
+    const { fake, voice } = await native();
+    const store = new FakeComposerStore(snapshot(), "keep draft");
+    let release!: (state: ReturnType<typeof voiceComposerHandoffSnapshot>) => void;
+    fake.plugin.claimComposerHandoff.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
+    const view = render(<Composer store={store as unknown as ThreadClientStore} />);
+    offer(fake);
+    expect(fake.plugin.claimComposerHandoff).toHaveBeenCalledOnce();
+    view.unmount();
+    expect(voice.hasSubmissionComposer("thread-1")).toBe(false);
+    await act(async () => release(voiceComposerHandoffSnapshot({ recordingId: "recording", threadId: "thread-1" })));
+    await waitFor(() => expect(fake.plugin.completeComposerHandoff).toHaveBeenCalledWith(expect.objectContaining({ outcome: "declined" })));
+    expect(store.stageComposerTransfer).not.toHaveBeenCalled();
+    expect(store.deliver).not.toHaveBeenCalled();
   });
 
   it("accepts a combined Unicode draft at the shared 256 KiB UTF-8 boundary", async () => {

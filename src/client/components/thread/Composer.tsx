@@ -1834,7 +1834,9 @@ export function Composer({
   // use the previous render's eligibility or submission function.
   acceptVoiceHandoff.current = () => { throw new Error("The message composer is unavailable."); };
   const voiceSubmissionVisible = active && chatViewVisible && optimisticTranscriptPresentationVisible && !tuiActive;
-  useEffect(() => {
+  // Remove the callback during the unmount commit, before a native claim reply
+  // can arrive while passive effect cleanup is still pending.
+  useLayoutEffect(() => {
     if (!voice || !voiceSubmissionVisible) return;
     return voice.registerSubmissionComposer(store.threadId, event => acceptVoiceHandoff.current(event));
   }, [voice, store, voiceSubmissionVisible]);
