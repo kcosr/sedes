@@ -719,8 +719,9 @@ account environment independently of the Sedes tool presentation.
 Failed MCP startup advisories publish bounded, thread- and generation-scoped
 warning notices. Failures received while attaching are retained until the
 successful projection is subscribed; recovered or stale-generation entries are
-discarded. Advisories never invalidate transcript receipts or expose native
-error text. Native MCP presentation fails closed on Windows
+discarded. Names that cannot be displayed safely receive a generic warning.
+Advisories never invalidate transcript receipts or expose native error text.
+Native MCP presentation fails closed on Windows
 execution hosts. Principal Tool clients
 use only generic management HTTP routes; they are not injected into Codex or
 accepted by the SSH sidecar. An admitted client may invoke currently eligible

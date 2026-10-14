@@ -4803,18 +4803,20 @@ export class CodexConversationHandle implements ConversationHandle {
         );
         // Names are configuration-owned, but still untrusted presentation.
         // Raw provider errors may contain filesystem paths or credentials.
-        if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/u.test(parsed.name)) return;
         if (parsed.status !== "failed") {
           this.#pendingMcpStartupNotices.delete(parsed.name);
           return;
         }
+        const serverDescription = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/u.test(parsed.name)
+          ? `MCP server "${parsed.name}"`
+          : "A configured MCP server";
         const event: Extract<BackendConversationEvent, { readonly type: "notice" }> = {
           type: "notice",
           notice: {
             id: `codex-mcp-startup:${notification.generation}:${notification.sequence}`,
             tone: "warning",
             message: boundedDisplayTextSchema.parse({
-              text: `MCP server "${parsed.name}" failed to start. Its tools are unavailable. Check the MCP configuration on the execution host.`,
+              text: `${serverDescription} failed to start. Its tools are unavailable. Check the MCP configuration on the execution host.`,
             }),
             createdAt: new Date(notification.emittedAtMs ?? this.#now()).toISOString(),
           },

@@ -8893,9 +8893,6 @@ describe("CodexConversationHandle", () => {
     for (const threadId of ["unrelated-thread", null]) {
       harness.notify("mcpServer/startupStatus/updated", { ...params, threadId });
     }
-    for (const name of ["", "x".repeat(129), "C:\\private\\secret", "node\nrepl"]) {
-      harness.notify("mcpServer/startupStatus/updated", { ...params, name });
-    }
     harness.notify("mcpServer/startupStatus/updated", { threadId: "thread-1" });
     harness.notify("mcpServer/startupStatus/updated", params, ++harness.sequence, false);
     harness.notifyUndecodable("mcpServer/startupStatus/updated", "thread-1");
@@ -8905,6 +8902,36 @@ describe("CodexConversationHandle", () => {
       params: decodeCodexServerNotificationParams("mcpServer/startupStatus/updated", params),
     });
     expect(events).toEqual([]);
+    expect(await handle.readCurrent()).toEqual(snapshot);
+    expect(harness.retirements).toEqual([]);
+    harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+    await handle.close();
+  });
+
+  it("uses a generic MCP startup warning when the configured server name cannot be displayed safely", async () => {
+    const harness = new RpcHarness();
+    const handle = await attachIdle(harness);
+    const established = await establish(harness, handle);
+    const snapshot = await handle.readCurrent();
+    const events: BackendConversationEvent[] = [];
+    established.subscribeFromNext(({ event }) => events.push(event));
+    const names = ["node repl", "_private", "", "x".repeat(129), "C:\\private\\secret", "node\nrepl"];
+    for (const name of names) {
+      harness.notify("mcpServer/startupStatus/updated", {
+        threadId: "thread-1", name, status: "failed", error: "private-error", failureReason: null,
+      });
+    }
+    expect(events).toHaveLength(names.length);
+    for (const event of events) {
+      expect(event).toMatchObject({
+        type: "notice",
+        notice: {
+          tone: "warning",
+          message: { text: "A configured MCP server failed to start. Its tools are unavailable. Check the MCP configuration on the execution host." },
+        },
+      });
+    }
+    expect(JSON.stringify(events)).not.toContain("private");
     expect(await handle.readCurrent()).toEqual(snapshot);
     expect(harness.retirements).toEqual([]);
     harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
