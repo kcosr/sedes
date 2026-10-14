@@ -301,8 +301,8 @@ test("idle voice retains the reply destination until Next or deliberate thread n
 
   // Native foreground context disappears in the background; the unchanged route on resume preserves B.
   await page.evaluate(({ viewedId }) => {
-    window.__voiceFixture.setForeground({ visible: false, threadId: null, threadTitle: null });
-    window.__voiceFixture.setForeground({ visible: true, threadId: viewedId, threadTitle: "Viewed thread A" });
+    window.__voiceFixture.setForeground({ visible: false, threadId: null, threadTitle: null, composerAvailable: false });
+    window.__voiceFixture.setForeground({ visible: true, threadId: viewedId, threadTitle: "Viewed thread A", composerAvailable: true });
   }, { viewedId });
   await expect(toolbar.locator(".voice-card-title")).toHaveText("Last voice thread B");
   const replyRevision = await page.evaluate(() => window.__voiceFixture.state.retainedVoiceTarget!.revision);
@@ -321,9 +321,9 @@ test("idle voice retains the reply destination until Next or deliberate thread n
   await expect(toolbar.locator(".voice-card-title")).toHaveText("Viewed thread A");
   await expect(next).toHaveCount(0);
   expect(await page.evaluate(() => window.__voiceFixture.state.retainedVoiceTarget?.threadId)).toBe(viewedId);
-  await page.evaluate(() => window.__voiceFixture.setForeground({ visible: false, threadId: null, threadTitle: null }));
+  await page.evaluate(() => window.__voiceFixture.setForeground({ visible: false, threadId: null, threadTitle: null, composerAvailable: false }));
   expect(await page.evaluate(() => window.__voiceFixture.state.retainedVoiceTarget?.threadId)).toBe(viewedId);
-  await page.evaluate(viewedId => window.__voiceFixture.setForeground({ visible: true, threadId: viewedId, threadTitle: "Viewed thread A" }), viewedId);
+  await page.evaluate(viewedId => window.__voiceFixture.setForeground({ visible: true, threadId: viewedId, threadTitle: "Viewed thread A", composerAvailable: true }), viewedId);
   await expect(next).toHaveCount(0);
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect.poll(() => mic.boundingBox()).toEqual(replyMicBox);

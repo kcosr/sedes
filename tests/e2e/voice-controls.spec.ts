@@ -636,7 +636,7 @@ test("saved dictation appends to its original composer without losing drafts or 
   await page.reload();
   await expect(composer).toHaveValue(`${unsaved}\n\nMore recovered words.`);
 
-  await page.evaluate(() => { window.__voiceFixture.recoveredText = "é".repeat(32_768); });
+  await page.evaluate(() => { window.__voiceFixture.recoveredText = "é".repeat(131_072); });
   await publishVoiceState(page, { recordingRecovery: { ...saved, recordingId: "oversized-recording" } });
   await toolbar.getByRole("button", { name: "Open voice controls", exact: true }).click();
   await sheet.getByRole("button", { name: "Add to composer", exact: true }).click();
