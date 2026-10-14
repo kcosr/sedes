@@ -218,7 +218,8 @@ User-facing changes are collected here before release. See the
 ### Fixed
 
 - Android uses patched Capacitor 8.4.3 to block internal HTTP proxy navigation;
-  rebuild the Android client after upgrading.
+  rebuild the Android client after upgrading. See the
+  [release verification and advisory dispositions](specs/release-0.2.0.md).
   ([#80](https://github.com/kcosr/sedes/pull/80), [upstream advisory](https://github.com/advisories/GHSA-rvm3-566m-v7fv))
 
 - Windows file and image attachments send without a false reconciliation

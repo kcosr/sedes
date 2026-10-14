@@ -59,8 +59,8 @@ changes to this record and PR references do not change the tested application.
 | Notice generation regression | Passed; Linux/Windows fixture installs produce identical notices while retaining the SDK license |
 | Full deterministic unit/integration suite | 16,335 passed, 24 skipped, 3 timeout failures in 660.02s; all three unchanged cases passed in a single-worker recheck (24.46s), yielding 16,338 passing cases across the run and recheck |
 | Full coordinated browser E2E and screenshot review | Passed: 143 tests, 48 jobs, default four lanes; 592.774s including build |
-| Android assembled-package/native-unit verification | Passed: synchronized assets, native unit tests, instrumentation APK compilation, debug assembly, assembled-package policy checks; device/emulator instrumentation not run |
-| Electron packaged application verification | Pending |
+| Android assembled-package/native-unit verification | Passed: synchronized assets, 318 native unit tests, instrumentation APK compilation, debug assembly, assembled-package policy checks; device/emulator instrumentation not run |
+| Electron packaged application verification | Passed: Linux x64 full distribution, native SQLite/PTY/provider imports, isolated server lifecycle, managed Local/Direct/SSH graphical smoke, encrypted credential reuse, renderer isolation |
 
 The notice generator retains the existing missing license-identifier warning for
 `khroma` 2.1.0; collected license text is included. Existing build warnings concern
@@ -79,6 +79,14 @@ were pending-input delivery (129.799s, local estimate 129.813s) and composer sta
 took 83.424s (estimate 83.710s) for revision/local-resource isolation, retained
 images, responsive viewports, and mobile interaction. Coverage and assertions
 were retained; the target miss remains a known performance limitation.
+
+Electron's initial graphical gate failed closed with `basic_text` storage because
+the shell lacked a usable desktop keyring. The unchanged full `electron:verify`
+gate then passed inside an isolated D-Bus session with a disposable,
+password-protected GNOME keyring. Secure storage assertions were retained; no
+desktop keyring was modified. Headless desktop-portal warnings remained, without
+failing the security/download checks. The package contained 252 ASAR entries and
+35,553 packaged files; its provenance records successful native and smoke gates.
 
 No new live-provider suite is part of this release verification. Pi, Codex,
 Claude, and OpenCode are **not live verified on this release candidate**;
