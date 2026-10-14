@@ -735,8 +735,10 @@ rollback, and UI recovery; voice exposes no separate Send or Resume for accepted
 speech. A pending attachment upload or known Send restriction may retain the
 combined draft with a notice to send manually when ready. Foreground voice uses
 native's frozen Queue/Steer choice rather than changing the client's preference;
-idle input uses Submit. Existing capability and target validation still govern
-Steer. Voice submission does not refocus the composer or open the keyboard.
+idle input uses Submit. If the frozen Steer is unavailable while Queue remains
+available, the same captured input uses Queue. Existing capability and target
+validation still govern Steer. Voice submission does not refocus the composer or
+open the keyboard.
 Blank completion, a recognized automatic stop command, and cancellation do not
 adopt or send a draft. Explicit voice Send remains literal and follows the same
 handoff eligibility as automatic completion. Successful composer submission uses

@@ -22,7 +22,9 @@ User-facing changes are collected here before release. See the
 
 - Chat draft text, speech, stashes, and restored queued input now use the same
   256 KiB UTF-8 limit. Text and materialized context share the existing input
-  budget; attachment-file limits remain separate.
+  budget; attachment-file limits remain separate. Each thread can retain up to
+  50 stashes and 8 MiB of serialized stash content; refusing another stash leaves
+  the current draft intact. See [stashed prompts](docs/user/conversations.md#put-a-draft-aside-with-stashes).
 
 ### Fixed
 
