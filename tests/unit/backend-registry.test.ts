@@ -4,6 +4,7 @@ import {
   type BackendDriverFactory,
 } from "../../src/server/backends/registry.js";
 import { APPLICATION_ASSIGNED_CREATION_IDENTITY } from "../../src/server/backends/contracts.js";
+import { DomainError } from "../../src/server/domain/errors.js";
 import type {
   AgentBackendInstance,
   AgentConnectionProfile,
@@ -38,6 +39,21 @@ const scope = {
 };
 
 describe("AgentBackendRegistry", () => {
+  it("reports an unavailable runtime for an unregistered scoped target", () => {
+    const registry = new AgentBackendRegistry();
+    for (const resolve of [
+      () => registry.driver(connection),
+      () => registry.supportsConversationCreation(connection),
+      () => registry.creationIdentity(connection),
+    ]) {
+      expect(resolve).toThrow(DomainError);
+      expect(resolve).toThrow(expect.objectContaining({
+        code: "runtime_unavailable",
+        retryable: false,
+      }));
+    }
+  });
+
   it("fences borrowed drivers, drains admitted calls, and keeps nested scopes independent", async () => {
     const registry = new AgentBackendRegistry();
     let finish!: () => void;

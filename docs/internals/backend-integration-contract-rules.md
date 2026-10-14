@@ -453,7 +453,11 @@ runtime has applied is not work: the method first applies it as attaching
 would, and reports `undelivered` only if it still holds the residency. That
 also refuses the archive, with a message to open the thread so its output is
 applied, rather than one claiming the thread is active. An unreachable provider is logged
-and left to the provider's own residency limit. Claude implements it through
+and left to the provider's own residency limit. Missing runtime registrations
+are typed `runtime_unavailable` domain failures, so a retired backend does not
+prevent application-owned archival of its old threads. Strict policy refresh
+still propagates that failure. This shared resolution rule applies to Pi,
+Codex, Claude, Grok, and OpenCode. Claude implements residency release through
 the persistent `retire` command, and its local worker owns no residency beyond
 the handle. Codex implements it by validating native idle state, unsubscribing,
 and invalidating persistent attach metadata. Its native thread may stay loaded

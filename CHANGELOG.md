@@ -64,6 +64,9 @@ User-facing changes are collected here before release. See the
 
 ### Fixed
 
+- Old threads can be archived when their backend is no longer registered,
+  while active work and unapplied provider output still block archival.
+
 ### Removed
 
 ## [0.2.0] - 2026-10-14
