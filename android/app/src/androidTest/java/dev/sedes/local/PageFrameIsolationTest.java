@@ -57,7 +57,7 @@ public final class PageFrameIsolationTest {
                 "}catch(error){window.pageIsolationTestResult=String(error.message);}finally{" +
                 "await Capacitor.nativePromise('Preferences','remove',{key:'" + key + "'});" +
                 "}})()");
-            while ("undefined".equals(evaluate(instrumentation, view, "typeof window.pageIsolationTestResult"))) {
+            while (!"true".equals(evaluate(instrumentation, view, "window.pageIsolationTestResult !== undefined"))) {
                 assertTrue("The actual application plugin round-trip timed out", SystemClock.elapsedRealtime() < deadline);
                 SystemClock.sleep(50);
             }
