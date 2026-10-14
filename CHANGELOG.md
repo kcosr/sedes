@@ -16,7 +16,9 @@ User-facing changes are collected here before release. See the
 
 - While Android voice is listening on another thread, **Target this thread**
   switches the entire unsent recording to the viewed thread without restarting
-  capture or changing queued replies. See [voice controls](docs/operator/clients/voice.md#targeting-and-controls).
+  capture or changing queued replies. The idle release button uses the same
+  target icon; playback Next remains unchanged. See
+  [voice controls](docs/operator/clients/voice.md#targeting-and-controls).
 
 - Android voice combines speech with the current Chat draft when foreground on
   the recording's thread, including attachments and other context. Composer

@@ -45,21 +45,23 @@ preserves the pending choice; Off and
 connection changes clear it. The setter rejects an active interaction or Off.
 Automatic notification replies preserve it and retain their own targets.
 The in-app card and all manual starts keep the last voice destination after
-playback or recording ends, even when another thread is visible. Idle Next releases
-that destination so the visible thread can supply the next target. An actual idle
-route change selects the newly viewed thread; repeated foreground updates, title
+playback or recording ends, even when another thread is visible. The idle target
+shortcut releases that destination so the visible thread can supply the next
+target. An actual idle route change selects the newly viewed thread; repeated foreground updates, title
 changes, and resuming on the same route preserve continuity. Native remembers the
 last viewed route across foreground hiding. Idle publication remembers the visible
 destination only when no retained destination or pending choice exists, including
-after Next or idle unpinning, so background starts keep that destination.
+after retention release or idle unpinning, so background starts keep that
+destination.
 The WebView follows a new route immediately while native still reports a different
 visible foreground thread; same-route and hidden foreground snapshots preserve
 voice continuity. Explicit pending choices and pinning still take
 priority. Navigation never retargets an active interaction or replaces its retained
 destination. When retention matches the visible thread, the card treats it as the
-ordinary visible destination and hides redundant Next. An unavailable visible
-destination opens the chooser; a distinct retained destination never falls back
-to the visible or saved default. The extra pre/post-cue authority checks apply when
+ordinary visible destination and hides the redundant target shortcut. An
+unavailable visible destination opens the chooser; a distinct retained
+destination never falls back to the visible or saved default. The extra
+pre/post-cue authority checks apply when
 retention determines the target, or when a background start adds an announcement.
 
 `retainedVoiceTarget` is nullable session state containing a thread ID, a bounded
@@ -111,9 +113,9 @@ progress notice. A Next captured during speech still discards that interaction's
 unsent follow-up if validation, cues, recording preparation, or capture begins
 before the command arrives, including a held default. It cannot cancel a new
 manual Record interaction or undo an admitted input. The card offers playback
-Next during speech and enables idle Next only when retention determines the
-displayed target. Notification and headset playback Next, and notification
-`stop_playback`, require the null recording ID captured before recording starts.
+Next during speech and enables the idle target shortcut only when retention
+determines the displayed target. Notification and headset playback Next, and
+notification `stop_playback`, require the null recording ID captured before recording starts.
 This lets a delayed playback action cancel its own unsent follow-up without
 affecting a new manual recording or admitted input. A fresh headset Next
 carrying the current recording ID leaves capture unchanged; recording commands
@@ -969,8 +971,12 @@ Next hides during synthesis and playback when the queue count is zero and
 Auto-listen is off. Queue and settings updates restore it without moving Stop
 or Record.
 Recording uses Keep listening, Cancel, Send. During Listening on a different
-available viewed thread, a Target this thread button precedes Keep listening.
-It calls the same `retargetActiveRecognition` command as the chevron picker:
+available viewed thread, a Target this thread button with the Locate icon
+precedes Keep listening. The idle retained-target shortcut uses the same icon,
+labelled Target this thread for an available viewed thread and Release voice
+target otherwise; playback continues to use Next.
+The Listening shortcut calls the same `retargetActiveRecognition` command as the
+chevron picker:
 the recording ID, captured audio/text, Keep listening setting, and queued replies
 are preserved. The command makes an automatic capture explicit and clears
 deferred client voice actions; queued replies retain their original destinations
@@ -979,7 +985,7 @@ disabled while a mutation is pending or retargeting is unavailable, with Cancel
 still enabled. It hides after an acknowledged matching destination or when
 Listening ends. Its press joins the existing repeat-tap guard so a quick second
 tap cannot activate text or the picker at the disappearing button's position.
-Idle omits unavailable Next and Stop controls, reclaiming their width for status
+Idle omits unavailable target and Stop controls, reclaiming their width for status
 text. Record/Send remains at the
 right edge. Active preparation keeps its action slots and shows progress in the
 primary slot. Speaking adds a blue outline; recording uses the red outline.
@@ -996,10 +1002,11 @@ On narrow text columns, a spinner beside the thread title replaces the
 Reconnecting hint and its leading dot so the full phase word stays readable.
 The hint remains when no thread title is shown, and Reconnecting remains in
 the title tooltip and live status announcement.
-Idle Next releases retention when the card displays a different retained thread
-from the one being viewed, or when no thread is visible. An explicit choice or a
-matching visible thread hides redundant Next. Idle navigation changes the next
-target; same-route foreground updates preserve it, and browsing never retargets
+The idle target shortcut releases retention when the card displays a different
+retained thread from the one being viewed, or when no thread is visible. An
+explicit choice or a matching visible thread hides the redundant target
+shortcut. Idle navigation changes the next target; same-route foreground
+updates preserve it, and browsing never retargets
 active work. Keep listening changes automatic stopping;
 Send can explicitly finish either ordinary or held capture through the same
 recording identity, endpoint fences, recognition drain, and admission path.

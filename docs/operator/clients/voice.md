@@ -301,14 +301,16 @@ view is open. Reading readiness does not start or reconnect a conversation.
 With pinning off, voice keeps its last active thread after playback or recording
 ends, including after Stop or Cancel. For example, if you are viewing A and a
 message from B speaks, the idle card continues to show B and **Start** replies to
-B even with Auto-listen off. Idle **Next**, immediately left of Start, releases B
-and returns the card to A. Deliberately navigating to another thread while idle
-selects that thread; backgrounding and resuming on the same thread keep the voice
-destination. An explicit choice in the voice target picker takes priority.
+B even with Auto-listen off. Idle **Target this thread**, immediately left of
+Start, releases B and returns the card to A. Deliberately navigating to another
+thread while idle selects that thread; backgrounding and resuming on the same
+thread keep the voice destination. An explicit choice in the voice target picker
+takes priority.
 In-app, headset, and notification starts use the same destination. With no retained
 destination, starts use the visible thread, then the saved **Default thread**
 or a picker when no thread is visible. The ordinary idle viewed destination remains
-selected when you leave the app, including after Next or idle unpinning.
+selected when you leave the app, including after releasing the retained target
+or idle unpinning.
 An unavailable visible destination opens the
 chooser rather than redirecting to the default thread.
 Recording can target a running thread. While
@@ -344,10 +346,11 @@ connection, and signed-in identity.
 On Android it also supplies the background voice target. Pinning does not
 redirect an active interaction.
 
-While idle and showing a retained destination, **Next**
-releases it and returns the card to the viewed thread, or the saved default or
-chooser when no thread is visible.
-Next is hidden when the retained destination matches the visible thread or the
+While idle and showing a retained destination, the target icon releases it and
+returns the card to the viewed thread, or the saved default or chooser when no
+thread is visible. It is labelled **Target this thread** when the viewed thread
+can accept a recording, and **Release voice target** otherwise. The icon is
+hidden when the retained destination matches the visible thread or the
 card follows an explicitly chosen thread. Idle notification Next and
 headset Next release the same destination. They do not record, send a message,
 navigate, or edit the composer. If the retained thread becomes unavailable,
@@ -414,8 +417,9 @@ The compact bar keeps its title and status beside 40 px action buttons on all
 screen widths. Playback shows **Next**, **Stop**, **Record**, hiding Next when
 the queue is empty and Auto-listen is off; recording shows
 **Keep listening**, **Cancel**, **Send**, with **Target this thread** immediately
-left of Keep listening when available. Idle hides unavailable Next and Stop
-actions so the text can use their space. Record/Send stays at the right edge,
+left of Keep listening when available. Idle uses the same target icon and hides
+unavailable target and Stop actions so the text can use their space.
+Record/Send stays at the right edge,
 and microphone preparation shows progress there. The outline is blue while
 speaking and red while recording.
 
@@ -477,7 +481,8 @@ voice** when a session needs it.
   advances to the next queued item. It preserves a separately requested agent
   thread switch or listen. A tap made during speech still cancels that reply's
   unsent recording if the microphone starts before the tap arrives. While idle,
-  Next releases the retained voice destination.
+  the target icon releases the retained voice destination; headset and
+  notification Next do the same.
 - **Stop** during playback cancels the current interaction and its automatic
   listen, clears queued speech including manual replays, and cancels pending
   agent-requested voice actions. New messages can still play afterward; Stop
