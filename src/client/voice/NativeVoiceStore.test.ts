@@ -448,6 +448,46 @@ describe("foreground submission to composer", () => {
     expect(plugin.completeComposerHandoff).toHaveBeenCalledOnce();
     store.dispose();
   });
+
+  it.each([
+    { profileId: "other-profile", connectionGeneration: 2 },
+    { serverOrigin: "https://other.test", connectionGeneration: 2 },
+    { identity: "f".repeat(64), connectionGeneration: 2 },
+    { connectionGeneration: 2 },
+  ])("settles an adopted handoff without accepting a foreign completion response %j or reconnecting the old profile", async patch => {
+    vi.useFakeTimers();
+    const { store, plugin, listeners } = fixture();
+    await store.initialize();
+    const claimed = voiceComposerHandoffSnapshot(handoffEvent(), { stateRevision: 2 });
+    plugin.claimComposerHandoff.mockResolvedValueOnce(claimed);
+    plugin.completeComposerHandoff.mockResolvedValueOnce(snapshot(patch));
+    const accept = vi.fn();
+    store.registerSubmissionComposer("named", accept);
+    listeners.get("composerHandoff")!(handoffEvent());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(accept).toHaveBeenCalledExactlyOnceWith(handoffEvent());
+    expect(plugin.completeComposerHandoff).toHaveBeenCalledExactlyOnceWith({ ...context, outcome: "accepted" });
+    expect(store.getSnapshot().native).toEqual(claimed);
+    await vi.advanceTimersByTimeAsync(2_001);
+    expect(plugin.setConnection).toHaveBeenCalledOnce();
+    store.dispose();
+  });
+
+  it("releases an unadopted claim without accepting another binding's completion response", async () => {
+    vi.useFakeTimers();
+    const { store, plugin, listeners } = fixture();
+    await store.initialize();
+    plugin.claimComposerHandoff.mockRejectedValueOnce(new Error("Claim response lost."));
+    plugin.completeComposerHandoff.mockResolvedValueOnce(snapshot({ profileId: "other-profile", connectionGeneration: 2 }));
+    listeners.get("composerHandoff")!(handoffEvent());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(plugin.completeComposerHandoff).toHaveBeenCalledExactlyOnceWith({ ...context, outcome: "declined", message: "Claim response lost." });
+    expect(store.getSnapshot().native?.profileId).toBe("profile");
+    expect(store.getSnapshot().error).toBe("Claim response lost.");
+    await vi.advanceTimersByTimeAsync(2_001);
+    expect(plugin.setConnection).toHaveBeenCalledOnce();
+    store.dispose();
+  });
 });
 describe("native voice state authority", () => {
   it.each(["stopPlayback", "stopInteraction"] as const)("%s interrupts a pending action, deduplicates taps, and rejects its late state", async action => {

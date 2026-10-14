@@ -87,6 +87,14 @@ export class NativeVoiceStore {
       event.profileId === this.connection.profileId && event.serverOrigin === this.connection.serverOrigin &&
       event.identity === this.connection.identity && event.connectionGeneration === this.#generation;
   }
+  #acceptHandoffCompletion(event: NativeVoiceComposerHandoff, raw: NativeVoiceState): void {
+    const state = nativeVoiceStateSchema.parse(raw);
+    // Native can settle the original reservation after a connection switch,
+    // returning that new session's state. It does not belong to this handoff.
+    if (this.#matchesHandoff(event) && state.connectionGeneration === event.connectionGeneration &&
+        state.profileId === event.profileId && state.serverOrigin === event.serverOrigin && state.identity === event.identity)
+      this.#accept(state);
+  }
   async #handoff(event: NativeVoiceComposerHandoff): Promise<void> {
     const context = { expectedConnectionGeneration: event.connectionGeneration, handoffId: event.handoffId };
     let claimed: NativeVoiceState;
@@ -100,7 +108,7 @@ export class NativeVoiceStore {
         // No composer adopted it, so release only this live offer to recovery.
         const message = (error instanceof Error ? error.message : "The composer handoff could not be confirmed.").slice(0, 1024);
         try {
-          this.#accept(await this.plugin.completeComposerHandoff({ ...context, outcome: "declined", message }));
+          this.#acceptHandoffCompletion(event, await this.plugin.completeComposerHandoff({ ...context, outcome: "declined", message }));
         } catch { /* An already cancelled offer needs no further action. */ }
       }
       return;
@@ -126,7 +134,7 @@ export class NativeVoiceStore {
       message = (error instanceof Error ? error.message : "The composer could not accept this dictation.").slice(0, 1024);
     }
     try {
-      this.#accept(await this.plugin.completeComposerHandoff({ ...context, outcome, ...(message ? { message } : {}) }));
+      this.#acceptHandoffCompletion(event, await this.plugin.completeComposerHandoff({ ...context, outcome, ...(message ? { message } : {}) }));
     } catch (error) {
       if (this.#matchesHandoff(event)) this.#error(error);
     }
