@@ -348,6 +348,7 @@ describe("turn reply speech lookup", () => {
     }
   });
 
+  // Includes full migration fixtures; allow for contention in the parallel suite.
   it("serves every lookup from the indexes added by migration 137", () => {
     const turnLookups = ["classified_result_json", "assistant_result_json"].map((column) => `EXPLAIN QUERY PLAN
       SELECT ${column} FROM submission_completion_observations
@@ -393,7 +394,7 @@ describe("turn reply speech lookup", () => {
     } finally {
       current.database.close();
     }
-  });
+  }, 15_000);
 });
 
 describe("turn reply speech service", () => {
