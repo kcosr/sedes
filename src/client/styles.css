@@ -7997,6 +7997,9 @@ tr.diff-hunk td {
   flex-wrap: wrap;
   gap: var(--space-1-5);
   margin: 10px 15px 0;
+  max-height: min(132px, 18dvh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .composer-task-chip {

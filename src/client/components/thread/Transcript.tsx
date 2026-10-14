@@ -1,3 +1,4 @@
+import { usePageResponseServices } from "../conversation/page-response-services.js";
 import {
   memo,
   useCallback,
@@ -141,6 +142,7 @@ export function Transcript({
   findViewportRef,
 }: TranscriptProps): React.JSX.Element {
   const state = useThreadStore(store);
+  const pageResponse = usePageResponseServices(store, state);
   const {
     snapshot,
     pendingComposerTransfers,
@@ -357,6 +359,7 @@ export function Transcript({
             createPageRenderAdmission,
             listPageRevisions,
             getPageRevision,
+            pageResponse,
             providerFeatureCapabilities,
           }
         : undefined,
@@ -367,6 +370,7 @@ export function Transcript({
       createPageRenderAdmission,
       listPageRevisions,
       getPageRevision,
+      pageResponse,
       providerFeatureCapabilities,
     ],
   );

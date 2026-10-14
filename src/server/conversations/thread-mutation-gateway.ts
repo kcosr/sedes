@@ -9,6 +9,7 @@ import {
   type ThreadInputContext,
 } from "../../shared/protocol/thread-input.js";
 import { DirectInputRepository } from "../db/repositories/direct-input-repository.js";
+import { PageRepository } from "../db/repositories/page-repository.js";
 import { QueuedInputRepository } from "../db/repositories/queued-input-repository.js";
 import { ThreadActivityService } from "./thread-activity-service.js";
 import { directInputRuntimeReady, initialThreadSettingsReady } from "./thread-input-readiness.js";
@@ -415,6 +416,20 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
     };
     validateInventory();
     const target = this.input.bindings.getTarget(scope, applicationThreadId);
+    const pageOrigin = () => {
+      if (!request.pageResponse) return undefined;
+      const page = new PageRepository(database).get(scope, applicationThreadId,
+        request.pageResponse.pageId, request.pageResponse.revision);
+      return { kind: "page_response" as const, pageId: page.pageId, revision: page.revision, title: page.title };
+    };
+    if (request.pageResponse) {
+      // Published pages belong to an existing conversation. A copied history
+      // card or a preview cannot turn another thread into its sending owner.
+      if (target.backingState !== "bound") {
+        throw new DomainError("invalid_transition", "Page responses require a bound thread.");
+      }
+      pageOrigin();
+    }
     if (request.runningPolicy.mode === "steer" && target.backingState !== "bound") {
       // No steering target can have been observed before a conversation is bound.
       throw new DomainError("invalid_transition", "The requested steering target is not supported by this thread.");
@@ -461,6 +476,7 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
         await this.input.runtimes.commitWithRuntimesObserved(scope, [applicationThreadId], () => database.transaction(() => {
           if (receipts.replay(scope, applicationThreadId, request)) return;
           const current = validateInventory();
+          const inputOrigin = pageOrigin();
           const observed = this.input.actors.observeInputRuntime(scope, applicationThreadId);
           if (!generation || observed?.generation !== generation || !observed.authoritative) {
             throw transientAdmission("The input target's runtime authority changed.");
@@ -493,8 +509,11 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
           const queued = queue.enqueue(scope, applicationThreadId, {
             mutationId: request.mutationId, text: request.text, origin: request.origin,
             contextExcerpts: [], attachmentIds: [], taskReferences: [],
-            source: { kind: "direct_input", expectedThreadRevision: current.thread.revision,
-              resolvedDeliveryMode: mode, ...(mode === "steer" ? { resolvedSteerTarget: steerTarget! } : {}) },
+            source: inputOrigin
+              ? { kind: "page_response", inputOrigin, expectedThreadRevision: current.thread.revision,
+                  resolvedDeliveryMode: settled ? "submit" : "queue" }
+              : { kind: "direct_input", expectedThreadRevision: current.thread.revision,
+                  resolvedDeliveryMode: mode, ...(mode === "steer" ? { resolvedSteerTarget: steerTarget! } : {}) },
             now: this.#now(),
           });
           receipts.record(scope, applicationThreadId, request, { admittedMode: mode, queuedInputId: queued.item.id, now: this.#now() });

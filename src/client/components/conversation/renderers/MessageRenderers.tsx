@@ -1,6 +1,6 @@
 import { QuestionTranscriptDisclosure } from "../../thread/QuestionInbox.js";
 import { useCallback, useState } from "react";
-import { ChevronRight, MessageCircleQuestion, Sparkles } from "lucide-react";
+import { ChevronRight, FileText, MessageCircleQuestion, Sparkles } from "lucide-react";
 import type {
   AssistantMessageItem,
   ComposerTaskReference,
@@ -19,6 +19,7 @@ import { DurableAttachmentCard } from "../../../attachments/AttachmentCards.js";
 import { MessageTaskCard } from "./MessageTaskCard.js";
 import { splitThreadReferenceText } from "../../../../shared/thread-references.js";
 import { ThreadReferenceChips } from "../../thread/ThreadReferenceChips.js";
+import "../page-response.css";
 
 export const userMessageRenderer: ConversationItemRenderer<UserMessageItem> = {
   kind: "user_message",
@@ -65,6 +66,29 @@ export function UserMessagePresentation({
     readonly itemRevision: number;
   };
 }): React.JSX.Element {
+  if (origin?.kind === "page_response") {
+    const text = content.flatMap((part) => part.kind === "text" ? [part.text.text] : []).join("\n");
+    const body = <div className="page-response-text" {...conversationMessageSelectableTextProps}>{text}</div>;
+    return (
+      <details className="agent-input-disclosure page-response-disclosure" data-message-origin={origin.kind} data-testid="message-row">
+        <summary className="agent-input-disclosure-summary">
+          <ChevronRight aria-hidden="true" className="agent-input-disclosure-chevron" size={12} strokeWidth={1.8} />
+          <FileText aria-hidden="true" className="page-response-icon" size={14} />
+          <span className="agent-input-disclosure-label">Page response</span>
+          <span className="agent-input-disclosure-source" title={origin.title}>{origin.title}</span>
+        </summary>
+        <div className="agent-input-disclosure-body">
+          <div className="page-response-provenance">
+            <span>{origin.title}</span>
+            <span className="page-response-revision">Revision {origin.revision}</span>
+          </div>
+          {selection ? <ConversationMessageSelectionSurface
+            enabled={selection.enabled} itemId={selection.itemId} itemRevision={selection.itemRevision} selectionKind="plain_text"
+          >{body}</ConversationMessageSelectionSurface> : body}
+        </div>
+      </details>
+    );
+  }
   if (origin?.kind === "question_response") {
     return (
       <details

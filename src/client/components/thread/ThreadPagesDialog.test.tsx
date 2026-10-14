@@ -63,7 +63,10 @@ describe("thread page discovery", () => {
       .fn<(...args: unknown[]) => Promise<PageRevisionPage>>()
       .mockResolvedValueOnce({ items: [page], nextCursor: "older-pages" })
       .mockResolvedValueOnce({ items: [older] });
+    const state = { authoritative: false, connection: "disconnected" };
     const store = {
+      subscribe: vi.fn(() => () => {}),
+      getSnapshot: () => state,
       listPages,
       createPageRenderAdmission: vi.fn(),
       listPageRevisions: vi.fn(),

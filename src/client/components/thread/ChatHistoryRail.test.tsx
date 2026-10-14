@@ -304,3 +304,17 @@ describe("chat history rail", () => {
     ).toBeInTheDocument();
   });
 });
+
+it("labels page responses with their pinned title and revision while preserving literal preview text", () => {
+  const entries = createChatHistoryEntries(["turn-1"], {
+    "turn-1": { id: "turn-1", revision: 1, status: "completed", orderedItemIds: ["page-response"] },
+  }, {
+    "page-response": {
+      id: "page-response", turnId: "turn-1", kind: "user_message", status: "completed", revision: 1,
+      origin: { kind: "page_response", pageId: "30000000-0000-4000-8000-000000000001", revision: 2, title: "Setup" },
+      content: [{ kind: "text", text: { text: "  **literal**\nvalue " } }],
+    },
+  });
+  expect(entries[0]?.userLabel).toBe("Page response · Setup · Revision 2");
+  expect(entries[0]?.userPreview).toBe("**literal** value");
+});

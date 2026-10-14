@@ -28,7 +28,7 @@ import {
   unifiedDiffSchema,
 } from "./payload.js";
 import { imageItemOriginSchema, normalizedImageSchema } from "./output-artifacts.js";
-import { pageRevisionSchema } from "./pages.js";
+import { pageResponseOriginSchema, pageRevisionSchema } from "./pages.js";
 import {
   MAXIMUM_PROVIDER_FEATURES_PER_CONVERSATION_ITEM,
   MAXIMUM_PROVIDER_FEATURES_PER_THREAD,
@@ -270,6 +270,7 @@ export type MessageContentPart = z.infer<typeof messageContentPartSchema>;
 
 export const deliveryInputOriginSchema = z.discriminatedUnion("kind", [
   questionResponseOriginSchema,
+  pageResponseOriginSchema,
   z.strictObject({
     kind: z.literal("agent_message"),
     sourceThreadId: z.string().min(1).max(160),
@@ -1105,8 +1106,9 @@ export const queuedInputSummarySchema = z
         : item.origin === "agent_control"
           ? "agent_message"
           : item.origin === "user" &&
-              item.inputOrigin?.kind === "question_response"
-            ? "question_response"
+              (item.inputOrigin?.kind === "question_response" ||
+                item.inputOrigin?.kind === "page_response")
+            ? item.inputOrigin.kind
             : undefined;
     if (item.inputOrigin?.kind !== expectedInputOriginKind) {
       context.addIssue({

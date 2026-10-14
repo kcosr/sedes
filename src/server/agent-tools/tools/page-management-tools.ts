@@ -40,7 +40,7 @@ export function createPageToolDefinitions(service: PageAgentToolService): readon
       exposure: { adapters: ["pi_sdk", "mcp", "http", "cli"] },
       adapters: { pi: { name: `sedes_page_${operation}`, label: manifest.catalog.label,
         promptSnippet: operation === "publish"
-          ? "Publish an HTML preview: provide exactly one of path (execution-environment file) or html (self-contained text). Files capture local images; inline text requires data images. Update with pageId and expectedRevision. Optional viewport fixes layout dimensions. No network resources."
+          ? "Publish HTML from one path or html, with inline CSS/JS. Files capture local images; html needs data images. Update with pageId and expectedRevision; viewport is optional. No network. For any controls, register window.sedes.onSubmit(() => string): synchronously return all answers as one nonblank string up to 65,536 UTF-8 bytes, without a separate summary. Host Send captures it once and sends or queues to this thread, never Steer. Unsent state is transient and unreadable by tools."
           : manifest.description },
         mcp: { name: `sedes_page_${operation}` }, http: { invocation: "inline" }, cli: { command: manifest.id } },
       execute: (input, context) => service.execute(operation, input, context),

@@ -5,6 +5,12 @@ agent tool optionally renders an HTML file with captured local images, or a
 self-contained HTML string, returning a PNG screenshot, bounded console messages, and measured
 dimensions. It does not publish or change a page revision.
 
+Page responses use the published viewer's Sedes-owned **Send** control and do
+not require the optional browser. Preview exposes the same
+`window.sedes.onSubmit(producer)` registration API so authored code can exercise
+its producer, but has no submission control and never sends or queues a
+response. See [authoring a response producer](../user/html-previews.md#author-a-response-producer).
+
 The Playwright library is a pinned production dependency, currently 1.62.0.
 The matching Chromium binary is a separate, explicit installation. It runs on
 the Sedes server only. Remote execution hosts, Android clients, and Electron
@@ -84,11 +90,21 @@ This is the same document used by the published viewer. The composed document
 allows up to 32 MiB of escaped payload plus 64 KiB of trusted rendering overhead;
 the captured authored document itself remains limited to 16 MiB. Its content security
 policies allow inline HTML/CSS/JavaScript and captured data images, while
-denying network connections, authored nested frames, workers, forms, and remote
-assets. Only the initial in-memory document is served through a request
+denying network connections, authored nested frames, workers, native form
+submissions, and remote assets. Only the initial in-memory document is served through a request
 interceptor. All other requests and WebSocket connections are denied. A
 loopback proxy and WebRTC restrictions provide additional network isolation.
 No authenticated Sedes endpoint or provider credential is supplied to the page.
+
+For published pages, the trusted host can request one bounded synchronous text
+capture after the user chooses **Send**. The authenticated server checks the
+page's principal, owning thread, and saved revision, supplies its title and
+revision metadata, and accepts the exact nonblank response up to 65,536 UTF-8
+bytes through ordinary Send or Queue. Authored code cannot choose a destination
+thread, send autonomously, or invoke Sedes tools. Accepted text is durable input;
+unsubmitted widget state is transient, has no server readback API, and is lost
+when its frame is reloaded or released. The response channel does not grant the
+page direct authenticated API access.
 
 The published viewer's Content Security Policy is not an operating-system
 network sandbox. It restricts HTTP resource loading, fetch/WebSocket connections,

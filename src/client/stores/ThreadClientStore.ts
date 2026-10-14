@@ -2,6 +2,7 @@ import { UsageQueryCache } from "./UsageQueryCache.js";
 import type { EnvironmentVariableOverrides } from "../../shared/protocol/environment-variables.js";
 import type { TurnReplySpeech } from "../../shared/protocol/turn-reply-speech.js";
 import type { PageRevision, PageRevisionPage } from "../../shared/protocol/pages.js";
+import type { DirectInputRequest, DirectInputReceipt, DirectInputReceiptLookup } from "../../shared/protocol/thread-input.js";
 import type { PageListOptions, PageRenderAdmission } from "../api/ApiClient.js";
 import type {
   QuestionRequest,
@@ -844,6 +845,17 @@ export class ThreadClientStore {
 
   createPageRenderAdmission(pageId: string, revision: number, signal?: AbortSignal): Promise<PageRenderAdmission> {
     return this.#api.createPageRenderAdmission(this.threadId, pageId, revision, signal);
+  }
+
+  submitPageResponse(request: Omit<DirectInputRequest, "origin">, signal?: AbortSignal): Promise<DirectInputReceipt> {
+    if (this.#disposed || this.#paused) return Promise.reject(new Error("This thread is no longer active."));
+    if (!request.pageResponse || request.runningPolicy.mode !== "queue")
+      return Promise.reject(new Error("Invalid page response."));
+    return this.#api.submitDirectInput(this.threadId, request, signal);
+  }
+
+  readPageResponseReceipt(mutationId: string, signal?: AbortSignal): Promise<DirectInputReceiptLookup> {
+    return this.#api.readDirectInputReceipt(this.threadId, mutationId, signal);
   }
 
   stash(draft: NormalizedDraft): Promise<NormalizedDraft> {

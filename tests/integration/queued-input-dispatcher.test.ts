@@ -1137,6 +1137,70 @@ describe("ThreadCompletionCallbackDispatcher", () => {
 });
 
 describe("QueuedInputDispatcher", () => {
+  it("retains exact page text and provenance through deferred delivery, failed recovery, and explicit retry", async () => {
+    const fixture = createFixture();
+    const repository = new QueuedInputRepository(fixture.database);
+    const [threadId] = fixture.threadIds;
+    const gateway = new FakeGateway();
+    gateway.authoritativelySettled = false;
+    const now = { value: 600 };
+    const { dispatcher } = createDispatcher(repository, gateway, { now });
+    const inputOrigin = { kind: "page_response" as const, pageId: randomUUID(), revision: 2, title: "Deployment review" };
+    const text = "  /review this deployment\nApproved: yes.  ";
+    const input = {
+      id: "page-response", mutationId: "page-operation", text,
+      contextExcerpts: [], attachmentIds: [], taskReferences: [],
+      source: { kind: "page_response" as const, inputOrigin,
+        resolvedDeliveryMode: "queue" as const, expectedThreadRevision: revision(fixture, threadId) },
+      now: 500,
+    };
+    try {
+      const drafts = new ConversationDraftRepository(fixture.database);
+      const draft = drafts.get(fixture.scope, threadId);
+      const admitted = repository.enqueue(fixture.scope, threadId, input);
+      expect(repository.enqueue(fixture.scope, threadId, input).replayed).toBe(true);
+      const admittedRevision = revision(fixture, threadId);
+      expect(() => repository.reserveHeadForSteer(fixture.scope, threadId, admitted.item.id, {
+        steerOperationId: "page-steer", expectedThreadRevision: admittedRevision, now: 550,
+      })).toThrow("Page responses cannot be steered");
+      expect(repository.get(fixture.scope, threadId, admitted.item.id)).toEqual(admitted.item);
+      expect(revision(fixture, threadId)).toBe(admittedRevision);
+      for (const changedOrigin of [{ ...inputOrigin, revision: 3 }, { ...inputOrigin, title: "Renamed review" }, { ...inputOrigin, pageId: randomUUID() }]) {
+        expect(() => repository.enqueue(fixture.scope, threadId, {
+          ...input, source: { ...input.source, inputOrigin: changedOrigin },
+        })).toThrow("reused with different input");
+      }
+      for (const otherScope of [{ ...fixture.scope, tenantId: randomUUID() }, { ...fixture.scope, principalId: randomUUID() }]) {
+        expect(() => repository.get(otherScope, threadId, admitted.item.id)).toThrow();
+      }
+      await dispatcher.recover(fixture.scope);
+      expect(gateway.submitted).toHaveLength(0);
+      expect(new QueuedInputRepository(fixture.database).get(fixture.scope, threadId, admitted.item.id))
+        .toMatchObject({ inputOrigin, text, isUserInput: 1, state: "pending" });
+      gateway.submitBehaviors.push(new BackendError({ category: "rejected", retryable: false,
+        crossedSubmissionBoundary: false, safeMessage: "Request rejected." }));
+      gateway.authoritativelySettled = true;
+      await dispatcher.onAuthoritativeSettled(fixture.scope, threadId);
+      expect(repository.get(fixture.scope, threadId, admitted.item.id).state).toBe("failed");
+      expect(() => repository.restoreIdempotently(fixture.scope, threadId, admitted.item.id, {
+        mutationId: "restore-page", expectedThreadRevision: revision(fixture, threadId),
+        expectedDraftRevision: draft.revision, now: 610,
+      })).toThrow("Page responses cannot be restored to the composer");
+      now.value = 620;
+      await dispatcher.retryFailed(fixture.scope, threadId, admitted.item.id, {
+        id: "retried-page", mutationId: "retried-page-operation", now: 620,
+      });
+      expect(gateway.submitted).toHaveLength(2);
+      expect(gateway.submitted.map(input => ({ text: input.text, inputOrigin: input.inputOrigin })))
+        .toEqual([{ text, inputOrigin }, { text, inputOrigin }]);
+      expect(new QueuedInputRepository(fixture.database).get(fixture.scope, threadId, "retried-page"))
+        .toMatchObject({ inputOrigin, text, retryOfId: admitted.item.id, isUserInput: 1, state: "accepted" });
+      expect(drafts.get(fixture.scope, threadId)).toEqual(draft);
+    } finally {
+      await dispatcher.close();
+      fixture.database.close();
+    }
+  });
   it("starts with pending input on an unavailable backend and retries without losing it", async () => {
     const fixture = createFixture();
     const repository = new QueuedInputRepository(fixture.database);

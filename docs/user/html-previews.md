@@ -3,8 +3,8 @@
 An agent can publish a mock-up, chart, or other interactive HTML example in a
 conversation. Previews load automatically when they are in or near view on
 web, desktop, and Android. Their JavaScript can update the displayed content
-locally; it has no connection to the agent, your credentials, or other Sedes
-tools.
+locally. A page can also prepare a response for you to send through Sedes's
+own **Send** control; it has no access to your credentials or other Sedes tools.
 
 Inline content appears without a permanent header or dimensions footer. Use
 the maximize button at the top right to open the larger viewer. Its header
@@ -53,9 +53,41 @@ controls, while each chat occurrence keeps its own interaction toggle.
 
 Saved revisions preserve document content, images, and requested dimensions.
 They do not save transient interaction state such as selected filters or text
-typed into a mock form. Reopening or switching revisions starts that page
-again. Pages belong to their original thread and are removed when that thread
-is deleted.
+typed into a mock form. Reopening, switching revisions, or moving between the
+inline and fullscreen views starts that page again. Pages belong to their
+original thread and are removed when that thread is deleted.
+
+## Send a Page response
+
+A published page of any design can optionally send responses: a dashboard,
+diagram, calculator, custom widget, or questionnaire. It can collect choices,
+multiple selections, free text, or changes made through controls and canvas.
+When the page supports responses, use Sedes's **Send** control to submit its text to the
+page's owning thread. Sedes captures the text once at that click. If the agent
+is busy, the response enters the thread's normal queue; it never interrupts
+the current turn with Steer. The same flow works with Pi, Codex, Claude, Grok,
+and OpenCode.
+
+Chat shows a single-row **Page response** user card with the saved page title.
+Expand it to see the full title, revision, and exact submitted plain text,
+including its original whitespace. The card does not render that text as HTML or Markdown.
+Queued responses and submitted history retain this frozen text across reloads
+and server restarts, even if the page later changes. A fork retains responses
+in its inherited history, but cannot send through a page owned by the original
+thread.
+
+If delivery cannot be confirmed, **Retry** checks the same captured response
+without reading the page again. Hiding the app or expanding the page does not
+cancel a captured send. The local retry record lasts only while that preview
+remains open; refreshing it, changing revisions, or reloading the app can
+discard that record. Responses already admitted by the server remain in the
+queue or conversation.
+
+Answers that you have not sent exist only in the loaded page. Reloading,
+closing, or releasing that frame can lose them; Sedes does not save form state,
+and the agent cannot inspect it through a tool. A page cannot send by itself.
+If its response is blank, invalid, or too large, Sedes shows an error instead
+of sending it.
 
 ## Interact and recover
 
@@ -126,12 +158,49 @@ Inline HTML has no source directory and cannot read filesystem images. Embed
 its images as base64 data URLs. Neither source form downloads images or other
 assets from HTTP or HTTPS addresses.
 
+## Author a response producer
+
+The published page receives `window.sedes.onSubmit(producer)`. Register a
+synchronous function that returns one nonblank string of at most 65,536 UTF-8
+bytes. Read whichever controls or JavaScript state define the answer; there
+is no fixed form schema. For example:
+
+```html
+<label><input type="radio" name="pace" value="steady" checked> Steady</label>
+<label><input type="radio" name="pace" value="fast"> Fast</label>
+<label>Topics
+  <select id="topics" multiple>
+    <option value="layout">Layout</option>
+    <option value="content">Content</option>
+  </select>
+</label>
+<label>Notes <textarea id="notes"></textarea></label>
+<script>
+  window.sedes.onSubmit(() => {
+    const pace = document.querySelector('input[name="pace"]:checked').value;
+    const topics = [...document.querySelector('#topics').selectedOptions]
+      .map(option => option.value).join(', ');
+    const notes = document.querySelector('#notes').value;
+    return `Pace: ${pace}\nTopics: ${topics || 'None'}\nNotes: ${notes}`;
+  });
+</script>
+```
+
+Canvas widgets can serialize their own selection state into the same string.
+Include all useful answers in that one value; there is no separately authored
+summary. Keep the producer synchronous: promises, non-string values, thrown
+errors, blank strings, and oversized output fail validation. Registering again
+replaces the producer for a later capture. Registration does not send anything;
+only the user's Sedes **Send** action requests a capture. Sedes supplies the
+saved title and revision separately, so the producer need not repeat them.
+
 ## Optional agent screenshot preview
 
 The agent can call the separate preview tool before publishing. It returns a
 screenshot, bounded console messages, and measured dimensions, allowing the
 agent to inspect and revise its work. It does not save a page or create a
-revision.
+revision. The registration API is available, so page code can test its producer
+directly, but preview never invokes it for submission or sends a response.
 
 This tool requires the optional browser installation on the Sedes server.
 Publishing and viewing still work without it. See

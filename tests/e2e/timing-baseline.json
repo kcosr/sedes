@@ -7,7 +7,7 @@
     },
     {
       "file": "agent-tool-policy.spec.ts",
-      "estimatedMilliseconds": 71000
+      "estimatedMilliseconds": 72000
     },
     {
       "file": "automations-list.spec.ts",
@@ -15,19 +15,23 @@
     },
     {
       "file": "blocking-interactions.spec.ts",
-      "estimatedMilliseconds": 56000
+      "estimatedMilliseconds": 57000
     },
     {
       "file": "canned-prompts.spec.ts",
-      "estimatedMilliseconds": 18000
+      "estimatedMilliseconds": 19000
     },
     {
       "file": "claude-journey.spec.ts",
-      "estimatedMilliseconds": 36000
+      "estimatedMilliseconds": 37000
     },
     {
       "file": "codex-tui-journeys.spec.ts",
-      "estimatedMilliseconds": 36000
+      "estimatedMilliseconds": 38000
+    },
+    {
+      "file": "composer-reference-limits.spec.ts",
+      "estimatedMilliseconds": 28000
     },
     {
       "file": "direct-input-submission.spec.ts",
@@ -35,15 +39,15 @@
     },
     {
       "file": "execution-settings.spec.ts",
-      "estimatedMilliseconds": 47000
+      "estimatedMilliseconds": 50000
     },
     {
       "file": "generative-ui.spec.ts",
-      "estimatedMilliseconds": 77000
+      "estimatedMilliseconds": 78000
     },
     {
       "file": "lineage-journeys.spec.ts",
-      "estimatedMilliseconds": 61000
+      "estimatedMilliseconds": 62000
     },
     {
       "file": "mobile-search-pickers.spec.ts",
@@ -55,11 +59,11 @@
     },
     {
       "file": "normalized-codex-creation.spec.ts",
-      "estimatedMilliseconds": 32000
+      "estimatedMilliseconds": 33000
     },
     {
       "file": "normalized-codex-interactive.spec.ts",
-      "estimatedMilliseconds": 20000
+      "estimatedMilliseconds": 22000
     },
     {
       "file": "normalized-codex-thread.spec.ts",
@@ -67,7 +71,7 @@
     },
     {
       "file": "normalized-composer-state.spec.ts",
-      "estimatedMilliseconds": 118000
+      "estimatedMilliseconds": 119000
     },
     {
       "file": "normalized-navigation.spec.ts",
@@ -75,15 +79,19 @@
     },
     {
       "file": "normalized-streaming-state.spec.ts",
-      "estimatedMilliseconds": 75000
+      "estimatedMilliseconds": 76000
     },
     {
       "file": "notifications.spec.ts",
-      "estimatedMilliseconds": 58000
+      "estimatedMilliseconds": 59000
     },
     {
       "file": "opencode-settings.spec.ts",
-      "estimatedMilliseconds": 25000
+      "estimatedMilliseconds": 27000
+    },
+    {
+      "file": "page-responses.spec.ts",
+      "estimatedMilliseconds": 42000
     },
     {
       "file": "pending-input-strip.spec.ts",
@@ -95,27 +103,27 @@
     },
     {
       "file": "question-inbox.spec.ts",
-      "estimatedMilliseconds": 29000
+      "estimatedMilliseconds": 30000
     },
     {
       "file": "saved-agents.spec.ts",
-      "estimatedMilliseconds": 29000
+      "estimatedMilliseconds": 30000
     },
     {
       "file": "settings-navigation.spec.ts",
-      "estimatedMilliseconds": 45000
+      "estimatedMilliseconds": 47000
     },
     {
       "file": "sidebar-background-work.spec.ts",
-      "estimatedMilliseconds": 20000
+      "estimatedMilliseconds": 22000
     },
     {
       "file": "sidebar-execution-scope.spec.ts",
-      "estimatedMilliseconds": 36000
+      "estimatedMilliseconds": 38000
     },
     {
       "file": "sidebar-thread-groups.spec.ts",
-      "estimatedMilliseconds": 61000
+      "estimatedMilliseconds": 63000
     },
     {
       "file": "skill-picker-layout.spec.ts",
@@ -123,7 +131,7 @@
     },
     {
       "file": "tasks-panel.spec.ts",
-      "estimatedMilliseconds": 54000
+      "estimatedMilliseconds": 56000
     },
     {
       "file": "terminal-panes-mobile.spec.ts",
@@ -131,7 +139,7 @@
     },
     {
       "file": "terminal-panes.spec.ts",
-      "estimatedMilliseconds": 35000
+      "estimatedMilliseconds": 36000
     },
     {
       "file": "terminal-reconciliation.spec.ts",
@@ -143,7 +151,7 @@
     },
     {
       "file": "thread-resume-retention.spec.ts",
-      "estimatedMilliseconds": 28000
+      "estimatedMilliseconds": 29000
     },
     {
       "file": "thread-templates.spec.ts",
@@ -151,11 +159,11 @@
     },
     {
       "file": "turn-bookmarks.spec.ts",
-      "estimatedMilliseconds": 44000
+      "estimatedMilliseconds": 45000
     },
     {
       "file": "usage-analytics.spec.ts",
-      "estimatedMilliseconds": 32000
+      "estimatedMilliseconds": 33000
     },
     {
       "file": "voice-composer-handoff.spec.ts",
@@ -163,39 +171,39 @@
     },
     {
       "file": "voice-controls.spec.ts",
-      "estimatedMilliseconds": 58000
+      "estimatedMilliseconds": 60000
     },
     {
       "file": "voice-playback-controls.spec.ts",
-      "estimatedMilliseconds": 38000
+      "estimatedMilliseconds": 42000
     },
     {
       "file": "workpad-checklists.spec.ts",
-      "estimatedMilliseconds": 18000
+      "estimatedMilliseconds": 19000
     },
     {
       "file": "workpads.spec.ts",
-      "estimatedMilliseconds": 52000
+      "estimatedMilliseconds": 53000
     },
     {
       "file": "workspace-files-compare.spec.ts",
-      "estimatedMilliseconds": 24000
+      "estimatedMilliseconds": 25000
     },
     {
       "file": "workspace-files-mobile-sheet.spec.ts",
-      "estimatedMilliseconds": 34000
+      "estimatedMilliseconds": 35000
     },
     {
       "file": "workspace-files.spec.ts",
-      "estimatedMilliseconds": 57000
+      "estimatedMilliseconds": 59000
     },
     {
       "file": "workspace-panel-regions.spec.ts",
-      "estimatedMilliseconds": 39000
+      "estimatedMilliseconds": 40000
     },
     {
       "file": "workspace-panels.spec.ts",
-      "estimatedMilliseconds": 38000
+      "estimatedMilliseconds": 40000
     }
   ]
 }

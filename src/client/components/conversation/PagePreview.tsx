@@ -5,6 +5,7 @@ import {
   Maximize2,
   Pointer,
   RotateCcw,
+  Send,
 } from "lucide-react";
 import {
   useCallback,
@@ -14,6 +15,9 @@ import {
   useState,
 } from "react";
 import type { PageRevision } from "../../../shared/protocol/pages.js";
+import { PageResponseBridge } from "../../lib/page-response-bridge.js";
+import type { PageResponseServices } from "./page-response-services.js";
+import { usePageResponseSubmission, type PageResponseSubmission } from "./page-response-submission.js";
 import { MediaFrame } from "../../workbench/components/MediaFrame.js";
 import { MediaZoomControls } from "../../workbench/components/MediaZoomControls.js";
 import { Button } from "../ui/button.js";
@@ -37,7 +41,7 @@ import "./page-preview.css";
 
 export type PagePreviewServices = Pick<
   ItemRenderContext,
-  "createPageRenderAdmission" | "listPageRevisions" | "getPageRevision"
+  "createPageRenderAdmission" | "listPageRevisions" | "getPageRevision" | "pageResponse"
 >;
 
 /** Each occurrence keeps its pinned revision and its own interaction state. */
@@ -61,6 +65,11 @@ export function PagePreview({
   const expandButton = useRef<HTMLButtonElement>(null);
   const deactivate = useCallback(() => setInteracting(false), []);
   const viewerOpen = presentation === "library" || expanded;
+  const connection = useConnectionScope();
+  const responsePage = viewerOpen ? selected : page;
+  const response = usePageResponseSubmission(
+    pageFrameRecoveryKey(connection, responsePage), responsePage, services.pageResponse,
+  );
 
   useEffect(() => {
     setSelected(page);
@@ -232,6 +241,7 @@ export function PagePreview({
         aria-label="Refresh page preview"
         title="Refresh preview"
         onClick={() => {
+          response.reset();
           setRefreshVersion((value) => value + 1);
         }}
         size="icon-lg"
@@ -263,6 +273,8 @@ export function PagePreview({
         key={`${selected.pageId}:${selected.revision}`}
         page={selected}
         createAdmission={services.createPageRenderAdmission}
+        responseServices={services.pageResponse}
+        response={response}
         enabled={viewerOpen}
         interactive
         onActivate={() => setInteracting(true)}
@@ -343,6 +355,8 @@ export function PagePreview({
           key={`${page.pageId}:${page.revision}`}
           page={page}
           createAdmission={services.createPageRenderAdmission}
+          responseServices={services.pageResponse}
+          response={response}
           enabled={!expanded}
           interactive={interacting}
           onActivate={() => setInteracting(true)}
@@ -375,6 +389,8 @@ export function PagePreview({
 function PageFrame({
   page,
   createAdmission,
+  responseServices,
+  response,
   enabled,
   interactive,
   onDeactivate,
@@ -385,6 +401,8 @@ function PageFrame({
 }: {
   readonly page: PageRevision;
   readonly createAdmission: PagePreviewServices["createPageRenderAdmission"];
+  readonly responseServices?: PageResponseServices;
+  readonly response: PageResponseSubmission;
   readonly enabled: boolean;
   readonly interactive: boolean;
   readonly onDeactivate: () => void;
@@ -397,6 +415,8 @@ function PageFrame({
   const recoveryKey = pageFrameRecoveryKey(connection, page);
   const host = useRef<HTMLDivElement>(null);
   const frame = useRef<HTMLIFrameElement>(null);
+  const responseBridge = useRef<PageResponseBridge | undefined>(undefined);
+  const [responseReady, setResponseReady] = useState(false);
   const tap = useRef<{ id: number; x: number; y: number; time: number } | undefined>(undefined);
   const clickReady = useRef(false);
   const [width, setWidth] = useState(page.viewport.width ?? 640);
@@ -413,6 +433,7 @@ function PageFrame({
         status: "ready";
         url: string;
         channel: string;
+        recoveryKey: string;
         recovery: PageFrameRecoveryAttempt;
       }
   >({ status: "waiting" });
@@ -453,7 +474,7 @@ function PageFrame({
     if (!admitted || !visible) onDeactivate();
   }, [admitted, onDeactivate, visible]);
   const ready =
-    enabled && admitted && state.status === "ready" ? state : undefined;
+    enabled && admitted && state.status === "ready" && state.recoveryKey === recoveryKey ? state : undefined;
   const loadGuard = useRef(new PageFrameLoadGuard());
   const handshakeAcknowledged = useRef(false);
   const wrapperAcknowledged = useRef(false);
@@ -519,7 +540,7 @@ function PageFrame({
       const channel = crypto.randomUUID();
       const url = `${admission.url}#${new URLSearchParams({ channel })}`;
       loadGuard.current.reset();
-      setState({ status: "ready", url, channel, recovery });
+      setState({ status: "ready", url, channel, recovery, recoveryKey });
     })().catch(() => {
       if (!controller.signal.aborted) {
         setNeedsActivation(true);
@@ -543,9 +564,16 @@ function PageFrame({
 
   useLayoutEffect(() => {
     if (!ready) return;
+    const bridge = new PageResponseBridge({
+      getSource: () => frame.current?.contentWindow ?? null,
+      channel: ready.channel,
+      onReady: setResponseReady,
+    });
+    responseBridge.current = bridge;
     handshakeAcknowledged.current = false;
     wrapperAcknowledged.current = false;
     const fail = () => {
+      bridge.dispose();
       ready.recovery.fail();
       setNeedsActivation(true);
       setState({ status: "error" });
@@ -553,6 +581,7 @@ function PageFrame({
     // Transport can take longer than bootstrap execution for a large document.
     handshakeTimeout.current = window.setTimeout(fail, 60_000);
     const receive = (event: MessageEvent) => {
+      bridge.handleMessage(event);
       const message = pageFrameMessage(
         event,
         frame.current?.contentWindow ?? null,
@@ -580,6 +609,9 @@ function PageFrame({
     };
     window.addEventListener("message", receive);
     return () => {
+      bridge.dispose();
+      responseBridge.current = undefined;
+      setResponseReady(false);
       window.clearTimeout(handshakeTimeout.current);
       handshakeTimeout.current = undefined;
       window.removeEventListener("message", receive);
@@ -590,6 +622,25 @@ function PageFrame({
     <div
       className={`page-frame-shell${expanded ? " page-frame-expanded" : ""}`}
     >
+      {enabled && responseServices?.threadId === page.threadId &&
+        (responseReady || response.phase !== "idle" || response.status || response.error) ? (
+        <div className="page-response-controls">
+          <span className="page-response-status" role={response.error ? "alert" : "status"}>
+            {response.error || response.status || responseServices.unavailableReason}
+          </span>
+          <Button
+            size="sm"
+            variant="outline"
+            aria-label={response.phase === "retry" ? "Retry page response" : "Send page response"}
+            disabled={response.phase === "sending" || (response.phase !== "retry" && (!responseReady || Boolean(responseServices.unavailableReason)))}
+            title={responseServices.unavailableReason ?? "Send this page response to the conversation"}
+            onClick={() => void response.send(responseBridge.current)}
+          >
+            <Send aria-hidden="true" />
+            {response.phase === "retry" ? "Retry" : response.phase === "sending" ? "Sending…" : "Send"}
+          </Button>
+        </div>
+      ) : null}
       {expanded ? (
         <MediaZoomControls
           label="Page zoom controls"
@@ -688,6 +739,7 @@ function PageFrame({
                 // its WindowProxy and remains disallowed.
                 const admission = loadGuard.current.accept(context);
                 if (admission === "rejected") {
+                  responseBridge.current?.dispose();
                   ready.recovery.fail();
                   setNeedsActivation(true);
                   setState({ status: "error" });

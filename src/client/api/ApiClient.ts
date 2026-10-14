@@ -2,6 +2,10 @@ import { usageReportSchema, usageAvailabilitySchema, usageAvailabilityRequestSch
 import { usageAnalyticsRequestSchema, usageAnalyticsResponseSchema, type UsageAnalyticsRequest, type UsageAnalyticsResponse } from "../../shared/protocol/usage-analytics.js";
 import { turnReplySpeechSchema, type TurnReplySpeech } from "../../shared/protocol/turn-reply-speech.js";
 import {
+  directInputReceiptSchema, directInputReceiptLookupSchema, directInputRequestBodySchema,
+  type DirectInputRequest, type DirectInputReceipt, type DirectInputReceiptLookup,
+} from "../../shared/protocol/thread-input.js";
+import {
   pageRevisionPageSchema,
   pageRevisionSchema,
   type PageRevision,
@@ -2074,6 +2078,26 @@ export class ApiClient {
       ...result,
       url: this.#endpoint.baseUrl ? new URL(result.url, this.#endpoint.baseUrl).toString() : result.url,
     };
+  }
+
+  async submitDirectInput(threadId: string, request: Omit<DirectInputRequest, "origin">, signal?: AbortSignal): Promise<DirectInputReceipt> {
+    const body = directInputRequestBodySchema.parse(request);
+    const receipt = await this.#mutation(
+      `/api/threads/${encodeURIComponent(threadId)}/inputs`, directInputReceiptSchema,
+      { method: "POST", body: JSON.stringify(body), signal },
+    );
+    if (receipt.threadId !== threadId || receipt.mutationId !== request.mutationId)
+      throw new ApiError(502, "invalid_response", "The input receipt did not match this response.", true);
+    return receipt;
+  }
+
+  async readDirectInputReceipt(threadId: string, mutationId: string, signal?: AbortSignal): Promise<DirectInputReceiptLookup> {
+    const result = await this.#request(
+      `/api/input-receipts/${encodeURIComponent(mutationId)}`, { signal }, directInputReceiptLookupSchema,
+    );
+    if (result.status === "found" && (result.receipt.threadId !== threadId || result.receipt.mutationId !== mutationId))
+      throw new ApiError(502, "invalid_response", "The input receipt did not match this response.", true);
+    return result;
   }
 
   async #loadImageContent(path: string, signal?: AbortSignal): Promise<Blob> {

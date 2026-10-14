@@ -2917,7 +2917,7 @@ command and tool statuses have no interrupted value, and ACP tool statuses
 have no cancelled value), so an aborted call keeps the provider's reported
 outcome. The in-memory conformance backend keeps the statuses it scripts.
 
-User-selected thread references are bounded canonical plain text (Sedes UUID
+Up to 16 user-selected thread references are bounded canonical plain text (Sedes UUID
 and JSON-quoted display title) in the existing input text contract. Pi, Codex,
 Claude, Grok, and OpenCode preserve that text through the shared delivery path;
 it grants no tool or resource authority and includes no referenced transcript.
@@ -2928,7 +2928,10 @@ for Sedes IDs. TUI submission of reference chips is explicitly unavailable.
 
 Text, context excerpts, attachments, and structured Task references are
 normalized application input, not provider-native IDs or browser-selected
-paths. Before provider delivery, the application materializes one immutable,
+paths. Composer inputs admit up to 16 unique Task references; their captured
+content shares the existing 256 KiB input budget with text and context. These
+count limits apply to all five backends through shared application validation.
+Before provider delivery, the application materializes one immutable,
 ordered delivery snapshot containing the original text, context, Task
 snapshots, and path-free attachment descriptors. That snapshot and its
 `deliveryOperationId` are authoritative for operation fingerprints, queues,
@@ -3832,6 +3835,43 @@ Presentation turn revisions include visible pages;
 fork capabilities and `thread.messages` retain the native source revision,
 derived by subtracting referenced page items. Validate that relationship with
 the referenced items in snapshots, history pages, and incremental stores.
+
+Page responses are principal- and thread-owned input, implemented for Pi,
+Codex, Claude, Grok, and OpenCode through ordinary normalized text delivery and
+an authenticated application snapshot. They do not require a provider app host
+or MCP Apps. Keep `page.publish` and `page.preview` source contracts unchanged;
+the trusted render bootstrap supplies `window.sedes.onSubmit(() => string)`.
+Only a deliberate Sedes-owned Send may request one synchronous capture. Bind
+the capture to the current frame and request; reject unsolicited, duplicate,
+stale, or invalid replies. Arbitrary controls and canvas supply one nonblank
+plain-text value bounded to 65,536 UTF-8 bytes. Preview supports registration
+but cannot submit. Never persist or expose unsubmitted widget state through an
+agent readback API.
+
+The authenticated server derives the owning principal and thread, validates the
+immutable published revision, and stamps its saved title and revision. Neither
+authored script nor browser-supplied provenance grants page ownership. Freeze
+the exact submitted text once before ordinary input admission; busy threads
+queue it and never Steer it. Persist its authenticated Page response snapshot
+with input so queue dispatch, retries, restart recovery, native observation,
+and history hydration preserve its text and identity without rerunning page
+code. Keep provider-native history authoritative and join only authenticated
+application metadata; provider text cannot invent a Page response card.
+
+Separate capture lifetime from delivery lifetime. Releasing the frame cancels
+an unfinished capture, but must not cancel admission or receipt lookup after
+text has been captured. Keep the frozen request and outcome at the preview
+owner, shared by its inline and expanded frames, so automatic release retains
+the same retry identity. A receipt retry needs no live page document. Explicit
+preview resets may discard this in-memory record without aborting admission.
+
+The compact expandable user card displays the exact plain text and saved title
+and revision; it does not execute HTML, render Markdown, or use a separately
+authored summary. Fork history preserves accepted response snapshots, while
+inherited pages retain their original ownership and cannot submit from the fork
+to the source thread. Audit normalized delivery, queue/restart recovery,
+history projection, fork presentation, and wrong-scope rejection for every
+compiled backend whenever this contract changes.
 
 Explicit image display uses the same application-publication projection and
 native-revision accounting. `image.show` reads through the source thread's

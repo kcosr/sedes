@@ -41,7 +41,7 @@ function fixture(version?: number) {
 }
 
 describe("user input admission revision", () => {
-  it.each(["composer", "direct_input", "question_response"] as const)("counts a fresh %s input once and rolls back with its admission", kind => {
+  it.each(["composer", "direct_input", "question_response", "page_response"] as const)("counts a fresh %s input once and rolls back with its admission", kind => {
     const f = fixture();
     try {
       const text = "A new message";
@@ -55,6 +55,9 @@ describe("user input admission revision", () => {
         kind, resolvedDeliveryMode: "queue" as const, expectedThreadRevision: f.revision(),
         inputOrigin: { kind: "question_response" as const, requestId: "request", sourceItemId: "item",
           answers: [{ questionIndex: 0, question: "Where?", answer: "Here" }] },
+      } : kind === "page_response" ? {
+        kind, resolvedDeliveryMode: "queue" as const, expectedThreadRevision: f.revision(),
+        inputOrigin: { kind: "page_response" as const, pageId: randomUUID(), revision: 1, title: "Review form" },
       } : { kind, resolvedDeliveryMode: "queue" as const, expectedThreadRevision: f.revision() };
       const request = { mutationId: randomUUID(), text, source };
       const admitted = f.enqueue(request);

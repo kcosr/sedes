@@ -377,7 +377,7 @@ describe("ConversationProjector", () => {
     });
   });
 
-  it.each(["pi", "codex", "claude", "grok"])(
+  it.each(["pi", "codex", "claude", "grok", "opencode"])(
     "uses the same canonical Sedes-authored history projection for %s",
     (backendName) => {
       const operationId = `operation-${backendName}`;
@@ -445,6 +445,44 @@ describe("ConversationProjector", () => {
         ],
       });
       expect(JSON.stringify(timeline)).not.toContain("provider-specific");
+    },
+  );
+
+  it.each(["pi", "codex", "claude", "grok", "opencode"])(
+    "restores page response history only through authenticated delivery correlation for %s",
+    backendName => {
+      const origin = { kind: "page_response" as const, pageId: "a6081ea9-e9f2-4b07-b2b2-b65062838998", revision: 2, title: "Options" };
+      const text = "  /review selected answer\n  ";
+      const echo = `Page response from Options (revision 2):\n\n${text}`;
+      const projector = new ConversationProjector({
+        backendInstanceId: `local-${backendName}`, bindingIdentity: `page-binding-${backendName}`,
+        resolveDeliveryInputSnapshot: candidate => candidate === "page-operation" ? {
+          tenantId: "tenant-1", principalId: "principal-1", threadId: "thread-1", deliveryOperationId: candidate,
+          text, origin, contextExcerpts: [], taskContexts: [], attachments: [], fingerprint: "b".repeat(64), createdAt: 1,
+        } : undefined,
+      });
+      const item: BackendItem = {
+        backendItemId: "page-user", backendTurnId: "page-turn", semanticKind: "user_message",
+        deliveryOperationId: "page-operation", status: "completed", sourceOrder: 0,
+        content: [{ kind: "text", text: { text: echo } }],
+      };
+      const page = {
+        orderedBackendTurnIds: ["page-turn"],
+        turnsById: { "page-turn": { backendTurnId: "page-turn", status: "completed" as const,
+          endedBy: "agent_settled" as const, orderedBackendItemIds: [item.backendItemId] } },
+        itemsById: { [item.backendItemId]: item },
+      };
+      const timeline = projector.replace({ ...page, runState: "idle" }, -1);
+      const expected = { origin, deliveryOperationId: "page-operation", content: [{ kind: "text", text: { text } }] };
+      expect(Object.values(timeline.itemsById)[0]).toMatchObject(expected);
+      const history = projector.projectHistoryPage(page, {
+        branching: { availability: "unavailable", reason: { text: "Unavailable." } }, sourceRunState: "idle",
+      });
+      expect(Object.values(history.itemsById)[0]).toMatchObject(expected);
+      const { deliveryOperationId: _operationId, ...uncorrelated } = item;
+      const ordinary = projector.replace({ ...page, itemsById: { [item.backendItemId]: uncorrelated }, runState: "idle" }, 0);
+      expect(Object.values(ordinary.itemsById)[0]).not.toHaveProperty("origin");
+      expect(Object.values(ordinary.itemsById)[0]).toMatchObject({ content: [{ kind: "text", text: { text: echo } }] });
     },
   );
 

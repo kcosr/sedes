@@ -333,9 +333,12 @@ captured at send time and a short preview of its notes. **Open task** opens
 Tasks and expands the live Task, switching to a view that contains it.
 **Details** shows the Task ID and, where recorded, its revision.
 
-A prompt can contain up to eight unique Task references and may consist only
-of Task references. Adding a Task does not enable Task-management tools for the
-agent and does not grant access to the Task's file paths.
+A prompt can contain up to 16 unique Task references and may consist only
+of Task references. Long pill lists scroll above the message box. The captured
+Task details, message text, and other text context share the 256 KiB input
+budget, so large Tasks can reach that budget before the count limit. A rejected
+delivery leaves the draft intact. Adding a Task does not enable Task-management
+tools for the agent and does not grant access to the Task's file paths.
 
 Structured Task references cannot be represented in Codex TUI keystrokes. Use
 Chat for that prompt.

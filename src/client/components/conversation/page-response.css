@@ -1,0 +1,28 @@
+.page-response-disclosure {
+  border-left-color: var(--info);
+  background: color-mix(in oklch, var(--info) 8%, transparent);
+}
+.page-response-disclosure .agent-input-disclosure-source {
+  flex: 1 1 auto;
+  max-width: none;
+}
+.page-response-icon,
+.page-response-revision {
+  flex: 0 0 auto;
+  color: var(--muted-foreground);
+}
+.page-response-provenance {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  margin-bottom: 8px;
+  color: var(--muted-foreground);
+  font-size: var(--text-meta);
+  overflow-wrap: anywhere;
+}
+.page-response-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: var(--text-ui);
+  line-height: 1.6;
+}
