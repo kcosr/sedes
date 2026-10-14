@@ -635,7 +635,7 @@ test("reconnect replacement retires a local Queue row that was never streamed", 
     "Message Codex",
   );
   await sendCurrentDraft(page);
-  await expect(page.getByRole("button", { name: "Stop" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeVisible();
 
   await selectDeliveryMode(page, "Queue");
   const prompt = "Materialize this Queue input entirely while disconnected";
@@ -721,7 +721,7 @@ test("Queue clears before its request and ambiguous Steer remains until exact ma
     "Message Codex",
   );
   await sendCurrentDraft(page);
-  await expect(page.getByRole("button", { name: "Stop" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeVisible();
 
   // A tall draft must not lift the delivery menu away from its button.
   const composer = page.getByRole("textbox", { name: "Message Codex" });
@@ -864,7 +864,7 @@ test("pending inputs stay ordered and support Delete, Restore, and head Steer on
     "Keep the scripted turn active for queue controls",
   );
   await sendCurrentDraft(page);
-  await expect(page.getByRole("button", { name: "Stop" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeVisible();
 
   await selectDeliveryMode(page, "Queue");
 
@@ -1148,7 +1148,7 @@ test("Pi pending-materialization Steer retains its cleared input until the exact
     "Keep the scripted Pi turn active for pending materialization",
   );
   await sendCurrentDraft(page);
-  await expect(page.getByRole("button", { name: "Stop" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeVisible();
 
   const armed = await page.request.post("/__e2e/pi/pending-steer/arm");
   expect(armed.status()).toBe(204);
@@ -1242,7 +1242,7 @@ test("Codex sends several Steers serially while earlier ones are unconfirmed and
     "Message Codex",
   );
   await sendCurrentDraft(page);
-  await expect(page.getByRole("button", { name: "Stop" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeVisible();
 
   const composer = page.getByRole("textbox", { name: "Message Codex" });
   const queueToSteerText = "Convert this queued input without losing its card";
@@ -1420,9 +1420,9 @@ test("Stop returns every Codex steer Codex never used as not sent and keeps a us
     const stopped = page.waitForResponse(
       (response) => operationKind(response) === "interrupt" && response.ok(),
     );
-    await page.getByRole("button", { name: "Stop" }).click();
+    await page.getByRole("button", { name: "Stop", exact: true }).click();
     await stopped;
-    await expect(page.getByRole("button", { name: "Stop" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Stop", exact: true })).toHaveCount(0);
   };
 
   const heldCount = async (): Promise<unknown> =>
@@ -1438,7 +1438,7 @@ test("Stop returns every Codex steer Codex never used as not sent and keeps a us
   ).toBe(204);
   await fillAndPersistDraft(page, "Keep this Codex turn running", "Message Codex");
   await sendCurrentDraft(page);
-  await expect(page.getByRole("button", { name: "Stop" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeVisible();
   await selectDeliveryMode(page, "Steer");
   expect(
     (
@@ -1482,7 +1482,7 @@ test("Stop returns every Codex steer Codex never used as not sent and keeps a us
   await capture(page, testInfo, "codex-stop-unused-steer-not-sent.png");
   // Nothing is resent: a not-sent entry is never dispatched, and the thread
   // stays idle until the user decides. Each entry clears independently.
-  await expect(page.getByRole("button", { name: "Stop" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Stop", exact: true })).toHaveCount(0);
   await unusedRows[1]!
     .getByRole("button", { name: `Dismiss not-sent input: ${unused[1]}` })
     .click();
@@ -1504,7 +1504,7 @@ test("Stop returns every Codex steer Codex never used as not sent and keeps a us
   ).toBe(204);
   await fillAndPersistDraft(page, "Start another Codex turn", "Message Codex");
   await sendCurrentDraft(page);
-  await expect(page.getByRole("button", { name: "Stop" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeVisible();
   const usedText = "Codex drained this steer before Stop";
   const usedOperationId = await steer(usedText);
   const usedMessage = page.locator(

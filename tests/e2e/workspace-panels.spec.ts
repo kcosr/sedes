@@ -160,17 +160,17 @@ test.describe("panel workbench", () => {
 
     // A stream keeps running, without a new subscription, while Chat is hidden.
     await sendCurrentDraft(page);
-    await expect(page.getByRole("button", { name: "Stop" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeVisible();
     await capture(page, testInfo, "panels-streaming.png");
     const requestsBeforeHiding = threadEventRequests;
     await quickButton(page, "Chat").click();
     await expect(chat).toBeHidden();
     await quickButton(page, "Chat").click();
-    await expect(page.getByRole("button", { name: "Stop" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeVisible();
     expect(threadEventRequests).toBe(requestsBeforeHiding);
     expect(await isRetained(chat, "__chat")).toBe(true);
-    await page.getByRole("button", { name: "Stop" }).click();
-    await expect(page.getByRole("button", { name: "Stop" })).toBeHidden();
+    await page.getByRole("button", { name: "Stop", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeHidden();
 
     // Files' quick button hides it, still loaded, and shows the same node.
     await quickButton(page, "Files").click();

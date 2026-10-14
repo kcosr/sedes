@@ -893,7 +893,7 @@ test.describe.serial("normalized Codex thread state", () => {
         .locator('.conversation-turn[data-turn-status="in_progress"]')
         .filter({ hasText: "Live Codex head remains active" }),
     ).toBeVisible();
-    await expect(page.getByRole("button", { name: "Stop" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeVisible();
 
     await page.getByRole("button", { name: "Load more" }).click();
     const olderAbandoned = page

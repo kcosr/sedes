@@ -112,7 +112,7 @@ test("compiled Claude backend streams, settles, and reloads through normalized U
   );
   await page.getByRole("button", { name: "Send message" }).click();
   await accepted;
-  await expect(page.getByRole("button", { name: "Stop" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeVisible();
   const permission = page.getByRole("dialog", {
     name: "Run fixture command?",
   });

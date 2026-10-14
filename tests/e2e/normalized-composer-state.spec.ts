@@ -1038,7 +1038,7 @@ test.describe.serial("normalized composer state", () => {
     await fillAndPersistDraft(page, "Keep this turn active until I stop it");
     await sendCurrentDraft(page);
 
-    const stop = page.getByRole("button", { name: "Stop" });
+    const stop = page.getByRole("button", { name: "Stop", exact: true });
     await expect(stop).toBeVisible();
     const interrupted = page.waitForResponse(async (response) => {
       if (
@@ -1087,7 +1087,7 @@ test("failed turns explain the current error and retain quiet details after retr
   // Drafting a retry is not an authoritative lifecycle transition.
   await expect(currentFailure).toBeVisible();
   await sendCurrentDraft(page);
-  await expect(page.getByRole("button", { name: "Stop" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeVisible();
   await expect(currentFailure).toHaveCount(0);
   const history = page.locator(".turn-failure-details");
   await expect(history).toHaveCount(1);
@@ -1097,7 +1097,7 @@ test("failed turns explain the current error and retain quiet details after retr
   await capture(page, testInfo, "turn-failure-history-during-retry.png");
   expect((await page.request.post("/__e2e/pi/turn-response/release")).status()).toBe(204);
   // The retained scripted response completes at 13 × 800 ms after release.
-  await expect(page.getByRole("button", { name: "Stop" })).toBeHidden({ timeout: 20_000 });
+  await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeHidden({ timeout: 20_000 });
   await page.reload();
   await expect(currentFailure).toHaveCount(0);
   await expect(history).toHaveCount(1);

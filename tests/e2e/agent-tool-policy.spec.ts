@@ -214,7 +214,7 @@ test.describe.serial("agent tool policy", () => {
       "Hold agent tools steady while this turn runs",
     );
     await sendCurrentDraft(page);
-    await expect(page.getByRole("button", { name: "Stop" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeVisible();
 
     await page.getByRole("button", { name: "Thread actions" }).click();
     await page.getByRole("menuitem", { name: /^Agent tools…/ }).click();

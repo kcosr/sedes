@@ -55,7 +55,7 @@ test.describe.serial("normalized streaming and restored state", () => {
     await fillAndPersistDraft(page, prompt);
     await sendCurrentDraft(page);
 
-    await expect(page.getByRole("button", { name: "Stop" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeVisible();
     const activityGroup = page
       .locator('[data-testid="activity-group"][data-activity-detail="full"]')
       .last();
@@ -598,7 +598,7 @@ test.describe.serial("normalized streaming and restored state", () => {
       name: "Show full reasoning summary",
     });
     const busyBar = page.locator(".input-activity-bar.visible");
-    await expect(page.getByRole("button", { name: "Stop" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeVisible();
     await expect(busyBar).toBeVisible();
 
     await expect(summaryTrigger).toHaveText("Preparing");
@@ -717,7 +717,7 @@ test.describe.serial("normalized streaming and restored state", () => {
       timeout: 6_000,
     });
     await expect(busyBar).toBeVisible();
-    await expect(page.getByRole("button", { name: "Stop" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeVisible();
     await expect(
       page.locator(
         '[data-item-kind="assistant_message"][data-item-status="completed"]',
