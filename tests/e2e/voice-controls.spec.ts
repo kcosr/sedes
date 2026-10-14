@@ -400,14 +400,39 @@ test("native dictation keeps its controls reachable on narrow screens and retain
   await expect(keep).toBeEnabled();
 
   await publishVoiceState(page, { active: { ...active, recording: { id: "recording", keepListening: true, reconnecting: true } } });
-  await expect(toolbar.locator(".voice-card-reconnecting")).toHaveText("Reconnecting");
-  await expect(toolbar.locator(".voice-card-reconnecting")).toBeVisible();
+  const reconnectingHint = toolbar.locator(".voice-card-reconnecting");
+  const reconnectingIcon = toolbar.locator(".voice-card-title-reconnecting");
+  const reconnectingSeparator = toolbar.locator(".voice-card-sub > .voice-card-dot");
+  await expect(reconnectingHint).toHaveText("Reconnecting");
+  // A narrow four-action row shows reconnecting in the title instead of
+  // clipping the phase word with an appended hint.
+  await expect(reconnectingHint).not.toBeVisible();
+  await expect(reconnectingIcon).toBeVisible();
+  await expect(reconnectingSeparator).toHaveCount(1);
+  await expect(reconnectingSeparator).not.toBeVisible();
+  await expect(toolbar.locator(".voice-card-phase")).toHaveText("Listening");
+  const [listeningPhase, listeningStatus] = await Promise.all([
+    toolbar.locator(".voice-card-phase").boundingBox(), toolbar.locator(".voice-card-sub").boundingBox(),
+  ]);
+  expect(listeningPhase!.x + listeningPhase!.width).toBeLessThanOrEqual(listeningStatus!.x + listeningStatus!.width);
+  expect(await toolbar.locator(".voice-card-sub").evaluate(status => status.scrollWidth <= status.clientWidth)).toBe(true);
+  await expect(toolbar.locator(".voice-card-title")).toHaveAttribute("title", `${title} · Reconnecting`);
+  await expect(toolbar.getByRole("status")).toContainText("Reconnecting");
   await expect(toolbar).toContainText("Listening");
   await expect(send).toBeEnabled();
   await expect(cancel).toBeEnabled();
   await expectNoPageOverflow(page);
   await measureRow("reconnecting", 4);
   await capture(page, testInfo, "voice-reconnecting-narrow.png");
+  await page.setViewportSize({ width: 480, height: 780 });
+  await expect(reconnectingHint).toBeVisible();
+  await expect(reconnectingIcon).not.toBeVisible();
+  await expect(reconnectingSeparator).toBeVisible();
+  expect(await toolbar.locator(".voice-card-sub").evaluate(status => status.scrollWidth <= status.clientWidth)).toBe(true);
+  await measureRow("reconnecting480", 4);
+  await expectNoPageOverflow(page);
+  await capture(page, testInfo, "voice-reconnecting-wider.png");
+  await page.setViewportSize({ width: 320, height: 780 });
   await expect(composer).toHaveValue(draft);
   for (const [width, held] of [[320, false], [320, true], [360, false], [360, true], [1280, false], [1280, true]] as const) {
     await page.setViewportSize({ width, height: 780 });
