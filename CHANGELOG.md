@@ -17,8 +17,8 @@ User-facing changes are collected here before release. See the
 
 - Published HTML pages can collect responses through Sedes's **Send** control.
   Responses go to the page's thread, queue while it is busy, and remain in
-  compact expandable chat cards with the exact submitted text and saved page
-  revision. See [Page responses](docs/user/html-previews.md#send-a-page-response).
+  compact single-row chat cards. Expand a card for the exact submitted text
+  and saved page revision. See [Page responses](docs/user/html-previews.md#send-a-page-response).
   ([#83](https://github.com/kcosr/sedes/pull/83))
 
 - While Android voice is listening on another thread, **Target this thread**

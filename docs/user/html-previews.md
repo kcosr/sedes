@@ -53,9 +53,9 @@ controls, while each chat occurrence keeps its own interaction toggle.
 
 Saved revisions preserve document content, images, and requested dimensions.
 They do not save transient interaction state such as selected filters or text
-typed into a mock form. Reopening or switching revisions starts that page
-again. Pages belong to their original thread and are removed when that thread
-is deleted.
+typed into a mock form. Reopening, switching revisions, or moving between the
+inline and fullscreen views starts that page again. Pages belong to their
+original thread and are removed when that thread is deleted.
 
 ## Send a Page response
 
@@ -68,9 +68,9 @@ is busy, the response enters the thread's normal queue; it never interrupts
 the current turn with Steer. The same flow works with Pi, Codex, Claude, Grok,
 and OpenCode.
 
-Chat shows a compact **Page response** user card with the saved page title and
-revision. Expand it to read the exact submitted plain text, including its
-original whitespace. The card does not render that text as HTML or Markdown.
+Chat shows a single-row **Page response** user card with the saved page title.
+Expand it to see the full title, revision, and exact submitted plain text,
+including its original whitespace. The card does not render that text as HTML or Markdown.
 Queued responses and submitted history retain this frozen text across reloads
 and server restarts, even if the page later changes. A fork retains responses
 in its inherited history, but cannot send through a page owned by the original

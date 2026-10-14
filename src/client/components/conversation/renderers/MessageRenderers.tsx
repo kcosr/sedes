@@ -19,7 +19,6 @@ import { DurableAttachmentCard } from "../../../attachments/AttachmentCards.js";
 import { MessageTaskCard } from "./MessageTaskCard.js";
 import { splitThreadReferenceText } from "../../../../shared/thread-references.js";
 import { ThreadReferenceChips } from "../../thread/ThreadReferenceChips.js";
-import { collapsePreview } from "../../thread/message-previews.js";
 import "../page-response.css";
 
 export const userMessageRenderer: ConversationItemRenderer<UserMessageItem> = {
@@ -77,10 +76,12 @@ export function UserMessagePresentation({
           <FileText aria-hidden="true" className="page-response-icon" size={14} />
           <span className="agent-input-disclosure-label">Page response</span>
           <span className="agent-input-disclosure-source" title={origin.title}>{origin.title}</span>
-          <span className="page-response-revision">Revision {origin.revision}</span>
-          <span className="agent-input-disclosure-preview">{collapsePreview(text, 240)}</span>
         </summary>
         <div className="agent-input-disclosure-body">
+          <div className="page-response-provenance">
+            <span>{origin.title}</span>
+            <span className="page-response-revision">Revision {origin.revision}</span>
+          </div>
           {selection ? <ConversationMessageSelectionSurface
             enabled={selection.enabled} itemId={selection.itemId} itemRevision={selection.itemRevision} selectionKind="plain_text"
           >{body}</ConversationMessageSelectionSurface> : body}

@@ -1933,9 +1933,10 @@ describe("page response presentation", () => {
     const summary = disclosure.querySelector("summary")!;
     expect(summary).toHaveTextContent("Page response");
     expect(summary).toHaveTextContent("Project setup");
-    expect(summary).toHaveTextContent("Revision 3");
-    expect(summary).toHaveTextContent("**Keep this literal**");
+    expect(summary).not.toHaveTextContent("Revision 3");
+    expect(summary).not.toHaveTextContent("**Keep this literal**");
     fireEvent.click(summary);
+    expect(disclosure.querySelector(".page-response-provenance")).toHaveTextContent("Project setupRevision 3");
     expect(disclosure.querySelector(".page-response-text")?.textContent).toBe(text);
     expect(disclosure.querySelector("a, strong, button")).toBeNull();
     view.unmount();

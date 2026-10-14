@@ -18,7 +18,7 @@ import {
 } from "./helpers.js";
 import { loadE2ERunContext } from "./run-context.js";
 
-const title = "Release choices";
+const title = "Release choices — rollout plan";
 const notes = "Keep the canary small.\nPreserve whitespace & Unicode: café 🌍.";
 const expectedText = `  Deployment request
 Include tests: Yes
@@ -38,7 +38,7 @@ const formHtml = `<!doctype html><html><head><meta charset="utf-8"><style>
   fieldset{border:0;padding:0;margin:18px 0}legend{font-weight:600;margin-bottom:10px}
   label{display:block;margin:10px 0}input{accent-color:#187c76}select,textarea{display:block;width:100%;font:inherit;padding:8px;border:1px solid #9bbbbb;border-radius:6px;margin-top:7px}
   textarea{height:90px}output{display:block;margin-top:16px;font-size:13px;color:#4b656a}
-  </style></head><body><main><h1>Release choices</h1><p>Choose the rollout and send your response to the conversation.</p>
+  </style></head><body><main><h1>${title}</h1><p>Choose the rollout and send your response to the conversation.</p>
   <label><input id="tests" type="checkbox"> Include tests</label>
   <fieldset><legend>Strategy</legend><label><input type="radio" name="strategy" value="all" checked> All at once</label>
   <label><input type="radio" name="strategy" value="canary"> Canary</label></fieldset>
@@ -164,10 +164,12 @@ test("page responses capture once, queue while busy, and retain exact text and s
     await expect(disclosure).not.toHaveAttribute("open", "");
     await expect(disclosure.locator("summary")).toContainText("Page response");
     await expect(disclosure.locator("summary")).toContainText(title);
-    await expect(disclosure.locator("summary")).toContainText("Revision 1");
+    await expect(disclosure.locator("summary")).not.toContainText("Revision 1");
+    await expect(disclosure.locator(".page-response-provenance")).toBeHidden();
     await expect(disclosure.locator(".page-response-text")).toBeHidden();
     await disclosure.locator("summary").click();
     await expect(disclosure.locator(".page-response-text")).toBeVisible();
+    await expect(disclosure.locator(".page-response-provenance")).toContainText("Revision 1");
     expect(await disclosure.locator(".page-response-text").textContent()).toBe(expectedText);
     // The conformance provider streams tools for nine 800ms stages before
     // starting its assistant text, so wait for that specific tenth stage.
@@ -197,6 +199,15 @@ test("page responses capture once, queue while busy, and retain exact text and s
     await expectNoPageOverflow(page);
     await capture(page, testInfo, "page-response-expanded-phone.png");
     await disclosure.locator("summary").click();
+    await expect(disclosure.locator(".page-response-provenance")).toBeHidden();
+    const compactSummary = disclosure.locator("summary");
+    await expect(compactSummary).toHaveText(`Page response${title}`);
+    const summaryLines = await compactSummary.evaluate(element => {
+      const label = element.querySelector(".agent-input-disclosure-label")!.getBoundingClientRect();
+      const source = element.querySelector(".agent-input-disclosure-source")!.getBoundingClientRect();
+      return { labelTop: label.top, sourceTop: source.top };
+    });
+    expect(Math.abs(summaryLines.labelTop - summaryLines.sourceTop)).toBeLessThan(1);
     await capture(page, testInfo, "page-response-compact-phone.png");
 
     // The page remains usable at idle from the enlarged viewer on a phone.
@@ -228,8 +239,8 @@ test("page responses capture once, queue while busy, and retain exact text and s
     await expect(responses).toHaveCount(1);
     await response.scrollIntoViewIfNeeded();
     await expect(disclosure.locator("summary")).toContainText(title);
-    await expect(disclosure.locator("summary")).toContainText("Revision 1");
     await disclosure.locator("summary").click();
+    await expect(disclosure.locator(".page-response-provenance")).toContainText("Revision 1");
     expect(await disclosure.locator(".page-response-text").textContent()).toBe(expectedText);
     const childPath = new URL(page.url()).pathname;
     const inputHeaders = idleSent.request().headers();
