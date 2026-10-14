@@ -169,8 +169,10 @@ and voice remaining enabled. The notification case delivers its actual
 The `Android speak/retained-target` scenario checks that the visible card and
 notification use the same destination and retain it after leaving the thread. It checks
 that new notification recordings announce their destination, in-app recordings
-skip the announcement, and idle card **Next** releases retention only when
-the card displays that fallback. Card title, route, button state, native
+skip the announcement, and the idle card's target shortcut releases retention
+only when the card displays that fallback. It is labelled **Target this thread**
+for an available viewed thread, or **Release voice target** otherwise.
+Card title, route, button state, native
 capabilities, and settings are observed separately.
 The `Android speak/background-switch` scenario invokes the real
 `client.switch_thread` agent tool through stock OpenCode after backgrounding
