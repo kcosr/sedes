@@ -2391,10 +2391,10 @@ export function Composer({
     if (!parsed.success || composerInputUtf8Bytes(candidate) + composerTaskInputUtf8Bytes(selectedTasks) > MAXIMUM_THREAD_INPUT_BYTES)
       throw new Error("Speech and the draft exceed the 256 KiB input limit. Shorten the draft before sending the saved dictation.");
     // Native froze Follow Composer at recording end. Current run state still
-    // decides idle Submit; an unsupported Steer uses Queue without changing the preference.
+    // decides idle Submit; unavailable Steer uses Queue without changing the preference.
     const mode = !busy
       ? "submit"
-      : event.mode === "steer" && supportedBusyDeliveryModes.some(({ id }) => id === "steer")
+      : event.mode === "steer" && supportedBusyDeliveryModes.some(({ id, available }) => id === "steer" && available)
         ? "steer"
         : "queue";
     if (send(candidate, mode, { refocus: false })) return;

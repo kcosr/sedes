@@ -5981,6 +5981,24 @@ describe("foreground voice composer ownership", () => {
     await waitFor(() => expect(store.deliver).toHaveBeenCalledWith(expected, expect.objectContaining({ text: "Explain this\n\nsnippet" }), expect.any(String)));
   });
 
+  it("queues a frozen Steer while approval blocks Steer and Queue remains available", async () => {
+    const { fake } = await native();
+    const base = snapshot("running");
+    base.runState = "waiting_for_approval";
+    base.capabilities.runState = "waiting_for_approval";
+    base.capabilities.deliveryModes = [
+      { id: "steer", steerTarget: "turn", label: { text: "Steer" }, available: false },
+      { id: "queue", steerTarget: null, label: { text: "Queue" }, available: true },
+    ];
+    const store = new FakeComposerStore(base, "snippet");
+    render(<Composer store={store as unknown as ThreadClientStore} />);
+    offer(fake, { mode: "steer" });
+    await accepted(fake);
+    await waitFor(() => expect(store.deliver).toHaveBeenCalledWith("queue", expect.objectContaining({ text: "Explain this\n\nsnippet" }), expect.any(String)));
+    expect(screen.getByRole("textbox")).toHaveValue("");
+    expect(screen.queryByText("Speech added to the draft. Resolve the current Send restriction, then press Send.")).toBeNull();
+  });
+
   it("keeps combined speech in composer rollback while preserving typing after Send", async () => {
     const { fake } = await native();
     const store = new FakeComposerStore(snapshot(), "snippet");
