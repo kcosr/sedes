@@ -594,7 +594,7 @@ export function PendingInputStrip({
               <Undo size={15} strokeWidth={1.9} aria-hidden="true" />
             </button>
           )}
-          {userRestorable && item.state === "failed" && (
+          {userRestorable && (item.state === "failed" || item.preview.truncation?.truncated) && (
             <button
               type="button"
               className="pending-input-action pending-input-copy"

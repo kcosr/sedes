@@ -1107,6 +1107,30 @@ describe("PendingInputStrip", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("Clipboard access denied.");
   });
 
+  it.each(["pending", "retry_wait"] as const)("copies full %s input with a truncated preview while restoring is blocked by another draft", async state => {
+    const write = mockClipboard();
+    const item = queued("large", 1, state, {
+      preview: { text: "A bounded preview", truncation: {
+        truncated: true, reason: "byte_limit", retainedBytes: 17, originalBytes: 262_144,
+      } },
+    });
+    const store = new FakeStripStore(snapshot([item]));
+    const { onRestore, input } = renderStrip(store, false, {
+      available: false, unavailableReason: "Clear the composer before restoring a queued input.",
+    });
+    input.value = "Keep this composer text";
+    expect(screen.getByRole("button", { name: "Restore queued input to composer: A bounded preview" })).toBeDisabled();
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Copy full text: A bounded preview" })));
+    expect(await clipboardText(write.mock.lastCall![0])).toBe(largeDirectInputText);
+    expect(store.readQueuedInputText).toHaveBeenCalledExactlyOnceWith("large");
+    expect(screen.getByRole("button", { name: "Copied full text: A bounded preview" })).toBeEnabled();
+    expect(store.state.snapshot!.queue).toEqual([item]);
+    expect(input.value).toBe("Keep this composer text");
+    expect(onRestore).not.toHaveBeenCalled();
+    expect(store.dismissQueueFailure).not.toHaveBeenCalled();
+    expect(store.cancelQueuedInput).not.toHaveBeenCalled();
+  });
+
   it.each(["read", "clipboard"] as const)("keeps failed text available after a %s error and permits Copy retry", async failure => {
     const write = mockClipboard();
     const item = queued("large", 1, "failed", { failureReason: "not_sent" });
