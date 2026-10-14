@@ -992,6 +992,10 @@ Choosing a target does not navigate or save a default. Quick and full settings
 share the default-thread picker. Mobile pickers leave search unfocused to avoid
 opening the keyboard. Long text truncates without reducing the 15 px title or
 13 px status fonts. Reconnecting and error details use the existing status line.
+On narrow text columns, a spinner beside the thread title replaces the
+Reconnecting hint and its leading dot so the full phase word stays readable.
+The hint remains when no thread title is shown, and Reconnecting remains in
+the title tooltip and live status announcement.
 Idle Next releases retention when the card displays a different retained thread
 from the one being viewed, or when no thread is visible. An explicit choice or a
 matching visible thread hides redundant Next. Idle navigation changes the next

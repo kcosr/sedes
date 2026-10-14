@@ -561,8 +561,9 @@ at forced boundaries depends on the selected model. The result timeout applies
 to each segment. Ordinary no-speech timeout ends without sending or restarting.
 
 During transient recognition failures, an adopted recording keeps the microphone
-open and shows **Reconnecting** while accepted audio accumulates in encrypted
-local storage. Recovery is bounded to five retries and a 60-second failure window;
+open and shows **Reconnecting**, or a spinner beside the thread title on narrow
+screens, while accepted audio accumulates in encrypted local storage.
+Recovery is bounded to five retries and a 60-second failure window;
 recognizing the same audio again can repeat provider cost. Permanent errors,
 exhausted retries, or storage limits stop capture and keep any captured audio or
 text as a saved draft. If an error occurs after Send, successful recognition leaves
