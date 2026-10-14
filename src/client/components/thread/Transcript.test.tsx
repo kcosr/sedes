@@ -4011,6 +4011,38 @@ describe("Transcript seek-on-submit", () => {
       );
   }
 
+  it("keeps an owned send seek on its message when earlier content moves the target", () => {
+    const resize = captureResize();
+    const seekRequest: { current: TranscriptSeekRequest | null } = {
+      current: { requestedAt: Date.now(), operationId: sentOperationId },
+    };
+    const { fake, viewport, scrollTo, advanceNativeScroll, finishNativeScroll } = mountSeekHarness(seekRequest);
+    act(() => fake.replaceSnapshot(withSentMessage()));
+    const sent = document.querySelector<HTMLElement>('[data-item-id="turn-2-message"]')!;
+    const spacer = screen.getByTestId("seek-spacer");
+    let targetTop = 940;
+    let contentHeight = 900;
+    Object.defineProperty(sent, "offsetTop", { configurable: true, get: () => targetTop });
+    Object.defineProperty(viewport, "scrollHeight", {
+      configurable: true, get: () => contentHeight + spacer.getBoundingClientRect().height,
+    });
+    act(flushRaf);
+    act(() => advanceNativeScroll(0.5));
+    expect(measureSeekSpacer()).toBe(324);
+
+    // Authoritative turn metadata can insert content above a just-sent message.
+    // The reservation stays the same size, but the exact message moves down.
+    targetTop += 80;
+    contentHeight += 80;
+    act(resize);
+    act(flushRaf);
+    expect(measureSeekSpacer()).toBe(324);
+    expect(scrollTo).toHaveBeenLastCalledWith({ top: 1004, behavior: "smooth" });
+    act(finishNativeScroll);
+    expect(viewport.scrollTop).toBe(1004);
+    expect(screen.queryByRole("button", { name: "Jump to latest" })).toBeNull();
+  });
+
   it("preserves the seek range when viewport growth resizes reserved space before observer delivery", () => {
     const resize = captureResize();
     const seekRequest: { current: TranscriptSeekRequest | null } = {

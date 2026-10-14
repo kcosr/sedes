@@ -197,7 +197,7 @@ export function Transcript({
     | undefined
   >(undefined);
   const seekScroll = useRef<
-    { readonly element: HTMLElement; readonly cleanup: () => void } | undefined
+    { readonly element: HTMLElement; readonly destination: number; readonly cleanup: () => void } | undefined
   >(undefined);
   const seekBeginFrame = useRef<number | undefined>(undefined);
   const deferredFollowFrames = useRef(new Set<number>());
@@ -760,6 +760,7 @@ export function Transcript({
     let completionCheck: number;
     const active = {
       element,
+      destination: target,
       cleanup: () => {
         element.removeEventListener("scrollend", onScrollEnd);
         window.clearInterval(completionCheck);
@@ -1077,6 +1078,12 @@ export function Transcript({
         scrollToLatest("auto", "seek_reservation_consumed");
       }
       return;
+    }
+    // Authoritative turn metadata can move a just-sent message after its
+    // optimistic seek began. Keep an untouched Send on that exact message.
+    if (!pin.readerScrolled && !pin.responseTurnId && !hasActiveTextSelection()) {
+      const destination = seekScroll.current?.destination ?? element.scrollTop;
+      if (Math.abs(destination - top) > 1) animateSeekScroll(element, top);
     }
     // Streaming growth can move the natural-bottom boundary across the
     // stationary viewport. That is not reader progress, so reset the side

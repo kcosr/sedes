@@ -16,7 +16,8 @@ User-facing changes are collected here before release. See the
 
 - Android voice combines speech with the current Chat draft when foreground on
   the recording's thread, including attachments and other context. Composer
-  owns submission and recovery after accepting the speech. See
+  owns submission and recovery after accepting the speech, and keeps the sent
+  message anchored as turn details arrive when Seek on Send is enabled. See
   [voice input](docs/operator/clients/voice.md).
   ([#81](https://github.com/kcosr/sedes/pull/81))
 

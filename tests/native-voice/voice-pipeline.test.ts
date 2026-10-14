@@ -589,10 +589,11 @@ describe("native voice production pipeline with loopback providers", () => {
           expect(evidence.nativeInputPresentationEvents).toBe(0);
           expect(evidence.inputAttempts).toBe(0);
           await app.waitFor(async () => Object.values((await app.thread(threadId)).itemsById).some(item =>
-            item.kind === "user_message" && item.content.filter(part => part.kind === "text").map(part => part.text).join("") === deliveredText));
+            item.kind === "user_message" && (scenario === "cycle" ? item.deliveryOperationId === evidence.inputUi.operationId : item.content.some(part => part.kind === "text" && part.text.text.includes(text)))));
           const userRows = Object.values((await app.thread(threadId)).itemsById).filter(item =>
-            item.kind === "user_message" && item.content.filter(part => part.kind === "text").map(part => part.text).join("") === deliveredText);
+            item.kind === "user_message" && (scenario === "cycle" ? item.deliveryOperationId === evidence.inputUi.operationId : item.content.some(part => part.kind === "text" && part.text.text.includes(text))));
           expect(userRows).toHaveLength(1);
+          expect(userRows[0]).toMatchObject({ content: [{ kind: "text", text: { text: deliveredText } }] });
           if (scenario === "cycle") expect(userRows[0]).toMatchObject({ kind: "user_message", deliveryOperationId: evidence.inputUi.operationId });
         }
         if (mode === "input") expect((await speech.observations()).speech.length).toBe(ttsBefore);

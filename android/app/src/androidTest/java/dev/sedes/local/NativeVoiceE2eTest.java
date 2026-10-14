@@ -896,7 +896,9 @@ public class NativeVoiceE2eTest {
             + "routineLabelCount:row?.querySelectorAll('[data-submission-phase]').length??null,"
             + "seekEnabled:localStorage.getItem('sedes-seek-on-submit')==='true',"
             + "spacerHeight:spacer?.getBoundingClientRect().height??null,scrollTop:viewport?.scrollTop??null,"
-            + "viewportHeight:viewport?.clientHeight??null,targetInset:row&&viewport?row.getBoundingClientRect().top-viewport.getBoundingClientRect().top:null}})()";
+            + "viewportHeight:viewport?.clientHeight??null,targetInset:row&&viewport?row.getBoundingClientRect().top-viewport.getBoundingClientRect().top:null,"
+            + "rowOffsetTop:row?.offsetTop??null,offsetParentTop:row?.offsetParent?.getBoundingClientRect().top??null,"
+            + "viewportTop:viewport?.getBoundingClientRect().top??null,scrollHeight:viewport?.scrollHeight??null}})()";
         long end = SystemClock.elapsedRealtime() + timeout;
         JSONObject observed;
         do {
