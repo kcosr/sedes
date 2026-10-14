@@ -16,10 +16,10 @@ walked through that workspace lockfile because packaging installs it from
 there; `dependencies`, installed `optionalDependencies`, and required
 `peerDependencies` are followed transitively through nested `node_modules`.
 Each entry names the roots that ship it, so a package pinned at two versions
-is listed once per version. Packages recorded in the lockfile
-but absent from an installed tree (for example the platform-specific Claude
-Code executable packages, which the `postinstall` step removes) are not part
-of a built installation and are not listed.
+is listed once per version. Absent optional packages are omitted.
+Packaging always discards the Claude SDK's bundled platform executables;
+operators supply Claude Code separately. Those executables are excluded
+even when an install with ignored scripts leaves them present in the tree.
 
 This file is generated. Run `npm run generate:third-party-notices` to refresh it
 and `npm run check:third-party-notices` to verify that it is current.
@@ -308,7 +308,7 @@ Packages listed: 616.
 - Shipped by: sedes
 - License text (`LICENSE`): [eb99a0d61b50](#license-text-eb99a0d61b50)
 
-### @capacitor/core 8.4.0
+### @capacitor/core 8.4.3
 
 - License: MIT
 - URL: https://github.com/ionic-team/capacitor
@@ -9373,7 +9373,7 @@ OTHER DEALINGS IN THE SOFTWARE.
 
 ### License text 7edf453d1584
 
-Applies to: @capacitor/core 8.4.0.
+Applies to: @capacitor/core 8.4.3.
 
 ```text
 MIT License
