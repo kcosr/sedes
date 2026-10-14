@@ -209,11 +209,13 @@ User-facing changes are collected here before release. See the
   requirement. Supplemental Files roots use Windows path rules for sensitive
   directory checks and labels. Deploy and restart the server; no client or
   sidecar upgrade is required. See [remote attachments](docs/operator/outbound-hosts.md#approve-and-configure).
+  ([#79](https://github.com/kcosr/sedes/pull/79))
 
 - Windows Codex sessions preserve the account environment required by configured
   MCP servers, and failed MCP startup appears as a thread warning. Rebuild and
   upgrade Windows sidecars or Managed Local, then restart the affected Codex
   backend. See [Codex setup](docs/operator/backends/codex.md).
+  ([#79](https://github.com/kcosr/sedes/pull/79))
 
 - Pi sessions await extension shutdown before disposal, preventing retained
   extension timers from crashing the server during catalogue reads or
