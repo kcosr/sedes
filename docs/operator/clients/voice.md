@@ -301,14 +301,16 @@ view is open. Reading readiness does not start or reconnect a conversation.
 With pinning off, voice keeps its last active thread after playback or recording
 ends, including after Stop or Cancel. For example, if you are viewing A and a
 message from B speaks, the idle card continues to show B and **Start** replies to
-B even with Auto-listen off. Idle **Next**, immediately left of Start, releases B
-and returns the card to A. Deliberately navigating to another thread while idle
-selects that thread; backgrounding and resuming on the same thread keep the voice
-destination. An explicit choice in the voice target picker takes priority.
+B even with Auto-listen off. Idle **Target this thread**, immediately left of
+Start, releases B and returns the card to A. Deliberately navigating to another
+thread while idle selects that thread; backgrounding and resuming on the same
+thread keep the voice destination. An explicit choice in the voice target picker
+takes priority.
 In-app, headset, and notification starts use the same destination. With no retained
 destination, starts use the visible thread, then the saved **Default thread**
 or a picker when no thread is visible. The ordinary idle viewed destination remains
-selected when you leave the app, including after Next or idle unpinning.
+selected when you leave the app, including after releasing the retained target
+or idle unpinning.
 An unavailable visible destination opens the
 chooser rather than redirecting to the default thread.
 Recording can target a running thread. While
@@ -344,10 +346,11 @@ connection, and signed-in identity.
 On Android it also supplies the background voice target. Pinning does not
 redirect an active interaction.
 
-While idle and showing a retained destination, **Next**
-releases it and returns the card to the viewed thread, or the saved default or
-chooser when no thread is visible.
-Next is hidden when the retained destination matches the visible thread or the
+While idle and showing a retained destination, the target icon releases it and
+returns the card to the viewed thread, or the saved default or chooser when no
+thread is visible. It is labelled **Target this thread** when the viewed thread
+can accept a recording, and **Release voice target** otherwise. The icon is
+hidden when the retained destination matches the visible thread or the
 card follows an explicitly chosen thread. Idle notification Next and
 headset Next release the same destination. They do not record, send a message,
 navigate, or edit the composer. If the retained thread becomes unavailable,
@@ -413,10 +416,24 @@ On mobile, the picker does not focus its search field automatically.
 The compact bar keeps its title and status beside 40 px action buttons on all
 screen widths. Playback shows **Next**, **Stop**, **Record**, hiding Next when
 the queue is empty and Auto-listen is off; recording shows
-**Keep listening**, **Cancel**, **Send**. Idle hides unavailable Next and Stop
-actions so the text can use their space. Record/Send stays at the right edge,
+**Keep listening**, **Cancel**, **Send**, with **Target this thread** immediately
+left of Keep listening when available. Idle uses the same target icon and hides
+unavailable target and Stop actions so the text can use their space.
+Record/Send stays at the right edge,
 and microphone preparation shows progress there. The outline is blue while
 speaking and red while recording.
+
+While **Listening** on a different thread, the target icon offers **Target this
+thread** when the viewed thread can accept a recording. It moves the entire
+unsent recording, including speech already captured, to that thread without
+restarting capture, sending, or navigating. It preserves Keep listening and
+queued replies. The button stays visible but disabled while the switch is
+pending; Cancel remains available. It disappears when the new destination is
+confirmed or Listening ends. As with the chevron picker, switching makes an
+automatic recording explicit and clears deferred server-issued voice actions.
+Queued replies keep their original destinations; a later reply's Auto-listen
+can start recording on its own thread again.
+
 During **Listening**, the infinity button toggles **Keep listening** for the current
 recording. **Keep listening by default**, available in the quick sheet and
 **Settings → Voice**, starts new manual and automatic recordings with it enabled.
@@ -437,8 +454,8 @@ is literal, including “stop”; it does not open a review step. It uses the sa
 foreground composer handoff as automatic completion, or native submission when
 that composer is not eligible. Blank speech, recognized automatic stop commands,
 and cancelled recordings leave the composer untouched.
-Ordinary navigation never retargets an active recording; its chevron picker does,
-until finishing.
+Ordinary navigation never retargets an active recording; its chevron picker and
+**Target this thread** do, until finishing.
 
 **Long dictation timeout** defaults to 60 minutes and accepts 1–1,440 whole minutes.
 The value is frozen for each recording. Its clock starts the first time Keep
@@ -464,7 +481,8 @@ voice** when a session needs it.
   advances to the next queued item. It preserves a separately requested agent
   thread switch or listen. A tap made during speech still cancels that reply's
   unsent recording if the microphone starts before the tap arrives. While idle,
-  Next releases the retained voice destination.
+  the target icon releases the retained voice destination; headset and
+  notification Next do the same.
 - **Stop** during playback cancels the current interaction and its automatic
   listen, clears queued speech including manual replays, and cancels pending
   agent-requested voice actions. New messages can still play afterward; Stop
@@ -548,8 +566,9 @@ at forced boundaries depends on the selected model. The result timeout applies
 to each segment. Ordinary no-speech timeout ends without sending or restarting.
 
 During transient recognition failures, an adopted recording keeps the microphone
-open and shows **Reconnecting** while accepted audio accumulates in encrypted
-local storage. Recovery is bounded to five retries and a 60-second failure window;
+open and shows **Reconnecting**, or a spinner beside the thread title on narrow
+screens, while accepted audio accumulates in encrypted local storage.
+Recovery is bounded to five retries and a 60-second failure window;
 recognizing the same audio again can repeat provider cost. Permanent errors,
 exhausted retries, or storage limits stop capture and keep any captured audio or
 text as a saved draft. If an error occurs after Send, successful recognition leaves

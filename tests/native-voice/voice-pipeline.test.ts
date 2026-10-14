@@ -480,7 +480,7 @@ describe("native voice production pipeline with loopback providers", () => {
           expect(evidence.retainedTarget).toMatchObject({
             retainedAfterPlayback: { threadId, threadTitle: canonical.threadTitle },
             idleCardAfterNavigation: { foregroundThreadId: secondThreadId, path: `/threads/${secondThreadId}`, cardTitle: viewedCanonical.threadTitle,
-              cardNextEnabled: false, nativeCanReleaseRetainedTarget: true, retainedThreadId: secondThreadId, notificationThreadId: secondThreadId },
+              cardTargetEnabled: false, nativeCanReleaseRetainedTarget: true, retainedThreadId: secondThreadId, notificationThreadId: secondThreadId },
             replyPlayback: { sampleRate: 24_000, writtenFrames: 2400 },
             inputPresentationEvents: 0,
             notification: { title: viewedCanonical.threadTitle, startLabel: "Start", startEnabled: true,
@@ -526,7 +526,7 @@ describe("native voice production pipeline with loopback providers", () => {
             const release = releases[index];
             expect(release).toMatchObject({ surface, retainedBeforeRelease: { threadId: target, threadTitle: title }, retainedAfterRelease: null,
               foregroundThreadId: null, path: "/settings/voice",
-              cardTitle: viewedCanonical.threadTitle, cardNextEnabled: false,
+              cardTitle: viewedCanonical.threadTitle, cardTargetEnabled: false,
               voiceThreadId: secondThreadId, pinDefaultVoiceThread: false,
               sourceDraftPreserved: true, secondDraftPreserved: true });
             expect(release.releasedIdleTargetRevision).toBeGreaterThan(release.cancelledIdleTargetRevision);

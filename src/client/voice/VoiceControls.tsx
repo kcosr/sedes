@@ -1,7 +1,7 @@
-import { Fragment, useEffect, useId, useRef, useState, useSyncExternalStore, type MouseEvent, type ReactNode } from "react";
-import { ArrowUp, AudioLines, ChevronDown, Infinity as InfinityIcon, LoaderCircle, Mic, MicOff, RotateCcw, Settings2, SkipForward, TriangleAlert, X } from "lucide-react";
+import { Fragment, useCallback, useEffect, useId, useRef, useState, useSyncExternalStore, type MouseEvent, type ReactNode } from "react";
+import { ArrowUp, AudioLines, ChevronDown, Infinity as InfinityIcon, LoaderCircle, Locate, Mic, MicOff, RotateCcw, Settings2, SkipForward, TriangleAlert, X } from "lucide-react";
 import type { NormalizedApplicationThreadSummary } from "../../shared/protocol/application.js";
-import { navigate, settingsPath, useRoute } from "../app/router.js";
+import { navigate, parseRoute, settingsPath, useRoute } from "../app/router.js";
 import { openThreadRoute } from "../workspace-panels/thread-panel-navigation.js";
 import { useComposerDeliveryMode } from "../app/composer-delivery-mode.js";
 import { useNativeVoice, useVoiceState } from "./VoiceProvider.js";
@@ -28,18 +28,41 @@ export function VoiceControls({ threads }: { threads: readonly NormalizedApplica
 function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; threads: readonly NormalizedApplicationThreadSummary[] }) {
   const state = useVoiceState(store);
   const route = useRoute();
+  const documentVisible = useSyncExternalStore(subscribeDocumentVisibility, () => document.visibilityState !== "hidden");
   const composerMode = useComposerDeliveryMode();
   const [showWhenOff] = useShowVoiceBarWhenOff();
   const [picker, setPicker] = useState<"start" | "retarget" | "next" | null>(null);
   const pickerAnchor = useRef<HTMLButtonElement>(null);
   const pickerRecording = useRef<NativeRecordingCommandContext | null>(null);
   const pickerGeneration = useRef<number | null>(null);
-  const lastActionPress = useRef<{ kind: "next" | "stop"; bounds: DOMRect; at: number } | null>(null);
+  const lastActionPress = useRef<{ kind: "next" | "stop" | "retarget"; bounds: DOMRect; at: number } | null>(null);
+  const shortcutButton = useRef<HTMLButtonElement | null>(null);
+  const keepButton = useRef<HTMLButtonElement>(null);
+  const shortcutRetarget = useRef<(NativeRecordingCommandContext & { threadId: string }) | null>(null);
+  const registerShortcut = useCallback((button: HTMLButtonElement | null) => {
+    const previous = shortcutButton.current;
+    shortcutButton.current = button;
+    if (button !== null) return;
+    const command = shortcutRetarget.current;
+    shortcutRetarget.current = null;
+    if (!command || document.activeElement !== previous) return;
+    const current = store.getSnapshot().native;
+    const currentRoute = parseRoute(window.location.pathname);
+    // Removal can also mean Cancel, navigation, or a replaced connection or
+    // recording. Only confirmation of this focused action moves focus.
+    if (document.visibilityState !== "hidden" && currentRoute.name === "thread" && currentRoute.threadId === command.threadId &&
+        current?.phase === "listening" && current.settings.audioMode !== "off" && current.connectionGeneration === command.expectedConnectionGeneration &&
+        current.active?.recording?.id === command.recordingId && current.active.recognitionThreadId === command.threadId)
+      keepButton.current?.focus({ preventScroll: true });
+  }, [store]);
   const [sheet, setSheet] = useState(false);
   const statusId = useId();
   const threadId = route.name === "thread" ? route.threadId : null;
   const composerAvailable = useSyncExternalStore(store.subscribeSubmissionComposers, () => store.hasSubmissionComposer(threadId));
-  const threadTitle = nativeThreadTitle(threads.find(thread => thread.id === threadId)?.title.text ?? "");
+  const viewedThread = threads.find(thread => thread.id === threadId);
+  const threadTitle = nativeThreadTitle(viewedThread?.title.text ?? "");
+  const viewedThreadAvailable = viewedThread?.available && (viewedThread.inventoryState === "active" || viewedThread.inventoryState === "settled");
+  const targetThisThreadLabel = `Target this thread: ${threadTitle ?? "Untitled thread"}`;
   // Native visibility reconciliation can clear the foreground without a document visibility event.
   // A successful settings write (including Resume) or session readiness change re-sends the current context.
   // Foreground replies change neither dependency, so a paused Activity rejecting visible=true cannot loop.
@@ -86,6 +109,9 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
   const capture = active?.recording;
   const recordingTools = recording && capture != null;
   const retargets = !off && native.actions.canRetarget && capture != null;
+  // Keep the slot through a pending retarget; only the confirmed destination
+  // or leaving Listening removes it. Native foreground can clear independently.
+  const targetsViewedThread = recordingTools && !off && documentVisible && viewedThreadAvailable && active?.recognitionThreadId !== threadId;
   // Voice is on without a session (Android stopped or refused the service): only a user-initiated mode write resumes it.
   const resumable = !off && native.actions.canResume;
   // Native Stop discards a recording that has not been sent yet.
@@ -225,16 +251,31 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
                 act(() => store.plugin.sendRecoveredRecording(command));
               }}>{saved.stage === "recognizing" || saved.stage === "admitting" ? <LoaderCircle className="motion-safe:animate-spin" aria-hidden="true" /> : <ArrowUp strokeWidth={1.8} aria-hidden="true" />}</button>
           </> : <>
-            {inputActions ? <button type="button" className="voice-card-button voice-card-keep" aria-label="Keep listening" title={keepBlocked ?? "Keep listening"}
+            {inputActions && targetsViewedThread ? <button ref={registerShortcut} type="button" className="voice-card-button" aria-label={targetThisThreadLabel}
+              title="This thread" aria-disabled={state.pending || !native.actions.canRetarget || undefined} onClick={event => {
+                const currentRoute = parseRoute(window.location.pathname);
+                if (state.pending || !native.actions.canRetarget || !capture || !viewedThread || document.visibilityState === "hidden" || currentRoute.name !== "thread" || currentRoute.threadId !== threadId) return;
+                if (lastActionPress.current?.kind !== "retarget" && repeatsLastAction(event)) return;
+                lastActionPress.current = { kind: "retarget", bounds: event.currentTarget.getBoundingClientRect(), at: event.timeStamp };
+                const command = { expectedConnectionGeneration: native.connectionGeneration, recordingId: capture.id,
+                  threadId: viewedThread.id, threadTitle: threadTitle ?? undefined };
+                shortcutRetarget.current = command;
+                void store.run(() => store.plugin.retargetActiveRecognition(command)).catch(() => {
+                  if (shortcutRetarget.current === command) shortcutRetarget.current = null;
+                });
+              }}><Locate strokeWidth={1.8} aria-hidden="true" /></button> : null}
+            {inputActions ? <button ref={keepButton} type="button" className="voice-card-button voice-card-keep" aria-label="Keep listening" title={keepBlocked ?? "Keep listening"}
               aria-pressed={capture?.keepListening ?? false} aria-disabled={state.pending || !recordingTools || !native.actions.canSetKeepListening || undefined}
               aria-describedby={keepBlocked ? `${statusId}-keep-blocked` : undefined} onClick={() => {
                 if (state.pending || !recordingTools || !native.actions.canSetKeepListening) return;
                 const command = { expectedConnectionGeneration: native.connectionGeneration, recordingId: capture.id, enabled: !capture.keepListening };
                 act(() => store.plugin.setKeepListening(command));
               }}><InfinityIcon strokeWidth={1.8} aria-hidden="true" /></button>
-              : showNext ? <button type="button" className="voice-card-button" aria-label="Next voice interaction" title="Next"
+              : showNext ? <button type="button" className="voice-card-button"
+                aria-label={idleNavigation ? viewedThreadAvailable ? targetThisThreadLabel : "Release voice target" : "Next voice interaction"}
+                title={idleNavigation ? viewedThreadAvailable ? "This thread" : "Release voice target" : "Next"}
                 disabled={state.pending || !(native.actions.canSkip && active || idleNavigation)} onClick={event => {
-                  if (lastActionPress.current?.kind === "stop" && repeatsLastAction(event)) return;
+                  if (lastActionPress.current?.kind !== "next" && repeatsLastAction(event)) return;
                   lastActionPress.current = { kind: "next", bounds: event.currentTarget.getBoundingClientRect(), at: event.timeStamp };
                   if (native.actions.canSkip && active) {
                     const command = { expectedConnectionGeneration: native.connectionGeneration, interactionId: active.id };
@@ -243,7 +284,7 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
                     const command = { expectedConnectionGeneration: native.connectionGeneration, expectedRetainedRevision: native.retainedVoiceTarget.revision };
                     act(() => store.plugin.releaseRetainedVoiceTarget(command));
                   }
-                }}><SkipForward strokeWidth={1.8} aria-hidden="true" /></button> : null}
+                }}>{idleNavigation ? <Locate strokeWidth={1.8} aria-hidden="true" /> : <SkipForward strokeWidth={1.8} aria-hidden="true" />}</button> : null}
             {active !== null ? <button type="button" className="voice-card-button" aria-label={cancels ? "Cancel voice recording" : "Stop voice interaction"}
               title={cancels ? "Cancel" : "Stop"} disabled={!native.actions.canStop || !active} onClick={event => {
                 if (!active || !native.actions.canStop) return;
@@ -301,6 +342,10 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
     {/* Beside the card, so choosing Off in the sheet keeps it open even when Off hides the card. */}
     <VoiceQuickSheet store={store} threads={threads} open={sheet} onOpenChange={setSheet} />
   </>;
+}
+function subscribeDocumentVisibility(listener: () => void): () => void {
+  document.addEventListener("visibilitychange", listener);
+  return () => { document.removeEventListener("visibilitychange", listener); };
 }
 function renderLine(line: Line, className: string): ReactNode {
   if ("saved" in line) return <span className={className} data-saved><span className="voice-card-saved-label">{line.saved.label}</span>

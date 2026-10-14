@@ -32,6 +32,8 @@ import org.junit.Test;
 
 /** Opt-in full-system lane. The host starts real Sedes and speech server with loopback model fixtures. */
 public class NativeVoiceE2eTest {
+    private static final String IDLE_CARD_TARGET_SELECTOR = ".voice-card-actions button[aria-label^=\"Target this thread: \"],"
+        + ".voice-card-actions button[aria-label=\"Release voice target\"]";
     private Instrumentation instrumentation;
     private WebView web;
     private NativeVoiceRuntime runtime;
@@ -564,7 +566,7 @@ public class NativeVoiceE2eTest {
         NativeVoiceJson.put(idleCardAfterNavigation, "notificationThreadId", NativeVoiceRuntimeService.notificationTarget(navigatedState).getString("threadId"));
         assertEquals(viewedTitle, idleCardAfterNavigation.getString("cardTitle"));
         assertEquals("/threads/" + viewed, idleCardAfterNavigation.getString("path"));
-        assertFalse("Viewed thread wins for every manual Start", idleCardAfterNavigation.getBoolean("cardNextEnabled"));
+        assertFalse("Viewed thread wins for every manual Start", idleCardAfterNavigation.getBoolean("cardTargetEnabled"));
         assertTrue(idleCardAfterNavigation.getBoolean("nativeCanReleaseRetainedTarget"));
         assertEquals(viewed, idleCardAfterNavigation.getString("retainedThreadId"));
         assertEquals(viewed, idleCardAfterNavigation.getString("notificationThreadId"));
@@ -614,14 +616,14 @@ public class NativeVoiceE2eTest {
         JSONObject viewedNotificationCapture = captureAndCancel("notification", "notification-viewed-thread", viewed, viewedTitle, viewed,
             true, supplied, () -> deliverNotificationControl(() -> viewedNotification.actions[0].actionIntent.send(), "viewed thread Start"));
         assertEquals(0, inputAttempts.get()); assertTrue(submittedInputs.isEmpty());
-        assertEquals("Viewed thread is not a releasable fallback", "false", js("document.querySelector('[aria-label=\"Next voice interaction\"]:not(:disabled)') !== null"));
+        assertEquals("Viewed thread is not a releasable fallback", "false", js("document.querySelector(" + JSONObject.quote(IDLE_CARD_TARGET_SELECTOR) + ") !== null"));
         assertEquals("true", js("document.querySelector('[data-testid=\"composer\"] textarea')?.value === " + JSONObject.quote(viewedDraft)));
-        // On a non-thread page the card falls back to retention, so Next releases that actual start target.
+        // On a non-thread page the card falls back to retention, so Release voice target releases that actual start target.
         js("(()=>{history.pushState({},''," + JSONObject.quote(releasePath) + ");window.dispatchEvent(new PopStateEvent('popstate'));return true})()");
         await(() -> runtime.snapshot().optJSONObject("foreground").isNull("threadId"), 15000, "settings has no foreground thread");
         waitJs("document.querySelector('.voice-card-title')?.textContent.trim() === " + JSONObject.quote(viewedTitle), 15000);
-        waitJs("document.querySelector('[aria-label=\"Next voice interaction\"]:not(:disabled)') !== null", 15000);
-        click("[aria-label=\"Next voice interaction\"]");
+        waitJs("document.querySelector('[aria-label=\"Release voice target\"]:not(:disabled):not([aria-disabled=\"true\"])') !== null", 15000);
+        click("[aria-label=\"Release voice target\"]");
         JSONObject cardRelease = assertRetainedRelease(args, viewedNotificationCapture.getJSONObject("afterCancel"), "card", releasePath, null);
         js("(()=>{history.pushState({},''," + JSONObject.quote("/threads/" + viewed) + ");window.dispatchEvent(new PopStateEvent('popstate'));return true})()");
         waitJs("document.querySelector('[data-testid=\"composer\"] textarea')?.value === " + JSONObject.quote(viewedDraft), 15000);
@@ -723,7 +725,7 @@ public class NativeVoiceE2eTest {
         String viewed = required(args, "secondThreadId"), viewedTitle = required(args, "secondThreadTitle");
         String viewedDraft = required(args, "secondDraftText"), server = required(args, "serverOrigin");
         await(() -> idleVoice(runtime.snapshot()) && runtime.snapshot().isNull("retainedVoiceTarget") &&
-            !runtime.snapshot().optJSONObject("actions").optBoolean("canReleaseRetainedTarget"), 15000, "idle Next released only the retained target");
+            !runtime.snapshot().optJSONObject("actions").optBoolean("canReleaseRetainedTarget"), 15000, "idle release cleared only the retained target");
         JSONObject released = runtime.snapshot();
         assertTrue(released.getLong("idleTargetRevision") > beforeRelease.getLong("idleTargetRevision"));
         assertEquals(expectedForeground, released.getJSONObject("foreground").isNull("threadId") ? null : released.getJSONObject("foreground").getString("threadId"));
@@ -731,20 +733,20 @@ public class NativeVoiceE2eTest {
         assertFalse(released.getJSONObject("settings").getBoolean("pinDefaultVoiceThread"));
         assertEquals("true", js("decodeURI(location.pathname) === " + JSONObject.quote(expectedPath)));
         waitJs("document.querySelector('.voice-card-title')?.textContent.trim() === " + JSONObject.quote(viewedTitle), 15000);
-        waitJs("document.querySelector('[aria-label=\"Next voice interaction\"]') === null", 15000);
+        waitJs("document.querySelector(" + JSONObject.quote(IDLE_CARD_TARGET_SELECTOR) + ") === null", 15000);
         JSONObject releasedCard = idleCardUi();
         assertEquals(expectedPath, releasedCard.getString("path"));
-        assertFalse(releasedCard.getBoolean("cardNextEnabled"));
+        assertFalse(releasedCard.getBoolean("cardTargetEnabled"));
         if (expectedForeground != null) assertEquals("true", js("document.querySelector('[data-testid=\"composer\"] textarea')?.value === " + JSONObject.quote(viewedDraft)));
         boolean viewedDraftPreserved = awaitServerDraft(server, viewed, viewedDraft, 15000);
         boolean sourceDraftPreserved = awaitServerDraft(server, required(args, "threadId"), required(args, "draftText"), 15000);
         assertTrue(viewedDraftPreserved); assertTrue(sourceDraftPreserved);
         assertFalse(phases.contains("submitting"));
-        screenshot(surface + "-next-released-target");
+        screenshot(surface + "-released-target");
         return NativeVoiceJson.object("surface", surface, "retainedBeforeRelease", beforeRelease.getJSONObject("retainedVoiceTarget"),
             "retainedAfterRelease", released.opt("retainedVoiceTarget"), "releasedIdleTargetRevision", released.getLong("idleTargetRevision"),
             "cancelledIdleTargetRevision", beforeRelease.getLong("idleTargetRevision"), "foregroundThreadId", released.getJSONObject("foreground").opt("threadId"),
-            "path", releasedCard.getString("path"), "cardTitle", releasedCard.getString("cardTitle"), "cardNextEnabled", releasedCard.getBoolean("cardNextEnabled"),
+            "path", releasedCard.getString("path"), "cardTitle", releasedCard.getString("cardTitle"), "cardTargetEnabled", releasedCard.getBoolean("cardTargetEnabled"),
             "voiceThreadId", released.getJSONObject("settings").getString("voiceThreadId"), "pinDefaultVoiceThread", released.getJSONObject("settings").getBoolean("pinDefaultVoiceThread"),
             "secondDraftPreserved", viewedDraftPreserved, "sourceDraftPreserved", sourceDraftPreserved);
     }
@@ -882,9 +884,9 @@ public class NativeVoiceE2eTest {
     }
     private JSONObject idleCardUi() throws Exception {
         return new JSONObject(js("(()=>{const card=document.querySelector('[aria-label=\"Voice controls\"]');"
-            + "const next=card?.querySelector('button[aria-label=\"Next voice interaction\"]');"
+            + "const target=card?.querySelector(" + JSONObject.quote(IDLE_CARD_TARGET_SELECTOR) + ");"
             + "return {path:decodeURI(location.pathname),cardTitle:card?.querySelector('.voice-card-title')?.textContent.trim()??null,"
-            + "cardNextEnabled:next instanceof HTMLButtonElement&&!next.disabled}})()"));
+            + "cardTargetEnabled:target instanceof HTMLButtonElement&&!target.disabled&&target.getAttribute('aria-disabled')!=='true'}})()"));
     }
     /** Observe the real transcript destination and scroll geometry, independently of the native receipt event. */
     private JSONObject awaitComposerInputUi(String thread, String recognizedText, boolean seekEnabled, long timeout) throws Exception {
