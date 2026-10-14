@@ -873,6 +873,23 @@ describe("page responses", () => {
       },
     };
   }
+  function pendingSubmission(api: ReturnType<typeof responseServices>) {
+    let resolve!: (receipt: import("../../../shared/protocol/thread-input.js").DirectInputReceipt) => void;
+    let reject!: (error: Error) => void;
+    api.pageResponse.submit.mockImplementationOnce(() => new Promise((accept, fail) => { resolve = accept; reject = fail; }));
+    return {
+      reject: (error: Error) => reject(error),
+      resolve: (overrides: Partial<import("../../../shared/protocol/thread-input.js").DirectInputReceipt> = {}) => {
+        const request = api.pageResponse.submit.mock.calls[0]![0];
+        resolve({ mutationId: request.mutationId, operationId: request.mutationId, threadId: original.threadId,
+          admittedMode: "queue", currentMode: "queue", status: "queued", queuedInputId: "queue-response", ...overrides });
+      },
+    };
+  }
+  function documentVisibility(visibility: DocumentVisibilityState) {
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue(visibility);
+    act(() => document.dispatchEvent(new Event("visibilitychange")));
+  }
   function producer(frame: HTMLIFrameElement, read: () => string) {
     const post = vi.spyOn(frame.contentWindow!, "postMessage").mockImplementation((message: unknown) => {
       const request = message as { type: string; requestId: string };
@@ -1022,5 +1039,145 @@ describe("page responses", () => {
     await act(async () => {});
     expect(api.pageResponse.submit).not.toHaveBeenCalled();
     expect(screen.queryByRole("button", { name: "Retry page response" })).toBeNull();
+  });
+
+  it("lets an admission finish after automatic frame release and labels an idle submit receipt accurately", async () => {
+    const api = responseServices(), submission = pendingSubmission(api);
+    const { container } = render(<PagePreview page={original} services={api} />);
+    const read = vi.fn(() => "captured response");
+    const frame = await waitForFrame(container);
+    producer(frame, read);
+    fireEvent.click(screen.getByRole("button", { name: "Send page response" }));
+    await waitFor(() => expect(api.pageResponse.submit).toHaveBeenCalledTimes(1));
+    const signal = api.pageResponse.submit.mock.calls[0]![1]!;
+    documentVisibility("hidden");
+    expect(container.querySelector("iframe")).toBeNull();
+    expect(signal.aborted).toBe(false);
+    expect(screen.getByRole("button", { name: "Send page response" })).toBeDisabled();
+    await act(async () => submission.resolve({ admittedMode: "submit", currentMode: "submit", status: "queued" }));
+    expect(screen.getByText("Response submitted.")).toHaveAttribute("role", "status");
+    expect(screen.queryByText("Response queued.")).toBeNull();
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(signal.aborted).toBe(false);
+  });
+
+  it("retains a lost admission's exact request and retries without a capture frame", async () => {
+    const api = responseServices(), submission = pendingSubmission(api);
+    const visible = makePreviewsVisible();
+    const { container } = render(<PagePreview page={original} services={api} />);
+    const read = vi.fn(() => "capture before release");
+    producer(await waitForFrame(container), read);
+    fireEvent.click(screen.getByRole("button", { name: "Send page response" }));
+    await waitFor(() => expect(api.pageResponse.submit).toHaveBeenCalledTimes(1));
+    const [request, signal] = api.pageResponse.submit.mock.calls[0]!;
+    visible(false);
+    documentVisibility("hidden");
+    documentVisibility("visible");
+    expect(container.querySelector("iframe")).toBeNull();
+    expect(signal!.aborted).toBe(false);
+    await act(async () => submission.reject(new TypeError("network lost")));
+    fireEvent.click(screen.getByRole("button", { name: "Retry page response" }));
+    await screen.findByText("Response queued.");
+    expect(api.pageResponse.readReceipt).toHaveBeenCalledWith(request.mutationId, expect.any(AbortSignal));
+    expect(api.pageResponse.submit.mock.calls[1]![0]).toBe(request);
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(container.querySelector("iframe")).toBeNull();
+  });
+
+  it("shares admission and receipt retry across inline and expanded frames", async () => {
+    const api = responseServices(), submission = pendingSubmission(api);
+    api.pageResponse.readReceipt.mockImplementation(async mutationId => ({ status: "found", receipt: {
+      mutationId, operationId: mutationId, threadId: original.threadId,
+      admittedMode: "submit", currentMode: "submit", status: "accepted",
+    } }));
+    const { container } = render(<PagePreview page={original} services={api} />);
+    const firstRead = vi.fn(() => "inline response");
+    producer(await waitForFrame(container), firstRead);
+    fireEvent.click(screen.getByRole("button", { name: "Send page response" }));
+    await waitFor(() => expect(api.pageResponse.submit).toHaveBeenCalledTimes(1));
+    const [request, signal] = api.pageResponse.submit.mock.calls[0]!;
+    expandPage();
+    const dialog = screen.getByRole("dialog");
+    const expandedRead = vi.fn(() => "expanded response must not replace capture");
+    producer(await waitForFrame(dialog), expandedRead);
+    const send = within(dialog).getByRole("button", { name: "Send page response" });
+    expect(send).toBeDisabled();
+    fireEvent.click(send);
+    expect(signal!.aborted).toBe(false);
+    await act(async () => submission.reject(new TypeError("network lost")));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Retry page response" }));
+    await within(dialog).findByText("Response sent.");
+    expect(api.pageResponse.readReceipt).toHaveBeenCalledWith(request.mutationId, expect.any(AbortSignal));
+    expect(api.pageResponse.submit).toHaveBeenCalledTimes(1);
+    expect(firstRead).toHaveBeenCalledTimes(1);
+    expect(expandedRead).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
+    expect(screen.getByText("Response sent.")).toBeInTheDocument();
+  });
+
+  it("invalidates only the unfinished capture when expanding into a new document", async () => {
+    const api = responseServices();
+    const { container } = render(<PagePreview page={original} services={api} />);
+    const frame = await waitForFrame(container);
+    const post = vi.spyOn(frame.contentWindow!, "postMessage").mockImplementation(() => {});
+    sendFrameMessage(frame, "sedes:page-submit-ready");
+    fireEvent.click(screen.getByRole("button", { name: "Send page response" }));
+    const request = post.mock.calls[0]![0] as { requestId: string };
+    expandPage();
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByRole("button", { name: "Send page response" })).toBeDisabled();
+    sendFrameMessage(frame, "sedes:page-submit-response", { requestId: request.requestId, text: "old capture" });
+    await within(dialog).findByText("Page changed before its response was captured.");
+    expect(api.pageResponse.submit).not.toHaveBeenCalled();
+    const read = vi.fn(() => "expanded capture");
+    producer(await waitForFrame(dialog), read);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Send page response" }));
+    await within(dialog).findByText("Response queued.");
+    expect(api.pageResponse.submit).toHaveBeenCalledTimes(1);
+    expect(api.pageResponse.submit.mock.calls[0]![0].text).toBe("expanded capture");
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not cancel a started admission when the entire preview unmounts", async () => {
+    const api = responseServices(), submission = pendingSubmission(api);
+    const view = render(<PagePreview page={original} services={api} />);
+    producer(await waitForFrame(view.container), () => "admission outlives preview");
+    fireEvent.click(screen.getByRole("button", { name: "Send page response" }));
+    await waitFor(() => expect(api.pageResponse.submit).toHaveBeenCalledTimes(1));
+    const signal = api.pageResponse.submit.mock.calls[0]![1]!;
+    view.unmount();
+    expect(signal.aborted).toBe(false);
+    await act(async () => submission.resolve());
+    expect(signal.aborted).toBe(false);
+  });
+
+  it("installs the handshake and submission bridge before a detached frame acquires its Window", async () => {
+    const contentWindow = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, "contentWindow")!.get!;
+    let attached = false;
+    vi.spyOn(HTMLIFrameElement.prototype, "contentWindow", "get").mockImplementation(function(this: HTMLIFrameElement) {
+      return attached ? contentWindow.call(this) : null;
+    });
+    const api = responseServices();
+    const { container } = render(<PagePreview page={{ ...original, viewport: { width: 390 } }} services={api} />);
+    const frame = await waitForFrame(container);
+    expect(frame.contentWindow).toBeNull();
+    attached = true;
+    sendFrameMessage(frame, "sedes:page-size", { height: 320 });
+    expect(frame.style.height).toBe("320px");
+    producer(frame, () => "attached response");
+    fireEvent.click(screen.getByRole("button", { name: "Send page response" }));
+    await screen.findByText("Response queued.");
+    expect(api.pageResponse.submit).toHaveBeenCalledTimes(1);
+  });
+
+  it("still times out a detached frame that never acquires a Window", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(HTMLIFrameElement.prototype, "contentWindow", "get").mockReturnValue(null);
+    const { container } = render(<PagePreview page={original} services={services()} />);
+    await act(async () => {});
+    expect(container.querySelector("iframe")).not.toBeNull();
+    act(() => vi.advanceTimersByTime(60_000));
+    expect(container.querySelector("iframe")).toBeNull();
+    expect(screen.getByRole("alert")).toHaveTextContent("Page preview unavailable.");
   });
 });

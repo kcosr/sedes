@@ -3855,6 +3855,13 @@ and history hydration preserve its text and identity without rerunning page
 code. Keep provider-native history authoritative and join only authenticated
 application metadata; provider text cannot invent a Page response card.
 
+Separate capture lifetime from delivery lifetime. Releasing the frame cancels
+an unfinished capture, but must not cancel admission or receipt lookup after
+text has been captured. Keep the frozen request and outcome at the preview
+owner, shared by its inline and expanded frames, so automatic release retains
+the same retry identity. A receipt retry needs no live page document. Explicit
+preview resets may discard this in-memory record without aborting admission.
+
 The compact expandable user card displays the exact plain text and saved title
 and revision; it does not execute HTML, render Markdown, or use a separately
 authored summary. Fork history preserves accepted response snapshots, while

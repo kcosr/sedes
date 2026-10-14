@@ -8,7 +8,7 @@ function setup() {
   const postMessage = vi.fn();
   const source = { postMessage } as unknown as Window;
   const onReady = vi.fn();
-  const bridge = new PageResponseBridge({ source, channel, onReady });
+  const bridge = new PageResponseBridge({ getSource: () => source, channel, onReady });
   const send = (data: Record<string, unknown>, from: MessageEventSource | null = source) =>
     bridge.handleMessage({ source: from, data: { channel, ...data } });
   const ready = () => send({ type: "sedes:page-submit-ready" });
@@ -130,5 +130,47 @@ describe("PageResponseBridge", () => {
     h.reply({ text: "Retry" });
     await expect(retry).resolves.toBe("Retry");
     h.bridge.dispose();
+  });
+
+  it("waits for the frame's first Window without accepting null or unrelated sources", async () => {
+    const postMessage = vi.fn(), source = { postMessage } as unknown as Window;
+    let current: Window | null = null;
+    const onReady = vi.fn();
+    const bridge = new PageResponseBridge({ getSource: () => current, channel, onReady });
+    const ready = { type: "sedes:page-submit-ready", channel };
+    bridge.handleMessage({ source: null, data: ready });
+    bridge.handleMessage({ source, data: ready });
+    await expect(bridge.capture()).rejects.toThrow("not ready");
+    expect(onReady).not.toHaveBeenCalled();
+    current = source;
+    bridge.handleMessage({ source: {} as Window, data: ready });
+    expect(onReady).not.toHaveBeenCalled();
+    bridge.handleMessage({ source, data: ready });
+    const captured = bridge.capture();
+    const requestId = (postMessage.mock.lastCall![0] as { requestId: string }).requestId;
+    bridge.handleMessage({ source, data: { type: "sedes:page-submit-response", channel, requestId, text: "attached" } });
+    await expect(captured).resolves.toBe("attached");
+    bridge.dispose();
+  });
+
+  it.each(["replacement", "detached"])("pins registration and pending capture to the original Window on %s", async change => {
+    const postMessage = vi.fn(), source = { postMessage } as unknown as Window;
+    const replacement = { postMessage: vi.fn() } as unknown as Window;
+    let current: Window | null = source;
+    const onReady = vi.fn();
+    const bridge = new PageResponseBridge({ getSource: () => current, channel, onReady });
+    bridge.handleMessage({ source, data: { type: "sedes:page-submit-ready", channel } });
+    const captured = bridge.capture();
+    const rejected = expect(captured).rejects.toThrow("Page changed");
+    const requestId = (postMessage.mock.lastCall![0] as { requestId: string }).requestId;
+    current = change === "replacement" ? replacement : null;
+    bridge.handleMessage({ source, data: { type: "sedes:page-submit-response", channel, requestId, text: "old document" } });
+    await rejected;
+    current = replacement;
+    bridge.handleMessage({ source: replacement, data: { type: "sedes:page-submit-ready", channel } });
+    bridge.handleMessage({ source: replacement, data: { type: "sedes:page-submit-response", channel, requestId, text: "replacement document" } });
+    await expect(bridge.capture()).rejects.toThrow("not ready");
+    expect(onReady.mock.calls).toEqual([[true], [false]]);
+    expect(replacement.postMessage).not.toHaveBeenCalled();
   });
 });

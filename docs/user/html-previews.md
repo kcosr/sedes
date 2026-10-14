@@ -76,6 +76,13 @@ and server restarts, even if the page later changes. A fork retains responses
 in its inherited history, but cannot send through a page owned by the original
 thread.
 
+If delivery cannot be confirmed, **Retry** checks the same captured response
+without reading the page again. Hiding the app or expanding the page does not
+cancel a captured send. The local retry record lasts only while that preview
+remains open; refreshing it, changing revisions, or reloading the app can
+discard that record. Responses already admitted by the server remain in the
+queue or conversation.
+
 Answers that you have not sent exist only in the loaded page. Reloading,
 closing, or releasing that frame can lose them; Sedes does not save form state,
 and the agent cannot inspect it through a tool. A page cannot send by itself.

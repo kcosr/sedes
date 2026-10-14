@@ -12,7 +12,8 @@ const responseErrors: Readonly<Record<string, string>> = {
 /** Bound to one wrapper document. Only the host's explicit Send action calls
  * capture; messages from the document can announce readiness or answer it. */
 export class PageResponseBridge {
-  readonly #source: Window;
+  readonly #getSource: () => Window | null;
+  #registeredSource: Window | undefined;
   readonly #channel: string;
   readonly #onReady: (ready: boolean) => void;
   #ready = false;
@@ -27,17 +28,19 @@ export class PageResponseBridge {
     | undefined;
 
   constructor(options: {
-    source: Window;
+    getSource: () => Window | null;
     channel: string;
     onReady: (ready: boolean) => void;
   }) {
-    this.#source = options.source;
+    this.#getSource = options.getSource;
     this.#channel = options.channel;
     this.#onReady = options.onReady;
   }
 
   handleMessage(event: Pick<MessageEvent, "source" | "data">): void {
-    if (this.#disposed || event.source !== this.#source) return;
+    if (this.#disposed) return;
+    const source = this.#documentSource();
+    if (!source || event.source !== source) return;
     const data: unknown = event.data;
     if (!data || typeof data !== "object" || !("channel" in data) ||
         data.channel !== this.#channel || !("type" in data)) return;
@@ -47,6 +50,7 @@ export class PageResponseBridge {
     }
     if (data.type === "sedes:page-submit-ready") {
       if (!this.#ready) {
+        this.#registeredSource = source;
         this.#ready = true;
         this.#onReady(true);
       }
@@ -72,7 +76,8 @@ export class PageResponseBridge {
   }
 
   capture(): Promise<string> {
-    if (this.#disposed || !this.#ready)
+    const source = this.#disposed ? undefined : this.#documentSource();
+    if (!source || !this.#ready)
       return Promise.reject(new Error("This page is not ready to send a response."));
     if (this.#pending)
       return Promise.reject(new Error("A page response is already being captured."));
@@ -88,7 +93,7 @@ export class PageResponseBridge {
         }, PAGE_RESPONSE_CAPTURE_TIMEOUT_MS),
       };
       try {
-        this.#source.postMessage({
+        source.postMessage({
           type: "sedes:page-submit-request",
           channel: this.#channel,
           requestId,
@@ -99,6 +104,17 @@ export class PageResponseBridge {
         reject(new Error("The page could not prepare its response."));
       }
     });
+  }
+
+  /** A detached frame may acquire its first Window later. Registration pins
+   * that document's Window; a replacement must obtain a new bridge/channel. */
+  #documentSource(): Window | undefined {
+    const source = this.#getSource();
+    if (this.#registeredSource && source !== this.#registeredSource) {
+      this.dispose();
+      return;
+    }
+    return source ?? undefined;
   }
 
   /** Call before changing the frame's document, channel, or selected revision. */

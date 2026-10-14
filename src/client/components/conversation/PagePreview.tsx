@@ -15,10 +15,9 @@ import {
   useState,
 } from "react";
 import type { PageRevision } from "../../../shared/protocol/pages.js";
-import { PAGE_RESPONSE_MAX_BYTES } from "../../../shared/protocol/pages.js";
-import { ApiError } from "../../api/ApiClient.js";
 import { PageResponseBridge } from "../../lib/page-response-bridge.js";
-import type { PageResponseRequest, PageResponseServices } from "./page-response-services.js";
+import type { PageResponseServices } from "./page-response-services.js";
+import { usePageResponseSubmission, type PageResponseSubmission } from "./page-response-submission.js";
 import { MediaFrame } from "../../workbench/components/MediaFrame.js";
 import { MediaZoomControls } from "../../workbench/components/MediaZoomControls.js";
 import { Button } from "../ui/button.js";
@@ -66,6 +65,11 @@ export function PagePreview({
   const expandButton = useRef<HTMLButtonElement>(null);
   const deactivate = useCallback(() => setInteracting(false), []);
   const viewerOpen = presentation === "library" || expanded;
+  const connection = useConnectionScope();
+  const responsePage = viewerOpen ? selected : page;
+  const response = usePageResponseSubmission(
+    pageFrameRecoveryKey(connection, responsePage), responsePage, services.pageResponse,
+  );
 
   useEffect(() => {
     setSelected(page);
@@ -237,6 +241,7 @@ export function PagePreview({
         aria-label="Refresh page preview"
         title="Refresh preview"
         onClick={() => {
+          response.reset();
           setRefreshVersion((value) => value + 1);
         }}
         size="icon-lg"
@@ -269,6 +274,7 @@ export function PagePreview({
         page={selected}
         createAdmission={services.createPageRenderAdmission}
         responseServices={services.pageResponse}
+        response={response}
         enabled={viewerOpen}
         interactive
         onActivate={() => setInteracting(true)}
@@ -350,6 +356,7 @@ export function PagePreview({
           page={page}
           createAdmission={services.createPageRenderAdmission}
           responseServices={services.pageResponse}
+          response={response}
           enabled={!expanded}
           interactive={interacting}
           onActivate={() => setInteracting(true)}
@@ -383,6 +390,7 @@ function PageFrame({
   page,
   createAdmission,
   responseServices,
+  response,
   enabled,
   interactive,
   onDeactivate,
@@ -394,6 +402,7 @@ function PageFrame({
   readonly page: PageRevision;
   readonly createAdmission: PagePreviewServices["createPageRenderAdmission"];
   readonly responseServices?: PageResponseServices;
+  readonly response: PageResponseSubmission;
   readonly enabled: boolean;
   readonly interactive: boolean;
   readonly onDeactivate: () => void;
@@ -407,13 +416,7 @@ function PageFrame({
   const host = useRef<HTMLDivElement>(null);
   const frame = useRef<HTMLIFrameElement>(null);
   const responseBridge = useRef<PageResponseBridge | undefined>(undefined);
-  const pendingResponse = useRef<PageResponseRequest | undefined>(undefined);
-  const responseRequest = useRef<AbortController | undefined>(undefined);
-  const responseInFlight = useRef(false);
   const [responseReady, setResponseReady] = useState(false);
-  const [responsePhase, setResponsePhase] = useState<"idle" | "sending" | "retry">("idle");
-  const [responseStatus, setResponseStatus] = useState("");
-  const [responseError, setResponseError] = useState("");
   const tap = useRef<{ id: number; x: number; y: number; time: number } | undefined>(undefined);
   const clickReady = useRef(false);
   const [width, setWidth] = useState(page.viewport.width ?? 640);
@@ -561,9 +564,11 @@ function PageFrame({
 
   useLayoutEffect(() => {
     if (!ready) return;
-    const source = frame.current?.contentWindow;
-    if (!source) return;
-    const bridge = new PageResponseBridge({ source, channel: ready.channel, onReady: setResponseReady });
+    const bridge = new PageResponseBridge({
+      getSource: () => frame.current?.contentWindow ?? null,
+      channel: ready.channel,
+      onReady: setResponseReady,
+    });
     responseBridge.current = bridge;
     handshakeAcknowledged.current = false;
     wrapperAcknowledged.current = false;
@@ -606,105 +611,33 @@ function PageFrame({
     return () => {
       bridge.dispose();
       responseBridge.current = undefined;
-      responseRequest.current?.abort();
-      responseInFlight.current = false;
-      pendingResponse.current = undefined;
       setResponseReady(false);
-      setResponsePhase("idle");
-      setResponseStatus("");
-      setResponseError("");
       window.clearTimeout(handshakeTimeout.current);
       handshakeTimeout.current = undefined;
       window.removeEventListener("message", receive);
     };
   }, [page.viewport.height, ready]);
 
-  const sendResponse = async () => {
-    const bridge = responseBridge.current;
-    if (!bridge || !responseServices || responseInFlight.current ||
-        responseServices.threadId !== page.threadId ||
-        (!pendingResponse.current && responseServices.unavailableReason)) return;
-    responseInFlight.current = true;
-    const controller = new AbortController();
-    responseRequest.current = controller;
-    const current = () => responseBridge.current === bridge && responseRequest.current === controller;
-    setResponsePhase("sending");
-    setResponseError("");
-    setResponseStatus("");
-    let admissionAttempted = false;
-    let timeout: number | undefined;
-    try {
-      let request = pendingResponse.current;
-      const retry = request !== undefined;
-      if (!request) {
-        const text = await bridge.capture();
-        if (!current()) return;
-        if (!text.trim()) throw new Error("The page response is empty.");
-        if (new TextEncoder().encode(text).byteLength > PAGE_RESPONSE_MAX_BYTES)
-          throw new Error("The page response exceeds 64 KiB.");
-        request = Object.freeze({
-          mutationId: crypto.randomUUID(), text,
-          pageResponse: Object.freeze({ pageId: page.pageId, revision: page.revision }),
-          runningPolicy: Object.freeze({ mode: "queue" as const }),
-        });
-        pendingResponse.current = request;
-      }
-      timeout = window.setTimeout(() => controller.abort(), 15_000);
-      const lookup = retry ? await responseServices.readReceipt(request.mutationId, controller.signal) : undefined;
-      if (!current()) return;
-      let receipt = lookup?.status === "found" ? lookup.receipt : undefined;
-      if (!receipt) {
-        admissionAttempted = true;
-        receipt = await responseServices.submit(request, controller.signal);
-      }
-      if (!current()) return;
-      pendingResponse.current = undefined;
-      setResponsePhase("idle");
-      if (receipt.status === "recovery_required") {
-        pendingResponse.current = request;
-        setResponsePhase("retry");
-        setResponseError("Delivery is unconfirmed. Use Reconcile in pending inputs before sending again.");
-      } else if (receipt.status === "failed" || receipt.status === "cancelled") {
-        setResponseError(receipt.diagnostic ?? "The response was not delivered. Check pending inputs.");
-      } else {
-        setResponseStatus(receipt.status === "accepted" ? "Response sent." : receipt.status === "queued" ? "Response queued." : "Response submitted.");
-      }
-    } catch (error) {
-      if (!current()) return;
-      const rejected = admissionAttempted && error instanceof ApiError &&
-        error.status >= 400 && error.status < 500 &&
-        error.code !== "operation_outcome_uncertain" && error.code !== "backend_submission_unknown";
-      if (rejected) pendingResponse.current = undefined;
-      const retry = pendingResponse.current !== undefined;
-      setResponsePhase(retry ? "retry" : "idle");
-      setResponseError(retry
-        ? "Delivery could not be confirmed. Retry checks the same response without capturing it again."
-        : error instanceof Error ? error.message : "Could not capture the page response.");
-    } finally {
-      window.clearTimeout(timeout);
-      if (current()) responseInFlight.current = false;
-    }
-  };
-
   return (
     <div
       className={`page-frame-shell${expanded ? " page-frame-expanded" : ""}`}
     >
-      {responseReady && responseServices?.threadId === page.threadId ? (
+      {enabled && responseServices?.threadId === page.threadId &&
+        (responseReady || response.phase !== "idle" || response.status || response.error) ? (
         <div className="page-response-controls">
-          <span className="page-response-status" role={responseError ? "alert" : "status"}>
-            {responseError || responseStatus || responseServices.unavailableReason}
+          <span className="page-response-status" role={response.error ? "alert" : "status"}>
+            {response.error || response.status || responseServices.unavailableReason}
           </span>
           <Button
             size="sm"
             variant="outline"
-            aria-label={responsePhase === "retry" ? "Retry page response" : "Send page response"}
-            disabled={responsePhase === "sending" || (responsePhase !== "retry" && Boolean(responseServices.unavailableReason))}
+            aria-label={response.phase === "retry" ? "Retry page response" : "Send page response"}
+            disabled={response.phase === "sending" || (response.phase !== "retry" && (!responseReady || Boolean(responseServices.unavailableReason)))}
             title={responseServices.unavailableReason ?? "Send this page response to the conversation"}
-            onClick={() => void sendResponse()}
+            onClick={() => void response.send(responseBridge.current)}
           >
             <Send aria-hidden="true" />
-            {responsePhase === "retry" ? "Retry" : responsePhase === "sending" ? "Sending…" : "Send"}
+            {response.phase === "retry" ? "Retry" : response.phase === "sending" ? "Sending…" : "Send"}
           </Button>
         </div>
       ) : null}
