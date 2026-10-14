@@ -24,7 +24,7 @@ of a built installation and are not listed.
 This file is generated. Run `npm run generate:third-party-notices` to refresh it
 and `npm run check:third-party-notices` to verify that it is current.
 
-Packages listed: 616.
+Packages listed: 617.
 
 ## Packages
 
@@ -47,6 +47,13 @@ Packages listed: 616.
 - License: SEE LICENSE IN README.md
 - URL: https://github.com/anthropics/claude-agent-sdk-typescript
 - Shipped by: sedes, @sedes/server-runtime
+- License text (`LICENSE.md`): [af2be7b670a0](#license-text-af2be7b670a0)
+
+### @anthropic-ai/claude-agent-sdk-linux-x64 0.3.296
+
+- License: SEE LICENSE IN LICENSE.md
+- URL: not declared in package metadata
+- Shipped by: @sedes/server-runtime
 - License text (`LICENSE.md`): [af2be7b670a0](#license-text-af2be7b670a0)
 
 ### @anthropic-ai/sdk 0.124.0
@@ -308,7 +315,7 @@ Packages listed: 616.
 - Shipped by: sedes
 - License text (`LICENSE`): [eb99a0d61b50](#license-text-eb99a0d61b50)
 
-### @capacitor/core 8.4.0
+### @capacitor/core 8.4.3
 
 - License: MIT
 - URL: https://github.com/ionic-team/capacitor
@@ -9373,7 +9380,7 @@ OTHER DEALINGS IN THE SOFTWARE.
 
 ### License text 7edf453d1584
 
-Applies to: @capacitor/core 8.4.0.
+Applies to: @capacitor/core 8.4.3.
 
 ```text
 MIT License
@@ -10930,7 +10937,7 @@ THE SOFTWARE.
 
 ### License text af2be7b670a0
 
-Applies to: @anthropic-ai/claude-agent-sdk 0.3.296.
+Applies to: @anthropic-ai/claude-agent-sdk 0.3.296, @anthropic-ai/claude-agent-sdk-linux-x64 0.3.296.
 
 ```text
 © Anthropic PBC. All rights reserved. Use is subject to the Legal Agreements outlined here: https://code.claude.com/docs/en/legal-and-compliance.

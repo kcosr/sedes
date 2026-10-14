@@ -7,6 +7,18 @@ User-facing changes are collected here before release. See the
 
 ### Breaking Changes
 
+### Added
+
+### Changed
+
+### Fixed
+
+### Removed
+
+## [0.2.0] - 2026-10-14
+
+### Breaking Changes
+
 - Codex app-servers and managed TUI commands require **0.162.1 or newer** on
   every execution host. Rebuild the server, execution sidecars, and Electron
   Local together for the updated generated protocol profile. See the
@@ -206,8 +218,8 @@ User-facing changes are collected here before release. See the
 ### Fixed
 
 - Android uses patched Capacitor 8.4.3 to block internal HTTP proxy navigation;
-  rebuild the Android client after upgrading. Pi resource globs use patched
-  brace-expansion 5.0.12.
+  rebuild the Android client after upgrading.
+  ([upstream advisory](https://github.com/advisories/GHSA-rvm3-566m-v7fv))
 
 - Windows file and image attachments send without a false reconciliation
   requirement. Supplemental Files roots use Windows path rules for sensitive
