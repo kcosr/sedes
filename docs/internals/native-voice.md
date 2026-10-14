@@ -968,8 +968,19 @@ beside 40 px action buttons. Playback uses Next, Stop, Record from left to right
 Next hides during synthesis and playback when the queue count is zero and
 Auto-listen is off. Queue and settings updates restore it without moving Stop
 or Record.
-Recording uses Keep listening, Cancel, Send. Idle omits unavailable Next and Stop
-controls, reclaiming their width for status text. Record/Send remains at the
+Recording uses Keep listening, Cancel, Send. During Listening on a different
+available viewed thread, a Target this thread button precedes Keep listening.
+It calls the same `retargetActiveRecognition` command as the chevron picker:
+the recording ID, captured audio/text, Keep listening setting, and queued replies
+are preserved. The command makes an automatic capture explicit and clears
+deferred client voice actions; queued replies retain their original destinations
+and may later Auto-listen on those threads. The shortcut stays visible but
+disabled while a mutation is pending or retargeting is unavailable, with Cancel
+still enabled. It hides after an acknowledged matching destination or when
+Listening ends. Its press joins the existing repeat-tap guard so a quick second
+tap cannot activate text or the picker at the disappearing button's position.
+Idle omits unavailable Next and Stop controls, reclaiming their width for status
+text. Record/Send remains at the
 right edge. Active preparation keeps its action slots and shows progress in the
 primary slot. Speaking adds a blue outline; recording uses the red outline.
 The existing animated status icon opens the quick sheet and carries a small

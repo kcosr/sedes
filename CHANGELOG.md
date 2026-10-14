@@ -14,6 +14,10 @@ User-facing changes are collected here before release. See the
 
 ### Added
 
+- While Android voice is listening on another thread, **Target this thread**
+  switches the entire unsent recording to the viewed thread without restarting
+  capture or changing queued replies. See [voice controls](docs/operator/clients/voice.md#targeting-and-controls).
+
 - Android voice combines speech with the current Chat draft when foreground on
   the recording's thread, including attachments and other context. Composer
   owns submission and recovery after accepting the speech, and keeps the sent

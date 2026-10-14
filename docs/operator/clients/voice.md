@@ -413,10 +413,23 @@ On mobile, the picker does not focus its search field automatically.
 The compact bar keeps its title and status beside 40 px action buttons on all
 screen widths. Playback shows **Next**, **Stop**, **Record**, hiding Next when
 the queue is empty and Auto-listen is off; recording shows
-**Keep listening**, **Cancel**, **Send**. Idle hides unavailable Next and Stop
+**Keep listening**, **Cancel**, **Send**, with **Target this thread** immediately
+left of Keep listening when available. Idle hides unavailable Next and Stop
 actions so the text can use their space. Record/Send stays at the right edge,
 and microphone preparation shows progress there. The outline is blue while
 speaking and red while recording.
+
+While **Listening** on a different thread, the target icon offers **Target this
+thread** when the viewed thread can accept a recording. It moves the entire
+unsent recording, including speech already captured, to that thread without
+restarting capture, sending, or navigating. It preserves Keep listening and
+queued replies. The button stays visible but disabled while the switch is
+pending; Cancel remains available. It disappears when the new destination is
+confirmed or Listening ends. As with the chevron picker, switching makes an
+automatic recording explicit and clears deferred server-issued voice actions.
+Queued replies keep their original destinations; a later reply's Auto-listen
+can start recording on its own thread again.
+
 During **Listening**, the infinity button toggles **Keep listening** for the current
 recording. **Keep listening by default**, available in the quick sheet and
 **Settings → Voice**, starts new manual and automatic recordings with it enabled.
@@ -437,8 +450,8 @@ is literal, including “stop”; it does not open a review step. It uses the sa
 foreground composer handoff as automatic completion, or native submission when
 that composer is not eligible. Blank speech, recognized automatic stop commands,
 and cancelled recordings leave the composer untouched.
-Ordinary navigation never retargets an active recording; its chevron picker does,
-until finishing.
+Ordinary navigation never retargets an active recording; its chevron picker and
+**Target this thread** do, until finishing.
 
 **Long dictation timeout** defaults to 60 minutes and accepts 1–1,440 whole minutes.
 The value is frozen for each recording. Its clock starts the first time Keep
