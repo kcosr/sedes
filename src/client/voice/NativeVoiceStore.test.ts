@@ -370,7 +370,40 @@ describe("foreground submission to composer", () => {
     listeners.get("composerHandoff")!(handoffEvent());
     await vi.waitFor(() => expect(store.getSnapshot().error).toBe("The recording is no longer current."));
     expect(accept).not.toHaveBeenCalled();
-    expect(plugin.completeComposerHandoff).not.toHaveBeenCalled();
+    expect(plugin.completeComposerHandoff).toHaveBeenCalledExactlyOnceWith({ ...context,
+      outcome: "declined", message: "The recording is no longer current." });
+    store.dispose();
+  });
+
+  it("releases a possibly claimed offer when the claim response is malformed without adopting speech", async () => {
+    const { store, plugin, listeners } = fixture();
+    await store.initialize();
+    plugin.claimComposerHandoff.mockResolvedValueOnce({ version: 15 } as NativeVoiceState);
+    const accept = vi.fn();
+    store.registerSubmissionComposer("named", accept);
+    listeners.get("composerHandoff")!(handoffEvent());
+    await vi.waitFor(() => expect(plugin.completeComposerHandoff).toHaveBeenCalledOnce());
+    expect(plugin.completeComposerHandoff).toHaveBeenCalledWith({ ...context, outcome: "declined",
+      message: store.getSnapshot().error!.slice(0, 1024) });
+    expect(accept).not.toHaveBeenCalled();
+    expect(plugin.sendRecording).not.toHaveBeenCalled();
+    expect(plugin.sendRecoveredRecording).not.toHaveBeenCalled();
+    expect(store.getSnapshot().error!.length).toBeGreaterThan(1024);
+    store.dispose();
+  });
+
+  it("keeps a failed claim recoverable even when releasing the cancelled offer also rejects", async () => {
+    const { store, plugin, listeners } = fixture();
+    await store.initialize();
+    plugin.claimComposerHandoff.mockRejectedValueOnce(new Error("Claim response lost."));
+    plugin.completeComposerHandoff.mockRejectedValueOnce(new Error("The offer was already cancelled."));
+    const accept = vi.fn();
+    store.registerSubmissionComposer("named", accept);
+    listeners.get("composerHandoff")!(handoffEvent());
+    await vi.waitFor(() => expect(plugin.completeComposerHandoff).toHaveBeenCalledWith({ ...context,
+      outcome: "declined", message: "Claim response lost." }));
+    expect(store.getSnapshot().error).toBe("Claim response lost.");
+    expect(accept).not.toHaveBeenCalled();
     store.dispose();
   });
 
