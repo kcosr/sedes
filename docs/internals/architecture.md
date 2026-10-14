@@ -45,12 +45,14 @@ AgentBackendRegistry ── normalized backend contracts
         ├── Pi backend ───── Pi SDK
         ├── Codex backend ── Codex app-server
         ├── Claude backend ─ local worker or persistent SSH/outbound runtime / Claude Code CLI
-        └── Grok backend ─── Grok ACP
+        ├── Grok backend ─── Grok ACP
+        └── OpenCode backend ─ stock v2 daemon over HTTP/SSE
 
 ExecutionEnvironment
   ├── Local: paths, processes, channels, PTYs, and Files
-  └── SSH: remote workspace authority, optional Codex UDS transport,
-           managed provider workers, and optional operations sidecar
+  ├── SSH: remote workspace authority, optional Codex UDS transport,
+  │        managed provider workers, and optional operations sidecar
+  └── Outbound: persistent HTTP(S)-connected execution sidecar
 
 Application state
   ├── overlay.sqlite
@@ -64,7 +66,7 @@ Provider state
 
 [`src/server/backends/compiled-module-catalog.ts`](../../src/server/backends/compiled-module-catalog.ts)
 is the sole shared production composition point that imports provider modules.
-It compiles Pi, Codex, Claude, and Grok. Shared services depend on normalized
+It compiles Pi, Codex, Claude, Grok, and OpenCode. Shared services depend on normalized
 module and driver contracts and never import provider SDK or protocol types.
 
 ## Authority and ownership
@@ -73,7 +75,8 @@ The first design question for any state or operation is who owns it.
 
 | Concern                                                                                                                 | Authority                                                                               |
 | ----------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| Listener, backend configuration, workspace roots, network boundary                                                      | Installation operator                                                                   |
+| Listener, state directory, network admission boundary                                                                   | Installation operator                                                                   |
+| Execution environments, backend configuration, targets, and file-root grants                                           | Sedes application state, scoped to tenant and principal                                 |
 | Tenant and principal identity                                                                                           | Server-side identity provider                                                           |
 | Projects and their locations (workspaces): names, membership, and removal                                               | Sedes application state, scoped to tenant and principal                                 |
 | Thread inventory, drafts, stashes, prompts, Tasks, Workpads, automations, saved Agents, queues, receipts, and lineage   | Sedes application state, scoped to tenant and principal                                 |
@@ -112,7 +115,7 @@ revisions and truthful failure/pending states under the same principal scope.
 These identities are intentionally distinct:
 
 - backend kind and target kind, which are closed compiled discriminants;
-- backend instance, which owns operator configuration and model policy;
+- backend instance, which owns principal-scoped provider configuration and model policy;
 - target, which selects a backend instance, execution environment, and defaults;
 - execution environment, which defines path, process, and operation authority;
 - project, which groups locations under one principal-owned, renamable name

@@ -558,11 +558,11 @@ For the server-side file contract, see
 The checked-in Electron project is not ready for public installer distribution.
 Currently:
 
-- `electron/package.json` is private, version `0.1.0`, and MIT-licensed;
+- `electron/package.json` is private and MIT-licensed, with its product version
+  synchronized to the root manifest;
 - electron-builder uses the provider-neutral application ID
   `dev.sedes.local`;
-- its homepage names the current `harness` repository; the release owner must
-  decide whether that repository name remains the public home for Sedes;
+- its homepage points to the [Sedes repository](https://github.com/kcosr/sedes);
 - the build has no macOS signing/notarization, Windows code-signing, Linux
   package-signing, or update/publication configuration;
 - only a general PNG artwork source is present, without reviewed platform icon
