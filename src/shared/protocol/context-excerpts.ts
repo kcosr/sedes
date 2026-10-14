@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { Task } from "./tasks.js";
 import { workspaceIdSchema } from "./domain.js";
 import {
   workspaceFilePathSchema,
@@ -299,6 +300,23 @@ export function composerInputUtf8Bytes(value: {
     bytes += encoder.encode(JSON.stringify(value.taskContexts)).byteLength;
   }
   return bytes;
+}
+
+/** Byte budget for the frozen fields captured from live Tasks at delivery. */
+export function composerTaskInputUtf8Bytes(tasks: readonly Task[]): number {
+  if (tasks.length === 0) return 0;
+  return encoder.encode(JSON.stringify(tasks.map(task => ({
+    id: task.id,
+    scope: task.scope,
+    title: task.title,
+    details: task.details,
+    pinned: task.pinned,
+    files: task.files,
+    completedAt: task.completedAt,
+    revision: task.revision,
+    createdAt: task.createdAt,
+    updatedAt: task.updatedAt,
+  })))).byteLength;
 }
 
 export function requireValidContextExcerptContentParts(

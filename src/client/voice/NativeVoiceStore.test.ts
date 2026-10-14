@@ -361,6 +361,32 @@ describe("foreground submission to composer", () => {
     store.dispose();
   });
 
+  it.each(["not visible", "composer unavailable", "different thread"])(
+    "declines a delayed claim when the latest native foreground is %s", async change => {
+      const { store, plugin, listeners } = fixture();
+      await store.initialize();
+      let release!: (value: NativeVoiceState) => void;
+      plugin.claimComposerHandoff.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
+      const accept = vi.fn();
+      store.registerSubmissionComposer("named", accept);
+      const offer = handoffEvent();
+      const claimed = voiceComposerHandoffSnapshot(offer, { stateRevision: 2 });
+      listeners.get("composerHandoff")!(offer);
+      const newer = { ...claimed, stateRevision: 3, foreground: { ...claimed.foreground,
+        ...(change === "not visible" ? { visible: false } : {}),
+        ...(change === "composer unavailable" ? { composerAvailable: false } : {}),
+        ...(change === "different thread" ? { threadId: "other-thread" } : {}),
+      } };
+      listeners.get("stateChanged")!(newer);
+      release(claimed);
+      await vi.waitFor(() => expect(plugin.completeComposerHandoff).toHaveBeenCalledWith({ ...context,
+        outcome: "declined", message: "Open the recording's live Chat to send it with the composer." }));
+      expect(accept).not.toHaveBeenCalled();
+      expect(store.getSnapshot().native).toEqual(newer);
+      store.dispose();
+    },
+  );
+
   it("does not capture speech after native rejects the claim", async () => {
     const { store, plugin, listeners } = fixture();
     await store.initialize();

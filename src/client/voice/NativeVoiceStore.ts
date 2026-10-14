@@ -111,6 +111,8 @@ export class NativeVoiceStore {
       if (!this.#matchesHandoff(event) || (typeof document !== "undefined" && document.visibilityState === "hidden"))
         throw new Error("Open the recording's live Chat to send it with the composer.");
       const current = this.#state.native;
+      if (!current?.foreground.visible || !current.foreground.composerAvailable || current.foreground.threadId !== event.threadId)
+        throw new Error("Open the recording's live Chat to send it with the composer.");
       if (current?.phase !== "submitting" || current.active?.id !== claimed.active?.id ||
           current.active?.recording?.id !== event.recordingId ||
           current.active.recognitionThreadId !== event.threadId)

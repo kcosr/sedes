@@ -18,7 +18,7 @@ import type {
   NormalizedDraft,
   NormalizedThreadSnapshot,
 } from "../../../shared/index.js";
-import { MAXIMUM_THREAD_INPUT_BYTES } from "../../../shared/index.js";
+import { composerTaskInputUtf8Bytes, MAXIMUM_THREAD_INPUT_BYTES } from "../../../shared/index.js";
 import type {
   PendingComposerTransfer,
   ThreadClientState,
@@ -27,7 +27,7 @@ import type {
 import { DeliveryRecoveryRequiredError } from "../../stores/ThreadClientStore.js";
 import { Composer } from "./Composer.js";
 import { NativeVoiceStore } from "../../voice/NativeVoiceStore.js";
-import { fakeVoicePlugin, voiceComposerHandoffSnapshot, VOICE_CONNECTION } from "../../voice/native-voice-test-fixture.js";
+import { fakeVoicePlugin, recordingRecovery, voiceComposerHandoffSnapshot, voiceSnapshot, VOICE_CONNECTION } from "../../voice/native-voice-test-fixture.js";
 const voiceForTests = vi.hoisted(() => ({ current: null as NativeVoiceStore | null }));
 vi.mock("../../voice/VoiceProvider.js", async importOriginal => ({
   ...await importOriginal<typeof import("../../voice/VoiceProvider.js")>(),
@@ -5943,6 +5943,28 @@ describe("foreground voice composer ownership", () => {
     await waitFor(() => expect(store.deliver).toHaveBeenCalledOnce());
     expect(store.deliver.mock.calls[0]![1].text).toBe(`é\n\n${body}`);
     expect(new TextEncoder().encode(store.deliver.mock.calls[0]![1].text).byteLength).toBe(MAXIMUM_THREAD_INPUT_BYTES);
+  });
+
+  it("retains native speech before adoption when materialized Tasks push the complete input over its byte limit", async () => {
+    const { fake, voice } = await native();
+    const task: AssociatedTask = { id: "84f9a3b0-9c14-456d-b08d-58d325d869d0", scope: { kind: "global" }, associatedProjectId: null,
+      title: "Detailed review", details: "é\n".repeat(10_000), pinned: true, backlog: false, files: ["/work/你好.ts"],
+      completedAt: null, revision: 2, createdAt: "2026-08-01T10:00:00.000Z", updatedAt: "2026-08-02T10:00:00.000Z" };
+    const original = "x".repeat(MAXIMUM_THREAD_INPUT_BYTES - composerTaskInputUtf8Bytes([task]) - 2);
+    const store = new FakeComposerStore(snapshot(), original);
+    store.replaceDraft({ text: original, taskReferences: [{ taskId: task.id, titleSnapshot: task.title }], revision: 2 });
+    const saved = recordingRecovery({ recordingId: "recording", threadId: "thread-1", stage: "ready",
+      hasUnrecognizedAudio: false, canSend: true, canCopyRecognizedText: true });
+    fake.plugin.completeComposerHandoff.mockResolvedValueOnce(voiceSnapshot({ stateRevision: 2, recordingRecovery: saved }));
+    render(<Composer store={store as unknown as ThreadClientStore} applicationStore={applicationStore([task])} />);
+    expect(new TextEncoder().encode(original).byteLength + composerTaskInputUtf8Bytes([task])).toBeLessThan(MAXIMUM_THREAD_INPUT_BYTES);
+    offer(fake, { text: "é" });
+    await waitFor(() => expect(fake.plugin.completeComposerHandoff).toHaveBeenCalledWith(expect.objectContaining({ outcome: "declined" })));
+    expect(screen.getByRole("textbox")).toHaveValue(original);
+    expect(store.saveDraft).not.toHaveBeenCalled();
+    expect(store.stageComposerTransfer).not.toHaveBeenCalled();
+    expect(store.deliver).not.toHaveBeenCalled();
+    expect(voice.getSnapshot().native?.recordingRecovery).toEqual(saved);
   });
 
   it.each([

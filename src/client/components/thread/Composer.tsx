@@ -29,7 +29,7 @@ import {
   COMPOSER_ATTACHMENT_LIMITS,
 } from "../../../shared/index.js";
 import { hasDeliverableComposerInput } from "../../../shared/index.js";
-import { MAXIMUM_THREAD_INPUT_BYTES } from "../../../shared/protocol/context-excerpts.js";
+import { composerInputUtf8Bytes, composerTaskInputUtf8Bytes, MAXIMUM_THREAD_INPUT_BYTES } from "../../../shared/protocol/context-excerpts.js";
 import type { NativeVoiceComposerHandoff } from "../../voice/native-voice-plugin.js";
 import {
   DeliveryRecoveryRequiredError,
@@ -2384,7 +2384,11 @@ export function Composer({
     const next = replaceThreadReferenceBody(current.text, body.length ? `${event.text}\n\n${body}` : event.text);
     const candidate = { ...current, text: next };
     const parsed = normalizedDraftSchema.safeParse({ ...candidate, revision: syncedDraft.current.revision });
-    if (!parsed.success || new TextEncoder().encode(next).byteLength > MAXIMUM_THREAD_INPUT_BYTES)
+    const selectedTasks = candidate.taskReferences.flatMap(({ taskId }) => {
+      const task = currentTasks.get(taskId);
+      return task ? [task] : [];
+    });
+    if (!parsed.success || composerInputUtf8Bytes(candidate) + composerTaskInputUtf8Bytes(selectedTasks) > MAXIMUM_THREAD_INPUT_BYTES)
       throw new Error("Speech and the draft exceed the 256 KiB input limit. Shorten the draft before sending the saved dictation.");
     // Native froze Follow Composer at recording end. Current run state still
     // decides idle Submit; an unsupported Steer uses Queue without changing the preference.

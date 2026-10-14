@@ -28,7 +28,8 @@ export function voiceActions(patch: Partial<NativeVoiceState["actions"]> = {}): 
 }
 /** A claimed offer still owns its current recording until the composer completes it. */
 export function voiceComposerHandoffSnapshot(event: Pick<NativeVoiceComposerHandoff, "recordingId" | "threadId">, patch: Partial<NativeVoiceState> = {}): NativeVoiceState {
-  return voiceSnapshot({ phase: "submitting", active: { id: "voice-handoff", eventKind: null, threadId: event.threadId,
+  return voiceSnapshot({ phase: "submitting", foreground: { visible: true, threadId: event.threadId, threadTitle: null, composerAvailable: true },
+    active: { id: "voice-handoff", eventKind: null, threadId: event.threadId,
     threadTitle: null, recognitionThreadId: event.threadId, recognitionThreadTitle: null, automatic: false,
     recording: { id: event.recordingId, keepListening: false, reconnecting: false } }, ...patch });
 }
