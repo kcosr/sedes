@@ -144,9 +144,9 @@ test.describe.serial("normalized lineage browser journeys", () => {
 
       await fillAndPersistDraft(page, "Later turn excluded by the first fork");
       await sendCurrentDraft(page);
-      await expect(page.getByRole("button", { name: "Stop" })).toBeVisible();
+      await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeVisible();
       await expect(
-        activeForkPage.getByRole("button", { name: "Stop" }),
+        activeForkPage.getByRole("button", { name: "Stop", exact: true }),
       ).toBeVisible();
       await expect(firstBoundary).toHaveAttribute("aria-disabled", "false");
       await expect(
@@ -703,7 +703,7 @@ test.describe.serial("normalized lineage browser journeys", () => {
       "Keep this descendant active during archive preflight",
     );
     await sendCurrentDraft(page);
-    await expect(page.getByRole("button", { name: "Stop" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeVisible();
     const activeFamilySourceRow = page
       .getByTestId("desktop-sidebar")
       .locator(`[data-thread-id="${sourceThreadId}"]`)
@@ -724,7 +724,7 @@ test.describe.serial("normalized lineage browser journeys", () => {
     );
     await archiveChoices.getByRole("button", { name: "Cancel" }).click();
     await expect(archiveChoices).toHaveCount(0);
-    await page.getByRole("button", { name: "Stop" }).click();
+    await page.getByRole("button", { name: "Stop", exact: true }).click();
 
     const [cleanupSession, cleanupSnapshot] = await Promise.all([
       applicationSession(page),

@@ -126,7 +126,7 @@ test("mobile rendered Markdown selection actions open notes and attach to the co
 
   await fillAndPersistDraft(page, "Mobile transcript selection");
   await sendCurrentDraft(page);
-  await expect(page.getByRole("button", { name: "Stop" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Send message" })).toBeVisible({
     timeout: 20_000,
   });

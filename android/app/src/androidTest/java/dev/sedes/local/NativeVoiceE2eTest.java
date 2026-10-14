@@ -330,13 +330,16 @@ public class NativeVoiceE2eTest {
                 await(() -> idleVoice(runtime.snapshot()), 15000, "Stop cleared playback and every queued replay");
                 JSONObject afterStop = runtime.snapshot();
                 assertEquals("Playback Stop leaves voice enabled", mode, afterStop.getJSONObject("settings").getString("audioMode"));
+                assertTrue("Stop invalidates the old idle destination before reseeding the viewed thread", afterStop.getLong("idleTargetRevision") > beforeStop.getLong("idleTargetRevision"));
+                assertEquals(thread, afterStop.getJSONObject("retainedVoiceTarget").getString("threadId"));
                 assertFalse(phases.contains("listening")); assertFalse(phases.contains("announcing")); assertFalse(phases.contains("submitting"));
                 assertEquals(0, supplied.get()); assertEquals(0, inputAttempts.get()); assertTrue(submittedInputs.isEmpty());
-                JSONObject stoppedState = select(afterStop, "phase", "active", "queue");
+                JSONObject stoppedState = select(afterStop, "phase", "active", "queue", "idleTargetRevision", "retainedVoiceTarget");
                 NativeVoiceJson.put(stoppedState, "settings", select(afterStop.getJSONObject("settings"), "audioMode", "autoListen"));
                 playbackControl = NativeVoiceJson.object("action", "Stop", "surface", notificationStop ? "notification" : "card",
                     "sourceThreadId", beforeStop.getJSONObject("active").getString("threadId"),
                     "autoListen", beforeStop.getJSONObject("settings").getBoolean("autoListen"),
+                    "idleTargetRevisionBeforeStop", beforeStop.getLong("idleTargetRevision"),
                     "queuedBeforeStop", beforeStop.getJSONObject("queue").getInt("count"), "afterStop", stoppedState,
                     "notification", notificationEvidence, "serviceDelivery", serviceDelivery, "inputPresentationEvents", submittedInputs.size());
             }

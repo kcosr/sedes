@@ -396,6 +396,7 @@ test.describe.serial("workspace file browser and editor", () => {
         name: "Download saved file src/example.ts",
       }),
     ).toBeVisible();
+    await overlaySettled(panel.locator("main"));
     const viewerBeforeTree = await panel.locator("main").boundingBox();
     await page.getByRole("button", { name: "Toggle file browser" }).click();
     await expect(

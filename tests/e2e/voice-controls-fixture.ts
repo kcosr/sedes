@@ -245,8 +245,10 @@ export async function installVoiceFixture(page: Page): Promise<void> {
             if (args.interactionId !== current.active?.id || args.expectedConnectionGeneration !== current.connectionGeneration ||
                 !["synthesizing", "speaking"].includes(current.phase)) throw new Error("The playback changed.");
             queuedReplays.clear();
-            fixture.publish({ phase: "idle", active: null,
-              actions: { ...initial.actions, canReleaseRetainedTarget: current.retainedVoiceTarget !== null && !current.settings.pinDefaultVoiceThread },
+            // Playback Stop releases continuity before idle uses the normal
+            // explicit choice, pin, viewed thread, or default policy.
+            fixture.publish({ phase: "idle", active: null, retainedVoiceTarget: null,
+              idleTargetRevision: current.idleTargetRevision + 1, actions: initial.actions,
               queue: { ...current.queue, count: 0, bytes: 0 } });
           } else if (method === "stopCurrentInteraction" || method === "skipCurrentPlayback") {
             if (args.interactionId !== current.active?.id || args.expectedConnectionGeneration !== current.connectionGeneration) throw new Error("The interaction changed.");

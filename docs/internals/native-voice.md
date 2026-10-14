@@ -45,7 +45,8 @@ preserves the pending choice; Off and
 connection changes clear it. The setter rejects an active interaction or Off.
 Automatic notification replies preserve it and retain their own targets.
 The in-app card and all manual starts keep the last voice destination after
-playback or recording ends, even when another thread is visible. The idle target
+playback completes or recording ends, including Cancel, even when another thread
+is visible. Explicit playback Stop releases that destination. The idle target
 shortcut releases that destination so the visible thread can supply the next
 target. An actual idle route change selects the newly viewed thread; repeated foreground updates, title
 changes, and resuming on the same route preserve continuity. Native remembers the
@@ -73,8 +74,9 @@ their validation is accepted. Manual and recovery activations retain their
 destination, and successful retargets update it after durable acknowledgement.
 Current input-context titles refresh this metadata independently of announcements. Pure
 threadless notices preserve the previous ID/title while advancing the revision.
-Completion, Stop, cancellation, and a drained queue preserve retention in both
-foreground and background. Idle navigation to a different thread replaces it. Off,
+Completion, recording cancellation, headset Stop, and a drained queue preserve
+retention in both foreground and background. Explicit app or playback-notification
+Stop releases it. Idle navigation to a different thread replaces it. Off,
 disconnect or connection-identity changes, session teardown, service detach, and
 pinning clear it. Pinning suppresses retention; unpinning during an interaction
 seeds its spoken thread or accepted recording destination. Nothing is persisted to settings,
@@ -129,8 +131,14 @@ active recording retains its
 existing Cancel/Stop behavior.
 Explicit app and notification playback Stop uses `stopPlayback`: it cancels the
 current playback and its unsent follow-up, clears queued automatic speech and
-manual replays, and clears pending client voice actions. It does not disable
-voice or discard a separately saved dictation. New work can play afterward.
+manual replays, clears pending client voice actions, and releases the retained
+voice destination before returning to idle. This applies with an empty or
+populated queue. It preserves the explicit pending app selection, pinning, and
+saved default; the ordinary idle resolver uses that selection, then the pinned
+default, then the visible foreground thread or saved default/chooser. Idle
+publication may retain the resulting visible destination for later background
+starts. Stop does not record, navigate, disable voice, or discard a separately
+saved dictation. New work can play afterward.
 Headset Play/Pause on a current Keep listening recording uses `sendRecording`:
 capture stops, all outstanding transcription finishes, and one nonblank transcript
 is submitted. Play/Pause cancels preparation consistently before and after the
@@ -143,8 +151,9 @@ behavior; durable adoption alone does not. An empty explicit Send ends normally
 without a failure cue, re-arming, or submitting input, then drains queued playback.
 Recording Cancel and dedicated headset Stop retain `stopCurrentInteraction`
 semantics: discard unsent capture, including adopted Keep listening recordings,
-then drain queued playback or return to idle. Cancelling capture from the headset
-does not itself report a recording failure or leave saved-dictation recovery.
+preserve voice retention, then drain queued playback or return to idle.
+Cancelling capture from the headset does not itself report a recording failure
+or leave saved-dictation recovery.
 Ordinary recording Play/Pause also cancels and discards. The normal headset
 Play/Pause and dedicated Next mappings do not clear the queue.
 The device preference `announceRecordingThread` defaults to false. A new
@@ -608,7 +617,8 @@ notification eligibility when drain resumes. A settings change rebuilds a
 pending replay from its stored request with the current cleanup setting, and the
 speech text limit chunks it when it starts. Next ends the replay's speech and
 skips its follow-up; Record starts an explicit reply to its thread regardless
-of Auto-listen. Playback Stop cancels the interaction and clears the queue.
+of Auto-listen. Playback Stop cancels the interaction, clears the queue, and
+releases the retained voice destination.
 Completing or skipping a replay never discards
 client turn actions, completes a notification ID, or signals reply drain. Like
 any playback, a speech configuration change or focus loss ends it, and an

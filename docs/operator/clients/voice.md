@@ -298,10 +298,11 @@ turn is still in progress, and the turn's completion makes the target stale.
 Readiness follows the server's current conversation owner even when no thread
 view is open. Reading readiness does not start or reconnect a conversation.
 
-With pinning off, voice keeps its last active thread after playback or recording
-ends, including after Stop or Cancel. For example, if you are viewing A and a
-message from B speaks, the idle card continues to show B and **Start** replies to
-B even with Auto-listen off. Idle **Target this thread**, immediately left of
+With pinning off, voice keeps its last active thread after playback completes or
+recording ends, including after recording **Cancel**. For example, if you are
+viewing A and a message from B finishes speaking, the idle card continues to show
+B and **Start** replies to B even with Auto-listen off. Playback **Stop** releases
+that destination instead. Idle **Target this thread**, immediately left of
 Start, releases B and returns the card to A. Deliberately navigating to another
 thread while idle selects that thread; backgrounding and resuming on the same
 thread keep the voice destination. An explicit choice in the voice target picker
@@ -485,10 +486,14 @@ voice** when a session needs it.
   notification Next do the same.
 - **Stop** during playback cancels the current interaction and its automatic
   listen, clears queued speech including manual replays, and cancels pending
-  agent-requested voice actions. New messages can still play afterward; Stop
-  does not turn voice off. While the microphone is preparing, listening, or
-  recognizing, **Cancel** discards the recording unsent and preserves queued
-  playback.
+  agent-requested voice actions. It also releases the retained voice destination,
+  whether the queue was empty or populated. The next manual recording uses an
+  explicit pending choice first, then the pinned default, then the visible
+  thread, or the saved default or chooser when no thread is visible. Stop does
+  not start recording, navigate, or change the saved default or pinning. New
+  messages can still play afterward; Stop does not turn voice off. While the
+  microphone is preparing, listening, or recognizing, **Cancel** discards the
+  recording unsent and preserves its voice destination and queued playback.
 - **Off** clears queued audio, stops voice, and hides the service notification.
   An adopted recording is saved when interrupted by Off. The voice card stays
   visible for saved dictation; otherwise it hides unless **Show voice bar when off** is on in
@@ -526,7 +531,9 @@ available; otherwise it skips the speech and follow-up. Dedicated headset Next
 skips both during speech, releases an idle retained destination, and leaves an
 active recording unchanged.
 Neither the normal headset Play/Pause tap nor dedicated Next clears queued
-playback. The explicit Stop button in the app or playback notification does.
+playback. The explicit Stop button in the app or playback notification clears
+the queue and releases the retained voice destination. Dedicated headset Stop
+keeps its existing cancellation behavior and preserves retention.
 Headset controls apply only during an active voice session. Android controls
 lock-screen visibility and any promoted presentation; these are not guaranteed.
 Opening the app restores the saved Input or Speak mode after its Sedes

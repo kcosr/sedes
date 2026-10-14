@@ -865,7 +865,7 @@ test("thread groups stack on desktop and open as a member sheet on mobile", asyn
   await page.goto(`/threads/${siblingId}`);
   await fillAndPersistDraft(page, "Keep one visible stack member running");
   await sendCurrentDraft(page);
-  await expect(page.getByRole("button", { name: "Stop" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeVisible();
   await expect(groupStack).toHaveCount(1);
   await groupStack.click({ button: "right" });
   await page.getByRole("menuitem", { name: "Archive stack" }).click();
@@ -887,8 +887,8 @@ test("thread groups stack on desktop and open as a member sheet on mobile", asyn
     [siblingId]: "active",
     [filteredId]: "snoozed",
   });
-  await page.getByRole("button", { name: "Stop" }).click();
-  await expect(page.getByRole("button", { name: "Stop" })).toBeHidden();
+  await page.getByRole("button", { name: "Stop", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeHidden();
   await transitionInventory(page, filteredId, "wake");
   await expectInventoryStates(page, {
     [selectedId]: "active",

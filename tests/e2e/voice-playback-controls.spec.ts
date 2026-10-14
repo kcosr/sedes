@@ -56,8 +56,11 @@ test("playback Record, Next and Stop stay separate on touch while replying to an
   await fillAndPersistDraft(page, draft);
   const spokenPath = await createDraftThread(page, "Spoken thread B");
   const defaultPath = await createDraftThread(page, "Pinned thread C");
+  const explicitPath = await createDraftThread(page, "Chosen thread D");
+  const viewedId = viewedPath.split("/").at(-1)!;
   const spokenId = spokenPath.split("/").at(-1)!;
   const defaultId = defaultPath.split("/").at(-1)!;
+  const explicitId = explicitPath.split("/").at(-1)!;
   await page.goto(viewedPath);
   await page.setViewportSize({ width: 320, height: 780 });
   const toolbar = page.getByRole("group", { name: "Voice controls", exact: true });
@@ -178,28 +181,81 @@ test("playback Record, Next and Stop stay separate on touch while replying to an
   await expect(page.getByRole("dialog")).toHaveCount(0);
   expect(await calls()).toEqual(expected);
   expect(await page.evaluate(() => window.__voiceFixture.state.queue)).toEqual({ ...queue, count: 0, bytes: 0 });
+  expect(await page.evaluate(() => ({ retained: window.__voiceFixture.state.retainedVoiceTarget,
+    next: window.__voiceFixture.state.nextRecordingTarget }))).toEqual({ retained: null,
+    next: { threadId: defaultId, threadTitle: "Pinned thread C" } });
+  await expect(toolbar.locator(".voice-card-title")).toHaveText("Pinned thread C");
   await expect(toolbar.getByRole("button", { name: "Next voice interaction" })).toHaveCount(0);
   await expect(toolbar.getByRole("button", { name: "Stop voice interaction" })).toHaveCount(0);
   await expect(page).toHaveURL(new RegExp(`${viewedPath}$`, "u"));
   await expect(composer).toHaveValue(draft);
 
+  // Stop releases speech continuity regardless of queue count. The existing
+  // explicit choice and pin still lead; otherwise the viewed thread takes over.
+  await page.setViewportSize({ width: 320, height: 780 });
+  for (const count of [0, 2]) {
+    for (const policy of ["viewed", "pinned", "explicit"] as const) {
+      const id = `stop-${policy}-${count}`;
+      const nextRecordingTarget = policy === "explicit" ? { threadId: explicitId, threadTitle: "Chosen thread D" } : null;
+      const stopSettings = { ...settings, pinDefaultVoiceThread: policy !== "viewed" };
+      await publishVoiceState(page, { phase: "speaking", settings: stopSettings, nextRecordingTarget,
+        retainedVoiceTarget: { threadId: spokenId, threadTitle: "Spoken thread B", revision: 20 + count },
+        queue: { ...queue, count }, active: { id, eventKind: "turn.completed", threadId: spokenId, threadTitle: "Spoken thread B",
+          recognitionThreadId: null, recognitionThreadTitle: null, automatic: true, recording: null },
+        actions: { ...base.actions, canStart: false, canStop: true, canSkip: true, canRecordDuringPlayback: true } });
+      await expect(toolbar.locator(".voice-card-title")).toHaveText("Spoken thread B");
+      const repeat = await tapAndRepeatAfterRemoval(page, toolbar.getByRole("button", { name: "Stop voice interaction", exact: true }));
+      expect(repeat.target ?? "").not.toMatch(/^(?:Target this thread:|Release voice target)/u);
+      expected.push({ method: "stopPlayback", args: { expectedConnectionGeneration: 1, interactionId: id } });
+      await expect.poll(calls).toEqual(expected);
+      await expect(toolbar.locator(".voice-card-title")).toHaveText(policy === "viewed" ? "Viewed thread A" : policy === "pinned" ? "Pinned thread C" : "Chosen thread D");
+      await expect(toolbar.getByRole("button", { name: /^(?:Target this thread:|Release voice target|Next voice interaction|Stop voice interaction)/u })).toHaveCount(0);
+      await expect(toolbar.getByRole("button", { name: "Start voice recording", exact: true })).toBeEnabled();
+      await expect(page.getByRole("dialog")).toHaveCount(0);
+      expect(await page.evaluate(() => ({ active: window.__voiceFixture.state.active, queue: window.__voiceFixture.state.queue,
+        next: window.__voiceFixture.state.nextRecordingTarget, retained: window.__voiceFixture.state.retainedVoiceTarget?.threadId ?? null,
+        settings: window.__voiceFixture.state.settings }))).toEqual({ active: null, queue: { ...queue, count: 0, bytes: 0 },
+        next: nextRecordingTarget, retained: policy === "viewed" ? viewedId : null, settings: stopSettings });
+      await expect(page).toHaveURL(new RegExp(`${viewedPath}$`, "u"));
+      await expect(composer).toHaveValue(draft);
+      await expect(composer).not.toBeFocused();
+      await expectNoPageOverflow(page);
+      if (count === 0) await capture(page, testInfo, `voice-stop-target-${policy}-320.png`);
+    }
+  }
+
+  await page.setViewportSize({ width: 480, height: 780 });
   await page.goto("/settings/voice");
   expected.length = 0;
   await playback("unpinned-stop", "speaking", false);
   await publishVoiceState(page, { settings: { ...settings, pinDefaultVoiceThread: false }, nextRecordingTarget: null,
     retainedVoiceTarget: { threadId: spokenId, threadTitle: "Spoken thread B", revision: 12 } });
   const repeat = await tapAndRepeatAfterRemoval(page, toolbar.getByRole("button", { name: "Stop voice interaction", exact: true }));
-  expect(repeat.target).toBe("Release voice target");
+  expect(repeat.target).not.toBe("Release voice target");
   expected.push({ method: "stopPlayback", args: { expectedConnectionGeneration: 1, interactionId: "unpinned-stop" } });
   await expect.poll(calls).toEqual(expected);
-  const releaseTarget = toolbar.getByRole("button", { name: "Release voice target", exact: true });
-  await expect(releaseTarget).toBeEnabled();
-  await expect(releaseTarget).toHaveAttribute("title", "Release voice target");
-  await expect(releaseTarget.locator(".lucide-locate")).toBeVisible();
-  await expect(toolbar.locator(".voice-card-title")).toHaveText("Spoken thread B");
-  expect(await page.evaluate(() => window.__voiceFixture.state.retainedVoiceTarget?.threadId)).toBe(spokenId);
+  await expect(toolbar.getByRole("button", { name: "Release voice target", exact: true })).toHaveCount(0);
+  await expect(toolbar.locator(".voice-card-title")).toHaveText("Pinned thread C");
+  expect(await page.evaluate(() => window.__voiceFixture.state.retainedVoiceTarget)).toBeNull();
   await expect(page).toHaveURL(/\/settings\/voice$/u);
-  await capture(page, testInfo, "voice-unpinned-after-stop-repeat-480.png");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await capture(page, testInfo, "voice-stop-default-without-viewed-thread-480.png");
+  await publishVoiceState(page, { phase: "speaking", settings: { ...settings, pinDefaultVoiceThread: false, voiceThreadId: null, voiceThreadTitle: null },
+    retainedVoiceTarget: { threadId: spokenId, threadTitle: "Spoken thread B", revision: 30 },
+    queue: { ...queue, count: 0, bytes: 0 }, active: { id: "stop-without-default", eventKind: "replay", threadId: spokenId,
+      threadTitle: "Spoken thread B", recognitionThreadId: null, recognitionThreadTitle: null, automatic: false, recording: null },
+    actions: { ...base.actions, canStart: false, canStop: true, canSkip: true, canRecordDuringPlayback: true } });
+  await toolbar.getByRole("button", { name: "Stop voice interaction", exact: true }).tap();
+  expected.push({ method: "stopPlayback", args: { expectedConnectionGeneration: 1, interactionId: "stop-without-default" } });
+  await expect.poll(calls).toEqual(expected);
+  await expect(toolbar.locator(".voice-card-title")).toHaveText("Choose a thread");
+  await expect(toolbar.getByRole("button", { name: "Release voice target", exact: true })).toHaveCount(0);
+  await expect(toolbar.getByRole("button", { name: "Start voice recording", exact: true })).toBeEnabled();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  expect(await page.evaluate(() => window.__voiceFixture.state.retainedVoiceTarget)).toBeNull();
+  await expect(page).toHaveURL(/\/settings\/voice$/u);
+  await expectNoPageOverflow(page);
+  await capture(page, testInfo, "voice-stop-without-default-480.png");
 });
 
 test("background recording announcements are opt-in and their preparation can be cancelled on a narrow screen", async ({ page }, testInfo) => {

@@ -1712,11 +1712,14 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         // deleting it or treating it as this item's optional automatic listen.
         finishItem(item);
     }
-    /** Explicit playback Stop ends this unsent interaction and the playback already waiting behind it. */
+    /** Explicit playback Stop ends this unsent interaction and returns targeting to ordinary manual policy. */
     private void stopPlayback() {
         Active item = active;
         if (item == null || !item.playbackOrigin || item.admission != null) throw new IllegalStateException("voice_not_speaking");
         queue.clearPending(); clientActions.clear(); inputSubmissionContext = new Object();
+        // Cancellation can publish idle synchronously or while settling recording creation.
+        // Release the spoken destination first so neither path exposes an actionable stale target.
+        clearRetainedVoiceTarget();
         cancelActive(false, "stopped"); drain();
     }
     private boolean playingSpeech() {

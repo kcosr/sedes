@@ -402,7 +402,7 @@ test.describe.serial("normalized interactive Codex projection", () => {
     );
     await expect(stagedUserMessage).toHaveCount(1);
     const submittedTurn = turnContainers.nth(turnCountBeforeSend);
-    await expect(page.getByRole("button", { name: "Stop" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeVisible();
     const activityToggle = submittedTurn
       .getByTestId("activity-group")
       .getByRole("button", { name: /^Activity/ });

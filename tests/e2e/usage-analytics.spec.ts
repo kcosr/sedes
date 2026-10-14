@@ -15,7 +15,7 @@ test("recorded turn usage appears on the Usage page with filters and thread link
   await fillAndPersistDraft(page, "Summarize recorded usage");
   await sendCurrentDraft(page);
   // The scripted turn streams for several seconds, then records 11 input and 7 output tokens.
-  const stop = page.getByRole("button", { name: "Stop" });
+  const stop = page.getByRole("button", { name: "Stop", exact: true });
   await expect(stop).toBeVisible();
   await expect(stop).toBeHidden({ timeout: 20_000 });
   await expect(page.getByRole("button", { name: "Turn usage and cost" }).last()).toBeVisible();

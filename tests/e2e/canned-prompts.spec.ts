@@ -271,7 +271,7 @@ test("saved prompts flow from principal settings through desktop and mobile deli
   await expect(composer).toHaveValue("");
   // Sending closes the picker; its row preview leaves with it.
   await expect(desktopPicker).toBeHidden();
-  await expect(page.getByRole("button", { name: "Stop" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeVisible();
   await expect(
     page.getByText(
       "Explain the architecture and the important ownership boundaries.",
