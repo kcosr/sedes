@@ -155,6 +155,83 @@ public class NativeVoiceRuntimeTest {
         }
     }
 
+    @Test public void acceptedComposerClaimSurvivesDisconnectAndCannotReturnAsRecoveryOnReconnect() throws Exception {
+        for (boolean settleAfterReconnect : new boolean[] { false, true }) {
+            try (Fixture f = new Fixture(false, false)) {
+                f.foregroundComposer(f.target, true, "queue"); String capture = f.recognizing(false);
+                f.result(capture, true, "Speech already adopted by Composer"); f.flushEvents();
+                JSONObject offer = f.handoffs.poll(10, TimeUnit.SECONDS); assertNotNull(offer);
+                long originalGeneration = offer.getLong("connectionGeneration");
+                JSONObject completion = NativeVoiceJson.object("handoffId", offer.getString("handoffId"), "outcome", "accepted");
+                assertNull(f.command("claimComposerHandoff", NativeVoiceJson.object("handoffId", offer.getString("handoffId"))));
+                assertNull(f.command("disconnect", new JSONObject())); assertTrue(f.runtime.snapshot().isNull("active"));
+                assertTrue(f.runtime.snapshot().getLong("connectionGeneration") > originalGeneration);
+                if (!settleAfterReconnect) assertNull(f.commandAtGeneration("completeComposerHandoff", completion, originalGeneration));
+                f.reconnect(Fixture.IDENTITY);
+                assertTrue("The reconnect cannot offer a second sender while Composer owns the claim", f.runtime.snapshot().isNull("recordingRecovery"));
+                long reconnectedGeneration = f.runtime.snapshot().getLong("connectionGeneration");
+                if (settleAfterReconnect) assertNull(f.commandAtGeneration("completeComposerHandoff", completion, originalGeneration));
+                assertEquals(reconnectedGeneration, f.runtime.snapshot().getLong("connectionGeneration"));
+                assertEquals(f.profile, f.runtime.snapshot().getString("profileId")); assertEquals(Fixture.IDENTITY, f.runtime.snapshot().getString("identity"));
+                assertTrue(f.runtime.snapshot().isNull("recordingRecovery")); f.assertRecordingDiscarded(offer.getString("recordingId"));
+                assertEquals(0, f.inputAttempts.get()); assertEquals(0, f.store.journal(f.binding).length());
+            }
+        }
+    }
+
+    @Test public void originalComposerClaimAuthorityCannotSettleAnotherGenerationOrTouchANewBinding() throws Exception {
+        try (Fixture f = new Fixture(false, false)) {
+            f.foregroundComposer(f.target, true, "queue"); String capture = f.recognizing(false);
+            f.result(capture, true, "Original binding's adopted speech"); f.flushEvents();
+            JSONObject offer = f.handoffs.poll(10, TimeUnit.SECONDS); assertNotNull(offer);
+            long originalGeneration = offer.getLong("connectionGeneration"); String handoff = offer.getString("handoffId"), oldRecording = offer.getString("recordingId");
+            assertNull(f.command("claimComposerHandoff", NativeVoiceJson.object("handoffId", handoff)));
+            assertNull(f.command("disconnect", new JSONObject())); String nextIdentity = "b".repeat(64); f.reconnect(nextIdentity);
+            long currentGeneration = f.runtime.snapshot().getLong("connectionGeneration"); String currentBinding = NativeVoiceStore.binding(f.profile, f.origin, nextIdentity);
+            f.onOwner(() -> {
+                Constructor<?> constructor = Class.forName("dev.sedes.local.NativeVoiceRuntime$Active").getDeclaredConstructor(String.class, String.class);
+                constructor.setAccessible(true); set(f.runtime, "active", constructor.newInstance(f.target, "New binding recording"));
+            });
+            f.recognizing(false); JSONObject current = f.runtime.snapshot();
+            String newer = current.getJSONObject("active").getJSONObject("recording").getString("id");
+            JSONObject completion = NativeVoiceJson.object("handoffId", handoff, "outcome", "accepted");
+            assertEquals("composer_handoff_changed", f.commandAtGeneration("completeComposerHandoff", completion, currentGeneration));
+            assertEquals("connection_changed", f.commandAtGeneration("completeComposerHandoff", completion, originalGeneration + 1));
+            assertEquals("connection_changed", f.commandAtGeneration("completeComposerHandoff",
+                NativeVoiceJson.object("handoffId", UUID.randomUUID().toString(), "outcome", "accepted"), originalGeneration));
+            assertEquals("connection_changed", f.commandAtGeneration("claimComposerHandoff", NativeVoiceJson.object("handoffId", handoff), originalGeneration));
+            f.onStore(() -> assertEquals(oldRecording, f.dictations.get(f.binding, oldRecording).id));
+            assertNull(f.commandAtGeneration("completeComposerHandoff", completion, originalGeneration)); f.flush();
+            JSONObject settled = f.runtime.snapshot(); assertEquals(currentGeneration, settled.getLong("connectionGeneration"));
+            assertEquals(nextIdentity, settled.getString("identity")); assertEquals(currentBinding, field(f.runtime, "binding"));
+            assertEquals(newer, settled.getJSONObject("active").getJSONObject("recording").getString("id"));
+            assertEquals(current.getLong("settingsRevision"), settled.getLong("settingsRevision"));
+            f.onStore(() -> {
+                Method directory = NativeDictationStore.class.getDeclaredMethod("directory", String.class, String.class); directory.setAccessible(true);
+                assertFalse(((File) directory.invoke(f.dictations, f.binding, oldRecording)).exists());
+                assertEquals(newer, f.dictations.get(currentBinding, newer).id);
+            });
+            assertTrue(settled.isNull("recordingRecovery")); assertEquals(0, f.inputAttempts.get());
+        }
+    }
+
+    @Test public void declinedComposerClaimAfterDisconnectRemainsRecoverableOnlyInItsOriginalBinding() throws Exception {
+        try (Fixture f = new Fixture(false, false)) {
+            f.foregroundComposer(f.target, true, "queue"); String capture = f.recognizing(false);
+            f.result(capture, true, "Speech the UI did not adopt"); f.flushEvents();
+            JSONObject offer = f.handoffs.poll(10, TimeUnit.SECONDS); assertNotNull(offer);
+            assertNull(f.command("claimComposerHandoff", NativeVoiceJson.object("handoffId", offer.getString("handoffId"))));
+            assertNull(f.command("disconnect", new JSONObject())); f.reconnect("b".repeat(64));
+            assertNull(f.commandAtGeneration("completeComposerHandoff", NativeVoiceJson.object("handoffId", offer.getString("handoffId"),
+                "outcome", "declined", "message", "The original composer could not adopt speech."), offer.getLong("connectionGeneration")));
+            assertTrue(f.runtime.snapshot().isNull("recordingRecovery")); assertEquals(0, f.errors("composer_handoff_unavailable"));
+            f.reconnect(Fixture.IDENTITY); JSONObject recovery = f.runtime.snapshot().getJSONObject("recordingRecovery");
+            assertEquals(offer.getString("recordingId"), recovery.getString("recordingId")); assertTrue(recovery.getBoolean("canCopyRecognizedText"));
+            f.onStore(() -> assertEquals("Speech the UI did not adopt", f.dictations.get(f.binding, offer.getString("recordingId")).text));
+            assertEquals(0, f.inputAttempts.get());
+        }
+    }
+
     @Test public void recognizedStopAndBlankSpeechNeverReachTheComposer() throws Exception {
         for (String text : new String[] { "Stop", " \u00a0 " }) {
             try (Fixture f = new Fixture(false, false)) {
@@ -6556,12 +6633,23 @@ public class NativeVoiceRuntimeTest {
             if ((action.equals("stopCurrentInteraction") || action.equals("skipCurrentPlayback") || action.equals("stopPlayback") || action.equals("recordDuringPlayback")) && !args.has("interactionId"))
                 NativeVoiceJson.put(args, "interactionId", active == null ? UUID.randomUUID().toString() : active.optString("id"));
             if (action.equals("retargetActiveRecognition") && !args.has("recordingId")) NativeVoiceJson.put(args, "recordingId", recording == null ? UUID.randomUUID().toString() : recording.optString("id"));
+            return commandAtGeneration(action, args, runtime.snapshot().getLong("connectionGeneration"));
+        }
+        String commandAtGeneration(String action, JSONObject args, long generation) throws Exception {
             CountDownLatch done = new CountDownLatch(1); AtomicReference<String> error = new AtomicReference<>();
-            runtime.command(action, args, true, new NativeVoiceRuntime.Reply() {
+            runtime.command(action, args, true, generation, new NativeVoiceRuntime.Reply() {
                 public void done(JSONObject state) { done.countDown(); }
                 public void failed(String code, String message) { error.set(code); done.countDown(); }
             });
             assertTrue(done.await(10, TimeUnit.SECONDS)); flush(); return error.get();
+        }
+        void reconnect(String nextIdentity) throws Exception {
+            AsyncCommand connection = beginCommand("setConnection", NativeVoiceJson.object("profileId", profile,
+                "serverOrigin", origin, "identity", nextIdentity));
+            NativeVoiceHttp.Result authentication = authentications.poll(10, TimeUnit.SECONDS); assertNotNull(authentication);
+            authentication.done(200, NativeVoiceJson.object("required", false, "authenticated", true, "navigationNamespace", nextIdentity), null); flush();
+            NativeVoiceHttp.Result session = sessions.poll(10, TimeUnit.SECONDS); assertNotNull(session); refreshed(session);
+            assertNull(connection.await()); flush();
         }
         String credentialAction(String action, String secret, long generation, long revision) throws Exception {
             CountDownLatch done = new CountDownLatch(1); AtomicReference<String> error = new AtomicReference<>();
