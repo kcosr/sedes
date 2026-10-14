@@ -33,6 +33,7 @@ User-facing changes are collected here before release. See the
   as clearing queued speech. The next recording honors an explicit choice or
   pinned default, then the viewed thread or normal fallback. See
   [voice controls](docs/operator/clients/voice.md#targeting-and-controls).
+  ([#84](https://github.com/kcosr/sedes/pull/84))
 
 - Idle voice **Next** is now the target icon labelled **Target this thread**, or
   **Release voice target** when no available thread is viewed. It still releases
