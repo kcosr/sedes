@@ -18,7 +18,7 @@ import type {
   NormalizedDraft,
   NormalizedThreadSnapshot,
 } from "../../../shared/index.js";
-import { MAXIMUM_COMPOSER_INPUT_BYTES } from "../../../shared/index.js";
+import { MAXIMUM_THREAD_INPUT_BYTES } from "../../../shared/index.js";
 import type {
   PendingComposerTransfer,
   ThreadClientState,
@@ -26,6 +26,13 @@ import type {
 } from "../../stores/ThreadClientStore.js";
 import { DeliveryRecoveryRequiredError } from "../../stores/ThreadClientStore.js";
 import { Composer } from "./Composer.js";
+import { NativeVoiceStore } from "../../voice/NativeVoiceStore.js";
+import { fakeVoicePlugin, VOICE_CONNECTION } from "../../voice/native-voice-test-fixture.js";
+const voiceForTests = vi.hoisted(() => ({ current: null as NativeVoiceStore | null }));
+vi.mock("../../voice/VoiceProvider.js", async importOriginal => ({
+  ...await importOriginal<typeof import("../../voice/VoiceProvider.js")>(),
+  useNativeVoice: () => voiceForTests.current,
+}));
 import { ChatViewVisibilityContext } from "./chat-view-visibility.js";
 import { CodexTuiTerminalControlContext } from "../../provider-features/codex-tui.js";
 import {
@@ -63,6 +70,8 @@ import {
 afterEach(() => {
   clearDiagnostics();
   cleanup();
+  voiceForTests.current?.dispose();
+  voiceForTests.current = null;
   localStorage.clear();
   vi.unstubAllGlobals();
 });
@@ -87,6 +96,7 @@ beforeEach(() => {
 });
 
 class FakeComposerStore {
+  readonly threadId = "thread-1";
   state: ThreadClientState;
   readonly deliver = vi.fn(
     async (
@@ -4460,7 +4470,7 @@ describe("Composer delivery guards", () => {
     fireEvent.click(screen.getByRole("button", { name: "Send message" }));
     await waitFor(() => expect(store.deliver).toHaveBeenCalledOnce());
 
-    const oversizedNextMessage = "x".repeat(MAXIMUM_COMPOSER_INPUT_BYTES + 1);
+    const oversizedNextMessage = "x".repeat(MAXIMUM_THREAD_INPUT_BYTES + 1);
     type(oversizedNextMessage);
     await act(async () => releaseDeliver());
 
@@ -4474,7 +4484,7 @@ describe("Composer delivery guards", () => {
     expect(alert).not.toHaveTextContent("changed in another client");
     expect(
       (screen.getByRole("textbox") as HTMLTextAreaElement).value.length,
-    ).toBe(MAXIMUM_COMPOSER_INPUT_BYTES + 1);
+    ).toBe(MAXIMUM_THREAD_INPUT_BYTES + 1);
   });
 
   it("preserves delivery uncertainty when a recovery draft cannot merge with local edits", async () => {
@@ -4499,7 +4509,7 @@ describe("Composer delivery guards", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Send message" }));
     await waitFor(() => expect(store.deliver).toHaveBeenCalledOnce());
-    type("x".repeat(MAXIMUM_COMPOSER_INPUT_BYTES + 1));
+    type("x".repeat(MAXIMUM_THREAD_INPUT_BYTES + 1));
     await act(async () => releaseRecovery());
 
     const alert = screen.getByRole("alert");
@@ -4507,7 +4517,7 @@ describe("Composer delivery guards", () => {
     expect(alert).not.toHaveTextContent("Your message was sent");
     expect(
       (screen.getByRole("textbox") as HTMLTextAreaElement).value.length,
-    ).toBe(MAXIMUM_COMPOSER_INPUT_BYTES + 1);
+    ).toBe(MAXIMUM_THREAD_INPUT_BYTES + 1);
   });
 
   it("serializes draft PUTs and coalesces waiting autosaves to the newest text", async () => {
@@ -5852,5 +5862,184 @@ describe("terminal key bar", () => {
     ).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "Send draft to TUI" }));
     expect(sendKey).not.toHaveBeenCalled();
+  });
+});
+
+describe("foreground voice composer ownership", () => {
+  async function native() {
+    const fake = fakeVoicePlugin();
+    const voice = new NativeVoiceStore(fake.asPlugin, VOICE_CONNECTION, vi.fn());
+    await voice.initialize();
+    voiceForTests.current = voice;
+    return { fake, voice };
+  }
+  function offer(fake: ReturnType<typeof fakeVoicePlugin>, patch = {}) {
+    act(() => fake.emit("composerHandoff", { ...VOICE_CONNECTION, connectionGeneration: 1,
+      handoffId: crypto.randomUUID(), recordingId: "recording", threadId: "thread-1", text: "Explain this", mode: "queue", ...patch }));
+  }
+  async function accepted(fake: ReturnType<typeof fakeVoicePlugin>) {
+    await waitFor(() => expect(fake.plugin.completeComposerHandoff).toHaveBeenLastCalledWith(
+      expect.objectContaining({ outcome: "accepted" })));
+  }
+
+  it("captures unsaved code with all draft fields, preserves references and does not open the keyboard", async () => {
+    const { fake } = await native();
+    const store = new FakeComposerStore(snapshot(), "old saved text");
+    const task = { taskId: "84f9a3b0-9c14-456d-b08d-58d325d869d0", titleSnapshot: "Review task" };
+    const attachment = { id: "d0739b85-4f1b-4c40-b364-51e5093f128b", fileName: "notes.bin",
+      kind: "file" as const, mediaType: "application/octet-stream" as const, byteSize: 128 };
+    store.replaceDraft({ text: formatThreadReferenceText("old saved text", [selectedThreadReference]),
+      selectedSkillId: "skill-review", contextExcerpts: [contextExcerpt], attachments: [attachment], taskReferences: [task], revision: 2 });
+    render(<><button>Voice Send</button><Composer store={store as unknown as ThreadClientStore}
+      applicationStore={applicationStore([{ id: task.taskId, title: "Review task" }])} /></>);
+    const input = screen.getByRole("textbox", { name: "Message Pi" });
+    const snippet = "```ts\n  const café = '你好';\n```\n";
+    fireEvent.change(input, { target: { value: snippet } });
+    screen.getByRole("button", { name: "Voice Send" }).focus();
+    offer(fake);
+    await accepted(fake);
+    await waitFor(() => expect(store.deliver).toHaveBeenCalledOnce());
+    const draft = store.deliver.mock.calls[0]![1];
+    expect(splitThreadReferenceText(draft.text)).toEqual({ text: `Explain this\n\n${snippet}`, references: [selectedThreadReference] });
+    expect(draft).toMatchObject({ selectedSkillId: "skill-review", contextExcerpts: [contextExcerpt], attachments: [attachment], taskReferences: [task] });
+    expect(input).toHaveValue("");
+    expect(screen.getByRole("button", { name: "Voice Send" })).toHaveFocus();
+    expect(fake.plugin.sendRecording).not.toHaveBeenCalled();
+  });
+
+  it("uses ordinary submission even when the composer is empty", async () => {
+    const { fake, voice } = await native();
+    const store = new FakeComposerStore(snapshot(), "");
+    render(<Composer store={store as unknown as ThreadClientStore} />);
+    expect(voice.hasSubmissionComposer("thread-1")).toBe(true);
+    offer(fake);
+    await accepted(fake);
+    await waitFor(() => expect(store.deliver).toHaveBeenCalledWith("submit", expect.objectContaining({ text: "Explain this" }), expect.any(String)));
+  });
+
+  it("accepts a combined Unicode draft at the shared 256 KiB UTF-8 boundary", async () => {
+    const { fake } = await native();
+    const body = "x".repeat(MAXIMUM_THREAD_INPUT_BYTES - 4);
+    const store = new FakeComposerStore(snapshot(), body);
+    render(<Composer store={store as unknown as ThreadClientStore} />);
+    offer(fake, { text: "é" });
+    await accepted(fake);
+    await waitFor(() => expect(store.deliver).toHaveBeenCalledOnce());
+    expect(store.deliver.mock.calls[0]![1].text).toBe(`é\n\n${body}`);
+    expect(new TextEncoder().encode(store.deliver.mock.calls[0]![1].text).byteLength).toBe(MAXIMUM_THREAD_INPUT_BYTES);
+  });
+
+  it.each([
+    ["queue", true, "queue"], ["steer", true, "steer"], ["steer", false, "queue"],
+  ] as const)("uses native %s choice with Steer support %s as %s", async (mode, steerSupported, expected) => {
+    const { fake } = await native();
+    const base = snapshot("running");
+    base.capabilities.deliveryModes = [{ id: "queue", steerTarget: null, label: { text: "Queue" }, available: true },
+      ...(steerSupported ? [{ id: "steer" as const, steerTarget: "turn" as const, label: { text: "Steer" }, available: true }] : [])];
+    const store = new FakeComposerStore(base, "snippet");
+    render(<Composer store={store as unknown as ThreadClientStore} />);
+    offer(fake, { mode });
+    await accepted(fake);
+    await waitFor(() => expect(store.deliver).toHaveBeenCalledWith(expected, expect.objectContaining({ text: "Explain this\n\nsnippet" }), expect.any(String)));
+  });
+
+  it("keeps combined speech in composer rollback while preserving typing after Send", async () => {
+    const { fake } = await native();
+    const store = new FakeComposerStore(snapshot(), "snippet");
+    let reject!: (error: Error) => void;
+    store.deliver.mockImplementationOnce(() => new Promise((_resolve, failure) => { reject = failure; }));
+    render(<Composer store={store as unknown as ThreadClientStore} />);
+    offer(fake);
+    await accepted(fake);
+    await waitFor(() => expect(store.deliver).toHaveBeenCalledOnce());
+    type("new draft");
+    await act(async () => reject(new Error("Delivery rejected")));
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "Message Pi" })).toHaveValue("Explain this\n\nsnippet\n\nnew draft"));
+    expect(fake.plugin.completeComposerHandoff).toHaveBeenCalledOnce();
+    expect(fake.plugin.sendRecoveredRecording).not.toHaveBeenCalled();
+    expect(store.deliver).toHaveBeenCalledOnce();
+  });
+
+  it("retains speech in the composer when saving fails before delivery", async () => {
+    const { fake } = await native();
+    const store = new FakeComposerStore(snapshot(), "snippet");
+    store.saveDraft.mockRejectedValueOnce(new Error("Disconnected"));
+    render(<Composer store={store as unknown as ThreadClientStore} />);
+    offer(fake);
+    await accepted(fake);
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "Message Pi" })).toHaveValue("Explain this\n\nsnippet"));
+    expect(store.deliver).not.toHaveBeenCalled();
+  });
+
+  it("adopts speech with pending attachments and waits for an explicit Send with the uploaded context", async () => {
+    const { fake } = await native();
+    const store = new FakeComposerStore(snapshot(), "snippet");
+    let upload!: (attachment: Awaited<ReturnType<typeof store.uploadComposerAttachment>>) => void;
+    store.uploadComposerAttachment.mockImplementationOnce(() => new Promise(resolve => { upload = resolve; }));
+    const { container } = render(<Composer store={store as unknown as ThreadClientStore} />);
+    fireEvent.change(container.querySelector('input[type="file"]')!, {
+      target: { files: [new File(["payload"], "notes.bin", { type: "application/octet-stream" })] },
+    });
+    await waitFor(() => expect(store.uploadComposerAttachment).toHaveBeenCalledOnce());
+    offer(fake);
+    await accepted(fake);
+    expect(screen.getByRole("textbox", { name: "Message Pi" })).toHaveValue("Explain this\n\nsnippet");
+    expect(screen.getByText("Speech added to the draft. Wait for attachment uploads to finish, then press Send.")).toBeVisible();
+    expect(store.deliver).not.toHaveBeenCalled();
+    const attachment = { id: store.uploadComposerAttachment.mock.calls[0]![0], fileName: "notes.bin",
+      kind: "file" as const, mediaType: "application/octet-stream" as const, byteSize: 7 };
+    await act(async () => upload(attachment));
+    expect(store.deliver).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    await waitFor(() => expect(store.deliver).toHaveBeenCalledWith("submit", expect.objectContaining({ text: "Explain this\n\nsnippet", attachments: [attachment] }), expect.any(String)));
+  });
+
+  it("adopts the whole draft when Submit is temporarily unavailable", async () => {
+    const { fake } = await native();
+    const store = new FakeComposerStore(snapshot("idle", false), "snippet");
+    render(<Composer store={store as unknown as ThreadClientStore} />);
+    offer(fake);
+    await accepted(fake);
+    expect(screen.getByRole("textbox", { name: "Message Pi" })).toHaveValue("Explain this\n\nsnippet");
+    expect(screen.getByText("Speech added to the draft. Resolve the current Send restriction, then press Send.")).toBeVisible();
+    expect(store.deliver).not.toHaveBeenCalled();
+  });
+
+  it.each(["inactive", "history", "tui", "hidden-chat"])("does not register the %s composer for foreground submission", async view => {
+    const { fake, voice } = await native();
+    const store = new FakeComposerStore(snapshot(), "keep draft");
+    render(<ChatViewVisibilityContext.Provider value={view !== "hidden-chat"}>
+      <CodexTuiTerminalControlContext.Provider value={tuiControl({ active: view === "tui" })}>
+        <Composer active={view !== "inactive"} optimisticTranscriptPresentationVisible={view !== "history"}
+          store={store as unknown as ThreadClientStore} />
+      </CodexTuiTerminalControlContext.Provider>
+    </ChatViewVisibilityContext.Provider>);
+    expect(voice.hasSubmissionComposer("thread-1")).toBe(false);
+    offer(fake);
+    await waitFor(() => expect(fake.plugin.completeComposerHandoff).toHaveBeenCalledWith(expect.objectContaining({ outcome: "declined" })));
+    expect(screen.getByRole("textbox")).toHaveValue("keep draft");
+    expect(store.deliver).not.toHaveBeenCalled();
+  });
+
+  it.each(["oversize", "conflict", "disabled", "mutation"])("rejects %s before taking speech ownership", async fence => {
+    const { fake, voice } = await native();
+    const store = new FakeComposerStore(snapshot(), fence === "oversize" ? "é".repeat(MAXIMUM_THREAD_INPUT_BYTES / 2) : "keep draft");
+    render(<Composer disabled={fence === "disabled"} store={store as unknown as ThreadClientStore} />);
+    expect(voice.hasSubmissionComposer("thread-1")).toBe(true);
+    if (fence === "conflict") {
+      type("unsaved local text");
+      act(() => store.replaceDraft({ text: "remote text", revision: 2 }));
+      await screen.findByRole("button", { name: "Use latest" });
+    }
+    if (fence === "mutation") {
+      type("unsaved draft");
+      store.saveDraft.mockImplementationOnce(() => new Promise(() => {}));
+      pressEnter(store);
+    }
+    const before = (screen.getByRole("textbox") as HTMLTextAreaElement).value;
+    offer(fake);
+    await waitFor(() => expect(fake.plugin.completeComposerHandoff).toHaveBeenCalledWith(expect.objectContaining({ outcome: "declined" })));
+    expect(screen.getByRole("textbox")).toHaveValue(before);
+    expect(store.deliver).not.toHaveBeenCalled();
   });
 });

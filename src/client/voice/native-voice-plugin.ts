@@ -49,14 +49,14 @@ export const nativeRecordingTextSchema = z.strictObject({
 });
 export type NativeRecordingText = z.infer<typeof nativeRecordingTextSchema>;
 export const nativeVoiceStateSchema = z.strictObject({
-  version: z.literal(14), stateRevision: z.number().int().nonnegative(), connectionGeneration: z.number().int().nonnegative(),
+  version: z.literal(15), stateRevision: z.number().int().nonnegative(), connectionGeneration: z.number().int().nonnegative(),
   profileId: z.string().nullable(), serverOrigin: z.string().nullable(), identity: z.string().nullable(), originClientId: z.uuid().nullable(), clientConnectionToken: z.string().nullable(),
   settingsRevision: z.number().int().nonnegative(), settings: nativeVoiceSettingsSchema,
   speech: z.strictObject({ credentialConfigured: z.boolean(), catalogStatus: z.enum(["idle", "loading", "ready", "error"]),
     catalog: nativeSpeechCatalogSchema.nullable(), error: z.string().nullable() }),
   phase: z.enum(["off", "starting", "idle", "synthesizing", "speaking", "validating", "announcing", "arming", "listening", "recognizing", "submitting", "cancelling", "recovering", "recordingRecovery", "error"]),
   ready: z.boolean(), readiness: z.string(),
-  foreground: z.strictObject({ visible: z.boolean(), threadId: z.string().nullable(), threadTitle: z.string().nullable() }),
+  foreground: z.strictObject({ visible: z.boolean(), threadId: z.string().nullable(), threadTitle: z.string().nullable(), composerAvailable: z.boolean() }),
   nextRecordingTarget: z.strictObject({ threadId: z.string().min(1), threadTitle: z.string().nullable() }).nullable(),
   retainedVoiceTarget: z.strictObject({ threadId: z.string().min(1), threadTitle: z.string().nullable(), revision: z.number().int().nonnegative() }).nullable(),
   idleTargetRevision: z.number().int().nonnegative(),
@@ -81,6 +81,13 @@ export const nativeVoiceInputSubmittedSchema = z.strictObject({
   text: directInputRequestSchema.shape.text, queuedInputId: z.string().min(1).max(128).nullable(),
 });
 export type NativeVoiceInputSubmitted = z.infer<typeof nativeVoiceInputSubmittedSchema>;
+/** A live offer to transfer speech and submission ownership to the visible composer. */
+export const nativeVoiceComposerHandoffSchema = z.strictObject({
+  profileId: z.string().min(1), serverOrigin: z.url(), identity: z.string().regex(/^[a-f0-9]{64}$/u),
+  connectionGeneration: z.number().int().nonnegative(), handoffId: z.string().min(1), recordingId: z.string().min(1),
+  threadId: z.string().min(1), text: directInputRequestSchema.shape.text, mode: z.enum(["queue", "steer"]),
+});
+export type NativeVoiceComposerHandoff = z.infer<typeof nativeVoiceComposerHandoffSchema>;
 export type NativeVoiceCommandContext = { expectedConnectionGeneration: number };
 export type NativeRecordingCommandContext = NativeVoiceCommandContext & { recordingId: string };
 export type NativeRecordingRecoveryCommandContext = NativeRecordingCommandContext & { expectedRecoveryRevision: number };
@@ -96,7 +103,9 @@ export interface NativeVoicePlugin {
   disconnect(input: NativeVoiceCommandContext): Promise<NativeVoiceState>;
   getState(): Promise<NativeVoiceState>;
   updateSettings(input: NativeVoiceCommandContext & { expectedRevision: number; patch: Partial<NativeVoiceSettings> }): Promise<NativeVoiceState>;
-  setForegroundContext(input: NativeVoiceCommandContext & { visible: boolean; threadId?: string | null; threadTitle?: string | null; composerMode?: "queue" | "steer" }): Promise<NativeVoiceState>;
+  setForegroundContext(input: NativeVoiceCommandContext & { visible: boolean; threadId?: string | null; threadTitle?: string | null; composerMode?: "queue" | "steer"; composerAvailable: boolean }): Promise<NativeVoiceState>;
+  claimComposerHandoff(input: NativeVoiceCommandContext & { handoffId: string }): Promise<NativeVoiceState>;
+  completeComposerHandoff(input: NativeVoiceCommandContext & { handoffId: string; outcome: "accepted" | "declined"; message?: string }): Promise<NativeVoiceState>;
   startManualListen(input: NativeVoiceCommandContext & { threadId?: string; threadTitle?: string }): Promise<NativeVoiceState>;
   setNextRecordingTarget(input: NativeVoiceCommandContext & { threadId: string; threadTitle?: string }): Promise<NativeVoiceState>;
   releaseRetainedVoiceTarget(input: NativeVoiceCommandContext & { expectedRetainedRevision: number }): Promise<NativeVoiceState>;
@@ -133,6 +142,7 @@ export interface NativeVoicePlugin {
   addListener(event: "openThread", listener: (event: { threadId: string; profileId: string; serverOrigin: string;
     identity: string; connectionGeneration: number }) => void): Promise<PluginListenerHandle>;
   addListener(event: "inputSubmitted", listener: (event: NativeVoiceInputSubmitted) => void): Promise<PluginListenerHandle>;
+  addListener(event: "composerHandoff", listener: (event: NativeVoiceComposerHandoff) => void): Promise<PluginListenerHandle>;
 }
 export const nativeVoice = registerPlugin<NativeVoicePlugin>("NativeVoice");
 export function hasNativeVoice(): boolean {

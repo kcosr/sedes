@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useId, useRef, useState, type MouseEvent, type ReactNode } from "react";
+import { Fragment, useEffect, useId, useRef, useState, useSyncExternalStore, type MouseEvent, type ReactNode } from "react";
 import { ArrowUp, AudioLines, ChevronDown, Infinity as InfinityIcon, LoaderCircle, Mic, MicOff, RotateCcw, Settings2, SkipForward, TriangleAlert, X } from "lucide-react";
 import type { NormalizedApplicationThreadSummary } from "../../shared/protocol/application.js";
 import { navigate, settingsPath, useRoute } from "../app/router.js";
@@ -38,6 +38,7 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
   const [sheet, setSheet] = useState(false);
   const statusId = useId();
   const threadId = route.name === "thread" ? route.threadId : null;
+  const composerAvailable = useSyncExternalStore(store.subscribeSubmissionComposers, () => store.hasSubmissionComposer(threadId));
   const threadTitle = nativeThreadTitle(threads.find(thread => thread.id === threadId)?.title.text ?? "");
   // Native visibility reconciliation can clear the foreground without a document visibility event.
   // A successful settings write (including Resume) or session readiness change re-sends the current context.
@@ -48,12 +49,12 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
     let alive = true;
     const publish = () => {
       if (!alive) return;
-      void store.plugin.setForegroundContext({ expectedConnectionGeneration, visible: document.visibilityState !== "hidden", threadId, threadTitle, composerMode }).catch(() => undefined);
+      void store.plugin.setForegroundContext({ expectedConnectionGeneration, visible: document.visibilityState !== "hidden", threadId, threadTitle, composerMode, composerAvailable }).catch(() => undefined);
     };
     publish();
     document.addEventListener("visibilitychange", publish);
     return () => { alive = false; document.removeEventListener("visibilitychange", publish); };
-  }, [store, threadId, threadTitle, composerMode, state.native?.connectionGeneration, state.native?.settingsRevision, state.native?.readiness]);
+  }, [store, threadId, threadTitle, composerMode, composerAvailable, state.native?.connectionGeneration, state.native?.settingsRevision, state.native?.readiness]);
   const native = state.native;
   // A lost connection closes the sheet and picker, so neither reopens by itself when voice reconnects.
   if (!native && (sheet || picker)) { setSheet(false); setPicker(null); }

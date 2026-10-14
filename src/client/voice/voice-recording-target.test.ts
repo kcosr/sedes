@@ -25,7 +25,7 @@ describe("recording target precedence", () => {
   });
   it("follows a new visible route before its foreground bridge reply arrives", () => {
     const native = voiceSnapshot({ retainedVoiceTarget,
-      foreground: { visible: true, threadId: "viewed", threadTitle: "Viewed thread" } });
+      foreground: { visible: true, threadId: "viewed", threadTitle: "Viewed thread", composerAvailable: false } });
     expect(voiceRecordingTarget(threads, native, "next")).toEqual({ threadId: "next", threadTitle: "Explicit choice", source: "visible" });
     expect(voiceRecordingTarget(threads, native, "viewed")).toEqual({ threadId: "outside-inventory", threadTitle: "Last voice thread", source: "retained" });
     expect(voiceRecordingTarget(threads, { ...native, nextRecordingTarget: { threadId: "default", threadTitle: "Default thread" } }, "next"))
@@ -34,12 +34,12 @@ describe("recording target precedence", () => {
       .toEqual({ threadId: "default", threadTitle: "Default thread", source: "pinned" });
   });
   it.each([false, true])("keeps continuity while foreground context is absent on resume (visible=%s)", visible => {
-    const native = voiceSnapshot({ retainedVoiceTarget, foreground: { visible, threadId: null, threadTitle: null } });
+    const native = voiceSnapshot({ retainedVoiceTarget, foreground: { visible, threadId: null, threadTitle: null, composerAvailable: false } });
     expect(voiceRecordingTarget(threads, native, "viewed")).toEqual({ threadId: "outside-inventory", threadTitle: "Last voice thread", source: "retained" });
   });
   it.each(["offline", "archived", "missing"])("opens the chooser for unavailable newly viewed %s before foreground reconciliation", threadId => {
     const native = voiceSnapshot({ retainedVoiceTarget,
-      foreground: { visible: true, threadId: "viewed", threadTitle: "Viewed thread" } });
+      foreground: { visible: true, threadId: "viewed", threadTitle: "Viewed thread", composerAvailable: false } });
     expect(voiceRecordingTarget(threads, native, threadId)).toBeUndefined();
   });
   it.each(["Original title", null])("refreshes the retained title from inventory without changing its destination (native title %s)", threadTitle => {
