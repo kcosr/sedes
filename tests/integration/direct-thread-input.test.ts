@@ -1,7 +1,8 @@
+import { MAXIMUM_THREAD_INPUT_BYTES } from "../../src/shared/protocol/context-excerpts.js";
 import { largeDirectInputText, largeDirectInputWithPrefix } from "../support/large-direct-input.js";
 import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
-import { MAX_DIRECT_INPUT_TEXT_BYTES, directInputRequestSchema, type DirectInputRequest } from "../../src/shared/protocol/thread-input.js";
+import { directInputRequestSchema, type DirectInputRequest } from "../../src/shared/protocol/thread-input.js";
 import { DirectInputRepository } from "../../src/server/db/repositories/direct-input-repository.js";
 import { BackendError } from "../../src/server/backends/contracts.js";
 import { ThreadActivityService } from "../../src/server/conversations/thread-activity-service.js";
@@ -715,7 +716,7 @@ describe("direct thread input admission", { timeout: 30_000 }, () => {
   });
 
   it("enforces text bytes independently of JSON escaping and rejects extra authority fields", () => {
-    const valid = request("é".repeat(MAX_DIRECT_INPUT_TEXT_BYTES / 2));
+    const valid = request("é".repeat(MAXIMUM_THREAD_INPUT_BYTES / 2));
     expect(directInputRequestSchema.safeParse(valid).success).toBe(true);
     expect(directInputRequestSchema.safeParse({ ...valid, text: valid.text + "é" }).success).toBe(false);
     expect(directInputRequestSchema.safeParse({ ...valid, text: " \n\t" }).success).toBe(false);

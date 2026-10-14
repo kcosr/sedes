@@ -4,7 +4,7 @@ import {
   COMPOSER_ATTACHMENT_IMAGE_MEDIA_TYPES,
   MAXIMUM_COMPOSER_ATTACHMENT_IMAGES,
 } from "../../../shared/protocol/composer-attachments.js";
-import { MAXIMUM_COMPOSER_INPUT_BYTES } from "../../../shared/protocol/context-excerpts.js";
+import { MAXIMUM_THREAD_INPUT_BYTES } from "../../../shared/protocol/context-excerpts.js";
 import { inspectSupportedRasterImage } from "../../images/raster-image-inspector.js";
 import {
   BackendError,
@@ -25,7 +25,7 @@ const CLAUDE_CODE_MAXIMUM_STREAM_INPUT_BYTES = 30 * MEBIBYTE;
  * current text and its JSON escaping are also counted exactly below.
  */
 export const CLAUDE_MAXIMUM_STREAM_INPUT_BYTES =
-  CLAUDE_CODE_MAXIMUM_STREAM_INPUT_BYTES - MAXIMUM_COMPOSER_INPUT_BYTES;
+  CLAUDE_CODE_MAXIMUM_STREAM_INPUT_BYTES - MAXIMUM_THREAD_INPUT_BYTES;
 
 // Provider session ids are normally UUIDs. Reserving the SDK's bounded native
 // id width keeps the calculation safe if a future provider identity is longer.

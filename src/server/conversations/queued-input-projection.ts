@@ -1,6 +1,5 @@
 import type { QueuedInputSummary } from "../../shared/protocol/conversation.js";
 import { splitThreadReferenceText } from "../../shared/thread-references.js";
-import { MAXIMUM_DRAFT_BYTES, OVERSIZED_COMPOSER_RESTORE_REASON } from "../../shared/protocol/context-excerpts.js";
 import {
   queuedInputPresentationSchema,
   type QueuedInputPresentation,
@@ -153,9 +152,6 @@ export function projectQueuedInputSummaries(
     resolvedDeliveryMode: item.resolvedDeliveryMode,
     attachmentCount: item.attachments.length,
     taskCount: item.taskContexts.length,
-    ...(Buffer.byteLength(item.text, "utf8") > MAXIMUM_DRAFT_BYTES
-      ? { restoreUnavailableReason: { text: OVERSIZED_COMPOSER_RESTORE_REASON } }
-      : {}),
     ...(item.requestedDeliveryMode === null
       ? {}
       : {

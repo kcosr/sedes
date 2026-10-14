@@ -1,3 +1,4 @@
+import { unifiedThreadInputLimitMigration } from "./migrations/144-unified-thread-input-limit.js";
 import { shownImagesMigration } from "./migrations/143-shown-images.js";
 import { htmlPagesMigration } from "./migrations/140-html-pages.js";
 import { userInputRevisionMigration } from "./migrations/141-user-input-revision.js";
@@ -300,6 +301,7 @@ export const backendNormalizedMigrations = [
   userInputRevisionMigration,
   conversationCreationProvenanceMigration,
   shownImagesMigration,
+  unifiedThreadInputLimitMigration,
 ] as const;
 
 export type DatabaseMigration = {

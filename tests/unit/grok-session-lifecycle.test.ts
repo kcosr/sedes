@@ -11,7 +11,7 @@ import { GrokInterruptNotSentError, GrokSessionLifecycle } from "../../src/serve
 import { AcpDeliveryError } from "../../src/server/provider-protocol/bindings/acp-v1/index.js";
 import { GrokSessionRegistry } from "../../src/server/backends/grok/grok-session-registry.js";
 import { LocalEnvironmentChannelProvider } from "../../src/server/execution/local-environment-channel.js";
-import { MAXIMUM_COMPOSER_INPUT_BYTES } from "../../src/shared/protocol/context-excerpts.js";
+import { MAXIMUM_THREAD_INPUT_BYTES } from "../../src/shared/protocol/context-excerpts.js";
 
 const fixture = fileURLToPath(
   new URL("../fixtures/grok/fake-grok-lifecycle-peer.mjs", import.meta.url),
@@ -777,7 +777,7 @@ describe("Grok provider-private lifecycle", () => {
       const created = await prompted.lifecycle.newSession({
         configuration: sessionConfiguration,
       });
-      const text = "u".repeat(MAXIMUM_COMPOSER_INPUT_BYTES);
+      const text = "u".repeat(MAXIMUM_THREAD_INPUT_BYTES);
       const operation = startPromptText(
         prompted.lifecycle,
         created.state.sessionId,

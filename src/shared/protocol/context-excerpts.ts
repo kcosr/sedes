@@ -17,9 +17,10 @@ export const MAXIMUM_CONTEXT_QUOTE_AFFIX_BYTES = 512;
 export const MAXIMUM_CONTEXT_HEADING_ENTRIES = 16;
 export const MAXIMUM_CONTEXT_HEADING_BYTES = 240;
 export const MAXIMUM_CONTEXT_PROVENANCE_PATH_BYTES = 4_096;
-export const MAXIMUM_COMPOSER_INPUT_BYTES = 262_144;
-export const MAXIMUM_DRAFT_BYTES = 65_536;
-export const OVERSIZED_COMPOSER_RESTORE_REASON = "This input is too large to restore to the composer (64 KiB limit).";
+/** One UTF-8 content budget for Chat drafts, delivered context, and voice text. */
+export const MAXIMUM_THREAD_INPUT_BYTES = 262_144;
+/** Serialized stash overlays reserve room within the 32 MiB thread snapshot. */
+export const MAXIMUM_THREAD_STASH_BYTES = 8 * 1_024 * 1_024;
 
 const encoder = new TextEncoder();
 
@@ -271,7 +272,7 @@ export function requireComposerInputByteLimit(
   context: z.RefinementCtx,
 ): void {
   const bytes = composerInputUtf8Bytes(value);
-  if (bytes > MAXIMUM_COMPOSER_INPUT_BYTES) {
+  if (bytes > MAXIMUM_THREAD_INPUT_BYTES) {
     context.addIssue({
       code: "custom",
       message:

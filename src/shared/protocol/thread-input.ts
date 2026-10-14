@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { mutationIdSchema, threadIdSchema, applicationTurnIdSchema } from "./domain.js";
 import { steerTargetSchema, threadRunStateSchema } from "./conversation.js";
+import { MAXIMUM_THREAD_INPUT_BYTES } from "./context-excerpts.js";
 import { boundedDisplayTextSchema } from "./payload.js";
 
 /** Server-stamped input attribution from the registered client connection. This ID is never authentication. */
@@ -9,7 +10,6 @@ export const clientOriginSchema = z.strictObject({
 });
 export type ClientOrigin = z.infer<typeof clientOriginSchema>;
 
-export const MAX_DIRECT_INPUT_TEXT_BYTES = 262_144;
 // Every admitted byte may need six JSON bytes (for example, a control character).
 export const MAX_DIRECT_INPUT_REQUEST_BYTES = 2_097_152;
 
@@ -19,7 +19,7 @@ export const directInputRequestSchema = z.strictObject({
     if (text.trim().length === 0) {
       context.addIssue({ code: "custom", message: "Input must contain text." });
     }
-    if (new TextEncoder().encode(text).byteLength > MAX_DIRECT_INPUT_TEXT_BYTES) {
+    if (new TextEncoder().encode(text).byteLength > MAXIMUM_THREAD_INPUT_BYTES) {
       context.addIssue({ code: "custom", message: "Input exceeds the text byte limit." });
     }
   }),

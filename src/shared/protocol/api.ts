@@ -49,6 +49,12 @@ import {
   threadEventIdSchema,
 } from "./conversation.js";
 import {
+  MAXIMUM_THREAD_INPUT_BYTES,
+  MAXIMUM_CONTEXT_EXCERPTS,
+  MAXIMUM_CONTEXT_PROVENANCE_PATH_BYTES,
+  MAXIMUM_CONTEXT_HEADING_ENTRIES,
+  MAXIMUM_CONTEXT_HEADING_BYTES,
+  MAXIMUM_CONTEXT_QUOTE_AFFIX_BYTES,
   contextExcerptArraySchema,
   requireComposerInputByteLimit,
 } from "./context-excerpts.js";
@@ -313,9 +319,20 @@ export const automationRunRouteParametersSchema = z.strictObject({
   runId: z.uuid(),
 });
 
+// Content and bounded display provenance may each require six JSON bytes per
+// UTF-8 byte. The per-excerpt allowance covers IDs, fingerprints and numeric
+// locators; the final allowance covers keys, task/attachment IDs and revision.
+export const MAXIMUM_DRAFT_REQUEST_BYTES = 6 * (
+  MAXIMUM_THREAD_INPUT_BYTES + MAXIMUM_CONTEXT_EXCERPTS * (
+    2 * MAXIMUM_CONTEXT_PROVENANCE_PATH_BYTES +
+    MAXIMUM_CONTEXT_HEADING_ENTRIES * MAXIMUM_CONTEXT_HEADING_BYTES +
+    2 * MAXIMUM_CONTEXT_QUOTE_AFFIX_BYTES + 4_096
+  )
+) + 65_536;
+
 export const saveDraftRequestSchema = z
   .strictObject({
-    text: z.string().max(262_144),
+    text: z.string().max(MAXIMUM_THREAD_INPUT_BYTES),
     selectedSkillId: z.string().min(1).max(160).optional(),
     contextExcerpts: contextExcerptArraySchema,
     attachmentIds: composerAttachmentReferenceArraySchema,

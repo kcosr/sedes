@@ -110,14 +110,17 @@ describe("large direct-input storage migration", () => {
       expect(() => updateFirst.run(largeDirectInputText + "x", attemptId)).toThrow(/CHECK constraint/u);
       expect(() => updateQueue.run(largeDirectInputText + "x", queuedId)).toThrow(/CHECK constraint/u);
       // Exercise the current repository only after the historical migration assertions.
-      applyDatabaseMigrations(database, backendNormalizedMigrations);
+      applyDatabaseMigrations(database, backendNormalizedMigrations.filter(migration => migration.version <= 143));
       expect(() => new QueuedInputRepository(database).enqueue(scope, queueThread.id, {
-        mutationId: randomUUID(), text: "é".repeat(32_768) + "x", contextExcerpts: [], attachmentIds: [], taskReferences: [],
+        mutationId: randomUUID(), text: "é".repeat(131_072) + "x", contextExcerpts: [], attachmentIds: [], taskReferences: [],
         source: { kind: "composer", expectedThreadRevision: 0, expectedDraftRevision: 0,
           requestedDeliveryMode: "queue", resolvedDeliveryMode: "queue" }, now: 203,
       })).toThrow("Queued input exceeds the text byte limit.");
       expect(() => database.prepare(`UPDATE conversation_creation_attempts
         SET source_kind = 'composer', consumed_draft_revision = 1 WHERE attempt_id = ?`).run(attemptId)).toThrow(/CHECK constraint/u);
+      applyDatabaseMigrations(database, backendNormalizedMigrations);
+      expect(() => database.prepare(`UPDATE conversation_creation_attempts
+        SET source_kind = 'composer', consumed_draft_revision = 1 WHERE attempt_id = ?`).run(attemptId)).not.toThrow();
       expect(database.pragma("foreign_key_check")).toEqual([]);
       expect(database.pragma("integrity_check", { simple: true })).toBe("ok");
     } finally { database.close(); }

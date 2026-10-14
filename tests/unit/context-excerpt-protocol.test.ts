@@ -3,7 +3,8 @@ import {
   backendItemSchema,
   contextExcerptArraySchema,
   contextExcerptSchema,
-  MAXIMUM_COMPOSER_INPUT_BYTES,
+  MAXIMUM_THREAD_INPUT_BYTES,
+  MAXIMUM_DRAFT_REQUEST_BYTES,
   MAXIMUM_CONTEXT_EXCERPT_BYTES,
   normalizedDraftSchema,
   normalizedStashSchema,
@@ -325,7 +326,7 @@ describe("context excerpt protocol", () => {
     expect(
       saveDraftRequestSchema.safeParse({
         text: "a".repeat(
-          MAXIMUM_COMPOSER_INPUT_BYTES - MAXIMUM_CONTEXT_EXCERPT_BYTES + 1,
+          MAXIMUM_THREAD_INPUT_BYTES - MAXIMUM_CONTEXT_EXCERPT_BYTES + 1,
         ),
         contextExcerpts: [
           { ...excerpt, excerpt: "b".repeat(MAXIMUM_CONTEXT_EXCERPT_BYTES) },
@@ -335,6 +336,28 @@ describe("context excerpt protocol", () => {
         expectedRevision: 0,
       }).success,
     ).toBe(false);
+  });
+
+  it("fits full-limit JSON escaping and maximum diff display provenance in the draft envelope", () => {
+    const contextExcerpts = Array.from({ length: 16 }, (_, index) => ({
+      id: `10000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
+      excerpt: "\u0001",
+      source: {
+        kind: "conversation_diff", itemId: "\u0001".repeat(160), itemRevision: Number.MAX_SAFE_INTEGER,
+        path: "\u0001".repeat(4_096), destinationPath: "\u0001".repeat(4_096),
+      },
+      locator: {
+        kind: "diff_line_range", start: { side: "old", line: 1 }, end: { side: "new", line: Number.MAX_SAFE_INTEGER },
+      },
+    }));
+    const value = {
+      text: "\u0001".repeat(MAXIMUM_THREAD_INPUT_BYTES - contextExcerpts.length), contextExcerpts,
+      attachmentIds: [], taskReferenceIds: [], expectedRevision: Number.MAX_SAFE_INTEGER,
+    };
+    expect(saveDraftRequestSchema.safeParse(value).success).toBe(true);
+    expect(Buffer.byteLength(JSON.stringify(value))).toBeGreaterThan(2 * 1_024 * 1_024);
+    expect(Buffer.byteLength(JSON.stringify(value))).toBeLessThan(MAXIMUM_DRAFT_REQUEST_BYTES);
+    expect(saveDraftRequestSchema.safeParse({ ...value, text: value.text + "x" }).success).toBe(false);
   });
 
   it("round-trips context parts through normalized and backend messages", () => {

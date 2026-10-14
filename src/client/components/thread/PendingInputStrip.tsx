@@ -582,10 +582,10 @@ export function PendingInputStrip({
               className="pending-input-action pending-input-restore"
               aria-label={`Restore queued input to composer: ${item.preview.text}`}
               title={
-                item.restoreUnavailableReason?.text ?? (restoreAvailable ? "Restore to composer" : restoreUnavailableReason)
+                restoreAvailable ? "Restore to composer" : restoreUnavailableReason
               }
               disabled={
-                disabled || awaitingProjection || rowPending || !restoreAvailable || item.restoreUnavailableReason !== undefined
+                disabled || awaitingProjection || rowPending || !restoreAvailable
               }
               onClick={(event) =>
                 void runAction(item, "restore", event.currentTarget)
@@ -594,7 +594,7 @@ export function PendingInputStrip({
               <Undo size={15} strokeWidth={1.9} aria-hidden="true" />
             </button>
           )}
-          {userRestorable && item.restoreUnavailableReason && (
+          {userRestorable && item.state === "failed" && (
             <button
               type="button"
               className="pending-input-action pending-input-copy"

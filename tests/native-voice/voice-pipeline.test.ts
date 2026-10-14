@@ -1,3 +1,4 @@
+import { MAXIMUM_THREAD_INPUT_BYTES } from "../../src/shared/protocol/context-excerpts.js";
 import { createHash, randomUUID } from "node:crypto";
 import { execFile as execCallback } from "node:child_process";
 import { promisify } from "node:util";
@@ -6,7 +7,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
 import { notificationSettingsSchema, voiceNotificationSchema } from "../../src/shared/protocol/notification.js";
-import { directInputReceiptSchema, MAX_DIRECT_INPUT_REQUEST_BYTES, MAX_DIRECT_INPUT_TEXT_BYTES, threadInputContextSchema } from "../../src/shared/protocol/thread-input.js";
+import { directInputReceiptSchema, MAX_DIRECT_INPUT_REQUEST_BYTES, threadInputContextSchema } from "../../src/shared/protocol/thread-input.js";
 import { clientPollResultSchema, registeredClientSchema } from "../../src/shared/protocol/client-controls.js";
 import { startOpenAiSpeechFixture, waitForSpeech } from "../support/openai-speech-fixture.js";
 import { OpenCodeProductionFixture } from "../support/opencode-production-fixture.js";
@@ -126,12 +127,12 @@ describe("native voice production pipeline with loopback providers", () => {
       } finally { await reconnected.close(); }
 
       // The full direct-input text limit still fits its dedicated request parser after JSON escaping.
-      const escaped = { ...input, mutationId: randomUUID(), text: "\u0001".repeat(MAX_DIRECT_INPUT_TEXT_BYTES) };
+      const escaped = { ...input, mutationId: randomUUID(), text: "\u0001".repeat(MAXIMUM_THREAD_INPUT_BYTES) };
       expect(JSON.stringify(escaped).length).toBeGreaterThan(256 * 1024);
-      expect(Buffer.byteLength(escaped.text)).toBe(MAX_DIRECT_INPUT_TEXT_BYTES);
+      expect(Buffer.byteLength(escaped.text)).toBe(MAXIMUM_THREAD_INPUT_BYTES);
       expect(Buffer.byteLength(JSON.stringify(escaped))).toBeLessThan(MAX_DIRECT_INPUT_REQUEST_BYTES);
-      const oversizedText = { ...input, mutationId: randomUUID(), text: "é".repeat(MAX_DIRECT_INPUT_TEXT_BYTES / 2 + 1) };
-      expect(Buffer.byteLength(oversizedText.text)).toBeGreaterThan(MAX_DIRECT_INPUT_TEXT_BYTES);
+      const oversizedText = { ...input, mutationId: randomUUID(), text: "é".repeat(MAXIMUM_THREAD_INPUT_BYTES / 2 + 1) };
+      expect(Buffer.byteLength(oversizedText.text)).toBeGreaterThan(MAXIMUM_THREAD_INPUT_BYTES);
       expect((await app.request(`/api/threads/${threadId}/inputs`, "POST", oversizedText, clientHeaders)).status).toBe(400);
       const overParser = { ...input, mutationId: randomUUID(), text: "\u0001".repeat(Math.floor(MAX_DIRECT_INPUT_REQUEST_BYTES / 6) + 1) };
       expect(Buffer.byteLength(JSON.stringify(overParser))).toBeGreaterThan(MAX_DIRECT_INPUT_REQUEST_BYTES);
