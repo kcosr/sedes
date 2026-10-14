@@ -28,6 +28,8 @@ type VoiceFixture = {
   setForeground(context: NativeVoiceState["foreground"]): void;
   emitInputSubmitted(event: NativeVoiceInputSubmitted): void;
   emitComposerHandoff(event: NativeVoiceComposerHandoff): void;
+  holdRetarget(): void;
+  settleRetarget(error?: string): void;
 };
 declare global { interface Window { __voiceFixture: VoiceFixture } }
 
@@ -46,6 +48,7 @@ export async function installVoiceFixture(page: Page): Promise<void> {
     const listeners = new Map<string, { plugin: string; event: string; callback: (value: unknown) => void }>();
     let listenerId = 0;
     let composerHandoff: { event: NativeVoiceComposerHandoff; claimed: boolean } | undefined;
+    let retargetGate: { promise: Promise<void>; resolve(): void; reject(error: Error): void } | undefined;
     const emit = (event: string, value: unknown) => {
       for (const listener of listeners.values()) if (listener.plugin === "NativeVoice" && listener.event === event) listener.callback(structuredClone(value));
     };
@@ -54,6 +57,18 @@ export async function installVoiceFixture(page: Page): Promise<void> {
       state: retained ? JSON.parse(retained) as NativeVoiceState : initial,
       calls: [],
       recoveredText: "Recovered dictation text.",
+      holdRetarget() {
+        if (retargetGate) throw new Error("A recording retarget is already held.");
+        let resolve!: () => void, reject!: (error: Error) => void;
+        const promise = new Promise<void>((accept, decline) => { resolve = accept; reject = decline; });
+        retargetGate = { promise, resolve, reject };
+      },
+      settleRetarget(error) {
+        if (!retargetGate) throw new Error("No recording retarget is held.");
+        const gate = retargetGate;
+        retargetGate = undefined;
+        if (error) gate.reject(new Error(error)); else gate.resolve();
+      },
       publish(patch) {
         const previous = fixture.state;
         fixture.state = { ...fixture.state, ...patch, stateRevision: fixture.state.stateRevision + 1 };
@@ -192,8 +207,16 @@ export async function installVoiceFixture(page: Page): Promise<void> {
               recording: { ...current.active.recording, keepListening: args.enabled === true } } });
             if (method === "sendRecording") fixture.publish({ phase: "recognizing", actions: { ...current.actions,
               canSetKeepListening: false, canSend: false, canRetarget: false, keepListeningBlockedReason: "not_capturing" } });
-            if (method === "retargetActiveRecognition") fixture.publish({ active: { ...current.active,
-              recognitionThreadId: String(args.threadId), recognitionThreadTitle: typeof args.threadTitle === "string" ? args.threadTitle : null } });
+            if (method === "retargetActiveRecognition") {
+              // Native persists the new destination before acknowledging it;
+              // tests can hold that write while exercising the live controls.
+              if (retargetGate) await retargetGate.promise;
+              const latest = fixture.state;
+              if (latest.phase !== "listening" || args.recordingId !== latest.active?.recording?.id ||
+                  args.expectedConnectionGeneration !== latest.connectionGeneration) throw new Error("The recording changed.");
+              fixture.publish({ active: { ...latest.active!, automatic: false,
+                recognitionThreadId: String(args.threadId), recognitionThreadTitle: typeof args.threadTitle === "string" ? args.threadTitle : null } });
+            }
           } else if (method === "speakReply") {
             if (current.settings.audioMode === "off" || !current.ready || args.expectedConnectionGeneration !== current.connectionGeneration)
               throw new Error("Voice is not ready.");
