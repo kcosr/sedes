@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useId, useRef, useState, useSyncExternalStore, type MouseEvent, type ReactNode } from "react";
-import { ArrowUp, AudioLines, ChevronDown, Infinity as InfinityIcon, LoaderCircle, LocateFixed, Mic, MicOff, RotateCcw, Settings2, SkipForward, TriangleAlert, X } from "lucide-react";
+import { ArrowUp, AudioLines, ChevronDown, Infinity as InfinityIcon, LoaderCircle, Locate, Mic, MicOff, RotateCcw, Settings2, SkipForward, TriangleAlert, X } from "lucide-react";
 import type { NormalizedApplicationThreadSummary } from "../../shared/protocol/application.js";
 import { navigate, parseRoute, settingsPath, useRoute } from "../app/router.js";
 import { openThreadRoute } from "../workspace-panels/thread-panel-navigation.js";
@@ -61,6 +61,8 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
   const composerAvailable = useSyncExternalStore(store.subscribeSubmissionComposers, () => store.hasSubmissionComposer(threadId));
   const viewedThread = threads.find(thread => thread.id === threadId);
   const threadTitle = nativeThreadTitle(viewedThread?.title.text ?? "");
+  const viewedThreadAvailable = viewedThread?.available && (viewedThread.inventoryState === "active" || viewedThread.inventoryState === "settled");
+  const targetThisThreadLabel = `Target this thread: ${threadTitle ?? "Untitled thread"}`;
   // Native visibility reconciliation can clear the foreground without a document visibility event.
   // A successful settings write (including Resume) or session readiness change re-sends the current context.
   // Foreground replies change neither dependency, so a paused Activity rejecting visible=true cannot loop.
@@ -109,8 +111,7 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
   const retargets = !off && native.actions.canRetarget && capture != null;
   // Keep the slot through a pending retarget; only the confirmed destination
   // or leaving Listening removes it. Native foreground can clear independently.
-  const targetsViewedThread = recordingTools && !off && documentVisible && viewedThread?.available &&
-    (viewedThread.inventoryState === "active" || viewedThread.inventoryState === "settled") && active?.recognitionThreadId !== threadId;
+  const targetsViewedThread = recordingTools && !off && documentVisible && viewedThreadAvailable && active?.recognitionThreadId !== threadId;
   // Voice is on without a session (Android stopped or refused the service): only a user-initiated mode write resumes it.
   const resumable = !off && native.actions.canResume;
   // Native Stop discards a recording that has not been sent yet.
@@ -250,7 +251,7 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
                 act(() => store.plugin.sendRecoveredRecording(command));
               }}>{saved.stage === "recognizing" || saved.stage === "admitting" ? <LoaderCircle className="motion-safe:animate-spin" aria-hidden="true" /> : <ArrowUp strokeWidth={1.8} aria-hidden="true" />}</button>
           </> : <>
-            {inputActions && targetsViewedThread ? <button ref={registerShortcut} type="button" className="voice-card-button" aria-label={`Target this thread: ${threadTitle ?? "Untitled thread"}`}
+            {inputActions && targetsViewedThread ? <button ref={registerShortcut} type="button" className="voice-card-button" aria-label={targetThisThreadLabel}
               title="This thread" aria-disabled={state.pending || !native.actions.canRetarget || undefined} onClick={event => {
                 const currentRoute = parseRoute(window.location.pathname);
                 if (state.pending || !native.actions.canRetarget || !capture || !viewedThread || document.visibilityState === "hidden" || currentRoute.name !== "thread" || currentRoute.threadId !== threadId) return;
@@ -262,7 +263,7 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
                 void store.run(() => store.plugin.retargetActiveRecognition(command)).catch(() => {
                   if (shortcutRetarget.current === command) shortcutRetarget.current = null;
                 });
-              }}><LocateFixed strokeWidth={1.8} aria-hidden="true" /></button> : null}
+              }}><Locate strokeWidth={1.8} aria-hidden="true" /></button> : null}
             {inputActions ? <button ref={keepButton} type="button" className="voice-card-button voice-card-keep" aria-label="Keep listening" title={keepBlocked ?? "Keep listening"}
               aria-pressed={capture?.keepListening ?? false} aria-disabled={state.pending || !recordingTools || !native.actions.canSetKeepListening || undefined}
               aria-describedby={keepBlocked ? `${statusId}-keep-blocked` : undefined} onClick={() => {
@@ -270,7 +271,9 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
                 const command = { expectedConnectionGeneration: native.connectionGeneration, recordingId: capture.id, enabled: !capture.keepListening };
                 act(() => store.plugin.setKeepListening(command));
               }}><InfinityIcon strokeWidth={1.8} aria-hidden="true" /></button>
-              : showNext ? <button type="button" className="voice-card-button" aria-label="Next voice interaction" title="Next"
+              : showNext ? <button type="button" className="voice-card-button"
+                aria-label={idleNavigation ? viewedThreadAvailable ? targetThisThreadLabel : "Release voice target" : "Next voice interaction"}
+                title={idleNavigation ? viewedThreadAvailable ? "This thread" : "Release voice target" : "Next"}
                 disabled={state.pending || !(native.actions.canSkip && active || idleNavigation)} onClick={event => {
                   if (lastActionPress.current?.kind !== "next" && repeatsLastAction(event)) return;
                   lastActionPress.current = { kind: "next", bounds: event.currentTarget.getBoundingClientRect(), at: event.timeStamp };
@@ -281,7 +284,7 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
                     const command = { expectedConnectionGeneration: native.connectionGeneration, expectedRetainedRevision: native.retainedVoiceTarget.revision };
                     act(() => store.plugin.releaseRetainedVoiceTarget(command));
                   }
-                }}><SkipForward strokeWidth={1.8} aria-hidden="true" /></button> : null}
+                }}>{idleNavigation ? <Locate strokeWidth={1.8} aria-hidden="true" /> : <SkipForward strokeWidth={1.8} aria-hidden="true" />}</button> : null}
             {active !== null ? <button type="button" className="voice-card-button" aria-label={cancels ? "Cancel voice recording" : "Stop voice interaction"}
               title={cancels ? "Cancel" : "Stop"} disabled={!native.actions.canStop || !active} onClick={event => {
                 if (!active || !native.actions.canStop) return;
