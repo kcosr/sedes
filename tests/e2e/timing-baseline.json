@@ -19,11 +19,11 @@
     },
     {
       "file": "canned-prompts.spec.ts",
-      "estimatedMilliseconds": 17000
+      "estimatedMilliseconds": 18000
     },
     {
       "file": "claude-journey.spec.ts",
-      "estimatedMilliseconds": 33000
+      "estimatedMilliseconds": 36000
     },
     {
       "file": "codex-tui-journeys.spec.ts",
@@ -31,7 +31,7 @@
     },
     {
       "file": "direct-input-submission.spec.ts",
-      "estimatedMilliseconds": 21000
+      "estimatedMilliseconds": 22000
     },
     {
       "file": "execution-settings.spec.ts",
@@ -39,11 +39,11 @@
     },
     {
       "file": "generative-ui.spec.ts",
-      "estimatedMilliseconds": 36000
+      "estimatedMilliseconds": 77000
     },
     {
       "file": "lineage-journeys.spec.ts",
-      "estimatedMilliseconds": 59000
+      "estimatedMilliseconds": 61000
     },
     {
       "file": "mobile-search-pickers.spec.ts",
@@ -63,19 +63,19 @@
     },
     {
       "file": "normalized-codex-thread.spec.ts",
-      "estimatedMilliseconds": 73000
+      "estimatedMilliseconds": 74000
     },
     {
       "file": "normalized-composer-state.spec.ts",
-      "estimatedMilliseconds": 117000
+      "estimatedMilliseconds": 118000
     },
     {
       "file": "normalized-navigation.spec.ts",
-      "estimatedMilliseconds": 65000
+      "estimatedMilliseconds": 66000
     },
     {
       "file": "normalized-streaming-state.spec.ts",
-      "estimatedMilliseconds": 76000
+      "estimatedMilliseconds": 75000
     },
     {
       "file": "notifications.spec.ts",
@@ -87,15 +87,15 @@
     },
     {
       "file": "pending-input-strip.spec.ts",
-      "estimatedMilliseconds": 121000
+      "estimatedMilliseconds": 123000
     },
     {
       "file": "production-primary.spec.ts",
-      "estimatedMilliseconds": 15000
+      "estimatedMilliseconds": 16000
     },
     {
       "file": "question-inbox.spec.ts",
-      "estimatedMilliseconds": 28000
+      "estimatedMilliseconds": 29000
     },
     {
       "file": "saved-agents.spec.ts",
@@ -107,7 +107,7 @@
     },
     {
       "file": "sidebar-background-work.spec.ts",
-      "estimatedMilliseconds": 21000
+      "estimatedMilliseconds": 20000
     },
     {
       "file": "sidebar-execution-scope.spec.ts",
@@ -115,15 +115,15 @@
     },
     {
       "file": "sidebar-thread-groups.spec.ts",
-      "estimatedMilliseconds": 46000
+      "estimatedMilliseconds": 61000
     },
     {
       "file": "skill-picker-layout.spec.ts",
-      "estimatedMilliseconds": 11000
+      "estimatedMilliseconds": 12000
     },
     {
       "file": "tasks-panel.spec.ts",
-      "estimatedMilliseconds": 53000
+      "estimatedMilliseconds": 54000
     },
     {
       "file": "terminal-panes-mobile.spec.ts",
@@ -131,7 +131,7 @@
     },
     {
       "file": "terminal-panes.spec.ts",
-      "estimatedMilliseconds": 34000
+      "estimatedMilliseconds": 35000
     },
     {
       "file": "terminal-reconciliation.spec.ts",
@@ -143,27 +143,31 @@
     },
     {
       "file": "thread-resume-retention.spec.ts",
-      "estimatedMilliseconds": 27000
+      "estimatedMilliseconds": 28000
     },
     {
       "file": "thread-templates.spec.ts",
-      "estimatedMilliseconds": 21000
+      "estimatedMilliseconds": 22000
     },
     {
       "file": "turn-bookmarks.spec.ts",
-      "estimatedMilliseconds": 42000
+      "estimatedMilliseconds": 44000
     },
     {
       "file": "usage-analytics.spec.ts",
       "estimatedMilliseconds": 32000
     },
     {
+      "file": "voice-composer-handoff.spec.ts",
+      "estimatedMilliseconds": 52000
+    },
+    {
       "file": "voice-controls.spec.ts",
-      "estimatedMilliseconds": 53000
+      "estimatedMilliseconds": 58000
     },
     {
       "file": "voice-playback-controls.spec.ts",
-      "estimatedMilliseconds": 37000
+      "estimatedMilliseconds": 38000
     },
     {
       "file": "workpad-checklists.spec.ts",
@@ -183,7 +187,7 @@
     },
     {
       "file": "workspace-files.spec.ts",
-      "estimatedMilliseconds": 55000
+      "estimatedMilliseconds": 57000
     },
     {
       "file": "workspace-panel-regions.spec.ts",
