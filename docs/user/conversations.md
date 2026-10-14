@@ -53,13 +53,16 @@ needs to resume, the card offers **Resume**.
 
 Voice retains its last active thread after playback or recording ends, including
 Stop or Cancel. If B speaks while you view A, the idle card keeps B so **Start**
-can reply to B even with Auto-listen off. Idle **Next**, immediately left of Start,
-releases B and returns to A; with no viewed thread, it returns to the saved default
-or chooser. Deliberately opening a different thread while idle selects it.
+can reply to B even with Auto-listen off. The idle target icon, immediately left
+of Start, releases B and returns to A; with no viewed thread, it returns to the
+saved default or chooser. It is labelled **Target this thread** when the viewed
+thread can accept a recording, and **Release voice target** otherwise.
+Deliberately opening a different thread while idle selects it.
 Resuming on the same thread preserves the voice destination. In-app, headset,
 and notification recording use the same destination, and an ordinary idle viewed
-destination stays selected when you background the app, including after Next.
-Next stays hidden when the retained target matches the viewed thread or the card
+destination stays selected when you background the app, including after releasing
+the retained target. The target icon stays hidden when the retained target
+matches the viewed thread or the card
 follows an explicitly chosen thread. Releasing does
 not record, send, navigate, or change the draft.
 Off, a connection change, an ended voice session, or enabling pinning clears
@@ -93,8 +96,11 @@ effect on the next recording. The idle Start button shows infinity when that
 default is on and a microphone when it is off.
 The compact voice bar keeps its title and status beside the controls. Playback
 shows Next, Stop, Record, hiding Next when nothing is queued and Auto-listen
-is off; recording shows Keep listening, Cancel, Send. Send
-works with or without Keep listening. Idle hides unavailable Next and Stop,
+is off; recording shows Keep listening, Cancel, Send. While Listening on another
+thread, **Target this thread** appears left of Keep listening and moves the
+entire unsent recording to the available viewed thread without restarting
+capture or changing queued replies. Send works with or without Keep listening.
+Idle hides unavailable target and Stop actions,
 while Record/Send stays at the right edge. The outline is blue while speaking
 and red while recording.
 
@@ -115,7 +121,8 @@ never types an answer into an approval or question form.
 
 **Record** ends speech and starts a reply to the spoken thread, even with
 Auto-listen off. During speech, **Next** skips both the speech and its follow-up
-recording; while idle and showing a retained fallback, it releases that thread.
+recording. While idle and showing a retained fallback, the target icon releases
+that thread; headset and notification Next do the same.
 Playback **Stop** in the app or notification cancels the interaction and clears
 queued speech and pending agent-requested voice actions. It leaves voice enabled
 and does not stop the agent. Headset Play/Pause and Next preserve queued speech.

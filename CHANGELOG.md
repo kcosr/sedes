@@ -16,8 +16,7 @@ User-facing changes are collected here before release. See the
 
 - While Android voice is listening on another thread, **Target this thread**
   switches the entire unsent recording to the viewed thread without restarting
-  capture or changing queued replies. The idle release button uses the same
-  target icon; playback Next remains unchanged. See
+  capture or changing queued replies. See
   [voice controls](docs/operator/clients/voice.md#targeting-and-controls).
 
 - Android voice combines speech with the current Chat draft when foreground on
@@ -28,6 +27,11 @@ User-facing changes are collected here before release. See the
   ([#81](https://github.com/kcosr/sedes/pull/81))
 
 ### Changed
+
+- Idle voice **Next** is now the target icon labelled **Target this thread**, or
+  **Release voice target** when no available thread is viewed. It still releases
+  the retained destination; playback, headset, and notification Next are
+  unchanged. See [voice controls](docs/operator/clients/voice.md#targeting-and-controls).
 
 - Chat draft text, speech, stashes, and restored queued input now use the same
   256 KiB UTF-8 limit. Text and materialized context share the existing input
