@@ -1257,8 +1257,9 @@ export const queuedInputPresentationSchema = z.strictObject({
     ? "agent_result"
     : input.origin === "agent_control"
       ? "agent_message"
-      : input.origin === "user" && input.inputOrigin?.kind === "question_response"
-        ? "question_response"
+      : input.origin === "user" &&
+          (input.inputOrigin?.kind === "question_response" || input.inputOrigin?.kind === "page_response")
+        ? input.inputOrigin.kind
         : undefined;
   if (input.inputOrigin?.kind !== expectedOrigin) {
     context.addIssue({

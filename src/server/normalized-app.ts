@@ -23,7 +23,7 @@ import {
 } from "../shared/protocol/projects.js";
 import { projectIdSchema, mutationIdSchema } from "../shared/protocol/domain.js";
 import { MAXIMUM_DRAFT_REQUEST_BYTES } from "../shared/protocol/api.js";
-import { directInputRequestSchema, threadInputContextSchema, MAX_DIRECT_INPUT_REQUEST_BYTES } from "../shared/protocol/thread-input.js";
+import { directInputRequestBodySchema, threadInputContextSchema, MAX_DIRECT_INPUT_REQUEST_BYTES } from "../shared/protocol/thread-input.js";
 import { LocationConflictError, ProjectRemovalBlockedError } from "./db/repositories/inventory-repository.js";
 import { respondToQuestionResultSchema } from "../shared/protocol/api.js";
 import type { QuestionRequestService } from "./domain/question-request-service.js";
@@ -1546,7 +1546,7 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
   routes.post("/api/threads/:threadId/inputs", async (request, response) => {
     const requestScope = await scope(request);
     const { threadId } = threadRouteParametersSchema.parse(request.params);
-    const external = directInputRequestSchema.omit({ origin: true }).parse(request.body);
+    const external = directInputRequestBodySchema.parse(request.body);
     const input = { ...external, origin: registeredOrigin(request, requestScope, true)! };
     response.setHeader("Cache-Control", "no-store");
     response.json(await dependencies.threads.admitInput(requestScope, threadId, input));

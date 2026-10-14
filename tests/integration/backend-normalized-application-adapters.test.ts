@@ -764,7 +764,7 @@ describe("backend-normalized application adapters", () => {
         .run(current.scope.tenantId, current.scope.principalId, current.threadId);
       const beforeQueue = current.database.prepare("SELECT * FROM queued_inputs").all();
       const migratedQueue = beforeQueue.map((row) => {
-        const { requested_steer_turn_id, resolved_steer_turn_id, ...retained } = row as Record<string, unknown>;
+        const { requested_steer_turn_id, resolved_steer_turn_id, question_response_origin_json, ...retained } = row as Record<string, unknown>;
         return { ...retained,
           requested_steer_target_json: requested_steer_turn_id === null ? null : JSON.stringify({ kind: "turn", turnId: requested_steer_turn_id }),
           resolved_steer_target_json: resolved_steer_turn_id === null ? null : JSON.stringify({ kind: "turn", turnId: resolved_steer_turn_id }),
@@ -772,6 +772,8 @@ describe("backend-normalized application adapters", () => {
           failure_reason: null,
           // Migration 141 classifies this ordinary historical input as user-written.
           is_user_input: 1,
+          // Migration 145 preserves provenance under the general input-origin column.
+          input_origin_json: question_response_origin_json,
         };
       });
       const beforeCompletion = current.database.prepare("SELECT * FROM submission_completion_observations").all();

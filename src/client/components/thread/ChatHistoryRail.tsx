@@ -59,6 +59,8 @@ export function createChatHistoryEntries(
               userLabel:
                 item.origin.kind === "question_response"
                   ? "Question answered"
+                  : item.origin.kind === "page_response"
+                    ? `Page response · ${item.origin.title} · Revision ${item.origin.revision}`
                   : `${item.origin.kind === "agent_message" ? "Agent message" : "Agent result"} · ${item.origin.sourceThreadLabel.text}`,
             }
           : {}),

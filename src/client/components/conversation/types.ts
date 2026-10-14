@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import type { PageResponseServices } from "./page-response-services.js";
 import type { PageRevision, PageRevisionPage } from "../../../shared/protocol/pages.js";
 import type { PageListOptions, PageRenderAdmission } from "../../api/ApiClient.js";
 import type {
@@ -19,6 +20,7 @@ export interface ItemRenderContext {
   createPageRenderAdmission?: (pageId: string, revision: number, signal?: AbortSignal) => Promise<PageRenderAdmission>;
   listPageRevisions?: (pageId: string, options?: PageListOptions) => Promise<PageRevisionPage>;
   getPageRevision?: (pageId: string, revision: number, signal?: AbortSignal) => Promise<PageRevision>;
+  pageResponse?: PageResponseServices;
   providerFeatureCapabilities?: readonly ProviderFeatureCapability[];
   /** A disclosure already names the image, so the figure omits its caption. */
   omitImageCaption?: boolean;

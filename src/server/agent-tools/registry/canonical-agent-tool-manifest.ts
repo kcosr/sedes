@@ -128,14 +128,14 @@ export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
   }),
   "page.publish": threadOnlyManifestEntry({
     id: "page.publish", schemaVersion: 1, environmentAuthority: { kind: "source_only" },
-    description: "Publish an interactive HTML preview. Provide exactly one source: path to an HTML file in this thread's execution environment (up to 1 MiB), or html text (up to 65,536 characters). CSS and JavaScript must be inline. File sources capture referenced local PNG, JPEG, GIF and WebP images; html text requires embedded data images. HTTP resources are unsupported. Omit viewport dimensions for fluid layout, or specify width and optionally height for a fixed mock-up. To update a page pass its pageId and expectedRevision; each changed publication preserves earlier versions and appends a preview.",
+    description: "Publish HTML from exactly one path (execution-environment file, max 1 MiB) or html (max 65,536 characters). Inline CSS/JS only. Files capture local PNG/JPEG/GIF/WebP; html needs data images. No HTTP resources. Optional viewport fixes width/height; update with pageId and expectedRevision. For controls or canvas, register window.sedes.onSubmit(() => string): synchronously return all answers as one nonblank plain-text string, max 65,536 UTF-8 bytes, with no separate summary. User's host Send captures once and sends or queues to the owning thread, never Steer. Unsent state is transient with no agent readback; pages cannot send themselves.",
     catalog: { groupId: "pages", label: "Publish HTML page", order: 10 },
     effects: { application: "write", modelUsage: "none", external: "none" },
   }),
   "page.preview": threadOnlyManifestEntry({
     id: "page.preview", schemaVersion: 1, environmentAuthority: { kind: "source_only" },
     outputMediaTypes: ["image/png"] as const,
-    description: "Capture a screenshot, console output and dimensions before publishing. Provide exactly one of path or html, with the same source limits, local-image capture and isolation as page.publish. Returns image/png as native model content; CLI output contains a private local PNG path. Requires the optional preview browser installation. Does not publish a page or revision.",
+    description: "Preview HTML as a PNG screenshot, console output and dimensions. Provide exactly one path or html using page.publish source and isolation rules. Returns native image content, or a private PNG path through CLI. Requires the optional preview browser. Supports window.sedes.onSubmit registration so page code can test its own producer. Preview never invokes it for submission, sends a response, or publishes a revision.",
     catalog: { groupId: "pages", label: "Preview HTML page", order: 20 },
     effects: { application: "read", modelUsage: "none", external: "none" },
   }),

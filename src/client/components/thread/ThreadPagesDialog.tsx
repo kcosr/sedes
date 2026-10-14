@@ -1,9 +1,10 @@
+import { usePageResponseServices } from "../conversation/page-response-services.js";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   PageRevision,
   PageRevisionPage,
 } from "../../../shared/protocol/pages.js";
-import type { ThreadClientStore } from "../../stores/ThreadClientStore.js";
+import { useThreadStore, type ThreadClientStore } from "../../stores/ThreadClientStore.js";
 import { PagePreview } from "../conversation/PagePreview.js";
 import { Button } from "../ui/button.js";
 import {
@@ -33,25 +34,6 @@ export function ThreadPagesDialog({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const request = useRef<AbortController | undefined>(undefined);
-  const services = useMemo(
-    () => ({
-      createPageRenderAdmission: (
-        pageId: string,
-        revision: number,
-        signal?: AbortSignal,
-      ) => store.createPageRenderAdmission(pageId, revision, signal),
-      listPageRevisions: (
-        pageId: string,
-        options?: import("../../api/ApiClient.js").PageListOptions,
-      ) => store.listPageRevisions(pageId, options),
-      getPageRevision: (
-        pageId: string,
-        revision: number,
-        signal?: AbortSignal,
-      ) => store.getPageRevision(pageId, revision, signal),
-    }),
-    [store],
-  );
   const load = useCallback(
     (cursor?: string) => {
       request.current?.abort();
@@ -144,11 +126,10 @@ export function ThreadPagesDialog({
             </nav>
             <div className="thread-pages-selected">
               {open && selected ? (
-                <PagePreview
+                <ThreadPagePreview
                   key={`${selected.pageId}:${selected.revision}`}
                   page={selected}
-                  services={services}
-                  presentation="library"
+                  store={store}
                 />
               ) : null}
             </div>
@@ -157,4 +138,29 @@ export function ThreadPagesDialog({
       </DialogContent>
     </Dialog>
   );
+}
+
+function ThreadPagePreview({ page, store }: { readonly page: PageRevision; readonly store: ThreadClientStore }): React.JSX.Element {
+  const threadState = useThreadStore(store);
+  const pageResponse = usePageResponseServices(store, threadState);
+  const services = useMemo(
+    () => ({
+      createPageRenderAdmission: (
+        pageId: string,
+        revision: number,
+        signal?: AbortSignal,
+      ) => store.createPageRenderAdmission(pageId, revision, signal),
+      listPageRevisions: (
+        pageId: string,
+        options?: import("../../api/ApiClient.js").PageListOptions,
+      ) => store.listPageRevisions(pageId, options),
+      getPageRevision: (
+        pageId: string,
+        revision: number,
+        signal?: AbortSignal,
+      ) => store.getPageRevision(pageId, revision, signal),
+    }),
+    [store],
+  );
+  return <PagePreview page={page} services={{ ...services, pageResponse }} presentation="library" />;
 }

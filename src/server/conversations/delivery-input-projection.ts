@@ -60,7 +60,9 @@ export function backendDeliveryInput(
   const provenanceText =
     inputOrigin?.kind === "agent_message"
       ? `Agent message from ${inputOrigin.sourceThreadLabel.text}:\n\n${providerInput.text}`
-      : providerInput.text;
+      : inputOrigin?.kind === "page_response"
+        ? `Page response from ${inputOrigin.title} (revision ${inputOrigin.revision}):\n\n${providerInput.text}`
+        : providerInput.text;
   if (providerInput.taskContexts.length === 0) {
     return provenanceText === providerInput.text
       ? providerInput
@@ -88,9 +90,9 @@ export function canonicalUserMessageContent(input: {
     { semanticKind: "user_message" }
   >["content"];
 }): readonly MessageContentPart[] {
-  const providerSkill = input.providerContent.find(
-    ({ kind }) => kind === "skill",
-  );
+  const providerSkill = input.snapshot.origin?.kind === "page_response"
+    ? undefined
+    : input.providerContent.find(({ kind }) => kind === "skill");
   const directSkillArguments =
     providerSkill?.kind === "skill" && !input.snapshot.selectedSkillId
       ? directSkillInvocationArguments(

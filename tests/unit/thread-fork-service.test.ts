@@ -731,6 +731,11 @@ describe("ThreadForkService", () => {
     const current = fixture();
     try {
       const request = current.manual();
+      const pageOrigin = { kind: "page_response" as const, pageId: "a6081ea9-e9f2-4b07-b2b2-b65062838998", revision: 2, title: "Source review" };
+      current.deliveryInputSnapshots.prepare(current.scope, current.source.id, {
+        applicationOperationId: "source-page-operation", text: "  /review selected option  ",
+        contextExcerpts: [], taskContexts: [], attachments: [], origin: pageOrigin, createdAt: 998,
+      });
       current.deliveryInputSnapshots.prepare(current.scope, current.source.id, {
         applicationOperationId: "source-delivery-operation",
         text: "Canonical source prompt",
@@ -766,6 +771,8 @@ describe("ThreadForkService", () => {
       const result = await current.service.forkManual(request);
       expect(result.status).toBe("created");
       const childThreadId = result.childThreadId;
+      expect(current.deliveryInputSnapshots.find(current.scope, childThreadId, "source-page-operation"))
+        .toMatchObject({ text: "  /review selected option  ", origin: pageOrigin });
       expect(
         current.deliveryInputSnapshots.find(
           current.scope,

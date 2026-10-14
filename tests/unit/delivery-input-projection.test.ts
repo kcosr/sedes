@@ -62,6 +62,22 @@ function snapshotWithTasks(taskContexts: readonly MaterializedTaskContext[]) {
 }
 
 describe("common delivery input projection", () => {
+  it("frames page replies while retaining exact text and suppressing skill echoes", () => {
+    const text = "  /review all files\nKeep these spaces.  ";
+    const origin = { kind: "page_response" as const, pageId: "a6081ea9-e9f2-4b07-b2b2-b65062838998", revision: 3, title: "Review form" };
+    const input = {
+      applicationOperationId: "page-operation", mutationId: "page-operation", source: { kind: "user" as const },
+      reconciliationToken: "page-operation", text, contextExcerpts: [], taskContexts: [], attachments: [], inputOrigin: origin,
+    };
+    const expectedText = `Page response from Review form (revision 3):\n\n${text}`;
+    expect(backendDeliveryInput(input)).toMatchObject({ text: expectedText });
+    expect(backendDeliveryInput(input)).not.toHaveProperty("inputOrigin");
+    expect(input.text).toBe(text);
+    expect(canonicalUserMessageContent({
+      snapshot: { ...snapshotWithTasks([]), text, origin },
+      providerContent: [{ kind: "skill", name: { text: "review" } }, { kind: "text", text: { text: expectedText } }],
+    })).toEqual([{ kind: "text", text: { text } }]);
+  });
   it("keeps user-selected thread text intact through provider input and canonical history with Tasks and attachments", () => {
     const references = [{ threadId: "616946aa-4574-41f7-bd70-d3a9edd56dbd", title: "Other thread" }];
     const text = formatThreadReferenceText("Summarize the findings.", references);

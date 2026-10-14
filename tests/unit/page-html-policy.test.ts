@@ -50,6 +50,7 @@ describe("generated page bootstrap", () => {
     const frame = document.createElement("iframe");
     document.body.append(frame);
     const target = frame.contentWindow as Window & typeof globalThis;
+    target.TextEncoder = TextEncoder;
     target.location.hash = "channel=1234567890123456";
     const messages: unknown[] = [];
     const postMessage = vi.spyOn(target.parent, "postMessage").mockImplementation(value => { messages.push(value); });
@@ -73,6 +74,7 @@ describe("generated page bootstrap", () => {
     frame.src = "about:blank";
     document.body.append(frame);
     const target = frame.contentWindow as Window & typeof globalThis;
+    target.TextEncoder = TextEncoder;
     target.location.hash = "channel=1234567890123456";
     const postMessage = vi.spyOn(target.parent, "postMessage").mockImplementation((value: unknown) => { messages.push(value); });
     target.requestAnimationFrame = (callback) => { frames.push(callback); return frames.length; };

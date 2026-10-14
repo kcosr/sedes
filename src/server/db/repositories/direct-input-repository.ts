@@ -30,6 +30,7 @@ function fingerprint(threadId: string, request: DirectInputRequest): string {
     request.runningPolicy.mode === "steer" ? request.runningPolicy.target.kind : null,
     request.runningPolicy.mode === "steer" && request.runningPolicy.target.kind === "turn"
       ? request.runningPolicy.target.turnId : null,
+    ...(request.pageResponse === undefined ? [] : [request.pageResponse.pageId, request.pageResponse.revision]),
   ])).digest("hex");
 }
 

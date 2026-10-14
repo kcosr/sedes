@@ -10,6 +10,19 @@ export const PAGE_RENDER_MAX_BYTES = PAGE_ESCAPED_MAX_BYTES + PAGE_RENDER_OVERHE
 export const PAGE_MAX_IMAGES = 64;
 export const pageIdSchema = z.string().uuid();
 export const pageRevisionNumberSchema = z.number().int().min(1).max(Number.MAX_SAFE_INTEGER);
+export const PAGE_RESPONSE_MAX_BYTES = 65_536;
+export const pageResponseReferenceSchema = z.strictObject({
+  pageId: pageIdSchema,
+  revision: pageRevisionNumberSchema,
+});
+export type PageResponseReference = z.infer<typeof pageResponseReferenceSchema>;
+/** Server-stamped source metadata retained with the immutable submitted text. */
+export const pageResponseOriginSchema = z.strictObject({
+  kind: z.literal("page_response"),
+  ...pageResponseReferenceSchema.shape,
+  title: z.string().trim().min(1).max(240),
+});
+export type PageResponseOrigin = z.infer<typeof pageResponseOriginSchema>;
 export const pageViewportSchema = z.strictObject({
   width: z.number().int().min(100).max(4096).optional(),
   height: z.number().int().min(100).max(8192).optional(),

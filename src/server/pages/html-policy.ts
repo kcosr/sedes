@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { defaultTreeAdapter, serialize, type DefaultTreeAdapterTypes } from "parse5";
-import { PAGE_RENDER_OVERHEAD_MAX_BYTES } from "../../shared/protocol/pages.js";
+import { PAGE_RENDER_OVERHEAD_MAX_BYTES, PAGE_RESPONSE_MAX_BYTES } from "../../shared/protocol/pages.js";
 import { PAGE_MEASUREMENT_INSTALL_SOURCE, stabilizePageHeight } from "../../shared/page-sizing.js";
 
 /** The trusted wrapper policy is inherited by its local srcdoc child.
@@ -18,6 +18,21 @@ const PAGE_BOOTSTRAP = `<script>(function(host){
 const document=host.document,Math=host.Math,Number=host.Number,Element=host.Element;
 const define=host.Object.defineProperty,ResizeObserver=host.ResizeObserver,MutationObserver=host.MutationObserver;
 const send=host.parent.postMessage.bind(host.parent),requestAnimationFrame=host.requestAnimationFrame.bind(host),addEventListener=host.addEventListener.bind(host);
+const parent=host.parent,channel=host.name,freeze=host.Object.freeze,TypeError=host.TypeError;
+const trim=host.Function.prototype.call.bind(host.String.prototype.trim),encoder=new host.TextEncoder(),encode=encoder.encode.bind(encoder);
+const validId=host.RegExp.prototype.test.bind(/^[a-zA-Z0-9_-]{16,128}$/);
+let producer,lastRequestId,disposed=false;
+define(host,"sedes",{value:freeze({onSubmit(callback){if(typeof callback!=="function")throw new TypeError("onSubmit requires a synchronous text producer");if(disposed)return;producer=callback;send({type:"sedes:page-submit-ready",channel},"*");}}),writable:false,configurable:false});
+addEventListener("message",event=>{
+if(disposed||!event.isTrusted||event.source!==parent)return;
+const data=event.data;if(!data||typeof data!=="object"||data.type!=="sedes:page-submit-request"||data.channel!==channel||typeof data.requestId!=="string"||!validId(data.requestId)||data.requestId===lastRequestId)return;
+lastRequestId=data.requestId;
+const reply={type:"sedes:page-submit-response",channel,requestId:data.requestId};
+if(!producer)reply.error="not_registered";
+else {try{const text=producer();if(typeof text!=="string"||!trim(text))reply.error="invalid_response";else if(text.length>${PAGE_RESPONSE_MAX_BYTES}||encode(text).byteLength>${PAGE_RESPONSE_MAX_BYTES})reply.error="response_too_large";else reply.text=text;}catch{reply.error="producer_failed";}}
+send(reply,"*");
+});
+addEventListener("pagehide",()=>{disposed=true;producer=undefined;send({type:"sedes:page-submit-unavailable",channel},"*");},{once:true});
 for(const name of ["RTCPeerConnection","webkitRTCPeerConnection","WebTransport"]){try{define(host,name,{value:undefined,writable:false,configurable:false});}catch{}}
 ${PAGE_MEASUREMENT_INSTALL_SOURCE}(host);
 const measurePage=host.__sedesMeasurePage,stabilize=${stabilizePageHeight.toString()};
@@ -45,10 +60,31 @@ const WRAPPER_SUFFIX = `"</script><script>(()=>{
 const channel=new URLSearchParams(location.hash.slice(1)).get("channel");
 const valid=typeof channel==="string"&&/^[a-zA-Z0-9_-]{16,128}$/.test(channel);
 const frame=document.createElement("iframe");frame.setAttribute("data-page-document","");frame.setAttribute("sandbox","allow-scripts");frame.title="Page content";frame.referrerPolicy="no-referrer";
-let loaded=false,failed=false;
+if(valid)frame.name=channel;
+let loaded=false,failed=false,submitReady=false,pendingRequestId,lastRequestId;
+const encoder=new TextEncoder();
 const fail=()=>{if(failed)return;failed=true;frame.remove();if(valid)parent.postMessage({type:"sedes:page-error",channel},"*");};
 frame.addEventListener("load",()=>{if(loaded)fail();else loaded=true;});frame.addEventListener("error",fail);
-addEventListener("message",event=>{if(failed||!valid||event.source!==frame.contentWindow)return;const data=event.data;if(!data||typeof data!=="object"||data.type!=="sedes:page-size"||!Number.isInteger(data.height)||data.height<1||data.height>8192)return;parent.postMessage({type:"sedes:page-size",channel,height:data.height},"*");});
+addEventListener("message",event=>{
+if(failed||!valid)return;
+const data=event.data;if(!data||typeof data!=="object")return;
+if(event.source===parent){
+if(!submitReady||data.type!=="sedes:page-submit-request"||data.channel!==channel||typeof data.requestId!=="string"||!/^[a-zA-Z0-9_-]{16,128}$/.test(data.requestId)||data.requestId===lastRequestId)return;
+pendingRequestId=lastRequestId=data.requestId;frame.contentWindow.postMessage({type:"sedes:page-submit-request",channel,requestId:pendingRequestId},"*");return;
+}
+if(event.source!==frame.contentWindow)return;
+if(data.type==="sedes:page-size"){if(Number.isInteger(data.height)&&data.height>=1&&data.height<=8192)parent.postMessage({type:"sedes:page-size",channel,height:data.height},"*");return;}
+if(data.channel!==channel)return;
+if(data.type==="sedes:page-submit-unavailable"){fail();return;}
+if(data.type==="sedes:page-submit-ready"){submitReady=true;parent.postMessage({type:"sedes:page-submit-ready",channel},"*");return;}
+if(data.type!=="sedes:page-submit-response"||!pendingRequestId||data.requestId!==pendingRequestId)return;
+const reply={type:"sedes:page-submit-response",channel,requestId:pendingRequestId};pendingRequestId=undefined;
+if(data.error==="not_registered"||data.error==="producer_failed"||data.error==="invalid_response"||data.error==="response_too_large")reply.error=data.error;
+else if(typeof data.text!=="string"||!data.text.trim())reply.error="invalid_response";
+else if(data.text.length>${PAGE_RESPONSE_MAX_BYTES}||encoder.encode(data.text).byteLength>${PAGE_RESPONSE_MAX_BYTES})reply.error="response_too_large";
+else reply.text=data.text;
+parent.postMessage(reply,"*");
+});
 const source=document.getElementById("sedes-page-document");frame.srcdoc=JSON.parse(source.textContent);source.remove();
 if(valid)parent.postMessage({type:"sedes:page-wrapper-ready",channel},"*");
 document.body.append(frame);

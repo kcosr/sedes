@@ -856,3 +856,171 @@ describe("published page preview", () => {
     expect(container.querySelector("iframe")).toBeNull();
   });
 });
+
+describe("page responses", () => {
+  function responseServices() {
+    return {
+      ...services(),
+      pageResponse: {
+        threadId: original.threadId,
+        submit: vi.fn(async (request: import("./page-response-services.js").PageResponseRequest, _signal?: AbortSignal): Promise<import("../../../shared/protocol/thread-input.js").DirectInputReceipt> => ({
+          mutationId: request.mutationId, operationId: request.mutationId,
+          threadId: original.threadId, admittedMode: "queue" as const,
+          currentMode: "queue" as const, status: "queued" as const,
+          queuedInputId: "queue-response",
+        })),
+        readReceipt: vi.fn<import("./page-response-services.js").PageResponseServices["readReceipt"]>(async () => ({ status: "notObserved" })),
+      },
+    };
+  }
+  function producer(frame: HTMLIFrameElement, read: () => string) {
+    const post = vi.spyOn(frame.contentWindow!, "postMessage").mockImplementation((message: unknown) => {
+      const request = message as { type: string; requestId: string };
+      if (request.type !== "sedes:page-submit-request") return;
+      queueMicrotask(() => sendFrameMessage(frame, "sedes:page-submit-response", { requestId: request.requestId, text: read() }));
+    });
+    sendFrameMessage(frame, "sedes:page-submit-ready");
+    return post;
+  }
+
+  it("captures only from host Send, preserves exact text and captures anew for each deliberate send", async () => {
+    const api = responseServices();
+    const { container } = render(<PagePreview page={original} services={api} />);
+    const frame = await waitForFrame(container);
+    let text = "  Plan:\n  * keep **literal** text\n";
+    const read = vi.fn(() => text);
+    const post = producer(frame, read);
+    expect(api.pageResponse.submit).not.toHaveBeenCalled();
+    sendFrameMessage(frame, "sedes:page-submit-response", { requestId: "unsolicited", text: "injected" });
+    expect(api.pageResponse.submit).not.toHaveBeenCalled();
+    const send = screen.getByRole("button", { name: "Send page response" });
+    fireEvent.click(send);
+    fireEvent.click(send);
+    await screen.findByText("Response queued.");
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(post).toHaveBeenCalledTimes(1);
+    const first = api.pageResponse.submit.mock.calls[0]![0];
+    expect(first).toEqual({ mutationId: expect.any(String), text, pageResponse: { pageId: original.pageId, revision: 1 }, runningPolicy: { mode: "queue" } });
+    expect(frame).toBe(container.querySelector("iframe"));
+    text = "Changed controls";
+    fireEvent.click(send);
+    await waitFor(() => expect(api.pageResponse.submit).toHaveBeenCalledTimes(2));
+    const second = api.pageResponse.submit.mock.calls[1]![0];
+    expect(second.text).toBe(text);
+    expect(second.mutationId).not.toBe(first.mutationId);
+  });
+
+  it("looks up a lost receipt and replays the identical request without recapturing edited controls", async () => {
+    const api = responseServices();
+    api.pageResponse.submit.mockRejectedValueOnce(new TypeError("network lost"));
+    const { container } = render(<PagePreview page={original} services={api} />);
+    let text = "captured once";
+    const read = vi.fn(() => text);
+    producer(await waitForFrame(container), read);
+    fireEvent.click(screen.getByRole("button", { name: "Send page response" }));
+    const retry = await screen.findByRole("button", { name: "Retry page response" });
+    const first = api.pageResponse.submit.mock.calls[0]![0];
+    text = "edited after lost response";
+    fireEvent.click(retry);
+    await screen.findByText("Response queued.");
+    expect(api.pageResponse.readReceipt).toHaveBeenCalledWith(first.mutationId, expect.any(AbortSignal));
+    expect(api.pageResponse.submit.mock.calls[1]![0]).toBe(first);
+    expect(first.text).toBe("captured once");
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses a found receipt without repeating admission or capture", async () => {
+    const api = responseServices();
+    api.pageResponse.submit.mockRejectedValueOnce(new TypeError("network lost"));
+    api.pageResponse.readReceipt.mockImplementation(async mutationId => ({ status: "found", receipt: {
+      mutationId, operationId: mutationId, threadId: original.threadId,
+      admittedMode: "submit", currentMode: "submit", status: "accepted",
+    } }));
+    const { container } = render(<PagePreview page={original} services={api} />);
+    const read = vi.fn(() => "response");
+    producer(await waitForFrame(container), read);
+    fireEvent.click(screen.getByRole("button", { name: "Send page response" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Retry page response" }));
+    await screen.findByText("Response sent.");
+    expect(api.pageResponse.submit).toHaveBeenCalledTimes(1);
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not expose Send for a fork's source page or preview without response services", async () => {
+    const api = responseServices();
+    api.pageResponse.threadId = "fork-thread";
+    const first = render(<PagePreview page={original} services={api} />);
+    producer(await waitForFrame(first.container), () => "response");
+    expect(screen.queryByRole("button", { name: "Send page response" })).toBeNull();
+    first.unmount();
+    const second = render(<PagePreview page={original} services={services()} />);
+    producer(await waitForFrame(second.container), () => "response");
+    expect(screen.queryByRole("button", { name: "Send page response" })).toBeNull();
+  });
+
+  it("rejects unavailable delivery before capture", async () => {
+    const api = responseServices();
+    const { container } = render(<PagePreview page={original} services={{ ...api, pageResponse: { ...api.pageResponse, unavailableReason: "Reconcile the uncertain input." } }} />);
+    const read = vi.fn(() => "response");
+    producer(await waitForFrame(container), read);
+    expect(screen.getByRole("button", { name: "Send page response" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Send page response" }));
+    expect(read).not.toHaveBeenCalled();
+    expect(api.pageResponse.submit).not.toHaveBeenCalled();
+  });
+
+  it("drops a pending captured response when refreshing its document", async () => {
+    const api = responseServices();
+    api.pageResponse.submit.mockRejectedValueOnce(new TypeError("network lost"));
+    const { container } = render(<PagePreview page={original} services={api} presentation="library" />);
+    const oldFrame = await waitForFrame(container);
+    producer(oldFrame, () => "old response");
+    fireEvent.click(screen.getByRole("button", { name: "Send page response" }));
+    await screen.findByRole("button", { name: "Retry page response" });
+    fireEvent.click(screen.getByRole("button", { name: "Refresh page preview" }));
+    await waitFor(() => expect(container.querySelector("iframe")).not.toBe(oldFrame));
+    producer(await waitForFrame(container), () => "new response");
+    expect(screen.queryByRole("button", { name: "Retry page response" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Send page response" }));
+    await screen.findByText("Response queued.");
+    expect(api.pageResponse.submit.mock.calls[1]![0].text).toBe("new response");
+    expect(api.pageResponse.readReceipt).not.toHaveBeenCalled();
+  });
+
+  it("keeps recovery-required delivery bound to the existing receipt until explicitly reconciled", async () => {
+    const api = responseServices();
+    api.pageResponse.submit.mockImplementationOnce(async request => ({
+      mutationId: request.mutationId, operationId: request.mutationId, threadId: original.threadId,
+      admittedMode: "queue", currentMode: "queue", status: "recovery_required", queuedInputId: "queue-response",
+    } as import("../../../shared/protocol/thread-input.js").DirectInputReceipt));
+    api.pageResponse.readReceipt.mockImplementation(async mutationId => ({ status: "found", receipt: {
+      mutationId, operationId: mutationId, threadId: original.threadId,
+      admittedMode: "queue", currentMode: "submit", status: "accepted",
+    } }));
+    const { container } = render(<PagePreview page={original} services={api} />);
+    const read = vi.fn(() => "response");
+    producer(await waitForFrame(container), read);
+    fireEvent.click(screen.getByRole("button", { name: "Send page response" }));
+    await screen.findByText(/Use Reconcile in pending inputs/);
+    fireEvent.click(screen.getByRole("button", { name: "Retry page response" }));
+    await screen.findByText("Response sent.");
+    expect(api.pageResponse.submit).toHaveBeenCalledTimes(1);
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+
+  it("invalidates an outstanding capture when connection scope changes", async () => {
+    const api = responseServices();
+    const view = renderView(<ConnectionScopeProvider scope={scope}><PagePreview page={original} services={api} /></ConnectionScopeProvider>);
+    const frame = await waitForFrame(view.container);
+    const post = vi.spyOn(frame.contentWindow!, "postMessage").mockImplementation(() => {});
+    sendFrameMessage(frame, "sedes:page-submit-ready");
+    fireEvent.click(screen.getByRole("button", { name: "Send page response" }));
+    const capturedRequest = post.mock.calls[0]![0] as { requestId: string };
+    view.rerender(<ConnectionScopeProvider scope={connectionScope("other", window.location.origin, "other-principal")}><PagePreview page={original} services={api} /></ConnectionScopeProvider>);
+    sendFrameMessage(frame, "sedes:page-submit-response", { requestId: capturedRequest.requestId, text: "old scope" });
+    await waitFor(() => expect(view.container.querySelector("iframe")).not.toBe(frame));
+    await act(async () => {});
+    expect(api.pageResponse.submit).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "Retry page response" })).toBeNull();
+  });
+});

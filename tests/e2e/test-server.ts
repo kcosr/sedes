@@ -4623,6 +4623,7 @@ async function main(): Promise<void> {
     lineage: lineageRepository,
     inventory: inventoryRepository,
     operations: operationRepository,
+    deliveryInputSnapshots,
     outputArtifacts,
     automations: automationRepository,
     automationExecutionPolicy: { assertCanAutomate: () => undefined },

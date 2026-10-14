@@ -3,6 +3,7 @@ import { mutationIdSchema, threadIdSchema, applicationTurnIdSchema } from "./dom
 import { steerTargetSchema, threadRunStateSchema } from "./conversation.js";
 import { MAXIMUM_THREAD_INPUT_BYTES } from "./context-excerpts.js";
 import { boundedDisplayTextSchema } from "./payload.js";
+import { PAGE_RESPONSE_MAX_BYTES, pageResponseReferenceSchema } from "./pages.js";
 
 /** Server-stamped input attribution from the registered client connection. This ID is never authentication. */
 export const clientOriginSchema = z.strictObject({
@@ -13,7 +14,7 @@ export type ClientOrigin = z.infer<typeof clientOriginSchema>;
 // Every admitted byte may need six JSON bytes (for example, a control character).
 export const MAX_DIRECT_INPUT_REQUEST_BYTES = 2_097_152;
 
-export const directInputRequestSchema = z.strictObject({
+const directInputFieldsSchema = z.strictObject({
   mutationId: mutationIdSchema,
   text: z.string().superRefine((text, context) => {
     if (text.trim().length === 0) {
@@ -24,6 +25,7 @@ export const directInputRequestSchema = z.strictObject({
     }
   }),
   origin: clientOriginSchema,
+  pageResponse: pageResponseReferenceSchema.optional(),
   runningPolicy: z.discriminatedUnion("mode", [
     z.strictObject({ mode: z.literal("queue") }),
     z.strictObject({
@@ -33,6 +35,21 @@ export const directInputRequestSchema = z.strictObject({
     }),
   ]),
 });
+function validatePageResponse(
+  input: z.infer<typeof directInputFieldsSchema> | Omit<z.infer<typeof directInputFieldsSchema>, "origin">,
+  context: z.RefinementCtx,
+): void {
+  if (!input.pageResponse) return;
+  if (input.runningPolicy.mode !== "queue") {
+    context.addIssue({ code: "custom", path: ["runningPolicy"], message: "Page responses must queue while the thread is running." });
+  }
+  if (new TextEncoder().encode(input.text).byteLength > PAGE_RESPONSE_MAX_BYTES) {
+    context.addIssue({ code: "custom", path: ["text"], message: "Page response exceeds the text byte limit." });
+  }
+}
+/** The connection registry supplies origin; the browser cannot select it. */
+export const directInputRequestBodySchema = directInputFieldsSchema.omit({ origin: true }).superRefine(validatePageResponse);
+export const directInputRequestSchema = directInputFieldsSchema.superRefine(validatePageResponse);
 export type DirectInputRequest = z.infer<typeof directInputRequestSchema>;
 
 const deliveryModeSchema = z.enum(["submit", "queue", "steer"]);

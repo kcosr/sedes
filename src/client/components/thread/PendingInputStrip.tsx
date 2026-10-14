@@ -482,7 +482,8 @@ export function PendingInputStrip({
       item.origin === "user" &&
       (item.state === "pending" || item.state === "retry_wait");
     const userRestorable =
-      userMutable || (item.origin === "user" && item.state === "failed");
+      item.inputOrigin?.kind !== "page_response" &&
+      (userMutable || (item.origin === "user" && item.state === "failed"));
     const failed = item.state === "failed";
     const notSent = failed && item.failureReason === "not_sent";
     const pendingAction = pendingActions[item.id];
@@ -494,6 +495,7 @@ export function PendingInputStrip({
       steerCapability?.unavailableReason?.text ??
       "Steer is unavailable right now.";
     const canOfferSteer =
+      item.inputOrigin?.kind !== "page_response" &&
       userMutable && item.isHead && item.resolvedDeliveryMode !== "steer";
     const stateLabel = statusLabel(item);
     const preview =
@@ -520,6 +522,8 @@ export function PendingInputStrip({
           title={
             item.inputOrigin?.kind === "question_response"
               ? "Question answered"
+              : item.inputOrigin?.kind === "page_response"
+                ? `Page response · ${item.inputOrigin.title} · Revision ${item.inputOrigin.revision}`
               : item.inputOrigin
                 ? `${item.inputOrigin.kind === "agent_message" ? "Agent message" : "Agent result"} · ${item.inputOrigin.sourceThreadLabel.text}`
                 : undefined
@@ -527,6 +531,8 @@ export function PendingInputStrip({
         >
           {item.inputOrigin?.kind === "question_response"
             ? "Question answered"
+            : item.inputOrigin?.kind === "page_response"
+              ? `Page response · ${item.inputOrigin.title} · Revision ${item.inputOrigin.revision}`
             : item.origin === "user"
             ? "You"
             : item.origin === "agent_result"
@@ -594,7 +600,7 @@ export function PendingInputStrip({
               <Undo size={15} strokeWidth={1.9} aria-hidden="true" />
             </button>
           )}
-          {userRestorable && (item.state === "failed" || item.preview.truncation?.truncated) && (
+          {(userRestorable || item.inputOrigin?.kind === "page_response") && (item.state === "failed" || item.preview.truncation?.truncated) && (
             <button
               type="button"
               className="pending-input-action pending-input-copy"

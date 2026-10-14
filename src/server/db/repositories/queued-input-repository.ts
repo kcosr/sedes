@@ -5,6 +5,7 @@ import type Database from "better-sqlite3";
 import { DomainError } from "../../domain/errors.js";
 import type { RequestScope } from "../../identity/identity-provider.js";
 import { MAXIMUM_THREAD_INPUT_BYTES, type ContextExcerpt } from "../../../shared/protocol/context-excerpts.js";
+import { PAGE_RESPONSE_MAX_BYTES, pageResponseOriginSchema } from "../../../shared/protocol/pages.js";
 import type { ComposerAttachmentDescriptor } from "../../../shared/protocol/composer-attachments.js";
 import {
   parseStoredContextExcerpts,
@@ -165,7 +166,7 @@ const columns = `
   initiating_agent_thread_id AS initiatingAgentThreadId,
   initiating_tool_client_id AS initiatingToolClientId,
   completion_callback_id AS completionCallbackId,
-  question_response_origin_json AS questionResponseOriginJson,
+  input_origin_json AS inputOriginJson,
   state,
   delivery_mode AS deliveryMode,
   retry_of_id AS retryOfId,
@@ -214,7 +215,7 @@ const qualifiedColumns = `
   q.initiating_agent_thread_id AS initiatingAgentThreadId,
   q.initiating_tool_client_id AS initiatingToolClientId,
   q.completion_callback_id AS completionCallbackId,
-  q.question_response_origin_json AS questionResponseOriginJson,
+  q.input_origin_json AS inputOriginJson,
   q.state,
   q.delivery_mode AS deliveryMode,
   q.retry_of_id AS retryOfId,
@@ -292,7 +293,7 @@ type QueuedInputRow = Omit<
 > & {
   readonly requestedSteerTargetJson: string | null;
   readonly resolvedSteerTargetJson: string | null;
-  readonly questionResponseOriginJson: string | null;
+  readonly inputOriginJson: string | null;
   readonly contextExcerptsJson: string;
   readonly taskContextsJson: string;
 };
@@ -408,6 +409,13 @@ export class QueuedInputRepository {
             readonly expectedThreadRevision: number;
           }
         | {
+            /** Reviewed page text with immutable, server-authorized provenance. */
+            readonly kind: "page_response";
+            readonly inputOrigin: Extract<DeliveryInputOrigin, { kind: "page_response" }>;
+            readonly resolvedDeliveryMode: "submit" | "queue";
+            readonly expectedThreadRevision: number;
+          }
+        | {
             readonly kind: "automation";
             readonly expectedThreadRevision: number;
             readonly automationId: string;
@@ -442,9 +450,16 @@ export class QueuedInputRepository {
     },
   ): { readonly item: QueuedInputRecord; readonly replayed: boolean } {
     const maximumTextBytes = input.source.kind === "composer" || input.source.kind === "direct_input"
-      ? MAXIMUM_THREAD_INPUT_BYTES : 65_536;
+      ? MAXIMUM_THREAD_INPUT_BYTES
+      : input.source.kind === "page_response" ? PAGE_RESPONSE_MAX_BYTES : 65_536;
     if (Buffer.byteLength(input.text, "utf8") > maximumTextBytes) {
       throw new DomainError("bad_request", "Queued input exceeds the text byte limit.");
+    }
+    if (
+      input.source.kind === "page_response" &&
+      (!pageResponseOriginSchema.safeParse(input.source.inputOrigin).success || input.selectedSkillId != null)
+    ) {
+      throw new DomainError("bad_request", "Page responses require page provenance and cannot invoke a selected skill.");
     }
     if (
       input.source.kind !== "composer" &&
@@ -483,12 +498,12 @@ export class QueuedInputRepository {
         if (
           replay.text !== input.text ||
           JSON.stringify(
-            replay.inputOrigin?.kind === "question_response"
+            replay.inputOrigin?.kind === "question_response" || replay.inputOrigin?.kind === "page_response"
               ? replay.inputOrigin
               : null,
           ) !==
             JSON.stringify(
-              input.source.kind === "question_response"
+              input.source.kind === "question_response" || input.source.kind === "page_response"
                 ? deliveryInputOriginSchema.parse(input.source.inputOrigin)
                 : null,
             ) ||
@@ -692,7 +707,8 @@ export class QueuedInputRepository {
         }
       ).sequence;
       const id = input.id ?? randomUUID();
-      const isUserInput = input.source.kind === "composer" || input.source.kind === "direct_input" || input.source.kind === "question_response";
+      const isUserInput = input.source.kind === "composer" || input.source.kind === "direct_input" ||
+        input.source.kind === "question_response" || input.source.kind === "page_response";
       this.#attachments.replaceOwnerLinks(
         scope,
         { kind: "queue", threadId: applicationThreadId, queuedInputId: id },
@@ -707,7 +723,7 @@ export class QueuedInputRepository {
               context_excerpts_json, task_contexts_json, trigger_kind,
               source_automation_id, source_automation_run_id,
               initiating_agent_thread_id, initiating_tool_client_id,
-              completion_callback_id, question_response_origin_json,
+              completion_callback_id, input_origin_json,
               requested_delivery_mode,
               requested_steer_target_json,
               resolved_delivery_mode, resolved_steer_target_json,
@@ -743,7 +759,7 @@ export class QueuedInputRepository {
           input.source.kind === "completion_callback"
             ? input.source.callbackId
             : null,
-          input.source.kind === "question_response"
+          input.source.kind === "question_response" || input.source.kind === "page_response"
             ? JSON.stringify(
                 deliveryInputOriginSchema.parse(input.source.inputOrigin),
               )
@@ -761,7 +777,7 @@ export class QueuedInputRepository {
             : null,
           input.source.kind === "composer" ||
             input.source.kind === "direct_input" ||
-            input.source.kind === "question_response" ||
+            input.source.kind === "question_response" || input.source.kind === "page_response" ||
             input.source.kind === "completion_callback"
             ? input.source.resolvedDeliveryMode
             : "queue",
@@ -1353,6 +1369,9 @@ export class QueuedInputRepository {
             "Only browser-origin user queued input can be restored.",
           );
         }
+        if (item.inputOrigin?.kind === "page_response") {
+          throw new DomainError("invalid_transition", "Page responses cannot be restored to the composer. Copy the text or retry the response.");
+        }
         if (
           item.state !== "pending" &&
           item.state !== "retry_wait" &&
@@ -1533,6 +1552,9 @@ export class QueuedInputRepository {
         );
       }
       const current = this.get(scope, applicationThreadId, id);
+      if (current.inputOrigin?.kind === "page_response") {
+        throw new DomainError("invalid_transition", "Page responses cannot be steered. They remain queued until the conversation is idle.");
+      }
       if (
         current.triggerKind !== "user" ||
         (current.state !== "pending" && current.state !== "retry_wait")
@@ -2077,7 +2099,7 @@ export class QueuedInputRepository {
               context_excerpts_json, task_contexts_json, trigger_kind,
               source_automation_id, source_automation_run_id,
               initiating_agent_thread_id, initiating_tool_client_id,
-              question_response_origin_json,
+              input_origin_json,
               resolved_delivery_mode, state, retry_of_id, created_at, is_user_input
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queue', 'pending', ?, ?, ?)
@@ -2099,7 +2121,7 @@ export class QueuedInputRepository {
           failed.sourceAutomationRunId,
           failed.initiatingAgentThreadId,
           failed.initiatingToolClientId,
-          failed.inputOrigin?.kind === "question_response"
+          failed.inputOrigin?.kind === "question_response" || failed.inputOrigin?.kind === "page_response"
             ? JSON.stringify(failed.inputOrigin)
             : null,
           failed.id,
@@ -2632,12 +2654,12 @@ export class QueuedInputRepository {
 
   #hydrate(scope: RequestScope, row: QueuedInputRow): QueuedInputRecord {
     let inputOrigin: DeliveryInputOrigin | null = null;
-    if (row.questionResponseOriginJson !== null) {
+    if (row.inputOriginJson !== null) {
       const parsed = deliveryInputOriginSchema.parse(
-        JSON.parse(row.questionResponseOriginJson),
+        JSON.parse(row.inputOriginJson),
       );
       if (
-        parsed.kind !== "question_response" ||
+        (parsed.kind !== "question_response" && parsed.kind !== "page_response") ||
         row.initiatingAgentThreadId !== null ||
         row.completionCallbackId !== null ||
         row.initiatingToolClientId !== null ||
@@ -2645,7 +2667,7 @@ export class QueuedInputRepository {
       ) {
         throw new DomainError(
           "conflict",
-          "The queued question-response provenance is invalid.",
+          "The queued input provenance is invalid.",
         );
       }
       inputOrigin = parsed;

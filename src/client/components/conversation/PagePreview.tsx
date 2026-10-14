@@ -5,6 +5,7 @@ import {
   Maximize2,
   Pointer,
   RotateCcw,
+  Send,
 } from "lucide-react";
 import {
   useCallback,
@@ -14,6 +15,10 @@ import {
   useState,
 } from "react";
 import type { PageRevision } from "../../../shared/protocol/pages.js";
+import { PAGE_RESPONSE_MAX_BYTES } from "../../../shared/protocol/pages.js";
+import { ApiError } from "../../api/ApiClient.js";
+import { PageResponseBridge } from "../../lib/page-response-bridge.js";
+import type { PageResponseRequest, PageResponseServices } from "./page-response-services.js";
 import { MediaFrame } from "../../workbench/components/MediaFrame.js";
 import { MediaZoomControls } from "../../workbench/components/MediaZoomControls.js";
 import { Button } from "../ui/button.js";
@@ -37,7 +42,7 @@ import "./page-preview.css";
 
 export type PagePreviewServices = Pick<
   ItemRenderContext,
-  "createPageRenderAdmission" | "listPageRevisions" | "getPageRevision"
+  "createPageRenderAdmission" | "listPageRevisions" | "getPageRevision" | "pageResponse"
 >;
 
 /** Each occurrence keeps its pinned revision and its own interaction state. */
@@ -263,6 +268,7 @@ export function PagePreview({
         key={`${selected.pageId}:${selected.revision}`}
         page={selected}
         createAdmission={services.createPageRenderAdmission}
+        responseServices={services.pageResponse}
         enabled={viewerOpen}
         interactive
         onActivate={() => setInteracting(true)}
@@ -343,6 +349,7 @@ export function PagePreview({
           key={`${page.pageId}:${page.revision}`}
           page={page}
           createAdmission={services.createPageRenderAdmission}
+          responseServices={services.pageResponse}
           enabled={!expanded}
           interactive={interacting}
           onActivate={() => setInteracting(true)}
@@ -375,6 +382,7 @@ export function PagePreview({
 function PageFrame({
   page,
   createAdmission,
+  responseServices,
   enabled,
   interactive,
   onDeactivate,
@@ -385,6 +393,7 @@ function PageFrame({
 }: {
   readonly page: PageRevision;
   readonly createAdmission: PagePreviewServices["createPageRenderAdmission"];
+  readonly responseServices?: PageResponseServices;
   readonly enabled: boolean;
   readonly interactive: boolean;
   readonly onDeactivate: () => void;
@@ -397,6 +406,14 @@ function PageFrame({
   const recoveryKey = pageFrameRecoveryKey(connection, page);
   const host = useRef<HTMLDivElement>(null);
   const frame = useRef<HTMLIFrameElement>(null);
+  const responseBridge = useRef<PageResponseBridge | undefined>(undefined);
+  const pendingResponse = useRef<PageResponseRequest | undefined>(undefined);
+  const responseRequest = useRef<AbortController | undefined>(undefined);
+  const responseInFlight = useRef(false);
+  const [responseReady, setResponseReady] = useState(false);
+  const [responsePhase, setResponsePhase] = useState<"idle" | "sending" | "retry">("idle");
+  const [responseStatus, setResponseStatus] = useState("");
+  const [responseError, setResponseError] = useState("");
   const tap = useRef<{ id: number; x: number; y: number; time: number } | undefined>(undefined);
   const clickReady = useRef(false);
   const [width, setWidth] = useState(page.viewport.width ?? 640);
@@ -413,6 +430,7 @@ function PageFrame({
         status: "ready";
         url: string;
         channel: string;
+        recoveryKey: string;
         recovery: PageFrameRecoveryAttempt;
       }
   >({ status: "waiting" });
@@ -453,7 +471,7 @@ function PageFrame({
     if (!admitted || !visible) onDeactivate();
   }, [admitted, onDeactivate, visible]);
   const ready =
-    enabled && admitted && state.status === "ready" ? state : undefined;
+    enabled && admitted && state.status === "ready" && state.recoveryKey === recoveryKey ? state : undefined;
   const loadGuard = useRef(new PageFrameLoadGuard());
   const handshakeAcknowledged = useRef(false);
   const wrapperAcknowledged = useRef(false);
@@ -519,7 +537,7 @@ function PageFrame({
       const channel = crypto.randomUUID();
       const url = `${admission.url}#${new URLSearchParams({ channel })}`;
       loadGuard.current.reset();
-      setState({ status: "ready", url, channel, recovery });
+      setState({ status: "ready", url, channel, recovery, recoveryKey });
     })().catch(() => {
       if (!controller.signal.aborted) {
         setNeedsActivation(true);
@@ -543,9 +561,14 @@ function PageFrame({
 
   useLayoutEffect(() => {
     if (!ready) return;
+    const source = frame.current?.contentWindow;
+    if (!source) return;
+    const bridge = new PageResponseBridge({ source, channel: ready.channel, onReady: setResponseReady });
+    responseBridge.current = bridge;
     handshakeAcknowledged.current = false;
     wrapperAcknowledged.current = false;
     const fail = () => {
+      bridge.dispose();
       ready.recovery.fail();
       setNeedsActivation(true);
       setState({ status: "error" });
@@ -553,6 +576,7 @@ function PageFrame({
     // Transport can take longer than bootstrap execution for a large document.
     handshakeTimeout.current = window.setTimeout(fail, 60_000);
     const receive = (event: MessageEvent) => {
+      bridge.handleMessage(event);
       const message = pageFrameMessage(
         event,
         frame.current?.contentWindow ?? null,
@@ -580,16 +604,110 @@ function PageFrame({
     };
     window.addEventListener("message", receive);
     return () => {
+      bridge.dispose();
+      responseBridge.current = undefined;
+      responseRequest.current?.abort();
+      responseInFlight.current = false;
+      pendingResponse.current = undefined;
+      setResponseReady(false);
+      setResponsePhase("idle");
+      setResponseStatus("");
+      setResponseError("");
       window.clearTimeout(handshakeTimeout.current);
       handshakeTimeout.current = undefined;
       window.removeEventListener("message", receive);
     };
   }, [page.viewport.height, ready]);
 
+  const sendResponse = async () => {
+    const bridge = responseBridge.current;
+    if (!bridge || !responseServices || responseInFlight.current ||
+        responseServices.threadId !== page.threadId ||
+        (!pendingResponse.current && responseServices.unavailableReason)) return;
+    responseInFlight.current = true;
+    const controller = new AbortController();
+    responseRequest.current = controller;
+    const current = () => responseBridge.current === bridge && responseRequest.current === controller;
+    setResponsePhase("sending");
+    setResponseError("");
+    setResponseStatus("");
+    let admissionAttempted = false;
+    let timeout: number | undefined;
+    try {
+      let request = pendingResponse.current;
+      const retry = request !== undefined;
+      if (!request) {
+        const text = await bridge.capture();
+        if (!current()) return;
+        if (!text.trim()) throw new Error("The page response is empty.");
+        if (new TextEncoder().encode(text).byteLength > PAGE_RESPONSE_MAX_BYTES)
+          throw new Error("The page response exceeds 64 KiB.");
+        request = Object.freeze({
+          mutationId: crypto.randomUUID(), text,
+          pageResponse: Object.freeze({ pageId: page.pageId, revision: page.revision }),
+          runningPolicy: Object.freeze({ mode: "queue" as const }),
+        });
+        pendingResponse.current = request;
+      }
+      timeout = window.setTimeout(() => controller.abort(), 15_000);
+      const lookup = retry ? await responseServices.readReceipt(request.mutationId, controller.signal) : undefined;
+      if (!current()) return;
+      let receipt = lookup?.status === "found" ? lookup.receipt : undefined;
+      if (!receipt) {
+        admissionAttempted = true;
+        receipt = await responseServices.submit(request, controller.signal);
+      }
+      if (!current()) return;
+      pendingResponse.current = undefined;
+      setResponsePhase("idle");
+      if (receipt.status === "recovery_required") {
+        pendingResponse.current = request;
+        setResponsePhase("retry");
+        setResponseError("Delivery is unconfirmed. Use Reconcile in pending inputs before sending again.");
+      } else if (receipt.status === "failed" || receipt.status === "cancelled") {
+        setResponseError(receipt.diagnostic ?? "The response was not delivered. Check pending inputs.");
+      } else {
+        setResponseStatus(receipt.status === "accepted" ? "Response sent." : receipt.status === "queued" ? "Response queued." : "Response submitted.");
+      }
+    } catch (error) {
+      if (!current()) return;
+      const rejected = admissionAttempted && error instanceof ApiError &&
+        error.status >= 400 && error.status < 500 &&
+        error.code !== "operation_outcome_uncertain" && error.code !== "backend_submission_unknown";
+      if (rejected) pendingResponse.current = undefined;
+      const retry = pendingResponse.current !== undefined;
+      setResponsePhase(retry ? "retry" : "idle");
+      setResponseError(retry
+        ? "Delivery could not be confirmed. Retry checks the same response without capturing it again."
+        : error instanceof Error ? error.message : "Could not capture the page response.");
+    } finally {
+      window.clearTimeout(timeout);
+      if (current()) responseInFlight.current = false;
+    }
+  };
+
   return (
     <div
       className={`page-frame-shell${expanded ? " page-frame-expanded" : ""}`}
     >
+      {responseReady && responseServices?.threadId === page.threadId ? (
+        <div className="page-response-controls">
+          <span className="page-response-status" role={responseError ? "alert" : "status"}>
+            {responseError || responseStatus || responseServices.unavailableReason}
+          </span>
+          <Button
+            size="sm"
+            variant="outline"
+            aria-label={responsePhase === "retry" ? "Retry page response" : "Send page response"}
+            disabled={responsePhase === "sending" || (responsePhase !== "retry" && Boolean(responseServices.unavailableReason))}
+            title={responseServices.unavailableReason ?? "Send this page response to the conversation"}
+            onClick={() => void sendResponse()}
+          >
+            <Send aria-hidden="true" />
+            {responsePhase === "retry" ? "Retry" : responsePhase === "sending" ? "Sending…" : "Send"}
+          </Button>
+        </div>
+      ) : null}
       {expanded ? (
         <MediaZoomControls
           label="Page zoom controls"
@@ -688,6 +806,7 @@ function PageFrame({
                 // its WindowProxy and remains disallowed.
                 const admission = loadGuard.current.accept(context);
                 if (admission === "rejected") {
+                  responseBridge.current?.dispose();
                   ready.recovery.fail();
                   setNeedsActivation(true);
                   setState({ status: "error" });

@@ -101,3 +101,40 @@ describe("page API", () => {
     ).rejects.toMatchObject({ code: "invalid_response" });
   });
 });
+
+it("submits page responses through registered input authority and validates receipt identities", async () => {
+  const threadId = "10000000-0000-4000-8000-000000000001";
+  const request = {
+    mutationId: "20000000-0000-4000-8000-000000000001",
+    text: "  untouched\ntext  ",
+    pageResponse: { pageId: page.pageId, revision: 1 },
+    runningPolicy: { mode: "queue" as const },
+  };
+  const receipt = {
+    mutationId: request.mutationId, operationId: request.mutationId, threadId: threadId,
+    admittedMode: "queue", currentMode: "queue", status: "queued", queuedInputId: "queued-page",
+  };
+  const requests: { input: string; init?: RequestInit }[] = [];
+  let wrongIdentity = false;
+  vi.stubGlobal("fetch", vi.fn(async (input: string, init?: RequestInit) => {
+    requests.push({ input, init });
+    if (input.endsWith("/session")) return Response.json(session());
+    const result = wrongIdentity ? { ...receipt, threadId: "10000000-0000-4000-8000-000000000002" } : receipt;
+    return Response.json(input.includes("/input-receipts/") ? { status: "found", receipt: result } : result);
+  }));
+  const api = new ApiClient(undefined, undefined, () => ({
+    clientId: "30000000-0000-4000-8000-000000000009", connectionToken: "registered-token",
+  }));
+  await expect(api.submitDirectInput(threadId, request)).resolves.toEqual(receipt);
+  const sent = requests.find(({ input }) => input.endsWith("/inputs"))!;
+  expect(sent.input).toBe(`/api/threads/${threadId}/inputs`);
+  expect(JSON.parse(String(sent.init?.body))).toEqual(request);
+  expect(new Headers(sent.init?.headers).get("X-Sedes-Client")).toBe("registered-token");
+  expect(new Headers(sent.init?.headers).get("X-CSRF-Token")).toBe("a".repeat(32));
+  await expect(api.readDirectInputReceipt(threadId, request.mutationId)).resolves.toEqual({ status: "found", receipt });
+  expect(requests.at(-1)?.input).toBe(`/api/input-receipts/${request.mutationId}`);
+  wrongIdentity = true;
+  await expect(api.submitDirectInput(threadId, request)).rejects.toMatchObject({ code: "invalid_response" });
+  await expect(api.readDirectInputReceipt(threadId, request.mutationId)).rejects.toMatchObject({ code: "invalid_response" });
+  await expect(api.submitDirectInput(threadId, { ...request, origin: { clientId: "30000000-0000-4000-8000-000000000009" } } as never)).rejects.toThrow();
+});

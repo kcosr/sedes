@@ -8,11 +8,17 @@ User-facing changes are collected here before release. See the
 ### Breaking Changes
 
 - Upgrade the server and browser/packaged clients together for client protocol
-  **156**. Rebuild Android with its bundled client for the updated native voice
-  bridge. See [voice input](docs/operator/clients/voice.md).
+  **157** for Page responses and the updated native voice bridge. Rebuild
+  Android with its bundled client. See [Page responses](docs/user/html-previews.md#send-a-page-response)
+  and [voice input](docs/operator/clients/voice.md).
   ([#81](https://github.com/kcosr/sedes/pull/81))
 
 ### Added
+
+- Published HTML pages can collect responses through Sedes's **Send** control.
+  Responses go to the page's thread, queue while it is busy, and remain in
+  compact expandable chat cards with the exact submitted text and saved page
+  revision. See [Page responses](docs/user/html-previews.md#send-a-page-response).
 
 - While Android voice is listening on another thread, **Target this thread**
   switches the entire unsent recording to the viewed thread without restarting

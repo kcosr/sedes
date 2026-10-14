@@ -1918,3 +1918,28 @@ describe("normalized conversation renderers", () => {
     expect(container.querySelector("script")).not.toBeInTheDocument();
   });
 });
+
+describe("page response presentation", () => {
+  it("renders persisted provenance in a compact disclosure with exact plain text on expansion", () => {
+    const text = "  **Keep this literal**\n[Link](https://example.com)\n  indented <button>\n";
+    const item = conversationItemSchema.parse({
+      ...common, kind: "user_message", deliveryOperationId: "operation-page-1",
+      origin: { kind: "page_response", pageId: "30000000-0000-4000-8000-000000000001", revision: 3, title: "Project setup" },
+      content: [{ kind: "text", text: { text } }],
+    });
+    const view = render(<ConversationItemView item={item} />);
+    const disclosure = view.container.querySelector(".page-response-disclosure")!;
+    expect(disclosure).not.toHaveAttribute("open");
+    const summary = disclosure.querySelector("summary")!;
+    expect(summary).toHaveTextContent("Page response");
+    expect(summary).toHaveTextContent("Project setup");
+    expect(summary).toHaveTextContent("Revision 3");
+    expect(summary).toHaveTextContent("**Keep this literal**");
+    fireEvent.click(summary);
+    expect(disclosure.querySelector(".page-response-text")?.textContent).toBe(text);
+    expect(disclosure.querySelector("a, strong, button")).toBeNull();
+    view.unmount();
+    const reloaded = render(<ConversationItemView item={conversationItemSchema.parse(JSON.parse(JSON.stringify(item)))} />);
+    expect(reloaded.container.querySelector(".page-response-text")?.textContent).toBe(text);
+  });
+});

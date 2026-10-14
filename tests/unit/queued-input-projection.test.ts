@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { projectQueuedInputPresentation, projectQueuedInputSummaries } from "../../src/server/conversations/queued-input-projection.js";
 import type { QueuedInputRecord } from "../../src/server/db/repositories/queued-input-repository.js";
 import { queuedInputPresentationSchema } from "../../src/shared/protocol/api.js";
+import { queuedInputSummarySchema } from "../../src/shared/protocol/conversation.js";
 import { MAXIMUM_MESSAGE_ITEM_BYTES } from "../../src/shared/protocol/payload.js";
 import { formatThreadReferenceText } from "../../src/shared/thread-references.js";
 
@@ -57,6 +58,19 @@ function queued(
 }
 
 describe("queued input projection", () => {
+  it("retains page-response provenance in summaries and full detail only for user input", () => {
+    const inputOrigin = { kind: "page_response" as const, pageId: "a6081ea9-e9f2-4b07-b2b2-b65062838998", revision: 3, title: "Review form" };
+    const item = queued({ id: "page-response", sequence: 1, applicationThreadId: "88b72554-a697-4ebc-9d96-b2ab09343f13",
+      text: "  Exact page reply.  ", inputOrigin });
+    const summary = projectQueuedInputSummaries([item])[0]!;
+    const detail = projectQueuedInputPresentation(item, 1, item.mutationId);
+    expect(queuedInputSummarySchema.parse(summary)).toMatchObject({ origin: "user", inputOrigin });
+    expect(detail).toMatchObject({ origin: "user", inputOrigin, content: [{ kind: "text", text: { text: item.text } }] });
+    for (const origin of ["automation", "agent_control", "principal_client_control", "agent_result"]) {
+      expect(queuedInputSummarySchema.safeParse({ ...summary, origin }).success).toBe(false);
+      expect(queuedInputPresentationSchema.safeParse({ ...detail, origin }).success).toBe(false);
+    }
+  });
   it.each(["pending", "retry_wait", "uncertain"] as const)("preserves thread references for %s while keeping previews readable", (state) => {
     const references = [{ threadId: "616946aa-4574-41f7-bd70-d3a9edd56dbd", title: "Related work" }];
     const text = formatThreadReferenceText("Read this thread first.", references);

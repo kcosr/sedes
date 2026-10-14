@@ -1455,3 +1455,24 @@ describe("PendingInputStrip", () => {
     );
   });
 });
+
+it("keeps page provenance in queued rows and offers failed responses Copy and Dismiss without Restore or Steer", async () => {
+  const write = mockClipboard();
+  const inputOrigin = { kind: "page_response" as const, pageId: "30000000-0000-4000-8000-000000000001", revision: 3, title: "Configuration" };
+  const store = new FakeStripStore(snapshot([
+    queued("page-pending", 1, "pending", { inputOrigin }),
+    queued("page-failed", 2, "failed", { inputOrigin }),
+  ]));
+  store.readQueuedInputText.mockResolvedValue("  exact **page** response\n");
+  renderStrip(store);
+  const pending = document.querySelector('[data-queued-input-id="page-pending"]')!;
+  const failed = document.querySelector('[data-queued-input-id="page-failed"]')!;
+  expect(pending).toHaveTextContent("Page response · Configuration · Revision 3");
+  expect(within(pending as HTMLElement).getAllByRole("button").map(button => button.getAttribute("title"))).toEqual(["Delete queued input"]);
+  expect(within(failed as HTMLElement).getAllByRole("button").map(button => button.getAttribute("aria-label"))).toEqual([
+    "Copy full text: Prompt page-failed", "Dismiss queued input failure: Prompt page-failed",
+  ]);
+  await act(async () => fireEvent.click(within(failed as HTMLElement).getByRole("button", { name: "Copy full text: Prompt page-failed" })));
+  expect(await clipboardText(write.mock.lastCall![0])).toBe("  exact **page** response\n");
+  expect(store.readQueuedInputText).toHaveBeenCalledWith("page-failed");
+});

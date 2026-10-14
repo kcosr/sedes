@@ -129,6 +129,28 @@
   --wb-media-muted: var(--muted-foreground);
   position: relative;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.page-response-controls {
+  order: 2;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border-top: 1px solid var(--border-soft);
+  background: var(--background);
+}
+.page-response-status {
+  min-width: 0;
+  margin-inline-end: auto;
+  font-size: var(--text-meta);
+  color: var(--muted-foreground);
+}
+.page-response-status[role="alert"] {
+  color: var(--destructive);
 }
 .page-frame-viewport {
   width: 100%;
