@@ -7,9 +7,22 @@ User-facing changes are collected here before release. See the
 
 ### Breaking Changes
 
+- Upgrade the server and browser/packaged clients together for client protocol
+  **156**. Rebuild Android with its bundled client for the updated native voice
+  bridge. See [voice input](docs/operator/clients/voice.md).
+
 ### Added
 
+- Android voice combines speech with the current Chat draft when foreground on
+  the recording's thread, including attachments and other context. Composer
+  owns submission and recovery after accepting the speech. See
+  [voice input](docs/operator/clients/voice.md).
+
 ### Changed
+
+- Chat draft text, speech, stashes, and restored queued input now use the same
+  256 KiB UTF-8 limit. Text and materialized context share the existing input
+  budget; attachment-file limits remain separate.
 
 ### Fixed
 

@@ -362,8 +362,28 @@ recognition finalizes. Steer names the exact current normalized target; if it
 is no longer available, or other queued input must deliver first, the input
 queues. Backend support remains explicit: Codex and Pi use a turn target,
 Claude and OpenCode a conversation target, and Grok has no steering. Spoken
-input delivery never edits or clears the composer draft. Saved dictation can be
-added to the composer explicitly through its recovery controls.
+input uses the normal composer when the Android Activity and app document are
+foreground on the destination's active live Chat. This applies even to an empty
+composer and does not require keyboard focus. Speech precedes the existing text
+body with a blank line between them, retaining attachments, the selected skill,
+excerpts, notes, Task references, and thread references in one submission. Voice
+does not refocus the text field or open the keyboard.
+
+The client checks the current view and draft when recognition finishes; the
+server receives ordinary composer requests and applies normal input validation.
+After the composer accepts the combined draft, native ends the recording and
+composer becomes the sole submission and recovery owner. Successful submission
+clears the captured draft through the normal composer path; later typing and
+ordinary Send recovery follow the same rules as typed input. No saved-dictation
+Send or Resume action remains for accepted speech.
+
+Pending uploads or another temporary Send restriction leave the speech in the
+composer with a notice to press **Send** when ready. Oversized input, a draft
+conflict, or an in-progress draft mutation refuses the handoff before changing
+the draft and retains the speech for voice recovery. Background voice, another
+viewed thread, TUI, and historical Chat views use native submission, preserving
+the composer. Saved dictation can still be added explicitly through its recovery
+controls.
 
 The voice card under the composer appears while voice is connected and set to
 Input or Speak, and whenever the selected connection has saved dictation. Wherever no composer is shown, including read-only threads
@@ -413,7 +433,10 @@ the same, including finishing speech that has not yet been transcribed. If the
 finished transcript is empty, voice ends the recording normally and continues
 queued speech without sending a message. The X **Cancel** discards the unsent
 recording. Explicit Send
-is literal, including “stop”; it does not open a review step or change the composer.
+is literal, including “stop”; it does not open a review step. It uses the same
+foreground composer handoff as automatic completion, or native submission when
+that composer is not eligible. Blank speech, recognized automatic stop commands,
+and cancelled recordings leave the composer untouched.
 Ordinary navigation never retargets an active recording; its chevron picker does,
 until finishing.
 
@@ -639,14 +662,19 @@ remains available through Copy and Discard, without truncation. Removing a serve
 profile deletes its saved recordings. Corrupt or inaccessible recording storage
 is preserved and reported, never replaced with an empty draft.
 
-Once a dictation is in the thread's input queue, text above the composer's separate
-64 KiB limit cannot use **Restore to composer**. Use **Copy full text** on its
-queue row to recover the complete text, including failed or not-sent input.
-Copy leaves the queued input and composer unchanged; save the text before
-choosing **Dismiss** if you want to keep it.
+Chat drafts, speech, stashes, and restored queued text all use the same 256 KiB
+UTF-8 limit. Combined speech, typed text, and materialized context must fit the
+existing aggregate input budget; attachment-file limits remain separate.
+**Restore to composer** uses the normal empty-draft requirement. **Copy full
+text** on a queue row preserves complete text without changing the queued input
+or composer; save it before choosing **Dismiss** if you want to keep it.
 
-Recognized input is journaled atomically in encrypted, backup-excluded native
-storage before sending. It carries one immutable mutation ID and original
+The recovery and receipt behavior below applies to native submission. Speech
+accepted by the foreground composer uses normal Chat recovery instead, without
+a separate voice recovery item.
+
+Native-submitted input is journaled atomically in encrypted, backup-excluded
+native storage before sending. It carries one immutable mutation ID and original
 target. When Sedes accepts it, or a later receipt read finds it, the journal
 entry is removed and delivery follows the thread's normal queue. When Sedes
 definitively rejects it, for example because the thread is archived or does

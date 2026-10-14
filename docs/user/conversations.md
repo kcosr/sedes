@@ -16,8 +16,23 @@ microphone on the voice card under the composer to send spoken text. The card
 appears once voice is connected and set to Input or Speak. If voice cannot
 connect, **Settings → Voice** shows the problem and a retry button; the rest of
 the app keeps working. The microphone targets the thread shown on the card.
-Voice sends a separate message and preserves the unsent composer draft. It can
-also make the first send to an empty thread.
+When the app is foreground on the recording's live Chat thread, voice sends
+through the composer, even when it is empty. Speech comes before the existing
+text body, separated by a blank line; attachments, skills, excerpts, Task
+references, and thread references stay with the same message. You can paste
+supplemental text or attach a file during recording without sending a second
+turn. The text field need not have keyboard focus, and voice does not open the
+keyboard. It can also make the first send to an empty thread.
+
+After the composer accepts speech, it owns sending, clearing, and recovery.
+There is no separate voice Send or Resume action for that message. If uploads
+are pending or Send is currently blocked, speech stays in the draft with a
+notice; finish uploading or resolve the restriction, then press **Send**.
+Oversized combined input or a draft conflict leaves the draft unchanged and
+keeps the speech available in voice recovery.
+
+Background voice, another viewed thread, TUI, and historical Chat views use
+native submission and preserve the unsent composer draft.
 
 Enable **Pin default thread** to use your default thread as the initial
 recording target while browsing elsewhere. The row picker can override it for
@@ -132,9 +147,10 @@ unselected phases, such as Partial replies or Provisional commentary.
 **Record**, **Next**, and **Stop** work as for any notice. See
 [Replay a reply](../operator/clients/voice.md#replay-a-reply).
 
-If Sedes rejects a spoken message, voice reports that it was not delivered. If
-voice cannot tell whether a message arrived, or Sedes asks it to try again
-later because the thread is busy starting, changing, or being created, it keeps
+Messages accepted by the foreground composer use ordinary Chat recovery. For
+native submission, if Sedes rejects a spoken message, voice reports that it was
+not delivered. If voice cannot tell whether a message arrived, or Sedes asks it
+to try again later because the thread is busy starting, changing, or being created, it keeps
 the message under **Pending input recovery** in **Settings → Voice** and checks
 again on its own without resending, while voice stays available for other
 notices and recording. **Resume input** explicitly authorizes another attempt
@@ -339,8 +355,10 @@ The composer can contain:
 - file or image attachments; and
 - up to eight structured Task references.
 
-The whole composer is saved on the server. Text, context, and materialized Task
-content share a 256 KiB input limit. Attachment limits are separate and shown
+The whole composer is saved on the server. Chat text has one 256 KiB UTF-8
+limit for draft save, Send, stash, and queue restoration, shared with voice
+text. Text, context, notes, and materialized Task content must also fit that
+same aggregate input budget. Attachment-file limits are separate and shown
 in the attachment picker.
 
 ### Use a skill
@@ -457,10 +475,10 @@ cosmetic dismiss action. A failed or not-sent entry offers **Restore**, which
 returns its text to an empty composer without sending, and **Dismiss**, which
 removes it; each entry clears on its own.
 
-Restore is disabled for user input above the composer's 64 KiB limit. Use
-**Copy full text** to preserve the complete text, including failed or not-sent
-input. Copy leaves the queued entry and current composer unchanged. Copy it
-before dismissing the entry if you want to keep it.
+Queued input uses the same 256 KiB UTF-8 text limit as the composer. **Copy full
+text** preserves the complete text, including failed or not-sent input, without
+changing the queued entry or current composer. Copy it before dismissing the
+entry if you want to keep it.
 
 When Steer is supported, you can convert the user-created queue head to
 **Steer** without changing the current draft. An ordinary Queue entry already
@@ -556,7 +574,9 @@ overwrite newer draft work from another client.
 
 Stashes belong to one thread, survive restart, and remain attached when the
 thread is parked or archived. The sidebar shows a stash count. Each thread
-can hold up to 50 stashes.
+can hold up to 50 stashes and 8 MiB of serialized stash content. Reaching either
+limit refuses a new stash and preserves the current draft; delete an older stash
+before trying again.
 
 ## Read agent activity
 
