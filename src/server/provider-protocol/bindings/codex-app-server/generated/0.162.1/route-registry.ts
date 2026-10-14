@@ -329,7 +329,7 @@ export interface CodexServerNotificationMap {
   readonly "item/reasoning/textDelta": { readonly params: StableReasoningTextDeltaNotification; readonly domain: "live_turns"; readonly use: "decoded" };
   readonly "modelProvider/authRecoveryStarted": { readonly params: StableAuthRecoveryNotification; readonly domain: "live_turns"; readonly use: "decoded" };
   readonly "modelProvider/authRecoveryCompleted": { readonly params: StableAuthRecoveryNotification; readonly domain: "live_turns"; readonly use: "decoded" };
-  readonly "mcpServer/startupStatus/updated": { readonly params: StableMcpServerStatusUpdatedNotification; readonly domain: "initialization"; readonly use: "ignored_informational" };
+  readonly "mcpServer/startupStatus/updated": { readonly params: StableMcpServerStatusUpdatedNotification; readonly domain: "initialization"; readonly use: "decoded" };
   readonly "serverRequest/resolved": { readonly params: StableServerRequestResolvedNotification; readonly domain: "live_turns"; readonly use: "decoded" };
   readonly "skills/changed": { readonly params: StableSkillsChangedNotification; readonly domain: "actions"; readonly use: "catalog_invalidation" };
   readonly "thread/started": { readonly params: ExperimentalThreadStartedNotification; readonly domain: "thread_history"; readonly use: "creation_correlation" };
@@ -509,7 +509,7 @@ export const codexServerNotificationRegistry = Object.freeze({
   "item/reasoning/textDelta": Object.freeze({ params: validateStableReasoningTextDeltaNotification, domain: "live_turns", use: "decoded" }),
   "modelProvider/authRecoveryStarted": Object.freeze({ params: validateStableAuthRecoveryNotification, domain: "live_turns", use: "decoded" }),
   "modelProvider/authRecoveryCompleted": Object.freeze({ params: validateStableAuthRecoveryNotification, domain: "live_turns", use: "decoded" }),
-  "mcpServer/startupStatus/updated": Object.freeze({ params: validateStableMcpServerStatusUpdatedNotification, domain: "initialization", use: "ignored_informational" }),
+  "mcpServer/startupStatus/updated": Object.freeze({ params: validateStableMcpServerStatusUpdatedNotification, domain: "initialization", use: "decoded" }),
   "serverRequest/resolved": Object.freeze({ params: validateStableServerRequestResolvedNotification, domain: "live_turns", use: "decoded" }),
   "skills/changed": Object.freeze({ params: validateStableSkillsChangedNotification, domain: "actions", use: "catalog_invalidation" }),
   "thread/started": Object.freeze({ params: validateExperimentalThreadStartedNotification, domain: "thread_history", use: "creation_correlation" }),

@@ -276,6 +276,7 @@ const REQUEST_TIMEOUT_MILLISECONDS = 10_000;
 const MAXIMUM_UNSUBSCRIBE_ATTEMPTS = 2;
 const MAXIMUM_ESTABLISHMENT_ATTEMPTS = 5;
 const MAXIMUM_EVENT_JOURNAL = 256;
+const MAXIMUM_PENDING_MCP_STARTUP_NOTICES = 32;
 const MAXIMUM_PAGINATED_ESTABLISHMENT_NOTIFICATIONS = 1_000;
 const MAXIMUM_PAGINATED_ESTABLISHMENT_NOTIFICATION_BYTES =
   MAXIMUM_BACKEND_SNAPSHOT_OR_PAGE_BYTES;
@@ -467,6 +468,10 @@ export class CodexConversationHandle implements ConversationHandle {
   #projectionEpoch = 0;
   #projectionSubscriptionClaimed = false;
   #establishing = false;
+  readonly #pendingMcpStartupNotices = new Map<string, {
+    readonly generation: number;
+    readonly event: Extract<BackendConversationEvent, { readonly type: "notice" }>;
+  }>();
   #establishmentSettled: Promise<void> | undefined;
   #establishedGeneration = 0;
   #subscribedGeneration = 0;
@@ -704,6 +709,7 @@ export class CodexConversationHandle implements ConversationHandle {
     }
     if (input.signal.aborted) throw projectionCancelled(input.signal.reason);
     this.#establishing = true;
+    this.#pendingMcpStartupNotices.clear();
     this.#resetPaginatedEstablishmentNotifications();
     this.#verifiedGeneratedImagePublicationKeys.clear();
     // One cold-load budget spans metadata, resume, paginated hydration and
@@ -759,6 +765,7 @@ export class CodexConversationHandle implements ConversationHandle {
             handleSequence,
             listener,
           );
+          this.#publishPendingMcpStartupNotices();
           this.#releasePaginatedEstablishmentNotifications();
           return unsubscribe;
         },
@@ -2096,6 +2103,7 @@ export class CodexConversationHandle implements ConversationHandle {
   #observeControlNotification(notification: CodexRpcNotification): void {
     if (this.#closing || this.#closed || notification.generation !== this.#client.lifecycleSnapshot().generation) return;
     if (isCodexRpcUndecodableNotification(notification)) {
+      if (notification.method === "mcpServer/startupStatus/updated") return;
       if (notification.nativeThreadId === this.binding.backendConversationId) { this.#controlObservationRevision++; this.#controlTurn = undefined; }
       return;
     }
@@ -4650,6 +4658,9 @@ export class CodexConversationHandle implements ConversationHandle {
   ): Promise<void> => {
     if (this.#closing || this.#closed || this.#policyHistory) return;
     if (isCodexRpcUndecodableNotification(notification)) {
+      // MCP progress is advisory only, including malformed native progress.
+      // It cannot invalidate an otherwise authoritative transcript receipt.
+      if (notification.method === "mcpServer/startupStatus/updated") return;
       if (notification.nativeThreadId !== this.binding.backendConversationId) {
         return;
       }
@@ -4786,8 +4797,40 @@ export class CodexConversationHandle implements ConversationHandle {
       return;
     }
     if (notification.method === "mcpServer/startupStatus/updated") {
-      // Informational MCP startup progress has no transcript projection in
-      // Sedes and cannot invalidate a thread/read or thread/resume receipt.
+      try {
+        const parsed = assertCodexAttestedServerNotificationParams(
+          "mcpServer/startupStatus/updated", notification.params,
+        );
+        // Names are configuration-owned, but still untrusted presentation.
+        // Raw provider errors may contain filesystem paths or credentials.
+        if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/u.test(parsed.name)) return;
+        if (parsed.status !== "failed") {
+          this.#pendingMcpStartupNotices.delete(parsed.name);
+          return;
+        }
+        const event: Extract<BackendConversationEvent, { readonly type: "notice" }> = {
+          type: "notice",
+          notice: {
+            id: `codex-mcp-startup:${notification.generation}:${notification.sequence}`,
+            tone: "warning",
+            message: boundedDisplayTextSchema.parse({
+              text: `MCP server "${parsed.name}" failed to start. Its tools are unavailable. Check the MCP configuration on the execution host.`,
+            }),
+            createdAt: new Date(notification.emittedAtMs ?? this.#now()).toISOString(),
+          },
+        };
+        if (this.#establishing) {
+          if (this.#pendingMcpStartupNotices.has(parsed.name) ||
+              this.#pendingMcpStartupNotices.size < MAXIMUM_PENDING_MCP_STARTUP_NOTICES) {
+            this.#pendingMcpStartupNotices.set(parsed.name, { generation: notification.generation, event });
+          }
+        } else if (notification.generation === this.#establishedGeneration) {
+          this.#emit(event);
+        }
+      } catch {
+        // Invalid native advisory input neither publishes untrusted text nor
+        // changes snapshot reconciliation or the daemon generation.
+      }
       return;
     }
     if (
@@ -6314,6 +6357,17 @@ export class CodexConversationHandle implements ConversationHandle {
 
   #assertOpen(): void {
     if (this.#closing || this.#closed) throw conversationClosed();
+  }
+
+  #publishPendingMcpStartupNotices(): void {
+    const lifecycle = this.#client.lifecycleSnapshot();
+    const pending = [...this.#pendingMcpStartupNotices.values()];
+    this.#pendingMcpStartupNotices.clear();
+    if (this.#closing || this.#closed || lifecycle.state !== "ready" ||
+        lifecycle.generation !== this.#establishedGeneration) return;
+    for (const { generation, event } of pending) {
+      if (generation === lifecycle.generation) this.#emit(event);
+    }
   }
 
   #reportError(error: unknown): void {

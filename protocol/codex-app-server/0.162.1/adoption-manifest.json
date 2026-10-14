@@ -18,7 +18,7 @@
   },
   "sourceTransformation": {
     "description": "copy adopted transitive TypeScript closures and append .js to relative NodeNext specifiers",
-    "treeSha256": "e922b64a6141ad2c84db9846a6f85c144749c003101e3e1724dcaba55526a442",
+    "treeSha256": "77ea5e48fb3176498d7ade2e10fdad0188ba7e37c475833f2d081ddbebc900ff",
     "artifacts": [
       {
         "path": "experimental/AbsolutePathBuf.ts",
@@ -802,8 +802,8 @@
       },
       {
         "path": "route-registry.ts",
-        "bytes": 53847,
-        "sha256": "b32d0381a5c3f67407e5bee0fd365568574c76ebbe8d9ad5738414cd8ec2c253"
+        "bytes": 53819,
+        "sha256": "b9994f54f6e74a4484c4ab51c98262710d052b131228446475a624ce87b91ac0"
       },
       {
         "path": "stable/AbsolutePathBuf.ts",
@@ -3806,7 +3806,7 @@
     {
       "direction": "server_notification",
       "method": "mcpServer/startupStatus/updated",
-      "use": "ignored_informational",
+      "use": "decoded",
       "stability": "stable",
       "artifactProfile": "stable",
       "domain": "initialization",
@@ -3816,7 +3816,8 @@
         "pointer": "#/definitions/McpServerStatusUpdatedNotification"
       },
       "sedesRefinements": [
-        "none_beyond_official_structure"
+        "route_identity",
+        "native_text_bounds"
       ]
     },
     {

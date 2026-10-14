@@ -710,7 +710,17 @@ execution tuple and Sedes tool policy into a new thread. See
 [Agent tools](../agent-tools.md).
 
 Sedes adds only its own per-thread `sedes` MCP server and never edits
-operator Codex configuration. Native MCP presentation fails closed on Windows
+operator Codex configuration. Owned Windows Codex launches and managed TUI
+launches preserve the same bounded Windows account-variable names as the
+sidecar bootstrap, with canonical casing and ambiguous values excluded.
+Explicit host/backend startup overlays remain authoritative; ambient credentials
+and loader controls remain excluded. Provider-configured MCP servers use that
+account environment independently of the Sedes tool presentation.
+Failed MCP startup advisories publish bounded, thread- and generation-scoped
+warning notices. Failures received while attaching are retained until the
+successful projection is subscribed; recovered or stale-generation entries are
+discarded. Advisories never invalidate transcript receipts or expose native
+error text. Native MCP presentation fails closed on Windows
 execution hosts. Principal Tool clients
 use only generic management HTTP routes; they are not injected into Codex or
 accepted by the SSH sidecar. An admitted client may invoke currently eligible

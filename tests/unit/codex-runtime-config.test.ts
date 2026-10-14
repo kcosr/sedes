@@ -16,9 +16,10 @@ import type {
   AgentBackendInstance,
   AgentConnectionProfile,
 } from "../../src/server/backends/contracts.js";
-import { resolveCodexRuntimeConfiguration } from "../../src/server/backends/codex/codex-runtime-config.js";
+import { buildCodexLaunchEnvironment, resolveCodexRuntimeConfiguration } from "../../src/server/backends/codex/codex-runtime-config.js";
 import { CODEX_APP_SERVER_RELEASE } from "../../src/server/backends/codex/codex-release-guard.js";
 import { LocalEnvironmentChannelProvider } from "../../src/server/execution/local-environment-channel.js";
+import { mergeResolvedEnvironment } from "../../src/server/environment-variables/runtime-environment.js";
 
 const scope = Object.freeze({
   tenantId: "tenant-one",
@@ -44,6 +45,65 @@ const connection: AgentConnectionProfile = Object.freeze({
   label: "Codex account",
   enabled: true,
   configurationRevision: 1,
+});
+
+describe("Codex launch account environment", () => {
+  it("preserves Windows account values needed by configured MCP subprocesses without forwarding credentials or loader controls", () => {
+    const environment = buildCodexLaunchEnvironment({
+      Path: "C:\\Windows\\System32;C:\\Tools", systemroot: "C:\\Windows", WINDIR: "C:\\Windows",
+      comspec: "C:\\Windows\\System32\\cmd.exe", userprofile: "C:\\Users\\account", HOMEDRIVE: "C:", HOMEPATH: "\\Users\\account",
+      AppData: "C:\\Users\\account\\AppData\\Roaming", LocalAppData: "C:\\Users\\account\\AppData\\Local",
+      TEMP: "C:\\Temp", TMP: "C:\\Temp", pathext: ".COM;.EXE;.BAT;.CMD", USERNAME: "account",
+      HTTPS_PROXY: "http://proxy.test", HOME: "ignored", CODEX_HOME: "ignored", CODEX_SQLITE_HOME: "ignored",
+      OPENAI_API_KEY: "secret", CODEX_ACCESS_TOKEN: "secret", NODE_OPTIONS: "--require injected.js",
+      NODE_PATH: "C:\\injected", PSModulePath: "C:\\injected", CLAUDE_CONFIG_DIR: "ignored",
+    }, { home: "C:\\Users\\account", codexHomeOverride: "C:\\CodexAccount" }, "win32");
+    expect(environment).toEqual({
+      PATH: "C:\\Windows\\System32;C:\\Tools", SystemRoot: "C:\\Windows", windir: "C:\\Windows",
+      ComSpec: "C:\\Windows\\System32\\cmd.exe", USERPROFILE: "C:\\Users\\account", HOMEDRIVE: "C:", HOMEPATH: "\\Users\\account",
+      APPDATA: "C:\\Users\\account\\AppData\\Roaming", LOCALAPPDATA: "C:\\Users\\account\\AppData\\Local",
+      TEMP: "C:\\Temp", TMP: "C:\\Temp", PATHEXT: ".COM;.EXE;.BAT;.CMD", USERNAME: "account",
+      HTTPS_PROXY: "http://proxy.test", HOME: "C:\\Users\\account", CODEX_HOME: "C:\\CodexAccount", NO_COLOR: "1", TERM: "dumb",
+    });
+    expect(Object.isFrozen(environment)).toBe(true);
+  });
+
+  it("drops ambiguous and malformed Windows account values instead of choosing a casing", () => {
+    expect(buildCodexLaunchEnvironment({
+      PATH: "one", Path: "two", path: "three", TEMP: "one", Temp: "two", temp: "three",
+      USERPROFILE: "C:\\Users\\account\nmalformed", TMP: "\0", APPDATA: "a".repeat(4097), SystemRoot: "C:\\Windows",
+    }, { home: "C:\\Users\\account" }, "win32")).toEqual({
+      SystemRoot: "C:\\Windows", HOME: "C:\\Users\\account", NO_COLOR: "1", TERM: "dumb",
+    });
+  });
+
+  it.each(["linux", "darwin"] as const)("keeps Windows account values out of %s launches", platform => {
+    expect(buildCodexLaunchEnvironment({
+      PATH: "/usr/bin", Path: "ignored", LANG: "en_US.UTF-8", SystemRoot: "ignored", USERPROFILE: "ignored",
+      APPDATA: "ignored", LOCALAPPDATA: "ignored", TEMP: "ignored", TMP: "ignored", OPENAI_API_KEY: "secret",
+    }, { home: "/home/account" }, platform)).toEqual({
+      PATH: "/usr/bin", LANG: "en_US.UTF-8", HOME: "/home/account", NO_COLOR: "1", TERM: "dumb",
+    });
+  });
+
+  it("takes account values only from the selected execution environment", () => {
+    vi.stubEnv("USERPROFILE", "C:\\Users\\other-account");
+    vi.stubEnv("TEMP", "C:\\OtherAccountTemp");
+    try {
+      expect(buildCodexLaunchEnvironment({}, { home: "C:\\Users\\account" }, "win32")).toEqual({
+        HOME: "C:\\Users\\account", NO_COLOR: "1", TERM: "dumb",
+      });
+    } finally { vi.unstubAllEnvs(); }
+  });
+
+  it("lets explicit Windows startup overrides replace or unset preserved account values case-insensitively", () => {
+    const baseline = buildCodexLaunchEnvironment({
+      APPDATA: "C:\\AccountAppData", TEMP: "C:\\AccountTemp", SystemRoot: "C:\\Windows",
+    }, { home: "C:\\Users\\account" }, "win32");
+    expect(mergeResolvedEnvironment(baseline, { AppData: "C:\\BackendAppData", temp: null }, "win32")).toEqual({
+      AppData: "C:\\BackendAppData", SystemRoot: "C:\\Windows", HOME: "C:\\Users\\account", NO_COLOR: "1", TERM: "dumb",
+    });
+  });
 });
 
 describe("Codex runtime configuration", () => {

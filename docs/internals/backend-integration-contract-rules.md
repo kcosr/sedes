@@ -3426,6 +3426,18 @@ reporting cleanup success. Parent-PID liveness and a successful signal request
 are not cleanup evidence. Keep supervision control separate from provider byte
 streams, authenticate it, and fail closed if its completion evidence is lost.
 
+Keep standard Windows account variables in an owned provider's explicit launch
+allowlist when its supported subprocesses require them. Resolve them on the
+execution host, canonicalize case-insensitive names, exclude ambiguous or
+malformed values, and preserve explicit startup-overlay precedence; never
+inherit another host's account, arbitrary credentials, or loader controls.
+Codex implements this for owned runtimes and managed TUI launches. Pi's
+existing account environment is unchanged; native Windows Claude and Grok
+remain unsupported, and OpenCode remains Linux-only. Provider startup failures
+can use existing normalized notices without treating an informational advisory
+as a transcript mutation; bind notices to the exact thread and generation and
+keep raw provider diagnostics private.
+
 These local filesystem and attachment primitives are shared by Pi, Codex,
 Claude, and Grok through execution-environment providers. They do not expand
 provider runtime availability: ordinary local Pi and owned Codex use their

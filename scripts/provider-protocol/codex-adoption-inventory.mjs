@@ -78,7 +78,7 @@ export const serverNotifications = [
   ["item/reasoning/textDelta", "ReasoningTextDeltaNotification"],
   ["modelProvider/authRecoveryStarted", "AuthRecoveryNotification", "live_turns", "decoded", ["route_identity"]],
   ["modelProvider/authRecoveryCompleted", "AuthRecoveryNotification", "live_turns", "decoded", ["route_identity"]],
-  ["mcpServer/startupStatus/updated", "McpServerStatusUpdatedNotification", "initialization", "ignored_informational", ["none_beyond_official_structure"]],
+  ["mcpServer/startupStatus/updated", "McpServerStatusUpdatedNotification", "initialization", "decoded", ["route_identity", "native_text_bounds"]],
   ["serverRequest/resolved", "ServerRequestResolvedNotification"],
   ["skills/changed", "SkillsChangedNotification", "actions", "catalog_invalidation", ["catalog_generation_invalidation"]],
   ["thread/started", "ThreadStartedNotification", "thread_history", "creation_correlation", ["creation_correlation", "native_identity_bounds", "owned_scope"], "experimental"],

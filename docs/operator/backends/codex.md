@@ -49,6 +49,14 @@ appropriately named `SEDES_CODEX_*TOKEN*` environment variable or an
 owner-protected absolute file. That bearer protects the app-server endpoint;
 it is separate from Codex account authentication.
 
+On Windows, Sedes-owned Codex processes preserve the execution account's
+standard profile, application-data, temporary-directory, and executable-discovery
+variables so configured MCP subprocesses can start. Provider credentials and
+process-loader overrides are not inherited. After upgrading this fix, rebuild
+and upgrade Windows execution sidecars (or Electron Managed Local), then restart
+the affected Codex backend. MCP startup failures appear as thread warnings;
+inspect the host's Codex configuration and native diagnostics for details.
+
 A remote target requires a working OpenSSH host alias, an admitted persistent
 sidecar, and a workspace beneath a saved remote root. Its provider endpoint and
 credentials resolve on that execution host. Files, attachments, and Sedes CLI
@@ -414,6 +422,7 @@ mutation safe to repeat.
 | ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Owned stdio is rejected before startup                       | Confirm Linux x64, macOS arm64/x64, or Windows arm64/x64 through Electron Managed Local; verify that `PATH` resolves `codex` or the optional canonical override is valid, the canonical workspace path is admitted, executable access is available, and one compatible stable `codex-cli` version line is reported.                                                      |
 | A console window briefly flashes when a Windows turn starts  | Current Codex Windows releases may create a visible PowerShell command-safety helper even when Sedes starts `codex.exe` without a console window. This is provider-runtime behavior; upgrade Codex when its Windows child-process fix is available.                                                                                                                    |
+| A configured MCP server's tools are missing on Windows      | Upgrade the Windows sidecar or Managed Local server and restart the Codex backend. A configured server must complete its startup handshake before its tools are available; thread warnings identify failed servers without exposing native error details. |
 | Codex reports that login is required                         | Authenticate the same service account using its intended `HOME`/`CODEX_HOME`. Sedes does not translate API credentials or perform login.                                                                                                                                                                 |
 | Native store is already locked                               | Another owned Codex/Sedes process is using the same store. Stop the other owner; do not remove the lock blindly or operate one native store concurrently.                                                                                                                                                |
 | Local UDS fails route assurance                              | Start the external daemon first, then verify that the socket parent is owned and mode `0700`, the filesystem socket is owned and mode `0600`, and the configured path is exact.                                                                                                                          |
