@@ -10,6 +10,7 @@ User-facing changes are collected here before release. See the
 - Upgrade the server and browser/packaged clients together for client protocol
   **156**. Rebuild Android with its bundled client for the updated native voice
   bridge. See [voice input](docs/operator/clients/voice.md).
+  ([#81](https://github.com/kcosr/sedes/pull/81))
 
 ### Added
 
@@ -17,6 +18,7 @@ User-facing changes are collected here before release. See the
   the recording's thread, including attachments and other context. Composer
   owns submission and recovery after accepting the speech. See
   [voice input](docs/operator/clients/voice.md).
+  ([#81](https://github.com/kcosr/sedes/pull/81))
 
 ### Changed
 
@@ -25,6 +27,7 @@ User-facing changes are collected here before release. See the
   budget; attachment-file limits remain separate. Each thread can retain up to
   50 stashes and 8 MiB of serialized stash content; refusing another stash leaves
   the current draft intact. See [stashed prompts](docs/user/conversations.md#put-a-draft-aside-with-stashes).
+  ([#81](https://github.com/kcosr/sedes/pull/81))
 
 ### Fixed
 
