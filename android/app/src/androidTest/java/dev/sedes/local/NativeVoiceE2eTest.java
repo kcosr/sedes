@@ -360,7 +360,7 @@ public class NativeVoiceE2eTest {
                     // own composer send, so background before recognition can choose that different route.
                     assertTrue(awaitServerDraft(server, thread, draft, 15000));
                     instrumentation.runOnMainSync(() -> activity.moveTaskToBack(true));
-                    await(() -> !runtime.snapshot().getJSONObject("foreground").optBoolean("visible"), 10000, "native recovery background visibility");
+                    await(() -> !runtime.snapshot().optJSONObject("foreground").optBoolean("visible"), 10000, "native recovery background visibility");
                 }
                 allowCaptureCompletion.set(true);
                 await(() -> phases.contains("submitting"), 60000, "recognized text admission");
@@ -376,7 +376,7 @@ public class NativeVoiceE2eTest {
                     String mutation = runtime.snapshot().optJSONArray("recovery").optJSONObject(0).optString("mutationId");
                     assertEquals(mutationIds.get(0), mutation);
                     instrumentation.runOnMainSync(() -> context.startActivity(new Intent(context, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)));
-                    await(() -> runtime.snapshot().getJSONObject("foreground").optBoolean("visible"), 15000, "foreground native recovery controls");
+                    await(() -> runtime.snapshot().optJSONObject("foreground").optBoolean("visible"), 15000, "foreground native recovery controls");
                     waitJs("document.visibilityState === 'visible'", 15000);
                     screenshot("uncertain");
                     if (scenario.equals("cancel-uncertain")) {
