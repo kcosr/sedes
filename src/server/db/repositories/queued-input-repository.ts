@@ -4,7 +4,7 @@ import { UserInputRevisionRepository } from "./user-input-revision-repository.js
 import type Database from "better-sqlite3";
 import { DomainError } from "../../domain/errors.js";
 import type { RequestScope } from "../../identity/identity-provider.js";
-import { MAXIMUM_DRAFT_BYTES, OVERSIZED_COMPOSER_RESTORE_REASON, type ContextExcerpt } from "../../../shared/protocol/context-excerpts.js";
+import { MAXIMUM_THREAD_INPUT_BYTES, type ContextExcerpt } from "../../../shared/protocol/context-excerpts.js";
 import type { ComposerAttachmentDescriptor } from "../../../shared/protocol/composer-attachments.js";
 import {
   parseStoredContextExcerpts,
@@ -441,9 +441,9 @@ export class QueuedInputRepository {
       readonly now: number;
     },
   ): { readonly item: QueuedInputRecord; readonly replayed: boolean } {
-    // Direct input uses the full materialized-input budget. Other entry points
-    // retain the raw-text bound previously enforced by this shared table.
-    if (input.source.kind !== "direct_input" && Buffer.byteLength(input.text, "utf8") > MAXIMUM_DRAFT_BYTES) {
+    const maximumTextBytes = input.source.kind === "composer" || input.source.kind === "direct_input"
+      ? MAXIMUM_THREAD_INPUT_BYTES : 65_536;
+    if (Buffer.byteLength(input.text, "utf8") > maximumTextBytes) {
       throw new DomainError("bad_request", "Queued input exceeds the text byte limit.");
     }
     if (
@@ -1362,9 +1362,6 @@ export class QueuedInputRepository {
             "invalid_transition",
             "Only pending, retry-scheduled, or unacknowledged failed queued input can be restored.",
           );
-        }
-        if (Buffer.byteLength(item.text, "utf8") > MAXIMUM_DRAFT_BYTES) {
-          throw new DomainError("invalid_transition", OVERSIZED_COMPOSER_RESTORE_REASON);
         }
         const draft = this.#getDraft(scope, applicationThreadId);
         if (draft.revision !== input.expectedDraftRevision) {

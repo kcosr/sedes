@@ -1,10 +1,10 @@
 import type { Page } from "@playwright/test";
-import type { NativeVoiceInputSubmitted, NativeVoiceState } from "../../src/client/voice/native-voice-plugin.js";
+import type { NativeVoiceComposerHandoff, NativeVoiceInputSubmitted, NativeVoiceState } from "../../src/client/voice/native-voice-plugin.js";
 
 const profileId = "c61b5d8b-4a77-43c6-bd72-12e23fe42e38";
 export function voiceFixtureState(): NativeVoiceState {
   return {
-    version: 14, stateRevision: 1, connectionGeneration: 1, profileId, serverOrigin: null, identity: null,
+    version: 15, stateRevision: 1, connectionGeneration: 1, profileId, serverOrigin: null, identity: null,
     originClientId: "34612c41-0bbb-455f-a5af-725bfc7ae768", clientConnectionToken: null, settingsRevision: 0,
     settings: { audioMode: "speak", autoListen: true, keepListeningByDefault: false, announceRecordingThread: false, ignoreOtherDevices: true, speechContent: "both", cleanSpeechText: true,
       speechProvider: "openai", speechEndpoint: "https://api.openai.com/v1", sttModel: "gpt-live-transcribe", ttsModel: "gpt-4o-mini-tts",
@@ -13,7 +13,7 @@ export function voiceFixtureState(): NativeVoiceState {
       recognitionResultTimeoutMs: 60000, longDictationTimeoutMs: 3_600_000, recognitionEndSilenceMs: 1200, recognizeStopCommand: true,
       recognitionCues: true, cueGain: 100, startupPreRollMs: 512, ttsGain: 100, headsetControls: true },
     speech: { credentialConfigured: true, catalogStatus: "idle", catalog: null, error: null }, phase: "idle", ready: true, readiness: "ready",
-    foreground: { visible: false, threadId: null, threadTitle: null }, nextRecordingTarget: null, retainedVoiceTarget: null, idleTargetRevision: 0, active: null,
+    foreground: { visible: false, threadId: null, threadTitle: null, composerAvailable: false }, nextRecordingTarget: null, retainedVoiceTarget: null, idleTargetRevision: 0, active: null,
     queue: { count: 0, bytes: 0, droppedCount: 0, droppedReasons: {} },
     actions: { canStart: true, canStop: false, canSkip: false, canRecordDuringPlayback: false, canReleaseRetainedTarget: false, canRetarget: false, canResume: false,
       canSetKeepListening: false, canSend: false, keepListeningBlockedReason: "not_capturing" }, recordingRecovery: null, recovery: [], errors: [],
@@ -27,6 +27,7 @@ type VoiceFixture = {
   publish(patch: Partial<NativeVoiceState>): void;
   setForeground(context: NativeVoiceState["foreground"]): void;
   emitInputSubmitted(event: NativeVoiceInputSubmitted): void;
+  emitComposerHandoff(event: NativeVoiceComposerHandoff): void;
 };
 declare global { interface Window { __voiceFixture: VoiceFixture } }
 
@@ -44,6 +45,7 @@ export async function installVoiceFixture(page: Page): Promise<void> {
     let lastViewedThread = sessionStorage.getItem(viewedKey);
     const listeners = new Map<string, { plugin: string; event: string; callback: (value: unknown) => void }>();
     let listenerId = 0;
+    let composerHandoff: { event: NativeVoiceComposerHandoff; claimed: boolean } | undefined;
     const emit = (event: string, value: unknown) => {
       for (const listener of listeners.values()) if (listener.plugin === "NativeVoice" && listener.event === event) listener.callback(structuredClone(value));
     };
@@ -82,7 +84,7 @@ export async function installVoiceFixture(page: Page): Promise<void> {
         sessionStorage.setItem(retainedKey, JSON.stringify(fixture.state));
         emit("stateChanged", fixture.state);
       },
-      setForeground({ visible, threadId, threadTitle }) {
+      setForeground({ visible, threadId, threadTitle, composerAvailable }) {
         const current = fixture.state;
         let retainedVoiceTarget = current.retainedVoiceTarget;
         let idleTargetRevision = current.idleTargetRevision;
@@ -102,9 +104,21 @@ export async function installVoiceFixture(page: Page): Promise<void> {
             retainedVoiceTarget = { threadId, threadTitle, revision: idleTargetRevision };
           }
         }
-        fixture.publish({ foreground: { visible, threadId, threadTitle }, retainedVoiceTarget, idleTargetRevision });
+        fixture.publish({ foreground: { visible, threadId, threadTitle, composerAvailable }, retainedVoiceTarget, idleTargetRevision });
       },
       emitInputSubmitted(event) { emit("inputSubmitted", event); },
+      emitComposerHandoff(event) {
+        composerHandoff = { event, claimed: false };
+        fixture.publish({ phase: "submitting", active: { id: event.handoffId, eventKind: "manual", threadId: event.threadId,
+          threadTitle: fixture.state.foreground.threadTitle, recognitionThreadId: event.threadId,
+          recognitionThreadTitle: fixture.state.foreground.threadTitle, automatic: false,
+          recording: { id: event.recordingId, keepListening: false, reconnecting: false } },
+          recordingRecovery: { recordingId: event.recordingId, revision: 1, threadId: event.threadId,
+            threadTitle: fixture.state.foreground.threadTitle, stage: "ready", reason: null, captureIncomplete: false,
+            hasUnrecognizedAudio: false, canRetryRecognition: false, canSend: false, canCopyRecognizedText: true,
+            canDiscard: true, admission: null }, actions: { ...initial.actions, canStart: false } });
+        emit("composerHandoff", event);
+      },
     };
     const snapshot = () => structuredClone(fixture.state);
     // Queued replay identities; the fake keeps only the queue count in state, and an emptied queue drops them.
@@ -120,7 +134,7 @@ export async function installVoiceFixture(page: Page): Promise<void> {
           header("NativeVoice", ["setConnection", "getState", "disconnect", "setForegroundContext", "updateSettings", "startManualListen", "setNextRecordingTarget", "releaseRetainedVoiceTarget",
             "retargetActiveRecognition", "setKeepListening", "sendRecording", "stopCurrentInteraction", "stopPlayback", "skipCurrentPlayback", "recordDuringPlayback", "retryRecordingRecognition",
             "sendRecoveredRecording", "copyRecognizedRecordingText", "readRecognizedRecordingText", "discardRecording", "resumeInput", "discardInput", "listInputDevices",
-            "refreshSpeechCatalog", "openSpeechCredentialDialog", "speakReply"], true),
+            "refreshSpeechCatalog", "openSpeechCredentialDialog", "speakReply", "claimComposerHandoff", "completeComposerHandoff"], true),
         ],
         nativeCallback(plugin: string, method: string, args: { eventName: string }, callback: (value: unknown) => void) {
           if (method !== "addListener") throw new Error(`Unexpected callback: ${plugin}.${method}`);
@@ -145,7 +159,21 @@ export async function installVoiceFixture(page: Page): Promise<void> {
             const visible = args.visible === true;
             const threadId = visible && typeof args.threadId === "string" ? args.threadId : null;
             const threadTitle = visible && typeof args.threadTitle === "string" ? args.threadTitle : null;
-            fixture.setForeground({ visible, threadId, threadTitle });
+            fixture.setForeground({ visible, threadId, threadTitle, composerAvailable: visible && args.composerAvailable === true });
+          } else if (method === "claimComposerHandoff" || method === "completeComposerHandoff") {
+            if (!composerHandoff || args.expectedConnectionGeneration !== current.connectionGeneration || args.handoffId !== composerHandoff.event.handoffId)
+              throw new Error("The voice handoff changed.");
+            if (method === "claimComposerHandoff") {
+              if (composerHandoff.claimed) throw new Error("The voice handoff was already claimed.");
+              composerHandoff.claimed = true;
+            } else {
+              if (!composerHandoff.claimed) throw new Error("The voice handoff is not claimed.");
+              const accepted = args.outcome === "accepted";
+              fixture.publish({ active: null, phase: accepted ? "idle" : "recordingRecovery", actions: initial.actions,
+                recordingRecovery: accepted ? null : { ...current.recordingRecovery!, canSend: true,
+                  reason: typeof args.message === "string" ? args.message : current.recordingRecovery!.reason } });
+              composerHandoff = undefined;
+            }
           } else if (method === "updateSettings") {
             fixture.publish({ settingsRevision: current.settingsRevision + 1, settings: { ...current.settings, ...args.patch as object } });
           } else if (method === "setNextRecordingTarget") {

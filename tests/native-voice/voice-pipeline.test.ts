@@ -1,3 +1,4 @@
+import { MAXIMUM_THREAD_INPUT_BYTES } from "../../src/shared/protocol/context-excerpts.js";
 import { createHash, randomUUID } from "node:crypto";
 import { execFile as execCallback } from "node:child_process";
 import { promisify } from "node:util";
@@ -6,7 +7,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
 import { notificationSettingsSchema, voiceNotificationSchema } from "../../src/shared/protocol/notification.js";
-import { directInputReceiptSchema, MAX_DIRECT_INPUT_REQUEST_BYTES, MAX_DIRECT_INPUT_TEXT_BYTES, threadInputContextSchema } from "../../src/shared/protocol/thread-input.js";
+import { directInputReceiptSchema, MAX_DIRECT_INPUT_REQUEST_BYTES, threadInputContextSchema } from "../../src/shared/protocol/thread-input.js";
 import { clientPollResultSchema, registeredClientSchema } from "../../src/shared/protocol/client-controls.js";
 import { startOpenAiSpeechFixture, waitForSpeech } from "../support/openai-speech-fixture.js";
 import { OpenCodeProductionFixture } from "../support/opencode-production-fixture.js";
@@ -126,12 +127,12 @@ describe("native voice production pipeline with loopback providers", () => {
       } finally { await reconnected.close(); }
 
       // The full direct-input text limit still fits its dedicated request parser after JSON escaping.
-      const escaped = { ...input, mutationId: randomUUID(), text: "\u0001".repeat(MAX_DIRECT_INPUT_TEXT_BYTES) };
+      const escaped = { ...input, mutationId: randomUUID(), text: "\u0001".repeat(MAXIMUM_THREAD_INPUT_BYTES) };
       expect(JSON.stringify(escaped).length).toBeGreaterThan(256 * 1024);
-      expect(Buffer.byteLength(escaped.text)).toBe(MAX_DIRECT_INPUT_TEXT_BYTES);
+      expect(Buffer.byteLength(escaped.text)).toBe(MAXIMUM_THREAD_INPUT_BYTES);
       expect(Buffer.byteLength(JSON.stringify(escaped))).toBeLessThan(MAX_DIRECT_INPUT_REQUEST_BYTES);
-      const oversizedText = { ...input, mutationId: randomUUID(), text: "é".repeat(MAX_DIRECT_INPUT_TEXT_BYTES / 2 + 1) };
-      expect(Buffer.byteLength(oversizedText.text)).toBeGreaterThan(MAX_DIRECT_INPUT_TEXT_BYTES);
+      const oversizedText = { ...input, mutationId: randomUUID(), text: "é".repeat(MAXIMUM_THREAD_INPUT_BYTES / 2 + 1) };
+      expect(Buffer.byteLength(oversizedText.text)).toBeGreaterThan(MAXIMUM_THREAD_INPUT_BYTES);
       expect((await app.request(`/api/threads/${threadId}/inputs`, "POST", oversizedText, clientHeaders)).status).toBe(400);
       const overParser = { ...input, mutationId: randomUUID(), text: "\u0001".repeat(Math.floor(MAX_DIRECT_INPUT_REQUEST_BYTES / 6) + 1) };
       expect(Buffer.byteLength(JSON.stringify(overParser))).toBeGreaterThan(MAX_DIRECT_INPUT_REQUEST_BYTES);
@@ -390,7 +391,7 @@ describe("native voice production pipeline with loopback providers", () => {
       const before = app.model.requests.length;
       const ttsBefore = (await speech.observations()).speech.length;
       const args = { serverOrigin: app.url, speechEndpoint: speech.endpoint, speechToken: speech.token, pairingCode, threadId, threadTitle, mode, scenario,
-        initialText, draftText: `unsent voice fixture draft ${mode} ${scenario}`,
+        initialText, recognizedText: text, draftText: `unsent voice fixture draft ${mode} ${scenario}`,
         ...(secondThreadId ? { secondThreadId, secondThreadTitle } : {}),
         ...(scenario === "retained-target" ? { secondDraftText: "unsent draft on the viewed thread after voice navigation" } : {}) };
       const diagnosticPath = path.join(artifactDirectory, `android-${mode}-${scenario}-voice-diagnostics.json`);
@@ -425,7 +426,8 @@ describe("native voice production pipeline with loopback providers", () => {
         expect(rawResult).toBeDefined();
         const evidence = JSON.parse(rawResult!);
         // Playback Next and Stop exercise speech without opening capture; other scenarios record after a start cue.
-        expect(evidence).toMatchObject({ draftPreserved: true, composerDraftPreserved: true, serverDraftPreserved: true,
+        const composerSubmission = scenario === "cycle" || scenario === "startup" || scenario === "record";
+        expect(evidence).toMatchObject({ composerDraftMatchesExpected: true, serverDraftMatchesExpected: true,
           audioSource: scenario === "next" || playbackStop ? "none" : "deterministic-pcm", audioSink: "AudioTrack" });
         if (mode === "speak" && scenario !== "stop") expect(evidence.speechPlayback).toBe(true);
         expect(evidence.journalOutstanding).toBe(0);
@@ -554,8 +556,9 @@ describe("native voice production pipeline with loopback providers", () => {
         }
         if (scenario === "cycle") {
           expect(evidence.inputUi).toMatchObject({ rowCount: 1, provisional: false, routineLabelCount: 0,
-            seekEnabled: mode === "input", submitted: { threadId } });
-          expect(evidence.inputUi.operationId).toBe(evidence.inputUi.submitted.operationId);
+            seekEnabled: mode === "input", source: "composer", threadId });
+          expect(evidence.nativeInputPresentationEvents).toBe(0);
+          expect(evidence.inputAttempts).toBe(0);
           expect(evidence.inputUi.operationId).toMatch(/^[0-9a-f-]{36}$/u);
           expect(evidence.inputUi.text).toContain(text);
           expect(evidence.inputUi.viewportHeight).toBeGreaterThan(0);
@@ -574,13 +577,25 @@ describe("native voice production pipeline with loopback providers", () => {
           expect(toolResults).toMatch(/"foreground"\s*:\s*false/u);
           expect(toolResults).toMatch(/"voiceReady"\s*:\s*true/u);
         }
-        // The device polled Sedes for the autosaved draft; confirm it is still the unsent composer text.
-        expect((await app.thread(threadId)).draft.text).toBe(args.draftText);
-        const submissions = () => app.model.requests.slice(before).filter(request => request.lastRole === "user" && request.lastText === text);
+        // Foreground composer sends consume the whole draft; native routes leave it untouched.
+        expect((await app.thread(threadId)).draft.text).toBe(composerSubmission ? "" : args.draftText);
+        const deliveredText = composerSubmission ? `${text}\n\n${args.draftText}` : text;
+        const submissions = () => app.model.requests.slice(before).filter(request => request.lastRole === "user" && request.lastText === deliveredText);
         // A definitive admission receipt may precede asynchronous provider dispatch.
         const submitsReply = scenario !== "stop" && scenario !== "next" && !playbackStop && scenario !== "retained-target";
         if (submitsReply) await waitForSpeech(() => submissions().length > 0);
         expect(submissions()).toHaveLength(submitsReply ? 1 : 0);
+        if (composerSubmission) {
+          expect(evidence.nativeInputPresentationEvents).toBe(0);
+          expect(evidence.inputAttempts).toBe(0);
+          await app.waitFor(async () => Object.values((await app.thread(threadId)).itemsById).some(item =>
+            item.kind === "user_message" && (scenario === "cycle" ? item.deliveryOperationId === evidence.inputUi.operationId : item.content.some(part => part.kind === "text" && part.text.text.includes(text)))));
+          const userRows = Object.values((await app.thread(threadId)).itemsById).filter(item =>
+            item.kind === "user_message" && (scenario === "cycle" ? item.deliveryOperationId === evidence.inputUi.operationId : item.content.some(part => part.kind === "text" && part.text.text.includes(text))));
+          expect(userRows).toHaveLength(1);
+          expect(userRows[0]).toMatchObject({ content: [{ kind: "text", text: { text: deliveredText } }] });
+          if (scenario === "cycle") expect(userRows[0]).toMatchObject({ kind: "user_message", deliveryOperationId: evidence.inputUi.operationId });
+        }
         if (mode === "input") expect((await speech.observations()).speech.length).toBe(ttsBefore);
         if (secondThreadId && scenario !== "retained-target") {
           if (scenario === "background-switch") await app.waitFor(async () => Object.values((await app.thread(secondThreadId)).itemsById)

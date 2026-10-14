@@ -15,7 +15,7 @@ import { TaskRepository } from "./repositories/task-repository.js";
 import type { ContextExcerpt } from "../../shared/protocol/context-excerpts.js";
 import {
   composerInputUtf8Bytes,
-  MAXIMUM_COMPOSER_INPUT_BYTES,
+  MAXIMUM_THREAD_INPUT_BYTES,
 } from "../../shared/protocol/context-excerpts.js";
 
 export function parseStoredTaskReferences(
@@ -140,7 +140,7 @@ export function assertMaterializedComposerBytes(input: {
   readonly taskContexts: readonly MaterializedTaskContext[];
 }): void {
   const bytes = composerInputUtf8Bytes(input);
-  if (bytes > MAXIMUM_COMPOSER_INPUT_BYTES) {
+  if (bytes > MAXIMUM_THREAD_INPUT_BYTES) {
     throw new DomainError(
       "task_context_too_large",
       "The attached task content is too large to send. Remove a task or shorten its details.",

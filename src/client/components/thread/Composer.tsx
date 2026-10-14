@@ -29,7 +29,8 @@ import {
   COMPOSER_ATTACHMENT_LIMITS,
 } from "../../../shared/index.js";
 import { hasDeliverableComposerInput } from "../../../shared/index.js";
-import { MAXIMUM_DRAFT_BYTES } from "../../../shared/protocol/context-excerpts.js";
+import { composerInputUtf8Bytes, composerTaskInputUtf8Bytes, MAXIMUM_THREAD_INPUT_BYTES } from "../../../shared/protocol/context-excerpts.js";
+import type { NativeVoiceComposerHandoff } from "../../voice/native-voice-plugin.js";
 import {
   DeliveryRecoveryRequiredError,
   useThreadStore,
@@ -1815,7 +1816,7 @@ export function Composer({
       attachments: attachmentsRef.current, taskReferences: taskReferencesRef.current,
       revision: syncedDraft.current.revision,
     });
-    if (!parsed.success || new TextEncoder().encode(next).byteLength > MAXIMUM_DRAFT_BYTES)
+    if (!parsed.success || new TextEncoder().encode(next).byteLength > MAXIMUM_THREAD_INPUT_BYTES)
       throw new Error("This dictation does not fit in the composer. Copy the text instead.");
     textRef.current = next;
     dirtyRef.current = true;
@@ -1828,6 +1829,17 @@ export function Composer({
     if (!active || !voice || !voiceComposerReady) return;
     return voice.registerComposer(store.threadId, text => appendVoiceText.current(text));
   }, [active, voice, store, voiceComposerReady]);
+  const acceptVoiceHandoff = useRef<(event: NativeVoiceComposerHandoff) => void>(() => {});
+  // Set before the snapshot early-return as well: an old registration can never
+  // use the previous render's eligibility or submission function.
+  acceptVoiceHandoff.current = () => { throw new Error("The message composer is unavailable."); };
+  const voiceSubmissionVisible = active && chatViewVisible && optimisticTranscriptPresentationVisible && !tuiActive;
+  // Remove the callback during the unmount commit, before a native claim reply
+  // can arrive while passive effect cleanup is still pending.
+  useLayoutEffect(() => {
+    if (!voice || !voiceSubmissionVisible) return;
+    return voice.registerSubmissionComposer(store.threadId, event => acceptVoiceHandoff.current(event));
+  }, [voice, store, voiceSubmissionVisible]);
 
   useEffect(() => {
     const element = textarea.current;
@@ -2140,6 +2152,7 @@ export function Composer({
   const send = (
     candidate?: DraftValue,
     requestedMode?: "submit" | "steer" | "queue",
+    options?: { refocus?: boolean },
   ): boolean => {
     if (tuiActive) {
       if (requestedMode) return false;
@@ -2149,12 +2162,13 @@ export function Composer({
     const mode = requestedMode ?? (busy ? deliveryMode : "submit");
     const value = candidate ?? currentDraftValue();
     if (!canDeliver(mode, value) || draftMutationRunning.current) return false;
+    setPromptInputError(undefined);
     recordComposerInputDiagnostic("send_captured", {
       textCharacters: value.text.length,
       domTextCharacters: textarea.current?.value.length ?? 0,
       textareaFocused: document.activeElement === textarea.current,
       refocusEnabled:
-        !mobileTerminalLayout || getMobileComposerRefocusAfterSend(),
+        options?.refocus !== false && (!mobileTerminalLayout || getMobileComposerRefocusAfterSend()),
       mode,
     });
     const operationId = crypto.randomUUID();
@@ -2200,7 +2214,7 @@ export function Composer({
       if (mode === "submit") onImmediateSend?.(operationId);
     });
     traceComposerInput("send_cleared");
-    if (!mobileTerminalLayout || getMobileComposerRefocusAfterSend()) {
+    if (options?.refocus !== false && (!mobileTerminalLayout || getMobileComposerRefocusAfterSend())) {
       traceComposerInput("send_refocus");
       textarea.current?.focus();
     }
@@ -2357,6 +2371,43 @@ export function Composer({
     return true;
   };
   excerptSendRef.current = (candidate) => send(candidate);
+  acceptVoiceHandoff.current = event => {
+    if (!voiceSubmissionVisible || document.visibilityState === "hidden" || event.threadId !== store.threadId)
+      throw new Error("Open the recording's live Chat to send it with the composer.");
+    if (draftEditingDisabled || !syncedDraft.current)
+      throw new Error("The message composer is unavailable.");
+    if (conflictRef.current) throw new Error("Resolve the draft conflict first.");
+    if (draftMutationRunning.current || queueRestoreRunning.current)
+      throw new Error("Wait for the current composer action to finish.");
+    const current = currentDraftValue();
+    const body = splitThreadReferenceText(current.text).text;
+    const next = replaceThreadReferenceBody(current.text, body.length ? `${event.text}\n\n${body}` : event.text);
+    const candidate = { ...current, text: next };
+    const parsed = normalizedDraftSchema.safeParse({ ...candidate, revision: syncedDraft.current.revision });
+    const selectedTasks = candidate.taskReferences.flatMap(({ taskId }) => {
+      const task = currentTasks.get(taskId);
+      return task ? [task] : [];
+    });
+    if (!parsed.success || composerInputUtf8Bytes(candidate) + composerTaskInputUtf8Bytes(selectedTasks) > MAXIMUM_THREAD_INPUT_BYTES)
+      throw new Error("Speech and the draft exceed the 256 KiB input limit. Shorten the draft before sending the saved dictation.");
+    // Native froze Follow Composer at recording end. Current run state still
+    // decides idle Submit; unavailable Steer uses Queue without changing the preference.
+    const mode = !busy
+      ? "submit"
+      : event.mode === "steer" && supportedBusyDeliveryModes.some(({ id, available }) => id === "steer" && available)
+        ? "steer"
+        : "queue";
+    if (send(candidate, mode, { refocus: false })) return;
+    // An upload or capability fence must keep the entire draft, including its
+    // outstanding uploads, rather than send speech with only part of its context.
+    textRef.current = next;
+    dirtyRef.current = true;
+    setText(next);
+    setDirty(true);
+    setPromptInputError(attachmentUploadsRef.current.length > 0
+      ? "Speech added to the draft. Wait for attachment uploads to finish, then press Send."
+      : "Speech added to the draft. Resolve the current Send restriction, then press Send.");
+  };
 
   const appendedCannedPromptValue = (
     prompt: ComposerPromptPickerItem,

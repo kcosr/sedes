@@ -52,7 +52,8 @@ public class NativeVoiceE2eTest {
         boolean startupPrepared = false;
         runLabel = scenario + "-" + mode + "-" + System.currentTimeMillis();
         String initial = args.getString("initialText", "native voice fixture start"), draft = args.getString("draftText", "unsent draft preserved by voice");
-        String visibleDraft = scenario.equals("retained-target") ? required(args, "secondDraftText") : draft;
+        boolean composerSubmission = List.of("cycle", "startup", "record").contains(scenario);
+        String visibleDraft = composerSubmission ? "" : scenario.equals("retained-target") ? required(args, "secondDraftText") : draft;
         instrumentation = InstrumentationRegistry.getInstrumentation(); Context context = instrumentation.getTargetContext();
         NativeVoiceAudioTest.grant(context, "android.permission.RECORD_AUDIO");
         if (Build.VERSION.SDK_INT >= 33) NativeVoiceAudioTest.grant(context, "android.permission.POST_NOTIFICATIONS");
@@ -111,7 +112,7 @@ public class NativeVoiceE2eTest {
                 return false;
             }
         });
-        else if (scenario.equals("retained-target") || playbackStop) NativeVoiceHttp.setTestTransport(new NativeVoiceHttp.TestTransport() {
+        else NativeVoiceHttp.setTestTransport(new NativeVoiceHttp.TestTransport() {
             public boolean before(String method, String path, JSONObject body, NativeVoiceHttp.Result result) {
                 // Observe native admission attempts without intercepting the real server or speech pipeline.
                 if (method.equals("POST") && path.endsWith("/inputs")) { inputAttempts.incrementAndGet(); mutationIds.add(body.optString("mutationId")); }
@@ -354,6 +355,13 @@ public class NativeVoiceE2eTest {
                     await(() -> second.equals(runtime.snapshot().optJSONObject("active").optString("recognitionThreadId")), 10000, "retarget applied");
                     screenshot("retargeted");
                 }
+                if (recoveryScenario) {
+                    // These cases exercise native direct-input uncertainty. Foreground Chat now owns its
+                    // own composer send, so background before recognition can choose that different route.
+                    assertTrue(awaitServerDraft(server, thread, draft, 15000));
+                    instrumentation.runOnMainSync(() -> activity.moveTaskToBack(true));
+                    await(() -> !runtime.snapshot().optJSONObject("foreground").optBoolean("visible"), 10000, "native recovery background visibility");
+                }
                 allowCaptureCompletion.set(true);
                 await(() -> phases.contains("submitting"), 60000, "recognized text admission");
                 if (recoveryScenario) {
@@ -367,6 +375,9 @@ public class NativeVoiceE2eTest {
                     assertTrue("Released recovery leaves voice available", runtime.snapshot().optJSONObject("actions").optBoolean("canStart"));
                     String mutation = runtime.snapshot().optJSONArray("recovery").optJSONObject(0).optString("mutationId");
                     assertEquals(mutationIds.get(0), mutation);
+                    instrumentation.runOnMainSync(() -> context.startActivity(new Intent(context, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)));
+                    await(() -> runtime.snapshot().optJSONObject("foreground").optBoolean("visible"), 15000, "foreground native recovery controls");
+                    waitJs("document.visibilityState === 'visible'", 15000);
                     screenshot("uncertain");
                     if (scenario.equals("cancel-uncertain")) {
                         // Leaving the binding persists cancellation intent; re-entering it reconciles read-only and never resends.
@@ -435,11 +446,9 @@ public class NativeVoiceE2eTest {
             }
             JSONObject inputUi = null;
             if (scenario.equals("cycle")) {
-                await(() -> !submittedInputs.isEmpty(), 15000, "local inputSubmitted event");
-                assertEquals("One local voice Send", 1, submittedInputs.size());
-                JSONObject submitted = submittedInputs.get(0);
-                assertEquals(thread, submitted.getString("threadId"));
-                inputUi = awaitSubmittedInputUi(submitted, mode.equals("input"), 45000);
+                assertTrue("Composer owns foreground sending without a native input presentation event", submittedInputs.isEmpty());
+                assertEquals("Composer sending bypasses native direct-input admission", 0, inputAttempts.get());
+                inputUi = awaitComposerInputUi(thread, required(args, "recognizedText"), mode.equals("input"), 45000);
             }
             if (playbackStop) {
                 // Native idle precedes the WebView render; capture the settled controls only after it catches up.
@@ -468,13 +477,14 @@ public class NativeVoiceE2eTest {
             if (mode.equals("speak") && !scenario.equals("stop")) assertTrue("No actual AudioTrack playback phase", phases.contains("speaking"));
             // Report observations, not expectations; the host harness asserts them.
             boolean composerDraft = "true".equals(js("document.querySelector('[data-testid=\"composer\"] textarea')?.value === " + JSONObject.quote(visibleDraft)));
-            boolean serverDraft = awaitServerDraft(server, thread, draft, 15000);
+            boolean serverDraft = awaitServerDraft(server, thread, composerSubmission ? "" : draft, 15000);
             boolean speechPlayback = retainedTarget == null ? speechPlayed.get() : physicallyDrained(retainedTarget.getJSONObject("replyPlayback"));
             boolean audioTrackPlayback = retainedTarget == null ? trackPlayed.get() : speechPlayback;
             JSONObject result = NativeVoiceJson.object("scenario", scenario, "mode", mode, "elapsedMs", SystemClock.elapsedRealtime() - began,
                 "phases", new JSONArray(phases), "captureChunks", supplied.get(), "audioSource", supplied.get() > 0 ? "deterministic-pcm" : "none",
                 "audioSink", audioTrackPlayback ? "AudioTrack" : "none", "speechPlayback", speechPlayback,
-                "draftPreserved", composerDraft && serverDraft, "composerDraftPreserved", composerDraft, "serverDraftPreserved", serverDraft,
+                "composerDraftMatchesExpected", composerDraft, "serverDraftMatchesExpected", serverDraft,
+                "nativeInputPresentationEvents", submittedInputs.size(),
                 "journalOutstanding", runtime.snapshot().optJSONArray("recovery").length(),
                 "announceRecordingThread", runtime.snapshot().getJSONObject("settings").getBoolean("announceRecordingThread"),
                 "inputAttempts", inputAttempts.get(), "receiptReads", receiptReads.get(), "mutationIds", new JSONArray(mutationIds),
@@ -877,28 +887,28 @@ public class NativeVoiceE2eTest {
             + "cardNextEnabled:next instanceof HTMLButtonElement&&!next.disabled}})()"));
     }
     /** Observe the real transcript destination and scroll geometry, independently of the native receipt event. */
-    private JSONObject awaitSubmittedInputUi(JSONObject submitted, boolean seekEnabled, long timeout) throws Exception {
-        String operationId = submitted.getString("operationId");
-        String selector = "[role=\"region\"][aria-label=\"Messages\"] [data-message-role=\"user\"][data-delivery-operation-id=\"" + operationId + "\"]";
-        String read = "(()=>{const rows=document.querySelectorAll(" + JSONObject.quote(selector) + ");const row=rows[0];"
+    private JSONObject awaitComposerInputUi(String thread, String recognizedText, boolean seekEnabled, long timeout) throws Exception {
+        String selector = "[role=\"region\"][aria-label=\"Messages\"] [data-message-role=\"user\"][data-delivery-operation-id]";
+        String read = "(()=>{const rows=Array.from(document.querySelectorAll(" + JSONObject.quote(selector) + ")).filter(row=>row.textContent.includes(" + JSONObject.quote(recognizedText) + "));const row=rows[0];"
             + "const viewport=row?.closest('[aria-label=\"Messages\"]');const spacer=viewport?.querySelector('[data-testid=\"seek-spacer\"]');"
-            + "return {rowCount:rows.length,operationId:row?.getAttribute('data-delivery-operation-id')??null,"
+            + "return {source:'composer',threadId:location.pathname.startsWith('/threads/')?location.pathname.slice('/threads/'.length):null,rowCount:rows.length,operationId:row?.getAttribute('data-delivery-operation-id')??null,"
             + "text:row?.textContent?.trim()??null,provisional:row?.getAttribute('data-client-provisional')==='true',"
             + "routineLabelCount:row?.querySelectorAll('[data-submission-phase]').length??null,"
             + "seekEnabled:localStorage.getItem('sedes-seek-on-submit')==='true',"
             + "spacerHeight:spacer?.getBoundingClientRect().height??null,scrollTop:viewport?.scrollTop??null,"
-            + "viewportHeight:viewport?.clientHeight??null,targetInset:row&&viewport?row.getBoundingClientRect().top-viewport.getBoundingClientRect().top:null}})()";
+            + "viewportHeight:viewport?.clientHeight??null,targetInset:row&&viewport?row.getBoundingClientRect().top-viewport.getBoundingClientRect().top:null,"
+            + "rowOffsetTop:row?.offsetTop??null,offsetParentTop:row?.offsetParent?.getBoundingClientRect().top??null,"
+            + "viewportTop:viewport?.getBoundingClientRect().top??null,scrollHeight:viewport?.scrollHeight??null}})()";
         long end = SystemClock.elapsedRealtime() + timeout;
         JSONObject observed;
         do {
             observed = new JSONObject(js(read));
-            boolean matched = observed.optInt("rowCount") == 1 && !observed.optBoolean("provisional") &&
+            boolean matched = thread.equals(observed.optString("threadId")) && observed.optInt("rowCount") == 1 && observed.optString("operationId").matches("[0-9a-f-]{36}") && !observed.optBoolean("provisional") &&
                 observed.optInt("routineLabelCount", -1) == 0 && observed.optBoolean("seekEnabled") == seekEnabled;
             boolean positioned = seekEnabled
                 ? observed.optDouble("spacerHeight", 0) > 0 && Math.abs(observed.optDouble("targetInset", -1000) - 16) <= 3
                 : observed.optDouble("spacerHeight", -1) == 0;
             if (matched && positioned) {
-                NativeVoiceJson.put(observed, "submitted", submitted);
                 return observed;
             }
             SystemClock.sleep(100);

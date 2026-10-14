@@ -193,7 +193,11 @@ test("idle direct input becomes one complete transcript message while active que
   await expect(composer).toHaveValue(retainedDraft);
   await page.setViewportSize({ width: 320, height: 844 });
   await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
-  await expect(queuedRow.getByRole("button", { name: /^Restore queued input to composer:/ })).toBeDisabled();
+  // The transcript now fits the shared composer limit. Restore remains fenced
+  // by the occupied independent draft; Copy must still preserve both inputs.
+  const restore = queuedRow.getByRole("button", { name: /^Restore queued input to composer:/ });
+  await expect(restore).toBeDisabled();
+  await expect(restore).toHaveAttribute("title", "Clear the composer before restoring a queued input.");
   await queuedRow.getByRole("button", { name: /^Copy full text:/ }).click();
   await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(queuedText);
   await expect(queuedRow.getByRole("button", { name: /^Copied full text:/ })).toBeVisible();

@@ -1,3 +1,5 @@
+import { MAXIMUM_THREAD_INPUT_BYTES } from "../../src/shared/protocol/context-excerpts.js";
+import { MAXIMUM_DRAFT_REQUEST_BYTES } from "../../src/shared/protocol/api.js";
 import { ClientControlService } from "../../src/server/domain/client-control-service.js";
 import { scriptDelivery } from "../support/notification-settings.js";
 import { largeDirectInputText } from "../support/large-direct-input.js";
@@ -14,7 +16,7 @@ import { SubmissionCompletionRepository } from "../../src/server/db/repositories
 import { ConversationDraftRepository } from "../../src/server/db/repositories/conversation-draft-repository.js";
 import { DirectInputRepository } from "../../src/server/db/repositories/direct-input-repository.js";
 import { ThreadActivityService } from "../../src/server/conversations/thread-activity-service.js";
-import { MAX_DIRECT_INPUT_REQUEST_BYTES, MAX_DIRECT_INPUT_TEXT_BYTES, type DirectInputRequest } from "../../src/shared/protocol/thread-input.js";
+import { MAX_DIRECT_INPUT_REQUEST_BYTES, type DirectInputRequest } from "../../src/shared/protocol/thread-input.js";
 import { createHash, randomUUID } from "node:crypto";
 import { execFile as execFileCallback } from "node:child_process";
 import type { Server } from "node:http";
@@ -4896,6 +4898,36 @@ describe("normalized HTTP application contract", () => {
       );
   });
 
+  it("saves, stashes and restores full-limit escaped composer text with a bounded draft-only JSON envelope", async () => {
+    const current = await fixture();
+    try {
+      const workspace = await current.mutate(request(current.app).post("/api/workspaces/open"))
+        .send({ environmentId: current.environmentId, path: current.workspacePath, project: { kind: "new", name: "Large composer" } })
+        .expect(201);
+      const created = await current.mutate(request(current.app).post("/api/threads"))
+        .send({ workspaceId: workspace.body.id, configuration: { kind: "custom", targetId: current.profile.id },
+          executionWorkspace: { kind: "direct" }, title: "Large composer" }).expect(201);
+      const threadId = created.body.threadId as string;
+      const value = { text: "\u0001".repeat(MAXIMUM_THREAD_INPUT_BYTES), contextExcerpts: [],
+        attachmentIds: [], taskReferenceIds: [], expectedRevision: 0 };
+      const save = (body: typeof value) => current.mutate(request(current.app).put(`/api/threads/${threadId}/draft`)).send(body);
+      expect(Buffer.byteLength(JSON.stringify(value))).toBeLessThan(MAXIMUM_DRAFT_REQUEST_BYTES);
+      const saved = await save(value).expect(200);
+      expect(saved.body).toMatchObject({ text: value.text, revision: 1 });
+      await save({ ...value, text: value.text + "x", expectedRevision: 1 }).expect(400);
+      const oversizedEnvelope = { ...value, text: "\u0001".repeat(Math.ceil(MAXIMUM_DRAFT_REQUEST_BYTES / 6) + 1), expectedRevision: 1 };
+      expect(Buffer.byteLength(JSON.stringify(oversizedEnvelope))).toBeGreaterThan(MAXIMUM_DRAFT_REQUEST_BYTES);
+      await save(oversizedEnvelope).expect(413);
+      await current.mutate(request(current.app).post(`/api/threads/${threadId}/operations`)).send(value).expect(413);
+      const stashed = await current.mutate(request(current.app).post(`/api/threads/${threadId}/stashes`))
+        .send({ expectedDraftRevision: 1, mutationId: randomUUID() }).expect(201);
+      expect(stashed.body).toMatchObject({ draft: { text: "", revision: 2 }, stashes: [{ text: value.text }] });
+      const restored = await current.mutate(request(current.app).post(`/api/threads/${threadId}/stashes/${stashed.body.stashes[0].id}/restore`))
+        .send({ expectedDraftRevision: 2, mutationId: randomUUID() }).expect(200);
+      expect(restored.body).toMatchObject({ draft: { text: value.text, revision: 3 }, stashes: [] });
+    } finally { current.close(); }
+  });
+
   it("admits direct input with its own body limit, CSRF, and principal-wide receipts", async () => {
     const current = await fixture();
     try {
@@ -4971,7 +5003,7 @@ describe("normalized HTTP application contract", () => {
       await receipt("not-a-mutation-id").expect(400);
 
       // Worst-case JSON escaping still admits every byte of a 256 KiB recording.
-      const escaped = input("\u0001".repeat(MAX_DIRECT_INPUT_TEXT_BYTES));
+      const escaped = input("\u0001".repeat(MAXIMUM_THREAD_INPUT_BYTES));
       expect(Buffer.byteLength(JSON.stringify(escaped))).toBeGreaterThan(256 * 1024);
       expect(Buffer.byteLength(JSON.stringify(escaped))).toBeLessThan(MAX_DIRECT_INPUT_REQUEST_BYTES);
       expect((await post(threadId, escaped).expect(200)).body).toMatchObject({ mutationId: escaped.mutationId, status: "queued" });
@@ -4980,8 +5012,8 @@ describe("normalized HTTP application contract", () => {
       await post(threadId, overParser)
         .expect(413)
         .expect(({ body }) => expect(body.error.code).toBe("bad_request"));
-      const atTextLimit = input("é".repeat(MAX_DIRECT_INPUT_TEXT_BYTES / 2));
-      expect(Buffer.byteLength(atTextLimit.text)).toBe(MAX_DIRECT_INPUT_TEXT_BYTES);
+      const atTextLimit = input("é".repeat(MAXIMUM_THREAD_INPUT_BYTES / 2));
+      expect(Buffer.byteLength(atTextLimit.text)).toBe(MAXIMUM_THREAD_INPUT_BYTES);
       await post(threadId, atTextLimit).expect(200);
       const overText = input(atTextLimit.text + "e");
       await post(threadId, overText)

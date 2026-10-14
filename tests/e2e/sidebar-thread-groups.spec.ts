@@ -334,7 +334,10 @@ async function chooseThreadGroups(page: Page, sidebar: Locator): Promise<void> {
 test("dragging individual threads creates a group and adds to its stack", async ({ page, browserDiagnostics }, testInfo) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await openSedesWorkspace(page);
-  const sourceId = await createNamedDraft(page, "Drag source thread");
+  // Native discovery titles include the checkout name, so use a unique search marker.
+  const sourceMarker = randomUUID();
+  const sourceTitle = `Drag source thread ${sourceMarker}`;
+  const sourceId = await createNamedDraft(page, sourceTitle);
   const targetId = await createNamedDraft(page, "Drag target group");
   const thirdId = await createNamedDraft(page, "Add third thread");
   const initialContext = await pickerContext(page, targetId);
@@ -355,8 +358,8 @@ test("dragging individual threads creates a group and adds to its stack", async 
     await expect(source).toHaveAttribute("draggable", "true");
     const composer = page.getByTestId("composer");
     await source.dragTo(composer);
-    await expect(composer.getByRole("list", { name: "Referenced threads" })).toContainText("Drag source thread");
-    await composer.getByRole("button", { name: "Remove thread: Drag source thread" }).click();
+    await expect(composer.getByRole("list", { name: "Referenced threads" })).toContainText(sourceTitle);
+    await composer.getByRole("button", { name: `Remove thread: ${sourceTitle}` }).click();
     const message = composer.getByRole("textbox");
     await message.fill("Compare ");
     await expect(composer.getByRole("button", { name: "Reference a thread", exact: true })).toHaveCount(0);
@@ -482,10 +485,10 @@ test("dragging individual threads creates a group and adds to its stack", async 
     await expect(page.getByRole("menuitem", { name: "Reference a thread…" })).toHaveCount(0);
     await page.keyboard.press("Escape");
     await message.fill("Compare ");
-    await message.pressSequentially("@source");
+    await message.pressSequentially(`@${sourceMarker}`);
     const picker = page.getByRole("dialog", { name: "Reference a thread" }).and(page.locator('[data-state="open"]'));
     await expect(picker).toBeVisible();
-    const mobileOption = picker.getByRole("option", { name: "Drag source thread", exact: true });
+    const mobileOption = picker.getByRole("option", { name: sourceTitle, exact: true });
     await expect(mobileOption).toBeVisible();
     expect((await picker.locator(".composer-thread-picker-list").boundingBox())!.width).toBeLessThanOrEqual(620);
     await expectPickerContextLayout(mobileOption, context, "two-lines", { requireProjectTruncation: true });
@@ -511,8 +514,8 @@ test("dragging individual threads creates a group and adds to its stack", async 
     const shortContext = { project: shortProjectName, environment: initialContext.environment };
     await page.setViewportSize({ width: 1440, height: 900 });
     await message.fill("Compare ");
-    await message.pressSequentially("@source");
-    const shortOption = desktopPicker.getByRole("option", { name: "Drag source thread", exact: true });
+    await message.pressSequentially(`@${sourceMarker}`);
+    const shortOption = desktopPicker.getByRole("option", { name: sourceTitle, exact: true });
     await expect(shortOption).toBeVisible();
     await expectPickerContextLayout(shortOption, shortContext, "flow", { compactLabels: true });
     await expect(message).toHaveAttribute("aria-expanded", "true");
@@ -522,8 +525,8 @@ test("dragging individual threads creates a group and adds to its stack", async 
     await expect(desktopPicker).toBeHidden();
     await page.setViewportSize({ width: 390, height: 844 });
     await message.fill("Compare ");
-    await message.pressSequentially("@source");
-    const shortMobileOption = picker.getByRole("option", { name: "Drag source thread", exact: true });
+    await message.pressSequentially(`@${sourceMarker}`);
+    const shortMobileOption = picker.getByRole("option", { name: sourceTitle, exact: true });
     await expect(shortMobileOption).toBeVisible();
     await expect.poll(async () => (await desktopList.boundingBox())!.width).toBeLessThanOrEqual(620);
     await expectPickerContextLayout(shortMobileOption, shortContext, "two-lines", { compactLabels: true });
@@ -540,8 +543,8 @@ test("dragging individual threads creates a group and adds to its stack", async 
     environmentNeedsRestore = true;
     await renameEnvironment(page, initialContext.environmentId, longEnvironmentName, session.csrfToken);
     await message.fill("Compare ");
-    await message.pressSequentially("@source");
-    const longEnvironmentOption = picker.getByRole("option", { name: "Drag source thread", exact: true });
+    await message.pressSequentially(`@${sourceMarker}`);
+    const longEnvironmentOption = picker.getByRole("option", { name: sourceTitle, exact: true });
     await expect(longEnvironmentOption).toBeVisible();
     await expectPickerContextLayout(longEnvironmentOption,
       { project: shortContext.project, environment: longEnvironmentName }, "two-lines",
@@ -562,8 +565,8 @@ test("dragging individual threads creates a group and adds to its stack", async 
     await expect(page.locator(".thread-notice.error").filter({ hasText: "The configured model is unavailable." })).toBeVisible();
     await page.goto(`/threads/${thirdId}`);
     await message.fill("Compare ");
-    await message.pressSequentially("@source");
-    const failedOption = desktopPicker.getByRole("option", { name: "Drag source thread", exact: true });
+    await message.pressSequentially(`@${sourceMarker}`);
+    const failedOption = desktopPicker.getByRole("option", { name: sourceTitle, exact: true });
     await expect(failedOption).toHaveAccessibleDescription(`Failed. Project: ${shortContext.project}. Environment: ${shortContext.environment}`);
     const failedGlyph = failedOption.locator('[data-glyph="failed"]');
     const failedColor = await failedGlyph.evaluate((element) => getComputedStyle(element).color);
@@ -574,7 +577,7 @@ test("dragging individual threads creates a group and adds to its stack", async 
     await capture(page, testInfo, "thread-reference-failed-status-desktop.png");
     await message.press("Enter");
     await expect(message).toHaveValue("Compare ");
-    await expect(composer.getByRole("list", { name: "Referenced threads" })).toContainText("Drag source thread");
+    await expect(composer.getByRole("list", { name: "Referenced threads" })).toContainText(sourceTitle);
   } finally {
     if (environmentNeedsRestore) {
       await renameEnvironment(page, initialContext.environmentId, initialContext.environment, session.csrfToken);

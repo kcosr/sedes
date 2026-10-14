@@ -46,7 +46,8 @@ import { presentTask } from "../../src/server/application/task-presentation.js";
 import { materializeTaskContext } from "../../src/server/domain/materialized-task-contexts.js";
 import {
   composerInputUtf8Bytes,
-  MAXIMUM_COMPOSER_INPUT_BYTES,
+  MAXIMUM_THREAD_INPUT_BYTES,
+  MAXIMUM_THREAD_STASH_BYTES,
 } from "../../src/shared/protocol/context-excerpts.js";
 
 const configuration = parseResolvedBackendConfiguration({
@@ -1778,6 +1779,78 @@ describe("inactive schema-10 repositories", () => {
     }
   });
 
+  it("saves, stashes, restores and admits a first composer input at the shared UTF-8 limit", () => {
+    const fixture = createFixture();
+    try {
+      const inventory = new InventoryRepository(fixture.database);
+      const service = new InventoryService(inventory, { publishMany() {}, publishApplicationThread() {} });
+      const text = "é".repeat(MAXIMUM_THREAD_INPUT_BYTES / 2);
+      const saved = service.saveDraft(fixture.scope, fixture.threadId, {
+        text, contextExcerpts: [], attachmentIds: [], taskReferenceIds: [],
+        expectedRevision: inventory.getDraft(fixture.scope, fixture.threadId).revision,
+      }, 310);
+      expect(() => service.saveDraft(fixture.scope, fixture.threadId, {
+        text: text + "x", contextExcerpts: [], attachmentIds: [], taskReferenceIds: [], expectedRevision: saved.revision,
+      }, 311)).toThrow("Draft exceeds its 262144-byte limit.");
+      expect(inventory.getDraft(fixture.scope, fixture.threadId)).toEqual(saved);
+      const stashed = service.stashDraft(fixture.scope, fixture.threadId, {
+        expectedDraftRevision: saved.revision, mutationId: randomUUID(),
+      }, 312);
+      expect(stashed.stash.text).toBe(text);
+      const restored = service.restoreStash(fixture.scope, fixture.threadId, stashed.stash.id, {
+        expectedDraftRevision: stashed.draft.revision, mutationId: randomUUID(),
+      }, 313);
+      expect(restored.draft.text).toBe(text);
+      const prepared = new ConversationCreationRepository(fixture.database).prepare(fixture.scope, fixture.threadId, {
+        attemptId: randomUUID(), mutationId: randomUUID(), expectedThreadRevision: threadRevision(fixture),
+        creationKind: "first_input", sourceKind: "composer", initialInputText: restored.draft.text,
+        initialContextExcerpts: [], initialAttachmentIds: [], initialTaskReferences: [],
+        expectedDraftRevision: restored.draft.revision, backendCreationCorrelation: randomUUID(), now: 314,
+      });
+      expect(prepared.initialInputText).toBe(text);
+      expect(inventory.getDraft(fixture.scope, fixture.threadId).text).toBe("");
+    } finally { fixture.database.close(); }
+  });
+
+  it("bounds serialized stash overlays without consuming the rejected draft or admitting another principal", () => {
+    const fixture = createFixture();
+    try {
+      const inventory = new InventoryRepository(fixture.database);
+      const service = new InventoryService(inventory, { publishMany() {}, publishApplicationThread() {} });
+      const text = "\u0001".repeat(MAXIMUM_THREAD_INPUT_BYTES);
+      for (let index = 0; index < 5; index++) {
+        const saved = service.saveDraft(fixture.scope, fixture.threadId, {
+          text, contextExcerpts: [], attachmentIds: [], taskReferenceIds: [],
+          expectedRevision: inventory.getDraft(fixture.scope, fixture.threadId).revision,
+        }, 310 + index);
+        service.stashDraft(fixture.scope, fixture.threadId, {
+          expectedDraftRevision: saved.revision, mutationId: randomUUID(),
+        }, 320 + index);
+      }
+      const stashes = inventory.listStashes(fixture.scope, fixture.threadId);
+      expect(stashes).toHaveLength(5);
+      expect(Buffer.byteLength(JSON.stringify(stashes))).toBeLessThan(MAXIMUM_THREAD_STASH_BYTES);
+      const saved = service.saveDraft(fixture.scope, fixture.threadId, {
+        text, selectedSkillId: "retained-skill", contextExcerpts: [], attachmentIds: [], taskReferenceIds: [],
+        expectedRevision: inventory.getDraft(fixture.scope, fixture.threadId).revision,
+      }, 330);
+      const mutationId = randomUUID();
+      expect(() => service.stashDraft(fixture.scope, fixture.threadId, {
+        expectedDraftRevision: saved.revision, mutationId,
+      }, 331)).toThrow("8 MiB prompt stash storage limit");
+      expect(inventory.getDraft(fixture.scope, fixture.threadId)).toEqual(saved);
+      expect(inventory.listStashes(fixture.scope, fixture.threadId)).toEqual(stashes);
+      expect(fixture.database.prepare("SELECT 1 FROM mutation_receipts WHERE mutation_id = ?").get(mutationId)).toBeUndefined();
+      const foreignScope = { ...fixture.scope, principalId: "other-principal" };
+      expect(() => inventory.listStashes(foreignScope, fixture.threadId)).toThrow("The thread was not found.");
+      expect(() => service.stashDraft(foreignScope, fixture.threadId, {
+        expectedDraftRevision: saved.revision, mutationId: randomUUID(),
+      }, 332)).toThrow("The thread draft was not found.");
+      expect(inventory.getDraft(fixture.scope, fixture.threadId)).toEqual(saved);
+      expect(inventory.listStashes(fixture.scope, fixture.threadId)).toEqual(stashes);
+    } finally { fixture.database.close(); }
+  });
+
   it("persists, stashes, and restores an annotated context-only composer snapshot", () => {
     const fixture = createFixture();
     try {
@@ -2546,7 +2619,7 @@ describe("inactive schema-10 repositories", () => {
           taskContexts,
         });
         const text = "x".repeat(
-          MAXIMUM_COMPOSER_INPUT_BYTES - taskBytes + extraByte,
+          MAXIMUM_THREAD_INPUT_BYTES - taskBytes + extraByte,
         );
         expect(
           composerInputUtf8Bytes({
@@ -2554,7 +2627,7 @@ describe("inactive schema-10 repositories", () => {
             contextExcerpts: [],
             taskContexts,
           }),
-        ).toBe(MAXIMUM_COMPOSER_INPUT_BYTES + extraByte);
+        ).toBe(MAXIMUM_THREAD_INPUT_BYTES + extraByte);
         const draft = drafts.save(fixture.scope, fixture.threadId, {
           text,
           contextExcerpts: [],
@@ -4605,7 +4678,7 @@ describe("inactive schema-10 repositories", () => {
     }
   });
 
-  it.each([65_536, 65_537, 262_144])("enforces the composer text budget when restoring %i-byte direct input", bytes => {
+  it.each([65_536, 65_537, 262_144])("restores %i-byte direct input within the shared composer budget", bytes => {
     const fixture = createFixture();
     try {
       bindDiscovered(fixture);
@@ -4625,15 +4698,8 @@ describe("inactive schema-10 repositories", () => {
       const restore = () => queue.restoreIdempotently(fixture.scope, fixture.threadId, queued.id, {
         mutationId, expectedThreadRevision: revision, expectedDraftRevision: before.revision, now: 610,
       });
-      if (bytes === 65_536) {
-        expect(restore()).toMatchObject({ item: { state: "cancelled" }, draft: { text } });
-      } else {
-        expect(restore).toThrow("This input is too large to restore to the composer (64 KiB limit).");
-        expect(drafts.get(fixture.scope, fixture.threadId)).toEqual(before);
-        expect(queue.get(fixture.scope, fixture.threadId, queued.id)).toEqual(queued);
-        expect(threadRevision(fixture)).toBe(revision);
-        expect(fixture.database.prepare("SELECT 1 FROM mutation_receipts WHERE mutation_id = ?").get(mutationId)).toBeUndefined();
-      }
+      expect(restore()).toMatchObject({ item: { state: "cancelled" }, draft: { text } });
+      expect(restore()).toMatchObject({ replayed: true, draft: { text } });
     } finally { fixture.database.close(); }
   });
 

@@ -688,16 +688,37 @@ Direct input admits up to 262,144 UTF-8 text bytes independently of JSON
 escaping; its HTTP envelope is bounded at 2 MiB. First-send creation storage,
 bound-thread queues, and immutable delivery snapshots must preserve that exact
 text, including whitespace and multibyte characters. This uses the existing
-256 KiB materialized input budget; composer, attachment, message, turn, and
-session limits remain independent. Backend fixtures must cover native delivery,
+shared `MAXIMUM_THREAD_INPUT_BYTES` 256 KiB input budget. Chat draft save,
+first Send, Queue, Steer, stash, restore, and native voice use the same raw
+UTF-8 text bound; text and materialized context must also fit that aggregate
+budget. Attachment-file, individual excerpt/note, message, turn, session, and
+64 KiB TUI limits remain independent. Backend fixtures must cover native delivery,
 history or durable reconciliation, and exact replay at this boundary for every
 enabled backend, including supported steering. Once admission creates a receipt,
 provider refusal or uncertain delivery remains owned by server recovery and does
 not authorize the recording client to submit a fresh copy.
 
-Queue restoration must honor the composer's separate 64 KiB draft budget. Project
-an intrinsic restoration-unavailable reason for larger inputs and reject the
-restore atomically without changing the queued item, draft, revisions, or receipt.
+Queue restoration uses the same text bound as admission, without a smaller
+composer-only budget or an intrinsic text-size restoration-unavailable field.
+Keep normal queue eligibility and empty-draft checks atomic. Size draft JSON
+request envelopes for worst-case escaping and legal metadata independently of
+the raw text budget: `MAXIMUM_DRAFT_REQUEST_BYTES` is 3,284,992 bytes. Keep the existing 50-stash count bound and admit at most
+8 MiB of serialized stashes per thread, refusing a new stash before clearing its
+draft. These bounds keep larger drafts loadable in thread snapshots.
+
+Foreground Android voice is a client-owned handoff into the active destination's
+live Chat composer, including an empty draft and all existing structured context.
+Android Activity visibility, document visibility, view identity, and destination
+matching select the route; the Sedes server never infers foreground state from
+request bodies or draft emptiness. Once accepted, composer alone owns submission
+and recovery through its ordinary APIs. Pending uploads may retain the combined
+draft without sending; refused adoption leaves native recovery intact. Other
+thread views and background voice retain direct-input submission and receipts.
+Pi, Codex, Claude, Grok, and OpenCode implement this through their existing
+normalized composer/native input paths and attachment capabilities. Their
+provider protocols and private input mappings are unchanged; Grok remains
+intentionally unsupported for Steer, while existing capability and targeting
+rules apply to the other four.
 
 An agent-to-client notification with no active consumer dependency—an exact
 registered descriptor, active profile, and registered handler—may be treated as

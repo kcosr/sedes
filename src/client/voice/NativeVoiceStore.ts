@@ -1,5 +1,5 @@
 import type { PluginListenerHandle } from "@capacitor/core";
-import { nativeRecordingTextSchema, nativeVoiceInputSubmittedSchema, nativeVoiceStateSchema, type NativeRecordingRecoveryCommandContext, type NativeReplySpeech, type NativeVoiceCommandContext, type NativeVoiceInputSubmitted, type NativeVoiceInteractionCommandContext, type NativeVoicePlugin, type NativeVoiceSettings, type NativeVoiceState } from "./native-voice-plugin.js";
+import { nativeRecordingTextSchema, nativeVoiceComposerHandoffSchema, nativeVoiceInputSubmittedSchema, nativeVoiceStateSchema, type NativeRecordingRecoveryCommandContext, type NativeReplySpeech, type NativeVoiceCommandContext, type NativeVoiceComposerHandoff, type NativeVoiceInputSubmitted, type NativeVoiceInteractionCommandContext, type NativeVoicePlugin, type NativeVoiceSettings, type NativeVoiceState } from "./native-voice-plugin.js";
 
 type NativeVoiceError = NativeVoiceState["errors"][number];
 export interface VoiceClientState {
@@ -40,6 +40,9 @@ export class NativeVoiceStore {
   #stopping = new Map<string, Promise<void>>();
   #composers = new Map<string, (text: string) => void>();
   #composerListeners = new Set<() => void>();
+  #submissionComposers = new Map<string, (event: NativeVoiceComposerHandoff) => void>();
+  #submissionComposerListeners = new Set<() => void>();
+  #seenHandoffs = new Set<string>();
   constructor(readonly plugin: NativeVoicePlugin, readonly connection: { profileId: string; serverOrigin: string; identity: string }, readonly openThread: (threadId: string) => void) {}
   getSnapshot = (): VoiceClientState => this.#state;
   subscribe = (listener: () => void): (() => void) => { this.#listeners.add(listener); return () => { this.#listeners.delete(listener); }; };
@@ -60,6 +63,80 @@ export class NativeVoiceStore {
     this.#composers.set(threadId, append);
     for (const listener of this.#composerListeners) listener();
     return () => { if (this.#composers.get(threadId) === append) this.#composers.delete(threadId); };
+  }
+  /** Separate from recovery insertion: only the current live Chat can take ownership and send. */
+  registerSubmissionComposer(threadId: string, accept: (event: NativeVoiceComposerHandoff) => void): () => void {
+    this.#submissionComposers.set(threadId, accept);
+    this.#notifySubmissionComposers();
+    return () => {
+      if (this.#submissionComposers.get(threadId) !== accept) return;
+      this.#submissionComposers.delete(threadId);
+      this.#notifySubmissionComposers();
+    };
+  }
+  hasSubmissionComposer = (threadId: string | null): boolean => threadId !== null && this.#submissionComposers.has(threadId);
+  subscribeSubmissionComposers = (listener: () => void): (() => void) => {
+    this.#submissionComposerListeners.add(listener);
+    return () => { this.#submissionComposerListeners.delete(listener); };
+  };
+  #notifySubmissionComposers(): void {
+    for (const listener of this.#submissionComposerListeners) listener();
+  }
+  #matchesHandoff(event: NativeVoiceComposerHandoff): boolean {
+    return !this.#disposed && this.#connected && this.#state.native !== undefined &&
+      event.profileId === this.connection.profileId && event.serverOrigin === this.connection.serverOrigin &&
+      event.identity === this.connection.identity && event.connectionGeneration === this.#generation;
+  }
+  #acceptHandoffCompletion(event: NativeVoiceComposerHandoff, raw: NativeVoiceState): void {
+    const state = nativeVoiceStateSchema.parse(raw);
+    // Native can settle the original reservation after a connection switch,
+    // returning that new session's state. It does not belong to this handoff.
+    if (this.#matchesHandoff(event) && state.connectionGeneration === event.connectionGeneration &&
+        state.profileId === event.profileId && state.serverOrigin === event.serverOrigin && state.identity === event.identity)
+      this.#accept(state);
+  }
+  async #handoff(event: NativeVoiceComposerHandoff): Promise<void> {
+    const context = { expectedConnectionGeneration: event.connectionGeneration, handoffId: event.handoffId };
+    let claimed: NativeVoiceState;
+    try {
+      claimed = nativeVoiceStateSchema.parse(await this.plugin.claimComposerHandoff(context));
+      this.#accept(claimed);
+    } catch (error) {
+      if (this.#matchesHandoff(event)) this.#error(error);
+      // A failed bridge response can still follow a successful native claim.
+      // No composer adopted it, so release the original reservation even if
+      // this store was disposed or its connection changed while claiming.
+      const message = (error instanceof Error ? error.message : "The composer handoff could not be confirmed.").slice(0, 1024);
+      try {
+        this.#acceptHandoffCompletion(event, await this.plugin.completeComposerHandoff({ ...context, outcome: "declined", message }));
+      } catch { /* An already cancelled offer needs no further action. */ }
+      return;
+    }
+    let outcome: "accepted" | "declined" = "declined";
+    let message: string | undefined;
+    try {
+      if (!this.#matchesHandoff(event) || (typeof document !== "undefined" && document.visibilityState === "hidden"))
+        throw new Error("Open the recording's live Chat to send it with the composer.");
+      const current = this.#state.native;
+      if (!current?.foreground.visible || !current.foreground.composerAvailable || current.foreground.threadId !== event.threadId)
+        throw new Error("Open the recording's live Chat to send it with the composer.");
+      if (current?.phase !== "submitting" || current.active?.id !== claimed.active?.id ||
+          current.active?.recording?.id !== event.recordingId ||
+          current.active.recognitionThreadId !== event.threadId)
+        throw new Error("The recording changed before the composer could accept it.");
+      const accept = this.#submissionComposers.get(event.threadId);
+      if (!accept) throw new Error("Open the recording's live Chat to send it with the composer.");
+      // No await between checking the latest view and capturing its live draft.
+      accept(event);
+      outcome = "accepted";
+    } catch (error) {
+      message = (error instanceof Error ? error.message : "The composer could not accept this dictation.").slice(0, 1024);
+    }
+    try {
+      this.#acceptHandoffCompletion(event, await this.plugin.completeComposerHandoff({ ...context, outcome, ...(message ? { message } : {}) }));
+    } catch (error) {
+      if (this.#matchesHandoff(event)) this.#error(error);
+    }
   }
   async addRecordingToComposer(context: NativeRecordingRecoveryCommandContext): Promise<void> {
     await this.run(async () => {
@@ -131,6 +208,13 @@ export class NativeVoiceStore {
           this.#seenSubmissions.add(event.operationId);
           if (this.#seenSubmissions.size > 128) this.#seenSubmissions.delete(this.#seenSubmissions.values().next().value!);
           for (const listener of this.#inputSubmittedListeners) listener(event);
+        }),
+        this.plugin.addListener("composerHandoff", raw => {
+          const parsed = nativeVoiceComposerHandoffSchema.safeParse(raw);
+          if (!parsed.success || !this.#matchesHandoff(parsed.data) || this.#seenHandoffs.has(parsed.data.handoffId)) return;
+          this.#seenHandoffs.add(parsed.data.handoffId);
+          if (this.#seenHandoffs.size > 128) this.#seenHandoffs.delete(this.#seenHandoffs.values().next().value!);
+          void this.#handoff(parsed.data);
         }),
       ]);
       const handles = results.flatMap(result => result.status === "fulfilled" ? [result.value] : []);
@@ -258,6 +342,10 @@ export class NativeVoiceStore {
     this.#disposed = true;
     for (const listener of this.#composerListeners) listener();
     this.#composers.clear();
+    this.#submissionComposers.clear();
+    this.#notifySubmissionComposers();
+    this.#submissionComposerListeners.clear();
+    this.#seenHandoffs.clear();
     this.#clearRetry();
     for (const handle of this.#handles) void handle.remove();
     this.#handles = [];
@@ -271,7 +359,10 @@ export class NativeVoiceStore {
     const state = nativeVoiceStateSchema.parse(raw);
     if (state.connectionGeneration < this.#generation ||
       (state.connectionGeneration === this.#generation && state.stateRevision < this.#revision)) return;
-    if (state.connectionGeneration !== this.#generation) this.#seenSubmissions.clear();
+    if (state.connectionGeneration !== this.#generation) {
+      this.#seenSubmissions.clear();
+      this.#seenHandoffs.clear();
+    }
     this.#generation = state.connectionGeneration;
     this.#revision = state.stateRevision;
     if (state.profileId !== this.connection.profileId || state.serverOrigin !== this.connection.serverOrigin || state.identity !== this.connection.identity) {

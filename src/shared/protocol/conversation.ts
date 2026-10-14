@@ -43,6 +43,7 @@ import {
 } from "./domain.js";
 import { automationScheduleSchema } from "./automation.js";
 import {
+  MAXIMUM_THREAD_INPUT_BYTES,
   contextExcerptArraySchema,
   contextExcerptSchema,
   requireComposerInputByteLimit,
@@ -1072,8 +1073,6 @@ export const queuedInputSummarySchema = z
      * nothing reached the conversation and nothing was resent.
      */
     failureReason: z.enum(["not_sent"]).optional(),
-    /** Intrinsic input restrictions, independent of whether the current draft is empty. */
-    restoreUnavailableReason: boundedDisplayTextSchema.optional(),
   })
   .superRefine((item, context) => {
     if (item.failureReason !== undefined && item.state !== "failed") {
@@ -1427,7 +1426,7 @@ export type NormalizedThreadSummary = z.infer<
 
 export const normalizedDraftSchema = z
   .strictObject({
-    text: z.string().max(262_144),
+    text: z.string().max(MAXIMUM_THREAD_INPUT_BYTES),
     selectedSkillId: z.string().min(1).max(160).optional(),
     contextExcerpts: contextExcerptArraySchema,
     attachments: composerAttachmentArraySchema,
@@ -1459,7 +1458,7 @@ export function hasDeliverableComposerInput(input: {
 export const normalizedStashSchema = z
   .strictObject({
     id: z.string().min(1).max(160),
-    text: z.string().max(262_144),
+    text: z.string().max(MAXIMUM_THREAD_INPUT_BYTES),
     selectedSkillId: z.string().min(1).max(160).optional(),
     contextExcerpts: contextExcerptArraySchema,
     attachments: composerAttachmentArraySchema,

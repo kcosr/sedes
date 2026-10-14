@@ -13,7 +13,7 @@ without an alias or migration. Client protocol 150 and client-control tool schem
 version 2 carry the audio-mode values. Notification payload version 5 carries
 Partial response sections, independent `turn.partial` delivery, and the required
 live `progress.phase` field.
-Native snapshot version 14 includes `active.recording` (ID, Keep listening and
+Native snapshot version 15 includes `active.recording` (ID, Keep listening and
 Reconnecting), native-authoritative `canSetKeepListening`/`canSend` actions, the
 Keep listening blocked reason, and an independent `recordingRecovery` item.
 Recovery exposes identity, revision, target, stage, incomplete/unrecognized
@@ -688,8 +688,69 @@ group or its later live classification. History replay, replacement snapshots,
 and terminal backfill do not carry this provenance. Grok and OpenCode
 intentionally have no live-progress producer.
 
+## Foreground composer handoff
+
+Before native direct-input admission, a completed nonblank recording can transfer
+to the foreground composer. Native Activity visibility and the WebView's current
+foreground thread identify a possible destination. The client rechecks document
+visibility and its registered active live Chat composer against that exact
+thread, publishing `foreground.composerAvailable`; an empty draft is eligible,
+and keyboard focus is irrelevant. TUI, historical views, another thread, and
+background recording retain native direct input. The Sedes server does not choose this route or receive client-selected
+foreground authority.
+
+Native offers completed text through the transient `composerHandoff` event,
+carrying profile, origin, authenticated identity, connection generation, handoff
+and recording IDs, target thread, text, and the frozen delivery mode. The client
+claims that exact offer with `claimComposerHandoff` before adopting it; native
+rechecks its binding, generation, visibility, destination, and active ownership.
+`completeComposerHandoff` reports acceptance or refusal. A claimed in-memory
+reservation hides its raw recording from native recovery and admission repair.
+It survives visibility changes, Stop, Off, service detachment, and a connection
+or identity change until completion. Only its handoff ID and original expected
+connection generation can settle that reservation's captured binding and
+recording. Settlement cannot mutate the current connection or a newer recording;
+all other bridge commands retain the current-generation fence.
+
+Acceptance retires only the original recording. Refusal restores its existing
+raw recovery if the original binding is active, or leaves the adopted recording
+for recovery on that binding's next reconnect, without reporting an error on
+another binding. If no client claims the offer within 15 seconds, native retains
+the recording for explicit recovery; an offered handoff never falls back to a
+separate native submission.
+
+After awaiting the claim, the client rechecks the latest foreground view,
+recording identity, and registered composer before capturing content, with no
+further asynchronous gap before adoption. The composer captures its latest local
+draft, prepends recognized speech to the text body with a blank line, and retains
+thread references and all structured context: skill, attachments, excerpts,
+notes, and Tasks. It validates the shared 256 KiB UTF-8 raw and aggregate
+materialized input limits, including selected Tasks' captured content, before
+adopting any content. A conflict, an in-progress draft mutation, or an uneditable
+composer refuses adoption and keeps native speech recovery available.
+
+After local acceptance, native retires its recording instead of allocating a
+direct-input submission. The ordinary composer owns saving, sending, clearing,
+rollback, and UI recovery; voice exposes no separate Send or Resume for accepted
+speech. A pending attachment upload or known Send restriction may retain the
+combined draft with a notice to send manually when ready. Foreground voice uses
+native's frozen Queue/Steer choice rather than changing the client's preference;
+idle input uses Submit. If the frozen Steer is unavailable while Queue remains
+available, the same captured input uses Queue. Existing capability and target
+validation still govern Steer. Voice submission does not refocus the composer or
+open the keyboard.
+Blank completion, a recognized automatic stop command, and cancellation do not
+adopt or send a draft. Explicit voice Send remains literal and follows the same
+handoff eligibility as automatic completion. Successful composer submission uses
+its existing capture-and-clear behavior, preserving subsequent typing and normal
+input recovery. Pi, Codex, Claude, Grok, and OpenCode retain their existing
+normalized input and attachment paths; no provider-private payload enters the
+bridge.
+
 ## Direct input admission
 
+This path applies when a foreground composer handoff is not offered, including
+background recording and a destination that is not the active live Chat.
 `POST /api/threads/:threadId/inputs` accepts one strict shape:
 
 ```json
@@ -806,9 +867,10 @@ active turn to another device.
 
 ## Native cancellation and recovery
 
-Native freezes text, target, origin, and delivery policy when recognition
-finalizes. Blank text, using the same whitespace as ECMAScript `trim()` on the
-server, is not submitted. Native persists `prepared`, then `possiblySubmitted`
+The following journal and receipt rules govern native direct-input submission,
+not speech already accepted by the foreground composer. Native freezes text,
+target, origin, and delivery policy when recognition finalizes. Blank text, using
+the same whitespace as ECMAScript `trim()` on the server, is not submitted. Native persists `prepared`, then `possiblySubmitted`
 before crossing the network boundary. A response must match the same mutation
 and thread.
 
@@ -947,7 +1009,8 @@ Only whole-recording completion produces feedback or input. Explicit Send is
 literal, including a spoken stop command, and blank Send does not rearm. Ordinary
 automatic completion applies the existing whole-utterance stop-command rule and
 speech-detected blank retry. Send freezes the target and waits for every accepted
-sample to resolve before preparing one immutable ordinary direct input.
+sample to resolve before either transferring speech to the eligible foreground
+composer or preparing one immutable ordinary direct input.
 
 `NativeDictationStore` owns encrypted, backup-excluded recording files under the
 profile and authenticated Sedes binding. Independent one-second PCM blocks,
@@ -962,7 +1025,8 @@ dictation before upgrading.
 Successful text is durable before corresponding audio is deleted. Each recording
 allows 32 MiB unresolved PCM and 128 unresolved segments; the global 64 MiB disk
 budget includes ciphertext, metadata, temporary writes and reserved staging.
-Complete direct input allows 256 KiB UTF-8; individual results allow 64 KiB.
+Complete speech and Chat draft text use the shared 256 KiB UTF-8 thread-input
+limit; individual recognition results retain their 64 KiB bound.
 Overflow retains the bounded recognized prefix and offending result for Copy
 and Discard. Nothing is silently truncated to make Send succeed.
 
@@ -1011,7 +1075,8 @@ oversized result without truncation. Draft adoption updates the current values
 before registration can accept a waiting handoff. Its existing autosave owns persistence;
 the native recovery item is retained. A successful insertion is remembered for
 that recording revision in the current voice store, preventing repeated taps
-from appending duplicates. Connection changes invalidate pending handoffs.
+from appending duplicates. Connection changes invalidate these pending explicit
+**Add to composer** handoffs.
 
 The recording and final-input journal merge into one recovery item as soon as
 an immutable mutation is allocated. Adopted input entries independently authenticate

@@ -3,7 +3,8 @@ import type Database from "better-sqlite3";
 import { MAXIMUM_PROJECT_NAME_LENGTH } from "../../../shared/protocol/domain.js";
 import { DomainError } from "../../domain/errors.js";
 import type { RequestScope } from "../../identity/identity-provider.js";
-import type { ContextExcerpt } from "../../../shared/protocol/context-excerpts.js";
+import { MAXIMUM_THREAD_STASH_BYTES, type ContextExcerpt } from "../../../shared/protocol/context-excerpts.js";
+import { serializedUtf8Bytes } from "../../../shared/protocol/payload.js";
 import type { ComposerAttachmentDescriptor } from "../../../shared/protocol/composer-attachments.js";
 import {
   MAXIMUM_BULK_INVENTORY_TARGETS,
@@ -1650,13 +1651,25 @@ export class InventoryRepository {
           "Only the current non-empty draft can be stashed.",
         );
       }
-      if (this.listStashes(scope, threadId).length >= input.maximumStashes) {
+      const stashes = this.listStashes(scope, threadId);
+      if (stashes.length >= input.maximumStashes) {
         throw new DomainError(
           "invalid_transition",
           "This thread has reached its prompt stash limit.",
         );
       }
       const stashId = input.stashId ?? randomUUID();
+      // Measure the authoritative stored content and attachment descriptors
+      // inside the write transaction, before consuming the source draft. This
+      // conservative record bound includes every field of the wire projection.
+      if (serializedUtf8Bytes([...stashes, {
+        ...draft, id: stashId, createdAt: input.now,
+      }]) > MAXIMUM_THREAD_STASH_BYTES) {
+        throw new DomainError(
+          "stash_limit_reached",
+          "This thread has reached its 8 MiB prompt stash storage limit. Delete a stash before adding another.",
+        );
+      }
       this.#attachments.copyOwnerLinks(
         scope,
         { kind: "draft", threadId },

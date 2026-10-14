@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { NativeVoiceStore, recentVoiceErrors } from "./NativeVoiceStore.js";
 import type { NativeVoiceState } from "./native-voice-plugin.js";
-import { disconnectedVoiceSnapshot, fakeVoicePlugin, recordingRecovery, VOICE_CONNECTION, VOICE_IDENTITY, voiceSettings, voiceSnapshot as snapshot } from "./native-voice-test-fixture.js";
+import { disconnectedVoiceSnapshot, fakeVoicePlugin, recordingRecovery, VOICE_CONNECTION, VOICE_IDENTITY, voiceComposerHandoffSnapshot, voiceSettings, voiceSnapshot as snapshot } from "./native-voice-test-fixture.js";
 
 function fixture() {
   const { plugin, listeners, remove, asPlugin } = fakeVoicePlugin();
@@ -14,6 +14,8 @@ const openEvent = (threadId: string, profileId = "profile") => ({ threadId, prof
 const runtimeError = (message: string, connectionGeneration = 1) => ({ code: "voice_error", message, connectionGeneration, ...VOICE_CONNECTION });
 const submittedEvent = (patch = {}) => ({ ...VOICE_CONNECTION, connectionGeneration: 1,
   threadId: "c61b5d8b-4a77-43c6-bd72-12e23fe42e38", operationId: "618f73db-b94d-4538-8ed9-7566313eb807", text: "Finalized voice transcript", queuedInputId: "queue-1", ...patch });
+const handoffEvent = (patch = {}) => ({ ...VOICE_CONNECTION, connectionGeneration: 1,
+  handoffId: "handoff-1", recordingId: "recording-1", threadId: "named", text: "Finalized voice transcript", mode: "queue" as const, ...patch });
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe("saved dictation to composer", () => {
@@ -156,6 +158,366 @@ describe("local voice submission events", () => {
     store.dispose();
   });
 });
+
+describe("foreground submission to composer", () => {
+  const context = { expectedConnectionGeneration: 1, handoffId: "handoff-1" };
+  it("publishes live composer availability and does not remove a replacement registration", () => {
+    const { store } = fixture();
+    const changed = vi.fn();
+    const unsubscribe = store.subscribeSubmissionComposers(changed);
+    expect(store.hasSubmissionComposer(null)).toBe(false);
+    expect(store.hasSubmissionComposer("named")).toBe(false);
+    const unregisterOld = store.registerSubmissionComposer("named", vi.fn());
+    expect(store.hasSubmissionComposer("named")).toBe(true);
+    expect(store.hasSubmissionComposer("other")).toBe(false);
+    expect(changed).toHaveBeenCalledTimes(1);
+    const unregisterLatest = store.registerSubmissionComposer("named", vi.fn());
+    unregisterOld();
+    expect(store.hasSubmissionComposer("named")).toBe(true);
+    expect(changed).toHaveBeenCalledTimes(2);
+    unregisterLatest();
+    expect(store.hasSubmissionComposer("named")).toBe(false);
+    expect(changed).toHaveBeenCalledTimes(3);
+    unsubscribe();
+    store.registerSubmissionComposer("named", vi.fn());
+    expect(changed).toHaveBeenCalledTimes(3);
+    store.dispose();
+    expect(store.hasSubmissionComposer("named")).toBe(false);
+  });
+
+  it("claims before capturing the complete live offer and accepts it only once", async () => {
+    const { store, plugin, listeners, open } = fixture();
+    await store.initialize();
+    let release!: (value: NativeVoiceState) => void;
+    plugin.claimComposerHandoff.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
+    const accept = vi.fn(() => {
+      expect(plugin.claimComposerHandoff).toHaveBeenCalledExactlyOnceWith(context);
+      expect(plugin.completeComposerHandoff).not.toHaveBeenCalled();
+    });
+    store.registerSubmissionComposer("named", accept);
+    const offer = handoffEvent({ mode: "steer" });
+    listeners.get("composerHandoff")!(offer);
+    listeners.get("composerHandoff")!(offer);
+    expect(plugin.claimComposerHandoff).toHaveBeenCalledExactlyOnceWith(context);
+    expect(accept).not.toHaveBeenCalled();
+    release(voiceComposerHandoffSnapshot(offer, { stateRevision: 2 }));
+    await vi.waitFor(() => expect(plugin.completeComposerHandoff).toHaveBeenCalledExactlyOnceWith({ ...context, outcome: "accepted" }));
+    expect(accept).toHaveBeenCalledExactlyOnceWith(offer);
+    listeners.get("composerHandoff")!(offer);
+    expect(plugin.claimComposerHandoff).toHaveBeenCalledOnce();
+    expect(accept).toHaveBeenCalledOnce();
+    expect(open).not.toHaveBeenCalled();
+    expect(plugin.sendRecording).not.toHaveBeenCalled();
+    expect(plugin.sendRecoveredRecording).not.toHaveBeenCalled();
+    store.dispose();
+  });
+
+  it("drops unhydrated, wrong-binding, stale, future and malformed offers before claim", async () => {
+    const { store, plugin, listeners } = fixture();
+    const accept = vi.fn();
+    store.registerSubmissionComposer("named", accept);
+    plugin.setConnection.mockImplementationOnce(async () => {
+      listeners.get("composerHandoff")!(handoffEvent());
+      return snapshot();
+    });
+    await store.initialize();
+    for (const patch of [
+      { profileId: "other" }, { serverOrigin: "https://other.test" }, { identity: "f".repeat(64) },
+      { connectionGeneration: 0 }, { connectionGeneration: 2 }, { connectionGeneration: -1 },
+      { recordingId: "" }, { handoffId: "" }, { threadId: "" }, { mode: "send" },
+      { text: undefined }, { text: " " }, { text: "é".repeat(131073) }, { unexpected: true },
+    ]) listeners.get("composerHandoff")!(handoffEvent(patch));
+    expect(plugin.claimComposerHandoff).not.toHaveBeenCalled();
+    expect(accept).not.toHaveBeenCalled();
+    listeners.get("composerHandoff")!(handoffEvent());
+    await vi.waitFor(() => expect(accept).toHaveBeenCalledOnce());
+    expect(plugin.claimComposerHandoff).toHaveBeenCalledOnce();
+    listeners.get("stateChanged")!(disconnectedVoiceSnapshot(2));
+    listeners.get("composerHandoff")!(handoffEvent({ connectionGeneration: 2, handoffId: "disconnected" }));
+    expect(plugin.claimComposerHandoff).toHaveBeenCalledOnce();
+    store.dispose();
+    listeners.get("composerHandoff")!(handoffEvent({ handoffId: "disposed" }));
+    expect(plugin.claimComposerHandoff).toHaveBeenCalledOnce();
+  });
+
+  it("declines a hidden view without deferring speech until visibility returns", async () => {
+    const { store, plugin, listeners } = fixture();
+    await store.initialize();
+    const accept = vi.fn();
+    store.registerSubmissionComposer("named", accept);
+    vi.stubGlobal("document", { visibilityState: "hidden" });
+    listeners.get("composerHandoff")!(handoffEvent());
+    await vi.waitFor(() => expect(plugin.completeComposerHandoff).toHaveBeenCalledExactlyOnceWith({ ...context,
+      outcome: "declined", message: "Open the recording's live Chat to send it with the composer." }));
+    expect(accept).not.toHaveBeenCalled();
+    vi.stubGlobal("document", { visibilityState: "visible" });
+    listeners.get("composerHandoff")!(handoffEvent());
+    expect(accept).not.toHaveBeenCalled();
+    expect(plugin.claimComposerHandoff).toHaveBeenCalledOnce();
+    store.dispose();
+  });
+
+  it("uses the latest composer callback when the view changes during claim", async () => {
+    const { store, plugin, listeners } = fixture();
+    await store.initialize();
+    let release!: (value: NativeVoiceState) => void;
+    plugin.claimComposerHandoff.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
+    const old = vi.fn(), latest = vi.fn();
+    const unregisterOld = store.registerSubmissionComposer("named", old);
+    listeners.get("composerHandoff")!(handoffEvent());
+    store.registerSubmissionComposer("named", latest);
+    unregisterOld();
+    release(voiceComposerHandoffSnapshot(handoffEvent()));
+    await vi.waitFor(() => expect(latest).toHaveBeenCalledExactlyOnceWith(handoffEvent()));
+    expect(old).not.toHaveBeenCalled();
+    expect(plugin.completeComposerHandoff).toHaveBeenCalledExactlyOnceWith({ ...context, outcome: "accepted" });
+    store.dispose();
+  });
+
+  it("declines navigation away during claim rather than opening or modifying another thread", async () => {
+    const { store, plugin, listeners, open } = fixture();
+    await store.initialize();
+    let release!: (value: NativeVoiceState) => void;
+    plugin.claimComposerHandoff.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
+    const original = vi.fn(), other = vi.fn();
+    const unregister = store.registerSubmissionComposer("named", original);
+    listeners.get("composerHandoff")!(handoffEvent());
+    unregister();
+    store.registerSubmissionComposer("other", other);
+    release(voiceComposerHandoffSnapshot(handoffEvent()));
+    await vi.waitFor(() => expect(plugin.completeComposerHandoff).toHaveBeenCalledExactlyOnceWith({ ...context,
+      outcome: "declined", message: "Open the recording's live Chat to send it with the composer." }));
+    expect(original).not.toHaveBeenCalled();
+    expect(other).not.toHaveBeenCalled();
+    expect(open).not.toHaveBeenCalled();
+    store.dispose();
+  });
+
+  it.each(["connection", "dispose"])("does not invoke a stale composer after %s changes during claim", async change => {
+    const { store, plugin, listeners } = fixture();
+    await store.initialize();
+    let release!: (value: NativeVoiceState) => void;
+    plugin.claimComposerHandoff.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
+    const accept = vi.fn();
+    store.registerSubmissionComposer("named", accept);
+    listeners.get("composerHandoff")!(handoffEvent());
+    if (change === "dispose") store.dispose();
+    else listeners.get("stateChanged")!(snapshot({ connectionGeneration: 2 }));
+    release(voiceComposerHandoffSnapshot(handoffEvent()));
+    await vi.waitFor(() => expect(plugin.completeComposerHandoff).toHaveBeenCalledExactlyOnceWith({ ...context,
+      outcome: "declined", message: "Open the recording's live Chat to send it with the composer." }));
+    expect(accept).not.toHaveBeenCalled();
+    if (change === "connection") expect(store.getSnapshot().native?.connectionGeneration).toBe(2);
+    store.dispose();
+  });
+
+  it.each(["stopped", "replacement recording", "new interaction for the same recording", "retargeted", "no longer submitting"])(
+    "does not stage speech when native is %s before the claim reply arrives", async change => {
+      const { store, plugin, listeners } = fixture();
+      await store.initialize();
+      let release!: (value: NativeVoiceState) => void;
+      plugin.claimComposerHandoff.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
+      const accept = vi.fn();
+      store.registerSubmissionComposer("named", accept);
+      const offer = handoffEvent();
+      const claimed = voiceComposerHandoffSnapshot(offer, { stateRevision: 2 });
+      listeners.get("composerHandoff")!(offer);
+      const newer = voiceComposerHandoffSnapshot(offer, { stateRevision: 3,
+        ...(change === "stopped" ? { active: null } : {}),
+        ...(change === "replacement recording" ? { active: { ...claimed.active!,
+          recording: { ...claimed.active!.recording!, id: "replacement-recording" } } } : {}),
+        ...(change === "new interaction for the same recording" ? { active: { ...claimed.active!, id: "new-interaction" } } : {}),
+        ...(change === "retargeted" ? { active: { ...claimed.active!, recognitionThreadId: "other-thread" } } : {}),
+        ...(change === "no longer submitting" ? { phase: "cancelling" } : {}),
+      });
+      listeners.get("stateChanged")!(newer);
+      release(claimed);
+      await vi.waitFor(() => expect(plugin.completeComposerHandoff).toHaveBeenCalledWith(expect.objectContaining({
+        ...context, outcome: "declined",
+      })));
+      expect(accept).not.toHaveBeenCalled();
+      expect(store.getSnapshot().native).toEqual(newer);
+      expect(plugin.sendRecording).not.toHaveBeenCalled();
+      store.dispose();
+    },
+  );
+
+  it("leaves a refused recording with native and reports the composer refusal", async () => {
+    const { store, plugin, listeners } = fixture();
+    const saved = recordingRecovery({ stage: "ready", hasUnrecognizedAudio: false, canSend: true, canCopyRecognizedText: true });
+    const native = snapshot({ recordingRecovery: saved });
+    plugin.setConnection.mockResolvedValue(native);
+    plugin.claimComposerHandoff.mockResolvedValue(voiceComposerHandoffSnapshot(handoffEvent(), { recordingRecovery: saved }));
+    plugin.completeComposerHandoff.mockResolvedValue(snapshot({ stateRevision: 2, recordingRecovery: saved }));
+    await store.initialize();
+    store.registerSubmissionComposer("named", () => { throw new Error("Resolve the draft conflict first."); });
+    listeners.get("composerHandoff")!(handoffEvent());
+    await vi.waitFor(() => expect(plugin.completeComposerHandoff).toHaveBeenCalledExactlyOnceWith({ ...context,
+      outcome: "declined", message: "Resolve the draft conflict first." }));
+    expect(store.getSnapshot().native?.recordingRecovery).toEqual(saved);
+    expect(plugin.discardRecording).not.toHaveBeenCalled();
+    expect(plugin.sendRecording).not.toHaveBeenCalled();
+    expect(plugin.sendRecoveredRecording).not.toHaveBeenCalled();
+    store.dispose();
+  });
+
+  it.each(["not visible", "composer unavailable", "different thread"])(
+    "declines a delayed claim when the latest native foreground is %s", async change => {
+      const { store, plugin, listeners } = fixture();
+      await store.initialize();
+      let release!: (value: NativeVoiceState) => void;
+      plugin.claimComposerHandoff.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
+      const accept = vi.fn();
+      store.registerSubmissionComposer("named", accept);
+      const offer = handoffEvent();
+      const claimed = voiceComposerHandoffSnapshot(offer, { stateRevision: 2 });
+      listeners.get("composerHandoff")!(offer);
+      const newer = { ...claimed, stateRevision: 3, foreground: { ...claimed.foreground,
+        ...(change === "not visible" ? { visible: false } : {}),
+        ...(change === "composer unavailable" ? { composerAvailable: false } : {}),
+        ...(change === "different thread" ? { threadId: "other-thread" } : {}),
+      } };
+      listeners.get("stateChanged")!(newer);
+      release(claimed);
+      await vi.waitFor(() => expect(plugin.completeComposerHandoff).toHaveBeenCalledWith({ ...context,
+        outcome: "declined", message: "Open the recording's live Chat to send it with the composer." }));
+      expect(accept).not.toHaveBeenCalled();
+      expect(store.getSnapshot().native).toEqual(newer);
+      store.dispose();
+    },
+  );
+
+  it("does not capture speech after native rejects the claim", async () => {
+    const { store, plugin, listeners } = fixture();
+    await store.initialize();
+    plugin.claimComposerHandoff.mockRejectedValue(new Error("The recording is no longer current."));
+    const accept = vi.fn();
+    store.registerSubmissionComposer("named", accept);
+    listeners.get("composerHandoff")!(handoffEvent());
+    await vi.waitFor(() => expect(store.getSnapshot().error).toBe("The recording is no longer current."));
+    expect(accept).not.toHaveBeenCalled();
+    expect(plugin.completeComposerHandoff).toHaveBeenCalledExactlyOnceWith({ ...context,
+      outcome: "declined", message: "The recording is no longer current." });
+    store.dispose();
+  });
+
+  it("releases a possibly claimed offer when the claim response is malformed without adopting speech", async () => {
+    const { store, plugin, listeners } = fixture();
+    await store.initialize();
+    plugin.claimComposerHandoff.mockResolvedValueOnce({ version: 15 } as NativeVoiceState);
+    const accept = vi.fn();
+    store.registerSubmissionComposer("named", accept);
+    listeners.get("composerHandoff")!(handoffEvent());
+    await vi.waitFor(() => expect(plugin.completeComposerHandoff).toHaveBeenCalledOnce());
+    expect(plugin.completeComposerHandoff).toHaveBeenCalledWith({ ...context, outcome: "declined",
+      message: store.getSnapshot().error!.slice(0, 1024) });
+    expect(accept).not.toHaveBeenCalled();
+    expect(plugin.sendRecording).not.toHaveBeenCalled();
+    expect(plugin.sendRecoveredRecording).not.toHaveBeenCalled();
+    expect(store.getSnapshot().error!.length).toBeGreaterThan(1024);
+    store.dispose();
+  });
+
+  it("keeps a failed claim recoverable even when releasing the cancelled offer also rejects", async () => {
+    const { store, plugin, listeners } = fixture();
+    await store.initialize();
+    plugin.claimComposerHandoff.mockRejectedValueOnce(new Error("Claim response lost."));
+    plugin.completeComposerHandoff.mockRejectedValueOnce(new Error("The offer was already cancelled."));
+    const accept = vi.fn();
+    store.registerSubmissionComposer("named", accept);
+    listeners.get("composerHandoff")!(handoffEvent());
+    await vi.waitFor(() => expect(plugin.completeComposerHandoff).toHaveBeenCalledWith({ ...context,
+      outcome: "declined", message: "Claim response lost." }));
+    expect(store.getSnapshot().error).toBe("Claim response lost.");
+    expect(accept).not.toHaveBeenCalled();
+    store.dispose();
+  });
+
+  it.each([
+    ["disposal", "rejected"], ["disposal", "malformed"],
+    ["connection change", "rejected"], ["connection change", "malformed"],
+  ] as const)("releases the original unadopted reservation after %s and a %s claim response", async (change, failure) => {
+    const { store, plugin, listeners } = fixture();
+    await store.initialize();
+    let resolve!: (value: NativeVoiceState) => void;
+    let reject!: (error: Error) => void;
+    plugin.claimComposerHandoff.mockImplementationOnce(() => new Promise((success, rejected) => { resolve = success; reject = rejected; }));
+    plugin.completeComposerHandoff.mockResolvedValueOnce(snapshot({ profileId: "other-profile", connectionGeneration: 2 }));
+    const accept = vi.fn();
+    store.registerSubmissionComposer("named", accept);
+    listeners.get("composerHandoff")!(handoffEvent());
+    if (change === "disposal") store.dispose();
+    else listeners.get("stateChanged")!(snapshot({ connectionGeneration: 2, stateRevision: 3 }));
+    const before = store.getSnapshot();
+    if (failure === "rejected") reject(new Error("Claim response lost."));
+    else resolve({ version: 15 } as NativeVoiceState);
+    await vi.waitFor(() => expect(plugin.completeComposerHandoff).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      ...context, outcome: "declined", message: expect.any(String),
+    })));
+    expect(accept).not.toHaveBeenCalled();
+    expect(store.getSnapshot()).toBe(before);
+    expect(store.getSnapshot().error).toBeUndefined();
+    if (change === "connection change") expect(store.getSnapshot().native?.connectionGeneration).toBe(2);
+    expect(plugin.sendRecording).not.toHaveBeenCalled();
+    store.dispose();
+  });
+
+  it("does not insert or send twice when native completion fails and the offer repeats", async () => {
+    const { store, plugin, listeners } = fixture();
+    await store.initialize();
+    plugin.completeComposerHandoff.mockRejectedValue(new Error("Native acknowledgement failed."));
+    const accept = vi.fn();
+    store.registerSubmissionComposer("named", accept);
+    listeners.get("composerHandoff")!(handoffEvent());
+    await vi.waitFor(() => expect(store.getSnapshot().error).toBe("Native acknowledgement failed."));
+    expect(plugin.completeComposerHandoff).toHaveBeenCalledExactlyOnceWith({ ...context, outcome: "accepted" });
+    listeners.get("composerHandoff")!(handoffEvent());
+    expect(accept).toHaveBeenCalledExactlyOnceWith(handoffEvent());
+    expect(plugin.claimComposerHandoff).toHaveBeenCalledOnce();
+    expect(plugin.completeComposerHandoff).toHaveBeenCalledOnce();
+    store.dispose();
+  });
+
+  it.each([
+    { profileId: "other-profile", connectionGeneration: 2 },
+    { serverOrigin: "https://other.test", connectionGeneration: 2 },
+    { identity: "f".repeat(64), connectionGeneration: 2 },
+    { connectionGeneration: 2 },
+  ])("settles an adopted handoff without accepting a foreign completion response %j or reconnecting the old profile", async patch => {
+    vi.useFakeTimers();
+    const { store, plugin, listeners } = fixture();
+    await store.initialize();
+    const claimed = voiceComposerHandoffSnapshot(handoffEvent(), { stateRevision: 2 });
+    plugin.claimComposerHandoff.mockResolvedValueOnce(claimed);
+    plugin.completeComposerHandoff.mockResolvedValueOnce(snapshot(patch));
+    const accept = vi.fn();
+    store.registerSubmissionComposer("named", accept);
+    listeners.get("composerHandoff")!(handoffEvent());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(accept).toHaveBeenCalledExactlyOnceWith(handoffEvent());
+    expect(plugin.completeComposerHandoff).toHaveBeenCalledExactlyOnceWith({ ...context, outcome: "accepted" });
+    expect(store.getSnapshot().native).toEqual(claimed);
+    await vi.advanceTimersByTimeAsync(2_001);
+    expect(plugin.setConnection).toHaveBeenCalledOnce();
+    store.dispose();
+  });
+
+  it("releases an unadopted claim without accepting another binding's completion response", async () => {
+    vi.useFakeTimers();
+    const { store, plugin, listeners } = fixture();
+    await store.initialize();
+    plugin.claimComposerHandoff.mockRejectedValueOnce(new Error("Claim response lost."));
+    plugin.completeComposerHandoff.mockResolvedValueOnce(snapshot({ profileId: "other-profile", connectionGeneration: 2 }));
+    listeners.get("composerHandoff")!(handoffEvent());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(plugin.completeComposerHandoff).toHaveBeenCalledExactlyOnceWith({ ...context, outcome: "declined", message: "Claim response lost." });
+    expect(store.getSnapshot().native?.profileId).toBe("profile");
+    expect(store.getSnapshot().error).toBe("Claim response lost.");
+    await vi.advanceTimersByTimeAsync(2_001);
+    expect(plugin.setConnection).toHaveBeenCalledOnce();
+    store.dispose();
+  });
+});
 describe("native voice state authority", () => {
   it.each(["stopPlayback", "stopInteraction"] as const)("%s interrupts a pending action, deduplicates taps, and rejects its late state", async action => {
     const { store, plugin } = fixture();
@@ -235,7 +597,7 @@ describe("native voice state authority", () => {
     listeners.get("openThread")!(openEvent("own"));
     expect(open).toHaveBeenCalledExactlyOnceWith("own");
     store.dispose();
-    expect(remove).toHaveBeenCalledTimes(5);
+    expect(remove).toHaveBeenCalledTimes(6);
     expect(plugin.disconnect).not.toHaveBeenCalled();
     await expect(store.update({ autoListen: false })).rejects.toThrow("no longer active");
   });

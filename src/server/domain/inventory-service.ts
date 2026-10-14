@@ -4,8 +4,7 @@ import { composerAttachmentReferenceArraySchema } from "../../shared/protocol/co
 import { composerTaskReferenceIdsSchema } from "../../shared/protocol/tasks.js";
 import {
   contextExcerptArraySchema,
-  MAXIMUM_COMPOSER_INPUT_BYTES,
-  MAXIMUM_DRAFT_BYTES,
+  MAXIMUM_THREAD_INPUT_BYTES,
   MAXIMUM_CONTEXT_EXCERPTS,
 } from "../../shared/protocol/context-excerpts.js";
 import {
@@ -69,7 +68,7 @@ function assertComposerBytes(
     bytes += encoder.encode(excerpt.excerpt).byteLength;
     if (excerpt.note) bytes += encoder.encode(excerpt.note).byteLength;
   }
-  if (bytes > MAXIMUM_COMPOSER_INPUT_BYTES) {
+  if (bytes > MAXIMUM_THREAD_INPUT_BYTES) {
     throw new DomainError(
       "invalid_transition",
       `${label} exceeds the composer input limit.`,
@@ -114,7 +113,7 @@ export class InventoryService {
     },
     now = Date.now(),
   ) {
-    assertBytes(input.text, MAXIMUM_DRAFT_BYTES, "Draft");
+    assertBytes(input.text, MAXIMUM_THREAD_INPUT_BYTES, "Draft");
     contextExcerptArraySchema.parse(input.contextExcerpts);
     composerAttachmentReferenceArraySchema.parse(input.attachmentIds);
     composerTaskReferenceIdsSchema.parse(input.taskReferenceIds);
@@ -142,7 +141,7 @@ export class InventoryService {
     now = Date.now(),
   ) {
     const draft = this.repository.getDraft(scope, applicationThreadId);
-    assertBytes(draft.text, MAXIMUM_DRAFT_BYTES, "Stashed prompt");
+    assertComposerBytes(draft.text, draft.contextExcerpts, "Stashed prompt");
     return this.repository.stashDraft(scope, applicationThreadId, {
       ...input,
       maximumStashes: MAXIMUM_STASHES_PER_THREAD,
@@ -171,7 +170,7 @@ export class InventoryService {
         ...draft.contextExcerpts,
         ...stash.contextExcerpts,
       ];
-      assertBytes(restored, MAXIMUM_DRAFT_BYTES, "Restored draft");
+      assertBytes(restored, MAXIMUM_THREAD_INPUT_BYTES, "Restored draft");
       if (contextExcerpts.length > MAXIMUM_CONTEXT_EXCERPTS) {
         throw new DomainError(
           "invalid_transition",

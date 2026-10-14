@@ -3,7 +3,7 @@ import {
   MAXIMUM_COMPOSER_ATTACHMENT_IMAGE_BYTES,
   MAXIMUM_COMPOSER_ATTACHMENT_IMAGES,
 } from "../../../shared/protocol/composer-attachments.js";
-import { MAXIMUM_COMPOSER_INPUT_BYTES } from "../../../shared/protocol/context-excerpts.js";
+import { MAXIMUM_THREAD_INPUT_BYTES } from "../../../shared/protocol/context-excerpts.js";
 import { MAXIMUM_PROVIDER_FRAME_BYTES } from "../../provider-protocol/transport/framed-message-limits.js";
 
 const MAXIMUM_JSON_ESCAPED_BYTES_PER_INPUT_BYTE = 6;
@@ -27,7 +27,7 @@ export const MAXIMUM_LEGAL_GROK_IMAGE_REQUEST_ENCODED_BYTES = (() => {
     MAXIMUM_COMPOSER_ATTACHMENT_IMAGES *
     base64EncodedBytes(MAXIMUM_COMPOSER_ATTACHMENT_IMAGE_BYTES);
   const escapedComposerBytes =
-    MAXIMUM_COMPOSER_INPUT_BYTES * MAXIMUM_JSON_ESCAPED_BYTES_PER_INPUT_BYTE;
+    MAXIMUM_THREAD_INPUT_BYTES * MAXIMUM_JSON_ESCAPED_BYTES_PER_INPUT_BYTE;
   const escapedDescriptorBytes =
     MAXIMUM_COMPOSER_ATTACHMENT_IMAGES *
     (MAXIMUM_ATTACHMENT_ID_BYTES +

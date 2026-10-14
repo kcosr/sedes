@@ -1,5 +1,5 @@
 import { vi } from "vitest";
-import type { NativeRecordingRecovery, NativeVoicePlugin, NativeVoiceSettings, NativeVoiceState } from "./native-voice-plugin.js";
+import type { NativeRecordingRecovery, NativeVoiceComposerHandoff, NativeVoicePlugin, NativeVoiceSettings, NativeVoiceState } from "./native-voice-plugin.js";
 
 /** Native binds voice to the authenticated navigation namespace, which is always 64 lowercase hex digits. */
 export const VOICE_IDENTITY = "0123456789abcdef".repeat(4);
@@ -15,8 +15,8 @@ export function voiceSettings(patch: Partial<NativeVoiceSettings> = {}): NativeV
 }
 export function voiceSnapshot(patch: Partial<NativeVoiceState> = {}): NativeVoiceState {
   return {
-    version: 14, stateRevision: 1, connectionGeneration: 1, ...VOICE_CONNECTION, originClientId: VOICE_ORIGIN_ID, clientConnectionToken: "a".repeat(43), settingsRevision: 0,
-    settings: voiceSettings(), phase: "off", ready: false, readiness: "off", foreground: { visible: false, threadId: null, threadTitle: null }, active: null,
+    version: 15, stateRevision: 1, connectionGeneration: 1, ...VOICE_CONNECTION, originClientId: VOICE_ORIGIN_ID, clientConnectionToken: "a".repeat(43), settingsRevision: 0,
+    settings: voiceSettings(), phase: "off", ready: false, readiness: "off", foreground: { visible: false, threadId: null, threadTitle: null, composerAvailable: false }, active: null,
     nextRecordingTarget: null, retainedVoiceTarget: null, idleTargetRevision: 0, queue: { count: 0, bytes: 0, droppedCount: 0, droppedReasons: {} },
     speech: { credentialConfigured: false, catalogStatus: "idle", catalog: null, error: null },
     actions: voiceActions(), recordingRecovery: null, recovery: [], errors: [], ...patch,
@@ -25,6 +25,13 @@ export function voiceSnapshot(patch: Partial<NativeVoiceState> = {}): NativeVoic
 export function voiceActions(patch: Partial<NativeVoiceState["actions"]> = {}): NativeVoiceState["actions"] {
   return { canStart: false, canStop: false, canSkip: false, canRecordDuringPlayback: false, canReleaseRetainedTarget: false, canRetarget: false, canResume: false,
     canSetKeepListening: false, canSend: false, keepListeningBlockedReason: "not_capturing", ...patch };
+}
+/** A claimed offer still owns its current recording until the composer completes it. */
+export function voiceComposerHandoffSnapshot(event: Pick<NativeVoiceComposerHandoff, "recordingId" | "threadId">, patch: Partial<NativeVoiceState> = {}): NativeVoiceState {
+  return voiceSnapshot({ phase: "submitting", foreground: { visible: true, threadId: event.threadId, threadTitle: null, composerAvailable: true },
+    active: { id: "voice-handoff", eventKind: null, threadId: event.threadId,
+    threadTitle: null, recognitionThreadId: event.threadId, recognitionThreadTitle: null, automatic: false,
+    recording: { id: event.recordingId, keepListening: false, reconnecting: false } }, ...patch });
 }
 export function recordingRecovery(patch: Partial<NativeRecordingRecovery> = {}): NativeRecordingRecovery {
   return { recordingId: "saved-recording", revision: 1, threadId: "named", threadTitle: "Release review", stage: "interrupted",
@@ -37,11 +44,14 @@ export function disconnectedVoiceSnapshot(connectionGeneration: number): NativeV
 }
 export function fakeVoicePlugin() {
   const listeners = new Map<string, (value: unknown) => void>();
+  let latestHandoff: NativeVoiceComposerHandoff | undefined;
   const remove = vi.fn(async () => {});
   // Each method needs its own mock: Vitest returns the same instance when vi.fn wraps an existing mock.
   const state = () => vi.fn(async (): Promise<NativeVoiceState> => voiceSnapshot());
   const plugin = {
     setConnection: state(), getState: state(), updateSettings: state(), disconnect: state(), setForegroundContext: state(),
+    claimComposerHandoff: vi.fn(async (): Promise<NativeVoiceState> => latestHandoff ? voiceComposerHandoffSnapshot(latestHandoff) : voiceSnapshot()),
+    completeComposerHandoff: state(),
     startManualListen: state(), setNextRecordingTarget: state(), releaseRetainedVoiceTarget: state(), retargetActiveRecognition: state(), recordDuringPlayback: state(), skipCurrentPlayback: state(), stopPlayback: state(), stopCurrentInteraction: state(),
     speakReply: vi.fn(async (_input: Parameters<NativeVoicePlugin["speakReply"]>[0]): Promise<NativeVoiceState> => voiceSnapshot()),
     setKeepListening: state(), sendRecording: state(), retryRecordingRecognition: state(), sendRecoveredRecording: state(),
@@ -51,7 +61,13 @@ export function fakeVoicePlugin() {
     })),
     resumeInput: state(), discardInput: state(), refreshSpeechCatalog: state(), openSpeechCredentialDialog: state(),
     listInputDevices: vi.fn(async (): Promise<Awaited<ReturnType<NativeVoicePlugin["listInputDevices"]>>> => ({ devices: [] })),
-    addListener: vi.fn(async (event: string, listener: (value: unknown) => void) => { listeners.set(event, listener); return { remove }; }),
+    addListener: vi.fn(async (event: string, listener: (value: unknown) => void) => {
+      listeners.set(event, value => {
+        if (event === "composerHandoff") latestHandoff = value as NativeVoiceComposerHandoff;
+        listener(value);
+      });
+      return { remove };
+    }),
   };
   const emit = (event: string, value: unknown) => listeners.get(event)!(value);
   return { plugin, listeners, remove, emit, asPlugin: plugin as unknown as NativeVoicePlugin };

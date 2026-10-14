@@ -1,13 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
   SEDES_CLIENT_PROTOCOL_VERSION,
-  MAXIMUM_COMPOSER_INPUT_BYTES,
+  MAXIMUM_THREAD_INPUT_BYTES,
   MAXIMUM_COMPOSER_TASK_REFERENCES,
   apiErrorCodeSchema,
   backendItemSchema,
   composerTaskReferenceIdsSchema,
   composerTaskReferencesSchema,
   composerInputUtf8Bytes,
+  composerTaskInputUtf8Bytes,
   hasDeliverableComposerInput,
   messageTaskContextSchema,
   normalizedDraftSchema,
@@ -51,8 +52,17 @@ const messageTask = {
 const reference = { taskId: task.id, titleSnapshot: task.title };
 
 describe("composer Task reference protocol", () => {
+  it("matches live Task byte preflight to exact materialized snapshots including escaped Unicode", () => {
+    const tasks = [task, { ...task, id: "10000000-0000-4000-8000-000000000002", title: "你好 café",
+      details: 'Quotes " and newline\nwith café and emoji 😀', files: ["/work/你好.ts"], backlog: true }];
+    const materializedBytes = composerInputUtf8Bytes({ text: "", contextExcerpts: [],
+      taskContexts: tasks.map(materializeTaskContext) });
+    expect(composerTaskInputUtf8Bytes(tasks)).toBe(materializedBytes);
+    expect(composerTaskInputUtf8Bytes(tasks.map(value => ({ ...value, associatedProjectId: "extra presentation metadata" })))).toBe(materializedBytes);
+    expect(composerTaskInputUtf8Bytes([])).toBe(0);
+  });
   it("uses the current protocol version for the atomic normalized cutover", () => {
-    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(155);
+    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(156);
   });
 
   it("bounds ordered draft references and rejects duplicate Task ids", () => {
@@ -117,7 +127,7 @@ describe("composer Task reference protocol", () => {
     expect(materializedTaskContextsSchema.safeParse([task]).success).toBe(false);
     expect(
       normalizedDraftSchema.safeParse({
-        text: "x".repeat(MAXIMUM_COMPOSER_INPUT_BYTES),
+        text: "x".repeat(MAXIMUM_THREAD_INPUT_BYTES),
         contextExcerpts: [],
         attachments: [],
         taskReferences: [reference],
@@ -126,11 +136,11 @@ describe("composer Task reference protocol", () => {
     ).toBe(true);
     expect(
       composerInputUtf8Bytes({
-        text: "x".repeat(MAXIMUM_COMPOSER_INPUT_BYTES),
+        text: "x".repeat(MAXIMUM_THREAD_INPUT_BYTES),
         contextExcerpts: [],
         taskContexts: [task],
       }),
-    ).toBeGreaterThan(MAXIMUM_COMPOSER_INPUT_BYTES);
+    ).toBeGreaterThan(MAXIMUM_THREAD_INPUT_BYTES);
   });
 
   it("requires authenticated delivery identity for normalized Task cards", () => {

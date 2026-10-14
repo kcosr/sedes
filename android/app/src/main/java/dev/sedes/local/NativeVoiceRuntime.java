@@ -85,6 +85,8 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
     /** Journal exists, but its first durable handoff still owns the initial Send. */
     private final Set<String> preparingAdmissions = new HashSet<>();
     private final Map<String, Recovery> recoveries = new HashMap<>();
+    /** Live bridge reservations survive cancellation only to settle their original recording, never to send natively. */
+    private final Map<String, Active> claimedComposerHandoffs = new HashMap<>();
     private NativeVoiceSettings settings = NativeVoiceSettings.defaults();
     private String profileId, origin, identity, binding, credential, csrf, originId;
     private String phase = "off", foregroundThread, foregroundTitle, composerMode = "queue";
@@ -95,7 +97,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
     private JSONObject retainedVoiceTarget;
     /** Fences controls captured while idle across target changes and idle/active/idle transitions. */
     private long idleTargetRevision;
-    private boolean foregroundVisible, sessionStarted, policyKnown, streamFailureReported;
+    private boolean foregroundVisible, foregroundComposerAvailable, sessionStarted, policyKnown, streamFailureReported;
     private int streamFailures;
     private volatile boolean nativeVisible;
     /** Invalidates a queued local UI event even if navigation or visibility changes back before dispatch. */
@@ -170,6 +172,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         final List<String> chunks;
         int chunk;
         JSONObject admission;
+        NativeVoiceComposerHandoff composerHandoff;
         Active(NativeVoiceQueue.Item item, int limit) {
             id = item.id; event = item.event; noticeThread = item.threadId; noticeTitle = item.threadTitle;
             targetId = item.targetId(); targetTitle = targetId != null && targetId.equals(item.threadId) ? item.threadTitle : null;
@@ -263,7 +266,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         handler.post(() -> {
             if (!visible) {
                 if (foregroundVisible && active == null) invalidateIdleTarget();
-                foregroundVisible = false; foregroundThread = null; foregroundTitle = null;
+                foregroundVisible = false; foregroundComposerAvailable = false; foregroundThread = null; foregroundTitle = null;
             }
             if (becameVisible && nativeVisible) resumeEnabledSession();
             publish();
@@ -276,7 +279,9 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         handler.post(() -> {
             try {
                 if (!action.equals("setConnection") && !action.equals("getState") && !action.equals("listInputDevices") &&
-                    expectedConnectionGeneration != connectionGeneration) throw new IllegalStateException("connection_changed");
+                    expectedConnectionGeneration != connectionGeneration &&
+                    !(action.equals("completeComposerHandoff") && settlesOriginalComposerClaim(args, expectedConnectionGeneration)))
+                    throw new IllegalStateException("connection_changed");
                 switch (action) {
                     case "setConnection": setConnection(args, reply); return;
                     case "disconnect": NativeVoiceJson.keys(args); disconnect(true); break;
@@ -286,6 +291,8 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
                         if (binding == null) throw new IllegalStateException("authentication_required");
                         refreshSpeechCatalog(NativeVoiceJson.bool(args, "force")); break;
                     case "setForegroundContext": foreground(args); break;
+                    case "claimComposerHandoff": claimComposerHandoff(args); break;
+                    case "completeComposerHandoff": completeComposerHandoff(args, expectedConnectionGeneration); break;
                     case "setNextRecordingTarget": setNextRecordingTarget(args); break;
                     case "releaseRetainedVoiceTarget":
                         NativeVoiceJson.keys(args, "expectedRetainedRevision");
@@ -626,7 +633,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         profileId = null; origin = null; settings = NativeVoiceSettings.defaults(); phase = "off";
         retainedDictation = null; dictationLoading = false; dictationOperationPending = false; dictationStorageError = false; dictationOperationRevision++;
         policyGeneration = -1;
-        foregroundVisible = false; foregroundThread = null; foregroundTitle = null; lastViewedThread = null;
+        foregroundVisible = false; foregroundComposerAvailable = false; foregroundThread = null; foregroundTitle = null; lastViewedThread = null;
         publish();
     }
     private void updateSettings(JSONObject args, boolean userInitiated) throws Exception {
@@ -747,14 +754,16 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         if (old != null) main.post(old::finish);
     }
     private void foreground(JSONObject args) {
-        NativeVoiceJson.keys(args, "visible", "threadId", "threadTitle", "composerMode");
+        NativeVoiceJson.keys(args, "visible", "threadId", "threadTitle", "composerMode", "composerAvailable");
         // Validate every argument before changing any foreground state.
         boolean visible = NativeVoiceJson.bool(args, "visible");
+        boolean composerAvailable = NativeVoiceJson.bool(args, "composerAvailable");
         String thread = NativeVoiceJson.nullableString(args, "threadId", 512), title = NativeVoiceJson.nullableString(args, "threadTitle", 512);
         String mode = args.has("composerMode") ? NativeVoiceJson.string(args, "composerMode", 16) : null;
         if (mode != null && !mode.equals("queue") && !mode.equals("steer")) throw new NativeVoiceJson.InvalidFieldException("composerMode");
         boolean nextVisible = visible && nativeVisible;
         String nextThread = nextVisible ? thread : null;
+        boolean nextComposerAvailable = nextVisible && thread != null && composerAvailable;
         boolean viewedThreadChanged = nextThread != null && !Objects.equals(lastViewedThread, nextThread);
         boolean cancelledVoice = false;
         if (foregroundVisible && nextVisible && !Objects.equals(foregroundThread, nextThread)) {
@@ -762,11 +771,13 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
             if (ownNavigation) active.clientNavigationPending = false;
             else { clientActions.discardListens(); cancelledVoice = cancelPreparingClientVoice(); }
         }
-        if (foregroundVisible != nextVisible || !Objects.equals(foregroundThread, nextThread)) {
+        if (foregroundVisible != nextVisible || !Objects.equals(foregroundThread, nextThread) ||
+            foregroundComposerAvailable != nextComposerAvailable) {
             inputSubmissionContext = new Object();
             if (active == null) invalidateIdleTarget();
         }
         foregroundVisible = nextVisible;
+        foregroundComposerAvailable = nextComposerAvailable;
         foregroundThread = nextThread;
         foregroundTitle = foregroundVisible ? title : null;
         if (nextThread != null) lastViewedThread = nextThread;
@@ -1745,6 +1756,19 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
     private void cancelActive(boolean cancelAdmission, String reason, boolean publishState, boolean discardSourceAction) {
         Active old = active; if (old == null) return;
         cancelInputContext(old);
+        if (old.composerHandoff != null && old.composerHandoff.claimed && !old.composerHandoff.finished) {
+            // The UI may already have adopted the speech. Keep the reservation until its live completion arrives,
+            // and hide the original recovery rather than offer another sender after Stop/Off/service detach.
+            old.stopped = true; active = null; audio.stop(); closeRecordingTransport(old);
+            if (captureOwner == old) captureOwner = null;
+            if (old.notification != null) {
+                queue.completed(old.id);
+                if (discardSourceAction) clientActions.discardTurn(old.notification.threadId, clientTurn(old.notification));
+            }
+            phase = sessionStarted ? "idle" : "off";
+            if (publishState) publish();
+            return;
+        }
         if (old.playbackOrigin) traceActive(NativeVoiceDiagnostics.Event.PLAYBACK_STOPPED, old, reason);
         if (waitingBeforeAudio(old)) { abortBeforeAudio(old, reason, false, discardSourceAction, false); return; }
         if (old.recordingStart != null) { cancelRecordingStart(old, reason, false); return; }
@@ -2140,6 +2164,10 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         final String target = item.targetId, frozenText = text, frozenOrigin = item.frozenOrigin;
         final long generation = connectionGeneration;
         phase = "submitting"; publish();
+        if (item.composerHandoff != null) return;
+        if (NativeVoiceComposerHandoff.eligible(nativeVisible, foregroundVisible, foregroundComposerAvailable, foregroundThread, target)) {
+            offerComposerHandoff(item, frozenText, steer); return;
+        }
         if (item.record != null && item.record.request != null) {
             prepareAdmission(item, target, frozenText, frozenOrigin, item.record.request.optJSONObject("runningPolicy")); return;
         }
@@ -2157,6 +2185,92 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
                     policy = NativeVoiceJson.object("mode", "steer", "target", targetSteer.optJSONObject("target"), "onUnavailable", "queue");
                 prepareAdmission(item, target, frozenText, frozenOrigin, policy);
             }));
+    }
+    /** Capture route eligibility before any asynchronous work; a declined offer never submits speech alone. */
+    private void offerComposerHandoff(Active item, String text, boolean steer) {
+        final NativeVoiceComposerHandoff offer = new NativeVoiceComposerHandoff(UUID.randomUUID().toString(),
+            item.recordingBinding, connectionGeneration, inputSubmissionContext, item.recordingId, item.targetId, text, steer);
+        item.composerHandoff = offer;
+        // Existing saved-recording ownership preserves the raw transcript if the UI cannot adopt the complete draft.
+        item.adopted = true;
+        dictationWork(() -> dictations.journal(offer.binding, offer.recordingId).adopt(false), (record, error) -> {
+            if (!ownsRecording(item, offer.recordingId) || item.composerHandoff != offer) return;
+            if (error != null) { interruptRecording(item, code(error)); return; }
+            item.record = record; acceptDictation(record);
+            if (!offer.current(binding, connectionGeneration, inputSubmissionContext, nativeVisible,
+                    foregroundVisible, foregroundComposerAvailable, foregroundThread)) {
+                declineComposerHandoff(item); return;
+            }
+            final JSONObject event = NativeVoiceJson.object("profileId", profileId, "serverOrigin", origin, "identity", identity,
+                "connectionGeneration", offer.generation, "handoffId", offer.id, "recordingId", offer.recordingId,
+                "threadId", offer.threadId, "text", offer.text, "mode", offer.mode);
+            final List<Observer> recipients = new ArrayList<>(observers);
+            publish();
+            main.post(() -> {
+                JSONObject current = state, foreground = current.optJSONObject("foreground"), currentActive = current.optJSONObject("active");
+                if (offer.context != inputSubmissionContext || !nativeVisible ||
+                    current.optLong("connectionGeneration", -1) != offer.generation ||
+                    !event.optString("profileId").equals(current.optString("profileId")) ||
+                    !event.optString("serverOrigin").equals(current.optString("serverOrigin")) ||
+                    !event.optString("identity").equals(current.optString("identity")) || foreground == null ||
+                    !foreground.optBoolean("visible") || !foreground.optBoolean("composerAvailable") ||
+                    !offer.threadId.equals(foreground.optString("threadId")) || currentActive == null ||
+                    !item.id.equals(currentActive.optString("id"))) return;
+                for (Observer observer : recipients) if (observers.contains(observer)) observer.event("composerHandoff", event);
+            });
+            // A WebView that disappears before claiming leaves ordinary, explicit recording recovery.
+            handler.postDelayed(() -> {
+                if (active == item && item.composerHandoff == offer && !offer.claimed && !offer.finished)
+                    declineComposerHandoff(item);
+            }, 15000);
+        });
+    }
+    private Active requireComposerHandoff(String id) {
+        Active item = active;
+        if (item == null || item.stopped || item.composerHandoff == null || !id.equals(item.composerHandoff.id))
+            throw new IllegalStateException("composer_handoff_changed");
+        return item;
+    }
+    private void claimComposerHandoff(JSONObject args) {
+        NativeVoiceJson.keys(args, "handoffId");
+        Active item = requireComposerHandoff(NativeVoiceJson.string(args, "handoffId", 160));
+        item.composerHandoff.claim(binding, connectionGeneration, inputSubmissionContext,
+            nativeVisible, foregroundVisible, foregroundComposerAvailable, foregroundThread);
+        claimedComposerHandoffs.put(item.composerHandoff.id, item);
+        if (retainedDictation != null && item.recordingId.equals(retainedDictation.id)) retainedDictation = null;
+    }
+    /** The captured handoff ID plus its generation can settle only that reservation's original recording. */
+    private boolean settlesOriginalComposerClaim(JSONObject args, long generation) {
+        Object id = args.opt("handoffId");
+        Active item = id instanceof String ? claimedComposerHandoffs.get(id) : null;
+        return item != null && item.composerHandoff.claimed && !item.composerHandoff.finished && item.composerHandoff.generation == generation;
+    }
+    private void completeComposerHandoff(JSONObject args, long expectedGeneration) {
+        NativeVoiceJson.keys(args, "handoffId", "outcome", "message");
+        String id = NativeVoiceJson.string(args, "handoffId", 160), outcome = NativeVoiceJson.string(args, "outcome", 16);
+        if (!outcome.equals("accepted") && !outcome.equals("declined")) throw new NativeVoiceJson.InvalidFieldException("outcome");
+        String detail = NativeVoiceJson.nullableString(args, "message", 1024);
+        Active item = claimedComposerHandoffs.get(id);
+        boolean originalClaim = item != null;
+        if (!originalClaim) item = requireComposerHandoff(id);
+        item.composerHandoff.complete(originalClaim ? item.composerHandoff.binding : binding, expectedGeneration, outcome.equals("accepted"));
+        claimedComposerHandoffs.remove(id);
+        if (outcome.equals("accepted")) {
+            discardStoredRecording(item.recordingBinding, item.recordingId);
+            if (active == item) finishItem(item); else publish();
+        } else {
+            declineComposerHandoff(item, detail);
+        }
+    }
+    private void declineComposerHandoff(Active item) {
+        declineComposerHandoff(item, null);
+    }
+    private void declineComposerHandoff(Active item, String detail) {
+        item.composerHandoff.finished = true;
+        claimedComposerHandoffs.remove(item.composerHandoff.id);
+        acceptDictation(item.record);
+        if (active == item) finishItem(item); else publish();
+        if (Objects.equals(item.recordingBinding, binding)) report("composer_handoff_unavailable", detail);
     }
     private void prepareAdmission(Active item, String target, String text, String originId, JSONObject policy) {
         if (active != item || binding == null) return;
@@ -2226,8 +2340,14 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
     private void acceptDictation(NativeDictationStore.Recording record) {
         if (record == null || !record.adopted || !Objects.equals(binding, record.binding) ||
             discardedDictations.contains(record.binding + "\n" + record.id)) return;
+        if (composerOwnsRecording(record)) return;
         if (retainedDictation == null || retainedDictation.id.equals(record.id) && retainedDictation.revision <= record.revision)
             retainedDictation = record;
+    }
+    private boolean composerOwnsRecording(NativeDictationStore.Recording record) {
+        for (Active pending : claimedComposerHandoffs.values())
+            if (record.binding.equals(pending.recordingBinding) && record.id.equals(pending.recordingId)) return true;
+        return false;
     }
     private void discardStoredRecording(String owner, String id) {
         if (owner == null || id == null) return;
@@ -2325,6 +2445,8 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
                     catch (Exception failure) { dictationStorageError = true; report(code(failure)); }
                     done.run(); return;
                 }
+                // A reconnect cannot expose or repair native admission for a live Composer-owned reservation.
+                if (composerOwnsRecording(record)) { done.run(); return; }
                 acceptDictation(record);
                 // A frozen request repairs either side of the journal handoff. Bootstrap never sends it.
                 if (record != null && record.request != null && !record.stage.equals("rejected")) {
@@ -3039,12 +3161,13 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
             "recognitionThreadTitle", active.targetTitle, "automatic", active.automatic, "recording", recording);
         String readiness = readiness(), blocked = keepListeningBlockedReason();
         boolean ready = readiness.equals("ready");
-        JSONObject next = NativeVoiceJson.object("version", 14, "connectionGeneration", connectionGeneration, "idleTargetRevision", idleTargetRevision,
+        JSONObject next = NativeVoiceJson.object("version", 15, "connectionGeneration", connectionGeneration, "idleTargetRevision", idleTargetRevision,
             "profileId", profileId, "serverOrigin", origin, "identity", identity, "originClientId", originId, "clientConnectionToken", clientConnectionToken,
             "settingsRevision", settings.revision, "settings", settings.value, "phase", phase, "ready", ready,
             "speech", NativeVoiceJson.object("credentialConfigured", speechCredential != null, "catalogStatus", catalogStatus,
                 "catalog", speechCatalog == null ? null : NativeSpeechCatalog.picker(speechCatalog), "error", catalogError == null ? null : message(catalogError)),
-            "readiness", readiness, "foreground", NativeVoiceJson.object("visible", foregroundVisible, "threadId", foregroundThread, "threadTitle", foregroundTitle),
+            "readiness", readiness, "foreground", NativeVoiceJson.object("visible", foregroundVisible, "threadId", foregroundThread, "threadTitle", foregroundTitle,
+                "composerAvailable", foregroundComposerAvailable),
             "active", current, "nextRecordingTarget", nextRecordingTarget, "retainedVoiceTarget", retainedVoiceTarget, "queue", queue.state(), "actions", NativeVoiceJson.object("canStart", canListen() && active == null && !blockingDictation() && !defaultHeldBlocked(),
                 "canStop", active != null && !active.recoveryRecognition && !active.recoverySend, "canSkip", playingSpeech(),
                 "canReleaseRetainedTarget", canReleaseRetainedTarget(),
@@ -3102,6 +3225,9 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
     }
     static String message(String code) {
         switch (code) {
+            case "composer_handoff_changed": return "That voice handoff is no longer current.";
+            case "composer_handoff_unclaimed": return "Accept the voice handoff before completing it.";
+            case "composer_handoff_unavailable": return "The chat draft could not receive this speech. Review the saved recording before sending.";
             case "recording_changed": return "That recording is no longer current.";
             case "voice_interaction_changed": return "That voice interaction has already ended.";
             case "recording_revision_conflict": return "The saved recording changed. Refresh and try again.";

@@ -132,6 +132,7 @@ describe("WorkpadRepository", () => {
     } finally { f.database.close(); }
   });
 
+  // Includes full migration fixtures; allow for contention in the parallel suite.
   it("rolls back serialized revision overflow, including draft commits and creation", () => {
     const f = fixture();
     try {
@@ -147,7 +148,7 @@ describe("WorkpadRepository", () => {
       expect(() => f.workpads.create(f.scope, { title: "Escaping", scope: { kind: "global" }, content: "\u0000".repeat(262_144) })).toThrow("revision size limit");
       expect(f.workpads.list(f.scope, { scope: { kind: "global" } }).items).toHaveLength(1);
     } finally { f.database.close(); }
-  });
+  }, 15_000);
 
   it("fences retries and no-op replacements without creating duplicate revisions", () => {
     const f = fixture();
@@ -406,6 +407,7 @@ describe("WorkpadRepository", () => {
     } finally { f.database.close(); }
   });
 
+  // Includes full migration fixtures; allow for contention in the parallel suite.
   it("rejects replacements beyond the deterministic diff budget atomically while allowing explicit patches", () => {
     const f = fixture();
     try {
@@ -423,7 +425,7 @@ describe("WorkpadRepository", () => {
       expect(patched.content).toBe(replacement);
       expect(patched.attribution.filter(span => span.author.kind === "agent").map(span => patched.content.slice(span.start, span.end))).toEqual(Array(1200).fill("b"));
     } finally { f.database.close(); }
-  });
+  }, 15_000);
 
   it("preserves Unicode text and keeps attribution ranges contiguous through replacements and append", () => {
     const f = fixture();

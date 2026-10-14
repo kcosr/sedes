@@ -178,9 +178,11 @@ the paired client. With automatic listening disabled and the source thread
 pinned as the default, it verifies reply playback followed by recognition and
 admission on a different requested thread, with no navigation event or screen,
 draft, or default-thread change on resume.
-They preserve the unsent composer and saved server draft, count real model
-admissions, and require one canonical user row for each admitted receipt.
-Automatic recovery is read-only; only **Resume input** resends. Startup
+Background and other-thread native submissions preserve the unsent composer
+and saved server draft. Foreground submission on the destination's live Chat
+uses composer ownership and combines the latest draft context. Cases count real
+model admissions and require one canonical user row for each accepted input.
+Native automatic recovery is read-only; only **Resume input** resends. Startup
 restores saved settings without spontaneously recording.
 
 Device smoke cases run each native test class in a separate instrumentation
@@ -202,7 +204,9 @@ Each packaged scenario reports observed `voiceResult` values to the host.
 `audioSink: "AudioTrack"` requires the runtime-owned playing track's playback
 head to advance. `speechPlayback` records advancement while speaking;
 `audioSource: "deterministic-pcm"` identifies injected capture. The host checks
-these values and both composer/server draft preservation. Injected PCM does
+these values and the appropriate draft contract: native background/other-thread
+submission preserves composer and server drafts, while foreground live Chat
+submission combines and clears the captured composer draft. Injected PCM does
 not establish real microphone speech quality.
 
 Pipeline runs write `test-results/voice-run-*` with Sedes and speech-server

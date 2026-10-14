@@ -22,6 +22,7 @@ import {
   restoreProjectResultSchema,
 } from "../shared/protocol/projects.js";
 import { projectIdSchema, mutationIdSchema } from "../shared/protocol/domain.js";
+import { MAXIMUM_DRAFT_REQUEST_BYTES } from "../shared/protocol/api.js";
 import { directInputRequestSchema, threadInputContextSchema, MAX_DIRECT_INPUT_REQUEST_BYTES } from "../shared/protocol/thread-input.js";
 import { LocationConflictError, ProjectRemovalBlockedError } from "./db/repositories/inventory-repository.js";
 import { respondToQuestionResultSchema } from "../shared/protocol/api.js";
@@ -873,6 +874,7 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
   app.use("/api/workpads", express.json({ limit: "2mb", strict: true }));
   app.use("/api/agent-tool-invocations", agentToolInvocationBodyParser());
   app.use("/api/configuration", express.json({ limit: "600kb", strict: true }));
+  app.use("/api/threads/:threadId/draft", express.json({ limit: MAXIMUM_DRAFT_REQUEST_BYTES, strict: true, type: "application/json" }));
   app.use("/api/threads/:threadId/inputs", express.json({ limit: MAX_DIRECT_INPUT_REQUEST_BYTES, strict: true, type: "application/json" }));
   app.use("/api/workpads", (_request, response, next) => {
     response.setHeader("Cache-Control", "no-store");
