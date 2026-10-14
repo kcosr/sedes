@@ -155,7 +155,7 @@ test("native dictation keeps its controls reachable on narrow screens and retain
   const send = toolbar.getByRole("button", { name: "Send voice recording" });
   const cancel = toolbar.getByRole("button", { name: "Cancel voice recording" });
   const targetThisThread = toolbar.getByRole("button", { name: "Target this thread: Voice navigation source", exact: true });
-  await expect(targetThisThread.locator(".lucide-locate-fixed")).toBeVisible();
+  await expect(targetThisThread.locator(".lucide-locate")).toBeVisible();
   await expect(targetThisThread).toHaveAttribute("title", "This thread");
   expect(await toolbar.locator(".voice-card-actions > button").evaluateAll(buttons => buttons.map(button => button.getAttribute("aria-label"))))
     .toEqual(["Target this thread: Voice navigation source", "Keep listening", "Cancel voice recording", "Send voice recording"]);
