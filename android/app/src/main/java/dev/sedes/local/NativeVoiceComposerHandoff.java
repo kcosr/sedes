@@ -36,7 +36,7 @@ final class NativeVoiceComposerHandoff {
         claimed = true;
     }
 
-    /** A claimed composer can finish after backgrounding; cancellation/connection changes still fence it. */
+    /** A claim can settle its original recording after backgrounding or cancellation; connection scope remains fenced. */
     void complete(String owner, long generation, boolean accepted) {
         if (finished || !Objects.equals(binding, owner) || this.generation != generation)
             throw new IllegalStateException("composer_handoff_changed");
