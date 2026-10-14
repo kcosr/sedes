@@ -21,7 +21,7 @@ export function voiceRecordingTarget(threads: readonly NormalizedApplicationThre
   if (visibleThreadId !== null && native.foreground.visible && native.foreground.threadId !== null &&
       native.foreground.threadId !== visibleThreadId) return available(visibleThreadId, "visible");
   if (retainedVoiceTarget) {
-    // Remembering the viewed thread does not add a redundant idle Next action.
+    // Remembering the viewed thread does not add a redundant idle target shortcut.
     if (retainedVoiceTarget.threadId === visibleThreadId) return available(visibleThreadId, "visible");
     const thread = threads.find(thread => thread.id === retainedVoiceTarget.threadId);
     return { threadId: retainedVoiceTarget.threadId, threadTitle: thread ? thread.title.text : retainedVoiceTarget.threadTitle, source: "retained" };
