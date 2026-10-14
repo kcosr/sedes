@@ -1,4 +1,3 @@
-import path from "node:path";
 import { normalizedAbsolutePath } from "../../shared/absolute-path.js";
 import { WORKSPACE_FILE_MAX_PATH_BYTES } from "../../shared/workspace-file-limits.js";
 import { isWithinRemoteRoot, pathForRemoteRoot } from "../execution/remote-path.js";
@@ -142,7 +141,7 @@ type RootOperationLifecycle = {
 };
 
 function derivedRootDisplayLabel(canonicalPath: string): string {
-  const basename = path
+  const basename = pathForRemoteRoot(canonicalPath)
     .basename(canonicalPath)
     .replace(/[\\\u0000-\u001f\u007f]/gu, "\uFFFD");
   const bounded = [...basename].slice(0, 240).join("") || "Files";
@@ -315,9 +314,10 @@ export class WorkspaceFileService {
         );
       });
     const canonicalPath = validated.canonicalPath;
+    const paths = pathForRemoteRoot(canonicalPath);
     const policyPath = canonicalPath
-      .slice(path.parse(canonicalPath).root.length)
-      .split(path.sep)
+      .slice(paths.parse(canonicalPath).root.length)
+      .split(paths.sep)
       .join("/");
     if (isSensitiveWorkspacePath(policyPath)) {
       throw new DomainError(

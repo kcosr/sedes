@@ -149,7 +149,7 @@ describe("OpenCode complete retained native history acquisition", () => {
     // Maximal descriptor counts, names and staging paths are included in the
     // encoded prompt. The signed paths disappear from normalized projection.
     const attachments: StagedComposerAttachment[] = Array.from({ length: 8 }, (_, index) => ({ id: randomUUID(),
-      fileName: `${'"'.repeat(251)}.png`, agentPath: `/${"\\".repeat(4_095)}`, sha256: "a".repeat(64),
+      fileName: `${'"'.repeat(251)}.png`, agentPath: `/${Array.from({ length: 16 }, () => '"'.repeat(255)).join("/")}`, sha256: "a".repeat(64),
       ...(index < 4 ? { kind: "image" as const, mediaType: "image/png" as const, byteSize: 3 * 1_024 * 1_024 }
         : { kind: "file" as const, mediaType: "application/octet-stream" as const, byteSize: 1 }) }));
     const nativeInputId = `msg_${"a".repeat(64)}`;

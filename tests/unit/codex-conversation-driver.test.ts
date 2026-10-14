@@ -13381,7 +13381,11 @@ describe("CodexConversationHandle", () => {
     await handle.close();
   });
 
-  it("keeps path-native image delivery unchanged without reading canonical bytes", async () => {
+  it.each([
+    "/remote/workspace/.sedes-attachments/diagram.png",
+    String.raw`C:\Users\example\staged\diagram.png`,
+    String.raw`\\fileserver\share\staged\diagram.png`,
+  ])("keeps path-native image delivery at %s without reading canonical bytes", async (agentPath) => {
     const harness = new RpcHarness();
     const handle = await attachIdle(harness);
     await establish(harness, handle);
@@ -13404,7 +13408,7 @@ describe("CodexConversationHandle", () => {
       kind: "image" as const,
       fileName: "diagram.png",
       mediaType: "image/png" as const,
-      agentPath: "/remote/workspace/.sedes-attachments/diagram.png",
+      agentPath,
     };
     const read = vi.fn(async () => Buffer.from("unexpected"));
 
@@ -13440,7 +13444,13 @@ describe("CodexConversationHandle", () => {
     await handle.close();
   });
 
-  it("retains the staged image path for text-only Codex submit and steer", async () => {
+  it.each([
+    { kind: "image" as const, agentPath: "/remote/workspace/.sedes-attachments/diagram.png" },
+    { kind: "image" as const, agentPath: String.raw`C:\Users\example\staged\diagram.png` },
+    { kind: "image" as const, agentPath: String.raw`\\fileserver\share\staged\diagram.png` },
+    { kind: "file" as const, agentPath: String.raw`C:\Users\example\staged\notes.txt` },
+    { kind: "file" as const, agentPath: String.raw`\\fileserver\share\staged\notes.txt` },
+  ])("retains staged $kind path $agentPath for text-only Codex submit and steer", async ({ kind, agentPath }) => {
     const harness = new RpcHarness();
     const handle = await attachIdle(harness);
     await establish(harness, handle);
@@ -13458,13 +13468,9 @@ describe("CodexConversationHandle", () => {
         completedAt: null,
       },
     });
-    const imageAttachment = {
-      ...stagedAttachment,
-      kind: "image" as const,
-      fileName: "diagram.png",
-      mediaType: "image/png" as const,
-      agentPath: "/remote/workspace/.sedes-attachments/diagram.png",
-    };
+    const imageAttachment = kind === "image" ? {
+      ...stagedAttachment, kind, fileName: "diagram.png", mediaType: "image/png" as const, agentPath,
+    } : { ...stagedAttachment, agentPath };
 
     const submitted = await handle.submit({
       applicationOperationId: "text-only-image-submit",
@@ -13510,8 +13516,8 @@ describe("CodexConversationHandle", () => {
         attachments: [
           expect.objectContaining({
             id: imageAttachment.id,
-            kind: "image",
-            fileName: "diagram.png",
+            kind,
+            fileName: imageAttachment.fileName,
           }),
         ],
       });
@@ -13519,6 +13525,40 @@ describe("CodexConversationHandle", () => {
         false,
       );
     }
+    harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+    await handle.close();
+  });
+
+  it("rejects invalid attachment staging before submit or steer without leaving an uncertain operation", async () => {
+    const harness = new RpcHarness();
+    const handle = await attachIdle(harness);
+    await establish(harness, handle);
+    const input = {
+      applicationOperationId: "invalid-staging-submit", source: { kind: "user" as const },
+      mutationId: "invalid-staging-submit", reconciliationToken: "invalid-staging-submit",
+      taskContexts: [], contextExcerpts: [], text: "inspect",
+      attachments: [{ ...stagedAttachment, agentPath: String.raw`C:staged\notes.txt` }],
+    };
+    await expect(handle.submit(input)).rejects.toMatchObject({
+      category: "rejected", retryable: false, crossedSubmissionBoundary: false,
+      backendCode: "staged_attachment_invalid",
+    });
+    expect(harness.calls.some(({ method }) => method === "turn/start")).toBe(false);
+    harness.enqueue("model/list", { data: [nativeModel()], nextCursor: null });
+    harness.enqueue("turn/start", {
+      turn: { ...nativeTurn(1), items: [], rootTurnId: null, itemsView: "notLoaded", status: "inProgress", completedAt: null },
+    });
+    const accepted = await handle.submit({
+      ...input, attachments: [{ ...stagedAttachment, agentPath: String.raw`C:\Users\example\staged\notes.txt` }],
+    });
+    await expect(handle.steer({
+      ...input, applicationOperationId: "invalid-staging-steer", mutationId: "invalid-staging-steer",
+      reconciliationToken: "invalid-staging-steer", target: { kind: "turn", turnId: accepted.backendTurnId! },
+    })).rejects.toMatchObject({
+      category: "rejected", retryable: false, crossedSubmissionBoundary: false,
+    });
+    expect(harness.calls.filter(({ method }) => method === "turn/start")).toHaveLength(1);
+    expect(harness.calls.some(({ method }) => method === "turn/steer")).toBe(false);
     harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
     await handle.close();
   });

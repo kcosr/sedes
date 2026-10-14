@@ -65,6 +65,24 @@ async function fixture() {
 }
 
 describe("ImageShowService", () => {
+  it.each([
+    "C:\\work\\screenshots\\chart.png",
+    "\\\\files\\share\\screenshots\\chart.png",
+  ])("passes the native Windows source %s to Files without resolving it on main", async nativePath => {
+    const f = await fixture();
+    const read = vi.spyOn(f.files, "readAbsoluteFile").mockResolvedValue(png());
+    const result = await f.show("windows-image", { path: nativePath });
+
+    expect(read).toHaveBeenCalledExactlyOnceWith(f.scope, f.thread.id, nativePath,
+      16_777_216, expect.any(AbortSignal));
+    expect(result.image).toMatchObject({ representation: "artifact", mimeType: "image/png",
+      fileName: { text: "chart.png" } });
+    expect(JSON.stringify(result)).not.toContain(nativePath);
+    const retained = await f.artifacts.openImage(f.scope, f.thread.id, result.image.artifactId);
+    try { expect(await retained.handle.readFile()).toEqual(png()); }
+    finally { await retained.handle.close(); }
+  });
+
   it("captures through real Files and retains a scoped immutable image after source deletion and restart", async () => {
     const f = await fixture();
     const result = await f.show("first", { path: f.source, title: "Results" });

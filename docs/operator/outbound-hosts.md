@@ -154,6 +154,13 @@ are not an operating-system sandbox for shell processes.
 See the [Codex](backends/codex.md), [Claude](backends/claude.md), [OpenCode](backends/opencode.md), and [Pi](backends/pi.md) guides for provider
 versions, executable/endpoint setup, tool prerequisites, and remaining limits.
 
+Windows file and image attachments preserve their native drive or UNC staging
+paths. Invalid staging evidence is rejected before provider delivery, so it
+does not require reconciliation. Supplemental Files roots use the host's path
+rules for sensitive-directory checks and display labels. These main-server
+fixes require deploying and restarting Sedes; they do not require a client or
+sidecar upgrade.
+
 ## Identity, availability, and decisions
 
 The connector keeps its connector ID, registration attempt, and accepted

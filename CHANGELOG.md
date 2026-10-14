@@ -205,6 +205,11 @@ User-facing changes are collected here before release. See the
 
 ### Fixed
 
+- Windows file and image attachments send without a false reconciliation
+  requirement. Supplemental Files roots use Windows path rules for sensitive
+  directory checks and labels. Deploy and restart the server; no client or
+  sidecar upgrade is required. See [remote attachments](docs/operator/outbound-hosts.md#approve-and-configure).
+
 - Windows Codex sessions preserve the account environment required by configured
   MCP servers, and failed MCP startup appears as a thread warning. Rebuild and
   upgrade Windows sidecars or Managed Local, then restart the affected Codex
