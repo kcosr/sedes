@@ -192,6 +192,7 @@ test("playback Record, Next and Stop stay separate on touch while replying to an
 
   // Stop releases speech continuity regardless of queue count. The existing
   // explicit choice and pin still lead; otherwise the viewed thread takes over.
+  await page.setViewportSize({ width: 320, height: 780 });
   for (const count of [0, 2]) {
     for (const policy of ["viewed", "pinned", "explicit"] as const) {
       const id = `stop-${policy}-${count}`;
@@ -219,10 +220,11 @@ test("playback Record, Next and Stop stay separate on touch while replying to an
       await expect(composer).toHaveValue(draft);
       await expect(composer).not.toBeFocused();
       await expectNoPageOverflow(page);
-      if (count === 0) await capture(page, testInfo, `voice-stop-target-${policy}-480.png`);
+      if (count === 0) await capture(page, testInfo, `voice-stop-target-${policy}-320.png`);
     }
   }
 
+  await page.setViewportSize({ width: 480, height: 780 });
   await page.goto("/settings/voice");
   expected.length = 0;
   await playback("unpinned-stop", "speaking", false);
