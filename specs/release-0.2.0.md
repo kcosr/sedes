@@ -58,13 +58,27 @@ changes to this record and PR references do not change the tested application.
 | Production third-party notices | Passed after regeneration; 616 packages, 244 license texts; pruned Claude executables excluded independently of build host |
 | Notice generation regression | Passed; Linux/Windows fixture installs produce identical notices while retaining the SDK license |
 | Full deterministic unit/integration suite | 16,335 passed, 24 skipped, 3 timeout failures in 660.02s; all three unchanged cases passed in a single-worker recheck (24.46s), yielding 16,338 passing cases across the run and recheck |
-| Full coordinated browser E2E and screenshot review | Pending |
-| Android assembled-package/native-unit verification | Pending |
+| Full coordinated browser E2E and screenshot review | Passed: 143 tests, 48 jobs, default four lanes; 592.774s including build |
+| Android assembled-package/native-unit verification | Passed: synchronized assets, native unit tests, instrumentation APK compilation, debug assembly, assembled-package policy checks; device/emulator instrumentation not run |
 | Electron packaged application verification | Pending |
 
 The notice generator retains the existing missing license-identifier warning for
 `khroma` 2.1.0; collected license text is included. Existing build warnings concern
 CSS `::highlight` parsing and large browser chunks.
+
+Browser artifacts remain local under `test-results/e2e-runs/run-4c7y42/`.
+Reviewed all 18 Pages/image, 27 voice, and 41 Tasks/Workpads screenshots, plus
+eight composer, thread-reference, agent-tool, and in-flight streaming views;
+no rendering failures found. Zoom crops, conflict warnings, and recovery states
+match their deliberately injected scenarios.
+
+The 592.774s browser run exceeds the 210s reference target but matches recent
+local job timings; no browser tests changed during preparation. The longest jobs
+were pending-input delivery (129.799s, local estimate 129.813s) and composer state
+(125.198s, estimate 125.000s), exercising ordered/recovery state chains. Pages
+took 83.424s (estimate 83.710s) for revision/local-resource isolation, retained
+images, responsive viewports, and mobile interaction. Coverage and assertions
+were retained; the target miss remains a known performance limitation.
 
 No new live-provider suite is part of this release verification. Pi, Codex,
 Claude, and OpenCode are **not live verified on this release candidate**;
@@ -124,8 +138,9 @@ SDK vendor patches, or postinstall rewrites were introduced.
 The Windows fix was reviewed iteratively with Keel `claude-default` before PR
 #79 merged. The separate release review found platform-dependent notices for
 Claude executables that packaging discards. The generator now excludes those
-packages, with a passing Linux/Windows fixture regression; follow-up review is
-pending. Release preparation is reviewed in [PR #80](https://github.com/kcosr/sedes/pull/80).
+packages, with a passing Linux/Windows fixture regression. A second follow-up
+verified the corrected compliance preamble and returned no findings. Release
+preparation is reviewed in [PR #80](https://github.com/kcosr/sedes/pull/80).
 Public issue/support/security destinations remain documented in
 [CONTRIBUTING](../CONTRIBUTING.md) and [SECURITY](../SECURITY.md); the source
 license is [LICENSE](../LICENSE), with dependencies in
