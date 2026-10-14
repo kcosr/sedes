@@ -356,6 +356,19 @@
   height: var(--icon-sm);
 }
 
+@container voice-card-text (max-width: 199px) {
+  .voice-card-title[data-thread] .voice-card-title-reconnecting {
+    display: block;
+  }
+
+  /* The title spinner carries reconnection while the status keeps its full
+     phase word. Keep the hint when no thread title can carry the spinner. */
+  .voice-card-heading:has(.voice-card-title-reconnecting) + .voice-card-sub .voice-card-reconnecting,
+  .voice-card-heading:has(.voice-card-title-reconnecting) + .voice-card-sub .voice-card-dot:has(+ .voice-card-reconnecting) {
+    display: none;
+  }
+}
+
 .voice-card-title[data-saved] {
   display: flex;
   align-items: center;
