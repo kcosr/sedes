@@ -18,6 +18,7 @@ User-facing changes are collected here before release. See the
   switches the entire unsent recording to the viewed thread without restarting
   capture or changing queued replies. See
   [voice controls](docs/operator/clients/voice.md#targeting-and-controls).
+  ([#82](https://github.com/kcosr/sedes/pull/82))
 
 - Android voice combines speech with the current Chat draft when foreground on
   the recording's thread, including attachments and other context. Composer
@@ -32,6 +33,7 @@ User-facing changes are collected here before release. See the
   **Release voice target** when no available thread is viewed. It still releases
   the retained destination; playback, headset, and notification Next are
   unchanged. See [voice controls](docs/operator/clients/voice.md#targeting-and-controls).
+  ([#82](https://github.com/kcosr/sedes/pull/82))
 
 - Chat draft text, speech, stashes, and restored queued input now use the same
   256 KiB UTF-8 limit. Text and materialized context share the existing input
