@@ -695,9 +695,8 @@ to the foreground composer. Native Activity visibility and the WebView's current
 foreground thread identify a possible destination. The client rechecks document
 visibility and its registered active live Chat composer against that exact
 thread, publishing `foreground.composerAvailable`; an empty draft is eligible,
-and keyboard focus is irrelevant. TUI,
-historical views, another thread, and background recording retain native direct
-input. The Sedes server does not choose this route or receive client-selected
+and keyboard focus is irrelevant. TUI, historical views, another thread, and
+background recording retain native direct input. The Sedes server does not choose this route or receive client-selected
 foreground authority.
 
 Native offers completed text through the transient `composerHandoff` event,
@@ -705,18 +704,30 @@ carrying profile, origin, authenticated identity, connection generation, handoff
 and recording IDs, target thread, text, and the frozen delivery mode. The client
 claims that exact offer with `claimComposerHandoff` before adopting it; native
 rechecks its binding, generation, visibility, destination, and active ownership.
-`completeComposerHandoff` reports acceptance or refusal. An accepted claim may
-complete after a visibility change while its binding and active ownership still
-match. If no client claims the offer within 15 seconds, native retains the
-recording for explicit recovery; an offered handoff never falls back to a
+`completeComposerHandoff` reports acceptance or refusal. A claimed in-memory
+reservation hides its raw recording from native recovery and admission repair.
+It survives visibility changes, Stop, Off, service detachment, and a connection
+or identity change until completion. Only its handoff ID and original expected
+connection generation can settle that reservation's captured binding and
+recording. Settlement cannot mutate the current connection or a newer recording;
+all other bridge commands retain the current-generation fence.
+
+Acceptance retires only the original recording. Refusal restores its existing
+raw recovery if the original binding is active, or leaves the adopted recording
+for recovery on that binding's next reconnect, without reporting an error on
+another binding. If no client claims the offer within 15 seconds, native retains
+the recording for explicit recovery; an offered handoff never falls back to a
 separate native submission.
 
-The composer captures its latest local draft, prepends recognized speech to the
-text body with a blank line, and retains thread references and all structured
-context: skill, attachments, excerpts, notes, and Tasks. It validates the shared
-256 KiB UTF-8 raw and aggregate materialized input limits before adopting any
-content. A conflict, an in-progress draft mutation, or an uneditable composer
-refuses adoption and keeps native speech recovery available.
+After awaiting the claim, the client rechecks the latest foreground view,
+recording identity, and registered composer before capturing content, with no
+further asynchronous gap before adoption. The composer captures its latest local
+draft, prepends recognized speech to the text body with a blank line, and retains
+thread references and all structured context: skill, attachments, excerpts,
+notes, and Tasks. It validates the shared 256 KiB UTF-8 raw and aggregate
+materialized input limits, including selected Tasks' captured content, before
+adopting any content. A conflict, an in-progress draft mutation, or an uneditable
+composer refuses adoption and keeps native speech recovery available.
 
 After local acceptance, native retires its recording instead of allocating a
 direct-input submission. The ordinary composer owns saving, sending, clearing,
@@ -1062,7 +1073,8 @@ oversized result without truncation. Draft adoption updates the current values
 before registration can accept a waiting handoff. Its existing autosave owns persistence;
 the native recovery item is retained. A successful insertion is remembered for
 that recording revision in the current voice store, preventing repeated taps
-from appending duplicates. Connection changes invalidate pending handoffs.
+from appending duplicates. Connection changes invalidate these pending explicit
+**Add to composer** handoffs.
 
 The recording and final-input journal merge into one recovery item as soon as
 an immutable mutation is allocated. Adopted input entries independently authenticate
