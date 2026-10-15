@@ -12,6 +12,7 @@ User-facing changes are collected here before release. See the
   operator scripts; create/run-now requests require stable mutation keys.
   The operator CLI attaches to existing threads. See the
   [automation CLI](docs/operator/automation-cli.md).
+  ([#88](https://github.com/kcosr/sedes/pull/88))
 
 - Upgrade Codex execution sidecars with the server for Codex runtime protocol
   **4**, which clears retained attach metadata after native archive changes.
@@ -26,7 +27,7 @@ User-facing changes are collected here before release. See the
   [Page responses](docs/user/html-previews.md#send-a-page-response),
   [voice input](docs/operator/clients/voice.md), and
   [notification scripts](docs/operator/configuration.md#notification-scripts).
-  ([#81](https://github.com/kcosr/sedes/pull/81), [#83](https://github.com/kcosr/sedes/pull/83), [#87](https://github.com/kcosr/sedes/pull/87))
+  ([#81](https://github.com/kcosr/sedes/pull/81), [#83](https://github.com/kcosr/sedes/pull/83), [#87](https://github.com/kcosr/sedes/pull/87), [#88](https://github.com/kcosr/sedes/pull/88))
 
 ### Added
 
@@ -36,6 +37,7 @@ User-facing changes are collected here before release. See the
   automations retain their history. Existing automations migrate in place,
   preserving names, schedules, history, and prior dismissals. See
   [automations](docs/user/tasks-and-automations.md#schedule-work-with-an-automation).
+  ([#88](https://github.com/kcosr/sedes/pull/88))
 
 - Published HTML pages can collect responses through Sedes's **Send** control.
   Responses go to the page's thread, queue while it is busy, and remain in
