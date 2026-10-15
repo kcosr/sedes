@@ -30,6 +30,8 @@ import {
   type CreateConversationResult,
   type DiscoverConversationsInput,
   type DiscoveredConversationPage,
+  type NativeConversationArchiveInput,
+  type NativeConversationArchiveResult,
   type ReadConversationInput,
   type ReconcileSubmissionInput,
   type ReleaseConversationResidencyInput,
@@ -44,6 +46,8 @@ import type { CodexServerRequestRouter } from "./codex-server-request-router.js"
 import {
   codexThreadListMethod,
   codexThreadReadMethod,
+  codexThreadArchiveMethod,
+  codexThreadUnarchiveMethod,
   codexThreadTurnsListMethod,
   codexThreadUnsubscribeMethod,
   CODEX_C1_MAX_LIST_THREADS,
@@ -126,6 +130,12 @@ import {
   CODEX_DISCOVERY_SOURCE_KINDS,
   isCodexDiscoverableThread,
 } from "./codex-thread-binding.js";
+import {
+  isCodexNativeArchiveThreadMissing,
+  isCodexThreadArchived,
+  readCodexNativeArchiveSyncEnabled,
+  waitForCodexArchiveInspection,
+} from "./codex-native-archive.js";
 
 const REQUEST_TIMEOUT_MILLISECONDS = 10_000;
 const FORK_REQUEST_TIMEOUT_MILLISECONDS = 60_000;
@@ -246,6 +256,7 @@ export interface CodexConversationDriverInput {
 }
 
 export class CodexConversationBackendDriver implements ConversationBackendDriver {
+  readonly #nativeArchiveSyncEnabled = readCodexNativeArchiveSyncEnabled();
   readonly #resolveThreadEnvironment: ThreadEnvironmentResolver;
   readonly instance: AgentBackendInstance;
   readonly connection: AgentConnectionProfile;
@@ -1099,6 +1110,101 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
     } finally {
       unsubscribe();
       releaseAgentToolCliEnvironment(cliEnvironment);
+    }
+  }
+
+  async nativeArchive(input: NativeConversationArchiveInput): Promise<NativeConversationArchiveResult> {
+    const signal = input.signal ?? AbortSignal.timeout(CODEX_HISTORY_TIMEOUT_MILLISECONDS);
+    signal.throwIfAborted();
+    this.#assertScope(input.scope);
+    this.#assertWorkspace(input.workspace);
+    this.#assertSourceBinding(input.binding, input.workspace);
+    if (input.action === "archive" && !this.#nativeArchiveSyncEnabled) {
+      return { state: "disabled", changed: false };
+    }
+    const threadId = input.binding.backendConversationId;
+    if (input.action !== "restore" && this.#ownership.current(threadId)) {
+      return { state: "busy", changed: false };
+    }
+    let mutationDispatched = false;
+    try {
+      const inspected = await this.#client.requestWithReceipt(
+        codexThreadReadMethod, { threadId, includeTurns: false },
+        { timeoutMilliseconds: CODEX_HISTORY_TIMEOUT_MILLISECONDS, signal },
+      );
+      assertThreadBinding(inspected.result.thread, threadId, input.workspace.canonicalPath);
+      const generation = inspected.generation;
+      const assertGeneration = (received: number) => {
+        const current = this.#client.lifecycleSnapshot();
+        if (received !== generation || current.generation !== generation || current.state !== "ready") {
+          throw codexError("unavailable", "Codex changed connection while synchronizing the thread archive.",
+            "codex_native_archive_generation_changed", !mutationDispatched);
+        }
+      };
+      assertGeneration(generation);
+      const state = isCodexThreadArchived(inspected.result.thread) ? "archived" : "active";
+      if (input.action === "restore") {
+        if (state === "active") return { state, changed: false };
+        signal.throwIfAborted();
+        assertGeneration(generation);
+        mutationDispatched = true;
+        const restored = await this.#client.requestWithReceipt(
+          codexThreadUnarchiveMethod, { threadId },
+          { timeoutMilliseconds: CODEX_HISTORY_TIMEOUT_MILLISECONDS, signal },
+        );
+        assertGeneration(restored.generation);
+        assertThreadBinding(restored.result.thread, threadId, input.workspace.canonicalPath);
+        if (isCodexThreadArchived(restored.result.thread)) {
+          throw codexError("incompatible_protocol", "Codex did not confirm the thread was restored.", "codex_native_restore_unconfirmed");
+        }
+        return { state: "active", changed: true };
+      }
+      if (inspected.result.thread.status.type === "active") return { state: "busy", changed: false };
+      if (state === "archived") return { state, changed: false };
+      // Native archive shuts down a loaded root and its native subagents. Keep
+      // Sedes's root work/terminal checks even when no local actor is retained.
+      if (this.#managedTui) {
+        await waitForCodexArchiveInspection(this.#managedTui.consumeLifecycle(), signal);
+        const lifecycle = this.#managedTui.registry.projection(input.scope, input.binding.applicationThreadId).state.lifecycle;
+        if (["starting", "running", "stopping"].includes(lifecycle) ||
+            this.#managedTui.registry.runningAuthority(input.scope, input.binding.applicationThreadId)) {
+          return { state: "busy", changed: false };
+        }
+      }
+      signal.throwIfAborted();
+      assertGeneration(generation);
+      const goal = await this.#client.requestWithReceipt(codexThreadGoalGetMethod, { threadId },
+        { timeoutMilliseconds: CODEX_HISTORY_TIMEOUT_MILLISECONDS, signal });
+      assertGeneration(goal.generation);
+      if (goal.result.goal && goal.result.goal.threadId !== threadId) throw bindingMismatch();
+      if (goal.result.goal?.status === "active") return { state: "busy", changed: false };
+      if (input.action === "inspect") return { state, changed: false };
+      signal.throwIfAborted();
+      assertGeneration(generation);
+      mutationDispatched = true;
+      const archived = await this.#client.requestWithReceipt(codexThreadArchiveMethod, { threadId },
+        { timeoutMilliseconds: CODEX_HISTORY_TIMEOUT_MILLISECONDS, signal });
+      assertGeneration(archived.generation);
+      return { state: "archived", changed: true };
+    } catch (error) {
+      if (!mutationDispatched && isCodexNativeArchiveThreadMissing(error, threadId) &&
+          this.#client.lifecycleSnapshot().state === "ready" &&
+          codexRpcErrorGeneration(error) === this.#client.lifecycleSnapshot().generation) {
+        return { state: "missing", changed: false };
+      }
+      const knownNotAccepted = error instanceof CodexRpcDeliveryError && error.delivery === "not_sent" ||
+        error instanceof CodexRpcRemoteError && (error.disposition === "rejected_not_accepted" ||
+          error.code === -32601 || error.code === -32602);
+      if (mutationDispatched && !knownNotAccepted) {
+        throw new BackendError({ category: "unavailable", retryable: false, crossedSubmissionBoundary: true,
+          safeMessage: "Codex archive synchronization needs its native state checked before retrying.",
+          backendCode: "codex_native_archive_outcome_unknown" }, { cause: error });
+      }
+      if (signal.aborted && !mutationDispatched) {
+        throw codexError("unavailable", "Codex archive synchronization stopped before a native change was sent.",
+          "codex_native_archive_cancelled", true, error);
+      }
+      throw mapCodexReadError(error);
     }
   }
 

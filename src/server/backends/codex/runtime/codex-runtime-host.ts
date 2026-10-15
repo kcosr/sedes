@@ -189,6 +189,9 @@ export class CodexRuntimeHost implements CodexRuntimeConnection {
           try {
             if (resume) resume.apply(receipt);
             else if (input.method === "thread/unsubscribe") this.#sessions!.unsubscribe((params as { threadId: string }).threadId, receipt.generation);
+            else if (input.method === "thread/archive" || input.method === "thread/unarchive") {
+              this.#sessions!.invalidateArchivedThread((params as { threadId: string }).threadId, receipt.generation);
+            }
             else this.#sessions!.observeResult(input.method, receipt.result, receipt.generation);
           } catch { this.#sessions!.markUnknown(); }
         }
@@ -198,6 +201,12 @@ export class CodexRuntimeHost implements CodexRuntimeConnection {
       if (this.#abandoning) return;
       this.#settle(operation, { status: "completed", operationId: input.operationId, method: input.method, receipt });
     }, error => {
+      // An archive can shut down native work before returning a failure. Its
+      // old subscription settings are no longer safe reattachment authority,
+      // even if an upstream carrier missed the corresponding notifications.
+      if (operation.dispatched && (input.method === "thread/archive" || input.method === "thread/unarchive")) {
+        this.#sessions!.invalidateArchivedThread((params as { threadId: string }).threadId, input.generation);
+      }
       const failure = error instanceof CodexRpcRemoteError
         ? { kind: "remote" as const, code: error.code, message: error.message.slice(0, 8192), generation: error.generation, method: input.method, ...(error.data === undefined ? {} : { data: error.data }) }
         : { kind: "delivery" as const, code: error instanceof CodexRpcDeliveryError ? error.message : "codex_runtime_outcome_unknown", delivery: error instanceof CodexRpcDeliveryError ? error.delivery : "sent_outcome_unknown" as const, generation: input.generation, method: input.method };

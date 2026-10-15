@@ -50,6 +50,29 @@ function fixture(answer: (method: string, params: Record<string, unknown>) => un
 }
 
 describe("persistent Codex native session recovery", () => {
+  it("invalidates an archived session and an earlier pending resume without affecting siblings", async () => {
+    const f = fixture((_method, params) => ({ thread: thread(String(params.threadId)) }));
+    f.sessions.observeResult("thread/resume", resumed(), 1);
+    f.sessions.observeResult("thread/resume", { ...resumed(), thread: thread("sibling") }, 1);
+    const pending = f.sessions.trackResume("thread", 1);
+    f.sessions.invalidateArchivedThread("thread", 1);
+    pending.apply({ result: resumed(), generation: 1, inboundSequence: 1 });
+    pending.close();
+    expect(f.sessions.hasCurrent("thread")).toBe(false);
+    expect(await f.sessions.reattach("thread", { timeoutMilliseconds: 1_000 })).toBeUndefined();
+    expect(f.sessions.hasCurrent("sibling")).toBe(true);
+  });
+
+  it.each(["thread/archived", "thread/unarchived"] as const)("drops retained configuration on native %s", method => {
+    const f = fixture(() => ({}));
+    f.sessions.observeResult("thread/resume", resumed(), 1);
+    const pending = f.sessions.trackResume("thread", 1);
+    f.sessions.observeNotification({ kind: "decoded_notification", generation: 1, sequence: 11, method, params: { threadId: "thread" } });
+    pending.apply({ result: resumed(), generation: 1, inboundSequence: 10 });
+    pending.close();
+    expect(f.sessions.hasCurrent("thread")).toBe(false);
+  });
+
   it("requires native resume after unsubscribe without invalidating a sibling session", async () => {
     const f = fixture((_method, params) => ({ thread: thread(String(params.threadId)) }));
     f.sessions.observeResult("thread/resume", resumed(), 1);

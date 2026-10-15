@@ -32,6 +32,22 @@ and arbitrary exception properties are not serialized. Remote errors already
 sanitized by the connector or daemon cannot reveal more detail than that peer
 sent. Collect both main and connector logs when the reported cause is remote.
 
+## Native archive synchronization
+
+Ordinary main-server logs include `[native-archive]` records for supported native
+archive/restore attempts. They contain the Sedes thread ID, action, resulting
+state (`active`, `archived`, `missing`, `busy`, or `disabled`), and `changed`.
+Unsupported backends emit no record. Failures use the normal bounded background
+error reporter with `Native archive synchronization for thread <id>`.
+The structured outcome records contain no transcript, native path, credential,
+or host address; failure logs follow the ordinary error-redaction guidance above.
+
+A successful Sedes archive response confirms its local inventory commit; native
+failure does not undo it. Use the corresponding outcome or failure record when
+checking a manual sweep. Unknown native outcomes retain an existing recovery
+guard across restarts: inspect the provider and use Force reset before another
+native mutation. Repeated requests leave the guard intact.
+
 ## Server delivery diagnostics
 
 Set `SEDES_DEBUG_DELIVERY` to any nonempty value before starting Sedes:

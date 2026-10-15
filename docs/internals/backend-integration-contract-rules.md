@@ -362,10 +362,16 @@ an all-or-nothing principal-scoped database mutation with one replay receipt
 and publish only after commit. External execution-workspace deletion cannot be
 included in that atomic boundary; bulk archive keeps those workspaces. This
 path is implemented uniformly for Pi, Codex, Claude, Grok and OpenCode through shared
-application composition and must not add provider methods, native identifiers,
-provider-name branches, or a fabricated capability. Archived threads are not
+application composition without native identifiers, provider-name branches, or
+a fabricated browser capability. Archived threads are not
 members of a visible working stack, so stack bulk restore is a separate product
 contract rather than an inferred inverse operation.
+
+Provider-history, workspace, or environment unavailability alone is not active
+work and must not fabricate a disconnected runtime to block archival. Use
+observed runtime activity and durable unresolved-operation evidence for single,
+family, and bulk archive admission; loaded disconnected or reconciling runtimes
+remain blockers. This shared rule applies to every backend above.
 
 When an inventory action also completes Tasks, bind confirmation to the full
 scoped open-Task set and its revisions, not only the displayed bounded list or
@@ -398,6 +404,38 @@ closes only resident handles, processes, subscriptions, and leases; it never
 deletes provider-native durable conversation history. Audit this close
 disposition for Pi, Codex, Claude, Grok and OpenCode whenever archive or runtime
 ownership changes.
+
+A provider's optional `nativeArchive` seam synchronizes its own durable archive
+after the application commit, inside the same maintenance fences and before
+publication. Recheck current scoped inventory on receipt replay and synchronize
+only fenced targets that remain archived. A fresh request for an already
+archived thread may repeat synchronization without changing inventory again.
+Provider absence, disconnection, or a failed native mutation never rolls back
+the local archive. Native state and outcomes remain backend-private. Restore
+commits locally under the same fence, attempts native restoration, and releases
+the fence before publication can acquire execution. Execution attachment must
+independently ensure native restoration; passive history reads must never do so.
+Record durable uncertainty before native mutation dispatch using the existing
+scoped operation receipts. Conclusive outcomes and proven non-delivery clear
+that guard; a timeout after possible dispatch does not. Unresolved native
+changes permit local archive/restore and passive history but block execution,
+including automatic Goal resume, until explicit existing recovery abandons
+them. Never infer safe retry merely from a later active-state read.
+
+Codex implements native inspection, archive, and restoration by its saved binding
+and exact workspace. Its native subagent cascade is intentional; Sedes forks
+remain separate application threads. Installation policy
+`SEDES_CODEX_ARCHIVE_SYNC=false` suppresses future archive mutations, not
+inspection or restoration. Pi, Claude, Grok, and OpenCode intentionally omit
+this seam and retain local-only archival. Audit these dispositions and both
+single/family and bulk entry points whenever synchronization changes.
+
+Discovery must not infer missing history from an active-only native listing
+omitting a local archive. Before exhaustive reconciliation, passively inspect
+omitted, known, nonarchived bindings for providers with native archival; an
+inspection failure makes the scan partial and forbids missing claims. Unknown
+native archives remain outside discovery, and inspection never resumes or
+restores them.
 
 Archived transcript access is a separate backend contract: `openHistory` returns
 an owned `ConversationHistoryReader` supporting a bounded initial snapshot,
@@ -453,7 +491,11 @@ runtime has applied is not work: the method first applies it as attaching
 would, and reports `undelivered` only if it still holds the residency. That
 also refuses the archive, with a message to open the thread so its output is
 applied, rather than one claiming the thread is active. An unreachable provider is logged
-and left to the provider's own residency limit. Claude implements it through
+and left to the provider's own residency limit. Missing runtime registrations
+are typed `runtime_unavailable` domain failures, so a retired backend does not
+prevent application-owned archival of its old threads. Strict policy refresh
+still propagates that failure. This shared resolution rule applies to Pi,
+Codex, Claude, Grok, and OpenCode. Claude implements residency release through
 the persistent `retire` command, and its local worker owns no residency beyond
 the handle. Codex implements it by validating native idle state, unsubscribing,
 and invalidating persistent attach metadata. Its native thread may stay loaded

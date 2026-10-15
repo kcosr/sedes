@@ -73,12 +73,14 @@ import {
   codexThreadTurnsListMethod,
   codexThreadResumeMethod,
   codexThreadUnsubscribeMethod,
+  codexThreadUnarchiveMethod,
   refineCodexItemLifecycleTimestamps,
   type CodexThread,
   type CodexThreadItem,
   type CodexThreadResumeResponse,
   type CodexTurn,
 } from "./codex-c1-protocol.js";
+import { isCodexThreadArchived } from "./codex-native-archive.js";
 import {
   CodexPaginatedHistoryAdapter,
   type CodexPaginatedNativePage,
@@ -3070,6 +3072,28 @@ export class CodexConversationHandle implements ConversationHandle {
         let serviceTierResolution: CodexServiceTierResolution | undefined;
         const controlObservationBeforeResume = this.#controlObservationRevision;
         try {
+          // Reading an archive is passive through CodexHistoryReader. An
+          // execution attach must restore the native thread before either a
+          // retained persistent session or a new resume can admit work. This
+          // remains required when future native archive linking is disabled.
+          if (isCodexThreadArchived(inspected.result.thread)) {
+            const restored = await this.#client.requestWithReceipt(
+              codexThreadUnarchiveMethod,
+              { threadId: this.binding.backendConversationId },
+              { timeoutMilliseconds: CODEX_HISTORY_TIMEOUT_MILLISECONDS, signal },
+            );
+            this.#assertEstablishmentMayContinue(signal);
+            this.#assertCurrentReceipt(restored.generation);
+            if (restored.generation !== inspected.generation) {
+              throw codexError("unavailable", "Codex changed connection while restoring the thread.",
+                "codex_native_restore_generation_changed", true);
+            }
+            this.#validateThread(restored.result.thread);
+            if (isCodexThreadArchived(restored.result.thread)) {
+              throw codexError("incompatible_protocol", "Codex did not confirm the thread was restored.",
+                "codex_native_restore_unconfirmed");
+            }
+          }
           resumed = await this.#client.persistentSessions?.reattachThread(
             this.binding.backendConversationId,
             {

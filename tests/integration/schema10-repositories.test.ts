@@ -20,6 +20,8 @@ import { ConversationBindingRepository } from "../../src/server/db/repositories/
 import { ConversationCreationRepository } from "../../src/server/db/repositories/conversation-creation-repository.js";
 import { ConversationDraftRepository } from "../../src/server/db/repositories/conversation-draft-repository.js";
 import { ConversationOperationRepository } from "../../src/server/db/repositories/conversation-operation-repository.js";
+import { NativeArchiveOperationRepository } from "../../src/server/db/repositories/native-archive-operation-repository.js";
+import { ThreadForceResetRepository } from "../../src/server/db/repositories/thread-force-reset-repository.js";
 import { ComposerAttachmentRepository } from "../../src/server/db/repositories/composer-attachment-repository.js";
 import { InventoryRepository } from "../../src/server/db/repositories/inventory-repository.js";
 import { ThreadGroupRepository } from "../../src/server/db/repositories/thread-group-repository.js";
@@ -876,7 +878,142 @@ function inventoryGeneration(fixture: Fixture): number {
   ).generation;
 }
 
+describe("native archive operation recovery", () => {
+  it("survives restart, preserves local archive and restore, and uses existing force reset", () => {
+    const fixture = createFixture();
+    try {
+      const bindings = bindDiscovered(fixture);
+      const record = bindings.getBinding(fixture.scope, fixture.threadId)!;
+      const binding = { ...record, createdAt: new Date(record.createdAt).toISOString() };
+      const native = new NativeArchiveOperationRepository(fixture.database);
+      const operations = new ConversationOperationRepository(fixture.database);
+      const mutationId = native.begin(fixture.scope, binding, "archive", 510)!;
+      expect(mutationId).toBeTypeOf("string");
+      expect(operations.hasBlockingThreadOperation(fixture.scope, fixture.threadId)).toBe(true);
+      expect(operations.findUncertainThreadOperation(fixture.scope, fixture.threadId)).toMatchObject({
+        category: "other", operationKind: "conversation_native_archive", mutationId,
+      });
+      expect(native.begin(fixture.scope, binding, "restore", 511)).toBeUndefined();
+
+      const restartedDatabase = new Database(fixture.database.serialize());
+      try {
+        expect(new NativeArchiveOperationRepository(restartedDatabase).hasUncertain(fixture.scope, fixture.threadId)).toBe(true);
+        expect(new ConversationOperationRepository(restartedDatabase).hasBlockingThreadOperation(fixture.scope, fixture.threadId)).toBe(true);
+      } finally { restartedDatabase.close(); }
+
+      for (const foreignScope of [
+        { ...fixture.scope, tenantId: "other-tenant" },
+        { ...fixture.scope, principalId: "other-principal" },
+      ]) {
+        expect(native.hasUncertain(foreignScope, fixture.threadId)).toBe(false);
+        expect(() => native.begin(foreignScope, binding, "restore")).toThrow("binding was not found");
+        native.complete(foreignScope, mutationId);
+      }
+      expect(native.hasUncertain(fixture.scope, fixture.threadId)).toBe(true);
+
+      const inventory = new InventoryRepository(fixture.database);
+      expect(inventory.findArchiveDurablyBlockedThreadIds(fixture.scope, [fixture.threadId])).toEqual(new Set());
+      const revision = inventory.getInventory(fixture.scope, fixture.threadId).inventoryRevision;
+      inventory.archiveThreads(fixture.scope, fixture.threadId, {
+        expectedRevision: revision, mutationId: "local-archive-with-native-uncertainty",
+        includeDescendants: false, expectedThreadIds: [fixture.threadId],
+        blockedThreadIds: new Set(), now: 512,
+      });
+      inventory.transitionInventory(fixture.scope, fixture.threadId, {
+        expectedRevision: revision + 1, mutationId: "local-restore-with-native-uncertainty",
+        change: { action: "restore" }, now: 513,
+      });
+      expect(operations.hasBlockingThreadOperation(fixture.scope, fixture.threadId)).toBe(true);
+      const resets = new ThreadForceResetRepository(fixture.database);
+      const impact = resets.impact(fixture.scope, fixture.threadId);
+      expect(impact.blockers).toEqual(expect.arrayContaining([expect.objectContaining({ kind: "conversation_operation", count: 1 })]));
+      resets.forceReset(fixture.scope, fixture.threadId, {
+        expectedBlockerFingerprint: impact.blockerFingerprint,
+        mutationId: "reset-native-archive-uncertainty", now: 514,
+      });
+      expect(native.hasUncertain(fixture.scope, fixture.threadId)).toBe(false);
+      expect(operations.hasBlockingThreadOperation(fixture.scope, fixture.threadId)).toBe(false);
+      native.complete(fixture.scope, mutationId);
+      expect(fixture.database.prepare("SELECT result_code AS state FROM mutation_receipts WHERE mutation_id = ?").get(mutationId)).toEqual({ state: "abandoned" });
+    } finally { fixture.database.close(); }
+  });
+
+  it.each(["archive", "restore"] as const)("completes conclusive %s operations without retaining an execution blocker", (action) => {
+    const fixture = createFixture();
+    try {
+      const bindings = bindDiscovered(fixture);
+      const record = bindings.getBinding(fixture.scope, fixture.threadId)!;
+      const binding = { ...record, createdAt: new Date(record.createdAt).toISOString() };
+      const native = new NativeArchiveOperationRepository(fixture.database);
+      expect(() => native.begin(fixture.scope, { ...binding, backendConversationId: "foreign-native-id" }, action)).toThrow("binding was not found");
+      const mutationId = native.begin(fixture.scope, binding, action)!;
+      native.complete(fixture.scope, mutationId);
+      expect(new ConversationOperationRepository(fixture.database).hasBlockingThreadOperation(fixture.scope, fixture.threadId)).toBe(false);
+      expect(native.hasUncertain(fixture.scope, fixture.threadId)).toBe(false);
+    } finally { fixture.database.close(); }
+  });
+});
+
 describe("discovered thread revisions", () => {
+  it("preserves archived history and bindings when active discovery omits them", () => {
+    const fixture = createFixture();
+    try {
+      const bindings = bindDiscovered(fixture);
+      const inventory = new InventoryRepository(fixture.database);
+      const before = inventory.getThread(fixture.scope, fixture.threadId);
+      const namespace = [
+        fixture.scope, before.thread.environmentId, fixture.workspaceId,
+        before.thread.backendInstanceId, [before.thread.connectionProfileId],
+      ] as const;
+      expect(inventory.listDiscoveryAbsenceCandidates(...namespace)).toMatchObject([
+        { applicationThreadId: fixture.threadId, backendConversationId: `session-${fixture.threadId}` },
+      ]);
+
+      // Archive after the scan captured its candidates. The final transaction
+      // must recompute the set instead of marking this history missing.
+      inventory.transitionInventory(fixture.scope, fixture.threadId, {
+        expectedRevision: before.inventory.inventoryRevision,
+        mutationId: "archive-before-discovery-finishes",
+        change: { action: "archive" }, now: 510,
+      });
+      const archived = inventory.getThread(fixture.scope, fixture.threadId);
+      const generation = inventoryGeneration(fixture);
+      expect(inventory.listDiscoveryAbsenceCandidates(...namespace)).toEqual([]);
+      expect(inventory.finishDiscovery(...namespace, new Set(), 520)).toEqual([]);
+      expect(inventory.getThread(fixture.scope, fixture.threadId)).toEqual(archived);
+      expect(inventoryGeneration(fixture)).toBe(generation);
+      expect(bindings.getBinding(fixture.scope, fixture.threadId)).toMatchObject({
+        backendConversationId: `session-${fixture.threadId}`,
+      });
+    } finally {
+      fixture.database.close();
+    }
+  });
+
+  it("restricts discovery absence candidates to their exact principal and target namespace", () => {
+    const fixture = createFixture();
+    try {
+      bindDiscovered(fixture);
+      const inventory = new InventoryRepository(fixture.database);
+      const { thread } = inventory.getThread(fixture.scope, fixture.threadId);
+      const namespaces = [
+        [{ ...fixture.scope, tenantId: "other-tenant" }, thread.environmentId, fixture.workspaceId, thread.backendInstanceId, [thread.connectionProfileId]],
+        [{ ...fixture.scope, principalId: "other-principal" }, thread.environmentId, fixture.workspaceId, thread.backendInstanceId, [thread.connectionProfileId]],
+        [fixture.scope, "other-environment", fixture.workspaceId, thread.backendInstanceId, [thread.connectionProfileId]],
+        [fixture.scope, thread.environmentId, fixture.secondWorkspaceId, thread.backendInstanceId, [thread.connectionProfileId]],
+        [fixture.scope, thread.environmentId, fixture.workspaceId, "other-backend", [thread.connectionProfileId]],
+        [fixture.scope, thread.environmentId, fixture.workspaceId, thread.backendInstanceId, ["other-profile"]],
+      ] as const;
+      for (const [candidateScope, environmentId, workspaceId, backendId, profileIds] of namespaces) {
+        expect(inventory.listDiscoveryAbsenceCandidates(candidateScope, environmentId, workspaceId, backendId, profileIds)).toEqual([]);
+        expect(inventory.finishDiscovery(candidateScope, environmentId, workspaceId, backendId, profileIds, new Set(), 520)).toEqual([]);
+      }
+      expect(inventory.getThread(fixture.scope, fixture.threadId).thread.availability).toBe("available");
+    } finally {
+      fixture.database.close();
+    }
+  });
+
   it("admits the initial composer input after unchanged rediscovery", () => {
     const fixture = createFixture();
     try {

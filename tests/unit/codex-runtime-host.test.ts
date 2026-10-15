@@ -47,7 +47,7 @@ function fixture() {
 const sink: CodexRuntimeReceiptSink = { reserve: () => { throw new Error("not used"); }, recordOutcome: () => "untracked", pending: () => [], reconcileRecordedApplicationState: () => 0, releaseRejected: () => false, compactRetiredRuntime: () => 0 };
 
 describe("persistent Codex runtime ownership", () => {
-  it.each([1, 2])("rejects retained protocol %s without current session configuration guarantees", async protocolVersion => {
+  it.each([1, 2, 3])("rejects retained protocol %s without current session configuration guarantees", async protocolVersion => {
     const f = fixture();
     const snapshot = await f.connect();
     vi.spyOn(f.host, "attach").mockResolvedValue({ ...snapshot, protocolVersion: protocolVersion as typeof snapshot.protocolVersion });
@@ -56,6 +56,57 @@ describe("persistent Codex runtime ownership", () => {
     expect(remote.client.lifecycleSnapshot().state).not.toBe("ready");
     expect(f.dispatch).not.toHaveBeenCalled();
     await remote.close();
+  });
+
+  it.each(["thread/archive", "thread/unarchive"] as const)("retains the %s outcome and invalidates native session metadata after success", async method => {
+    const f = fixture();
+    await f.connect();
+    const invalidate = vi.spyOn(CodexRuntimeSessions.prototype, "invalidateArchivedThread");
+    try {
+      const pending = await f.host.submit(authority, { ...request, method, params: { threadId: "thread" } });
+      expect(pending.status).toBe("pending");
+      expect(invalidate).not.toHaveBeenCalled();
+      f.settle({ result: method === "thread/archive" ? {} : { thread: resumed().thread }, generation: 1, inboundSequence: 1 });
+      await vi.waitFor(() => expect(f.host.readRetainedOutcome(request.operationId)).toMatchObject({ status: "completed", method }));
+      expect(invalidate).toHaveBeenCalledExactlyOnceWith("thread", 1);
+      const replacement = { ...authority, controllerId: "replacement" };
+      await f.host.detach(authority);
+      await f.host.attach(replacement, () => {});
+      expect(await f.host.outcome(replacement, request.operationId)).toMatchObject({ status: "completed", method });
+      await f.host.acknowledge(replacement, request.operationId);
+      expect(f.host.retainedOutcomeReferences()).toEqual([]);
+    } finally { invalidate.mockRestore(); f.host.dispose(); }
+  });
+
+  it("invalidates retained native authority after an uncertain archive failure", async () => {
+    const f = fixture();
+    await f.connect();
+    const invalidate = vi.spyOn(CodexRuntimeSessions.prototype, "invalidateArchivedThread");
+    f.dispatch.mockRejectedValueOnce(new Error("native_archive_outcome_unknown"));
+    try {
+      await f.host.submit(authority, { ...request, method: "thread/archive", params: { threadId: "thread" } });
+      await vi.waitFor(() => expect(f.host.readRetainedOutcome(request.operationId)).toMatchObject({
+        status: "failed", failure: { delivery: "sent_outcome_unknown" },
+      }));
+      expect(invalidate).toHaveBeenCalledExactlyOnceWith("thread", 1);
+    } finally { invalidate.mockRestore(); f.host.dispose(); }
+  });
+
+  it("carries archive and restore through the remote client without leaking retained receipts", async () => {
+    const f = fixture();
+    const remote = new CodexRuntimeClient({ connection: f.host, authority, receipts: sink });
+    try {
+      await remote.start();
+      f.dispatch.mockResolvedValue({ result: {}, generation: 1, inboundSequence: 1 });
+      await expect(remote.client.requestWithReceipt(codexRuntimeMethod("thread/archive"), { threadId: "thread" },
+        { timeoutMilliseconds: 1_000 })).resolves.toMatchObject({ result: {}, generation: 1 });
+      await remote.drainAcknowledgements();
+      f.dispatch.mockResolvedValue({ result: { thread: resumed().thread }, generation: 1, inboundSequence: 2 });
+      await expect(remote.client.requestWithReceipt(codexRuntimeMethod("thread/unarchive"), { threadId: "thread" },
+        { timeoutMilliseconds: 1_000 })).resolves.toMatchObject({ result: { thread: { id: "thread" } }, generation: 1 });
+      await remote.drainAcknowledgements();
+      expect(f.host.retainedOutcomeReferences()).toEqual([]);
+    } finally { await remote.close(); f.host.dispose(); }
   });
 
   it("invalidates the retained configuration only after native unsubscribe succeeds", async () => {

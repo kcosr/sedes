@@ -121,11 +121,16 @@ export class CodexRuntimeSessions {
           sequence: notification.sequence,
           settings: (notification.params as OfficialCodexServerNotificationParams<"thread/settings/updated">).threadSettings,
         };
-      } else if (notification.method === "thread/closed" || notification.method === "thread/deleted") {
+      } else if (notification.method === "thread/closed" || notification.method === "thread/deleted" ||
+          notification.method === "thread/archived" || notification.method === "thread/unarchived") {
         pending.closedSequence = Math.max(pending.closedSequence ?? -1, notification.sequence);
       }
     }
     const inventoried = this.#inventory.get(params.threadId);
+    if (notification.method === "thread/archived" || notification.method === "thread/unarchived") {
+      this.#inventoryKnown = false;
+      this.#evicted.delete(params.threadId);
+    }
     if (inventoried) {
       if (notification.method === "turn/started") inventoried.active = true;
       if (notification.method === "turn/completed") inventoried.active = false;
@@ -153,7 +158,9 @@ export class CodexRuntimeSessions {
         return;
       }
       case "thread/closed":
-      case "thread/deleted": this.#sessions.delete(params.threadId); return;
+      case "thread/deleted":
+      case "thread/archived":
+      case "thread/unarchived": this.#sessions.delete(params.threadId); return;
     }
   }
 
@@ -177,6 +184,14 @@ export class CodexRuntimeSessions {
   unsubscribe(threadId: string, generation: number): void {
     if (this.#sessions.get(threadId)?.generation !== generation) return;
     this.#sessions.delete(threadId);
+    this.#evicted.delete(threadId);
+    this.#inventoryKnown = false;
+  }
+  /** Archive effects can race an earlier resume continuation. Its metadata
+   * must never reinstall a session after a completed archive or restore. */
+  invalidateArchivedThread(threadId: string, generation: number): void {
+    if (this.#sessions.get(threadId)?.generation === generation) this.#sessions.delete(threadId);
+    if (this.#pendingResumes.get(threadId)?.generation === generation) this.#pendingResumes.delete(threadId);
     this.#evicted.delete(threadId);
     this.#inventoryKnown = false;
   }

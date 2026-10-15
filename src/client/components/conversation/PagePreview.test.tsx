@@ -910,8 +910,16 @@ describe("page responses", () => {
     expect(api.pageResponse.submit).not.toHaveBeenCalled();
     sendFrameMessage(frame, "sedes:page-submit-response", { requestId: "unsolicited", text: "injected" });
     expect(api.pageResponse.submit).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Interact with preview" }));
+    frame.focus();
+    expect(frame).toHaveFocus();
+    expect(frame).not.toHaveAttribute("inert");
     const send = screen.getByRole("button", { name: "Send page response" });
     fireEvent.click(send);
+    expect(frame).toHaveAttribute("inert");
+    expect(frame).toHaveAttribute("tabindex", "-1");
+    expect(screen.getByRole("button", { name: "Interact with preview" })).toHaveAttribute("aria-pressed", "false");
+    expect(send).toHaveFocus();
     fireEvent.click(send);
     await screen.findByText("Response queued.");
     expect(read).toHaveBeenCalledTimes(1);

@@ -202,7 +202,10 @@ export class AgentBackendRegistry {
       ),
     );
     if (!factory) {
-      throw new Error("The selected backend instance is not registered.");
+      throw new DomainError(
+        "runtime_unavailable",
+        "The selected backend instance is not registered.",
+      );
     }
     if (!factory.instance.enabled || !connection.enabled) {
       throw new Error("The selected backend connection is disabled.");

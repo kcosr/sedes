@@ -49,6 +49,8 @@ import {
 import { ConversationBindingRepository } from "../../src/server/db/repositories/conversation-binding-repository.js";
 import { ConversationCreationRepository } from "../../src/server/db/repositories/conversation-creation-repository.js";
 import { ConversationOperationRepository } from "../../src/server/db/repositories/conversation-operation-repository.js";
+import { NativeArchiveOperationRepository } from "../../src/server/db/repositories/native-archive-operation-repository.js";
+import { ThreadForceResetRepository } from "../../src/server/db/repositories/thread-force-reset-repository.js";
 import { ConversationTurnBookmarkRepository } from "../../src/server/db/repositories/conversation-turn-bookmark-repository.js";
 import { InventoryRepository } from "../../src/server/db/repositories/inventory-repository.js";
 import { SavedAgentRepository } from "../../src/server/db/repositories/saved-agent-repository.js";
@@ -2975,6 +2977,23 @@ describe("backend-normalized application adapters", () => {
       await expect(
         recoveryReader.read(current.scope, current.threadId),
       ).resolves.toBeUndefined();
+      const nativeOperations = new NativeArchiveOperationRepository(current.database);
+      const activeTarget = await actor.resolve(current.scope, current.threadId);
+      nativeOperations.begin(current.scope, activeTarget.binding, "archive", 512);
+      expect(historyInventory.getInventory(current.scope, current.threadId).inventoryState).toBe("active");
+      // An unknown archive must not resume an execution actor or native Goal,
+      // even though the user already restored the Sedes inventory locally.
+      await expect(actor.resolve(current.scope, current.threadId)).resolves.toMatchObject({ access: "history" });
+      await expect(recoveryReader.read(current.scope, current.threadId)).resolves.toMatchObject({
+        kind: "operation_uncertain", operationCategory: "other", recoverable: true,
+      });
+      const nativeReset = new ThreadForceResetRepository(current.database);
+      nativeReset.forceReset(current.scope, current.threadId, {
+        expectedBlockerFingerprint: nativeReset.impact(current.scope, current.threadId).blockerFingerprint,
+        mutationId: "native-archive-target-recovery", now: 513,
+      });
+      await expect(actor.resolve(current.scope, current.threadId)).resolves.toMatchObject({ access: "execution" });
+      await expect(recoveryReader.read(current.scope, current.threadId)).resolves.toBeUndefined();
       current.database
         .prepare(
           `

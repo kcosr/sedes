@@ -9,6 +9,7 @@ import {
 import { ConversationBindingRepository } from "../../src/server/db/repositories/conversation-binding-repository.js";
 import { QuestionRequestRepository } from "../../src/server/db/repositories/question-request-repository.js";
 import { InventoryRepository } from "../../src/server/db/repositories/inventory-repository.js";
+import { ProviderFeatureMutationRepository } from "../../src/server/db/repositories/provider-feature-mutation-repository.js";
 import { QueuedInputRepository } from "../../src/server/db/repositories/queued-input-repository.js";
 import { TaskRepository } from "../../src/server/db/repositories/task-repository.js";
 import { ThreadBulkInventoryService } from "../../src/server/domain/thread-bulk-inventory-service.js";
@@ -50,7 +51,9 @@ const configuration = parseResolvedBackendConfiguration({
   defaultTargetId: "local-primary",
 });
 
-function fixture() {
+function fixture(nativeArchive?: {
+  archive(scope: { tenantId: string; principalId: string }, threadIds: readonly string[]): Promise<void>;
+}) {
   const database = openOverlayDatabase(":memory:");
   const scope = new SingleUserIdentityProvider(database).getScope();
   const legacy = new ThreadInventoryService(new OverlayRepository(database));
@@ -179,6 +182,7 @@ function fixture() {
       releaseProviderResidency: async () => undefined,
     },
     publications: { publishCommitted },
+    nativeArchive,
     tasks,
     taskPublications: { publishTaskChange },
     now: () => 500,
@@ -204,6 +208,83 @@ function fixture() {
 }
 
 describe("thread bulk inventory service", () => {
+  it("holds every target fence through native synchronization and releases them before publication", async () => {
+    const fenced = new Set<string>();
+    const archive = vi.fn(async (_scope, threadIds: readonly string[]) => {
+      expect([...fenced].sort()).toEqual([...threadIds].sort());
+      for (const id of threadIds) {
+        expect(current.inventory.getInventory(current.scope, id).inventoryState).toBe("archived");
+      }
+    });
+    const current = fixture({ archive });
+    current.runWithRuntimeRetired.mockImplementation(async (_scope, id, operation) => {
+      fenced.add(id);
+      try { return await operation(); } finally { fenced.delete(id); }
+    });
+    current.publishCommitted.mockImplementation(async () => { expect(fenced.size).toBe(0); });
+    try {
+      const ids = current.ids.slice(0, 2);
+      const impact = await current.service.impact(current.scope, { action: "archive", threadIds: ids });
+      await current.service.transition(current.scope, {
+        action: "archive", targets: impact.targets, mutationId: "bulk-native-archive-order",
+        expectedStashedPromptCount: 0, expectedOpenTaskCount: 0,
+      });
+      expect(archive).toHaveBeenCalledExactlyOnceWith(current.scope, ids);
+      expect(current.publishCommitted).toHaveBeenCalledOnce();
+    } finally { current.database.close(); }
+  });
+
+  it.each([
+    ["missing", "archive"], ["quarantined", "archive"], ["environment_unavailable", "archive"],
+    ["missing", "settle"], ["quarantined", "settle"], ["environment_unavailable", "settle"],
+  ] as const)("changes dormant %s stack members to %s without changing provider evidence", async (availability, action) => {
+    const current = fixture();
+    try {
+      const ids = current.ids.slice(0, 2);
+      for (const id of ids) current.database.prepare(
+        "UPDATE application_threads SET availability = ? WHERE id = ?",
+      ).run(availability, id);
+      const impact = await current.service.impact(current.scope, { action, threadIds: ids });
+      expect(impact).toMatchObject({ available: true, blockers: { total: 0 } });
+      await current.service.transition(current.scope, {
+        action, targets: impact.targets,
+        mutationId: `bulk-${action}-${availability}`,
+        expectedStashedPromptCount: 0, expectedOpenTaskCount: 0,
+      });
+      for (const id of ids) {
+        expect(current.inventory.getInventory(current.scope, id).inventoryState).toBe(action === "archive" ? "archived" : "settled");
+        expect(current.inventory.getThread(current.scope, id).thread.availability).toBe(availability);
+      }
+    } finally { current.database.close(); }
+  });
+
+  it.each(["disconnected", "reconciling", "provider_work"] as const)("keeps unavailable stack members with %s blocked atomically", async (state) => {
+    const current = fixture();
+    try {
+      const ids = current.ids.slice(0, 2);
+      const unavailableId = ids[1]!;
+      current.database.prepare("UPDATE application_threads SET availability = 'quarantined' WHERE id = ?").run(unavailableId);
+      if (state === "provider_work") {
+        new ProviderFeatureMutationRepository(current.database).prepare(current.scope, {
+          applicationThreadId: unavailableId, mutationId: "bulk-unavailable-provider-work",
+          featureId: "execution-settings", schemaVersion: 1, actionId: "set-model",
+          requestFingerprint: "a".repeat(64), expectedThreadRevision: 0,
+          expectedFeatureRevision: 0, desiredPostcondition: { model: "test-model" }, now: 450,
+        });
+      } else current.runtimeStates.set(unavailableId, state);
+      const impact = await current.service.impact(current.scope, { action: "archive", threadIds: ids });
+      expect(impact).toMatchObject({
+        available: false, blockers: { total: 1, items: [{ threadId: unavailableId, reason: "active" }] },
+      });
+      await expect(current.service.transition(current.scope, {
+        action: "archive", targets: impact.targets,
+        mutationId: `bulk-archive-unavailable-${state}`,
+        expectedStashedPromptCount: 0, expectedOpenTaskCount: 0,
+      })).rejects.toMatchObject({ code: "invalid_transition" });
+      for (const id of ids) expect(current.inventory.getInventory(current.scope, id).inventoryState).toBe("active");
+    } finally { current.database.close(); }
+  });
+
   it("counts pending questions only in affected archive targets", async () => {
     const current = fixture();
     try {
@@ -398,7 +479,8 @@ describe("thread bulk inventory service", () => {
   });
 
   it("blocks bulk archive commit on unproven retirement and converges on receipt replay", async () => {
-    const current = fixture();
+    const archive = vi.fn(async () => undefined);
+    const current = fixture({ archive });
     try {
       const [first, second] = current.ids as [string, string, string];
       const impact = await current.service.impact(current.scope, {
@@ -437,6 +519,7 @@ describe("thread bulk inventory service", () => {
         ),
       ).toEqual(["active", "active"]);
       expect(current.publishCommitted).not.toHaveBeenCalled();
+      expect(archive).not.toHaveBeenCalled();
 
       current.runWithRuntimeRetired.mockImplementation(
         async (_scope, _threadId, operation) => operation(),
@@ -446,6 +529,7 @@ describe("thread bulk inventory service", () => {
       ).resolves.toEqual({ changedThreadIds: [second, first] });
       expect(current.runWithRuntimeRetired).toHaveBeenCalledTimes(3);
       expect(current.publishCommitted).toHaveBeenCalledTimes(1);
+      expect(archive).toHaveBeenCalledExactlyOnceWith(current.scope, [second, first]);
 
       current.inventory.transitionInventory(current.scope, first, {
         expectedRevision: 1,
@@ -456,6 +540,7 @@ describe("thread bulk inventory service", () => {
       await current.service.transition(current.scope, request);
       expect(current.runWithRuntimeRetired).toHaveBeenCalledTimes(4);
       expect(current.runWithRuntimeRetired.mock.calls.at(-1)?.[1]).toBe(second);
+      expect(archive).toHaveBeenLastCalledWith(current.scope, [second]);
     } finally {
       current.database.close();
     }

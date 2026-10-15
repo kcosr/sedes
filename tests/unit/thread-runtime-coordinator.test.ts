@@ -23,6 +23,8 @@ import { BackendError } from "../../src/server/backends/contracts.js";
 import { PiConversationBackendDriver } from "../../src/server/backends/pi/pi-conversation-driver.js";
 import { GrokConversationBackendDriver } from "../../src/server/backends/grok/grok-conversation-driver.js";
 import { DomainError } from "../../src/server/domain/errors.js";
+import { AgentBackendRegistry } from "../../src/server/backends/registry.js";
+import type { AgentConnectionProfile } from "../../src/server/backends/contracts.js";
 
 const scope = { tenantId: "tenant", principalId: "principal" };
 
@@ -1082,6 +1084,63 @@ describe("ThreadRuntimeCoordinator", () => {
       expect(release).toHaveBeenCalledTimes(3);
     } finally {
       stderr.mockRestore();
+      await coordinator.close();
+    }
+  });
+
+  it.each([
+    "pi_sdk", "codex_app_server", "claude_agent_sdk", "grok_acp", "opencode_http",
+  ] as const)("archives an unloaded %s thread whose backend is unregistered, while keeping policy refresh closed", async (kind) => {
+    const registry = new AgentBackendRegistry();
+    const connection: AgentConnectionProfile = {
+      id: "connection-1",
+      tenantId: scope.tenantId,
+      ownerPrincipalId: scope.principalId,
+      templateId: "retired-target",
+      kind,
+      backendInstanceId: "backend-1",
+      executionEnvironmentId: "environment-1",
+      label: "Retired backend",
+      enabled: true,
+      configurationRevision: 1,
+    };
+    const { coordinator } = resetCoordinator([], 60_000, threadId => ({
+      ...runtimeTarget(threadId),
+      driver: registry.driver(connection),
+    }));
+    const archive = vi.fn(async () => "archived");
+    const updatePolicy = vi.fn(async () => undefined);
+    try {
+      await expect(runWithArchivedThreadRuntimesRetired({
+        scope,
+        threadIds: ["retired-thread"],
+        runtimes: coordinator,
+        operation: archive,
+      })).resolves.toBe("archived");
+      expect(archive).toHaveBeenCalledOnce();
+      await expect(coordinator.runWithRuntimeRetired(scope, "retired-thread", async () => {
+        await coordinator.releaseProviderResidency(scope, "retired-thread", { failurePolicy: "propagate" });
+        await updatePolicy();
+      })).rejects.toMatchObject({ code: "runtime_unavailable" });
+      expect(updatePolicy).not.toHaveBeenCalled();
+    } finally {
+      await coordinator.close();
+    }
+  });
+
+  it("does not archive when provider target resolution has an unexpected failure", async () => {
+    const failure = new Error("binding_reader_failed");
+    const { coordinator } = resetCoordinator([], 60_000, () => { throw failure; });
+    const archive = vi.fn(async () => undefined);
+    try {
+      await expect(runWithArchivedThreadRuntimesRetired({
+        scope,
+        threadIds: ["unresolved-thread"],
+        runtimes: coordinator,
+        operation: archive,
+      })).rejects.toBe(failure);
+      expect(archive).not.toHaveBeenCalled();
+    } finally {
       await coordinator.close();
     }
   });

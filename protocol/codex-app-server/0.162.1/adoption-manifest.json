@@ -18,7 +18,7 @@
   },
   "sourceTransformation": {
     "description": "copy adopted transitive TypeScript closures and append .js to relative NodeNext specifiers",
-    "treeSha256": "77ea5e48fb3176498d7ade2e10fdad0188ba7e37c475833f2d081ddbebc900ff",
+    "treeSha256": "3d1e4259943cf99b6d042540e1882d7d893169653df2b04164905dca801ce436",
     "artifacts": [
       {
         "path": "experimental/AbsolutePathBuf.ts",
@@ -761,6 +761,16 @@
         "sha256": "f47e1a803675acc8f52aa0cce5c3a461c4268f33367fedf1a5c04ac97b30dbd9"
       },
       {
+        "path": "experimental/v2/ThreadUnarchiveParams.ts",
+        "bytes": 212,
+        "sha256": "50df685c2ddcc5cb002d57c70662d4d5ebc23b14bef71c448e36a3ad65b18ffd"
+      },
+      {
+        "path": "experimental/v2/ThreadUnarchiveResponse.ts",
+        "bytes": 255,
+        "sha256": "13f3a3eb83f1b98897836759bed2211fd85df587e918d55c48a2bfaa0fb29a02"
+      },
+      {
         "path": "experimental/v2/Turn.ts",
         "bytes": 1293,
         "sha256": "2d445513839e057751b8290dd600116adf103ff2069ce324e2aa4e67986164cd"
@@ -802,8 +812,8 @@
       },
       {
         "path": "route-registry.ts",
-        "bytes": 53819,
-        "sha256": "b9994f54f6e74a4484c4ab51c98262710d052b131228446475a624ce87b91ac0"
+        "bytes": 56015,
+        "sha256": "3aa65e39132c4df7454655c98b1a814ac073fbffa03b41746155799c8d0c84ec"
       },
       {
         "path": "stable/AbsolutePathBuf.ts",
@@ -1986,6 +1996,16 @@
         "sha256": "0e17998362c085d594478d3fac2a330e89ab49669f8481e9f4791272932e3cfd"
       },
       {
+        "path": "stable/v2/ThreadArchiveParams.ts",
+        "bytes": 210,
+        "sha256": "63bf71301b897cf74c0a3b48c49ba61823d549de8f66f434e9e2eb705e594db2"
+      },
+      {
+        "path": "stable/v2/ThreadArchiveResponse.ts",
+        "bytes": 212,
+        "sha256": "d6c8715393f98c0de93e31ee024687f3ac6f766941d656871d977e401eebaf18"
+      },
+      {
         "path": "stable/v2/ThreadArchivedNotification.ts",
         "bytes": 217,
         "sha256": "9b1747973cae28bf84f0e4b0656b03bdc0ed396b53f9f5f5711acd56110271f7"
@@ -2482,8 +2502,8 @@
       },
       {
         "path": "validators.ts",
-        "bytes": 2113107,
-        "sha256": "ae8c6ab7d7f8708e3b081267e1b824b4dae1debe536261e4c59d494e9273e92e"
+        "bytes": 2117201,
+        "sha256": "a48f68502f722a1829d8ab1e38b01cfa9d805ac8ecc0727580eafe0574078e79"
       }
     ]
   },
@@ -2687,6 +2707,52 @@
       "resultSchema": {
         "bundle": "codex_app_server_protocol.v2.schemas.json",
         "pointer": "#/definitions/ThreadUnsubscribeResponse"
+      },
+      "sedesRefinements": [
+        "native_identity_bounds",
+        "history_bounds",
+        "consumed_projection"
+      ]
+    },
+    {
+      "direction": "client_request",
+      "method": "thread/archive",
+      "use": "invoked",
+      "stability": "stable",
+      "artifactProfile": "stable",
+      "domain": "actions",
+      "paramsDefinition": "ThreadArchiveParams",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/ThreadArchiveParams"
+      },
+      "resultDefinition": "ThreadArchiveResponse",
+      "resultSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/ThreadArchiveResponse"
+      },
+      "sedesRefinements": [
+        "outbound_subset",
+        "safe_integer_bounds",
+        "postcondition_semantics"
+      ]
+    },
+    {
+      "direction": "client_request",
+      "method": "thread/unarchive",
+      "use": "invoked",
+      "stability": "stable",
+      "artifactProfile": "experimental",
+      "domain": "thread_history",
+      "paramsDefinition": "ThreadUnarchiveParams",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/ThreadUnarchiveParams"
+      },
+      "resultDefinition": "ThreadUnarchiveResponse",
+      "resultSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/ThreadUnarchiveResponse"
       },
       "sedesRefinements": [
         "native_identity_bounds",
@@ -3375,6 +3441,38 @@
         "route_identity",
         "collection_bounds",
         "completion_semantics"
+      ]
+    },
+    {
+      "direction": "server_notification",
+      "method": "thread/archived",
+      "use": "runtime_session_invalidation",
+      "stability": "stable",
+      "artifactProfile": "stable",
+      "domain": "thread_history",
+      "paramsDefinition": "ThreadArchivedNotification",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/ThreadArchivedNotification"
+      },
+      "sedesRefinements": [
+        "route_identity"
+      ]
+    },
+    {
+      "direction": "server_notification",
+      "method": "thread/unarchived",
+      "use": "runtime_session_invalidation",
+      "stability": "stable",
+      "artifactProfile": "stable",
+      "domain": "thread_history",
+      "paramsDefinition": "ThreadUnarchivedNotification",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/ThreadUnarchivedNotification"
+      },
+      "sedesRefinements": [
+        "route_identity"
       ]
     },
     {

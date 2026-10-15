@@ -17,6 +17,7 @@ import {
 } from "../context-excerpts-json.js";
 import { ComposerAttachmentRepository } from "./composer-attachment-repository.js";
 import { WorkpadRepository } from "./workpad-repository.js";
+import type { ConversationBindingRecord } from "./conversation-binding-repository.js";
 import type { ComposerTaskReference } from "../../../shared/protocol/tasks.js";
 import {
   parseStoredTaskReferences,
@@ -2650,6 +2651,7 @@ export class InventoryRepository {
          FROM mutation_receipts
          WHERE tenant_id = ? AND principal_id = ?
            AND thread_id IN (${placeholders})
+           AND operation_kind <> 'conversation_native_archive'
            AND result_code IN ('prepared', 'uncertain', 'pending_materialization')`,
         "threadId",
       );
@@ -2973,6 +2975,61 @@ export class InventoryRepository {
     })();
   }
 
+  /**
+   * Only visible, previously available bindings can become missing from an
+   * exhaustive active-thread listing. Archived inventory retains its saved
+   * binding and proves history availability when that history is opened.
+   */
+  listDiscoveryAbsenceCandidates(
+    scope: RequestScope,
+    environmentId: string,
+    workspaceId: string,
+    backendInstanceId: string,
+    connectionProfileIds: readonly string[],
+  ): ConversationBindingRecord[] {
+    if (connectionProfileIds.length === 0) {
+      throw new Error("discovery_connection_profiles_required");
+    }
+    const profilePlaceholders = connectionProfileIds.map(() => "?").join(", ");
+    return this.database.prepare(`
+      SELECT binding.tenant_id AS tenantId,
+        binding.owner_principal_id AS ownerPrincipalId,
+        binding.application_thread_id AS applicationThreadId,
+        binding.backend_instance_id AS backendInstanceId,
+        binding.connection_profile_id AS connectionProfileId,
+        binding.execution_environment_id AS executionEnvironmentId,
+        binding.backend_conversation_id AS backendConversationId,
+        binding.created_at AS createdAt
+      FROM application_threads AS thread
+      JOIN conversation_bindings AS binding
+        ON binding.tenant_id = thread.tenant_id
+        AND binding.owner_principal_id = thread.owner_principal_id
+        AND binding.application_thread_id = thread.id
+      JOIN thread_principal_state AS inventory
+        ON inventory.tenant_id = thread.tenant_id
+        AND inventory.principal_id = thread.owner_principal_id
+        AND inventory.thread_id = thread.id
+      WHERE thread.tenant_id = ? AND thread.owner_principal_id = ?
+        AND thread.environment_id = ? AND thread.backing_state = 'bound'
+        AND thread.workspace_id = ?
+        AND thread.backend_instance_id = ? AND binding.backend_instance_id = ?
+        AND thread.connection_profile_id IN (${profilePlaceholders})
+        AND binding.connection_profile_id = thread.connection_profile_id
+        AND binding.execution_environment_id = thread.environment_id
+        AND thread.availability = 'available'
+        AND inventory.inventory_state <> 'archived'
+      ORDER BY thread.id
+    `).all(
+      scope.tenantId,
+      scope.principalId,
+      environmentId,
+      workspaceId,
+      backendInstanceId,
+      backendInstanceId,
+      ...connectionProfileIds,
+    ) as ConversationBindingRecord[];
+  }
+
   finishDiscovery(
     scope: RequestScope,
     environmentId: string,
@@ -2982,44 +3039,15 @@ export class InventoryRepository {
     seenBackendConversationIds: ReadonlySet<string>,
     now: number,
   ): InventoryThreadAggregate[] {
-    if (connectionProfileIds.length === 0) {
-      throw new Error("discovery_connection_profiles_required");
-    }
     return this.database.transaction(() => {
-      const profilePlaceholders = connectionProfileIds
-        .map(() => "?")
-        .join(", ");
-      const candidates = this.database
-        .prepare(
-          `
-            SELECT thread.id, binding.backend_conversation_id AS conversationId
-            FROM application_threads AS thread
-            JOIN conversation_bindings AS binding
-              ON binding.tenant_id = thread.tenant_id
-              AND binding.owner_principal_id = thread.owner_principal_id
-              AND binding.application_thread_id = thread.id
-            WHERE thread.tenant_id = ? AND thread.owner_principal_id = ?
-              AND thread.environment_id = ? AND thread.backing_state = 'bound'
-              AND thread.workspace_id = ?
-              AND thread.backend_instance_id = ?
-              AND binding.backend_instance_id = ?
-              AND thread.connection_profile_id IN (${profilePlaceholders})
-              AND thread.availability = 'available'
-            ORDER BY thread.id
-          `,
-        )
-        .all(
-          scope.tenantId,
-          scope.principalId,
-          environmentId,
-          workspaceId,
-          backendInstanceId,
-          backendInstanceId,
-          ...connectionProfileIds,
-        ) as Array<{ readonly id: string; readonly conversationId: string }>;
+      // Re-read under the write transaction: a thread may have been archived
+      // while the provider's list or passive existence check was in flight.
+      const candidates = this.listDiscoveryAbsenceCandidates(
+        scope, environmentId, workspaceId, backendInstanceId, connectionProfileIds,
+      );
       const changed: InventoryThreadAggregate[] = [];
       for (const candidate of candidates) {
-        if (seenBackendConversationIds.has(candidate.conversationId)) continue;
+        if (seenBackendConversationIds.has(candidate.backendConversationId)) continue;
         this.database
           .prepare(
             `
@@ -3030,8 +3058,8 @@ export class InventoryRepository {
                 AND availability = 'available'
             `,
           )
-          .run(now, now, scope.tenantId, scope.principalId, candidate.id);
-        changed.push(this.getThread(scope, candidate.id));
+          .run(now, now, scope.tenantId, scope.principalId, candidate.applicationThreadId);
+        changed.push(this.getThread(scope, candidate.applicationThreadId));
       }
       if (changed.length > 0) this.#bumpGeneration(scope);
       return changed;

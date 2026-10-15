@@ -68,6 +68,9 @@ is busy, the response enters the thread's normal queue; it never interrupts
 the current turn with Steer. The same flow works with Pi, Codex, Claude, Grok,
 and OpenCode.
 
+In an inline preview, tapping **Send** also turns off interaction mode so
+gestures scroll the conversation again. The page stays loaded.
+
 Chat shows a single-row **Page response** user card with the saved page title.
 Expand it to see the full title, revision, and exact submitted plain text,
 including its original whitespace. The card does not render that text as HTML or Markdown.

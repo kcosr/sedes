@@ -58,7 +58,9 @@ const configuration = parseResolvedBackendConfiguration({
   defaultTargetId: "local-primary",
 });
 
-function fixture() {
+function fixture(nativeArchive?: {
+  archive(scope: { tenantId: string; principalId: string }, threadIds: readonly string[]): Promise<void>;
+}) {
   const database = openOverlayDatabase(":memory:");
   const scope = new SingleUserIdentityProvider(database).getScope();
   const legacy = new ThreadInventoryService(new OverlayRepository(database));
@@ -207,6 +209,7 @@ function fixture() {
       releaseProviderResidency,
     },
     publications: { publishCommitted },
+    nativeArchive,
     tasks,
     taskPublications: { publishTaskChange },
     executionWorkspaces: {
@@ -260,6 +263,107 @@ function fixture() {
 }
 
 describe("thread family archive service", () => {
+  it("commits inventory and synchronizes native archive inside the maintenance fence before publication", async () => {
+    let fenced = false;
+    const archive = vi.fn(async () => {
+      expect(fenced).toBe(true);
+      expect(current.inventory.getInventory(current.scope, current.rootId).inventoryState).toBe("archived");
+    });
+    const current = fixture({ archive });
+    current.runWithRuntimeRetired.mockImplementation(async (_scope, _id, operation) => {
+      fenced = true;
+      try { return await operation(); } finally { fenced = false; }
+    });
+    current.publishCommitted.mockImplementation(async () => { expect(fenced).toBe(false); });
+    try {
+      await current.service.archive(current.scope, current.rootId, {
+        includeDescendants: false, expectedRevision: 0, mutationId: "native-archive-order",
+        executionWorkspaceDisposition: { kind: "keep" },
+      });
+      expect(archive).toHaveBeenCalledExactlyOnceWith(current.scope, [current.rootId]);
+      expect(current.publishCommitted).toHaveBeenCalledOnce();
+    } finally { current.database.close(); }
+  });
+
+  it("synchronizes an already archived root on a fresh request without changing inventory again", async () => {
+    const archive = vi.fn(async () => undefined);
+    const current = fixture({ archive });
+    try {
+      const input = {
+        includeDescendants: false, expectedRevision: 0, mutationId: "initial-native-archive",
+        executionWorkspaceDisposition: { kind: "keep" as const },
+      };
+      await current.service.archive(current.scope, current.rootId, input);
+      const revision = current.inventory.getInventory(current.scope, current.rootId).inventoryRevision;
+      archive.mockClear();
+      await current.service.archive(current.scope, current.rootId, {
+        ...input, expectedRevision: revision, mutationId: "manual-native-archive-sweep",
+      });
+      expect(archive).toHaveBeenCalledExactlyOnceWith(current.scope, [current.rootId]);
+      expect(current.inventory.getInventory(current.scope, current.rootId).inventoryRevision).toBe(revision);
+    } finally { current.database.close(); }
+  });
+
+  it.each([
+    ["missing", false], ["missing", true],
+    ["quarantined", false], ["quarantined", true],
+    ["environment_unavailable", false], ["environment_unavailable", true],
+  ] as const)("archives dormant %s threads with descendants=%s without changing provider evidence", async (availability, includeDescendants) => {
+    const current = fixture();
+    try {
+      const ids = [current.rootId, current.childId, current.grandchildId];
+      const setAvailability = current.database.prepare(
+        "UPDATE application_threads SET availability = ? WHERE id = ?",
+      );
+      for (const id of ids) setAvailability.run(availability, id);
+      await expect(current.service.impact(current.scope, current.rootId)).resolves.toMatchObject({
+        archiveOnly: { available: true }, archiveAll: { available: true },
+      });
+      await current.service.archive(current.scope, current.rootId, {
+        includeDescendants, expectedRevision: 0,
+        mutationId: `archive-${availability}-${includeDescendants}`,
+        executionWorkspaceDisposition: { kind: "keep" },
+      });
+      for (const id of ids) {
+        expect(current.inventory.getThread(current.scope, id).thread.availability).toBe(availability);
+        expect(current.inventory.getInventory(current.scope, id).inventoryState).toBe(
+          includeDescendants || id === current.rootId ? "archived" : "active",
+        );
+      }
+    } finally { current.database.close(); }
+  });
+
+  it.each(["disconnected", "reconciling"] as const)("keeps a quarantined thread with a loaded %s runtime blocked", async (state) => {
+    const current = fixture();
+    try {
+      current.database.prepare("UPDATE application_threads SET availability = 'quarantined' WHERE id = ?").run(current.rootId);
+      current.runtimeStates.set(current.rootId, state);
+      await expect(current.service.impact(current.scope, current.rootId)).resolves.toMatchObject({
+        archiveOnly: { available: false }, archiveAll: { available: false },
+      });
+      await expect(current.service.archive(current.scope, current.rootId, {
+        includeDescendants: false, expectedRevision: 0,
+        mutationId: `archive-loaded-${state}`, executionWorkspaceDisposition: { kind: "keep" },
+      })).rejects.toMatchObject({ code: "invalid_transition" });
+      expect(current.inventory.getInventory(current.scope, current.rootId).inventoryState).toBe("active");
+    } finally { current.database.close(); }
+  });
+
+  it("keeps a missing descendant with unresolved provider work blocked", async () => {
+    const current = fixture();
+    try {
+      current.database.prepare("UPDATE application_threads SET availability = 'missing' WHERE id = ?").run(current.grandchildId);
+      new ProviderFeatureMutationRepository(current.database).prepare(current.scope, {
+        applicationThreadId: current.grandchildId,
+        mutationId: "missing-descendant-provider-work", featureId: "execution-settings",
+        schemaVersion: 1, actionId: "set-model", requestFingerprint: "a".repeat(64),
+        expectedThreadRevision: 0, expectedFeatureRevision: 0,
+        desiredPostcondition: { model: "test-model" }, now: 450,
+      });
+      await expectDescendantReservationBlocks(current, "archive-missing-descendant-provider-work");
+    } finally { current.database.close(); }
+  });
+
   it("counts pending questions across the archive family and preserves them on restore", async () => {
     const current = fixture();
     try {
@@ -730,7 +834,8 @@ describe("thread family archive service", () => {
   });
 
   it("retries retirement on post-commit publication replay and ignores a restored replay target", async () => {
-    const current = fixture();
+    const archive = vi.fn(async () => undefined);
+    const current = fixture({ archive });
     try {
       current.publishCommitted.mockRejectedValueOnce(
         new Error("first-publication-failed"),
@@ -753,6 +858,7 @@ describe("thread family archive service", () => {
         current.service.archive(current.scope, current.rootId, input),
       ).resolves.toEqual([current.rootId]);
       expect(current.runWithRuntimeRetired).toHaveBeenCalledTimes(2);
+      expect(archive).toHaveBeenCalledTimes(2);
       expect(current.publishCommitted).toHaveBeenCalledTimes(2);
       expect(
         current.inventory.getInventory(current.scope, current.rootId)
@@ -769,6 +875,7 @@ describe("thread family archive service", () => {
         current.service.archive(current.scope, current.rootId, input),
       ).resolves.toEqual([current.rootId]);
       expect(current.runWithRuntimeRetired).toHaveBeenCalledTimes(2);
+      expect(archive).toHaveBeenCalledTimes(2);
     } finally {
       current.database.close();
     }

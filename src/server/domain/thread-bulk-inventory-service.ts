@@ -40,13 +40,13 @@ const BLOCKED_RUN_STATES = new Set<ThreadRunState>([
 
 function effectiveRunState(
   backingState: "unbound" | "creating" | "bound" | "creation_unknown",
-  available: boolean,
   loaded: ThreadRunState | undefined,
 ): ThreadRunState {
   if (backingState === "creating") return "starting";
   if (backingState === "creation_unknown") return "failed";
   if (backingState === "unbound") return "idle";
-  if (!available) return "disconnected";
+  // Only a loaded runtime can supply runtime activity; inventory availability
+  // also includes missing history and offline workspace/environment state.
   return loaded ?? "idle";
 }
 
@@ -82,6 +82,9 @@ export class ThreadBulkInventoryService {
       readonly runtimes: Pick<ThreadRuntimeCoordinator, "captureLoadedState"> &
         ArchivedThreadRuntimeRetirement;
       readonly publications: Pick<InventoryService, "publishCommitted">;
+      readonly nativeArchive?: {
+        archive(scope: RequestScope, threadIds: readonly string[]): Promise<void>;
+      };
       readonly tasks: Pick<
         TaskRepository,
         | "listOpenThreadTaskSummaries"
@@ -151,13 +154,18 @@ export class ThreadBulkInventoryService {
     const replay = this.input.inventory.findBulkInventoryReplay(scope, input);
     if (replay) {
       if (input.action === "archive") {
+        const archivedThreadIds = replay.states
+          .filter(({ inventoryState }) => inventoryState === "archived")
+          .map(({ threadId }) => threadId);
         await runWithArchivedThreadRuntimesRetired({
           scope,
-          threadIds: replay.states
-            .filter(({ inventoryState }) => inventoryState === "archived")
-            .map(({ threadId }) => threadId),
+          threadIds: archivedThreadIds,
           runtimes: this.input.runtimes,
-          operation: async () => undefined,
+          operation: async () => {
+            if (archivedThreadIds.length > 0) {
+              await this.input.nativeArchive?.archive(scope, archivedThreadIds);
+            }
+          },
         });
       }
       await this.#publish(scope, replay.states, replay.movedTaskIds, now);
@@ -222,7 +230,11 @@ export class ThreadBulkInventoryService {
             scope,
             threadIds: affectedThreadIds,
             runtimes: this.input.runtimes,
-            operation: transition,
+            operation: async () => {
+              const committed = await transition();
+              await this.input.nativeArchive?.archive(scope, affectedThreadIds);
+              return committed;
+            },
           })
         : await transition();
     await this.#publish(scope, result.states, result.movedTaskIds, now);
@@ -304,7 +316,6 @@ export class ThreadBulkInventoryService {
               summary.backingState === "creating"
               ? "creation_unknown"
               : summary.backingState,
-            summary.available,
             loaded?.runState,
           );
           if (BLOCKED_RUN_STATES.has(state)) {

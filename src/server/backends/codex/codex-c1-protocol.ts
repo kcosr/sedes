@@ -946,3 +946,18 @@ export const codexThreadUnsubscribeMethod = method("thread/unsubscribe", refineT
   assertExactKeys(value, ["status"], "thread_unsubscribe_response");
   return value;
 });
+
+export const codexThreadArchiveMethod = method("thread/archive", (value) => {
+  assertExactKeys(value, ["threadId"], "thread_archive_params");
+  assertNativeId(value.threadId, "thread_archive_id");
+  return value;
+}, (value) => {
+  assertExactKeys(value, [], "thread_archive_response");
+  return value;
+});
+
+export const codexThreadUnarchiveMethod = method("thread/unarchive", (value) => {
+  assertExactKeys(value, ["threadId"], "thread_unarchive_params");
+  assertNativeId(value.threadId, "thread_unarchive_id");
+  return value;
+}, projectThreadReadResponse);

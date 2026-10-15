@@ -19593,6 +19593,214 @@ describe("CodexBackendDriverFactory", () => {
   });
 });
 
+describe("Codex native archive synchronization", () => {
+  const archivedThread = () => nativeThread({ path: "/private/.codex/archived_sessions/rollout.jsonl", status: { type: "notLoaded" } });
+
+  it("archives an idle known native thread without resuming or reading its transcript", async () => {
+    const harness = new RpcHarness();
+    harness.enqueue("thread/read", { thread: nativeThread() });
+    harness.enqueue("thread/goal/get", { goal: null });
+    harness.enqueue("thread/archive", {});
+    await expect(driver(harness).nativeArchive({ ...attachInput(), action: "archive" })).resolves.toEqual({ state: "archived", changed: true });
+    expect(harness.calls).toEqual([
+      { method: "thread/read", params: { threadId: "thread-1", includeTurns: false } },
+      { method: "thread/goal/get", params: { threadId: "thread-1" } },
+      { method: "thread/archive", params: { threadId: "thread-1" } },
+    ]);
+  });
+
+  it("inspects active and archived native storage without mutating either", async () => {
+    const harness = new RpcHarness();
+    const selected = driver(harness);
+    harness.enqueue("thread/read", { thread: nativeThread() }, { thread: archivedThread() });
+    harness.enqueue("thread/goal/get", { goal: null });
+    await expect(selected.nativeArchive({ ...attachInput(), action: "inspect" })).resolves.toEqual({ state: "active", changed: false });
+    await expect(selected.nativeArchive({ ...attachInput(), action: "inspect" })).resolves.toEqual({ state: "archived", changed: false });
+    expect(harness.calls.every(call => ["thread/read", "thread/goal/get"].includes(call.method))).toBe(true);
+  });
+
+  it("does not replay native archive for an already archived thread", async () => {
+    const harness = new RpcHarness();
+    harness.enqueue("thread/read", { thread: archivedThread() });
+    await expect(driver(harness).nativeArchive({ ...attachInput(), action: "archive" })).resolves.toEqual({ state: "archived", changed: false });
+    expect(harness.calls.map(call => call.method)).toEqual(["thread/read"]);
+  });
+
+  it.each(["inspect", "archive", "restore"] as const)("reports an absent native thread during %s without mutation", async action => {
+    const harness = new RpcHarness();
+    harness.enqueue("thread/read", new CodexRpcRemoteError({ code: -32600, message: "thread not loaded: thread-1", generation: 1, method: "thread/read" }));
+    await expect(driver(harness).nativeArchive({ ...attachInput(), action })).resolves.toEqual({ state: "missing", changed: false });
+    expect(harness.calls.map(call => call.method)).toEqual(["thread/read"]);
+  });
+
+  it("restores native storage and validates the returned thread before reporting success", async () => {
+    const harness = new RpcHarness();
+    harness.enqueue("thread/read", { thread: archivedThread() });
+    harness.enqueue("thread/unarchive", { thread: nativeThread() });
+    await expect(driver(harness).nativeArchive({ ...attachInput(), action: "restore" })).resolves.toEqual({ state: "active", changed: true });
+    expect(harness.calls.map(call => call.method)).toEqual(["thread/read", "thread/unarchive"]);
+  });
+
+  it("disables new native archival while preserving inspect and restore", async () => {
+    vi.stubEnv("SEDES_CODEX_ARCHIVE_SYNC", "false");
+    try {
+      const harness = new RpcHarness();
+      const selected = driver(harness);
+      await expect(selected.nativeArchive({ ...attachInput(), action: "archive" })).resolves.toEqual({ state: "disabled", changed: false });
+      expect(harness.calls).toEqual([]);
+      harness.enqueue("thread/read", { thread: archivedThread() }, { thread: archivedThread() });
+      harness.enqueue("thread/unarchive", { thread: nativeThread() });
+      await expect(selected.nativeArchive({ ...attachInput(), action: "inspect" })).resolves.toEqual({ state: "archived", changed: false });
+      await expect(selected.nativeArchive({ ...attachInput(), action: "restore" })).resolves.toEqual({ state: "active", changed: true });
+    } finally { vi.unstubAllEnvs(); }
+  });
+
+  it("refuses active native work and native goals without archiving", async () => {
+    const harness = new RpcHarness();
+    const selected = driver(harness);
+    harness.enqueue("thread/read", { thread: nativeThread({ status: { type: "active", activeFlags: [] } }) }, { thread: nativeThread() });
+    harness.enqueue("thread/goal/get", { goal: {
+      threadId: "thread-1", objective: "Keep working", status: "active", tokenBudget: null,
+      tokensUsed: 0, timeUsedSeconds: 0, createdAt: 1, updatedAt: 1,
+    } });
+    await expect(selected.nativeArchive({ ...attachInput(), action: "archive" })).resolves.toEqual({ state: "busy", changed: false });
+    await expect(selected.nativeArchive({ ...attachInput(), action: "archive" })).resolves.toEqual({ state: "busy", changed: false });
+    expect(harness.calls.some(call => call.method === "thread/archive")).toBe(false);
+  });
+
+  it("does not archive a native thread still owned by a local actor", async () => {
+    const harness = new RpcHarness();
+    const selected = driver(harness);
+    const handle = await selected.attach(attachInput());
+    try {
+      await expect(selected.nativeArchive({ ...attachInput(), action: "archive" })).resolves.toEqual({ state: "busy", changed: false });
+      expect(harness.calls).toEqual([]);
+    } finally { await handle.close(); }
+  });
+
+  it("refuses a managed TUI even when its actor is not loaded", async () => {
+    const harness = new RpcHarness();
+    const managedTui = new CodexManagedTuiController({ client: harness.facade });
+    const runningAuthority = vi.spyOn(managedTui.registry, "runningAuthority").mockReturnValue({
+      scope, applicationThreadId: binding().applicationThreadId, backendInstanceId: binding().backendInstanceId,
+      connectionProfileId: binding().connectionProfileId, executionEnvironmentId: binding().executionEnvironmentId,
+      backendConversationId: binding().backendConversationId, workspaceId: workspace.summary.id,
+      canonicalWorkspacePath: workspace.canonicalPath, opaqueBindingDetail: attachInput().opaqueBindingDetail,
+      runtimeLeaseId: "native-archive-tui", appServerGeneration: 1,
+    });
+    try {
+      harness.enqueue("thread/read", { thread: nativeThread() });
+      const selected = driver(harness, connection, new CodexConversationOwnershipRegistry(), catalogModelPolicy, executionSettingsProvider(), undefined, managedTui);
+      await expect(selected.nativeArchive({ ...attachInput(), action: "archive" })).resolves.toEqual({ state: "busy", changed: false });
+      expect(harness.calls.map(call => call.method)).toEqual(["thread/read"]);
+    } finally { runningAuthority.mockRestore(); await managedTui.close(); }
+  });
+
+  it("rejects wrong principals, native identities, and canonical workspace paths", async () => {
+    const harness = new RpcHarness();
+    const selected = driver(harness);
+    await expect(selected.nativeArchive({ ...attachInput(), scope: { ...scope, principalId: "foreign" }, action: "archive" })).rejects.toMatchObject({ backendCode: "codex_thread_binding_mismatch" });
+    expect(harness.calls).toEqual([]);
+    harness.enqueue("thread/read", { thread: nativeThread({ id: "foreign" }) }, { thread: nativeThread({ cwd: "/foreign" }) });
+    await expect(selected.nativeArchive({ ...attachInput(), action: "archive" })).rejects.toMatchObject({ backendCode: "codex_thread_binding_mismatch" });
+    await expect(selected.nativeArchive({ ...attachInput(), action: "archive" })).rejects.toMatchObject({ backendCode: "codex_thread_binding_mismatch" });
+    expect(harness.calls.every(call => call.method === "thread/read")).toBe(true);
+  });
+
+  it("bounds a slow managed terminal inspection and sends nothing after cancellation", async () => {
+    const harness = new RpcHarness();
+    const managedTui = new CodexManagedTuiController({ client: harness.facade });
+    let finish!: () => void;
+    const inspecting = new Promise<void>(resolve => { finish = resolve; });
+    const consume = vi.spyOn(managedTui, "consumeLifecycle").mockReturnValue(inspecting);
+    const controller = new AbortController();
+    try {
+      harness.enqueue("thread/read", { thread: nativeThread() });
+      const selected = driver(harness, connection, new CodexConversationOwnershipRegistry(), catalogModelPolicy, executionSettingsProvider(), undefined, managedTui);
+      const operation = selected.nativeArchive({ ...attachInput(), action: "archive", signal: controller.signal });
+      const rejected = expect(operation).rejects.toMatchObject({ backendCode: "codex_native_archive_cancelled", crossedSubmissionBoundary: false });
+      await vi.waitFor(() => expect(consume).toHaveBeenCalledOnce());
+      controller.abort();
+      await rejected;
+      finish();
+      await Promise.resolve();
+      expect(harness.calls.map(call => call.method)).toEqual(["thread/read"]);
+    } finally { finish(); consume.mockRestore(); await managedTui.close(); }
+  });
+
+  it("rejects generation changes before native archive dispatch", async () => {
+    const harness = new RpcHarness();
+    harness.enqueue("thread/read", { thread: nativeThread() });
+    harness.enqueue("thread/goal/get", { goal: null });
+    harness.after("thread/goal/get", () => harness.lifecycle("ready", 2));
+    await expect(driver(harness).nativeArchive({ ...attachInput(), action: "archive" })).rejects.toMatchObject({ backendCode: "codex_native_archive_generation_changed" });
+    expect(harness.calls.some(call => call.method === "thread/archive")).toBe(false);
+  });
+
+  it.each(["transport", "provider"] as const)("preserves an uncertain %s archive outcome without blindly resending", async failure => {
+    const harness = new RpcHarness();
+    harness.enqueue("thread/read", { thread: nativeThread() });
+    harness.enqueue("thread/goal/get", { goal: null });
+    harness.enqueue("thread/archive", failure === "transport"
+      ? new CodexRpcDeliveryError({ code: "carrier_closed", delivery: "sent_outcome_unknown", generation: 1, method: "thread/archive" })
+      : new CodexRpcRemoteError({ code: -32603, message: "archive failed after native cleanup", generation: 1, method: "thread/archive" }));
+    await expect(driver(harness).nativeArchive({ ...attachInput(), action: "archive" })).rejects.toMatchObject({
+      backendCode: "codex_native_archive_outcome_unknown", crossedSubmissionBoundary: true, retryable: false,
+    });
+    expect(harness.calls.filter(call => call.method === "thread/archive")).toHaveLength(1);
+  });
+
+  it("does not mistake offline delivery or arbitrary remote errors for absence", async () => {
+    const harness = new RpcHarness();
+    harness.enqueue("thread/read", new CodexRpcDeliveryError({ code: "offline", delivery: "not_sent", generation: 1, method: "thread/read" }),
+      new CodexRpcRemoteError({ code: -32600, message: "permission denied", generation: 1, method: "thread/read" }));
+    const selected = driver(harness);
+    await expect(selected.nativeArchive({ ...attachInput(), action: "archive" })).rejects.toMatchObject({ category: "unavailable", backendCode: "offline" });
+    await expect(selected.nativeArchive({ ...attachInput(), action: "archive" })).rejects.toMatchObject({ category: "unavailable" });
+  });
+
+  it("does not accept absence reported by a replaced native generation", async () => {
+    const harness = new RpcHarness();
+    harness.enqueue("thread/read", () => {
+      harness.lifecycle("ready", 2);
+      throw new CodexRpcRemoteError({ code: -32600, message: "thread not loaded: thread-1", generation: 1, method: "thread/read" });
+    });
+    await expect(driver(harness).nativeArchive({ ...attachInput(), action: "inspect" })).rejects.toMatchObject({ category: "unavailable" });
+  });
+
+  it("reads archived history without restoring or acquiring a persistent session", async () => {
+    const persistent = { reattachThread: vi.fn(), detachThread: vi.fn() };
+    const harness = new RpcHarness(persistent);
+    enqueueCompleteLegacyRead(harness, archivedThread());
+    const reader = await driver(harness).openHistory(attachInput());
+    try { await reader.readSnapshot({ signal: new AbortController().signal }); }
+    finally { await reader.close(); }
+    expect(harness.calls.every(call => call.method === "thread/read")).toBe(true);
+    expect(persistent.reattachThread).not.toHaveBeenCalled();
+  });
+
+  it("unarchives before persistent reattachment even when future archival is disabled", async () => {
+    vi.stubEnv("SEDES_CODEX_ARCHIVE_SYNC", "false");
+    const persistent = { reattachThread: vi.fn(async () => undefined), detachThread: vi.fn() };
+    const harness = new RpcHarness(persistent);
+    let handle: ConversationHandle | undefined;
+    try {
+      handle = await driver(harness).attach(attachInput());
+      harness.enqueue("thread/read", { thread: { ...archivedThread(), turns: [] } });
+      harness.enqueue("thread/unarchive", () => {
+        expect(persistent.reattachThread).not.toHaveBeenCalled();
+        return { thread: nativeThread() };
+      });
+      harness.enqueue("thread/resume", () => {
+        expect(persistent.reattachThread).toHaveBeenCalledOnce();
+        return resumeResult();
+      });
+      await handle.establishProjection({ signal: new AbortController().signal });
+      expect(harness.calls.findIndex(call => call.method === "thread/unarchive")).toBeLessThan(harness.calls.findIndex(call => call.method === "thread/resume"));
+    } finally { await handle?.close(); vi.unstubAllEnvs(); }
+  });
+});
+
 describe("Codex provider residency release for tool changes", () => {
   it.each(["starting", "running", "stopping"] as const)("attaches the initially empty remote TUI cache before refusing a retained %s terminal", async lifecycle => {
     const harness = new RpcHarness();
