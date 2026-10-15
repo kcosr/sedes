@@ -131,6 +131,14 @@ ${verifyRuntimePty.toString()}
 })().catch(error => { console.error(error); process.exitCode = 1; });
 `;
 
+export function requestRuntimeShutdown(server) {
+  // SIGTERM force-terminates Windows children. The managed parent protocol
+  // already treats IPC disconnect as a graceful shutdown request.
+  if (process.platform === 'win32') {
+    if (server.connected) server.disconnect();
+  } else server.kill('SIGTERM');
+}
+
 export async function verifyRuntime(root, { nodeExecutable = process.execPath, electronRunAsNode = false } = {}) {
   // Worker entry guards compare argv to import.meta.url. Resolve installation
   // aliases such as `current` before launching their executable entry points.
@@ -206,7 +214,7 @@ export async function verifyRuntime(root, { nodeExecutable = process.execPath, e
       assert.equal(fetched.status, 200);
       assert.deepEqual(Buffer.from(await fetched.arrayBuffer()), await readFile(path.join(root, 'dist/client', asset)));
     }
-    server.kill('SIGTERM');
+    requestRuntimeShutdown(server);
     const exit = await boundedExit(exited, 15_000);
     assert.deepEqual(exit, {code:0, signal:null}, `Server shutdown failed: ${logs}`);
     return ['sqlite-query-and-migrations', 'real-pty', 'pi-esbuild', 'provider-module-imports', 'pi-esbuild-target-binary', 'sidecar-and-worker-argument-guards', 'connector-help', 'isolated-server-startup', 'browser-http-and-static-assets', 'graceful-shutdown'];

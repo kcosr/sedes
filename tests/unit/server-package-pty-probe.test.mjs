@@ -66,3 +66,52 @@ describe('packaged PTY probe ownership', () => {
     await expect(run('cleanup-failure')).rejects.toMatchObject({ code: 1, stderr: expect.stringContaining('PTY cleanup failed') });
   });
 });
+
+it('lets the verification server close its resources and exit naturally', async () => {
+  const serverSource = `
+    const keepAlive = setInterval(() => {}, 1000);
+    let closing = false;
+    const stop = () => {
+      if (closing) return;
+      closing = true;
+      setTimeout(() => {
+        clearInterval(keepAlive);
+        console.log('owned server resources closed');
+        if (process.connected) process.disconnect();
+      }, 25);
+    };
+    process.on('SIGTERM', stop);
+    process.on('disconnect', stop);
+    process.send({ type: 'ready' });
+  `;
+  const source = `
+    import assert from 'node:assert/strict';
+    import { spawn } from 'node:child_process';
+    const { requestRuntimeShutdown } = await import(${JSON.stringify(verifier)});
+    const child = spawn(process.execPath, ['--input-type=module', '--eval', ${JSON.stringify(serverSource)}], {
+      stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+    });
+    let output = '';
+    child.stdout.on('data', chunk => { output += chunk; });
+    const exited = new Promise(resolve => child.once('exit', (code, signal) => resolve({code, signal})));
+    const outputDrained = new Promise(resolve => child.stdout.once('end', resolve));
+    try {
+      await new Promise((resolve, reject) => {
+        child.once('message', resolve);
+        child.once('error', reject);
+      });
+      requestRuntimeShutdown(child);
+      assert.deepEqual(await exited, {code: 0, signal: null});
+      await outputDrained;
+      assert.ok(output.includes('owned server resources closed'));
+      console.log('server completed naturally');
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill('SIGKILL');
+        await exited;
+      }
+    }
+  `;
+  await expect(execute(process.execPath, ['--input-type=module', '--eval', source], {timeout: 3000}))
+    .resolves.toMatchObject({stdout: 'server completed naturally\n', stderr: ''});
+});
