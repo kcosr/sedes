@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 const execute = promisify(execFile);
 const verifier = new URL('../../scripts/verify-server-package.mjs', import.meta.url).href;
 
-function run(mode) {
+function run(mode, platform = 'win32') {
   // A referenced MessagePort models node-pty's Windows ConoutConnection: a
   // shell's exit does not dispose its output worker. The child must exit
   // naturally after the probe releases its owned resource through kill().
@@ -14,7 +14,9 @@ function run(mode) {
     import { MessageChannel } from 'node:worker_threads';
     const { verifyRuntimePty } = await import(${JSON.stringify(verifier)});
     const probe = new Function('return (' + verifyRuntimePty.toString() + ')')();
+    Object.defineProperty(process, 'platform', { value: ${JSON.stringify(platform)} });
     const mode = ${JSON.stringify(mode)};
+    const expectedKill = process.platform === 'win32' || mode === 'registration-failure';
     const channel = new MessageChannel();
     channel.port1.on('message', () => {});
     let killed = false;
@@ -27,10 +29,16 @@ function run(mode) {
         return { dispose() { clearImmediate(delivery); dataDisposed = true; } };
       },
       onExit(listener) {
-        const delivery = setImmediate(() => listener({ exitCode: mode === 'bad-exit' ? 9 : 0 }));
+        if (mode === 'registration-failure') throw new Error('PTY subscription failed');
+        const delivery = setImmediate(() => {
+          // A POSIX PTY has already reaped the shell when it reports exit.
+          if (process.platform !== 'win32') close();
+          listener({ exitCode: mode === 'bad-exit' ? 9 : 0 });
+        });
         return { dispose() { clearImmediate(delivery); exitDisposed = true; } };
       },
       kill() {
+        assert.ok(expectedKill, 'probe signalled an already exited POSIX terminal');
         assert.equal(killed, false, 'duplicate cleanup');
         killed = true;
         close();
@@ -40,13 +48,14 @@ function run(mode) {
     try {
       await probe({ spawn: () => terminal }, process.cwd());
       assert.equal(mode, 'success', 'probe accepted an invalid result');
-      assert.ok(killed && dataDisposed && exitDisposed, 'probe did not release its owned PTY');
+      assert.ok(killed === expectedKill && dataDisposed && exitDisposed, 'probe did not release its owned PTY');
       console.log('probe completed naturally');
     } catch (error) {
       // Close only on a failing assertion so the test reports that assertion
       // rather than leaving a fixture resource alive until the parent timeout.
       close();
-      assert.ok(killed && dataDisposed && exitDisposed, 'probe did not release its owned PTY on failure');
+      assert.ok(killed === expectedKill && dataDisposed && exitDisposed === (mode !== 'registration-failure'),
+        'probe did not release its owned PTY on failure');
       throw error;
     }
   `;
@@ -64,6 +73,15 @@ describe('packaged PTY probe ownership', () => {
 
   it('does not hide an owned resource cleanup failure', async () => {
     await expect(run('cleanup-failure')).rejects.toMatchObject({ code: 1, stderr: expect.stringContaining('PTY cleanup failed') });
+  });
+
+  it.each(['linux', 'darwin'])('does not signal a completed %s terminal', async platform => {
+    await expect(run('success', platform)).resolves.toMatchObject({ stdout: 'probe completed naturally\n', stderr: '' });
+    await expect(run('bad-exit', platform)).rejects.toMatchObject({ code: 1, stderr: expect.stringContaining('PTY output/exit invalid') });
+  });
+
+  it.each(['win32', 'linux', 'darwin'])('cleans up the active %s terminal if subscription fails', async platform => {
+    await expect(run('registration-failure', platform)).rejects.toMatchObject({ code: 1, stderr: expect.stringContaining('PTY subscription failed') });
   });
 });
 

@@ -84,20 +84,21 @@ export async function verifyRuntimePty(pty, root) {
   let timer;
   let data;
   let exit;
+  let terminalExited = false;
   try {
     await new Promise((resolve, reject) => {
       let output = '';
       timer = setTimeout(() => reject(new Error('PTY timed out')), 5000);
       data = terminal.onData(chunk => { output += chunk; });
-      exit = terminal.onExit(({exitCode}) => { if (exitCode !== 0 || !output.includes('sedes_package_pty_ok')) reject(new Error('PTY output/exit invalid')); else resolve(); });
+      exit = terminal.onExit(({exitCode}) => { terminalExited = true; if (exitCode !== 0 || !output.includes('sedes_package_pty_ok')) reject(new Error('PTY output/exit invalid')); else resolve(); });
     });
   } finally {
     clearTimeout(timer);
     data?.dispose();
     exit?.dispose();
     // Shell exit alone leaves node-pty's Windows ConoutConnection worker alive.
-    // Release the probe's PTY through its public cleanup API on every outcome.
-    terminal.kill();
+    // POSIX has already reaped an exited shell; do not signal a retired PID.
+    if (windows || !terminalExited) terminal.kill();
   }
 }
 
