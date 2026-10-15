@@ -115,6 +115,8 @@ class LocalInteractiveTerminalProcess implements InteractiveTerminalProcess {
   #paused = false;
   #pendingOutputBytes = 0;
   #interruptionCode: string | undefined;
+  #windowsPtyCleanupAttempted = false;
+  #windowsPtyCleanupFailed = false;
   readonly #cleanupOnNaturalExit: boolean;
 
   constructor(pty: IPty, cleanupOnNaturalExit: boolean) {
@@ -131,7 +133,8 @@ class LocalInteractiveTerminalProcess implements InteractiveTerminalProcess {
         this.#pendingOutputBytes += bytes.byteLength;
         if (this.#pendingOutputBytes > 1024 * 1024) {
           this.#interruptionCode = "local_terminal_early_output_limit";
-          killPty(this.#pty, "SIGHUP");
+          if (process.platform === "win32") this.#releaseWindowsPty();
+          else killPty(this.#pty, "SIGHUP");
         }
       }
       else for (const listener of this.#outputListeners) listener(bytes);
@@ -183,7 +186,9 @@ class LocalInteractiveTerminalProcess implements InteractiveTerminalProcess {
           ? "SIGTERM"
           : "SIGKILL";
     if (process.platform === "win32") {
-      killPty(this.#pty, signalName);
+      if (!this.#releaseWindowsPty()) {
+        throw new Error("local_terminal_cleanup_unconfirmed");
+      }
       return;
     }
     try {
@@ -193,11 +198,25 @@ class LocalInteractiveTerminalProcess implements InteractiveTerminalProcess {
     }
   }
 
+  #releaseWindowsPty(): boolean {
+    // Natural shell exit does not release node-pty's Windows worker/input
+    // resources. Its public kill API also closes the owned pseudoconsole, so
+    // share one attempt across termination, output limits and natural exit.
+    if (!this.#windowsPtyCleanupAttempted) {
+      this.#windowsPtyCleanupAttempted = true;
+      try { this.#pty.kill(); }
+      catch { this.#windowsPtyCleanupFailed = true; }
+    }
+    return !this.#windowsPtyCleanupFailed;
+  }
+
   async #publishExit(exitCode: number, signal: number): Promise<void> {
-    const cleanupRequired = this.#terminationRequested || this.#cleanupOnNaturalExit;
-    const cleanupConfirmed = cleanupRequired
+    if (process.platform === "win32") this.#releaseWindowsPty();
+    const cleanupRequired = this.#terminationRequested || this.#cleanupOnNaturalExit || this.#windowsPtyCleanupFailed;
+    const processCleanupConfirmed = cleanupRequired
       ? await cleanupProcessGroup(this.#pty.pid)
       : false;
+    const cleanupConfirmed = processCleanupConfirmed && !this.#windowsPtyCleanupFailed;
     if (cleanupRequired && !cleanupConfirmed && !this.#interruptionCode) {
       this.#interruptionCode = "local_terminal_cleanup_unconfirmed";
     }

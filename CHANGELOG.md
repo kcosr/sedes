@@ -102,7 +102,9 @@ User-facing changes are collected here before release. See the
   See [native Windows verification](docs/developer/development.md#native-windows).
   ([#87](https://github.com/kcosr/sedes/pull/87))
 
-- Windows terminal journals recover incomplete trailing writes without a
+- Windows terminals release owned PTY resources after shell exit without
+  repeated cleanup calls and report cleanup failures in their exit status.
+  Windows terminal journals recover incomplete trailing writes without a
   read-only file-flush failure. Notification scripts accept native Windows
   executable paths and clean up their owned descendants on exit or timeout.
   Rebuild the Windows server or execution sidecar before its next safe restart.
