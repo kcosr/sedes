@@ -89,15 +89,18 @@ User-facing changes are collected here before release. See the
   Rebuild the server, Windows execution sidecars, or Electron Managed Local
   where these operations run; upgrade retained sidecars when their work can
   safely be stopped. See [native host validation](docs/operator/outbound-hosts.md#native-support-and-validation-limits).
+  ([#87](https://github.com/kcosr/sedes/pull/87))
 
 - Windows source checkouts preserve required generated-file line endings, and
   browser-test servers close gracefully through IPC before forced cleanup.
   See [native Windows verification](docs/developer/development.md#native-windows).
+  ([#87](https://github.com/kcosr/sedes/pull/87))
 
 - Windows terminal journals recover incomplete trailing writes without a
   read-only file-flush failure. Notification scripts accept native Windows
   executable paths and clean up their owned descendants on exit or timeout.
   Rebuild the Windows server or execution sidecar before its next safe restart.
+  ([#87](https://github.com/kcosr/sedes/pull/87))
 
 - Sending an inline Page response exits preview interaction mode and returns
   focus to the chat controls.
