@@ -3567,6 +3567,14 @@ provider requires the exact configured and negotiated Sidecar
 wrong-environment capability fails closed before process creation and never
 falls back to a local PTY.
 
+Shell exit does not prove that a native PTY has released its owned resources.
+Windows terminal providers must use the public PTY cleanup API on natural exit
+as well as explicit termination and early-output rejection, sharing one cleanup
+attempt and retaining failures in the normalized exit result. A cleanup failure
+must never yield `cleanupConfirmed: true`. Do not signal an exited POSIX PTY
+merely to release Windows-specific resources. Exercise native Windows child
+completion so a retained worker cannot pass solely on the shell's exit event.
+
 Keep terminal resource and panel lifecycles separate. Server-owned metadata,
 history, process incarnation, actor, admissions, and controller lease retain
 tenant/principal/thread/environment scope. Browser-owned panel instances and

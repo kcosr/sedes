@@ -85,21 +85,24 @@ describe('packaged PTY probe ownership', () => {
   });
 });
 
-it('lets the verification server close its resources and exit naturally', async () => {
+it.each([...new Set([process.platform, 'win32'])])('lets the %s verification server close its resources and exit naturally', async platform => {
+  const expectedShutdown = platform === 'win32' ? 'disconnect' : 'SIGTERM';
   const serverSource = `
+    import assert from 'node:assert/strict';
     const keepAlive = setInterval(() => {}, 1000);
     let closing = false;
-    const stop = () => {
+    const stop = mechanism => {
       if (closing) return;
       closing = true;
+      assert.equal(mechanism, ${JSON.stringify(expectedShutdown)}, 'wrong shutdown mechanism');
       setTimeout(() => {
         clearInterval(keepAlive);
-        console.log('owned server resources closed');
+        console.log('owned server resources closed via ' + mechanism);
         if (process.connected) process.disconnect();
       }, 25);
     };
-    process.on('SIGTERM', stop);
-    process.on('disconnect', stop);
+    process.on('SIGTERM', () => stop('SIGTERM'));
+    process.on('disconnect', () => stop('disconnect'));
     process.send({ type: 'ready' });
   `;
   const source = `
@@ -118,10 +121,18 @@ it('lets the verification server close its resources and exit naturally', async 
         child.once('message', resolve);
         child.once('error', reject);
       });
+      Object.defineProperty(process, 'platform', { value: ${JSON.stringify(platform)} });
       requestRuntimeShutdown(child);
       assert.deepEqual(await exited, {code: 0, signal: null});
       await outputDrained;
-      assert.ok(output.includes('owned server resources closed'));
+      assert.ok(output.includes(${JSON.stringify('owned server resources closed via ' + expectedShutdown)}));
+      if (process.platform === 'win32') {
+        requestRuntimeShutdown({
+          connected: false,
+          disconnect() { throw new Error('disconnected Windows server was disconnected again'); },
+          kill() { throw new Error('disconnected Windows server was signalled'); },
+        });
+      }
       console.log('server completed naturally');
     } finally {
       if (child.exitCode === null && child.signalCode === null) {

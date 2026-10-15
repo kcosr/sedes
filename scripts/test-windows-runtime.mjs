@@ -23,6 +23,8 @@ const result = spawnSync(process.execPath, [
   "tests/unit/local-file-descriptor-path.test.ts",
   "tests/unit/windows-workspace-search.test.ts",
   "tests/unit/terminal-journal.test.ts",
+  "tests/unit/local-interactive-terminal-provider.test.ts",
+  "tests/unit/local-interactive-terminal-provider-native.test.ts",
   "tests/unit/windows-staging-privacy.test.ts",
   "tests/unit/sidecar-windows-platform.test.ts",
   "tests/unit/sidecar-windows-ipc.test.ts",
