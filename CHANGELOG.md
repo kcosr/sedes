@@ -30,11 +30,11 @@ User-facing changes are collected here before release. See the
 
 ### Added
 
-- Attach independent recurring schedules and one-time reminders to the same
-  thread. **Fork** creates a separate result each run, including from a draft
-  using its saved settings. One-time history remains after exhaustion, and
-  busy sources defer unsent work. Existing automations and their history upgrade
-  in place, preserving names, schedules, and prior dismissals. See
+- Threads support multiple named recurring schedules and one-time reminders.
+  Run on **This thread**, or **Fork** a fresh result each time, copying saved
+  settings from drafts. Busy sources defer unsent work; exhausted one-time
+  automations retain their history. Existing automations migrate in place,
+  preserving names, schedules, history, and prior dismissals. See
   [automations](docs/user/tasks-and-automations.md#schedule-work-with-an-automation).
 
 - Published HTML pages can collect responses through Sedes's **Send** control.
