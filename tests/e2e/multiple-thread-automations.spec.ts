@@ -108,6 +108,14 @@ test("keeps named daily and one-shot automations independent on the same draft",
 
   await page.goto(`/threads/${sourceId}/automations`);
   await page.setViewportSize({ width: 390, height: 844 });
+  const search = page.getByRole("searchbox", { name: "Search automations" });
+  await expect.poll(async () => (await search.boundingBox())?.width ?? 0)
+    .toBeGreaterThanOrEqual(200);
+  await search.fill("Morning update");
+  await expect(page.getByTestId("automation-row")).toHaveCount(1);
+  await expect(automationRow(page, dailyId)).toBeVisible();
+  await search.fill("");
+  await expect(page.getByTestId("automation-row")).toHaveCount(2);
   const reminderRow = automationRow(page, reminderId);
   await expect(reminderRow).toBeVisible();
   await expectNoPageOverflow(page);

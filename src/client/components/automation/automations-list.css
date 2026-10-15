@@ -44,6 +44,13 @@
   gap: var(--space-1);
 }
 
+.automations-source-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-1);
+}
+
 .automations-search {
   width: 260px;
   margin: 0;
@@ -352,9 +359,18 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
+  .automations-tools {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .automations-source-actions {
+    grid-column: 1 / -1;
+  }
+
   .automations-search {
-    width: auto;
-    flex: 1 1 auto;
+    width: 100%;
+    min-width: 0;
   }
 
   .automation-row-open {

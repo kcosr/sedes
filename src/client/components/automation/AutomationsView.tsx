@@ -317,10 +317,10 @@ export const AutomationsView = memo(function AutomationsView({
             </span>
           </div>
           <div className="automations-tools">
-            {threadId && <>
+            {threadId && <div className="automations-source-actions">
               <Button variant="ghost" size="sm" onClick={() => navigate(threadPath(threadId))}>Open thread</Button>
               <Button size="sm" onClick={() => navigate(automationCreatePath(threadId))}><Plus aria-hidden="true" />Add automation</Button>
-            </>}
+            </div>}
             <label className="search-box automations-search">
               <Search size={16} strokeWidth={1.8} aria-hidden="true" />
               <span className="sr-only">Search automations</span>
