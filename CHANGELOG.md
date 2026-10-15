@@ -10,6 +10,7 @@ User-facing changes are collected here before release. See the
 - Upgrade Codex execution sidecars with the server for Codex runtime protocol
   **4**, which clears retained attach metadata after native archive changes.
   See [Codex archival](docs/operator/backends/codex.md#archiving-conversations).
+  ([#85](https://github.com/kcosr/sedes/pull/85))
 
 - Upgrade the server and browser/packaged clients together for client protocol
   **158** for Page responses, larger composer reference lists, and the updated
@@ -46,6 +47,7 @@ User-facing changes are collected here before release. See the
   or offline. Existing archives require a manual sweep; set
   `SEDES_CODEX_ARCHIVE_SYNC=false` to disable future native archiving. See
   [Codex archival](docs/operator/backends/codex.md#archiving-conversations).
+  ([#85](https://github.com/kcosr/sedes/pull/85))
 
 - Composer prompts support up to 16 thread references and 16 Task references.
   Long reference lists scroll above the message box; the shared 256 KiB input
@@ -76,10 +78,12 @@ User-facing changes are collected here before release. See the
 
 - Sending an inline Page response exits preview interaction mode and returns
   focus to the chat controls.
+  ([#85](https://github.com/kcosr/sedes/pull/85))
 
 - Old threads can be archived when their backend is no longer registered.
   Unavailable saved conversations no longer appear active to archive and bulk
   Park controls; active work and unresolved operations still block those actions.
+  ([#85](https://github.com/kcosr/sedes/pull/85))
 
 ### Removed
 
