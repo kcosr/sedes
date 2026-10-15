@@ -227,7 +227,7 @@ describe("Codex D3 production app-server binding", () => {
     expect(adoptionManifest.productionRuntimeCompatibility.currentPolicy).toBe(
       "stable releases admitted by the runtime policy using exactly the 0.162.1 parser profile",
     );
-    expect(adoptionManifest.routes).toHaveLength(67);
+    expect(adoptionManifest.routes).toHaveLength(71);
 
     const byDirection = adoptionManifest.routes.reduce<
       Record<string, typeof adoptionManifest.routes>
@@ -235,10 +235,10 @@ describe("Codex D3 production app-server binding", () => {
       (groups[route.direction] ??= []).push(route);
       return groups;
     }, {});
-    expect(byDirection.client_request).toHaveLength(24);
+    expect(byDirection.client_request).toHaveLength(26);
     expect(byDirection.client_notification).toHaveLength(1);
     expect(byDirection.server_request).toHaveLength(10);
-    expect(byDirection.server_notification).toHaveLength(32);
+    expect(byDirection.server_notification).toHaveLength(34);
 
     expect(
       byDirection.client_request!
@@ -247,7 +247,7 @@ describe("Codex D3 production app-server binding", () => {
     ).toEqual([]);
     expect(
       byDirection.client_request!.filter((route) => route.use === "invoked"),
-    ).toHaveLength(24);
+    ).toHaveLength(26);
 
     expect(methods(byDirection.client_request)).toEqual(
       [...CODEX_CLIENT_REQUEST_METHODS].sort(),
@@ -265,16 +265,32 @@ describe("Codex D3 production app-server binding", () => {
       [...stableProtocolManifest.methods.serverNotifications].sort(),
     );
     expect(CODEX_SERVER_NOTIFICATION_METHODS).toHaveLength(86);
+
+    // Method stability and schema profile are independent: unarchive remains
+    // stable while decoding the adopted experimental Thread response.
+    for (const [direction, method, artifactProfile] of [
+      ["client_request", "thread/archive", "stable"],
+      ["client_request", "thread/unarchive", "experimental"],
+      ["server_notification", "thread/archived", "stable"],
+      ["server_notification", "thread/unarchived", "stable"],
+    ] as const) {
+      expect(
+        adoptionManifest.routes.find(
+          (route) => route.direction === direction && route.method === method,
+        ),
+        method,
+      ).toMatchObject({ stability: "stable", artifactProfile });
+    }
   });
 
-  it("separates method stability from the ten selected experimental artifacts", () => {
+  it("separates method stability from the eleven selected experimental artifacts", () => {
     expect(CODEX_EXPERIMENTAL_CLIENT_REQUEST_METHODS).toEqual([
       "thread/settings/update",
     ]);
     const experimentalArtifacts = adoptionManifest.routes.filter(
       (route) => route.artifactProfile === "experimental",
     );
-    expect(experimentalArtifacts).toHaveLength(10);
+    expect(experimentalArtifacts).toHaveLength(11);
     expect(
       experimentalArtifacts
         .map((route) => `${route.direction}:${route.method}`)
@@ -286,6 +302,7 @@ describe("Codex D3 production app-server binding", () => {
       "client_request:thread/resume",
       "client_request:thread/settings/update",
       "client_request:thread/start",
+      "client_request:thread/unarchive",
       "server_notification:thread/settings/updated",
       "server_notification:thread/started",
       "server_request:item/commandExecution/requestApproval",
