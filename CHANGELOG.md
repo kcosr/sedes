@@ -97,6 +97,7 @@ User-facing changes are collected here before release. See the
 
 - Windows source checkouts preserve required generated-file line endings, and
   browser-test servers close gracefully through IPC before forced cleanup.
+  Full Electron verification releases its native PTY probe after success or failure.
   See [native Windows verification](docs/developer/development.md#native-windows).
   ([#87](https://github.com/kcosr/sedes/pull/87))
 
