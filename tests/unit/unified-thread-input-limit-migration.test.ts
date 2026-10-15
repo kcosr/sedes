@@ -10,6 +10,11 @@ import { savedAgentDatabase } from "../support/saved-agent-fixture.js";
 describe("unified thread input limit migration", () => {
   it("preserves creation rows, indexes, trigger order and foreign keys, with transactional rollback", () => {
     const { database, scope } = savedAgentDatabase(143);
+    // Test migration 144 in isolation: later migrations intentionally change
+    // foreign keys outside conversation creation.
+    const inputLimitMigrations = backendNormalizedMigrations.filter(
+      (migration) => migration.version <= 144,
+    );
     try {
       const inventory = new InventoryRepository(database);
       const environment = inventory.getLocalEnvironment(scope);
@@ -44,7 +49,7 @@ describe("unified thread input limit migration", () => {
       const update = database.prepare("UPDATE conversation_creation_attempts SET initial_input_text = ? WHERE attempt_id = ?");
       const text = "é".repeat(MAXIMUM_THREAD_INPUT_BYTES / 2);
       expect(() => update.run(text, attempt.attemptId)).toThrow(/CHECK constraint/u);
-      expect(() => applyDatabaseMigrations(database, backendNormalizedMigrations, {
+      expect(() => applyDatabaseMigrations(database, inputLimitMigrations, {
         verifyBeforeCommit: (_database, migration) => { if (migration.version === 144) throw new Error("test_rollback"); },
       })).toThrow("test_rollback");
       expect(rows()).toEqual(beforeRows);
@@ -52,7 +57,8 @@ describe("unified thread input limit migration", () => {
       expect(foreignKeys()).toEqual(beforeForeignKeys);
       expect(database.pragma("foreign_keys", { simple: true })).toBe(1);
       expect(database.prepare("SELECT 1 FROM schema_migrations WHERE version = 144").get()).toBeUndefined();
-      applyDatabaseMigrations(database, backendNormalizedMigrations);
+      applyDatabaseMigrations(database, inputLimitMigrations);
+      expect(database.prepare("SELECT max(version) AS version FROM schema_migrations").get()).toEqual({ version: 144 });
       expect(rows()).toEqual(beforeRows);
       expect(objects()).toEqual(beforeObjects);
       expect(foreignKeys()).toEqual(beforeForeignKeys);
