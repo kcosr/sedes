@@ -7,6 +7,7 @@ import type {
 } from "./automation-agent-tool-service.js";
 import {
   automationDefinitionToolOutputSchema,
+  automationNameToolSchema,
   automationPrecheckToolSchema,
   automationReadWaitCeilings,
   automationScheduleToolSchema,
@@ -27,7 +28,7 @@ export function createAutomationCreateToolDefinition(
   return {
     ...CANONICAL_AGENT_TOOL_MANIFEST["automation.create"],
     inputSchema: automationToolInputSchema({
-      name: Type.String({ minLength: 1, maxLength: 240 }),
+      name: automationNameToolSchema,
       initialState: Type.String({ maxLength: 7, enum: ["enabled", "paused"] }),
       mutationId: automationMutationId,
       prompt: Type.String({ minLength: 1, maxLength: 65_536 }),

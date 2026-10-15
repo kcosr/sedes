@@ -3671,7 +3671,7 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
     const { automationId } = automationRouteParametersSchema.parse(request.params);
     const body = updateAutomationRequestSchema.parse(request.body);
     const current = dependencies.automations.get(requestScope, automationId);
-    if (body.runMode === "clone") {
+    if (body.runMode === "clone" && current.runMode !== "clone") {
       assertAutomationCloneEligible({ runMode: body.runMode, canCloneOnRun: (
         await dependencies.threads.automationCapability(requestScope, current.threadId)
       ).canCloneOnRun });

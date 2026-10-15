@@ -1082,4 +1082,30 @@ describe("automation canonical tool service", () => {
     expect(setup.threads.automationCapability).not.toHaveBeenCalled();
     expect(setup.automations.create).not.toHaveBeenCalled();
   });
+  it.each([undefined, "clone"] as const)("edits an existing clone without rechecking current Fork eligibility (requested mode %s)", async (requestedMode) => {
+    const setup = fixture({definition: definition({runMode:"clone"}),canCloneOnRun:false});
+    await setup.service.update({automationId,expectedRevision:4,name:"Renamed Fork",prompt:"Updated Fork prompt",...(requestedMode ? {runMode:requestedMode}: {})},context());
+    expect(setup.threads.automationCapability).not.toHaveBeenCalled();
+    expect(setup.automations.update).toHaveBeenCalledWith(scope,automationId,expect.objectContaining({name:"Renamed Fork",prompt:"Updated Fork prompt",runMode:"clone"}),expect.any(Number));
+  });
+
+  it("still checks Fork eligibility when an existing automation changes to clone", async () => {
+    const setup = fixture({canCloneOnRun:false});
+    await expect(setup.service.update({automationId,expectedRevision:4,runMode:"clone"},context())).rejects.toMatchObject({code:"invalid_transition"});
+    expect(setup.threads.automationCapability).toHaveBeenCalledOnce();
+    expect(setup.automations.update).not.toHaveBeenCalled();
+  });
+
+  it("uses the persisted 160-character name bound on create, update, and output schemas", async () => {
+    const setup=fixture(), executor=canonical(setup), longName="n".repeat(160);
+    const input={name:longName,initialState:"paused",prompt:"Review",runMode:"same_thread",schedule:{kind:"date_time",runAt:"2026-08-09T00:00:00.000Z"},misfirePolicy:null,mutationId:firstMutationId};
+    expect(executor.registry.validatesInput("automation.create",2,input)).toBe(true);
+    expect(executor.registry.validatesInput("automation.create",2,{...input,name:longName+"n"})).toBe(false);
+    expect(executor.registry.validatesInput("automation.update",2,{automationId,expectedRevision:4,name:longName})).toBe(true);
+    expect(executor.registry.validatesInput("automation.update",2,{automationId,expectedRevision:4,name:longName+"n"})).toBe(false);
+    const result=await setup.service.get({automationId},context());
+    expect(executor.registry.validatesOutput("automation.get",2,{...result,name:longName})).toBe(true);
+    expect(executor.registry.validatesOutput("automation.get",2,{...result,name:longName+"n"})).toBe(false);
+  });
+
 });

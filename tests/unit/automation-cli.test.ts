@@ -105,6 +105,12 @@ describe("automation CLI identity and retries", () => {
 });
 
 describe("automation CLI input", () => {
+  it("accepts 160-character names and rejects 161 before sending a request", () => {
+    const name="n".repeat(160);
+    expect(automationCliInputSchema.safeParse({...validInput,automation:{...validInput.automation,name}}).success).toBe(true);
+    expect(automationCliInputSchema.safeParse({...validInput,automation:{...validInput.automation,name:name+"n"}}).success).toBe(false);
+  });
+
   it("leaves state unset for the create command's paused default", () => {
     const parsed = automationCliInputSchema.parse(validInput);
 

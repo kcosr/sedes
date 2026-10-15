@@ -5169,6 +5169,7 @@ async function main(): Promise<void> {
         return {
           backingState: thread.backingState,
           revision: thread.revision,
+          creationForceReset: inventoryRepository.isThreadCreationForceReset(eventScope, applicationThreadId),
         };
       },
     },

@@ -128,8 +128,17 @@ CREATE TABLE automation_runs_v146 (
   )
 ) STRICT;
 
-INSERT INTO automation_runs_v146(tenant_id,owner_principal_id,automation_id,id,occurrence_kind,scheduled_for,occurrence_key,definition_revision,coalesced_count,run_mode,state,claim_token,lease_expires_at,claim_attempt_count,prompt_snapshot,dispatch_mutation_id,anchor_thread_id,child_thread_id,error_code,error_diagnostic,claimed_at,started_at,accepted_at,finished_at,created_at,updated_at,precheck_command_snapshot,precheck_timeout_seconds,precheck_include_stdout,precheck_status,precheck_started_at,precheck_finished_at,precheck_exit_code,precheck_duration_ms,precheck_stdout_bytes,precheck_stdout_included,force_reset_at,force_reset_mutation_id,turn_id,turn_outcome,turn_settled_at,turn_started_at,turn_ended_at,initial_eligible_at)
-SELECT tenant_id,owner_principal_id,automation_id,id,occurrence_kind,scheduled_for,occurrence_key,definition_revision,coalesced_count,run_mode,state,claim_token,lease_expires_at,claim_attempt_count,prompt_snapshot,dispatch_mutation_id,anchor_thread_id,child_thread_id,error_code,error_diagnostic,claimed_at,started_at,accepted_at,finished_at,created_at,updated_at,precheck_command_snapshot,precheck_timeout_seconds,precheck_include_stdout,precheck_status,precheck_started_at,precheck_finished_at,precheck_exit_code,precheck_duration_ms,precheck_stdout_bytes,precheck_stdout_included,force_reset_at,force_reset_mutation_id,turn_id,turn_outcome,turn_settled_at,turn_started_at,turn_ended_at,scheduled_for FROM automation_runs;
+INSERT INTO automation_runs_v146(tenant_id,owner_principal_id,automation_id,id,occurrence_kind,scheduled_for,occurrence_key,definition_revision,coalesced_count,run_mode,state,claim_token,lease_expires_at,claim_attempt_count,prompt_snapshot,dispatch_mutation_id,anchor_thread_id,child_thread_id,error_code,error_diagnostic,claimed_at,started_at,accepted_at,finished_at,created_at,updated_at,precheck_command_snapshot,precheck_timeout_seconds,precheck_include_stdout,precheck_status,precheck_started_at,precheck_finished_at,precheck_exit_code,precheck_duration_ms,precheck_stdout_bytes,precheck_stdout_included,force_reset_at,force_reset_mutation_id,turn_id,turn_outcome,turn_settled_at,turn_started_at,turn_ended_at,initial_eligible_at,acknowledged_at)
+SELECT tenant_id,owner_principal_id,automation_id,id,occurrence_kind,scheduled_for,occurrence_key,definition_revision,coalesced_count,run_mode,state,claim_token,lease_expires_at,claim_attempt_count,prompt_snapshot,dispatch_mutation_id,anchor_thread_id,child_thread_id,error_code,error_diagnostic,claimed_at,started_at,accepted_at,finished_at,created_at,updated_at,precheck_command_snapshot,precheck_timeout_seconds,precheck_include_stdout,precheck_status,precheck_started_at,precheck_finished_at,precheck_exit_code,precheck_duration_ms,precheck_stdout_bytes,precheck_stdout_included,force_reset_at,force_reset_mutation_id,turn_id,turn_outcome,turn_settled_at,turn_started_at,turn_ended_at,scheduled_for,
+  CASE WHEN state IN ('completed','failed') AND NOT EXISTS (
+    SELECT 1 FROM thread_principal_state AS prior_attention
+    WHERE prior_attention.tenant_id = automation_runs.tenant_id
+      AND prior_attention.principal_id = automation_runs.owner_principal_id
+      AND prior_attention.thread_id = coalesce(automation_runs.child_thread_id, automation_runs.anchor_thread_id)
+      AND prior_attention.automation_context_run_id = automation_runs.id
+      AND prior_attention.automation_context_source_thread_id = automation_runs.anchor_thread_id
+  ) THEN coalesce(finished_at, updated_at) ELSE NULL END
+FROM automation_runs;
 
 DROP TABLE automation_runs;
 
@@ -334,5 +343,103 @@ CREATE INDEX automation_runs_deferred ON automation_runs(eligible_at,created_at,
 CREATE TRIGGER automation_runs_ack_immutable BEFORE UPDATE OF acknowledged_at ON automation_runs
 WHEN OLD.acknowledged_at IS NOT NULL AND NEW.acknowledged_at IS NOT OLD.acknowledged_at
 BEGIN SELECT RAISE(ABORT, 'Automation acknowledgement is immutable'); END;
+
+-- Legacy context was one dismissible slot on the result thread. Convert it
+-- before removing the slot so completed history does not become new attention.
+CREATE TABLE thread_principal_state_v146 (
+  tenant_id TEXT NOT NULL,
+  principal_id TEXT NOT NULL,
+  thread_id TEXT NOT NULL,
+  inventory_state TEXT NOT NULL CHECK (
+    inventory_state IN ('active', 'snoozed', 'settled', 'archived')
+  ),
+  state_changed_at INTEGER NOT NULL,
+  snoozed_at INTEGER,
+  snoozed_until INTEGER,
+  woke_at INTEGER,
+  wake_reason TEXT CHECK (
+    wake_reason IS NULL OR wake_reason IN (
+      'manual', 'deadline', 'completion', 'failure', 'needs-input', 'activity'
+    )
+  ),
+  wake_acknowledged_at INTEGER,
+  inventory_revision INTEGER NOT NULL DEFAULT 0 CHECK (inventory_revision >= 0),
+  wake_reminder_text TEXT CHECK (
+    wake_reminder_text IS NULL OR (
+      length(wake_reminder_text) BETWEEN 1 AND 1000
+      AND length(CAST(wake_reminder_text AS BLOB)) <= 4096
+    )
+  ),
+  pinned INTEGER NOT NULL DEFAULT 0 CHECK (pinned IN (0, 1)),
+  pin_revision INTEGER NOT NULL DEFAULT 0 CHECK (pin_revision BETWEEN 0 AND 9007199254740991),
+  group_assignment_revision INTEGER NOT NULL DEFAULT 0 CHECK (group_assignment_revision BETWEEN 0 AND 9007199254740991),
+  bookmark_revision INTEGER NOT NULL DEFAULT 0 CHECK (bookmark_revision BETWEEN 0 AND 9007199254740991),
+  preferred_worktree_root_id TEXT CHECK (preferred_worktree_root_id IS NULL OR length(preferred_worktree_root_id) BETWEEN 1 AND 128),
+  preferred_worktree_revision INTEGER NOT NULL DEFAULT 0 CHECK (preferred_worktree_revision BETWEEN 0 AND 9007199254740991),
+  PRIMARY KEY (tenant_id, principal_id, thread_id),
+  FOREIGN KEY (tenant_id, principal_id, thread_id)
+    REFERENCES application_threads(tenant_id, owner_principal_id, id) ON DELETE RESTRICT,
+  CHECK (
+    (inventory_state = 'snoozed' AND snoozed_at IS NOT NULL AND snoozed_until IS NOT NULL)
+    OR (inventory_state <> 'snoozed' AND snoozed_at IS NULL AND snoozed_until IS NULL)
+  ),
+  CHECK (inventory_state = 'active' OR (woke_at IS NULL AND wake_reason IS NULL AND wake_acknowledged_at IS NULL)),
+  CHECK ((woke_at IS NULL AND wake_reason IS NULL AND wake_acknowledged_at IS NULL) OR (woke_at IS NOT NULL AND wake_reason IS NOT NULL))
+) STRICT;
+
+INSERT INTO thread_principal_state_v146(
+  tenant_id, principal_id, thread_id, inventory_state, state_changed_at,
+  snoozed_at, snoozed_until, woke_at, wake_reason, wake_acknowledged_at,
+  inventory_revision, wake_reminder_text, pinned, pin_revision,
+  group_assignment_revision, bookmark_revision, preferred_worktree_root_id, preferred_worktree_revision
+)
+SELECT tenant_id, principal_id, thread_id, inventory_state, state_changed_at,
+  snoozed_at, snoozed_until, woke_at, wake_reason, wake_acknowledged_at,
+  inventory_revision, wake_reminder_text, pinned, pin_revision,
+  group_assignment_revision, bookmark_revision, preferred_worktree_root_id, preferred_worktree_revision
+FROM thread_principal_state;
+
+DROP TABLE thread_principal_state;
+ALTER TABLE thread_principal_state_v146 RENAME TO thread_principal_state;
+
+CREATE INDEX thread_principal_state_active
+  ON thread_principal_state(tenant_id, principal_id, inventory_state, thread_id);
+CREATE INDEX thread_principal_state_snooze_deadline
+  ON thread_principal_state(snoozed_until, tenant_id, principal_id, thread_id)
+  WHERE inventory_state = 'snoozed';
+CREATE INDEX thread_principal_state_changed
+  ON thread_principal_state(tenant_id, principal_id, inventory_state, state_changed_at DESC, thread_id);
+
+CREATE TRIGGER thread_preferred_worktree_insert_guard
+BEFORE INSERT ON thread_principal_state
+WHEN NEW.preferred_worktree_root_id IS NOT NULL AND NOT EXISTS (
+  SELECT 1 FROM application_threads AS thread
+  JOIN workspace_file_linked_worktree_roots AS root
+    ON root.tenant_id = thread.tenant_id AND root.owner_principal_id = thread.owner_principal_id
+    AND root.workspace_id = thread.workspace_id AND root.root_id = NEW.preferred_worktree_root_id
+    AND root.availability = 'available'
+  WHERE thread.tenant_id = NEW.tenant_id AND thread.owner_principal_id = NEW.principal_id AND thread.id = NEW.thread_id
+)
+BEGIN SELECT RAISE(ABORT, 'preferred worktree is not available for the thread workspace'); END;
+
+CREATE TRIGGER thread_preferred_worktree_update_guard
+BEFORE UPDATE OF preferred_worktree_root_id ON thread_principal_state
+WHEN NEW.preferred_worktree_root_id IS NOT NULL AND NOT EXISTS (
+  SELECT 1 FROM application_threads AS thread
+  JOIN workspace_file_linked_worktree_roots AS root
+    ON root.tenant_id = thread.tenant_id AND root.owner_principal_id = thread.owner_principal_id
+    AND root.workspace_id = thread.workspace_id AND root.root_id = NEW.preferred_worktree_root_id
+    AND root.availability = 'available'
+  WHERE thread.tenant_id = NEW.tenant_id AND thread.owner_principal_id = NEW.principal_id AND thread.id = NEW.thread_id
+)
+BEGIN SELECT RAISE(ABORT, 'preferred worktree is not available for the thread workspace'); END;
+
+CREATE TRIGGER input_activity_inventory AFTER UPDATE OF inventory_state ON thread_principal_state
+WHEN OLD.inventory_state IS NOT NEW.inventory_state
+BEGIN
+  UPDATE application_threads SET input_activity_revision = input_activity_revision + 1
+  WHERE tenant_id = NEW.tenant_id AND owner_principal_id = NEW.principal_id AND id = NEW.thread_id;
+END;
+
 `,
 };

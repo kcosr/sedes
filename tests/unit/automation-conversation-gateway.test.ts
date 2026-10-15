@@ -86,6 +86,7 @@ function gateway(input: {
   assertCanAutomate?: () => void;
   copyChild?: string;
   existingQueue?: boolean;
+  creationForceReset?: boolean;
 }) {
   const enqueue = vi.fn(async () => ({
     item: queued(input.queueState ?? "pending"),
@@ -103,11 +104,13 @@ function gateway(input: {
   );
   const assertCanAutomate = vi.fn(input.assertCanAutomate ?? (() => undefined));
   const readThread = vi.fn(
-    (_scope, applicationThreadId: string) =>
-      input.readThread?.(applicationThreadId) ?? {
+    (_scope, applicationThreadId: string) => ({
+      creationForceReset: input.creationForceReset ?? false,
+      ...(input.readThread?.(applicationThreadId) ?? {
         backingState: input.backingState,
         revision: 7,
-      },
+      }),
+    }),
   );
   return {
     instance: new LifecycleAutomationConversationGateway({
@@ -136,6 +139,13 @@ function gateway(input: {
 }
 
 describe("LifecycleAutomationConversationGateway", () => {
+  it.each([false, true])("rejects an abandoned target without retrying first input (existing mutation: %s)", async (hasFirstInputMutation) => {
+    const setup = gateway({ backingState: "creation_unknown", creationForceReset: true, hasFirstInputMutation });
+    await expect(setup.instance.dispatch(dispatchInput)).rejects.toMatchObject({ code: "invalid_transition" });
+    expect(setup.firstInput).not.toHaveBeenCalled();
+    expect(setup.enqueue).not.toHaveBeenCalled();
+  });
+
   it("routes a bound thread through the durable actor-backed queue", async () => {
     const setup = gateway({ backingState: "bound", queueState: "accepted" });
     await expect(setup.instance.dispatch(dispatchInput)).resolves.toEqual({

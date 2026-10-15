@@ -7319,6 +7319,11 @@ describe("normalized HTTP application contract", () => {
         .send(originalForkInput)
         .expect(201);
       expect(replayedFork.body.id).toBe(originalFork.body.id);
+      const editedExistingFork = await current
+        .mutate(request(current.app).patch(`/api/automations/${originalFork.body.id}`))
+        .send({ ...baseDefinition, name: "Renamed existing Fork", prompt: "New Fork prompt", runMode: "clone", expectedRevision: originalFork.body.revision, mutationId: randomUUID() })
+        .expect(200);
+      expect(editedExistingFork.body).toMatchObject({ name: "Renamed existing Fork", prompt: "New Fork prompt", runMode: "clone" });
       await current
         .mutate(request(current.app).post("/api/automations"))
         .send({

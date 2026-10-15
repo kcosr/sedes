@@ -142,6 +142,12 @@ describe("uncertainRunResolution", () => {
 });
 
 describe("deferred and exhausted controls", () => {
+  it("keeps an existing Fork's Edit action available when execution is unavailable", () => {
+    const result = actions(automation({ runMode: "clone" }), {}, { available: false });
+    expect(result.edit).toEqual(allowed);
+    expect(result.runNow.available).toBe(false);
+  });
+
   it("allows pausing a pending one-time reminder while its scheduled invocation is deferred", () => {
     const pending = automation({ status: "enabled", scheduleKind: "date_time", schedule: { kind: "date_time", runAt: "2026-10-06T02:00:00.000Z" }, misfirePolicy: null, lastRun: lastRun("deferred") });
     const result = actions(pending);

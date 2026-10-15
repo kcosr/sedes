@@ -1,3 +1,4 @@
+import { MAXIMUM_AUTOMATION_NAME_LENGTH } from "../../shared/protocol/automation.js";
 import { createHash, randomUUID } from "node:crypto";
 import type {
   ThreadAutomationDefinition,
@@ -611,10 +612,16 @@ export class AutomationService implements DurableDeadlineSource {
       claimed = { run: replay, replayed: true };
     } else {
       this.#definition(scope, automationId);
-      if (
-        this.#inventory.getThread(scope, definition.anchorThreadId).inventory
-          .inventoryState === "snoozed"
-      )
+      const sourceState = this.#inventory.getThread(
+        scope,
+        definition.anchorThreadId,
+      ).inventory.inventoryState;
+      if (sourceState === "archived")
+        throw new DomainError(
+          "archived_thread",
+          "Restore this thread before running its automation manually.",
+        );
+      if (sourceState === "snoozed")
         throw new DomainError(
           "invalid_transition",
           "Wake this thread before running its automation manually.",
@@ -893,7 +900,7 @@ export class AutomationService implements DurableDeadlineSource {
       claimed.run.id,
       { claimToken: claimed.run.claimToken!, now, dispatch: false },
     );
-    if (admitted.state === "deferred") {
+    if (admitted.state !== "claimed") {
       this.publishRun(scope, admitted);
       return;
     }
@@ -1526,10 +1533,10 @@ function scheduledDispatchMutationId(
 
 function normalizeName(name: string): string {
   const value = name.trim();
-  if (!value || value.length > 160)
+  if (!value || value.length > MAXIMUM_AUTOMATION_NAME_LENGTH)
     throw new DomainError(
       "invalid_transition",
-      "Automation name must contain 1 to 160 characters.",
+      `Automation name must contain 1 to ${MAXIMUM_AUTOMATION_NAME_LENGTH} characters.`,
     );
   return value;
 }

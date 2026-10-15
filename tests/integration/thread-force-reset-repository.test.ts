@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { AutomationForkTargetResolver } from "../../src/server/runtime/automation-fork-target.js";
 import type Database from "better-sqlite3";
 import { parseResolvedBackendConfiguration } from "../support/resolved-backend-configuration.js";
 import { openOverlayDatabase } from "../../src/server/db/database.js";
@@ -1165,6 +1166,115 @@ describe("thread force-reset repository", () => {
           failureAcknowledgedAt: 700,
         },
       );
+    } finally {
+      current.database.close();
+    }
+  });
+
+  it("abandons a deferred copied result after its independent first-send is force-reset", async () => {
+    const current = fixture();
+    try {
+      const automations = new AutomationRepository(current.database);
+      const bindings = new ConversationBindingRepository(current.database);
+      const inventory = new InventoryRepository(current.database);
+      const creation = new ConversationCreationRepository(current.database);
+      const definition = automations.createDefinition(current.scope, {
+        id: "deferred-copy", anchorThreadId: current.rootId, name: "Deferred copy",
+        prompt: "Send the update", precheck: null, runMode: "clone", enabled: true,
+        schedule: { kind: "date_time", runAt: 500 }, misfirePolicy: null,
+        nextRunAt: 500, now: 400,
+      });
+      const run = automations.claimScheduledOccurrence(current.scope, definition.id, {
+        runId: "deferred-copy-run", occurrenceKey: "scheduled:500", scheduledFor: 500,
+        lastScheduledAt: 500, nextRunAt: null, coalescedCount: 0,
+        claimToken: "copy-claim", leaseExpiresAt: 10_000,
+        dispatchMutationId: "copy-dispatch", now: 500,
+      }).run;
+      automations.checkRunAdmission(current.scope, definition.id, run.id, {
+        claimToken: run.claimToken!, dispatch: true, now: 501,
+      });
+      current.database.transaction(() => {
+        bindings.recordThreadConfigurationCopyReceipt(current.scope, current.childId, {
+          sourceApplicationThreadId: current.rootId, workspaceId: current.workspaceId,
+          targetId: inventory.getThread(current.scope, current.childId).thread.connectionProfileId,
+          title: "Copied result", mutationId: run.dispatchMutationId,
+          automation: { automationId: definition.id, automationRunId: run.id }, now: 502,
+        });
+        automations.bindResultChild(current.scope, definition.id, run.id, {
+          claimToken: run.claimToken!, childThreadId: current.childId, now: 502,
+        });
+      })();
+      // A user starts the published result before the automation submits to it.
+      creation.prepare(current.scope, current.childId, {
+        attemptId: "user-copy-start", mutationId: "user-copy-start",
+        expectedThreadRevision: revision(current, current.childId),
+        creationKind: "first_input", sourceKind: "direct_input",
+        initialInputText: "User input", initialAttachmentIds: [],
+        backendCreationCorrelation: "user-copy-start", now: 503,
+      });
+      creation.markExternalCallStarted(current.scope, current.childId, "user-copy-start", 504);
+      creation.markRecoveryRequired(current.scope, current.childId, "user-copy-start", {
+        expected: "external_call_started", diagnostic: "Creation acceptance unknown", now: 505,
+      });
+      expect(inventory.getThread(current.scope, current.childId).thread.backingState).toBe("creation_unknown");
+      automations.deferRun(current.scope, definition.id, run.id, {
+        expectedState: "dispatching", claimToken: run.claimToken!,
+        reason: "source_recovery", eligibleAt: null, now: 506,
+      });
+      const resets = new ThreadForceResetRepository(current.database);
+      expect(resets.impact(current.scope, current.rootId).blockers).toEqual([{ kind: "automation_run", count: 1 }]);
+      const impact = resets.impact(current.scope, current.childId);
+      expect(impact.blockers).toContainEqual({ kind: "automation_run", count: 1 });
+      const reset = resets.forceReset(current.scope, current.childId, {
+        expectedBlockerFingerprint: impact.blockerFingerprint, mutationId: "reset-copied-result", now: 600,
+      });
+      expect(reset.resetRunAnchorThreadIds).toEqual([current.rootId]);
+      const abandoned = automations.getRun(current.scope, definition.id, run.id);
+      expect(abandoned).toMatchObject({
+        state: "failed", errorCode: "force_reset", forceResetAt: 600,
+        childThreadId: current.childId,
+        deferredReason: "source_recovery", eligibleAt: null, suppressionPending: false,
+      });
+      expect(automations.listDeferredRuns(100_000, 10)).toEqual([]);
+      expect(automations.getNearestDeadline()).toBeNull();
+      expect(automations.isExhausted(current.scope, definition.id)).toBe(true);
+      expect(() => automations.reclaimDeferredRun(current.scope, definition.id, run.id, {
+        claimToken: "late-claim", leaseExpiresAt: 100_000, now: 700,
+      })).toThrow("deferred run changed");
+      const copy = vi.fn();
+      const resolver = new AutomationForkTargetResolver({
+        automations, bindings, creation, inventory,
+        savedAgents: { createAutomationForkFromDraft: copy } as never,
+        policy: { assertCanAutomate: vi.fn() },
+      });
+      await expect(resolver.resolve({
+        scope: current.scope, automationId: definition.id, automationRunId: run.id,
+        anchorThreadId: current.rootId, dispatchMutationId: run.dispatchMutationId,
+        claimToken: run.claimToken!, runMode: "clone", prompt: run.promptSnapshot!, resultTitleSuffix: " update",
+      })).rejects.toMatchObject({ code: "conflict" });
+      expect(copy).not.toHaveBeenCalled();
+      expect(automations.getRun(current.scope, definition.id, run.id)).toEqual(abandoned);
+      expect(current.database.prepare("SELECT count(*) AS count FROM application_threads").get()).toEqual({ count: 3 });
+
+      // New work anchored to the abandoned source also terminates before a shell
+      // precheck or a provider operation can be started, retaining the one-shot.
+      const later = automations.createDefinition(current.scope, {
+        id: "after-reset", anchorThreadId: current.childId, name: "After reset",
+        prompt: "Should not submit", precheck: { command: "exit 0", timeoutSeconds: 30, includeStdout: false },
+        runMode: "same_thread", enabled: true, schedule: { kind: "date_time", runAt: 800 },
+        misfirePolicy: null, nextRunAt: 800, now: 700,
+      });
+      const laterRun = automations.claimScheduledOccurrence(current.scope, later.id, {
+        runId: "after-reset-run", occurrenceKey: "scheduled:800", scheduledFor: 800,
+        lastScheduledAt: 800, nextRunAt: null, coalescedCount: 0,
+        claimToken: "later-claim", leaseExpiresAt: 10_000,
+        dispatchMutationId: "after-reset-dispatch", now: 800,
+      }).run;
+      expect(automations.checkRunAdmission(current.scope, later.id, laterRun.id, {
+        claimToken: laterRun.claimToken!, dispatch: false, now: 801,
+      })).toMatchObject({ state: "failed", errorCode: "automation_source_force_reset", precheckStatus: "pending" });
+      expect(automations.getDefinition(current.scope, later.id)).toMatchObject({ enabled: false, completedAt: 801, deletedAt: null });
+      expect(automations.getNearestDeadline()).toBeNull();
     } finally {
       current.database.close();
     }

@@ -1,3 +1,4 @@
+import { MAXIMUM_AUTOMATION_NAME_LENGTH } from "../../../shared/protocol/automation.js";
 import { Type } from "typebox";
 import {
   AGENT_TOOL_JSON_SCHEMA_DIALECT,
@@ -6,6 +7,7 @@ import {
 
 const isoDate = () => Type.String({ minLength: 20, maxLength: 40 });
 const id = () => Type.String({ minLength: 1, maxLength: 128 });
+export const automationNameToolSchema = Type.String({ minLength: 1, maxLength: MAXIMUM_AUTOMATION_NAME_LENGTH });
 
 export const automationScheduleToolSchema = Type.Union([
   Type.Object(
@@ -94,7 +96,7 @@ export const automationDefinitionToolOutputSchema =
       {
         id: id(),
         threadId: id(),
-        name: Type.String({ minLength: 1, maxLength: 240 }),
+        name: automationNameToolSchema,
         source: Type.Object(
           {
             title: Type.String({ maxLength: 240 }),

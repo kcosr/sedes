@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { AutomationSchedule } from "../../../shared/protocol/automation.js";
+import { MAXIMUM_AUTOMATION_NAME_LENGTH, type AutomationSchedule } from "../../../shared/protocol/automation.js";
 import { ApiError } from "../../api/ApiClient.js";
 import { mutationId } from "../../lib/ids.js";
 import {
@@ -246,7 +246,7 @@ export function useAutomationEditor(
   const promptBytes = utf8Bytes(prompt);
   const commandBytes = utf8Bytes(form.precheckCommand.trim());
   const precheck = precheckFromForm(form);
-  const cloneUnavailable = form.runMode === "clone" && !options.canCloneOnRun;
+  const cloneUnavailable = form.runMode === "clone" && definition?.runMode !== "clone" && !options.canCloneOnRun;
   const validation: AutomationEditorValidation = {
     promptBytes,
     ...(promptBytes > MAXIMUM_PROMPT_BYTES
@@ -262,7 +262,7 @@ export function useAutomationEditor(
     cloneUnavailable,
     valid:
       form.name.trim().length > 0 &&
-      form.name.trim().length <= 240 &&
+      form.name.trim().length <= MAXIMUM_AUTOMATION_NAME_LENGTH &&
       prompt.length > 0 &&
       promptBytes <= MAXIMUM_PROMPT_BYTES &&
       schedule !== undefined &&

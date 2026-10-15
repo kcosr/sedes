@@ -538,6 +538,21 @@ export class AutomationRepository {
             "conflict",
             "The automation no longer owns its admission claim.",
           );
+        const sourceCreationWasReset = this.database.prepare(`
+          SELECT 1 FROM application_threads
+          WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?
+            AND backing_state IN ('creating', 'creation_unknown') AND force_reset_at IS NOT NULL
+        `).get(scope.tenantId, scope.principalId, run.anchorThreadId);
+        if (sourceCreationWasReset) {
+          const definition = this.getDefinition(scope, automationId);
+          return this.updateRunState(scope, automationId, runId, {
+            expectedState: "claimed", state: "failed", claimToken: input.claimToken,
+            errorCode: "automation_source_force_reset",
+            errorDiagnostic: "The automation source creation was force-reset.",
+            completeDefinition: run.occurrenceKind === "scheduled" && definition.schedule.kind === "date_time",
+            now: input.now,
+          });
+        }
         const block = this.runAdmissionBlock(scope, run, input.now);
         if (block)
           return this.deferRun(scope, automationId, runId, {

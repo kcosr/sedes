@@ -72,6 +72,7 @@ export interface AutomationThreadExecutionStateReader {
     readonly backingState:
       "unbound" | "creating" | "bound" | "creation_unknown";
     readonly revision: number;
+    readonly creationForceReset: boolean;
   };
 }
 
@@ -177,6 +178,10 @@ export class LifecycleAutomationConversationGateway implements AutomationConvers
       }
       return queueResult(targetThreadId, existing);
     }
+    const thread = this.#threads.read(input.scope, targetThreadId);
+    if (thread.creationForceReset) {
+      throw new DomainError("invalid_transition", "The automation target creation was force-reset.");
+    }
     if (this.#firstInput.hasMutation(input.scope, input.dispatchMutationId)) {
       const result = await this.#firstInput.submit({
         scope: input.scope, applicationThreadId: targetThreadId,
@@ -188,7 +193,6 @@ export class LifecycleAutomationConversationGateway implements AutomationConvers
     }
     this.#executionPolicy.assertCanAutomate(input.scope, input.anchorThreadId);
     this.#executionPolicy.assertCanAutomate(input.scope, targetThreadId);
-    const thread = this.#threads.read(input.scope, targetThreadId);
     if (thread.backingState === "bound") {
       await this.#queue.enqueue(input.scope, targetThreadId, {
         mutationId: input.dispatchMutationId, text: input.prompt,

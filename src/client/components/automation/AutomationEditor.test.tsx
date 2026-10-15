@@ -79,4 +79,21 @@ describe("automation editor", () => {
     expect(fixture.api.updateAutomation).not.toHaveBeenCalled();
   });
 
+  it("keeps an existing Fork editable while explaining its current source limitation", async () => {
+    const saved = definition({ runMode: "clone" });
+    const fixture = automationStore([{ automation: saved }], {
+      getThreadAutomationCapability: vi.fn().mockResolvedValue({ available: false, canAttach: false, canRunNow: false, canCloneOnRun: false }),
+      updateAutomation: vi.fn().mockResolvedValue(saved),
+    });
+    render(<AutomationEditor store={fixture.store} threadRegistry={fixture.threadRegistry} automationId={AUTOMATION_ID} />);
+    const name = await screen.findByRole("textbox", { name: "Name" });
+    expect(name).toHaveAttribute("maxlength", "160");
+    expect(screen.getByText(/You can edit this automation while keeping Fork/)).toBeInTheDocument();
+    await userEvent.setup().type(name, " edited");
+    const save = screen.getByRole("button", { name: "Save" });
+    await waitFor(() => expect(save).toBeEnabled());
+    await userEvent.setup().click(save);
+    expect(fixture.api.updateAutomation).toHaveBeenCalledWith(AUTOMATION_ID, expect.objectContaining({ runMode: "clone", name: "Nightly dependency audit edited" }));
+  });
+
 });

@@ -52,7 +52,8 @@ export const automationPrecheckSchema = z.strictObject({
 });
 export type AutomationPrecheck = z.infer<typeof automationPrecheckSchema>;
 
-export const automationNameSchema = z.string().trim().min(1).max(240);
+export const MAXIMUM_AUTOMATION_NAME_LENGTH = 160;
+export const automationNameSchema = z.string().trim().min(1).max(MAXIMUM_AUTOMATION_NAME_LENGTH);
 
 export const automationDeferredReasonSchema = z.enum([
   "snoozed",

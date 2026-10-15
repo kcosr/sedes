@@ -390,7 +390,7 @@ export class ThreadForceResetRepository {
         .prepare(
           `UPDATE automation_runs
            SET state = 'failed', claim_token = NULL, lease_expires_at = NULL,
-             prompt_snapshot = NULL, finished_at = ?,
+             prompt_snapshot = NULL, eligible_at = NULL, suppression_pending = 0, finished_at = ?,
              error_code = 'force_reset',
              error_diagnostic = 'The user force-reset this unresolved Sedes automation run.',
              updated_at = max(updated_at, ?), force_reset_at = ?,
@@ -401,7 +401,7 @@ export class ThreadForceResetRepository {
                OR child_thread_id IN (${placeholders})
              )
              AND force_reset_at IS NULL
-             AND state IN ('claimed', 'dispatching', 'queued', 'running', 'uncertain')`,
+             AND state IN ('claimed', 'dispatching', 'queued', 'running', 'uncertain', 'deferred')`,
         )
         .run(
           input.now,
@@ -734,7 +734,7 @@ export class ThreadForceResetRepository {
              anchor_thread_id IN (${placeholders})
              OR child_thread_id IN (${placeholders})
            )
-           AND state IN ('claimed', 'dispatching', 'queued', 'running', 'uncertain')`,
+           AND state IN ('claimed', 'dispatching', 'queued', 'running', 'uncertain', 'deferred')`,
       )
       .all(
         ...threadIds,

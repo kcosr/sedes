@@ -92,7 +92,7 @@ export function automationActionAvailability(
         unknown ?? inFlight ?? exhausted ?? (enable ? (archived ?? unavailable) : undefined),
       ),
     },
-    edit: availability(unknown ?? archived ?? unavailable),
+    edit: availability(unknown ?? archived ?? (thread.automation.runMode === "clone" ? undefined : unavailable)),
     remove: availability(unknown ?? inFlight),
   };
 }

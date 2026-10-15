@@ -14,6 +14,7 @@ function fixture(options: {
   copyReceipt?: string;
   nativeAttempt?: boolean;
   missingChild?: boolean;
+  resetThreadId?: string;
 } = {}) {
   const getThread = vi.fn((_scope, id: string) => {
     if (options.missingChild && id !== "source") throw new DomainError("not_found", "The result was deleted.");
@@ -31,7 +32,7 @@ function fixture(options: {
     automations: { getRun: () => run, bindResultChild },
     bindings: { findThreadConfigurationCopyReceipt: getReceipt },
     creation: { findByMutationId: () => options.nativeAttempt ? { creationKind: "fork" } : undefined },
-    inventory: { getThread, assertWorkspaceActive: vi.fn() },
+    inventory: { getThread, assertWorkspaceActive: vi.fn(), isThreadCreationForceReset: (_scope: unknown, id: string) => options.resetThreadId === id },
     savedAgents: { createAutomationForkFromDraft: create },
     policy: { assertCanAutomate: vi.fn() },
   } as unknown as ConstructorParameters<typeof AutomationForkTargetResolver>[0]);
@@ -75,6 +76,20 @@ describe("automation Fork target selection", () => {
   it("never replaces a deleted result", async () => {
     const setup = fixture({ boundChild: "deleted-copy", missingChild: true });
     await expect(setup.resolver.resolve(input)).rejects.toMatchObject({ code: "not_found" });
+    expect(setup.create).not.toHaveBeenCalled();
+  });
+
+  it.each(["binding", "receipt"] as const)("rejects a reset result recovered from its %s without copying again", async (artifact) => {
+    const setup = fixture({ resetThreadId: "reset-copy", ...(artifact === "binding" ? { boundChild: "reset-copy" } : { copyReceipt: "reset-copy" }) });
+    await expect(setup.resolver.resolve(input)).rejects.toMatchObject({ code: "invalid_transition" });
+    expect(setup.create).not.toHaveBeenCalled();
+    expect(setup.bindResultChild).not.toHaveBeenCalled();
+    expect(setup.getThread).not.toHaveBeenCalledWith(input.scope, "source");
+  });
+
+  it("rejects a force-reset source instead of deferring it forever", async () => {
+    const setup = fixture({ backingState: "creation_unknown", resetThreadId: "source" });
+    await expect(setup.resolver.resolve(input)).rejects.toMatchObject({ code: "invalid_transition" });
     expect(setup.create).not.toHaveBeenCalled();
   });
 

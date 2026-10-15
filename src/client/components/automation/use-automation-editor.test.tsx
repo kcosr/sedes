@@ -6,8 +6,8 @@ import { AUTOMATION_ID, THREAD_ID, automationStore, definition } from "./automat
 
 afterEach(cleanup);
 
-function editHook(fixture: ReturnType<typeof automationStore>, saved = definition()) {
-  return renderHook(({ live }) => useAutomationEditor(fixture.store, { id: THREAD_ID, automation: live }, { canCloneOnRun: true, automationId: saved.id }), { initialProps: { live: saved } });
+function editHook(fixture: ReturnType<typeof automationStore>, saved = definition(), canCloneOnRun = true) {
+  return renderHook(({ live }) => useAutomationEditor(fixture.store, { id: THREAD_ID, automation: live }, { canCloneOnRun, automationId: saved.id }), { initialProps: { live: saved } });
 }
 
 describe("independent automation editor", () => {
@@ -72,4 +72,38 @@ describe("independent automation editor", () => {
     await act(async () => { await result.current.remove(); });
     expect(fixture.api.deleteAutomation).toHaveBeenCalledWith(AUTOMATION_ID, 3, expect.any(String));
   });
+  it("allows name and prompt edits that retain an existing Fork when the source cannot fork now", async () => {
+    const saved = definition({ runMode: "clone" });
+    const update = vi.fn().mockResolvedValue({ ...saved, name: "Changed name" });
+    const fixture = automationStore([{ automation: saved }], { updateAutomation: update });
+    const { result } = editHook(fixture, saved, false);
+    await waitFor(() => expect(result.current.status).toBe("ready"));
+    act(() => result.current.update({ name: "Changed name", prompt: "An updated prompt" }));
+    await waitFor(() => expect(result.current.validation.valid).toBe(true));
+    await act(async () => { await result.current.save(); });
+    expect(update).toHaveBeenCalledWith(AUTOMATION_ID, expect.objectContaining({ name: "Changed name", prompt: "An updated prompt", runMode: "clone" }));
+  });
+
+  it("rejects changing an existing This thread automation to Fork while the source cannot fork", async () => {
+    const fixture = automationStore([{ automation: definition() }]);
+    const { result } = editHook(fixture, definition(), false);
+    await waitFor(() => expect(result.current.status).toBe("ready"));
+    act(() => result.current.update({ runMode: "clone" }));
+    await waitFor(() => expect(result.current.preview.checking).toBe(false));
+    expect(result.current.validation.cloneUnavailable).toBe(true);
+    expect(result.current.validation.valid).toBe(false);
+    await act(async () => { await result.current.save(); });
+    expect(fixture.api.updateAutomation).not.toHaveBeenCalled();
+  });
+
+  it("enforces the shared 160-character name boundary", async () => {
+    const fixture = automationStore([{ automation: null }]);
+    const { result } = renderHook(() => useAutomationEditor(fixture.store, { id: THREAD_ID, automation: null }, { canCloneOnRun: true }));
+    act(() => result.current.update({ name: "a".repeat(161), prompt: "Reminder" }));
+    await waitFor(() => expect(result.current.preview.checking).toBe(false));
+    expect(result.current.validation.valid).toBe(false);
+    act(() => result.current.update({ name: "a".repeat(160) }));
+    expect(result.current.validation.valid).toBe(true);
+  });
+
 });

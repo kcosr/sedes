@@ -35,6 +35,15 @@ const identity = {
 } as const;
 
 describe("normalized automation protocol", () => {
+  it("bounds names at 160 across create and presented definitions", () => {
+    const request={name:"n".repeat(160),threadId,initialState:"paused",prompt:"Review",runMode:"same_thread",schedule:{kind:"date_time",runAt:"2099-01-01T00:00:00.000Z"},misfirePolicy:null,precheck:null,mutationId:automationId};
+    expect(createAutomationRequestSchema.safeParse(request).success).toBe(true);
+    expect(createAutomationRequestSchema.safeParse({...request,name:request.name+"n"}).success).toBe(false);
+    const summary={...identity,name:request.name,status:"paused",runMode:"same_thread",scheduleKind:"date_time",revision:0,runsRevision:0,createdAt:"2026-10-15T00:00:00.000Z",updatedAt:"2026-10-15T00:00:00.000Z",hasPrecheck:false};
+    expect(threadAutomationSummarySchema.safeParse(summary).success).toBe(true);
+    expect(threadAutomationSummarySchema.safeParse({...summary,name:summary.name+"n"}).success).toBe(false);
+  });
+
   it("previews from an optional instant, given as an ISO date-time", () => {
     const schedule = {
       kind: "cron",

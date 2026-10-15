@@ -1807,6 +1807,7 @@ export async function startProductionApplication(
           return {
             backingState: thread.backingState,
             revision: thread.revision,
+            creationForceReset: inventoryRepository.isThreadCreationForceReset(eventScope, applicationThreadId),
           };
         },
       },

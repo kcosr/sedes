@@ -1,6 +1,7 @@
 import "./automations-view.css";
 import "./automation-page.css";
 import { Trash2 } from "lucide-react";
+import { MAXIMUM_AUTOMATION_NAME_LENGTH } from "../../../shared/protocol/automation.js";
 import { useEffect, useRef, useState } from "react";
 import {
   automationPath,
@@ -307,7 +308,7 @@ function ThreadAutomationEditor({
         >
           <SettingsSection id="automation-name" title="Name" card>
             <Field label="Name" id="automation-name-input">
-              <Input value={form.name} maxLength={240} required
+              <Input value={form.name} maxLength={MAXIMUM_AUTOMATION_NAME_LENGTH} required
                 onChange={(event) => editor.update({ name: event.target.value })} placeholder="Daily update" />
             </Field>
           </SettingsSection>
@@ -348,6 +349,7 @@ function ThreadAutomationEditor({
             value={form.runMode}
             onChange={(runMode) => editor.update({ runMode })}
             canCloneOnRun={capability?.canCloneOnRun ?? false}
+            savedRunMode={editor.definition?.runMode}
             forkDraftOnly={capability?.forkDraftOnly}
           />
           <AutomationPrecheckSection

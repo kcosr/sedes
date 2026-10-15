@@ -288,12 +288,14 @@ export class AutomationAgentToolService {
         : current.precheck,
     };
     validateMisfirePolicy(merged.schedule, merged.misfirePolicy);
-    await this.#assertCloneEligible(
-      operationScope,
-      threadId,
-      merged.runMode,
-      context.abortSignal,
-    );
+    if (merged.runMode === "clone" && current.runMode !== "clone") {
+      await this.#assertCloneEligible(
+        operationScope,
+        threadId,
+        merged.runMode,
+        context.abortSignal,
+      );
+    }
     const definition = this.#automations.update(
       operationScope,
       input.automationId,

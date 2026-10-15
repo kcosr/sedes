@@ -29,7 +29,7 @@ export class AutomationForkTargetResolver {
     const identity = { automationId: input.automationId, automationRunId: input.automationRunId };
     if (run.childThreadId) {
       // A deleted/reset child is a visible failure, never permission to copy again.
-      this.input.inventory.getThread(input.scope, run.childThreadId);
+      this.#assertResultAvailable(input, run.childThreadId);
       return { kind: "child", childThreadId: run.childThreadId };
     }
     const copy = this.input.bindings.findThreadConfigurationCopyReceipt(input.scope, {
@@ -39,7 +39,7 @@ export class AutomationForkTargetResolver {
       automation: identity,
     });
     if (copy) {
-      this.input.inventory.getThread(input.scope, copy.applicationThreadId);
+      this.#assertResultAvailable(input, copy.applicationThreadId);
       this.input.automations.bindResultChild(input.scope, input.automationId, input.automationRunId, {
         childThreadId: copy.applicationThreadId, claimToken: input.claimToken, now: Date.now(),
       });
@@ -51,6 +51,9 @@ export class AutomationForkTargetResolver {
       return { kind: "native" };
     }
     const source = this.input.inventory.getThread(input.scope, input.anchorThreadId).thread;
+    if (this.input.inventory.isThreadCreationForceReset(input.scope, input.anchorThreadId)) {
+      throw new DomainError("invalid_transition", "The automation source creation was force-reset.");
+    }
     if (source.backingState === "bound") return { kind: "native" };
     if (source.backingState !== "unbound") {
       throw new AutomationDeferredError(source.backingState === "creating" ? "source_materializing" : "source_recovery", "The automation source is waiting for conversation creation to settle.");
@@ -92,5 +95,12 @@ export class AutomationForkTargetResolver {
       throw error;
     }
     return { kind: "child", childThreadId: child.threadId };
+  }
+
+  #assertResultAvailable(input: AutomationConversationDispatchInput, childThreadId: string): void {
+    this.input.inventory.getThread(input.scope, childThreadId);
+    if (this.input.inventory.isThreadCreationForceReset(input.scope, childThreadId)) {
+      throw new DomainError("invalid_transition", "The automation result creation was force-reset.");
+    }
   }
 }

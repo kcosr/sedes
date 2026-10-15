@@ -72,7 +72,7 @@ execution context remain explicit. All other item commands take automation IDs.
 
 | Field | Meaning |
 | --- | --- |
-| `name` | Required nonempty display name, at most 240 characters; duplicates are allowed |
+| `name` | Required nonempty display name, at most 160 characters; duplicates are allowed |
 | `prompt` | Required prompt submitted on every invocation |
 | `runMode` | `same_thread` for **This thread**, or `clone` for **Fork** |
 | `schedule` | One-time, fixed interval, or cron schedule |

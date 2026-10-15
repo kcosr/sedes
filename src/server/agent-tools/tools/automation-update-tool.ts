@@ -7,6 +7,7 @@ import type {
 } from "./automation-agent-tool-service.js";
 import {
   automationDefinitionToolOutputSchema,
+  automationNameToolSchema,
   automationPrecheckToolSchema,
   automationReadWaitCeilings,
   automationScheduleToolSchema,
@@ -27,7 +28,7 @@ export function createAutomationUpdateToolDefinition(
     ...CANONICAL_AGENT_TOOL_MANIFEST["automation.update"],
     inputSchema: automationToolInputSchema(
       {
-        name: Type.Optional(Type.String({ minLength: 1, maxLength: 240 })),
+        name: Type.Optional(automationNameToolSchema),
         expectedRevision: Type.Integer({
           minimum: 0,
           maximum: Number.MAX_SAFE_INTEGER,

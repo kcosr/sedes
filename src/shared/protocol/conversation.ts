@@ -39,7 +39,7 @@ import {
 import {
   applicationTurnIdSchema,
 } from "./domain.js";
-import { threadAutomationsSummarySchema } from "./automation.js";
+import { automationNameSchema, threadAutomationsSummarySchema } from "./automation.js";
 import {
   MAXIMUM_THREAD_INPUT_BYTES,
   contextExcerptArraySchema,
@@ -1216,7 +1216,7 @@ export const normalizedThreadAttentionSchema = z.strictObject({
     .optional(),
   automationContexts: z.array(z.strictObject({
     automationId: z.uuid(),
-    name: z.string().min(1).max(240),
+    name: automationNameSchema,
     runId: z.string().min(1).max(160),
     sourceThreadId: z.string().min(1).max(160),
     triggeredAt: z.iso.datetime(),

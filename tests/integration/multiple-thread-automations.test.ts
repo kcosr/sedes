@@ -30,6 +30,7 @@ import {
   type AutomationDefinitionFields,
 } from "../../src/server/domain/automation-service.js";
 import { AutomationDispatcher } from "../../src/server/runtime/automation-dispatcher.js";
+import { readThreadAutomationContexts } from "../../src/server/application/thread-automation-context.js";
 
 const configuration = parseResolvedBackendConfiguration({
   schemaVersion: 10,
@@ -347,6 +348,36 @@ describe("multiple independent thread automations", () => {
     expect(
       service.listRuns(scope, created.id, { pageSize: 10 }).items,
     ).toHaveLength(2);
+  });
+
+  it("rejects new manual work on an archived source without reserving its mutation", async () => {
+    const created = create("Daily report", recurring());
+    const mutationId = randomUUID();
+    const transition = (action: "archive" | "restore") =>
+      inventory.transitionInventory(scope, threadId, {
+        expectedRevision: inventory.getInventory(scope, threadId)
+          .inventoryRevision,
+        mutationId: randomUUID(),
+        change: { action },
+        now: ++now,
+      });
+    transition("archive");
+    await expect(
+      service.runNow(scope, created.id, mutationId, now),
+    ).rejects.toMatchObject({ code: "archived_thread" });
+    expect(repository.listRuns(scope, created.id, { limit: 10 })).toEqual([]);
+    expect(dispatch).not.toHaveBeenCalled();
+
+    transition("restore");
+    const completed = await service.runNow(scope, created.id, mutationId, now);
+    expect(completed.state).toBe("completed");
+    expect(dispatch).toHaveBeenCalledTimes(1);
+
+    transition("archive");
+    await expect(
+      service.runNow(scope, created.id, mutationId, now),
+    ).resolves.toMatchObject({ id: completed.id, state: "completed" });
+    expect(dispatch).toHaveBeenCalledTimes(1);
   });
 
   it("defers snoozed reminders without a lease and delivers once after an early wake", async () => {
@@ -712,5 +743,208 @@ describe("multiple independent thread automations", () => {
     await settle();
     expect(service.getNearestDeadline()).toBe(70_000);
     expect(dispatch).toHaveBeenCalledTimes(2);
+  });
+  it.each([
+    { mode: "same_thread", state: "completed", visible: false },
+    { mode: "same_thread", state: "completed", visible: true },
+    { mode: "same_thread", state: "failed", visible: false },
+    { mode: "same_thread", state: "failed", visible: true },
+    { mode: "clone", state: "completed", visible: false },
+    { mode: "clone", state: "completed", visible: true },
+    { mode: "clone", state: "failed", visible: false },
+    { mode: "clone", state: "failed", visible: true },
+  ] as const)(
+    "preserves historical $mode $state attention visibility=$visible",
+    ({ mode, state, visible }) => {
+      const previous = new Database(preMigrationSeed);
+      previous.pragma("foreign_keys=ON");
+      try {
+        const definitionId = randomUUID(),
+          runId = randomUUID();
+        const source = new InventoryRepository(previous).getThread(
+          scope,
+          threadId,
+        ).thread;
+        const child =
+          mode === "clone"
+            ? new ConversationBindingRepository(previous).createUnboundThread(
+                scope,
+                {
+                  workspaceId: source.workspaceId,
+                  connectionProfileId: source.connectionProfileId,
+                  title: "Prior fork result",
+                  now: 1_000,
+                },
+              ).id
+            : null;
+        new AutomationRepository(previous).createDefinition(scope, {
+          id: definitionId,
+          anchorThreadId: threadId,
+          name: "Prior schedule",
+          prompt: "Prior prompt",
+          precheck: null,
+          runMode: mode,
+          enabled: false,
+          schedule: { kind: "interval", anchorAt: 1_000, everySeconds: 300 },
+          misfirePolicy: "coalesce",
+          nextRunAt: null,
+          now: 1_000,
+        });
+        previous
+          .prepare(
+            `INSERT INTO automation_runs(tenant_id,owner_principal_id,automation_id,id,occurrence_kind,scheduled_for,occurrence_key,definition_revision,coalesced_count,run_mode,state,claim_token,lease_expires_at,claim_attempt_count,prompt_snapshot,dispatch_mutation_id,anchor_thread_id,child_thread_id,claimed_at,started_at,accepted_at,finished_at,created_at,updated_at,precheck_status,error_code,error_diagnostic) VALUES(?,?,?,?,'scheduled',10000,'scheduled:10000',0,0,?,?,NULL,NULL,1,NULL,?,?,?,10000,10000,?,11000,10000,11000,'not_configured',?,?)`,
+          )
+          .run(
+            scope.tenantId,
+            scope.principalId,
+            definitionId,
+            runId,
+            mode,
+            state,
+            runId,
+            threadId,
+            child,
+            state === "completed" ? 10_000 : null,
+            state === "failed" ? "automation_dispatch_failed" : null,
+            state === "failed" ? "Prior failure" : null,
+          );
+        const target = child ?? threadId;
+        if (visible)
+          previous
+            .prepare(
+              `UPDATE thread_principal_state SET automation_context_run_id=?,automation_context_source_thread_id=?,automation_context_at=11000,automation_context_outcome=?,automation_context_diagnostic=? WHERE tenant_id=? AND principal_id=? AND thread_id=?`,
+            )
+            .run(
+              runId,
+              threadId,
+              state === "completed" ? "triggered" : "failed",
+              state === "failed" ? "Prior failure" : null,
+              scope.tenantId,
+              scope.principalId,
+              target,
+            );
+        previous
+          .prepare(
+            `UPDATE thread_principal_state SET pinned=1,pin_revision=7,bookmark_revision=3,group_assignment_revision=2 WHERE tenant_id=? AND principal_id=? AND thread_id=?`,
+          )
+          .run(scope.tenantId, scope.principalId, target);
+        applyDatabaseMigrations(previous, backendNormalizedMigrations);
+        const current = new AutomationRepository(previous);
+        expect(current.getRun(scope, definitionId, runId).acknowledgedAt).toBe(
+          visible ? null : 11_000,
+        );
+        const contexts = readThreadAutomationContexts(previous, scope, target);
+        if (visible)
+          expect(contexts).toEqual([
+            expect.objectContaining({
+              automationId: definitionId,
+              runId,
+              outcome: state === "completed" ? "triggered" : "failed",
+            }),
+          ]);
+        else {
+          expect(contexts).toEqual([]);
+          expect(
+            readThreadAutomationContexts(previous, scope, threadId),
+          ).toEqual([]);
+          expect(current.attentionRun(scope, definitionId)).toBeUndefined();
+        }
+        expect(
+          previous
+            .prepare(
+              `SELECT pinned,pin_revision AS pinRevision,bookmark_revision AS bookmarkRevision,group_assignment_revision AS groupRevision FROM thread_principal_state WHERE tenant_id=? AND principal_id=? AND thread_id=?`,
+            )
+            .get(scope.tenantId, scope.principalId, target),
+        ).toEqual({
+          pinned: 1,
+          pinRevision: 7,
+          bookmarkRevision: 3,
+          groupRevision: 2,
+        });
+        expect(
+          (
+            previous.pragma("table_info(thread_principal_state)") as {
+              name: string;
+            }[]
+          ).some((column) => column.name.startsWith("automation_context_")),
+        ).toBe(false);
+        expect(previous.pragma("foreign_key_check")).toEqual([]);
+      } finally {
+        previous.close();
+      }
+    },
+  );
+
+  it("keeps historical uncertainty unresolved while acknowledging silent manual failures", () => {
+    const previous = new Database(preMigrationSeed);
+    previous.pragma("foreign_keys=ON");
+    try {
+      const bindings = new ConversationBindingRepository(previous),
+        inventory = new InventoryRepository(previous);
+      const source = inventory.getThread(scope, threadId).thread;
+      for (const state of ["failed", "uncertain"] as const) {
+        const target = bindings.createUnboundThread(scope, {
+          workspaceId: source.workspaceId,
+          connectionProfileId: source.connectionProfileId,
+          title: state,
+          now: 1_000,
+        }).id;
+        const id = randomUUID(),
+          runId = randomUUID();
+        new AutomationRepository(previous).createDefinition(scope, {
+          id,
+          anchorThreadId: target,
+          name: state,
+          prompt: "Historical manual prompt",
+          precheck: null,
+          runMode: "same_thread",
+          enabled: false,
+          schedule: { kind: "interval", anchorAt: 1_000, everySeconds: 300 },
+          misfirePolicy: "coalesce",
+          nextRunAt: null,
+          now: 1_000,
+        });
+        previous
+          .prepare(
+            `INSERT INTO automation_runs(tenant_id,owner_principal_id,automation_id,id,occurrence_kind,scheduled_for,occurrence_key,definition_revision,coalesced_count,run_mode,state,claim_token,lease_expires_at,claim_attempt_count,prompt_snapshot,dispatch_mutation_id,anchor_thread_id,claimed_at,started_at,finished_at,created_at,updated_at,precheck_status,error_code) VALUES(?,?,?,?,'manual',10000,?,0,0,'same_thread',?,NULL,NULL,1,?,?,?,10000,10000,?,10000,11000,'not_configured',?)`,
+          )
+          .run(
+            scope.tenantId,
+            scope.principalId,
+            id,
+            runId,
+            `manual:${runId}`,
+            state,
+            state === "uncertain" ? "Historical manual prompt" : null,
+            runId,
+            target,
+            state === "uncertain" ? null : 11_000,
+            state === "uncertain"
+              ? "automation_dispatch_uncertain"
+              : "automation_dispatch_failed",
+          );
+      }
+      applyDatabaseMigrations(previous, backendNormalizedMigrations);
+      const rows = previous
+        .prepare(
+          "SELECT state,acknowledged_at AS acknowledgedAt FROM automation_runs ORDER BY state",
+        )
+        .all();
+      expect(rows).toEqual([
+        { state: "failed", acknowledgedAt: 11_000 },
+        { state: "uncertain", acknowledgedAt: null },
+      ]);
+      const uncertain = previous
+        .prepare(
+          "SELECT automation_id AS id FROM automation_runs WHERE state='uncertain'",
+        )
+        .get() as { id: string };
+      expect(
+        new AutomationRepository(previous).attentionRun(scope, uncertain.id)
+          ?.state,
+      ).toBe("uncertain");
+    } finally {
+      previous.close();
+    }
   });
 });
