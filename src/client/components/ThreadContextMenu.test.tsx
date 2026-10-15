@@ -1151,6 +1151,7 @@ describe("ThreadContextMenu content per thread state", () => {
     expect(items.map((item) => item.textContent)).toEqual([
       "Move to group",
       "Restore to Active",
+      "Automations…",
       "New with same settings",
       "Copy ID",
     ]);

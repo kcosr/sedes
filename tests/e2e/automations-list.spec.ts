@@ -147,7 +147,7 @@ test("lists every automation from the More menu and opens one", async ({
   await page.setViewportSize({ width: 390, height: 844 });
   const phoneRow = row(page, weeklyAutomation);
   await expect(phoneRow.locator('[data-layout="narrow"]')).toHaveText(
-    "Not started · Every Monday at 9:00 AM UTC",
+    "Not started · Weekly release notes draft · Every Monday at 9:00 AM UTC",
   );
   await expect(phoneRow.locator('[data-layout="wide"]')).toBeHidden();
   await expect(
