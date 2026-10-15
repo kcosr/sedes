@@ -79,6 +79,7 @@ User-facing changes are collected here before release. See the
 - macOS preview packages ad hoc sign Sedes and its helpers with their bundle
   identities, fixing Local Network connections that failed when launched from
   Finder. Package verification rejects mismatched or incomplete signatures.
+  ([#86](https://github.com/kcosr/sedes/pull/86))
 
 - Sending an inline Page response exits preview interaction mode and returns
   focus to the chat controls.
