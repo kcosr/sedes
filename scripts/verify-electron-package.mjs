@@ -7,6 +7,7 @@ import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { electronBuilderUnpackedDirectory } from "./electron-package-layout.mjs";
+import { verifyMacSignatures } from "./electron-macos-signatures.mjs";
 
 const repositoryRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -248,6 +249,10 @@ async function verifyPackaged() {
     unpackedName,
   );
   const resourcesRoot = process.platform === "darwin" ? path.join(unpackedRoot, "Sedes.app/Contents/Resources") : path.join(unpackedRoot, "resources");
+  if (process.platform === "darwin") {
+    await verifyMacSignatures(path.join(unpackedRoot, "Sedes.app"), expectedAppId);
+    process.stdout.write("Electron macOS app and helper signatures verified.\n");
+  }
   const localServerRoot = path.join(resourcesRoot, "local-server");
   const asar = path.join(resourcesRoot, "app.asar");
   if (!(await stat(asar)).isFile())
@@ -504,6 +509,18 @@ async function verifyPackaged() {
       if ((metadata.mode & 0o777) !== expectedMode) {
         throw new Error(`electron_local_server_mode_invalid:${relative}`);
       }
+    }
+  }
+  const sidecarRoot = path.join(localServerRoot, "dist/sidecar");
+  const sidecarManifest = JSON.parse(await readFile(path.join(sidecarRoot, "manifest.json"), "utf8"));
+  const sidecarFiles = [
+    { relativePath: sidecarManifest.filename, sha256: sidecarManifest.sha256, size: sidecarManifest.bytes },
+    ...sidecarManifest.nativeAssets.flatMap(asset => asset.files),
+  ];
+  for (const entry of sidecarFiles) {
+    const filename = path.join(sidecarRoot, entry.relativePath);
+    if ((await stat(filename)).size !== entry.size || await digest(filename) !== entry.sha256) {
+      throw new Error(`electron_sidecar_artifact_integrity_invalid:${entry.relativePath}`);
     }
   }
   const executable = process.platform === "darwin"

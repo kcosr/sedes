@@ -162,10 +162,16 @@ platform, architecture, Electron ABI, and native provider packages; it is not
 a cross-compilation step. Run `npm run electron:verify -- --profile PROFILE`
 for each selected profile on every Linux, macOS, or Windows target. Build and
 verify Windows profiles on Windows; Linux checks do not establish Windows
-or macOS compatibility. macOS
-distribution additionally requires Apple signing and notarization on macOS;
-Windows distribution requires its own code-signing setup. An unsigned build
-from this preview workflow is suitable only for deliberate local testing.
+or macOS compatibility. macOS previews use free ad hoc signing (`mac.identity`
+is `-`) so Sedes and its helpers have signatures matching their bundle IDs.
+This lets macOS attribute Local Network permission to Sedes when launched from
+Finder. These signatures do not establish an Apple-verified publisher.
+Checksum-bound sidecar native artifacts retain their original bytes and are
+covered by the app's resource seal; verification checks their manifest hashes.
+macOS release distribution additionally requires an Apple certificate identity
+and notarization on macOS; override `mac.identity` when configuring a release.
+Windows distribution requires its own code-signing setup. Preview builds are
+suitable only for deliberate local testing.
 
 ## Use managed Local
 
@@ -440,6 +446,8 @@ Prefix these commands with `env -u NODE_ENV`.
 `electron:verify` checks both the synchronized source and the assembled package:
 
 - synchronized files exactly match `dist/client` by listing and SHA-256;
+- on macOS, the app passes strict recursive signature verification and the app
+  and helper signatures match their bundle IDs with bound property lists;
 - the content-security policy retains the expected network and framing rules;
 - the renderer origin remains exactly `capacitor-electron://localhost`;
 - permission checks and permission requests remain denied except for sanitized
@@ -459,6 +467,11 @@ Prefix these commands with `env -u NODE_ENV`.
   its Electron-ABI native modules, passes health, the normalized session
   handshake, and the initial application SSE snapshot;
   exercises switching and rollback, and leaves no managed child after exit.
+
+The macOS smoke uses the logged-in user's home directory to reach the login
+Keychain; its application preferences and managed Local state use disposable
+Electron user data. Run it in a logged-in desktop session with an available
+Keychain.
 
 Generated `electron/app`, `electron/build`, `electron/generated`,
 `electron/vendor`, and `electron/dist` content is ignored and must not be
@@ -563,7 +576,8 @@ Currently:
 - electron-builder uses the provider-neutral application ID
   `dev.sedes.local`;
 - its homepage points to the [Sedes repository](https://github.com/kcosr/sedes);
-- the build has no macOS signing/notarization, Windows code-signing, Linux
+- the build has only macOS ad hoc signing, without Apple certificate signing
+  or notarization, Windows code-signing, Linux
   package-signing, or update/publication configuration;
 - only a general PNG artwork source is present, without reviewed platform icon
   assets for every target; and
