@@ -156,8 +156,9 @@ export async function runElectronDistribution(options) {
   await node(['scripts/verify-electron-package.mjs', '--packaged']);
   const validation = {
     synchronizedAssets: true, packageContents: true, nativeRuntime: options.profile === 'full',
+    macSignatures: process.platform === 'darwin',
     runtimeSmoke: false, liveProviders: false,
-    limitations: ['Validated only on the recorded host; other platforms require independent validation.', 'Unsigned preview; installation, signing, and live providers are not validated by this command.'],
+    limitations: ['Validated only on the recorded host; other platforms require independent validation.', 'Preview build; installation, Apple certificate signing, notarization, and live providers are not validated by this command.'],
   };
   // Preserve truthful provenance even when the runtime gate fails after a
   // successful package build (for example, a host without a secure keyring).

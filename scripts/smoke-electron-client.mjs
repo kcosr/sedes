@@ -441,7 +441,10 @@ async function launchElectron() {
     cwd: packaged ? launchHomeDirectory : electronRoot,
     env: {
       ...process.env,
-      HOME: launchHomeDirectory,
+      // macOS safeStorage needs the user's login Keychain. An empty HOME can
+      // trigger a missing-Keychain password dialog instead of testing storage.
+      // Electron preferences and server state remain in disposable userData.
+      HOME: process.platform === "darwin" ? os.homedir() : launchHomeDirectory,
       PATH: `${fakeSshDirectory}${path.delimiter}${process.env.PATH ?? ""}`,
       SEDES_ELECTRON_SMOKE_SSH_LOG: fakeSshLog,
       ...(process.platform === "win32"

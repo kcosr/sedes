@@ -43,6 +43,12 @@ module.exports = {
     syncDesktopName: true,
   },
   mac: {
+    // Sign preview bundles even without an Apple certificate. Leaving Electron's
+    // original signature makes macOS attribute Local Network access incorrectly.
+    identity: '-',
+    // These cross-platform sidecar artifacts are checksum-bound by manifest.json;
+    // re-signing would change their bytes and invalidate remote installation.
+    signIgnore: ['/Contents/Resources/local-server/dist/sidecar/native/'],
     category: 'public.app-category.developer-tools',
     icon: 'assets/icon.png',
     extendInfo: {
