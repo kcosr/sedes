@@ -1,7 +1,7 @@
 import type { AgentToolDefinition } from "../contracts/agent-tool-contracts.js";
 import type {
   AutomationAgentToolService,
-  AutomationTargetInput,
+  AutomationRunNowToolInput,
   AutomationToolRun,
 } from "./automation-agent-tool-service.js";
 import {
@@ -10,7 +10,8 @@ import {
   automationToolExposure,
   automationToolInputSchema,
   automationToolPresentations,
-  optionalAutomationThreadId,
+  requiredAutomationId,
+  automationMutationId,
 } from "./automation-tool-schemas.js";
 import {
   AGENT_TOOL_JSON_SCHEMA_DIALECT,
@@ -24,17 +25,18 @@ export const automationRunNowToolId =
 
 export function createAutomationRunNowToolDefinition(
   service: AutomationAgentToolService,
-): AgentToolDefinition<AutomationTargetInput, AutomationToolRun> {
+): AgentToolDefinition<AutomationRunNowToolInput, AutomationToolRun> {
   return {
     ...CANONICAL_AGENT_TOOL_MANIFEST["automation.run_now"],
     inputSchema: automationToolInputSchema({
-      threadId: optionalAutomationThreadId,
+      automationId: requiredAutomationId,
+      mutationId: automationMutationId,
     }),
     outputSchema: normalizeCanonicalAgentToolSchema(
       Type.Object(automationRunToolSchema.properties, {
         $schema: AGENT_TOOL_JSON_SCHEMA_DIALECT,
         additionalProperties: false,
-        maxProperties: 14,
+        maxProperties: 19,
       }),
     ),
     requiredCapabilities: [],
@@ -42,7 +44,7 @@ export function createAutomationRunNowToolDefinition(
       form: "inline",
       adapterWaitCeilingMilliseconds: automationRunWaitCeilings,
       supportsCancellation: false,
-      idempotency: "not_applicable",
+      idempotency: "required",
       progress: "none",
       maximumInputBytes: 1_024,
       maximumOutputBytes: 32 * 1_024,

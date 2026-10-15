@@ -35,7 +35,7 @@ function thread(): NormalizedApplicationThreadSummary {
     available: true,
     lastActivityAt: "2026-08-09T12:00:00.000Z",
     stateChangedAt: "2026-08-09T12:00:00.000Z",
-    automation: null,
+    automations: { totalCount: 0, enabledCount: 0, pausedCount: 0, exhaustedCount: 0, inFlightCount: 0, attentionCount: 0, revision: 0 },
     attention: {
       wake: false,
       automationContext: null,
@@ -196,38 +196,16 @@ describe("ThreadPeekCard detail beneath attention and background glyphs", () => 
 });
 
 describe("ThreadPeekCard automation line", () => {
-  type Automation = NonNullable<NormalizedApplicationThreadSummary["automation"]>;
-  type LastRun = NonNullable<Automation["lastRun"]>;
+  type Automation = NonNullable<NormalizedApplicationThreadSummary["automations"]>;
   const NOW = new Date("2026-10-06T03:40:00.000Z");
 
   function automated(
-    automation: Partial<Automation>,
+    automations: Partial<Automation>,
     overrides: Partial<NormalizedApplicationThreadSummary> = {},
   ): NormalizedApplicationThreadSummary {
     return {
       ...thread(),
-      automation: {
-        status: "enabled",
-        runMode: "same_thread",
-        scheduleKind: "cron",
-        schedule: { kind: "cron", expression: "0 2 * * *", timeZone: "UTC" },
-        misfirePolicy: "coalesce",
-        promptPreview: "Check dependencies",
-        revision: 1,
-        runsRevision: 0,
-        hasPrecheck: false,
-        ...automation,
-      },
-      ...overrides,
-    };
-  }
-
-  function run(state: LastRun["state"], overrides: Partial<LastRun> = {}): LastRun {
-    return {
-      id: "run-1",
-      state,
-      occurrence: "scheduled",
-      scheduledFor: "2026-10-05T06:30:00.000Z",
+      automations: { totalCount: 1, enabledCount: 1, pausedCount: 0, exhaustedCount: 0, inFlightCount: 0, attentionCount: 0, revision: 1, ...automations },
       ...overrides,
     };
   }
@@ -249,48 +227,48 @@ describe("ThreadPeekCard automation line", () => {
   it.each([
     {
       name: "active",
-      automation: { nextRunAt: "2026-10-07T02:00:00.000Z", lastRun: run("completed") },
-      text: /^Automation · next Tmrw \d/u,
+      automations: { nextRunAt: "2026-10-07T02:00:00.000Z" },
+      text: /^Automation · 1 automation · 1 active · next Tmrw \d/u,
       glyph: "repeat",
       tone: "success",
     },
     {
       name: "failed",
-      automation: { lastRun: run("failed", { finishedAt: "2026-10-05T06:40:00.000Z" }) },
-      text: /^Automation · Failed 21h ago$/u,
+      automations: { attentionCount: 1 },
+      text: /^Automation · 1 automation · 1 needs attention$/u,
       glyph: "triangle",
       tone: "danger",
     },
     {
       name: "uncertain",
-      automation: { status: "paused" as const, lastRun: run("uncertain") },
-      text: /^Automation · Outcome unknown$/u,
+      automations: { enabledCount: 0, pausedCount: 1, attentionCount: 1 },
+      text: /^Automation · 1 automation · 1 needs attention$/u,
       glyph: "triangle",
-      tone: "warning",
+      tone: "danger",
     },
     {
       name: "sending",
-      automation: { lastRun: run("dispatching") },
-      text: /^Automation · Sending$/u,
+      automations: { inFlightCount: 1 },
+      text: /^Automation · 1 automation · 1 in progress$/u,
       glyph: "spinner",
       tone: "info",
     },
     {
       name: "paused",
-      automation: { status: "paused" as const, lastRun: run("completed") },
-      text: /^Automation · Paused$/u,
+      automations: { enabledCount: 0, pausedCount: 1 },
+      text: /^Automation · 1 automation · 1 paused$/u,
       glyph: "pause",
       tone: "neutral",
     },
     {
       name: "not started",
-      automation: { status: "paused" as const },
-      text: /^Automation · Not started$/u,
+      automations: { enabledCount: 0, pausedCount: 1 },
+      text: /^Automation · 1 automation · 1 paused$/u,
       glyph: "pause",
       tone: "neutral",
     },
-  ])("says $name in one line with its health glyph and tone", ({ automation, text, glyph, tone }) => {
-    const container = renderPeek(automated(automation));
+  ])("says $name in one line with its health glyph and tone", ({ automations, text, glyph, tone }) => {
+    const container = renderPeek(automated(automations));
     const row = automationRow(container);
     expect(row).toHaveTextContent(text);
     expect(row).toHaveAttribute("data-tone", tone);
@@ -303,7 +281,7 @@ describe("ThreadPeekCard automation line", () => {
 
   it("keeps the state row when it says more than Idle, without the automation glyph", () => {
     const container = renderPeek(
-      automated({ status: "paused", lastRun: run("completed") }, { inventoryState: "settled", stateChangedAt: "2026-10-06T00:40:00.000Z" }),
+      automated({ enabledCount: 0, pausedCount: 1 }, { inventoryState: "settled", stateChangedAt: "2026-10-06T00:40:00.000Z" }),
     );
     const stateRow = container.querySelector('[data-row="state"]')!;
     expect(stateRow).toHaveTextContent("Parked 3h ago");
@@ -315,19 +293,19 @@ describe("ThreadPeekCard automation line", () => {
   });
 
   it("shows a running thread's state beside its automation", () => {
-    const container = renderPeek(automated({ lastRun: run("queued") }, { runState: "running" }));
+    const container = renderPeek(automated({ inFlightCount: 1 }, { runState: "running" }));
     expect(container.querySelector('[data-row="state"]')).toHaveTextContent("Running");
-    expect(automationRow(container)).toHaveTextContent("Automation · Waiting for turn");
+    expect(automationRow(container)).toHaveTextContent("Automation · 1 automation · 1 in progress");
   });
 
   it("names a suspended automation", () => {
-    const archived = renderPeek(automated({ lastRun: run("completed") }, { inventoryState: "archived" }));
-    expect(automationRow(archived)).toHaveTextContent("Automation · Thread archived");
+    const archived = renderPeek(automated({  }, { inventoryState: "archived" }));
+    expect(automationRow(archived)).toHaveTextContent("Automation · 1 automation · Thread archived");
     expect(automationRow(archived).querySelector('[data-automation-glyph="archive"]')).not.toBeNull();
     const snoozed = renderPeek(
       automated({}, { inventoryState: "snoozed", snoozedUntil: "2026-10-06T09:00:00.000Z" }),
     );
-    expect(automationRow(snoozed)).toHaveTextContent("Automation · Snoozed");
+    expect(automationRow(snoozed)).toHaveTextContent("Automation · 1 automation · Snoozed");
   });
 
   it("keeps the failed-run line for a thread whose automation context failed without an automation", () => {
@@ -343,27 +321,24 @@ describe("ThreadPeekCard automation line", () => {
   });
 
   it("keeps a retained scheduled failure after a later run succeeds", () => {
-    const base = automated({
-      nextRunAt: "2026-10-07T02:00:00.000Z",
-      lastRun: run("completed", { occurrence: "manual" }),
-    });
+    const base = automated({ nextRunAt: "2026-10-07T02:00:00.000Z" });
     const container = renderPeek({
       ...base,
       attention: { ...base.attention, automationContext: "failed" },
     });
-    expect(automationRow(container)).toHaveTextContent(/^Automation · next Tmrw/u);
+    expect(automationRow(container)).toHaveTextContent(/^Automation · 1 automation · 1 active · next Tmrw/u);
     const row = container.querySelector('[data-row="automation-failed"]')!;
     expect(row).toHaveTextContent("A scheduled run failed");
     expect(row).toHaveAttribute("data-tone", "danger");
   });
 
-  it("does not repeat a failure the automation line already shows", () => {
-    const base = automated({ lastRun: run("failed") });
+  it("keeps explicit source failure details beside aggregate attention", () => {
+    const base = automated({ attentionCount: 1 });
     const container = renderPeek({
       ...base,
       attention: { ...base.attention, automationContext: "failed" },
     });
-    expect(automationRow(container)).toHaveTextContent("Automation · Failed");
-    expect(container.querySelector('[data-row="automation-failed"]')).toBeNull();
+    expect(automationRow(container)).toHaveTextContent("Automation · 1 automation · 1 needs attention");
+    expect(container.querySelector('[data-row="automation-failed"]')).toHaveTextContent("A scheduled run failed");
   });
 });

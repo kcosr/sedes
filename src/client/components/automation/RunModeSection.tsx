@@ -14,11 +14,13 @@ export function AutomationRunModeSection({
   value,
   onChange,
   canCloneOnRun,
+  forkDraftOnly,
 }: {
   readonly id: string;
   readonly value: AutomationRunMode;
   readonly onChange: (mode: AutomationRunMode) => void;
   readonly canCloneOnRun: boolean;
+  readonly forkDraftOnly?: boolean;
 }): React.JSX.Element {
   const cloneUnavailable = value === "clone" && !canCloneOnRun;
   return (
@@ -37,15 +39,16 @@ export function AutomationRunModeSection({
         />
         <AutomationChoice
           value="clone"
-          title="A new fork each run"
+          title="Fork"
           disabled={!canCloneOnRun}
           description={
             canCloneOnRun
-              ? "Each run starts a fork of this thread at its latest completed turn, so runs don't pile up here."
+              ? "Each run creates a separate child from this source: its settings while unstarted, or its latest completed turn after it starts."
               : "Not available for this thread: forking needs a completed turn and a backend that can fork."
           }
         />
       </RadioGroup>
+      {forkDraftOnly && value === "clone" ? <Callout tone="warning">This backend can copy an unstarted source. After this source starts, Fork runs will fail because the backend cannot fork conversations.</Callout> : null}
       {cloneUnavailable ? (
         <Callout tone="danger" role="alert">
           This thread can't fork now. Choose This thread before saving.

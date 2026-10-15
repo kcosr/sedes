@@ -201,6 +201,9 @@ export class ApplicationClientStore {
     });
   }
 
+  subscribeAutomationChanges = this.normalized.subscribeAutomationChanges;
+  subscribeThreadSummaryChanges = this.normalized.subscribeThreadSummaryChanges;
+
   getThreadSummaries(): readonly NormalizedApplicationThreadSummary[] {
     return this.#state.snapshot?.threads ?? [];
   }

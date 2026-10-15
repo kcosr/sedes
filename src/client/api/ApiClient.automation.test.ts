@@ -8,6 +8,7 @@ afterEach(() => vi.unstubAllGlobals());
 const threadId = "thread/1";
 const runId = "6ba7b810-9dad-41d1-80b4-00c04fd430c8";
 const run = {
+  automationId: "30000000-0000-4000-8000-000000000001",
   id: runId,
   occurrence: "scheduled",
   scheduledFor: "2026-10-06T08:15:00.000Z",
@@ -34,7 +35,7 @@ describe("ApiClient automation routes", () => {
       new ApiClient().getThreadAutomationCapability(threadId),
     ).resolves.toEqual(capability);
     expect(String(fetch.mock.calls[0]![0])).toBe(
-      "/api/threads/thread%2F1/automation/capability",
+      "/api/threads/thread%2F1/automations/capability",
     );
   });
 
@@ -49,18 +50,18 @@ describe("ApiClient automation routes", () => {
     const api = new ApiClient();
 
     await expect(
-      api.listThreadAutomationRuns(threadId, { filter: "problems", limit: 5 }),
+      api.listAutomationRuns(threadId, { filter: "problems", limit: 5 }),
     ).resolves.toEqual(page);
     expect(String(fetch.mock.calls[0]![0])).toBe(
-      "/api/threads/thread%2F1/automation/runs?pageSize=5&filter=problems",
+      "/api/automations/thread%2F1/runs?pageSize=5&filter=problems",
     );
 
     fetch.mockResolvedValue(Response.json({ items: [], nextCursor: null }));
     await expect(
-      api.listThreadAutomationRuns(threadId, { cursor: "next" }),
+      api.listAutomationRuns(threadId, { cursor: "next" }),
     ).resolves.toEqual({ items: [], nextCursor: null });
     expect(String(fetch.mock.calls[1]![0])).toBe(
-      "/api/threads/thread%2F1/automation/runs?cursor=next&pageSize=50",
+      "/api/automations/thread%2F1/runs?cursor=next&pageSize=50",
     );
   });
 
@@ -92,7 +93,7 @@ describe("ApiClient automation routes", () => {
     });
 
     const bodies = fetch.mock.calls
-      .filter(([url]) => url.endsWith("/automation/preview"))
+      .filter(([url]) => url.endsWith("/automations/preview"))
       .map(([, init]) => JSON.parse(init!.body as string));
     expect(bodies).toEqual([
       { schedule, count: 5 },
@@ -119,9 +120,9 @@ describe("ApiClient automation routes", () => {
     await api.session();
 
     await expect(
-      api.resolveThreadAutomationRun(threadId, runId, { resume: true }),
+      api.resolveAutomationRun(threadId, runId, { resume: true }),
     ).resolves.toEqual({ run, automation: null });
-    await api.resolveThreadAutomationRun(threadId, runId);
+    await api.resolveAutomationRun(threadId, runId);
 
     const bodies = fetch.mock.calls
       .filter(([url]) => url.endsWith("/resolve"))
@@ -132,6 +133,6 @@ describe("ApiClient automation routes", () => {
     ]);
     expect(
       fetch.mock.calls.find(([url]) => url.endsWith("/resolve"))![0],
-    ).toBe(`/api/threads/thread%2F1/automation/runs/${runId}/resolve`);
+    ).toBe(`/api/automations/thread%2F1/runs/${runId}/resolve`);
   });
 });

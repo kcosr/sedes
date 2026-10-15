@@ -1,7 +1,9 @@
+import { AutomationDeferredError } from "../../src/server/domain/automation-deferred.js";
 import { describe, expect, it, vi } from "vitest";
 import type { QueuedInputRecord } from "../../src/server/db/repositories/queued-input-repository.js";
 import {
   AutomationQueueRunObserver,
+  AutomationTurnSettlementObserver,
   LifecycleAutomationConversationGateway,
   type AutomationFirstInputLifecycle,
 } from "../../src/server/runtime/automation-conversation-gateway.js";
@@ -17,6 +19,7 @@ const dispatchInput = {
   runMode: "same_thread" as const,
   prompt: "Run the review",
   dispatchMutationId: "dispatch-1",
+  claimToken: "claim-1",
 };
 
 function queued(state: QueuedInputRecord["state"]): QueuedInputRecord {
@@ -81,6 +84,8 @@ function gateway(input: {
     readonly revision: number;
   };
   assertCanAutomate?: () => void;
+  copyChild?: string;
+  existingQueue?: boolean;
 }) {
   const enqueue = vi.fn(async () => ({
     item: queued(input.queueState ?? "pending"),
@@ -111,13 +116,14 @@ function gateway(input: {
       },
       queue: { enqueue },
       queueRepository: {
-        findByMutationId: () => queued(input.queueState ?? "pending"),
+        findByMutationId: () => input.existingQueue || enqueue.mock.calls.length > 0 ? queued(input.queueState ?? "pending") : undefined,
       },
       firstInput: {
         hasMutation: () => input.hasFirstInputMutation ?? false,
         submit: firstInput,
       },
       branches: { forkAutomation: branch },
+      forkTargets: { resolve: async () => input.copyChild ? { kind: "child", childThreadId: input.copyChild } : { kind: "native" } },
       executionPolicy: { assertCanAutomate },
       now: () => 1_500,
     }),
@@ -144,7 +150,7 @@ describe("LifecycleAutomationConversationGateway", () => {
       taskReferences: [],
       source: {
         kind: "automation",
-        expectedThreadRevision: 7,
+        claimToken: "claim-1",
         automationId: "automation-1",
         automationRunId: "run-1",
       },
@@ -176,7 +182,7 @@ describe("LifecycleAutomationConversationGateway", () => {
       attachmentIds: [],
       taskReferences: [],
       mutationId: "dispatch-1",
-      expectedThreadRevision: 7,
+      claimToken: "claim-1",
     });
     expect(setup.enqueue).not.toHaveBeenCalled();
   });
@@ -202,12 +208,12 @@ describe("LifecycleAutomationConversationGateway", () => {
       attachmentIds: [],
       taskReferences: [],
       mutationId: "dispatch-1",
-      expectedThreadRevision: 0,
+      claimToken: "claim-1",
     });
     expect(setup.enqueue).not.toHaveBeenCalled();
   });
 
-  it("replays committed fork creation before checking changed anchor eligibility or enqueueing clone input", async () => {
+  it("resolves committed fork creation before checking anchor eligibility for the new child input", async () => {
     let resolveFork!: (value: {
       readonly status: "created";
       readonly childThreadId: string;
@@ -241,28 +247,10 @@ describe("LifecycleAutomationConversationGateway", () => {
     expect(setup.enqueue).not.toHaveBeenCalled();
 
     resolveFork({ status: "created", childThreadId: "thread-child" });
-    await expect(dispatch).resolves.toEqual({
-      status: "queued",
-      targetThreadId: "thread-child",
-    });
-    expect(setup.branch).toHaveBeenCalledWith({
-      scope,
-      anchorThreadId: "thread-1",
-      automationId: "automation-1",
-      automationRunId: "run-1",
-      mutationId: "dispatch-1",
-      titleSuffix: " · Oct 6, 3:15 AM",
-    });
-    expect(setup.assertCanAutomate).not.toHaveBeenCalled();
-    expect(setup.readThread).toHaveBeenCalledWith(scope, "thread-child");
-    expect(setup.enqueue).toHaveBeenCalledWith(
-      scope,
-      "thread-child",
-      expect.objectContaining({ text: "Run the review", contextExcerpts: [] }),
-    );
-    expect(setup.readThread.mock.invocationCallOrder[0]).toBeLessThan(
-      setup.enqueue.mock.invocationCallOrder[0]!,
-    );
+    await expect(dispatch).rejects.toMatchObject({ code: "invalid_transition" });
+    expect(setup.branch).toHaveBeenCalledOnce();
+    expect(setup.assertCanAutomate).toHaveBeenCalled();
+    expect(setup.enqueue).not.toHaveBeenCalled();
   });
 
   it("still rejects a genuinely new clone when the fork service reports current branching unavailable", async () => {
@@ -328,10 +316,54 @@ describe("LifecycleAutomationConversationGateway", () => {
       diagnostic: "Unknown acceptance",
     });
   });
+  it.each(["creating", "creation_unknown"] as const)("defers a %s source without a submission", async (backingState) => {
+    const setup = gateway({ backingState });
+    expect(await setup.instance.dispatch(dispatchInput)).toMatchObject({ status: "deferred", eligibleAt: null });
+    expect(setup.firstInput).not.toHaveBeenCalled();
+    expect(setup.enqueue).not.toHaveBeenCalled();
+  });
+
+  it("starts a copied draft child through the normal first-input lifecycle", async () => {
+    const setup = gateway({ backingState: "unbound", copyChild: "copied-child" });
+    expect(await setup.instance.dispatch({ ...dispatchInput, runMode: "clone", resultTitleSuffix: " today" })).toEqual({ status: "accepted", targetThreadId: "copied-child" });
+    expect(setup.firstInput).toHaveBeenCalledWith(expect.objectContaining({ applicationThreadId: "copied-child", claimToken: "claim-1" }));
+    expect(setup.branch).not.toHaveBeenCalled();
+  });
+
+  it("queues into a copied result that the user has already started", async () => {
+    const setup = gateway({ backingState: "bound", copyChild: "copied-child" });
+    expect(await setup.instance.dispatch({ ...dispatchInput, runMode: "clone", resultTitleSuffix: " today" })).toEqual({ status: "queued", targetThreadId: "copied-child" });
+    expect(setup.enqueue).toHaveBeenCalledWith(scope, "copied-child", expect.anything());
+    expect(setup.branch).not.toHaveBeenCalled();
+  });
+
+  it("defers native forks rejected before checkpoint capture while the source is busy", async () => {
+    const setup = gateway({ backingState: "bound", branch: async () => { throw new AutomationDeferredError("source_busy", "Wait for the source turn."); } });
+    expect(await setup.instance.dispatch({ ...dispatchInput, runMode: "clone", resultTitleSuffix: " today" })).toEqual({ status: "deferred", reason: "source_busy", eligibleAt: null });
+    expect(setup.enqueue).not.toHaveBeenCalled();
+  });
+
+  it("reports prior queue acceptance before current execution policy", async () => {
+    const setup = gateway({ backingState: "bound", existingQueue: true, queueState: "accepted", assertCanAutomate: () => { throw new Error("policy tightened"); } });
+    expect(await setup.instance.dispatch(dispatchInput)).toEqual({ status: "accepted", targetThreadId: "thread-1" });
+    expect(setup.assertCanAutomate).not.toHaveBeenCalled();
+  });
+
 });
 
 describe("AutomationQueueRunObserver", () => {
-  it("completes a queued run through the repository and publisher so one-shot removal and attention remain centralized", () => {
+  it("retains explicit queue cancellation without turning it into delivery failure attention", () => {
+    const run = { automationId: "automation-1", id: "run-1", occurrenceKind: "scheduled", state: "queued" };
+    const updateRunState = vi.fn(() => ({ ...run, state: "cancelled" }));
+    const observer = new AutomationQueueRunObserver({
+      repository: { findRunByDispatchMutation: () => run, getDefinition: () => ({ schedule: { kind: "date_time" } }), updateRunState } as never,
+      queue: { findByMutationId: vi.fn() }, publisher: { publishRun: vi.fn() } as never,
+    });
+    observer.observe(scope, "thread-1", queued("cancelled"));
+    expect(updateRunState).toHaveBeenCalledWith(scope, "automation-1", "run-1", expect.objectContaining({ state: "cancelled", completeDefinition: true }));
+  });
+
+  it("completes a queued run through the repository and publisher so one-shot exhaustion and attention remain centralized", () => {
     const automationRun = {
       tenantId: scope.tenantId,
       ownerPrincipalId: scope.principalId,
@@ -425,5 +457,19 @@ describe("AutomationQueueRunObserver", () => {
       },
     );
     expect(publisher.publishRun).toHaveBeenCalledWith(scope, completed);
+  });
+});
+
+
+describe("AutomationTurnSettlementObserver sibling publication", () => {
+  it("publishes each automation when sibling runs settle during startup", () => {
+    const publishRunSettlement = vi.fn();
+    const runs = ["daily", "reminder"].map((automationId) => ({ tenantId: scope.tenantId, ownerPrincipalId: scope.principalId, automationId, anchorThreadId: "thread-1", childThreadId: null }));
+    const observer = new AutomationTurnSettlementObserver({
+      repository: { settleRunTurnsFromCompletions: () => runs, settleRunTurn: vi.fn() } as never,
+      publisher: { publishRunSettlement },
+    });
+    observer.recover();
+    expect(publishRunSettlement).toHaveBeenCalledTimes(2);
   });
 });

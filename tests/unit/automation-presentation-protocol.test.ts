@@ -14,24 +14,63 @@ import {
 } from "../../src/shared/protocol/automation-presentation.js";
 import { normalizedThreadSummarySchema } from "../../src/shared/protocol/conversation.js";
 
+const automationId = "550e8400-e29b-41d4-a716-446655440000";
+const threadId = "550e8400-e29b-41d4-a716-446655440001";
+const identity = {
+  id: automationId,
+  threadId,
+  name: "Daily update",
+  source: {
+    title: "Assistant",
+    workspaceId: "workspace",
+    environmentId: "environment",
+    targetId: "target",
+    groupId: null,
+    backendLabel: "Pi",
+    available: true,
+    backingState: "bound",
+    inventoryState: "active",
+    inventoryRevision: 1,
+  },
+} as const;
+
 describe("normalized automation protocol", () => {
   it("previews from an optional instant, given as an ISO date-time", () => {
-    const schedule = { kind: "cron", expression: "0 9 * * *", timeZone: "UTC" } as const;
-    expect(previewAutomationScheduleRequestSchema.parse({ schedule })).toEqual({ schedule, count: 5 });
+    const schedule = {
+      kind: "cron",
+      expression: "0 9 * * *",
+      timeZone: "UTC",
+    } as const;
+    expect(previewAutomationScheduleRequestSchema.parse({ schedule })).toEqual({
+      schedule,
+      count: 5,
+    });
     expect(
-      previewAutomationScheduleRequestSchema.parse({ schedule, count: 3, after: "2026-10-08T00:00:00.000Z" }),
+      previewAutomationScheduleRequestSchema.parse({
+        schedule,
+        count: 3,
+        after: "2026-10-08T00:00:00.000Z",
+      }),
     ).toEqual({ schedule, count: 3, after: "2026-10-08T00:00:00.000Z" });
-    expect(previewAutomationScheduleRequestSchema.safeParse({ schedule, after: "tomorrow" }).success).toBe(false);
+    expect(
+      previewAutomationScheduleRequestSchema.safeParse({
+        schedule,
+        after: "tomorrow",
+      }).success,
+    ).toBe(false);
   });
 
   it("bounds prompts by persisted UTF-8 bytes, not JavaScript length", () => {
     const request = {
+      name: "Daily update",
+      threadId,
+      initialState: "paused",
       runMode: "same_thread",
       schedule: {
         kind: "date_time",
         runAt: new Date(10_000).toISOString(),
       },
-      misfirePolicy: "coalesce",
+      misfirePolicy: null,
       precheck: null,
       mutationId: "6ba7b810-9dad-41d1-80b4-00c04fd430c8",
     } as const;
@@ -58,9 +97,10 @@ describe("normalized automation protocol", () => {
     ).toBe(false);
   });
 
-  it("keeps automation identity on its owning thread presentation", () => {
+  it("requires independent automation identity and source presentation", () => {
     const createdAt = new Date(10_000).toISOString();
     const automation = {
+      ...identity,
       status: "enabled",
       runMode: "same_thread",
       scheduleKind: "date_time",
@@ -76,13 +116,13 @@ describe("normalized automation protocol", () => {
     expect(
       threadAutomationSummarySchema.safeParse({
         ...automation,
-        threadId: "550e8400-e29b-41d4-a716-446655440000",
+        legacyAnchorThreadId: threadId,
       }).success,
     ).toBe(false);
     const { createdAt: _createdAt, ...withoutCreatedAt } = automation;
-    expect(threadAutomationSummarySchema.safeParse(withoutCreatedAt).success).toBe(
-      false,
-    );
+    expect(
+      threadAutomationSummarySchema.safeParse(withoutCreatedAt).success,
+    ).toBe(false);
     const { runsRevision: _runsRevision, ...withoutRunsRevision } = automation;
     expect(
       threadAutomationSummarySchema.safeParse(withoutRunsRevision).success,
@@ -95,60 +135,38 @@ describe("normalized automation protocol", () => {
           kind: "date_time",
           runAt: new Date(30_000).toISOString(),
         },
-        misfirePolicy: "coalesce",
+        misfirePolicy: null,
         precheck: null,
       }),
     ).toMatchObject({ createdAt });
   });
 
-  it("projects schedule detail and a bounded prompt preview on thread summaries", () => {
-    const automation =
-      normalizedThreadSummarySchema.shape.automation.unwrap();
-    const projected = {
-      status: "enabled",
-      runMode: "clone",
-      scheduleKind: "cron",
-      schedule: {
-        kind: "cron",
-        expression: "15 3 * * 1-5",
-        timeZone: "America/Chicago",
-      },
-      misfirePolicy: "skip",
-      promptPreview: "Review the repository and summarize…",
-      revision: 4,
-      runsRevision: 5,
-      hasPrecheck: true,
-    } as const;
-
-    expect(automation.parse(projected)).toEqual(projected);
-    for (const field of [
-      "schedule",
-      "misfirePolicy",
-      "promptPreview",
-      "runsRevision",
-    ] as const) {
-      const { [field]: _omitted, ...missing } = projected;
-      expect(automation.safeParse(missing).success).toBe(false);
-    }
+  it("projects only a bounded aggregate on thread summaries", () => {
+    const aggregate = normalizedThreadSummarySchema.shape.automations;
+    const value = {
+      totalCount: 3,
+      enabledCount: 2,
+      pausedCount: 0,
+      exhaustedCount: 1,
+      inFlightCount: 1,
+      attentionCount: 0,
+      revision: 8,
+      nextRunAt: "2026-10-08T09:00:00.000Z",
+    };
+    expect(aggregate.parse(value)).toEqual(value);
     expect(
-      automation.safeParse({ ...projected, runsRevision: -1 }).success,
+      aggregate.safeParse({ ...value, definitions: [identity] }).success,
     ).toBe(false);
-    expect(
-      automation.safeParse({ ...projected, promptPreview: "x".repeat(161) })
-        .success,
-    ).toBe(false);
-    // A prompt with no printable text has an empty preview.
-    expect(
-      automation.safeParse({ ...projected, promptPreview: "" }).success,
-    ).toBe(true);
-    // The full prompt stays behind the automation route.
-    expect(
-      automation.safeParse({ ...projected, prompt: "Review" }).success,
-    ).toBe(false);
+    expect(aggregate.safeParse({ ...value, totalCount: -1 }).success).toBe(
+      false,
+    );
+    const { revision: _revision, ...missing } = value;
+    expect(aggregate.safeParse(missing).success).toBe(false);
   });
 
   it("presents run detail, filtered pages with counts, and resolutions", () => {
     const run = {
+      automationId,
       id: "6ba7b810-9dad-41d1-80b4-00c04fd430c8",
       occurrence: "scheduled",
       scheduledFor: new Date(10_000).toISOString(),
@@ -206,7 +224,10 @@ describe("normalized automation protocol", () => {
       filter: "all",
     });
     expect(
-      listAutomationRunsQuerySchema.parse({ filter: "problems", pageSize: "25" }),
+      listAutomationRunsQuerySchema.parse({
+        filter: "problems",
+        pageSize: "25",
+      }),
     ).toEqual({ filter: "problems", pageSize: 25 });
     expect(
       listAutomationRunsQuerySchema.safeParse({ filter: "failed" }).success,
@@ -231,6 +252,7 @@ describe("normalized automation protocol", () => {
 
   it("describes a settled run turn and the last run's turn outcome strictly", () => {
     const run = {
+      automationId,
       id: "6ba7b810-9dad-41d1-80b4-00c04fd430c8",
       occurrence: "scheduled",
       scheduledFor: new Date(10_000).toISOString(),
@@ -252,9 +274,10 @@ describe("normalized automation protocol", () => {
       turn,
     });
     const { startedAt: _startedAt, endedAt: _endedAt, ...untimed } = turn;
-    expect(threadAutomationRunSchema.parse({ ...run, turn: untimed })).toEqual(
-      { ...run, turn: untimed },
-    );
+    expect(threadAutomationRunSchema.parse({ ...run, turn: untimed })).toEqual({
+      ...run,
+      turn: untimed,
+    });
     for (const invalid of [
       { ...turn, outcome: "cancelled" },
       { ...turn, steeredBy: "you" },
@@ -273,6 +296,7 @@ describe("normalized automation protocol", () => {
       turn: { outcome: "interrupted", endedAt: turn.endedAt },
     } as const;
     const summary = {
+      ...identity,
       status: "enabled",
       runMode: "same_thread",
       scheduleKind: "date_time",
@@ -290,19 +314,19 @@ describe("normalized automation protocol", () => {
         lastRun: { ...lastRun, turn: { ...lastRun.turn, id: turn.id } },
       }).success,
     ).toBe(false);
-    const projected = {
+    const definition = {
       ...summary,
       schedule: { kind: "date_time", runAt: new Date(10_000).toISOString() },
-      misfirePolicy: "coalesce",
-      promptPreview: "Review",
-    } as const;
-    const { createdAt: _createdAt, updatedAt: _updatedAt, ...summaryOnly } =
-      projected;
-    const automation = normalizedThreadSummarySchema.shape.automation.unwrap();
-    expect(automation.parse(summaryOnly)).toEqual(summaryOnly);
+      misfirePolicy: null,
+      prompt: "Review",
+      precheck: null,
+    };
+    expect(threadAutomationDefinitionSchema.parse(definition)).toEqual(
+      definition,
+    );
     expect(
-      automation.safeParse({
-        ...summaryOnly,
+      threadAutomationDefinitionSchema.safeParse({
+        ...definition,
         lastRun: { ...lastRun, turn: { outcome: "cancelled" } },
       }).success,
     ).toBe(false);

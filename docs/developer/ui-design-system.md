@@ -335,8 +335,9 @@ the helpers and their tests.
 
 | Helper | Use |
 | --- | --- |
-| `automationHealth(thread, now)` | The one state, first match wins: `sending`, `failed`, `unknown` (an uncertain last run), `archived`, `snoozed` (only while the wake time is ahead), `active`, `paused`, `not_started`. Each carries its list `group` (`needs_attention`, `upcoming`, `paused`, `suspended`), `glyph`, chip `tone`, and `label` |
-| `automationNeedsAttention`, `automationIdentityGlyph`, `automationIdentityLabel` | Failed or uncertain for attention buckets; the Repeat, CirclePause, or spinner glyph for surfaces that show attention separately, as a row badge or a tinted header button |
+| `automationHealth(thread, now)` | State for one automation: unresolved delivery attention, deferred or in-flight work, source suspension, then definition status. Includes `waiting` and `exhausted` (shown as Finished). Each carries its list group, glyph, chip tone, and label |
+| `threadAutomationHealth(thread, now)` | Bounded thread-level counts for the sidebar, header, and preview. Attention on any automation remains visible even while another sends or succeeds; no arbitrary singleton is selected |
+| `automationNeedsAttention`, `automationIdentityGlyph`, `automationIdentityLabel` | The explicit per-automation attention projection for attention buckets; the Repeat, CirclePause, or spinner glyph for surfaces that show attention separately, as a row badge or a tinted header button |
 | `compareAutomationsInGroup`, `AUTOMATION_HEALTH_GROUPS` | List group order and the order within a group |
 | `describeSchedule`, `runStateLabel`, `runSkipReason`, `runMeta` | Schedule sentences, run state words, and one-line run facts. `completed` reads "Delivered": the backend accepted the prompt, not that the turn ended |
 | `automationStatusText`, `lastRunAge`, `automationErrorText` | The short state for tooltips and status lines, the last run's age, and an error code as a sentence where only the code is projected |

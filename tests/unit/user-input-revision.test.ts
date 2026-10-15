@@ -128,9 +128,11 @@ describe("user input admission revision", () => {
           automation.createDefinition(f.scope, { id: automationId, anchorThreadId: f.threadId, name: "Automation",
             prompt: "Automated work", precheck: null, runMode: "same_thread", enabled: true,
             schedule: { kind: "date_time", runAt: 10_000 }, misfirePolicy: "coalesce", nextRunAt: 10_000, now: 202 });
+          const claimToken = randomUUID();
           automation.createManualRun(f.scope, automationId, { runId: automationRunId, occurrenceKey: randomUUID(),
-            scheduledFor: 203, claimToken: randomUUID(), leaseExpiresAt: 10_000, dispatchMutationId: mutationId, now: 203 });
-          return { kind, expectedThreadRevision: f.revision(), automationId, automationRunId };
+            scheduledFor: 203, claimToken, leaseExpiresAt: 10_000, dispatchMutationId: mutationId, now: 203 });
+          automation.checkRunAdmission(f.scope, automationId, automationRunId, { claimToken, now: 203, dispatch: true });
+          return { kind, claimToken, automationId, automationRunId };
         }
         if (kind === "principal_client_control") {
           const client = new PrincipalAgentToolClientRepository(f.database, { eligibleToolIds: new Set(["thread.send"]) }).create(f.scope, {

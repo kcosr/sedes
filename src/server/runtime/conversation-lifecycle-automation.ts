@@ -33,7 +33,7 @@ export class ConversationLifecycleAutomationFirstInput implements AutomationFirs
           automationRunId: input.automationRunId,
           prompt: input.prompt,
           mutationId: input.mutationId,
-          expectedThreadRevision: input.expectedThreadRevision,
+          claimToken: input.claimToken,
         },
       ),
     );

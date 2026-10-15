@@ -193,7 +193,7 @@ function thread(
     available: true,
     lastActivityAt: "2026-08-01T12:00:00.000Z",
     stateChangedAt: "2026-08-01T12:00:00.000Z",
-    automation: null,
+    automations: { totalCount: 0, enabledCount: 0, pausedCount: 0, exhaustedCount: 0, inFlightCount: 0, attentionCount: 0, revision: 0 },
     attention: {
       wake: false,
       automationContext: null,

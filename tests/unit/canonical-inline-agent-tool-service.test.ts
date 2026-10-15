@@ -858,9 +858,10 @@ describe("CanonicalInlineAgentToolService", () => {
       service.invoke(
         {
           toolId: "automation.create",
-          schemaVersion: 1,
+          schemaVersion: 2,
           requestId: "blank-automation-prompt",
           input: {
+            name: "Review", initialState: "paused", mutationId: "6ba7b810-9dad-41d1-80b4-00c04fd430c8", misfirePolicy: null,
             prompt: " \n ",
             runMode: "same_thread",
             schedule: {

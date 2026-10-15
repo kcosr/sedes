@@ -75,11 +75,12 @@ export const test = base.extend<{
                 /^\/api\/threads\/[^/]+\/pages\/[^/]+\/revisions\/\d+\/render-token$/u.test(new URL(request.url()).pathname)) ||
               // The automation page and editor abort stale reads (the
               // definition, runs, capability and schedule preview) when the
-              // thread summary moves on or they close.
+              // automation changes or they close.
               (request.method() === "GET" &&
-                /^\/api\/threads\/[^/]+\/automation(?:\/capability|\/runs)?$/u.test(new URL(request.url()).pathname)) ||
+                (/^\/api\/automations(?:\/[^/]+(?:\/runs)?)?$/u.test(new URL(request.url()).pathname) ||
+                  /^\/api\/threads\/[^/]+\/automations\/capability$/u.test(new URL(request.url()).pathname))) ||
               (request.method() === "POST" &&
-                /^\/api\/threads\/[^/]+\/automation\/preview$/u.test(new URL(request.url()).pathname)) ||
+                /^\/api\/threads\/[^/]+\/automations\/preview$/u.test(new URL(request.url()).pathname)) ||
               // Settings and variable previews explicitly abort stale reads
               // on close/selection change; mutation failures remain visible.
               (request.method() === "GET" &&

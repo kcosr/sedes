@@ -11,8 +11,7 @@ import type {
 } from "../../shared/index.js";
 import { DEFAULT_THREAD_TITLE } from "../../shared/index.js";
 import {
-  automationEditPath,
-  automationPath,
+  automationsPath,
   navigate,
 } from "../app/router.js";
 import type { ApplicationClientStore } from "../stores/ApplicationClientStore.js";
@@ -583,23 +582,6 @@ export function ThreadContextMenu({
       : !forkState || forkState.status === "loading" || !forkState.snapshot
         ? "Loading…"
         : "Unavailable";
-  // "Automate…" follows the thread-actions menu: offered while the retained
-  // thread reports automation available, enabled by its attach capability.
-  const automationSnapshot = forkState?.snapshot;
-  const attachAutomation = automationSnapshot?.capabilities.operations.find(
-    ({ id }) => id === "attach_automation",
-  );
-  const automateOffered =
-    !thread.automation &&
-    threadRegistry !== undefined &&
-    automationSnapshot?.capabilities.automation.available !== false;
-  const automateAvailable =
-    automationSnapshot !== undefined &&
-    forkState?.connection === "connected" &&
-    automationSnapshot.thread.available &&
-    automationSnapshot.runState !== "disconnected" &&
-    automationSnapshot.runState !== "reconciling" &&
-    attachAutomation?.available === true;
   const title = thread.title.text || "Untitled thread";
   const metaLine = threadMetaLine(thread, projectLabel);
 
@@ -671,13 +653,22 @@ export function ThreadContextMenu({
     </>
   );
 
+  const automationsItem = <ContextMenuItem onSelect={() => {
+    navigate(automationsPath(thread.id));
+    onNavigate?.();
+  }}><Repeat aria-hidden="true" />Automations…</ContextMenuItem>;
+
   const lifecycleGroup = archived ? (
+    <>
+
     <ContextMenuItem
       onSelect={() => (onRestore ? onRestore() : mutate("restore"))}
     >
       <ArchiveRestore aria-hidden="true" />
       Restore to Active
     </ContextMenuItem>
+    {automationsItem}
+    </>
   ) : (
     <>
       {thread.inventoryState === "settled" ? (
@@ -702,34 +693,7 @@ export function ThreadContextMenu({
           Snooze…
         </ContextMenuItem>
       )}
-      {thread.automation ? (
-        <ContextMenuItem
-          onSelect={() => {
-            navigate(automationPath(thread.id));
-            onNavigate?.();
-          }}
-        >
-          <Repeat aria-hidden="true" />
-          Automation…
-        </ContextMenuItem>
-      ) : automateOffered ? (
-        <ContextMenuItem
-          disabled={!automateAvailable}
-          title={attachAutomation?.unavailableReason?.text}
-          onSelect={() => {
-            navigate(automationEditPath(thread.id));
-            onNavigate?.();
-          }}
-        >
-          <Repeat aria-hidden="true" />
-          Automate…
-          {!automateAvailable && (
-            <ContextMenuValue aria-hidden="true">
-              {automationSnapshot ? "Unavailable" : "Loading…"}
-            </ContextMenuValue>
-          )}
-        </ContextMenuItem>
-      ) : null}
+      {automationsItem}
     </>
   );
 

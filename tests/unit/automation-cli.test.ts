@@ -29,16 +29,8 @@ describe("automation CLI authentication", () => {
 });
 
 const validInput = {
-  thread: {
-    workspaceId: "10000000-0000-4000-8000-000000000001",
-    title: "Nightly review",
-    configuration: {
-      kind: "custom",
-      targetId: "pi-default",
-    },
-    executionWorkspace: { kind: "direct" },
-  },
   automation: {
+    name: "Nightly review",
     prompt: "Review the repository.",
     runMode: "clone",
     schedule: {
@@ -50,11 +42,73 @@ const validInput = {
   },
 };
 
+const definition = {
+  ...validInput.automation,
+  id: "10000000-0000-4000-8000-000000000001",
+  threadId: "10000000-0000-4000-8000-000000000002",
+  source: {
+    title: "Assistant", workspaceId: "workspace", environmentId: "environment",
+    targetId: "target", groupId: null, backendLabel: "Pi", available: true,
+    backingState: "unbound", inventoryState: "active", inventoryRevision: 1,
+  },
+  precheck: null, status: "enabled", scheduleKind: "cron", revision: 1,
+  runsRevision: 0, createdAt: "2026-10-15T00:00:00.000Z",
+  updatedAt: "2026-10-15T00:00:00.000Z", hasPrecheck: false,
+};
+
+function sessionResponse() {
+  return Response.json({
+    clientProtocolVersion: SEDES_CLIENT_PROTOCOL_VERSION, version: SEDES_VERSION,
+    csrfToken: "a".repeat(32), providerPulseEnabled: false, experimentalUsageEnabled: false,
+  });
+}
+
+describe("automation CLI identity and retries", () => {
+  it("creates on an existing source atomically and preserves the key through CSRF retry", async () => {
+    const mutations: RequestInit[] = [];
+    const fetch = vi.fn(async (input: URL, init: RequestInit) => {
+      if (input.pathname === "/api/application/session") return sessionResponse();
+      expect(input.pathname).toBe("/api/automations");
+      mutations.push(init);
+      if (mutations.length === 1) return Response.json({ error: {
+        code: "csrf_token_invalid", message: "Refresh CSRF", retryable: true,
+      } }, { status: 403 });
+      return Response.json(definition);
+    });
+    vi.stubGlobal("fetch", fetch);
+    const client = new SedesCliApiClient("http://127.0.0.1:4783");
+    const mutationId = "10000000-0000-4000-8000-000000000003";
+    const input = automationCliInputSchema.parse({ automation: {
+      ...validInput.automation, initialState: "enabled",
+    } });
+    await expect(client.createAutomation(definition.threadId, input.automation, mutationId)).resolves.toEqual(definition);
+    expect(mutations).toHaveLength(2);
+    expect(mutations[1]!.body).toBe(mutations[0]!.body);
+    expect(JSON.parse(mutations[0]!.body as string)).toMatchObject({
+      name: "Nightly review", threadId: definition.threadId, mutationId, initialState: "enabled",
+    });
+    expect(fetch.mock.calls.every(([url]) => url.pathname !== "/api/threads")).toBe(true);
+  });
+
+  it("pages the dedicated collection, including an explicit source filter", async () => {
+    const fetch = vi.fn(async () => Response.json({ items: [definition], nextCursor: "next-page" }));
+    vi.stubGlobal("fetch", fetch);
+    const client = new SedesCliApiClient("http://127.0.0.1:4783");
+    const page = await client.listAutomations({ threadId: definition.threadId, cursor: "previous/page" });
+    expect(page.items[0]!.id).toBe(definition.id);
+    expect(page.nextCursor).toBe("next-page");
+    const [url] = fetch.mock.calls[0]! as unknown as [URL];
+    expect(url.pathname).toBe("/api/automations");
+    expect(url.searchParams.get("threadId")).toBe(definition.threadId);
+    expect(url.searchParams.get("cursor")).toBe("previous/page");
+  });
+});
+
 describe("automation CLI input", () => {
   it("leaves state unset for the create command's paused default", () => {
     const parsed = automationCliInputSchema.parse(validInput);
 
-    expect(parsed.automation.state).toBeUndefined();
+    expect(parsed.automation.initialState).toBeUndefined();
     expect(parsed.automation.precheck).toBeNull();
     expect(parsed.checks).toEqual({ previewCount: 0, testPrecheck: false });
   });
@@ -64,7 +118,7 @@ describe("automation CLI input", () => {
       ...validInput,
       automation: {
         ...validInput.automation,
-        state: "paused",
+        initialState: "paused",
         precheck: {
           command: "test -f package.json",
           timeoutSeconds: 10,
@@ -74,17 +128,19 @@ describe("automation CLI input", () => {
       checks: { previewCount: 5, testPrecheck: true },
     });
 
-    expect(parsed.automation.state).toBe("paused");
+    expect(parsed.automation.initialState).toBe("paused");
     expect(parsed.checks.previewCount).toBe(5);
   });
 
-  it("allows existing-thread commands to omit create-only thread selection", () => {
-    const { thread: _thread, ...existingThreadInput } = validInput;
+  it("rejects the removed thread creation block", () => {
+    expect(() => automationCliInputSchema.parse({ ...validInput, thread: { title: "New" } })).toThrow();
+  });
 
-    const parsed = automationCliInputSchema.parse(existingThreadInput);
-
-    expect(parsed.thread).toBeUndefined();
-    expect(parsed.automation.prompt).toBe("Review the repository.");
+  it("requires null misfire policy for a one-shot and a policy for recurrence", () => {
+    const once = { ...validInput.automation, schedule: { kind: "date_time", runAt: "2028-01-01T00:00:00.000Z" } };
+    expect(() => automationCliInputSchema.parse({ automation: once })).toThrow();
+    expect(automationCliInputSchema.parse({ automation: { ...once, misfirePolicy: null } }).automation.misfirePolicy).toBeNull();
+    expect(() => automationCliInputSchema.parse({ automation: { ...validInput.automation, misfirePolicy: null } })).toThrow();
   });
 
   it("rejects unknown fields rather than creating an accidental dual contract", () => {
@@ -187,7 +243,7 @@ describe("automation CLI thread requests", () => {
 
     expect(fetch).toHaveBeenCalledOnce();
     expect(fetch.mock.calls[0]?.[0].toString()).toBe(
-      "http://127.0.0.1:4783/api/threads/thread%2Fwith%20spaces/automation/capability",
+      "http://127.0.0.1:4783/api/threads/thread%2Fwith%20spaces/automations/capability",
     );
   });
 
@@ -196,6 +252,7 @@ describe("automation CLI thread requests", () => {
     const runId = "10000000-0000-4000-8000-000000000002";
     const run = {
       id: runId,
+      automationId: threadId,
       occurrence: "scheduled",
       scheduledFor: "2026-10-06T08:15:00.000Z",
       state: "failed",
@@ -215,7 +272,7 @@ describe("automation CLI thread requests", () => {
           experimentalUsageEnabled: false,
         });
       }
-      if (url.pathname.endsWith("/automation/runs")) {
+      if (url.pathname.endsWith("/runs")) {
         return Response.json({
           items: [run],
           nextCursor: null,
@@ -237,7 +294,7 @@ describe("automation CLI thread requests", () => {
 
     const calls = fetch.mock.calls as unknown as [URL, RequestInit][];
     expect(calls[0]![0].toString()).toBe(
-      `http://127.0.0.1:4783/api/threads/${threadId}/automation/runs?pageSize=50&filter=problems`,
+      `http://127.0.0.1:4783/api/automations/${threadId}/runs?pageSize=50&filter=problems`,
     );
     const resolve = calls.find(([url]) =>
       url.toString().endsWith(`/runs/${runId}/resolve`),

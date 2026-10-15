@@ -1,18 +1,11 @@
-import { useCallback } from "react";
 import type { NormalizedThreadAttention } from "../../../shared/index.js";
 import { automationPath } from "../../app/router.js";
-import { findLoadedThread } from "../../automation/loaded-threads.js";
-import type {
-  ApplicationClientState,
-  ApplicationClientStore,
-} from "../../stores/ApplicationClientStore.js";
-import { useApplicationStoreSelector } from "../../stores/use-application-store-selector.js";
 import { Button } from "@client/components/ui/button";
 import { followLink } from "../settings/SettingsNav.js";
 import "./automation-context-notice.css";
 
 type AutomationContext = NonNullable<
-  NormalizedThreadAttention["automationContext"]
+  NormalizedThreadAttention["automationContexts"][number]
 >;
 
 /**
@@ -26,58 +19,37 @@ type AutomationContext = NonNullable<
  */
 export function AutomationContextNotice({
   context,
-  store,
   onDismiss,
 }: {
   readonly context: AutomationContext;
-  readonly store: Pick<ApplicationClientStore, "subscribe" | "getSnapshot">;
   readonly onDismiss: () => void;
 }): React.JSX.Element {
-  // The source thread can be a fork the sidebar loaded beyond the bootstrap.
-  const selectOccurrence = useCallback(
-    (state: ApplicationClientState) => {
-      const lastRun = findLoadedThread(state, context.sourceThreadId)
-        ?.automation?.lastRun;
-      return lastRun?.id === context.runId ? lastRun.occurrence : undefined;
-    },
-    [context.runId, context.sourceThreadId],
-  );
-  const occurrence = useApplicationStoreSelector(store, selectOccurrence);
-  const selectHasAutomation = useCallback(
-    (state: ApplicationClientState) =>
-      Boolean(findLoadedThread(state, context.sourceThreadId)?.automation),
-    [context.sourceThreadId],
-  );
-  const hasAutomation = useApplicationStoreSelector(store, selectHasAutomation);
-  const automation = automationPath(context.sourceThreadId);
+  const automation = automationPath(context.automationId);
   const failed = context.outcome === "failed";
+  const uncertain = context.outcome === "uncertain";
   return (
     <aside
       className="thread-attention automation-context"
-      data-tone={failed ? "danger" : "neutral"}
+      data-tone={failed ? "danger" : uncertain ? "warning" : "neutral"}
     >
       <div className="automation-context-body">
         <div className="automation-context-text">
           <p>
-            {failed
-              ? occurrence === "manual"
-                ? "This run failed."
-                : "This scheduled run failed."
-              : "This thread was triggered by an automation."}
+            {uncertain ? `${context.name}: delivery outcome is unknown.` : failed
+              ? `${context.name}: this run failed.`
+              : `${context.name} triggered this thread.`}
           </p>
           {context.diagnostic && <small>{context.diagnostic.text}</small>}
         </div>
         <div className="automation-context-actions">
-          {hasAutomation ? (
+          {(
             <Button variant="outline" size="xs" asChild>
               <a href={automation} onClick={(event) => followLink(event, automation)}>
                 Open automation
               </a>
             </Button>
-          ) : null}
-          <Button variant="outline" size="xs" onClick={onDismiss}>
-            Dismiss
-          </Button>
+          )}
+          {!uncertain && <Button variant="outline" size="xs" onClick={onDismiss}>Dismiss</Button>}
         </div>
       </div>
     </aside>

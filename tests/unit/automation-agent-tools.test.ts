@@ -22,12 +22,29 @@ import {
 const scope = { tenantId: "tenant-1", principalId: "principal-1" };
 const sourceThreadId = "0191cfe0-7d51-7a51-ae51-111111111111";
 const targetThreadId = "0191cfe0-7d51-7a51-ae51-222222222222";
+const automationId = "0191cfe0-7d51-7a51-ae51-555555555555";
+const targetAutomationId = "0191cfe0-7d51-7a51-ae51-777777777777";
 const firstMutationId = "0191cfe0-7d51-7a51-ae51-333333333333";
 
 function definition(
   overrides: Partial<ThreadAutomationDefinition> = {},
 ): ThreadAutomationDefinition {
   return {
+    id: automationId,
+    threadId: sourceThreadId,
+    name: "Review",
+    source: {
+      title: "Assistant",
+      workspaceId: "workspace-1",
+      environmentId: "environment-1",
+      targetId: "target-1",
+      groupId: null,
+      backendLabel: "Pi",
+      available: true,
+      backingState: "bound",
+      inventoryState: "active",
+      inventoryRevision: 1,
+    },
     status: "paused",
     runMode: "same_thread",
     scheduleKind: "interval",
@@ -92,6 +109,16 @@ function context(mutationId = firstMutationId): TrustedToolInvocationContext {
       admittedEnvironmentIds: ["environment-1", "environment-2"],
       targetEnvironmentIds: ["environment-2"],
       resolvedResourceRefs: [
+        {
+          kind: "automation",
+          id: automationId,
+          environmentId: "environment-1",
+        },
+        {
+          kind: "automation",
+          id: targetAutomationId,
+          environmentId: "environment-2",
+        },
         { kind: "thread", id: sourceThreadId, environmentId: "environment-1" },
         { kind: "thread", id: targetThreadId, environmentId: "environment-2" },
       ],
@@ -120,16 +147,28 @@ function fixture(input?: {
     executionPolicy: { assertCanAutomate: () => undefined },
   });
   const automations = {
-    get: vi.fn(() => current),
+    get: vi.fn((_scope, id) =>
+      id === targetAutomationId
+        ? { ...current, id: targetAutomationId, threadId: targetThreadId }
+        : current,
+    ),
+    list: vi.fn(() => ({ items: [current], nextCursor: null })),
+    delete: vi.fn(),
+    resolveUncertainRun: vi.fn(),
+    acknowledgeRun: vi.fn(),
     preview: vi.fn((...args: Parameters<AutomationService["preview"]>) => {
       scheduleValidation.preview(...args);
       return ["2026-08-08T01:05:00.000Z", "2026-08-08T01:10:00.000Z"];
     }),
+    replayCreate: vi.fn(
+      () => undefined as ThreadAutomationDefinition | undefined,
+    ),
     create: vi.fn(() => current),
     update: vi.fn(() => current),
     setState: vi.fn(() => current),
     listRuns: vi.fn(() => ({ items: [], nextCursor: null })),
     runNow: vi.fn(async () => ({
+      automationId,
       id: firstMutationId,
       occurrence: "manual" as const,
       scheduledFor: "2026-08-08T00:00:00.000Z",
@@ -190,6 +229,10 @@ describe("automation canonical tool service", () => {
     const setup = fixture();
     const result = await setup.service.create(
       {
+        name: "Review",
+        initialState: "paused",
+        mutationId: firstMutationId,
+        misfirePolicy: null,
         prompt: "Run the review",
         runMode: "same_thread",
         schedule: {
@@ -211,7 +254,7 @@ describe("automation canonical tool service", () => {
       sourceThreadId,
       expect.objectContaining({
         mutationId: firstMutationId,
-        misfirePolicy: "coalesce",
+        misfirePolicy: null,
         precheck: expect.objectContaining({ command: "npm test" }),
       }),
       Date.parse("2026-08-08T00:00:00.000Z"),
@@ -225,14 +268,21 @@ describe("automation canonical tool service", () => {
   it("read-merges a partial update, preserves omitted precheck, and keeps the caller CAS", async () => {
     const setup = fixture();
     await setup.service.update(
-      { expectedRevision: 3, prompt: "  Changed  ", threadId: targetThreadId },
+      {
+        expectedRevision: 3,
+        prompt: "  Changed  ",
+        automationId: targetAutomationId,
+      },
       context(),
     );
 
-    expect(setup.automations.get).toHaveBeenCalledWith(scope, targetThreadId);
+    expect(setup.automations.get).toHaveBeenCalledWith(
+      scope,
+      targetAutomationId,
+    );
     expect(setup.automations.update).toHaveBeenCalledWith(
       scope,
-      targetThreadId,
+      targetAutomationId,
       expect.objectContaining({
         prompt: "Changed",
         runMode: "same_thread",
@@ -248,12 +298,12 @@ describe("automation canonical tool service", () => {
   it("clears only an explicitly null precheck", async () => {
     const setup = fixture();
     await setup.service.update(
-      { expectedRevision: 4, precheck: null },
+      { automationId, expectedRevision: 4, precheck: null },
       context(),
     );
     expect(setup.automations.update).toHaveBeenCalledWith(
       scope,
-      sourceThreadId,
+      automationId,
       expect.objectContaining({ precheck: null }),
       expect.any(Number),
     );
@@ -264,6 +314,10 @@ describe("automation canonical tool service", () => {
     await expect(
       setup.service.create(
         {
+          name: "Review",
+          initialState: "paused",
+          mutationId: firstMutationId,
+          misfirePolicy: null,
           prompt: "Fork",
           runMode: "clone",
           schedule: {
@@ -278,7 +332,9 @@ describe("automation canonical tool service", () => {
   });
 
   it("owns a cancelled clone capability read through drain and never later mutates", async () => {
-    let resolveCapability!: (value: { readonly canCloneOnRun: boolean }) => void;
+    let resolveCapability!: (value: {
+      readonly canCloneOnRun: boolean;
+    }) => void;
     const capability = new Promise<{ readonly canCloneOnRun: boolean }>(
       (resolve) => {
         resolveCapability = resolve;
@@ -291,9 +347,13 @@ describe("automation canonical tool service", () => {
     const invocation = executor.invoke(
       {
         toolId: "automation.create",
-        schemaVersion: 1,
+        schemaVersion: 2,
         requestId: "cancel-clone-read",
         input: {
+          name: "Review",
+          initialState: "paused",
+          mutationId: firstMutationId,
+          misfirePolicy: null,
           prompt: "Fork",
           runMode: "clone",
           schedule: {
@@ -325,10 +385,10 @@ describe("automation canonical tool service", () => {
   it("bounds run history defaults and uses each invocation's fresh mutation for run now", async () => {
     const setup = fixture();
     const invocation = context();
-    setup.service.listRuns({}, invocation);
+    setup.service.listRuns({ automationId }, invocation);
     expect(setup.automations.listRuns).toHaveBeenCalledWith(
       scope,
-      sourceThreadId,
+      automationId,
       {
         pageSize: 50,
         environmentAuthority: {
@@ -340,19 +400,25 @@ describe("automation canonical tool service", () => {
     );
 
     const secondMutationId = "0191cfe0-7d51-7a51-ae51-555555555555";
-    await setup.service.runNow({}, context(firstMutationId));
-    await setup.service.runNow({}, context(secondMutationId));
+    await setup.service.runNow(
+      { automationId, mutationId: firstMutationId },
+      context(firstMutationId),
+    );
+    await setup.service.runNow(
+      { automationId, mutationId: secondMutationId },
+      context(secondMutationId),
+    );
     expect(setup.automations.runNow).toHaveBeenNthCalledWith(
       1,
       scope,
-      sourceThreadId,
+      automationId,
       firstMutationId,
       expect.any(Number),
     );
     expect(setup.automations.runNow).toHaveBeenNthCalledWith(
       2,
       scope,
-      sourceThreadId,
+      automationId,
       secondMutationId,
       expect.any(Number),
     );
@@ -362,6 +428,7 @@ describe("automation canonical tool service", () => {
     const setup = fixture();
     const detailed = {
       id: firstMutationId,
+      automationId,
       occurrence: "manual" as const,
       scheduledFor: "2026-08-08T00:00:00.000Z",
       state: "failed" as const,
@@ -388,6 +455,7 @@ describe("automation canonical tool service", () => {
     };
     const frozen = {
       id: firstMutationId,
+      automationId,
       occurrence: "manual",
       scheduledFor: "2026-08-08T00:00:00.000Z",
       state: "failed",
@@ -408,19 +476,24 @@ describe("automation canonical tool service", () => {
     } as never);
     setup.automations.runNow.mockResolvedValue(detailed as never);
 
-    expect(setup.service.listRuns({}, context())).toEqual({
+    expect(setup.service.listRuns({ automationId }, context())).toEqual({
       items: [frozen],
       nextCursor: null,
     });
-    await expect(setup.service.runNow({}, context())).resolves.toEqual(frozen);
-    // The registry validates outputs against the unchanged v1 artifacts.
+    await expect(
+      setup.service.runNow(
+        { automationId, mutationId: firstMutationId },
+        context(),
+      ),
+    ).resolves.toEqual(frozen);
+    // The current v2 contracts retain bounded run details and require identity.
     await expect(
       canonical(setup).invoke(
         {
           toolId: "automation.runs",
-          schemaVersion: 1,
+          schemaVersion: 2,
           requestId: "frozen-run-shape",
-          input: {},
+          input: { automationId },
         },
         invocationSource,
       ),
@@ -448,29 +521,31 @@ describe("automation canonical tool service", () => {
       }),
     });
 
-    await expect(setup.service.get({}, context())).resolves.toMatchObject({
+    await expect(
+      setup.service.get({ automationId }, context()),
+    ).resolves.toMatchObject({
       lastRun,
     });
-    await expect(setup.service.get({}, context())).resolves.not.toHaveProperty(
-      "runsRevision",
-    );
+    await expect(
+      setup.service.get({ automationId }, context()),
+    ).resolves.not.toHaveProperty("runsRevision");
     for (const result of [
-      await setup.service.get({}, context()),
+      await setup.service.get({ automationId }, context()),
       await setup.service.setState(
-        { expectedRevision: 4, action: "pause" },
+        { automationId, expectedRevision: 4, action: "pause" },
         context(),
       ),
     ]) {
       expect(result.lastRun).toEqual(lastRun);
     }
-    // The registry validates outputs against the unchanged v1 artifacts.
+    // The current v2 contracts retain bounded run details and require identity.
     await expect(
       canonical(setup).invoke(
         {
           toolId: "automation.get",
-          schemaVersion: 1,
+          schemaVersion: 2,
           requestId: "frozen-definition-shape",
-          input: {},
+          input: { automationId },
         },
         invocationSource,
       ),
@@ -493,13 +568,17 @@ describe("automation canonical tool service", () => {
         ],
       },
     };
-    const target = { threadId: targetThreadId };
+    const target = { automationId: targetAutomationId };
     const invocations = [
       setup.service.get(target, denied),
       Promise.resolve().then(() => setup.service.listRuns(target, denied)),
       setup.service.create(
         {
-          ...target,
+          name: "Review",
+          initialState: "paused",
+          mutationId: firstMutationId,
+          misfirePolicy: null,
+          threadId: targetThreadId,
           prompt: "Review",
           runMode: "same_thread",
           schedule: {
@@ -517,7 +596,12 @@ describe("automation canonical tool service", () => {
         { ...target, expectedRevision: 4, action: "enable" },
         denied,
       ),
-      Promise.resolve().then(() => setup.service.runNow(target, denied)),
+      Promise.resolve().then(() =>
+        setup.service.runNow(
+          { ...target, mutationId: firstMutationId },
+          denied,
+        ),
+      ),
     ];
     for (const invocation of invocations) {
       await expect(invocation).rejects.toMatchObject({
@@ -560,23 +644,24 @@ describe("automation canonical tool service", () => {
       "automation.set_state",
       "automation.run_now",
     ]);
-    expect(registry.get("automation.run_now", 1).effects).toEqual({
+    expect(registry.get("automation.run_now", 2).effects).toEqual({
       application: "write",
       modelUsage: "agent_execution",
       external: "durable_side_effect",
     });
-    expect(registry.get("automation.run_now", 1).execution).toMatchObject({
+    expect(registry.get("automation.run_now", 2).execution).toMatchObject({
       adapterWaitCeilingMilliseconds: { cli: 90_000 },
       uncertainExternalOutcome: true,
     });
     expect(
-      registry.validatesInput("automation.update", 1, {
+      registry.validatesInput("automation.update", 2, {
+        automationId,
         expectedRevision: 4,
         precheck: null,
       }),
     ).toBe(true);
     expect(
-      registry.validatesInput("automation.create", 1, {
+      registry.validatesInput("automation.create", 2, {
         prompt: "Review",
         runMode: "same_thread",
         schedule: {
@@ -593,9 +678,9 @@ describe("automation canonical tool service", () => {
       canonical(fixture()).invoke(
         {
           toolId: "automation.update",
-          schemaVersion: 1,
+          schemaVersion: 2,
           requestId: "no-change",
-          input: { expectedRevision: 4, threadId: targetThreadId },
+          input: { expectedRevision: 4, automationId: targetAutomationId },
         },
         invocationSource,
       ),
@@ -612,9 +697,13 @@ describe("automation canonical tool service", () => {
       executor.invoke(
         {
           toolId: "automation.create",
-          schemaVersion: 1,
+          schemaVersion: 2,
           requestId: "invalid-timestamp",
           input: {
+            name: "Review",
+            initialState: "paused",
+            mutationId: firstMutationId,
+            misfirePolicy: null,
             prompt: "Review",
             runMode: "same_thread",
             schedule: { kind: "date_time", runAt: "not-a-timestamp" },
@@ -627,9 +716,13 @@ describe("automation canonical tool service", () => {
       executor.invoke(
         {
           toolId: "automation.create",
-          schemaVersion: 1,
+          schemaVersion: 2,
           requestId: "invalid-precheck",
           input: {
+            name: "Review",
+            initialState: "paused",
+            mutationId: firstMutationId,
+            misfirePolicy: null,
             prompt: "Review",
             runMode: "same_thread",
             schedule: {
@@ -654,9 +747,13 @@ describe("automation canonical tool service", () => {
     const createFailure = executor.invoke(
       {
         toolId: "automation.create",
-        schemaVersion: 1,
+        schemaVersion: 2,
         requestId: "too-frequent-cron",
         input: {
+          name: "Review",
+          initialState: "paused",
+          mutationId: firstMutationId,
+          misfirePolicy: null,
           prompt: "Review",
           runMode: "same_thread",
           schedule: {
@@ -686,9 +783,10 @@ describe("automation canonical tool service", () => {
       executor.invoke(
         {
           toolId: "automation.update",
-          schemaVersion: 1,
+          schemaVersion: 2,
           requestId: "invalid-timezone",
           input: {
+            automationId,
             expectedRevision: 4,
             schedule: {
               kind: "cron",
@@ -703,7 +801,6 @@ describe("automation canonical tool service", () => {
       code: "invalid_input",
       message: expect.stringMatching(/schedule.*timezone/i),
     });
-    expect(setup.automations.get).not.toHaveBeenCalled();
     expect(setup.automations.update).not.toHaveBeenCalled();
   });
 
@@ -712,6 +809,10 @@ describe("automation canonical tool service", () => {
     await expect(
       setup.service.create(
         {
+          name: "Review",
+          initialState: "paused",
+          mutationId: firstMutationId,
+          misfirePolicy: "coalesce",
           prompt: "Daily review",
           runMode: "same_thread",
           schedule: {
@@ -738,9 +839,9 @@ describe("automation canonical tool service", () => {
       canonical(setup).invoke(
         {
           toolId: "automation.update",
-          schemaVersion: 1,
+          schemaVersion: 2,
           requestId: "stale-revision",
-          input: { expectedRevision: 3, prompt: "Changed" },
+          input: { automationId, expectedRevision: 3, prompt: "Changed" },
         },
         invocationSource,
       ),
@@ -754,9 +855,13 @@ describe("automation canonical tool service", () => {
       canonical(setup).invoke(
         {
           toolId: "automation.create",
-          schemaVersion: 1,
+          schemaVersion: 2,
           requestId: "escaped-prompt",
           input: {
+            name: "Review",
+            initialState: "paused",
+            mutationId: firstMutationId,
+            misfirePolicy: null,
             prompt,
             runMode: "same_thread",
             schedule: {
@@ -791,12 +896,190 @@ describe("automation canonical tool service", () => {
       canonical(escaped).invoke(
         {
           toolId: "automation.get",
-          schemaVersion: 1,
+          schemaVersion: 2,
           requestId: "escaped-definition",
-          input: {},
+          input: { automationId },
         },
         invocationSource,
       ),
     ).resolves.toMatchObject({ state: "completed" });
+  });
+  it("lists independent identities on the current thread without leaking full prompt or precheck", async () => {
+    const setup = fixture();
+    const executor = canonical(setup);
+    const result = await executor.invoke(
+      {
+        toolId: "automation.list",
+        schemaVersion: 1,
+        requestId: "list",
+        input: {},
+      },
+      invocationSource,
+    );
+    expect(setup.automations.list).toHaveBeenCalledWith(scope, {
+      threadId: sourceThreadId,
+      pageSize: 50,
+    });
+    expect(result).toMatchObject({
+      state: "completed",
+      output: {
+        items: [
+          {
+            id: automationId,
+            name: "Review",
+            threadId: sourceThreadId,
+            promptPreview: "Existing prompt",
+          },
+        ],
+        nextCursor: null,
+      },
+    });
+    const output = (result as { output: { items: unknown[] } }).output;
+    expect(output.items[0]).not.toHaveProperty("prompt");
+    expect(output.items[0]).not.toHaveProperty("precheck");
+  });
+
+  it("requires explicit entity identity and rejects the retired version", async () => {
+    const executor = canonical(fixture());
+    await expect(
+      executor.invoke(
+        {
+          toolId: "automation.get",
+          schemaVersion: 2,
+          requestId: "missing-id",
+          input: {},
+        },
+        invocationSource,
+      ),
+    ).rejects.toMatchObject({ code: "invalid_input" });
+    await expect(
+      executor.invoke(
+        {
+          toolId: "automation.get",
+          schemaVersion: 1,
+          requestId: "old-version",
+          input: { threadId: sourceThreadId },
+        },
+        invocationSource,
+      ),
+    ).rejects.toMatchObject({ code: "not_found" });
+  });
+
+  it("requires caller keys for create and run now and preserves keys across invocation retries", async () => {
+    const setup = fixture(),
+      executor = canonical(setup);
+    const input = {
+      name: "Reminder",
+      initialState: "enabled",
+      prompt: "Remind me",
+      runMode: "same_thread",
+      schedule: { kind: "date_time", runAt: "2026-08-09T00:00:00.000Z" },
+      misfirePolicy: null,
+    };
+    await expect(
+      executor.invoke(
+        {
+          toolId: "automation.create",
+          schemaVersion: 2,
+          requestId: "no-key",
+          input,
+        },
+        invocationSource,
+      ),
+    ).rejects.toMatchObject({ code: "invalid_input" });
+    await expect(
+      executor.invoke(
+        {
+          toolId: "automation.run_now",
+          schemaVersion: 2,
+          requestId: "run-no-key",
+          input: { automationId },
+        },
+        invocationSource,
+      ),
+    ).rejects.toMatchObject({ code: "invalid_input" });
+    for (const requestId of ["first", "retry"]) {
+      await executor.invoke(
+        {
+          toolId: "automation.create",
+          schemaVersion: 2,
+          requestId,
+          input: { ...input, mutationId: firstMutationId },
+        },
+        invocationSource,
+      );
+      await executor.invoke(
+        {
+          toolId: "automation.run_now",
+          schemaVersion: 2,
+          requestId,
+          input: { automationId, mutationId: firstMutationId },
+        },
+        invocationSource,
+      );
+    }
+    expect(setup.automations.create).toHaveBeenCalledTimes(2);
+    expect(
+      setup.automations.create.mock.calls.every(
+        (call: any[]) =>
+          call[2].mutationId === firstMutationId &&
+          call[2].initialState === "enabled",
+      ),
+    ).toBe(true);
+    expect(
+      setup.automations.runNow.mock.calls.every(
+        (call: any[]) =>
+          call[1] === automationId && call[2] === firstMutationId,
+      ),
+    ).toBe(true);
+  });
+
+  it("does not reuse another automation's admitted resource", async () => {
+    const setup = fixture();
+    const authority = {
+      ...context(),
+      environmentAuthority: {
+        ...context().environmentAuthority,
+        resolvedResourceRefs:
+          context().environmentAuthority.resolvedResourceRefs.filter(
+            (ref) => ref.id !== targetAutomationId,
+          ),
+      },
+    };
+    await expect(
+      setup.service.setState(
+        {
+          automationId: targetAutomationId,
+          expectedRevision: 4,
+          action: "pause",
+        },
+        authority,
+      ),
+    ).rejects.toMatchObject({ code: "permission_denied" });
+    expect(setup.automations.get).not.toHaveBeenCalled();
+    expect(setup.automations.setState).not.toHaveBeenCalled();
+  });
+
+  it("replays an existing create receipt before checking mutable fork capability", async () => {
+    const setup = fixture({ canCloneOnRun: false });
+    setup.automations.replayCreate.mockReturnValue(
+      definition({ runMode: "clone" }),
+    );
+    await expect(
+      setup.service.create(
+        {
+          name: "Review",
+          initialState: "paused",
+          mutationId: firstMutationId,
+          prompt: "Review",
+          runMode: "clone",
+          schedule: { kind: "date_time", runAt: "2026-08-09T00:00:00.000Z" },
+          misfirePolicy: null,
+        },
+        context(),
+      ),
+    ).resolves.toMatchObject({ id: automationId, runMode: "clone" });
+    expect(setup.threads.automationCapability).not.toHaveBeenCalled();
+    expect(setup.automations.create).not.toHaveBeenCalled();
   });
 });

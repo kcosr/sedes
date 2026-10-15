@@ -386,7 +386,7 @@ function archiveService(
             stateChangedAt: new Date(
               aggregate.inventory.stateChangedAt,
             ).toISOString(),
-            automation: null,
+            automations: { totalCount: 0, enabledCount: 0, pausedCount: 0, exhaustedCount: 0, inFlightCount: 0, attentionCount: 0, revision: 0 },
             attention: {
               wake: false,
               automationContext: null,
@@ -867,14 +867,14 @@ describe("thread force-reset repository", () => {
               attachmentIds: [],
               source: {
                 kind: "automation",
-                expectedThreadRevision: revision(current, current.rootId),
+                claimToken: "automation-reset-claim",
                 automationId: seeded.automationId,
                 automationRunId: seeded.automationRunId,
               },
               now: 720,
             },
           ),
-        ).toThrow("Force-reset automation cannot enqueue input");
+        ).toThrow("The automation dispatch no longer owns an admissible claim.");
         expect(() =>
           new ConversationCreationRepository(current.database).prepare(
             current.scope,
@@ -1386,7 +1386,7 @@ describe("thread force-reset repository", () => {
 
       let thrown: unknown;
       try {
-        automations.bindForkChild(current.scope, automation.id, run.id, {
+        automations.bindResultChild(current.scope, automation.id, run.id, {
           childThreadId: current.childId,
           now: 710,
         });
@@ -1396,7 +1396,7 @@ describe("thread force-reset repository", () => {
       expect(thrown).toBeInstanceOf(DomainError);
       expect(thrown).toMatchObject({
         code: "conflict",
-        message: "The automation branch lineage changed in another operation.",
+        message: "The automation claim is no longer active.",
       });
     } finally {
       current.database.close();

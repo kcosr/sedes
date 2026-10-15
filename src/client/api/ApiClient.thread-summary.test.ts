@@ -6,7 +6,7 @@ const thread: NormalizedApplicationThreadSummary = {
   id: "thread/one", workspaceId: "workspace", targetId: "target", title: { text: "Older fork" },
   backend: { label: { text: "Pi" }, brand: "pi" }, backingState: "bound", inventoryState: "active",
   inventoryRevision: 0, threadRevision: 0, runState: "idle", available: true,
-  lastActivityAt: "2026-10-12T00:00:00.000Z", stateChangedAt: "2026-10-12T00:00:00.000Z", automation: null,
+  lastActivityAt: "2026-10-12T00:00:00.000Z", stateChangedAt: "2026-10-12T00:00:00.000Z", automations: { totalCount: 0, enabledCount: 0, pausedCount: 0, exhaustedCount: 0, inFlightCount: 0, attentionCount: 0, revision: 0 },
   terminalSummary: { runningCount: 0, retainedCount: 0 }, pinned: false, pinRevision: 0,
   preferredWorktree: null, preferredWorktreeRevision: 0, bookmarkRevision: 0, turnBookmarkCount: 0,
   groupId: null, groupAssignmentRevision: 0, queuedInputCount: 0, stashedPromptCount: 0,

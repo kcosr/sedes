@@ -88,7 +88,7 @@ import {
   snoozeLabel,
 } from "../lib/time.js";
 import {
-  automationHealth,
+  threadAutomationHealth,
   automationIdentityGlyph,
   automationIdentityLabel,
 } from "../automation/automation-health.js";
@@ -1445,12 +1445,12 @@ export function InventorySidebar({
   }, [projectFilterId, selectedProjectId, setProjectExpanded]);
   const shownThreads = threads.filter(keepShownThread);
   const active = shownThreads.filter(
-    ({ inventoryState, automation }) =>
-      inventoryState === "active" && !automation,
+    ({ inventoryState, automations }) =>
+      inventoryState === "active" && automations.totalCount === 0,
   );
   const automated = shownThreads.filter(
-    ({ inventoryState, automation }) =>
-      inventoryState === "active" && Boolean(automation),
+    ({ inventoryState, automations }) =>
+      inventoryState === "active" && automations.totalCount > 0,
   );
   const snoozed = shownThreads.filter(
     ({ inventoryState }) => inventoryState === "snoozed",
@@ -1460,8 +1460,8 @@ export function InventorySidebar({
   );
   const scopedInventoryThreads = scopedSnapshot?.threads ?? [];
   const scopedAutomationCount = scopedInventoryThreads.filter(
-    ({ inventoryState, automation }) =>
-      inventoryState === "active" && Boolean(automation),
+    ({ inventoryState, automations }) =>
+      inventoryState === "active" && automations.totalCount > 0,
   ).length;
   const scopedSnoozedCount = scopedInventoryThreads.filter(
     ({ inventoryState }) => inventoryState === "snoozed",
@@ -4515,8 +4515,8 @@ function ThreadRow({
    * moved focus somewhere deliberate, and stealing it back would be wrong.
    */
   const restoreRowFocus = useRef(false);
-  const automation = thread.automation ?? undefined;
-  const automationState = automationHealth(thread, Date.now());
+  const automation = thread.automations.totalCount > 0 ? thread.automations : undefined;
+  const automationState = threadAutomationHealth(thread, Date.now());
   const glyphKind = flatRowGlyphKind(thread, backgroundWorkCurrent);
   const glyphLabel = flatRowGlyphLabel(thread, backgroundWorkCurrent);
   const unseenOwnsGlyph = glyphKind === "unseen";
@@ -4541,11 +4541,9 @@ function ThreadRow({
       : automation?.nextRunAt
         ? futureTimeLabel(automation.nextRunAt)
         : automation
-          ? automation.status === "enabled"
+          ? automation.enabledCount > 0
             ? "Active"
-            : automationState?.kind === "not_started"
-              ? "Not started"
-              : "Paused"
+            : automation.pausedCount > 0 ? "Paused" : "Finished"
           : shortRelativeTime(thread.lastActivityAt);
   const glyph = (
     <span className="row-glyph">
@@ -4584,7 +4582,7 @@ function ThreadRow({
         <Clock size={13} strokeWidth={2} />
       ) : kind === "automations" && automationState ? (
         <AutomationGlyph
-          glyph={automationIdentityGlyph(automationState)}
+          glyph={thread.automations.inFlightCount > 0 ? "spinner" : automationIdentityGlyph(automationState)}
           tone={automationState.kind === "sending" ? "info" : undefined}
           label={automationIdentityLabel(automationState)}
         />
@@ -4785,6 +4783,8 @@ function ThreadRow({
               <StatusChip chip="automation-failed" label="Automation failed">
                 <TriangleAlert size={14} strokeWidth={2} />
               </StatusChip>
+            ) : automationState?.kind === "attention" ? (
+              <StatusChip chip="automation-attention" label="Automation needs attention"><TriangleAlert size={14} strokeWidth={2} /></StatusChip>
             ) : automationState?.kind === "unknown" ? (
               <StatusChip
                 chip="automation-unknown"

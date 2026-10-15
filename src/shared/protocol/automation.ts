@@ -51,3 +51,30 @@ export const automationPrecheckSchema = z.strictObject({
   includeStdout: z.boolean(),
 });
 export type AutomationPrecheck = z.infer<typeof automationPrecheckSchema>;
+
+export const automationNameSchema = z.string().trim().min(1).max(240);
+
+export const automationDeferredReasonSchema = z.enum([
+  "snoozed",
+  "archived",
+  "project_removed",
+  "sibling",
+  "source_materializing",
+  "source_recovery",
+  "source_busy",
+  "queue_capacity",
+]);
+
+export const threadAutomationsSummarySchema = z.strictObject({
+  totalCount: z.number().int().nonnegative(),
+  enabledCount: z.number().int().nonnegative(),
+  pausedCount: z.number().int().nonnegative(),
+  exhaustedCount: z.number().int().nonnegative(),
+  inFlightCount: z.number().int().nonnegative(),
+  attentionCount: z.number().int().nonnegative(),
+  nextRunAt: z.iso.datetime().optional(),
+  revision: z.number().int().nonnegative(),
+});
+export type ThreadAutomationsSummary = z.infer<
+  typeof threadAutomationsSummarySchema
+>;

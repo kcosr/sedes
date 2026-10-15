@@ -11,7 +11,7 @@ import {
   automationToolExposure,
   automationToolInputSchema,
   automationToolPresentations,
-  optionalAutomationThreadId,
+  requiredAutomationId,
 } from "./automation-tool-schemas.js";
 import { CANONICAL_AGENT_TOOL_MANIFEST } from "../registry/canonical-agent-tool-manifest.js";
 
@@ -29,7 +29,7 @@ export function createAutomationSetStateToolDefinition(
         maximum: Number.MAX_SAFE_INTEGER,
       }),
       action: Type.String({ maxLength: 6, enum: ["enable", "pause"] }),
-      threadId: optionalAutomationThreadId,
+      automationId: requiredAutomationId,
     }),
     outputSchema: automationDefinitionToolOutputSchema,
     requiredCapabilities: [],

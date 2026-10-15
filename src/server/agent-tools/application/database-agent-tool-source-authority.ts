@@ -1,7 +1,8 @@
 import type Database from "better-sqlite3";
 import type { BackendKind } from "../../backends/contracts.js";
 import type { RequestScope } from "../../identity/identity-provider.js";
-import type { TrustedAgentToolSource, BackendAgentToolAccessDecisionAuthority } from "../adapters/backend-facade.js";
+import type { TrustedAgentToolSource, BackendAgentToolAccessDecisionAuthority,
+} from "../adapters/backend-facade.js";
 import type {
   AgentToolEnvironmentAuthorityReader,
   EnvironmentAuthorityProjectFact,
@@ -54,7 +55,7 @@ export interface EnvironmentScopedAgentToolSourceResolver {
 }
 
 export type AgentToolSourceCapabilityTransport =
-  | "management_http"
+  "management_http"
   | "execution_environment_sidecar";
 
 export interface AgentToolSourceCapabilityIssuer {
@@ -82,7 +83,8 @@ export class DatabaseAgentToolSourceAuthority
   constructor(
     readonly database: Database.Database,
     installationKey: Uint8Array,
-    readonly accessDecisionAuthority?: (source: TrustedAgentToolSource) => BackendAgentToolAccessDecisionAuthority | undefined,
+    readonly accessDecisionAuthority?: (source: TrustedAgentToolSource,
+    ) => BackendAgentToolAccessDecisionAuthority | undefined,
   ) {
     this.#references = new ThreadSourceReferenceCodec(installationKey);
   }
@@ -213,6 +215,29 @@ export class DatabaseAgentToolSourceAuthority
       EnvironmentAuthorityResourceFact | undefined;
   }
 
+  resolveAutomation(
+    scope: RequestScope,
+    id: string,
+  ):
+    | (EnvironmentAuthorityResourceFact & { readonly threadId: string })
+    | undefined {
+    return this.database
+      .prepare(
+        `
+      SELECT automation.id, automation.anchor_thread_id AS threadId,
+        thread.environment_id AS environmentId, thread.workspace_id AS workspaceId,
+        automation.name AS label
+      FROM automation_definitions AS automation
+      JOIN application_threads AS thread ON thread.tenant_id = automation.tenant_id
+        AND thread.owner_principal_id = automation.owner_principal_id AND thread.id = automation.anchor_thread_id
+      WHERE automation.tenant_id = ? AND automation.owner_principal_id = ? AND automation.id = ?
+    `,
+      )
+      .get(scope.tenantId, scope.principalId, id) as
+      | (EnvironmentAuthorityResourceFact & { readonly threadId: string })
+      | undefined;
+  }
+
   resolveThreadFamily(
     scope: RequestScope,
     id: string,
@@ -245,7 +270,8 @@ export class DatabaseAgentToolSourceAuthority
   resolveSavedAgent(
     scope: RequestScope,
     id: string,
-  ): { readonly id: string; readonly revision: number; readonly label: string } | undefined {
+  ):
+    | { readonly id: string; readonly revision: number; readonly label: string } | undefined {
     return this.database
       .prepare(
         `SELECT id, revision, name AS label
@@ -253,7 +279,8 @@ export class DatabaseAgentToolSourceAuthority
          WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?`,
       )
       .get(scope.tenantId, scope.principalId, id) as
-      { readonly id: string; readonly revision: number; readonly label: string } | undefined;
+      | { readonly id: string; readonly revision: number; readonly label: string;
+        } | undefined;
   }
 
   resolveTask(

@@ -163,38 +163,40 @@ checkpoint as a later event.
 
 ## Thread automation summary
 
-A thread summary's `automation` is `null` or a projection of the thread's live
-automation definition and its latest run. It reads only application-owned
-definitions and runs, never a backend, and every backend shares it. It carries
-`status`, `runMode`, `scheduleKind`, the presented `schedule`,
-`misfirePolicy`, `promptPreview`, `nextRunAt`, `revision`, `hasPrecheck`, and
-`lastRun` (`id`, `state`, `occurrence`, `scheduledFor`, `finishedAt`,
-`resultThreadId`, which is the fork child or else the anchor, `errorCode`, and
-`turn`). `lastRun.turn` appears once the agent turn the run's prompt started
-has settled on the completion rail. It carries the turn's `outcome`
-(`completed`, `interrupted` or `failed`) and, when the backend reported the
-turn's own end, `endedAt`. A settlement recovered from the rail has no times
-until a later replay fills them, so readers fall back to `finishedAt`. The turn
-is run history only: it never changes `state`, scheduling or attention. The
-full prompt, run diagnostics, and run history, including each run's turn ID,
-settlement time and turn start, stay behind the thread automation routes. A
-definition change, run transition or turn settlement republishes the anchor's
-summary, and a fork run's child, so list and sidebar surfaces follow it live.
+Every thread summary carries a non-null `automations` aggregate. It reads only
+principal-scoped application definitions and runs and is shared by every backend.
+It contains `totalCount`, `enabledCount`, `pausedCount`, `exhaustedCount`,
+`inFlightCount`, `attentionCount`, `revision`, and optional `nextRunAt`.
+An empty source has zero counts. A thread with multiple definitions still appears
+once in inventory: joins must aggregate per source before producing thread rows.
 
-`promptPreview` lets lists show and search a prompt without carrying up to
-64 KiB per thread. Readers load at most the prompt's first 8 KiB, taken as a
-BLOB because SQLite text functions stop at an embedded NUL, and drop a
-replacement character left by a cut inside a multi-byte character. Whitespace
-and control characters collapse to single spaces, the result is trimmed and
-cut to 140 UTF-16 units without splitting a code point, and "…" ends it when
-more text follows, including when the prompt continues past the loaded
-prefix, which keeps it within the protocol's 160-character bound. It is empty
-only when the prompt has no printable text.
+The aggregate is bounded independently of the number of attached automations.
+Full definitions and histories are fetched from the paginated `/api/automations`
+collection and `/api/automations/:automationId` resource routes. Global collection
+membership never depends on which source threads or fork families the browser has
+loaded. Each resource carries its own identity, name, source metadata, revisions,
+latest run, and independent attention. Source IDs select collections, not a
+single implicit automation.
 
-The latest run is the first row in run-history order, `created_at DESC, id
-DESC`: the order of `GET …/automation/runs` and the `automation_runs_history`
-index. The application projection and the thread snapshot share one select
-and a correlated `LIMIT 1` join per definition
-([`thread-automation-summary.ts`](../../src/server/application/thread-automation-summary.ts)),
-and the REST definition summary reads the same first row, so every surface
-names the same run.
+`nextRunAt` describes the earliest actionable candidate, accounting for source
+suppression and deferred delivery. An indefinitely blocked run has no invented
+deadline. In-flight and attention counts remain separate: a sibling's activity or
+success must not hide another automation's unresolved delivery problem.
+
+The latest run follows history order, `created_at DESC, id DESC`. Attention is
+computed independently: an unresolved uncertain delivery takes priority;
+otherwise the latest decisive delivery failure needs attention until acknowledged
+or superseded by a later success from that same automation. Skips, cancellation,
+and manual uncertainty resolution do not count as successful delivery. Assistant
+turn failure stays in history and normal thread attention, not delivery attention.
+
+Thread detail includes bounded `attention.automationContexts`, each with explicit
+automation, run, and source identity. Dismissal acknowledges that run, never a
+mutable singleton slot. A result thread's provenance names its actual source even
+when the source's other automations have run since.
+
+Definition and run changes publish scoped `automation_changed` invalidations on
+the existing application stream and refresh affected thread summaries. Source
+metadata changes also invalidate matching collection views. Reconnect must
+re-fetch authoritative collections; revision equality between sibling resources
+never makes their detail or history caches interchangeable.

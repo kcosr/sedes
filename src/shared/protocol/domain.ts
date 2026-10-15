@@ -42,12 +42,14 @@ export type AutomationMisfirePolicy = z.infer<
   typeof automationMisfirePolicySchema
 >;
 
-export const automationDefinitionStatusSchema = z.enum(["enabled", "paused"]);
+export const automationDefinitionStatusSchema = z.enum(["enabled", "paused", "exhausted"]);
 export type AutomationDefinitionStatus = z.infer<
   typeof automationDefinitionStatusSchema
 >;
 
 export const automationRunStateSchema = z.enum([
+  "deferred",
+  "cancelled",
   "claimed",
   "dispatching",
   "queued",

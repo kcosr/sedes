@@ -1,3 +1,4 @@
+import { AutomationForkTargetResolver } from "../../src/server/runtime/automation-fork-target.js";
 import { readFile, writeFile, unlink } from "node:fs/promises";
 import { ViewedImageCaptureService } from "../../src/server/output-artifacts/viewed-image-capture.js";
 import { UsageService } from "../../src/server/usage/usage-service.js";
@@ -5080,6 +5081,9 @@ async function main(): Promise<void> {
     });
   };
   const attention = new ThreadAttentionService({
+    acknowledgeAutomationRun: (scope, threadId, runId) => {
+      automations.acknowledgeThreadRun(scope, threadId, runId);
+    },
     inventory: inventoryRepository,
     completions: completion,
     queue,
@@ -5136,6 +5140,10 @@ async function main(): Promise<void> {
     queueRepository,
     firstInput: automationFirstInput,
     branches: forks,
+    forkTargets: new AutomationForkTargetResolver({
+      automations: automationRepository, bindings, creation, inventory: inventoryRepository, savedAgents,
+      policy: { assertCanAutomate: () => undefined },
+    }),
     executionPolicy: { assertCanAutomate: () => undefined },
   });
   const automationDispatcher = new AutomationDispatcher({

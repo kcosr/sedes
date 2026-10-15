@@ -6,6 +6,7 @@ import {
   automationEditPath,
   automationPath,
   automationsPath,
+  automationCreatePath,
   historyStepsBackTo,
   installNavigationBlocker,
   navigate,
@@ -58,40 +59,9 @@ describe("thread load diagnostics", () => {
 });
 
 describe("automation routes", () => {
-  it("reads the old automation dialog address as the automation page", () => {
-    const threadId = randomUUID();
-
-    expect(parseRoute(`/threads/${threadId}/automation`)).toEqual({
-      name: "automation",
-      threadId,
-      edit: false,
-    });
-    expect(parseRoute(threadPath(threadId))).toEqual({
-      name: "thread",
-      threadId,
-    });
-  });
-
-  it("replaces the old automation address with the page's own, keeping one history entry", () => {
-    const threadId = "thread/one";
-    navigate(threadPath("origin"), { replace: true });
-    const length = window.history.length;
-
-    navigate(`/threads/${encodeURIComponent(threadId)}/automation`);
-
-    expect(window.location.pathname).toBe(automationPath(threadId));
-    expect(window.history.length).toBe(length + 1);
-    // The router recorded the page's own address for the entry.
-    navigate(automationEditPath(threadId));
-    expect(historyStepsBackTo(automationPath(threadId))).toBe(-1);
-  });
-
-  it("rewrites an old address that history leads back to", () => {
-    navigate(automationPath("thread-2"), { replace: true });
-    // An entry left from before, under the dialog's address.
-    window.history.replaceState(window.history.state, "", "/threads/thread-2/automation");
-    window.dispatchEvent(new PopStateEvent("popstate", { state: window.history.state }));
-    expect(window.location.pathname).toBe(automationPath("thread-2"));
+  it("rejects removed singleton automation addresses", () => {
+    expect(parseRoute(`/threads/${randomUUID()}/automation`)).toEqual({ name: "home" });
+    expect(parseRoute("/threads/thread-1/automation/edit")).toEqual({ name: "home" });
   });
 
   it("keeps normalized source-turn focus in the URL fragment", () => {
@@ -122,31 +92,36 @@ describe("automation routes", () => {
   });
 
   it("parses the automations list, page and editor routes", () => {
+    const automationId = randomUUID();
     const threadId = randomUUID();
 
+    expect(parseRoute(automationsPath(threadId))).toEqual({ name: "automations", threadId });
+    expect(parseRoute(automationCreatePath(threadId))).toEqual({ name: "automation-create", threadId });
+    expect(routePath({ name: "automations", threadId })).toBe(automationsPath(threadId));
+    expect(routePath({ name: "automation-create", threadId })).toBe(automationCreatePath(threadId));
     expect(parseRoute(automationsPath())).toEqual({ name: "automations" });
-    expect(parseRoute(automationPath(threadId))).toEqual({
+    expect(parseRoute(automationPath(automationId))).toEqual({
       name: "automation",
-      threadId,
+      automationId,
       edit: false,
     });
-    expect(parseRoute(automationEditPath(threadId))).toEqual({
+    expect(parseRoute(automationEditPath(automationId))).toEqual({
       name: "automation",
-      threadId,
+      automationId,
       edit: true,
     });
     expect(automationPath("a/b")).toBe("/automations/a%2Fb");
     expect(parseRoute(automationPath("a/b"))).toEqual({
       name: "automation",
-      threadId: "a/b",
+      automationId: "a/b",
       edit: false,
     });
     expect(routePath({ name: "automations" })).toBe("/automations");
-    expect(routePath({ name: "automation", threadId, edit: false })).toBe(
-      automationPath(threadId),
+    expect(routePath({ name: "automation", automationId, edit: false })).toBe(
+      automationPath(automationId),
     );
-    expect(routePath({ name: "automation", threadId, edit: true })).toBe(
-      automationEditPath(threadId),
+    expect(routePath({ name: "automation", automationId, edit: true })).toBe(
+      automationEditPath(automationId),
     );
   });
 

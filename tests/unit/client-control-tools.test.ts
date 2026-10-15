@@ -23,6 +23,7 @@ const state = { runtime: { foreground: true, voiceReady: false, interactionActiv
 const reader: AgentToolEnvironmentAuthorityReader = {
   resolveEnvironment: (_scope, id) => ({ id, environmentId: id }), resolveWorkspace: () => undefined,
   resolveWorkspaceProject: () => "project", resolveProject: () => undefined,
+  resolveAutomation: () => undefined,
   resolveThread: (_scope, id) => id === missing ? undefined : ({ id, environmentId: id === destination ? "other-environment" : "environment", label: threadLabel }),
   resolveThreadFamily: () => undefined, resolveSavedAgent: () => undefined, resolveWorkpad: () => undefined, resolveTask: () => undefined,
   listEnvironments: () => [{ id: "environment", environmentId: "environment" }, { id: "other-environment", environmentId: "other-environment" }],

@@ -86,54 +86,16 @@ export interface AgentThreadCreationService {
   }>;
 }
 
-const automationSchema = Type.Union([
-  Type.Object(
-    {
-      status: Type.String({ enum: ["enabled", "paused"], maxLength: 7 }),
-      runMode: Type.String({ enum: ["same_thread", "clone"], maxLength: 11 }),
-      scheduleKind: Type.String({
-        enum: ["date_time", "interval", "cron"],
-        maxLength: 9,
-      }),
-      nextRunAt: Type.Optional(isoDateSchema),
-      revision: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
-      hasPrecheck: Type.Boolean(),
-      lastRun: Type.Optional(
-        Type.Object(
-          {
-            id: targetIdentifierSchema,
-            state: Type.String({
-              enum: [
-                "claimed",
-                "dispatching",
-                "queued",
-                "running",
-                "completed",
-                "failed",
-                "skipped",
-                "uncertain",
-              ],
-              maxLength: 11,
-            }),
-            occurrence: Type.String({
-              enum: ["scheduled", "manual"],
-              maxLength: 9,
-            }),
-            scheduledFor: isoDateSchema,
-            finishedAt: Type.Optional(isoDateSchema),
-            resultThreadId: Type.Optional(targetIdentifierSchema),
-            errorCode: Type.Optional(
-              Type.String({ minLength: 1, maxLength: 120 }),
-            ),
-          },
-          { additionalProperties: false, maxProperties: 7 },
-        ),
-      ),
-    },
-    { additionalProperties: false, maxProperties: 7 },
-  ),
-  Type.Null(),
-]);
+const automationsSchema = Type.Object({
+  totalCount: Type.Integer({minimum:0,maximum:Number.MAX_SAFE_INTEGER}),
+  enabledCount: Type.Integer({minimum:0,maximum:Number.MAX_SAFE_INTEGER}),
+  pausedCount: Type.Integer({minimum:0,maximum:Number.MAX_SAFE_INTEGER}),
+  exhaustedCount: Type.Integer({minimum:0,maximum:Number.MAX_SAFE_INTEGER}),
+  inFlightCount: Type.Integer({minimum:0,maximum:Number.MAX_SAFE_INTEGER}),
+  attentionCount: Type.Integer({minimum:0,maximum:Number.MAX_SAFE_INTEGER}),
+  nextRunAt: Type.Optional(isoDateSchema),
+  revision: Type.Integer({minimum:0,maximum:Number.MAX_SAFE_INTEGER}),
+}, {additionalProperties:false,maxProperties:8});
 
 const threadItemSchema = Type.Object(
   {
@@ -183,7 +145,7 @@ const threadItemSchema = Type.Object(
       enum: ["idle", "running", "waiting_for_input"],
       maxLength: 17,
     }),
-    automation: automationSchema,
+    automations: automationsSchema,
     pinned: Type.Boolean({ description: "Whether this thread is pinned for the current user." }),
   },
   { additionalProperties: false, maxProperties: 10 },

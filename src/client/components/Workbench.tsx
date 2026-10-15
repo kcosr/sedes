@@ -138,31 +138,14 @@ export function Workbench({
       </main>
     );
   }
-  if (route.name === "automations" || route.name === "automation") {
-    return (
-      <main className="workbench">
-        <div className="pane-host pane-host-nav-header">
-          <div className="pane-nav-header">
-            <SidebarNavTrigger />
-          </div>
-          {route.name === "automations" ? (
-            <AutomationsView store={applicationStore} />
-          ) : route.edit ? (
-            <AutomationEditor
-              store={applicationStore}
-              threadRegistry={threadRegistry}
-              threadId={route.threadId}
-            />
-          ) : (
-            <AutomationPage
-              store={applicationStore}
-              threadRegistry={threadRegistry}
-              threadId={route.threadId}
-            />
-          )}
-        </div>
-      </main>
-    );
+  if (route.name === "automations" || route.name === "automation" || route.name === "automation-create") {
+    return <main className="workbench"><div className="pane-host pane-host-nav-header">
+      <div className="pane-nav-header"><SidebarNavTrigger /></div>
+      {route.name === "automations" ? <AutomationsView key={route.threadId ?? "all"} store={applicationStore} threadId={route.threadId} />
+        : route.name === "automation-create" ? <AutomationEditor key={route.threadId} store={applicationStore} threadRegistry={threadRegistry} threadId={route.threadId} />
+        : route.edit ? <AutomationEditor key={route.automationId} store={applicationStore} threadRegistry={threadRegistry} automationId={route.automationId} />
+        : <AutomationPage key={route.automationId} store={applicationStore} threadRegistry={threadRegistry} automationId={route.automationId} />}
+    </div></main>;
   }
   if (route.name === "thread") {
     const panelLayout = (

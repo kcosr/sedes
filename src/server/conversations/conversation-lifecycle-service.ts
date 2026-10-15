@@ -1,3 +1,5 @@
+import { assertAutomationDispatchClaim } from "../db/repositories/automation-dispatch-claim.js";
+import type { AutomationThreadCopyIdentity } from "../db/repositories/conversation-binding-repository.js";
 import type { EnvironmentVariablesService, PreparedThreadEnvironmentVariables } from "../environment-variables/environment-variables-service.js";
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
@@ -264,6 +266,7 @@ export class ConversationLifecycleService {
       readonly sourceApplicationThreadId: string;
       readonly title: string;
       readonly mutationId: string;
+      readonly automation?: AutomationThreadCopyIdentity;
     },
   ):
     | {
@@ -314,6 +317,7 @@ export class ConversationLifecycleService {
       readonly configurationCopy?: {
         readonly sourceApplicationThreadId: string;
         readonly mutationId: string;
+        readonly automation?: AutomationThreadCopyIdentity;
       };
     },
     signal?: AbortSignal,
@@ -524,12 +528,6 @@ export class ConversationLifecycleService {
           catalog!,
         );
       }
-      input.initializeApplicationThread?.({
-        transaction,
-        applicationThreadId: created.id,
-        target: resolved,
-        now,
-      });
       if (input.configurationCopy) {
         this.#bindings.recordThreadConfigurationCopyReceipt(scope, created.id, {
           ...input.configurationCopy,
@@ -539,6 +537,12 @@ export class ConversationLifecycleService {
           now,
         });
       }
+      input.initializeApplicationThread?.({
+        transaction,
+        applicationThreadId: created.id,
+        target: resolved,
+        now,
+      });
       return {
         applicationThreadId: created.id,
         draft: this.#drafts.get(scope, created.id),
@@ -639,7 +643,7 @@ export class ConversationLifecycleService {
       readonly automationRunId: string;
       readonly prompt: string;
       readonly mutationId: string;
-      readonly expectedThreadRevision: number;
+      readonly claimToken: string;
     },
   ): Promise<FirstSendResult> {
     const key = operationKey(scope, applicationThreadId, input.mutationId);
@@ -890,7 +894,7 @@ export class ConversationLifecycleService {
       readonly automationRunId: string;
       readonly prompt: string;
       readonly mutationId: string;
-      readonly expectedThreadRevision: number;
+      readonly claimToken: string;
     },
   ): Promise<FirstSendResult> {
     const replay = this.#creation.findByMutationId(scope, input.mutationId);
@@ -927,19 +931,23 @@ export class ConversationLifecycleService {
     await this.#validateInitialization(scope, applicationThreadId);
     let attempt: ConversationCreationAttemptRecord;
     try {
-      attempt = this.#creation.prepare(scope, applicationThreadId, {
+      const correlation = await this.#reserveCreationCorrelation(scope, applicationThreadId);
+      attempt = this.#bindings.database.transaction(() => {
+        assertAutomationDispatchClaim(this.#bindings.database, scope, { ...input, targetThreadId: applicationThreadId });
+        return this.#creation.prepare(scope, applicationThreadId, {
         attemptId: input.attemptId ?? this.#id(),
         mutationId: input.mutationId,
-        expectedThreadRevision: input.expectedThreadRevision,
+        expectedThreadRevision: (this.#bindings.database.prepare("SELECT revision FROM application_threads WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?").get(scope.tenantId, scope.principalId, applicationThreadId) as { revision: number }).revision,
         creationKind: "first_input",
         sourceKind: "automation",
         sourceAutomationId: input.automationId,
         sourceAutomationRunId: input.automationRunId,
         initialInputText: input.prompt,
         initialAttachmentIds: [],
-        backendCreationCorrelation: await this.#reserveCreationCorrelation(scope, applicationThreadId),
+        backendCreationCorrelation: correlation,
         now: this.#now(),
       });
+      })();
     } catch (error) {
       const concurrent = this.#creation.findByMutationId(
         scope,

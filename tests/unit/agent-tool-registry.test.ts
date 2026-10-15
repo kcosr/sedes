@@ -139,14 +139,14 @@ describe("AgentToolRegistry", () => {
   it("keeps all canonical contracts equal to deterministic artifacts", () => {
     expect(() => checkAgentToolArtifacts()).not.toThrow();
     expect(() => checkAgentToolArtifacts(() => "{}\n")).toThrow(
-      /artifact_stale/,
+      /artifact_stale|historical_artifact_changed/,
     );
     expect(Object.keys(generatedAgentToolArtifacts())).toEqual(
       CANONICAL_AGENT_TOOL_MANIFEST_ENTRIES.map(
         ({ id, schemaVersion }) => `${id}@${schemaVersion}`,
       ),
     );
-    expect(CANONICAL_AGENT_TOOL_MANIFEST_ENTRIES).toHaveLength(50);
+    expect(CANONICAL_AGENT_TOOL_MANIFEST_ENTRIES).toHaveLength(54);
   });
 
   it("assembles the complete production catalog only with every domain adapter", () => {
@@ -223,7 +223,7 @@ describe("AgentToolRegistry", () => {
     });
     const summaries = canonical.catalogSummaries("cli", "thread_agent");
 
-    expect(summaries).toHaveLength(50);
+    expect(summaries).toHaveLength(54);
     expect(
       Buffer.byteLength(JSON.stringify({ tools: summaries }), "utf8"),
     ).toBeLessThanOrEqual(AGENT_TOOL_MAXIMUM_CATALOG_SUMMARY_BYTES);
@@ -418,6 +418,8 @@ describe("AgentToolRegistry", () => {
       () => undefined,
       () => [
         ...expectedFilenames,
+        "automation.create.v1.json",
+        "thread.list.v6.json",
         "removed.tool.v1.json",
         "legacy.json",
         "README.json.tmp",

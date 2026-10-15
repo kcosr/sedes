@@ -7,14 +7,21 @@ User-facing changes are collected here before release. See the
 
 ### Breaking Changes
 
+- Automation management now uses explicit automation IDs and the
+  `/api/automations` collection. Update automation agent-tool versions and
+  operator scripts; create/run-now requests require stable mutation keys.
+  The operator CLI attaches to existing threads. See the
+  [automation CLI](docs/operator/automation-cli.md).
+
 - Upgrade Codex execution sidecars with the server for Codex runtime protocol
   **4**, which clears retained attach metadata after native archive changes.
   See [Codex archival](docs/operator/backends/codex.md#archiving-conversations).
   ([#85](https://github.com/kcosr/sedes/pull/85))
 
 - Upgrade the server and browser/packaged clients together for client protocol
-  **159** for Page responses, larger composer reference lists, the updated
-  native voice bridge, and Windows notification script paths. Rebuild Android
+  **160** for Page responses, larger composer reference lists, the updated
+  native voice bridge, Windows notification script paths, and multiple named
+  automations per thread. Rebuild Android
   and Electron with their bundled clients. See
   [Page responses](docs/user/html-previews.md#send-a-page-response),
   [voice input](docs/operator/clients/voice.md), and
@@ -22,6 +29,11 @@ User-facing changes are collected here before release. See the
   ([#81](https://github.com/kcosr/sedes/pull/81), [#83](https://github.com/kcosr/sedes/pull/83), [#87](https://github.com/kcosr/sedes/pull/87))
 
 ### Added
+
+- Attach independent recurring schedules and one-time reminders to the same
+  thread. **Fork** creates a separate result each run, including from a draft
+  using its saved settings. One-time history remains after exhaustion, and
+  busy sources defer unsent work. See [automations](docs/user/tasks-and-automations.md#schedule-work-with-an-automation).
 
 - Published HTML pages can collect responses through Sedes's **Send** control.
   Responses go to the page's thread, queue while it is busy, and remain in

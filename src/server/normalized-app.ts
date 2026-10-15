@@ -48,6 +48,7 @@ import {
 import {
   applicationEventStreamQuerySchema,
   automationRunRouteParametersSchema,
+  automationRouteParametersSchema,
   automationStateRequestSchema,
   bulkInventoryImpactRequestSchema,
   bulkInventoryImpactSchema,
@@ -70,6 +71,7 @@ import {
   importThreadExecutionWorkspaceResultSchema,
   loadThreadHistoryRequestSchema,
   listAutomationRunsQuerySchema,
+  listAutomationsQuerySchema,
   listThreadDescendantsQuerySchema,
   previewAutomationScheduleRequestSchema,
   putComposerAttachmentQuerySchema,
@@ -819,11 +821,17 @@ function roundedDiagnosticMilliseconds(value: number): number {
 
 export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
   const app = express();
+  const workspacePublications = {
+    handoffAuthoritativeReplacement(eventScope: RequestScope) {
+      dependencies.automations.requestDeferredReconcile();
+      dependencies.applicationSnapshots.handoffAuthoritativeReplacement(eventScope);
+    },
+  };
   const workspaceManagement = () =>
     new WorkspaceApplicationService({
       inventory: dependencies.inventory.repository,
       execution: dependencies.execution,
-      publications: dependencies.applicationSnapshots,
+      publications: workspacePublications,
       discoverWorkspace: dependencies.discoverWorkspace,
     });
   const projectManagement = () =>
@@ -833,7 +841,7 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
       files: dependencies.workspaceFiles,
       ...(dependencies.terminals ? { terminals: dependencies.terminals.service } : {}),
       locations: workspaceManagement(),
-      publications: dependencies.applicationSnapshots,
+      publications: workspacePublications,
       threads: dependencies.threadSnapshots,
       workpads: dependencies.workpads,
     });
@@ -3594,7 +3602,7 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
   );
 
   routes.post(
-    "/api/threads/:threadId/automation/preview",
+    "/api/threads/:threadId/automations/preview",
     async (request, response) => {
       const requestScope = await scope(request);
       const { threadId } = threadRouteParametersSchema.parse(request.params);
@@ -3612,7 +3620,7 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
   );
 
   routes.post(
-    "/api/threads/:threadId/automation/precheck/test",
+    "/api/threads/:threadId/automations/precheck/test",
     async (request, response) => {
       const requestScope = await scope(request);
       const { threadId } = threadRouteParametersSchema.parse(request.params);
@@ -3631,147 +3639,79 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
     },
   );
 
-  routes.post(
-    "/api/threads/:threadId/automation",
-    async (request, response) => {
-      const requestScope = await scope(request);
-      const { threadId } = threadRouteParametersSchema.parse(request.params);
-      const body = createAutomationRequestSchema.parse(request.body);
-      if (body.runMode === "clone") {
-        assertAutomationCloneEligible({
-          runMode: body.runMode,
-          canCloneOnRun: (
-            await dependencies.threads.automationCapability(
-              requestScope,
-              threadId,
-            )
-          ).canCloneOnRun,
-        });
-      }
-      response
-        .status(201)
-        .json(dependencies.automations.create(requestScope, threadId, body));
-    },
-  );
-  routes.get("/api/threads/:threadId/automation", async (request, response) => {
+  routes.get("/api/automations", async (request, response) => {
+    const requestScope = await scope(request);
+    response.json(dependencies.automations.list(requestScope, listAutomationsQuerySchema.parse(request.query)));
+  });
+  routes.post("/api/automations", async (request, response) => {
+    const requestScope = await scope(request);
+    const { threadId, ...body } = createAutomationRequestSchema.parse(request.body);
+    const replay = dependencies.automations.replayCreate(requestScope, threadId, body);
+    if (replay) { response.status(201).json(replay); return; }
+    if (body.runMode === "clone") {
+      assertAutomationCloneEligible({ runMode: body.runMode, canCloneOnRun: (
+        await dependencies.threads.automationCapability(requestScope, threadId)
+      ).canCloneOnRun });
+    }
+    response.status(201).json(dependencies.automations.create(requestScope, threadId, body));
+  });
+  routes.get("/api/automations/:automationId", async (request, response) => {
+    const requestScope = await scope(request);
+    const { automationId } = automationRouteParametersSchema.parse(request.params);
+    response.json(dependencies.automations.get(requestScope, automationId));
+  });
+  routes.get("/api/threads/:threadId/automations/capability", async (request, response) => {
+    z.strictObject({}).parse(request.query);
     const requestScope = await scope(request);
     const { threadId } = threadRouteParametersSchema.parse(request.params);
-    response.json(dependencies.automations.get(requestScope, threadId));
+    response.json(automationCapabilitySchema.parse(await dependencies.threads.automationCapability(requestScope, threadId)));
   });
-  routes.get(
-    "/api/threads/:threadId/automation/capability",
-    async (request, response) => {
-      z.strictObject({}).parse(request.query);
-      const requestScope = await scope(request);
-      const { threadId } = threadRouteParametersSchema.parse(request.params);
-      response.json(
-        automationCapabilitySchema.parse(
-          await dependencies.threads.automationCapability(
-            requestScope,
-            threadId,
-          ),
-        ),
-      );
-    },
-  );
-  routes.patch(
-    "/api/threads/:threadId/automation",
-    async (request, response) => {
-      const requestScope = await scope(request);
-      const { threadId } = threadRouteParametersSchema.parse(request.params);
-      const body = updateAutomationRequestSchema.parse(request.body);
-      if (body.runMode === "clone") {
-        assertAutomationCloneEligible({
-          runMode: body.runMode,
-          canCloneOnRun: (
-            await dependencies.threads.automationCapability(
-              requestScope,
-              threadId,
-            )
-          ).canCloneOnRun,
-        });
-      }
-      response.json(
-        dependencies.automations.update(requestScope, threadId, body),
-      );
-    },
-  );
-  routes.patch(
-    "/api/threads/:threadId/automation/state",
-    async (request, response) => {
-      const requestScope = await scope(request);
-      const { threadId } = threadRouteParametersSchema.parse(request.params);
-      response.json(
-        dependencies.automations.setState(
-          requestScope,
-          threadId,
-          automationStateRequestSchema.parse(request.body),
-        ),
-      );
-    },
-  );
-  routes.delete(
-    "/api/threads/:threadId/automation",
-    async (request, response) => {
-      const requestScope = await scope(request);
-      const { threadId } = threadRouteParametersSchema.parse(request.params);
-      dependencies.automations.delete(
-        requestScope,
-        threadId,
-        deleteAutomationRequestSchema.parse(request.body),
-      );
-      response.json({ deleted: true });
-    },
-  );
-  routes.post(
-    "/api/threads/:threadId/automation/run-now",
-    async (request, response) => {
-      const requestScope = await scope(request);
-      const { threadId } = threadRouteParametersSchema.parse(request.params);
-      const body = runAutomationNowRequestSchema.parse(request.body);
-      response
-        .status(202)
-        .json(
-          await dependencies.automations.runNow(
-            requestScope,
-            threadId,
-            body.mutationId,
-          ),
-        );
-    },
-  );
-  routes.get(
-    "/api/threads/:threadId/automation/runs",
-    async (request, response) => {
-      const requestScope = await scope(request);
-      const { threadId } = threadRouteParametersSchema.parse(request.params);
-      response.json(
-        dependencies.automations.listRuns(
-          requestScope,
-          threadId,
-          listAutomationRunsQuerySchema.parse(request.query),
-        ),
-      );
-    },
-  );
-  routes.post(
-    "/api/threads/:threadId/automation/runs/:runId/resolve",
-    async (request, response) => {
-      const requestScope = await scope(request);
-      const { threadId, runId } = automationRunRouteParametersSchema.parse(
-        request.params,
-      );
-      const body = resolveAutomationRunRequestSchema.parse(request.body);
-      response.json(
-        dependencies.automations.resolveUncertainRun(
-          requestScope,
-          threadId,
-          runId,
-          { resume: body.resume },
-        ),
-      );
-    },
-  );
+  routes.patch("/api/automations/:automationId", async (request, response) => {
+    const requestScope = await scope(request);
+    const { automationId } = automationRouteParametersSchema.parse(request.params);
+    const body = updateAutomationRequestSchema.parse(request.body);
+    const current = dependencies.automations.get(requestScope, automationId);
+    if (body.runMode === "clone") {
+      assertAutomationCloneEligible({ runMode: body.runMode, canCloneOnRun: (
+        await dependencies.threads.automationCapability(requestScope, current.threadId)
+      ).canCloneOnRun });
+    }
+    response.json(dependencies.automations.update(requestScope, automationId, body));
+  });
+  routes.patch("/api/automations/:automationId/state", async (request, response) => {
+    const requestScope = await scope(request);
+    const { automationId } = automationRouteParametersSchema.parse(request.params);
+    response.json(dependencies.automations.setState(requestScope, automationId, automationStateRequestSchema.parse(request.body)));
+  });
+  routes.delete("/api/automations/:automationId", async (request, response) => {
+    const requestScope = await scope(request);
+    const { automationId } = automationRouteParametersSchema.parse(request.params);
+    dependencies.automations.delete(requestScope, automationId, deleteAutomationRequestSchema.parse(request.body));
+    response.json({ deleted: true });
+  });
+  routes.post("/api/automations/:automationId/run-now", async (request, response) => {
+    const requestScope = await scope(request);
+    const { automationId } = automationRouteParametersSchema.parse(request.params);
+    const body = runAutomationNowRequestSchema.parse(request.body);
+    response.status(202).json(await dependencies.automations.runNow(requestScope, automationId, body.mutationId));
+  });
+  routes.get("/api/automations/:automationId/runs", async (request, response) => {
+    const requestScope = await scope(request);
+    const { automationId } = automationRouteParametersSchema.parse(request.params);
+    response.json(dependencies.automations.listRuns(requestScope, automationId, listAutomationRunsQuerySchema.parse(request.query)));
+  });
+  routes.post("/api/automations/:automationId/runs/:runId/resolve", async (request, response) => {
+    const requestScope = await scope(request);
+    const { automationId, runId } = automationRunRouteParametersSchema.parse(request.params);
+    const body = resolveAutomationRunRequestSchema.parse(request.body);
+    response.json(dependencies.automations.resolveUncertainRun(requestScope, automationId, runId, { resume: body.resume }));
+  });
+  routes.post("/api/automations/:automationId/runs/:runId/acknowledge", async (request, response) => {
+    const requestScope = await scope(request);
+    const { automationId, runId } = automationRunRouteParametersSchema.parse(request.params);
+    z.strictObject({}).parse(request.body);
+    response.json(dependencies.automations.acknowledgeRun(requestScope, automationId, runId));
+  });
 
   routes.get("/api/tool-clients/options", async (request, response) => {
     z.strictObject({}).parse(request.query);

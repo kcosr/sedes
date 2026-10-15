@@ -325,7 +325,7 @@ function ApplicationShellContent({
       state={state}
       store={applicationStore}
       threadRegistry={threadRegistry}
-      selectedThreadId={route.name === "thread" || route.name === "automation" ? route.threadId : undefined}
+      selectedThreadId={route.name === "thread" || route.name === "automations" || route.name === "automation-create" ? route.threadId : undefined}
       onSelectThread={(threadId) => {
         openThreadChatPanel(panelLayoutStore, threadId);
       }}

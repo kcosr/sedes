@@ -157,7 +157,7 @@ function AutomationRowMenu({
         <DropdownMenuSeparator />
         <DropdownMenuItem
           onSelect={() =>
-            openThreadRoute(row.id)
+            openThreadRoute(row.threadId)
           }
         >
           <MessageSquare aria-hidden="true" />
@@ -202,7 +202,7 @@ export const AutomationRow = memo(function AutomationRow({
   const titleId = `${id}-title`;
   const detailsId = `${id}-details`;
   const project = showProject ? row.projectLabel : row.locationTag;
-  const wideMeta = joinParts([detail, project, row.backendLabel]);
+  const wideMeta = joinParts([row.sourceTitle, detail, project, row.backendLabel]);
   const lead =
     health.kind === "active" && nextRun !== null
       ? `Next run ${nextRun}`
@@ -215,7 +215,8 @@ export const AutomationRow = memo(function AutomationRow({
       <div
         className="automation-row"
         data-testid="automation-row"
-        data-thread-id={row.id}
+        data-thread-id={row.threadId}
+        data-automation-id={row.id}
         data-group={health.group}
         aria-busy={busy || undefined}
       >
@@ -244,7 +245,7 @@ export const AutomationRow = memo(function AutomationRow({
               </span>
             )}
             {outcome && " · "}
-            {joinParts([detail])}
+            {joinParts([row.sourceTitle, detail])}
           </span>
           <RowText value={secondary} className="automation-row-secondary" />
           <span className="automation-row-next" aria-hidden="true">

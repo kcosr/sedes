@@ -525,7 +525,7 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
       itemsById: {},
       queue: [],
     });
-    expect(child.thread.automation).toBeNull();
+    expect(child.thread.automations.totalCount).toBe(0);
     const snapshotResponse = await page.request.get(
       "/api/application/snapshot",
     );

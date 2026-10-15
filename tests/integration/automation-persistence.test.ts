@@ -816,11 +816,17 @@ describe("automation persistence", () => {
       schedule: { kind: "date_time", runAt: 5_000 },
       nextRunAt: 5_000,
     });
-    expect(automations.findDefinitionForThread(scope, anchorThreadId)).toEqual(
-      created,
-    );
+    expect(
+      automations.listDefinitions(scope, {
+        threadId: anchorThreadId,
+        limit: 100,
+      })[0],
+    ).toEqual(created);
     expect(() =>
-      automations.createDefinition(scope, definitionInput(anchorThreadId)),
+      automations.createDefinition(scope, {
+        ...definitionInput(anchorThreadId),
+        id: created.id,
+      }),
     ).toThrow();
 
     const updated = automations.updateDefinition(scope, created.id, {
@@ -927,16 +933,22 @@ describe("automation persistence", () => {
       }),
     ).toHaveLength(1);
     expect(
-      automations.findDefinitionForThread(scope, anchorThreadId),
+      automations.listDefinitions(scope, {
+        threadId: anchorThreadId,
+        limit: 100,
+      })[0],
     ).toBeUndefined();
     const replacement = automations.createDefinition(
       scope,
       definitionInput(anchorThreadId),
     );
     expect(replacement.id).not.toBe(created.id);
-    expect(automations.findDefinitionForThread(scope, anchorThreadId)).toEqual(
-      replacement,
-    );
+    expect(
+      automations.listDefinitions(scope, {
+        threadId: anchorThreadId,
+        limit: 100,
+      })[0],
+    ).toEqual(replacement);
     expect(
       automations.listDefinitions(scope, {
         includeDeleted: true,
@@ -1166,23 +1178,15 @@ describe("automation persistence", () => {
     });
     expect(automations.getDefinition(scope, dateTime.id)).toMatchObject({
       enabled: false,
-      completedAt: null,
-      deletedAt: 5_100,
+      completedAt: 5_100,
+      deletedAt: null,
       nextRunAt: null,
       revision: 2,
     });
-    expect(
-      automations.findDefinitionForThread(scope, dateTimeAnchorThreadId),
-    ).toBeUndefined();
-    expect(
-      inventory.getThread(scope, dateTimeAnchorThreadId).inventory,
-    ).toMatchObject({
-      automationContextOutcome: "triggered",
-      automationContextRunId: dateRun.id,
-      automationContextAt: 5_100,
-      automationContextSourceThreadId: dateTimeAnchorThreadId,
-      automationContextDiagnostic: null,
-    });
+    expect(automations.isExhausted(scope, dateTime.id)).toBe(true);
+    expect(automations.listRuns(scope, dateTime.id, { limit: 1 })[0]?.id).toBe(
+      dateRun.id,
+    );
 
     const uncertainAnchorThreadId = createThread(
       "Uncertain Date & time anchor",
@@ -1242,22 +1246,13 @@ describe("automation persistence", () => {
     );
     expect(automations.getDefinition(scope, uncertainDate.id)).toMatchObject({
       enabled: false,
-      completedAt: null,
-      deletedAt: 5_200,
+      completedAt: 5_200,
+      deletedAt: null,
       nextRunAt: null,
     });
     expect(
-      automations.findDefinitionForThread(scope, uncertainAnchorThreadId),
-    ).toBeUndefined();
-    expect(
-      inventory.getThread(scope, uncertainAnchorThreadId).inventory,
-    ).toMatchObject({
-      automationContextOutcome: "failed",
-      automationContextRunId: uncertainDateRun.id,
-      automationContextAt: 5_200,
-      automationContextSourceThreadId: uncertainAnchorThreadId,
-      automationContextDiagnostic: "The uncertain run was manually resolved.",
-    });
+      automations.listRuns(scope, uncertainDate.id, { limit: 1 })[0]?.state,
+    ).toBe("failed");
   });
 
   it("binds one idempotent child and backend checkpoint to clone runs only", () => {
@@ -1337,7 +1332,7 @@ describe("automation persistence", () => {
       backendConversationId: "clone-child",
       acceptedAt: 2_150,
     });
-    const bound = automations.bindForkChild(
+    const bound = automations.bindResultChild(
       scope,
       cloneDefinition.id,
       cloneRun.id,
@@ -1351,7 +1346,7 @@ describe("automation persistence", () => {
       childThreadId,
     });
     expect(
-      automations.bindForkChild(scope, cloneDefinition.id, cloneRun.id, {
+      automations.bindResultChild(scope, cloneDefinition.id, cloneRun.id, {
         childThreadId,
         now: 2_300,
       }),
@@ -1362,7 +1357,7 @@ describe("automation persistence", () => {
       now: 2_450,
     });
     expect(() =>
-      automations.bindForkChild(scope, cloneDefinition.id, cloneRun.id, {
+      automations.bindResultChild(scope, cloneDefinition.id, cloneRun.id, {
         childThreadId: otherChildThreadId,
         now: 2_500,
       }),
@@ -1386,7 +1381,7 @@ describe("automation persistence", () => {
       },
     ).run;
     expect(() =>
-      automations.bindForkChild(
+      automations.bindResultChild(
         scope,
         otherCloneDefinition.id,
         otherCloneRun.id,
@@ -1418,7 +1413,7 @@ describe("automation persistence", () => {
       },
     ).run;
     expect(() =>
-      automations.bindForkChild(
+      automations.bindResultChild(
         scope,
         sameThreadDefinition.id,
         sameThreadRun.id,

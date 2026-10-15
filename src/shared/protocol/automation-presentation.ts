@@ -11,10 +11,14 @@ import {
   automationPrecheckSchema,
   automationPromptSchema,
   automationScheduleSchema,
+  automationNameSchema,
+  automationDeferredReasonSchema,
 } from "./automation.js";
 
 export const threadAutomationLastRunSchema = z.strictObject({
   id: z.uuid(),
+  deferredReason: automationDeferredReasonSchema.optional(),
+  eligibleAt: z.iso.datetime().nullable().optional(),
   state: automationRunStateSchema,
   occurrence: z.enum(["scheduled", "manual"]),
   scheduledFor: z.iso.datetime(),
@@ -32,7 +36,45 @@ export type ThreadAutomationLastRun = z.infer<
   typeof threadAutomationLastRunSchema
 >;
 
+export const automationSourceSchema = z.strictObject({
+  title: z.string().max(240),
+  workspaceId: z.string().min(1).max(160),
+  environmentId: z.string().min(1).max(160),
+  targetId: z.string().min(1).max(160),
+  groupId: z.string().min(1).max(160).nullable(),
+  backendLabel: z.string().min(1).max(240),
+  available: z.boolean(),
+  backingState: z.enum(["unbound", "creating", "bound", "creation_unknown"]),
+  runState: z
+    .enum([
+      "idle",
+      "starting",
+      "running",
+      "waiting_for_approval",
+      "waiting_for_input",
+      "stopping",
+      "failed",
+      "disconnected",
+      "reconciling",
+    ])
+    .optional(),
+  inventoryState: z.enum(["active", "snoozed", "settled", "archived"]),
+  inventoryRevision: z.number().int().nonnegative(),
+  snoozedUntil: z.iso.datetime().optional(),
+});
+
 export const threadAutomationSummarySchema = z.strictObject({
+  id: z.uuid(),
+  threadId: z.uuid(),
+  name: automationNameSchema,
+  source: automationSourceSchema,
+  attention: z
+    .strictObject({
+      runId: z.uuid(),
+      kind: z.enum(["uncertain", "failed"]),
+      diagnostic: z.string().max(500).optional(),
+    })
+    .optional(),
   status: automationDefinitionStatusSchema,
   runMode: automationRunModeSchema,
   scheduleKind: z.enum(["date_time", "interval", "cron"]),
@@ -56,7 +98,7 @@ export const threadAutomationDefinitionSchema =
   threadAutomationSummarySchema.extend({
     prompt: automationPromptSchema,
     schedule: automationScheduleSchema,
-    misfirePolicy: automationMisfirePolicySchema,
+    misfirePolicy: automationMisfirePolicySchema.nullable(),
     precheck: automationPrecheckSchema.nullable(),
   });
 export type ThreadAutomationDefinition = z.infer<
@@ -65,6 +107,11 @@ export type ThreadAutomationDefinition = z.infer<
 
 export const threadAutomationRunSchema = z.strictObject({
   id: z.uuid(),
+  automationId: z.uuid(),
+  deferredReason: automationDeferredReasonSchema.optional(),
+  eligibleAt: z.iso.datetime().nullable().optional(),
+  initialEligibleAt: z.iso.datetime().optional(),
+  acknowledgedAt: z.iso.datetime().optional(),
   occurrence: z.enum(["scheduled", "manual"]),
   scheduledFor: z.iso.datetime(),
   state: automationRunStateSchema,
@@ -163,4 +210,12 @@ export const automationPrecheckTestResultSchema = z.strictObject({
 });
 export type AutomationPrecheckTestResult = z.infer<
   typeof automationPrecheckTestResultSchema
+>;
+
+export const threadAutomationDefinitionPageSchema = z.strictObject({
+  items: z.array(threadAutomationDefinitionSchema).max(100),
+  nextCursor: z.string().nullable(),
+});
+export type ThreadAutomationDefinitionPage = z.infer<
+  typeof threadAutomationDefinitionPageSchema
 >;

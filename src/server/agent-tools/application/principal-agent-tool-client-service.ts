@@ -82,7 +82,8 @@ export class PrincipalAgentToolClientService {
     input: Omit<PrincipalAgentToolClientPolicyInput, "enabled"> & {
       readonly requestId: string;
     },
-  ): { readonly client: PrincipalAgentToolClientRecord; readonly credential: string } {
+  ): { readonly client: PrincipalAgentToolClientRecord; readonly credential: string;
+  } {
     const existing = this.repository.findByCreationRequestId(
       scope,
       input.requestId,
@@ -164,7 +165,8 @@ export class PrincipalAgentToolClientService {
     scope: RequestScope,
     clientId: string,
     expectedRevision: number,
-  ): { readonly client: PrincipalAgentToolClientRecord; readonly credential: string } {
+  ): { readonly client: PrincipalAgentToolClientRecord; readonly credential: string;
+  } {
     const current = this.repository.get(scope, clientId);
     if (current.revokedAt !== undefined) {
       throw new DomainError("conflict", "The tool client is revoked.");
@@ -423,7 +425,8 @@ export class PrincipalAgentToolClientService {
         });
         const environmentAuthority = createTrustedEnvironmentAuthorityGrant({
           ...resolved,
-          tool: { id: definition.id, schemaVersion: definition.schemaVersion },
+          tool: { id: definition.id, schemaVersion: definition.schemaVersion,
+            },
           callerKind: "principal_client",
           defaults,
           policyIdentity,
@@ -496,6 +499,7 @@ export class PrincipalAgentToolClientService {
       readonly kind: string;
       readonly id: string;
       readonly workspaceId?: string;
+      readonly threadId?: string;
     }[],
   ): void {
     const environment = this.database
@@ -517,9 +521,11 @@ export class PrincipalAgentToolClientService {
       defaults.threadId &&
         resolvedResourceRefs.some(
           (resource) =>
-            (resource.kind === "thread" ||
+            ((resource.kind === "thread" ||
               resource.kind === "thread_family") &&
-            resource.id === defaults.threadId,
+            resource.id === defaults.threadId) ||
+          (resource.kind === "automation" &&
+            resource.threadId === defaults.threadId),
         ),
     );
     const usesDefaultWorkspace = Boolean(
@@ -747,8 +753,8 @@ function encodeCursor(record: PrincipalAgentToolClientRecord): string {
 }
 
 function decodeCursor(
-  cursor: string,
-): { readonly createdAt: number; readonly id: string } {
+  cursor: string): { readonly createdAt: number; readonly id: string;
+} {
   try {
     if (cursor.length > 2_048 || !/^[A-Za-z0-9_-]+$/u.test(cursor)) {
       throw new Error("tool_client_cursor_invalid");

@@ -5,16 +5,18 @@ import type {
 import {
   automationPrecheckSchema,
   automationPromptSchema,
+  automationNameSchema,
   automationScheduleSchema,
   type AutomationPrecheck,
   type AutomationSchedule,
 } from "../../../shared/protocol/automation.js";
-import { ZodError } from "zod";
+import { ZodError, z } from "zod";
 import type {
   AutomationMisfirePolicy,
   AutomationRunMode,
 } from "../../domain/automation-models.js";
 import type { AutomationService } from "../../domain/automation-service.js";
+import { automationPromptPreview } from "../../domain/automation-presentation.js";
 import { assertAutomationCloneEligible } from "../../domain/automation-clone-eligibility.js";
 import { DomainError } from "../../domain/errors.js";
 import type { ThreadApplicationService } from "../../conversations/thread-application-service.js";
@@ -26,13 +28,15 @@ import { CanonicalAgentToolRequestError } from "../invocation/canonical-inline-a
 const UPCOMING_OCCURRENCE_COUNT = 5;
 
 /**
- * The definition shape frozen by the `automation.get@1`, `automation.create@1`,
- * `automation.update@1` and `automation.set_state@1` output schemas. The
+ * The definition shape frozen by the `automation.get@2`, `automation.create@2`,
+ * `automation.update@2` and `automation.set_state@2` output schemas. The
  * run-history revision and the last run's agent turn are browser-only detail
  * and are stripped.
  */
-export interface AgentAutomationDefinition
-  extends Omit<ThreadAutomationDefinition, "lastRun" | "runsRevision"> {
+export interface AgentAutomationDefinition extends Omit<
+  ThreadAutomationDefinition,
+  "lastRun" | "runsRevision"
+> {
   readonly lastRun?: Omit<
     NonNullable<ThreadAutomationDefinition["lastRun"]>,
     "turn"
@@ -41,11 +45,32 @@ export interface AgentAutomationDefinition
 }
 
 export interface AutomationTargetInput {
+  readonly automationId: string;
+}
+export interface AutomationThreadInput {
   readonly threadId?: string;
+}
+export interface AutomationListToolInput extends AutomationThreadInput {
+  readonly cursor?: string;
+  readonly pageSize?: number;
+  readonly status?: "enabled" | "paused" | "exhausted";
+}
+export interface AutomationRunNowToolInput extends AutomationTargetInput {
+  readonly mutationId: string;
+}
+export interface AutomationDeleteToolInput extends AutomationTargetInput {
+  readonly expectedRevision: number;
+}
+export interface AutomationResolveToolInput extends AutomationTargetInput {
+  readonly runId: string;
+  readonly resume: boolean;
+}
+export interface AutomationAcknowledgeToolInput extends AutomationTargetInput {
+  readonly runId: string;
 }
 
 /**
- * The run shape frozen by the `automation.runs@1` and `automation.run_now@1`
+ * The run shape frozen by the `automation.runs@2` and `automation.run_now@2`
  * output schemas. Browser-only run detail is stripped rather than versioning
  * the tools.
  */
@@ -59,20 +84,24 @@ export type AutomationToolRun = Omit<
   >;
 };
 
-export interface AutomationCreateToolInput extends AutomationTargetInput {
+export interface AutomationCreateToolInput extends AutomationThreadInput {
+  readonly name: string;
+  readonly initialState: "enabled" | "paused";
+  readonly mutationId: string;
   readonly prompt: string;
   readonly runMode: AutomationRunMode;
   readonly schedule: AutomationSchedule;
-  readonly misfirePolicy?: AutomationMisfirePolicy;
+  readonly misfirePolicy: AutomationMisfirePolicy | null;
   readonly precheck?: AutomationPrecheck | null;
 }
 
 export interface AutomationUpdateToolInput extends AutomationTargetInput {
   readonly expectedRevision: number;
+  readonly name?: string;
   readonly prompt?: string;
   readonly runMode?: AutomationRunMode;
   readonly schedule?: AutomationSchedule;
-  readonly misfirePolicy?: AutomationMisfirePolicy;
+  readonly misfirePolicy?: AutomationMisfirePolicy | null;
   readonly precheck?: AutomationPrecheck | null;
 }
 
@@ -88,7 +117,18 @@ export interface AutomationSetStateToolInput extends AutomationTargetInput {
 
 type AutomationDomain = Pick<
   AutomationService,
-  "create" | "get" | "listRuns" | "preview" | "runNow" | "setState" | "update"
+  | "create"
+  | "replayCreate"
+  | "get"
+  | "list"
+  | "listRuns"
+  | "preview"
+  | "runNow"
+  | "setState"
+  | "update"
+  | "delete"
+  | "resolveUncertainRun"
+  | "acknowledgeRun"
 >;
 
 /** Canonical, source-scoped adapter over the existing automation domain. */
@@ -115,8 +155,7 @@ export class AutomationAgentToolService {
     context: TrustedToolInvocationContext,
   ): Promise<AgentAutomationDefinition> {
     const now = this.#now();
-    const threadId = this.#admitTargetThread(input, context);
-    const definition = this.#automations.get(scope(context), threadId);
+    const definition = this.#admitAutomation(input, context);
     return this.#withUpcoming(definition, now);
   }
 
@@ -127,16 +166,22 @@ export class AutomationAgentToolService {
     readonly items: AutomationToolRun[];
     readonly nextCursor: string | null;
   } {
-    const threadId = this.#admitTargetThread(input, context);
-    const page = this.#automations.listRuns(scope(context), threadId, {
-      ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
-      pageSize: input.pageSize ?? 50,
-      environmentAuthority: {
-        sourceEnvironmentId: context.environmentAuthority.defaults.environmentId,
-        targetEnvironmentIds: context.environmentAuthority.targetEnvironmentIds,
-        policyRevision: context.environmentAuthority.policyIdentity.revision,
+    this.#admitAutomation(input, context);
+    const page = this.#automations.listRuns(
+      scope(context),
+      input.automationId,
+      {
+        ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
+        pageSize: input.pageSize ?? 50,
+        environmentAuthority: {
+          sourceEnvironmentId:
+            context.environmentAuthority.defaults.environmentId,
+          targetEnvironmentIds:
+            context.environmentAuthority.targetEnvironmentIds,
+          policyRevision: context.environmentAuthority.policyIdentity.revision,
+        },
       },
-    });
+    );
     return { items: page.items.map(toolRun), nextCursor: page.nextCursor };
   }
 
@@ -146,6 +191,7 @@ export class AutomationAgentToolService {
   ): Promise<AgentAutomationDefinition> {
     const operationScope = scope(context);
     const threadId = this.#admitTargetThread(input, context);
+    const name = automationNameSchema.parse(input.name);
     const prompt = automationPromptSchema.parse(input.prompt);
     const schedule = automationScheduleSchema.parse(input.schedule);
     const precheck =
@@ -154,6 +200,23 @@ export class AutomationAgentToolService {
         : automationPrecheckSchema.parse(input.precheck);
     const now = this.#now();
     this.#validateSchedule(schedule, now);
+    validateMisfirePolicy(schedule, input.misfirePolicy);
+    const creation = {
+      name,
+      initialState: input.initialState,
+      prompt,
+      runMode: input.runMode,
+      schedule,
+      misfirePolicy: input.misfirePolicy,
+      precheck,
+      mutationId: z.uuid().parse(input.mutationId),
+    };
+    const replay = this.#automations.replayCreate(
+      operationScope,
+      threadId,
+      creation,
+    );
+    if (replay) return this.#withUpcoming(replay, now);
     await this.#assertCloneEligible(
       operationScope,
       threadId,
@@ -164,12 +227,14 @@ export class AutomationAgentToolService {
       operationScope,
       threadId,
       {
+        name,
+        initialState: input.initialState,
         prompt,
         runMode: input.runMode,
         schedule,
-        misfirePolicy: input.misfirePolicy ?? "coalesce",
+        misfirePolicy: input.misfirePolicy,
         precheck,
-        mutationId: context.mutationId,
+        mutationId: z.uuid().parse(input.mutationId),
       },
       now,
     );
@@ -190,7 +255,8 @@ export class AutomationAgentToolService {
       ]);
     }
     const operationScope = scope(context);
-    const threadId = this.#admitTargetThread(input, context);
+    const current = this.#admitAutomation(input, context);
+    const threadId = current.threadId;
     const prompt =
       input.prompt === undefined
         ? undefined
@@ -205,16 +271,23 @@ export class AutomationAgentToolService {
         : automationPrecheckSchema.parse(input.precheck);
     const now = this.#now();
     if (schedule !== undefined) this.#validateSchedule(schedule, now);
-    const current = this.#automations.get(operationScope, threadId);
     const merged = {
+      name:
+        input.name === undefined
+          ? current.name
+          : automationNameSchema.parse(input.name),
       prompt: prompt ?? current.prompt,
       runMode: input.runMode ?? current.runMode,
       schedule: schedule ?? current.schedule,
-      misfirePolicy: input.misfirePolicy ?? current.misfirePolicy,
+      misfirePolicy:
+        input.misfirePolicy === undefined
+          ? current.misfirePolicy
+          : input.misfirePolicy,
       precheck: Object.prototype.hasOwnProperty.call(input, "precheck")
         ? (precheck ?? null)
         : current.precheck,
     };
+    validateMisfirePolicy(merged.schedule, merged.misfirePolicy);
     await this.#assertCloneEligible(
       operationScope,
       threadId,
@@ -223,7 +296,7 @@ export class AutomationAgentToolService {
     );
     const definition = this.#automations.update(
       operationScope,
-      threadId,
+      input.automationId,
       {
         ...merged,
         expectedRevision: input.expectedRevision,
@@ -239,10 +312,10 @@ export class AutomationAgentToolService {
     context: TrustedToolInvocationContext,
   ): Promise<AgentAutomationDefinition> {
     const now = this.#now();
-    const threadId = this.#admitTargetThread(input, context);
+    this.#admitAutomation(input, context);
     const definition = this.#automations.setState(
       scope(context),
-      threadId,
+      input.automationId,
       {
         action: input.action,
         expectedRevision: input.expectedRevision,
@@ -254,22 +327,123 @@ export class AutomationAgentToolService {
   }
 
   async runNow(
-    input: AutomationTargetInput,
+    input: AutomationRunNowToolInput,
     context: TrustedToolInvocationContext,
   ): Promise<AutomationToolRun> {
-    const threadId = this.#admitTargetThread(input, context);
+    this.#admitAutomation(input, context);
     return toolRun(
       await this.#automations.runNow(
         scope(context),
-        threadId,
-        context.mutationId,
+        input.automationId,
+        z.uuid().parse(input.mutationId),
         this.#now(),
       ),
     );
   }
 
-  #admitTargetThread(
+  list(input: AutomationListToolInput, context: TrustedToolInvocationContext) {
+    const threadId = this.#admitTargetThread(input, context);
+    const page = this.#automations.list(scope(context), {
+      threadId,
+      pageSize: input.pageSize ?? 50,
+      ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
+      ...(input.status === undefined ? {} : { status: input.status }),
+    });
+    return {
+      items: page.items.map((definition) => {
+        const {
+          prompt,
+          precheck: _precheck,
+          ...summary
+        } = this.#withUpcoming(definition, this.#now());
+        return { ...summary, promptPreview: automationPromptPreview(prompt) };
+      }),
+      nextCursor: page.nextCursor,
+    };
+  }
+
+  delete(
+    input: AutomationDeleteToolInput,
+    context: TrustedToolInvocationContext,
+  ) {
+    this.#admitAutomation(input, context);
+    this.#automations.delete(scope(context), input.automationId, {
+      expectedRevision: input.expectedRevision,
+      mutationId: context.mutationId,
+    });
+    return { deleted: true as const };
+  }
+
+  resolve(
+    input: AutomationResolveToolInput,
+    context: TrustedToolInvocationContext,
+  ) {
+    this.#admitAutomation(input, context);
+    const result = this.#automations.resolveUncertainRun(
+      scope(context),
+      input.automationId,
+      input.runId,
+      { resume: input.resume },
+    );
+    return {
+      run: toolRun(result.run),
+      automation: result.automation
+        ? this.#withUpcoming(result.automation, this.#now())
+        : null,
+    };
+  }
+
+  acknowledge(
+    input: AutomationAcknowledgeToolInput,
+    context: TrustedToolInvocationContext,
+  ) {
+    this.#admitAutomation(input, context);
+    const result = this.#automations.acknowledgeRun(
+      scope(context),
+      input.automationId,
+      input.runId,
+    );
+    return {
+      run: toolRun(result.run),
+      automation: result.automation
+        ? this.#withUpcoming(result.automation, this.#now())
+        : null,
+    };
+  }
+
+  #admitAutomation(
     input: AutomationTargetInput,
+    context: TrustedToolInvocationContext,
+  ): ThreadAutomationDefinition {
+    const admitted = context.environmentAuthority.resolvedResourceRefs.find(
+      (ref) => ref.kind === "automation" && ref.id === input.automationId,
+    );
+    if (!admitted)
+      throw new CanonicalAgentToolRequestError(
+        "permission_denied",
+        "The automation was not admitted for this invocation.",
+      );
+    requireAdmittedResource(context.environmentAuthority, admitted);
+    const definition = this.#automations.get(
+      scope(context),
+      input.automationId,
+    );
+    const target = this.#inventory.getThread(
+      scope(context),
+      definition.threadId,
+    ).thread;
+    requireAdmittedResource(context.environmentAuthority, {
+      kind: "automation",
+      id: definition.id,
+      threadId: target.id,
+      environmentId: target.environmentId,
+      workspaceId: target.workspaceId,
+    });
+    return definition;
+  }
+
+  #admitTargetThread(
+    input: AutomationThreadInput,
     context: TrustedToolInvocationContext,
   ): string {
     const threadId = targetThreadId(input, context);
@@ -337,11 +511,15 @@ export class AutomationAgentToolService {
     return {
       ...rest,
       ...(lastRun ? { lastRun: toolLastRun(lastRun) } : {}),
-      upcoming: this.#automations.preview(
-        definition.schedule,
-        UPCOMING_OCCURRENCE_COUNT,
-        now,
-      ),
+      upcoming:
+        definition.schedule.kind === "date_time" &&
+        Date.parse(definition.schedule.runAt) <= now
+          ? []
+          : this.#automations.preview(
+              definition.schedule,
+              UPCOMING_OCCURRENCE_COUNT,
+              now,
+            ),
     };
   }
 }
@@ -351,7 +529,7 @@ function scope(context: TrustedToolInvocationContext) {
 }
 
 function targetThreadId(
-  input: AutomationTargetInput,
+  input: AutomationThreadInput,
   context: TrustedToolInvocationContext,
 ): string {
   const threadId = input.threadId ?? context.defaults.threadId;
@@ -365,9 +543,14 @@ function targetThreadId(
 }
 
 function hasDefinitionChange(input: AutomationUpdateToolInput): boolean {
-  return ["prompt", "runMode", "schedule", "misfirePolicy", "precheck"].some(
-    (field) => Object.prototype.hasOwnProperty.call(input, field),
-  );
+  return [
+    "name",
+    "prompt",
+    "runMode",
+    "schedule",
+    "misfirePolicy",
+    "precheck",
+  ].some((field) => Object.prototype.hasOwnProperty.call(input, field));
 }
 
 function cancellationError(): DOMException {
@@ -396,4 +579,19 @@ function toolRun(run: ThreadAutomationRun): AutomationToolRun {
     ...toolPrecheck
   } = precheck;
   return { ...rest, precheck: toolPrecheck };
+}
+
+function validateMisfirePolicy(
+  schedule: AutomationSchedule,
+  policy: AutomationMisfirePolicy | null,
+): void {
+  if ((schedule.kind === "date_time") !== (policy === null))
+    throw new ZodError([
+      {
+        code: "custom",
+        path: ["misfirePolicy"],
+        message:
+          "One-shots require null; recurring schedules require coalesce or skip.",
+      },
+    ]);
 }

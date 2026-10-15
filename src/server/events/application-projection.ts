@@ -199,6 +199,7 @@ export class ApplicationProjection {
     let value: Value | undefined;
     let counts = this.#counts;
     switch (event.type) {
+      case "automation_changed":
       case "workpad_changed":
         break;
       case "inventory_counts_changed":

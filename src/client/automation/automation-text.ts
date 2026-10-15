@@ -299,6 +299,10 @@ export function runStateLabel(
 ): string {
   if (run.turn) return TURN_OUTCOME_LABELS[run.turn.outcome];
   switch (run.state) {
+    case "deferred":
+      return "Waiting on source";
+    case "cancelled":
+      return "Cancelled";
     case "claimed":
     case "dispatching":
       return run.precheck?.status === "checking" ? "Checking" : "Starting";
@@ -590,4 +594,13 @@ export function automationErrorText(errorCode: string): string {
       ? "The precheck failed."
       : "The agent runtime didn't accept the prompt.")
   );
+}
+
+/** Compact scheduling detail for one thread containing independent automations. */
+export function threadAutomationStatusText(summary: import("../../shared/index.js").NormalizedThreadSummary["automations"], health: AutomationHealth, now: Date | number): string {
+  const count = `${summary.totalCount} automation${summary.totalCount === 1 ? "" : "s"}`;
+  const state = summary.attentionCount > 0 ? `${summary.attentionCount} ${summary.attentionCount === 1 ? "needs" : "need"} attention` : health.label;
+  const next = summary.nextRunAt ? ` · next ${futureTimeLabel(summary.nextRunAt, new Date(now))}` : "";
+  const activity = summary.attentionCount > 0 && summary.inFlightCount > 0 ? ` · ${summary.inFlightCount} in progress` : "";
+  return `${count} · ${state}${activity}${next}`;
 }

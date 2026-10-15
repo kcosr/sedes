@@ -72,7 +72,7 @@ function toAutomationThread(
     available: thread.available,
     backingState: thread.backingState,
     runState: thread.runState,
-    automation: thread.automation,
+    automation: null,
   };
 }
 
@@ -228,7 +228,7 @@ export function automationLiveKey(
 ): string | undefined {
   if (!automation) return undefined;
   const lastRun = automation.lastRun;
-  return `${automation.revision}:${lastRun?.id ?? ""}:${lastRun?.state ?? ""}:${lastRun?.turn?.outcome ?? ""}`;
+  return `${automation.id}:${automation.revision}:${lastRun?.id ?? ""}:${lastRun?.state ?? ""}:${lastRun?.turn?.outcome ?? ""}`;
 }
 
 /**
@@ -274,5 +274,5 @@ export function useThreadRunState(
 export function automationRunsKey(
   automation: SummaryAutomation | null | undefined,
 ): string | undefined {
-  return automation ? String(automation.runsRevision) : undefined;
+  return automation ? `${automation.id}:${automation.runsRevision}` : undefined;
 }

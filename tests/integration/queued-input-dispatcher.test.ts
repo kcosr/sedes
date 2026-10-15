@@ -186,7 +186,7 @@ function automationSource(
   fixture: Fixture,
   threadId: string,
   mutationId: string,
-): { readonly automationId: string; readonly automationRunId: string } {
+): { readonly automationId: string; readonly automationRunId: string; readonly claimToken: string } {
   const source = fixture.automationSources.get(threadId)!;
   const repository = new AutomationRepository(fixture.database);
   if (source.currentRunId && source.currentClaimToken) {
@@ -195,7 +195,7 @@ function automationSource(
       source.automationId,
       source.currentRunId,
       {
-        expectedState: "claimed",
+        expectedState: "dispatching",
         state: "failed",
         claimToken: source.currentClaimToken,
         errorCode: "fixture_superseded",
@@ -216,9 +216,12 @@ function automationSource(
     dispatchMutationId: mutationId,
     now: 500 + source.sequence * 10,
   });
+  repository.checkRunAdmission(fixture.scope, source.automationId, automationRunId, {
+    claimToken, now: 500 + source.sequence * 10, dispatch: true,
+  });
   source.currentRunId = automationRunId;
   source.currentClaimToken = claimToken;
-  return { automationId: source.automationId, automationRunId };
+  return { automationId: source.automationId, automationRunId, claimToken };
 }
 
 function revision(fixture: Fixture, threadId: string): number {
@@ -274,7 +277,6 @@ function enqueue(
     ...(selectedSkillId ? { selectedSkillId } : {}),
     source: {
       kind: "automation",
-      expectedThreadRevision: revision(fixture, threadId),
       ...source,
     },
     now,
@@ -3035,7 +3037,6 @@ describe("QueuedInputDispatcher", () => {
           taskReferences: [],
           source: {
             kind: "automation",
-            expectedThreadRevision: revision(fixture, threadId),
             ...automationSource(
               fixture,
               threadId,
@@ -3086,7 +3087,6 @@ describe("QueuedInputDispatcher", () => {
           taskReferences: [],
           source: {
             kind: "automation",
-            expectedThreadRevision: revision(fixture, threadId),
             ...automationSource(fixture, threadId, "operation-settlement-lag"),
           },
           now: now.value,
@@ -3448,7 +3448,6 @@ describe("QueuedInputDispatcher", () => {
         taskReferences: [],
         source: {
           kind: "automation",
-          expectedThreadRevision: revision(fixture, crossedThreadId),
           ...automationSource(fixture, crossedThreadId, "operation-crossed"),
         },
         now: 620,
@@ -3965,7 +3964,6 @@ describe("QueuedInputDispatcher", () => {
         taskReferences: [],
         source: {
           kind: "automation",
-          expectedThreadRevision: revision(fixture, threadId),
           ...automationSource(fixture, threadId, "operation-close"),
         },
         now: 610,
@@ -5151,8 +5149,12 @@ describe("QueuedInputDispatcher", () => {
         );
       }
       expect(repository.listActiveHeads(fixture.scope)).toHaveLength(1);
+      const waiting = automationSource(fixture, threadId, "over-capacity");
+      expect(new AutomationRepository(fixture.database).getRun(
+        fixture.scope, waiting.automationId, waiting.automationRunId,
+      )).toMatchObject({ state: "deferred", deferredReason: "queue_capacity", claimToken: null });
       expect(() =>
-        enqueue(fixture, repository, threadId, "over-capacity", 2_000),
+        enqueueUser(fixture, repository, threadId, "user-over-capacity", 6_000),
       ).toThrow("active-item limit");
     } finally {
       fixture.database.close();

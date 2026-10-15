@@ -495,12 +495,16 @@ describe("thread agent tool policy persistence", () => {
         "page.get",
         "page.revisions",
         "image.show",
+        "automation.list",
         "automation.get",
         "automation.runs",
         "automation.create",
         "automation.update",
         "automation.set_state",
         "automation.run_now",
+        "automation.delete",
+        "automation.resolve",
+        "automation.acknowledge",
         "research.web_search",
       ]);
       expect(

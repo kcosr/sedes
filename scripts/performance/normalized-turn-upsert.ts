@@ -42,7 +42,7 @@ function snapshot(): NormalizedThreadSnapshot {
       available: true,
       lastActivityAt: "2026-01-01T00:00:00.000Z",
       stateChangedAt: "2026-01-01T00:00:00.000Z",
-      automation: null,
+      automations: { totalCount: 0, enabledCount: 0, pausedCount: 0, exhaustedCount: 0, inFlightCount: 0, attentionCount: 0, revision: 0 },
     },
     workspace: {
       id: "workspace-1",
@@ -144,7 +144,7 @@ function snapshot(): NormalizedThreadSnapshot {
     providerFeatures: [],
     usage: {},
     interactions: [],
-    attention: {},
+    attention: { automationContexts: [] },
   };
 }
 

@@ -1,3 +1,4 @@
+import { AutomationForkTargetResolver } from "./runtime/automation-fork-target.js";
 import { ImageShowRepository } from "./db/repositories/image-show-repository.js";
 import { ImageShowService } from "./output-artifacts/image-show-service.js";
 import { ImageShowAgentToolService } from "./agent-tools/tools/image-show-agent-tool-service.js";
@@ -388,6 +389,7 @@ export async function startProductionApplication(
   let database: Database.Database | undefined;
   let server: Server | undefined;
   let scheduler: DurableScheduler | undefined;
+  let requestAutomationReadmission: (() => void) | undefined;
   let automationDispatcher: AutomationDispatcher | undefined;
   let queueDispatcher: QueuedInputDispatcher | undefined;
   let mutations: ThreadMutationGateway | undefined;
@@ -1237,9 +1239,11 @@ export async function startProductionApplication(
       interactions,
       hubs: threadHubs,
       retentionMilliseconds: config.conversationRetentionMilliseconds,
-      onThreadChanged: (eventScope, applicationThreadId) =>
-        publishApplicationThread?.publish(eventScope, applicationThreadId),
+      onThreadChanged: (eventScope, applicationThreadId) => {
+        return publishApplicationThread?.publish(eventScope, applicationThreadId);
+      },
       onAuthoritativeSettled: async (eventScope, applicationThreadId) => {
+        requestAutomationReadmission?.();
         await mutations?.onAuthoritativeSettled(
           eventScope,
           applicationThreadId,
@@ -1279,6 +1283,7 @@ export async function startProductionApplication(
       gateway: queueGateway,
       publisher: {
         publish(eventScope, applicationThreadId, event) {
+          requestAutomationReadmission?.();
           threadHubs.thread(eventScope, applicationThreadId).publish(event);
           for (const item of queueRepository.list(
             eventScope,
@@ -1546,8 +1551,10 @@ export async function startProductionApplication(
       threadGroupRepository,
       activeApplicationSnapshots,
     );
-    publishExecutionEnvironmentChange = (environmentId) =>
+    publishExecutionEnvironmentChange = (environmentId) => {
+      requestAutomationReadmission?.();
       activeApplicationSnapshots.handoffEnvironmentChange(scope, environmentId);
+    };
     forks.bindApplicationSnapshots(activeApplicationSnapshots);
     publishApplicationThread = new ApplicationThreadChangePublisher(
       activeApplicationSnapshots,
@@ -1576,6 +1583,7 @@ export async function startProductionApplication(
       inventoryRepository,
       {
         publishMany(eventScope, states) {
+          requestAutomationReadmission?.();
           scheduler?.rearm();
           activeApplicationSnapshots.handoffStructuralThreadChanges(eventScope, states.map(({ threadId }) => threadId));
           activeThreadSnapshots.scheduleMany(
@@ -1721,6 +1729,9 @@ export async function startProductionApplication(
       });
     };
     const attention = new ThreadAttentionService({
+      acknowledgeAutomationRun: (scope, threadId, runId) => {
+        automations.acknowledgeThreadRun(scope, threadId, runId);
+      },
       inventory: inventoryRepository,
       completions: completion,
       queue: queueDispatcher,
@@ -1746,8 +1757,10 @@ export async function startProductionApplication(
       publishThreadSnapshot: (eventScope, applicationThreadId) =>
         activeThreadSnapshots.publish(eventScope, applicationThreadId),
       onPublicationError: reportBackgroundError("Thread mutation publication"),
-      onThreadChanged: (eventScope, applicationThreadId) =>
-        publishApplicationThread!.publish(eventScope, applicationThreadId),
+      onThreadChanged: (eventScope, applicationThreadId) => {
+        requestAutomationReadmission?.();
+        return publishApplicationThread!.publish(eventScope, applicationThreadId);
+      },
     });
     resources.defer("thread mutations", () => mutations?.close(), {
       mode: "ownership_critical",
@@ -1765,13 +1778,17 @@ export async function startProductionApplication(
       // Automation state is part of both the open thread projection and the
       // application inventory. ThreadSnapshotPublisher updates the loaded
       // thread first, then publishes the matching application summary.
-      publisher: activeThreadSnapshots,
+      publisher: {
+        publish: (eventScope, threadId) => activeThreadSnapshots.publish(eventScope, threadId),
+        publishAutomation: (eventScope, change) => activeApplicationSnapshots.publishAutomationChange(eventScope, change),
+      },
       onChanged: () => scheduler?.rearm(),
       onReconcileError: reportBackgroundError("Automation reconciliation"),
       onRunLifecycle: (eventScope, input) =>
         notificationLifecycle.automation(eventScope, input),
       executionPolicy: automationExecutionPolicy,
     });
+    requestAutomationReadmission = () => automations.requestDeferredReconcile(Date.now());
     const automationPrechecks = new AutomationPrecheckExecutor(
       inventoryRepository,
       execution,
@@ -1797,6 +1814,10 @@ export async function startProductionApplication(
       queueRepository,
       firstInput: automationFirstInput,
       branches: forks,
+      forkTargets: new AutomationForkTargetResolver({
+        automations: automationRepository, bindings, creation, inventory: inventoryRepository, savedAgents,
+        policy: automationExecutionPolicy,
+      }),
       executionPolicy: automationExecutionPolicy,
     });
     automationDispatcher = new AutomationDispatcher({
@@ -1810,7 +1831,12 @@ export async function startProductionApplication(
     const workspaceManagement = new WorkspaceApplicationService({
       inventory: inventoryRepository,
       execution,
-      publications: activeApplicationSnapshots,
+      publications: {
+        handoffAuthoritativeReplacement(eventScope) {
+          requestAutomationReadmission?.();
+          activeApplicationSnapshots.handoffAuthoritativeReplacement(eventScope);
+        },
+      },
       projectAuthority: agentToolSources,
       discoverWorkspace: discoverOpenedWorkspace,
     });
@@ -1997,8 +2023,10 @@ export async function startProductionApplication(
             reportBackgroundError(
               `Fork reconciliation for operation ${applicationOperationId}`,
             )(error),
-          onThreadChanged: (eventScope, applicationThreadId) =>
-            activeThreadSnapshots.publish(eventScope, applicationThreadId),
+          onThreadChanged: (eventScope, applicationThreadId) => {
+            requestAutomationReadmission?.();
+            return activeThreadSnapshots.publish(eventScope, applicationThreadId);
+          },
         }),
       }),
     );

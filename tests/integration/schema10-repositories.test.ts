@@ -1227,6 +1227,9 @@ function createAutomationQueueSource(
     dispatchMutationId: mutationId,
     now: 581,
   });
+  repository.checkRunAdmission(fixture.scope, automationId, automationRunId, {
+    claimToken, now: 581, dispatch: true,
+  });
   return { automationId, automationRunId, claimToken };
 }
 
@@ -4249,7 +4252,7 @@ describe("inactive schema-10 repositories", () => {
           taskReferences: [],
           source: {
             kind: "automation",
-            expectedThreadRevision: 1,
+            claimToken: automationSource.claimToken,
             automationId: automationSource.automationId,
             automationRunId: automationSource.automationRunId,
           },
@@ -4336,7 +4339,7 @@ describe("inactive schema-10 repositories", () => {
         taskReferences: [],
         source: {
           kind: "automation",
-          expectedThreadRevision: 2,
+          claimToken: automationSource.claimToken,
           automationId: automationSource.automationId,
           automationRunId: automationSource.automationRunId,
         },
@@ -4485,7 +4488,7 @@ describe("inactive schema-10 repositories", () => {
         automationSource.automationId,
         automationSource.automationRunId,
         {
-          expectedState: "claimed",
+          expectedState: "dispatching",
           state: "failed",
           claimToken: automationSource.claimToken,
           errorCode: "fixture_superseded",
@@ -4508,6 +4511,10 @@ describe("inactive schema-10 repositories", () => {
         },
       );
 
+      automations.checkRunAdmission(fixture.scope, automationSource.automationId, nextAutomationRunId, {
+        claimToken: "queue-provenance-claim-2", now: 776, dispatch: true,
+      });
+
       const cancellable = queue.enqueue(fixture.scope, fixture.threadId, {
         id: "queue-3",
         mutationId: "queue-operation-3",
@@ -4517,7 +4524,7 @@ describe("inactive schema-10 repositories", () => {
         taskReferences: [],
         source: {
           kind: "automation",
-          expectedThreadRevision: threadRevision(fixture),
+          claimToken: "queue-provenance-claim-2",
           automationId: automationSource.automationId,
           automationRunId: nextAutomationRunId,
         },
@@ -5179,7 +5186,7 @@ describe("inactive schema-10 repositories", () => {
         taskReferences: [],
         source: {
           kind: "automation",
-          expectedThreadRevision: threadRevision(fixture),
+          claimToken: automationSource.claimToken,
           automationId: automationSource.automationId,
           automationRunId: automationSource.automationRunId,
         },

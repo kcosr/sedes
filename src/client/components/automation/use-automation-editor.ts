@@ -70,7 +70,7 @@ export interface AutomationEditor {
   readonly pending?: "save" | "save_and_enable" | "delete";
   readonly error?: string;
   /** Saves the form (and enables a new automation when asked); true when all of it succeeded. */
-  readonly save: (options?: { readonly enable?: boolean }) => Promise<boolean>;
+  readonly save: (options?: { readonly enable?: boolean }) => Promise<ThreadAutomationDefinition | undefined>;
   /** Deletes the automation, then stays pending while the caller leaves; rejects with the server's message. */
   readonly remove: () => Promise<void>;
   /** Puts the form back to the saved (or new) values. */
@@ -96,9 +96,11 @@ export interface AutomationEditor {
 export function useAutomationEditor(
   store: EditorStore,
   thread: Pick<AutomationThread, "id" | "automation">,
-  options: { readonly canCloneOnRun: boolean },
+  options: { readonly canCloneOnRun: boolean; readonly automationId?: string; readonly missing?: boolean },
 ): AutomationEditor {
   const threadId = thread.id;
+  const automationId = options.automationId;
+  const saveIdentity = useRef<{ fingerprint: string; id: string } | undefined>(undefined);
   const live = thread.automation;
   const liveRevision = live?.revision;
   const [initial] = useState(() => defaultAutomationForm(new Date()));
@@ -118,7 +120,8 @@ export function useAutomationEditor(
   }, []);
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
-  const [deletedElsewhere, setDeletedElsewhere] = useState(false);
+  const [deletedState, setDeletedElsewhere] = useState(false);
+  const deletedElsewhere = deletedState || options.missing === true;
   const [preview, setPreview] = useState<{
     readonly key: string;
     readonly occurrences: readonly string[];
@@ -159,7 +162,7 @@ export function useAutomationEditor(
     let settled = false;
     setLoading(true);
     setLoadError(undefined);
-    store.api.getThreadAutomation(threadId, controller.signal).then(
+    store.api.getAutomation(automationId!, controller.signal).then(
       (loaded) => {
         if (controller.signal.aborted) return;
         settled = true;
@@ -180,7 +183,7 @@ export function useAutomationEditor(
         loadedRevision.current = undefined;
       }
     };
-  }, [adopt, dirty, liveRevision, loadAttempt, pending, remoteAhead, store, threadId]);
+  }, [adopt, dirty, liveRevision, loadAttempt, pending, remoteAhead, store, threadId, automationId]);
 
   // Deleted elsewhere (the summary loses the automation, and this editor
   // did not delete it): the form stays, and saving creates a new one.
@@ -191,14 +194,12 @@ export function useAutomationEditor(
     if (previous === undefined || liveRevision !== undefined || pending === "delete") {
       return;
     }
-    setDefinition(undefined);
     setDeletedElsewhere(true);
   }, [liveRevision, pending]);
 
   // An automation that appears elsewhere while a new one is being written
   // leaves the form in create mode, stale, until the user reloads.
-  const mode: AutomationEditor["mode"] =
-    definition !== undefined || (live !== null && !dirty) ? "edit" : "create";
+  const mode: AutomationEditor["mode"] = automationId ? "edit" : "create";
   const status: AutomationEditor["status"] =
     mode === "edit" && definition === undefined
       ? loadError !== undefined && !loading
@@ -260,6 +261,8 @@ export function useAutomationEditor(
       : {}),
     cloneUnavailable,
     valid:
+      form.name.trim().length > 0 &&
+      form.name.trim().length <= 240 &&
       prompt.length > 0 &&
       promptBytes <= MAXIMUM_PROMPT_BYTES &&
       schedule !== undefined &&
@@ -272,7 +275,7 @@ export function useAutomationEditor(
   // From the live summary alone: resolving the run elsewhere changes its
   // state without a new revision, so the definition read at load would keep
   // a resolved run uncertain.
-  const uncertain = live?.lastRun?.state === "uncertain";
+  const uncertain = live?.attention?.kind === "uncertain";
   const stale = remoteAhead && dirty;
 
   // A changed precheck input voids the last test.
@@ -325,67 +328,25 @@ export function useAutomationEditor(
       });
   }, [precheck.precheck, precheckFingerprint, prompt, store, threadId]);
 
-  const save = async (saveOptions?: { readonly enable?: boolean }): Promise<boolean> => {
-    if (!schedule || !validation.valid || pending || stale || uncertain) return false;
-    const enable = saveOptions?.enable === true && definition === undefined;
+  const save = async (saveOptions?: { readonly enable?: boolean }): Promise<ThreadAutomationDefinition | undefined> => {
+    if (!schedule || !validation.valid || pending || stale || uncertain || deletedElsewhere) return;
+    const enable = saveOptions?.enable === true && !automationId;
     markPending(enable ? "save_and_enable" : "save");
     setError(undefined);
-    setNotice(undefined);
-    const fields = {
-      prompt,
-      runMode: form.runMode,
-      schedule,
-      misfirePolicy: form.misfirePolicy,
-      precheck: precheck.precheck,
-    };
-    let saved: ThreadAutomationDefinition;
+    const fields = { name: form.name.trim(), prompt, runMode: form.runMode, schedule, misfirePolicy: schedule.kind === "date_time" ? null : form.misfirePolicy, precheck: precheck.precheck };
+    const fingerprint = JSON.stringify([automationId, definition?.revision, fields, enable]);
+    if (saveIdentity.current?.fingerprint !== fingerprint) saveIdentity.current = { fingerprint, id: mutationId() };
     try {
-      saved = definition
-        ? await store.api.updateThreadAutomation(threadId, {
-            ...fields,
-            expectedRevision: definition.revision,
-            mutationId: mutationId(),
-          })
-        : await store.api.createThreadAutomation(threadId, {
-            ...fields,
-            mutationId: mutationId(),
-          });
+      const saved = automationId && definition
+        ? await store.api.updateAutomation(automationId, { ...fields, expectedRevision: definition.revision, mutationId: saveIdentity.current.id })
+        : await store.api.createAutomation(threadId, { ...fields, initialState: enable ? "enabled" : "paused", mutationId: saveIdentity.current.id });
+      adopt(saved);
+      saveIdentity.current = undefined;
+      return saved;
     } catch (reason) {
-      if (!definition && reason instanceof ApiError && reason.code === "conflict") {
-        // Another client attached one first: show it instead of this form.
-        try {
-          adopt(await store.api.getThreadAutomation(threadId));
-          setNotice(
-            "This thread already has an automation, so its saved settings are shown instead.",
-          );
-        } catch (reloadReason) {
-          setError(messageFrom(reloadReason));
-        }
-      } else {
-        setError(messageFrom(reason));
-      }
-      markPending(undefined);
-      return false;
-    }
-    adopt(saved);
-    if (enable) {
-      try {
-        adopt(
-          await store.api.setThreadAutomationState(
-            threadId,
-            "enable",
-            saved.revision,
-            mutationId(),
-          ),
-        );
-      } catch (reason) {
-        setError(`Saved as paused. It could not be enabled: ${messageFrom(reason)}`);
-        markPending(undefined);
-        return false;
-      }
-    }
-    markPending(undefined);
-    return true;
+      setError(messageFrom(reason));
+      return undefined;
+    } finally { markPending(undefined); }
   };
 
   const remove = async (): Promise<void> => {
@@ -393,7 +354,7 @@ export function useAutomationEditor(
     markPending("delete");
     setError(undefined);
     try {
-      await store.api.deleteThreadAutomation(threadId, definition.revision, mutationId());
+      await store.api.deleteAutomation(definition.id, definition.revision, mutationId());
     } catch (reason) {
       markPending(undefined);
       throw new Error(messageFrom(reason));

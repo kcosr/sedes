@@ -69,7 +69,7 @@ function fixture(): Snapshot {
     available: true,
     lastActivityAt: timestamp,
     stateChangedAt: timestamp,
-    automation: null,
+    automations: { totalCount: 0, enabledCount: 0, pausedCount: 0, exhaustedCount: 0, inFlightCount: 0, attentionCount: 0, revision: 0 },
     attention: {
       wake: false,
       automationContext: null,

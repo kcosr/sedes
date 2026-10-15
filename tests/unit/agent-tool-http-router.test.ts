@@ -70,6 +70,7 @@ function fixture(
     new AgentToolEnvironmentAuthorityResolver({
       resolveEnvironment: () => undefined,
       resolveWorkspace: () => undefined,
+      resolveAutomation: () => undefined,
       resolveThread: (_scope, id) =>
         id === targetThreadId
           ? { id, environmentId: "environment-1", label: "Target" }

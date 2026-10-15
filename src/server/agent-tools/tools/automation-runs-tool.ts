@@ -11,7 +11,7 @@ import {
   automationToolExposure,
   automationToolInputSchema,
   automationToolPresentations,
-  optionalAutomationThreadId,
+  requiredAutomationId,
 } from "./automation-tool-schemas.js";
 import {
   AGENT_TOOL_JSON_SCHEMA_DIALECT,
@@ -33,7 +33,7 @@ export function createAutomationRunsToolDefinition(
   return {
     ...CANONICAL_AGENT_TOOL_MANIFEST["automation.runs"],
     inputSchema: automationToolInputSchema({
-      threadId: optionalAutomationThreadId,
+      automationId: requiredAutomationId,
       cursor: Type.Optional(Type.String({ minLength: 1, maxLength: 2_048 })),
       pageSize: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
     }),

@@ -1,12 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
 import { describe, expect, it, vi } from "vitest";
-import {
-  latestAutomationRunJoin,
-  projectThreadAutomationSummary,
-  threadAutomationSummaryColumns,
-  type ThreadAutomationSummaryRow,
-} from "../../src/server/application/thread-automation-summary.js";
+import { readThreadAutomationSummary } from "../../src/server/application/thread-automation-summary.js";
 import { openOverlayDatabase } from "../../src/server/db/database.js";
 import {
   applyBackendNormalizationMigration,
@@ -154,6 +149,7 @@ function fixture(latestMigration = Number.POSITIVE_INFINITY) {
     anchorThreadId,
     childThreadId,
     unboundThreadId,
+    hasDeferredRuns: latestMigration >= 146,
   };
 }
 
@@ -193,10 +189,12 @@ function insertRun(
           anchor_thread_id, child_thread_id, error_code,
           claimed_at, started_at, accepted_at, finished_at,
           created_at, updated_at
+          ${current.hasDeferredRuns ? ", initial_eligible_at" : ""}
         )
         VALUES (
           ?, ?, ?, ?, 'manual', ?, ?, 0, 0, ?, ?, NULL, NULL, 1, ?,
           'not_configured', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+          ${current.hasDeferredRuns ? ", ?" : ""}
         )
       `,
     )
@@ -224,6 +222,7 @@ function insertRun(
       finished ? at + 2 : null,
       at,
       at,
+      ...(current.hasDeferredRuns ? [at] : []),
     );
   if (input.forceReset) {
     current.database
@@ -321,23 +320,8 @@ function service(current: Fixture) {
 }
 
 function projectedAutomation(current: Fixture) {
-  const row = current.database
-    .prepare(
-      `
-        SELECT ${threadAutomationSummaryColumns("definition", "run")}
-        FROM automation_definitions AS definition
-        ${latestAutomationRunJoin("definition", "run")}
-        WHERE definition.tenant_id = ? AND definition.owner_principal_id = ?
-          AND definition.anchor_thread_id = ?
-      `,
-    )
-    .get(
-      current.scope.tenantId,
-      current.scope.principalId,
-      current.anchorThreadId,
-    ) as ThreadAutomationSummaryRow;
-  return normalizedThreadSummarySchema.shape.automation.parse(
-    projectThreadAutomationSummary(row),
+  return normalizedThreadSummarySchema.shape.automations.parse(
+    readThreadAutomationSummary(current.database, current.scope, current.anchorThreadId),
   );
 }
 
@@ -502,7 +486,23 @@ describe("automation turn settlement migration", () => {
         current.database
           .prepare(
             `
-              INSERT INTO automation_runs
+              INSERT INTO automation_runs (
+                tenant_id, owner_principal_id, automation_id, id,
+                occurrence_kind, scheduled_for, occurrence_key, definition_revision,
+                coalesced_count, run_mode, state, claim_token,
+                lease_expires_at, claim_attempt_count, prompt_snapshot,
+                dispatch_mutation_id, anchor_thread_id, child_thread_id,
+                error_code, error_diagnostic, claimed_at, started_at,
+                accepted_at, finished_at, created_at, updated_at,
+                precheck_command_snapshot, precheck_timeout_seconds,
+                precheck_include_stdout, precheck_status,
+                precheck_started_at, precheck_finished_at,
+                precheck_exit_code, precheck_duration_ms,
+                precheck_stdout_bytes, precheck_stdout_included,
+                force_reset_at, force_reset_mutation_id,
+                turn_id, turn_outcome, turn_settled_at, turn_started_at, turn_ended_at,
+                initial_eligible_at
+              )
               SELECT tenant_id, owner_principal_id, automation_id, 'copy',
                 occurrence_kind, scheduled_for, 'copy', definition_revision,
                 coalesced_count, run_mode, state, claim_token,
@@ -516,7 +516,7 @@ describe("automation turn settlement migration", () => {
                 precheck_exit_code, precheck_duration_ms,
                 precheck_stdout_bytes, precheck_stdout_included,
                 force_reset_at, force_reset_mutation_id,
-                turn_id, NULL, turn_settled_at, NULL, NULL
+                turn_id, NULL, turn_settled_at, NULL, NULL, initial_eligible_at
               FROM automation_runs WHERE id = ?
             `,
           )
@@ -743,7 +743,7 @@ describe("AutomationTurnSettlementObserver", () => {
       expect(setup.onRunLifecycle).not.toHaveBeenCalled();
       expect(setup.onChanged).not.toHaveBeenCalled();
       expect(
-        setup.automations.listRuns(current.scope, current.anchorThreadId, {
+        setup.automations.listRuns(current.scope, current.automationId, {
           pageSize: 10,
         }).items,
       ).toEqual([
@@ -1069,13 +1069,14 @@ describe("automation run-history revision", () => {
         step(() =>
           automations.resolveUncertainRun(
             current.scope,
-            current.anchorThreadId,
+            current.automationId,
             claimed.id,
             { resume: false },
             3_000,
           ),
         ),
-      ).toBe(1);
+      // Resolution settles the delivery and then acknowledges its notice.
+      ).toBe(2);
 
       const recovered = insertRun(current, {
         state: "completed",
@@ -1147,13 +1148,11 @@ describe("automation run-history revision", () => {
 
       settle(null, null);
       const settled = projectedAutomation(current)!;
-      expect(settled.lastRun).toEqual(before.lastRun);
-      expect(settled.runsRevision).toBe(before.runsRevision + 1);
+      expect(settled).toEqual({ ...before, revision: before.revision + 1 });
 
       settle(1_100, 2_900);
       const timed = projectedAutomation(current)!;
-      expect(timed.lastRun).toEqual(before.lastRun);
-      expect(timed.runsRevision).toBe(before.runsRevision + 2);
+      expect(timed).toEqual({ ...before, revision: before.revision + 2 });
 
       settle(1_100, 2_900);
       expect(projectedAutomation(current)).toEqual(timed);
@@ -1219,7 +1218,7 @@ describe("automation run turn presentation", () => {
 
       const page = (filter: "all" | "problems" | "skipped", cursor?: string) =>
         threadAutomationRunPageSchema.parse(
-          automations.listRuns(current.scope, current.anchorThreadId, {
+          automations.listRuns(current.scope, current.automationId, {
             pageSize: 2,
             filter,
             ...(cursor ? { cursor } : {}),
@@ -1248,7 +1247,7 @@ describe("automation run turn presentation", () => {
           },
         }),
       );
-      const all = automations.listRuns(current.scope, current.anchorThreadId, {
+      const all = automations.listRuns(current.scope, current.automationId, {
         pageSize: 10,
       });
       expect(all.items.find(({ id }) => id === failedDelivery.id)).not.toHaveProperty(
@@ -1266,7 +1265,7 @@ describe("automation run turn presentation", () => {
     }
   });
 
-  it("presents the latest run's turn outcome in the REST and projected summaries", () => {
+  it("presents the latest run's turn outcome in automation detail, outside bounded thread aggregates", () => {
     const current = fixture();
     try {
       const { automations } = service(current);
@@ -1281,7 +1280,7 @@ describe("automation run turn presentation", () => {
       expect(
         automations.presentSummary(current.scope, definition).lastRun,
       ).not.toHaveProperty("turn");
-      expect(projectedAutomation(current)?.lastRun).not.toHaveProperty("turn");
+      expect(projectedAutomation(current)).not.toHaveProperty("lastRun");
 
       settle(current, latest, "failed", null);
       expect(
@@ -1289,16 +1288,14 @@ describe("automation run turn presentation", () => {
           automations.presentSummary(current.scope, definition),
         ).lastRun?.turn,
       ).toEqual({ outcome: "failed" });
-      expect(projectedAutomation(current)?.lastRun?.turn).toEqual({
-        outcome: "failed",
-      });
+      expect(projectedAutomation(current).attentionCount).toBe(0);
 
       settle(current, latest, "failed", { startedAt: 1_100, endedAt: 1_900 });
       const turn = { outcome: "failed", endedAt: new Date(1_900).toISOString() };
       expect(
         automations.presentSummary(current.scope, definition).lastRun?.turn,
       ).toEqual(turn);
-      expect(projectedAutomation(current)?.lastRun?.turn).toEqual(turn);
+      expect(projectedAutomation(current).attentionCount).toBe(0);
     } finally {
       current.database.close();
     }

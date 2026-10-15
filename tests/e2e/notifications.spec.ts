@@ -260,25 +260,29 @@ test("notification settings persist and passive server scripts follow selected l
   const session = (await sessionResponse.json()) as { csrfToken: string };
   const headers = { "X-CSRF-Token": session.csrfToken };
   const created = await page.request.post(
-    `/api/threads/${threadId}/automation`,
+    "/api/automations",
     {
       headers,
       data: {
+        threadId,
+        name: "Automation notification",
+        initialState: "paused",
         prompt: "Exercise automation start notification",
         runMode: "clone",
         schedule: {
           kind: "date_time",
           runAt: new Date(Date.now() + 3_600_000).toISOString(),
         },
-        misfirePolicy: "skip",
+        misfirePolicy: null,
         precheck: null,
         mutationId: randomUUID(),
       },
     },
   );
   expect(created.ok()).toBe(true);
+  const automation = (await created.json()) as { id: string };
   const started = await page.request.post(
-    `/api/threads/${threadId}/automation/run-now`,
+    `/api/automations/${automation.id}/run-now`,
     { headers, data: { mutationId: randomUUID() } },
   );
   expect(started.ok()).toBe(true);

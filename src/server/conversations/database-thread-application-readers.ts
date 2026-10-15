@@ -28,12 +28,8 @@ import type { ValidatedWorkspace } from "../execution/contracts.js";
 import type { DatabaseConversationTargetStore } from "./database-conversation-adapters.js";
 import { boundDisplayText } from "./payload-policy.js";
 import type { ThreadAgentToolRuntimeAvailabilityReader } from "./thread-agent-tool-runtime-availability.js";
-import {
-  latestAutomationRunJoin,
-  projectThreadAutomationSummary,
-  threadAutomationSummaryColumns,
-  type ThreadAutomationSummaryRow,
-} from "../application/thread-automation-summary.js";
+import { readThreadAutomationContexts } from "../application/thread-automation-context.js";
+import { readThreadAutomationSummary } from "../application/thread-automation-summary.js";
 import type {
   AuthorizedThreadApplicationState,
   CachedThreadApplicationPresentation,
@@ -81,29 +77,6 @@ export const directThreadExecutionWorkspaceReader: ThreadExecutionWorkspaceReade
 
 function iso(milliseconds: number): string {
   return new Date(milliseconds).toISOString();
-}
-
-function automation(
-  database: Database.Database,
-  scope: RequestScope,
-  applicationThreadId: string,
-): InventoryThread["automation"] {
-  const row = database
-    .prepare(
-      `
-        SELECT ${threadAutomationSummaryColumns("definition", "run")}
-        FROM automation_definitions AS definition
-        ${latestAutomationRunJoin("definition", "run")}
-        WHERE definition.tenant_id = ?
-          AND definition.owner_principal_id = ?
-          AND definition.anchor_thread_id = ?
-          AND definition.deleted_at IS NULL
-      `,
-    )
-    .get(scope.tenantId, scope.principalId, applicationThreadId) as
-    | ThreadAutomationSummaryRow
-    | undefined;
-  return row ? projectThreadAutomationSummary(row) : null;
 }
 
 /**
@@ -238,7 +211,7 @@ export class DatabaseThreadApplicationInventoryReader implements ThreadApplicati
       ...(aggregate.inventory.snoozedUntil === null
         ? {}
         : { snoozedUntil: iso(aggregate.inventory.snoozedUntil) }),
-      automation: automation(this.#database, scope, applicationThreadId),
+      automations: readThreadAutomationSummary(this.#database, scope, applicationThreadId),
     };
     return {
       tenantId: aggregate.thread.tenantId,
@@ -387,26 +360,7 @@ export class DatabaseThreadApplicationInventoryReader implements ThreadApplicati
             },
           }
         : {}),
-      ...(inventory.automationContextRunId &&
-      inventory.automationContextSourceThreadId &&
-      inventory.automationContextAt !== null &&
-      inventory.automationContextOutcome
-        ? {
-            automationContext: {
-              runId: inventory.automationContextRunId,
-              sourceThreadId: inventory.automationContextSourceThreadId,
-              triggeredAt: iso(inventory.automationContextAt),
-              outcome: inventory.automationContextOutcome,
-              ...(inventory.automationContextDiagnostic === null
-                ? {}
-                : {
-                    diagnostic: boundDisplayText(
-                      inventory.automationContextDiagnostic,
-                    ),
-                  }),
-            },
-          }
-        : {}),
+      automationContexts: readThreadAutomationContexts(this.#database, scope, applicationThreadId),
       ...(completion?.attentionCreatedAt === null ||
       completion?.attentionCreatedAt === undefined
         ? {}

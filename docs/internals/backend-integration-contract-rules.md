@@ -131,15 +131,15 @@ publish affected thread summaries after committed membership changes, including
 both ends of a scope move. Content and draft edits do not change membership.
 Keep snapshot, incremental publication, and reconnect projections equivalent.
 
-The thread summary's `automation` projection is likewise shared by Pi, Codex,
+The thread summary's bounded `automations` aggregate is shared by Pi, Codex,
 Claude, Grok, and OpenCode and reads only application-owned definitions and
-runs. Its fields, bounded prompt preview, and one latest-run rule are in
+runs. Full named definitions and run histories use explicit automation resource
+IDs, independently of which threads the browser has loaded. See
 [Materialized application projection](application-projection.md#thread-automation-summary).
 The automation capability route composes the same `capabilities.automation`
-as the thread snapshot without the transcript. Agent tools whose frozen output
-schemas predate the added summary and run fields (`thread.list`,
-`automation.runs`, `automation.run_now`) strip them rather than widening the
-contract.
+as the thread snapshot without loading the transcript. Versioned agent-tool
+contracts must reflect the aggregate and identity-based automation API; do not
+synthesize a singleton by choosing one sibling.
 
 An actor must replay current authoritative pending interactions to late
 subscribers, including the interaction broker. Remove resolved requests and
@@ -4084,6 +4084,42 @@ same target must remain admissible for automation. Attended approval modes use
 the ordinary interaction lifecycle and may leave the thread waiting for the
 principal. Do not add an automation-only "safe" tuple or silently replace the
 thread's selected execution settings.
+
+Automation sources may have several independent definitions. Keep exactly two
+run modes: `same_thread` submits to the existing source and `clone` creates one
+new result per invocation. The user-facing labels are **This thread** and
+**Fork**. `clone` on an unbound draft reuses normal configuration capture and
+creation; on a bound source it requires native fork support and an eligible
+checkpoint. Creating or uncertain source state waits. Never approximate a bound
+native fork with an empty settings copy.
+
+Target recovery resolves the run's bound result, copy receipt, or fork attempt
+before consulting the source's current backing state. The copy reservation
+asserts an unbound source and commits its automation receipt and run attribution
+with the child row before publication. Re-entry preserves that result identity.
+A deleted, reset, or aborted result cannot justify reserving another result for
+the same invocation. Ordinary first-send/queue admission handles a copy child
+that the user starts before the automation submits its prompt.
+
+Automation admission resolves current thread revisions within the serialized
+transactional boundary; caller snapshots must not make sibling runs conflict.
+Claim-token fences apply immediately before side effects. Definitively unsent
+runs may defer without keeping a worker or lease; externally ambiguous work must
+follow its recorded recovery phase. Persist completed precheck results and reuse
+them after deferral: shell commands cannot be assumed safe to replay.
+
+| Backend | This thread | Fork from draft | Fork from bound source |
+| --- | --- | --- | --- |
+| Pi | Shared normal admission | Normal settings-copy creation | Native eligible checkpoint |
+| Codex | Shared normal admission | Normal settings-copy creation | Native eligible checkpoint |
+| Claude | Shared normal admission | Normal settings-copy creation | Native eligible checkpoint |
+| OpenCode | Shared normal admission | Normal settings-copy creation | Unsupported; no empty-copy fallback |
+| Grok | Automation unsupported | Automation unsupported | Unsupported |
+
+All paths retain backend-owned policy checks. Child threads inherit normal
+configuration, never automation definitions. Automation `clone` remains the
+existing semantic contract for old definitions; no fork-removal conversion is
+necessary.
 
 ### Isolated workspace execution
 

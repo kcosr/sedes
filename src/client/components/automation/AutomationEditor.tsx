@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   automationPath,
   automationsPath,
+  automationCreatePath,
   navigate,
   navigateBack,
   threadPath,
@@ -26,6 +27,7 @@ import { Callout } from "@client/components/ui/callout";
 import { ConfirmDialog } from "@client/components/ui/confirm-dialog";
 import { DiscardChangesDialog } from "@client/components/ui/discard-changes-dialog";
 import { Field } from "@client/components/ui/field";
+import { Input } from "@client/components/ui/input";
 import { Textarea } from "@client/components/ui/textarea";
 import { AutomationPrecheckSection } from "./PrecheckSection.js";
 import { AutomationRunModeSection } from "./RunModeSection.js";
@@ -39,6 +41,7 @@ import {
   isRecurring,
 } from "./automation-form.js";
 import { useAutomationCapability } from "./use-automation-details.js";
+import { useAutomationResource } from "./use-automation-resource.js";
 import { useAutomationEditor } from "./use-automation-editor.js";
 import {
   useAutomationAnchor,
@@ -50,7 +53,7 @@ import {
   AutomationAnchorUnavailable,
 } from "./AutomationAnchorStates.js";
 
-type EditorStore = Pick<ApplicationClientStore, "api" | "subscribe" | "getSnapshot">;
+type EditorStore = Pick<ApplicationClientStore, "api" | "subscribe" | "getSnapshot" | "subscribeAutomationChanges" | "subscribeThreadSummaryChanges">;
 
 const SECTION = {
   prompt: "automation-prompt",
@@ -60,48 +63,49 @@ const SECTION = {
   misfire: "automation-misfire",
 } as const;
 
-/** Create or edit a thread's automation (`/automations/:threadId/edit`). */
-export function AutomationEditor({
-  store,
-  threadRegistry,
-  threadId,
-}: {
+/** Add to an explicit source, or edit an explicitly identified automation. */
+export function AutomationEditor({ store, threadRegistry, threadId, automationId }: {
   store: EditorStore;
-  /** Loads a thread the application store does not hold, as its route would. */
   threadRegistry: AutomationThreadSource;
-  threadId: string;
+  threadId?: string;
+  automationId?: string;
+}): React.JSX.Element {
+  const resource = useAutomationResource(store, automationId);
+  const sourceId = resource.definition?.threadId ?? threadId;
+  if (resource.error && !resource.definition) return <AutomationAnchorUnavailable message={resource.error} onRetry={resource.reload} />;
+  if (!sourceId) return <AutomationAnchorLoading />;
+  return <EditorAnchor key={automationId ?? sourceId} store={store} threadRegistry={threadRegistry} threadId={sourceId} automation={resource.definition} refreshError={resource.error} missing={resource.missing} onRetry={resource.reload} />;
+}
+
+function EditorAnchor({ store, threadRegistry, threadId, automation, refreshError, missing, onRetry }: {
+  store: EditorStore; threadRegistry: AutomationThreadSource; threadId: string;
+  automation?: import("../../types.js").ThreadAutomationDefinition;
+  refreshError?: string; missing: boolean; onRetry: () => void;
 }): React.JSX.Element {
   const anchor = useAutomationAnchor(store, threadRegistry, threadId);
-  let content: React.ReactNode;
-  if (anchor.status === "loading") {
-    content = <AutomationAnchorLoading />;
-  } else if (anchor.status === "unavailable") {
-    content = <AutomationAnchorUnavailable message={anchor.message} onRetry={anchor.retry} />;
-  } else {
-    // Keyed by thread: another thread's editor starts from its own form,
-    // definition and requests, never from this one's.
-    content = (
-      <ThreadAutomationEditor key={anchor.thread.id} store={store} thread={anchor.thread} />
-    );
-  }
-  return (
-    <section className="automations-view" aria-label="Automation editor">
-      <div className="automations-page automation-page">{content}</div>
-    </section>
-  );
+  if (anchor.status === "loading") return <AutomationAnchorLoading />;
+  if (anchor.status === "unavailable") return <AutomationAnchorUnavailable message={anchor.message} onRetry={anchor.retry} />;
+  return <section className="automations-view" aria-label="Automation editor"><div className="automations-page automation-page">
+    {refreshError && <Callout tone="warning" title={missing ? "This automation was deleted" : "The automation could not be refreshed"}
+      action={<Button variant="outline" size="sm" onClick={onRetry}>Retry</Button>}>{refreshError} Your edits are kept.</Callout>}
+    <ThreadAutomationEditor store={store} missing={missing} thread={{ ...anchor.thread, automation: automation ?? null }} />
+  </div></section>;
 }
 
 function ThreadAutomationEditor({
   store,
-  thread,
+  thread, missing,
 }: {
   readonly store: EditorStore;
+  readonly missing: boolean;
   readonly thread: AutomationThread;
 }): React.JSX.Element {
   const capabilityState = useAutomationCapability(store, thread.id, thread);
   const capability = capabilityState.capability;
   const editor = useAutomationEditor(store, thread, {
     canCloneOnRun: capability?.canCloneOnRun ?? false,
+    automationId: thread.automation?.id,
+    missing,
   });
   const saving = editor.pending === "save" || editor.pending === "save_and_enable";
   // Leaving is guarded while a save is unresolved too: its outcome is not
@@ -122,7 +126,7 @@ function ThreadAutomationEditor({
   const now = new Date();
   const create = editor.mode === "create";
   const form = editor.form;
-  const backTo = create ? threadPath(thread.id) : automationPath(thread.id);
+  const backTo = create ? automationsPath(thread.id) : automationPath(thread.automation!.id);
   const back = create ? (
     <SettingsBackLink
       href={backTo}
@@ -164,13 +168,14 @@ function ThreadAutomationEditor({
 
   const attachBlocked =
     create && capability !== undefined && !(capability.available && capability.canAttach);
-  const blocked = editor.stale || editor.uncertain || attachBlocked;
+  const blocked = editor.stale || editor.uncertain || editor.deletedElsewhere || attachBlocked;
   const submit = async (enable: boolean) => {
     const saved = await editor.save({ enable });
     // Up to the automation page: back when the editor was opened from it.
-    if (saved && mounted.current) guard.proceed(automationPath(thread.id), { up: true });
+    if (saved && mounted.current) guard.proceed(automationPath(saved.id), { up: true });
   };
   const sections: SettingsEditorSection[] = [
+    { id: "automation-name", label: "Name" },
     { id: SECTION.prompt, label: "Prompt" },
     { id: SECTION.when, label: "When" },
     { id: SECTION.runIn, label: "Run in" },
@@ -218,7 +223,7 @@ function ThreadAutomationEditor({
               >
                 {editor.definition
                   ? "This automation changed elsewhere. Reload before making another change."
-                  : "This thread got an automation elsewhere. Reload to edit that one instead."}
+                  : "This automation changed elsewhere. Reload its saved settings."}
               </Callout>
             ) : null}
             {editor.uncertain ? (
@@ -230,7 +235,7 @@ function ThreadAutomationEditor({
                     type="button"
                     variant="outline"
                     size="sm"
-                    onClick={() => navigate(automationPath(thread.id))}
+                    onClick={() => navigate(automationPath(thread.automation!.id))}
                   >
                     Open automation
                   </Button>
@@ -242,7 +247,7 @@ function ThreadAutomationEditor({
             ) : null}
             {editor.deletedElsewhere ? (
               <Callout tone="warning" role="status">
-                This automation was deleted elsewhere. Saving creates a new one.
+                This automation was deleted elsewhere. Add a new automation from the thread to schedule more work.
               </Callout>
             ) : null}
             {attachBlocked ? (
@@ -281,7 +286,7 @@ function ThreadAutomationEditor({
             saveDisabled={!validation.valid || blocked}
             onSave={() => void submit(create)}
             // Cancel puts an automation's edits back, or leaves a new one.
-            onCancel={create ? () => navigateBack(threadPath(thread.id)) : editor.reset}
+            onCancel={create ? () => navigateBack(automationsPath(thread.id)) : editor.reset}
             secondaryAction={
               create
                 ? {
@@ -300,6 +305,12 @@ function ThreadAutomationEditor({
           disabled={editor.pending !== undefined}
           aria-busy={editor.pending !== undefined || undefined}
         >
+          <SettingsSection id="automation-name" title="Name" card>
+            <Field label="Name" id="automation-name-input">
+              <Input value={form.name} maxLength={240} required
+                onChange={(event) => editor.update({ name: event.target.value })} placeholder="Daily update" />
+            </Field>
+          </SettingsSection>
           <SettingsSection
             id={SECTION.prompt}
             title="Prompt"
@@ -337,6 +348,7 @@ function ThreadAutomationEditor({
             value={form.runMode}
             onChange={(runMode) => editor.update({ runMode })}
             canCloneOnRun={capability?.canCloneOnRun ?? false}
+            forkDraftOnly={capability?.forkDraftOnly}
           />
           <AutomationPrecheckSection
             id={SECTION.precheck}

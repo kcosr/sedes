@@ -13,7 +13,7 @@ import {
   automationToolExposure,
   automationToolInputSchema,
   automationToolPresentations,
-  optionalAutomationThreadId,
+  requiredAutomationId,
 } from "./automation-tool-schemas.js";
 import { CANONICAL_AGENT_TOOL_MANIFEST } from "../registry/canonical-agent-tool-manifest.js";
 
@@ -27,6 +27,7 @@ export function createAutomationUpdateToolDefinition(
     ...CANONICAL_AGENT_TOOL_MANIFEST["automation.update"],
     inputSchema: automationToolInputSchema(
       {
+        name: Type.Optional(Type.String({ minLength: 1, maxLength: 240 })),
         expectedRevision: Type.Integer({
           minimum: 0,
           maximum: Number.MAX_SAFE_INTEGER,
@@ -37,12 +38,15 @@ export function createAutomationUpdateToolDefinition(
         ),
         schedule: Type.Optional(automationScheduleToolSchema),
         misfirePolicy: Type.Optional(
-          Type.String({ maxLength: 8, enum: ["coalesce", "skip"] }),
+          Type.Union([
+            Type.String({ maxLength: 8, enum: ["coalesce", "skip"] }),
+            Type.Null(),
+          ]),
         ),
         precheck: Type.Optional(
           Type.Union([automationPrecheckToolSchema, Type.Null()]),
         ),
-        threadId: optionalAutomationThreadId,
+        automationId: requiredAutomationId,
       },
       { minProperties: 2 },
     ),

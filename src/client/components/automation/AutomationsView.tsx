@@ -8,7 +8,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { ChevronRight, Repeat, Search, SlidersHorizontal } from "lucide-react";
+import { ChevronRight, Plus, Repeat, Search, SlidersHorizontal } from "lucide-react";
 import { Button } from "@client/components/ui/button";
 import {
   DropdownMenu,
@@ -36,7 +36,9 @@ import {
   setAutomationsGroupBy,
   useAutomationsViewPreferences,
 } from "../../automation/automations-view-preferences.js";
-import { loadedDescendantThreads } from "../../automation/loaded-threads.js";
+import { automationCreatePath, threadPath, navigate } from "../../app/router.js";
+import type { ThreadAutomationDefinition } from "../../types.js";
+import { Callout } from "@client/components/ui/callout";
 import { mutationId } from "../../lib/ids.js";
 import {
   messageFrom,
@@ -68,18 +70,6 @@ const SUCCESS_ANNOUNCEMENTS: Readonly<Record<AutomationRowActionKind, string>> =
   };
 
 const countFormat = new Intl.NumberFormat();
-
-/** Only the snapshot and the loaded fork pages can change the list. */
-function selectBase(
-  state: ApplicationClientState,
-  previous: AutomationsBase | undefined,
-): AutomationsBase {
-  return selectAutomationsBase(
-    state.snapshot,
-    previous,
-    loadedDescendantThreads(state),
-  );
-}
 
 function AutomationsViewOptions({
   groupBy,
@@ -135,11 +125,39 @@ function AutomationsViewOptions({
  * do not re-render it, and `thread_upsert` events update it live.
  */
 export const AutomationsView = memo(function AutomationsView({
-  store,
+  store, threadId,
 }: {
   store: ApplicationClientStore;
+  threadId?: string;
 }): React.JSX.Element {
-  const base = useApplicationStoreSelector(store, selectBase);
+  const snapshot = useApplicationStoreSelector(store, (state) => state.snapshot);
+  const [definitions, setDefinitions] = useState<readonly ThreadAutomationDefinition[]>([]);
+  const [loadError, setLoadError] = useState<string>();
+  const [loading, setLoading] = useState(true);
+  const [attempt, setAttempt] = useState(0);
+  useEffect(() => store.subscribeAutomationChanges((change) => {
+    if (!change || !threadId || change.threadId === threadId) setAttempt((value) => value + 1);
+  }), [store, threadId]);
+  useEffect(() => {
+    const controller = new AbortController();
+    setLoading(true); setLoadError(undefined);
+    void (async () => {
+      const items: ThreadAutomationDefinition[] = [];
+      let cursor: string | undefined;
+      do {
+        const page = await store.api.listAutomations({ threadId, cursor, limit: 100, signal: controller.signal });
+        items.push(...page.items); cursor = page.nextCursor ?? undefined;
+      } while (cursor && !controller.signal.aborted);
+      if (!controller.signal.aborted) setDefinitions(items);
+    })().catch((reason: unknown) => {
+      if (!controller.signal.aborted) setLoadError(messageFrom(reason));
+    }).finally(() => { if (!controller.signal.aborted) setLoading(false); });
+    return () => controller.abort();
+  }, [store, threadId, attempt]);
+  useEffect(() => store.subscribeThreadSummaryChanges((sourceId) => {
+    if (sourceId === undefined || (threadId ? sourceId === threadId : definitions.some((definition) => definition.threadId === sourceId))) setAttempt((value) => value + 1);
+  }), [store, threadId, definitions]);
+  const base = useMemo(() => selectAutomationsBase(snapshot, definitions), [snapshot, definitions]);
   // Page-local: the search also matches prompt previews, which the
   // sidebar's search does not, so the two are kept apart.
   const [search, setSearch] = useState("");
@@ -168,6 +186,7 @@ export const AutomationsView = memo(function AutomationsView({
   const [statuses, setStatuses] = useState<
     ReadonlyMap<string, AutomationRowStatus>
   >(() => new Map());
+  const runMutations = useRef(new Map<string, string>());
   const statusesRef = useRef(statuses);
   statusesRef.current = statuses;
   // Keyed so a repeated message still replaces the live region's content
@@ -194,10 +213,11 @@ export const AutomationsView = memo(function AutomationsView({
           return updated;
         });
       setStatuses((current) => new Map(current).set(row.id, pending));
+      if (action === "run" && !runMutations.current.has(row.id)) runMutations.current.set(row.id, mutationId());
       const request =
         action === "run"
-          ? store.api.runThreadAutomationNow(row.id, mutationId())
-          : store.api.setThreadAutomationState(
+          ? store.api.runAutomationNow(row.id, runMutations.current.get(row.id)!)
+          : store.api.setAutomationState(
               row.id,
               action,
               row.automation.revision,
@@ -205,6 +225,7 @@ export const AutomationsView = memo(function AutomationsView({
             );
       request.then(
         () => {
+          if (action === "run") runMutations.current.delete(row.id);
           settle(undefined);
           setAnnouncement((current) => ({
             key: current.key + 1,
@@ -251,7 +272,7 @@ export const AutomationsView = memo(function AutomationsView({
       <EmptyState
         icon={<Repeat />}
         title="No automations yet"
-        description="Open a thread’s ⋯ menu and choose Automate… to send it a prompt on a schedule."
+        description="Choose Automations… from a thread’s menu, then add a named schedule."
       />
     );
   } else if (projection.matchCount === 0) {
@@ -296,6 +317,10 @@ export const AutomationsView = memo(function AutomationsView({
             </span>
           </div>
           <div className="automations-tools">
+            {threadId && <>
+              <Button variant="ghost" size="sm" onClick={() => navigate(threadPath(threadId))}>Open thread</Button>
+              <Button size="sm" onClick={() => navigate(automationCreatePath(threadId))}><Plus aria-hidden="true" />Add automation</Button>
+            </>}
             <label className="search-box automations-search">
               <Search size={16} strokeWidth={1.8} aria-hidden="true" />
               <span className="sr-only">Search automations</span>
@@ -342,7 +367,8 @@ export const AutomationsView = memo(function AutomationsView({
           </p>
         </header>
         <div className="automations-groups">
-          {empty}
+          {loadError && <Callout tone="danger" action={<Button onClick={() => setAttempt((value) => value + 1)}>Retry</Button>}>{loadError}</Callout>}
+          {loading && definitions.length === 0 ? <p role="status">Loading automations…</p> : empty}
           {projection.groups.map((group, position) => {
             const headingId = `${groupIds}-group-${position}`;
             const collapsed = automationGroupCollapsed(preferences, group.key);

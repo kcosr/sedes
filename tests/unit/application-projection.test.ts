@@ -50,7 +50,7 @@ function thread(patch: Partial<Thread> = {}): Thread {
     available: true,
     lastActivityAt: now,
     stateChangedAt: now,
-    automation: null,
+    automations: { totalCount: 0, enabledCount: 0, pausedCount: 0, exhaustedCount: 0, inFlightCount: 0, attentionCount: 0, revision: 0 },
     attention: {
       wake: false,
       automationContext: null,

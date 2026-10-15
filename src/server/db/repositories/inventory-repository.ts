@@ -293,11 +293,6 @@ export type InventoryPrincipalStateRecord = {
   readonly preferredWorktreeRootId: string | null;
   readonly preferredWorktreeRevision: number;
   readonly wakeReminderText: string | null;
-  readonly automationContextRunId: string | null;
-  readonly automationContextSourceThreadId: string | null;
-  readonly automationContextAt: number | null;
-  readonly automationContextOutcome: "triggered" | "failed" | null;
-  readonly automationContextDiagnostic: string | null;
 };
 
 export type InventoryDraftRecord = {
@@ -399,12 +394,7 @@ const inventoryColumns = `
   bookmark_revision AS bookmarkRevision,
   preferred_worktree_root_id AS preferredWorktreeRootId,
   preferred_worktree_revision AS preferredWorktreeRevision,
-  wake_reminder_text AS wakeReminderText,
-  automation_context_run_id AS automationContextRunId,
-  automation_context_source_thread_id AS automationContextSourceThreadId,
-  automation_context_at AS automationContextAt,
-  automation_context_outcome AS automationContextOutcome,
-  automation_context_diagnostic AS automationContextDiagnostic
+  wake_reminder_text AS wakeReminderText
 `;
 const draftColumns = `
   tenant_id AS tenantId, principal_id AS principalId,
@@ -2729,33 +2719,6 @@ export class InventoryRepository {
     })();
   }
 
-  dismissAutomationContext(
-    scope: RequestScope,
-    threadId: string,
-    runId: string,
-  ): InventoryPrincipalStateRecord {
-    return this.database.transaction(() => {
-      this.getInventory(scope, threadId);
-      const changed = this.database
-        .prepare(
-          `
-            UPDATE thread_principal_state
-            SET automation_context_run_id = NULL,
-              automation_context_source_thread_id = NULL,
-              automation_context_at = NULL,
-              automation_context_outcome = NULL,
-              automation_context_diagnostic = NULL,
-              inventory_revision = inventory_revision + 1
-            WHERE tenant_id = ? AND principal_id = ? AND thread_id = ?
-              AND automation_context_run_id = ?
-          `,
-        )
-        .run(scope.tenantId, scope.principalId, threadId, runId);
-      if (changed.changes === 1) this.#bumpGeneration(scope);
-      return this.getInventory(scope, threadId);
-    })();
-  }
-
   wakeForRuntimeSignal(
     scope: RequestScope,
     threadId: string,
@@ -3426,11 +3389,7 @@ export class InventoryRepository {
           SET inventory_state = ?, state_changed_at = ?,
             snoozed_at = ?, snoozed_until = ?, woke_at = ?, wake_reason = ?,
             wake_acknowledged_at = ?, inventory_revision = ?,
-            wake_reminder_text = ?,
-            automation_context_run_id = ?,
-            automation_context_source_thread_id = ?,
-            automation_context_at = ?, automation_context_outcome = ?,
-            automation_context_diagnostic = ?
+            wake_reminder_text = ?
           WHERE tenant_id = ? AND principal_id = ? AND thread_id = ?
             AND inventory_revision = ?
         `,
@@ -3445,11 +3404,6 @@ export class InventoryRepository {
         state.wakeAcknowledgedAt,
         state.inventoryRevision,
         state.wakeReminderText,
-        state.automationContextRunId,
-        state.automationContextSourceThreadId,
-        state.automationContextAt,
-        state.automationContextOutcome,
-        state.automationContextDiagnostic,
         state.tenantId,
         state.principalId,
         state.threadId,

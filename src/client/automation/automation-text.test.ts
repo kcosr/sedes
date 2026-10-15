@@ -177,6 +177,7 @@ describe("describeSchedule: date_time", () => {
 
 function makeRun(overrides: Partial<ThreadAutomationRun> = {}): ThreadAutomationRun {
   return {
+    automationId: "30000000-0000-4000-8000-000000000001",
     id: "6f0f8f9e-3c55-4c55-9a55-0c7f0a1b2c3d",
     occurrence: "scheduled",
     scheduledFor: "2026-10-06T02:00:00.000Z",

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { buildSedesToolExecutable } from "../helpers/built-sedes-cli.js";
 import { execFile } from "node:child_process";
 import {
@@ -82,12 +83,16 @@ const fullToolCatalog = [
   "task.create",
   "task.update",
   "task.delete",
+  "automation.list",
   "automation.get",
   "automation.runs",
   "automation.create",
   "automation.update",
   "automation.set_state",
   "automation.run_now",
+  "automation.delete",
+  "automation.resolve",
+  "automation.acknowledge",
 ] as const;
 const environmentId = "019196f7-a0a8-7bc4-a89b-8cf013978405";
 const configuration = parseResolvedBackendConfiguration({
@@ -831,9 +836,10 @@ describe("built Sedes agent-tool CLI", () => {
       });
       const automationRequest = {
         toolId: "automation.create",
-        schemaVersion: 1,
+        schemaVersion: 2,
         requestId: "direct-http-automation-create",
         input: {
+          name:"Review",initialState:"paused",mutationId:randomUUID(),misfirePolicy:null,
           prompt: "Review the workspace",
           runMode: "same_thread",
           schedule: {
@@ -893,9 +899,9 @@ describe("built Sedes agent-tool CLI", () => {
           },
           body: JSON.stringify({
             toolId: "automation.get",
-            schemaVersion: 1,
+            schemaVersion: 2,
             requestId: "direct-http-automation-get",
-            input: {},
+            input: {automationId: automationRequest.input.mutationId},
           }),
         },
       );

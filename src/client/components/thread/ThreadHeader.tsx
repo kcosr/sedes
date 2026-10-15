@@ -19,8 +19,7 @@ import type {
 } from "../../../shared/index.js";
 import { DEFAULT_THREAD_TITLE } from "../../../shared/index.js";
 import {
-  automationEditPath,
-  automationPath,
+  automationsPath,
   navigate,
 } from "../../app/router.js";
 import type { ConnectionState } from "../../api/EventStreamTransport.js";
@@ -59,10 +58,10 @@ import {
 } from "lucide-react";
 import { Button } from "@client/components/ui/button";
 import {
-  automationHealth,
+  threadAutomationHealth,
   automationIdentityGlyph,
 } from "../../automation/automation-health.js";
-import { automationStatusText } from "../../automation/automation-text.js";
+import { threadAutomationStatusText } from "../../automation/automation-text.js";
 import { AutomationGlyph } from "../automation/AutomationGlyph.js";
 import "./automation-thread-button.css";
 import {
@@ -381,7 +380,7 @@ export const ThreadHeader = memo(function ThreadHeader({
     pendingQuestionCount: applicationPin?.pendingQuestionCount ?? 0,
     attention: {
       wake: Boolean(snapshot.attention.wake),
-      automationContext: snapshot.attention.automationContext?.outcome ?? null,
+      automationContext: snapshot.attention.automationContexts.some((context) => context.outcome === "failed") ? "failed" as const : snapshot.attention.automationContexts.length ? "triggered" as const : null,
       unseenCompletion: false,
       queueFailure: Boolean(snapshot.attention.queueFailure),
     },
@@ -406,7 +405,7 @@ export const ThreadHeader = memo(function ThreadHeader({
         setPinPending(false);
       });
   };
-  const automationState = automationHealth(
+  const automationState = threadAutomationHealth(
     applicationThreadSummary,
     automationNow,
   );
@@ -727,24 +726,24 @@ export const ThreadHeader = memo(function ThreadHeader({
                 mobile={sheet}
                 onSelectTurn={onSelectBookmarkTurn}
               />
-              {snapshot.thread.automation &&
+              {snapshot.thread.automations.totalCount > 0 &&
                 automationState &&
                 snapshot.capabilities.automation.available && (
                   <button
                     className="automation-thread-button"
-                    aria-label="Automation"
-                    title={`Automation · ${automationStatusText(
-                      snapshot.thread.automation,
+                    aria-label="Automations"
+                    title={`Automation · ${threadAutomationStatusText(
+                      snapshot.thread.automations,
                       automationState,
                       automationNow,
                     )}`}
                     data-health={automationState.kind}
                     onClick={() =>
-                      navigate(automationPath(snapshot.thread.id))
+                      navigate(automationsPath(snapshot.thread.id))
                     }
                   >
                     <AutomationGlyph
-                      glyph={automationIdentityGlyph(automationState)}
+                      glyph={snapshot.thread.automations.inFlightCount > 0 ? "spinner" : automationIdentityGlyph(automationState)}
                       size="header"
                     />
                   </button>
@@ -950,32 +949,10 @@ export const ThreadHeader = memo(function ThreadHeader({
                       )}
                     </DropdownMenuItem>
                   )}
-                  {snapshot.capabilities.automation.available && (
-                    <DropdownMenuItem
-                      disabled={
-                        disabled ||
-                        (!snapshot.thread.automation &&
-                          attachAutomation?.available !== true)
-                      }
-                      title={
-                        snapshot.thread.automation
-                          ? undefined
-                          : attachAutomation?.unavailableReason?.text
-                      }
-                      onSelect={() => {
-                        setActionsOpen(false);
-                        navigate(
-                          snapshot.thread.automation
-                            ? automationPath(snapshot.thread.id)
-                            : automationEditPath(snapshot.thread.id),
-                        );
-                      }}
-                    >
-                      <Repeat aria-hidden="true" />
-                      {snapshot.thread.automation ? "Automation…" : "Automate…"}
-                      {disabled && <ReasonShortcut reason={busyReason} />}
-                    </DropdownMenuItem>
-                  )}
+                  <DropdownMenuItem onSelect={() => {
+                    setActionsOpen(false);
+                    navigate(automationsPath(snapshot.thread.id));
+                  }}><Repeat aria-hidden="true" />Automations…</DropdownMenuItem>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem
                     disabled={

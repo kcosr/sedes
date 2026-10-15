@@ -31,6 +31,7 @@ const environmentAuthority = new AgentToolEnvironmentAuthorityResolver({
   resolveWorkspaceProject: () => "project-1",
   resolveEnvironment: () => undefined,
   resolveWorkspace: () => undefined,
+  resolveAutomation: () => undefined,
   resolveThread: () => undefined,
   resolveThreadFamily: () => undefined,
   resolveSavedAgent: (_scope, id) => ({ id, revision: 0 }),
@@ -355,6 +356,7 @@ describe("SourceScopedAgentToolService", () => {
           resolveWorkspaceProject: () => "project-1",
           resolveEnvironment: () => undefined,
           resolveWorkspace: () => undefined,
+          resolveAutomation: () => undefined,
           resolveThread: (_scope, id) =>
             id === "thread-2"
               ? { id, environmentId: "environment-2", label: "Remote" }
@@ -434,6 +436,7 @@ describe("SourceScopedAgentToolService", () => {
         resolveWorkspaceProject: () => "project-1",
         resolveEnvironment: () => undefined,
         resolveWorkspace: () => undefined,
+        resolveAutomation: () => undefined,
         resolveThread: (_scope, id) =>
           id === "thread-2"
             ? { id, environmentId: "environment-2", label: "Remote thread" }
@@ -547,6 +550,7 @@ describe("SourceScopedAgentToolService", () => {
           resolveWorkspaceProject: () => "project-1",
           resolveEnvironment: () => undefined,
           resolveWorkspace: () => undefined,
+          resolveAutomation: () => undefined,
           resolveThread: (_scope, id) => ({
             id,
             environmentId: "environment-2",
@@ -640,6 +644,7 @@ describe("SourceScopedAgentToolService", () => {
           label: id,
         }),
         resolveWorkspace: () => undefined,
+        resolveAutomation: () => undefined,
         resolveThread: () => undefined,
         resolveThreadFamily: () => undefined,
         resolveSavedAgent: (_scope, id) => ({ id, revision: 0 }),
@@ -706,6 +711,7 @@ describe("SourceScopedAgentToolService", () => {
           label: id === "environment-1" ? "Local" : "Remote",
         }),
         resolveWorkspace: () => undefined,
+        resolveAutomation: () => undefined,
         resolveThread: () => undefined,
         resolveThreadFamily: () => undefined,
         resolveSavedAgent: (_scope, id) => ({ id, revision: 0 }),
@@ -789,6 +795,7 @@ describe("SourceScopedAgentToolService", () => {
         resolveWorkspaceProject: () => "project-1",
         resolveEnvironment: () => undefined,
         resolveWorkspace: () => undefined,
+        resolveAutomation: () => undefined,
         resolveThread: () => undefined,
         resolveThreadFamily: () => undefined,
         resolveSavedAgent: (_scope, id) => ({ id, revision: 0 }),
@@ -856,6 +863,7 @@ describe("SourceScopedAgentToolService", () => {
         resolveWorkspaceProject: () => "project-1",
         resolveEnvironment: () => undefined,
         resolveWorkspace: () => undefined,
+        resolveAutomation: () => undefined,
         resolveThread: () => ({
           id: "thread-2",
           environmentId: "environment-2",
@@ -910,6 +918,7 @@ describe("SourceScopedAgentToolService", () => {
         resolveWorkspaceProject: () => "project-1",
         resolveEnvironment: () => undefined,
         resolveWorkspace: () => undefined,
+        resolveAutomation: () => undefined,
         resolveThread: () => ({
           id: "thread-2",
           environmentId: "environment-2",
@@ -1217,6 +1226,8 @@ describe("SourceScopedAgentToolService", () => {
 
 describe("thread access boundary", () => {
   const cases = [
+    { name: "automation same thread", declaration: { kind: "direct_resource", resource: "automation" }, input: { automationId: "self" }, prompt: false },
+    { name: "automation other thread", declaration: { kind: "direct_resource", resource: "automation" }, input: { automationId: "other" }, prompt: true },
     { name: "source context", declaration: { kind: "source_only" }, input: {}, prompt: false },
     { name: "public research", declaration: { kind: "public_information" }, input: {}, prompt: false },
     { name: "environment directory", declaration: { kind: "installation_directory" }, input: {}, prompt: true },
@@ -1245,12 +1256,13 @@ describe("thread access boundary", () => {
         environmentAuthority: declaration as AgentToolDefinition["environmentAuthority"],
         adapters: { pi: { name: "sedes_example_boundary", label: "Boundary" }, mcp: { name: "sedes_example_boundary" }, cli: { command: "example.boundary" }, http: { invocation: "inline" } },
         inputSchema: normalizeCanonicalAgentToolSchema(Type.Object({
+          automationId: Type.Optional(Type.String({ maxLength: 128 })),
           taskId: Type.Optional(Type.String({ maxLength: 128 })),
           workpadId: Type.Optional(Type.String({ maxLength: 128 })),
           threadId: Type.Optional(Type.String({ maxLength: 128 })),
           workspaceId: Type.Optional(Type.String({ maxLength: 128 })),
           scope: Type.Optional(Type.Object({ kind: Type.String({ maxLength: 32 }), threadId: Type.Optional(Type.String({ maxLength: 128 })), projectId: Type.Optional(Type.String({ maxLength: 128 })) }, { additionalProperties: false, maxProperties: 3 })),
-        }, { $schema: AGENT_TOOL_JSON_SCHEMA_DIALECT, additionalProperties: false, maxProperties: 5 })),
+        }, { $schema: AGENT_TOOL_JSON_SCHEMA_DIALECT, additionalProperties: false, maxProperties: 6 })),
       };
       const fact = (_scope: unknown, id: string) => ({ id, revision: 1,
         scopeKind: id === "global" ? "global" as const : id === "project" ? "project" as const : "thread" as const,
@@ -1264,6 +1276,7 @@ describe("thread access boundary", () => {
         { get: () => ({ enabled: true, enabledToolIds: [definition.id], presentation: { surface: "cli", mode: "progressive" }, accessBoundary: "thread", revision: 1 }) } as unknown as ThreadAgentToolPolicyRepository,
         new AgentToolEnvironmentAuthorityResolver({
           ...environmentAuthority.reader,
+          resolveAutomation: (_scope, id) => ({id,environmentId:source.sourceEnvironmentId,threadId:id === "self" ? source.sourceThreadId : "thread-2"}),
           resolveThread: (_scope, id) => ({ id, environmentId: source.sourceEnvironmentId }),
           resolveWorkspace: (_scope, id) => ({ id, environmentId: source.sourceEnvironmentId }),
           resolveTask: fact, resolveWorkpad: fact,
@@ -1326,6 +1339,7 @@ describe("provider current-input access decision authority", () => {
       new CanonicalInlineAgentToolService({ application: { readThreadStatus } }),
       { get: () => ({ enabled: true, enabledToolIds: ["thread.status"], presentation: { surface: "cli", mode: "progressive" }, accessBoundary: "environment", revision: 1 }) } as unknown as ThreadAgentToolPolicyRepository,
       new AgentToolEnvironmentAuthorityResolver({ resolveProject: () => undefined, resolveWorkspaceProject: () => "project-1", resolveEnvironment: () => undefined, resolveWorkspace: () => undefined,
+        resolveAutomation: () => undefined,
         resolveThread: (_scope, id) => ({ id, environmentId: "environment-2", label: "Other thread" }),
         resolveThreadFamily: () => undefined, resolveSavedAgent: () => undefined, resolveWorkpad: () => undefined, resolveTask: () => undefined,
         listEnvironments: () => [{ id: "environment-1", environmentId: "environment-1", label: "Local" }, { id: "environment-2", environmentId: "environment-2", label: "Other" }] }),

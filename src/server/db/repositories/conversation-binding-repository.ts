@@ -60,10 +60,22 @@ function moveDraftFingerprint(
     .digest("hex");
 }
 
+export type AutomationThreadCopyIdentity = {
+  readonly automationId: string;
+  readonly automationRunId: string;
+};
+
 function threadConfigurationCopyFingerprint(input: {
   readonly sourceApplicationThreadId: string;
   readonly title: string;
+  readonly automation?: AutomationThreadCopyIdentity;
 }): string {
+  if (input.automation) {
+    return createHash("sha256").update(JSON.stringify([
+      "automation_thread_copy", input.sourceApplicationThreadId,
+      input.automation.automationId, input.automation.automationRunId,
+    ])).digest("hex");
+  }
   return createHash("sha256")
     .update(
       JSON.stringify([
@@ -211,12 +223,13 @@ export class ConversationBindingRepository {
       readonly sourceApplicationThreadId: string;
       readonly title: string;
       readonly mutationId: string;
+      readonly automation?: AutomationThreadCopyIdentity;
     },
   ): ThreadConfigurationCopyReceipt | undefined {
     const receipt = this.#mutationReceipt(scope, input.mutationId);
     if (!receipt) return undefined;
     if (
-      receipt.operationKind !== "thread_configuration_copy" ||
+      receipt.operationKind !== (input.automation ? "automation_thread_copy" : "thread_configuration_copy") ||
       receipt.requestFingerprint !== threadConfigurationCopyFingerprint(input)
     ) {
       throw new DomainError(
@@ -258,6 +271,7 @@ export class ConversationBindingRepository {
       readonly targetId: string;
       readonly title: string;
       readonly mutationId: string;
+      readonly automation?: AutomationThreadCopyIdentity;
       readonly now: number;
     },
   ): void {
@@ -272,7 +286,7 @@ export class ConversationBindingRepository {
             request_fingerprint, result_code, result_json, replayable,
             created_at
           )
-          VALUES (?, ?, ?, ?, 'thread_configuration_copy', ?, 'completed', ?, 1, ?)
+          VALUES (?, ?, ?, ?, ?, ?, 'completed', ?, 1, ?)
         `,
       )
       .run(
@@ -280,9 +294,15 @@ export class ConversationBindingRepository {
         scope.principalId,
         applicationThreadId,
         input.mutationId,
+        input.automation ? "automation_thread_copy" : "thread_configuration_copy",
         threadConfigurationCopyFingerprint(input),
         JSON.stringify({
           threadId: applicationThreadId,
+          ...(input.automation ? {
+            applicationThreadId,
+            sourceApplicationThreadId: input.sourceApplicationThreadId,
+            ...input.automation,
+          } : {}),
           workspaceId: input.workspaceId,
           targetId: input.targetId,
         }),

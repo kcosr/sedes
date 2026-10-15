@@ -15,8 +15,8 @@ import {
 } from "react";
 import type { NormalizedApplicationThreadSummary } from "../../../shared/index.js";
 import { futureTimeLabel, shortRelativeTime } from "../../lib/time.js";
-import { automationHealth } from "../../automation/automation-health.js";
-import { automationStatusText } from "../../automation/automation-text.js";
+import { threadAutomationHealth } from "../../automation/automation-health.js";
+import { threadAutomationStatusText } from "../../automation/automation-text.js";
 import { AutomationGlyph } from "../automation/AutomationGlyph.js";
 import {
   flatRowGlyphIcon,
@@ -330,8 +330,8 @@ export function ThreadPeekCard({
   const glyphKind = flatRowGlyphKind(thread, backgroundWorkCurrent);
   const stateGlyphKind = stateRowGlyphKind(thread, glyphKind);
   const stateLabel = threadStateInWords(thread, backgroundWorkCurrent);
-  const automation = thread.automation ?? undefined;
-  const automationState = automation && automationHealth(thread, now);
+  const automation = thread.automations.totalCount > 0 ? thread.automations : undefined;
+  const automationState = automation && threadAutomationHealth(thread, now);
   // A plain "Idle" adds nothing beside the automation line.
   const showStateRow = !automationState || stateLabel !== "Idle";
   const forkCount = fork?.descendantCount ?? 0;
@@ -419,12 +419,12 @@ export function ThreadPeekCard({
           >
             <span className="thread-peek-row-icon">
               <AutomationGlyph
-                glyph={automationState.glyph}
+                glyph={thread.automations.inFlightCount > 0 ? "spinner" : automationState.glyph}
                 tone={automationState.tone}
               />
             </span>
             <span className="thread-peek-row-text">
-              {`Automation · ${automationStatusText(automation, automationState, now)}`}
+              {`Automation · ${threadAutomationStatusText(automation, automationState, now)}`}
             </span>
           </div>
         )}

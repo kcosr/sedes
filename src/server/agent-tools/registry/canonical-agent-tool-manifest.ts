@@ -84,7 +84,8 @@ export const CANONICAL_AGENT_TOOL_GROUPS = Object.freeze([
     description: "Inspect, read, create, and control Sedes threads.",
     order: 20,
   }),
-  Object.freeze({ id: "client" as const, label: "Client controls", description: "Control the user’s current Sedes client and its basic voice settings.", order: 30 }),
+  Object.freeze({ id: "client" as const, label: "Client controls", description: "Control the user’s current Sedes client and its basic voice settings.", order: 30,
+  }),
   Object.freeze({
     id: "agents" as const,
     label: "Agents",
@@ -103,8 +104,10 @@ export const CANONICAL_AGENT_TOOL_GROUPS = Object.freeze([
     description: "Read and collaboratively edit scoped working documents.",
     order: 55,
   }),
-  Object.freeze({ id: "pages" as const, label: "Pages", description: "Publish and preview self-contained HTML documents.", order: 57 }),
-  Object.freeze({ id: "images" as const, label: "Images", description: "Show retained image files in the conversation.", order: 58 }),
+  Object.freeze({ id: "pages" as const, label: "Pages", description: "Publish and preview self-contained HTML documents.", order: 57,
+  }),
+  Object.freeze({ id: "images" as const, label: "Images", description: "Show retained image files in the conversation.", order: 58,
+  }),
   Object.freeze({
     id: "automations" as const,
     label: "Automations",
@@ -182,13 +185,15 @@ export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
     effects: { application: "read", modelUsage: "none", external: "none" },
   }),
   "client.settings.update": threadOnlyManifestEntry({
-    id: "client.settings.update", schemaVersion: 2, environmentAuthority: { kind: "direct_resource", resource: "thread", inputField: "patch.voice.voiceThreadId", defaultToSource: true },
+    id: "client.settings.update", schemaVersion: 2, environmentAuthority: { kind: "direct_resource", resource: "thread", inputField: "patch.voice.voiceThreadId", defaultToSource: true,
+    },
     description: "Update the current client\u2019s basic voice settings using the revision from settings.get. Persists immediately; Off stops voice immediately. Setting the default thread does not navigate or listen. Current client means the client that started this turn; later Steer input never changes it. Set clientId only when the user explicitly requests another client.",
     catalog: { groupId: "client", label: "Update client settings", order: 50 },
     effects: { application: "write", modelUsage: "none", external: "none" },
   }),
   "client.replay_turn": threadOnlyManifestEntry({
-    id: "client.replay_turn", schemaVersion: 2, environmentAuthority: { kind: "direct_resource", resource: "thread", defaultToSource: true },
+    id: "client.replay_turn", schemaVersion: 2, environmentAuthority: { kind: "direct_resource", resource: "thread", defaultToSource: true,
+    },
     description: "Replay an ended turn\u2019s reply on the current client, queued behind voice work without navigation or automatic-playback filters. Auto-listen can record a new reply to that thread when input is available. threadId defaults to this thread; turnId to its latest ended turn with a stored reply. For an earlier turn, use turns[].id from thread.messages. Current client started this turn; Steer never changes it. Set clientId only when the user explicitly requests another client.",
     catalog: { groupId: "client", label: "Replay turn reply", order: 60 },
     effects: { application: "write", modelUsage: "none", external: "none" },
@@ -257,7 +262,8 @@ export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
     schemaVersion: 1,
     description:
       "Revision-checks and clears the source thread's preferred linked worktree so the thread uses its primary project directory.",
-    catalog: { groupId: "threads", label: "Clear preferred worktree", order: 3 },
+    catalog: { groupId: "threads", label: "Clear preferred worktree", order: 3,
+    },
     effects: { application: "write", modelUsage: "none", external: "none" },
   }),
   "thread.status": manifestEntry({
@@ -272,7 +278,7 @@ export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
   "thread.list": manifestEntry({
     environmentAuthority: { kind: "scoped_query", resource: "thread" },
     id: "thread.list",
-    schemaVersion: 6,
+    schemaVersion: 7,
     description:
       "Searches admitted principal-owned Sedes threads, including read-only pin state, defaulting to the caller's configured environment with newest activity first.",
     catalog: { groupId: "threads", label: "List threads", order: 20 },
@@ -362,7 +368,8 @@ export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
     effects: { application: "read", modelUsage: "none", external: "none" },
   }),
   "saved_agent.get": manifestEntry({
-    environmentAuthority: { kind: "direct_resource", resource: "saved_agent", inputField: "agentId" },
+    environmentAuthority: { kind: "direct_resource", resource: "saved_agent", inputField: "agentId",
+    },
     id: "saved_agent.get",
     schemaVersion: 5,
     description: "Returns one complete principal-owned saved Agent definition.",
@@ -410,7 +417,8 @@ export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
     effects: { application: "write", modelUsage: "none", external: "none" },
   }),
   "saved_agent.delete": manifestEntry({
-    environmentAuthority: { kind: "direct_resource", resource: "saved_agent", inputField: "agentId" },
+    environmentAuthority: { kind: "direct_resource", resource: "saved_agent", inputField: "agentId",
+    },
     id: "saved_agent.delete",
     schemaVersion: 1,
     description:
@@ -504,18 +512,18 @@ export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
     description:
       "Deletes a completed task at the expected revision. Invoke only at the user’s request.",
     catalog: { groupId: "tasks", label: "Delete task", order: 50 },
-    effects: { application: "destructive", modelUsage: "none", external: "none" },
+    effects: { application: "destructive", modelUsage: "none", external: "none",
+    },
   }),
   "automation.get": manifestEntry({
     environmentAuthority: {
       kind: "direct_resource",
-      resource: "thread",
-      defaultToSource: true,
+      resource: "automation",
     },
     id: "automation.get",
-    schemaVersion: 1,
+    schemaVersion: 2,
     description:
-      "Returns the target thread's automation definition and upcoming schedule occurrences.",
+      "Returns the named automation selected by automationId and its upcoming occurrences.",
     catalog: {
       groupId: "automations",
       label: "Get automation",
@@ -526,11 +534,10 @@ export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
   "automation.runs": manifestEntry({
     environmentAuthority: {
       kind: "direct_resource",
-      resource: "thread",
-      defaultToSource: true,
+      resource: "automation",
     },
     id: "automation.runs",
-    schemaVersion: 1,
+    schemaVersion: 2,
     description: "Returns a bounded page of recent automation runs.",
     catalog: {
       groupId: "automations",
@@ -546,12 +553,12 @@ export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
       defaultToSource: true,
     },
     id: "automation.create",
-    schemaVersion: 1,
+    schemaVersion: 2,
     description:
-      "Attaches a paused automation. A configured pre-check runs only when the automation later runs.",
+      "Creates a named independent automation in its requested initial state. Reuse mutationId for a retry; enabled state schedules model execution.",
     catalog: {
       groupId: "automations",
-      label: "Create paused automation",
+      label: "Create automation",
       order: 30,
     },
     effects: { application: "write", modelUsage: "none", external: "none" },
@@ -559,11 +566,10 @@ export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
   "automation.update": manifestEntry({
     environmentAuthority: {
       kind: "direct_resource",
-      resource: "thread",
-      defaultToSource: true,
+      resource: "automation",
     },
     id: "automation.update",
-    schemaVersion: 1,
+    schemaVersion: 2,
     description:
       "Revision-checks schedule, pre-check, prompt, and run-mode changes that govern future automated executions; omitted fields are preserved and a null pre-check clears it.",
     catalog: {
@@ -576,11 +582,10 @@ export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
   "automation.set_state": manifestEntry({
     environmentAuthority: {
       kind: "direct_resource",
-      resource: "thread",
-      defaultToSource: true,
+      resource: "automation",
     },
     id: "automation.set_state",
-    schemaVersion: 1,
+    schemaVersion: 2,
     description:
       "Enables or pauses an automation using its revision. Enabling schedules future model execution.",
     catalog: {
@@ -593,11 +598,10 @@ export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
   "automation.run_now": manifestEntry({
     environmentAuthority: {
       kind: "direct_resource",
-      resource: "thread",
-      defaultToSource: true,
+      resource: "automation",
     },
     id: "automation.run_now",
-    schemaVersion: 1,
+    schemaVersion: 2,
     description:
       "Starts a new manual automation run and returns its durable run record. A configured pre-check executes first.",
     catalog: {
@@ -610,6 +614,68 @@ export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
       modelUsage: "agent_execution",
       external: "durable_side_effect",
     },
+  }),
+  "automation.list": manifestEntry({
+    environmentAuthority: {
+      kind: "direct_resource",
+      resource: "thread",
+      defaultToSource: true,
+    },
+    id: "automation.list",
+    schemaVersion: 1,
+    description:
+      "Lists independent automations on the requested thread, defaulting to the current thread. Follow nextCursor until null.",
+    catalog: {
+      groupId: "automations",
+      label: "List automations", order: 5 },
+    effects: { application: "read", modelUsage: "none", external: "none" },
+  }),
+  "automation.delete": manifestEntry({
+    environmentAuthority: {
+      kind: "direct_resource",
+      resource: "automation" },
+    id: "automation.delete",
+    schemaVersion: 1,
+    description:
+      "Deletes the selected automation at its expected revision, retaining run history. Invoke only at the user's request.",
+    catalog: {
+      groupId: "automations",
+      label: "Delete automation", order: 70 },
+    effects: {
+      application: "destructive",
+      modelUsage: "none",
+      external: "none",
+    },
+  }),
+  "automation.resolve": manifestEntry({
+    environmentAuthority: {
+      kind: "direct_resource",
+      resource: "automation" },
+    id: "automation.resolve",
+    schemaVersion: 1,
+    description:
+      "Marks an uncertain run of the selected automation failed; optionally resumes its schedule. This does not repeat the run.",
+    catalog: {
+      groupId: "automations",
+      label: "Resolve uncertain automation run",
+      order: 80,
+    },
+    effects: { application: "write", modelUsage: "none", external: "none" },
+  }),
+  "automation.acknowledge": manifestEntry({
+    environmentAuthority: {
+      kind: "direct_resource",
+      resource: "automation" },
+    id: "automation.acknowledge",
+    schemaVersion: 1,
+    description:
+      "Acknowledges the selected failed run's attention. Does not change execution or repeat a run.",
+    catalog: {
+      groupId: "automations",
+      label: "Acknowledge automation run",
+      order: 90,
+    },
+    effects: { application: "write", modelUsage: "none", external: "none" },
   }),
   "research.web_search": manifestEntry({
     environmentAuthority: { kind: "public_information" },

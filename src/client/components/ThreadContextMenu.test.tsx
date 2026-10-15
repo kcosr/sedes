@@ -100,7 +100,7 @@ function makeThread(
     available: true,
     lastActivityAt: "2026-07-30T15:00:00.000Z",
     stateChangedAt: "2026-07-30T15:00:00.000Z",
-    automation: null,
+    automations: { totalCount: 0, enabledCount: 0, pausedCount: 0, exhaustedCount: 0, inFlightCount: 0, attentionCount: 0, revision: 0 },
     attention: {
       wake: false,
       automationContext: null,
@@ -1040,105 +1040,50 @@ describe("ThreadContextMenu content per thread state", () => {
     expect(within(menu).queryByText("Park")).toBeNull();
   });
 
-  it("opens the automation page only when the thread has an automation", async () => {
+  it("opens the thread collection when it already has automations", async () => {
     const onNavigate = vi.fn();
-    const trigger = renderMenu(
-      makeThread({
-        automation: {
-          status: "enabled",
-          runMode: "same_thread",
-          scheduleKind: "interval",
-          schedule: {
-            kind: "interval",
-            anchorAt: "2026-07-30T00:00:00.000Z",
-            everySeconds: 3_600,
-          },
-          misfirePolicy: "coalesce",
-          promptPreview: "Review the repository.",
-          revision: 1,
-          runsRevision: 0,
-          hasPrecheck: false,
-        },
-      }),
-      makeStore(),
-      { onNavigate, threadRegistry: automationRegistry() },
-    );
-    const menu = await openMenu(trigger);
-    expect(within(menu).queryByText("Automate…")).toBeNull();
-    const item = within(menu).getByRole("menuitem", {
-      name: "Automation…",
-    });
+    const menu = await openMenu(renderMenu(makeThread({
+      automations: { totalCount: 2, enabledCount: 1, pausedCount: 1, exhaustedCount: 0, inFlightCount: 0, attentionCount: 0, revision: 1 },
+    }), makeStore(), { onNavigate, threadRegistry: automationRegistry() }));
+    const item = within(menu).getByRole("menuitem", { name: "Automations…" });
     expect(item.querySelector(".lucide-repeat")).not.toBeNull();
-    expect(item.querySelector(".lucide-calendar-clock")).toBeNull();
     await userEvent.click(item);
-    expect(window.location.pathname).toBe("/automations/thread-1");
+    expect(window.location.pathname).toBe("/threads/thread-1/automations");
     expect(onNavigate).toHaveBeenCalled();
   });
 
-  it("offers Automate… with the thread-actions gating and opens the editor to create one", async () => {
+  it("opens the same collection for an unautomated source so adding does not choose a singleton", async () => {
     const onNavigate = vi.fn();
-    const menu = await openMenu(
-      renderMenu(makeThread(), makeStore(), {
-        onNavigate,
-        threadRegistry: automationRegistry(),
-      }),
-    );
-    const item = within(menu).getByRole("menuitem", { name: "Automate…" });
+    const menu = await openMenu(renderMenu(makeThread(), makeStore(), { onNavigate, threadRegistry: automationRegistry() }));
+    const item = within(menu).getByRole("menuitem", { name: "Automations…" });
     expect(item).not.toHaveAttribute("data-disabled");
-    expect(item.querySelector(".lucide-repeat")).not.toBeNull();
     await userEvent.click(item);
-    expect(window.location.pathname).toBe("/automations/thread-1/edit");
+    expect(window.location.pathname).toBe("/threads/thread-1/automations");
     expect(onNavigate).toHaveBeenCalled();
   });
 
-  it("disables Automate… with its reason when the thread cannot take an automation", async () => {
-    const menu = await openMenu(
-      renderMenu(makeThread(), makeStore(), {
-        threadRegistry: automationRegistry({ attachAvailable: false }),
-      }),
-    );
-    const item = within(menu).getByRole("menuitem", { name: /^Automate…/ });
-    expect(item).toHaveAttribute("data-disabled");
-    expect(item).toHaveAttribute(
-      "title",
-      "Automation requires an inactive, unarchived thread.",
-    );
-    expect(item).toHaveTextContent("Unavailable");
+  it("keeps collection inspection available when adding an automation is unavailable", async () => {
+    const menu = await openMenu(renderMenu(makeThread(), makeStore(), { threadRegistry: automationRegistry({ attachAvailable: false }) }));
+    expect(within(menu).getByRole("menuitem", { name: "Automations…" })).not.toHaveAttribute("data-disabled");
   });
 
-  it("disables Automate… while the thread is offline or still loading", async () => {
-    const offline = await openMenu(
-      renderMenu(makeThread(), makeStore(), {
-        threadRegistry: automationRegistry({ connection: "reconnecting" }),
-      }),
-    );
-    expect(
-      within(offline).getByRole("menuitem", { name: /^Automate…/ }),
-    ).toHaveAttribute("data-disabled");
+  it("does not require the source conversation to be online or loaded to open its collection", async () => {
+    const offline = await openMenu(renderMenu(makeThread(), makeStore(), { threadRegistry: automationRegistry({ connection: "reconnecting" }) }));
+    expect(within(offline).getByRole("menuitem", { name: "Automations…" })).not.toHaveAttribute("data-disabled");
     cleanup();
-    const loading = await openMenu(
-      renderMenu(makeThread(), makeStore(), {
-        threadRegistry: makeForkRegistry(vi.fn(), {
-          status: "loading",
-          snapshot: undefined,
-        }),
-      }),
-    );
-    const item = within(loading).getByRole("menuitem", { name: /^Automate…/ });
-    expect(item).toHaveAttribute("data-disabled");
-    expect(item).toHaveTextContent("Loading…");
+    const loading = await openMenu(renderMenu(makeThread(), makeStore(), { threadRegistry: makeForkRegistry(vi.fn(), { status: "loading", snapshot: undefined }) }));
+    const item = within(loading).getByRole("menuitem", { name: "Automations…" });
+    expect(item).not.toHaveAttribute("data-disabled");
+    await userEvent.click(item);
+    expect(window.location.pathname).toBe("/threads/thread-1/automations");
   });
 
-  it("leaves Automate… out where automation is unavailable or the row has no live thread", async () => {
-    const unavailable = await openMenu(
-      renderMenu(makeThread(), makeStore(), {
-        threadRegistry: automationRegistry({ automationAvailable: false }),
-      }),
-    );
-    expect(within(unavailable).queryByText("Automate…")).toBeNull();
+  it("opens retained automation history without attaching an unsupported or archived source", async () => {
+    const unavailable = await openMenu(renderMenu(makeThread(), makeStore(), { threadRegistry: automationRegistry({ automationAvailable: false }) }));
+    expect(within(unavailable).getByRole("menuitem", { name: "Automations…" })).not.toHaveAttribute("data-disabled");
     cleanup();
-    const archiveOnly = await openMenu(renderMenu(makeThread(), makeStore()));
-    expect(within(archiveOnly).queryByText("Automate…")).toBeNull();
+    const archived = await openMenu(renderMenu(makeThread({ inventoryState: "archived" }), makeStore()));
+    expect(within(archived).getByRole("menuitem", { name: "Automations…" })).not.toHaveAttribute("data-disabled");
   });
 
   it.each([false, true])(
@@ -1269,6 +1214,7 @@ describe("ThreadContextMenu content per thread state", () => {
       "|",
       "Park",
       "Snooze…",
+      "Automations…",
       "|",
       "New with same settings",
       "Fork",

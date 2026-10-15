@@ -35,7 +35,7 @@ export type EnvironmentAuthorityDeclaration =
     }
   | {
       readonly kind: "direct_resource";
-      readonly resource: "thread_family" | "task" | "workpad" | "saved_agent";
+      readonly resource: "thread_family" | "task" | "workpad" | "saved_agent" | "automation";
       readonly inputField?: string;
       readonly defaultToSource?: never;
     }
@@ -85,6 +85,7 @@ export interface TrustedEnvironmentAuthorityGrant extends ResolvedEnvironmentAut
 
 export interface EnvironmentAuthorityResourceFact {
   readonly id: string;
+  readonly threadId?: string;
   readonly environmentId: string;
   readonly workspaceId?: string;
   readonly label?: string;
@@ -127,6 +128,12 @@ export interface AgentToolEnvironmentAuthorityReader {
     scope: RequestScope,
     id: string,
   ): EnvironmentAuthorityResourceFact | undefined;
+  resolveAutomation(
+    scope: RequestScope,
+    id: string,
+  ):
+    | (EnvironmentAuthorityResourceFact & { readonly threadId: string })
+    | undefined;
   resolveThreadFamily(
     scope: RequestScope,
     id: string,
@@ -138,7 +145,9 @@ export interface AgentToolEnvironmentAuthorityReader {
   resolveSavedAgent(
     scope: RequestScope,
     id: string,
-  ): { readonly id: string; readonly revision: number; readonly label?: string } | undefined;
+  ):
+    | { readonly id: string; readonly revision: number; readonly label?: string;
+      } | undefined;
   resolveWorkpad(
     scope: RequestScope,
     id: string,
@@ -188,7 +197,8 @@ export class AgentToolEnvironmentAuthorityResolver {
     ) {
       refs.push({
         kind: "saved_agent",
-        ...required(this.reader.resolveSavedAgent(request.scope, input.agentId)),
+        ...required(this.reader.resolveSavedAgent(request.scope, input.agentId),
+        ),
       });
     }
     const resolvedResourceRefs = uniqueSortedRefs(refs);
@@ -276,7 +286,8 @@ export class AgentToolEnvironmentAuthorityResolver {
     const object = inputObject(request.input);
     const inputField = declaration.inputField ?? `${declaration.resource}Id`;
     const supplied = inputField.split(".").reduce<unknown>((value, key) =>
-      value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>)[key] : undefined, object);
+      value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>)[key] : undefined, object,
+      );
     const sourceDefault = declaration.defaultToSource
       ? declaration.resource === "environment"
         ? request.defaults.environmentId
@@ -323,6 +334,10 @@ export class AgentToolEnvironmentAuthorityResolver {
           required(this.reader.resolveThread(request.scope, id)),
         ),
       ];
+    if (declaration.resource === "automation") {
+      const fact = required(this.reader.resolveAutomation(request.scope, id));
+      return [resourceRef("automation", fact)];
+    }
     if (declaration.resource === "thread_family") {
       if (object.includeDescendants !== true) {
         return [
@@ -354,7 +369,8 @@ export class AgentToolEnvironmentAuthorityResolver {
       return [{ kind: "saved_agent", ...fact }];
     }
     return this.#taskRefs(
-      required(declaration.resource === "workpad" ? this.reader.resolveWorkpad(request.scope, id) : this.reader.resolveTask(request.scope, id)),
+      required(declaration.resource === "workpad" ? this.reader.resolveWorkpad(request.scope, id) : this.reader.resolveTask(request.scope, id),
+      ),
       request,
       declaration.resource,
     );
@@ -522,7 +538,8 @@ export class AgentToolEnvironmentAuthorityResolver {
     if (typeof resourceId === "string")
       refs.push(
         ...this.#taskRefs(
-          required(resource === "workpad" ? this.reader.resolveWorkpad(request.scope, resourceId) : this.reader.resolveTask(request.scope, resourceId)),
+          required(resource === "workpad" ? this.reader.resolveWorkpad(request.scope, resourceId) : this.reader.resolveTask(request.scope, resourceId),
+          ),
           request,
           resource,
         ),
@@ -864,7 +881,8 @@ export function scopeAuthorityRefs(
       );
     case "thread":
       return [
-        resourceRef("thread", required(reader.resolveThread(scope, target.threadId))),
+        resourceRef("thread", required(reader.resolveThread(scope, target.threadId)),
+        ),
       ];
   }
 }
@@ -879,7 +897,10 @@ export function requireExactScopeQuery(
   refs: readonly ResolvedEnvironmentResourceRef[],
 ): void {
   const environmentIds = [
-    ...new Set(refs.flatMap(({ environmentId }) => (environmentId ? [environmentId] : []))),
+    ...new Set(refs.flatMap(({ environmentId }) =>
+        environmentId ? [environmentId] : [],
+      ),
+    ),
   ].sort();
   if (
     environmentIds.length !== grant.targetEnvironmentIds.length ||
@@ -948,6 +969,7 @@ function resourceRef(
     environmentId: fact.environmentId,
     ...(fact.workspaceId ? { workspaceId: fact.workspaceId } : {}),
     ...(fact.label ? { label: fact.label } : {}),
+    ...(fact.threadId ? { threadId: fact.threadId } : {}),
   });
 }
 

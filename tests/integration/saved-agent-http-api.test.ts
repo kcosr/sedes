@@ -148,7 +148,7 @@ function fixture() {
     threadArchives: {} as never,
     threadExecutionWorkspaces: directThreadExecutionWorkspaceLifecycle,
     threadForceResets: {} as never,
-    attention: {} as never,
+    attention: { automationContexts: [] } as never,
     execution: {} as never,
     automations: {} as never,
     automationPrechecks: {} as never,

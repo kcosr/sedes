@@ -94,7 +94,7 @@ function snapshot(
 ): NormalizedThreadSnapshot {
   return {
     queue,
-    attention: {
+    attention: { automationContexts: [],
       ...(options.failureId
         ? {
             queueFailure: {

@@ -75,14 +75,13 @@ import { Skeleton } from "@client/components/ui/skeleton";
 import { StatusPill } from "@client/components/ui/status-pill";
 import { AutomationRunsSection, type AutomationRunsView } from "./AutomationRuns.js";
 import { MarkRunFailedDialog } from "./MarkRunFailedDialog.js";
+import { useAutomationResource } from "./use-automation-resource.js";
 import {
   useAutomationCapability,
-  useAutomationDefinition,
 } from "./use-automation-details.js";
 import { useAutomationRuns } from "./use-automation-runs.js";
 import { useNextOccurrences } from "./use-next-occurrences.js";
 import {
-  automationLiveKey,
   useAutomationAnchor,
   useThreadRunState,
   type AutomationThread,
@@ -97,139 +96,44 @@ const PHONE_QUERY = "(max-width: 819px)";
 
 type PageStore = Pick<
   ApplicationClientStore,
-  "api" | "subscribe" | "getSnapshot" | "mutateInventory"
+  "api" | "subscribe" | "getSnapshot" | "mutateInventory" | "subscribeAutomationChanges" | "subscribeThreadSummaryChanges"
 >;
 
-type PageAction = "run" | "state" | "restore" | "wake";
+type PageAction = "run" | "state" | "restore" | "wake" | "acknowledge";
 
-/** One automation, read-only, with its runs (`/automations/:threadId`). */
-export function AutomationPage({
-  store,
-  threadRegistry,
-  threadId,
-}: {
-  store: PageStore;
-  /** Loads a thread the application store does not hold, as its route would. */
-  threadRegistry: AutomationThreadSource;
-  threadId: string;
+/** Detail and history are owned by an automation identity, including exhausted schedules. */
+export function AutomationPage({ store, threadRegistry, automationId }: {
+  store: PageStore; threadRegistry: AutomationThreadSource; automationId: string;
 }): React.JSX.Element {
-  const anchor = useAutomationAnchor(store, threadRegistry, threadId);
-  const thread = anchor.status === "ready" ? anchor.thread : undefined;
-  const minute = useMinuteClock();
-  const now = useMemo(() => new Date(minute), [minute]);
-  const back = (
-    <nav className="automation-page-navigation" aria-label="Automation navigation">
-      <SettingsBackLink href={automationsPath()} label="Automations" />
-      <Button asChild variant="ghost" size="xs">
-        <a
-          href={threadPath(threadId)}
-          onClick={(event) => {
-            if (!isPlainClick(event)) return;
-            event.preventDefault();
-            const path = threadPath(threadId);
-            const steps = historyStepsBackTo(path);
-            if (steps === undefined) navigate(path);
-            else window.history.go(steps);
-          }}
-        >
-          <MessageSquare aria-hidden="true" />
-          Open thread
-        </a>
-      </Button>
-    </nav>
-  );
-
-  let content: React.ReactNode;
-  if (anchor.status === "loading") {
-    content = <AutomationAnchorLoading back={back} />;
-  } else if (anchor.status === "unavailable") {
-    content = (
-      <AutomationAnchorUnavailable back={back} message={anchor.message} onRetry={anchor.retry} />
-    );
-  } else {
-    // Keyed by thread: another thread's page starts from its own
-    // definition, runs, capability and view state, never from this one's.
-    content = (
-      <LoadedAutomation
-        key={anchor.thread.id}
-        store={store}
-        thread={anchor.thread}
-        back={back}
-        now={now}
-      />
-    );
-  }
-  return (
-    <section
-      className="automations-view"
-      aria-label={thread ? `${thread.title} automation` : "Automation"}
-    >
-      <div className="automations-page automation-page">{content}</div>
-    </section>
-  );
+  const resource = useAutomationResource(store, automationId);
+  if (resource.error) return <AutomationAnchorUnavailable message={resource.error} onRetry={resource.reload} />;
+  if (!resource.definition) return <AutomationAnchorLoading />;
+  return <AutomationPageAnchor key={automationId} store={store} threadRegistry={threadRegistry}
+    definition={resource.definition} onDefinition={resource.replace} />;
 }
 
-function LoadedAutomation({
-  store,
-  thread,
-  back,
-  now,
-}: {
-  readonly store: PageStore;
-  readonly thread: AutomationThread;
-  readonly back: React.ReactNode;
-  readonly now: Date;
+function AutomationPageAnchor({ store, threadRegistry, definition, onDefinition }: {
+  store: PageStore; threadRegistry: AutomationThreadSource; definition: ThreadAutomationDefinition;
+  onDefinition: (definition: ThreadAutomationDefinition | undefined) => void;
 }): React.JSX.Element {
-  const capabilityState = useAutomationCapability(store, thread.id, thread);
-  const capability = capabilityState.capability;
-  const automation = thread.automation;
-  const definitionState = useAutomationDefinition(
-    store,
-    thread.id,
-    automationLiveKey(automation),
-  );
-
-  if (!automation || definitionState.status === "missing") {
-    const canAttach = capability?.available === true && capability.canAttach;
-    return (
-      <>
-        <SettingsDetailHeader back={back} headingLevel={1} title={thread.title} />
-        <EmptyState
-          icon={<Repeat />}
-          title="No automation"
-          description={
-            canAttach || capability === undefined
-              ? "An automation sends this thread a prompt on a schedule."
-              : (capability.unavailableReason?.text ??
-                "This thread can't take an automation right now.")
-          }
-          action={
-            canAttach ? (
-              <Button type="button" onClick={() => navigate(automationEditPath(thread.id))}>
-                Automate…
-              </Button>
-            ) : undefined
-          }
-        />
-      </>
-    );
-  }
-  return (
-    <AutomationDetails
-      store={store}
-      thread={thread}
-      automation={automation}
-      definition={definitionState.definition}
-      definitionStatus={definitionState.status}
-      definitionError={definitionState.error}
-      onRetryDefinition={definitionState.retry}
-      onDefinition={definitionState.replace}
-      available={capability?.available}
-      unavailableReason={capability?.unavailableReason?.text}
-      back={back}
-      now={now}
-    />
-  );
+  const anchor = useAutomationAnchor(store, threadRegistry, definition.threadId);
+  const minute = useMinuteClock();
+  const now = useMemo(() => new Date(minute), [minute]);
+  const selected = anchor.status === "ready" ? { ...anchor.thread, automation: definition } : undefined;
+  const capabilityState = useAutomationCapability(store, definition.threadId, selected);
+  if (anchor.status === "loading") return <AutomationAnchorLoading />;
+  if (anchor.status === "unavailable") return <AutomationAnchorUnavailable message={anchor.message} onRetry={anchor.retry} />;
+  const back = <nav className="automation-page-navigation" aria-label="Automation navigation">
+    <SettingsBackLink href={automationsPath(definition.threadId)} label="Thread automations" />
+    <Button asChild variant="ghost" size="xs"><a href={threadPath(definition.threadId)} onClick={(event) => {
+      if (!isPlainClick(event)) return; event.preventDefault(); navigate(threadPath(definition.threadId));
+    }}><MessageSquare aria-hidden="true" />Open thread</a></Button>
+  </nav>;
+  return <section className="automations-view" aria-label={`${definition.name} automation`}><div className="automations-page automation-page">
+    <AutomationDetails store={store} thread={selected!} automation={definition} definition={definition}
+      definitionStatus="ready" onRetryDefinition={() => undefined} onDefinition={(next) => onDefinition(next ?? undefined)}
+      available={capabilityState.capability?.available} unavailableReason={capabilityState.capability?.unavailableReason?.text} back={back} now={now} />
+  </div></section>;
 }
 
 /**
@@ -243,6 +147,12 @@ function headerState(
   now: Date,
 ): string {
   switch (health.kind) {
+    case "attention":
+      return "needs attention";
+    case "waiting":
+      return "waiting on the source thread";
+    case "exhausted":
+      return "no future scheduled run";
     case "unknown":
     case "paused":
     case "not_started":
@@ -328,12 +238,13 @@ function AutomationDetails({
     runsView.expanded ? runsView.filter : "all",
   );
   const [busy, setBusy] = useState<PageAction>();
+  const runMutation = useRef<string | undefined>(undefined);
   const [actionError, setActionError] = useState<string>();
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [markFailedOpen, setMarkFailedOpen] = useState(false);
   const moreTrigger = useRef<HTMLButtonElement>(null);
   const revision = definition?.revision ?? automation.revision;
-  const paused = automation.status === "paused";
+  const paused = automation.status !== "enabled";
   // The Automations list's row menu offers the same actions with the same reasons.
   const actions = automationActionAvailability(
     { inventoryState: thread.inventoryState, automation },
@@ -357,7 +268,7 @@ function AutomationDetails({
     ? runs.items.find(({ id }) => id === lastRun.id)
     : undefined;
   const lastRunProblem =
-    lastRunDetail?.diagnostic ??
+    automation.attention?.diagnostic ?? lastRunDetail?.diagnostic ??
     (lastRun?.errorCode ? automationErrorText(lastRun.errorCode) : undefined);
 
   const act = async (action: PageAction, work: () => Promise<void>) => {
@@ -374,12 +285,14 @@ function AutomationDetails({
   };
   const runNow = () =>
     void act("run", async () => {
-      runs.upsert(await store.api.runThreadAutomationNow(thread.id, mutationId()));
+      runMutation.current ??= mutationId();
+      runs.upsert(await store.api.runAutomationNow(automation.id, runMutation.current));
+      runMutation.current = undefined;
     });
   const setState = (action: "enable" | "pause") =>
     void act("state", async () => {
       onDefinition(
-        await store.api.setThreadAutomationState(thread.id, action, revision, mutationId()),
+        await store.api.setAutomationState(automation.id, action, revision, mutationId()),
       );
     });
   const inventory = (action: "restore" | "wake") =>
@@ -388,7 +301,7 @@ function AutomationDetails({
     });
   const openThread = (id = thread.id) => navigate(threadPath(id));
   const toggleState = () => setState(paused ? "enable" : "pause");
-  const edit = () => navigate(automationEditPath(thread.id));
+  const edit = () => navigate(automationEditPath(automation.id));
 
   const runNowButton = (
     <ActionTooltip label={actions.runNow.reason ?? "Send the prompt now"}>
@@ -411,7 +324,7 @@ function AutomationDetails({
       back={back}
       headingLevel={1}
       icon={<Repeat />}
-      title={thread.title}
+      title={automation.name}
       status={<StatusPill tone={health.tone}>{health.label}</StatusPill>}
       description={
         <span className="automation-page-meta">
@@ -532,6 +445,11 @@ function AutomationDetails({
         now={now}
         onOpenThread={() => openThread(lastRun?.resultThreadId ?? thread.id)}
         onMarkFailed={() => setMarkFailedOpen(true)}
+        onAcknowledge={() => void act("acknowledge", async () => {
+          if (!automation.attention) return;
+          const result = await store.api.acknowledgeAutomationRun(automation.id, automation.attention.runId);
+          runs.upsert(result.run); onDefinition(result.automation);
+        })}
         onEnable={() => setState("enable")}
         onRestore={() => inventory("restore")}
         onWake={() => inventory("wake")}
@@ -587,13 +505,13 @@ function AutomationDetails({
         onOpenChange={setDeleteOpen}
         tone="danger"
         title="Delete this automation?"
-        description="Scheduled and manual runs stop and the schedule is removed. The thread, its messages and any result threads stay. Run history is no longer shown."
+        description="Scheduled and manual runs stop and the schedule is removed. The thread, its messages and any result threads stay. "
         confirmLabel="Delete automation"
         pendingLabel="Deleting…"
         returnFocusRef={moreTrigger}
         onConfirm={async () => {
           try {
-            await store.api.deleteThreadAutomation(thread.id, revision, mutationId());
+            await store.api.deleteAutomation(automation.id, revision, mutationId());
           } catch (reason) {
             throw new Error(messageFrom(reason));
           }
@@ -608,8 +526,8 @@ function AutomationDetails({
           resolution={uncertainRunResolution(automation, now) ?? "choose"}
           onResolve={async (resume) => {
             try {
-              const resolution = await store.api.resolveThreadAutomationRun(
-                thread.id,
+              const resolution = await store.api.resolveAutomationRun(
+                automation.id,
                 lastRun.id,
                 { resume },
               );
@@ -641,6 +559,7 @@ function HealthCallout({
   now,
   onOpenThread,
   onMarkFailed,
+  onAcknowledge,
   onEnable,
   onRestore,
   onWake,
@@ -653,6 +572,7 @@ function HealthCallout({
   readonly now: Date;
   readonly onOpenThread: () => void;
   readonly onMarkFailed: () => void;
+  readonly onAcknowledge: () => void;
   readonly onEnable: () => void;
   readonly onRestore: () => void;
   readonly onWake: () => void;
@@ -668,11 +588,11 @@ function HealthCallout({
         <Callout
           tone="danger"
           title={
-            automation.lastRun
-              ? `Last run failed ${lastRunAge(automation.lastRun, now.getTime())}`
-              : "Last run failed"
+            automation.lastRun && automation.lastRun.id === automation.attention?.runId
+              ? `Run failed ${lastRunAge(automation.lastRun, now.getTime())}`
+              : "A run needs attention"
           }
-          action={openThread}
+          action={<>{openThread}<Button variant="outline" size="sm" disabled={busy !== undefined} onClick={onAcknowledge}>Acknowledge failure</Button></>}
         >
           {problem}
         </Callout>
@@ -747,10 +667,13 @@ function HealthCallout({
           }
         >
           {thread.snoozedUntil
-            ? `Scheduled runs are skipped until ${futureTimeLabel(thread.snoozedUntil, now)}.`
-            : "Scheduled runs are skipped while the thread is snoozed."}
+            ? `Scheduled runs wait until ${futureTimeLabel(thread.snoozedUntil, now)}. Recurring schedules then apply their missed-run policy; a one-time reminder still runs once.`
+            : "Scheduled runs wait while the thread is snoozed. Recurring schedules apply their missed-run policy when it wakes; a one-time reminder still runs once."}
         </Callout>
       );
+    case "attention":
+    case "waiting":
+    case "exhausted":
     case "active":
     case "paused":
     case "sending":

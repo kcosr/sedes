@@ -90,6 +90,7 @@ function createCrossEnvironmentApprovalComposition() {
   const environmentAuthority = new AgentToolEnvironmentAuthorityResolver({
     resolveEnvironment: () => undefined,
     resolveWorkspace: () => undefined,
+    resolveAutomation: () => undefined,
     resolveThread: (_scope, id) =>
       id === "remote-thread"
         ? {

@@ -98,7 +98,7 @@ function snapshot(
       available: true,
       lastActivityAt: "2026-07-30T15:00:00.000Z",
       stateChangedAt: "2026-07-30T15:00:00.000Z",
-      automation: null,
+      automations: { totalCount: 0, enabledCount: 0, pausedCount: 0, exhaustedCount: 0, inFlightCount: 0, attentionCount: 0, revision: 0 },
     },
     workspace: {
       id: "workspace-1",
@@ -192,7 +192,7 @@ function snapshot(
     providerFeatures: [],
     usage: {},
     interactions: [],
-    attention: {},
+    attention: { automationContexts: [] },
   };
 }
 
@@ -246,13 +246,14 @@ describe("ConversationEventBridge", () => {
           `preserves %s completion attention with ${firstCapture} capture first during ${replacement} replacement in ${generation}`,
           async (transition) => {
             const completion = {
+      automationContexts: [],
               unseenCompletion: {
                 operationId: "completion-operation",
                 completedAt: "2026-10-02T16:54:42.808Z",
               },
             };
             let attention: NormalizedThreadSnapshot["attention"] =
-              transition === "created" ? {} : completion;
+              transition === "created" ? { automationContexts: [] } : completion;
             let state = actorState("generation-1");
             const source = new Source();
             const actor = {
@@ -356,12 +357,12 @@ describe("ConversationEventBridge", () => {
               if (firstCapture === "snapshot") {
                 replace();
                 await started;
-                attention = transition === "created" ? completion : {};
+                attention = transition === "created" ? completion : { automationContexts: [] };
                 publishing = publish();
               } else {
                 publishing = publish();
                 await started;
-                attention = transition === "created" ? completion : {};
+                attention = transition === "created" ? completion : { automationContexts: [] };
                 replace();
               }
               // Drain runnable work while the older capture is paused. This
@@ -1561,7 +1562,7 @@ describe("ConversationEventBridge", () => {
       });
       let compositionStarted!: () => void;
       const started = new Promise<void>((resolve) => { compositionStarted = resolve; });
-      const staleAttention = {
+      const staleAttention = { automationContexts: [],
         unseenCompletion: {
           operationId: "acknowledged-operation",
           completedAt: "2026-10-02T16:54:42.808Z",
@@ -1599,13 +1600,13 @@ describe("ConversationEventBridge", () => {
         // preparation or cached composition never returns.
         await second.ready;
         expect(hub.projectionGeneration).toBe("generation-1");
-        expect(hub.snapshot?.attention).toEqual({});
+        expect(hub.snapshot?.attention).toEqual({ automationContexts: [] });
       } finally {
         releaseComposition();
         await first.release();
         await second.release();
       }
-      expect(hub.snapshot?.attention).toEqual({});
+      expect(hub.snapshot?.attention).toEqual({ automationContexts: [] });
       expect(listener.mock.calls.map(([envelope]) => envelope.projectionGeneration)).toEqual([
         "generation-1", "generation-1",
       ]);
@@ -1622,7 +1623,7 @@ describe("ConversationEventBridge", () => {
     let compositionStarted!: () => void;
     const started = new Promise<void>((resolve) => { compositionStarted = resolve; });
     let compositions = 0;
-    const attention = {
+    const attention = { automationContexts: [],
       unseenCompletion: {
         operationId: "new-completion",
         completedAt: "2026-10-02T16:54:42.808Z",
@@ -1637,7 +1638,7 @@ describe("ConversationEventBridge", () => {
         }
         return {
           ...snapshot(current.timeline.generation),
-          attention: compositions === 1 ? {} : attention,
+          attention: compositions === 1 ? { automationContexts: [] } : attention,
         };
       },
       ancillary: async () => [],

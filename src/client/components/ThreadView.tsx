@@ -633,20 +633,20 @@ export function ThreadView({
             </Button>
           </aside>
         )}
-        {snapshot.attention.automationContext && (
+        {snapshot.attention.automationContexts.map((context) => (
           <AutomationContextNotice
-            context={snapshot.attention.automationContext}
-            store={applicationStore}
+            key={context.runId}
+            context={context}
             onDismiss={() =>
               void store
                 .dismissAttention({
                   kind: "automation_context",
-                  runId: snapshot.attention.automationContext!.runId,
+                  runId: context.runId,
                 })
                 .catch(() => undefined)
             }
           />
-        )}
+        ))}
         <ThreadFailureNotice snapshot={snapshot} />
         <ThreadNotices notices={store.normalized.state.notices} />
         <CodexTuiThreadPresentation

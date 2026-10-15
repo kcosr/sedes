@@ -455,7 +455,7 @@ describe("principal agent-tool client persistence and admission", () => {
       expect(new Set(optionIds)).toEqual(
         value.repository.eligibility.eligibleToolIds,
       );
-      expect(optionIds).toHaveLength(34);
+      expect(optionIds).toHaveLength(38);
       expect(optionIds).not.toContain("agent.context");
       expect(options.environments).toEqual(
         expect.arrayContaining([
@@ -826,7 +826,7 @@ describe("principal agent-tool client persistence and admission", () => {
         now: 140,
       });
       const created = createClient(value, {
-        toolIds: ["thread.status", "thread.list", "automation.get"],
+        toolIds: ["thread.status", "thread.list", "automation.list"],
       });
       value.database
         .prepare(
@@ -850,14 +850,14 @@ describe("principal agent-tool client persistence and admission", () => {
       expect(() =>
         value.service().admitInvocation(created.credential, {
           toolId: "thread.list",
-          schemaVersion: 6,
+          schemaVersion: 7,
           requestId: "principal-client-default-workspace",
           input: { scope: { kind: "default_workspace" } },
         }),
       ).toThrowError(expect.objectContaining({ code: "not_found" }));
       expect(() =>
         value.service().admitInvocation(created.credential, {
-          toolId: "automation.get",
+          toolId: "automation.list",
           schemaVersion: 1,
           requestId: "principal-client-default-thread",
           input: {},
@@ -885,7 +885,7 @@ describe("principal agent-tool client persistence and admission", () => {
       expect(() =>
         value.service().admitInvocation(created.credential, {
           toolId: "thread.list",
-          schemaVersion: 6,
+          schemaVersion: 7,
           requestId: "principal-client-removed-default-workspace",
           input: { scope: { kind: "default_workspace" } },
         }),

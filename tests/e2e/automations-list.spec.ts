@@ -20,8 +20,8 @@ async function csrfHeaders(page: Page): Promise<Record<string, string>> {
 
 const group = (page: Page, key: string): Locator =>
   page.locator(`[data-testid="automations-group"][data-group="${key}"]`);
-const row = (scope: Page | Locator, threadId: string): Locator =>
-  scope.locator(`[data-testid="automation-row"][data-thread-id="${threadId}"]`);
+const row = (scope: Page | Locator, automationId: string): Locator =>
+  scope.locator(`[data-testid="automation-row"][data-automation-id="${automationId}"]`);
 
 test("lists every automation from the More menu and opens one", async ({
   page,
@@ -56,17 +56,21 @@ test("lists every automation from the More menu and opens one", async ({
   const weekly = ((await weeklyResponse.json()) as { threadId: string })
     .threadId;
 
-  // New automations start paused; the nightly one is enabled. The scripted
-  // agent completes a turn for this prompt in two short steps.
-  for (const [threadId, prompt, expression] of [
-    [nightly, "Measure turn throughput", "0 2 * * *"],
-    [weekly, "Draft release notes from merged PRs.", "0 9 * * 1"],
+  // Definitions have their own identity, independent of their source thread.
+  // The scripted agent completes the nightly prompt in two short steps.
+  const automationIds: string[] = [];
+  for (const [threadId, name, prompt, expression, initialState] of [
+    [nightly, "Nightly dependency audit", "Measure turn throughput", "0 2 * * *", "enabled"],
+    [weekly, "Weekly release notes draft", "Draft release notes from merged PRs.", "0 9 * * 1", "paused"],
   ] as const) {
     const response = await page.request.post(
-      `/api/threads/${threadId}/automation`,
+      "/api/automations",
       {
         headers,
         data: {
+          threadId,
+          name,
+          initialState,
           prompt,
           runMode: "same_thread",
           schedule: { kind: "cron", expression, timeZone: "UTC" },
@@ -77,22 +81,9 @@ test("lists every automation from the More menu and opens one", async ({
       },
     );
     expect(response.ok(), await response.text()).toBe(true);
+    automationIds.push(((await response.json()) as { id: string }).id);
   }
-  const definition = (await (
-    await page.request.get(`/api/threads/${nightly}/automation`)
-  ).json()) as { revision: number };
-  const enabled = await page.request.patch(
-    `/api/threads/${nightly}/automation/state`,
-    {
-      headers,
-      data: {
-        action: "enable",
-        expectedRevision: definition.revision,
-        mutationId: randomUUID(),
-      },
-    },
-  );
-  expect(enabled.ok(), await enabled.text()).toBe(true);
+  const [nightlyAutomation, weeklyAutomation] = automationIds as [string, string];
 
   // The sidebar's Projects view links its Automations shelf to the page.
   const sidebar = page.getByTestId("desktop-sidebar");
@@ -115,10 +106,10 @@ test("lists every automation from the More menu and opens one", async ({
     "Grouped by status",
   );
   await expect(group(page, "status:upcoming")).toContainText("Upcoming · 1");
-  const nightlyRow = row(group(page, "status:upcoming"), nightly);
+  const nightlyRow = row(group(page, "status:upcoming"), nightlyAutomation);
   await expect(nightlyRow).toContainText("Nightly dependency audit");
   await expect(nightlyRow).toContainText("Every day at 2:00 AM UTC");
-  const weeklyRow = row(group(page, "status:paused"), weekly);
+  const weeklyRow = row(group(page, "status:paused"), weeklyAutomation);
   await expect(weeklyRow).toContainText("Weekly release notes draft");
   await expect(weeklyRow).toContainText("Not started");
   await expect(weeklyRow).toContainText("Every Monday at 9:00 AM UTC");
@@ -134,27 +125,27 @@ test("lists every automation from the More menu and opens one", async ({
   await expect(group(page, "status:paused")).toContainText("Paused · 2");
   await expect(group(page, "status:upcoming")).toHaveCount(0);
   // It never ran, so it reads as not started.
-  await expect(row(group(page, "status:paused"), nightly)).toContainText(
+  await expect(row(group(page, "status:paused"), nightlyAutomation)).toContainText(
     "Not started",
   );
-  await row(page, nightly).hover();
-  await row(page, nightly)
+  await row(page, nightlyAutomation).hover();
+  await row(page, nightlyAutomation)
     .getByRole("button", { name: "Actions for Nightly dependency audit" })
     .click();
   await page.getByRole("menuitem", { name: "Enable" }).click();
-  await expect(row(group(page, "status:upcoming"), nightly)).toBeVisible();
+  await expect(row(group(page, "status:upcoming"), nightlyAutomation)).toBeVisible();
 
   // Search covers the prompt preview.
   const search = view.getByRole("searchbox", { name: "Search automations" });
   await search.fill("merged prs");
   await expect(view.getByTestId("automation-row")).toHaveCount(1);
-  await expect(row(page, weekly)).toBeVisible();
+  await expect(row(page, weeklyAutomation)).toBeVisible();
   await search.fill("");
   await expect(view.getByTestId("automation-row")).toHaveCount(2);
 
   // A phone keeps the outcome and schedule on line 2 and ⋯ always visible.
   await page.setViewportSize({ width: 390, height: 844 });
-  const phoneRow = row(page, weekly);
+  const phoneRow = row(page, weeklyAutomation);
   await expect(phoneRow.locator('[data-layout="narrow"]')).toHaveText(
     "Not started · Every Monday at 9:00 AM UTC",
   );
@@ -167,10 +158,10 @@ test("lists every automation from the More menu and opens one", async ({
   await page.setViewportSize({ width: 1440, height: 900 });
 
   // The whole row opens the automation page.
-  await row(page, nightly)
+  await row(page, nightlyAutomation)
     .getByRole("link", { name: "Nightly dependency audit" })
     .click();
-  await expect(page).toHaveURL(`/automations/${nightly}`);
+  await expect(page).toHaveURL(`/automations/${nightlyAutomation}`);
 
   const navigation = view.getByRole("navigation", { name: "Automation navigation" });
   await expect(navigation.getByRole("link", { name: "Open thread" })).toBeVisible();
@@ -183,12 +174,14 @@ test("lists every automation from the More menu and opens one", async ({
 
   await navigation.getByRole("link", { name: "Open thread" }).click();
   await expect(page).toHaveURL(`/threads/${nightly}`);
-  await page.getByRole("button", { name: "Automation", exact: true }).click();
-  await expect(page).toHaveURL(`/automations/${nightly}`);
-  await navigation.getByRole("link", { name: "Automations", exact: true }).click();
-  await expect(page).toHaveURL("/automations");
-  await row(page, nightly).getByRole("link", { name: "Nightly dependency audit" }).click();
-  await expect(page).toHaveURL(`/automations/${nightly}`);
+  await page.getByRole("button", { name: "Automations", exact: true }).click();
+  await expect(page).toHaveURL(`/threads/${nightly}/automations`);
+  await row(page, nightlyAutomation).getByRole("link", { name: "Nightly dependency audit" }).click();
+  await expect(page).toHaveURL(`/automations/${nightlyAutomation}`);
+  await navigation.getByRole("link", { name: "Thread automations", exact: true }).click();
+  await expect(page).toHaveURL(`/threads/${nightly}/automations`);
+  await row(page, nightlyAutomation).getByRole("link", { name: "Nightly dependency audit" }).click();
+  await expect(page).toHaveURL(`/automations/${nightlyAutomation}`);
 
   // Run now: the scripted agent answers, and once its turn settles the run
   // reads how that turn ended, here and in the list.
@@ -197,16 +190,16 @@ test("lists every automation from the More menu and opens one", async ({
     name: /\sFinished(?: in [^,]+)?, Manual$/u,
   });
   await expect(finishedRun).toBeVisible();
-  await view.getByRole("link", { name: "Automations" }).click();
-  await expect(page).toHaveURL("/automations");
+  await view.getByRole("link", { name: "Thread automations", exact: true }).click();
+  await expect(page).toHaveURL(`/threads/${nightly}/automations`);
   await expect(
-    row(group(page, "status:upcoming"), nightly).locator(
+    row(group(page, "status:upcoming"), nightlyAutomation).locator(
       ".automation-row-secondary",
     ),
   ).toHaveText(/^Finished (?:just now|\d+m ago)$/u);
 
   // Go to turn opens the thread at the turn the run started.
-  await row(page, nightly)
+  await row(page, nightlyAutomation)
     .getByRole("link", { name: "Nightly dependency audit" })
     .click();
   await finishedRun.click();

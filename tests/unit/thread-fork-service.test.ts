@@ -1990,8 +1990,12 @@ describe("ThreadForkService", () => {
         dispatchMutationId: "migrated-clone-operation",
         now: 1_001,
       });
+      automations.checkRunAdmission(current.scope, "migrated-clone", "migrated-clone-run", {
+        claimToken: "migrated-claim", now: 1_001, dispatch: true,
+      });
       const request = {
         scope: current.scope,
+        claimToken: "migrated-claim",
         anchorThreadId: current.source.id,
         automationId: "migrated-clone",
         automationRunId: "migrated-clone-run",

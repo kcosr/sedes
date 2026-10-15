@@ -1,6 +1,7 @@
 import type {
   NormalizedThreadSummary,
   ThreadRunState,
+  ThreadAutomationDefinition,
 } from "../../shared/index.js";
 import type { Tone } from "../components/ui/tone.js";
 
@@ -12,20 +13,17 @@ import type { Tone } from "../components/ui/tone.js";
  * everywhere; paused is never a warning.
  */
 
-export type SummaryAutomation = NonNullable<
-  NormalizedThreadSummary["automation"]
->;
+export type SummaryAutomation = ThreadAutomationDefinition;
 export type SummaryAutomationRun = NonNullable<
   SummaryAutomation["lastRun"]
 >;
 
 /** The summary fields health reads; application and thread summaries both carry them. */
-export type AutomationHealthThread = Pick<
-  NormalizedThreadSummary,
-  "automation" | "inventoryState" | "snoozedUntil"
->;
+export type AutomationHealthThread = Pick<NormalizedThreadSummary, "inventoryState" | "snoozedUntil"> & { readonly automation: SummaryAutomation | null };
 
 export type AutomationHealthKind =
+  | "attention"
+  | "waiting"
   | "sending"
   | "failed"
   | "unknown"
@@ -33,13 +31,15 @@ export type AutomationHealthKind =
   | "snoozed"
   | "active"
   | "paused"
-  | "not_started";
+  | "not_started"
+  | "exhausted";
 
 export type AutomationHealthGroup =
   | "needs_attention"
   | "upcoming"
   | "paused"
-  | "suspended";
+  | "suspended"
+  | "finished";
 
 /** Glyphs drawn by `AutomationGlyph`. */
 export type AutomationGlyphKind =
@@ -66,6 +66,8 @@ const GROUP_BY_KIND: Readonly<
   Record<AutomationHealthKind, AutomationHealthGroup>
 > = {
   sending: "upcoming",
+  waiting: "upcoming",
+  attention: "needs_attention",
   failed: "needs_attention",
   unknown: "needs_attention",
   archived: "suspended",
@@ -73,6 +75,7 @@ const GROUP_BY_KIND: Readonly<
   active: "upcoming",
   paused: "paused",
   not_started: "paused",
+  exhausted: "finished",
 };
 
 /** Group order on the Automations list. */
@@ -81,6 +84,7 @@ export const AUTOMATION_HEALTH_GROUPS: readonly AutomationHealthGroup[] = [
   "upcoming",
   "paused",
   "suspended",
+  "finished",
 ];
 
 export const AUTOMATION_HEALTH_GROUP_LABELS: Readonly<
@@ -90,6 +94,7 @@ export const AUTOMATION_HEALTH_GROUP_LABELS: Readonly<
   upcoming: "Upcoming",
   paused: "Paused",
   suspended: "Suspended",
+  finished: "Finished",
 };
 
 function health(
@@ -125,6 +130,9 @@ export function automationHealth(
   const automation = thread.automation;
   if (!automation) return undefined;
   const lastRun = automation.lastRun;
+  if (automation.attention?.kind === "uncertain") return health("unknown", "triangle", "warning", "Outcome unknown");
+  if (automation.attention?.kind === "failed") return health("failed", "triangle", "danger", "Failed");
+  if (lastRun?.state === "deferred") return health("waiting", "pause", "neutral", "Waiting on source");
   if (lastRun && IN_FLIGHT_RUN_STATES.has(lastRun.state)) {
     return health(
       "sending",
@@ -133,18 +141,13 @@ export function automationHealth(
       lastRun.state === "queued" ? "Waiting for turn" : "Sending",
     );
   }
-  if (lastRun?.state === "failed") {
-    return health("failed", "triangle", "danger", "Failed");
-  }
-  if (lastRun?.state === "uncertain") {
-    return health("unknown", "triangle", "warning", "Outcome unknown");
-  }
   if (thread.inventoryState === "archived") {
     return health("archived", "archive", "neutral", "Thread archived");
   }
   if (snoozeSuspendsRuns(thread, now)) {
     return health("snoozed", "snoozed", "neutral", "Snoozed");
   }
+  if (automation.status === "exhausted") return health("exhausted", "pause", "neutral", "Finished");
   if (automation.status === "enabled") {
     return health("active", "repeat", "success", "Active");
   }
@@ -158,11 +161,11 @@ function snoozeSuspendsRuns(
   now: Date | number,
 ): boolean {
   if (
-    thread.inventoryState !== "snoozed" ||
-    thread.snoozedUntil === undefined
+    thread.inventoryState !== "snoozed"
   ) {
     return false;
   }
+  if (thread.snoozedUntil === undefined) return true;
   const until = Date.parse(thread.snoozedUntil);
   return !Number.isNaN(until) && until >= epoch(now);
 }
@@ -171,8 +174,7 @@ function snoozeSuspendsRuns(
 export function automationNeedsAttention(
   automation: SummaryAutomation | null | undefined,
 ): boolean {
-  const state = automation?.lastRun?.state;
-  return state === "failed" || state === "uncertain";
+  return automation?.attention !== undefined;
 }
 
 /**
@@ -187,10 +189,13 @@ export function automationIdentityGlyph(
     case "sending":
       return "spinner";
     case "paused":
+    case "waiting":
+    case "exhausted":
     case "not_started":
     case "archived":
     case "snoozed":
       return "pause";
+    case "attention":
     case "failed":
     case "unknown":
     case "active":
@@ -266,8 +271,8 @@ export function compareAutomationsInGroup(
     if (order !== 0) return order;
   } else if (group === "needs_attention") {
     const order = compareOptionalInstants(
-      left.automation.lastRun && lastRunAt(left.automation.lastRun),
-      right.automation.lastRun && lastRunAt(right.automation.lastRun),
+      left.automation.lastRun && left.automation.lastRun.id === left.automation.attention?.runId ? lastRunAt(left.automation.lastRun) : undefined,
+      right.automation.lastRun && right.automation.lastRun.id === right.automation.attention?.runId ? lastRunAt(right.automation.lastRun) : undefined,
       -1,
     );
     if (order !== 0) return order;
@@ -302,4 +307,17 @@ function compareOptionalInstants(
 
 function epoch(now: Date | number): number {
   return typeof now === "number" ? now : now.getTime();
+}
+
+/** Bounded thread projection; problem counts never disappear behind sibling activity. */
+export function threadAutomationHealth(thread: Pick<NormalizedThreadSummary, "automations" | "inventoryState" | "snoozedUntil">, now: Date | number): AutomationHealth | undefined {
+  const summary = thread.automations;
+  if (summary.totalCount === 0) return undefined;
+  if (summary.attentionCount > 0) return health("attention", "triangle", "danger", `${summary.attentionCount} ${summary.attentionCount === 1 ? "needs" : "need"} attention`);
+  if (summary.inFlightCount > 0) return health("sending", "spinner", "info", `${summary.inFlightCount} in progress`);
+  if (thread.inventoryState === "archived") return health("archived", "archive", "neutral", "Thread archived");
+  if (thread.inventoryState === "snoozed" && (thread.snoozedUntil === undefined || Date.parse(thread.snoozedUntil) >= epoch(now))) return health("snoozed", "snoozed", "neutral", "Snoozed");
+  if (summary.enabledCount > 0) return health("active", "repeat", "success", `${summary.enabledCount} active`);
+  if (summary.pausedCount > 0) return health("paused", "pause", "neutral", `${summary.pausedCount} paused`);
+  return health("exhausted", "pause", "neutral", "Finished");
 }

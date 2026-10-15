@@ -12,30 +12,24 @@ import type { AutomationThreadSource } from "./use-automation-thread.js";
 
 /** Test data and a live application store for the automation page and editor. */
 
+export const AUTOMATION_ID = "30000000-0000-4000-8000-000000000001";
 export const THREAD_ID = "10000000-0000-4000-8000-000000000001";
 
 export function automationSummary(
   overrides: Partial<SummaryAutomation> = {},
 ): SummaryAutomation {
-  return {
-    status: "enabled",
-    runMode: "same_thread",
-    scheduleKind: "cron",
-    schedule: { kind: "cron", expression: "0 2 * * *", timeZone: "UTC" },
-    misfirePolicy: "coalesce",
-    promptPreview: "Check dependencies",
-    nextRunAt: "2026-10-07T02:00:00.000Z",
-    revision: 3,
-    runsRevision: 0,
-    hasPrecheck: false,
-    ...overrides,
-  };
+  return definition(overrides);
+
 }
 
 export function definition(
   overrides: Partial<ThreadAutomationDefinition> = {},
 ): ThreadAutomationDefinition {
   return {
+    id: AUTOMATION_ID,
+    threadId: THREAD_ID,
+    name: "Nightly dependency audit",
+    source: { title: "Nightly dependency audit", workspaceId: "workspace-1", environmentId: "environment-1", targetId: "target-1", groupId: null, backendLabel: "Pi SDK", available: true, backingState: "bound", runState: "idle", inventoryState: "active", inventoryRevision: 4 },
     status: "enabled",
     runMode: "same_thread",
     scheduleKind: "cron",
@@ -58,6 +52,7 @@ let runSequence = 0;
 export function run(overrides: Partial<ThreadAutomationRun> = {}): ThreadAutomationRun {
   runSequence += 1;
   return {
+    automationId: AUTOMATION_ID,
     id: `20000000-0000-4000-8000-${String(runSequence).padStart(12, "0")}`,
     occurrence: "scheduled",
     scheduledFor: "2026-10-06T02:00:00.000Z",
@@ -97,7 +92,7 @@ function threadSummary(thread: FixtureThread): NormalizedApplicationThreadSummar
     available: true,
     backingState: thread.backingState ?? "bound",
     runState: thread.runState ?? "idle",
-    automation: thread.automation,
+    automations: { totalCount: thread.automation ? 1 : 0, enabledCount: thread.automation?.status === "enabled" ? 1 : 0, pausedCount: thread.automation?.status === "paused" ? 1 : 0, exhaustedCount: thread.automation?.status === "exhausted" ? 1 : 0, inFlightCount: 0, attentionCount: thread.automation?.attention ? 1 : 0, nextRunAt: thread.automation?.nextRunAt, revision: thread.automation?.revision ?? 0 },
   } as unknown as NormalizedApplicationThreadSummary;
 }
 
@@ -131,6 +126,7 @@ function stateFor(
           },
     pendingThreadConfigurationCopySourceIds: [],
     snapshot: {
+      executionTargets: [], groups: [], tasks: [], lineageFamilies: [],
       projects: [{ id: "project-1", name: "acme-web" }],
       workspaces: [
         {
@@ -152,16 +148,18 @@ function stateFor(
 
 export type AutomationApi = {
   readonly [Key in
-    | "getThreadAutomation"
+    | "acknowledgeAutomationRun"
+    | "listAutomations"
+    | "getAutomation"
     | "getThreadAutomationCapability"
-    | "listThreadAutomationRuns"
+    | "listAutomationRuns"
     | "previewThreadAutomationSchedule"
-    | "createThreadAutomation"
-    | "updateThreadAutomation"
-    | "setThreadAutomationState"
-    | "deleteThreadAutomation"
-    | "runThreadAutomationNow"
-    | "resolveThreadAutomationRun"
+    | "createAutomation"
+    | "updateAutomation"
+    | "setAutomationState"
+    | "deleteAutomation"
+    | "runAutomationNow"
+    | "resolveAutomationRun"
     | "testThreadAutomationPrecheck"
     | "getUsageAvailability"
     | "getUsage"]: ReturnType<typeof vi.fn>;
@@ -169,6 +167,9 @@ export type AutomationApi = {
 
 export interface AutomationStore {
   readonly store: ApplicationClientStore;
+  readonly automationForThread: (threadId: string) => SummaryAutomation | null;
+  readonly invalidate: (automationId?: string) => void;
+  readonly invalidateSource: (threadId?: string) => void;
   readonly api: AutomationApi;
   readonly mutateInventory: ReturnType<typeof vi.fn>;
   /** Replaces the threads (and the loaded fork pages), as a stream event would. */
@@ -226,18 +227,24 @@ export function automationStore(
   settings: FixtureSettings = {},
 ): AutomationStore {
   const listeners = new Set<() => void>();
+  const automationListeners = new Set<(change: any) => void>();
+  const sourceListeners = new Set<(id: string | undefined) => void>();
+  let currentThreads = [...(threads ?? []), ...loadedForks];
+  const automationForThread = (threadId: string) => currentThreads.find((thread) => (thread.id ?? THREAD_ID) === threadId)?.automation ?? null;
   let state: ApplicationClientState = threads
     ? stateFor(threads, loadedForks, settings)
     : ({ status: "loading", search: "", descendantPages: {} } as unknown as ApplicationClientState);
   const fullApi: AutomationApi = {
-    getThreadAutomation: vi.fn().mockResolvedValue(definition()),
+    acknowledgeAutomationRun: vi.fn().mockResolvedValue({ run: run(), automation: definition() }),
+    listAutomations: vi.fn().mockImplementation(async (input) => ({ items: currentThreads.flatMap((thread) => thread.automation && (!input?.threadId || input.threadId === (thread.id ?? THREAD_ID)) ? [thread.automation] : []), nextCursor: null })),
+    getAutomation: vi.fn().mockImplementation(async (id) => currentThreads.find((thread) => thread.automation?.id === id)?.automation ?? definition({ id })) ,
     getThreadAutomationCapability: vi.fn().mockResolvedValue({
       available: true,
-      canAttach: false,
+      canAttach: true,
       canRunNow: true,
       canCloneOnRun: true,
     }),
-    listThreadAutomationRuns: vi
+    listAutomationRuns: vi
       .fn()
       .mockResolvedValue({ items: [], nextCursor: null, counts: { all: 0, problems: 0, skipped: 0 } }),
     previewThreadAutomationSchedule: vi.fn().mockResolvedValue({
@@ -247,12 +254,12 @@ export function automationStore(
         "2026-10-09T02:00:00.000Z",
       ],
     }),
-    createThreadAutomation: vi.fn(),
-    updateThreadAutomation: vi.fn(),
-    setThreadAutomationState: vi.fn(),
-    deleteThreadAutomation: vi.fn().mockResolvedValue({ deleted: true }),
-    runThreadAutomationNow: vi.fn(),
-    resolveThreadAutomationRun: vi.fn(),
+    createAutomation: vi.fn(),
+    updateAutomation: vi.fn(),
+    setAutomationState: vi.fn(),
+    deleteAutomation: vi.fn().mockResolvedValue({ deleted: true }),
+    runAutomationNow: vi.fn(),
+    resolveAutomationRun: vi.fn(),
     testThreadAutomationPrecheck: vi.fn(),
     getUsageAvailability: vi.fn().mockRejectedValue(new Error("Usage is not driven by this test.")),
     getUsage: vi.fn().mockRejectedValue(new Error("Usage is not driven by this test.")),
@@ -267,15 +274,28 @@ export function automationStore(
     },
     getSnapshot: () => state,
     mutateInventory,
+    subscribeThreadSummaryChanges: (listener: (id: string | undefined) => void) => { sourceListeners.add(listener); return () => sourceListeners.delete(listener); },
+    subscribeAutomationChanges: (listener: (change: any) => void) => { automationListeners.add(listener); return () => automationListeners.delete(listener); },
   } as unknown as ApplicationClientStore;
   return {
     store,
+    automationForThread,
+    invalidateSource: (threadId) => { for (const listener of sourceListeners) listener(threadId); },
+    invalidate: (automationId) => { for (const listener of automationListeners) listener(automationId ? { automationId, threadId: THREAD_ID } : undefined); },
     api: fullApi,
     mutateInventory,
     publish: (next, forks = []) => {
+      currentThreads = [...next, ...forks];
+      for (const listener of automationListeners) listener(undefined);
       state = stateFor(next, forks, settings);
       for (const listener of listeners) listener();
     },
     threadRegistry: threadRegistry(),
   };
+}
+
+export function installAutomationDom(): void {
+  vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} unobserve() {} });
+  vi.stubGlobal("matchMedia", vi.fn((media: string) => ({ matches: false, media, addEventListener: vi.fn(), removeEventListener: vi.fn() })));
+  Object.assign(window.HTMLElement.prototype, { scrollIntoView: vi.fn(), hasPointerCapture: vi.fn(), setPointerCapture: vi.fn(), releasePointerCapture: vi.fn() });
 }

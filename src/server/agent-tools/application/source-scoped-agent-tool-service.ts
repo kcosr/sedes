@@ -644,7 +644,7 @@ function isWithinSourceThread(
       (resource) =>
         ((resource.kind === "thread" || resource.kind === "thread_family") &&
           resource.id === sourceThreadId) ||
-        ((resource.kind === "task" || resource.kind === "workpad") &&
+        ((resource.kind === "task" || resource.kind === "workpad" || resource.kind === "automation") &&
           resource.threadId === sourceThreadId),
     )
   );

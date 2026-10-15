@@ -150,7 +150,7 @@ function snapshot(
       available: true,
       lastActivityAt: "2026-07-30T15:00:00.000Z",
       stateChangedAt: "2026-07-30T15:00:00.000Z",
-      automation: null,
+      automations: { totalCount: 0, enabledCount: 0, pausedCount: 0, exhaustedCount: 0, inFlightCount: 0, attentionCount: 0, revision: 0 },
     },
     workspace: {
       id: "workspace-1",
@@ -252,7 +252,7 @@ function snapshot(
     providerFeatures: [],
     usage: {},
     interactions: [],
-    attention: {},
+    attention: { automationContexts: [] },
   } satisfies NormalizedThreadSnapshot;
   return { type: "snapshot", generation, snapshot: value };
 }

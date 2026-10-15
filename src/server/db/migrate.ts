@@ -1,3 +1,4 @@
+import { multipleThreadAutomationsMigration } from "./migrations/146-multiple-thread-automations.js";
 import { unifiedThreadInputLimitMigration } from "./migrations/144-unified-thread-input-limit.js";
 import { pageResponseInputOriginMigration } from "./migrations/145-page-response-input-origin.js";
 import { shownImagesMigration } from "./migrations/143-shown-images.js";
@@ -304,6 +305,7 @@ export const backendNormalizedMigrations = [
   shownImagesMigration,
   unifiedThreadInputLimitMigration,
   pageResponseInputOriginMigration,
+  multipleThreadAutomationsMigration,
 ] as const;
 
 export type DatabaseMigration = {

@@ -59,7 +59,7 @@ function inventory(
       available: true,
       lastActivityAt: "2026-07-30T10:00:00.000Z",
       stateChangedAt: "2026-07-30T09:00:00.000Z",
-      automation: null,
+      automations: { totalCount: 0, enabledCount: 0, pausedCount: 0, exhaustedCount: 0, inFlightCount: 0, attentionCount: 0, revision: 0 },
     },
     workspace: {
       id: "workspace-1",
@@ -127,7 +127,7 @@ function inventory(
       ],
       revision: 0,
     },
-    attention: {
+    attention: { automationContexts: [],
       unseenCompletion: {
         operationId: "operation-1",
         completedAt: "2026-07-30T09:59:00.000Z",
@@ -208,6 +208,7 @@ function createService(input?: {
   )[];
   modelValue?: string | null;
   automationAllowed?: boolean;
+  automationForkDraftOnly?: boolean;
   nextTurnSettingIds?: ThreadApplicationPresentation["nextTurnSettingIds"];
   providerFeatureCapabilities?: ThreadApplicationPresentation["providerFeatureCapabilities"];
   providerFeatureConcurrency?: (
@@ -373,6 +374,7 @@ function createService(input?: {
     },
     interactionMode: input?.interactionMode ?? "interactive",
     automationAllowed: input?.automationAllowed,
+    automationForkDraftOnly: input?.automationForkDraftOnly,
     nextTurnSettingIds: input?.nextTurnSettingIds,
     providerFeatureCapabilities:
       input?.providerFeatureCapabilities === undefined
@@ -803,6 +805,7 @@ describe("ThreadApplicationService", () => {
       `publishes %s attention and drains the publisher during stalled ${replacement} catalog preparation`,
       async (transition) => {
         const completion = {
+      automationContexts: [],
           unseenCompletion: {
             operationId: "completion-operation",
             completedAt: "2026-10-02T16:54:42.808Z",
@@ -810,7 +813,7 @@ describe("ThreadApplicationService", () => {
         };
         const durable = {
           ...inventory(),
-          attention: transition === "created" ? {} : completion,
+          attention: transition === "created" ? { automationContexts: [] } : completion,
         };
         const current = createService({
           state: durable,
@@ -893,7 +896,7 @@ describe("ThreadApplicationService", () => {
             listener({ type: "projection_replaced", state: actorState });
           }
           await started;
-          const attention = transition === "created" ? completion : {};
+          const attention = transition === "created" ? completion : { automationContexts: [] };
           current.getAuthorized.mockResolvedValue({ ...durable, attention });
           publisher.schedule(scope, "thread-1");
           let publisherClosed = false;
@@ -1062,7 +1065,7 @@ describe("ThreadApplicationService", () => {
       settings: { revision: 4 },
       usage: { context: { usedTokens: 25, windowTokens: 100 } },
       interactions: [{ id: "interaction-1", kind: "confirmation" }],
-      attention: {
+      attention: { automationContexts: [],
         unseenCompletion: { operationId: "operation-1" },
       },
     });
@@ -1127,6 +1130,22 @@ describe("ThreadApplicationService", () => {
       canAttach: true,
     });
     expect(snapshot.capabilities.history.available).toBe(false);
+  });
+
+  it("offers Fork from a draft while disclosing a backend without native forks", async () => {
+    const { service } = createService({ state: inventory("unbound"), automationForkDraftOnly: true });
+    const snapshot = await service.snapshot(scope, "thread-1");
+    expect(snapshot.capabilities.automation).toMatchObject({ canCloneOnRun: true, forkDraftOnly: true });
+    const native = createService({ state: inventory("unbound") });
+    expect((await native.service.snapshot(scope, "thread-1")).capabilities.automation.forkDraftOnly).toBeUndefined();
+  });
+
+  it("keeps Add automation available when other schedules already exist", async () => {
+    const state = inventory();
+    const { service } = createService({ runState: "idle", includeInteraction: false, queue: [], state: { ...state, thread: { ...state.thread, automations: { ...state.thread.automations, totalCount: 2, enabledCount: 2 } } } });
+    const snapshot = await service.snapshot(scope, "thread-1");
+    expect(snapshot.capabilities.automation.canAttach).toBe(true);
+    expect(snapshot.capabilities.operations).toContainEqual(expect.objectContaining({ id: "attach_automation", available: true }));
   });
 
   it("requires an available explicit model before a server-side draft can send", async () => {
@@ -1720,22 +1739,9 @@ describe("ThreadApplicationService", () => {
         ...state,
         thread: {
           ...state.thread,
-          automation: {
-            status: "enabled",
-            runMode: "same_thread",
-            scheduleKind: "interval",
-            schedule: {
-              kind: "interval",
-              anchorAt: "2026-07-30T10:00:00.000Z",
-              everySeconds: 3_600,
-            },
-            misfirePolicy: "coalesce",
-            promptPreview: "Summarize the open issues.",
-            nextRunAt: "2026-07-30T11:00:00.000Z",
-            revision: 1,
-            runsRevision: 0,
-            hasPrecheck: false,
-          },
+          automations: { totalCount: 1, enabledCount: 1, pausedCount: 0,
+            exhaustedCount: 0, inFlightCount: 0, attentionCount: 0, revision: 1,
+            nextRunAt: "2026-07-30T11:00:00.000Z" },
         },
       },
       automationAllowed: false,
@@ -1747,7 +1753,7 @@ describe("ThreadApplicationService", () => {
 
     expect(snapshot.capabilities.automation).toMatchObject({
       available: true,
-      canAttach: false,
+      canAttach: true,
       canRunNow: false,
       canCloneOnRun: false,
     });
@@ -1755,11 +1761,7 @@ describe("ThreadApplicationService", () => {
     await expect(service.automationCapability(scope, "thread-1")).resolves.toEqual(
       snapshot.capabilities.automation,
     );
-    expect(
-      snapshot.capabilities.operations.find(
-        ({ id }) => id === "remove_automation",
-      ),
-    ).toMatchObject({ available: true });
+    expect(snapshot.capabilities.operations.map(({ id }) => id)).not.toContain("remove_automation");
   });
 
   it("honors a bound backend that does not support submit", async () => {
@@ -2015,7 +2017,7 @@ describe("ThreadApplicationService", () => {
       state: {
         ...changedState,
         draft: { ...changedState.draft, revision: 4 },
-        attention: {},
+        attention: { automationContexts: [] },
       },
       recovery: {
         kind: "conversation_creation",

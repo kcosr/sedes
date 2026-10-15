@@ -193,6 +193,8 @@ export interface ThreadApplicationPresentation {
   readonly nextTurnSettingIds?: readonly SettingDescriptor["id"][];
   /** Provider execution policy for attach/enable/run automation controls. */
   readonly automationAllowed?: boolean;
+  /** Backend can copy drafts, but cannot fork started conversations. */
+  readonly automationForkDraftOnly?: boolean;
   readonly providerFeatureCapabilities: readonly ProviderFeatureCapability[];
   readonly providerFeatureStates: readonly ProviderFeatureStateEnvelope[];
   readonly composerCommands: readonly ComposerCommandDescriptor[];
@@ -1040,8 +1042,7 @@ function composeCapabilities(input: {
       | "archive"
       | "settle"
       | "acknowledge_attention"
-      | "remove_automation"
-      | "run_automation",
+,
     label: string,
     available: boolean,
     unavailable: string,
@@ -1185,36 +1186,18 @@ function composeCapabilities(input: {
       "This thread has no pending attention.",
     ),
   ];
-  const automation = input.inventory.thread.automation;
-  if (automation) {
-    operations.push(
-      operation(
-        "remove_automation",
-        "Remove automation",
-        available && !mutationBlocked && backendCanSubmit,
-        "Automation cannot be removed during an active turn.",
-        true,
-      ),
-      operation(
-        "run_automation",
-        "Run automation",
-        available && settled && !archived && !snoozed && backendCanSubmit,
-        "Automation requires an idle, active thread.",
-      ),
-    );
-  } else {
-    operations.push({
-      id: "attach_automation",
-      label: { text: "Add automation" },
-      destructive: false,
-      available: available && !archived && !mutationBlocked && backendCanSubmit,
-      ...reason(
-        available && !archived && !mutationBlocked && backendCanSubmit,
-        "Automation requires an inactive, unarchived thread.",
-      ),
-      parameters: { kind: "automation_editor" },
-    });
-  }
+  const hasAutomations = (input.inventory.thread.automations?.totalCount ?? 0) > 0;
+  operations.push({
+    id: "attach_automation",
+    label: { text: "Add automation" },
+    destructive: false,
+    available: available && !archived && !mutationBlocked && backendCanSubmit,
+    ...reason(
+      available && !archived && !mutationBlocked && backendCanSubmit,
+      "Automation requires an inactive, unarchived thread.",
+    ),
+    parameters: { kind: "automation_editor" },
+  });
   const allDeliveryModes: ThreadCapabilityDocument["deliveryModes"] = [
     {
       id: "submit",
@@ -1288,11 +1271,7 @@ function composeCapabilities(input: {
       return input.recovery !== undefined ||
         (operation.id === "recover_uncertain" && canReconcileQueue);
     }
-    if (operation.id === "remove_automation") return backendCanSubmit;
     if (operation.id === "attach_automation") return backendCanSubmit;
-    if (operation.id === "run_automation") {
-      return backendCanSubmit && input.presentation.automationAllowed !== false;
-    }
     return true;
   });
   const supportedSettings = new Set([
@@ -1380,7 +1359,7 @@ function composeCapabilities(input: {
         threadRevision: input.inventory.thread.threadRevision,
         available,
         inventoryState: input.inventory.thread.inventoryState,
-        automation: input.inventory.thread.automation,
+        automations: input.inventory.thread.automations,
         draftRevision: input.inventory.draft.revision,
         stashIds: input.inventory.stashes.map(({ id }) => id),
         attention: input.inventory.attention,
@@ -1476,26 +1455,26 @@ function composeCapabilities(input: {
         available && !archived && !backendTransitioning && backendCanSubmit,
       canAttach:
         available &&
-        !automation &&
         !archived &&
         !mutationBlocked &&
         backendCanSubmit,
       canRunNow:
         available &&
-        Boolean(automation) &&
+        hasAutomations &&
         settled &&
         !archived &&
         !snoozed &&
         backendCanSubmit &&
         input.presentation.automationAllowed !== false,
+      ...(unbound && input.presentation.automationForkDraftOnly === true
+        ? { forkDraftOnly: true } : {}),
       canCloneOnRun:
         available &&
-        bound &&
         !backendTransitioning &&
-        input.backendCapabilities.branching.availability === "available" &&
-        input.backendCapabilities.branching.boundaries.includes(
-          "latest_completed",
-        ) &&
+        backendCanSubmit &&
+        (unbound || (bound &&
+          input.backendCapabilities.branching.availability === "available" &&
+          input.backendCapabilities.branching.boundaries.includes("latest_completed"))) &&
         !archived &&
         input.presentation.automationAllowed !== false,
       ...reason(
