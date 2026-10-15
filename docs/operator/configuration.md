@@ -921,6 +921,12 @@ and the script filename as an argument. No shell expansion, argument splitting,
 or interpolation of thread content is performed. Arguments in the settings UI
 are one per line. Use absolute paths for files the script needs.
 
+On Windows, configure a native executable or interpreter, for example
+`C:\Program Files\nodejs\node.exe` with `C:\Scripts\notify.cjs` as its first
+argument. Windows does not execute a script's shebang. Native drive and UNC
+executable paths are accepted; drive-relative paths, device namespaces, and
+alternate data streams are rejected.
+
 Each invocation receives one UTF-8 JSON object on standard input followed by
 EOF. Version 5 uses this shape for a completed turn:
 
@@ -1065,8 +1071,13 @@ print(notification["title"] + ": " + notification["message"])
 A test reports exit code zero as success and nonzero, timeout, or launch failure
 as failure. A script may ignore stdin or stop reading it early; a closed input
 pipe does not override a successful exit. No response JSON is expected. Output retained for the immediate test
-result is bounded. Script execution has bounded concurrency and timeouts, and
-shutdown terminates active script process groups. Notification scripts have the
+result is bounded. Script execution has bounded concurrency and timeouts.
+Shutdown terminates active POSIX process groups or Windows Job Objects. On
+Windows, normal exit, cancellation, and timeout also clean up descendants and
+allow up to five additional seconds to confirm that the Job is empty. Missing
+cleanup confirmation is a failure. Native Windows tools retain the account's
+system, profile, application-data, and temporary-directory environment values.
+Notification scripts have the
 Sedes account's server-side authority; the controlled environment does not
 implicitly forward provider API credentials.
 

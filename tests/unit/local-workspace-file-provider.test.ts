@@ -1,9 +1,9 @@
 import { execFile as execFileCallback } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
-  chmod,
   mkdir,
   mkdtemp,
+  open,
   readFile,
   readdir,
   rename,
@@ -17,7 +17,7 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   WORKSPACE_FILE_MAX_CONTENT_BYTES,
   WORKSPACE_FILE_MAX_DOWNLOAD_BYTES,
@@ -40,12 +40,18 @@ import {
 import { LocalWorkspaceFileWatcherRegistry } from "../../src/server/workspace-files/local-workspace-file-watcher.js";
 import { WorkspaceFilesEngine } from "../../src/server/workspace-files/workspace-files-engine.js";
 
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return { ...actual, open: vi.fn(actual.open) };
+});
+
 const execFile = promisify(execFileCallback);
 const scope = { tenantId: "tenant-1", principalId: "principal-1" };
 const environmentId = "environment-1";
 const temporaryDirectories: string[] = [];
 
 afterEach(async () => {
+  vi.mocked(open).mockReset();
   await Promise.all(
     temporaryDirectories
       .splice(0)
@@ -143,6 +149,9 @@ describe("LocalWorkspaceFileProvider", () => {
       ),
     ).rejects.toBeInstanceOf(WorkspaceFileRevisionConflictError);
     await symlink("actual.txt", path.join(current.root, "linked.txt"));
+    await expect(
+      current.provider.read(scope, current.workspace, "linked.txt"),
+    ).rejects.toBeInstanceOf(WorkspaceFileAccessError);
     await expect(
       current.provider.withDownload(
         scope,
@@ -644,7 +653,7 @@ describe("LocalWorkspaceFileProvider", () => {
         {
           canonicalPath: path.join(linked, "packages", "app"),
           canonicalCheckoutPath: linked,
-          canonicalGitDir: gitDirectory.trim(),
+          canonicalGitDir: path.normalize(gitDirectory.trim()),
           identityToken: expect.stringMatching(/^[0-9a-f]{64}$/u),
           displayLabel: "feature/linked",
           branchRef: "refs/heads/feature/linked",
@@ -693,7 +702,7 @@ describe("LocalWorkspaceFileProvider", () => {
       primary,
     );
     expect(replacement.worktrees[0]).toMatchObject({
-      canonicalGitDir: gitDirectory.trim(),
+      canonicalGitDir: path.normalize(gitDirectory.trim()),
       canonicalPath: path.join(linked, "packages", "app"),
     });
     expect(replacement.worktrees[0]!.identityToken).not.toBe(
@@ -798,6 +807,7 @@ describe("LocalWorkspaceFileProvider", () => {
     const discovered = (
       await current.provider.discoverLinkedWorktrees(scope, current.workspace)
     ).worktrees[0]!;
+    const originalContents = await readFile(path.join(linked, "tracked.txt"));
 
     await expect(
       current.provider.removeLinkedWorktree(scope, {
@@ -808,8 +818,8 @@ describe("LocalWorkspaceFileProvider", () => {
       }),
     ).rejects.toBeInstanceOf(WorkspaceFileRootUnavailableError);
     await expect(
-      readFile(path.join(linked, "tracked.txt"), "utf8"),
-    ).resolves.toBe("main\n");
+      readFile(path.join(linked, "tracked.txt")),
+    ).resolves.toEqual(originalContents);
   });
 
   it("revalidates root identity on every operation", async () => {
@@ -953,19 +963,23 @@ describe("LocalWorkspaceFileProvider", () => {
     await writeFile(path.join(current.root, "visible.ts"), "a\n");
     await mkdir(path.join(current.root, "locked"), { recursive: true });
     await writeFile(path.join(current.root, "locked", "hidden.ts"), "b\n");
-    await chmod(path.join(current.root, "locked"), 0o000);
-
-    try {
-      const listed = await current.provider.list(scope, current.workspace, {
-        pageSize: 100,
-      });
-      expect(listed).toMatchObject({ availability: "available" });
-      if (listed.availability !== "available") throw new Error("unavailable");
-      expect(listed.entries).toContain("visible.ts");
-      expect(listed.entries).not.toContain("locked/hidden.ts");
-    } finally {
-      await chmod(path.join(current.root, "locked"), 0o700);
-    }
+    const actual = await vi.importActual<typeof import("node:fs/promises")>(
+      "node:fs/promises",
+    );
+    // Native Windows does not enforce POSIX directory permission bits. Inject
+    // the filesystem denial so the recovery contract runs on every platform.
+    vi.mocked(open).mockImplementation(async (filename, flags, mode) => {
+      if (path.basename(String(filename)) === "locked")
+        throw Object.assign(new Error("access denied"), { code: "EACCES" });
+      return actual.open(filename, flags, mode);
+    });
+    const listed = await current.provider.list(scope, current.workspace, {
+      pageSize: 100,
+    });
+    expect(listed).toMatchObject({ availability: "available" });
+    if (listed.availability !== "available") throw new Error("unavailable");
+    expect(listed.entries).toContain("visible.ts");
+    expect(listed.entries).not.toContain("locked/hidden.ts");
   });
 
   it("bounds non-Git traversal depth and reports truncation", async () => {
@@ -1213,37 +1227,32 @@ describe("LocalWorkspaceFileProvider", () => {
     provider.close();
   });
 
-  it("applies the explicit sensitive-file denylist to list and read", async () => {
+  it.each(["lower", "upper"] as const)("applies the explicit sensitive-file denylist to %s-case names", async (letterCase) => {
     const current = await fixture();
-    await mkdir(path.join(current.root, ".ssh"));
-    await writeFile(path.join(current.root, ".ssh", "config"), "host private");
+    const names = letterCase === "upper"
+      ? { ssh: ".SSH", envLocal: ".ENV.Local", pem: "SERVER.PEM", example: ".ENV.Example" }
+      : { ssh: ".ssh", envLocal: ".env.local", pem: "server.pem", example: ".env.example" };
+    await mkdir(path.join(current.root, names.ssh));
+    await writeFile(path.join(current.root, names.ssh, "config"), "host private");
     await writeFile(path.join(current.root, ".env"), "TOKEN=x");
-    await writeFile(path.join(current.root, ".env.local"), "TOKEN=x");
-    await writeFile(path.join(current.root, "server.pem"), "private");
-    await writeFile(path.join(current.root, ".env.example"), "TOKEN=");
+    await writeFile(path.join(current.root, names.envLocal), "TOKEN=x");
+    await writeFile(path.join(current.root, names.pem), "private");
+    await writeFile(path.join(current.root, names.example), "TOKEN=");
     await writeFile(path.join(current.root, "safe.txt"), "safe");
-    await mkdir(path.join(current.root, ".SSH"));
-    await writeFile(path.join(current.root, ".SSH", "config"), "private");
-    await writeFile(path.join(current.root, ".ENV.Local"), "TOKEN=x");
     await writeFile(path.join(current.root, "ID_RSA"), "private");
-    await writeFile(path.join(current.root, "SERVER.PEM"), "private");
-    await writeFile(path.join(current.root, ".ENV.Example"), "TOKEN=");
 
     const listed = await current.provider.list(scope, current.workspace, {
       pageSize: 100,
     });
     expect(listed).toMatchObject({
-      entries: [".ENV.Example", ".env.example", "safe.txt"],
+      entries: [names.example, "safe.txt"],
     });
     for (const relativePath of [
-      ".ssh/config",
-      ".SSH/config",
+      `${names.ssh}/config`,
       ".env",
-      ".env.local",
-      ".ENV.Local",
+      names.envLocal,
       "ID_RSA",
-      "server.pem",
-      "SERVER.PEM",
+      names.pem,
     ]) {
       await expect(
         current.provider.read(scope, current.workspace, relativePath),
@@ -1534,7 +1543,7 @@ describe("LocalWorkspaceFileProvider", () => {
   it("never overwrites existing binary or invalid UTF-8 files", async () => {
     const current = await fixture();
     const fixtures = [
-      { path: "nul.bin", bytes: Buffer.from([0x61, 0x00, 0x62]) },
+      { path: "contains-nul.bin", bytes: Buffer.from([0x61, 0x00, 0x62]) },
       { path: "invalid.bin", bytes: Buffer.from([0xc3, 0x28]) },
     ];
 
@@ -1783,19 +1792,22 @@ describe("LocalWorkspaceFileProvider", () => {
       "locked/edit.txt",
     );
     if (initial.availability !== "available") throw new Error("expected file");
-    await chmod(directory, 0o500);
-    try {
-      await expect(
-        current.provider.write(scope, current.workspace, {
-          path: "locked/edit.txt",
-          content: "after",
-          expectedRevision: initial.revision,
-        }),
-      ).rejects.toThrow();
-      await expect(readFile(filename, "utf8")).resolves.toBe("before");
-    } finally {
-      await chmod(directory, 0o700);
-    }
+    const actual = await vi.importActual<typeof import("node:fs/promises")>(
+      "node:fs/promises",
+    );
+    vi.mocked(open).mockImplementation(async (candidate, flags, mode) => {
+      if (path.basename(String(candidate)).startsWith(".sedes-edit.txt-"))
+        throw Object.assign(new Error("access denied"), { code: "EACCES" });
+      return actual.open(candidate, flags, mode);
+    });
+    await expect(
+      current.provider.write(scope, current.workspace, {
+        path: "locked/edit.txt",
+        content: "after",
+        expectedRevision: initial.revision,
+      }),
+    ).rejects.toThrow();
+    await expect(readFile(filename, "utf8")).resolves.toBe("before");
   });
 
   it("maps git status and reports a truthful non-git capability", async () => {

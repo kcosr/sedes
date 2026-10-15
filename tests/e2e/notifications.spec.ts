@@ -34,12 +34,11 @@ test("notification settings persist and passive server scripts follow selected l
   const payloadPath = path.join(workspace, "notifications.jsonl");
   await mkdir(workspace, { recursive: true });
   await writeFile(payloadPath, "");
-  // An actual server-local executable validates the stdin/argument contract without
+  // An actual server-local interpreter validates the stdin/argument contract without
   // contacting an external notification provider or replacing the hook service.
   await writeFile(
     scriptPath,
-    `#!${process.execPath}\nconst fs = require("node:fs");\nconst payload = JSON.parse(fs.readFileSync(0, "utf8"));\nfs.appendFileSync(process.argv[2], JSON.stringify(payload) + "\\n");\nprocess.stdout.write("Hook accepted JSON\\n");\n`,
-    { mode: 0o700 },
+    `const fs = require("node:fs");\nconst payload = JSON.parse(fs.readFileSync(0, "utf8"));\nfs.appendFileSync(process.argv[2], JSON.stringify(payload) + "\\n");\nprocess.stdout.write("Hook accepted JSON\\n");\n`,
   );
   const payloads = async (): Promise<NotificationPayload[]> =>
     (await readFile(payloadPath, "utf8"))
@@ -57,10 +56,10 @@ test("notification settings persist and passive server scripts follow selected l
     .check();
   await settings
     .getByLabel("Server script path", { exact: true })
-    .fill(scriptPath);
+    .fill(process.execPath);
   await settings
     .getByLabel("Arguments (one per line)", { exact: true })
-    .fill(payloadPath);
+    .fill([scriptPath, payloadPath].join("\n"));
   await settings.getByLabel("Timeout (seconds)", { exact: true }).fill("10");
   const partialScript = settings.getByRole("switch", { name: "Script: Partial", exact: true });
   const progressScript = settings.getByRole("switch", { name: "Script: Turn progress", exact: true });
@@ -135,10 +134,10 @@ test("notification settings persist and passive server scripts follow selected l
   await expect(page).toHaveURL(/\/settings\/notifications$/u);
   await expect(
     settings.getByLabel("Server script path", { exact: true }),
-  ).toHaveValue(scriptPath);
+  ).toHaveValue(process.execPath);
   await expect(
     settings.getByLabel("Arguments (one per line)", { exact: true }),
-  ).toHaveValue(payloadPath);
+  ).toHaveValue([scriptPath, payloadPath].join("\n"));
   await expect(
     settings.getByRole("switch", { name: "Script: Automation started", exact: true }),
   ).toBeChecked();

@@ -485,7 +485,7 @@ export class WorkspaceToolEngine {
       .map((candidate) =>
         path.posix.join(
           this.#relative(base) === "." ? "" : this.#relative(base),
-          candidate.replace(/^\.\//u, ""),
+          nativeSearchResultPath(candidate),
         ),
       );
     try {
@@ -612,7 +612,7 @@ export class WorkspaceToolEngine {
           const relativeBase = this.#relative(base);
           const resultPath = path.posix.join(
             relativeBase === "." ? "" : relativeBase,
-            record.data.path.text.replace(/^\.\//u, ""),
+            nativeSearchResultPath(record.data.path.text),
           );
           const full = (record.data.lines?.text ?? "").replace(/\r?\n$/u, "");
           const lineText =
@@ -913,6 +913,11 @@ export class WorkspaceToolEngine {
         .join("/") || "."
     );
   }
+}
+
+/** Search runs on this host; the sidecar wire always uses forward slashes. */
+function nativeSearchResultPath(value: string): string {
+  return value.split(path.sep).join("/").replace(/^\.\//u, "");
 }
 
 async function boundedDescriptorRead(

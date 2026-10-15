@@ -21,8 +21,11 @@ export function createWindowsSidecarPlatform(
     if (!systemRoot || !/^[A-Za-z]:[\\/]/u.test(systemRoot) || systemRoot.includes("\0")) {
       throw new Error("sidecar_windows_platform_unavailable");
     }
+    // WinPS must load its own built-in modules, never an inherited PowerShell
+    // Core or user module with the same name. Keep this factory standalone.
+    const command = "$env:PSModulePath = [IO.Path]::Combine($PSHOME, 'Modules')\n" + script;
     const { stdout } = await run(`${systemRoot.replace(/[\\/]+$/u, "")}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`,
-      ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")],
+      ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(command, "utf16le").toString("base64")],
       { env: { ...process.env, ...environment }, windowsHide: true, timeout: 15_000, maxBuffer: 64 * 1024 });
     return JSON.parse(stdout.trim()) as unknown;
   };

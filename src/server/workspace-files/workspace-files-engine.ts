@@ -32,6 +32,7 @@ import {
 } from "../../shared/workspace-file-limits.js";
 import {
   openVerifiedDirectory,
+  openVerifiedRegularFile,
   pathForOpenDescriptor,
   revalidatedPathForOpenHandle,
 } from "../local-file-descriptor-path.js";
@@ -66,6 +67,7 @@ import {
   isWorkspaceFileWriteTemporaryPath,
 } from "./workspace-file-policy.js";
 import { CanonicalMutationSerializer } from "./canonical-mutation-serializer.js";
+import { checkoutGitEnvironment, gitEnvironment } from "./git-environment.js";
 
 const executeFile = promisify(execFile);
 const MAXIMUM_SCANNED_FILES = 50_000;
@@ -133,23 +135,6 @@ function normalizedPath(value: string): string | undefined {
 
 function comparePaths(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
-}
-
-function gitEnvironment(): NodeJS.ProcessEnv {
-  const environment: NodeJS.ProcessEnv = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    if (!key.startsWith("GIT_") && value !== undefined)
-      environment[key] = value;
-  }
-  return {
-    ...environment,
-    GIT_CONFIG_NOSYSTEM: "1",
-    GIT_TERMINAL_PROMPT: "0",
-    GIT_OPTIONAL_LOCKS: "0",
-    GIT_PAGER: "cat",
-    PAGER: "cat",
-    LC_ALL: "C",
-  };
 }
 
 interface PorcelainWorktreeRecord {
@@ -451,10 +436,9 @@ export class WorkspaceFilesEngine {
       return undefined;
     }
     signal?.throwIfAborted();
-    const handle = await open(
-      absolutePath,
-      fileConstants.O_RDONLY | fileConstants.O_NOFOLLOW,
-    ).catch(() => undefined);
+    const handle = await openVerifiedRegularFile(absolutePath).catch(
+      () => undefined,
+    );
     if (!handle) return undefined;
     try {
       signal?.throwIfAborted();
@@ -555,7 +539,21 @@ export class WorkspaceFilesEngine {
       normalizedAbsolutePath(commonDirectory) === undefined
     )
       throw new Error("workspace_file_linked_worktree_discovery_failed");
-    const records = parseWorktreePorcelain(stdout);
+    // Git for Windows emits slash-separated drive/UNC paths. Convert only
+    // separators, then require a normalized native path before any comparison;
+    // do not resolve away traversal or relax canonical filesystem identity.
+    const records = parseWorktreePorcelain(stdout).flatMap((record) => {
+      const nativePath =
+        process.platform === "win32"
+          ? record.worktreePath.replaceAll("/", "\\")
+          : record.worktreePath;
+      if (
+        normalizedAbsolutePath(nativePath) === undefined ||
+        (process.platform === "win32" && !isNormalizedAbsolutePath(nativePath))
+      )
+        return [];
+      return [{ ...record, worktreePath: nativePath }];
+    });
     const primary = records
       .filter(({ worktreePath }) => {
         const normalized = normalizedAbsolutePath(worktreePath);
@@ -746,7 +744,7 @@ export class WorkspaceFilesEngine {
     const options = {
       encoding: "utf8",
       maxBuffer: MAXIMUM_GIT_OUTPUT_BYTES,
-      env: gitEnvironment(),
+      env: await checkoutGitEnvironment(checkout!, signal),
       windowsHide: true,
       timeout: 30_000,
       killSignal: "SIGKILL",
@@ -759,6 +757,8 @@ export class WorkspaceFilesEngine {
         "--no-replace-objects",
         "-c",
         "core.hooksPath=/dev/null",
+        "-c",
+        "core.fsmonitor=false",
         "-C",
         checkout!,
         "status",
@@ -828,6 +828,8 @@ export class WorkspaceFilesEngine {
           "--no-replace-objects",
           "-c",
           "core.hooksPath=/dev/null",
+          "-c",
+          "core.fsmonitor=false",
           "-C",
           primaryRoot,
           "worktree",
@@ -880,10 +882,9 @@ export class WorkspaceFilesEngine {
     ) {
       return undefined;
     }
-    const handle = await open(
-      absolutePath,
-      fileConstants.O_RDONLY | fileConstants.O_NOFOLLOW,
-    ).catch(() => undefined);
+    const handle = await openVerifiedRegularFile(absolutePath).catch(
+      () => undefined,
+    );
     if (!handle) return undefined;
     try {
       const openedPath = await revalidatedPathForOpenHandle(handle, canonical);
@@ -1014,10 +1015,7 @@ export class WorkspaceFilesEngine {
     ) {
       throw new WorkspaceFileAccessError();
     }
-    const handle = await open(
-      candidate,
-      fileConstants.O_RDONLY | fileConstants.O_NOFOLLOW,
-    ).catch(() => {
+    const handle = await openVerifiedRegularFile(candidate).catch(() => {
       throw new WorkspaceFileAccessError();
     });
     try {
@@ -1187,10 +1185,7 @@ export class WorkspaceFilesEngine {
     ) {
       throw new WorkspaceFileAccessError();
     }
-    const handle = await open(
-      candidate,
-      fileConstants.O_RDONLY | fileConstants.O_NOFOLLOW,
-    ).catch(() => {
+    const handle = await openVerifiedRegularFile(candidate).catch(() => {
       throw new WorkspaceFileAccessError();
     });
     try {
@@ -1641,10 +1636,9 @@ export class WorkspaceFilesEngine {
       }
     | undefined
   > {
-    const handle = await open(
-      candidate,
-      fileConstants.O_RDONLY | fileConstants.O_NOFOLLOW,
-    ).catch(() => undefined);
+    const handle = await openVerifiedRegularFile(candidate).catch(
+      () => undefined,
+    );
     if (!handle) return undefined;
     try {
       const openedPath = await revalidatedPathForOpenHandle(handle, candidate);

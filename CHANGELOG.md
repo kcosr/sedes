@@ -81,6 +81,24 @@ User-facing changes are collected here before release. See the
   Finder. Package verification rejects mismatched or incomplete signatures.
   ([#86](https://github.com/kcosr/sedes/pull/86))
 
+- Native Windows Codex executable discovery, linked-worktree discovery, and
+  workspace search results use the execution host's path conventions. Windows
+  downloads and file links also reject final symbolic links consistently.
+  Native process and file helpers use built-in Windows PowerShell modules even
+  when launched from PowerShell 7.
+  Rebuild the server, Windows execution sidecars, or Electron Managed Local
+  where these operations run; upgrade retained sidecars when their work can
+  safely be stopped. See [native host validation](docs/operator/outbound-hosts.md#native-support-and-validation-limits).
+
+- Windows source checkouts preserve required generated-file line endings, and
+  browser-test servers close gracefully through IPC before forced cleanup.
+  See [native Windows verification](docs/developer/development.md#native-windows).
+
+- Windows terminal journals recover incomplete trailing writes without a
+  read-only file-flush failure. Notification scripts accept native Windows
+  executable paths and clean up their owned descendants on exit or timeout.
+  Rebuild the Windows server or execution sidecar before its next safe restart.
+
 - Sending an inline Page response exits preview interaction mode and returns
   focus to the chat controls.
   ([#85](https://github.com/kcosr/sedes/pull/85))

@@ -30,6 +30,42 @@ Do not commit `node_modules`, `dist`, `test-results`, local state, provider
 sessions, credentials, Android build output, or generated Capacitor runtime
 files.
 
+### Native Windows
+
+Use Node.js 24.18 or newer and npm 11 from the same installation. In
+PowerShell, use `npm.cmd` so PowerShell does not consume npm's forwarded
+command-line options. Clear `NODE_ENV` for the current process before running
+the checks:
+
+```powershell
+Remove-Item Env:NODE_ENV -ErrorAction SilentlyContinue
+npm.cmd ci
+npm.cmd run typecheck
+npm.cmd run test:windows-runtime
+npm.cmd test
+npm.cmd run build
+npm.cmd run test:e2e
+```
+
+Native dependency compilation requires Visual Studio C++ Build Tools and a
+Windows SDK. If node-gyp cannot discover an installed toolchain, run these
+commands from its Developer PowerShell. The focused Windows runtime command
+checks owned-process and notification cleanup, workspace files and search,
+PowerShell module isolation, staging privacy, terminal recovery, and named-pipe
+IPC; it complements the broader unit, integration, and browser suites.
+
+The broader suite still contains Unix-only fixture assumptions, including
+POSIX user IDs, permissions, and shell executables. Record native results and
+remaining failures rather than treating a Linux pass as Windows qualification.
+One known native limitation is cleanup after a save's parent directory is moved
+and replaced concurrently: Windows rejects the save and protects both target
+files, but can leave its denied `.sedes-*.tmp` file in the moved directory.
+The corresponding race assertion remains enabled to track this gap.
+Task file-link metadata also retains a POSIX-only path rule in frozen Task
+attachment format v1. Native Windows Task links need a coordinated snapshot
+and client/sidecar compatibility rollout; do not silently rewrite or drop
+their paths. Ordinary Files links already use execution-host native paths.
+
 ## Standard verification
 
 The normal sequence is:

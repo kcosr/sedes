@@ -1,0 +1,5 @@
+# These files are compared with generated text or Git's LF baseline byte-for-byte.
+/CHANGELOG.md text eol=lf
+/src/server/agent-tools/schema/artifacts/*.json text eol=lf
+# The Grok protocol profile pins exact text bytes and hashes in its manifest.
+/protocol/grok-acp/1.0.4/** text eol=lf

@@ -892,16 +892,19 @@ test.describe.serial("workspace file browser and editor", () => {
       .poll(() => readFile(alphaSupplementalExamplePath, "utf8"))
       .toBe(savedSupplemental);
 
-    // The browser passes explicit file URLs, assistant-style absolute paths,
-    // and workspace-relative paths to the server resolver. Absolute paths can
+    // The browser passes explicit file URLs and workspace-relative paths to
+    // the server resolver. Absolute file references can
     // address attached roots; relative paths intentionally address primary.
     // A file elsewhere in this allowed Git worktree opens through a hidden
     // link-only root without adding that worktree to the visible root tabs.
     const attachedHref = `${pathToFileURL(alphaSupplementalLinkedPath).href}:3`;
+    // Native Windows drive paths need file URLs in Markdown destinations;
+    // otherwise the drive letter is parsed as an unsupported URL scheme.
+    const primaryHref = pathToFileURL(alphaExamplePath).href;
     const linkOnlyHref = pathToFileURL(linkOnlyWorktreeFilePath).href;
     const composer = page.getByRole("textbox", { name: /Message/ });
     await composer.fill(
-      `[supplemental file link](${attachedHref}), [primary absolute link](${alphaExamplePath}), [primary relative link](src/example.ts), and [link-only worktree file](${linkOnlyHref})`,
+      `[supplemental file link](${attachedHref}), [primary absolute link](${primaryHref}), [primary relative link](src/example.ts), and [link-only worktree file](${linkOnlyHref})`,
     );
     await page.getByRole("button", { name: "Send message" }).click();
     const assistant = page.locator(

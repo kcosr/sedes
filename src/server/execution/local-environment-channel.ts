@@ -361,12 +361,18 @@ export class LocalEnvironmentChannelProvider implements ExecutionEnvironmentChan
     if (input.configuredPath !== undefined) {
       return await resolveExecutableIdentity(input.configuredPath);
     }
+    // Owned processes launch directly. Unqualified Windows names select the
+    // native .exe rather than package-manager POSIX or .cmd/.bat wrappers.
+    const executableName =
+      process.platform === "win32" && path.extname(input.commandName) === ""
+        ? `${input.commandName}.exe`
+        : input.commandName;
     const searchPath = this.#environment.PATH ?? "/usr/bin:/bin";
     for (const entry of searchPath.split(path.delimiter)) {
       if (!path.isAbsolute(entry)) continue;
       try {
         return await resolveExecutableIdentity(
-          path.join(entry, input.commandName),
+          path.join(entry, executableName),
         );
       } catch {
         // Match command lookup precedence by continuing to the next PATH entry

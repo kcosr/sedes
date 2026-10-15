@@ -3327,6 +3327,24 @@ Resolve executable, endpoint, secret, PTY, and filesystem authority inside the
 same execution namespace where each operation runs. Host paths and credentials
 must never be reused for an SSH or future container environment.
 
+Normalize execution-host tool output with that host's path rules before
+comparing it with canonical filesystem identities. Git's Windows porcelain
+paths use forward slashes; search-result paths become forward-slash relative
+protocol paths only at the host boundary. Keep caller-supplied canonical-path
+validation strict. Regular-file admission must reject final symbolic links on
+Windows as well as POSIX, with opened-file identity checked across the open.
+These shared workspace operations apply independently to Pi, Codex, Claude,
+Grok, and OpenCode. Native owned-executable lookup also serves Codex and Grok;
+Windows suffix handling does not expand Grok's supported platforms. Pi and
+Claude SDK execution and OpenCode's service connection retain their existing
+startup contracts.
+
+Code-owned Windows PowerShell helpers must resolve modules only from that
+Windows PowerShell installation's built-in module directory. Inherited
+PowerShell Core or user modules must not supply native identity, ACL, or
+process-control commands. This restriction belongs to the helper process;
+preserve the explicitly supplied environment of provider children.
+
 Persistent sidecar ownership is environment-scoped under the exact installation,
 tenant, and principal. One configured SSH environment identifies one
 single target lifetime at a time: management, bootstrap, and daemon invocations
