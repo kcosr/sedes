@@ -1127,7 +1127,10 @@ function claudeSystemInit(
 class TestBackendPersistence implements BackendThreadPersistenceAdapter {
   readonly #submissionIntents = new Set<string>();
 
-  constructor(readonly database: Database.Database) {
+  constructor(
+    readonly database: Database.Database,
+    readonly settings: PiBackendThreadPersistenceAdapter,
+  ) {
     database.exec(`
       CREATE TABLE IF NOT EXISTS e2e_backend_binding_details (
         tenant_id TEXT NOT NULL,
@@ -1147,7 +1150,20 @@ class TestBackendPersistence implements BackendThreadPersistenceAdapter {
     return { toolAccess: "full" as const };
   }
 
-  initializeNewThread(): void {}
+  initializeNewThread(
+    scope: RequestScope,
+    applicationThreadId: string,
+    connection: AgentConnectionProfile,
+  ): void {
+    // Ordinary scripted drafts need the same durable configuration consumed
+    // by production's New with same settings and automation draft-copy paths.
+    this.settings.initializeResolvedNewThread(scope, applicationThreadId, connection, {
+      modelProvider: "memory",
+      modelId: "conformance-model",
+      thinkingLevel: "low",
+      toolAccess: "read_only",
+    });
+  }
 
   validateInitialization(): void {}
 
@@ -1527,6 +1543,26 @@ class TestActionPersistence implements ThreadActionPersistenceProvider {
         input.expectedThreadRevision,
       );
     if (changed.changes !== 1) throw new Error("e2e_thread_revision_changed");
+    const piSettings = new PiConversationRepository(this.database);
+    const modelValue = values.find(({ id }) => id === "model")!.desiredValue;
+    const [modelProvider, ...modelId] = modelValue.split("/");
+    const toolMode = values.find(({ id }) => id === "tool_access")!.desiredValue;
+    if (toolMode !== "read_only" && toolMode !== "ask" && toolMode !== "full") {
+      throw new Error("e2e_tool_access_invalid");
+    }
+    const persisted = piSettings.initializeSettings(scope, applicationThreadId, {
+      modelProvider: modelProvider!,
+      modelId: modelId.join("/"),
+      thinkingLevel: values.find(({ id }) => id === "thinking_level")!.desiredValue,
+      toolMode,
+    });
+    piSettings.updateSettings(scope, applicationThreadId, {
+      expectedRevision: persisted.revision,
+      modelProvider: modelProvider!,
+      modelId: modelId.join("/"),
+      thinkingLevel: values.find(({ id }) => id === "thinking_level")!.desiredValue,
+      toolMode,
+    });
     settingsByThread.set(applicationThreadId, {
       revision: current.revision + 1,
       values,
@@ -4392,12 +4428,12 @@ async function main(): Promise<void> {
   const operationRepository = new ConversationOperationRepository(database);
   const lineageRepository = new ThreadLineageRepository(database);
   const automationRepository = new AutomationRepository(database);
-  const persistence = new TestBackendPersistence(database);
   const piPreferences = new ConnectionSettingPreferenceRepository(database);
   const piSavedAgentPersistence = new TestPiSavedAgentPersistence(
     new PiConversationRepository(database),
     piPreferences,
   );
+  const persistence = new TestBackendPersistence(database, piSavedAgentPersistence);
   const piSavedAgentAdapter = new PiSavedAgentAdapter({
     preferences: piPreferences,
     persistence: piSavedAgentPersistence,

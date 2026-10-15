@@ -102,7 +102,7 @@ test("keeps named daily and one-shot automations independent on the same draft",
   const reminder = await page.request.get(`/api/automations/${reminderId}`);
   expect(reminder.ok()).toBe(true);
   expect(await reminder.json()).toMatchObject({ name: "Afternoon reminder", status: "enabled" });
-  const source = await page.request.get(`/api/threads/${sourceId}`);
+  const source = await page.request.get(`/api/threads/${sourceId}?activityDetail=full`);
   expect(source.ok()).toBe(true);
   expect(await source.json()).toMatchObject({ thread: { backingState: "unbound" } });
 
@@ -132,6 +132,11 @@ test("keeps named daily and one-shot automations independent on the same draft",
 
 test("fork creates a fresh result from a draft or started source without inheriting schedules", async ({ page }, testInfo) => {
   const sourceId = await createSource(page, "multiple-automation-fork");
+  const reasoning = page.getByTestId("thread-configuration")
+    .locator('[data-setting-id="thinking_level"] [role="combobox"]');
+  await reasoning.click();
+  await page.getByRole("option", { name: "High", exact: true }).click();
+  await expect(reasoning).toHaveText("High");
   const headers = await csrfHeaders(page);
   const create = async (name: string, runMode: "clone" | "same_thread") => {
     const response = await page.request.post("/api/automations", {
@@ -179,12 +184,12 @@ test("fork creates a fresh result from a draft or started source without inherit
   const firstChildId = await run(forkId);
   const secondChildId = await run(forkId);
   expect(new Set([sourceId, firstChildId, secondChildId]).size).toBe(3);
-  const sourceBeforeStart = await page.request.get(`/api/threads/${sourceId}`);
+  const sourceBeforeStart = await page.request.get(`/api/threads/${sourceId}?activityDetail=full`);
   expect(sourceBeforeStart.ok()).toBe(true);
   const sourceSnapshot = normalizedThreadSnapshotSchema.parse(await sourceBeforeStart.json());
   expect(sourceSnapshot).toMatchObject({ thread: { backingState: "unbound" }, orderedTurnIds: [] });
   for (const childId of [firstChildId, secondChildId]) {
-    const childResponse = await page.request.get(`/api/threads/${childId}`);
+    const childResponse = await page.request.get(`/api/threads/${childId}?activityDetail=full`);
     expect(childResponse.ok()).toBe(true);
     const child = normalizedThreadSnapshotSchema.parse(await childResponse.json());
     expect(child.thread).toMatchObject({
