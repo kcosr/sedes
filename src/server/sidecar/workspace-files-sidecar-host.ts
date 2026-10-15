@@ -845,7 +845,14 @@ async function canonicalDirectory(value: string): Promise<string> {
 }
 
 function isWithin(root: string, candidate: string): boolean {
-  return root === "/" || candidate === root || candidate.startsWith(`${root}/`);
+  if (!path.isAbsolute(root) || !path.isAbsolute(candidate)) return false;
+  const relative = path.relative(root, candidate);
+  return (
+    relative === "" ||
+    (!path.isAbsolute(relative) &&
+      relative !== ".." &&
+      !relative.startsWith(`..${path.sep}`))
+  );
 }
 
 function protocolReadResult(

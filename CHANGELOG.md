@@ -84,6 +84,8 @@ User-facing changes are collected here before release. See the
 - Native Windows Codex executable discovery, linked-worktree discovery, and
   workspace search results use the execution host's path conventions. Windows
   downloads and file links also reject final symbolic links consistently.
+  Windows outbound Files admit nested roots and discover viewed images using
+  native containment checks while rejecting paths outside the allowed roots.
   Native process and file helpers use built-in Windows PowerShell modules even
   when launched from PowerShell 7.
   Rebuild the server, Windows execution sidecars, or Electron Managed Local

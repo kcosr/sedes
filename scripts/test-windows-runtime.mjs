@@ -18,6 +18,7 @@ const result = spawnSync(process.execPath, [
   "tests/unit/windows-notification-script.test.ts",
   "tests/unit/notification-paths.test.ts",
   "tests/unit/windows-workspace-files.test.ts",
+  "tests/unit/windows-workspace-files-sidecar-host.test.ts",
   "tests/unit/windows-workspace-file-links.test.ts",
   "tests/unit/local-file-descriptor-path.test.ts",
   "tests/unit/windows-workspace-search.test.ts",
