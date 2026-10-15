@@ -5,7 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
 import { checkChangelog } from "../../scripts/changelog.mjs";
-import { checkAgentToolArtifacts, generatedAgentToolArtifacts } from "../../src/server/agent-tools/schema/check-agent-tool-artifacts.js";
+import { checkAgentToolArtifacts } from "../../src/server/agent-tools/schema/check-agent-tool-artifacts.js";
 
 it("keeps strict build text checks valid in a CRLF Git checkout", () => {
   const repository = fileURLToPath(new URL("../../", import.meta.url));
@@ -18,8 +18,10 @@ it("keeps strict build text checks valid in a CRLF Git checkout", () => {
   const filenames = [
     ".gitattributes", "CHANGELOG.md",
     "scripts/grok-probes/check-grok-profile.mjs", ...profileFiles,
-    ...Object.keys(generatedAgentToolArtifacts()).map((contract) =>
-      `${artifactDirectory}/${contract.replace("@", ".v")}.json`),
+    // Retained historical contracts are immutable checked inputs too.
+    ...readdirSync(path.join(repository, artifactDirectory))
+      .filter((filename) => /^[a-z][a-z0-9_.-]*\.v[1-9][0-9]*\.json$/.test(filename))
+      .map((filename) => path.join(artifactDirectory, filename)),
   ];
   const environment = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")));
   environment.GIT_CONFIG_NOSYSTEM = "1";
@@ -45,6 +47,8 @@ it("keeps strict build text checks valid in a CRLF Git checkout", () => {
     expect(() => checkChangelog(root)).not.toThrow();
     expect(() => checkAgentToolArtifacts((url) =>
       readFileSync(path.join(root, path.relative(repository, fileURLToPath(url))), "utf8"),
+      () => readdirSync(path.join(root, artifactDirectory))
+        .filter((filename) => /^[a-z][a-z0-9_.-]*\.v[1-9][0-9]*\.json$/.test(filename)),
     )).not.toThrow();
     // Run the real checker against the checked-out profile. It validates both
     // canonical JSON and exact pinned byte counts/hashes, including help text.

@@ -41,6 +41,29 @@ afterEach(async () => {
   if (failures.length > 0) throw failures[0];
 }, 60_000);
 
+function parseCompleteClaudeEvents(content: string): OutboundClaudeFixtureEvent[] {
+  // The worker appends newline-delimited records. A concurrent read can stop
+  // during the last append, so only its newline makes a record complete.
+  return content.split("\n").slice(0, -1).filter(Boolean)
+    .map(line => JSON.parse(line) as OutboundClaudeFixtureEvent);
+}
+
+describe("outbound fixture event framing", () => {
+  it("waits for the trailing newline before parsing an appended event", () => {
+    const event: OutboundClaudeFixtureEvent = {
+      event: "send", pid: 42, queryId: "query", sessionId: "session", sendCount: 1,
+    };
+    const record = JSON.stringify(event);
+    expect(parseCompleteClaudeEvents(`${record}\n${record.slice(0, 18)}`)).toEqual([event]);
+    expect(parseCompleteClaudeEvents(`${record}\n${record}`)).toEqual([event]);
+    expect(parseCompleteClaudeEvents(`${record}\n${record}\n`)).toEqual([event, event]);
+  });
+
+  it("still rejects malformed records that have a terminating newline", () => {
+    expect(() => parseCompleteClaudeEvents('{"event":"send\n')).toThrow(SyntaxError);
+  });
+});
+
 // These tests start real disposable connector/daemon processes with offline providers.
 describe.skipIf(process.platform !== "linux" && process.platform !== "darwin")("outbound production composition", () => {
   it("pairs through HTTP, serves Files and terminals, preserves processes across reconnects, and revokes/reapproves access", async () => {
@@ -391,7 +414,7 @@ else process.exit(64);
   }
   async claudeEvents(): Promise<OutboundClaudeFixtureEvent[]> {
     const content = await readFile(path.join(this.hostHome, "claude-config", ".outbound-claude-events.jsonl"), "utf8").catch(() => "");
-    return content.trim().split("\n").filter(Boolean).map(line => JSON.parse(line) as OutboundClaudeFixtureEvent);
+    return parseCompleteClaudeEvents(content);
   }
   async thread(threadId: string) { return normalizedThreadSnapshotSchema.parse(await this.json(`/api/threads/${threadId}?activityDetail=full`)); }
   async stopBackend(resourceId = "outbound-codex-backend") {

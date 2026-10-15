@@ -58,7 +58,14 @@ describe("automation run index migration", () => {
       expect(live.where).toBe(" WHERE deleted_at IS NULL");
       expect(duplicate).toEqual(live);
 
-      applyDatabaseMigrations(database, backendNormalizedMigrations);
+      // Inspect migration 135's result before migration 146 intentionally
+      // removes the remaining one-per-thread constraint.
+      applyDatabaseMigrations(
+        database,
+        backendNormalizedMigrations.filter(
+          (migration) => migration.version <= 135,
+        ),
+      );
 
       const names = (
         database
