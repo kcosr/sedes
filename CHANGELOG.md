@@ -13,11 +13,13 @@ User-facing changes are collected here before release. See the
   ([#85](https://github.com/kcosr/sedes/pull/85))
 
 - Upgrade the server and browser/packaged clients together for client protocol
-  **158** for Page responses, larger composer reference lists, and the updated
-  native voice bridge. Rebuild Android with its bundled client. See
-  [Page responses](docs/user/html-previews.md#send-a-page-response)
-  and [voice input](docs/operator/clients/voice.md).
-  ([#81](https://github.com/kcosr/sedes/pull/81), [#83](https://github.com/kcosr/sedes/pull/83))
+  **159** for Page responses, larger composer reference lists, the updated
+  native voice bridge, and Windows notification script paths. Rebuild Android
+  and Electron with their bundled clients. See
+  [Page responses](docs/user/html-previews.md#send-a-page-response),
+  [voice input](docs/operator/clients/voice.md), and
+  [notification scripts](docs/operator/configuration.md#notification-scripts).
+  ([#81](https://github.com/kcosr/sedes/pull/81), [#83](https://github.com/kcosr/sedes/pull/83), [#87](https://github.com/kcosr/sedes/pull/87))
 
 ### Added
 

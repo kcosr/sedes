@@ -61,7 +61,7 @@ describe("composer Task reference protocol", () => {
     expect(composerTaskInputUtf8Bytes([])).toBe(0);
   });
   it("uses the current protocol version for the atomic normalized cutover", () => {
-    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(158);
+    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(159);
   });
 
   it("bounds ordered draft references and rejects duplicate Task ids", () => {
