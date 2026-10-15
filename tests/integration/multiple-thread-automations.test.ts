@@ -780,7 +780,7 @@ describe("multiple independent thread automations", () => {
         new AutomationRepository(previous).createDefinition(scope, {
           id: definitionId,
           anchorThreadId: threadId,
-          name: "Prior schedule",
+          name: source.title,
           prompt: "Prior prompt",
           precheck: null,
           runMode: mode,
@@ -830,6 +830,14 @@ describe("multiple independent thread automations", () => {
           .run(scope.tenantId, scope.principalId, target);
         applyDatabaseMigrations(previous, backendNormalizedMigrations);
         const current = new AutomationRepository(previous);
+        expect(current.getDefinition(scope, definitionId)).toMatchObject({
+          id: definitionId,
+          anchorThreadId: threadId,
+          name: source.title,
+          runMode: mode,
+          enabled: false,
+          schedule: { kind: "interval", anchorAt: 1_000, everySeconds: 300 },
+        });
         expect(current.getRun(scope, definitionId, runId).acknowledgedAt).toBe(
           visible ? null : 11_000,
         );

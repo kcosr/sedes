@@ -33,7 +33,9 @@ User-facing changes are collected here before release. See the
 - Attach independent recurring schedules and one-time reminders to the same
   thread. **Fork** creates a separate result each run, including from a draft
   using its saved settings. One-time history remains after exhaustion, and
-  busy sources defer unsent work. See [automations](docs/user/tasks-and-automations.md#schedule-work-with-an-automation).
+  busy sources defer unsent work. Existing automations and their history upgrade
+  in place, preserving names, schedules, and prior dismissals. See
+  [automations](docs/user/tasks-and-automations.md#schedule-work-with-an-automation).
 
 - Published HTML pages can collect responses through Sedes's **Send** control.
   Responses go to the page's thread, queue while it is busy, and remain in

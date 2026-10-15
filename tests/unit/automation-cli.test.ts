@@ -5,6 +5,7 @@ import {
   normalizeSedesUrl,
 } from "../../src/cli/sedes-api-client.js";
 import { SEDES_CLIENT_PROTOCOL_VERSION } from "../../src/shared/protocol/application.js";
+import { testAutomationPrecheckRequestSchema } from "../../src/shared/protocol/api.js";
 import { SEDES_VERSION } from "../../src/shared/version.js";
 
 afterEach(() => {
@@ -189,6 +190,46 @@ describe("automation CLI server URL", () => {
 });
 
 describe("automation CLI thread requests", () => {
+  it("sends a named automation's pre-check through the strict server request schema", async () => {
+    const input = automationCliInputSchema.parse({
+      automation: {
+        ...validInput.automation,
+        precheck: {
+          command: "test -f package.json",
+          timeoutSeconds: 10,
+          includeStdout: false,
+        },
+      },
+      checks: { testPrecheck: true },
+    });
+    const result = {
+      decision: "invoke",
+      durationMilliseconds: 1,
+      stdoutPreview: "",
+      stderrPreview: "",
+      stdoutTruncated: false,
+      stderrTruncated: false,
+      exitCode: 0,
+      stdoutWillBeIncluded: false,
+      effectivePromptBytes: input.automation.prompt.length,
+    };
+    const fetch = vi.fn(async (url: URL, init: RequestInit) => {
+      if (url.pathname === "/api/application/session") return sessionResponse();
+      expect(url.pathname).toBe(`/api/threads/${definition.threadId}/automations/precheck/test`);
+      expect(init.method).toBe("POST");
+      // Use the route's actual strict schema so an extra definition field
+      // fails here exactly as it would before reaching the executor.
+      const body = testAutomationPrecheckRequestSchema.parse(JSON.parse(init.body as string));
+      expect(body).toEqual({ prompt: input.automation.prompt, precheck: input.automation.precheck });
+      return Response.json(result);
+    });
+    vi.stubGlobal("fetch", fetch);
+    const client = new SedesCliApiClient("http://127.0.0.1:4783");
+
+    await expect(client.testPrecheck(definition.threadId, input.automation)).resolves.toEqual(result);
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps session metadata separate from point-in-time inventory", async () => {
     const fetch = vi.fn(async (input: string | URL | Request) => {
       const path = new URL(input.toString()).pathname;

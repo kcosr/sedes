@@ -386,6 +386,8 @@ export class ThreadForceResetRepository {
         )
         .run(input.now, input.mutationId, ...scoped);
 
+      // Deferred runs have no active submission to abandon. Admission handles
+      // those separately if this reset permanently abandons their source/result creation.
       this.database
         .prepare(
           `UPDATE automation_runs
@@ -401,7 +403,7 @@ export class ThreadForceResetRepository {
                OR child_thread_id IN (${placeholders})
              )
              AND force_reset_at IS NULL
-             AND state IN ('claimed', 'dispatching', 'queued', 'running', 'uncertain', 'deferred')`,
+             AND state IN ('claimed', 'dispatching', 'queued', 'running', 'uncertain')`,
         )
         .run(
           input.now,
@@ -720,6 +722,7 @@ export class ThreadForceResetRepository {
       });
     }
     // A clone run is reset from its anchor or from the child it created.
+    // Healthy deferred work must not make either thread resettable.
     const runRows = this.database
       .prepare(
         `SELECT id,
@@ -734,7 +737,7 @@ export class ThreadForceResetRepository {
              anchor_thread_id IN (${placeholders})
              OR child_thread_id IN (${placeholders})
            )
-           AND state IN ('claimed', 'dispatching', 'queued', 'running', 'uncertain', 'deferred')`,
+           AND state IN ('claimed', 'dispatching', 'queued', 'running', 'uncertain')`,
       )
       .all(
         ...threadIds,

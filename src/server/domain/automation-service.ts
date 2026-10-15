@@ -696,6 +696,7 @@ export class AutomationService implements DurableDeadlineSource {
         }
         const scope = runScope(waiting);
         let skip = false;
+        let failedDuringRefresh = false;
         const run = this.#repository.database
           .transaction(() => {
             const current = this.#repository.getRun(
@@ -704,12 +705,15 @@ export class AutomationService implements DurableDeadlineSource {
               waiting.id,
             );
             if (current.state !== "deferred") return current;
-            if (this.#repository.refreshDeferredBlock(scope, current, now))
-              return this.#repository.getRun(
+            if (this.#repository.refreshDeferredBlock(scope, current, now)) {
+              const refreshed = this.#repository.getRun(
                 scope,
                 current.automationId,
                 current.id,
               );
+              failedDuringRefresh = refreshed.state === "failed";
+              return refreshed;
+            }
             const definition = this.#repository.getDefinition(
               scope,
               current.automationId,
@@ -745,6 +749,10 @@ export class AutomationService implements DurableDeadlineSource {
             );
           })
           .immediate();
+        if (failedDuringRefresh) {
+          this.publishRun(scope, run);
+          continue;
+        }
         if (run.state === "deferred") {
           if (
             run.deferredReason !== waiting.deferredReason ||

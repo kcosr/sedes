@@ -538,21 +538,8 @@ export class AutomationRepository {
             "conflict",
             "The automation no longer owns its admission claim.",
           );
-        const sourceCreationWasReset = this.database.prepare(`
-          SELECT 1 FROM application_threads
-          WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?
-            AND backing_state IN ('creating', 'creation_unknown') AND force_reset_at IS NOT NULL
-        `).get(scope.tenantId, scope.principalId, run.anchorThreadId);
-        if (sourceCreationWasReset) {
-          const definition = this.getDefinition(scope, automationId);
-          return this.updateRunState(scope, automationId, runId, {
-            expectedState: "claimed", state: "failed", claimToken: input.claimToken,
-            errorCode: "automation_source_force_reset",
-            errorDiagnostic: "The automation source creation was force-reset.",
-            completeDefinition: run.occurrenceKind === "scheduled" && definition.schedule.kind === "date_time",
-            now: input.now,
-          });
-        }
+        const resetFailure = this.#failResetCreationRun(scope, run, input.now);
+        if (resetFailure) return resetFailure;
         const block = this.runAdmissionBlock(scope, run, input.now);
         if (block)
           return this.deferRun(scope, automationId, runId, {
@@ -676,7 +663,24 @@ export class AutomationRepository {
       this.database
         .prepare(
           `SELECT ${runColumns} FROM automation_runs WHERE state = 'deferred'
-      AND (eligible_at IS NULL OR eligible_at <= ? OR (deferred_reason = 'snoozed' AND EXISTS (SELECT 1 FROM thread_principal_state AS inventory WHERE inventory.tenant_id = automation_runs.tenant_id AND inventory.principal_id = automation_runs.owner_principal_id AND inventory.thread_id = automation_runs.anchor_thread_id AND inventory.inventory_state <> 'snoozed'))) ORDER BY updated_at, created_at, id LIMIT ?`,
+           AND (
+             eligible_at IS NULL OR eligible_at <= ?
+             OR (deferred_reason = 'snoozed' AND EXISTS (
+               SELECT 1 FROM thread_principal_state AS inventory
+               WHERE inventory.tenant_id = automation_runs.tenant_id
+                 AND inventory.principal_id = automation_runs.owner_principal_id
+                 AND inventory.thread_id = automation_runs.anchor_thread_id
+                 AND inventory.inventory_state <> 'snoozed'
+             ))
+             OR EXISTS (
+               SELECT 1 FROM application_threads AS target
+               WHERE target.tenant_id = automation_runs.tenant_id
+                 AND target.owner_principal_id = automation_runs.owner_principal_id
+                 AND target.id IN (automation_runs.anchor_thread_id, automation_runs.child_thread_id)
+                 AND target.backing_state IN ('creating', 'creation_unknown')
+                 AND target.force_reset_at IS NOT NULL
+             )
+           ) ORDER BY updated_at, created_at, id LIMIT ?`,
         )
         .all(now, limit) as RunRow[]
     ).map(runFromRow);
@@ -697,6 +701,9 @@ export class AutomationRepository {
     run: AutomationRunRecord,
     now: number,
   ): boolean {
+    // The caller holds the admission transaction. Permanent creation failure
+    // takes precedence over temporary snooze, archive, and capacity gates.
+    if (this.#failResetCreationRun(scope, run, now)) return true;
     const block = this.runAdmissionBlock(scope, run, now);
     if (!block) return false;
     this.database
@@ -721,6 +728,36 @@ export class AutomationRepository {
         run.id,
       );
     return true;
+  }
+
+  #failResetCreationRun(
+    scope: RequestScope,
+    run: AutomationRunRecord,
+    now: number,
+  ): AutomationRunRecord | undefined {
+    const resetTarget = this.database
+      .prepare(`
+        SELECT id FROM application_threads
+        WHERE tenant_id = ? AND owner_principal_id = ? AND id IN (?, ?)
+          AND backing_state IN ('creating', 'creation_unknown')
+          AND force_reset_at IS NOT NULL
+      `)
+      .get(scope.tenantId, scope.principalId, run.anchorThreadId, run.childThreadId) as
+      | { id: string }
+      | undefined;
+    if (!resetTarget) return undefined;
+    const definition = this.getDefinition(scope, run.automationId);
+    return this.updateRunState(scope, run.automationId, run.id, {
+      expectedState: run.state,
+      state: "failed",
+      ...(run.claimToken === null ? {} : { claimToken: run.claimToken }),
+      errorCode: "automation_source_force_reset",
+      errorDiagnostic: resetTarget.id === run.anchorThreadId
+        ? "The automation source creation was force-reset."
+        : "The automation result creation was force-reset.",
+      completeDefinition: run.occurrenceKind === "scheduled" && definition.schedule.kind === "date_time",
+      now,
+    });
   }
 
   reclaimDeferredRun(
@@ -1873,6 +1910,7 @@ export class AutomationRepository {
       }
       const timestamps = nextRunTimestamps(current, input.state, input.now);
       const keepsClaim = input.state === "dispatching";
+      const terminal = ["completed", "failed", "skipped", "cancelled"].includes(input.state);
       const promptSnapshot = input.retainPromptSnapshot
         ? current.promptSnapshot
         : null;
@@ -1882,7 +1920,8 @@ export class AutomationRepository {
             UPDATE automation_runs
             SET state = ?, claim_token = ?, lease_expires_at = ?,
               prompt_snapshot = ?, error_code = ?, error_diagnostic = ?,
-              started_at = ?, accepted_at = ?, finished_at = ?, updated_at = ?
+              started_at = ?, accepted_at = ?, finished_at = ?, updated_at = ?,
+              eligible_at = ?, suppression_pending = ?
             WHERE tenant_id = ? AND owner_principal_id = ?
               AND automation_id = ? AND id = ? AND state = ?
           `,
@@ -1902,6 +1941,8 @@ export class AutomationRepository {
           timestamps.acceptedAt,
           timestamps.finishedAt,
           input.now,
+          terminal ? null : current.eligibleAt,
+          terminal ? 0 : Number(current.suppressionPending),
           scope.tenantId,
           scope.principalId,
           automationId,

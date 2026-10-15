@@ -2001,47 +2001,82 @@ describe("thread automation lifecycle", () => {
     expect(invokeAutomation).not.toHaveBeenCalled();
   });
 
-  it("defers an archived-anchor manual run until restoration", async () => {
-    createAutomation(
+  it("preserves an already-deferred manual run through archive and restoration", async () => {
+    const definition = createManual({
+      command: "prepare once",
+      timeoutSeconds: 30,
+      includeStdout: false,
+    });
+    invokeAutomation.mockResolvedValueOnce({
+      status: "deferred",
+      reason: "source_busy",
+      eligibleAt: null,
+    });
+    clock = 2_000;
+    const mutationId = randomUUID();
+    const waiting = await service.runNow(
       scope,
-      threadId,
-      {
-        prompt: "Manual prompt",
-        runMode: "same_thread",
-        schedule: {
-          kind: "interval",
-          anchorAt: new Date(10_000).toISOString(),
-          everySeconds: 300,
-        },
-        misfirePolicy: "coalesce",
-        precheck: null,
-        mutationId: randomUUID(),
-      },
-      1_000,
+      definition.id,
+      mutationId,
+      clock,
     );
-    const definition = currentAutomation()!;
+    expect(waiting).toMatchObject({
+      state: "deferred",
+      deferredReason: "source_busy",
+    });
+    expect(precheckCalls).toBe(1);
+    expect(invokeAutomation).toHaveBeenCalledTimes(1);
+
+    clock = 3_000;
     inventory.transitionInventory(scope, threadId, {
       expectedRevision: inventory.getThread(scope, threadId).inventory
         .inventoryRevision,
       mutationId: randomUUID(),
       change: { action: "archive" },
-      now: 2_000,
+      now: clock,
     });
+    service.requestDeferredReconcile(clock);
+    await service.reconcileDue(clock);
+    expect(repository.getRun(scope, definition.id, waiting.id)).toMatchObject({
+      state: "deferred",
+      deferredReason: "archived",
+      claimToken: null,
+      leaseExpiresAt: null,
+      eligibleAt: null,
+      promptSnapshot: "Base prompt",
+      precheckStatus: "passed",
+    });
+    expect(precheckCalls).toBe(1);
+    expect(invokeAutomation).toHaveBeenCalledTimes(1);
 
-    clock = 3_000;
-    await expect(
-      service.runNow(scope, currentAutomation()!.id, randomUUID(), 3_000),
-    ).resolves.toMatchObject({
-      state: "deferred",
-      deferredReason: "archived",
+    clock = 4_000;
+    inventory.transitionInventory(scope, threadId, {
+      expectedRevision: inventory.getThread(scope, threadId).inventory
+        .inventoryRevision,
+      mutationId: randomUUID(),
+      change: { action: "restore" },
+      now: clock,
     });
-    expect(
-      repository.listRuns(scope, definition.id, { limit: 10 })[0],
-    ).toMatchObject({
-      state: "deferred",
-      deferredReason: "archived",
+    service.requestDeferredReconcile(clock);
+    await service.reconcileDue(clock);
+    await vi.waitFor(() => {
+      expect(repository.getRun(scope, definition.id, waiting.id).state).toBe(
+        "completed",
+      );
     });
-    expect(invokeAutomation).not.toHaveBeenCalled();
+    expect(precheckCalls).toBe(1);
+    expect(invokeAutomation).toHaveBeenCalledTimes(2);
+    expect(invokeAutomation.mock.calls[1]![0]).toMatchObject({
+      automationId: definition.id,
+      automationRunId: waiting.id,
+      dispatchMutationId: mutationId,
+      prompt: "Base prompt",
+    });
+    expect(repository.listRuns(scope, definition.id, { limit: 10 })).toEqual([
+      expect.objectContaining({ id: waiting.id, state: "completed" }),
+    ]);
+    expect(currentAutomation()).toMatchObject({ enabled: false });
+    expect(reconcileErrors).toEqual([]);
   });
 
   it("rejects UTF-8 oversized precheck commands before persistence", () => {

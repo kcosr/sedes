@@ -171,8 +171,7 @@ export class SedesCliApiClient {
       {
         method: "POST",
         body: JSON.stringify({
-          name: definition.name,
-    prompt: definition.prompt,
+          prompt: definition.prompt,
           precheck: definition.precheck,
         }),
       },
