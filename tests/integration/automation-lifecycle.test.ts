@@ -1328,7 +1328,7 @@ describe("thread automation lifecycle", () => {
     },
     {
       item: "cancelled",
-      state: "failed",
+      state: "cancelled",
       errorCode: "automation_dispatch_cancelled",
     },
     {
@@ -1337,7 +1337,7 @@ describe("thread automation lifecycle", () => {
       errorCode: "automation_dispatch_uncertain",
     },
   ] as const)(
-    "returns a parked anchor to Active when its queued input ends $item",
+    "updates run and parked inventory when its queued input ends $item",
     async ({ item: itemState, state, errorCode }) => {
       createManual();
       invokeAutomation.mockResolvedValueOnce({
@@ -1373,12 +1373,18 @@ describe("thread automation lifecycle", () => {
         state,
         errorCode,
       });
-      expect(inventory.getThread(scope, threadId).inventory).toMatchObject({
-        inventoryState: "active",
-        inventoryRevision: parked.inventoryRevision + 1,
-        stateChangedAt: 3_000,
-      });
-      expect(inventoryGeneration()).toBe(generation + 1);
+      if (itemState === "cancelled") {
+        expect(inventory.getThread(scope, threadId).inventory).toEqual(parked);
+        expect(inventoryGeneration()).toBe(generation);
+        expect(service.get(scope, run.automationId).attention).toBeUndefined();
+      } else {
+        expect(inventory.getThread(scope, threadId).inventory).toMatchObject({
+          inventoryState: "active",
+          inventoryRevision: parked.inventoryRevision + 1,
+          stateChangedAt: 3_000,
+        });
+        expect(inventoryGeneration()).toBe(generation + 1);
+      }
       expect(publishedThreads).toContain(threadId);
     },
   );
