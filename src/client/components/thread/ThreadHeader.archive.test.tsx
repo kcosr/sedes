@@ -108,11 +108,7 @@ function makeSnapshot(
       label: { text: "Machine" },
       available: true,
     },
-    attention: {
-      wake: false,
-      automationContext: null,
-      queueFailure: false,
-    },
+    attention: { automationContexts: [] },
     stashes: [],
     agentTools: {
       runtimeAvailability: { availability: "available" },
