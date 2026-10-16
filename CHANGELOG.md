@@ -106,6 +106,7 @@ User-facing changes are collected here before release. See the
 - Codex advisory metadata no longer forces conversation history reloads.
   Completion replay and already-active inventory wakes avoid unchanged
   publications, and thread-summary reads reuse prepared SQL statements.
+  ([#89](https://github.com/kcosr/sedes/pull/89))
 
 - Automation delivery reconciles saved acceptance despite UI publication
   failures or dispatch timing races. Stopping a turn preserves its Interrupted
