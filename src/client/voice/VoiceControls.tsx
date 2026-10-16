@@ -35,7 +35,7 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
   const pickerAnchor = useRef<HTMLButtonElement>(null);
   const pickerRecording = useRef<NativeRecordingCommandContext | null>(null);
   const pickerGeneration = useRef<number | null>(null);
-  const lastActionPress = useRef<{ kind: "next" | "stop" | "retarget"; bounds: DOMRect; at: number } | null>(null);
+  const lastActionPress = useRef<{ kind: "next" | "target" | "stop" | "retarget"; bounds: DOMRect; at: number } | null>(null);
   const shortcutButton = useRef<HTMLButtonElement | null>(null);
   const keepButton = useRef<HTMLButtonElement>(null);
   const shortcutRetarget = useRef<(NativeRecordingCommandContext & { threadId: string }) | null>(null);
@@ -118,9 +118,14 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
   const cancels = ["validating", "announcing", "arming", "listening", "recognizing"].includes(phase);
   const showingInput = ["validating", "announcing", "arming", "listening", "recognizing", "submitting", "recovering"].includes(phase);
   const inputActions = (showingInput || capture != null) && active !== null && !showingRecovery;
-  const idleNavigation = !off && active === null && !showingRecovery && startTarget?.source === "retained" &&
+  const idleNavigation = !off && documentVisible && active === null && !showingRecovery && startTarget?.source === "retained" &&
     native.actions.canReleaseRetainedTarget && native.retainedVoiceTarget !== null;
-  const showNext = idleNavigation || (active !== null && (!speaking || native.queue.count > 0 || settings.autoListen));
+  // Explicit and pinned destinations can differ from the viewed thread too.
+  // Choosing it affects the next recording, not the saved default or pin.
+  const idleTargetsViewedThread = !off && documentVisible && phase === "idle" && active === null && !showingRecovery &&
+    native.actions.canStart && viewedThreadAvailable && startTarget?.threadId !== threadId && !idleNavigation;
+  const idleTargetAction = idleNavigation || idleTargetsViewedThread;
+  const showNext = idleTargetAction || (active !== null && (!speaking || native.queue.count > 0 || settings.autoListen));
   const [targetId, targetTitle] = showingInput ? [active?.recognitionThreadId, active?.recognitionThreadTitle]
     : [active?.threadId ?? active?.recognitionThreadId, active?.threadTitle ?? active?.recognitionThreadTitle];
   const activeTitle = targetTitle ?? (targetId ? threads.find(thread => thread.id === targetId)?.title.text.trim() || "Untitled thread" : undefined);
@@ -271,20 +276,36 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
                 const command = { expectedConnectionGeneration: native.connectionGeneration, recordingId: capture.id, enabled: !capture.keepListening };
                 act(() => store.plugin.setKeepListening(command));
               }}><InfinityIcon strokeWidth={1.8} aria-hidden="true" /></button>
-              : showNext ? <button type="button" className="voice-card-button"
-                aria-label={idleNavigation ? viewedThreadAvailable ? targetThisThreadLabel : "Release voice target" : "Next voice interaction"}
-                title={idleNavigation ? viewedThreadAvailable ? "This thread" : "Release voice target" : "Next"}
-                disabled={state.pending || !(native.actions.canSkip && active || idleNavigation)} onClick={event => {
-                  if (lastActionPress.current?.kind !== "next" && repeatsLastAction(event)) return;
-                  lastActionPress.current = { kind: "next", bounds: event.currentTarget.getBoundingClientRect(), at: event.timeStamp };
+              : showNext ? <button key={idleTargetAction ? "target" : "next"} type="button" className="voice-card-button"
+                aria-label={idleTargetAction ? viewedThreadAvailable ? targetThisThreadLabel : "Release voice target" : "Next voice interaction"}
+                title={idleTargetAction ? viewedThreadAvailable ? "This thread" : "Release voice target" : "Next"}
+                disabled={state.pending || !(native.actions.canSkip && active || idleTargetAction)} onClick={event => {
+                  if (store.getSnapshot().pending) return;
+                  if (idleTargetAction && document.visibilityState === "hidden") return;
+                  if (idleTargetsViewedThread) {
+                    const current = store.getSnapshot().native;
+                    const currentRoute = parseRoute(window.location.pathname);
+                    if (!current || !viewedThread || current.connectionGeneration !== native.connectionGeneration ||
+                        current.idleTargetRevision !== native.idleTargetRevision || current.phase !== "idle" || current.active !== null ||
+                        current.settings.audioMode === "off" || !current.actions.canStart || savedRecording(current) !== null ||
+                        currentRoute.name !== "thread" || currentRoute.threadId !== threadId ||
+                        voiceRecordingTarget(threads, current, threadId)?.threadId === threadId) return;
+                  }
+                  const actionKind = idleTargetAction ? "target" : "next";
+                  if (lastActionPress.current?.kind !== actionKind && repeatsLastAction(event)) return;
+                  lastActionPress.current = { kind: actionKind, bounds: event.currentTarget.getBoundingClientRect(), at: event.timeStamp };
                   if (native.actions.canSkip && active) {
                     const command = { expectedConnectionGeneration: native.connectionGeneration, interactionId: active.id };
                     act(() => store.plugin.skipCurrentPlayback(command));
                   } else if (idleNavigation && native.retainedVoiceTarget) {
                     const command = { expectedConnectionGeneration: native.connectionGeneration, expectedRetainedRevision: native.retainedVoiceTarget.revision };
                     act(() => store.plugin.releaseRetainedVoiceTarget(command));
+                  } else if (idleTargetsViewedThread && viewedThread) {
+                    const command = { expectedConnectionGeneration: native.connectionGeneration,
+                      threadId: viewedThread.id, threadTitle: threadTitle ?? undefined };
+                    act(() => store.plugin.setNextRecordingTarget(command));
                   }
-                }}>{idleNavigation ? <Locate strokeWidth={1.8} aria-hidden="true" /> : <SkipForward strokeWidth={1.8} aria-hidden="true" />}</button> : null}
+                }}>{idleTargetAction ? <Locate strokeWidth={1.8} aria-hidden="true" /> : <SkipForward strokeWidth={1.8} aria-hidden="true" />}</button> : null}
             {active !== null ? <button type="button" className="voice-card-button" aria-label={cancels ? "Cancel voice recording" : "Stop voice interaction"}
               title={cancels ? "Cancel" : "Stop"} disabled={!native.actions.canStop || !active} onClick={event => {
                 if (!active || !native.actions.canStop) return;

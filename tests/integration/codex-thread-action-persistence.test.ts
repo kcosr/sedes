@@ -1,4 +1,5 @@
 import { importLegacyDatabaseConfigurationFixture } from "../support/database-configuration-fixture.js";
+import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type Database from "better-sqlite3";
 import { parseResolvedBackendConfiguration } from "../support/resolved-backend-configuration.js";
@@ -9,6 +10,7 @@ import {
   backendNormalizedMigrations,
 } from "../../src/server/db/migrate.js";
 import { BackendConfigurationRepository } from "../../src/server/db/repositories/backend-configuration-repository.js";
+import { AutomationRepository } from "../../src/server/db/repositories/automation-repository.js";
 import { ConversationBindingRepository } from "../../src/server/db/repositories/conversation-binding-repository.js";
 import { ConversationOperationRepository } from "../../src/server/db/repositories/conversation-operation-repository.js";
 import { InventoryRepository } from "../../src/server/db/repositories/inventory-repository.js";
@@ -18,6 +20,8 @@ import { CodexAutomationExecutionPolicy } from "../../src/server/backends/codex/
 import { CodexThreadExecutionSettingsRepository } from "../../src/server/backends/codex/codex-thread-execution-settings-repository.js";
 import { CodexGoalSessionRegistry } from "../../src/server/backends/codex/codex-goal-session.js";
 import { ProviderFeatureMutationRepository } from "../../src/server/db/repositories/provider-feature-mutation-repository.js";
+import { QueuedInputRepository } from "../../src/server/db/repositories/queued-input-repository.js";
+import { CodexThreadPresentationProvider } from "../../src/server/backends/codex/codex-thread-presentation-provider.js";
 import { boundValue } from "../../src/server/conversations/payload-policy.js";
 import { SingleUserIdentityProvider } from "../../src/server/identity/identity-provider.js";
 import type { RequestScope } from "../../src/server/identity/identity-provider.js";
@@ -114,6 +118,7 @@ function fixture(
   input: {
     readonly imported?: boolean;
     readonly unbound?: boolean;
+    readonly enabledAutomation?: boolean;
     readonly managedTui?: CodexManagedTuiController;
     readonly desiredSettingsChanged?: (scope: RequestScope, applicationThreadId: string) => void;
     readonly fastModeRuntime?: {
@@ -196,9 +201,29 @@ function fixture(
         },
     now: 320,
   });
+  const automations = new AutomationRepository(database);
+  const automation = input.enabledAutomation
+    ? automations.createDefinition(scope, {
+        anchorThreadId: codexThreadId,
+        name: "Recurring thread wake-up",
+        prompt: "Check for updates",
+        runMode: "same_thread",
+        enabled: true,
+        precheck: null,
+        schedule: { kind: "interval", anchorAt: 1_000, everySeconds: 300 },
+        misfirePolicy: "coalesce",
+        nextRunAt: 1_000,
+        now: 330,
+      })
+    : undefined;
   return {
     database,
     scope,
+    automations,
+    automation,
+    codexProfile,
+    configurations,
+    workspace,
     inventory: new InventoryRepository(database),
     operations: new ConversationOperationRepository(database),
     codexThreadId,
@@ -226,6 +251,216 @@ function fixture(
 }
 
 describe("Codex interactive action persistence", () => {
+  it.each([false, true])("offers model, reasoning, speed, and permissions with enabled automation (unbound=%s)", async (unbound) => {
+    const current = fixture({ enabledAutomation: true, unbound });
+    const backend = current.configurations.getBackend(current.scope, "codex-primary");
+    const provider = new CodexThreadPresentationProvider({
+      settings: current.settings,
+      executionPolicy,
+      modelPolicy: catalogModelPolicy,
+      fastModeRuntime: {
+        projection: () => ({ revision: 1, fastEnabled: true, ultrafastEnabled: true, availability: "available" }),
+      },
+    });
+    const presentation = await provider.read({
+      scope: current.scope,
+      applicationThreadId: current.codexThreadId,
+      backend: { ...backend, enabled: backend.enabled === 1 },
+      connection: { ...current.codexProfile, enabled: current.codexProfile.enabled === 1 },
+      workspace: {
+        authorityRevision: 0,
+        canonicalPath: "/tmp/codex-actions",
+        summary: {
+          id: current.workspace.id,
+          environmentId: current.codexProfile.executionEnvironmentId,
+          displayName: "Codex actions",
+          displayPath: "/tmp/codex-actions",
+          availability: "available",
+          trustState: "trusted",
+          revision: 0,
+        },
+      },
+      catalog: {
+        models: [{
+          provider: current.codexProfile.id,
+          id: "gpt-5.6-codex",
+          label: "GPT-5.6 Codex",
+          supportedReasoningEfforts: ["low", "high"],
+          defaultReasoningEffort: "low",
+          inputModalities: ["text"],
+          serviceTiers: { offered: [{ selection: "fast" }, { selection: "ultrafast" }], defaultSelection: "standard" },
+        }],
+        commands: [], skills: [], notices: [],
+      },
+    });
+
+    expect(presentation.settingDescriptors).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "model", available: true }),
+      expect.objectContaining({ id: "thinking_level", available: true }),
+    ]));
+    expect(presentation.providerFeatureCapabilities).toEqual(expect.arrayContaining([
+      expect.objectContaining({ ref: { featureId: "codex.execution", schemaVersion: 1 }, availability: "available" }),
+      expect.objectContaining({ ref: { featureId: "codex.fast_mode", schemaVersion: 2 }, availability: "available" }),
+    ]));
+    expect(presentation.automationAllowed).toBe(true);
+    expect(current.automations.getDefinition(current.scope, current.automation!.id).enabled).toBe(true);
+  });
+
+  it.each([
+    {
+      settingId: "model" as const,
+      value: encodeCodexModelSetting("gpt-5.7-codex", "medium", ["fast"], "standard"),
+      desired: { model: "gpt-5.7-codex", reasoningEffort: "medium" },
+    },
+    {
+      settingId: "thinking_level" as const,
+      value: "high",
+      desired: { model: "gpt-5.6-codex", reasoningEffort: "high" },
+    },
+  ])("changes $settingId while a recurring automation stays enabled", ({ settingId, value, desired }) => {
+    const current = fixture({ enabledAutomation: true });
+    const thread = current.inventory.getThread(current.scope, current.codexThreadId).thread;
+    const settings = current.settings.find(current.scope, current.codexThreadId)!;
+
+    current.persistence.persistAccepted(current.scope, current.codexThreadId, {
+      mutationId: `automated-thread-${settingId}`,
+      expectedThreadRevision: thread.revision,
+      settingsGuard: { kind: "staged", expectedRevision: settings.revision },
+      operation: { action: "set_setting", settingId, value },
+      now: 400,
+    });
+
+    expect(current.settings.find(current.scope, current.codexThreadId)).toMatchObject({
+      desired,
+      revision: settings.revision + 1,
+    });
+    expect(current.automations.getDefinition(current.scope, current.automation!.id))
+      .toEqual(current.automation);
+  });
+
+  it.each([
+    { featureId: "codex.fast_mode", schemaVersion: 2, actionId: "set_fast", desired: { serviceTier: "fast" } },
+    { featureId: "codex.execution", schemaVersion: 1, actionId: "set_sandbox_workspace", desired: { sandboxMode: "workspace-write" } },
+    { featureId: "codex.execution", schemaVersion: 1, actionId: "set_network_enabled", desired: { networkAccess: "enabled" } },
+    { featureId: "codex.execution", schemaVersion: 1, actionId: "set_approval_on_request", desired: { approvalPolicy: "on-request" } },
+    { featureId: "codex.execution", schemaVersion: 1, actionId: "set_reviewer_auto_review", desired: { approvalReviewer: "auto_review" } },
+  ])("accepts $actionId while a recurring automation stays enabled", async ({ featureId, schemaVersion, actionId, desired }) => {
+    const current = fixture({ enabledAutomation: true });
+    const thread = current.inventory.getThread(current.scope, current.codexThreadId).thread;
+    const settings = current.settings.find(current.scope, current.codexThreadId)!;
+    const mutationId = `automated-thread-${actionId}`;
+
+    await expect(current.persistence.performProviderFeature(current.scope, current.codexThreadId, {
+      mutationId,
+      expectedThreadRevision: thread.revision,
+      operation: {
+        action: "perform_provider_feature",
+        feature: { featureId, schemaVersion },
+        actionId,
+        arguments: null,
+        expectedFeatureRevision: settings.revision,
+      },
+      now: 400,
+    })).resolves.toEqual({ applicationOperationId: mutationId });
+
+    expect(current.settings.find(current.scope, current.codexThreadId)).toMatchObject({
+      desired,
+      revision: settings.revision + 1,
+    });
+    expect(current.featureMutations.find(current.scope, mutationId)?.state).toBe("accepted");
+    expect(current.automations.getDefinition(current.scope, current.automation!.id))
+      .toEqual(current.automation);
+  });
+
+  it("preserves a frozen operation while the next operation uses edited thread settings", () => {
+    const current = fixture({ enabledAutomation: true });
+    const thread = current.inventory.getThread(current.scope, current.codexThreadId).thread;
+    const before = current.settings.find(current.scope, current.codexThreadId)!;
+    const frozen = current.settings.freezeOperationSnapshot(current.scope, {
+      applicationThreadId: current.codexThreadId,
+      applicationOperationId: "earlier-automation-operation",
+      now: 400,
+    });
+
+    current.persistence.persistAccepted(current.scope, current.codexThreadId, {
+      mutationId: "between-runs-model-change",
+      expectedThreadRevision: thread.revision,
+      settingsGuard: { kind: "staged", expectedRevision: before.revision },
+      operation: {
+        action: "set_setting",
+        settingId: "model",
+        value: encodeCodexModelSetting("gpt-5.7-codex", "high", ["fast"], "standard"),
+      },
+      now: 410,
+    });
+
+    const replay = current.settings.freezeOperationSnapshot(current.scope, {
+      applicationThreadId: current.codexThreadId,
+      applicationOperationId: frozen.applicationOperationId,
+      now: 420,
+    });
+    const next = current.settings.freezeOperationSnapshot(current.scope, {
+      applicationThreadId: current.codexThreadId,
+      applicationOperationId: "next-automation-operation",
+      now: 430,
+    });
+    expect(replay).toEqual(frozen);
+    expect(replay.settings).toEqual(before.desired);
+    const after = current.settings.find(current.scope, current.codexThreadId)!;
+    expect(next.settings).toEqual(after.desired);
+    expect(next.settingsRevision).toBe(after.revision);
+    expect(next.settings).toMatchObject({ model: "gpt-5.7-codex", reasoningEffort: "high" });
+    expect(current.automations.getDefinition(current.scope, current.automation!.id))
+      .toEqual(current.automation);
+  });
+
+  it("rejects a settings edit admitted before an automation input was queued", () => {
+    const current = fixture({ enabledAutomation: true });
+    const thread = current.inventory.getThread(current.scope, current.codexThreadId).thread;
+    const settings = current.settings.find(current.scope, current.codexThreadId)!;
+    const automationId = current.automation!.id;
+    const { run } = current.automations.claimScheduledOccurrence(current.scope, automationId, {
+      runId: randomUUID(),
+      occurrenceKey: "scheduled:1000",
+      scheduledFor: 1_000,
+      lastScheduledAt: 1_000,
+      nextRunAt: 301_000,
+      coalescedCount: 0,
+      claimToken: "settings-race-claim",
+      leaseExpiresAt: 2_000,
+      dispatchMutationId: randomUUID(),
+      now: 1_000,
+    });
+    current.automations.updateRunState(current.scope, automationId, run.id, {
+      expectedState: "claimed",
+      state: "dispatching",
+      claimToken: run.claimToken!,
+      retainPromptSnapshot: true,
+      now: 1_001,
+    });
+    const queued = new QueuedInputRepository(current.database).enqueue(current.scope, current.codexThreadId, {
+      mutationId: run.dispatchMutationId,
+      text: run.promptSnapshot!,
+      contextExcerpts: [],
+      attachmentIds: [],
+      taskReferences: [],
+      source: { kind: "automation", automationId, automationRunId: run.id, claimToken: run.claimToken! },
+      now: 1_002,
+    });
+    expect(queued.item.triggerKind).toBe("automation");
+    expect(current.inventory.getThread(current.scope, current.codexThreadId).thread.revision)
+      .toBeGreaterThan(thread.revision);
+
+    expect(() => current.persistence.persistAccepted(current.scope, current.codexThreadId, {
+      mutationId: "raced-settings-edit",
+      expectedThreadRevision: thread.revision,
+      settingsGuard: { kind: "staged", expectedRevision: settings.revision },
+      operation: { action: "set_setting", settingId: "thinking_level", value: "high" },
+      now: 1_003,
+    })).toThrow(expect.objectContaining({ code: "conflict" }));
+    expect(current.settings.find(current.scope, current.codexThreadId)).toEqual(settings);
+  });
+
   it("owns the best-effort Goal pause after accepted Stop", async () => {
     const current = fixture();
     const mutateProviderFeature = vi.fn(async () => ({

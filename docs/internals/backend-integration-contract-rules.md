@@ -4117,6 +4117,15 @@ the ordinary interaction lifecycle and may leave the thread waiting for the
 principal. Do not add an automation-only "safe" tuple or silently replace the
 thread's selected execution settings.
 
+Enabled automation definitions do not own or lock their thread's configuration.
+Keep supported settings editable under the ordinary backend lifecycle rules;
+same-thread runs use current thread settings when preparing the operation, and
+recovery preserves any frozen operation snapshot. Preserve revision checks
+across settings edits and automation admission, as well as ordinary fork
+inheritance. Codex, Pi, Claude, and OpenCode implement this rule; Grok explicitly
+does not support automation. Preserve a backend's specific setting-unavailable
+reason when composing normalized capabilities.
+
 Automation sources may have several independent definitions. Keep exactly two
 run modes: `same_thread` submits to the existing source and `clone` creates one
 new result per invocation. The user-facing labels are **This thread** and

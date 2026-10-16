@@ -90,8 +90,8 @@ change. Sedes never steps Ultrafast down to Fast, because that would change
 usage without a choice.
 
 Settings and Speed controls are read-only while a turn or queued input is
-active, while mutation recovery is unresolved, or while an enabled automation
-owns the thread configuration. This quiet-thread gate is separate from the
+active, or while mutation recovery is unresolved. Enabled automations do not
+own or lock the thread configuration. This quiet-thread gate is separate from the
 immutable-snapshot rule: even if desired state changes after an operation has
 been accepted, that operation continues with its frozen tuple.
 
@@ -306,9 +306,13 @@ execution tuple and agent-tool policy, but not Goal or managed-TUI state.
 Automations may use any complete Codex tuple available to a manual turn. Sedes
 does not narrow sandbox, network, or approval values for automation. An
 attended approval policy can therefore leave an automated turn waiting for the
-principal. The immutable snapshot is revalidated again at dispatch. An enabled
-automation makes interactive execution-setting and Speed controls read-only to
-prevent configuration races.
+principal. The immutable snapshot is revalidated again at dispatch. Enabled
+automations leave execution-setting and Speed controls editable between runs,
+subject to the ordinary quiet-thread checks. Same-thread automation uses the
+thread's current settings when preparing its turn; retries retain that
+operation's frozen snapshot. Fork automations retain the ordinary fork
+settings-inheritance contract. Thread and settings revision checks reject
+stale edits that race automation admission.
 
 Saved Agents can carry the complete tuple, subject to the destination target's
 current policy and catalog. The **New with same settings** action

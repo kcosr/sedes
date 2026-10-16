@@ -4131,6 +4131,8 @@ function unboundSettingFixture(input?: {
 }
 
 function boundSettingActionFixture(input?: {
+  readonly local?: boolean;
+  readonly runState?: "idle" | "running";
   perform?: () => Promise<{ accepted: true; capabilityRevision?: string }>;
   reconcileAction?: () => Promise<{
     outcome: "accepted" | "not_applied" | "unknown";
@@ -4162,7 +4164,7 @@ function boundSettingActionFixture(input?: {
     | undefined;
   let aggregateRevision = 4;
   const actor = {
-    timeline: { runState: "idle" as const },
+    timeline: { runState: input?.runState ?? ("idle" as const) },
     backendCapabilities: vi.fn(async () => ({
       actions: ["set_model", "set_thinking_level", "set_tool_access"],
     })),
@@ -4278,6 +4280,7 @@ function boundSettingActionFixture(input?: {
       [
         "backend-1",
         {
+          isLocalOperation: () => input?.local ?? false,
           driverAction: (
             operation: { action: "set_setting"; value: string },
             applicationOperationId: string,
@@ -4479,6 +4482,24 @@ describe("ThreadMutationGateway backend-action receipts", () => {
       message:
         "The setting cannot change while the thread has active durable work.",
     });
+  });
+
+  it("rejects a bound local next-turn setting while a turn is active", async () => {
+    const subject = boundSettingActionFixture({
+      local: true,
+      runState: "running",
+    });
+
+    await expect(
+      subject.gateway.mutate(scope, "thread-1", boundSetting),
+    ).rejects.toMatchObject({
+      code: "invalid_transition",
+      message: "The setting cannot change while a turn is active.",
+    });
+    expect(subject.operations.prepareBackendAction).not.toHaveBeenCalled();
+    expect(subject.persistAccepted).not.toHaveBeenCalled();
+    expect(subject.actor.perform).not.toHaveBeenCalled();
+    expect(subject.publishThreadSnapshot).not.toHaveBeenCalled();
   });
 
   it.each([

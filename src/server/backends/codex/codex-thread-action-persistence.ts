@@ -382,7 +382,6 @@ export class CodexThreadActionPersistence implements ThreadActionPersistenceProv
         "The Codex execution-setting action is unavailable.",
       );
     }
-    this.#assertNoEnabledAutomation(scope, applicationThreadId);
     const requestFingerprint = fingerprint([
       applicationThreadId,
       input.expectedThreadRevision,
@@ -479,7 +478,6 @@ export class CodexThreadActionPersistence implements ThreadActionPersistenceProv
         "The Codex Speed action is invalid.",
       );
     }
-    this.#assertNoEnabledAutomation(scope, applicationThreadId);
     const requestFingerprint = fingerprint([
       applicationThreadId,
       input.expectedThreadRevision,
@@ -926,7 +924,6 @@ export class CodexThreadActionPersistence implements ThreadActionPersistenceProv
     }
     const expectedSettingsRevision = input.settingsGuard.expectedRevision;
     const settingValue = input.operation.value;
-    this.#assertNoEnabledAutomation(scope, applicationThreadId);
     this.database.transaction(() => {
       const target = this.#threadTarget(scope, applicationThreadId);
       const current = this.#settings.find(scope, applicationThreadId);
@@ -1030,29 +1027,6 @@ export class CodexThreadActionPersistence implements ThreadActionPersistenceProv
       .run(scope.tenantId, scope.principalId);
     if (generation.changes !== 1) {
       throw new Error("codex_action_inventory_generation_missing");
-    }
-  }
-
-  #assertNoEnabledAutomation(
-    scope: RequestScope,
-    applicationThreadId: string,
-  ): void {
-    const attached = this.database
-      .prepare(
-        `
-      SELECT 1 AS present
-      FROM automation_definitions
-      WHERE tenant_id = ? AND owner_principal_id = ?
-        AND anchor_thread_id = ? AND enabled = 1 AND deleted_at IS NULL
-      LIMIT 1
-    `,
-      )
-      .get(scope.tenantId, scope.principalId, applicationThreadId);
-    if (attached) {
-      throw new DomainError(
-        "invalid_transition",
-        "Codex execution settings cannot change while an automation is enabled.",
-      );
     }
   }
 

@@ -343,6 +343,11 @@ Codex model catalog for your account, the active runtime, and installation
 policy; Sedes does not infer it from a model name. Change it with the other
 desired next-turn settings.
 
+Enabled automations do not lock the thread's model, reasoning, Speed, or
+permissions. Change them between runs; the next **This thread** automation run
+uses the current thread settings. Active turns, queued input, and unresolved
+recovery still prevent settings changes.
+
 When the model offers one faster speed, the composer's lightning button turns
 it on and off. When it offers both Fast and Ultrafast, the button opens a Speed
 menu; the button shows a filled lightning bolt for Fast and a rocket for

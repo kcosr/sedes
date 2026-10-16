@@ -88,11 +88,13 @@ User-facing changes are collected here before release. See the
   [voice controls](docs/operator/clients/voice.md#targeting-and-controls).
   ([#84](https://github.com/kcosr/sedes/pull/84))
 
-- Idle voice **Next** is now the target icon labelled **Target this thread**, or
-  **Release voice target** when no available thread is viewed. It still releases
-  the retained destination; playback, headset, and notification Next are
-  unchanged. See [voice controls](docs/operator/clients/voice.md#targeting-and-controls).
-  ([#82](https://github.com/kcosr/sedes/pull/82))
+- Android's idle voice bar uses **Target this thread** beside Start when its
+  destination differs from the viewed thread or is missing, including pinned
+  and explicit choices, without changing the saved default. Retained targets
+  keep their release action, labelled **Release voice target** when no available
+  thread is viewed; playback, headset, and notification Next are unchanged. See
+  [voice controls](docs/operator/clients/voice.md#targeting-and-controls).
+  ([#82](https://github.com/kcosr/sedes/pull/82), [#90](https://github.com/kcosr/sedes/pull/90))
 
 - Chat draft text, speech, stashes, and restored queued input now use the same
   256 KiB UTF-8 limit. Text and materialized context share the existing input
@@ -102,6 +104,12 @@ User-facing changes are collected here before release. See the
   ([#81](https://github.com/kcosr/sedes/pull/81))
 
 ### Fixed
+
+- Codex threads keep model, reasoning, Speed, and permissions editable between
+  runs while automations remain enabled. Same-thread automation uses current
+  thread settings; active-work and recovery safeguards remain in place. See
+  [Codex settings](docs/user/provider-features.md#speed).
+  ([#90](https://github.com/kcosr/sedes/pull/90))
 
 - Sidebar cards no longer repeat the same scheduled run or snooze wake time on
   both lines, or add a draft label beside the existing draft icon. Distinct

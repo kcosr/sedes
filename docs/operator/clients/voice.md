@@ -350,9 +350,12 @@ redirect an active interaction.
 While idle and showing a retained destination, the target icon releases it and
 returns the card to the viewed thread, or the saved default or chooser when no
 thread is visible. It is labelled **Target this thread** when the viewed thread
-can accept a recording, and **Release voice target** otherwise. The icon is
-hidden when the retained destination matches the visible thread or the
-card follows an explicitly chosen thread. Idle notification Next and
+can accept a recording, and **Release voice target** otherwise. When an explicit
+next choice or pinned default differs from the viewed thread, **Target this
+thread** selects the viewed thread for the next recording without changing the
+saved default or pin. It also works when the next destination is missing. The
+shortcut is hidden when the card already targets the viewed thread, or that
+thread cannot accept a recording. Idle notification Next and
 headset Next release the same destination. They do not record, send a message,
 navigate, or edit the composer. If the retained thread becomes unavailable,
 Start reports the failure and keeps that target until you release it or choose
@@ -418,7 +421,9 @@ The compact bar keeps its title and status beside 40 px action buttons on all
 screen widths. Playback shows **Next**, **Stop**, **Record**, hiding Next when
 the queue is empty and Auto-listen is off; recording shows
 **Keep listening**, **Cancel**, **Send**, with **Target this thread** immediately
-left of Keep listening when available. Idle uses the same target icon and hides
+left of Keep listening when available. Idle shows **Target this thread** beside
+the infinity or microphone Start button when its destination differs from the
+viewed thread. It uses the same target icon and hides
 unavailable target and Stop actions so the text can use their space.
 Record/Send stays at the right edge,
 and microphone preparation shows progress there. The outline is blue while

@@ -812,7 +812,7 @@ function presentationProvider(
   const backingState = input.backingState ?? "bound";
   const database = {
     prepare: () => ({
-      get: () => ({ backingState, enabledAutomation: 0 }),
+      get: () => ({ backingState }),
     }),
   } as unknown as Database.Database;
   const settings = {
