@@ -49,7 +49,6 @@ import { reasoningLabel } from "./codex-reasoning-label.js";
 
 type ThreadState = {
   readonly backingState: "unbound" | "creating" | "bound" | "creation_unknown";
-  readonly enabledAutomation: number;
 };
 
 export class CodexThreadPresentationProvider implements ThreadBackendPresentationProvider {
@@ -209,7 +208,7 @@ export class CodexThreadPresentationProvider implements ThreadBackendPresentatio
         id: "model",
         label: boundDisplayText("Model"),
         requiredForFirstSubmission: true,
-        available: models.length > 0 && thread.enabledAutomation === 0,
+        available: models.length > 0,
         ...(models.length === 0
           ? {
               unavailableReason: boundDisplayText(
@@ -218,21 +217,14 @@ export class CodexThreadPresentationProvider implements ThreadBackendPresentatio
                   : "Refreshing the Codex model catalog.",
               ),
             }
-          : thread.enabledAutomation > 0
-            ? {
-                unavailableReason: boundDisplayText(
-                  "Disable the automation before changing Codex execution settings.",
-                ),
-              }
-            : {}),
+          : {}),
         options: modelOptions,
       },
       {
         id: "thinking_level",
         label: boundDisplayText("Reasoning"),
         requiredForFirstSubmission: true,
-        available:
-          reasoningOptions.length > 0 && thread.enabledAutomation === 0,
+        available: reasoningOptions.length > 0,
         ...(reasoningOptions.length === 0
           ? {
               unavailableReason: boundDisplayText(
@@ -241,13 +233,7 @@ export class CodexThreadPresentationProvider implements ThreadBackendPresentatio
                   : "Refreshing the Codex model catalog.",
               ),
             }
-          : thread.enabledAutomation > 0
-            ? {
-                unavailableReason: boundDisplayText(
-                  "Disable the automation before changing Codex execution settings.",
-                ),
-              }
-            : {}),
+          : {}),
         options: presentedReasoningOptions.map((effort) => ({
           value: effort,
           label: boundDisplayText(reasoningLabel(effort)),
@@ -313,7 +299,7 @@ export class CodexThreadPresentationProvider implements ThreadBackendPresentatio
       this.input.executionPolicy,
     );
     const featureAvailability =
-      settings.desired && thread.enabledAutomation === 0
+      settings.desired
         ? ("available" as const)
         : ("read_only" as const);
     const featureCapability = compiledProviderFeatureRegistry.capability(
@@ -326,9 +312,7 @@ export class CodexThreadPresentationProvider implements ThreadBackendPresentatio
           ? {}
           : {
               unavailableReason: boundDisplayText(
-                thread.enabledAutomation > 0
-                  ? "Disable the automation before changing Codex permissions."
-                  : "Observe or choose complete Codex settings before changing permissions.",
+                "Observe or choose complete Codex settings before changing permissions.",
               ),
             }),
         allowedOperationIds: allowedActions,
@@ -356,7 +340,6 @@ export class CodexThreadPresentationProvider implements ThreadBackendPresentatio
       scope: input.scope,
       applicationThreadId: input.applicationThreadId,
       backingState: thread.backingState,
-      enabledAutomation: thread.enabledAutomation,
       settings,
       desiredModel,
     });
@@ -428,7 +411,6 @@ export class CodexThreadPresentationProvider implements ThreadBackendPresentatio
           commands: catalog.commands,
           skills: catalog.skills,
           allowedActions,
-          enabledAutomation: thread.enabledAutomation,
           goal: goalPresentation
             ? {
                 revision: goalPresentation.revision,
@@ -547,14 +529,7 @@ export class CodexThreadPresentationProvider implements ThreadBackendPresentatio
     const row = this.input.settings.database
       .prepare(
         `
-      SELECT thread.backing_state AS backingState,
-        EXISTS(
-          SELECT 1 FROM automation_definitions AS automation
-          WHERE automation.tenant_id = thread.tenant_id
-            AND automation.owner_principal_id = thread.owner_principal_id
-            AND automation.anchor_thread_id = thread.id
-            AND automation.enabled = 1 AND automation.deleted_at IS NULL
-        ) AS enabledAutomation
+      SELECT thread.backing_state AS backingState
       FROM application_threads AS thread
       WHERE thread.tenant_id = ? AND thread.owner_principal_id = ?
         AND thread.id = ?
@@ -606,7 +581,6 @@ function fastModeFeaturePresentation(input: {
   >[0]["scope"];
   readonly applicationThreadId: string;
   readonly backingState: ThreadState["backingState"];
-  readonly enabledAutomation: number;
   readonly settings: CodexThreadExecutionSettingsRecord;
   readonly desiredModel: BackendModelDescriptor | undefined;
 }):
@@ -651,8 +625,7 @@ function fastModeFeaturePresentation(input: {
   let state: CodexFastModeStateV2;
   let unavailableReason: string | undefined;
   if (input.backingState === "unbound") {
-    availability = input.enabledAutomation === 0 ? "available" : "read_only";
-    unavailableReason = "Disable the automation before changing Speed.";
+    availability = "available";
     state = {
       desired,
       effective: null,
@@ -662,14 +635,8 @@ function fastModeFeaturePresentation(input: {
   } else {
     if (input.backingState !== "bound") return undefined;
     if (!projection) return undefined;
-    availability =
-      input.enabledAutomation === 0 && projection.availability === "available"
-        ? "available"
-        : "read_only";
-    unavailableReason =
-      input.enabledAutomation > 0
-        ? "Disable the automation before changing Speed."
-        : "Speed is temporarily unavailable while Codex reconnects.";
+    availability = projection.availability === "available" ? "available" : "read_only";
+    unavailableReason = "Speed is temporarily unavailable while Codex reconnects.";
     const effective = input.settings.effective?.serviceTier ?? null;
     state = {
       desired,

@@ -207,6 +207,7 @@ function createService(input?: {
     | "questionnaire"
   )[];
   modelValue?: string | null;
+  settingDescriptors?: ThreadApplicationPresentation["settingDescriptors"];
   automationAllowed?: boolean;
   automationForkDraftOnly?: boolean;
   nextTurnSettingIds?: ThreadApplicationPresentation["nextTurnSettingIds"];
@@ -394,7 +395,7 @@ function createService(input?: {
         },
       ],
     },
-    settingDescriptors: [
+    settingDescriptors: input?.settingDescriptors ?? [
       {
         id: "model" as const,
         label: { text: "Model" },
@@ -1104,6 +1105,29 @@ describe("ThreadApplicationService", () => {
         ({ kind }) => kind === "text_input",
       ),
     ).toBeUndefined();
+  });
+
+  it("preserves the backend's specific reason for an unavailable setting", async () => {
+    const { service } = createService({
+      runState: "idle",
+      queue: [],
+      settingDescriptors: [{
+        id: "model",
+        label: { text: "Model" },
+        available: false,
+        requiredForFirstSubmission: true,
+        unavailableReason: { text: "Refreshing the model catalog." },
+        options: [],
+      }],
+    });
+    const snapshot = await service.snapshot(scope, "thread-1");
+    expect(snapshot.capabilities.settings).toEqual([
+      expect.objectContaining({
+        id: "model",
+        available: false,
+        unavailableReason: { text: "Refreshing the model catalog." },
+      }),
+    ]);
   });
 
   it("does not acquire a backend conversation for a server-side draft", async () => {

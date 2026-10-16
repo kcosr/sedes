@@ -1298,7 +1298,8 @@ function composeCapabilities(input: {
     available: settingAvailable(descriptor),
     ...reason(
       settingAvailable(descriptor),
-      "This setting is unavailable in the current thread state.",
+      descriptor.unavailableReason?.text ??
+        "This setting is unavailable in the current thread state.",
     ),
   }));
   const providerFeatures = input.presentation.providerFeatureCapabilities.map(

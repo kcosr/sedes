@@ -69,7 +69,7 @@ test("playback Record, Next and Stop stay separate on touch while replying to an
   const settings = { ...base.settings, autoListen: false, pinDefaultVoiceThread: true, voiceThreadId: defaultId, voiceThreadTitle: "Pinned thread C" };
   const queue = { count: 2, bytes: 80, droppedCount: 0, droppedReasons: {} };
   const calls = () => page.evaluate(() => window.__voiceFixture.calls.filter(call =>
-    ["recordDuringPlayback", "sendRecording", "skipCurrentPlayback", "stopCurrentInteraction", "stopPlayback", "startManualListen", "releaseRetainedVoiceTarget"].includes(call.method)));
+    ["recordDuringPlayback", "sendRecording", "skipCurrentPlayback", "stopCurrentInteraction", "stopPlayback", "startManualListen", "releaseRetainedVoiceTarget", "setNextRecordingTarget"].includes(call.method)));
   const expected: Awaited<ReturnType<typeof calls>> = [];
   const playback = async (id: string, phase: "synthesizing" | "speaking", automatic: boolean) => {
     await publishVoiceState(page, { phase, settings, queue,
@@ -204,12 +204,12 @@ test("playback Record, Next and Stop stay separate on touch while replying to an
           recognitionThreadId: null, recognitionThreadTitle: null, automatic: true, recording: null },
         actions: { ...base.actions, canStart: false, canStop: true, canSkip: true, canRecordDuringPlayback: true } });
       await expect(toolbar.locator(".voice-card-title")).toHaveText("Spoken thread B");
-      const repeat = await tapAndRepeatAfterRemoval(page, toolbar.getByRole("button", { name: "Stop voice interaction", exact: true }));
-      expect(repeat.target ?? "").not.toMatch(/^(?:Target this thread:|Release voice target)/u);
+      // The idle shortcut can replace Stop, but a repeat tap must not select it.
+      await tapAndRepeatAfterRemoval(page, toolbar.getByRole("button", { name: "Stop voice interaction", exact: true }));
       expected.push({ method: "stopPlayback", args: { expectedConnectionGeneration: 1, interactionId: id } });
       await expect.poll(calls).toEqual(expected);
       await expect(toolbar.locator(".voice-card-title")).toHaveText(policy === "viewed" ? "Viewed thread A" : policy === "pinned" ? "Pinned thread C" : "Chosen thread D");
-      await expect(toolbar.getByRole("button", { name: /^(?:Target this thread:|Release voice target|Next voice interaction|Stop voice interaction)/u })).toHaveCount(0);
+      await expect(toolbar.getByRole("button", { name: /^(?:Target this thread:|Release voice target|Next voice interaction|Stop voice interaction)/u })).toHaveCount(policy === "viewed" ? 0 : 1);
       await expect(toolbar.getByRole("button", { name: "Start voice recording", exact: true })).toBeEnabled();
       await expect(page.getByRole("dialog")).toHaveCount(0);
       expect(await page.evaluate(() => ({ active: window.__voiceFixture.state.active, queue: window.__voiceFixture.state.queue,
@@ -223,6 +223,29 @@ test("playback Record, Next and Stop stay separate on touch while replying to an
       if (count === 0) await capture(page, testInfo, `voice-stop-target-${policy}-320.png`);
     }
   }
+
+  // The idle shortcut overrides the next destination without changing the pin,
+  // and sits beside the infinity Start action when Keep listening is the default.
+  const keepSettings = { ...settings, keepListeningByDefault: true };
+  await publishVoiceState(page, { phase: "idle", active: null, settings: keepSettings,
+    nextRecordingTarget: { threadId: explicitId, threadTitle: "Chosen thread D" },
+    retainedVoiceTarget: null, actions: base.actions });
+  const idleTarget = toolbar.getByRole("button", { name: "Target this thread: Viewed thread A", exact: true });
+  const infinityStart = toolbar.getByRole("button", { name: "Start recording with Keep listening", exact: true });
+  await expect(idleTarget).toBeEnabled();
+  await expect(infinityStart.locator(".lucide-infinity")).toBeVisible();
+  await expectNoPageOverflow(page);
+  await capture(page, testInfo, "voice-idle-target-infinity-320.png");
+  // This is a deliberate new action after Stop, outside its 500 ms repeat-tap guard.
+  await page.waitForTimeout(510);
+  await tapAndRepeatAfterRemoval(page, idleTarget);
+  expected.push({ method: "setNextRecordingTarget", args: { expectedConnectionGeneration: 1, threadId: viewedId, threadTitle: "Viewed thread A" } });
+  await expect.poll(calls).toEqual(expected);
+  await expect(toolbar.locator(".voice-card-title")).toHaveText("Viewed thread A");
+  await expect(idleTarget).toHaveCount(0);
+  expect(await page.evaluate(() => window.__voiceFixture.state.settings)).toEqual(keepSettings);
+  await expect(composer).toHaveValue(draft);
+  await expect(page).toHaveURL(new RegExp(`${viewedPath}$`, "u"));
 
   await page.setViewportSize({ width: 480, height: 780 });
   await page.goto("/settings/voice");
