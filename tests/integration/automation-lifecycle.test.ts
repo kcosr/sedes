@@ -173,6 +173,7 @@ describe("thread automation lifecycle", () => {
     beforePrecheckResult = undefined;
     precheckCalls = 0;
     dispatcher = new AutomationDispatcher({
+      queueObserver: { reconcile: () => undefined },
       repository,
       inventory,
       service,

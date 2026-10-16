@@ -23,7 +23,7 @@ import { QueuedInputRepository } from "../../src/server/db/repositories/queued-i
 import { SubmissionCompletionRepository } from "../../src/server/db/repositories/submission-completion-repository.js";
 import { AutomationService } from "../../src/server/domain/automation-service.js";
 import type { AutomationPrecheckResult } from "../../src/server/runtime/automation-precheck-executor.js";
-import type { AutomationConversationGateway } from "../../src/server/runtime/automation-conversation-gateway.js";
+import { AutomationQueueRunObserver, type AutomationConversationGateway } from "../../src/server/runtime/automation-conversation-gateway.js";
 import { AutomationDispatcher } from "../../src/server/runtime/automation-dispatcher.js";
 import { SingleUserIdentityProvider } from "../../src/server/identity/identity-provider.js";
 import { OverlayRepository } from "../support/schema9/overlay-repository.js";
@@ -180,7 +180,9 @@ function createFixture() {
       },
       executionPolicy: { assertCanAutomate: () => undefined },
     });
+    const queueObserver = new AutomationQueueRunObserver({ repository, queue, publisher: service, now: () => clock });
     const dispatcher = new AutomationDispatcher({
+      queueObserver,
       repository,
       inventory,
       service,
@@ -189,7 +191,7 @@ function createFixture() {
       now: () => clock,
     });
     service.bindDispatcher(dispatcher);
-    return { service, dispatcher };
+    return { service, dispatcher, queueObserver };
   };
 
   return {
@@ -266,6 +268,45 @@ function createRecurring(
 }
 
 describe("C2 same-thread automation acceptance", () => {
+  it("reconciles acceptance observed before the dispatcher parks the run queued", async () => {
+    const subject = fixture();
+    const { service, dispatcher, queueObserver } = subject.createRuntime();
+    const definition = createRecurring(subject, service);
+    subject.setClock(2_000);
+    const dispatch = vi.fn(async (input: DispatchInput): Promise<DispatchResult> => {
+      const { item } = subject.queue.enqueue(input.scope, input.anchorThreadId, {
+        mutationId: input.dispatchMutationId,
+        text: input.prompt, contextExcerpts: [], attachmentIds: [], taskReferences: [],
+        source: { kind: "automation", automationId: input.automationId,
+          automationRunId: input.automationRunId, claimToken: input.claimToken },
+        now: 2_000,
+      });
+      subject.queue.claimHead(input.scope, input.anchorThreadId, "fixture-anchor", 2_001);
+      subject.queue.markAccepted(input.scope, input.anchorThreadId, item.id, {
+        expectedState: "dispatching", acceptedAt: 2_002,
+        backendCorrelation: input.dispatchMutationId,
+      });
+      // Model the async queue accepting after the gateway's last pending read,
+      // but before its queued result reaches the automation dispatcher.
+      queueObserver.observe(input.scope, input.anchorThreadId, subject.queue.get(input.scope, input.anchorThreadId, item.id));
+      expect(subject.repository.getRun(input.scope, input.automationId, input.automationRunId).state)
+        .toBe("dispatching");
+      return { status: "queued", targetThreadId: input.anchorThreadId };
+    });
+    subject.setDispatch(dispatch);
+    try {
+      const run = await service.runNow(subject.scope, definition.id, randomUUID(), 2_000);
+      expect(run.state).toBe("completed");
+      expect(subject.repository.getRun(subject.scope, definition.id, run.id).state).toBe("completed");
+      expect(subject.queue.list(subject.scope, subject.threadId)).toMatchObject([{ state: "accepted" }]);
+      expect(dispatch).toHaveBeenCalledOnce();
+      expect((await dispatcher.dispatch(subject.repository.getRun(subject.scope, definition.id, run.id))).state).toBe("completed");
+      expect(dispatch).toHaveBeenCalledOnce();
+    } finally {
+      await dispatcher.dispose();
+    }
+  });
+
   it("dispatches scheduled and Run Now work to one bound thread without cloning and projects completion attention", async () => {
     const subject = fixture();
     const { service } = subject.createRuntime();

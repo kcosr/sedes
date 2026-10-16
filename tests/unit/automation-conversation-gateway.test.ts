@@ -415,6 +415,45 @@ describe("AutomationQueueRunObserver", () => {
     expect(publisher.publishRun).toHaveBeenCalledWith(scope, completed);
   });
 
+  it("reports one failed recovery receipt and still reconciles later scoped runs", () => {
+    const runs = ["bad", "good"].map((id) => ({
+      tenantId: `tenant-${id}`, ownerPrincipalId: `principal-${id}`,
+      automationId: `automation-${id}`, id: `run-${id}`, anchorThreadId: `thread-${id}`,
+      childThreadId: null, dispatchMutationId: `dispatch-${id}`, occurrenceKind: "manual", state: "queued",
+    }));
+    const error = new Error("fixture corrupt recovery receipt");
+    const completed = { ...runs[1]!, state: "completed" };
+    const repository = {
+      listQueueObservedRuns: () => runs,
+      findRunByDispatchMutation: vi.fn(() => runs[1]!),
+      getDefinition: () => ({ schedule: { kind: "interval" } }),
+      updateRunState: vi.fn(() => completed),
+    };
+    const queue = {
+      findByMutationId: vi.fn((_scope, _threadId, mutationId) => {
+        if (mutationId === "dispatch-bad") throw error;
+        return { ...queued("accepted"), mutationId };
+      }),
+    };
+    const publishRun = vi.fn(), onRecoveryError = vi.fn();
+    const observer = new AutomationQueueRunObserver({
+      repository: repository as never, queue, publisher: { publishRun },
+      now: () => 2_000, onRecoveryError,
+    });
+    expect(() => observer.recover()).not.toThrow();
+    expect(onRecoveryError).toHaveBeenCalledExactlyOnceWith(error);
+    expect(queue.findByMutationId).toHaveBeenLastCalledWith(
+      { tenantId: "tenant-good", principalId: "principal-good" }, "thread-good", "dispatch-good",
+    );
+    expect(repository.updateRunState).toHaveBeenCalledExactlyOnceWith(
+      { tenantId: "tenant-good", principalId: "principal-good" }, "automation-good", "run-good",
+      { expectedState: "queued", state: "completed", now: 2_000, completeDefinition: false },
+    );
+    expect(publishRun).toHaveBeenCalledExactlyOnceWith(
+      { tenantId: "tenant-good", principalId: "principal-good" }, completed,
+    );
+  });
+
   it("recovers a fast accepted clone receipt after restart", () => {
     const automationRun = {
       tenantId: scope.tenantId,

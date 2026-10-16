@@ -21,6 +21,7 @@ import {
 } from "../db/repositories/submission-completion-repository.js";
 import type { RequestScope } from "../identity/identity-provider.js";
 import { DomainError } from "../domain/errors.js";
+import { reportBackgroundError } from "../report-background-error.js";
 import { projectQueuedInputSummaries } from "./queued-input-projection.js";
 import type {
   QueuedInputConversation,
@@ -53,6 +54,13 @@ export interface QueueEventPublisher {
     event: QueueChangedEvent,
   ): void;
 }
+
+/** Observes committed queue records independently of runtime/UI availability. */
+export type QueueDurableInputObserver = (
+  scope: RequestScope,
+  applicationThreadId: string,
+  item: QueuedInputRecord,
+) => void;
 
 /**
  * Whether an application operation blocks provider dispatch. `steer` asks for
@@ -127,6 +135,8 @@ export class QueuedInputDispatcher {
   readonly #operations: ConversationOperationRepository;
   readonly #gateway: QueuedInputConversationGateway;
   readonly #publisher: QueueEventPublisher;
+  readonly #onDurableInputChanged: QueueDurableInputObserver;
+  readonly #onBackgroundError: (error: unknown) => void;
   readonly #retryPolicy: QueueRetryPolicy;
   readonly #clock: QueueDispatchClock;
   readonly #scheduler: QueueDispatchScheduler;
@@ -145,6 +155,8 @@ export class QueuedInputDispatcher {
     readonly repository: QueuedInputRepository;
     readonly gateway: QueuedInputConversationGateway;
     readonly publisher: QueueEventPublisher;
+    readonly onDurableInputChanged: QueueDurableInputObserver;
+    readonly onBackgroundError?: (error: unknown) => void;
     readonly retryPolicy: QueueRetryPolicy;
     readonly isDispatchBlocked: QueueDispatchBlockCheck;
     readonly clock?: QueueDispatchClock;
@@ -159,6 +171,10 @@ export class QueuedInputDispatcher {
     );
     this.#gateway = input.gateway;
     this.#publisher = input.publisher;
+    this.#onDurableInputChanged = input.onDurableInputChanged;
+    this.#onBackgroundError =
+      input.onBackgroundError ??
+      reportBackgroundError("Queued input observation or publication");
     this.#retryPolicy = input.retryPolicy;
     this.#isDispatchBlocked = input.isDispatchBlocked;
     this.#clock = input.clock ?? defaultClock;
@@ -285,6 +301,9 @@ export class QueuedInputDispatcher {
     return this.#track(async () => {
       await this.#requireRecovery(scope);
       await this.#serialize(scope, applicationThreadId, async () => {
+        // Settlement (including Stop) is also a convergence point for saved
+        // acceptance, even when there is no pending queue head to publish.
+        this.#observeDurableState(scope, applicationThreadId);
         // Several Steers may await materialization at once. Each has its own
         // exact evidence, so reconcile every one, in queue order; one that
         // stays unresolved does not hold back the others' outcomes.
@@ -1473,6 +1492,7 @@ export class QueuedInputDispatcher {
                 );
               }
             }
+            this.#observeDurableState(scope, applicationThreadId);
             try {
               const replayStart = Date.now();
               await conversation.replayAuthoritativeCompletions();
@@ -1978,25 +1998,55 @@ export class QueuedInputDispatcher {
     scope: RequestScope,
     applicationThreadId: string,
   ): Promise<void> {
+    this.#observeDurableState(scope, applicationThreadId);
     try {
       await this.#gateway.withConversation(
         scope,
         applicationThreadId,
         (conversation) => {
-          this.#publishQueueChanged(
+          this.#publishQueueProjection(
             scope,
             applicationThreadId,
             conversation.generation,
           );
         },
       );
-    } catch {
+    } catch (error) {
       // The durable queue is included in the next snapshot. Event delivery
       // cannot change a committed queue transition into an operation failure.
+      this.#onBackgroundError(error);
     }
   }
 
   #publishQueueChanged(
+    scope: RequestScope,
+    applicationThreadId: string,
+    generation: string,
+  ): void {
+    this.#observeDurableState(scope, applicationThreadId);
+    this.#publishQueueProjection(scope, applicationThreadId, generation);
+  }
+
+  #observeDurableState(scope: RequestScope, applicationThreadId: string): void {
+    let records: readonly QueuedInputRecord[];
+    try {
+      records = this.#repository.list(scope, applicationThreadId);
+    } catch (error) {
+      this.#onBackgroundError(error);
+      return;
+    }
+    for (const item of records) {
+      try {
+        this.#onDurableInputChanged(scope, applicationThreadId, item);
+      } catch (error) {
+        // A failed observer must not hide other committed inputs or block UI
+        // publication. Startup and settlement replay the same durable records.
+        this.#onBackgroundError(error);
+      }
+    }
+  }
+
+  #publishQueueProjection(
     scope: RequestScope,
     applicationThreadId: string,
     generation: string,
@@ -2016,8 +2066,9 @@ export class QueuedInputDispatcher {
         threadRevision: state.threadRevision,
         items,
       });
-    } catch {
+    } catch (error) {
       // One transport subscriber cannot poison durable queue progression.
+      this.#onBackgroundError(error);
     }
   }
 

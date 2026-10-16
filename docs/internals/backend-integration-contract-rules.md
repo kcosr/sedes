@@ -141,6 +141,15 @@ as the thread snapshot without loading the transcript. Versioned agent-tool
 contracts must reflect the aggregate and identity-based automation API; do not
 synthesize a singleton by choosing one sibling.
 
+Automation delivery bookkeeping for Pi, Codex, Claude, Grok, and OpenCode must
+observe committed queue receipts independently of runtime acquisition or UI
+publication. Reconcile the exact scoped receipt after parking a dispatch and
+at authoritative turn settlement, including Stop, to cover acceptance races.
+Accepted delivery completes the run; an interrupted turn remains a separate
+history outcome. Reconciliation never resubmits input or changes a recurring
+definition's enabled/paused state. Isolate and report observer/publication
+failures so one failure cannot skip another receipt's bookkeeping.
+
 An actor must replay current authoritative pending interactions to late
 subscribers, including the interaction broker. Remove resolved requests and
 rebuild the pending view from the handle's replay on projection replacement;

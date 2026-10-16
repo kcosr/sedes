@@ -1232,6 +1232,7 @@ describe("thread force-reset repository", () => {
         executionPolicy: { assertCanAutomate: vi.fn() },
       });
       dispatcher = new AutomationDispatcher({
+        queueObserver: { reconcile: () => undefined },
         repository: automations, inventory, service, prechecks: { execute: precheck },
         gateway: { dispatch }, now: () => now,
       });

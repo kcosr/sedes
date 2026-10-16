@@ -146,6 +146,7 @@ describe("multiple independent thread automations", () => {
       targetThreadId: input.anchorThreadId,
     }));
     dispatcher = new AutomationDispatcher({
+      queueObserver: { reconcile: () => undefined },
       repository,
       inventory,
       service,

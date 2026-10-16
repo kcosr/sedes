@@ -466,6 +466,7 @@ export async function createInMemoryThreadRuntimeHarness(options: {
   queueDispatcher = new QueuedInputDispatcher({
     repository: queueRepository,
     gateway: queueGateway,
+    onDurableInputChanged: () => undefined,
     publisher: {
       publish(eventScope, applicationThreadId, event) {
         threadHubs.thread(eventScope, applicationThreadId).publish(event);

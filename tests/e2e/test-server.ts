@@ -4775,19 +4775,11 @@ async function main(): Promise<void> {
   queue = new QueuedInputDispatcher({
     repository: queueRepository,
     gateway: queueGateway,
+    onDurableInputChanged: (eventScope, applicationThreadId, item) =>
+      observeAutomationQueue?.observe(eventScope, applicationThreadId, item),
     publisher: {
       publish(eventScope, applicationThreadId, event) {
         threadHubs.thread(eventScope, applicationThreadId).publish(event);
-        for (const item of queueRepository.list(
-          eventScope,
-          applicationThreadId,
-        )) {
-          observeAutomationQueue?.observe(
-            eventScope,
-            applicationThreadId,
-            item,
-          );
-        }
         void publishApplicationThread
           ?.publish(eventScope, applicationThreadId)
           .catch(() => undefined);
@@ -5183,19 +5175,20 @@ async function main(): Promise<void> {
     }),
     executionPolicy: { assertCanAutomate: () => undefined },
   });
-  const automationDispatcher = new AutomationDispatcher({
-    repository: automationRepository,
-    gateway: automationGateway,
-    inventory: inventoryRepository,
-    service: automations,
-    prechecks: new AutomationPrecheckExecutor(inventoryRepository, execution),
-  });
-  automations.bindDispatcher(automationDispatcher);
   observeAutomationQueue = new AutomationQueueRunObserver({
     repository: automationRepository,
     queue: queueRepository,
     publisher: automations,
   });
+  const automationDispatcher = new AutomationDispatcher({
+    repository: automationRepository,
+    gateway: automationGateway,
+    queueObserver: observeAutomationQueue,
+    inventory: inventoryRepository,
+    service: automations,
+    prechecks: new AutomationPrecheckExecutor(inventoryRepository, execution),
+  });
+  automations.bindDispatcher(automationDispatcher);
   observeAutomationTurns = new AutomationTurnSettlementObserver({
     repository: automationRepository,
     publisher: automations,

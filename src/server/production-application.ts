@@ -1281,20 +1281,12 @@ export async function startProductionApplication(
     queueDispatcher = new QueuedInputDispatcher({
       repository: queueRepository,
       gateway: queueGateway,
+      onDurableInputChanged: (eventScope, applicationThreadId, item) =>
+        observeAutomationQueue?.observe(eventScope, applicationThreadId, item),
       publisher: {
         publish(eventScope, applicationThreadId, event) {
           requestAutomationReadmission?.();
           threadHubs.thread(eventScope, applicationThreadId).publish(event);
-          for (const item of queueRepository.list(
-            eventScope,
-            applicationThreadId,
-          )) {
-            observeAutomationQueue?.observe(
-              eventScope,
-              applicationThreadId,
-              item,
-            );
-          }
           void publishApplicationThread
             ?.publish(eventScope, applicationThreadId)
             .catch(() => undefined);
@@ -1821,9 +1813,15 @@ export async function startProductionApplication(
       }),
       executionPolicy: automationExecutionPolicy,
     });
+    observeAutomationQueue = new AutomationQueueRunObserver({
+      repository: automationRepository,
+      queue: queueRepository,
+      publisher: automations,
+    });
     automationDispatcher = new AutomationDispatcher({
       repository: automationRepository,
       gateway: automationGateway,
+      queueObserver: observeAutomationQueue,
       inventory: inventoryRepository,
       service: automations,
       prechecks: automationPrechecks,
@@ -1950,11 +1948,6 @@ export async function startProductionApplication(
     const httpAgentTools = new PolicyCheckedAgentToolHttpService(
       sourceScopedAgentTools,
     );
-    observeAutomationQueue = new AutomationQueueRunObserver({
-      repository: automationRepository,
-      queue: queueRepository,
-      publisher: automations,
-    });
     observeAutomationTurns = new AutomationTurnSettlementObserver({
       repository: automationRepository,
       publisher: automations,

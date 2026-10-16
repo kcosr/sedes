@@ -8,9 +8,13 @@ import type {
 } from "../domain/automation-models.js";
 import type { InventoryRepository } from "../db/repositories/inventory-repository.js";
 import type { RequestScope } from "../identity/identity-provider.js";
-import type { AutomationConversationGateway } from "./automation-conversation-gateway.js";
+import type {
+  AutomationConversationGateway,
+  AutomationQueueRunObserver,
+} from "./automation-conversation-gateway.js";
 import type { AutomationPrecheckExecutor } from "./automation-precheck-executor.js";
 import { automationCloneTitleSuffix } from "../domain/automation-presentation.js";
+import { reportBackgroundError } from "../report-background-error.js";
 
 const UNCERTAIN_CODE = "automation_dispatch_uncertain";
 const MAX_CONCURRENT_DISPATCHES = 4;
@@ -38,6 +42,8 @@ type DispatcherPrechecks = Pick<AutomationPrecheckExecutor, "execute">;
 export interface AutomationDispatcherDependencies {
   readonly repository: DispatcherRepository;
   readonly gateway: AutomationConversationGateway;
+  readonly queueObserver: Pick<AutomationQueueRunObserver, "reconcile">;
+  readonly onReconcileError?: (error: unknown) => void;
   readonly inventory: DispatcherInventory;
   readonly service: DispatcherPublisher;
   readonly prechecks: DispatcherPrechecks;
@@ -53,6 +59,8 @@ export interface AutomationDispatcherDependencies {
 export class AutomationDispatcher {
   readonly #repository: DispatcherRepository;
   readonly #gateway: AutomationConversationGateway;
+  readonly #queueObserver: Pick<AutomationQueueRunObserver, "reconcile">;
+  readonly #onReconcileError: (error: unknown) => void;
   readonly #inventory: DispatcherInventory;
   readonly #service: DispatcherPublisher;
   readonly #prechecks: DispatcherPrechecks;
@@ -71,6 +79,10 @@ export class AutomationDispatcher {
   constructor(dependencies: AutomationDispatcherDependencies) {
     this.#repository = dependencies.repository;
     this.#gateway = dependencies.gateway;
+    this.#queueObserver = dependencies.queueObserver;
+    this.#onReconcileError =
+      dependencies.onReconcileError ??
+      reportBackgroundError("Automation queued input reconciliation");
     this.#inventory = dependencies.inventory;
     this.#service = dependencies.service;
     this.#prechecks = dependencies.prechecks;
@@ -223,8 +235,25 @@ export class AutomationDispatcher {
           now: this.#now(),
         },
       );
-      this.#service.publishRun(scope, accepted);
-      return accepted;
+      // Acceptance may have been observed while this run was dispatching and
+      // therefore deliberately ignored. Re-read after parking: earlier
+      // acceptance is found here; later acceptance sees a queued/running run.
+      try {
+        this.#queueObserver.reconcile(
+          scope,
+          dispatched.targetThreadId,
+          run.dispatchMutationId,
+        );
+      } catch (error) {
+        this.#onReconcileError(error);
+      }
+      const observed = this.#repository.getRun(
+        scope,
+        accepted.automationId,
+        accepted.id,
+      );
+      this.#service.publishRun(scope, observed);
+      return observed;
     } catch (error) {
       return this.#recordDispatchError(scope, run, error);
     }

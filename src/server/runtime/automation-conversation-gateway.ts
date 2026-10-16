@@ -12,6 +12,7 @@ import type { QueuedInputDispatcher } from "../conversations/queued-input-dispat
 import { DomainError } from "../domain/errors.js";
 import type { AutomationExecutionPolicy } from "./automation-execution-policy.js";
 import type { ThreadForkService } from "../conversations/thread-fork-service.js";
+import { reportBackgroundError } from "../report-background-error.js";
 
 export type AutomationConversationDispatchResult =
   | { readonly status: "deferred"; readonly reason: AutomationDeferredError["reason"]; readonly eligibleAt: number | null }
@@ -277,6 +278,7 @@ export class AutomationQueueRunObserver {
   readonly #queue: Pick<QueuedInputRepository, "findByMutationId">;
   readonly #publisher: Pick<AutomationService, "publishRun">;
   readonly #now: () => number;
+  readonly #onRecoveryError: (error: unknown) => void;
 
   constructor(input: {
     readonly repository: Pick<
@@ -290,11 +292,14 @@ export class AutomationQueueRunObserver {
     readonly queue: Pick<QueuedInputRepository, "findByMutationId">;
     readonly publisher: Pick<AutomationService, "publishRun">;
     readonly now?: () => number;
+    readonly onRecoveryError?: (error: unknown) => void;
   }) {
     this.#repository = input.repository;
     this.#queue = input.queue;
     this.#publisher = input.publisher;
     this.#now = input.now ?? Date.now;
+    this.#onRecoveryError =
+      input.onRecoveryError ?? reportBackgroundError("Automation queue recovery");
   }
 
   recover(): void {
@@ -304,13 +309,26 @@ export class AutomationQueueRunObserver {
         principalId: run.ownerPrincipalId,
       };
       const targetThreadId = run.childThreadId ?? run.anchorThreadId;
-      const item = this.#queue.findByMutationId(
-        scope,
-        targetThreadId,
-        run.dispatchMutationId,
-      );
-      if (item) this.observe(scope, targetThreadId, item);
+      try {
+        this.reconcile(scope, targetThreadId, run.dispatchMutationId);
+      } catch (error) {
+        this.#onRecoveryError(error);
+      }
     }
+  }
+
+  /** Reconcile only the existing receipt; this never submits provider work. */
+  reconcile(
+    scope: RequestScope,
+    applicationThreadId: string,
+    mutationId: string,
+  ): void {
+    const item = this.#queue.findByMutationId(
+      scope,
+      applicationThreadId,
+      mutationId,
+    );
+    if (item) this.observe(scope, applicationThreadId, item);
   }
 
   observe(

@@ -156,7 +156,11 @@ function fixture(
     publishRun: vi.fn(),
     dispatchCapacityChanged: vi.fn(),
   };
+  const queueObserver = { reconcile: vi.fn() };
+  const onReconcileError = vi.fn();
   const dispatcher = new AutomationDispatcher({
+    queueObserver,
+    onReconcileError,
     repository:
       repository as unknown as AutomationDispatcherDependencies["repository"],
     gateway,
@@ -169,10 +173,24 @@ function fixture(
     prechecks: { execute: vi.fn() as never },
     now: () => 2_000,
   });
-  return { dispatcher, gateway, repository, service, current: () => current, replaceCurrent: (value: AutomationRunRecord) => { current = value; } };
+  return { dispatcher, gateway, repository, service, queueObserver, onReconcileError, current: () => current, replaceCurrent: (value: AutomationRunRecord) => { current = value; } };
 }
 
 describe("AutomationDispatcher v10 backend-neutral dispatch", () => {
+  it("retains queued delivery and reports a failed receipt reconciliation without retrying", async () => {
+    const setup = fixture(run(), async () => ({ status: "queued", targetThreadId: "thread-anchor" }));
+    const error = new Error("fixture receipt read failed");
+    setup.queueObserver.reconcile.mockImplementation(() => { throw error; });
+    const result = await setup.dispatcher.dispatch(run());
+    expect(result.state).toBe("queued");
+    expect(setup.onReconcileError).toHaveBeenCalledWith(error);
+    expect(setup.queueObserver.reconcile).toHaveBeenCalledWith(
+      { tenantId: "tenant-1", principalId: "principal-1" }, "thread-anchor", "dispatch-1",
+    );
+    expect(setup.gateway.dispatch).toHaveBeenCalledOnce();
+    expect(setup.repository.markRunUncertainAndPause).not.toHaveBeenCalled();
+  });
+
   it("dispatches same-thread work with application IDs and completes accepted work", async () => {
     const setup = fixture(run(), async () => ({
       status: "accepted",
@@ -446,6 +464,7 @@ describe("AutomationDispatcher v10 backend-neutral dispatch", () => {
       passPrecheck: vi.fn(),
     };
     const dispatcher = new AutomationDispatcher({
+      queueObserver: { reconcile: () => undefined },
       repository: repository as never,
       gateway,
       inventory: {

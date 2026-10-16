@@ -14,6 +14,7 @@ import { serializePiBindingDetail } from "../../src/server/backends/pi/pi-sessio
 import {
   type QueueDispatchScheduler,
   type QueueEventPublisher,
+  type QueueDurableInputObserver,
   QueuedInputDispatcher,
 } from "../../src/server/conversations/queued-input-dispatcher.js";
 import { projectQueuedInputSummaries } from "../../src/server/conversations/queued-input-projection.js";
@@ -42,6 +43,9 @@ import { ThreadCompletionCallbackRepository } from "../../src/server/db/reposito
 import { ThreadCompletionCallbackDispatcher } from "../../src/server/conversations/thread-completion-callback-dispatcher.js";
 import { ComposerAttachmentRepository } from "../../src/server/db/repositories/composer-attachment-repository.js";
 import { AutomationRepository } from "../../src/server/db/repositories/automation-repository.js";
+import { AutomationService } from "../../src/server/domain/automation-service.js";
+import { AutomationQueueRunObserver, AutomationTurnSettlementObserver } from "../../src/server/runtime/automation-conversation-gateway.js";
+import { readThreadAutomationSummary } from "../../src/server/application/thread-automation-summary.js";
 import { TaskRepository } from "../../src/server/db/repositories/task-repository.js";
 import { ThreadInventoryService } from "../support/schema9/thread-inventory-service.js";
 import type { RequestScope } from "../../src/server/identity/identity-provider.js";
@@ -539,6 +543,9 @@ function createDispatcher(
   input: {
     readonly now: { value: number };
     readonly scheduler?: ManualScheduler;
+    readonly onDurableInputChanged?: QueueDurableInputObserver;
+    readonly onBackgroundError?: (error: unknown) => void;
+    readonly publish?: QueueEventPublisher["publish"];
     readonly isDispatchBlocked?: (
       scope: RequestScope,
       threadId: string,
@@ -563,10 +570,13 @@ function createDispatcher(
     dispatcher: new QueuedInputDispatcher({
       repository,
       gateway,
+      onDurableInputChanged: input.onDurableInputChanged ?? (() => undefined),
+      ...(input.onBackgroundError ? { onBackgroundError: input.onBackgroundError } : {}),
       publisher: {
         publish(scope, threadId, event) {
           normalizedThreadEventSchema.parse(event);
           events.push({ scope, threadId, event });
+          input.publish?.(scope, threadId, event);
         },
       },
       retryPolicy: {
@@ -621,6 +631,163 @@ function readyCallback(
   });
   return callbacks;
 }
+
+describe("durable automation queue observation", () => {
+  function setup() {
+    const fixture = createFixture();
+    const threadId = fixture.threadIds[0];
+    const repository = new QueuedInputRepository(fixture.database);
+    const automations = new AutomationRepository(fixture.database);
+    const inventory = new InventoryRepository(fixture.database);
+    const service = new AutomationService({
+      repository: automations, inventory, publisher: { publish: () => undefined },
+      executionPolicy: { assertCanAutomate: () => undefined },
+    });
+    const source = fixture.automationSources.get(threadId)!;
+    service.update(fixture.scope, source.automationId, {
+      name: "Recurring queue source", prompt: "Queue source fixture", runMode: "same_thread",
+      schedule: { kind: "interval", anchorAt: new Date(10_000).toISOString(), everySeconds: 300 },
+      misfirePolicy: "coalesce", precheck: null, expectedRevision: 0, mutationId: randomUUID(),
+    }, 500);
+    enqueue(fixture, repository, threadId, "automation-input", 600);
+    const run = automations.updateRunState(fixture.scope, source.automationId, source.currentRunId!, {
+      expectedState: "dispatching", state: "queued", claimToken: source.currentClaimToken!,
+      retainPromptSnapshot: true, now: 650,
+    });
+    const observer = new AutomationQueueRunObserver({
+      repository: automations, queue: repository, publisher: service, now: () => 700,
+    });
+    return { fixture, threadId, repository, automations, inventory, service, run, observer };
+  }
+
+  it("completes accepted automation delivery even when UI publication throws", async () => {
+    const current = setup();
+    const { fixture, repository, observer, threadId, automations, run } = current;
+    const gateway = new FakeGateway();
+    const errors = vi.fn();
+    const { dispatcher } = createDispatcher(repository, gateway, {
+      now: { value: 700 }, onBackgroundError: errors,
+      onDurableInputChanged: (scope, id, item) => observer.observe(scope, id, item),
+      publish: () => { throw new Error("thread_projection_queue_revision_conflict"); },
+    });
+    try {
+      await dispatcher.recover(fixture.scope);
+      expect(repository.get(fixture.scope, threadId, "automation-input").state).toBe("accepted");
+      expect(automations.getRun(fixture.scope, run.automationId, run.id).state).toBe("completed");
+      expect(readThreadAutomationSummary(fixture.database, fixture.scope, threadId).inFlightCount).toBe(0);
+      expect(gateway.submitted).toHaveLength(1);
+      expect(errors).toHaveBeenCalledWith(expect.objectContaining({ message: "thread_projection_queue_revision_conflict" }));
+    } finally { await dispatcher.close(); fixture.database.close(); }
+  });
+
+  it("observes saved acceptance even when acquiring the UI conversation fails", async () => {
+    const current = setup();
+    const { fixture, repository, observer, threadId, automations, run } = current;
+    const gateway = new FakeGateway();
+    const errors = vi.fn();
+    const { dispatcher } = createDispatcher(repository, gateway, {
+      now: { value: 700 }, onBackgroundError: errors,
+      onDurableInputChanged: (scope, id, item) => observer.observe(scope, id, item),
+    });
+    try {
+      // A previously committed receipt exists independently of a live actor.
+      repository.claimHead(fixture.scope, threadId, "fixture-anchor", 680);
+      repository.markAccepted(fixture.scope, threadId, "automation-input", {
+        expectedState: "dispatching", acceptedAt: 690, backendCorrelation: run.dispatchMutationId,
+      });
+      await dispatcher.recover(fixture.scope);
+      gateway.withConversationFailures.push(new Error("fixture actor unavailable"));
+      await dispatcher.dispatchAdmitted(fixture.scope, threadId);
+      expect(automations.getRun(fixture.scope, run.automationId, run.id).state).toBe("completed");
+      expect(errors).toHaveBeenCalledWith(expect.objectContaining({ message: "fixture actor unavailable" }));
+      expect(gateway.submitted).toHaveLength(0);
+    } finally { await dispatcher.close(); fixture.database.close(); }
+  });
+
+  it("isolates observer failures per input and still publishes the UI event", async () => {
+    const fixture = createFixture();
+    const threadId = fixture.threadIds[0];
+    const repository = new QueuedInputRepository(fixture.database);
+    const gateway = new FakeGateway();
+    gateway.authoritativelySettled = false;
+    const errors = vi.fn(), observed: string[] = [];
+    enqueueUser(fixture, repository, threadId, "first", 600);
+    enqueueUser(fixture, repository, threadId, "second", 610);
+    const { dispatcher, events } = createDispatcher(repository, gateway, {
+      now: { value: 700 }, scheduler: new ManualScheduler(), onBackgroundError: errors,
+      onDurableInputChanged: (_scope, _id, item) => {
+        observed.push(item.id);
+        if (item.id === "first") throw new Error("fixture observer failure");
+      },
+    });
+    try {
+      await dispatcher.recover(fixture.scope);
+      await dispatcher.dispatchAdmitted(fixture.scope, threadId);
+      expect(observed).toContain("second");
+      expect(errors).toHaveBeenCalledWith(expect.objectContaining({ message: "fixture observer failure" }));
+      expect(events.length).toBeGreaterThan(0);
+      expect(gateway.submitted).toHaveLength(0);
+    } finally { await dispatcher.close(); fixture.database.close(); }
+  });
+
+  it.each([false, true])("Stop settles missed acceptance without resending or changing paused=%s", async (paused) => {
+    const current = setup();
+    const { fixture, repository, observer, threadId, automations, inventory, service, run } = current;
+    const native = new FakeGateway();
+    let observeAcceptance = false;
+    const { dispatcher: queue } = createDispatcher(repository, native, {
+      now: { value: 700 }, onDurableInputChanged: (scope, id, item) => {
+        if (observeAcceptance) observer.observe(scope, id, item);
+      },
+    });
+    try {
+      await queue.recover(fixture.scope);
+      expect(native.submitted).toHaveLength(1);
+      expect(automations.getRun(fixture.scope, run.automationId, run.id).state).toBe("queued");
+      if (paused) service.setState(fixture.scope, run.automationId, {
+        action: "pause",
+        expectedRevision: service.get(fixture.scope, run.automationId).revision, mutationId: randomUUID(),
+      }, 710);
+      const before = automations.getDefinition(fixture.scope, run.automationId);
+      const completions = new SubmissionCompletionRepository(fixture.database);
+      const turns = new AutomationTurnSettlementObserver({ repository: automations, publisher: service });
+      const interrupt = vi.fn(async (_input: unknown, onDispatch?: () => void) => { onDispatch?.(); });
+      const gateway = new ThreadMutationGateway({
+        actors: {} as never, bindings: new ConversationBindingRepository(fixture.database), inventory,
+        operations: new ConversationOperationRepository(fixture.database), completions, queue, queueGateway: native,
+        runtimes: { acquireExistingControl: () => ({ control: {
+          generation: "fixture-owner", lifetime: new AbortController().signal, interrupt,
+          reconcileInterrupt: async () => ({ outcome: "unknown" as const }),
+        }, release: () => undefined }) } as never,
+        lifecycle: {} as never, forks: { recoverActive: () => undefined, discardActive: async () => { throw new Error("unexpected discard"); } },
+        interactions: {} as never, presentation: {} as never,
+        agentToolPolicies: { database: fixture.database, get: () => { throw new Error("unexpected policy read"); }, update: () => { throw new Error("unexpected policy write"); } },
+        actionPersistence: new Map(), publishThreadSnapshot: async () => undefined, now: () => 720,
+      });
+      expect(await gateway.mutate(fixture.scope, threadId, { kind: "interrupt", operationId: "stop-automation" }))
+        .toEqual({ status: "accepted", operationId: "stop-automation" });
+      const observation = completions.observeBackendCompletion(fixture.scope, threadId, {
+        backendCorrelation: run.dispatchMutationId, applicationTurnId: "automation-turn",
+        completionIdentity: "automation-turn:interrupted", outcome: "interrupted",
+        result: { text: "" }, classifiedResult: null, observedAt: 730,
+      })!;
+      turns.observe(fixture.scope, threadId, observation);
+      observeAcceptance = true;
+      await queue.onAuthoritativeSettled(fixture.scope, threadId);
+      expect(automations.getRun(fixture.scope, run.automationId, run.id)).toMatchObject({
+        state: "completed", turnOutcome: "interrupted", turnSettledAt: 730,
+      });
+      expect(automations.getDefinition(fixture.scope, run.automationId)).toMatchObject({
+        enabled: before.enabled, completedAt: before.completedAt, revision: before.revision,
+      });
+      expect(repository.get(fixture.scope, threadId, "automation-input").state).toBe("accepted");
+      expect(readThreadAutomationSummary(fixture.database, fixture.scope, threadId).inFlightCount).toBe(0);
+      await queue.onAuthoritativeSettled(fixture.scope, threadId);
+      expect(native.submitted).toHaveLength(1);
+      expect(interrupt).toHaveBeenCalledOnce();
+    } finally { await queue.close(); fixture.database.close(); }
+  });
+});
 
 describe("OpenCode failed preparation through Queue", () => {
   it("fails an admitted preparation immediately with new-Send guidance and no same-ID backoff", async () => {
