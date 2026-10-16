@@ -10,8 +10,6 @@ User-facing changes are collected here before release. See the
 - Automation management now uses explicit automation IDs and the
   `/api/automations` collection. Update automation agent-tool versions and
   operator scripts; create/run-now requests require stable mutation keys.
-  Resolve and Acknowledge are user actions only; their agent tools are removed.
-  Saved Agent presets keep unavailable selections editable; remove them before reuse.
   The operator CLI attaches to existing threads. See the
   [automation CLI](docs/operator/automation-cli.md).
   ([#88](https://github.com/kcosr/sedes/pull/88))
@@ -36,13 +34,15 @@ User-facing changes are collected here before release. See the
 - Threads support multiple named recurring schedules and one-time reminders.
   Run on **This thread**, or **Fork** a fresh result each time, copying saved
   settings from drafts. Busy sources defer unsent work. Successful one-time
-  reminders show no sidebar schedule icon and leave the collection when their
-  result notice is dismissed; their conversations remain. Failures or
-  interruptions arriving after dismissal surface again. Existing automations
-  migrate in place, preserving names, schedules, and run history. A thread's
-  **Automations** page lists only its own automations and links back to the
-  thread; an automation's page names its thread and returns to wherever you
-  opened it. See
+  reminders show no sidebar schedule icon and leave the collection once no
+  result notice remains to dismiss, including after a later **Run now**; their
+  conversations remain. Failures or interruptions arriving after dismissal
+  surface again. Existing automations migrate in place with their names,
+  schedules, run history, and dismissed notices; on first start, one-time
+  reminders that already succeeded with no notice left to dismiss leave the
+  collection. A thread's **Automations** page lists only its own automations
+  and links back to the thread; an automation's page names its thread and
+  returns to wherever you opened it. See
   [automations](docs/user/tasks-and-automations.md#schedule-work-with-an-automation).
   ([#88](https://github.com/kcosr/sedes/pull/88))
 

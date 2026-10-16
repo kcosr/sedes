@@ -385,7 +385,9 @@ thread. **Add automation** creates another automation. The global
 [Automations page](#see-all-automations) also opens individual automations.
 
 After upgrading, existing automations appear here with their saved names and
-history. You can rename them independently of the source thread.
+history. You can rename them independently of the source thread. A one-time
+reminder that had already run successfully is removed on first start unless
+its result notice is still waiting to be dismissed; its conversation remains.
 
 ### Create an automation
 
