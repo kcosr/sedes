@@ -110,7 +110,7 @@ function EditorAnchor({ store, threadRegistry, threadId, automation, refreshErro
   if (anchor.status === "loading") return <AutomationAnchorLoading back={back} />;
   if (anchor.status === "unavailable") return <AutomationAnchorUnavailable back={back} message={anchor.message} onRetry={anchor.retry} />;
   return <>
-    {refreshError && <Callout tone="warning" title={missing ? "This automation was deleted" : "The automation could not be refreshed"}
+    {refreshError && <Callout tone="warning" title={missing ? "This automation was removed" : "The automation could not be refreshed"}
       action={<Button variant="outline" size="sm" onClick={onRetry}>Retry</Button>}>{refreshError} Your edits are kept.</Callout>}
     <ThreadAutomationEditor store={store} missing={missing} reads={reads} thread={{ ...anchor.thread, automation: automation ?? null }} back={back} />
   </>;
@@ -275,7 +275,7 @@ function ThreadAutomationEditor({
             ) : null}
             {editor.deletedElsewhere ? (
               <Callout tone="warning" role="status">
-                This automation was deleted elsewhere. To schedule more work, add a new automation from
+                This automation was removed elsewhere. To schedule more work, add a new automation from
                 the thread's Automations.
               </Callout>
             ) : null}

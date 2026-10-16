@@ -21,6 +21,7 @@ import {
 } from "react";
 import {
   automationEditPath,
+  automationPath,
   navigate,
   threadPath,
 } from "../../app/router.js";
@@ -258,14 +259,6 @@ function AutomationDetails({
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [markFailedOpen, setMarkFailedOpen] = useState(false);
   const moreTrigger = useRef<HTMLButtonElement>(null);
-  // A delete that settles after the user left must not move them again.
-  const mounted = useRef(false);
-  useEffect(() => {
-    mounted.current = true;
-    return () => {
-      mounted.current = false;
-    };
-  }, []);
   const revision = definition?.revision ?? automation.revision;
   const paused = automation.status !== "enabled";
   // The Automations list's row menu offers the same actions with the same reasons.
@@ -556,7 +549,11 @@ function AutomationDetails({
           } catch (reason) {
             throw new Error(messageFrom(reason));
           }
-          if (mounted.current) leaveDeletedAutomation(automation.id, thread.id);
+          // The page shows the removal as soon as the delete lands; leave it
+          // unless the user already has (a later Back must not move them).
+          if (window.location.pathname === automationPath(automation.id)) {
+            leaveDeletedAutomation(automation.id, thread.id);
+          }
         }}
       />
       {lastRun?.state === "uncertain" ? (

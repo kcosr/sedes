@@ -32,6 +32,7 @@ describe("automation resource page", () => {
   it("aborts definition and history reads before local Delete without waiting for an event", async () => {
     let finishHistory!: (page: { items: ReturnType<typeof run>[]; nextCursor: null }) => void;
     const list = vi.fn().mockImplementation(() => new Promise((resolve) => { finishHistory = resolve; }));
+    openFrom();
     const fixture = mount(definition(), { listAutomationRuns: list });
     await screen.findByRole("heading", { name: "Nightly dependency audit" });
     await waitFor(() => expect(list).toHaveBeenCalledOnce());
@@ -52,7 +53,7 @@ describe("automation resource page", () => {
     await user.click(screen.getByRole("button", { name: "More automation actions" }));
     await user.click(screen.getByRole("menuitem", { name: "Delete automation…" }));
     await user.click(screen.getByRole("button", { name: "Delete automation" }));
-    await waitFor(() => expect(window.location.pathname).toBe("/automations"));
+    await waitFor(() => expect(window.location.pathname).toBe(automationsPath(THREAD_ID)));
     await act(async () => {
       finishDefinition(definition({ revision: 99 }));
       finishHistory({ items: [run()], nextCursor: null });
@@ -69,7 +70,7 @@ describe("automation resource page", () => {
     const fixture = mount(current, { acknowledgeAutomationRun: vi.fn().mockResolvedValue({ run: failed, automation: null }) });
     const button = await screen.findByRole("button", { name: "Acknowledge failure" });
     await userEvent.setup().click(button);
-    expect(await screen.findByText("This automation was deleted.")).toBeInTheDocument();
+    expect(await screen.findByText("This automation was removed")).toBeInTheDocument();
     expect(fixture.api.getAutomation).toHaveBeenCalledOnce();
   });
 
@@ -132,10 +133,10 @@ describe("automation resource page", () => {
     fixture.api.getAutomation.mockRejectedValue(new ApiError(404, "not_found", "This automation was retired", false));
     if (deletionArrivesFirst) {
       act(() => fixture.invalidate(AUTOMATION_ID));
-      await screen.findByText("This automation was retired");
+      await screen.findByText("This automation was removed");
     }
     await act(async () => finishPause({ ...current, status: "paused", revision: current.revision + 1 }));
-    expect(await screen.findByText("This automation was retired")).toBeInTheDocument();
+    expect(await screen.findByText("This automation was removed")).toBeInTheDocument();
     await waitFor(() => expect(fixture.api.getAutomation).toHaveBeenCalledTimes(deletionArrivesFirst ? 3 : 2));
     expect(screen.queryByRole("heading", { name: current.name })).toBeNull();
   });
@@ -345,7 +346,7 @@ describe("automation page states", () => {
   it("says a missing automation was deleted, with a way to every automation", async () => {
     openFrom("/settings/general");
     mount(sourced(), { getAutomation: vi.fn().mockRejectedValue(new ApiError(404, "not_found", "Automation was not found", false)) });
-    expect(await screen.findByText("This automation was deleted")).toBeInTheDocument();
+    expect(await screen.findByText("This automation was removed")).toBeInTheDocument();
     expect(screen.queryByText("Couldn't open this thread")).toBeNull();
     expect(screen.getByRole("region", { name: "Automation" })).toHaveClass("automations-view");
     // The thread is not known: up goes to every automation, in its place.

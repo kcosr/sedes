@@ -43,7 +43,7 @@ describe("automation editor", () => {
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "Delete automation…" }));
     await user.click(screen.getByRole("button", { name: "Delete automation" }));
-    await waitFor(() => expect(window.location.pathname).toBe("/automations"));
+    await waitFor(() => expect(window.location.pathname).toBe(`/threads/${THREAD_ID}/automations`));
     await act(async () => finishRead(definition({ revision: 99 })));
     act(() => { fixture.invalidateSource(THREAD_ID); fixture.invalidate(); });
     expect(fixture.api.getAutomation).toHaveBeenCalledTimes(beforeRefresh + 1);
@@ -130,7 +130,7 @@ describe("automation editor", () => {
     await user.type(name, " unsaved");
     fixture.api.getAutomation.mockRejectedValue(new ApiError(404, "not_found", "Automation was deleted", false));
     act(() => fixture.invalidate(AUTOMATION_ID));
-    await screen.findByText("This automation was deleted");
+    await screen.findByText("This automation was removed");
     expect(name).toHaveValue("Nightly dependency audit unsaved");
     expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
     expect(fixture.api.createAutomation).not.toHaveBeenCalled();
@@ -154,7 +154,7 @@ describe("automation editor", () => {
       fixture.invalidateSource(THREAD_ID);
       fixture.invalidate();
     });
-    await screen.findByText("This automation was deleted");
+    await screen.findByText("This automation was removed");
     expect(screen.getByRole("textbox", { name: "Name" })).toBe(name);
     expect(name).toHaveValue("Nightly dependency audit unsaved");
     expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
@@ -258,7 +258,7 @@ describe("automation editor navigation", () => {
       getAutomation: vi.fn().mockRejectedValue(new ApiError(404, "not_found", "Automation was not found", false)),
     });
     render(<AutomationEditor store={fixture.store} threadRegistry={fixture.threadRegistry} automationId={AUTOMATION_ID} />);
-    expect(await screen.findByText("This automation was deleted")).toBeInTheDocument();
+    expect(await screen.findByText("This automation was removed")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "All automations" })).toBeInTheDocument();
     expect(screen.queryByText("Couldn't open this thread")).toBeNull();
     expect(backLink()).toHaveTextContent("Automations");

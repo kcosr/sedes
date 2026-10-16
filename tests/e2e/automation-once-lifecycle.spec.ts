@@ -65,11 +65,10 @@ async function fixture(page: Page, name: string) {
 const row = (page: Page, automationId: string) =>
   page.locator(`[data-testid="automation-row"][data-automation-id="${automationId}"]`);
 
-async function expandAutomationGroups(page: Page): Promise<void> {
-  await expect(page.getByTestId("automations-group").first()).toBeVisible();
-  for (const toggle of await page.locator('.automations-group-toggle[aria-expanded="false"]').all()) {
-    await toggle.click();
-  }
+/** Opens an Automations list and waits for its first load, so an absent row means absent. */
+async function openAutomationsList(page: Page, path: string): Promise<void> {
+  await page.goto(path);
+  await expect(page.getByTestId("automations-count")).toBeVisible();
 }
 
 test("a successful one-shot keeps its banner until dismissal and leaves a recurring sibling intact", async ({ page }, testInfo) => {
@@ -83,15 +82,14 @@ test("a successful one-shot keeps its banner until dismissal and leaves a recurr
   await capture(page, testInfo, "once-success-banner-no-sidebar-icon.png");
 
   // Success alone keeps the definition available while the trigger banner is visible.
-  await page.goto(`/threads/${f.threadId}/automations`);
-  await expandAutomationGroups(page);
+  await openAutomationsList(page, `/threads/${f.threadId}/automations`);
   await expect(row(page, id)).toContainText("Send release notes");
   await page.goto(`/threads/${f.threadId}`);
   await f.dismiss("Send release notes", "triggered");
   await expect.poll(async () => (await page.request.get(`/api/automations/${id}`)).status()).toBe(404);
-  await page.goto("/automations");
+  await openAutomationsList(page, "/automations");
   await expect(row(page, id)).toHaveCount(0);
-  await page.goto(`/threads/${f.threadId}/automations`);
+  await openAutomationsList(page, `/threads/${f.threadId}/automations`);
   await expect(page.getByTestId("automation-row")).toHaveCount(0);
 
   const recurringId = await f.create("Daily update", "Measure turn throughput", true);
@@ -102,7 +100,7 @@ test("a successful one-shot keeps its banner until dismissal and leaves a recurr
   await expect(f.sidebarRow().locator('[data-automation-glyph="repeat"]')).toBeVisible();
   await f.dismiss("Send another reminder", "triggered");
   await expect(f.sidebarRow().locator('[data-automation-glyph="repeat"]')).toBeVisible();
-  await page.goto(`/threads/${f.threadId}/automations`);
+  await openAutomationsList(page, `/threads/${f.threadId}/automations`);
   await expect(page.getByTestId("automation-row")).toHaveCount(1);
   await expect(row(page, recurringId)).toContainText("Daily update");
   await expect(row(page, siblingId)).toHaveCount(0);
@@ -131,8 +129,7 @@ for (const outcome of ["completed", "failed"] as const) {
       expect(started.turn).toBeUndefined();
       await expect(f.notice(name)).toContainText("triggered this thread.");
       await f.dismiss(name, "triggered");
-      await page.goto(`/threads/${f.threadId}/automations`);
-      await expandAutomationGroups(page);
+      await openAutomationsList(page, `/threads/${f.threadId}/automations`);
       await expect(row(page, id)).toBeVisible();
       await page.goto(`/threads/${f.threadId}`);
       await expect(page.getByRole("textbox", { name: "Message Scripted agent", exact: true })).toBeVisible();
@@ -148,7 +145,7 @@ for (const outcome of ["completed", "failed"] as const) {
         const snapshot = normalizedThreadSnapshotSchema.parse(await response.json());
         expect(snapshot.orderedTurnIds).toHaveLength(1);
         expect(snapshot.turnsById[snapshot.orderedTurnIds[0]!]?.status).toBe("completed");
-        await page.goto(`/threads/${f.threadId}/automations`);
+        await openAutomationsList(page, `/threads/${f.threadId}/automations`);
         await expect(row(page, id)).toHaveCount(0);
       } else {
         await expect.poll(async () => (await f.run(id))?.turn?.outcome).toBe("failed");
@@ -164,7 +161,7 @@ for (const outcome of ["completed", "failed"] as const) {
         await expect(f.notice(name)).toContainText("this run failed.");
         await capture(page, testInfo, "once-failure-after-trigger-dismissal.png");
         await f.dismiss(name, "failed");
-        await page.goto(`/threads/${f.threadId}/automations`);
+        await openAutomationsList(page, `/threads/${f.threadId}/automations`);
         await expect(row(page, id)).toContainText(name);
         expect((await page.request.get(`/api/automations/${id}`)).ok()).toBe(true);
       }

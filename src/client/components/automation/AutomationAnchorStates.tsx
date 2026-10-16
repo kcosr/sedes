@@ -96,7 +96,7 @@ export function AutomationAnchorUnavailable({
   );
 }
 
-/** The page or editor when its automation could not be loaded: deleted, or the reason. */
+/** The page or editor when its automation could not be loaded: removed, or the reason. */
 export function AutomationUnavailable({
   back,
   message,
@@ -113,8 +113,8 @@ export function AutomationUnavailable({
       <SettingsDetailHeader back={back} headingLevel={1} title="Automation" />
       {missing ? (
         <EmptyState
-          title="This automation was deleted"
-          description="Its thread and messages stay."
+          title="This automation was removed"
+          description="It was deleted, or it was a one-time reminder whose result was dismissed. Its thread and messages stay."
           action={<AllAutomations />}
         />
       ) : (
