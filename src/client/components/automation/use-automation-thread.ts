@@ -235,16 +235,22 @@ export function automationLiveKey(
  * A thread's title from the application store, also among loaded fork
  * descendants (clone runs create forks); undefined when it is not loaded.
  */
+export function loadedThreadTitle(
+  state: Pick<ApplicationClientState, "snapshot" | "descendantPages">,
+  threadId: string,
+): string | undefined {
+  const summary = findLoadedThread(state, threadId);
+  return summary ? summary.title.text || "Untitled thread" : undefined;
+}
+
+/** `loadedThreadTitle`, kept current. */
 export function useThreadTitle(
   store: ThreadStore,
   threadId: string | undefined,
 ): string | undefined {
   const select = useCallback(
-    (state: ApplicationClientState) => {
-      if (threadId === undefined) return undefined;
-      const summary = findLoadedThread(state, threadId);
-      return summary ? summary.title.text || "Untitled thread" : undefined;
-    },
+    (state: ApplicationClientState) =>
+      threadId === undefined ? undefined : loadedThreadTitle(state, threadId),
     [threadId],
   );
   return useApplicationStoreSelector(store, select);

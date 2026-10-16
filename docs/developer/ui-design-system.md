@@ -328,13 +328,15 @@ Automations (`/threads/:id/automations`) goes up to its thread, and the
 editor goes up to the automation it edits. A page reached from several
 places, such as an automation's page, derives its link from
 `historyEntryBefore(path)`, which skips its own sub-entries such as the
-editor. The link reads "Automations" after either list or the thread's title
-after the thread. It leaves through `navigateOut(path, accept, fallback)`,
-which goes back when `accept` takes that entry and otherwise replaces the
-entry with the fallback. Deleting an automation leaves the same way, so Back
-never lands on the deleted page. `components/automation/automation-navigation.ts`
-holds these targets. `useAutomationUp` sends Escape, and Android Back without
-history, to the same place.
+editor. The link reads "Automations" after either list, or the title of
+the thread after a thread (its own, or a fork result's notice). It leaves
+through `navigateOut(path, accept, fallback)`, which goes back when `accept`
+takes that entry and otherwise replaces the entry with the fallback.
+Deleting an automation leaves the same way, so Back does not land on the
+deleted page when a list or thread lies behind it.
+`components/automation/automation-navigation.ts` holds these targets.
+`useAutomationUp` sends Escape, and Android Back without history, to the same
+place.
 
 ## Automation state vocabulary
 

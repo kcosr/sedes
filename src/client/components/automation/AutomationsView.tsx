@@ -54,10 +54,7 @@ import {
   type AutomationRowStatus,
 } from "./AutomationRow.js";
 import { useAutomationUp } from "./automation-navigation.js";
-import {
-  useAutomationAnchor,
-  type AutomationThreadSource,
-} from "./use-automation-thread.js";
+import { useThreadTitle } from "./use-automation-thread.js";
 import "./automations-view.css";
 import "./automations-list.css";
 
@@ -197,11 +194,9 @@ function AutomationsLoadStatus({
  * not re-render it, and `thread_upsert` events update it live.
  */
 export const AutomationsView = memo(function AutomationsView({
-  store, threadRegistry, threadId,
+  store, threadId,
 }: {
   store: ApplicationClientStore;
-  /** Where a thread's list reads a thread the application store lacks. */
-  threadRegistry: AutomationThreadSource;
   threadId?: string;
 }): React.JSX.Element {
   const snapshot = useApplicationStoreSelector(store, (state) => state.snapshot);
@@ -317,7 +312,6 @@ export const AutomationsView = memo(function AutomationsView({
         {threadId ? (
           <ThreadAutomations
             store={store}
-            threadRegistry={threadRegistry}
             threadId={threadId}
             base={base}
             load={load}
@@ -545,14 +539,12 @@ function AllAutomations({
  */
 function ThreadAutomations({
   store,
-  threadRegistry,
   threadId,
   base,
   load,
   rows,
 }: {
   readonly store: ApplicationClientStore;
-  readonly threadRegistry: AutomationThreadSource;
   readonly threadId: string;
   readonly base: AutomationsBase;
   readonly load: AutomationsLoad;
@@ -560,18 +552,18 @@ function ThreadAutomations({
 }): React.JSX.Element {
   const { now } = rows;
   const entries = useMemo(() => listThreadAutomations(base, now), [base, now]);
-  // The live summary; the automations' copy while a thread the application
-  // store lacks (an archived one) loads.
-  const anchor = useAutomationAnchor(store, threadRegistry, threadId);
-  const thread = anchor.status === "ready" ? anchor.thread : undefined;
-  const title = thread?.title ?? base.rows[0]?.sourceTitle ?? "Thread";
+  // The live summary, else the automations' copy (an archived thread, or a
+  // fork the sidebar has not loaded). The list does not open the thread
+  // itself just to name it.
+  const title = useThreadTitle(store, threadId) ?? base.rows[0]?.sourceTitle ?? "Thread";
   return (
     <>
       <header className="automations-header" data-scope="thread">
         <SettingsBackLink href={threadPath(threadId)} label={title} />
         <AutomationsHeading count={load.loaded ? entries.length : undefined} />
-        {/* With none yet, the empty state carries the action. */}
-        {entries.length > 0 && (
+        {/* With none yet, the empty state carries the action; a list that
+            failed to load still offers it. */}
+        {(entries.length > 0 || load.error !== undefined) && (
           <AddAutomation threadId={threadId} variant="outline" />
         )}
       </header>

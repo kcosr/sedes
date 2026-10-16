@@ -299,8 +299,18 @@ describe("automation page navigation", () => {
     expect(window.history.length).toBe(length);
   });
 
-  it("replaces itself with the thread's list after a delete when no list lies behind it", async () => {
+  it("goes back to the thread it was opened from after a delete", async () => {
     openFrom(threadPath(THREAD_ID));
+    mount(sourced());
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "More automation actions" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Delete automation…" }));
+    await user.click(within(await screen.findByRole("dialog", { name: "Delete this automation?" })).getByRole("button", { name: "Delete automation" }));
+    await waitFor(() => expect(window.location.pathname).toBe(threadPath(THREAD_ID)));
+  });
+
+  it("replaces itself with the thread's list after a delete when neither a list nor a thread lies behind it", async () => {
+    openFrom("/settings/general");
     mount(sourced());
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "More automation actions" }));
@@ -333,7 +343,7 @@ describe("automation page states", () => {
   });
 
   it("says a missing automation was deleted, with a way to every automation", async () => {
-    openFrom(threadPath(THREAD_ID));
+    openFrom("/settings/general");
     mount(sourced(), { getAutomation: vi.fn().mockRejectedValue(new ApiError(404, "not_found", "Automation was not found", false)) });
     expect(await screen.findByText("This automation was deleted")).toBeInTheDocument();
     expect(screen.queryByText("Couldn't open this thread")).toBeNull();

@@ -42,6 +42,7 @@ import { useAutomationResource } from "./use-automation-resource.js";
 import type { AutomationResourceReads } from "./automation-resource-reads.js";
 import { useAutomationEditor } from "./use-automation-editor.js";
 import {
+  loadedThreadTitle,
   useAutomationAnchor,
   type AutomationThread,
   type AutomationThreadSource,
@@ -86,7 +87,7 @@ export function AutomationEditor({ store, threadRegistry, threadId, automationId
   const up = sourceId === undefined || resource.missing
     ? automationPageUp(automationId!, definition && {
       id: definition.threadId, title: definition.source.title || "Untitled thread",
-    })
+    }, (id) => loadedThreadTitle(store.getSnapshot(), id))
     : automationEditorUp(sourceId, definition);
   const back = <AutomationBackLink up={up} />;
   // The editor region inside names itself; the frame does not repeat it.

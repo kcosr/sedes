@@ -142,7 +142,7 @@ export function Workbench({
   }
   if (route.name === "automations" || route.name === "automation" || route.name === "automation-create") {
     return <AutomationsPane>
-      {route.name === "automations" ? <AutomationsView key={route.threadId ?? "all"} store={applicationStore} threadRegistry={threadRegistry} threadId={route.threadId} />
+      {route.name === "automations" ? <AutomationsView key={route.threadId ?? "all"} store={applicationStore} threadId={route.threadId} />
         : route.name === "automation-create" ? <AutomationEditor key={route.threadId} store={applicationStore} threadRegistry={threadRegistry} threadId={route.threadId} />
         : route.edit ? <AutomationEditor key={route.automationId} store={applicationStore} threadRegistry={threadRegistry} automationId={route.automationId} />
         : <AutomationPage key={route.automationId} store={applicationStore} threadRegistry={threadRegistry} automationId={route.automationId} />}

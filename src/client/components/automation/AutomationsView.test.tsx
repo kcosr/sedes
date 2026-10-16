@@ -19,7 +19,7 @@ const otherId = "30000000-0000-4000-8000-000000000002";
 const thirdId = "30000000-0000-4000-8000-000000000003";
 
 function renderList(fixture: AutomationStore, threadId?: string, store: ApplicationClientStore = fixture.store) {
-  return render(<AutomationsView store={store} threadRegistry={fixture.threadRegistry} threadId={threadId} />);
+  return render(<AutomationsView store={store} threadId={threadId} />);
 }
 
 /** The fixture's store with a second, empty project for the sidebar Scope. */
@@ -136,8 +136,6 @@ describe("a thread's automations", () => {
     expect(screen.getByRole("heading", { level: 1, name: "Automations" })).toBeInTheDocument();
     expect(screen.getByTestId("automations-count")).toHaveTextContent(/^1\s*automations$/u);
     expect(screen.queryByRole("button", { name: "Open thread" })).not.toBeInTheDocument();
-    // The application store holds the thread, so no thread store is loaded.
-    expect(fixture.threadRegistry.retain).not.toHaveBeenCalled();
     await userEvent.setup().click(back);
     await waitFor(() => expect(window.location.pathname).toBe(`/threads/${THREAD_ID}`));
   });
@@ -246,14 +244,12 @@ describe("a thread's automations", () => {
     expect(window.location.pathname).toBe(automationsPath());
   });
 
-  it("names a thread the application store lacks from its automations, then from its own load", async () => {
+  it("names a thread the application store lacks from its automations, without opening the thread", async () => {
     const archived = definition({ source: { ...definition().source, title: "Archived checkout", inventoryState: "archived" } });
     const fixture = automationStore([], { listAutomations: vi.fn().mockResolvedValue({ items: [archived], nextCursor: null }) });
     renderList(fixture, THREAD_ID);
     expect(screen.getByRole("link", { name: "Thread" })).toHaveAttribute("href", `/threads/${THREAD_ID}`);
-    expect(await screen.findByRole("link", { name: "Archived checkout" })).toBeInTheDocument();
-    expect(fixture.threadRegistry.retain).toHaveBeenCalledWith(THREAD_ID);
-    act(() => fixture.threadRegistry.settle({ thread: { title: "Checkout flow refactor", inventoryState: "archived", automation: null } }));
-    expect(await screen.findByRole("link", { name: "Checkout flow refactor" })).toHaveAttribute("href", `/threads/${THREAD_ID}`);
+    expect(await screen.findByRole("link", { name: "Archived checkout" })).toHaveAttribute("href", `/threads/${THREAD_ID}`);
+    expect(fixture.threadRegistry.retain).not.toHaveBeenCalled();
   });
 });

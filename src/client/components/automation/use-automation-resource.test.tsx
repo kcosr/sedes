@@ -151,5 +151,4 @@ describe("automation resource ownership", () => {
     await waitFor(() => expect(result.current.definition?.source.title).toBe("Renamed source"));
     expect(result.current.definition?.source.inventoryState).toBe("snoozed");
   });
-
 });

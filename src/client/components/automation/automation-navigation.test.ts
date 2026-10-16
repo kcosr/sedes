@@ -12,6 +12,8 @@ import {
 import {
   automationEditorUp,
   automationPageUp,
+  leaveDeletedAutomation,
+  openAutomationThread,
   shownAutomationUp,
   useAutomationUp,
 } from "./automation-navigation.js";
@@ -23,6 +25,10 @@ afterEach(() => {
 });
 
 const thread = { id: "thread-1", title: "Checkout flow refactor" };
+const fork = { id: "fork-1", title: "Checkout flow refactor (Oct 16, 2:00 AM)" };
+/** The titles the application holds: the thread and one fork result. */
+const titles = (threadId: string) => [thread, fork].find(({ id }) => id === threadId)?.title;
+const noTitles = () => undefined;
 
 /** History down to `last`, from `entries` (the first replaces the current entry). */
 function openFrom(...entries: string[]) {
@@ -32,14 +38,14 @@ function openFrom(...entries: string[]) {
 describe("automationPageUp", () => {
   it("names the list history came from: the thread's or every automation's", () => {
     openFrom(automationsPath(thread.id), automationPath("a1"));
-    expect(automationPageUp("a1", thread)).toMatchObject({ label: "Automations", href: automationsPath(thread.id) });
+    expect(automationPageUp("a1", thread, titles)).toMatchObject({ label: "Automations", href: automationsPath(thread.id) });
     openFrom(automationsPath(), automationPath("a1"));
-    expect(automationPageUp("a1", thread)).toMatchObject({ label: "Automations", href: "/automations" });
+    expect(automationPageUp("a1", thread, titles)).toMatchObject({ label: "Automations", href: "/automations" });
   });
 
   it("names the thread history came from, even at a focused turn", () => {
     openFrom(threadTurnPath(thread.id, "turn-1"), automationPath("a1"));
-    expect(automationPageUp("a1", thread)).toMatchObject({
+    expect(automationPageUp("a1", thread, titles)).toMatchObject({
       label: thread.title,
       href: threadTurnPath(thread.id, "turn-1"),
     });
@@ -47,26 +53,67 @@ describe("automationPageUp", () => {
 
   it("looks past the automation's own editor", () => {
     openFrom(threadPath(thread.id), automationPath("a1"), automationEditPath("a1"), automationPath("a1"));
-    expect(automationPageUp("a1", thread)).toMatchObject({ label: thread.title });
+    expect(automationPageUp("a1", thread, titles)).toMatchObject({ label: thread.title });
+  });
+
+  it("names any thread history came from, such as a fork result's notice, before and after the automation loads", () => {
+    openFrom(threadPath(fork.id), automationPath("a1"));
+    expect(automationPageUp("a1", thread, titles)).toMatchObject({ label: fork.title, href: threadPath(fork.id) });
+    expect(automationPageUp("a1", undefined, titles)).toMatchObject({ label: fork.title, href: threadPath(fork.id) });
+    expect(automationPageUp("a1", undefined, noTitles)).toMatchObject({ label: "Thread", href: threadPath(fork.id) });
   });
 
   it("goes up to the thread's list from anywhere else, or every automation's while the thread is unknown", () => {
-    openFrom(threadPath("another-thread"), automationPath("a1"));
-    expect(automationPageUp("a1", thread)).toMatchObject({ label: "Automations", href: automationsPath(thread.id) });
-    expect(automationPageUp("a1")).toMatchObject({ label: "Automations", href: "/automations" });
-    openFrom(threadPath(thread.id), automationPath("a1"));
-    expect(automationPageUp("a1")).toMatchObject({ label: "Automations", href: "/automations" });
+    openFrom("/settings/general", automationPath("a1"));
+    expect(automationPageUp("a1", thread, titles)).toMatchObject({ label: "Automations", href: automationsPath(thread.id) });
+    expect(automationPageUp("a1", undefined, titles)).toMatchObject({ label: "Automations", href: "/automations" });
   });
 
   it("goes where its label says", async () => {
     openFrom(threadPath(thread.id), automationPath("a1"));
-    automationPageUp("a1", thread).go();
+    automationPageUp("a1", thread, titles).go();
     await vi.waitFor(() => expect(window.location.pathname).toBe(threadPath(thread.id)));
     openFrom("/settings/general", automationPath("a1"));
     const length = window.history.length;
-    automationPageUp("a1", thread).go();
+    automationPageUp("a1", thread, titles).go();
     expect(window.location.pathname).toBe(automationsPath(thread.id));
     expect(window.history.length).toBe(length);
+  });
+});
+
+describe("leaveDeletedAutomation", () => {
+  it("goes back past the page and its editor to the list or thread history came from", async () => {
+    openFrom(automationsPath(thread.id), automationPath("a1"), automationEditPath("a1"));
+    leaveDeletedAutomation("a1", thread.id);
+    await vi.waitFor(() => expect(window.location.pathname).toBe(automationsPath(thread.id)));
+    openFrom(threadPath(thread.id), automationPath("a1"), automationEditPath("a1"));
+    leaveDeletedAutomation("a1", thread.id);
+    await vi.waitFor(() => expect(window.location.pathname).toBe(threadPath(thread.id)));
+  });
+
+  it("replaces the entry with the thread's list when history came from elsewhere", () => {
+    openFrom("/settings/general", automationPath("a1"));
+    const length = window.history.length;
+    leaveDeletedAutomation("a1", thread.id);
+    expect(window.location.pathname).toBe(automationsPath(thread.id));
+    expect(window.history.length).toBe(length);
+  });
+});
+
+describe("openAutomationThread", () => {
+  it("walks back to the thread history came from, even at a focused turn", async () => {
+    openFrom(threadTurnPath(thread.id, "turn-1"), automationPath("a1"));
+    const length = window.history.length;
+    openAutomationThread(thread.id, "a1");
+    await vi.waitFor(() => expect(window.location.hash).toBe("#turn=turn-1"));
+    expect(window.location.pathname).toBe(threadPath(thread.id));
+    expect(window.history.length).toBe(length);
+  });
+
+  it("walks back down through the thread's Automations", async () => {
+    openFrom(threadPath(thread.id), automationsPath(thread.id), automationPath("a1"));
+    openAutomationThread(thread.id, "a1");
+    await vi.waitFor(() => expect(window.location.pathname).toBe(threadPath(thread.id)));
   });
 });
 

@@ -424,7 +424,7 @@ export function ThreadPeekCard({
               />
             </span>
             <span className="thread-peek-row-text">
-              {`Automation · ${threadAutomationStatusText(automation, automationState, now)}`}
+              {`Automations · ${threadAutomationStatusText(automation, automationState, now)}`}
             </span>
           </div>
         )}

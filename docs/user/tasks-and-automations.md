@@ -467,9 +467,9 @@ until their result notice is dismissed.
 
 Each automation has its own detail link. The page names its source thread:
 select the name, or choose **Open thread** from **⋯**, to open it. Individual
-runs link to their actual result thread. The back link returns to wherever you
-opened the automation, such as the thread's collection, where you can add
-another automation without changing the current one.
+runs link to their actual result thread. The back link, and Escape, return to
+wherever you opened the automation, such as the thread's collection, where you
+can add another automation without changing the current one.
 
 - **Run now** invokes the saved prompt once, including its precheck. It works
   independently of the recurring cursor or exhausted one-time schedule.

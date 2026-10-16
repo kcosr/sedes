@@ -25,27 +25,37 @@ export interface AutomationUp {
   readonly go: () => void;
 }
 
+/** A thread's title, when the application knows the thread. */
+export type ThreadTitleSource = (threadId: string) => string | undefined;
+
 const isAutomationList = (route: Route): boolean => route.name === "automations";
 
 /**
- * The automation page's way up: back to the Automations list (every
- * automation, or its thread's) or the thread history reached it from, past
- * its own editor; otherwise (a deep link, a reload, another page's link) up
- * to its thread's Automations, or to every automation while the thread is
- * not known yet.
+ * Where an automation's page was opened from: an Automations list (every
+ * automation, or a thread's) or a thread (its own, or a fork result's
+ * notice). Leaving goes back there.
+ */
+const isAutomationOrigin = (route: Route): boolean =>
+  isAutomationList(route) || route.name === "thread";
+
+/**
+ * The automation page's way up: back to the Automations list or the thread
+ * history reached it from, past its own editor; otherwise (a deep link, a
+ * reload, another page's link) up to its thread's Automations, or to every
+ * automation while the thread is not known yet.
  */
 export function automationPageUp(
   automationId: string,
-  thread?: { readonly id: string; readonly title: string },
+  thread: { readonly id: string; readonly title: string } | undefined,
+  threadTitle: ThreadTitleSource,
 ): AutomationUp {
   const page = automationPath(automationId);
   const fallback = automationsPath(thread?.id);
-  const accepts = (route: Route) =>
-    isAutomationList(route) || (route.name === "thread" && route.threadId === thread?.id);
-  const go = () => navigateOut(page, accepts, fallback);
+  const go = () => navigateOut(page, isAutomationOrigin, fallback);
   const before = historyEntryBefore(page)?.route;
-  if (thread && before?.name === "thread" && before.threadId === thread.id) {
-    return { label: thread.title, href: routePath(before), go };
+  if (before?.name === "thread") {
+    const title = before.threadId === thread?.id ? thread.title : threadTitle(before.threadId);
+    return { label: title ?? "Thread", href: routePath(before), go };
   }
   if (before && isAutomationList(before)) return { label: "Automations", href: routePath(before), go };
   return { label: "Automations", href: fallback, go };
@@ -69,21 +79,26 @@ export function automationEditorUp(
 }
 
 /**
- * Leaves a deleted automation's page or editor: back to the Automations list
+ * Leaves a deleted automation's page or editor: back to the list or thread
  * history reached it from, so no Back lands on the gone page; otherwise to
  * its thread's Automations, in place of this entry.
  */
 export function leaveDeletedAutomation(automationId: string, threadId: string): void {
-  navigateOut(automationPath(automationId), isAutomationList, automationsPath(threadId));
+  navigateOut(automationPath(automationId), isAutomationOrigin, automationsPath(threadId));
 }
 
 /**
- * Opens an automation's thread, or a run's result thread: back to it when
- * history came down from it, so Back never loops between the thread and its
- * automations; otherwise a new entry, with the thread's Chat in front.
+ * Opens a thread from an automation's page (its source, or a run's result
+ * thread): back to it when history came from it, at whatever turn, or down
+ * from it through its Automations, so Back never loops between the thread
+ * and its automations; otherwise a new entry, with the thread's Chat in
+ * front.
  */
-export function openAutomationThread(threadId: string): void {
-  const steps = historyStepsBackTo(threadPath(threadId));
+export function openAutomationThread(threadId: string, automationId: string): void {
+  const before = historyEntryBefore(automationPath(automationId));
+  const steps = before?.route.name === "thread" && before.route.threadId === threadId
+    ? before.steps
+    : historyStepsBackTo(threadPath(threadId));
   if (steps === undefined) openThreadRoute(threadId);
   else window.history.go(steps);
 }

@@ -238,42 +238,42 @@ describe("ThreadPeekCard automation line", () => {
     {
       name: "active",
       automations: { nextRunAt: "2026-10-07T02:00:00.000Z" },
-      text: /^Automation · 1 automation · 1 active · next Tmrw \d/u,
+      text: /^Automations · 1 automation · 1 active · next Tmrw \d/u,
       glyph: "repeat",
       tone: "success",
     },
     {
       name: "failed",
       automations: { attentionCount: 1 },
-      text: /^Automation · 1 automation · 1 needs attention$/u,
+      text: /^Automations · 1 automation · 1 needs attention$/u,
       glyph: "triangle",
       tone: "danger",
     },
     {
       name: "uncertain",
       automations: { enabledCount: 0, pausedCount: 1, attentionCount: 1 },
-      text: /^Automation · 1 automation · 1 needs attention$/u,
+      text: /^Automations · 1 automation · 1 needs attention$/u,
       glyph: "triangle",
       tone: "danger",
     },
     {
       name: "sending",
       automations: { inFlightCount: 1 },
-      text: /^Automation · 1 automation · 1 in progress$/u,
+      text: /^Automations · 1 automation · 1 in progress$/u,
       glyph: "spinner",
       tone: "info",
     },
     {
       name: "paused",
       automations: { enabledCount: 0, pausedCount: 1 },
-      text: /^Automation · 1 automation · 1 paused$/u,
+      text: /^Automations · 1 automation · 1 paused$/u,
       glyph: "pause",
       tone: "neutral",
     },
     {
       name: "not started",
       automations: { enabledCount: 0, pausedCount: 1 },
-      text: /^Automation · 1 automation · 1 paused$/u,
+      text: /^Automations · 1 automation · 1 paused$/u,
       glyph: "pause",
       tone: "neutral",
     },
@@ -305,17 +305,17 @@ describe("ThreadPeekCard automation line", () => {
   it("shows a running thread's state beside its automation", () => {
     const container = renderPeek(automated({ inFlightCount: 1 }, { runState: "running" }));
     expect(container.querySelector('[data-row="state"]')).toHaveTextContent("Running");
-    expect(automationRow(container)).toHaveTextContent("Automation · 1 automation · 1 in progress");
+    expect(automationRow(container)).toHaveTextContent("Automations · 1 automation · 1 in progress");
   });
 
   it("names a suspended automation", () => {
     const archived = renderPeek(automated({  }, { inventoryState: "archived" }));
-    expect(automationRow(archived)).toHaveTextContent("Automation · 1 automation · Thread archived");
+    expect(automationRow(archived)).toHaveTextContent("Automations · 1 automation · Thread archived");
     expect(automationRow(archived).querySelector('[data-automation-glyph="archive"]')).not.toBeNull();
     const snoozed = renderPeek(
       automated({}, { inventoryState: "snoozed", snoozedUntil: "2026-10-06T09:00:00.000Z" }),
     );
-    expect(automationRow(snoozed)).toHaveTextContent("Automation · 1 automation · Snoozed");
+    expect(automationRow(snoozed)).toHaveTextContent("Automations · 1 automation · Snoozed");
   });
 
   it("keeps the failed-run line for a thread whose automation context failed without an automation", () => {
@@ -336,7 +336,7 @@ describe("ThreadPeekCard automation line", () => {
       ...base,
       attention: { ...base.attention, automationContext: "failed" },
     });
-    expect(automationRow(container)).toHaveTextContent(/^Automation · 1 automation · 1 active · next Tmrw/u);
+    expect(automationRow(container)).toHaveTextContent(/^Automations · 1 automation · 1 active · next Tmrw/u);
     const row = container.querySelector('[data-row="automation-failed"]')!;
     expect(row).toHaveTextContent("A scheduled run failed");
     expect(row).toHaveAttribute("data-tone", "danger");
@@ -348,7 +348,7 @@ describe("ThreadPeekCard automation line", () => {
       ...base,
       attention: { ...base.attention, automationContext: "failed" },
     });
-    expect(automationRow(container)).toHaveTextContent("Automation · 1 automation · 1 needs attention");
+    expect(automationRow(container)).toHaveTextContent("Automations · 1 automation · 1 needs attention");
     expect(container.querySelector('[data-row="automation-failed"]')).toHaveTextContent("A scheduled run failed");
   });
 });

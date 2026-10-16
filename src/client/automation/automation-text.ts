@@ -526,7 +526,7 @@ export function threadLiveState(
 
 /**
  * The automation's state in a few words for a status line or tooltip
- * ("Automation · <this>"): "next Tmrw 2:00 AM" while active, "Failed 21h ago",
+ * ("Automations · <this>"): "next Tmrw 2:00 AM" while active, "Failed 21h ago",
  * otherwise the health label ("Outcome unknown", "Paused", "Not started").
  */
 export function automationStatusText(

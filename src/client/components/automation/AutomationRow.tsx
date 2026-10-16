@@ -55,7 +55,7 @@ export type AutomationRowStatus =
  * Scope on one), leaving only a location tag. `thread` is the thread's own
  * list: rows drop the thread, its project and backend, and ⋯'s Open thread.
  */
-export type AutomationRowContext = "all" | "project" | "thread";
+type AutomationRowContext = "all" | "project" | "thread";
 
 const FAILURE_TITLES: Readonly<Record<AutomationRowActionKind, string>> = {
   run: "Couldn’t run",

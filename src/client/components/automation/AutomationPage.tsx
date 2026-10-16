@@ -79,6 +79,7 @@ import {
 import { useAutomationRuns } from "./use-automation-runs.js";
 import { useNextOccurrences } from "./use-next-occurrences.js";
 import {
+  loadedThreadTitle,
   useAutomationAnchor,
   useThreadRunState,
   type AutomationThread,
@@ -117,7 +118,7 @@ export function AutomationPage({ store, threadRegistry, automationId }: {
   // One way up in every state; it names the thread once the automation says which.
   const up = automationPageUp(automationId, definition && {
     id: definition.threadId, title: definition.source.title || "Untitled thread",
-  });
+  }, (threadId) => loadedThreadTitle(store.getSnapshot(), threadId));
   const back = <AutomationBackLink up={up} />;
   return <AutomationFrame label={definition ? `${definition.name} automation` : "Automation"} up={up}>
     {resource.error ? <AutomationUnavailable back={back} message={resource.error} missing={resource.missing} onRetry={resource.reload} />
@@ -257,6 +258,14 @@ function AutomationDetails({
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [markFailedOpen, setMarkFailedOpen] = useState(false);
   const moreTrigger = useRef<HTMLButtonElement>(null);
+  // A delete that settles after the user left must not move them again.
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   const revision = definition?.revision ?? automation.revision;
   const paused = automation.status !== "enabled";
   // The Automations list's row menu offers the same actions with the same reasons.
@@ -349,7 +358,7 @@ function AutomationDetails({
               onClick={(event) => {
                 if (!isPlainClick(event)) return;
                 event.preventDefault();
-                openAutomationThread(thread.id);
+                openAutomationThread(thread.id, automation.id);
               }}
             >
               {thread.title}
@@ -436,7 +445,7 @@ function AutomationDetails({
                   <DropdownMenuSeparator />
                 </>
               ) : null}
-              <DropdownMenuItem onSelect={() => openAutomationThread(thread.id)}>
+              <DropdownMenuItem onSelect={() => openAutomationThread(thread.id, automation.id)}>
                 <MessageSquare aria-hidden="true" />
                 Open thread
               </DropdownMenuItem>
@@ -475,7 +484,7 @@ function AutomationDetails({
         problem={lastRunProblem}
         busy={busy}
         now={now}
-        onOpenThread={() => openAutomationThread(lastRun?.resultThreadId ?? thread.id)}
+        onOpenThread={() => openAutomationThread(lastRun?.resultThreadId ?? thread.id, automation.id)}
         onMarkFailed={() => setMarkFailedOpen(true)}
         onAcknowledge={() => void act("acknowledge", async () => {
           if (!automation.attention) return;
@@ -547,7 +556,7 @@ function AutomationDetails({
           } catch (reason) {
             throw new Error(messageFrom(reason));
           }
-          leaveDeletedAutomation(automation.id, thread.id);
+          if (mounted.current) leaveDeletedAutomation(automation.id, thread.id);
         }}
       />
       {lastRun?.state === "uncertain" ? (
