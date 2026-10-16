@@ -379,7 +379,9 @@ can still be a draft. Automations use its model, reasoning, tools, workspace,
 and execution settings; they have no separate thread-configuration editor.
 
 Open **Automations** from the thread's header or thread actions to see its
-collection. **Add automation** creates another automation. The global
+collection. The page lists only that thread's automations, whatever the
+sidebar's scope, and its back link, named after the thread, returns to the
+thread. **Add automation** creates another automation. The global
 [Automations page](#see-all-automations) also opens individual automations.
 
 After upgrading, existing automations appear here with their saved names and
@@ -463,9 +465,11 @@ until their result notice is dismissed.
 
 ## Open an automation
 
-Each automation has its own detail link. **Open thread** opens the source;
-individual runs link to their actual result thread. Returning to the thread's
-collection lets you add another automation without changing the current one.
+Each automation has its own detail link. The page names its source thread:
+select the name, or choose **Open thread** from **⋯**, to open it. Individual
+runs link to their actual result thread. The back link returns to wherever you
+opened the automation, such as the thread's collection, where you can add
+another automation without changing the current one.
 
 - **Run now** invokes the saved prompt once, including its precheck. It works
   independently of the recurring cursor or exhausted one-time schedule.

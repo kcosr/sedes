@@ -306,9 +306,12 @@ with `useSettingsEscapeLevel`.
 
 Archived, Usage, Automations, an automation's page, and its editor are pages
 without a thread: `Workbench.tsx` renders each in `pane-host-nav-header`, a
-column whose header holds only the sidebar trigger (shown when the sidebar is
-collapsed or hidden), with no workspace panels and no Tasks. A new page adds
-its root class to the `pane-host-nav-header > …` flex rule in `styles.css`.
+column whose header holds the sidebar trigger (shown when the sidebar is
+collapsed or hidden), with no workspace panels and no Tasks. The automation
+pages also provide that header as the `SettingsBackSlotContext` slot, so
+their "‹" link moves into it, as in the compact Settings header. A new page
+adds its root class to the `pane-host-nav-header > …` flex rule in
+`styles.css`.
 The three automation pages share one frame in `automations-view.css`,
 matching the Archived page: `.automations-view` is the scroller, and
 `.automations-page` is the centred column, `--measure` wide, and the
@@ -319,11 +322,19 @@ A page can build on the settings kit. `SettingsDetailHeader` and
 `headingLevel={1}` when they are the page's own header. Section anchors follow
 the nearest scrolling ancestor, so an editor works in a page's own scroller
 as well as the settings column, and `SaveBar` sticks to that scroller. A "‹"
-link to a parent the page is always under uses `navigateUp(path)` (the
-`SettingsBackLink` default); a page reached from several places, such as an
-automation's page, passes `navigateBack(fallback)`, which returns to the
-previous entry when this document opened it and otherwise replaces the entry
-with the fallback.
+link names the page it leads to. A link to a parent the page is always under
+uses `navigateUp(path)` (the `SettingsBackLink` default): a thread's
+Automations (`/threads/:id/automations`) goes up to its thread, and the
+editor goes up to the automation it edits. A page reached from several
+places, such as an automation's page, derives its link from
+`historyEntryBefore(path)`, which skips its own sub-entries such as the
+editor. The link reads "Automations" after either list or the thread's title
+after the thread. It leaves through `navigateOut(path, accept, fallback)`,
+which goes back when `accept` takes that entry and otherwise replaces the
+entry with the fallback. Deleting an automation leaves the same way, so Back
+never lands on the deleted page. `components/automation/automation-navigation.ts`
+holds these targets. `useAutomationUp` sends Escape, and Android Back without
+history, to the same place.
 
 ## Automation state vocabulary
 

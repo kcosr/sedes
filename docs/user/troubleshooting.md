@@ -210,7 +210,7 @@ and confirm that:
 - its schedule and next runs show the expected time zone and time;
 - the thread and target are available;
 - a local precheck exited zero;
-- for **A new fork each run**, the thread can still fork; and
+- for **Fork**, the thread can still fork; and
 - the run is not waiting at an attended approval.
 
 Use **Runs**, and its **Problems** and **Skipped** filters, to tell skipped,

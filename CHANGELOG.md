@@ -39,7 +39,10 @@ User-facing changes are collected here before release. See the
   reminders show no sidebar schedule icon and leave the collection when their
   result notice is dismissed; their conversations remain. Failures or
   interruptions arriving after dismissal surface again. Existing automations
-  migrate in place, preserving names, schedules, and run history. See
+  migrate in place, preserving names, schedules, and run history. A thread's
+  **Automations** page lists only its own automations and links back to the
+  thread; an automation's page names its thread and returns to wherever you
+  opened it. See
   [automations](docs/user/tasks-and-automations.md#schedule-work-with-an-automation).
   ([#88](https://github.com/kcosr/sedes/pull/88))
 
