@@ -332,6 +332,33 @@ export class DeferredProductionOperations {
   }
 }
 
+/**
+ * Force-reset follow-up for the affected threads. Retirement reconciliation
+ * and publication fail independently: a reconciliation failure is reported
+ * on its own and never leaves the reset threads unpublished, while a
+ * publication failure still reaches the reset's post-commit reporter.
+ */
+export function forceResetThreadPublications(input: {
+  readonly reconcileRetirements: (
+    scope: RequestScope,
+    threadIds: readonly string[],
+  ) => void;
+  readonly onReconcileError: (error: unknown) => void;
+  readonly schedulePublications: (
+    scope: RequestScope,
+    threadIds: readonly string[],
+  ) => void;
+}): (scope: RequestScope, threadIds: readonly string[]) => void {
+  return (scope, threadIds) => {
+    try {
+      input.reconcileRetirements(scope, threadIds);
+    } catch (error) {
+      input.onReconcileError(error);
+    }
+    input.schedulePublications(scope, threadIds);
+  };
+}
+
 function backendInstance(
   record: ReturnType<BackendConfigurationRepository["getBackend"]>,
 ): AgentBackendInstance {
@@ -1654,10 +1681,15 @@ export async function startProductionApplication(
       repository: new ThreadForceResetRepository(database),
       interactions,
       runtimes,
-      scheduleThreadPublications: (eventScope, threadIds) => {
-        automations.reconcileRetirementsForThreads(eventScope, threadIds);
-        activeThreadSnapshots.scheduleMany(eventScope, threadIds);
-      },
+      scheduleThreadPublications: forceResetThreadPublications({
+        reconcileRetirements: (eventScope, threadIds) =>
+          automations.reconcileRetirementsForThreads(eventScope, threadIds),
+        onReconcileError: reportBackgroundError(
+          "Thread force-reset automation retirement",
+        ),
+        schedulePublications: (eventScope, threadIds) =>
+          activeThreadSnapshots.scheduleMany(eventScope, threadIds),
+      }),
       publishTaskChange: (eventScope, taskId) =>
         tasks.publishTaskChange(eventScope, taskId),
       onPostCommitError: reportBackgroundError(
