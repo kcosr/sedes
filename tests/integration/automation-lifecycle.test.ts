@@ -1,3 +1,4 @@
+import { readThreadAutomationContexts } from "../../src/server/application/thread-automation-context.js";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -172,6 +173,7 @@ describe("thread automation lifecycle", () => {
     beforePrecheckResult = undefined;
     precheckCalls = 0;
     dispatcher = new AutomationDispatcher({
+      queueObserver: { reconcile: () => undefined },
       repository,
       inventory,
       service,
@@ -244,7 +246,7 @@ describe("thread automation lifecycle", () => {
             backendConversationId: `clone-${input.automationRunId}`,
             acceptedAt: clock,
           });
-          repository.bindForkChild(
+          repository.bindResultChild(
             scope,
             input.automationId,
             input.automationRunId,
@@ -303,14 +305,53 @@ describe("thread automation lifecycle", () => {
     rmSync(directory, { recursive: true, force: true });
   });
 
-  function createEnabled(
-    input: Parameters<AutomationService["create"]>[2],
+  function contexts(id = threadId) {
+    return readThreadAutomationContexts(database, scope, id);
+  }
+  function latestRun() {
+    const definition = currentAutomation();
+    return definition
+      ? repository.listRuns(scope, definition.id, { limit: 1 })[0]
+      : undefined;
+  }
+
+  function currentAutomation() {
+    return repository.listDefinitions(scope, { threadId, limit: 100 })[0];
+  }
+  function createAutomation(
+    scope: RequestScope,
+    threadId: string,
+    input: Omit<
+      Parameters<AutomationService["create"]>[2],
+      "name" | "initialState"
+    >,
     now: number,
   ) {
-    const created = service.create(scope, threadId, input, now);
-    return service.setState(
+    return service.create(
       scope,
       threadId,
+      {
+        ...input,
+        name: "Scheduled work",
+        initialState: "paused",
+        misfirePolicy:
+          input.schedule.kind === "date_time" ? null : input.misfirePolicy,
+      },
+      now,
+    );
+  }
+
+  function createEnabled(
+    input: Omit<
+      Parameters<AutomationService["create"]>[2],
+      "name" | "initialState"
+    >,
+    now: number,
+  ) {
+    const created = createAutomation(scope, threadId, input, now);
+    return service.setState(
+      scope,
+      currentAutomation()!.id,
       {
         action: "enable",
         expectedRevision: created.revision,
@@ -343,9 +384,12 @@ describe("thread automation lifecycle", () => {
   }
 
   function createManual(
-    precheck: Parameters<AutomationService["create"]>[2]["precheck"] = null,
+    precheck: Omit<
+      Parameters<AutomationService["create"]>[2],
+      "name" | "initialState"
+    >["precheck"] = null,
   ) {
-    service.create(
+    createAutomation(
       scope,
       threadId,
       {
@@ -362,11 +406,11 @@ describe("thread automation lifecycle", () => {
       },
       1_000,
     );
-    return repository.findDefinitionForThread(scope, threadId)!;
+    return currentAutomation()!;
   }
 
   it("persists a new automation paused until an explicit enable", () => {
-    const created = service.create(
+    const created = createAutomation(
       scope,
       threadId,
       {
@@ -384,7 +428,7 @@ describe("thread automation lifecycle", () => {
     );
     expect(created).toMatchObject({ status: "paused", revision: 0 });
     expect(created).not.toHaveProperty("nextRunAt");
-    expect(repository.findDefinitionForThread(scope, threadId)).toMatchObject({
+    expect(currentAutomation()).toMatchObject({
       enabled: false,
       nextRunAt: null,
     });
@@ -392,7 +436,7 @@ describe("thread automation lifecycle", () => {
 
     const enabled = service.setState(
       scope,
-      threadId,
+      currentAutomation()!.id,
       {
         action: "enable",
         expectedRevision: created.revision,
@@ -432,7 +476,12 @@ describe("thread automation lifecycle", () => {
       });
 
       clock = 2_000;
-      const result = await service.runNow(scope, threadId, randomUUID(), clock);
+      const result = await service.runNow(
+        scope,
+        currentAutomation()!.id,
+        randomUUID(),
+        clock,
+      );
       expect(result.state).toBe(status);
       expect(onRunLifecycle).not.toHaveBeenCalled();
     },
@@ -467,7 +516,12 @@ describe("thread automation lifecycle", () => {
           targetThreadId: threadId,
         });
       clock = 2_000;
-      const result = await service.runNow(scope, threadId, randomUUID(), clock);
+      const result = await service.runNow(
+        scope,
+        currentAutomation()!.id,
+        randomUUID(),
+        clock,
+      );
       if (mode !== "immediate") {
         expect(emit).not.toHaveBeenCalled();
         const run = repository.findRunByScopedId(scope, result.id)!;
@@ -521,7 +575,12 @@ describe("thread automation lifecycle", () => {
       });
 
       clock = 2_000;
-      const result = await service.runNow(scope, threadId, randomUUID(), clock);
+      const result = await service.runNow(
+        scope,
+        currentAutomation()!.id,
+        randomUUID(),
+        clock,
+      );
       expect(result.state).toBe("completed");
       expect(onRunLifecycle).toHaveBeenCalledOnce();
       expect(invokeAutomation).toHaveBeenCalledOnce();
@@ -529,7 +588,7 @@ describe("thread automation lifecycle", () => {
   );
 
   it("replays an accepted enable before applying a tightened backend policy", () => {
-    const created = service.create(
+    const created = createAutomation(
       scope,
       threadId,
       {
@@ -551,7 +610,12 @@ describe("thread automation lifecycle", () => {
       expectedRevision: created.revision,
       mutationId,
     };
-    const first = service.setState(scope, threadId, request, 1_100);
+    const first = service.setState(
+      scope,
+      currentAutomation()!.id,
+      request,
+      1_100,
+    );
     assertCanAutomate.mockImplementation(() => {
       throw new DomainError(
         "invalid_transition",
@@ -559,11 +623,13 @@ describe("thread automation lifecycle", () => {
       );
     });
 
-    expect(service.setState(scope, threadId, request, 1_200)).toEqual(first);
+    expect(
+      service.setState(scope, currentAutomation()!.id, request, 1_200),
+    ).toEqual(first);
     expect(() =>
       service.setState(
         scope,
-        threadId,
+        currentAutomation()!.id,
         {
           action: "enable",
           expectedRevision: first.revision,
@@ -572,7 +638,7 @@ describe("thread automation lifecycle", () => {
         1_300,
       ),
     ).toThrow(expect.objectContaining({ code: "invalid_transition" }));
-    expect(repository.findDefinitionForThread(scope, threadId)).toMatchObject({
+    expect(currentAutomation()).toMatchObject({
       revision: first.revision,
       enabled: true,
     });
@@ -596,6 +662,7 @@ describe("thread automation lifecycle", () => {
     );
     const mutationId = randomUUID();
     const request = {
+      name: "Scheduled work",
       prompt: "Updated recurring prompt",
       runMode: "same_thread" as const,
       schedule: {
@@ -608,7 +675,12 @@ describe("thread automation lifecycle", () => {
       expectedRevision: enabled.revision,
       mutationId,
     };
-    const first = service.update(scope, threadId, request, 1_100);
+    const first = service.update(
+      scope,
+      currentAutomation()!.id,
+      request,
+      1_100,
+    );
     assertCanAutomate.mockImplementation(() => {
       throw new DomainError(
         "invalid_transition",
@@ -616,11 +688,13 @@ describe("thread automation lifecycle", () => {
       );
     });
 
-    expect(service.update(scope, threadId, request, 1_200)).toEqual(first);
+    expect(
+      service.update(scope, currentAutomation()!.id, request, 1_200),
+    ).toEqual(first);
     expect(() =>
       service.update(
         scope,
-        threadId,
+        currentAutomation()!.id,
         {
           ...request,
           expectedRevision: first.revision,
@@ -629,14 +703,14 @@ describe("thread automation lifecycle", () => {
         1_300,
       ),
     ).toThrow(expect.objectContaining({ code: "invalid_transition" }));
-    expect(repository.findDefinitionForThread(scope, threadId)).toMatchObject({
+    expect(currentAutomation()).toMatchObject({
       revision: first.revision,
       prompt: "Updated recurring prompt",
     });
   });
 
   it("pages run history with an opaque query-bound keyset cursor", () => {
-    service.create(
+    createAutomation(
       scope,
       threadId,
       {
@@ -652,7 +726,7 @@ describe("thread automation lifecycle", () => {
       },
       500,
     );
-    const definition = repository.findDefinitionForThread(scope, threadId)!;
+    const definition = currentAutomation()!;
     const createFinishedRun = (runId: string, now: number) => {
       const claimToken = randomUUID();
       repository.createManualRun(scope, definition.id, {
@@ -678,13 +752,15 @@ describe("thread automation lifecycle", () => {
     createFinishedRun(oldestRunId, 1_000);
     createFinishedRun(middleRunId, 2_000);
 
-    const firstPage = service.listRuns(scope, threadId, { pageSize: 1 });
+    const firstPage = service.listRuns(scope, currentAutomation()!.id, {
+      pageSize: 1,
+    });
     expect(firstPage.items.map(({ id }) => id)).toEqual([middleRunId]);
     expect(firstPage.nextCursor).toEqual(expect.any(String));
     expect(firstPage.nextCursor).not.toBe("1");
 
     createFinishedRun(newestRunId, 3_000);
-    const secondPage = service.listRuns(scope, threadId, {
+    const secondPage = service.listRuns(scope, currentAutomation()!.id, {
       cursor: firstPage.nextCursor!,
       pageSize: 1,
     });
@@ -692,24 +768,24 @@ describe("thread automation lifecycle", () => {
     expect(secondPage.nextCursor).toBeNull();
     expect(
       service
-        .listRuns(scope, threadId, { pageSize: 1 })
+        .listRuns(scope, currentAutomation()!.id, { pageSize: 1 })
         .items.map(({ id }) => id),
     ).toEqual([newestRunId]);
 
     expect(() =>
-      service.listRuns(scope, threadId, {
+      service.listRuns(scope, currentAutomation()!.id, {
         cursor: "not-a-cursor",
         pageSize: 1,
       }),
     ).toThrow(expect.objectContaining({ code: "cursor_invalid" }));
     expect(() =>
-      service.listRuns(scope, threadId, {
+      service.listRuns(scope, currentAutomation()!.id, {
         cursor: firstPage.nextCursor!,
         pageSize: 2,
       }),
     ).toThrow(expect.objectContaining({ code: "cursor_invalid" }));
 
-    const authorityPage = service.listRuns(scope, threadId, {
+    const authorityPage = service.listRuns(scope, currentAutomation()!.id, {
       pageSize: 1,
       environmentAuthority: {
         sourceEnvironmentId: "environment-a",
@@ -718,7 +794,7 @@ describe("thread automation lifecycle", () => {
       },
     });
     expect(() =>
-      service.listRuns(scope, threadId, {
+      service.listRuns(scope, currentAutomation()!.id, {
         cursor: authorityPage.nextCursor!,
         pageSize: 1,
         environmentAuthority: {
@@ -732,7 +808,7 @@ describe("thread automation lifecycle", () => {
 
   it("rejects a blank normalized prompt before persisting an automation", () => {
     expect(() =>
-      service.create(
+      createAutomation(
         scope,
         threadId,
         {
@@ -749,11 +825,11 @@ describe("thread automation lifecycle", () => {
         1_000,
       ),
     ).toThrow(expect.objectContaining({ code: "invalid_transition" }));
-    expect(repository.findDefinitionForThread(scope, threadId)).toBeUndefined();
+    expect(currentAutomation()).toBeUndefined();
     expect(publishedThreads).toEqual([]);
   });
 
-  it("silently suppresses a recurring occurrence for the full snooze window", async () => {
+  it("durably defers a recurring occurrence for the full snooze window", async () => {
     createEnabled(
       {
         prompt: "Recurring prompt",
@@ -783,18 +859,23 @@ describe("thread automation lifecycle", () => {
     clock = 400_000;
     await service.reconcileDue(clock);
 
-    const stored = repository.findDefinitionForThread(scope, threadId);
+    const stored = currentAutomation();
     expect(stored).toMatchObject({ enabled: true });
-    expect(stored!.nextRunAt).toBeGreaterThan(1_000_000);
-    expect(repository.listRuns(scope, stored!.id, { limit: 10 })).toEqual([]);
+    expect(stored!.nextRunAt).toBe(601_000);
+    expect(repository.listRuns(scope, stored!.id, { limit: 10 })).toEqual([
+      expect.objectContaining({
+        state: "deferred",
+        deferredReason: "snoozed",
+        eligibleAt: 1_000_000,
+      }),
+    ]);
     expect(invokeAutomation).not.toHaveBeenCalled();
     expect(inventory.getThread(scope, threadId).inventory).toMatchObject({
       inventoryState: "snoozed",
-      automationContextRunId: null,
     });
   });
 
-  it("silently detaches a one-shot whose time passes while snoozed", async () => {
+  it("retains a deferred one-shot whose time passes while snoozed", async () => {
     createEnabled(
       {
         prompt: "One shot",
@@ -823,16 +904,15 @@ describe("thread automation lifecycle", () => {
     clock = 2_100;
     await service.reconcileDue(clock);
 
-    expect(repository.findDefinitionForThread(scope, threadId)).toBeUndefined();
+    expect(currentAutomation()).toBeDefined();
     expect(invokeAutomation).not.toHaveBeenCalled();
     expect(inventory.getThread(scope, threadId).inventory).toMatchObject({
       inventoryState: "snoozed",
-      automationContextRunId: null,
     });
     expect(publishedThreads).toContain(threadId);
   });
 
-  it("lets snooze suppress an occurrence exactly at its wake boundary", async () => {
+  it("permits a one-shot exactly at its wake boundary", async () => {
     createEnabled(
       {
         prompt: "Boundary one shot",
@@ -847,7 +927,7 @@ describe("thread automation lifecycle", () => {
       },
       1_000,
     );
-    const definition = repository.findDefinitionForThread(scope, threadId)!;
+    const definition = currentAutomation()!;
     inventory.transitionInventory(scope, threadId, {
       expectedRevision: 0,
       mutationId: randomUUID(),
@@ -862,11 +942,12 @@ describe("thread automation lifecycle", () => {
     clock = 5_000;
     await service.reconcileDue(clock);
 
-    expect(repository.findDefinitionForThread(scope, threadId)).toBeUndefined();
-    expect(repository.listRuns(scope, definition.id, { limit: 10 })).toEqual(
-      [],
-    );
-    expect(invokeAutomation).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(latestRun()?.state).toBe("completed"));
+    expect(currentAutomation()).toMatchObject({
+      deletedAt: null,
+      completedAt: 5_000,
+    });
+    expect(invokeAutomation).toHaveBeenCalledOnce();
     expect(inventory.getThread(scope, threadId).inventory.inventoryState).toBe(
       "snoozed",
     );
@@ -926,7 +1007,7 @@ describe("thread automation lifecycle", () => {
     );
   });
 
-  it("detaches a successful scheduled one-shot and keeps context until dismissal", async () => {
+  it("retains a successful scheduled one-shot and keeps context until acknowledgement", async () => {
     createEnabled(
       {
         prompt: "One shot",
@@ -945,12 +1026,12 @@ describe("thread automation lifecycle", () => {
     clock = 2_000;
     await service.reconcileDue(clock);
     await vi.waitFor(() => {
-      expect(
-        repository.findDefinitionForThread(scope, threadId),
-      ).toBeUndefined();
+      expect(latestRun()?.state).toMatch(
+        /^(completed|failed|skipped|deferred)$/,
+      );
     });
 
-    const context = inventory.getThread(scope, threadId).inventory;
+    const context = contexts()[0]!;
     expect(onRunLifecycle).toHaveBeenCalledExactlyOnceWith(scope, {
       event: "automation.started",
       run: expect.objectContaining({
@@ -960,19 +1041,13 @@ describe("thread automation lifecycle", () => {
       definition: expect.objectContaining({ anchorThreadId: threadId }),
     });
     expect(context).toMatchObject({
-      automationContextOutcome: "triggered",
-      automationContextAt: 2_000,
-      automationContextSourceThreadId: threadId,
+      outcome: "triggered",
+      triggeredAt: new Date(2_000).toISOString(),
+      sourceThreadId: threadId,
     });
-    expect(context.automationContextRunId).toEqual(expect.any(String));
-    inventory.dismissAutomationContext(
-      scope,
-      threadId,
-      context.automationContextRunId!,
-    );
-    expect(
-      inventory.getThread(scope, threadId).inventory.automationContextRunId,
-    ).toBeNull();
+    expect(context.runId).toEqual(expect.any(String));
+    service.acknowledgeThreadRun(scope, threadId, context.runId, "triggered", 2_100);
+    expect(contexts()).toEqual([]);
   });
 
   it("keeps a settled clone anchor settled when its one-shot succeeds", async () => {
@@ -990,7 +1065,7 @@ describe("thread automation lifecycle", () => {
       },
       1_000,
     );
-    const definition = repository.findDefinitionForThread(scope, threadId)!;
+    const definition = currentAutomation()!;
     inventory.transitionInventory(scope, threadId, {
       expectedRevision: 0,
       mutationId: randomUUID(),
@@ -1001,9 +1076,9 @@ describe("thread automation lifecycle", () => {
     clock = 2_000;
     await service.reconcileDue(clock);
     await vi.waitFor(() => {
-      expect(
-        repository.findDefinitionForThread(scope, threadId),
-      ).toBeUndefined();
+      expect(latestRun()?.state).toMatch(
+        /^(completed|failed|skipped|deferred)$/,
+      );
     });
 
     const run = repository.listRuns(scope, definition.id, { limit: 10 })[0]!;
@@ -1015,7 +1090,6 @@ describe("thread automation lifecycle", () => {
     expect(run.childThreadId).not.toBe(threadId);
     expect(inventory.getThread(scope, threadId).inventory).toMatchObject({
       inventoryState: "settled",
-      automationContextRunId: null,
     });
     expect(
       inventory.getThread(scope, run.childThreadId!).inventory,
@@ -1023,9 +1097,6 @@ describe("thread automation lifecycle", () => {
       inventoryState: "active",
       wokeAt: null,
       wakeReason: null,
-      automationContextOutcome: "triggered",
-      automationContextSourceThreadId: threadId,
-      automationContextRunId: run.id,
     });
   });
 
@@ -1044,7 +1115,7 @@ describe("thread automation lifecycle", () => {
       },
       1_000,
     );
-    const definition = repository.findDefinitionForThread(scope, threadId)!;
+    const definition = currentAutomation()!;
     const parked = park(1_500);
     const generation = inventoryGeneration();
     invokeAutomation.mockRejectedValueOnce(new Error("Backend rejected work"));
@@ -1053,9 +1124,9 @@ describe("thread automation lifecycle", () => {
     clock = 2_000;
     await service.reconcileDue(clock);
     await vi.waitFor(() => {
-      expect(
-        repository.findDefinitionForThread(scope, threadId),
-      ).toBeUndefined();
+      expect(latestRun()?.state).toMatch(
+        /^(completed|failed|skipped|deferred)$/,
+      );
     });
 
     const run = repository.listRuns(scope, definition.id, { limit: 10 })[0]!;
@@ -1067,11 +1138,9 @@ describe("thread automation lifecycle", () => {
       inventoryState: "active",
       inventoryRevision: parked.inventoryRevision + 1,
       stateChangedAt: 2_000,
-      automationContextRunId: null,
     });
-    // The child's automation context and the anchor's activation each
-    // advance the inventory generation.
-    expect(inventoryGeneration()).toBe(generation + 2);
+    // The anchor's activation advances inventory; run attention has its own revision.
+    expect(inventoryGeneration()).toBe(generation + 1);
     expect(publishedThreads).toContain(threadId);
     expect(
       inventory.getThread(scope, run.childThreadId!).inventory,
@@ -1079,10 +1148,6 @@ describe("thread automation lifecycle", () => {
       inventoryState: "active",
       wokeAt: null,
       wakeReason: null,
-      automationContextOutcome: "failed",
-      automationContextSourceThreadId: threadId,
-      automationContextRunId: run.id,
-      automationContextDiagnostic: "Backend rejected work",
     });
   });
 
@@ -1116,7 +1181,7 @@ describe("thread automation lifecycle", () => {
 
       clock = 2_000;
       await expect(
-        service.runNow(scope, threadId, randomUUID(), clock),
+        service.runNow(scope, currentAutomation()!.id, randomUUID(), clock),
       ).resolves.toMatchObject({ state });
 
       expect(inventory.getThread(scope, threadId).inventory).toMatchObject({
@@ -1150,7 +1215,7 @@ describe("thread automation lifecycle", () => {
         },
         1_000,
       );
-      const definition = repository.findDefinitionForThread(scope, threadId)!;
+      const definition = currentAutomation()!;
       park(1_500);
       if (failure === "throws") {
         precheckError = new Error("provider failed before execution");
@@ -1168,9 +1233,9 @@ describe("thread automation lifecycle", () => {
       clock = 2_000;
       await service.reconcileDue(clock);
       await vi.waitFor(() => {
-        expect(
-          repository.findDefinitionForThread(scope, threadId),
-        ).toBeUndefined();
+        expect(latestRun()?.state).toMatch(
+          /^(completed|failed|skipped|deferred)$/,
+        );
       });
 
       expect(
@@ -1180,7 +1245,6 @@ describe("thread automation lifecycle", () => {
       expect(inventory.getThread(scope, threadId).inventory).toMatchObject({
         inventoryState: "active",
         stateChangedAt: 2_000,
-        automationContextOutcome: "failed",
       });
       expect(publishedThreads).toContain(threadId);
     },
@@ -1258,10 +1322,14 @@ describe("thread automation lifecycle", () => {
   });
 
   it.each([
-    { item: "failed", state: "failed", errorCode: "automation_dispatch_failed" },
+    {
+      item: "failed",
+      state: "failed",
+      errorCode: "automation_dispatch_failed",
+    },
     {
       item: "cancelled",
-      state: "failed",
+      state: "cancelled",
       errorCode: "automation_dispatch_cancelled",
     },
     {
@@ -1270,7 +1338,7 @@ describe("thread automation lifecycle", () => {
       errorCode: "automation_dispatch_uncertain",
     },
   ] as const)(
-    "returns a parked anchor to Active when its queued input ends $item",
+    "updates run and parked inventory when its queued input ends $item",
     async ({ item: itemState, state, errorCode }) => {
       createManual();
       invokeAutomation.mockResolvedValueOnce({
@@ -1278,7 +1346,12 @@ describe("thread automation lifecycle", () => {
         targetThreadId: threadId,
       });
       clock = 2_000;
-      const queued = await service.runNow(scope, threadId, randomUUID(), clock);
+      const queued = await service.runNow(
+        scope,
+        currentAutomation()!.id,
+        randomUUID(),
+        clock,
+      );
       expect(queued.state).toBe("queued");
       const run = repository.findRunByScopedId(scope, queued.id)!;
       const parked = park(2_500);
@@ -1301,12 +1374,18 @@ describe("thread automation lifecycle", () => {
         state,
         errorCode,
       });
-      expect(inventory.getThread(scope, threadId).inventory).toMatchObject({
-        inventoryState: "active",
-        inventoryRevision: parked.inventoryRevision + 1,
-        stateChangedAt: 3_000,
-      });
-      expect(inventoryGeneration()).toBe(generation + 1);
+      if (itemState === "cancelled") {
+        expect(inventory.getThread(scope, threadId).inventory).toEqual(parked);
+        expect(inventoryGeneration()).toBe(generation);
+        expect(service.get(scope, run.automationId).attention).toBeUndefined();
+      } else {
+        expect(inventory.getThread(scope, threadId).inventory).toMatchObject({
+          inventoryState: "active",
+          inventoryRevision: parked.inventoryRevision + 1,
+          stateChangedAt: 3_000,
+        });
+        expect(inventoryGeneration()).toBe(generation + 1);
+      }
       expect(publishedThreads).toContain(threadId);
     },
   );
@@ -1318,10 +1397,17 @@ describe("thread automation lifecycle", () => {
         {
           prompt: "Skippable one-shot",
           runMode: "same_thread",
-          schedule: {
-            kind: "date_time",
-            runAt: new Date(2_000).toISOString(),
-          },
+          schedule:
+            skip === "misfire"
+              ? {
+                  kind: "interval",
+                  anchorAt: new Date(2_000).toISOString(),
+                  everySeconds: 300,
+                }
+              : {
+                  kind: "date_time",
+                  runAt: new Date(2_000).toISOString(),
+                },
           misfirePolicy: skip === "misfire" ? "skip" : "coalesce",
           precheck:
             skip === "pre-check"
@@ -1331,7 +1417,7 @@ describe("thread automation lifecycle", () => {
         },
         1_000,
       );
-      const definition = repository.findDefinitionForThread(scope, threadId)!;
+      const definition = currentAutomation()!;
       const parked = park(1_500);
       const generation = inventoryGeneration();
       precheckResult = {
@@ -1344,9 +1430,9 @@ describe("thread automation lifecycle", () => {
       clock = skip === "misfire" ? 2_000 + 60_001 : 2_000;
       await service.reconcileDue(clock);
       await vi.waitFor(() => {
-        expect(
-          repository.findDefinitionForThread(scope, threadId),
-        ).toBeUndefined();
+        expect(latestRun()?.state).toMatch(
+          /^(completed|failed|skipped|deferred)$/,
+        );
       });
 
       expect(
@@ -1375,7 +1461,7 @@ describe("thread automation lifecycle", () => {
     clock = 2_000;
     const uncertain = await service.runNow(
       scope,
-      threadId,
+      currentAutomation()!.id,
       randomUUID(),
       clock,
     );
@@ -1388,7 +1474,7 @@ describe("thread automation lifecycle", () => {
     expect(
       service.resolveUncertainRun(
         scope,
-        threadId,
+        currentAutomation()!.id,
         uncertain.id,
         { resume: false },
         3_000,
@@ -1407,7 +1493,12 @@ describe("thread automation lifecycle", () => {
     invokeAutomation.mockRejectedValueOnce(new Error("Backend rejected work"));
 
     clock = 2_000;
-    const failed = await service.runNow(scope, threadId, randomUUID(), clock);
+    const failed = await service.runNow(
+      scope,
+      currentAutomation()!.id,
+      randomUUID(),
+      clock,
+    );
     expect(failed.state).toBe("failed");
     // Replaying the terminal run neither repeats it nor touches inventory.
     await dispatcher.dispatch(repository.findRunByScopedId(scope, failed.id)!);
@@ -1446,16 +1537,14 @@ describe("thread automation lifecycle", () => {
     clock = 2_000;
     await service.reconcileDue(clock);
     await vi.waitFor(() => {
-      expect(
-        repository.findDefinitionForThread(scope, threadId),
-      ).toBeUndefined();
+      expect(latestRun()?.state).toMatch(
+        /^(completed|failed|skipped|deferred)$/,
+      );
     });
 
     expect(invokeAutomation).not.toHaveBeenCalled();
     expect(onRunLifecycle).not.toHaveBeenCalled();
-    expect(
-      inventory.getThread(scope, threadId).inventory.automationContextRunId,
-    ).toBeNull();
+    expect(contexts()).toEqual([]);
     const definition = repository
       .listDefinitions(scope, { includeDeleted: true, limit: 10 })
       .find(
@@ -1500,14 +1589,14 @@ describe("thread automation lifecycle", () => {
     };
 
     clock = 2_000;
-    await service.runNow(scope, threadId, randomUUID(), clock);
+    await service.runNow(scope, currentAutomation()!.id, randomUUID(), clock);
 
     expect(invokeAutomation).toHaveBeenCalledWith(
       expect.objectContaining({
         prompt: expect.stringContaining("<automation-precheck-output>"),
       }),
     );
-    expect(repository.findDefinitionForThread(scope, threadId)).toBeDefined();
+    expect(currentAutomation()).toBeDefined();
   });
 
   it("records a thrown precheck provider failure without leaving checking state", async () => {
@@ -1534,9 +1623,9 @@ describe("thread automation lifecycle", () => {
     clock = 2_000;
     await service.reconcileDue(clock);
     await vi.waitFor(() => {
-      expect(
-        repository.findDefinitionForThread(scope, threadId),
-      ).toBeUndefined();
+      expect(latestRun()?.state).toMatch(
+        /^(completed|failed|skipped|deferred)$/,
+      );
     });
 
     const definition = repository
@@ -1594,15 +1683,14 @@ describe("thread automation lifecycle", () => {
     clock = 2_000;
     await service.reconcileDue(clock);
     await vi.waitFor(() => {
-      expect(
-        repository.findDefinitionForThread(scope, threadId),
-      ).toBeUndefined();
+      expect(latestRun()?.state).toMatch(
+        /^(completed|failed|skipped|deferred)$/,
+      );
     });
 
     expect(invokeAutomation).not.toHaveBeenCalled();
     expect(inventory.getThread(scope, threadId).inventory).toMatchObject({
       inventoryState: "snoozed",
-      automationContextRunId: null,
     });
   });
 
@@ -1635,7 +1723,7 @@ describe("thread automation lifecycle", () => {
 
     clock = 2_000;
     await service.reconcileDue(clock);
-    const definition = repository.findDefinitionForThread(scope, threadId)!;
+    const definition = currentAutomation()!;
 
     expect(definition).toMatchObject({
       enabled: true,
@@ -1665,7 +1753,7 @@ describe("thread automation lifecycle", () => {
       },
       1_000,
     );
-    const definition = repository.findDefinitionForThread(scope, threadId)!;
+    const definition = currentAutomation()!;
     repository.createManualRun(scope, definition.id, {
       runId: randomUUID(),
       occurrenceKey: `manual:${randomUUID()}`,
@@ -1692,7 +1780,7 @@ describe("thread automation lifecycle", () => {
     expect(inventory.getThread(scope, threadId).inventory.inventoryState).toBe(
       "active",
     );
-    expect(repository.findDefinitionForThread(scope, threadId)).toMatchObject({
+    expect(currentAutomation()).toMatchObject({
       id: definition.id,
       enabled: true,
     });
@@ -1768,7 +1856,12 @@ describe("thread automation lifecycle", () => {
     );
     const mutationId = randomUUID();
     clock = 2_000;
-    const first = await service.runNow(scope, threadId, mutationId, 2_000);
+    const first = await service.runNow(
+      scope,
+      currentAutomation()!.id,
+      mutationId,
+      2_000,
+    );
     inventory.transitionInventory(scope, threadId, {
       expectedRevision: inventory.getThread(scope, threadId).inventory
         .inventoryRevision,
@@ -1782,13 +1875,13 @@ describe("thread automation lifecycle", () => {
     });
 
     await expect(
-      service.runNow(scope, threadId, mutationId, 4_000),
+      service.runNow(scope, currentAutomation()!.id, mutationId, 4_000),
     ).resolves.toEqual(first);
     expect(invokeAutomation).toHaveBeenCalledTimes(1);
   });
 
   it("replays an accepted Run now before applying a tightened backend policy", async () => {
-    service.create(
+    createAutomation(
       scope,
       threadId,
       {
@@ -1805,10 +1898,15 @@ describe("thread automation lifecycle", () => {
       },
       1_000,
     );
-    const definition = repository.findDefinitionForThread(scope, threadId)!;
+    const definition = currentAutomation()!;
     const mutationId = randomUUID();
     clock = 2_000;
-    const first = await service.runNow(scope, threadId, mutationId, 2_000);
+    const first = await service.runNow(
+      scope,
+      currentAutomation()!.id,
+      mutationId,
+      2_000,
+    );
     assertCanAutomate.mockImplementation(() => {
       throw new DomainError(
         "invalid_transition",
@@ -1817,10 +1915,10 @@ describe("thread automation lifecycle", () => {
     });
 
     await expect(
-      service.runNow(scope, threadId, mutationId, 3_000),
+      service.runNow(scope, currentAutomation()!.id, mutationId, 3_000),
     ).resolves.toEqual(first);
     await expect(
-      service.runNow(scope, threadId, randomUUID(), 4_000),
+      service.runNow(scope, currentAutomation()!.id, randomUUID(), 4_000),
     ).rejects.toMatchObject({ code: "invalid_transition" });
     expect(
       repository.listRuns(scope, definition.id, { limit: 10 }),
@@ -1829,7 +1927,7 @@ describe("thread automation lifecycle", () => {
   });
 
   it("rejects a new manual run while the anchor is snoozed", async () => {
-    service.create(
+    createAutomation(
       scope,
       threadId,
       {
@@ -1846,7 +1944,7 @@ describe("thread automation lifecycle", () => {
       },
       1_000,
     );
-    const definition = repository.findDefinitionForThread(scope, threadId)!;
+    const definition = currentAutomation()!;
     inventory.transitionInventory(scope, threadId, {
       expectedRevision: inventory.getThread(scope, threadId).inventory
         .inventoryRevision,
@@ -1861,7 +1959,7 @@ describe("thread automation lifecycle", () => {
 
     clock = 3_000;
     await expect(
-      service.runNow(scope, threadId, randomUUID(), 3_000),
+      service.runNow(scope, currentAutomation()!.id, randomUUID(), 3_000),
     ).rejects.toMatchObject({ code: "invalid_transition" });
     expect(repository.listRuns(scope, definition.id, { limit: 10 })).toEqual(
       [],
@@ -1870,7 +1968,7 @@ describe("thread automation lifecycle", () => {
   });
 
   it("rejects a manual run when backend execution policy is ineligible", async () => {
-    service.create(
+    createAutomation(
       scope,
       threadId,
       {
@@ -1887,7 +1985,7 @@ describe("thread automation lifecycle", () => {
       },
       1_000,
     );
-    const definition = repository.findDefinitionForThread(scope, threadId)!;
+    const definition = currentAutomation()!;
     assertCanAutomate.mockImplementation(() => {
       throw new DomainError(
         "invalid_transition",
@@ -1896,7 +1994,7 @@ describe("thread automation lifecycle", () => {
     });
 
     await expect(
-      service.runNow(scope, threadId, randomUUID(), 2_000),
+      service.runNow(scope, currentAutomation()!.id, randomUUID(), 2_000),
     ).rejects.toMatchObject({ code: "invalid_transition" });
     expect(repository.listRuns(scope, definition.id, { limit: 10 })).toEqual(
       [],
@@ -1904,52 +2002,87 @@ describe("thread automation lifecycle", () => {
     expect(invokeAutomation).not.toHaveBeenCalled();
   });
 
-  it("persists an archived-anchor manual run as failed", async () => {
-    service.create(
+  it("preserves an already-deferred manual run through archive and restoration", async () => {
+    const definition = createManual({
+      command: "prepare once",
+      timeoutSeconds: 30,
+      includeStdout: false,
+    });
+    invokeAutomation.mockResolvedValueOnce({
+      status: "deferred",
+      reason: "source_busy",
+      eligibleAt: null,
+    });
+    clock = 2_000;
+    const mutationId = randomUUID();
+    const waiting = await service.runNow(
       scope,
-      threadId,
-      {
-        prompt: "Manual prompt",
-        runMode: "same_thread",
-        schedule: {
-          kind: "interval",
-          anchorAt: new Date(10_000).toISOString(),
-          everySeconds: 300,
-        },
-        misfirePolicy: "coalesce",
-        precheck: null,
-        mutationId: randomUUID(),
-      },
-      1_000,
+      definition.id,
+      mutationId,
+      clock,
     );
-    const definition = repository.findDefinitionForThread(scope, threadId)!;
+    expect(waiting).toMatchObject({
+      state: "deferred",
+      deferredReason: "source_busy",
+    });
+    expect(precheckCalls).toBe(1);
+    expect(invokeAutomation).toHaveBeenCalledTimes(1);
+
+    clock = 3_000;
     inventory.transitionInventory(scope, threadId, {
       expectedRevision: inventory.getThread(scope, threadId).inventory
         .inventoryRevision,
       mutationId: randomUUID(),
       change: { action: "archive" },
-      now: 2_000,
+      now: clock,
     });
+    service.requestDeferredReconcile(clock);
+    await service.reconcileDue(clock);
+    expect(repository.getRun(scope, definition.id, waiting.id)).toMatchObject({
+      state: "deferred",
+      deferredReason: "archived",
+      claimToken: null,
+      leaseExpiresAt: null,
+      eligibleAt: null,
+      promptSnapshot: "Base prompt",
+      precheckStatus: "passed",
+    });
+    expect(precheckCalls).toBe(1);
+    expect(invokeAutomation).toHaveBeenCalledTimes(1);
 
-    clock = 3_000;
-    await expect(
-      service.runNow(scope, threadId, randomUUID(), 3_000),
-    ).resolves.toMatchObject({
-      state: "failed",
-      errorCode: "automation_anchor_archived",
+    clock = 4_000;
+    inventory.transitionInventory(scope, threadId, {
+      expectedRevision: inventory.getThread(scope, threadId).inventory
+        .inventoryRevision,
+      mutationId: randomUUID(),
+      change: { action: "restore" },
+      now: clock,
     });
-    expect(
-      repository.listRuns(scope, definition.id, { limit: 10 })[0],
-    ).toMatchObject({
-      state: "failed",
-      errorCode: "automation_anchor_archived",
+    service.requestDeferredReconcile(clock);
+    await service.reconcileDue(clock);
+    await vi.waitFor(() => {
+      expect(repository.getRun(scope, definition.id, waiting.id).state).toBe(
+        "completed",
+      );
     });
-    expect(invokeAutomation).not.toHaveBeenCalled();
+    expect(precheckCalls).toBe(1);
+    expect(invokeAutomation).toHaveBeenCalledTimes(2);
+    expect(invokeAutomation.mock.calls[1]![0]).toMatchObject({
+      automationId: definition.id,
+      automationRunId: waiting.id,
+      dispatchMutationId: mutationId,
+      prompt: "Base prompt",
+    });
+    expect(repository.listRuns(scope, definition.id, { limit: 10 })).toEqual([
+      expect.objectContaining({ id: waiting.id, state: "completed" }),
+    ]);
+    expect(currentAutomation()).toMatchObject({ enabled: false });
+    expect(reconcileErrors).toEqual([]);
   });
 
   it("rejects UTF-8 oversized precheck commands before persistence", () => {
     expect(() =>
-      service.create(
+      createAutomation(
         scope,
         threadId,
         {
@@ -1971,11 +2104,11 @@ describe("thread automation lifecycle", () => {
         1_000,
       ),
     ).toThrow(expect.objectContaining({ code: "invalid_transition" }));
-    expect(repository.findDefinitionForThread(scope, threadId)).toBeUndefined();
+    expect(currentAutomation()).toBeUndefined();
   });
 
   it("resolves an uncertain run and resumes in one transaction", () => {
-    service.create(
+    createAutomation(
       scope,
       threadId,
       {
@@ -1992,7 +2125,7 @@ describe("thread automation lifecycle", () => {
       },
       1_000,
     );
-    const automationId = repository.findDefinitionForThread(scope, threadId)!.id;
+    const automationId = currentAutomation()!.id;
     const claimed = repository.createManualRun(scope, automationId, {
       runId: randomUUID(),
       occurrenceKey: "manual:uncertain",
@@ -2009,13 +2142,18 @@ describe("thread automation lifecycle", () => {
       retainPromptSnapshot: true,
       now: 2_100,
     });
-    repository.markRunUncertainAndPause(scope, claimed.automationId, claimed.id, {
-      expectedState: "dispatching",
-      claimToken: "uncertain-claim",
-      errorCode: "automation_dispatch_uncertain",
-      errorDiagnostic: "Acceptance could not be proven.",
-      now: 2_200,
-    });
+    repository.markRunUncertainAndPause(
+      scope,
+      claimed.automationId,
+      claimed.id,
+      {
+        expectedState: "dispatching",
+        claimToken: "uncertain-claim",
+        errorCode: "automation_dispatch_uncertain",
+        errorDiagnostic: "Acceptance could not be proven.",
+        now: 2_200,
+      },
+    );
     const paused = repository.getDefinition(scope, claimed.automationId);
 
     // A rejected enable rolls the resolution back with it.
@@ -2028,7 +2166,7 @@ describe("thread automation lifecycle", () => {
     expect(() =>
       service.resolveUncertainRun(
         scope,
-        threadId,
+        currentAutomation()!.id,
         claimed.id,
         { resume: true },
         20_000,
@@ -2039,15 +2177,17 @@ describe("thread automation lifecycle", () => {
         message: "The backend policy does not permit automation.",
       }),
     );
-    expect(repository.getRun(scope, claimed.automationId, claimed.id).state).toBe(
-      "uncertain",
+    expect(
+      repository.getRun(scope, claimed.automationId, claimed.id).state,
+    ).toBe("uncertain");
+    expect(repository.getDefinition(scope, claimed.automationId)).toEqual(
+      paused,
     );
-    expect(repository.getDefinition(scope, claimed.automationId)).toEqual(paused);
 
     publishedThreads.length = 0;
     const resolved = service.resolveUncertainRun(
       scope,
-      threadId,
+      currentAutomation()!.id,
       claimed.id,
       { resume: true },
       20_000,
@@ -2066,13 +2206,15 @@ describe("thread automation lifecycle", () => {
       },
     });
     expect(publishedThreads).toContain(threadId);
-    expect(repository.getDefinition(scope, claimed.automationId)).toMatchObject({
-      enabled: true,
-      nextRunAt: 310_000,
-    });
+    expect(repository.getDefinition(scope, claimed.automationId)).toMatchObject(
+      {
+        enabled: true,
+        nextRunAt: 310_000,
+      },
+    );
   });
 
-  it("replays a resolved uncertain one-shot after its definition detaches", () => {
+  it("replays a resolved uncertain one-shot while retaining its exhausted definition", () => {
     const definition = repository.createDefinition(scope, {
       id: randomUUID(),
       anchorThreadId: threadId,
@@ -2121,7 +2263,7 @@ describe("thread automation lifecycle", () => {
     expect(() =>
       service.resolveUncertainRun(
         scope,
-        threadId,
+        currentAutomation()!.id,
         claimed.id,
         { resume: true },
         2_250,
@@ -2130,7 +2272,7 @@ describe("thread automation lifecycle", () => {
       expect.objectContaining({
         code: "invalid_transition",
         message:
-          "This one-time automation ended with the resolved run, so it cannot be resumed.",
+          "This one-shot is exhausted. Choose a new future time to rearm it.",
       }),
     );
     expect(repository.getRun(scope, definition.id, claimed.id).state).toBe(
@@ -2139,14 +2281,14 @@ describe("thread automation lifecycle", () => {
 
     const first = service.resolveUncertainRun(
       scope,
-      threadId,
+      currentAutomation()!.id,
       claimed.id,
       { resume: false },
       2_300,
     );
     const replay = service.resolveUncertainRun(
       scope,
-      threadId,
+      currentAutomation()!.id,
       claimed.id,
       { resume: true },
       2_400,
@@ -2154,9 +2296,9 @@ describe("thread automation lifecycle", () => {
 
     expect(first).toMatchObject({
       run: { state: "failed", errorCode: "automation_uncertain_resolved" },
-      automation: null,
+      automation: { id: definition.id, status: "exhausted" },
     });
     expect(replay).toEqual(first);
-    expect(repository.findDefinitionForThread(scope, threadId)).toBeUndefined();
+    expect(currentAutomation()).toMatchObject({ deletedAt: null });
   });
 });

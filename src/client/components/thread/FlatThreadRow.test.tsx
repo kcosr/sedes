@@ -11,7 +11,7 @@ import {
 } from "./FlatThreadRow.js";
 
 type ThreadAutomation = NonNullable<
-  NormalizedApplicationThreadSummary["automation"]
+  NormalizedApplicationThreadSummary["automations"]
 >;
 
 function iso(offsetMs: number): string {
@@ -46,7 +46,7 @@ function makeThread(
     available: true,
     lastActivityAt: iso(-2 * 3_600_000),
     stateChangedAt: iso(-2 * 3_600_000),
-    automation: null,
+    automations: { totalCount: 0, enabledCount: 0, pausedCount: 0, exhaustedCount: 0, inFlightCount: 0, attentionCount: 0, revision: 0 },
     attention: {
       wake: false,
       automationContext: null,
@@ -62,22 +62,7 @@ function makeThread(
 function makeAutomation(
   overrides: Partial<ThreadAutomation> = {},
 ): ThreadAutomation {
-  return {
-    status: "enabled",
-    runMode: "same_thread",
-    scheduleKind: "interval",
-    schedule: {
-      kind: "interval",
-      anchorAt: "2026-07-30T00:00:00.000Z",
-      everySeconds: 3_600,
-    },
-    misfirePolicy: "coalesce",
-    promptPreview: "Review the repository.",
-    revision: 0,
-    runsRevision: 0,
-    hasPrecheck: false,
-    ...overrides,
-  };
+  return { totalCount: 1, enabledCount: 1, pausedCount: 0, exhaustedCount: 0, inFlightCount: 0, attentionCount: 0, revision: 0, ...overrides };
 }
 
 function attention(
@@ -133,7 +118,7 @@ describe("flatRowGlyphKind ladder", () => {
           runState: "failed",
           inventoryState: "snoozed",
           snoozedUntil: iso(3_600_000),
-          automation: makeAutomation({ nextRunAt: iso(3_600_000) }),
+          automations: makeAutomation({ nextRunAt: iso(3_600_000) }),
         }),
       ),
     ).toBe("failed");
@@ -157,7 +142,7 @@ describe("flatRowGlyphKind ladder", () => {
           runState: "waiting_for_input",
           backingState: "unbound",
           inventoryState: "snoozed",
-          automation: makeAutomation(),
+          automations: makeAutomation(),
         }),
       ),
     ).toBe("waiting");
@@ -172,7 +157,7 @@ describe("flatRowGlyphKind ladder", () => {
         makeThread({
           runState: "running",
           inventoryState: "snoozed",
-          automation: makeAutomation(),
+          automations: makeAutomation(),
         }),
       ),
     ).toBe("running");
@@ -204,7 +189,7 @@ describe("flatRowGlyphKind ladder", () => {
         makeThread({
           backingState: "unbound",
           inventoryState: "snoozed",
-          automation: makeAutomation(),
+          automations: makeAutomation(),
         }),
       ),
     ).toBe("draft");
@@ -216,7 +201,7 @@ describe("flatRowGlyphKind ladder", () => {
         makeThread({
           inventoryState: "snoozed",
           snoozedUntil: iso(3_600_000),
-          automation: makeAutomation({ nextRunAt: iso(3_600_000) }),
+          automations: makeAutomation({ nextRunAt: iso(3_600_000) }),
         }),
       ),
     ).toBe("snoozed");
@@ -225,7 +210,7 @@ describe("flatRowGlyphKind ladder", () => {
   it("automation beats parked; parked beats idle", () => {
     expect(
       flatRowGlyphKind(
-        makeThread({ inventoryState: "settled", automation: makeAutomation() }),
+        makeThread({ inventoryState: "settled", automations: makeAutomation() }),
       ),
     ).toBe("automation");
     expect(flatRowGlyphKind(makeThread({ inventoryState: "settled" }))).toBe(
@@ -245,23 +230,17 @@ describe("flatRowGlyphKind ladder", () => {
   });
 
   it("an automation's glyph follows its health: Repeat, CirclePause or the sending spinner", () => {
-    const run = (state: "running" | "queued" | "failed" | "uncertain" | "completed") => ({
-      id: `run-${state}`,
-      state,
-      occurrence: "scheduled" as const,
-      scheduledFor: iso(-3_600_000),
-    });
     const cases = [
       [makeAutomation(), "automation", "Automation", "lucide-repeat"],
-      [makeAutomation({ lastRun: run("failed") }), "automation", "Automation", "lucide-repeat"],
-      [makeAutomation({ status: "paused", lastRun: run("uncertain") }), "automation", "Automation", "lucide-repeat"],
-      [makeAutomation({ status: "paused", lastRun: run("completed") }), "automation-paused", "Automation paused", "lucide-circle-pause"],
-      [makeAutomation({ status: "paused" }), "automation-paused", "Automation not started", "lucide-circle-pause"],
-      [makeAutomation({ lastRun: run("running") }), "automation-sending", "Automation sending", "comet-spinner"],
-      [makeAutomation({ lastRun: run("queued") }), "automation-sending", "Automation waiting for turn", "comet-spinner"],
+      [makeAutomation({ attentionCount: 1 }), "automation", "Automation", "lucide-repeat"],
+      [makeAutomation({ enabledCount: 0, pausedCount: 1, attentionCount: 1 }), "automation", "Automation", "lucide-repeat"],
+      [makeAutomation({ enabledCount: 0, pausedCount: 1 }), "automation-paused", "Automation 1 paused", "lucide-circle-pause"],
+      [makeAutomation({ enabledCount: 0, pausedCount: 1 }), "automation-paused", "Automation 1 paused", "lucide-circle-pause"],
+      [makeAutomation({ inFlightCount: 1 }), "automation-sending", "Automation 1 in progress", "comet-spinner"],
+      [makeAutomation({ inFlightCount: 1 }), "automation-sending", "Automation 1 in progress", "comet-spinner"],
     ] as const;
-    for (const [automation, kind, label, iconClass] of cases) {
-      const thread = makeThread({ automation });
+    for (const [automations, kind, label, iconClass] of cases) {
+      const thread = makeThread({ automations });
       expect(flatRowGlyphKind(thread)).toBe(kind);
       expect(flatRowGlyphLabel(thread)).toBe(label);
       render(<FlatThreadRow showBackendBrand thread={thread} density="compact" />);
@@ -273,12 +252,12 @@ describe("flatRowGlyphKind ladder", () => {
     render(
       <FlatThreadRow
         showBackendBrand
-        thread={makeThread({ automation: makeAutomation({ lastRun: run("running") }) })}
+        thread={makeThread({ automations: makeAutomation({ inFlightCount: 1 }) })}
         density="compact"
       />,
     );
     expect(
-      screen.getByRole("img", { name: "Automation sending" }).querySelector(".automation-glyph"),
+      screen.getByRole("img", { name: "Automation 1 in progress" }).querySelector(".automation-glyph"),
     ).toHaveAttribute("data-tone", "info");
   });
 
@@ -287,6 +266,19 @@ describe("flatRowGlyphKind ladder", () => {
     expect(flatRowGlyphKind(makeThread({ runState: "disconnected" }))).toBe(
       "disconnected",
     );
+  });
+
+  it("omits finished automation glyphs while an undismissed trigger context remains", () => {
+    const thread = makeThread({
+      automations: makeAutomation({ enabledCount: 0, exhaustedCount: 1 }),
+      attention: attention({ automationContext: "triggered" }),
+    });
+    expect(flatRowGlyphKind(thread)).toBe("idle");
+    const view = render(<FlatThreadRow thread={thread} density="card" showBackendBrand={false} />);
+    expect(view.container.querySelector(".automation-glyph")).toBeNull();
+    expect(view.container.querySelector(".lucide-circle-pause")).toBeNull();
+    view.rerender(<FlatThreadRow thread={{ ...thread, runState: "running" }} density="card" showBackendBrand={false} />);
+    expect(screen.getByRole("img", { name: "Running" }).querySelector(".comet-spinner")).not.toBeNull();
   });
 
   it("renders the glyph with its state color hook and accessible name", () => {
@@ -466,50 +458,38 @@ describe("status badges and wake indicator", () => {
     expect(screen.queryByRole("img", { name: /workpad/ })).toBeNull();
   });
 
-  it("flags a failed last run red and an unknown outcome amber", () => {
-    const lastRun = (state: "failed" | "uncertain") => ({
-      id: "run-1",
-      state,
-      occurrence: "scheduled" as const,
-      scheduledFor: iso(-3_600_000),
-    });
+  it("flags automation attention independently of enabled state", () => {
     const { container, rerender } = render(
       <FlatThreadRow
         thread={makeThread({
-          automation: makeAutomation({ lastRun: lastRun("failed") }),
+          automations: makeAutomation({ attentionCount: 1 }),
         })}
         showBackendBrand
         density="compact"
       />,
     );
     expect(chipsOf(container)).toEqual(["alert"]);
-    expect(screen.getByRole("img", { name: "Automation failed" })).toBeVisible();
+    expect(screen.getByRole("img", { name: "Automation needs attention" })).toBeVisible();
 
     rerender(
       <FlatThreadRow
         thread={makeThread({
-          automation: makeAutomation({
-            status: "paused",
-            lastRun: lastRun("uncertain"),
-          }),
+          automations: makeAutomation({ enabledCount: 0, pausedCount: 1, attentionCount: 1 }),
         })}
         showBackendBrand
         density="compact"
       />,
     );
-    expect(chipsOf(container)).toEqual(["attention"]);
+    expect(chipsOf(container)).toEqual(["alert"]);
     expect(
-      screen.getByRole("img", { name: "Automation outcome unknown" }),
+      screen.getByRole("img", { name: "Automation needs attention" }),
     ).toBeVisible();
 
     rerender(
       <FlatThreadRow
         thread={makeThread({
           inventoryState: "settled",
-          automation: makeAutomation({
-            status: "paused",
-            lastRun: lastRun("uncertain"),
-          }),
+          automations: makeAutomation({ enabledCount: 0, pausedCount: 1, attentionCount: 1 }),
         })}
         showBackendBrand
         density="compact"
@@ -833,82 +813,55 @@ describe("thread pin presentation", () => {
 });
 
 describe("card context slot priority", () => {
-  it("failure beats paused, schedule, and wake", () => {
+  it("automation attention beats paused, schedule, and wake", () => {
     render(
       <FlatThreadRow
         showBackendBrand
         thread={makeThread({
           inventoryState: "snoozed",
           snoozedUntil: iso(3_600_000),
-          automation: makeAutomation({
-            status: "paused",
-            nextRunAt: iso(3_600_000),
-            lastRun: {
-              id: "run-1",
-              state: "failed",
-              occurrence: "scheduled",
-              scheduledFor: iso(-3_600_000),
-            },
-          }),
+          automations: makeAutomation({ enabledCount: 0, pausedCount: 1, attentionCount: 1, nextRunAt: iso(3_600_000) }),
         })}
         density="card"
       />,
     );
     const context = screen.getByTestId("flat-row-context");
-    expect(context).toHaveTextContent("run failed");
-    expect(context).toHaveAttribute("data-tone", "failure");
+    expect(context).toHaveTextContent("needs attention");
+    expect(context).toHaveAttribute("data-tone", "attention");
   });
 
-  it("paused beats schedule, and a never-run automation reads not started", () => {
-    const lastRun = {
-      id: "run-1",
-      state: "completed" as const,
-      occurrence: "scheduled" as const,
-      scheduledFor: iso(-3_600_000),
-    };
+  it("paused schedules remain visible before their first run", () => {
     render(
       <FlatThreadRow
         showBackendBrand
         thread={makeThread({
-          automation: makeAutomation({
-            status: "paused",
-            nextRunAt: iso(3_600_000),
-            lastRun,
-          }),
+          automations: makeAutomation({ enabledCount: 0, pausedCount: 1, nextRunAt: iso(3_600_000) }),
         })}
         density="card"
       />,
     );
-    expect(screen.getByTestId("flat-row-context")).toHaveTextContent(/^paused$/);
+    expect(screen.getByTestId("flat-row-context")).toHaveTextContent(/^1 paused$/);
     cleanup();
     render(
       <FlatThreadRow
         showBackendBrand
         thread={makeThread({
-          automation: makeAutomation({ status: "paused" }),
+          automations: makeAutomation({ enabledCount: 0, pausedCount: 1 }),
         })}
         density="card"
       />,
     );
     expect(screen.getByTestId("flat-row-context")).toHaveTextContent(
-      /^not started$/,
+      /^1 paused$/,
     );
   });
 
   it("an unknown outcome needs attention ahead of paused", () => {
     const thread = makeThread({
-      automation: makeAutomation({
-        status: "paused",
-        lastRun: {
-          id: "run-1",
-          state: "uncertain",
-          occurrence: "scheduled",
-          scheduledFor: iso(-3_600_000),
-        },
-      }),
+      automations: makeAutomation({ enabledCount: 0, pausedCount: 1, attentionCount: 1 }),
     });
     expect(flatRowContext(thread)).toEqual({
-      label: "outcome unknown",
+      label: "needs attention",
       tone: "attention",
     });
     render(<FlatThreadRow showBackendBrand thread={thread} density="card" />);
@@ -923,7 +876,7 @@ describe("card context slot priority", () => {
       <FlatThreadRow
         showBackendBrand
         thread={makeThread({
-          automation: makeAutomation({ nextRunAt: iso(30 * 60_000) }),
+          automations: makeAutomation({ nextRunAt: iso(30 * 60_000) }),
         })}
         density="card"
       />,
@@ -963,7 +916,7 @@ describe("card context slot priority", () => {
       <FlatThreadRow
         showBackendBrand
         thread={makeThread({
-          automation: makeAutomation({ nextRunAt: iso(3_600_000) }),
+          automations: makeAutomation({ nextRunAt: iso(3_600_000) }),
         })}
         density="compact"
       />,
@@ -1296,7 +1249,7 @@ describe("trailing time", () => {
       <FlatThreadRow
         showBackendBrand
         thread={makeThread({
-          automation: makeAutomation({ nextRunAt: iso(45 * 60_000) }),
+          automations: makeAutomation({ nextRunAt: iso(45 * 60_000) }),
         })}
         density="compact"
         futureTimes
@@ -1442,7 +1395,7 @@ describe("background work glyph priority", () => {
     { backingState: "unbound" as const },
     { inventoryState: "snoozed" as const },
     { inventoryState: "settled" as const },
-    { automation: makeAutomation() },
+    { automations: makeAutomation() },
   ])("puts completion and background work ahead of quiet inventory glyphs: %j", (quiet) => {
     expect(flatRowGlyphKind(makeThread({ ...quiet, backgroundWork, attention: attention({ unseenCompletion: true }) }))).toBe("unseen");
     expect(flatRowGlyphKind(makeThread({ ...quiet, backgroundWork }))).toBe("background-agents");

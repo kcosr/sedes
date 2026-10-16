@@ -1,387 +1,224 @@
 # Automation CLI
 
-`sedes-automation` is the repository-supplied command-line client for creating
-and managing thread automations through the normalized Sedes HTTP API. It is
-useful for reviewed JSON definitions, shell scripts, and repeatable operator
-workflows. It does not read SQLite or provider stores, configure a backend, or
-start and stop the server.
+`sedes-automation` manages named automations through the authenticated Sedes
+management API. Each automation attaches to an existing source thread, including
+an unstarted draft. Create and configure the thread through the normal thread
+interface first. Several automations can share it.
 
-The CLI authenticates as the local principal using the paired device credential
-in `SEDES_AUTH_TOKEN`. Its CSRF token is a separate request-integrity mechanism.
-Create and store a credential using
-[Credentials for operator scripts](operations.md#credentials-for-operator-scripts),
-and supply it through the environment rather than command arguments or URLs.
-Run it only against a Sedes
-listener protected by the trusted boundary in
-[Operations and security](operations.md).
-
-Sedes also builds a separate, credentialed `sedes` Tool client. That generic
-client invokes tools such as `automation.create`, `automation.update`, and
-`automation.runs` under a configured principal Tool client policy. It can
-attach an automation to an already-bound thread, supports partial updates, and
-has cursor pagination; it is not interchangeable with `sedes-automation`,
-`SEDES_URL`, or management-API CSRF. See
-[Principal Tool clients](../internals/agent-tools.md#principal-tool-clients) for
-endpoint, one-time credential, environment allowlist, and invocation setup.
-
-The two executables are intentional, not aliases:
-
-| Need | Use |
-| --- | --- |
-| Operate the complete thread-automation definition from a trusted local script or reviewed JSON file | `sedes-automation`; it uses the management API, creates a new draft for `create`, and replaces the complete definition on `update`. |
-| Let an agent or external tool invoke a policy-limited set of Sedes operations | `sedes`; it uses a revocable principal Tool-client credential, can attach to an eligible existing thread, and supports the general agent-tool contract. |
-
-A paired `sedes-automation` credential carries management authority. Prefer
-`sedes` with a principal Tool-client credential when the caller needs a
-least-authority tool policy.
+The agent-facing `sedes` tools use their own source or Tool-client credentials
+and admitted environment boundary. This operator CLI instead uses a paired
+device credential. Do not interchange those credential types.
 
 ## On this page
 
 - [Quick start](#quick-start)
-- [Input document and schedules](#input-document)
-- [Precheck safety](#prechecks)
+- [Input document](#input-document)
 - [Command reference](#command-reference)
 - [Server selection](#server-selection)
-- [Compiled executable](#install-the-compiled-executable)
-- [Safe scripting](#safe-scripting-practices)
+- [Install the compiled executable](#install-the-compiled-executable)
+- [Safe scripting practices](#safe-scripting-practices)
 
 ## Quick start
 
-The CLI defaults to the same loopback origin as a production-shaped Sedes
-source run. Set `SEDES_URL` when the selected installation uses another port:
+Set `SEDES_AUTH_TOKEN` to a paired device credential for the selected server.
+Then prepare a definition file and attach it to an existing thread:
 
 ```sh
-export SEDES_URL=http://127.0.0.1:4784
-npm run automation -- list
+npm run automation -- validate ./daily-update.json
+npm run automation -- create THREAD_ID ./daily-update.json
+npm run automation -- list --thread THREAD_ID
+npm run automation -- get AUTOMATION_ID
 ```
 
-Create a JSON file, validate it locally, create a paused automation, inspect
-it, and then enable it deliberately:
-
-```sh
-npm run automation -- validate nightly-review.json
-npm run automation -- create nightly-review.json
-npm run automation -- get THREAD_ID
-npm run automation -- enable THREAD_ID
-```
-
-Successful commands print formatted JSON to stdout. Validation, transport,
-protocol, and server errors print a diagnostic to stderr and exit nonzero.
+Create returns the automation's own ID. Use it for subsequent get, edit, state,
+run, history, and removal commands. Thread IDs select a source for creation or
+filter a collection; they never implicitly select one sibling automation.
 
 ## Input document
 
-`create`, `update`, `preview`, and `precheck` read one strict JSON document.
-Unknown properties are rejected and the file may be at most 256 KiB.
-For `update`, the definition is a full replacement: `prompt`, `runMode`,
-`schedule`, and `misfirePolicy` are always required. The JSON returned by `get`
-cannot be passed back as input because it contains presentation fields and uses
-`status` where input uses optional `state`.
-
-This complete create example uses the checked-in Pi target ID. Replace the
-workspace and target IDs with values from the selected installation:
-
 ```json
 {
-  "thread": {
-    "workspaceId": "10000000-0000-4000-8000-000000000001",
-    "title": "Nightly repository review",
-    "executionWorkspace": { "kind": "direct" },
-    "configuration": {
-      "kind": "custom",
-      "targetId": "pi-sdk-local"
-    }
-  },
   "automation": {
-    "prompt": "Review the repository and summarize outstanding issues.",
+    "name": "Daily update",
+    "prompt": "Summarize today's outstanding work.",
     "runMode": "same_thread",
     "schedule": {
       "kind": "cron",
-      "expression": "0 2 * * *",
+      "expression": "0 9 * * *",
       "timeZone": "Europe/London"
     },
-    "misfirePolicy": "skip",
-    "precheck": {
-      "command": "test -f package.json",
-      "timeoutSeconds": 10,
-      "includeStdout": false
-    },
-    "state": "paused"
+    "misfirePolicy": "coalesce",
+    "precheck": null,
+    "initialState": "enabled"
   },
   "checks": {
-    "previewCount": 5,
-    "testPrecheck": true
+    "previewCount": 3,
+    "testPrecheck": false
   }
 }
 ```
 
-Only `create` accepts `thread`. Commands that take `THREAD_ID` on the command
-line require the block to be omitted:
-
-```json
-{
-  "automation": {
-    "prompt": "Review the repository and summarize outstanding issues.",
-    "runMode": "same_thread",
-    "schedule": {
-      "kind": "interval",
-      "anchorAt": "2026-09-01T14:00:00.000Z",
-      "everySeconds": 86400
-    },
-    "misfirePolicy": "coalesce",
-    "precheck": null
-  },
-  "checks": { "previewCount": 3, "testPrecheck": false }
-}
-```
+Input is strict JSON, at most 256 KiB. Unknown fields are rejected. The former
+`thread` creation block and `state` field are removed. Model, reasoning, tool,
+workspace, and environment choices belong to the source thread.
 
 ### Thread selection
 
-A create request uses the same strict thread-creation contract as the UI:
-
-| Field | Meaning |
-| --- | --- |
-| `workspaceId` | Existing Sedes workspace (a project location) UUID. It must be available and belong to the target's execution environment. |
-| `title` | New anchor-thread title. Blank input normalizes to `New thread`; nonblank titles are limited to 240 characters. |
-| `executionWorkspace` | `{ "kind": "direct" }`, or an admitted isolated workspace selection with `workspaceAccess` and `networkProfile`. |
-| `configuration` | A `custom` target plus optional overrides/tool policy, or a `saved_agent` ID with an optional compatible target. |
-
-The CLI requires an explicit resolved `targetId`, including when the
-configuration uses a Saved Agent. It verifies the workspace/target environment
-relationship and target availability before creating the thread. Creation is
-imperative: running `create` twice creates two draft threads.
+`create THREAD_ID FILE` takes an existing source thread ID. It does not create a
+thread. `preview` and `precheck` also take a source thread ID so authorization and
+execution context remain explicit. All other item commands take automation IDs.
 
 ### Automation definition
 
-| Field | Values and effect |
+| Field | Meaning |
 | --- | --- |
-| `prompt` | Nonempty prompt, at most 65,536 UTF-8 bytes. |
-| `runMode` | `same_thread` sends work to the anchor thread; `clone` creates a separate result thread for each run and requires a bound, forkable anchor. A clone result thread is titled with the anchor's title and the run time, such as `Nightly review · Oct 6, 3:15 AM`: in the cron schedule's time zone, otherwise in UTC with a ` UTC` suffix. |
-| `schedule` | One `date_time`, `interval`, or `cron` shape described below. |
-| `misfirePolicy` | `coalesce` represents missed interval/cron occurrences with one newest due run and its count; `skip` records an occurrence more than 60 seconds late as skipped. |
-| `precheck` | `null`, omitted, or a bounded local command gate. Omission normalizes to `null`. |
-| `state` | Optional `paused` or `enabled`. Create defaults to `paused`; update preserves the current state when omitted. |
+| `name` | Required nonempty display name, at most 160 characters; duplicates are allowed |
+| `prompt` | Required prompt submitted on every invocation |
+| `runMode` | `same_thread` for **This thread**, or `clone` for **Fork** |
+| `schedule` | One-time, fixed interval, or cron schedule |
+| `misfirePolicy` | `null` for one-time; `skip` or `coalesce` for recurring |
+| `precheck` | Command definition or `null`; defaults to `null` |
+| `initialState` | Create only: `enabled` or `paused`; omitted means paused |
 
-Choose `same_thread` when periodic work should accumulate in one conversation.
-It obeys normal thread activity and queueing rules. Choose `clone` when each run
-should have an independent result derived from the anchor's latest snapshot.
+Creation and initial enabling are atomic. `update` replaces the definition and
+requires all definition fields; it rejects `initialState`. Use `enable` or
+`pause` to change state independently. A concurrent revision change causes a
+conflict rather than silently overwriting another editor.
 
-The CLI's `create` command always creates a new, unbound draft and therefore
-cannot create a clone-mode automation directly. Create it in `same_thread`
-mode, bind the thread by completing its first provider turn, then use `update`
-to select `clone` if that bound thread advertises clone-on-run capability. The
-CLI has no command that attaches a new definition to an arbitrary existing
-thread.
-
-Enabling or manually running an automation can schedule provider work and
-consume provider capacity. Creating a paused definition, previewing a schedule,
-and testing a precheck do not themselves send the automation prompt to a model.
-Attach, enable, and dispatch recheck current backend, model, reasoning, thread,
-and environment capabilities. A paused definition is not a promise that later
-policy or availability will permit a run. Grok targets currently do not support
-thread automations.
+**Fork** always creates a separate result from the original source. For a draft,
+it copies saved settings using normal thread creation; for a started source, it
+uses native fork support. It never reuses an earlier result or copies schedules.
+To continue a result on a schedule, attach another automation to that thread.
+Native fork restrictions still apply after a source is started.
 
 ### Schedule shapes
 
-A one-time schedule uses an ISO 8601 timestamp:
+A one-time reminder:
 
 ```json
-{ "kind": "date_time", "runAt": "2026-09-15T16:30:00.000Z" }
+{"kind":"date_time","runAt":"2028-01-20T15:00:00.000Z"}
 ```
 
-An interval has an ISO anchor and an integer period from 300 through 31,536,000
-seconds:
+A fixed interval:
 
 ```json
-{
-  "kind": "interval",
-  "anchorAt": "2026-09-01T14:00:00.000Z",
-  "everySeconds": 21600
-}
+{"kind":"interval","everySeconds":3600,"anchorAt":"2028-01-20T09:00:00.000Z"}
 ```
 
-A cron schedule has exactly five fields and a supported IANA timezone:
+A cron schedule:
 
 ```json
-{
-  "kind": "cron",
-  "expression": "30 8 * * 1-5",
-  "timeZone": "America/Chicago"
-}
+{"kind":"cron","expression":"0 9 * * 1-5","timeZone":"America/New_York"}
 ```
 
-Cron macros such as `@daily` and hashed fields are unsupported. Schedules that
-can occur more often than every five minutes are rejected, including around
-daylight-saving transitions. Use `preview` before enabling a definition to
-verify the actual upcoming instants.
+Use the preview command to validate the exact schedule. Recurring schedules must
+not run more often than every five minutes. The missed-run policy applies to
+downtime and suppression, not to ordinary delivery waiting behind a busy source.
+One-time reminders wait through snooze. Once their scheduled agent turn succeeds
+or is interrupted, and no result notice remains to dismiss, they leave the
+collection and their item/history endpoints return not found. Conversations and
+internal provenance records remain. Dismissal before completion waits for the
+turn to end; failed and uncertain work remains available. An interrupted turn,
+including a user's Stop, is not a failure. `run-now` does not rearm a
+consumed schedule. A later run replaces the scheduled notice on a This thread
+reminder: after a successful `run-now` the reminder leaves once that turn
+succeeds, and otherwise once that run's notice is dismissed. Scheduling
+another occurrence before removal requires a distinct future `runAt` and
+enabling the edited schedule.
 
 ### Prechecks
 
-A precheck runs a POSIX shell command in the anchor thread's server-authorized
-workspace immediately before model dispatch:
-
 ```json
 {
-  "command": "git diff --quiet -- .",
-  "timeoutSeconds": 15,
+  "command": "test -f package.json",
+  "timeoutSeconds": 10,
   "includeStdout": false
 }
 ```
 
-The command is at most 4,096 UTF-8 bytes and the timeout is an integer from 1
-through 60 seconds. Exit status zero permits the run; nonzero skips it. A
-timeout, signal, unavailable execution runtime, invalid output, or other
-execution failure fails the run rather than treating the condition as false.
-
-When `includeStdout` is true, successful UTF-8 stdout is trimmed and appended
-to the model prompt inside an explicit untrusted-data envelope. Output over 16
-KiB, a NUL byte, invalid UTF-8, or an effective prompt over 65,536 bytes fails
-the precheck. Treat both the command and its output as sensitive: the command
-runs with the service account's local workspace authority and output can become
-model-visible input.
-
-The standalone precheck test returns bounded stdout and stderr previews
-regardless of `includeStdout`; that flag controls only whether successful
-stdout joins the later model prompt. A test command can mutate the workspace
-and expose secrets in terminal output, logs, or captured JSON.
-
-Precheck command execution is currently local-only. An SSH thread reports
-`ssh_command_execution_unsupported`; it does not silently run the command on
-the Sedes host or managed sidecar.
+Prechecks use the source's authorized workspace. Exit 0 permits delivery; nonzero
+skips it. Timeout is 1–60 seconds. Explicit `precheck` and `testPrecheck` execute
+the shell command, so they can have effects even though they send no prompt.
+Completed per-run checks are retained across deferred delivery instead of being
+rerun. Interrupted checks fail rather than replaying unknown shell effects.
 
 ### Optional checks
 
-`checks.previewCount` is an integer from 0 through 10. A positive value makes
-`create` or `update` preview that many occurrences before mutating the
-automation. Zero, or omitting `checks`, performs no preview. The standalone
-`preview` command uses five when the value is zero or omitted.
-
-`checks.testPrecheck: true` runs the proposed precheck before create/update and
-requires `automation.precheck` to be non-null. Because it executes the command,
-this is not a validation-only operation. Both checks occur after thread
-creation in `create`; if a check or later automation mutation fails, the new
-draft thread is retained and its ID is printed to stderr.
-
-The standalone `preview` and `precheck` commands also require the complete
-`automation` input shape, although preview uses its schedule and precheck uses
-its prompt plus precheck. They require an existing thread but do not require an
-automation already attached to that thread. Local `validate` checks the API
-shape only; server-backed preview/create/update additionally validates cron
-syntax, timezone, cadence, and future occurrences.
+`checks.previewCount` is 0–10, default 0. `checks.testPrecheck` defaults false.
+Create and update perform requested checks before mutation. An explicit preview
+uses five occurrences if the requested count is zero. Repeating the CLI with
+checks enabled repeats those explicit diagnostic checks.
 
 ## Command reference
 
 | Command | Effect |
 | --- | --- |
-| `validate FILE` | Parse and normalize an input locally. Does not contact Sedes. |
-| `create FILE` | Create a draft thread, run requested checks, attach the definition, and apply the requested/default state. Not idempotent. |
-| `update THREAD_ID FILE` | Replace the existing definition fields using the current server revision, run requested checks first, and optionally change state. |
-| `preview THREAD_ID FILE` | Validate the proposed schedule against the existing thread and return upcoming occurrences. |
-| `precheck THREAD_ID FILE` | Execute the proposed precheck and return its decision and bounded output previews. |
-| `get THREAD_ID` | Return the current automation definition, state, revision, schedule, and summary. |
-| `enable THREAD_ID` | Enable future scheduled runs using the current revision. |
-| `pause THREAD_ID` | Stop admission of future scheduled runs using the current revision. |
-| `run-now THREAD_ID` | Create a manual run even while paused. It rejects snoozed anchors and can queue on a busy bound thread. This can execute a precheck and schedule provider work. |
-| `runs THREAD_ID [--filter FILTER]` | Return the newest run-history page, currently up to 50 items, with whole-history `counts` (`all`, `problems`, `skipped`). `--filter` is `all` (default), `problems` (failed or uncertain runs, and runs whose agent turn failed), or `skipped`. A run whose agent turn has settled includes `turn`: `id`, `outcome` (`completed`, `interrupted` or `failed`), `settledAt`, and `startedAt` and `endedAt` when the backend reported them. The response may include `nextCursor`, but this helper has no continuation option. |
-| `resolve THREAD_ID RUN_ID [--resume]` | Mark an `uncertain` run failed after reviewing its result thread; other states are rejected. `--resume` also enables the automation in the same operation; if enabling is rejected, the run stays uncertain. Resolving the scheduled run of a one-time automation ends that automation, so `--resume` is rejected for it. Resolving an already resolved run changes nothing, even with `--resume`. Prints `{ run, automation }`, where `automation` is the resulting definition or `null` when the thread no longer has one. |
-| `list [TITLE_QUERY]` | Filter automation-bearing threads in one bounded point-in-time application snapshot by case-insensitive title substring. |
-| `remove THREAD_ID` | Delete the automation definition using its current revision; it does not delete the thread. |
+| `validate FILE` | Validate strict input locally |
+| `create THREAD_ID FILE` | Add an independent automation to the source |
+| `update AUTOMATION_ID FILE` | Replace that automation's definition |
+| `preview THREAD_ID FILE` | Preview schedule occurrences |
+| `precheck THREAD_ID FILE` | Execute the diagnostic precheck |
+| `get AUTOMATION_ID` | Read one definition and summary |
+| `enable AUTOMATION_ID` | Enable its eligible schedule |
+| `pause AUTOMATION_ID` | Pause scheduling and cancel deferred unsent intent |
+| `run-now AUTOMATION_ID` | Create a separate manual invocation |
+| `runs AUTOMATION_ID [--filter all\|problems\|skipped]` | Read recent run history |
+| `resolve AUTOMATION_ID RUN_ID [--resume]` | Mark uncertain delivery failed, optionally resume eligible scheduling |
+| `list [QUERY] [--thread THREAD_ID]` | Read all collection pages, optionally filter source/name/title |
+| `remove AUTOMATION_ID` | Remove one automation; preserve its threads |
 
-Repository invocations are:
-
-```sh
-npm run automation -- validate automation.json
-npm run automation -- create automation.json
-npm run automation -- update THREAD_ID automation.json
-npm run automation -- preview THREAD_ID automation.json
-npm run automation -- precheck THREAD_ID automation.json
-npm run automation -- get THREAD_ID
-npm run automation -- enable THREAD_ID
-npm run automation -- pause THREAD_ID
-npm run automation -- run-now THREAD_ID
-npm run automation -- runs THREAD_ID [--filter all|problems|skipped]
-npm run automation -- resolve THREAD_ID RUN_ID [--resume]
-npm run automation -- list [TITLE_QUERY]
-npm run automation -- remove THREAD_ID
-```
-
-`list` is not an exhaustive server-side search. Its result includes
-`boundedToSnapshot: true` and the number of loaded threads so scripts do not
-mistake it for a complete inventory.
+The collection is independent of sidebar loading and includes automations on
+unloaded fork threads. Actions use explicit identities, never display-name
+matching. The HTTP contract uses `GET/POST /api/automations` and
+`/api/automations/:automationId` item routes. The old singular per-thread item
+routes are removed. Thread capability, preview, and precheck routes are under
+`/api/threads/:threadId/automations/`.
 
 ## Server selection
 
-Use `SEDES_URL` or `--server` with an HTTP(S) origin. URLs containing
-credentials, a path, query, or fragment are rejected:
+The default origin is `SEDES_URL` or `http://127.0.0.1:4784`. Override it with
+`--server URL`. The URL must be an HTTP(S) origin without credentials, path,
+query, or fragment. A non-loopback origin requires `--allow-remote`:
 
 ```sh
-npm run automation -- get THREAD_ID \
-  --server http://127.0.0.1:4784
+npm run automation -- list --server https://sedes.example.test --allow-remote
 ```
 
-Loopback hostnames `127.0.0.1`, `localhost`, and `::1` are admitted by default.
-A non-loopback origin additionally requires `--allow-remote`:
-
-```sh
-sedes-automation list \
-  --server https://sedes.example.ts.net \
-  --allow-remote
-```
-
-`--allow-remote` only acknowledges the destination. It adds no TLS trust,
-login, or API authentication. Use it only for a private HTTPS endpoint whose
-clients are already trusted.
+The CLI sends the paired credential only to that origin and refuses redirects.
+It fetches a CSRF token before mutations and preserves the request body if an
+expired CSRF token requires one retry. Authentication failure requires pairing
+or replacing the credential; it does not fall back to another identity.
 
 ## Install the compiled executable
 
-`npm run automation -- ...` executes TypeScript from the current checkout. To
-link both compiled Sedes CLIs into the current npm prefix, build and link this
-checkout:
+Build with the repository's normal build, then invoke:
 
 ```sh
-env -u NODE_ENV npm run build
-npm link
+node dist/cli/automation-cli.js --help
+node dist/cli/automation-cli.js create THREAD_ID ./daily-update.json
 ```
 
-Then run the automation executable from any directory:
-
-```sh
-sedes-automation list
-sedes-automation create ./automation.json
-sedes-automation pause THREAD_ID
-```
-
-Rebuild after changing source; the linked executable runs
-`dist/cli/automation-cli.js`. The working directory affects only relative input
-file paths, not server-side workspace selection or command execution.
+`sedes-automation` is the package executable for `dist/cli/automation-cli.js`.
+The working directory affects relative input paths only.
 
 ## Safe scripting practices
 
-- Start definitions paused, validate and preview them, test any precheck, then
-  enable them in a separate reviewed step.
-- Capture the `threadId` returned by `create`; do not discover an authoritative
-  thread with the bounded `list` command when titles can collide.
-- Treat `create` and `run-now` as non-idempotent. A lost client response can
-  leave accepted work; inspect server state before retrying.
-- Reconcile partial failures explicitly. `create` can retain a draft or a
-  paused automation when a later check/enable step fails; `update` can retain
-  the new definition when its final state change fails. Use the reported
-  thread ID with `get`, and use `list` only as a bounded fallback.
-- Expect revision conflicts when another operator or browser edits the same
-  definition. Re-read it and reapply the intended change instead of forcing a
-  stale update.
-- Remember that `pause` prevents future scheduler admissions; it is not a stop
-  button for work already admitted or running.
-- Review run records in `runs` and the UI; `runs THREAD_ID --filter problems`
-  lists failed and uncertain runs and runs whose agent turn failed. A failed
-  turn does not pause the automation. An `uncertain` result pauses the automation
-  and requires recovery review, not an automatic replay. Resolve it with
-  `resolve`, adding `--resume` only when the automation should run on schedule
-  again.
-- A successful `run-now` response records queue/provider acceptance, not final
-  agent-turn settlement. Follow the result thread, or `runs` until the run
-  carries `turn`, to completion.
+Create and run-now require a mutation ID on the wire. The CLI generates one per
+invocation and prints it to standard error before sending; successful JSON output
+also includes it. Supply `--mutation-id UUID` to retry an uncertain request with
+the same identity and unchanged input:
 
-For UI workflows and lifecycle concepts, see
-[Tasks and automations](../user/tasks-and-automations.md#schedule-work-with-an-automation).
-For deployment, listener, state, and recovery policy, return to the
-[operator guide](index.md).
+```sh
+npm run automation -- create THREAD_ID ./daily-update.json --mutation-id REQUEST_UUID
+npm run automation -- run-now AUTOMATION_ID --mutation-id REQUEST_UUID
+```
+
+A new key means new work. Reusing a key with a different source, automation, or
+request content conflicts. Do not generate a new key merely because a response
+was lost. Use distinct keys for independent operations. A retry recovers the
+original invocation and any reserved result thread; it must not create another
+copy or fork.
+
+Check the exit status and parse JSON output rather than human labels. Preserve
+unknown delivery outcomes for reconciliation. Do not store credentials in the
+input file, prompts, or precheck output.

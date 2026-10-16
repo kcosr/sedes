@@ -6,10 +6,13 @@ import {
   automationEditPath,
   automationPath,
   automationsPath,
+  automationCreatePath,
+  historyEntryBefore,
   historyStepsBackTo,
   installNavigationBlocker,
   navigate,
   navigateBack,
+  navigateOut,
   navigateUp,
   parseRoute,
   routePath,
@@ -18,6 +21,7 @@ import {
   pushHistoryEntry,
   replaceHistoryEntry,
   type NavigationBlocker,
+  type Route,
   threadPath,
   threadTurnPath,
   usagePath,
@@ -58,40 +62,9 @@ describe("thread load diagnostics", () => {
 });
 
 describe("automation routes", () => {
-  it("reads the old automation dialog address as the automation page", () => {
-    const threadId = randomUUID();
-
-    expect(parseRoute(`/threads/${threadId}/automation`)).toEqual({
-      name: "automation",
-      threadId,
-      edit: false,
-    });
-    expect(parseRoute(threadPath(threadId))).toEqual({
-      name: "thread",
-      threadId,
-    });
-  });
-
-  it("replaces the old automation address with the page's own, keeping one history entry", () => {
-    const threadId = "thread/one";
-    navigate(threadPath("origin"), { replace: true });
-    const length = window.history.length;
-
-    navigate(`/threads/${encodeURIComponent(threadId)}/automation`);
-
-    expect(window.location.pathname).toBe(automationPath(threadId));
-    expect(window.history.length).toBe(length + 1);
-    // The router recorded the page's own address for the entry.
-    navigate(automationEditPath(threadId));
-    expect(historyStepsBackTo(automationPath(threadId))).toBe(-1);
-  });
-
-  it("rewrites an old address that history leads back to", () => {
-    navigate(automationPath("thread-2"), { replace: true });
-    // An entry left from before, under the dialog's address.
-    window.history.replaceState(window.history.state, "", "/threads/thread-2/automation");
-    window.dispatchEvent(new PopStateEvent("popstate", { state: window.history.state }));
-    expect(window.location.pathname).toBe(automationPath("thread-2"));
+  it("rejects removed singleton automation addresses", () => {
+    expect(parseRoute(`/threads/${randomUUID()}/automation`)).toEqual({ name: "home" });
+    expect(parseRoute("/threads/thread-1/automation/edit")).toEqual({ name: "home" });
   });
 
   it("keeps normalized source-turn focus in the URL fragment", () => {
@@ -122,31 +95,36 @@ describe("automation routes", () => {
   });
 
   it("parses the automations list, page and editor routes", () => {
+    const automationId = randomUUID();
     const threadId = randomUUID();
 
+    expect(parseRoute(automationsPath(threadId))).toEqual({ name: "automations", threadId });
+    expect(parseRoute(automationCreatePath(threadId))).toEqual({ name: "automation-create", threadId });
+    expect(routePath({ name: "automations", threadId })).toBe(automationsPath(threadId));
+    expect(routePath({ name: "automation-create", threadId })).toBe(automationCreatePath(threadId));
     expect(parseRoute(automationsPath())).toEqual({ name: "automations" });
-    expect(parseRoute(automationPath(threadId))).toEqual({
+    expect(parseRoute(automationPath(automationId))).toEqual({
       name: "automation",
-      threadId,
+      automationId,
       edit: false,
     });
-    expect(parseRoute(automationEditPath(threadId))).toEqual({
+    expect(parseRoute(automationEditPath(automationId))).toEqual({
       name: "automation",
-      threadId,
+      automationId,
       edit: true,
     });
     expect(automationPath("a/b")).toBe("/automations/a%2Fb");
     expect(parseRoute(automationPath("a/b"))).toEqual({
       name: "automation",
-      threadId: "a/b",
+      automationId: "a/b",
       edit: false,
     });
     expect(routePath({ name: "automations" })).toBe("/automations");
-    expect(routePath({ name: "automation", threadId, edit: false })).toBe(
-      automationPath(threadId),
+    expect(routePath({ name: "automation", automationId, edit: false })).toBe(
+      automationPath(automationId),
     );
-    expect(routePath({ name: "automation", threadId, edit: true })).toBe(
-      automationEditPath(threadId),
+    expect(routePath({ name: "automation", automationId, edit: true })).toBe(
+      automationEditPath(automationId),
     );
   });
 
@@ -312,6 +290,74 @@ describe("up navigation", () => {
       navigateUp("/settings/environments");
       await vi.waitFor(() => expect(block).toHaveBeenCalledOnce());
       await vi.waitFor(() => expect(window.location.pathname).toBe("/settings/environments/local/edit"));
+    } finally { remove(); }
+  });
+});
+
+describe("leaving a page", () => {
+  const isList = (route: Route) => route.name === "automations";
+
+  it("finds the entry before a page and the entries below it", () => {
+    navigate("/threads/t1", { replace: true });
+    navigate("/threads/t1/automations");
+    navigate("/automations/a1");
+    navigate("/automations/a1/edit");
+    expect(historyEntryBefore("/automations/a1")).toEqual({
+      route: { name: "automations", threadId: "t1" },
+      steps: -2,
+    });
+    // Only entries at or below the page are passed over.
+    expect(historyEntryBefore("/automations/a1/edit")).toEqual({
+      route: { name: "automation", automationId: "a1", edit: false },
+      steps: -1,
+    });
+    navigate("/automations/a2");
+    expect(historyEntryBefore("/automations/a2")).toEqual({
+      route: { name: "automation", automationId: "a1", edit: true },
+      steps: -1,
+    });
+  });
+
+  it("reads the entry's address as its route, turn focus included", () => {
+    navigate(threadTurnPath("t1", "turn-1"), { replace: true });
+    navigate("/automations/a1");
+    expect(historyEntryBefore("/automations/a1")?.route).toEqual({
+      name: "thread",
+      threadId: "t1",
+      focusTurnId: "turn-1",
+    });
+  });
+
+  it("walks back past the page's entries to an accepted entry without adding history", async () => {
+    navigate("/automations", { replace: true });
+    navigate("/automations/a1");
+    navigate("/automations/a1/edit");
+    const length = window.history.length;
+    navigateOut("/automations/a1", isList, "/threads/t1/automations");
+    await vi.waitFor(() => expect(window.location.pathname).toBe("/automations"));
+    expect(window.history.length).toBe(length);
+  });
+
+  it("replaces the entry with the fallback when the entry before is not accepted", () => {
+    navigate("/threads/t1", { replace: true });
+    navigate("/automations/a1");
+    const length = window.history.length;
+    navigateOut("/automations/a1", isList, "/threads/t1/automations");
+    expect(window.location.pathname).toBe("/threads/t1/automations");
+    expect(window.history.length).toBe(length);
+    // The page is gone from history: Back leads where it was opened from.
+    expect(historyEntryBefore("/threads/t1/automations")?.route).toEqual({ name: "thread", threadId: "t1" });
+  });
+
+  it("runs guards on the way out and stays put when one declines", async () => {
+    navigate("/automations", { replace: true });
+    navigate("/automations/a1/edit");
+    const block = vi.fn<NavigationBlocker>(() => false);
+    const remove = installNavigationBlocker(block);
+    try {
+      navigateOut("/automations/a1", isList, "/automations");
+      await vi.waitFor(() => expect(block).toHaveBeenCalledOnce());
+      await vi.waitFor(() => expect(window.location.pathname).toBe("/automations/a1/edit"));
     } finally { remove(); }
   });
 });

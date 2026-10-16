@@ -1,968 +1,255 @@
 // @vitest-environment jsdom
-
-import {
-  act,
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-  within,
-} from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { Profiler } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type {
-  ApplicationClientState,
-  ApplicationClientStore,
-} from "../../stores/ApplicationClientStore.js";
-import {
-  SIDEBAR_VIEW_DEFAULTS,
-  SIDEBAR_VIEW_STORAGE_KEY,
-} from "../../app/sidebar-view-model.js";
-import { AUTOMATIONS_VIEW_STORAGE_KEY } from "../../automation/automations-view-preferences.js";
-import type {
-  SummaryAutomation,
-  SummaryAutomationRun,
-} from "../../automation/automation-health.js";
-import { futureTimeLabel } from "../../lib/time.js";
-import { installThreadPanelOpenRequestListener } from "../../workspace-panels/thread-panel-navigation.js";
+import { automationsPath, navigate, threadPath } from "../../app/router.js";
+import { setSidebarInventoryScope } from "../../app/sidebar-view-store.js";
+import { setAutomationGroupCollapsed } from "../../automation/automations-view-preferences.js";
+import type { ApplicationClientStore } from "../../stores/ApplicationClientStore.js";
 import { AutomationsView } from "./AutomationsView.js";
+import { AUTOMATION_ID, THREAD_ID, automationStore, definition, installAutomationDom, type AutomationStore } from "./automation-test-fixture.js";
 
-type Snapshot = NonNullable<ApplicationClientState["snapshot"]>;
-type Thread = Snapshot["threads"][number];
-
-function resetStorage() {
-  localStorage.clear();
-  window.dispatchEvent(new StorageEvent("storage", { key: null }));
-}
-
-// Relative times and health read the clock; only Date is faked, so timers
-// and the minute clock stay real.
-const NOW = Date.parse("2026-10-06T03:40:00.000Z");
-const minutesAgo = (minutes: number) =>
-  new Date(NOW - minutes * 60_000).toISOString();
-const hoursFromNow = (hours: number) =>
-  new Date(NOW + hours * 3_600_000).toISOString();
-const nextLabel = (hours: number) =>
-  futureTimeLabel(hoursFromNow(hours), new Date(NOW));
-
+beforeEach(installAutomationDom);
 afterEach(() => {
-  cleanup();
-  resetStorage();
-  vi.unstubAllGlobals();
-  vi.useRealTimers();
-  window.history.replaceState(null, "", "/");
+  cleanup(); vi.unstubAllGlobals(); localStorage.clear();
+  // Drops the cached sidebar Scope and list preferences with the storage.
+  window.dispatchEvent(new StorageEvent("storage", { key: null }));
 });
-beforeEach(() => {
-  vi.useFakeTimers({ toFake: ["Date"], now: NOW });
-  vi.stubGlobal(
-    "matchMedia",
-    vi.fn(() => ({
-      matches: false,
-      addEventListener: vi.fn(),
-      removeEventListener: vi.fn(),
-    })),
-  );
-  vi.stubGlobal(
-    "ResizeObserver",
-    class {
-      observe(): void {}
-      disconnect(): void {}
-      unobserve(): void {}
-    },
-  );
-  Object.assign(window.HTMLElement.prototype, {
-    scrollIntoView: vi.fn(),
-    hasPointerCapture: vi.fn(),
-    setPointerCapture: vi.fn(),
-    releasePointerCapture: vi.fn(),
-  });
-});
+const otherId = "30000000-0000-4000-8000-000000000002";
+const thirdId = "30000000-0000-4000-8000-000000000003";
 
-function run(
-  state: SummaryAutomationRun["state"],
-  overrides: Partial<SummaryAutomationRun> = {},
-): SummaryAutomationRun {
-  return {
-    id: `run-${state}`,
-    state,
-    occurrence: "scheduled",
-    scheduledFor: minutesAgo(30),
-    finishedAt: minutesAgo(23),
-    ...overrides,
-  };
+function renderList(fixture: AutomationStore, threadId?: string, store: ApplicationClientStore = fixture.store) {
+  return render(<AutomationsView store={store} threadId={threadId} />);
 }
 
-function automation(
-  overrides: Partial<SummaryAutomation> = {},
-): SummaryAutomation {
-  return {
-    status: "enabled",
-    runMode: "same_thread",
-    scheduleKind: "cron",
-    schedule: { kind: "cron", expression: "0 2 * * *", timeZone: "UTC" },
-    misfirePolicy: "coalesce",
-    promptPreview: "Check dependencies for advisories",
-    nextRunAt: hoursFromNow(22),
-    revision: 4,
-    runsRevision: 0,
-    hasPrecheck: false,
-    ...overrides,
-  };
+/** The fixture's store with a second, empty project for the sidebar Scope. */
+function withBillingProject(fixture: AutomationStore): ApplicationClientStore {
+  const state = fixture.store.getSnapshot();
+  const scoped = { ...state, snapshot: { ...state.snapshot!, projects: [...state.snapshot!.projects, { id: "project-2", name: "billing-service" }] } };
+  return { ...(fixture.store as object), getSnapshot: () => scoped } as unknown as ApplicationClientStore;
 }
 
-function makeThread(
-  id: string,
-  title: string,
-  overrides: Partial<Thread> = {},
-): Thread {
-  return {
-    id,
-    workspaceId: "ws-acme",
-    targetId: "t-pi",
-    title: { text: title },
-    backend: { label: { text: "Pi SDK" }, brand: "pi" },
-    backingState: "bound",
-    inventoryState: "active",
-    inventoryRevision: 1,
-    preferredWorktreeRevision: 0,
-    preferredWorktree: null,
-    pinned: false,
-    pinRevision: 0,
-    groupId: null,
-    groupAssignmentRevision: 0,
-    bookmarkRevision: 0,
-    turnBookmarkCount: 0,
-    nonArchivedWorkpadCount: 0,
-    threadRevision: 1,
-    runState: "idle",
-    terminalSummary: { runningCount: 0, retainedCount: 0 },
-    queuedInputCount: 0,
-    pendingQuestionCount: 0,
-    stashedPromptCount: 0,
-    available: true,
-    lastActivityAt: minutesAgo(60),
-    stateChangedAt: minutesAgo(60),
-    automation: automation(),
-    attention: {
-      wake: false,
-      automationContext: null,
-      unseenCompletion: false,
-      queueFailure: false,
-    },
-    ...overrides,
-  } as Thread;
-}
+const wideMeta = (row: HTMLElement) => row.querySelector('[data-layout="wide"]');
+const narrowMeta = (row: HTMLElement) => row.querySelector('[data-layout="narrow"]');
 
-function makeSnapshot(
-  threads: readonly Thread[],
-  overrides: Partial<Snapshot> = {},
-): Snapshot {
-  return {
-    advisories: [],
-    environments: [
-      {
-        id: "env-local",
-        kind: "local",
-        label: { text: "Local" },
-        available: true,
-        directoryBrowsing: "available",
-      },
-    ],
-    projects: [
-      { id: "project-acme", name: "acme-web", revision: 1 },
-      { id: "project-billing", name: "billing-service", revision: 1 },
-      { id: "project-docs", name: "docs", revision: 1 },
-    ],
-    workspaces: [
-      {
-        id: "ws-acme",
-        environmentId: "env-local",
-        projectId: "project-acme",
-        label: { text: "acme-web" },
-        displayPath: { text: "/src/acme-web" },
-        available: true,
-      },
-      {
-        id: "ws-billing",
-        environmentId: "env-local",
-        projectId: "project-billing",
-        label: { text: "billing-service" },
-        displayPath: { text: "/src/billing-service" },
-        available: true,
-      },
-      {
-        id: "ws-docs",
-        environmentId: "env-local",
-        projectId: "project-docs",
-        label: { text: "docs" },
-        displayPath: { text: "/src/docs" },
-        available: true,
-      },
-    ],
-    executionTargets: [],
-    threads: [...threads],
-    forkOrigins: [],
-    lineagePlacements: [],
-    groups: [],
-    lineageFamilies: [],
-    defaultNewThreadTargetId: null,
-    counts: { active: threads.length, snoozed: 0, settled: 0, archived: 0 },
-    tasks: [],
-    ...overrides,
-  } as Snapshot;
-}
-
-function createStore(snapshot: Snapshot) {
-  let state: ApplicationClientState = {
-    status: "ready",
-    connection: "connected",
-    authoritative: true,
-    providerPulseEnabled: false,
-    experimentalUsageEnabled: false,
-    search: "",
-    descendantPages: {},
-    pendingThreadConfigurationCopySourceIds: [],
-    visibleThreads: snapshot.threads,
-    snapshot,
-  };
-  const listeners = new Set<() => void>();
-  const publish = (patch: Partial<ApplicationClientState>) => {
-    state = { ...state, ...patch };
-    act(() => {
-      for (const listener of listeners) listener();
-    });
-  };
-  const api = {
-    runThreadAutomationNow: vi.fn(async (): Promise<unknown> => ({})),
-    setThreadAutomationState: vi.fn(async (): Promise<unknown> => ({})),
-  };
-  const store = {
-    subscribe: (listener: () => void) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-    getSnapshot: () => state,
-    setSearch: vi.fn(),
-    api,
-  };
-  return {
-    store: store as typeof store & ApplicationClientStore,
-    api,
-    publish,
-  };
-}
-
-function seedScope(patch: Record<string, unknown>) {
-  localStorage.setItem(
-    SIDEBAR_VIEW_STORAGE_KEY,
-    JSON.stringify({ ...SIDEBAR_VIEW_DEFAULTS, ...patch }),
-  );
-  window.dispatchEvent(
-    new StorageEvent("storage", { key: SIDEBAR_VIEW_STORAGE_KEY }),
-  );
-}
-
-/** The mock world: one automation per list state. */
-const world = [
-  makeThread("triage", "Triage new billing issues", {
-    workspaceId: "ws-billing",
-    automation: automation({
-      schedule: {
-        kind: "interval",
-        everySeconds: 14_400,
-        anchorAt: "2026-10-01T00:00:00.000Z",
-      },
-      nextRunAt: hoursFromNow(4),
-      lastRun: run("completed", { finishedAt: minutesAgo(25) }),
-    }),
-  }),
-  makeThread("nightly", "Nightly dependency audit", {
-    automation: automation({ lastRun: run("completed") }),
-  }),
-  makeThread("invoice", "Invoice reconciliation report", {
-    workspaceId: "ws-billing",
-    automation: automation({
-      nextRunAt: hoursFromNow(3),
-      lastRun: run("failed", {
-        finishedAt: minutesAgo(21 * 60),
-        errorCode: "automation_dispatch_failed",
-      }),
-    }),
-  }),
-  makeThread("sync", "Sync staging fixtures", {
-    automation: automation({
-      status: "paused",
-      nextRunAt: undefined,
-      lastRun: run("uncertain", {
-        finishedAt: undefined,
-        scheduledFor: minutesAgo(3 * 60),
-        errorCode: "automation_dispatch_uncertain",
-      }),
-    }),
-  }),
-  makeThread("weekly", "Weekly release notes draft", {
-    automation: automation({
-      status: "paused",
-      nextRunAt: undefined,
-      promptPreview: "Draft the weekly release notes from merged PRs",
-    }),
-  }),
-  makeThread("spike", "Spike: GraphQL gateway", {
-    inventoryState: "archived",
-    automation: automation({ lastRun: run("completed") }),
-  }),
-  makeThread("plain", "Plain thread", { automation: null }),
-];
-
-const groups = () => screen.queryAllByTestId("automations-group");
-const headings = () =>
-  screen
-    .queryAllByRole("heading", { level: 2 })
-    .map((heading) => heading.textContent);
-const rowTitles = () =>
-  screen
-    .queryAllByTestId("automation-row")
-    .map((row) => row.querySelector(".automation-row-title")?.textContent);
-const row = (id: string) =>
-  document.querySelector<HTMLElement>(
-    `[data-testid="automation-row"][data-thread-id="${id}"]`,
-  )!;
-const text = (id: string, part: string) =>
-  row(id).querySelector(`.automation-row-${part}`)?.textContent;
-
-async function openRowMenu(
-  user: ReturnType<typeof userEvent.setup>,
-  title: string,
-) {
-  await user.click(
-    screen.getByRole("button", { name: `Actions for ${title}` }),
-  );
-  return screen.getByRole("menu", { name: `Actions for ${title}` });
-}
-
-describe("AutomationsView list", () => {
-  it("groups every automation by status with counts, Suspended collapsed", () => {
-    const { store } = createStore(makeSnapshot(world));
-    render(<AutomationsView store={store} />);
-    expect(
-      screen.getByRole("heading", { level: 1, name: "Automations" }),
-    ).toBeVisible();
-    expect(screen.getByTestId("automations-count")).toHaveTextContent("6");
-    expect(headings()).toEqual([
-      "Needs attention · 2",
-      "Upcoming · 2",
-      "Paused · 1",
-      "Suspended · 1",
-    ]);
-    expect(rowTitles()).toEqual([
-      "Sync staging fixtures",
-      "Invoice reconciliation report",
-      "Triage new billing issues",
-      "Nightly dependency audit",
-      "Weekly release notes draft",
-    ]);
-    const suspended = screen.getByRole("button", { name: "Suspended · 1" });
-    expect(suspended).toHaveAttribute("aria-expanded", "false");
-    expect(screen.getByRole("button", { name: "Upcoming · 2" })).toHaveAttribute(
-      "aria-expanded",
-      "true",
-    );
-    expect(
-      within(screen.getByRole("list", { name: "Upcoming · 2" })).getAllByRole(
-        "listitem",
-      ),
-    ).toHaveLength(2);
-    const status = screen.getByTestId("automations-status");
-    expect(status).toHaveTextContent("All projects");
-    expect(status).toHaveTextContent("Grouped by status");
-    expect(within(status).queryByRole("button")).toBeNull();
+describe("automation collections", () => {
+  it("reads all pages and shows two independent names from one unloaded source", async () => {
+    const first = definition({ name: "Daily update" });
+    const second = definition({ id: otherId, name: "Call dentist" });
+    const list = vi.fn().mockResolvedValueOnce({ items: [first], nextCursor: "next" }).mockResolvedValueOnce({ items: [second], nextCursor: null });
+    const fixture = automationStore([], { listAutomations: list });
+    renderList(fixture);
+    expect(await screen.findByRole("link", { name: "Daily update" })).toHaveAttribute("href", `/automations/${AUTOMATION_ID}`);
+    expect(screen.getByRole("link", { name: "Call dentist" })).toHaveAttribute("href", `/automations/${otherId}`);
+    expect(screen.getAllByTestId("automation-row")).toHaveLength(2);
+    expect(list).toHaveBeenLastCalledWith(expect.objectContaining({ cursor: "next" }));
   });
 
-  it("reads each row as title, schedule · project · backend, next run and last outcome", () => {
-    const { store } = createStore(makeSnapshot(world));
-    render(<AutomationsView store={store} />);
-    const nightly = screen.getByRole("link", {
-      name: "Nightly dependency audit",
-    });
-    expect(nightly).toHaveAttribute("href", "/automations/nightly");
-    expect(text("nightly", "primary")).toBe(nextLabel(22));
-    expect(row("nightly").querySelector('[data-layout="wide"]')).toHaveTextContent(
-      "Every day at 2:00 AM UTC · acme-web · Pi SDK",
-    );
-    expect(text("nightly", "secondary")).toBe("Delivered 23m ago");
-    expect(
-      row("nightly").querySelector(".automation-row-secondary .lucide-check"),
-    ).not.toBeNull();
-    expect(nightly).toHaveAccessibleDescription(
-      `Next run ${nextLabel(22)}. Every day at 2:00 AM UTC · acme-web · Pi SDK. Delivered 23m ago`,
-    );
-    // The glyph speaks through the description, not on its own.
-    expect(
-      row("nightly").querySelector('[data-automation-glyph="repeat"]'),
-    ).toHaveAttribute("aria-hidden", "true");
-
-    // Problems lead with the failure, its error text replaces the schedule,
-    // and line 2 says whether scheduling continues.
-    expect(text("invoice", "primary")).toBe("Failed 21h ago");
-    expect(
-      row("invoice").querySelector(".automation-row-primary"),
-    ).toHaveAttribute("data-tone", "danger");
-    expect(row("invoice").querySelector('[data-layout="wide"]')).toHaveTextContent(
-      "The prompt could not be delivered to the agent · billing-service · Pi SDK",
-    );
-    expect(text("invoice", "secondary")).toBe(`next ${nextLabel(3)}`);
-    expect(
-      row("invoice").querySelector('[data-automation-glyph="triangle"]'),
-    ).toHaveAttribute("data-tone", "danger");
-    expect(text("sync", "primary")).toBe("Outcome unknown");
-    expect(text("sync", "secondary")).toBe("Scheduling paused");
-    expect(
-      row("sync").querySelector('[data-automation-glyph="triangle"]'),
-    ).toHaveAttribute("data-tone", "warning");
-    expect(text("weekly", "primary")).toBe("Not started");
-    expect(text("weekly", "secondary")).toBe("");
-    expect(
-      row("weekly").querySelector('[data-automation-glyph="pause"]'),
-    ).not.toBeNull();
-
-    // Phones read outcome · schedule with only the next run trailing.
-    expect(
-      row("nightly").querySelector('[data-layout="narrow"]'),
-    ).toHaveTextContent("Delivered 23m ago · Every day at 2:00 AM UTC");
-    expect(text("nightly", "next")).toBe(nextLabel(22));
-    expect(
-      row("invoice").querySelector('[data-layout="narrow"]'),
-    ).toHaveTextContent(
-      "Failed 21h ago · The prompt could not be delivered to the agent",
-    );
-    expect(
-      row("weekly").querySelector('[data-layout="narrow"]'),
-    ).toHaveTextContent("Not started · Every day at 2:00 AM UTC");
-    expect(text("weekly", "next")).toBe("");
+  it("names each row's thread, project and backend, with Open thread in ⋯", async () => {
+    const fixture = automationStore([{ title: "Checkout flow refactor", automation: definition() }]);
+    renderList(fixture);
+    const row = await screen.findByTestId("automation-row");
+    expect(wideMeta(row)).toHaveTextContent(/^Checkout flow refactor · Every day at 2:00 AM UTC · acme-web · Pi SDK$/u);
+    expect(narrowMeta(row)).toHaveTextContent(/^Checkout flow refactor · Every day at 2:00 AM UTC$/u);
+    await userEvent.setup().click(within(row).getByRole("button", { name: "Actions for Nightly dependency audit" }));
+    expect(await screen.findByRole("menuitem", { name: "Open thread" })).toBeInTheDocument();
   });
 
-  it("reads the last turn's ending in the row, and keeps each row in its group", () => {
-    const turnWorld = [
-      makeThread("finished", "Nightly dependency audit", {
-        automation: automation({
-          lastRun: run("completed", {
-            finishedAt: minutesAgo(40),
-            turn: { outcome: "completed", endedAt: minutesAgo(23) },
-          }),
-        }),
-      }),
-      makeThread("failed", "Invoice reconciliation report", {
-        automation: automation({
-          nextRunAt: hoursFromNow(3),
-          lastRun: run("completed", {
-            finishedAt: minutesAgo(125),
-            turn: { outcome: "failed", endedAt: minutesAgo(120) },
-          }),
-        }),
-      }),
-      makeThread("interrupted", "Triage new billing issues", {
-        automation: automation({
-          status: "paused",
-          nextRunAt: undefined,
-          lastRun: run("completed", {
-            finishedAt: minutesAgo(60),
-            turn: { outcome: "interrupted" },
-          }),
-        }),
-      }),
-    ];
-    const { store } = createStore(makeSnapshot(turnWorld));
-    render(<AutomationsView store={store} />);
-    // A failed turn adds no attention: no Needs attention group.
-    expect(headings()).toEqual(["Upcoming · 2", "Paused · 1"]);
-    expect(row("failed")).toHaveAttribute("data-group", "upcoming");
-
-    expect(text("finished", "secondary")).toBe("Finished 23m ago");
-    expect(
-      row("finished").querySelector(".automation-row-secondary .lucide-check"),
-    ).not.toBeNull();
-    expect(row("finished").querySelector(".automation-row-secondary")).not.toHaveAttribute("data-tone");
-
-    const failed = row("failed").querySelector(".automation-row-secondary");
-    expect(failed).toHaveTextContent(/^Failed 2h ago$/u);
-    expect(failed).toHaveAttribute("data-tone", "danger");
-    expect(failed?.querySelector(".lucide-check")).toBeNull();
-    expect(text("failed", "primary")).toBe(nextLabel(3));
-    expect(
-      row("failed").querySelector('[data-automation-glyph="repeat"]'),
-    ).not.toBeNull();
-    expect(
-      screen.getByRole("link", { name: "Invoice reconciliation report" }),
-    ).toHaveAccessibleDescription(
-      `Next run ${nextLabel(3)}. Every day at 2:00 AM UTC · acme-web · Pi SDK. Failed 2h ago`,
-    );
-    expect(
-      row("failed").querySelector('[data-layout="narrow"] .automation-row-outcome'),
-    ).toHaveAttribute("data-tone", "danger");
-
-    expect(text("interrupted", "primary")).toBe("Paused");
-    expect(text("interrupted", "secondary")).toBe("Interrupted 1h ago");
-    expect(row("interrupted").querySelector(".automation-row-secondary")).not.toHaveAttribute("data-tone");
-  });
-
-  it("opens the automation page from the whole row and leaves modified clicks to the browser", () => {
-    const { store } = createStore(makeSnapshot(world));
-    render(<AutomationsView store={store} />);
-    const link = screen.getByRole("link", { name: "Nightly dependency audit" });
-    // Whether the app took each click; jsdom cannot follow the rest.
-    const taken: boolean[] = [];
-    const record = (event: MouseEvent) => {
-      taken.push(event.defaultPrevented);
-      event.preventDefault();
-    };
-    window.addEventListener("click", record);
-    fireEvent.click(link, { ctrlKey: true });
-    expect(window.location.pathname).toBe("/");
-    fireEvent.click(link);
-    window.removeEventListener("click", record);
-    expect(taken).toEqual([false, true]);
-    expect(window.location.pathname).toBe("/automations/nightly");
-  });
-
-  it("expands and collapses groups and remembers the choice", async () => {
+  it("targets row controls at the selected automation and preserves its sibling", async () => {
+    const first = definition({ name: "Daily update" });
+    const second = definition({ id: otherId, name: "Call dentist" });
+    const pause = vi.fn().mockResolvedValue({ ...second, status: "paused" });
+    const fixture = automationStore([], { listAutomations: vi.fn().mockResolvedValue({ items: [first, second], nextCursor: null }), setAutomationState: pause });
+    renderList(fixture);
+    await screen.findByRole("link", { name: "Call dentist" });
     const user = userEvent.setup();
-    const { store } = createStore(makeSnapshot(world));
-    const view = render(<AutomationsView store={store} />);
-    await user.click(screen.getByRole("button", { name: "Suspended · 1" }));
-    expect(rowTitles()).toContain("Spike: GraphQL gateway");
-    expect(text("spike", "primary")).toBe("Thread archived");
-    expect(
-      row("spike").querySelector('[data-automation-glyph="archive"]'),
-    ).not.toBeNull();
-    await user.click(screen.getByRole("button", { name: "Upcoming · 2" }));
-    expect(rowTitles()).not.toContain("Nightly dependency audit");
-    expect(
-      JSON.parse(localStorage.getItem(AUTOMATIONS_VIEW_STORAGE_KEY)!)
-        .collapsed,
-    ).toEqual({ "status:suspended": false, "status:upcoming": true });
+    await user.click(screen.getByRole("button", { name: "Actions for Call dentist" }));
+    await user.click(await screen.findByRole("menuitem", { name: /^Pause/ }));
+    expect(pause).toHaveBeenCalledWith(otherId, "pause", 3, expect.any(String));
+    expect(screen.getByRole("link", { name: "Daily update" })).toBeInTheDocument();
+  });
+
+  it("searches names, prompts and source titles and refreshes from collection invalidations", async () => {
+    const first = definition({ name: "Daily update", prompt: "Weather and news" });
+    const fixture = automationStore([], { listAutomations: vi.fn().mockResolvedValue({ items: [first], nextCursor: null }) });
+    renderList(fixture);
+    await screen.findByRole("link", { name: "Daily update" });
+    await userEvent.setup().type(screen.getByRole("searchbox", { name: "Search automations" }), "weather");
+    expect(screen.getByRole("link", { name: "Daily update" })).toBeInTheDocument();
+    act(() => fixture.invalidate(otherId));
+    await waitFor(() => expect(fixture.api.listAutomations).toHaveBeenCalledTimes(2));
+  });
+
+  it("keeps exhausted reminders in the collapsed Finished group", async () => {
+    const fixture = automationStore([], { listAutomations: vi.fn().mockResolvedValue({ items: [definition({ name: "Completed reminder", status: "exhausted", nextRunAt: undefined })], nextCursor: null }) });
+    renderList(fixture);
+    const group = await screen.findByRole("button", { name: /Finished/ });
+    expect(group).toHaveAttribute("aria-expanded", "false");
+    await userEvent.setup().click(group);
+    expect(screen.getByRole("link", { name: "Completed reminder" })).toBeInTheDocument();
+  });
+
+  it("refreshes an unloaded source when its thread summary changes", async () => {
+    const value = definition({ name: "Daily update" });
+    const list = vi.fn().mockResolvedValueOnce({ items: [value], nextCursor: null })
+      .mockResolvedValue({ items: [{ ...value, source: { ...value.source, title: "Changed source" } }], nextCursor: null });
+    const fixture = automationStore([], { listAutomations: list });
+    renderList(fixture);
+    await screen.findByRole("link", { name: "Daily update" });
+    act(() => fixture.invalidateSource(THREAD_ID));
+    await waitFor(() => expect(list).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getByRole("link", { name: "Daily update" })).toHaveTextContent("Changed source"));
+  });
+
+  it("shows placeholder rows and no count until the first load, and an outline Retry after a failure", async () => {
+    let fail!: (reason: unknown) => void;
+    const list = vi.fn()
+      .mockReturnValueOnce(new Promise((_resolve, reject) => { fail = reject; }))
+      .mockResolvedValue({ items: [definition()], nextCursor: null });
+    const fixture = automationStore([], { listAutomations: list });
+    renderList(fixture);
+    expect(screen.getByRole("status", { name: "Loading automations" })).toBeInTheDocument();
+    expect(screen.queryByTestId("automations-count")).not.toBeInTheDocument();
+    await act(async () => fail(new Error("The server is unavailable.")));
+    expect(await screen.findByText("The server is unavailable.")).toBeInTheDocument();
+    // A failed load says nothing about the collection.
+    expect(screen.queryByRole("status", { name: "Loading automations" })).not.toBeInTheDocument();
+    expect(screen.queryByText("No automations yet")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("automations-count")).not.toBeInTheDocument();
+    const retry = screen.getByRole("button", { name: "Retry" });
+    expect(retry).toHaveAttribute("data-variant", "outline");
+    expect(retry).toHaveAttribute("data-size", "sm");
+    await userEvent.setup().click(retry);
+    expect(await screen.findByRole("link", { name: "Nightly dependency audit" })).toBeInTheDocument();
+    expect(screen.getByTestId("automations-count")).toHaveTextContent(/^1\s*automations$/u);
+  });
+});
+
+describe("a thread's automations", () => {
+  it("names the thread in a back link that goes up to it, instead of Open thread", async () => {
+    navigate(automationsPath(THREAD_ID));
+    const fixture = automationStore([{ title: "Checkout flow refactor", automation: definition() }]);
+    renderList(fixture, THREAD_ID);
+    const back = screen.getByRole("link", { name: "Checkout flow refactor" });
+    expect(back).toHaveAttribute("href", `/threads/${THREAD_ID}`);
+    await screen.findByTestId("automation-row");
+    expect(screen.getByRole("heading", { level: 1, name: "Automations" })).toBeInTheDocument();
+    expect(screen.getByTestId("automations-count")).toHaveTextContent(/^1\s*automations$/u);
+    expect(screen.queryByRole("button", { name: "Open thread" })).not.toBeInTheDocument();
+    await userEvent.setup().click(back);
+    await waitFor(() => expect(window.location.pathname).toBe(`/threads/${THREAD_ID}`));
+  });
+
+  it("ignores the sidebar Scope and has no search, View options or status line", async () => {
+    setSidebarInventoryScope({ projectFilterId: "project-2" });
+    const fixture = automationStore([{ title: "Checkout flow refactor", automation: definition() }]);
+    const store = withBillingProject(fixture);
+    // The global list honours the Scope, which leaves out this thread.
+    renderList(fixture, undefined, store);
+    expect(await screen.findByText(/^No automations in /u)).toBeInTheDocument();
+    cleanup();
+
+    renderList(fixture, THREAD_ID, store);
+    expect(await screen.findByRole("link", { name: "Nightly dependency audit" })).toBeInTheDocument();
+    expect(screen.getByTestId("automations-count")).toHaveTextContent(/^1\s*automations$/u);
+    expect(screen.queryByText(/^No automations in /u)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Scope:/u)).not.toBeInTheDocument();
+    expect(screen.queryByText("All projects")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Clear scope" })).not.toBeInTheDocument();
+    expect(screen.queryByTestId("automations-status")).not.toBeInTheDocument();
+    expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "View options" })).not.toBeInTheDocument();
+  });
+
+  it("leaves the thread, project and backend out of rows and Open thread out of ⋯", async () => {
+    const fixture = automationStore([{ title: "Checkout flow refactor", automation: definition() }]);
+    renderList(fixture, THREAD_ID);
+    const row = await screen.findByTestId("automation-row");
+    expect(wideMeta(row)).toHaveTextContent(/^Every day at 2:00 AM UTC$/u);
+    expect(narrowMeta(row)).toHaveTextContent(/^Every day at 2:00 AM UTC$/u);
+    for (const repeated of ["Checkout flow refactor", "acme-web", "Pi SDK"]) expect(row).not.toHaveTextContent(repeated);
+    await userEvent.setup().click(within(row).getByRole("button", { name: "Actions for Nightly dependency audit" }));
+    expect(await screen.findByRole("menuitem", { name: /^Edit/u })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Open thread" })).not.toBeInTheDocument();
+  });
+
+  it("lists every automation flat, in status order", async () => {
+    const finished = definition({ name: "Afternoon reminder", status: "exhausted", nextRunAt: undefined });
+    const paused = definition({ id: otherId, name: "Weekly release notes", status: "paused", nextRunAt: undefined });
+    const upcoming = definition({ id: thirdId, name: "Nightly dependency audit" });
+    const fixture = automationStore([{ title: "Checkout flow refactor", automation: upcoming }], {
+      listAutomations: vi.fn().mockResolvedValue({ items: [finished, paused, upcoming], nextCursor: null }),
+    });
+    renderList(fixture, THREAD_ID);
+    await screen.findByRole("link", { name: "Afternoon reminder" });
+    expect(screen.getAllByTestId("automation-row").map((row) => row.dataset.automationId)).toEqual([thirdId, otherId, AUTOMATION_ID]);
+    expect(screen.queryAllByTestId("automations-group")).toHaveLength(0);
+    expect(screen.queryByRole("button", { name: /Finished/u })).not.toBeInTheDocument();
+  });
+
+  it("shows a snoozed thread's suspended automations whatever the global list collapsed", async () => {
+    setAutomationGroupCollapsed("status:suspended", true);
+    const fixture = automationStore([{ title: "Checkout flow refactor", inventoryState: "snoozed", automation: definition() }], {
+      listAutomations: vi.fn().mockResolvedValue({ items: [definition(), definition({ id: otherId, name: "Weekly release notes" })], nextCursor: null }),
+    });
+    renderList(fixture, THREAD_ID);
+    const rows = await screen.findAllByTestId("automation-row");
+    expect(rows.map((row) => row.dataset.group)).toEqual(["suspended", "suspended"]);
+    expect(screen.getByRole("link", { name: "Weekly release notes" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: /Suspended/u })).not.toBeInTheDocument();
+  });
+
+  it("puts an outline Add automation last in the header", async () => {
+    const fixture = automationStore([{ title: "Checkout flow refactor", automation: definition() }]);
+    renderList(fixture, THREAD_ID);
+    await screen.findByTestId("automation-row");
+    const add = screen.getByRole("button", { name: "Add automation" });
+    expect(add).toHaveAttribute("data-variant", "outline");
+    expect(add).toHaveAttribute("data-size", "default");
+    expect(add.closest("header")?.lastElementChild).toBe(add);
+    await userEvent.setup().click(add);
+    expect(window.location.pathname).toBe(`/threads/${THREAD_ID}/automations/new`);
+    expect(fixture.api.listAutomations).toHaveBeenCalledWith(expect.objectContaining({ threadId: THREAD_ID }));
+  });
+
+  it("offers Add automation in the empty state when the thread has none", async () => {
+    const fixture = automationStore([{ title: "Spike: GraphQL gateway", automation: null }]);
+    renderList(fixture, THREAD_ID);
+    expect(await screen.findByText("No automations on this thread")).toBeInTheDocument();
+    expect(screen.getByText("Send this thread a prompt on a schedule.")).toBeInTheDocument();
+    expect(screen.getByTestId("automations-count")).toHaveTextContent(/^0\s*automations$/u);
+    // The header has no second one.
+    const [add, ...others] = screen.getAllByRole("button", { name: "Add automation" });
+    expect(others).toHaveLength(0);
+    expect(add).toHaveAttribute("data-variant", "default");
+    expect(add!.closest('[data-slot="empty-state"]')).not.toBeNull();
+  });
+
+  it("goes up to its thread on Escape; the global list has no way up", async () => {
+    const fixture = automationStore([{ title: "Checkout flow refactor", automation: null }], {
+      listAutomations: vi.fn().mockResolvedValue({ items: [definition()], nextCursor: null }),
+    });
+    navigate(threadPath(THREAD_ID));
+    navigate(automationsPath(THREAD_ID));
+    const view = renderList(fixture, THREAD_ID);
+    await screen.findByRole("link", { name: "Checkout flow refactor" });
+    const user = userEvent.setup();
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(window.location.pathname).toBe(threadPath(THREAD_ID)));
     view.unmount();
-    render(<AutomationsView store={store} />);
-    expect(screen.getByRole("button", { name: "Upcoming · 2" })).toHaveAttribute(
-      "aria-expanded",
-      "false",
-    );
-    expect(rowTitles()).toContain("Spike: GraphQL gateway");
-  });
-
-  it("groups by project from View options; headings then name the project", async () => {
-    const user = userEvent.setup();
-    const { store } = createStore(makeSnapshot(world));
-    render(<AutomationsView store={store} />);
-    await user.click(screen.getByRole("button", { name: "View options" }));
-    expect(
-      screen.getByRole("menuitemradio", { name: "Status" }),
-    ).toHaveAttribute("aria-checked", "true");
-    await user.click(screen.getByRole("menuitemradio", { name: "Project" }));
-    expect(headings()).toEqual(["acme-web · 4", "billing-service · 2"]);
-    // Status order within each project.
-    expect(rowTitles()).toEqual([
-      "Sync staging fixtures",
-      "Nightly dependency audit",
-      "Weekly release notes draft",
-      "Spike: GraphQL gateway",
-      "Invoice reconciliation report",
-      "Triage new billing issues",
-    ]);
-    expect(row("nightly").querySelector('[data-layout="wide"]')).toHaveTextContent(
-      /^Every day at 2:00 AM UTC · Pi SDK$/u,
-    );
-    expect(screen.getByTestId("automations-status")).toHaveTextContent(
-      "Grouped by project",
-    );
-    expect(
-      JSON.parse(localStorage.getItem(AUTOMATIONS_VIEW_STORAGE_KEY)!).groupBy,
-    ).toBe("project");
-  });
-});
-
-describe("AutomationsView search and scope", () => {
-  it("searches titles and prompt previews and explains no match", async () => {
-    const user = userEvent.setup();
-    const { store } = createStore(makeSnapshot(world));
-    render(<AutomationsView store={store} />);
-    const search = screen.getByRole("searchbox", { name: "Search automations" });
-    fireEvent.change(search, { target: { value: "merged PRs" } });
-    expect(rowTitles()).toEqual(["Weekly release notes draft"]);
-    expect(headings()).toEqual(["Paused · 1"]);
-    const status = screen.getByTestId("automations-status");
-    expect(status).toHaveTextContent("1 of 6");
-    expect(status).toHaveTextContent("matching “merged PRs”");
-    // The page's search is its own; the sidebar search is untouched.
-    expect(store.setSearch).not.toHaveBeenCalled();
-
-    fireEvent.change(search, { target: { value: "nightly" } });
-    expect(rowTitles()).toEqual(["Nightly dependency audit"]);
-
-    fireEvent.change(search, { target: { value: "nothing like it" } });
-    expect(screen.getByText("No matching automations")).toBeVisible();
-    expect(screen.getByText("Nothing matches “nothing like it”.")).toBeVisible();
-    expect(groups()).toHaveLength(0);
-    await user.click(screen.getByRole("button", { name: "Clear search" }));
-    expect(search).toHaveValue("");
-    expect(search).toHaveFocus();
-    expect(rowTitles()).toHaveLength(5);
-  });
-
-  it("honors the sidebar Scope and clears it from the status line", async () => {
-    seedScope({ projectFilterId: "project-billing" });
-    const { store } = createStore(makeSnapshot(world));
-    render(<AutomationsView store={store} />);
-    expect(rowTitles()).toEqual([
-      "Invoice reconciliation report",
-      "Triage new billing issues",
-    ]);
-    const status = screen.getByTestId("automations-status");
-    expect(status).toHaveTextContent("2 of 6");
-    expect(status).toHaveTextContent("Scope: billing-service");
-    expect(status).not.toHaveTextContent("All projects");
-    // The Scope names the project, so rows do not repeat it.
-    expect(row("triage").querySelector('[data-layout="wide"]')).toHaveTextContent(
-      /^Every 4 hours · Pi SDK$/u,
-    );
-    await userEvent
-      .setup()
-      .click(within(status).getByRole("button", { name: "Clear scope" }));
-    expect(rowTitles()).toHaveLength(5);
-    expect(
-      JSON.parse(localStorage.getItem(SIDEBAR_VIEW_STORAGE_KEY)!)
-        .projectFilterId,
-    ).toBeNull();
-    expect(
-      screen.getByRole("searchbox", { name: "Search automations" }),
-    ).toHaveFocus();
-    expect(status).toHaveTextContent("All projects");
-  });
-
-  it("says when a scope has no automations and offers Clear scope", async () => {
-    seedScope({ projectFilterId: "project-docs" });
-    const { store } = createStore(makeSnapshot(world));
-    render(<AutomationsView store={store} />);
-    expect(screen.getByText("No automations in docs")).toBeVisible();
-    expect(groups()).toHaveLength(0);
-    await userEvent
-      .setup()
-      .click(screen.getAllByRole("button", { name: "Clear scope" })[0]!);
-    expect(rowTitles()).toHaveLength(5);
-  });
-
-  it("explains an empty list", () => {
-    const { store } = createStore(makeSnapshot([world[6]!]));
-    render(<AutomationsView store={store} />);
-    expect(screen.getByText("No automations yet")).toBeVisible();
-    expect(
-      screen.getByText(
-        "Open a thread’s ⋯ menu and choose Automate… to send it a prompt on a schedule.",
-      ),
-    ).toBeVisible();
-    expect(screen.getByTestId("automations-count")).toHaveTextContent("0");
-    expect(screen.queryByTestId("automation-row")).toBeNull();
-  });
-});
-
-describe("AutomationsView row actions", () => {
-  it("runs, pauses and enables from the row menu and announces the result", async () => {
-    const user = userEvent.setup();
-    const { store, api } = createStore(makeSnapshot(world));
-    render(<AutomationsView store={store} />);
-
-    let menu = await openRowMenu(user, "Nightly dependency audit");
-    expect(
-      within(menu)
-        .getAllByRole("menuitem")
-        .map((item) => item.textContent),
-    ).toEqual(["Run now", "Pause", "Edit…", "Open thread"]);
-    await user.click(within(menu).getByRole("menuitem", { name: "Run now" }));
-    expect(api.runThreadAutomationNow).toHaveBeenCalledExactlyOnceWith(
-      "nightly",
-      expect.stringMatching(/^[0-9a-f-]{36}$/u),
-    );
-    await act(async () => undefined);
-    expect(screen.getByRole("status")).toHaveTextContent(
-      "Started a run of Nightly dependency audit",
-    );
-
-    menu = await openRowMenu(user, "Nightly dependency audit");
-    await user.click(within(menu).getByRole("menuitem", { name: "Pause" }));
-    expect(api.setThreadAutomationState).toHaveBeenLastCalledWith(
-      "nightly",
-      "pause",
-      4,
-      expect.any(String),
-    );
-    await act(async () => undefined);
-    expect(screen.getByRole("status")).toHaveTextContent(
-      "Paused Nightly dependency audit",
-    );
-
-    menu = await openRowMenu(user, "Weekly release notes draft");
-    await user.click(within(menu).getByRole("menuitem", { name: "Enable" }));
-    expect(api.setThreadAutomationState).toHaveBeenLastCalledWith(
-      "weekly",
-      "enable",
-      4,
-      expect.any(String),
-    );
-  });
-
-  it("disables Run now, Pause/Enable and Edit with the page's instructions", async () => {
-    const user = userEvent.setup();
-    const { store, api } = createStore(
-      makeSnapshot([
-        ...world,
-        makeThread("sending", "Sending audit", {
-          automation: automation({
-            lastRun: run("running", { finishedAt: undefined }),
-          }),
-        }),
-      ]),
-    );
-    render(<AutomationsView store={store} />);
-
-    let menu = await openRowMenu(user, "Sync staging fixtures");
-    const runNow = within(menu).getByRole("menuitem", { name: /^Run now/u });
-    expect(runNow).toHaveAttribute("aria-disabled", "true");
-    // A short hint shows; the instruction is the tooltip and description.
-    expect(runNow).toHaveTextContent("Outcome unknown");
-    expect(runNow).toHaveAccessibleDescription("Resolve the unknown run first");
-    for (const name of [/^Enable/u, /^Edit…/u]) {
-      const item = within(menu).getByRole("menuitem", { name });
-      expect(item).toHaveAttribute("aria-disabled", "true");
-      expect(item).toHaveAttribute("title", "Resolve the unknown run first");
-    }
-    await user.click(runNow);
-    expect(api.runThreadAutomationNow).not.toHaveBeenCalled();
+    navigate(automationsPath());
+    renderList(fixture);
+    await screen.findByRole("heading", { name: /Automations/ });
     await user.keyboard("{Escape}");
-
-    menu = await openRowMenu(user, "Sending audit");
-    expect(
-      within(menu).getByRole("menuitem", { name: /^Run now/u }),
-    ).toHaveAttribute("title", "Wait for the current run to finish");
-    expect(
-      within(menu).getByRole("menuitem", { name: /^Pause/u }),
-    ).toHaveAttribute("aria-disabled", "true");
-    await user.keyboard("{Escape}");
-
-    // An archived anchor cannot run or be edited, but its schedule can
-    // still be paused.
-    await user.click(screen.getByRole("button", { name: "Suspended · 1" }));
-    menu = await openRowMenu(user, "Spike: GraphQL gateway");
-    expect(
-      within(menu).getByRole("menuitem", { name: /^Run now/u }),
-    ).toHaveAttribute("title", "Restore the thread first");
-    expect(
-      within(menu).getByRole("menuitem", { name: /^Edit…/u }),
-    ).toHaveAttribute("title", "Restore the thread first");
-    expect(
-      within(menu).getByRole("menuitem", { name: "Pause" }),
-    ).not.toHaveAttribute("aria-disabled");
+    expect(window.location.pathname).toBe(automationsPath());
   });
 
-  it("opens the editor and the thread from the row menu", async () => {
-    const user = userEvent.setup();
-    const { store } = createStore(makeSnapshot(world));
-    const onOpen = vi.fn();
-    const removeOpenListener = installThreadPanelOpenRequestListener(
-      window,
-      onOpen,
-    );
-    render(<AutomationsView store={store} />);
-    let menu = await openRowMenu(user, "Nightly dependency audit");
-    await user.click(within(menu).getByRole("menuitem", { name: "Edit…" }));
-    expect(window.location.pathname).toBe("/automations/nightly/edit");
-    menu = await openRowMenu(user, "Invoice reconciliation report");
-    await user.click(
-      within(menu).getByRole("menuitem", { name: "Open thread" }),
-    );
-    expect(onOpen).toHaveBeenCalledWith(
-      expect.objectContaining({ threadId: "invoice" }),
-    );
-    expect(window.location.pathname).toBe("/threads/invoice");
-    removeOpenListener();
-  });
-
-  it("reports a failed action inline on the row until the next attempt", async () => {
-    const user = userEvent.setup();
-    const { store, api } = createStore(makeSnapshot(world));
-    let reject!: (error: Error) => void;
-    api.runThreadAutomationNow.mockImplementationOnce(
-      () =>
-        new Promise((_resolve, rejectRun) => {
-          reject = rejectRun;
-        }),
-    );
-    render(<AutomationsView store={store} />);
-    let menu = await openRowMenu(user, "Invoice reconciliation report");
-    await user.click(within(menu).getByRole("menuitem", { name: "Run now" }));
-    expect(row("invoice")).toHaveAttribute("aria-busy", "true");
-    // One action at a time per row.
-    menu = await openRowMenu(user, "Invoice reconciliation report");
-    expect(
-      within(menu).getByRole("menuitem", { name: "Pause" }),
-    ).toHaveAttribute("aria-disabled", "true");
-    await user.keyboard("{Escape}");
-    await act(async () => reject(new Error("The thread is busy.")));
-    const alert = screen.getByRole("alert");
-    expect(alert).toHaveTextContent(
-      "Couldn’t run Invoice reconciliation report",
-    );
-    expect(alert).toHaveTextContent("The thread is busy.");
-    expect(row("invoice")).not.toHaveAttribute("aria-busy");
-    expect(row("invoice").closest("li")).toContainElement(alert);
-    expect(screen.queryByRole("dialog")).toBeNull();
-
-    menu = await openRowMenu(user, "Invoice reconciliation report");
-    await user.click(within(menu).getByRole("menuitem", { name: "Pause" }));
-    await act(async () => undefined);
-    expect(screen.queryByRole("alert")).toBeNull();
-    expect(api.setThreadAutomationState).toHaveBeenCalledOnce();
-  });
-});
-
-describe("AutomationsView live updates", () => {
-  it("follows thread summaries as they change", () => {
-    const snapshot = makeSnapshot(world);
-    const { store, publish } = createStore(snapshot);
-    render(<AutomationsView store={store} />);
-    expect(text("nightly", "primary")).toBe(nextLabel(22));
-
-    // Paused elsewhere: the row moves to Paused.
-    const paused = structuredClone(snapshot);
-    paused.threads[1] = {
-      ...paused.threads[1]!,
-      automation: automation({
-        status: "paused",
-        nextRunAt: undefined,
-        lastRun: run("completed"),
-        revision: 5,
-      }),
-    };
-    publish({ snapshot: paused });
-    expect(headings()).toEqual([
-      "Needs attention · 2",
-      "Upcoming · 1",
-      "Paused · 2",
-      "Suspended · 1",
-    ]);
-    expect(text("nightly", "primary")).toBe("Paused");
-
-    // A run starts: the spinner shows and it is upcoming again.
-    const running = structuredClone(paused);
-    running.threads[1] = {
-      ...running.threads[1]!,
-      automation: automation({
-        status: "paused",
-        nextRunAt: undefined,
-        lastRun: run("claimed", { id: "run-2", finishedAt: undefined }),
-        revision: 5,
-      }),
-    };
-    publish({ snapshot: running });
-    expect(text("nightly", "primary")).toBe("Starting");
-    expect(
-      row("nightly").querySelector('[data-automation-glyph="spinner"]'),
-    ).not.toBeNull();
-
-    // A new automation appears and a deleted one leaves; the title is live.
-    const changed = structuredClone(running);
-    changed.threads = [
-      ...changed.threads.filter(({ id }) => id !== "weekly"),
-      makeThread("fresh", "Fresh automation", {
-        automation: automation({ status: "paused", nextRunAt: undefined }),
-      }),
-    ];
-    changed.threads[0] = {
-      ...changed.threads[0]!,
-      title: { text: "Triage billing" },
-    };
-    publish({ snapshot: changed });
-    expect(rowTitles()).toContain("Fresh automation");
-    expect(rowTitles()).toContain("Triage billing");
-    expect(rowTitles()).not.toContain("Weekly release notes draft");
-    expect(screen.getByTestId("automations-count")).toHaveTextContent("6");
-  });
-
-  it("lists a fork loaded beyond the bootstrap, and opens its page", () => {
-    const snapshot = makeSnapshot(world);
-    const { store, publish } = createStore(snapshot);
-    const commits = vi.fn();
-    render(
-      <Profiler id="automations" onRender={commits}>
-        <AutomationsView store={store} />
-      </Profiler>,
-    );
-    expect(rowTitles()).not.toContain("Nightly audit fork");
-    const fork = makeThread("loaded-fork", "Nightly audit fork");
-    const descendants = (loading: boolean) =>
-      ({
-        nightly: { descendants: [{ thread: fork }], loading, loaded: true },
-      }) as unknown as ApplicationClientState["descendantPages"];
-    publish({ descendantPages: descendants(false) });
-    expect(rowTitles()).toContain("Nightly audit fork");
-    expect(screen.getByTestId("automations-count")).toHaveTextContent("7");
-
-    // Paging state alone leaves the list as it is.
-    commits.mockClear();
-    publish({ descendantPages: descendants(true) });
-    expect(commits).not.toHaveBeenCalled();
-
-    fireEvent.click(screen.getByRole("link", { name: "Nightly audit fork" }));
-    expect(window.location.pathname).toBe("/automations/loaded-fork");
-  });
-
-  it("shows the latest run as Running while its turn goes, then as delivered", () => {
-    const snapshot = makeSnapshot(world);
-    const { store, publish } = createStore(snapshot);
-    render(<AutomationsView store={store} />);
-    const secondary = () => row("nightly").querySelector(".automation-row-secondary")!;
-    expect(secondary()).toHaveTextContent(/^Delivered /u);
-
-    const busy = structuredClone(snapshot);
-    busy.threads[1] = { ...busy.threads[1]!, runState: "running" };
-    act(() => publish({ snapshot: busy }));
-    expect(secondary()).toHaveTextContent(/^Running/u);
-    expect(secondary()).toHaveAttribute("data-tone", "info");
-    expect(secondary().querySelector(".comet-spinner")).not.toBeNull();
-    expect(secondary().querySelector(".lucide-check")).toBeNull();
-
-    act(() => publish({ snapshot }));
-    expect(secondary()).toHaveTextContent(/^Delivered /u);
-    expect(secondary().querySelector(".comet-spinner")).toBeNull();
-  });
-
-  it("does not re-render for events that leave the automations unchanged", () => {
-    const snapshot = makeSnapshot(world);
-    const { store, publish } = createStore(snapshot);
-    const commits = vi.fn();
-    render(
-      <Profiler id="automations" onRender={commits}>
-        <AutomationsView store={store} />
-      </Profiler>,
-    );
-    commits.mockClear();
-    // A re-parsed snapshot with equal values (new object identities).
-    publish({ snapshot: structuredClone(snapshot) });
-    // An anchor with no run to follow starts a turn; the connection flickers.
-    const busy = structuredClone(snapshot);
-    busy.threads[4] = {
-      ...busy.threads[4]!,
-      runState: "running",
-      lastActivityAt: minutesAgo(0),
-    };
-    publish({ snapshot: busy, connection: "reconnecting" });
-    expect(commits).not.toHaveBeenCalled();
-    const renamed = structuredClone(busy);
-    renamed.threads[1] = {
-      ...renamed.threads[1]!,
-      title: { text: "Renamed audit" },
-    };
-    publish({ snapshot: renamed });
-    expect(commits).toHaveBeenCalled();
-    expect(rowTitles()).toContain("Renamed audit");
+  it("names a thread the application store lacks from its automations, without opening the thread", async () => {
+    const archived = definition({ source: { ...definition().source, title: "Archived checkout", inventoryState: "archived" } });
+    const fixture = automationStore([], { listAutomations: vi.fn().mockResolvedValue({ items: [archived], nextCursor: null }) });
+    renderList(fixture, THREAD_ID);
+    expect(screen.getByRole("link", { name: "Thread" })).toHaveAttribute("href", `/threads/${THREAD_ID}`);
+    expect(await screen.findByRole("link", { name: "Archived checkout" })).toHaveAttribute("href", `/threads/${THREAD_ID}`);
+    expect(fixture.threadRegistry.retain).not.toHaveBeenCalled();
   });
 });

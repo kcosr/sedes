@@ -89,27 +89,10 @@ export type AgentThreadSummary = {
   readonly lifecycle: "active" | "snoozed" | "settled" | "archived";
   readonly pinned: boolean;
   readonly activity: AgentThreadActivity;
-  readonly automation: AgentThreadAutomation | null;
+  readonly automations: AgentThreadAutomations;
 };
 
-type ProjectedThreadAutomation = NonNullable<
-  NormalizedThreadSummary["automation"]
->;
-
-/**
- * The automation summary frozen by the `thread.list` output schema; schedule
- * detail, the prompt preview, the run-history revision and the last run's
- * agent turn stay browser projection fields.
- */
-export type AgentThreadAutomation = Omit<
-  ProjectedThreadAutomation,
-  "schedule" | "misfirePolicy" | "promptPreview" | "runsRevision" | "lastRun"
-> & {
-  readonly lastRun?: Omit<
-    NonNullable<ProjectedThreadAutomation["lastRun"]>,
-    "turn"
-  >;
-};
+export type AgentThreadAutomations = NormalizedThreadSummary["automations"];
 
 export type AgentThreadListScope =
   | { readonly kind: "default_environment" }
@@ -233,7 +216,10 @@ export class AgentManagementService {
         "listEnvironments" | "openWorkspaceForAgent"
       >;
       readonly taskRepository: TaskRepository;
-      readonly tasks: Pick<TaskService, "create" | "update" | "removeCompleted">;
+      readonly tasks: Pick<
+        TaskService,
+        "create" | "update" | "removeCompleted"
+      >;
       /** Live authority facts, read through the same reader as admission. */
       readonly authorityReader: AgentToolEnvironmentAuthorityReader;
     },
@@ -569,7 +555,7 @@ export class AgentManagementService {
           lifecycle: summary.inventoryState,
           pinned: row.pinned === 1,
           activity: activity(runState),
-          automation: agentThreadAutomation(summary.automation),
+          automations: summary.automations,
         };
       }),
     );
@@ -776,21 +762,4 @@ export class AgentManagementService {
       ),
     );
   }
-}
-
-function agentThreadAutomation(
-  automation: NormalizedThreadSummary["automation"],
-): AgentThreadAutomation | null {
-  if (!automation) return null;
-  const {
-    schedule: _schedule,
-    misfirePolicy: _misfirePolicy,
-    promptPreview: _promptPreview,
-    runsRevision: _runsRevision,
-    lastRun,
-    ...summary
-  } = automation;
-  if (!lastRun) return summary;
-  const { turn: _turn, ...agentLastRun } = lastRun;
-  return { ...summary, lastRun: agentLastRun };
 }

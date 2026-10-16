@@ -60,6 +60,7 @@ export class OpenCodeThreadPresentationProvider implements ThreadBackendPresenta
     return { revision: `opencode_${revision}`, backend: { label: boundDisplayText(input.backend.label), brand: "opencode",
       ...(effectiveModel || desiredModel ? { modelLabel: boundDisplayText((effectiveModel ?? desiredModel)!.label) } : {}) },
       interactionMode: "interactive", settings: normalized, settingDescriptors, nextTurnSettingIds: [],
+      automationForkDraftOnly: true,
       automationAllowed: !!desiredModel && !!desiredEffort && efforts.includes(desiredEffort) &&
         (observed === null || observed.classification === "recognized"),
       providerFeatureCapabilities: [], providerFeatureStates: [], composerCommands: [], skills: (input.catalog?.skills ?? []).map(skill => ({

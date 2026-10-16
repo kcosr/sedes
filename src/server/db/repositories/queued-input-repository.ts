@@ -1,3 +1,5 @@
+import { assertAutomationDispatchClaim } from "./automation-dispatch-claim.js";
+import { AutomationDeferredError } from "../../domain/automation-deferred.js";
 import { steerTargetSchema, type SteerTarget } from "../../../shared/protocol/conversation.js";
 import { createHash, randomUUID } from "node:crypto";
 import { UserInputRevisionRepository } from "./user-input-revision-repository.js";
@@ -417,7 +419,7 @@ export class QueuedInputRepository {
           }
         | {
             readonly kind: "automation";
-            readonly expectedThreadRevision: number;
+            readonly claimToken: string;
             readonly automationId: string;
             readonly automationRunId: string;
           }
@@ -578,11 +580,16 @@ export class QueuedInputRepository {
         new DirectInputRepository(this.database).recordOrigin(scope, applicationThreadId, input.mutationId, input.origin);
         return { item: replay, replayed: true };
       }
+      if (input.source.kind === "automation") {
+        assertAutomationDispatchClaim(this.database, scope, {
+          ...input.source, mutationId: input.mutationId, targetThreadId: applicationThreadId,
+        });
+      }
       const threadRevision = this.#boundThreadRevision(
         scope,
         applicationThreadId,
       );
-      if (threadRevision !== input.source.expectedThreadRevision) {
+      if (input.source.kind !== "automation" && threadRevision !== input.source.expectedThreadRevision) {
         throw new DomainError(
           "conflict",
           "The thread changed before the input could be queued.",
@@ -677,7 +684,7 @@ export class QueuedInputRepository {
         contextExcerpts: input.contextExcerpts,
         taskContexts,
       });
-      this.#assertActiveCapacity(scope, applicationThreadId);
+      this.#assertActiveCapacity(scope, applicationThreadId, input.source.kind === "automation");
       if (
         (input.source.kind === "composer" ||
           input.source.kind === "direct_input" ||
@@ -822,7 +829,7 @@ export class QueuedInputRepository {
           scope.tenantId,
           scope.principalId,
           applicationThreadId,
-          input.source.expectedThreadRevision,
+          threadRevision,
         );
       if (advanced.changes !== 1) {
         throw new DomainError(
@@ -2536,6 +2543,7 @@ export class QueuedInputRepository {
   #assertActiveCapacity(
     scope: RequestScope,
     applicationThreadId: string,
+    automation = false,
   ): void {
     const active = this.database
       .prepare(
@@ -2554,10 +2562,8 @@ export class QueuedInputRepository {
       count: number;
     };
     if (active.count >= MAXIMUM_ACTIVE_QUEUED_INPUTS) {
-      throw new DomainError(
-        "conflict",
-        "The thread queue has reached its active-item limit.",
-      );
+      if (automation) throw new AutomationDeferredError("queue_capacity", "The thread queue has reached its active-item limit.");
+      throw new DomainError("conflict", "The thread queue has reached its active-item limit.");
     }
   }
 

@@ -275,6 +275,14 @@ The canonical catalog groups operations under:
 - **Research** — current public information through an installation-owned
   provider process.
 
+Automation recovery stays under user control: acknowledging failures and marking
+uncertain runs as failed are available in the UI and authenticated management
+API, but have no agent-tool operation. This applies to Pi, Codex, Claude,
+Grok, and OpenCode across all supported tool presentations.
+`automation.update@2` and `automation.set_state@2` report `retired: true` when
+the change retired a finished one-time reminder, so the definition they return
+has left the collection; a replay of the same mutation returns the same result.
+
 `thread.status@3` and `thread.list@6` include the current principal's read-only
 `pinned` flag. There is no thread-pin mutation tool.
 

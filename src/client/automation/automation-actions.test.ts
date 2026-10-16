@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { definition } from "../components/automation/automation-test-fixture.js";
 import type { NormalizedThreadSummary } from "../../shared/index.js";
 import { automationActionAvailability, uncertainRunResolution } from "./automation-actions.js";
 import { automationHealth, type SummaryAutomation, type SummaryAutomationRun } from "./automation-health.js";
@@ -6,19 +7,15 @@ import { automationHealth, type SummaryAutomation, type SummaryAutomationRun } f
 const NOW = Date.parse("2026-10-06T03:40:00.000Z");
 
 function automation(overrides: Partial<SummaryAutomation> = {}): SummaryAutomation {
-  return {
-    status: "enabled",
-    runMode: "same_thread",
-    scheduleKind: "cron",
-    schedule: { kind: "cron", expression: "0 2 * * *", timeZone: "UTC" },
-    misfirePolicy: "coalesce",
-    promptPreview: "Check dependencies",
+  return definition({
+    revision: 1, runsRevision: 0,
+    prompt: "Check dependencies",
     nextRunAt: "2026-10-07T02:00:00.000Z",
-    revision: 1,
-    runsRevision: 0,
-    hasPrecheck: false,
+    ...(overrides.lastRun?.state === "failed" || overrides.lastRun?.state === "uncertain"
+      ? { attention: { runId: overrides.lastRun.id, kind: overrides.lastRun.state } }
+      : {}),
     ...overrides,
-  };
+  });
 }
 
 function lastRun(state: SummaryAutomationRun["state"]): SummaryAutomationRun {
@@ -141,5 +138,45 @@ describe("uncertainRunResolution", () => {
     expect(uncertainRunResolution({ schedule: cron, lastRun: uncertain("scheduled") }, NOW)).toBe("choose");
     expect(uncertainRunResolution({ schedule: cron, lastRun: uncertain("manual") }, NOW)).toBe("choose");
     expect(uncertainRunResolution({ schedule: cron, lastRun: lastRun("failed") }, NOW)).toBeUndefined();
+  });
+});
+
+describe("deferred and exhausted controls", () => {
+  it("keeps an existing Fork's Edit action available when execution is unavailable", () => {
+    const result = actions(automation({ runMode: "clone" }), {}, { available: false });
+    expect(result.edit).toEqual(allowed);
+    expect(result.runNow.available).toBe(false);
+  });
+
+  it("allows pausing a pending one-time reminder while its scheduled invocation is deferred", () => {
+    const pending = automation({ status: "enabled", scheduleKind: "date_time", schedule: { kind: "date_time", runAt: "2026-10-06T02:00:00.000Z" }, misfirePolicy: null, lastRun: lastRun("deferred") });
+    const result = actions(pending);
+    expect(result.toggle).toEqual({ action: "pause", available: true });
+    expect(result.remove.available).toBe(true);
+    expect(result.runNow.available).toBe(false);
+  });
+
+  it("allows changing or removing waiting work without admitting a second run", () => {
+    const result = actions(automation({ lastRun: lastRun("deferred") }));
+    expect(result.runNow.available).toBe(false);
+    expect(result.edit).toEqual(allowed);
+    expect(result.remove).toEqual(allowed);
+    expect(result.toggle).toEqual({ action: "pause", available: true });
+  });
+
+  it("keeps active-run controls blocked when older failure attention takes precedence", () => {
+    const result = actions(automation({
+      lastRun: lastRun("queued"),
+      attention: { runId: "older-failure", kind: "failed" },
+    }));
+    expect(result.runNow.available).toBe(false);
+    expect(result.remove.available).toBe(false);
+  });
+
+  it("permits manual invocation and editing of an exhausted one-shot, without blindly enabling it", () => {
+    const result = actions(automation({ status: "exhausted", nextRunAt: undefined }));
+    expect(result.runNow).toEqual(allowed);
+    expect(result.edit).toEqual(allowed);
+    expect(result.toggle.available).toBe(false);
   });
 });

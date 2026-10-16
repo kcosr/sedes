@@ -122,14 +122,9 @@ export function useSettingsEscapeLevel(onUp: (() => void) | undefined): void {
 }
 
 /**
- * Installs Escape-to-go-up while Settings is shown. The open layers and the
- * focused element are read in the window's capture phase, before any
- * handler runs, so a layer that this Escape closes still counts (also for
- * the non-cancelable Escape Android Back dispatches). The decision runs in
- * the window's bubble phase, after Radix's document-level handling and
- * every control's own handlers, so a handled event is already marked.
- * Navigation goes through `navigateUp` (or the return callback), so the
- * dirty guards run as they do for the "‹" links.
+ * Installs Escape-to-go-up while Settings is shown. Navigation goes through
+ * `navigateUp` (or the return callback), so the dirty guards run as they do
+ * for the "‹" links.
  */
 export function useSettingsEscape({
   location,
@@ -140,9 +135,33 @@ export function useSettingsEscape({
   readonly navInSidebar: boolean;
   readonly onReturn: () => void;
 }): void {
-  const current = useRef({ location, navInSidebar, onReturn });
-  current.current = { location, navInSidebar, onReturn };
+  useEscapeUp(() => {
+    const level = levels.at(-1);
+    if (level) {
+      level.up();
+      return;
+    }
+    const target = settingsUpTarget(location, navInSidebar);
+    if (target.kind === "workspace") onReturn();
+    else navigateUp(target.path);
+  });
+}
+
+/**
+ * Escape goes up, by `onUp`, while it is set: the Settings rules
+ * (`settingsEscapeAction`) for any page with a "‹" link. The open layers and
+ * the focused element are read in the window's capture phase, before any
+ * handler runs, so a layer that this Escape closes still counts (also for
+ * the non-cancelable Escape Android Back dispatches). The decision runs in
+ * the window's bubble phase, after Radix's document-level handling and
+ * every control's own handlers, so a handled event is already marked.
+ */
+export function useEscapeUp(onUp: (() => void) | undefined): void {
+  const handler = useRef(onUp);
+  handler.current = onUp;
+  const enabled = onUp !== undefined;
   useEffect(() => {
+    if (!enabled) return undefined;
     let arrival: { readonly event: Event; readonly layerOpen: boolean; readonly active: Element | null } | undefined;
     const onArrival = (event: KeyboardEvent) => {
       arrival = event.key === "Escape"
@@ -165,14 +184,7 @@ export function useSettingsEscape({
         return;
       }
       event.preventDefault();
-      const level = levels.at(-1);
-      if (level) {
-        level.up();
-        return;
-      }
-      const target = settingsUpTarget(current.current.location, current.current.navInSidebar);
-      if (target.kind === "workspace") current.current.onReturn();
-      else navigateUp(target.path);
+      handler.current?.();
     };
     window.addEventListener("keydown", onArrival, { capture: true });
     window.addEventListener("keydown", onKeyDown);
@@ -180,5 +192,5 @@ export function useSettingsEscape({
       window.removeEventListener("keydown", onArrival, { capture: true });
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, []);
+  }, [enabled]);
 }

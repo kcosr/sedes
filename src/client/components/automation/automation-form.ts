@@ -24,6 +24,7 @@ export const MAXIMUM_PRECHECK_COMMAND_BYTES = 4_096;
 export const BYTE_COUNTER_THRESHOLD = 0.8;
 
 export interface AutomationForm {
+  readonly name: string;
   readonly prompt: string;
   readonly runMode: AutomationRunMode;
   readonly scheduleKind: ScheduleKind;
@@ -63,6 +64,7 @@ export function nextWholeHour(now: Date): string {
 export function defaultAutomationForm(now: Date): AutomationForm {
   const start = nextWholeHour(now);
   return {
+    name: "",
     prompt: "",
     runMode: "same_thread",
     scheduleKind: "interval",
@@ -101,10 +103,11 @@ export function formFromDefinition(
 ): AutomationForm {
   const form: AutomationForm = {
     ...defaultAutomationForm(now),
+    name: definition.name,
     prompt: definition.prompt,
     runMode: definition.runMode,
     scheduleKind: definition.schedule.kind,
-    misfirePolicy: definition.misfirePolicy,
+    misfirePolicy: definition.misfirePolicy ?? "coalesce",
     precheckEnabled: definition.precheck !== null,
     precheckCommand: definition.precheck?.command ?? "",
     precheckTimeout: definition.precheck?.timeoutSeconds ?? 30,
@@ -230,6 +233,7 @@ function effectiveFields(form: AutomationForm): readonly unknown[] {
         ? [form.intervalAmount, form.intervalUnit, form.intervalStart]
         : [form.cronExpression.trim(), form.timeZone];
   return [
+    form.name.trim(),
     form.prompt.trim(),
     form.runMode,
     form.scheduleKind,

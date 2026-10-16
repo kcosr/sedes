@@ -1,6 +1,7 @@
 import type {
   NormalizedApplicationSnapshot,
   NormalizedApplicationThreadSummary,
+  ThreadAutomationDefinition,
 } from "../../shared/index.js";
 import { describeProjectLocations } from "../app/project-locations.js";
 import {
@@ -43,7 +44,8 @@ import {
  *    activity a row shows is whether its latest run's turn is still going.
  * 2. `projectAutomations` applies the sidebar Scope and the search (title and
  *    prompt preview), computes each automation's health at `now`, and groups
- *    by status or by project.
+ *    by status or by project. A thread's own list
+ *    (`/threads/:id/automations`) takes `listThreadAutomations` instead.
  *
  * Every automation lands in exactly one group, so the groups double as the
  * page's filter.
@@ -62,6 +64,8 @@ export interface AutomationListRow
   readonly id: string;
   /** The live thread title with the shared untitled fallback. */
   readonly displayTitle: string;
+  readonly threadId: string;
+  readonly sourceTitle: string;
   readonly automation: SummaryAutomation;
   readonly workspaceId: string;
   readonly targetId: string;
@@ -189,106 +193,42 @@ function catalogIndexFor(catalog: SidebarScopeCatalog): CatalogIndex {
   return index;
 }
 
-/** The summary fields a row is built from; anything else never re-renders it. */
-function rowSource(
-  thread: NormalizedApplicationThreadSummary,
-  automation: SummaryAutomation,
-  resultRunState: NormalizedApplicationThreadSummary["runState"] | undefined,
-) {
-  return {
-    id: thread.id,
-    title: thread.title,
-    automation,
-    inventoryState: thread.inventoryState,
-    snoozedUntil: thread.snoozedUntil,
-    workspaceId: thread.workspaceId,
-    targetId: thread.targetId,
-    groupId: thread.groupId,
-    backendLabel: thread.backend.label.text,
-    latestRunTurnRunning:
-      automation.lastRun !== undefined &&
-      runTurnRunning(automation.lastRun, resultRunState),
-  };
-}
-
-function buildRow(
-  source: ReturnType<typeof rowSource>,
-  index: CatalogIndex,
-): AutomationListRow {
-  const displayTitle = source.title.text || "Untitled thread";
-  return {
-    ...source,
-    displayTitle,
-    projectId: index.projectIds.get(source.workspaceId) ?? null,
-    projectLabel: index.projectLabels.get(source.workspaceId) ?? "Project",
-    locationTag: index.locationTags.get(source.workspaceId) ?? null,
-    searchValues: [
-      displayTitle.toLocaleLowerCase(),
-      source.automation.promptPreview.toLocaleLowerCase(),
-    ],
-  };
-}
-
-function rowMatchesSource(
-  row: AutomationListRow,
-  source: ReturnType<typeof rowSource>,
-): boolean {
-  return (Object.keys(source) as (keyof typeof source)[]).every((key) =>
-    jsonEqual(row[key], source[key]),
-  );
-}
-
-/**
- * Rows for every thread with an automation, reusing each unchanged row and,
- * when nothing the page renders changed, the previous base itself.
- *
- * The threads are the snapshot's, then the loaded forks it does not hold
- * (`loadedDescendantThreads`). The snapshot is a bootstrap that bounds fork
- * summaries, so an automation on a fork outside it that the sidebar has not
- * loaded is missing from the list until a thread update brings the fork in.
- * That is a v1 limitation: an exhaustive list would need a server-side
- * automations endpoint.
- */
+/** The collection is exhaustive, independent of which source threads are loaded. */
 export function selectAutomationsBase(
   snapshot: NormalizedApplicationSnapshot | undefined,
+  definitions: readonly ThreadAutomationDefinition[],
   previous?: AutomationsBase,
-  loadedForks: readonly NormalizedApplicationThreadSummary[] = [],
 ): AutomationsBase {
   if (!snapshot) return previous ?? EMPTY_AUTOMATIONS_BASE;
   const catalog = shareCatalog(previous?.catalog, snapshot);
-  const catalogUnchanged = previous?.catalog === catalog;
   const index = catalogIndexFor(catalog);
-  const previousRows = new Map(previous?.rows.map((row) => [row.id, row]));
-  const rows: AutomationListRow[] = [];
-  const listed = new Set<string>();
-  let changed = previous === undefined;
-  const threads = [...snapshot.threads, ...loadedForks];
-  // A run's turn runs on its result thread: the anchor, or a fork run's own
-  // thread. The snapshot's copy comes first and is the live one.
-  const runStates = new Map<string, NormalizedApplicationThreadSummary["runState"]>();
-  for (const thread of threads) {
-    if (!runStates.has(thread.id)) runStates.set(thread.id, thread.runState);
-  }
-  for (const thread of threads) {
-    if (thread.automation === null || listed.has(thread.id)) continue;
-    listed.add(thread.id);
-    const resultThreadId = thread.automation.lastRun?.resultThreadId ?? thread.id;
-    const source = rowSource(
-      thread,
-      thread.automation,
-      runStates.get(resultThreadId),
-    );
-    const prior = previousRows.get(thread.id);
-    const row =
-      prior !== undefined && catalogUnchanged && rowMatchesSource(prior, source)
-        ? prior
-        : buildRow(source, index);
-    if (previous?.rows[rows.length] !== row) changed = true;
-    rows.push(row);
-  }
-  if (previous && previous.rows.length !== rows.length) changed = true;
-  if (!changed && catalogUnchanged) return previous!;
-  return { catalog, rows };
+  const old = new Map(previous?.rows.map((row) => [row.id, row]));
+  const rows = definitions.map((automation): AutomationListRow => {
+    const liveSource = snapshot.threads.find(({ id }) => id === automation.threadId);
+    const source = liveSource ? { ...automation.source, title: liveSource.title.text,
+      workspaceId: liveSource.workspaceId, targetId: liveSource.targetId, groupId: liveSource.groupId,
+      backendLabel: liveSource.backend.label.text, inventoryState: liveSource.inventoryState,
+      inventoryRevision: liveSource.inventoryRevision, snoozedUntil: liveSource.snoozedUntil,
+      backingState: liveSource.backingState, available: liveSource.available, runState: liveSource.runState,
+    } : automation.source;
+    const result = automation.lastRun?.resultThreadId;
+    const resultState = result === automation.threadId ? source.runState : snapshot.threads.find(({ id }) => id === result)?.runState;
+    const row: AutomationListRow = {
+      id: automation.id, threadId: automation.threadId, sourceTitle: source.title || "Untitled thread",
+      title: { text: automation.name }, displayTitle: automation.name,
+      automation, inventoryState: source.inventoryState, snoozedUntil: source.snoozedUntil,
+      workspaceId: source.workspaceId, targetId: source.targetId, groupId: source.groupId,
+      backendLabel: source.backendLabel,
+      projectId: index.projectIds.get(source.workspaceId) ?? null,
+      projectLabel: index.projectLabels.get(source.workspaceId) ?? "Project",
+      locationTag: index.locationTags.get(source.workspaceId) ?? null,
+      searchValues: [automation.name, source.title, automation.prompt].map((text) => text.toLocaleLowerCase()),
+      latestRunTurnRunning: automation.lastRun !== undefined && runTurnRunning(automation.lastRun, resultState),
+    };
+    const prior = old.get(row.id);
+    return prior && jsonEqual(prior, row) ? prior : row;
+  });
+  return previous && previous.catalog === catalog && rows.length === previous.rows.length && rows.every((row, i) => row === previous.rows[i]) ? previous : { catalog, rows };
 }
 
 export interface AutomationListEntry {
@@ -326,7 +266,7 @@ export interface AutomationsProjection {
 
 /** Suspended automations cannot run; their group starts collapsed. */
 export function automationGroupCollapsedByDefault(key: string): boolean {
-  return key === "status:suspended";
+  return key === "status:suspended" || key === "status:finished";
 }
 
 const titleCollator = new Intl.Collator(undefined, {
@@ -352,6 +292,29 @@ function compareEntries(
   return compareAutomationsInGroup(left.health.group, left.row, right.row);
 }
 
+/** Each row with its health at `now`, in status order. */
+function entriesInStatusOrder(
+  rows: readonly AutomationListRow[],
+  now: number,
+): AutomationListEntry[] {
+  return rows
+    .map((row) => ({ row, health: automationHealth(row, now) }))
+    .sort(compareEntries);
+}
+
+/**
+ * A thread's own list: every automation, flat, in the global page's status
+ * order. It neither filters nor groups: the page is narrower than any Scope,
+ * a thread has few automations, and grouped, a snoozed or archived thread's
+ * would all sit in Suspended, which starts collapsed.
+ */
+export function listThreadAutomations(
+  base: AutomationsBase,
+  now: number,
+): readonly AutomationListEntry[] {
+  return entriesInStatusOrder(base.rows, now);
+}
+
 export function projectAutomations(
   base: AutomationsBase,
   { scope, search, groupBy, now }: AutomationsProjectionOptions,
@@ -362,14 +325,14 @@ export function projectAutomations(
     scope,
   );
   const query = normalizeThreadSearchQuery(search);
-  const entries = (
+  const entries = entriesInStatusOrder(
     query
       ? scoped.filter((row) =>
           row.searchValues.some((value) => value.includes(query)),
         )
-      : scoped
-  ).map((row) => ({ row, health: automationHealth(row, now) }));
-  entries.sort(compareEntries);
+      : scoped,
+    now,
+  );
   let groups: AutomationListGroup[];
   if (groupBy === "status") {
     groups = AUTOMATION_HEALTH_GROUPS.flatMap((group) => {
@@ -508,11 +471,12 @@ export function automationRowPresentation(
     ? lastRunOutcome(lastRun, row.latestRunTurnRunning, now)
     : null;
   switch (health.kind) {
+    case "attention":
     case "failed":
     case "unknown": {
       const problem: AutomationRowText = {
         text:
-          health.kind === "failed" && lastRun
+          health.kind === "failed" && lastRun && lastRun.id === automation.attention?.runId
             ? `Failed ${lastRunAge(lastRun, now)}`
             : health.label,
         tone: health.kind === "failed" ? "danger" : "warning",
@@ -520,9 +484,7 @@ export function automationRowPresentation(
       return {
         primary: problem,
         secondary: scheduling,
-        detail: lastRun?.errorCode
-          ? automationErrorText(lastRun.errorCode)
-          : schedule,
+        detail: automation.attention?.diagnostic ?? (lastRun?.id === automation.attention?.runId && lastRun?.errorCode ? automationErrorText(lastRun.errorCode) : schedule),
         outcome: problem,
         nextRun,
       };
@@ -548,6 +510,15 @@ export function automationRowPresentation(
         outcome: lastOutcome,
         nextRun,
       };
+    case "exhausted":
+      return {
+        primary: lastOutcome ?? { text: health.label },
+        secondary: null,
+        detail: schedule,
+        outcome: lastOutcome ?? { text: health.label },
+        nextRun,
+      };
+    case "waiting":
     case "paused":
     case "not_started":
     case "archived":

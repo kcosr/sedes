@@ -217,6 +217,7 @@ describe("OpenCode MCP runtime admission", () => {
         accessBoundary: "thread", revision: 1 }) } as unknown as ThreadAgentToolPolicyRepository,
       new AgentToolEnvironmentAuthorityResolver({
         resolveEnvironment: () => undefined, resolveWorkspace: () => undefined,
+        resolveAutomation: () => undefined,
         resolveThread: (_scope, id) => ({ id, environmentId: binding.executionEnvironmentId, label: "Other thread" }),
         resolveThreadFamily: () => undefined, resolveSavedAgent: () => undefined, resolveWorkpad: () => undefined,
         resolveTask: () => undefined, resolveProject: () => undefined, resolveWorkspaceProject: () => "project-1", listEnvironments: () => [{ id: binding.executionEnvironmentId, environmentId: binding.executionEnvironmentId, label: "Local" }],

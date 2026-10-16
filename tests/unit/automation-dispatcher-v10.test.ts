@@ -22,6 +22,8 @@ function run(
     coalescedCount: 0,
     runMode,
     state: "claimed",
+    deferredReason: null, eligibleAt: null, initialEligibleAt: 1000, suppressedAt: null, suppressionPending: false,
+    precheckStdout: null, acknowledgedAt: null,
     claimToken: "claim-1",
     leaseExpiresAt: 10_000,
     claimAttemptCount: 1,
@@ -62,6 +64,14 @@ function fixture(
 ) {
   let current = initial;
   const repository = {
+    checkRunAdmission: vi.fn((_scope, _automationId, _runId, input) => {
+      if (input.dispatch) current = { ...current, state: "dispatching" };
+      return current;
+    }),
+    deferRun: vi.fn((_scope, _automationId, _runId, input) => {
+      current = { ...current, state: "deferred", deferredReason: input.reason, eligibleAt: input.eligibleAt, claimToken: null, leaseExpiresAt: null };
+      return current;
+    }),
     getRun: vi.fn(() => current),
     getDefinition: vi.fn(() => ({
       schedule: { kind: "interval" as const },
@@ -146,7 +156,11 @@ function fixture(
     publishRun: vi.fn(),
     dispatchCapacityChanged: vi.fn(),
   };
+  const queueObserver = { reconcile: vi.fn() };
+  const onReconcileError = vi.fn();
   const dispatcher = new AutomationDispatcher({
+    queueObserver,
+    onReconcileError,
     repository:
       repository as unknown as AutomationDispatcherDependencies["repository"],
     gateway,
@@ -159,10 +173,24 @@ function fixture(
     prechecks: { execute: vi.fn() as never },
     now: () => 2_000,
   });
-  return { dispatcher, gateway, repository, service, current: () => current };
+  return { dispatcher, gateway, repository, service, queueObserver, onReconcileError, current: () => current, replaceCurrent: (value: AutomationRunRecord) => { current = value; } };
 }
 
 describe("AutomationDispatcher v10 backend-neutral dispatch", () => {
+  it("retains queued delivery and reports a failed receipt reconciliation without retrying", async () => {
+    const setup = fixture(run(), async () => ({ status: "queued", targetThreadId: "thread-anchor" }));
+    const error = new Error("fixture receipt read failed");
+    setup.queueObserver.reconcile.mockImplementation(() => { throw error; });
+    const result = await setup.dispatcher.dispatch(run());
+    expect(result.state).toBe("queued");
+    expect(setup.onReconcileError).toHaveBeenCalledWith(error);
+    expect(setup.queueObserver.reconcile).toHaveBeenCalledWith(
+      { tenantId: "tenant-1", principalId: "principal-1" }, "thread-anchor", "dispatch-1",
+    );
+    expect(setup.gateway.dispatch).toHaveBeenCalledOnce();
+    expect(setup.repository.markRunUncertainAndPause).not.toHaveBeenCalled();
+  });
+
   it("dispatches same-thread work with application IDs and completes accepted work", async () => {
     const setup = fixture(run(), async () => ({
       status: "accepted",
@@ -178,6 +206,7 @@ describe("AutomationDispatcher v10 backend-neutral dispatch", () => {
       runMode: "same_thread",
       prompt: "Review the current work",
       dispatchMutationId: "dispatch-1",
+      claimToken: "claim-1",
     });
     expect(result.state).toBe("completed");
     expect(JSON.stringify(setup.gateway.dispatch.mock.calls)).not.toMatch(
@@ -318,6 +347,35 @@ describe("AutomationDispatcher v10 backend-neutral dispatch", () => {
     );
   });
 
+  it("releases a deferred dispatch while preserving its frozen prompt and precheck result", async () => {
+    const initial = { ...run(), precheckStatus: "passed" as const, precheckFinishedAt: 900 };
+    const setup = fixture(initial, async () => ({ status: "deferred", reason: "source_busy", eligibleAt: null }));
+    const deferred = await setup.dispatcher.dispatch(initial);
+    expect(deferred).toMatchObject({ state: "deferred", claimToken: null, leaseExpiresAt: null, promptSnapshot: initial.promptSnapshot, precheckFinishedAt: 900 });
+    expect(setup.repository.beginPrecheck).not.toHaveBeenCalled();
+    expect(setup.dispatcher.availableCapacity()).toBe(4);
+  });
+
+  it("does not adopt a newer claim when a stale queued worker starts", async () => {
+    const old = run();
+    const setup = fixture({ ...old, claimToken: "new-owner" }, async () => ({ status: "accepted", targetThreadId: "thread-anchor" }));
+    expect(await setup.dispatcher.dispatch(old)).toMatchObject({ state: "claimed", claimToken: "new-owner" });
+    expect(setup.gateway.dispatch).not.toHaveBeenCalled();
+    expect(setup.repository.checkRunAdmission).not.toHaveBeenCalled();
+  });
+
+  it("does not let a stale dispatcher error overwrite a reclaimed lease", async () => {
+    let reject!: (error: Error) => void;
+    const pending = new Promise<never>((_resolve, failed) => { reject = failed; });
+    const setup = fixture(run(), async () => pending);
+    const dispatch = setup.dispatcher.dispatch(run());
+    await vi.waitFor(() => expect(setup.gateway.dispatch).toHaveBeenCalledOnce());
+    setup.replaceCurrent({ ...setup.current(), claimToken: "new-owner" });
+    reject(new DomainError("invalid_transition", "Old capture failed"));
+    expect(await dispatch).toMatchObject({ state: "dispatching", claimToken: "new-owner" });
+    expect(setup.repository.updateRunState).not.toHaveBeenCalled();
+  });
+
   it("caps concurrent backend dispatches and starts queued runs as capacity returns", async () => {
     const runs = Array.from({ length: 6 }, (_, index) => ({
       ...run(),
@@ -350,6 +408,14 @@ describe("AutomationDispatcher v10 backend-neutral dispatch", () => {
       }),
     };
     const repository = {
+      checkRunAdmission: vi.fn((_scope, automationId, runId, input) => {
+        const key = `${automationId}\0${runId}`;
+        const current = stored.get(key)!;
+        const updated = input.dispatch ? { ...current, state: "dispatching" as const } : current;
+        stored.set(key, updated);
+        return updated;
+      }),
+      deferRun: vi.fn(),
       getDefinition: vi.fn(() => ({
         schedule: { kind: "interval" as const },
       })),
@@ -398,6 +464,7 @@ describe("AutomationDispatcher v10 backend-neutral dispatch", () => {
       passPrecheck: vi.fn(),
     };
     const dispatcher = new AutomationDispatcher({
+      queueObserver: { reconcile: () => undefined },
       repository: repository as never,
       gateway,
       inventory: {

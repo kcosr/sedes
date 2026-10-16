@@ -7,6 +7,7 @@ import type {
 } from "./automation-agent-tool-service.js";
 import {
   automationDefinitionToolOutputSchema,
+  automationNameToolSchema,
   automationPrecheckToolSchema,
   automationReadWaitCeilings,
   automationScheduleToolSchema,
@@ -14,6 +15,7 @@ import {
   automationToolInputSchema,
   automationToolPresentations,
   optionalAutomationThreadId,
+  automationMutationId,
 } from "./automation-tool-schemas.js";
 import { CANONICAL_AGENT_TOOL_MANIFEST } from "../registry/canonical-agent-tool-manifest.js";
 
@@ -26,12 +28,16 @@ export function createAutomationCreateToolDefinition(
   return {
     ...CANONICAL_AGENT_TOOL_MANIFEST["automation.create"],
     inputSchema: automationToolInputSchema({
+      name: automationNameToolSchema,
+      initialState: Type.String({ maxLength: 7, enum: ["enabled", "paused"] }),
+      mutationId: automationMutationId,
       prompt: Type.String({ minLength: 1, maxLength: 65_536 }),
       runMode: Type.String({ maxLength: 11, enum: ["same_thread", "clone"] }),
       schedule: automationScheduleToolSchema,
-      misfirePolicy: Type.Optional(
+      misfirePolicy: Type.Union([
         Type.String({ maxLength: 8, enum: ["coalesce", "skip"] }),
-      ),
+        Type.Null(),
+      ]),
       precheck: Type.Optional(
         Type.Union([automationPrecheckToolSchema, Type.Null()]),
       ),
@@ -43,7 +49,7 @@ export function createAutomationCreateToolDefinition(
       form: "inline",
       adapterWaitCeilingMilliseconds: automationReadWaitCeilings,
       supportsCancellation: false,
-      idempotency: "not_applicable",
+      idempotency: "required",
       progress: "none",
       maximumInputBytes: 512 * 1_024,
       maximumOutputBytes: 512 * 1_024,
@@ -53,8 +59,9 @@ export function createAutomationCreateToolDefinition(
     exposure: automationToolExposure,
     adapters: automationToolPresentations({
       piName: "sedes_automation_create",
-      label: "Create paused Sedes automation",
-      promptSnippet: "Configure a paused automation without starting model work.",
+      label: "Create Sedes automation",
+      promptSnippet:
+        "Create an independent named automation; enabled state schedules future model work.",
       command: automationCreateToolId,
     }),
     execute: (input, context) => service.create(input, context),

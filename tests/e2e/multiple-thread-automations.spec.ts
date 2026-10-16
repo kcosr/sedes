@@ -1,0 +1,350 @@
+import { randomUUID } from "node:crypto";
+import { mkdir } from "node:fs/promises";
+import path from "node:path";
+import type { Locator, Page } from "@playwright/test";
+import { normalizedThreadSnapshotSchema } from "../../src/shared/protocol/conversation.js";
+import { expect, test } from "./fixtures";
+import {
+  capture,
+  createDraftThread,
+  expectNoPageOverflow,
+  openWorkspaceDirectory,
+} from "./helpers";
+import { loadE2ERunContext } from "./run-context.js";
+
+const automationRow = (page: Page, automationId: string) =>
+  page.locator(`[data-testid="automation-row"][data-automation-id="${automationId}"]`);
+
+async function createSource(page: Page, fixture: string): Promise<string> {
+  const workspace = path.join(loadE2ERunContext().workspacesDirectory, fixture);
+  await mkdir(workspace, { recursive: true });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openWorkspaceDirectory(page, workspace);
+  return (await createDraftThread(page, "Assistant source")).split("/").at(-1)!;
+}
+
+async function csrfHeaders(page: Page): Promise<Record<string, string>> {
+  const response = await page.request.get("/api/application/session");
+  expect(response.ok()).toBe(true);
+  return { "X-CSRF-Token": ((await response.json()) as { csrfToken: string }).csrfToken };
+}
+
+async function createInEditor(
+  page: Page,
+  input: { name: string; prompt: string; once?: boolean },
+  inspect?: (editor: Locator) => Promise<void>,
+): Promise<string> {
+  await page.getByRole("button", { name: "Add automation", exact: true }).click();
+  const editor = page.getByRole("region", { name: "New automation", exact: true });
+  if (inspect) await inspect(editor);
+  await editor.getByRole("textbox", { name: "Name", exact: true }).fill(input.name);
+  await editor.getByRole("textbox", { name: "Prompt", exact: true }).fill(input.prompt);
+  if (input.once) await editor.getByRole("radio", { name: "Once", exact: true }).click();
+  const saved = page.waitForResponse(response =>
+    response.request().method() === "POST" && response.url().endsWith("/api/automations") && response.ok());
+  await editor.getByRole("button", { name: "Save and enable", exact: true }).click();
+  const automationId = ((await (await saved).json()) as { id: string }).id;
+  await expect(page).toHaveURL(`/automations/${automationId}`);
+  return automationId;
+}
+
+async function expectPhoneSaveBar(page: Page, editor: Locator, label: string): Promise<number> {
+  const saveBar = editor.locator('[data-slot="save-bar"]');
+  await expect(saveBar).toBeInViewport();
+  const viewport = page.viewportSize()!;
+  const buttonBounds: Array<{ x: number; y: number; width: number; height: number }> = [];
+  for (const button of await saveBar.getByRole("button").all()) {
+    await expect(button).toBeInViewport({ ratio: 1 });
+    const bounds = (await button.boundingBox())!;
+    expect(bounds.height).toBeGreaterThanOrEqual(44);
+    expect(bounds.y).toBeGreaterThanOrEqual(0);
+    expect(bounds.y + bounds.height).toBeLessThanOrEqual(viewport.height);
+    buttonBounds.push(bounds);
+  }
+  const bottomGap = viewport.height - Math.max(...buttonBounds.map(({ y, height }) => y + height));
+  // Chromium has no bottom safe-area inset. The requested footer adds no
+  // extra bottom padding while retaining each full-height touch target.
+  expect(bottomGap).toBeCloseTo(0, 1);
+  const height = (await saveBar.boundingBox())!.height;
+  await test.info().attach(`${label}-savebar-geometry`, {
+    body: JSON.stringify({ height, bottomGap, buttons: buttonBounds }),
+    contentType: "application/json",
+  });
+  return height;
+}
+
+test("keeps named daily and one-shot automations independent on the same draft", async ({ page }, testInfo) => {
+  const sourceId = await createSource(page, "multiple-automation-editor");
+  await page.getByRole("button", { name: "Thread actions", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Automations…", exact: true }).click();
+  await expect(page).toHaveURL(`/threads/${sourceId}/automations`);
+
+  let createSaveBarHeight = 0;
+  const dailyId = await createInEditor(page, {
+    name: "Daily update",
+    prompt: "Summarize today's work and tomorrow's priorities.",
+  }, async (editor) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(editor.getByRole("textbox", { name: "Name", exact: true })).toHaveCount(1);
+    await expect(editor.getByRole("heading", { name: "Name", exact: true })).toBeVisible();
+    const sections = editor.getByRole("navigation", { name: "Editor sections", exact: true });
+    await expect(sections.getByRole("button", { name: "Name", exact: true })).toBeVisible();
+    await expect(sections).toHaveAttribute("data-overflow-end", "true");
+    await expect(sections).not.toHaveAttribute("data-overflow-start", "true");
+    const sectionBounds = (await sections.boundingBox())!;
+    expect(sectionBounds.x + sectionBounds.width).toBeLessThanOrEqual(page.viewportSize()!.width);
+    const saveBar = editor.locator('[data-slot="save-bar"]');
+    createSaveBarHeight = await expectPhoneSaveBar(page, editor, "create-clean");
+    await expectNoPageOverflow(page);
+    await capture(page, testInfo, "automation-create-mobile.png");
+    await editor.getByRole("textbox", { name: "Name", exact: true }).fill("Phone size check");
+    await expect(saveBar.getByRole("status")).toHaveText("Unsaved changes");
+    expect(await saveBar.getByRole("status").evaluate((element) => getComputedStyle(element).display)).not.toBe("none");
+    expect(Math.abs(await expectPhoneSaveBar(page, editor, "create-dirty") - createSaveBarHeight)).toBeLessThanOrEqual(1);
+    await capture(page, testInfo, "automation-create-dirty-mobile.png");
+    const sectionScroller = sections.locator('[data-slot="settings-anchors-scroll"]');
+    await sectionScroller.evaluate((element) => { element.scrollLeft = element.scrollWidth; });
+    await expect(sections).toHaveAttribute("data-overflow-start", "true");
+    await expect(sections).not.toHaveAttribute("data-overflow-end", "true");
+    await expect(sections.getByRole("button", { name: "If Sedes was down", exact: true })).toBeInViewport();
+    await capture(page, testInfo, "automation-create-mobile-chip-end.png");
+    await sections.getByRole("button", { name: "If Sedes was down", exact: true }).click();
+    await page.evaluate(async () => {
+      const position = () => [...document.querySelectorAll(".application-shell, .workbench, .pane-host, .automations-view")]
+        .map((element) => `${element.scrollTop}:${element.getBoundingClientRect().top}`).join(";");
+      await new Promise<void>((resolve) => {
+        let previous = "";
+        let stable = 0;
+        const check = () => {
+          const next = position();
+          stable = next === previous ? stable + 1 : 0;
+          previous = next;
+          if (stable >= 3) resolve(); else requestAnimationFrame(check);
+        };
+        requestAnimationFrame(check);
+      });
+    });
+    const scroll = await page.evaluate(() => ({
+      window: window.scrollY,
+      outer: document.querySelector(".pane-host")!.scrollTop,
+      editor: document.querySelector(".automations-view")!.scrollTop,
+    }));
+    expect(scroll.window).toBe(0);
+    expect(scroll.outer).toBe(0);
+    expect(scroll.editor).toBeGreaterThan(0);
+    await expect(page.locator(".pane-nav-header")).toBeInViewport({ ratio: 1 });
+    await expect(sections).toHaveAttribute("data-stuck", "true");
+    await expect(sections).toBeInViewport({ ratio: 1 });
+    await expect(editor.getByRole("heading", { name: "If Sedes was down", exact: true })).toBeInViewport({ ratio: 1 });
+    const stickyStyle = await sections.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return { mask: style.maskImage, shadow: style.boxShadow };
+    });
+    expect(stickyStyle.mask).toBe("none");
+    expect(stickyStyle.shadow).not.toBe("none");
+    expect(await sectionScroller.evaluate((element) => getComputedStyle(element).maskImage)).not.toBe("none");
+    await capture(page, testInfo, "automation-create-mobile-sticky-chips.png");
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await expect(saveBar.getByRole("status")).toBeInViewport({ ratio: 1 });
+    expect(await saveBar.getByRole("status").evaluate((element) => getComputedStyle(element).position)).not.toBe("absolute");
+  });
+  // Saved from the thread's list, the page leads back there and names its thread.
+  await expect(page.locator('.automation-page [data-slot="settings-page-back"]')).toHaveText("Automations");
+  await expect(
+    page.locator(".automation-page-meta").getByRole("link", { name: "Assistant source", exact: true }),
+  ).toHaveAttribute("href", `/threads/${sourceId}`);
+  await page.goto(`/threads/${sourceId}/automations`);
+  const reminderId = await createInEditor(page, {
+    name: "Afternoon reminder",
+    prompt: "Remind me to send the release notes.",
+    once: true,
+  });
+  expect(reminderId).not.toBe(dailyId);
+
+  await page.goto(`/threads/${sourceId}/automations`);
+  await expect(page.getByTestId("automation-row")).toHaveCount(2);
+  await expect(automationRow(page, dailyId)).toContainText("Daily update");
+  await expect(automationRow(page, reminderId)).toContainText("Afternoon reminder");
+  await capture(page, testInfo, "multiple-automations-draft-desktop.png");
+
+  // These siblings initially have equal revisions. Opening one after the other
+  // must load by automation identity rather than reuse the first editor's cache.
+  await automationRow(page, dailyId).getByRole("link", { name: "Daily update", exact: true }).click();
+  await page.getByRole("button", { name: "Edit automation", exact: true }).click();
+  const editor = page.getByRole("region", { name: "Automation editor", exact: true });
+  await expect(editor.getByRole("textbox", { name: "Name", exact: true })).toHaveValue("Daily update");
+  // The editor's "‹" names the automation page it returns to.
+  await expect(editor.locator('[data-slot="settings-page-back"]')).toHaveText("Daily update");
+  await expect(editor.getByRole("textbox", { name: "Prompt", exact: true })).toHaveValue(
+    "Summarize today's work and tomorrow's priorities.",
+  );
+  await capture(page, testInfo, "automation-editor-desktop.png");
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(Math.abs(await expectPhoneSaveBar(page, editor, "edit-clean") - createSaveBarHeight)).toBeLessThanOrEqual(1);
+  await expectNoPageOverflow(page);
+  await capture(page, testInfo, "automation-editor-mobile.png");
+  await editor.getByRole("textbox", { name: "Name", exact: true }).fill("Morning update");
+  const editStatus = editor.locator('[data-slot="save-bar"]').getByRole("status");
+  await expect(editStatus).toHaveText("Unsaved changes");
+  await expect(editStatus).toBeInViewport({ ratio: 1 });
+  expect(await editStatus.evaluate((element) => getComputedStyle(element).position)).not.toBe("absolute");
+  expect(Math.abs(await expectPhoneSaveBar(page, editor, "edit-dirty") - createSaveBarHeight)).toBeLessThanOrEqual(1);
+  await capture(page, testInfo, "automation-editor-dirty-mobile.png");
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await editor.getByRole("textbox", { name: "Prompt", exact: true }).fill("Summarize today's priorities at breakfast.");
+  await editor.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page).toHaveURL(`/automations/${dailyId}`);
+  await expect(page.getByRole("heading", { level: 1, name: "Morning update", exact: true })).toBeVisible();
+
+  await page.goto(`/automations/${reminderId}/edit`);
+  await expect(editor.getByRole("textbox", { name: "Name", exact: true })).toHaveValue("Afternoon reminder");
+  await expect(editor.getByRole("textbox", { name: "Prompt", exact: true })).toHaveValue("Remind me to send the release notes.");
+  await expect(editor.getByRole("radio", { name: "Once", exact: true })).toBeChecked();
+
+  // Pause just the recurring schedule. Its sibling remains enabled, and the
+  // source stays a draft because configuring an automation does not start it.
+  await page.goto(`/automations/${dailyId}`);
+  await page.getByRole("button", { name: "Pause automation", exact: true }).click();
+  await expect.poll(async () => {
+    const response = await page.request.get(`/api/automations/${dailyId}`);
+    expect(response.ok()).toBe(true);
+    return ((await response.json()) as { status: string }).status;
+  }).toBe("paused");
+  const reminder = await page.request.get(`/api/automations/${reminderId}`);
+  expect(reminder.ok()).toBe(true);
+  expect(await reminder.json()).toMatchObject({ name: "Afternoon reminder", status: "enabled" });
+  const source = await page.request.get(`/api/threads/${sourceId}?activityDetail=full`);
+  expect(source.ok()).toBe(true);
+  expect(await source.json()).toMatchObject({ thread: { backingState: "unbound" } });
+
+  await page.goto(`/threads/${sourceId}/automations`);
+  await page.setViewportSize({ width: 390, height: 844 });
+  // A thread's list shows its few automations flat, without a search.
+  await expect(page.getByTestId("automation-row")).toHaveCount(2);
+  await expect(page.getByRole("searchbox", { name: "Search automations" })).toHaveCount(0);
+  await expect(automationRow(page, dailyId)).toBeVisible();
+  const reminderRow = automationRow(page, reminderId);
+  await expect(reminderRow).toBeVisible();
+  // On a phone, the way back to the thread is the pane bar's one "‹" link.
+  await expect(page.locator('.pane-nav-header [data-slot="settings-page-back"]')).toHaveText("Assistant source");
+  await expect(page.locator('[data-slot="settings-page-back"]')).toHaveCount(1);
+  await expectNoPageOverflow(page);
+  await capture(page, testInfo, "multiple-automations-draft-mobile.png");
+  // The row link remains keyboard operable at phone width.
+  const reminderLink = reminderRow.getByRole("link", { name: "Afternoon reminder", exact: true });
+  await reminderLink.focus();
+  await page.keyboard.press("Enter");
+  await expect(page).toHaveURL(`/automations/${reminderId}`);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.getByRole("button", { name: "Edit automation", exact: true }).click();
+  await editor.getByRole("button", { name: "Delete automation…", exact: true }).click();
+  await page.getByRole("dialog", { name: "Delete this automation?" })
+    .getByRole("button", { name: "Delete automation", exact: true }).click();
+  // Back to the list it was opened from, past the deleted automation's page.
+  await expect(page).toHaveURL(`/threads/${sourceId}/automations`);
+  await expect(page.getByTestId("automation-row")).toHaveCount(1);
+  await expect(automationRow(page, reminderId)).toHaveCount(0);
+  await expect(automationRow(page, dailyId)).toContainText("Morning update");
+});
+
+test("fork creates a fresh result from a draft or started source without inheriting schedules", async ({ page }, testInfo) => {
+  const sourceId = await createSource(page, "multiple-automation-fork");
+  const reasoning = page.getByTestId("thread-configuration")
+    .locator('[data-setting-id="thinking_level"] [role="combobox"]');
+  await reasoning.click();
+  await page.getByRole("option", { name: "High", exact: true }).click();
+  await expect(reasoning).toHaveText("High");
+  const headers = await csrfHeaders(page);
+  const create = async (name: string, runMode: "clone" | "same_thread") => {
+    const response = await page.request.post("/api/automations", {
+      headers,
+      data: {
+        threadId: sourceId,
+        name,
+        prompt: "Measure turn throughput",
+        runMode,
+        initialState: "paused",
+        schedule: { kind: "interval", everySeconds: 86400, anchorAt: new Date(Date.now() + 3600000).toISOString() },
+        misfirePolicy: "coalesce",
+        precheck: null,
+        mutationId: randomUUID(),
+      },
+    });
+    expect(response.ok(), await response.text()).toBe(true);
+    return ((await response.json()) as { id: string }).id;
+  };
+  const forkId = await create("Separate review", "clone");
+  const sameThreadId = await create("Daily update", "same_thread");
+
+  const run = async (automationId: string): Promise<string> => {
+    await page.goto(`/automations/${automationId}`);
+    const started = page.waitForResponse(response =>
+      response.request().method() === "POST" &&
+      response.url().endsWith(`/api/automations/${automationId}/run-now`) && response.ok());
+    await page.getByRole("button", { name: "Run now", exact: true }).click();
+    const runId = ((await (await started).json()) as { id: string }).id;
+    let resultThreadId: string | undefined;
+    await expect.poll(async () => {
+      const response = await page.request.get(`/api/automations/${automationId}/runs`);
+      expect(response.ok()).toBe(true);
+      const history = (await response.json()) as {
+        items: Array<{ id: string; resultThreadId?: string; turn?: { outcome: string } }>;
+      };
+      const current = history.items.find(item => item.id === runId);
+      resultThreadId = current?.resultThreadId;
+      return current?.turn?.outcome;
+    }).toBe("completed");
+    expect(resultThreadId).toBeDefined();
+    return resultThreadId!;
+  };
+
+  const firstChildId = await run(forkId);
+  const secondChildId = await run(forkId);
+  expect(new Set([sourceId, firstChildId, secondChildId]).size).toBe(3);
+  const sourceBeforeStart = await page.request.get(`/api/threads/${sourceId}?activityDetail=full`);
+  expect(sourceBeforeStart.ok()).toBe(true);
+  const sourceSnapshot = normalizedThreadSnapshotSchema.parse(await sourceBeforeStart.json());
+  expect(sourceSnapshot).toMatchObject({ thread: { backingState: "unbound" }, orderedTurnIds: [] });
+  for (const childId of [firstChildId, secondChildId]) {
+    const childResponse = await page.request.get(`/api/threads/${childId}?activityDetail=full`);
+    expect(childResponse.ok()).toBe(true);
+    const child = normalizedThreadSnapshotSchema.parse(await childResponse.json());
+    expect(child.thread).toMatchObject({
+      targetId: sourceSnapshot.thread.targetId,
+      workspaceId: sourceSnapshot.thread.workspaceId,
+    });
+    expect(child.settings.values.map(({ id, desiredValue }) => ({ id, desiredValue })))
+      .toEqual(sourceSnapshot.settings.values.map(({ id, desiredValue }) => ({ id, desiredValue })));
+    expect(child.agentTools).toMatchObject({
+      enabled: sourceSnapshot.agentTools.enabled,
+      presentation: sourceSnapshot.agentTools.presentation,
+      accessBoundary: sourceSnapshot.agentTools.accessBoundary,
+    });
+  }
+
+  const sameThreadResult = await run(sameThreadId);
+  expect(sameThreadResult).toBe(sourceId);
+  const nativeChildId = await run(forkId);
+  expect(new Set([sourceId, firstChildId, secondChildId, nativeChildId]).size).toBe(4);
+
+  for (const childId of [firstChildId, secondChildId, nativeChildId]) {
+    const childAutomations = await page.request.get(`/api/automations?threadId=${childId}`);
+    expect(childAutomations.ok()).toBe(true);
+    expect(await childAutomations.json()).toMatchObject({ items: [] });
+  }
+  const snapshotResponse = await page.request.get("/api/application/snapshot");
+  expect(snapshotResponse.ok()).toBe(true);
+  const snapshot = (await snapshotResponse.json()) as {
+    forkOrigins: Array<{ sourceThreadId: string; childThreadId: string }>;
+  };
+  expect(snapshot.forkOrigins.some(origin => origin.childThreadId === firstChildId)).toBe(false);
+  expect(snapshot.forkOrigins.some(origin => origin.childThreadId === secondChildId)).toBe(false);
+  expect(snapshot.forkOrigins).toContainEqual(expect.objectContaining({ sourceThreadId: sourceId, childThreadId: nativeChildId }));
+
+  await page.goto(`/automations/${forkId}`);
+  await expect(page.getByRole("button", { name: /\sFinished(?: in [^,]+)?, Manual$/u })).toHaveCount(3);
+  await capture(page, testInfo, "automation-fork-results.png");
+  await page.goto(`/threads/${firstChildId}/automations`);
+  await expect(page.getByTestId("automation-row")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Add automation", exact: true })).toBeEnabled();
+});

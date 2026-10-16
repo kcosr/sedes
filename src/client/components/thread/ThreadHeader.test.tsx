@@ -67,7 +67,7 @@ afterEach(() => {
 });
 
 type HeaderAutomation = NonNullable<
-  NormalizedThreadSnapshot["thread"]["automation"]
+  NormalizedThreadSnapshot["thread"]["automations"]
 >;
 
 function makeSnapshot({
@@ -77,10 +77,10 @@ function makeSnapshot({
   runState = "idle",
   available = true,
   environmentKind = "ssh",
-  automation = false,
+  automations = false,
 }: {
   /** `attachable`: no automation yet, and the thread can take one. */
-  readonly automation?: boolean | HeaderAutomation | "attachable";
+  readonly automations?: boolean | HeaderAutomation | "attachable";
   readonly renameAvailable?: boolean;
   readonly brand?: "pi" | "codex" | "claude";
   readonly backingState?: "bound" | "unbound";
@@ -116,12 +116,12 @@ function makeSnapshot({
       available,
       lastActivityAt: "2026-07-30T15:00:00.000Z",
       stateChangedAt: "2026-07-30T15:00:00.000Z",
-      automation:
-        automation === true
-          ? { status: "enabled" }
-          : automation === false || automation === "attachable"
-            ? null
-            : automation,
+      automations:
+        automations === true
+          ? { totalCount: 1, enabledCount: 1, pausedCount: 0, exhaustedCount: 0, inFlightCount: 0, attentionCount: 0, revision: 0 }
+          : automations === false || automations === "attachable"
+            ? { totalCount: 0, enabledCount: 0, pausedCount: 0, exhaustedCount: 0, inFlightCount: 0, attentionCount: 0, revision: 0 }
+            : automations,
     },
     executionWorkspace: { kind: "direct" },
     workspace: {
@@ -138,11 +138,7 @@ function makeSnapshot({
       label: { text: environmentKind === "local" ? "Local" : "Machine" },
       available: true,
     },
-    attention: {
-      wake: false,
-      automationContext: null,
-      queueFailure: false,
-    },
+    attention: { automationContexts: [] },
     stashes: [],
     agentTools: {
       runtimeAvailability: { availability: "available" },
@@ -175,7 +171,7 @@ function makeSnapshot({
               },
             ]
           : []),
-        ...(automation === "attachable"
+        ...(automations === "attachable"
           ? [
               {
                 id: "attach_automation",
@@ -190,7 +186,7 @@ function makeSnapshot({
       composerActions: [],
       interactions: [],
       providerFeatures: [],
-      automation: { available: automation !== false },
+      automation: { available: automations !== false },
     },
   } as unknown as NormalizedThreadSnapshot;
 }
@@ -418,14 +414,14 @@ function renderHeader({
   forkOrigins,
   projects,
   workspaces,
-  automation = false,
+  automations = false,
   findOpen = false,
   onFindOpenChange = vi.fn(),
 }: {
   readonly projects?: readonly CatalogProject[];
   readonly workspaces?: readonly CatalogWorkspace[];
   /** `attachable`: no automation yet, and the thread can take one. */
-  readonly automation?: boolean | HeaderAutomation | "attachable";
+  readonly automations?: boolean | HeaderAutomation | "attachable";
   readonly findOpen?: boolean;
   readonly onFindOpenChange?: (open: boolean) => void;
   readonly environmentCount?: number;
@@ -465,7 +461,7 @@ function renderHeader({
       store={threadStore}
       applicationStore={applicationStore}
       snapshot={makeSnapshot({
-        automation,
+        automations,
         renameAvailable,
         brand,
         backingState,
@@ -767,7 +763,7 @@ describe("ThreadHeader panel chrome", () => {
     ).toHaveAttribute("aria-expanded", "true");
   });
 
-  it.each([false, true])("keeps mobile bookmarks, settings, and available automation before the toolbar toggle (automation: %s)", (automation) => {
+  it.each([false, true])("keeps mobile bookmarks, settings, and available automation before the toolbar toggle (automation: %s)", (automations) => {
     vi.stubGlobal(
       "matchMedia",
       vi.fn((query: string) => ({
@@ -776,7 +772,7 @@ describe("ThreadHeader panel chrome", () => {
         removeEventListener: vi.fn(),
       })),
     );
-    renderHeader({ automation, withPanelControls: "phone" });
+    renderHeader({ automations, withPanelControls: "phone" });
 
     const toolbar = screen.getByTestId("thread-controls");
     expect(
@@ -800,13 +796,13 @@ describe("ThreadHeader panel chrome", () => {
     expect(pin).toBeVisible();
     expect(toolbar).not.toContainElement(pin);
     const actions = [pin, bookmarks];
-    if (automation) {
-      const automationButton = screen.getByRole("button", { name: "Automation" });
+    if (automations) {
+      const automationButton = screen.getByRole("button", { name: "Automations" });
       expect(automationButton).toBeVisible();
       expect(toolbar).not.toContainElement(automationButton);
       actions.push(automationButton);
     } else {
-      expect(screen.queryByRole("button", { name: "Automation" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Automations" })).toBeNull();
     }
     actions.push(settings, toggle);
     for (let index = 1; index < actions.length; index += 1) {
@@ -836,12 +832,12 @@ describe("ThreadHeader panel chrome", () => {
       })),
     );
     const onFindOpenChange = vi.fn();
-    renderHeader({ automation: true, withPanelControls: "phone", onFindOpenChange });
+    renderHeader({ automations: true, withPanelControls: "phone", onFindOpenChange });
 
     const toolbar = screen.getByTestId("thread-controls");
     expect(screen.queryByRole("button", { name: "Show thread toolbar" })).toBeNull();
     expect(screen.getByRole("button", { name: "Bookmarks" })).toBeVisible();
-    expect(screen.getByRole("button", { name: "Automation" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Automations" })).toBeVisible();
     // Chat is a phone's home: it has no Maximize and no ✕ there.
     expect(screen.queryByRole("button", { name: "Maximize Chat panel" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Hide Chat panel" })).toBeNull();
@@ -1532,78 +1528,52 @@ describe("ThreadHeader force reset", () => {
 
 describe("ThreadHeader automation chip", () => {
   const NOW = new Date("2026-10-06T03:40:00.000Z");
-  type LastRun = NonNullable<HeaderAutomation["lastRun"]>;
-  const run = (state: LastRun["state"], overrides: Partial<LastRun> = {}): LastRun => ({
-    id: "run-1",
-    state,
-    occurrence: "scheduled",
-    scheduledFor: "2026-10-05T06:30:00.000Z",
-    ...overrides,
-  });
-  const automation = (overrides: Partial<HeaderAutomation>): HeaderAutomation => ({
-    status: "enabled",
-    runMode: "same_thread",
-    scheduleKind: "cron",
-    schedule: { kind: "cron", expression: "0 2 * * *", timeZone: "UTC" },
-    misfirePolicy: "coalesce",
-    promptPreview: "Check dependencies",
-    revision: 1,
-    runsRevision: 0,
-    hasPrecheck: false,
-    ...overrides,
-  });
+  const automations = (overrides: Partial<HeaderAutomation>): HeaderAutomation => ({ totalCount: 1, enabledCount: 1, pausedCount: 0, exhaustedCount: 0, inFlightCount: 0, attentionCount: 0, revision: 1, ...overrides });
 
   it.each([
     {
       name: "active",
-      automation: automation({ nextRunAt: "2026-10-07T02:00:00.000Z" }),
+      automations: automations({ nextRunAt: "2026-10-07T02:00:00.000Z" }),
       health: "active",
-      title: /^Automation · next Tmrw \d/u,
+      title: /^Automations · 1 automation · 1 active · next Tmrw \d/u,
       icon: ".lucide-repeat",
     },
     {
-      name: "failed",
-      automation: automation({ lastRun: run("failed", { finishedAt: "2026-10-05T06:40:00.000Z" }) }),
-      health: "failed",
-      title: /^Automation · Failed 21h ago$/u,
-      icon: ".lucide-repeat",
+      name: "sibling attention ahead of another run in progress",
+      automations: automations({ totalCount: 3, enabledCount: 2, pausedCount: 1, inFlightCount: 1, attentionCount: 1 }),
+      health: "attention",
+      title: /^Automations · 3 automations · 1 needs attention · 1 in progress$/u,
+      icon: ".comet-spinner",
     },
     {
       name: "unknown",
-      automation: automation({ status: "paused", lastRun: run("uncertain") }),
-      health: "unknown",
-      title: /^Automation · Outcome unknown$/u,
+      automations: automations({ enabledCount: 0, pausedCount: 1, attentionCount: 1 }),
+      health: "attention",
+      title: /^Automations · 1 automation · 1 needs attention$/u,
       icon: ".lucide-repeat",
     },
     {
       name: "sending",
-      automation: automation({ lastRun: run("claimed") }),
+      automations: automations({ inFlightCount: 1 }),
       health: "sending",
-      title: /^Automation · Sending$/u,
+      title: /^Automations · 1 automation · 1 in progress$/u,
       icon: ".comet-spinner",
     },
     {
       name: "paused",
-      automation: automation({ status: "paused", lastRun: run("completed") }),
+      automations: automations({ enabledCount: 0, pausedCount: 1 }),
       health: "paused",
-      title: /^Automation · Paused$/u,
+      title: /^Automations · 1 automation · 1 paused$/u,
       icon: ".lucide-circle-pause",
     },
-    {
-      name: "not started",
-      automation: automation({ status: "paused" }),
-      health: "not_started",
-      title: /^Automation · Not started$/u,
-      icon: ".lucide-circle-pause",
-    },
-  ])("draws $name with the shared vocabulary", ({ automation, health, title, icon }) => {
+  ])("draws $name with the shared vocabulary", ({ automations, health, title, icon }) => {
     vi.useFakeTimers({ now: NOW, toFake: ["Date"] });
     try {
-      renderHeader({ automation });
+      renderHeader({ automations });
     } finally {
       vi.useRealTimers();
     }
-    const chip = screen.getByRole("button", { name: "Automation" });
+    const chip = screen.getByRole("button", { name: "Automations" });
     expect(chip).toHaveAttribute("data-health", health);
     expect(chip).not.toHaveAttribute("data-status");
     expect(chip.getAttribute("title")).toMatch(title);
@@ -1611,27 +1581,35 @@ describe("ThreadHeader automation chip", () => {
     expect(chip.querySelector(".lucide-clock")).toBeNull();
   });
 
+  it("omits the status icon for finished one-shots while keeping their collection accessible", async () => {
+    renderHeader({ automations: automations({ enabledCount: 0, exhaustedCount: 1 }) });
+    expect(screen.queryByRole("button", { name: "Automations" })).toBeNull();
+    const menu = await openThreadActions();
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "Automations…" }));
+    expect(window.location.pathname).toBe("/threads/thread-1/automations");
+  });
+
   it("opens the automation page from the chip", async () => {
-    renderHeader({ automation: true });
-    await userEvent.click(screen.getByRole("button", { name: "Automation" }));
-    expect(window.location.pathname).toBe("/automations/thread-1");
+    renderHeader({ automations: true });
+    await userEvent.click(screen.getByRole("button", { name: "Automations" }));
+    expect(window.location.pathname).toBe("/threads/thread-1/automations");
   });
 
   it("opens the automation page from Thread actions, with Repeat", async () => {
-    renderHeader({ automation: true });
+    renderHeader({ automations: true });
     const menu = await openThreadActions();
-    const item = within(menu).getByRole("menuitem", { name: "Automation…" });
+    const item = within(menu).getByRole("menuitem", { name: "Automations…" });
     expect(item.querySelector(".lucide-repeat")).not.toBeNull();
     expect(item.querySelector(".lucide-calendar-clock")).toBeNull();
     await userEvent.click(item);
-    expect(window.location.pathname).toBe("/automations/thread-1");
+    expect(window.location.pathname).toBe("/threads/thread-1/automations");
   });
 
-  it("opens a new automation in the editor from Automate…", async () => {
-    renderHeader({ automation: "attachable" });
-    expect(screen.queryByRole("button", { name: "Automation" })).toBeNull();
+  it("opens the collection for adding the first automation", async () => {
+    renderHeader({ automations: "attachable" });
+    expect(screen.queryByRole("button", { name: "Automations" })).toBeNull();
     const menu = await openThreadActions();
-    await userEvent.click(within(menu).getByRole("menuitem", { name: "Automate…" }));
-    expect(window.location.pathname).toBe("/automations/thread-1/edit");
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "Automations…" }));
+    expect(window.location.pathname).toBe("/threads/thread-1/automations");
   });
 });

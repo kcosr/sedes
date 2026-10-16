@@ -1,0 +1,175 @@
+/** Shared durable automation predicates used by collections and thread projections. */
+export function consumedOnceSql(definition: string): string {
+  return `(${definition}.schedule_kind = 'date_time' AND EXISTS (
+    SELECT 1 FROM automation_runs AS consumed
+    WHERE consumed.tenant_id = ${definition}.tenant_id
+      AND consumed.owner_principal_id = ${definition}.owner_principal_id
+      AND consumed.automation_id = ${definition}.id
+      AND consumed.occurrence_kind = 'scheduled'
+      AND consumed.occurrence_key = 'scheduled:' || ${definition}.run_at
+  ))`;
+}
+
+/** A consumed one-shot stays actionable while its scheduled delivery is pending. */
+export function exhaustedSql(definition: string): string {
+  return `(${consumedOnceSql(definition)} AND NOT EXISTS (
+    SELECT 1 FROM automation_runs AS pending
+    WHERE pending.tenant_id = ${definition}.tenant_id
+      AND pending.owner_principal_id = ${definition}.owner_principal_id
+      AND pending.automation_id = ${definition}.id
+      AND pending.occurrence_kind = 'scheduled'
+      AND pending.occurrence_key = 'scheduled:' || ${definition}.run_at
+      AND pending.state IN ('claimed', 'dispatching', 'queued', 'running', 'uncertain', 'deferred')
+  ))`;
+}
+
+/** Skips, cancellations, resolved uncertainty and force resets do not settle attention. */
+export function latestDecisiveRunIdSql(definition: string): string {
+  return `(SELECT decisive.id FROM automation_runs AS decisive
+    WHERE decisive.tenant_id = ${definition}.tenant_id
+      AND decisive.owner_principal_id = ${definition}.owner_principal_id
+      AND decisive.automation_id = ${definition}.id
+      AND decisive.force_reset_at IS NULL
+      AND (decisive.state = 'completed' OR (
+        decisive.state = 'failed'
+        AND coalesce(decisive.error_code, '') != 'automation_uncertain_resolved'
+      ))
+    ORDER BY decisive.created_at DESC, decisive.id DESC LIMIT 1)`;
+}
+
+/**
+ * Delivery failure or a failed agent turn, excluding abandoned work. An
+ * interrupted turn, including one the user stopped, is not a failure.
+ */
+export function runFailureSql(run: string): string {
+  return `(${run}.force_reset_at IS NULL AND (
+    (${run}.state = 'failed'
+      AND coalesce(${run}.error_code, '') != 'automation_uncertain_resolved')
+    OR (${run}.state = 'completed' AND ${run}.turn_outcome = 'failed')
+  ))`;
+}
+
+/** Unresolved uncertainty or a failure, each of which has a notice until acknowledged. */
+export function runHasProblemSql(run: string): string {
+  return `((${run}.force_reset_at IS NULL AND ${run}.state = 'uncertain')
+    OR ${runFailureSql(run)})`;
+}
+
+/** Only a scheduled delivery whose turn has not ended otherwise reports that it triggered. */
+export function runTriggeredSql(run: string): string {
+  return `(${run}.state = 'completed' AND ${run}.occurrence_kind = 'scheduled'
+    AND ${run}.force_reset_at IS NULL
+    AND (${run}.turn_outcome IS NULL OR ${run}.turn_outcome = 'completed'))`;
+}
+
+/** Any delivery whose agent turn was interrupted; neutral, never a problem. */
+export function runInterruptedSql(run: string): string {
+  return `(${run}.state = 'completed' AND ${run}.force_reset_at IS NULL
+    AND ${run}.turn_outcome = 'interrupted')`;
+}
+
+/** A notice that needs no action: a scheduled delivery or an interrupted turn. */
+export function runNeutralNoticeSql(run: string): string {
+  return `(${runTriggeredSql(run)} OR ${runInterruptedSql(run)})`;
+}
+
+/** The one run whose notice the anchor can show for a definition. */
+export function anchorNoticeRunIdSql(definition: string): string {
+  return `coalesce((SELECT unresolved.id FROM automation_runs AS unresolved
+    WHERE unresolved.tenant_id = ${definition}.tenant_id
+      AND unresolved.owner_principal_id = ${definition}.owner_principal_id
+      AND unresolved.automation_id = ${definition}.id
+      AND unresolved.state = 'uncertain'
+      AND unresolved.force_reset_at IS NULL
+    ORDER BY unresolved.created_at DESC, unresolved.id DESC LIMIT 1
+  ), ${latestDecisiveRunIdSql(definition)})`;
+}
+
+/** A notice on the anchor, which a later decisive run supersedes. */
+export function anchorNoticeSql(run: string): string {
+  return `(${runHasProblemSql(run)}
+    OR (${runNeutralNoticeSql(run)} AND ${run}.child_thread_id IS NULL))`;
+}
+
+/** A Fork result thread keeps a notice for each of its runs. */
+export function resultThreadNoticeSql(run: string): string {
+  return `(${run}.child_thread_id IS NOT NULL
+    AND (${runNeutralNoticeSql(run)} OR ${runHasProblemSql(run)}))`;
+}
+
+/** A definition still has a result notice the user can see and dismiss. */
+export function undismissedNoticeSql(definition: string): string {
+  return `EXISTS (
+    SELECT 1 FROM automation_runs AS notice
+    WHERE notice.tenant_id = ${definition}.tenant_id
+      AND notice.owner_principal_id = ${definition}.owner_principal_id
+      AND notice.automation_id = ${definition}.id
+      AND notice.acknowledged_at IS NULL
+      AND ((notice.id = ${anchorNoticeRunIdSql(definition)}
+          AND ${anchorNoticeSql("notice")})
+        OR ${resultThreadNoticeSql("notice")})
+  )`;
+}
+
+export function needsAttentionSql(definition: string): string {
+  return `(EXISTS (
+    SELECT 1 FROM automation_runs AS unresolved
+    WHERE unresolved.tenant_id = ${definition}.tenant_id
+      AND unresolved.owner_principal_id = ${definition}.owner_principal_id
+      AND unresolved.automation_id = ${definition}.id
+      AND unresolved.state = 'uncertain'
+      AND unresolved.force_reset_at IS NULL
+  ) OR EXISTS (
+    SELECT 1 FROM automation_runs AS failure
+    WHERE failure.tenant_id = ${definition}.tenant_id
+      AND failure.owner_principal_id = ${definition}.owner_principal_id
+      AND failure.automation_id = ${definition}.id
+      AND failure.id = ${latestDecisiveRunIdSql(definition)}
+      AND ${runFailureSql("failure")}
+      AND failure.acknowledged_at IS NULL
+  ))`;
+}
+
+/** Delivery admission only; accepted agent work has already released this slot. */
+export function pendingDeliverySql(definition: string): string {
+  return `EXISTS (
+    SELECT 1 FROM automation_runs AS active
+    WHERE active.tenant_id = ${definition}.tenant_id
+      AND active.owner_principal_id = ${definition}.owner_principal_id
+      AND active.automation_id = ${definition}.id
+      AND active.state IN ('claimed', 'dispatching', 'queued', 'running', 'uncertain', 'deferred')
+  )`;
+}
+
+/** UI activity includes the latest accepted turn without reviving incomplete historical records. */
+export function inFlightSql(definition: string): string {
+  return `(${pendingDeliverySql(definition)} OR EXISTS (
+    SELECT 1 FROM automation_runs AS accepted
+    WHERE accepted.tenant_id = ${definition}.tenant_id
+      AND accepted.owner_principal_id = ${definition}.owner_principal_id
+      AND accepted.automation_id = ${definition}.id
+      AND accepted.force_reset_at IS NULL
+      AND accepted.state = 'completed' AND accepted.turn_outcome IS NULL
+      AND accepted.id = (
+        SELECT latest.id FROM automation_runs AS latest
+        WHERE latest.tenant_id = ${definition}.tenant_id
+          AND latest.owner_principal_id = ${definition}.owner_principal_id
+          AND latest.automation_id = ${definition}.id
+        ORDER BY latest.created_at DESC, latest.id DESC LIMIT 1
+      )
+  ))`;
+}
+
+/** Earliest potentially actionable delivery, before source inventory suppression. */
+export function nextActionAtSql(definition: string): string {
+  return `(CASE WHEN ${definition}.deleted_at IS NULL THEN
+    CASE WHEN ${pendingDeliverySql(definition)} THEN (
+      SELECT waiting.eligible_at FROM automation_runs AS waiting
+      WHERE waiting.tenant_id = ${definition}.tenant_id
+        AND waiting.owner_principal_id = ${definition}.owner_principal_id
+        AND waiting.automation_id = ${definition}.id
+        AND waiting.state = 'deferred'
+    ) WHEN ${definition}.enabled = 1 AND NOT ${exhaustedSql(definition)}
+      THEN ${definition}.next_run_at END
+  END)`;
+}

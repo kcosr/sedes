@@ -1,14 +1,17 @@
 import { describe, expect, it } from "vitest";
+import { definition } from "../components/automation/automation-test-fixture.js";
 import {
   AUTOMATION_HEALTH_GROUPS,
   AUTOMATION_HEALTH_GROUP_LABELS,
   automationHealth,
+  automationDefinitionGlyph,
   automationIdentityGlyph,
   automationIdentityLabel,
   automationNeedsAttention,
   compareAutomationsInGroup,
   lastRunAt,
   threadRunPhase,
+  threadAutomationHealth,
   type AutomationHealthThread,
   type AutomationSortSubject,
   type SummaryAutomation,
@@ -33,19 +36,15 @@ function run(
 function automation(
   overrides: Partial<SummaryAutomation> = {},
 ): SummaryAutomation {
-  return {
-    status: "enabled",
-    runMode: "same_thread",
-    scheduleKind: "cron",
-    schedule: { kind: "cron", expression: "0 2 * * *", timeZone: "UTC" },
-    misfirePolicy: "coalesce",
-    promptPreview: "Check dependencies",
+  return definition({
+    revision: 1, runsRevision: 0,
+    prompt: "Check dependencies",
     nextRunAt: "2026-10-07T02:00:00.000Z",
-    revision: 1,
-    runsRevision: 0,
-    hasPrecheck: false,
+    ...(overrides.lastRun?.state === "failed" || overrides.lastRun?.state === "uncertain"
+      ? { attention: { runId: overrides.lastRun.id, kind: overrides.lastRun.state } }
+      : {}),
     ...overrides,
-  };
+  });
 }
 
 function thread(
@@ -178,10 +177,10 @@ describe("automationHealth", () => {
     });
   });
 
-  it("follows the dispatcher: an open-ended or lapsed snooze does not skip runs", () => {
+  it("suspends an open-ended snooze and resumes after a dated snooze lapses", () => {
     expect(
       automationHealth(thread({ inventoryState: "snoozed" }), NOW)?.kind,
-    ).toBe("active");
+    ).toBe("snoozed");
     expect(
       automationHealth(
         thread({
@@ -258,16 +257,19 @@ describe("automationHealth", () => {
       "upcoming",
       "paused",
       "suspended",
+      "finished",
     ]);
     expect(AUTOMATION_HEALTH_GROUPS.map((group) => AUTOMATION_HEALTH_GROUP_LABELS[group]))
-      .toEqual(["Needs attention", "Upcoming", "Paused", "Suspended"]);
+      .toEqual(["Needs attention", "Upcoming", "Paused", "Suspended", "Finished"]);
   });
 });
 
 describe("automationNeedsAttention", () => {
-  it("is true only for failed and uncertain last runs", () => {
+  it("uses explicit unresolved delivery attention instead of guessing from the latest run", () => {
     expect(automationNeedsAttention(null)).toBe(false);
     expect(automationNeedsAttention(automation())).toBe(false);
+    expect(automationNeedsAttention(automation({ lastRun: run("failed"), attention: undefined }))).toBe(false);
+    expect(automationNeedsAttention(automation({ lastRun: run("skipped"), attention: { runId: "older-failure", kind: "failed" } }))).toBe(true);
     for (const state of ["failed", "uncertain"] as const) {
       expect(automationNeedsAttention(automation({ lastRun: run(state) }))).toBe(true);
     }
@@ -292,9 +294,20 @@ describe("automationIdentityGlyph", () => {
       glyphFor(thread({ automation: automation({ status: "paused", lastRun: run("completed") }) })),
     ).toBe("pause");
     expect(glyphFor(thread({ inventoryState: "archived" }))).toBe("pause");
+    expect(glyphFor(thread({ automation: automation({ status: "exhausted", nextRunAt: undefined }) }))).toBe("finished");
     expect(
       glyphFor(thread({ inventoryState: "snoozed", snoozedUntil: "2026-10-07T00:00:00.000Z" })),
     ).toBe("pause");
+  });
+});
+
+describe("automationDefinitionGlyph", () => {
+  it.each([
+    ["enabled", "repeat"],
+    ["paused", "pause"],
+    ["exhausted", "finished"],
+  ] as const)("keeps %s schedule identity independent of live work", (status, glyph) => {
+    expect(automationDefinitionGlyph(status)).toBe(glyph);
   });
 });
 
@@ -411,5 +424,52 @@ describe("compareAutomationsInGroup", () => {
     expect(
       sorted("upcoming", [subject("z", "Zeta", { nextRunAt: at }), subject("a", "Alpha", { nextRunAt: at })]),
     ).toEqual(["a", "z"]);
+  });
+});
+
+describe("independent automation attention", () => {
+  const finishedSummary = {
+    totalCount: 2, enabledCount: 0, pausedCount: 0, exhaustedCount: 2,
+    inFlightCount: 0, attentionCount: 0, revision: 10,
+  };
+
+  it.each(["active", "snoozed", "archived"] as const)(
+    "omits thread status for finished history on a %s source",
+    (inventoryState) => {
+      expect(threadAutomationHealth({ inventoryState, automations: finishedSummary }, NOW)).toBeUndefined();
+    },
+  );
+
+  it("keeps ongoing work and unresolved problems visible after a one-shot schedule is exhausted", () => {
+    expect(threadAutomationHealth({ inventoryState: "active", automations: { ...finishedSummary, inFlightCount: 1 } }, NOW)).toMatchObject({ kind: "sending", glyph: "spinner" });
+    expect(threadAutomationHealth({ inventoryState: "active", automations: { ...finishedSummary, inFlightCount: 1, attentionCount: 1 } }, NOW)).toMatchObject({ kind: "attention", glyph: "triangle" });
+  });
+
+  it("keeps active and paused siblings visible beside finished history", () => {
+    expect(threadAutomationHealth({ inventoryState: "active", automations: { ...finishedSummary, totalCount: 3, enabledCount: 1 } }, NOW)).toMatchObject({ kind: "active", label: "1 active" });
+    expect(threadAutomationHealth({ inventoryState: "active", automations: { ...finishedSummary, totalCount: 3, pausedCount: 1 } }, NOW)).toMatchObject({ kind: "paused", label: "1 paused" });
+  });
+
+  it("keeps an older failure visible while its next run waits", () => {
+    const subject = automation({
+      lastRun: run("deferred"),
+      attention: { runId: "older-failed-run", kind: "failed" },
+    });
+    expect(automationHealth(thread({ automation: subject }), NOW)).toMatchObject({ kind: "failed", group: "needs_attention" });
+  });
+
+  it("presents deferred delivery as waiting and retains exhausted schedules", () => {
+    expect(automationHealth(thread({ automation: automation({ lastRun: run("deferred") }) }), NOW)).toMatchObject({ label: "Waiting on source" });
+    expect(automationHealth(thread({ automation: automation({ status: "exhausted", nextRunAt: undefined }) }), NOW)).toMatchObject({ kind: "exhausted", group: "finished", glyph: "finished", label: "Finished" });
+  });
+
+  it("does not hide sibling failures behind another automation's active run", () => {
+    const summary = {
+      totalCount: 3, enabledCount: 2, pausedCount: 0, exhaustedCount: 1,
+      inFlightCount: 1, attentionCount: 1, revision: 10,
+    };
+    expect(threadAutomationHealth({ inventoryState: "active", automations: summary }, NOW)).toMatchObject({ kind: "attention", label: "1 needs attention" });
+    expect(threadAutomationHealth({ inventoryState: "active", automations: { ...summary, attentionCount: 0 } }, NOW)).toMatchObject({ kind: "sending" });
+    expect(threadAutomationHealth({ inventoryState: "snoozed", automations: { ...summary, attentionCount: 0, inFlightCount: 0 } }, NOW)).toMatchObject({ kind: "snoozed" });
   });
 });

@@ -386,11 +386,13 @@ export class ThreadForceResetRepository {
         )
         .run(input.now, input.mutationId, ...scoped);
 
+      // Deferred runs have no active submission to abandon. Admission handles
+      // those separately if this reset permanently abandons their source/result creation.
       this.database
         .prepare(
           `UPDATE automation_runs
            SET state = 'failed', claim_token = NULL, lease_expires_at = NULL,
-             prompt_snapshot = NULL, finished_at = ?,
+             prompt_snapshot = NULL, eligible_at = NULL, suppression_pending = 0, finished_at = ?,
              error_code = 'force_reset',
              error_diagnostic = 'The user force-reset this unresolved Sedes automation run.',
              updated_at = max(updated_at, ?), force_reset_at = ?,
@@ -720,6 +722,7 @@ export class ThreadForceResetRepository {
       });
     }
     // A clone run is reset from its anchor or from the child it created.
+    // Healthy deferred work must not make either thread resettable.
     const runRows = this.database
       .prepare(
         `SELECT id,

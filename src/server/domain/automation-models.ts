@@ -43,7 +43,7 @@ export type AutomationDefinitionRecord = {
    */
   readonly runsRevision: number;
   readonly schedule: AutomationSchedule;
-  readonly misfirePolicy: AutomationMisfirePolicy;
+  readonly misfirePolicy: AutomationMisfirePolicy | null;
   readonly nextRunAt: number | null;
   readonly lastScheduledAt: number | null;
   readonly createdAt: number;
@@ -53,6 +53,8 @@ export type AutomationDefinitionRecord = {
 export type AutomationOccurrenceKind = "scheduled" | "manual";
 
 export type AutomationRunState =
+  | "deferred"
+  | "cancelled"
   | "claimed"
   | "dispatching"
   | "queued"
@@ -68,7 +70,24 @@ export type AutomationTurnOutcome = "completed" | "interrupted" | "failed";
 export type AutomationPrecheckStatus =
   "not_configured" | "pending" | "checking" | "passed" | "skipped" | "failed";
 
+export type AutomationDeferredReason =
+  | "snoozed"
+  | "archived"
+  | "project_removed"
+  | "sibling"
+  | "source_materializing"
+  | "source_recovery"
+  | "source_busy"
+  | "queue_capacity";
+
 export type AutomationRunRecord = {
+  readonly deferredReason: AutomationDeferredReason | null;
+  readonly eligibleAt: number | null;
+  readonly initialEligibleAt: number;
+  readonly suppressedAt: number | null;
+  readonly suppressionPending: boolean;
+  readonly precheckStdout: string | null;
+  readonly acknowledgedAt: number | null;
   readonly tenantId: string;
   readonly ownerPrincipalId: string;
   readonly automationId: string;

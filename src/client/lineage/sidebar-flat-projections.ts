@@ -147,9 +147,9 @@ export function isUpcomingThread(
 ): boolean {
   if (thread.inventoryState === "snoozed") return true;
   return (
-    thread.automation !== null &&
-    thread.automation.status === "enabled" &&
-    thread.automation.nextRunAt !== undefined &&
+    thread.automations.totalCount > 0 &&
+    thread.automations.enabledCount > 0 &&
+    thread.automations.nextRunAt !== undefined &&
     !ACTIVE_RUN_STATES.has(thread.runState)
   );
 }
@@ -163,8 +163,8 @@ export function sidebarWakeTimestamp(
   thread: NormalizedApplicationThreadSummary,
 ): number | undefined {
   const nextRunAt =
-    thread.automation !== null && thread.automation.status === "enabled"
-      ? thread.automation.nextRunAt
+    thread.automations.totalCount > 0 && thread.automations.enabledCount > 0
+      ? thread.automations.nextRunAt
       : undefined;
   const wake =
     thread.inventoryState === "snoozed"
@@ -246,7 +246,7 @@ export function resolveStateBucket(
     thread.attention.queueFailure ||
     thread.attention.wake ||
     thread.attention.automationContext === "failed" ||
-    automationNeedsAttention(thread.automation)
+    thread.automations.attentionCount > 0
   ) {
     return "needs-attention";
   }
@@ -254,9 +254,9 @@ export function resolveStateBucket(
   if (thread.inventoryState === "snoozed") return "snoozed";
   if (thread.inventoryState === "settled") return "settled";
   if (
-    thread.automation !== null &&
-    thread.automation.status === "enabled" &&
-    thread.automation.nextRunAt !== undefined
+    thread.automations.totalCount > 0 &&
+    thread.automations.enabledCount > 0 &&
+    thread.automations.nextRunAt !== undefined
   ) {
     return "scheduled";
   }
@@ -332,7 +332,7 @@ function timelineBucketTimestamp(
   thread: NormalizedApplicationThreadSummary,
   now: number,
 ): number {
-  if (thread.automation !== null && ACTIVE_RUN_STATES.has(thread.runState)) {
+  if (thread.automations.totalCount > 0 && ACTIVE_RUN_STATES.has(thread.runState)) {
     return now;
   }
   return sidebarEffectiveTimestamp(thread);

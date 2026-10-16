@@ -68,6 +68,8 @@ import {
 import type { ToolClientSettingsResources } from "./tool-clients/ToolClientsSettingsPage.js";
 import { describeProjectLocations } from "../app/project-locations.js";
 import { VoiceControls } from "../voice/VoiceControls.js";
+import { shownAutomationUp } from "./automation/automation-navigation.js";
+import { useAutomationThreadId } from "./automation/automation-route-thread.js";
 
 export function ApplicationShell(props: Parameters<typeof ApplicationShellContent>[0]): React.JSX.Element {
   return <DefaultThreadResolutionProvider store={props.applicationStore}><ApplicationShellContent {...props} /></DefaultThreadResolutionProvider>;
@@ -114,6 +116,10 @@ function ApplicationShellContent({
     if (openDefaultThread(defaultThread)) setDrawerOpen(false);
   }), [defaultThread?.thread, defaultThread?.resolving]);
   const route = useRoute();
+  // An automation's route names only the automation; its page says the thread.
+  const automationThreadId = useAutomationThreadId(
+    route.name === "automation" ? route.automationId : undefined,
+  );
   const [drawerOpen, setDrawerOpen] = useState(false);
   // Drawer contents unmount on close; retain this client-session UI state here.
   const drawerScrollPosition = useRef(0);
@@ -263,6 +269,7 @@ function ApplicationShellContent({
         hasActiveSidebarFilters(getSidebarViewPreferences()),
       onClearSidebarFilters: clearActiveSidebarFilters,
       drawerReturnsToThread: () => route.name === "thread",
+      pageUp: shownAutomationUp,
     });
   }, [applicationStore, route.name]);
 
@@ -325,7 +332,7 @@ function ApplicationShellContent({
       state={state}
       store={applicationStore}
       threadRegistry={threadRegistry}
-      selectedThreadId={route.name === "thread" || route.name === "automation" ? route.threadId : undefined}
+      selectedThreadId={route.name === "thread" || route.name === "automations" || route.name === "automation-create" ? route.threadId : automationThreadId}
       onSelectThread={(threadId) => {
         openThreadChatPanel(panelLayoutStore, threadId);
       }}

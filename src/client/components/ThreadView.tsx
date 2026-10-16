@@ -633,20 +633,22 @@ export function ThreadView({
             </Button>
           </aside>
         )}
-        {snapshot.attention.automationContext && (
+        {snapshot.attention.automationContexts.map((context) => (
           <AutomationContextNotice
-            context={snapshot.attention.automationContext}
-            store={applicationStore}
-            onDismiss={() =>
+            key={context.runId}
+            context={context}
+            onDismiss={() => {
+              if (context.outcome === "uncertain") return;
               void store
                 .dismissAttention({
                   kind: "automation_context",
-                  runId: snapshot.attention.automationContext!.runId,
+                  runId: context.runId,
+                  outcome: context.outcome,
                 })
-                .catch(() => undefined)
-            }
+                .catch(() => undefined);
+            }}
           />
-        )}
+        ))}
         <ThreadFailureNotice snapshot={snapshot} />
         <ThreadNotices notices={store.normalized.state.notices} />
         <CodexTuiThreadPresentation

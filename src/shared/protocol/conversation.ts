@@ -38,10 +38,8 @@ import {
 } from "./provider-feature.js";
 import {
   applicationTurnIdSchema,
-  automationMisfirePolicySchema,
-  automationTurnOutcomeSchema,
 } from "./domain.js";
-import { automationScheduleSchema } from "./automation.js";
+import { automationNameSchema, threadAutomationsSummarySchema } from "./automation.js";
 import {
   MAXIMUM_THREAD_INPUT_BYTES,
   contextExcerptArraySchema,
@@ -672,8 +670,6 @@ const noParameterOperationIds = [
   "archive",
   "settle",
   "acknowledge_attention",
-  "remove_automation",
-  "run_automation",
 ] as const;
 export const threadOperationDescriptorSchema = z.discriminatedUnion("id", [
   z.strictObject({
@@ -717,11 +713,6 @@ export const threadOperationDescriptorSchema = z.discriminatedUnion("id", [
   z.strictObject({
     ...operationDescriptorBaseShape,
     id: z.literal("attach_automation"),
-    parameters: z.strictObject({ kind: z.literal("automation_editor") }),
-  }),
-  z.strictObject({
-    ...operationDescriptorBaseShape,
-    id: z.literal("update_automation"),
     parameters: z.strictObject({ kind: z.literal("automation_editor") }),
   }),
 ]);
@@ -807,6 +798,7 @@ export const automationCapabilitySchema = z.strictObject({
   canAttach: z.boolean(),
   canRunNow: z.boolean(),
   canCloneOnRun: z.boolean(),
+  forkDraftOnly: z.boolean().optional(),
   unavailableReason: boundedDisplayTextSchema.optional(),
 });
 export type AutomationCapability = z.infer<typeof automationCapabilitySchema>;
@@ -1222,15 +1214,15 @@ export const normalizedThreadAttentionSchema = z.strictObject({
       text: boundedDisplayTextSchema.optional(),
     })
     .optional(),
-  automationContext: z
-    .strictObject({
-      runId: z.string().min(1).max(160),
-      sourceThreadId: z.string().min(1).max(160),
-      triggeredAt: z.iso.datetime(),
-      outcome: z.enum(["triggered", "failed"]),
-      diagnostic: boundedDisplayTextSchema.optional(),
-    })
-    .optional(),
+  automationContexts: z.array(z.strictObject({
+    automationId: z.uuid(),
+    name: automationNameSchema,
+    runId: z.string().min(1).max(160),
+    sourceThreadId: z.string().min(1).max(160),
+    triggeredAt: z.iso.datetime(),
+    outcome: z.enum(["triggered", "interrupted", "failed", "uncertain"]),
+    diagnostic: boundedDisplayTextSchema.optional(),
+  })).max(20),
   unseenCompletion: z
     .strictObject({
       operationId: z.string().min(1).max(160),
@@ -1370,57 +1362,7 @@ export const normalizedThreadSummarySchema = z.strictObject({
   lastActivityAt: z.iso.datetime(),
   stateChangedAt: z.iso.datetime(),
   snoozedUntil: z.iso.datetime().optional(),
-  automation: z
-    .strictObject({
-      status: z.enum(["enabled", "paused"]),
-      runMode: z.enum(["same_thread", "clone"]),
-      scheduleKind: z.enum(["date_time", "interval", "cron"]),
-      schedule: automationScheduleSchema,
-      misfirePolicy: automationMisfirePolicySchema,
-      /**
-       * Whitespace-collapsed opening of the prompt for list rows and search.
-       * The full prompt (up to 64 KiB) stays behind the automation route.
-       */
-      // Empty only when the prompt has no printable text.
-      promptPreview: z.string().max(160),
-      nextRunAt: z.iso.datetime().optional(),
-      revision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
-      /**
-       * Advances whenever the automation's run history changes: a new run,
-       * a run state change, or a run's turn settling or gaining its times.
-       * Refresh run history when it changes.
-       */
-      runsRevision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
-      hasPrecheck: z.boolean(),
-      lastRun: z
-        .strictObject({
-          id: z.string().min(1).max(160),
-          state: z.enum([
-            "claimed",
-            "dispatching",
-            "queued",
-            "running",
-            "completed",
-            "failed",
-            "skipped",
-            "uncertain",
-          ]),
-          occurrence: z.enum(["scheduled", "manual"]),
-          scheduledFor: z.iso.datetime(),
-          finishedAt: z.iso.datetime().optional(),
-          resultThreadId: z.string().min(1).max(160).optional(),
-          errorCode: z.string().min(1).max(120).optional(),
-          /** How the run's agent turn ended, once it settled. */
-          turn: z
-            .strictObject({
-              outcome: automationTurnOutcomeSchema,
-              endedAt: z.iso.datetime().optional(),
-            })
-            .optional(),
-        })
-        .optional(),
-    })
-    .nullable(),
+  automations: threadAutomationsSummarySchema,
 });
 export type NormalizedThreadSummary = z.infer<
   typeof normalizedThreadSummarySchema

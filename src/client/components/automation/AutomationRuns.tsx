@@ -327,6 +327,8 @@ function RunGlyph({ health }: { readonly health: RunHealth }): React.JSX.Element
       return <AutomationGlyph glyph="triangle" tone="danger" />;
     case "uncertain":
       return <AutomationGlyph glyph="triangle" tone="warning" />;
+    case "waiting":
+    case "cancelled":
     case "skipped":
       return <CircleDashed className="automation-glyph" aria-hidden="true" />;
     case "interrupted":

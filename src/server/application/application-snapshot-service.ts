@@ -356,6 +356,7 @@ type CaptureOperation = {
   cancelDelay?: () => void;
 };
 type ApplicationChange =
+  | {kind: "automation"; id:string; threadId:string; revision:number; runsRevision:number; deleted:boolean}
   | { kind: "thread"; id: string; forcePublication: boolean }
   | { kind: "task"; id: string }
   | {
@@ -697,6 +698,10 @@ export class ApplicationSnapshotPublicationBoundary {
       (workspaceId) => !inventory.isWorkspaceRemoved(scope, workspaceId),
     );
   }
+  async publishAutomationChange(scope:RequestScope,input:{automationId:string;threadId:string;revision:number;runsRevision:number;deleted:boolean}):Promise<void> {
+    await this.#change(scope,{kind:"automation",id:input.automationId,threadId:input.threadId,revision:input.revision,runsRevision:input.runsRevision,deleted:input.deleted});
+  }
+
   async publishWorkpadChange(
     scope: RequestScope,
     workpadId: string,
@@ -777,6 +782,10 @@ export class ApplicationSnapshotPublicationBoundary {
         );
       case "task":
         return this.#publishTaskChange(scope, hub, hint.id);
+      case "automation":
+        hub.publish({type:"automation_changed",generation:hub.generation,automationId:hint.id,threadId:hint.threadId,
+          revision:hint.revision,runsRevision:hint.runsRevision,deleted:hint.deleted});
+        return;
       case "workpad":
         hub.publish({
           type: "workpad_changed",

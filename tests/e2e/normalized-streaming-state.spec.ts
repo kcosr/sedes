@@ -48,7 +48,7 @@ test.describe.serial("normalized streaming and restored state", () => {
     await page.keyboard.press("Escape");
     await expect(desktopModelPicker).toBeFocused();
     await page.getByRole("button", { name: "Thread actions" }).click();
-    await expect(page.getByRole("menuitem", { name: "Automate…" })).toBeVisible();
+    await expect(page.getByRole("menuitem", { name: "Automations…" })).toBeVisible();
     await page.keyboard.press("Escape");
 
     const prompt = "Summarize normalized streaming";
@@ -885,26 +885,30 @@ test.describe.serial("normalized streaming and restored state", () => {
       "X-CSRF-Token": session.csrfToken,
     };
     const createResponse = await page.request.post(
-      `/api/threads/${sourceThreadId}/automation`,
+      "/api/automations",
       {
         headers,
         data: {
+          threadId: sourceThreadId,
+          name: "Background activity",
+          initialState: "paused",
           prompt: "Exercise background activity projection",
           runMode: "clone",
           schedule: {
             kind: "date_time",
             runAt: new Date(Date.now() + 3_600_000).toISOString(),
           },
-          misfirePolicy: "skip",
+          misfirePolicy: null,
           precheck: null,
           mutationId: crypto.randomUUID(),
         },
       },
     );
     expect(createResponse.ok()).toBe(true);
+    const automationId = ((await createResponse.json()) as { id: string }).id;
 
     const runResponse = await page.request.post(
-      `/api/threads/${sourceThreadId}/automation/run-now`,
+      `/api/automations/${automationId}/run-now`,
       {
         headers,
         data: { mutationId: crypto.randomUUID() },
@@ -929,7 +933,7 @@ test.describe.serial("normalized streaming and restored state", () => {
 
     await expect(runningIndicator).toBeHidden({ timeout: 15_000 });
     const latestDefinitionResponse = await page.request.get(
-      `/api/threads/${sourceThreadId}/automation`,
+      `/api/automations/${automationId}`,
     );
     expect(latestDefinitionResponse.ok()).toBe(true);
     const latestDefinition = (await latestDefinitionResponse.json()) as {
@@ -938,7 +942,7 @@ test.describe.serial("normalized streaming and restored state", () => {
     };
     expect(latestDefinition.lastRun?.state).toBe("completed");
     const deleteResponse = await page.request.delete(
-      `/api/threads/${sourceThreadId}/automation`,
+      `/api/automations/${automationId}`,
       {
         headers,
         data: {

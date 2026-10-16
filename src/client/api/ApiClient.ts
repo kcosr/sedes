@@ -96,6 +96,7 @@ import {
 import {
   automationPrecheckTestResultSchema,
   threadAutomationDefinitionSchema,
+  threadAutomationDefinitionPageSchema,
   threadAutomationRunPageSchema,
   threadAutomationRunResolutionSchema,
   threadAutomationRunSchema,
@@ -2433,7 +2434,7 @@ export class ApiClient {
     threadId: string,
     attention:
       | { kind: "wake"; wokeAt: string }
-      | { kind: "automation_context"; runId: string }
+      | { kind: "automation_context"; runId: string; outcome: "triggered" | "interrupted" | "failed" }
       | { kind: "unseen_completion"; operationId: string }
       | { kind: "queue_failure"; queuedInputId: string },
     mutationId: string,
@@ -2448,62 +2449,72 @@ export class ApiClient {
     );
   }
 
-  getThreadAutomation(
-    threadId: string,
+  listAutomations(input: { threadId?: string; cursor?: string; limit?: number; signal?: AbortSignal } = {}) {
+    const query = new URLSearchParams({ pageSize: String(input.limit ?? 100) });
+    if (input.threadId) query.set("threadId", input.threadId);
+    if (input.cursor) query.set("cursor", input.cursor);
+    return this.#request(`/api/automations?${query}`, { signal: input.signal }, threadAutomationDefinitionPageSchema);
+  }
+
+  getAutomation(
+    automationId: string,
     signal?: AbortSignal,
   ): Promise<ThreadAutomationDefinition> {
     return this.#request(
-      `/api/threads/${encodeURIComponent(threadId)}/automation`,
+      `/api/automations/${encodeURIComponent(automationId)}`,
       { signal },
       threadAutomationDefinitionSchema,
     );
   }
 
-  createThreadAutomation(
+  createAutomation(
     threadId: string,
     input: {
+      name: string;
+      initialState: "enabled" | "paused";
       prompt: string;
       runMode: AutomationRunMode;
       schedule: AutomationSchedule;
-      misfirePolicy: AutomationMisfirePolicy;
+      misfirePolicy: AutomationMisfirePolicy | null;
       precheck: AutomationPrecheck | null;
       mutationId: string;
     },
   ): Promise<ThreadAutomationDefinition> {
     return this.#mutation(
-      `/api/threads/${encodeURIComponent(threadId)}/automation`,
+      "/api/automations",
       threadAutomationDefinitionSchema,
-      { method: "POST", body: JSON.stringify(input) },
+      { method: "POST", body: JSON.stringify({ ...input, threadId }) },
     );
   }
 
-  updateThreadAutomation(
-    threadId: string,
+  updateAutomation(
+    automationId: string,
     input: {
+      name: string;
       prompt: string;
       runMode: AutomationRunMode;
       schedule: AutomationSchedule;
-      misfirePolicy: AutomationMisfirePolicy;
+      misfirePolicy: AutomationMisfirePolicy | null;
       precheck: AutomationPrecheck | null;
       expectedRevision: number;
       mutationId: string;
     },
   ): Promise<ThreadAutomationDefinition> {
     return this.#mutation(
-      `/api/threads/${encodeURIComponent(threadId)}/automation`,
+      `/api/automations/${encodeURIComponent(automationId)}`,
       threadAutomationDefinitionSchema,
       { method: "PATCH", body: JSON.stringify(input) },
     );
   }
 
-  setThreadAutomationState(
-    threadId: string,
+  setAutomationState(
+    automationId: string,
     action: "enable" | "pause",
     expectedRevision: number,
     mutationId: string,
   ): Promise<ThreadAutomationDefinition> {
     return this.#mutation(
-      `/api/threads/${encodeURIComponent(threadId)}/automation/state`,
+      `/api/automations/${encodeURIComponent(automationId)}/state`,
       threadAutomationDefinitionSchema,
       {
         method: "PATCH",
@@ -2512,13 +2523,13 @@ export class ApiClient {
     );
   }
 
-  deleteThreadAutomation(
-    threadId: string,
+  deleteAutomation(
+    automationId: string,
     expectedRevision: number,
     mutationId: string,
   ): Promise<{ deleted: true }> {
     return this.#mutation(
-      `/api/threads/${encodeURIComponent(threadId)}/automation`,
+      `/api/automations/${encodeURIComponent(automationId)}`,
       z.strictObject({ deleted: z.literal(true) }),
       {
         method: "DELETE",
@@ -2527,12 +2538,12 @@ export class ApiClient {
     );
   }
 
-  runThreadAutomationNow(
-    threadId: string,
+  runAutomationNow(
+    automationId: string,
     mutationId: string,
   ): Promise<ThreadAutomationRun> {
     return this.#mutation(
-      `/api/threads/${encodeURIComponent(threadId)}/automation/run-now`,
+      `/api/automations/${encodeURIComponent(automationId)}/run-now`,
       threadAutomationRunSchema,
       { method: "POST", body: JSON.stringify({ mutationId }) },
     );
@@ -2543,15 +2554,15 @@ export class ApiClient {
     signal?: AbortSignal,
   ): Promise<AutomationCapability> {
     return this.#request(
-      `/api/threads/${encodeURIComponent(threadId)}/automation/capability`,
+      `/api/threads/${encodeURIComponent(threadId)}/automations/capability`,
       { signal },
       automationCapabilitySchema,
     );
   }
 
   /** The first page (no cursor) also carries whole-history `counts`. */
-  listThreadAutomationRuns(
-    threadId: string,
+  listAutomationRuns(
+    automationId: string,
     input: {
       cursor?: string;
       limit?: number;
@@ -2564,20 +2575,20 @@ export class ApiClient {
     parameters.set("pageSize", String(input.limit ?? 50));
     if (input.filter) parameters.set("filter", input.filter);
     return this.#request(
-      `/api/threads/${encodeURIComponent(threadId)}/automation/runs?${parameters.toString()}`,
+      `/api/automations/${encodeURIComponent(automationId)}/runs?${parameters.toString()}`,
       { signal: input.signal },
       threadAutomationRunPageSchema,
     );
   }
 
   /** `resume` also enables the definition, in the same server transaction. */
-  resolveThreadAutomationRun(
-    threadId: string,
+  resolveAutomationRun(
+    automationId: string,
     runId: string,
     input: { resume?: boolean } = {},
   ): Promise<ThreadAutomationRunResolution> {
     return this.#mutation(
-      `/api/threads/${encodeURIComponent(threadId)}/automation/runs/${encodeURIComponent(runId)}/resolve`,
+      `/api/automations/${encodeURIComponent(automationId)}/runs/${encodeURIComponent(runId)}/resolve`,
       threadAutomationRunResolutionSchema,
       {
         method: "POST",
@@ -2587,6 +2598,10 @@ export class ApiClient {
         }),
       },
     );
+  }
+
+  acknowledgeAutomationRun(automationId: string, runId: string): Promise<ThreadAutomationRunResolution> {
+    return this.#mutation(`/api/automations/${encodeURIComponent(automationId)}/runs/${encodeURIComponent(runId)}/acknowledge`, threadAutomationRunResolutionSchema, { method: "POST", body: "{}" });
   }
 
   /** Occurrences after now, or after `after` when that is later (a snooze's wake time). */
@@ -2600,7 +2615,7 @@ export class ApiClient {
     } = {},
   ): Promise<ThreadAutomationSchedulePreview> {
     return this.#mutation(
-      `/api/threads/${encodeURIComponent(threadId)}/automation/preview`,
+      `/api/threads/${encodeURIComponent(threadId)}/automations/preview`,
       threadAutomationSchedulePreviewSchema,
       {
         method: "POST",
@@ -2621,7 +2636,7 @@ export class ApiClient {
     signal?: AbortSignal,
   ): Promise<AutomationPrecheckTestResult> {
     return this.#mutation(
-      `/api/threads/${encodeURIComponent(threadId)}/automation/precheck/test`,
+      `/api/threads/${encodeURIComponent(threadId)}/automations/precheck/test`,
       automationPrecheckTestResultSchema,
       {
         method: "POST",

@@ -10,7 +10,7 @@ import {
   automationToolExposure,
   automationToolInputSchema,
   automationToolPresentations,
-  optionalAutomationThreadId,
+  requiredAutomationId,
 } from "./automation-tool-schemas.js";
 import { CANONICAL_AGENT_TOOL_MANIFEST } from "../registry/canonical-agent-tool-manifest.js";
 
@@ -23,7 +23,7 @@ export function createAutomationGetToolDefinition(
   return {
     ...CANONICAL_AGENT_TOOL_MANIFEST["automation.get"],
     inputSchema: automationToolInputSchema({
-      threadId: optionalAutomationThreadId,
+      automationId: requiredAutomationId,
     }),
     outputSchema: automationDefinitionToolOutputSchema,
     requiredCapabilities: [],

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { WorkpadAgentToolService } from "../tools/workpad-agent-tool-service.js";
 import type { PageAgentToolService } from "../tools/page-agent-tool-service.js";
 import type { ImageShowAgentToolService } from "../tools/image-show-agent-tool-service.js";
@@ -25,13 +26,31 @@ const artifactUrls = Object.freeze(
     ]),
   ),
 );
+const historicalArtifactHashes: Readonly<Record<string, string>> =
+  Object.freeze({
+    "thread.list.v6.json":
+      "e5c223751b3bf821218ae9939224994a0c6e68670ca8f3e7a74e6ff7d35ca536",
+    "automation.get.v1.json":
+      "3e37d2c4fa9e97979332aa856bc1451c51ca869074935ef76ed719b46abc4f3f",
+    "automation.runs.v1.json":
+      "8456a0bd29db93abb392dfc5dd15516b2db6d54456bc1f535ef8f41b7c398fab",
+    "automation.create.v1.json":
+      "40f1e2b66351e60b6677e587e401347c2d2c140898e270968db7441362ba9ef1",
+    "automation.update.v1.json":
+      "30d4adeccf10025de54ab89227e38df729dca33298f6eec3f4b71fe5c8f0aec8",
+    "automation.set_state.v1.json":
+      "d773d278a682cc832b7a6429fb9b6fd9596b5efa57fffcb4d586553fefdd33b2",
+    "automation.run_now.v1.json":
+      "1739021a12b25e44bf66bb5f3356e9e57bbc208781aca55496e09b38cbed4ec9",
+  });
 const artifactDirectoryUrl = new URL("./artifacts/", import.meta.url);
 const artifactFilenamePattern = /^[a-z][a-z0-9_.-]*\.v[1-9][0-9]*\.json$/;
 
 function expectedArtifactFilenames(): readonly string[] {
-  return Object.values(artifactUrls)
-    .map((url) => basename(fileURLToPath(url)))
-    .sort();
+  return [
+    ...Object.values(artifactUrls).map((url) => basename(fileURLToPath(url))),
+    ...Object.keys(historicalArtifactHashes),
+  ].sort();
 }
 
 function listArtifactFilenames(): readonly string[] {
@@ -101,14 +120,18 @@ const artifactThreadControl =
 const artifactWebSearch =
   unavailableDomainService<WebSearchExecutor>("web_search_service");
 const artifactThreadWorktrees =
-  unavailableDomainService<AgentThreadWorktreeService>("thread_worktree_service");
+  unavailableDomainService<AgentThreadWorktreeService>(
+    "thread_worktree_service",
+  );
 
 function definitions(): readonly AgentToolDefinition[] {
   return createCanonicalAgentToolDefinitions({
     application: artifactReader,
-    workpads: unavailableDomainService<WorkpadAgentToolService>("workpad_service"),
+    workpads:
+      unavailableDomainService<WorkpadAgentToolService>("workpad_service"),
     pages: unavailableDomainService<PageAgentToolService>("page_service"),
-    images: unavailableDomainService<ImageShowAgentToolService>("image_service"),
+    images:
+      unavailableDomainService<ImageShowAgentToolService>("image_service"),
     management: artifactManagement,
     automations: artifactAutomations,
     threadCreation: artifactThreadCreation,
@@ -160,6 +183,15 @@ export function checkAgentToolArtifacts(
     Object.keys(artifactUrls),
   );
   assertArtifactFileSet(list());
+  for (const [filename, hash] of Object.entries(historicalArtifactHashes)) {
+    if (
+      createHash("sha256")
+        .update(read(new URL(`./artifacts/${filename}`, import.meta.url)))
+        .digest("hex") !== hash
+    ) {
+      throw new Error(`agent_tool_historical_artifact_changed:${filename}`);
+    }
+  }
   for (const [contract, url] of Object.entries(artifactUrls)) {
     if (read(url) !== generated[contract]) {
       throw new Error(

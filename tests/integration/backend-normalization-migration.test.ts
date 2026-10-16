@@ -1931,7 +1931,7 @@ describe("inactive backend-normalization migration", () => {
         applicationTurnId: "neutral-turn",
       });
       expect(() =>
-        automations.bindForkChild(scope, "neutral-clone", claim.run.id, {
+        automations.bindResultChild(scope, "neutral-clone", claim.run.id, {
           childThreadId: "neutral-child",
           now: 90_130,
         }),
@@ -2417,6 +2417,7 @@ describe("inactive backend-normalization migration", () => {
       await expect(
         service.forkAutomation({
           scope,
+          claimToken: "historical-replay",
           anchorThreadId: anchor.thread.id,
           automationId: "repurposed-child-clone",
           automationRunId: abortedRun.id,
@@ -2679,6 +2680,7 @@ describe("inactive backend-normalization migration", () => {
       await expect(
         service.forkAutomation({
           scope,
+          claimToken: "historical-replay",
           anchorThreadId: anchor.thread.id,
           automationId: "legacy-aborted-clone",
           automationRunId: run.id,

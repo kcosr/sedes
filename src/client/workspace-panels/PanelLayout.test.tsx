@@ -1185,6 +1185,7 @@ describe("PanelLayout phones", () => {
       isSidebarFiltersActive: () => false,
       onClearSidebarFilters: vi.fn(),
       drawerReturnsToThread: () => true,
+      pageUp: () => undefined,
     });
     await waitFor(() => expect(androidBack.press).toBeDefined());
     const back = () => act(() => androidBack.press!({ canGoBack: true }));
@@ -1328,6 +1329,7 @@ describe("PanelLayout phones", () => {
       isSidebarFiltersActive: () => false,
       onClearSidebarFilters: vi.fn(),
       drawerReturnsToThread: () => true,
+      pageUp: () => undefined,
     });
     await waitFor(() => expect(androidBack.press).toBeDefined());
     const back = () => act(() => androidBack.press!({ canGoBack: true }));

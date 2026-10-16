@@ -88,7 +88,7 @@ describe("normalized application components", () => {
       available: true,
       lastActivityAt: "2026-07-30T15:00:00.000Z",
       stateChangedAt: "2026-07-30T15:00:00.000Z",
-      automation: null,
+      automations: { totalCount: 0, enabledCount: 0, pausedCount: 0, exhaustedCount: 0, inFlightCount: 0, attentionCount: 0, revision: 0 },
       attention: {
         wake: false,
         automationContext: null,
@@ -272,7 +272,7 @@ describe("normalized application components", () => {
       available: true,
       lastActivityAt: "2026-07-30T15:00:00.000Z",
       stateChangedAt: "2026-07-30T15:00:00.000Z",
-      automation: null,
+      automations: { totalCount: 0, enabledCount: 0, pausedCount: 0, exhaustedCount: 0, inFlightCount: 0, attentionCount: 0, revision: 0 },
       attention: {
         wake: false,
         automationContext: null,
@@ -584,21 +584,7 @@ describe("normalized application components", () => {
   it("offers bounded paging for a recurring root with no bootstrap children", () => {
     const root = {
       ...makeSidebarThread("automation-root", "Recurring review", "idle"),
-      automation: {
-        status: "enabled" as const,
-        runMode: "clone" as const,
-        scheduleKind: "interval" as const,
-        schedule: {
-          kind: "interval" as const,
-          anchorAt: "2026-07-30T00:00:00.000Z",
-          everySeconds: 3_600,
-        },
-        misfirePolicy: "coalesce" as const,
-        promptPreview: "Review the repository.",
-        revision: 1,
-        runsRevision: 0,
-        hasPrecheck: false,
-      },
+      automations: { totalCount: 1, enabledCount: 1, pausedCount: 0, exhaustedCount: 0, inFlightCount: 0, attentionCount: 0, revision: 1 },
     };
     const snapshot = {
       advisories: [],
@@ -994,7 +980,7 @@ function makeSidebarThread(
     available: true,
     lastActivityAt: "2026-07-30T15:00:00.000Z",
     stateChangedAt: "2026-07-30T15:00:00.000Z",
-    automation: null,
+    automations: { totalCount: 0, enabledCount: 0, pausedCount: 0, exhaustedCount: 0, inFlightCount: 0, attentionCount: 0, revision: 0 },
     attention: {
       wake: false,
       automationContext: null,
@@ -1032,7 +1018,7 @@ function sidebarElement(runState: "running" | "waiting_for_input") {
     available: true,
     lastActivityAt: "2026-07-30T15:00:00.000Z",
     stateChangedAt: "2026-07-30T15:00:00.000Z",
-    automation: null,
+    automations: { totalCount: 0, enabledCount: 0, pausedCount: 0, exhaustedCount: 0, inFlightCount: 0, attentionCount: 0, revision: 0 },
     attention: {
       wake: false,
       automationContext: null,

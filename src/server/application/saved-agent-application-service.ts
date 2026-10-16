@@ -1,3 +1,5 @@
+import type { AutomationThreadCopyIdentity } from "../db/repositories/conversation-binding-repository.js";
+import { AutomationDeferredError } from "../domain/automation-deferred.js";
 import type { EnvironmentVariablesService } from "../environment-variables/environment-variables-service.js";
 import type {
   CreateThreadFromSettingsRequest,
@@ -809,10 +811,36 @@ export class SavedAgentApplicationService {
     request: CreateThreadFromSettingsRequest,
     signal?: AbortSignal,
   ): Promise<CreateThreadResult> {
+    return this.#copyThreadSettings(scope, sourceApplicationThreadId, request, signal);
+  }
+
+  async createAutomationForkFromDraft(
+    scope: RequestScope,
+    sourceApplicationThreadId: string,
+    request: CreateThreadFromSettingsRequest,
+    automation: AutomationThreadCopyIdentity & {
+      readonly assertAdmission: () => void;
+      readonly bindResult: (threadId: string, now: number) => void;
+    },
+  ): Promise<CreateThreadResult> {
+    return this.#copyThreadSettings(scope, sourceApplicationThreadId, request, undefined, automation);
+  }
+
+  async #copyThreadSettings(
+    scope: RequestScope,
+    sourceApplicationThreadId: string,
+    request: CreateThreadFromSettingsRequest,
+    signal?: AbortSignal,
+    automation?: AutomationThreadCopyIdentity & {
+      readonly assertAdmission: () => void;
+      readonly bindResult: (threadId: string, now: number) => void;
+    },
+  ): Promise<CreateThreadResult> {
     const receiptInput = {
       sourceApplicationThreadId,
       title: request.title,
       mutationId: request.mutationId,
+      ...(automation ? { automation } : {}),
     };
     const replay = this.input.lifecycle.findThreadConfigurationCopy(
       scope,
@@ -910,6 +938,9 @@ export class SavedAgentApplicationService {
       scope,
       sourceApplicationThreadId,
     );
+    const workspaceInitialization = this.#executionWorkspaceInitialization(
+      scope, source.thread.workspaceId, source.thread.connectionProfileId, executionWorkspace,
+    );
     const created = await this.input.lifecycle.createServerDraft(
       scope,
       {
@@ -920,13 +951,12 @@ export class SavedAgentApplicationService {
         configurationCopy: {
           sourceApplicationThreadId,
           mutationId: request.mutationId,
+          ...(automation ? { automation } : {}),
         },
-        ...this.#executionWorkspaceInitialization(
-          scope,
-          source.thread.workspaceId,
-          source.thread.connectionProfileId,
-          executionWorkspace,
-        ),
+        initializeApplicationThread: (input) => {
+          workspaceInitialization.initializeApplicationThread?.(input);
+          automation?.bindResult(input.applicationThreadId, input.now);
+        },
         bootstrap: {
           backendAdapter: resolved.adapter,
           backendConfiguration: resolved.backendConfiguration,
@@ -941,6 +971,12 @@ export class SavedAgentApplicationService {
               scope,
               sourceApplicationThreadId,
             ).thread;
+            if (automation) {
+              automation.assertAdmission();
+              if (currentSource.backingState !== "unbound") {
+                throw new AutomationDeferredError("source_materializing", "The source draft changed before its copy was reserved.");
+              }
+            }
             if (
               currentSource.availability !== "available" ||
               currentSource.workspaceId !== source.thread.workspaceId ||

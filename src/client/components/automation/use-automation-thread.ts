@@ -72,7 +72,7 @@ function toAutomationThread(
     available: thread.available,
     backingState: thread.backingState,
     runState: thread.runState,
-    automation: thread.automation,
+    automation: null,
   };
 }
 
@@ -228,23 +228,29 @@ export function automationLiveKey(
 ): string | undefined {
   if (!automation) return undefined;
   const lastRun = automation.lastRun;
-  return `${automation.revision}:${lastRun?.id ?? ""}:${lastRun?.state ?? ""}:${lastRun?.turn?.outcome ?? ""}`;
+  return `${automation.id}:${automation.revision}:${lastRun?.id ?? ""}:${lastRun?.state ?? ""}:${lastRun?.turn?.outcome ?? ""}`;
 }
 
 /**
  * A thread's title from the application store, also among loaded fork
  * descendants (clone runs create forks); undefined when it is not loaded.
  */
+export function loadedThreadTitle(
+  state: Pick<ApplicationClientState, "snapshot" | "descendantPages">,
+  threadId: string,
+): string | undefined {
+  const summary = findLoadedThread(state, threadId);
+  return summary ? summary.title.text || "Untitled thread" : undefined;
+}
+
+/** `loadedThreadTitle`, kept current. */
 export function useThreadTitle(
   store: ThreadStore,
   threadId: string | undefined,
 ): string | undefined {
   const select = useCallback(
-    (state: ApplicationClientState) => {
-      if (threadId === undefined) return undefined;
-      const summary = findLoadedThread(state, threadId);
-      return summary ? summary.title.text || "Untitled thread" : undefined;
-    },
+    (state: ApplicationClientState) =>
+      threadId === undefined ? undefined : loadedThreadTitle(state, threadId),
     [threadId],
   );
   return useApplicationStoreSelector(store, select);
@@ -274,5 +280,5 @@ export function useThreadRunState(
 export function automationRunsKey(
   automation: SummaryAutomation | null | undefined,
 ): string | undefined {
-  return automation ? String(automation.runsRevision) : undefined;
+  return automation ? `${automation.id}:${automation.runsRevision}` : undefined;
 }

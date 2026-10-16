@@ -16,7 +16,8 @@ import { SubmissionCompletionRepository } from "../../src/server/db/repositories
 import { ConversationDraftRepository } from "../../src/server/db/repositories/conversation-draft-repository.js";
 import { DirectInputRepository } from "../../src/server/db/repositories/direct-input-repository.js";
 import { ThreadActivityService } from "../../src/server/conversations/thread-activity-service.js";
-import { MAX_DIRECT_INPUT_REQUEST_BYTES, type DirectInputRequest } from "../../src/shared/protocol/thread-input.js";
+import { MAX_DIRECT_INPUT_REQUEST_BYTES, type DirectInputRequest,
+} from "../../src/shared/protocol/thread-input.js";
 import { createHash, randomUUID } from "node:crypto";
 import { execFile as execFileCallback } from "node:child_process";
 import type { Server } from "node:http";
@@ -53,7 +54,8 @@ import {
   WORKSPACE_FILE_MAX_DOWNLOAD_BYTES,
   WORKSPACE_FILE_MAX_IMAGE_CONTENT_BYTES,
 } from "../../src/shared/protocol/workspace-files.js";
-import { createNormalizedApp, type NormalizedAppDependencies } from "../../src/server/normalized-app.js";
+import { createNormalizedApp, type NormalizedAppDependencies,
+} from "../../src/server/normalized-app.js";
 import {
   locationConflictErrorSchema,
   projectRemovalBlockedErrorSchema,
@@ -130,7 +132,8 @@ import type { ConversationLifecycleService } from "../../src/server/conversation
 import type { ThreadApplicationService } from "../../src/server/conversations/thread-application-service.js";
 import type { ThreadAttentionService } from "../../src/server/domain/thread-attention-service.js";
 import type { AutomationPrecheckExecutor } from "../../src/server/runtime/automation-precheck-executor.js";
-import type { ThreadRuntimeCoordinator, ThreadRuntimeObservation } from "../../src/server/events/thread-runtime-coordinator.js";
+import type { ThreadRuntimeCoordinator, ThreadRuntimeObservation,
+} from "../../src/server/events/thread-runtime-coordinator.js";
 import type { ThreadSnapshotPublisher } from "../../src/server/events/thread-snapshot-publisher.js";
 import { unavailableAgentToolRouterDependencies } from "../support/agent-tool-http.js";
 import { SEDES_AGENT_TOOL_SOURCE_CAPABILITY_HEADER } from "../../src/server/agent-tools/http/agent-tool-http-contracts.js";
@@ -220,7 +223,15 @@ function summary(
     ...(inventory.snoozedUntil === null
       ? {}
       : { snoozedUntil: new Date(inventory.snoozedUntil).toISOString() }),
-    automation: null,
+    automations: {
+      totalCount: 0,
+      enabledCount: 0,
+      pausedCount: 0,
+      exhaustedCount: 0,
+      inFlightCount: 0,
+      attentionCount: 0,
+      revision: 0,
+    },
   };
 }
 
@@ -476,8 +487,9 @@ function threadSnapshot(
     providerFeatures: [],
     usage: {},
     interactions: [],
-    attention:
-      inventory.wokeAt !== null &&
+    attention: {
+      automationContexts: [],
+      ...(inventory.wokeAt !== null &&
       (inventory.wakeAcknowledgedAt === null ||
         inventory.wakeAcknowledgedAt < inventory.wokeAt)
         ? {
@@ -488,7 +500,8 @@ function threadSnapshot(
                 : { text: { text: inventory.wakeReminderText } }),
             },
           }
-        : {},
+        : {}),
+    },
   });
 }
 
@@ -722,13 +735,15 @@ async function fixture(
   // Real durable activity authority; no conversation runtime is ever observed here.
   const inputActivity = new ThreadActivityService({
     database,
-    actors: { observeInputRuntime: () => undefined, isInputRuntimeDormant: () => true, subscribeInputActivity: () => () => undefined },
+    actors: { observeInputRuntime: () => undefined, isInputRuntimeDormant: () => true, subscribeInputActivity: () => () => undefined,
+    },
     presentation: { readCached: async () => ({
       revision: "input-presentation", backend: { label: { text: "Input fixture" } },
       interactionMode: "interactive", inputTargetAvailable: true,
       settings: { revision: 0, values: [] }, settingDescriptors: [],
       providerFeatureCapabilities: [], providerFeatureStates: [], composerCommands: [], skills: [],
-    }) },
+    }),
+    },
   });
   const snapshots = {
     async skills(scope: RequestScope, threadId: string) {
@@ -741,12 +756,15 @@ async function fixture(
     readInputReceipt(scope: RequestScope, mutationId: string) {
       return directInputs.lookup(scope, mutationId);
     },
-    readQueuedInput(scope: RequestScope, threadId: string, queuedInputId: string) {
-      return new DatabaseThreadApplicationQueueReader(new QueuedInputRepository(database))
+    readQueuedInput(scope: RequestScope, threadId: string, queuedInputId: string,
+    ) {
+      return new DatabaseThreadApplicationQueueReader(new QueuedInputRepository(database),
+      )
         .read(scope, threadId, queuedInputId);
     },
     // Queue-mode admission over the real receipt and queue repositories.
-    async admitInput(scope: RequestScope, threadId: string, input: DirectInputRequest) {
+    async admitInput(scope: RequestScope, threadId: string, input: DirectInputRequest,
+    ) {
       const current = repository.getThread(scope, threadId);
       const replay = directInputs.replay(scope, threadId, input);
       if (replay) return directInputs.present(scope, replay);
@@ -754,12 +772,15 @@ async function fixture(
         const queued = new QueuedInputRepository(database).enqueue(scope, threadId, {
           mutationId: input.mutationId, text: input.text, origin: input.origin,
           contextExcerpts: [], attachmentIds: [], taskReferences: [],
-          source: { kind: "direct_input", resolvedDeliveryMode: "queue", expectedThreadRevision: current.thread.revision },
+          source: { kind: "direct_input", resolvedDeliveryMode: "queue", expectedThreadRevision: current.thread.revision,
+            },
           now: Date.now(),
-        });
+        },
+        );
         return directInputs.present(scope, directInputs.record(scope, threadId, input, {
           admittedMode: "queue", queuedInputId: queued.item.id, now: Date.now(),
-        }));
+        }),
+        );
       })();
     },
     async snapshot(scope: RequestScope, threadId: string) {
@@ -980,7 +1001,9 @@ async function fixture(
                 kind: "loaded" as const,
                 runState: snapshot.runState,
                 retirable: snapshot.runState === "idle" || snapshot.runState === "failed",
-              }] as const]
+              },
+                ] as const,
+              ]
             : [];
         }),
       );
@@ -988,7 +1011,8 @@ async function fixture(
     async commitWithRuntimesObserved<Result>(
       scope: RequestScope,
       threadIds: readonly string[],
-      commit: (runtimes: ReadonlyMap<string, ThreadRuntimeObservation>) => Result,
+      commit: (runtimes: ReadonlyMap<string, ThreadRuntimeObservation>,
+      ) => Result,
     ): Promise<Result> {
       return commit(this.observeRuntimes(scope, threadIds));
     },
@@ -1118,7 +1142,8 @@ async function fixture(
       const quiet = threadRuntimes.quiet(scope, threadId);
       try {
         if (options.quietSnapshotError) throw options.quietSnapshotError;
-        return quiet.publishIfUnowned(await snapshots.snapshot(scope, threadId))!;
+        return quiet.publishIfUnowned(await snapshots.snapshot(scope, threadId),
+        )!;
       } finally {
         quiet.release();
       }
@@ -1258,7 +1283,8 @@ async function fixture(
     inventory: repository,
     queue: new QueuedInputRepository(database),
     dispatch: { dispatchAdmitted: questionDispatch },
-    gateway: { withConversation: async () => { throw new Error("runtime unavailable"); } },
+    gateway: { withConversation: async () => { throw new Error("runtime unavailable"); },
+    },
     publish: () => undefined,
     onOpened: () => undefined,
   });
@@ -1269,7 +1295,8 @@ async function fixture(
   const app = createNormalizedApp({
     clientControls,
     ...(options.terminals ? { terminals: options.terminals } : {}),
-    usage: new UsageService(database, {enabled: options.experimentalUsageEnabled ?? false}),
+    usage: new UsageService(database, {enabled: options.experimentalUsageEnabled ?? false,
+    }),
     workpads: {} as never,
     questions,
     cannedPrompts: new CannedPromptService(
@@ -1742,15 +1769,19 @@ describe("normalized HTTP application contract", () => {
     const current = await fixture();
     try {
       const workspace = await current.mutate(request(current.app).post("/api/workspaces/open"))
-        .send({ environmentId: current.environmentId, path: current.workspacePath, project: { kind: "new", name: "workspace" } }).expect(201);
+        .send({ environmentId: current.environmentId, path: current.workspacePath, project: { kind: "new", name: "workspace" },
+        }).expect(201);
       const created = await current.mutate(request(current.app).post("/api/threads"))
-        .send({ workspaceId: workspace.body.id, configuration: { kind: "custom", targetId: current.profile.id }, executionWorkspace: { kind: "direct" }, title: "Default thread" }).expect(201);
+        .send({ workspaceId: workspace.body.id, configuration: { kind: "custom", targetId: current.profile.id }, executionWorkspace: { kind: "direct" }, title: "Default thread",
+        }).expect(201);
       const threadId = created.body.threadId;
       const result = await current.withHost(request(current.app).get(`/api/threads/${threadId}/summary`)).expect(200);
-      expect(result.body).toMatchObject({ id: threadId, title: { text: "Default thread" }, available: true });
+      expect(result.body).toMatchObject({ id: threadId, title: { text: "Default thread" }, available: true,
+      });
       expect(result.headers["cache-control"]).toBe("no-store");
       await current.withHost(request(current.app).get(`/api/threads/${threadId}/summary`)).set("X-Test-Foreign-Principal", "yes").expect(404);
-      await current.withHost(request(current.app).get(`/api/threads/${randomUUID()}/summary`)).expect(404);
+      await current.withHost(request(current.app).get(`/api/threads/${randomUUID()}/summary`),
+        ).expect(404);
       expect(current.runtimeEstablishmentCaptures).not.toHaveBeenCalled();
     } finally { current.close(); }
   });
@@ -1766,11 +1797,16 @@ describe("normalized HTTP application contract", () => {
       const id = "00000000-0000-4000-8000-000000000099";
       const responses = [
         await current.withHost(request(current.app).get(`/api/threads/${id}/usage`)).expect(403),
-        await current.withHost(request(current.app).get(`/api/threads/${id}/usage/turns/turn`)).expect(403),
-        await current.mutate(request(current.app).post(`/api/threads/${id}/usage/turn-availability`)).send({invalid:true}).expect(403),
+        await current.withHost(request(current.app).get(`/api/threads/${id}/usage/turns/turn`),
+          ).expect(403),
+        await current.mutate(request(current.app).post(`/api/threads/${id}/usage/turn-availability`,
+            ),
+          ).send({invalid:true}).expect(403),
         await current.mutate(request(current.app).post("/api/usage/analytics")).send({invalid:true}).expect(403),
       ];
-      for (const response of responses) expect(response.body).toMatchObject({error:{code:"experimental_usage_disabled",message:"Experimental usage accounting is disabled on this server.",retryable:false}});
+      for (const response of responses) expect(response.body).toMatchObject({error:{code:"experimental_usage_disabled",message:"Experimental usage accounting is disabled on this server.",retryable:false,
+          },
+        });
       expect(reads).not.toHaveBeenCalled(); expect(availability).not.toHaveBeenCalled(); expect(analytics).not.toHaveBeenCalled();
       expect(current.runtimeEstablishmentCaptures).not.toHaveBeenCalled();
     } finally { reads.mockRestore(); availability.mockRestore(); analytics.mockRestore(); await current.close(); }
@@ -1778,24 +1814,41 @@ describe("normalized HTTP application contract", () => {
   it("reads durable usage and known empty turns without acquiring a provider", async () => {
     const current=await fixture({experimentalUsageEnabled: true});
     try {
-      const workspace=await current.mutate(request(current.app).post("/api/workspaces/open")).send({environmentId:current.environmentId,path:current.workspacePath,project:{kind:"new",name:"workspace"}}).expect(201);
-      const created=await current.mutate(request(current.app).post("/api/threads")).send({workspaceId:workspace.body.id,configuration:{kind:"custom",targetId:current.profile.id},executionWorkspace:{kind:"direct"},title:"Usage"}).expect(201);
+      const workspace=await current.mutate(request(current.app).post("/api/workspaces/open")).send({environmentId:current.environmentId,path:current.workspacePath,project:{kind:"new",name:"workspace"},
+        }).expect(201);
+      const created=await current.mutate(request(current.app).post("/api/threads")).send({workspaceId:workspace.body.id,configuration:{kind:"custom",targetId:current.profile.id},executionWorkspace:{kind:"direct"},title:"Usage",
+        }).expect(201);
       const threadId=created.body.threadId;
       const usage=new UsageService(current.database, {enabled: true});
-      usage.registerVisibleTurns(current.owner,threadId,[{id:"known-turn",revision:1,status:"completed",orderedItemIds:[]}]);
+      usage.registerVisibleTurns(current.owner,threadId,[{id:"known-turn",revision:1,status:"completed",orderedItemIds:[],
+        },
+      ]);
       const session=await current.withHost(request(current.app).get(`/api/threads/${threadId}/usage`)).expect(200);
       expect(session.headers["cache-control"]).toBe("no-store");
       expect(session.body.state).toBe("unavailable");
       expect(session.body.summary.metrics.input.value).toBeNull();
-      const turn=await current.withHost(request(current.app).get(`/api/threads/${threadId}/usage/turns/known-turn`)).expect(200);
+      const turn=await current.withHost(request(current.app).get(`/api/threads/${threadId}/usage/turns/known-turn`,
+          ),
+        ).expect(200);
       expect(turn.body.turnState).toBe("completed");
-      await current.withHost(request(current.app).get(`/api/threads/${threadId}/usage/turns/foreign-turn`)).expect(404);
-      await current.withHost(request(current.app).get(`/api/threads/00000000-0000-4000-8000-000000000099/usage`)).expect(404);
-      const availability=await current.mutate(request(current.app).post(`/api/threads/${threadId}/usage/turn-availability`)).send({turnIds:["known-turn","foreign-turn"]}).expect(200);
+      await current.withHost(request(current.app).get(`/api/threads/${threadId}/usage/turns/foreign-turn`,
+          ),
+        ).expect(404);
+      await current.withHost(request(current.app).get(`/api/threads/00000000-0000-4000-8000-000000000099/usage`,
+          ),
+        ).expect(404);
+      const availability=await current.mutate(request(current.app).post(`/api/threads/${threadId}/usage/turn-availability`,
+          ),
+        ).send({turnIds:["known-turn","foreign-turn"]}).expect(200);
       expect(availability.headers["cache-control"]).toBe("no-store");
-      expect(availability.body.turns).toEqual([{turnId:"known-turn",available:false},{turnId:"foreign-turn",available:false}]);
-      await current.mutate(request(current.app).post(`/api/threads/${threadId}/usage/turn-availability`)).send({turnIds:["known-turn"],principalId:"forged"}).expect(400);
-      await current.mutate(request(current.app).post(`/api/threads/00000000-0000-4000-8000-000000000099/usage/turn-availability`)).send({turnIds:["known-turn"]}).expect(404);
+      expect(availability.body.turns).toEqual([{turnId:"known-turn",available:false},{turnId:"foreign-turn",available:false},
+      ]);
+      await current.mutate(request(current.app).post(`/api/threads/${threadId}/usage/turn-availability`,
+          ),
+        ).send({turnIds:["known-turn"],principalId:"forged"}).expect(400);
+      await current.mutate(request(current.app).post(`/api/threads/00000000-0000-4000-8000-000000000099/usage/turn-availability`,
+          ),
+        ).send({turnIds:["known-turn"]}).expect(404);
       expect(current.runtimeEstablishmentCaptures).not.toHaveBeenCalled();
     } finally {await current.close();}
   });
@@ -1804,21 +1857,27 @@ describe("normalized HTTP application contract", () => {
     const current = await fixture();
     try {
       const workspace = await current.mutate(request(current.app).post("/api/workspaces/open"))
-        .send({ environmentId: current.environmentId, path: current.workspacePath, project: { kind: "new", name: "workspace" } })
+        .send({ environmentId: current.environmentId, path: current.workspacePath, project: { kind: "new", name: "workspace" },
+        })
         .expect(201);
       const threadId = (await current.mutate(request(current.app).post("/api/threads"))
         .send({ workspaceId: workspace.body.id, configuration: { kind: "custom", targetId: current.profile.id },
-          executionWorkspace: { kind: "direct" }, title: "Reply speech" })
+          executionWorkspace: { kind: "direct" }, title: "Reply speech",
+          })
         .expect(201)).body.threadId as string;
       current.bindThread(threadId);
       const completions = new SubmissionCompletionRepository(current.database);
-      const observe = (acceptedAt: number, turnId: string, final: string | null) => {
+      const observe = (acceptedAt: number, turnId: string, final: string | null,
+      ) => {
         const operationId = randomUUID();
-        completions.recordAccepted(current.owner, threadId, { operationId, acceptedAt, backendCorrelation: operationId });
+        completions.recordAccepted(current.owner, threadId, { operationId, acceptedAt, backendCorrelation: operationId,
+        });
         completions.observeCompletion(current.owner, threadId, operationId, {
           completionIdentity: `completion-${operationId}`, observedAt: acceptedAt, createAttention: false,
           finalized: { applicationTurnId: turnId, outcome: "completed", result: { text: "Whole reply" },
-            classifiedResult: final === null ? null : { partial: null, provisional: { text: "Looking." }, final: { text: final }, unclassified: null } },
+            classifiedResult: final === null ? null : { partial: null, provisional: { text: "Looking." }, final: { text: final }, unclassified: null,
+                  },
+          },
         });
       };
       // A steer gives one turn two classified observations; the later accepted one is read.
@@ -1826,20 +1885,29 @@ describe("normalized HTTP application contract", () => {
       observe(2_000, "turn-steered", "After the steer.");
       observe(3_000, "turn-legacy", null);
       const read = (turnId: string, targetThreadId = threadId) => current
-        .withHost(request(current.app).get(`/api/threads/${targetThreadId}/turns/${turnId}/reply-speech`));
+        .withHost(request(current.app).get(`/api/threads/${targetThreadId}/turns/${turnId}/reply-speech`,
+          ),
+        );
 
       const fresh = await read("turn-steered").expect(200).expect("Cache-Control", "no-store");
-      expect(fresh.body).toEqual({ assistantResult: { final: { text: "After the steer." }, unclassified: null } });
+      expect(fresh.body).toEqual({ assistantResult: { final: { text: "After the steer." }, unclassified: null,
+        },
+      });
       const { silenced: _silenced, revision, ...settings } = (await current
         .withHost(request(current.app).get("/api/application/notifications")).expect(200)).body;
       await current.mutate(request(current.app).put("/api/application/notifications"))
-        .send({ ...settings, assistantResultPhases: ["provisional", "final"], expectedRevision: revision })
+        .send({ ...settings, assistantResultPhases: ["provisional", "final"], expectedRevision: revision,
+        })
         .expect(200);
       expect((await read("turn-steered").expect(200)).body)
-        .toEqual({ assistantResult: { provisional: { text: "Looking." }, final: { text: "After the steer." } } });
+        .toEqual({ assistantResult: { provisional: { text: "Looking." }, final: { text: "After the steer." },
+        },
+      });
       // Without a classification the stored whole reply is read; null means nothing was stored.
-      expect((await read("turn-legacy").expect(200)).body).toEqual({ assistantResult: { unclassified: { text: "Whole reply" } } });
-      expect((await read("turn-missing").expect(200).expect("Cache-Control", "no-store")).body)
+      expect((await read("turn-legacy").expect(200)).body).toEqual({ assistantResult: { unclassified: { text: "Whole reply" } },
+      });
+      expect((await read("turn-missing").expect(200).expect("Cache-Control", "no-store")).body,
+      )
         .toEqual({ assistantResult: null });
 
       await read("turn-steered").set("X-Test-Foreign-Principal", "yes").expect(404)
@@ -1847,7 +1915,8 @@ describe("normalized HTTP application contract", () => {
       await read("turn-steered", randomUUID()).expect(404);
       await read("not-a-thread", "not-a-thread").expect(400);
       await read("t".repeat(161)).expect(400);
-      expect((await read("t".repeat(160)).expect(200)).body).toEqual({ assistantResult: null });
+      expect((await read("t".repeat(160)).expect(200)).body).toEqual({ assistantResult: null,
+      });
       expect(current.runtimeEstablishmentCaptures).not.toHaveBeenCalled();
       expect(current.operationCalls).toHaveLength(0);
     } finally {
@@ -1858,30 +1927,46 @@ describe("normalized HTTP application contract", () => {
   it("aggregates principal usage analytics with labels from the real schema", async () => {
     const current=await fixture({experimentalUsageEnabled: true});
     try {
-      const workspace=await current.mutate(request(current.app).post("/api/workspaces/open")).send({environmentId:current.environmentId,path:current.workspacePath,project:{kind:"new",name:"workspace"}}).expect(201);
-      const created=await current.mutate(request(current.app).post("/api/threads")).send({workspaceId:workspace.body.id,configuration:{kind:"custom",targetId:current.profile.id},executionWorkspace:{kind:"direct"},title:"Analytics"}).expect(201);
+      const workspace=await current.mutate(request(current.app).post("/api/workspaces/open")).send({environmentId:current.environmentId,path:current.workspacePath,project:{kind:"new",name:"workspace"},
+        }).expect(201);
+      const created=await current.mutate(request(current.app).post("/api/threads")).send({workspaceId:workspace.body.id,configuration:{kind:"custom",targetId:current.profile.id},executionWorkspace:{kind:"direct"},title:"Analytics",
+        }).expect(201);
       const threadId=created.body.threadId as string;
-      const thread=current.database.prepare("SELECT backend_instance_id AS backend, environment_id AS environment FROM application_threads WHERE id=?").get(threadId) as {backend:string;environment:string};
+      const thread=current.database.prepare("SELECT backend_instance_id AS backend, environment_id AS environment FROM application_threads WHERE id=?",
+        ).get(threadId) as {backend:string;environment:string};
       const db=current.database;
-      db.prepare("INSERT INTO usage_thread_state(tenant_id,principal_id,thread_id) VALUES(?,?,?)").run(current.owner.tenantId,current.owner.principalId,threadId);
+      db.prepare("INSERT INTO usage_thread_state(tenant_id,principal_id,thread_id) VALUES(?,?,?)",
+      ).run(current.owner.tenantId,current.owner.principalId,threadId);
       db.prepare(`INSERT INTO usage_sources(id,tenant_id,principal_id,thread_id,backend_id,environment_id,workspace_id,native_namespace,native_session,epoch,normalization_version,baseline,capture_state)
-        VALUES('analytics-source',?,?,?,?,?,?,'store','native','epoch','v1','unknown','idle')`).run(current.owner.tenantId,current.owner.principalId,threadId,thread.backend,thread.environment,workspace.body.id);
+        VALUES('analytics-source',?,?,?,?,?,?,'store','native','epoch','v1','unknown','idle')`,
+      ).run(current.owner.tenantId,current.owner.principalId,threadId,thread.backend,thread.environment,workspace.body.id,
+      );
       db.prepare(`INSERT INTO usage_observations(source_id,observation_id,revision,fingerprint,evidence_json,normalization_version,occurred_at,received_at)
-        VALUES('analytics-source','entry','1','fingerprint','{"facts":[]}','v1','2026-09-02T12:00:00.000Z','2026-09-02T12:00:01.000Z')`).run();
+        VALUES('analytics-source','entry','1','fingerprint','{"facts":[]}','v1','2026-09-02T12:00:00.000Z','2026-09-02T12:00:01.000Z')`,
+      ).run();
       db.prepare(`INSERT INTO usage_increments(tenant_id,principal_id,thread_id,source_id,fact_id,observation_id,observation_revision,backend_id,backend_kind,environment_id,workspace_id,
           agent_role,activity,provider,model,effort,placement,occurred_at,input,output,cost_units,currency,cost_kind,costed)
-        VALUES(?,?,?,'analytics-source','fact','entry','1',?,'pi',?,?,'main','model','anthropic','claude','high','reported','2026-09-02T12:00:00.000Z',120,30,2500000000000,'USD','estimated',1)`)
-        .run(current.owner.tenantId,current.owner.principalId,threadId,thread.backend,thread.environment,workspace.body.id);
-      const body={from:"2026-09-01T00:00:00.000Z",to:"2026-09-03T00:00:00.000Z",timeZone:"America/Chicago",bucket:"auto",filters:{effort:["high"]},groupBy:"thread",crossBy:"model",breakdownLimit:10,facets:true};
+        VALUES(?,?,?,'analytics-source','fact','entry','1',?,'pi',?,?,'main','model','anthropic','claude','high','reported','2026-09-02T12:00:00.000Z',120,30,2500000000000,'USD','estimated',1)`,
+      )
+        .run(current.owner.tenantId,current.owner.principalId,threadId,thread.backend,thread.environment,workspace.body.id,
+      );
+      const body={from:"2026-09-01T00:00:00.000Z",to:"2026-09-03T00:00:00.000Z",timeZone:"America/Chicago",bucket:"auto",filters:{effort:["high"]},groupBy:"thread",crossBy:"model",breakdownLimit:10,facets:true,
+      };
       await current.withHost(request(current.app).post("/api/usage/analytics")).send(body).expect(403);
       const response=await current.mutate(request(current.app).post("/api/usage/analytics")).send(body).expect(200);
       expect(response.headers["cache-control"]).toBe("no-store");
-      expect(response.body).toMatchObject({bucket:"hour",totals:{tokens:"150",costs:[{currency:"USD",amount:"2.5",kind:"estimated"}]},
-        timeline:{series:[{key:threadId,totals:{input:"120"}}]},matrix:{cells:[{row:threadId,column:"claude"}]}});
-      expect(response.body.labels.thread[threadId]).toMatchObject({label:"Analytics",kind:"pi",retired:false,workspaceId:workspace.body.id});
-      expect(response.body.labels.workspace[workspace.body.id].label).toBe(db.prepare("SELECT display_name FROM workspaces WHERE id=?").pluck().get(workspace.body.id));
-      expect(response.body.labels.environment[thread.environment].label).toBeTruthy();
-      expect(response.body.labels.backend[thread.backend]).toMatchObject({kind:"pi"});
+      expect(response.body).toMatchObject({bucket:"hour",totals:{tokens:"150",costs:[{currency:"USD",amount:"2.5",kind:"estimated"}],
+        },
+        timeline:{series:[{key:threadId,totals:{input:"120"}}]},matrix:{cells:[{row:threadId,column:"claude"}]},
+      });
+      expect(response.body.labels.thread[threadId]).toMatchObject({label:"Analytics",kind:"pi",retired:false,workspaceId:workspace.body.id,
+      });
+      expect(response.body.labels.workspace[workspace.body.id].label).toBe(db.prepare("SELECT display_name FROM workspaces WHERE id=?").pluck().get(workspace.body.id),
+      );
+      expect(response.body.labels.environment[thread.environment].label,
+      ).toBeTruthy();
+      expect(response.body.labels.backend[thread.backend]).toMatchObject({kind:"pi",
+      });
       const filtered=await current.mutate(request(current.app).post("/api/usage/analytics")).send({...body,filters:{effort:[null]}}).expect(200);
       expect(filtered.body.totals.increments).toBe("0");
       await current.mutate(request(current.app).post("/api/usage/analytics")).send({...body,principalId:"forged"}).expect(400);
@@ -1895,16 +1980,23 @@ describe("normalized HTTP application contract", () => {
     try {
       const newProject = { kind: "new", name: "workspace" };
       const opened = await current.mutate(request(current.app).post("/api/workspaces/open"))
-        .send({ environmentId: current.environmentId, path: current.workspacePath, project: newProject }).expect(201);
+        .send({ environmentId: current.environmentId, path: current.workspacePath, project: newProject,
+        }).expect(201);
       const id = opened.body.id;
       const projectId = opened.body.projectId;
-      expect(opened.body).toEqual({ id, projectId: current.repository.getWorkspace(current.owner, id).projectId });
+      expect(opened.body).toEqual({ id, projectId: current.repository.getWorkspace(current.owner, id).projectId,
+      });
       await current.mutate(request(current.app).post("/api/workspaces/open"))
-        .send({ environmentId: current.environmentId, path: current.workspacePath }).expect(400);
+        .send({ environmentId: current.environmentId, path: current.workspacePath,
+        }).expect(400);
       await current.withHost(request(current.app).get("/api/workspaces")).expect(404);
       const listed = await current.withHost(request(current.app).get("/api/projects")).expect(200);
-      const project = listed.body.projects.find((entry: { id: string }) => entry.id === projectId);
-      expect(project).toMatchObject({ name: "workspace", removed: false, locations: [{ id, removed: false, removedWithProject: false, path: current.workspacePath, environmentId: current.environmentId }] });
+      const project = listed.body.projects.find((entry: { id: string }) => entry.id === projectId,
+      );
+      expect(project).toMatchObject({ name: "workspace", removed: false, locations: [{ id, removed: false, removedWithProject: false, path: current.workspacePath, environmentId: current.environmentId,
+          },
+        ],
+      });
       const location = project.locations[0];
       await current.withHost(request(current.app).post(`/api/workspaces/${id}/remove`))
         .send({ expectedRevision: location.revision }).expect(403);
@@ -1914,18 +2006,25 @@ describe("normalized HTTP application contract", () => {
         .send({ expectedRevision: location.revision + 1 }).expect(409);
       const removed = await current.mutate(request(current.app).post(`/api/workspaces/${id}/remove`))
         .send({ expectedRevision: location.revision }).expect(200);
-      expect(removed.body).toMatchObject({ id: projectId, removed: false, locations: [{ id, removed: true }] });
+      expect(removed.body).toMatchObject({ id: projectId, removed: false, locations: [{ id, removed: true }],
+      });
       const snapshot = await current.withHost(request(current.app).get("/api/application/snapshot")).expect(200);
-      expect(snapshot.body.workspaces.some((entry: { id: string }) => entry.id === id)).toBe(false);
+      expect(snapshot.body.workspaces.some((entry: { id: string }) => entry.id === id,
+        ),
+      ).toBe(false);
       // The emptied project stays active and listed.
-      expect(snapshot.body.projects).toContainEqual(expect.objectContaining({ id: projectId, name: "workspace" }));
+      expect(snapshot.body.projects).toContainEqual(expect.objectContaining({ id: projectId, name: "workspace" }),
+      );
       const restored = await current.mutate(request(current.app).post("/api/workspaces/open"))
-        .send({ environmentId: current.environmentId, path: current.workspacePath, project: newProject }).expect(201);
+        .send({ environmentId: current.environmentId, path: current.workspacePath, project: newProject,
+        }).expect(201);
       expect(restored.body).toEqual({ id, projectId });
       const repeated = await current.mutate(request(current.app).post("/api/workspaces/open"))
-        .send({ environmentId: current.environmentId, path: current.workspacePath, project: newProject }).expect(201);
+        .send({ environmentId: current.environmentId, path: current.workspacePath, project: newProject,
+        }).expect(201);
       expect(repeated.body).toEqual({ id, projectId });
-      expect(current.repository.listProjects(current.owner).flatMap(({ locations }) => locations).filter(entry => entry.id === id)).toHaveLength(1);
+      expect(current.repository.listProjects(current.owner).flatMap(({ locations }) => locations).filter((entry) => entry.id === id),
+      ).toHaveLength(1);
       const reopened = await current.mutate(request(current.app).post(`/api/workspaces/${id}/open`)).expect(200);
       expect(reopened.body).toEqual({ id, projectId });
     } finally { current.close(); }
@@ -1935,33 +2034,43 @@ describe("normalized HTTP application contract", () => {
     const current = await fixture();
     try {
       const open = async (directory: string, project: unknown) => (await current.mutate(request(current.app).post("/api/workspaces/open"))
-        .send({ environmentId: current.environmentId, path: directory, project }).expect(201)).body as { id: string; projectId: string };
+        .send({ environmentId: current.environmentId, path: directory, project,
+            }).expect(201)).body as { id: string; projectId: string };
       const projects = async () => (await current.withHost(request(current.app).get("/api/projects")).expect(200)).body.projects as Array<{
         id: string; name: string; revision: number; membershipRevision: number; removed: boolean;
-        locations: Array<{ id: string; revision: number; removed: boolean; removedWithProject: boolean }>;
+        locations: Array<{ id: string; revision: number; removed: boolean; removedWithProject: boolean;
+          }>;
       }>;
       const projectOf = async (projectId: string) => (await projects()).find(({ id }) => id === projectId)!;
-      const primary = await open(current.workspacePath, { kind: "new", name: "  Primary  " });
-      const second = await open(current.secondWorkspacePath, { kind: "existing", projectId: primary.projectId });
+      const primary = await open(current.workspacePath, { kind: "new", name: "  Primary  ",
+      });
+      const second = await open(current.secondWorkspacePath, { kind: "existing", projectId: primary.projectId,
+      });
       expect(second.projectId).toBe(primary.projectId);
-      const supplemental = await open(current.supplementalPath, { kind: "new", name: "Supplemental" });
+      const supplemental = await open(current.supplementalPath, { kind: "new", name: "Supplemental",
+      });
       // A known directory keeps its project; naming another one is a conflict, never a move.
       // The conflict names the location and its project, so Add project can offer the move.
       const elsewhere = await current.mutate(request(current.app).post("/api/workspaces/open"))
-        .send({ environmentId: current.environmentId, path: current.secondWorkspacePath, project: { kind: "existing", projectId: supplemental.projectId } })
+        .send({ environmentId: current.environmentId, path: current.secondWorkspacePath, project: { kind: "existing", projectId: supplemental.projectId },
+        })
         .expect(409);
       const primaryListing = await projectOf(primary.projectId);
       expect(elsewhere.body).toEqual({
-        error: { code: "conflict", message: "This directory already belongs to another project. Move it instead.", retryable: false },
+        error: { code: "conflict", message: "This directory already belongs to another project. Move it instead.", retryable: false,
+        },
         conflict: {
           reason: "other_project", workspaceId: second.id,
-          locationRevision: primaryListing.locations.find(({ id }) => id === second.id)!.revision, locationRemoved: false,
+          locationRevision: primaryListing.locations.find(({ id }) => id === second.id,
+          )!.revision, locationRemoved: false,
           projectId: primary.projectId, projectName: "Primary", projectRevision: primaryListing.revision,
         },
       });
-      expect(locationConflictErrorSchema.safeParse(elsewhere.body).success).toBe(true);
+      expect(locationConflictErrorSchema.safeParse(elsewhere.body).success,
+      ).toBe(true);
       await current.mutate(request(current.app).post("/api/workspaces/open"))
-        .send({ environmentId: current.environmentId, path: current.workspacePath, project: { kind: "new", name: " " } })
+        .send({ environmentId: current.environmentId, path: current.workspacePath, project: { kind: "new", name: " " },
+        })
         .expect(400);
 
       let project = await projectOf(primary.projectId);
@@ -1970,73 +2079,103 @@ describe("normalized HTTP application contract", () => {
         .send({ name: "Renamed", expectedRevision: project.revision + 1 }).expect(409);
       const renamed = await current.mutate(request(current.app).patch(`/api/projects/${project.id}`))
         .send({ name: " Renamed ", expectedRevision: project.revision }).expect(200);
-      expect(renamed.body).toMatchObject({ id: project.id, name: "Renamed", revision: project.revision + 1 });
-      expect((await current.withHost(request(current.app).get("/api/application/snapshot")).expect(200)).body.projects)
-        .toContainEqual({ id: project.id, name: "Renamed", revision: project.revision + 1 });
+      expect(renamed.body).toMatchObject({ id: project.id, name: "Renamed", revision: project.revision + 1,
+      });
+      expect((await current.withHost(request(current.app).get("/api/application/snapshot")).expect(200)).body.projects,
+      )
+        .toContainEqual({ id: project.id, name: "Renamed", revision: project.revision + 1,
+      });
 
       // Moving a location into a new project splits it off.
       const secondLocation = (await projectOf(primary.projectId)).locations.find(({ id }) => id === second.id)!;
       await current.mutate(request(current.app).post(`/api/workspaces/${second.id}/move`))
-        .send({ target: { kind: "new", name: "Split" }, expectedRevision: secondLocation.revision + 1 }).expect(409);
+        .send({ target: { kind: "new", name: "Split" }, expectedRevision: secondLocation.revision + 1,
+        }).expect(409);
       const split = await current.mutate(request(current.app).post(`/api/workspaces/${second.id}/move`))
-        .send({ target: { kind: "new", name: "Split" }, expectedRevision: secondLocation.revision }).expect(200);
-      expect(split.body).toMatchObject({ name: "Split", locations: [{ id: second.id }] });
+        .send({ target: { kind: "new", name: "Split" }, expectedRevision: secondLocation.revision,
+        }).expect(200);
+      expect(split.body).toMatchObject({ name: "Split", locations: [{ id: second.id }],
+      });
 
       // Merging moves every location and deletes the source.
       const source = await projectOf(split.body.id);
       const target = await projectOf(supplemental.projectId);
       const merged = await current.mutate(request(current.app).post(`/api/projects/${source.id}/merge`))
-        .send({ targetProjectId: target.id, expectedSourceMembershipRevision: source.membershipRevision, expectedTargetMembershipRevision: target.membershipRevision })
+        .send({ targetProjectId: target.id, expectedSourceMembershipRevision: source.membershipRevision, expectedTargetMembershipRevision: target.membershipRevision,
+        })
         .expect(200);
-      expect(merged.body.locations.map(({ id }: { id: string }) => id).sort()).toEqual([second.id, supplemental.id].sort());
+      expect(merged.body.locations.map(({ id }: { id: string }) => id).sort(),
+      ).toEqual([second.id, supplemental.id].sort());
       expect((await projects()).some(({ id }) => id === source.id)).toBe(false);
 
       // Every blocker across the project's locations is reported together.
       const thread = (await current.mutate(request(current.app).post("/api/threads"))
-        .send({ workspaceId: second.id, configuration: { kind: "custom", targetId: current.profile.id }, executionWorkspace: { kind: "direct" }, title: "Queued" })
+        .send({ workspaceId: second.id, configuration: { kind: "custom", targetId: current.profile.id }, executionWorkspace: { kind: "direct" }, title: "Queued",
+          })
         .expect(201)).body.threadId as string;
       current.bindThread(thread);
       new QueuedInputRepository(current.database).enqueue(current.owner, thread, {
         mutationId: randomUUID(), text: "Queued", contextExcerpts: [], attachmentIds: [], taskReferences: [],
-        source: { kind: "agent_control", expectedThreadRevision: current.repository.getThread(current.owner, thread).thread.revision, initiatingAgentThreadId: thread },
+        source: { kind: "agent_control", expectedThreadRevision: current.repository.getThread(current.owner, thread,
+            ).thread.revision, initiatingAgentThreadId: thread,
+          },
         now: Date.now(),
-      });
+      },
+      );
       // A loaded runtime with a turn in progress is reported alongside.
       const running = (await current.mutate(request(current.app).post("/api/threads"))
-        .send({ workspaceId: supplemental.id, configuration: { kind: "custom", targetId: current.profile.id }, executionWorkspace: { kind: "direct" }, title: "Running" })
+        .send({ workspaceId: supplemental.id, configuration: { kind: "custom", targetId: current.profile.id }, executionWorkspace: { kind: "direct" }, title: "Running",
+          })
         .expect(201)).body.threadId as string;
       current.bindThread(running);
       const runningHub = await current.loadBoundHub(running);
-      runningHub.publish({ type: "run_state", generation: runningHub.projectionGeneration!, state: "running" });
+      runningHub.publish({ type: "run_state", generation: runningHub.projectionGeneration!, state: "running",
+      });
       project = await projectOf(target.id);
       const blocked = await current.mutate(request(current.app).post(`/api/projects/${project.id}/remove`))
-        .send({ expectedRevision: project.revision, expectedMembershipRevision: project.membershipRevision }).expect(400);
+        .send({ expectedRevision: project.revision, expectedMembershipRevision: project.membershipRevision,
+        }).expect(400);
       const blockersByLocation = {
-        [second.id]: { locationId: second.id, environmentId: current.environmentId, kind: "durable_work", threadIds: [thread] },
-        [supplemental.id]: { locationId: supplemental.id, environmentId: current.environmentId, kind: "busy_runtime", threadIds: [running] },
+        [second.id]: { locationId: second.id, environmentId: current.environmentId, kind: "durable_work", threadIds: [thread],
+        },
+        [supplemental.id]: { locationId: supplemental.id, environmentId: current.environmentId, kind: "busy_runtime", threadIds: [running],
+        },
       };
       expect(blocked.body).toEqual({
-        error: { code: "invalid_transition", message: expect.stringContaining("before removing it"), retryable: false },
+        error: { code: "invalid_transition", message: expect.stringContaining("before removing it"), retryable: false,
+        },
         blockers: [second.id, supplemental.id].sort().map((id) => blockersByLocation[id]),
       });
-      expect(projectRemovalBlockedErrorSchema.safeParse(blocked.body).success).toBe(true);
+      expect(projectRemovalBlockedErrorSchema.safeParse(blocked.body).success,
+      ).toBe(true);
       await current.mutate(request(current.app).post(`/api/projects/${project.id}/remove`))
-        .send({ expectedRevision: project.revision, expectedMembershipRevision: project.membershipRevision + 1 }).expect(409);
+        .send({ expectedRevision: project.revision, expectedMembershipRevision: project.membershipRevision + 1,
+        }).expect(409);
 
       // An unblocked project is removed with its locations and restored per location.
       project = await projectOf(primary.projectId);
       const removed = await current.mutate(request(current.app).post(`/api/projects/${project.id}/remove`))
-        .send({ expectedRevision: project.revision, expectedMembershipRevision: project.membershipRevision }).expect(200);
-      expect(removed.body).toMatchObject({ removed: true, locations: [{ id: primary.id, removed: true, removedWithProject: true }] });
+        .send({ expectedRevision: project.revision, expectedMembershipRevision: project.membershipRevision,
+        }).expect(200);
+      expect(removed.body).toMatchObject({ removed: true, locations: [{ id: primary.id, removed: true, removedWithProject: true },
+        ],
+      });
       expect((await current.withHost(request(current.app).get("/api/application/snapshot")).expect(200)).body.projects
-        .some(({ id }: { id: string }) => id === project.id)).toBe(false);
+        .some(({ id }: { id: string }) => id === project.id),
+      ).toBe(false);
       // Restoring the location alone reports a plain error; adding its directory again names the removed project.
-      expect((await current.mutate(request(current.app).post(`/api/workspaces/${primary.id}/open`)).expect(400)).body)
-        .toEqual({ error: { code: "invalid_transition", message: expect.any(String), retryable: false } });
+      expect((await current.mutate(request(current.app).post(`/api/workspaces/${primary.id}/open`),
+            ).expect(400)).body,
+      )
+        .toEqual({ error: { code: "invalid_transition", message: expect.any(String), retryable: false,
+        },
+      });
       const again = await current.mutate(request(current.app).post("/api/workspaces/open"))
-        .send({ environmentId: current.environmentId, path: current.workspacePath, project: { kind: "new", name: "Again" } }).expect(400);
+        .send({ environmentId: current.environmentId, path: current.workspacePath, project: { kind: "new", name: "Again" },
+        }).expect(400);
       expect(again.body).toEqual({
-        error: { code: "invalid_transition", message: "The project was removed. Restore it before restoring its locations.", retryable: false },
+        error: { code: "invalid_transition", message: "The project was removed. Restore it before restoring its locations.", retryable: false,
+        },
         conflict: {
           reason: "project_removed", workspaceId: primary.id,
           locationRevision: removed.body.locations[0].revision, locationRemoved: true,
@@ -2045,20 +2184,32 @@ describe("normalized HTTP application contract", () => {
       });
       // A removed project takes precedence over a request naming another project.
       expect((await current.mutate(request(current.app).post("/api/workspaces/open"))
-        .send({ environmentId: current.environmentId, path: current.workspacePath, project: { kind: "existing", projectId: target.id } })
-        .expect(400)).body.conflict).toMatchObject({ reason: "project_removed", projectId: project.id });
-      await current.mutate(request(current.app).post(`/api/projects/${project.id}/restore`))
-        .send({ expectedRevision: removed.body.revision, locationIds: [second.id] }).expect(400);
-      await current.mutate(request(current.app).post(`/api/projects/${project.id}/restore`))
-        .send({ expectedRevision: removed.body.revision, locationIds: [primary.id, primary.id] }).expect(400);
+        .send({ environmentId: current.environmentId, path: current.workspacePath, project: { kind: "existing", projectId: target.id },
+            })
+        .expect(400)).body.conflict,
+      ).toMatchObject({ reason: "project_removed", projectId: project.id });
+      await current.mutate(request(current.app).post(`/api/projects/${project.id}/restore`),
+        )
+        .send({ expectedRevision: removed.body.revision, locationIds: [second.id],
+        }).expect(400);
+      await current.mutate(request(current.app).post(`/api/projects/${project.id}/restore`),
+        )
+        .send({ expectedRevision: removed.body.revision, locationIds: [primary.id, primary.id],
+        }).expect(400);
       await rm(current.workspacePath, { recursive: true, force: true });
-      const failed = await current.mutate(request(current.app).post(`/api/projects/${project.id}/restore`))
-        .send({ expectedRevision: removed.body.revision, locationIds: [primary.id] }).expect(200);
+      const failed = await current.mutate(request(current.app).post(`/api/projects/${project.id}/restore`),
+        )
+        .send({ expectedRevision: removed.body.revision, locationIds: [primary.id],
+        }).expect(200);
       expect(failed.body).toEqual({
         project: expect.objectContaining({ id: project.id, removed: false }),
-        locations: [{ id: primary.id, status: "failed", error: { code: expect.any(String), message: expect.any(String), retryable: expect.any(Boolean) } }],
+        locations: [{ id: primary.id, status: "failed", error: { code: expect.any(String), message: expect.any(String), retryable: expect.any(Boolean),
+            },
+          },
+        ],
       });
-      expect(restoreProjectResultSchema.safeParse(failed.body).success).toBe(true);
+      expect(restoreProjectResultSchema.safeParse(failed.body).success).toBe(true,
+      );
       await mkdir(current.workspacePath);
       const reopened = await current.mutate(request(current.app).post(`/api/workspaces/${primary.id}/open`)).expect(200);
       expect(reopened.body).toEqual({ id: primary.id, projectId: project.id });
@@ -2067,21 +2218,34 @@ describe("normalized HTTP application contract", () => {
 
   it("returns terminal fence conflicts from location and project removal as conflicts", async () => {
     const runWithWorkspaceRetired = vi.fn(async () => {
-      throw new TerminalServiceError("conflict", "Terminal admission is already suspended for this project.", true);
+      throw new TerminalServiceError("conflict", "Terminal admission is already suspended for this project.", true,
+      );
     });
     const current = await fixture({
-      terminals: { service: { runWithWorkspaceRetired } as unknown as TerminalService, admissions: {} as TerminalAdmissionTokens },
+      terminals: { service: { runWithWorkspaceRetired } as unknown as TerminalService, admissions: {} as TerminalAdmissionTokens,
+      },
     });
     try {
       const opened = await current.mutate(request(current.app).post("/api/workspaces/open"))
-        .send({ environmentId: current.environmentId, path: current.workspacePath, project: { kind: "new", name: "workspace" } }).expect(201);
-      const project = current.repository.getProject(current.owner, opened.body.projectId);
-      const terminalConflict = { error: { code: "conflict", message: "Terminal admission is already suspended for this project.", retryable: true } };
-      expect((await current.mutate(request(current.app).post(`/api/workspaces/${opened.body.id}/remove`))
-        .send({ expectedRevision: project.locations[0]!.revision }).expect(409)).body).toEqual(terminalConflict);
-      expect((await current.mutate(request(current.app).post(`/api/projects/${project.id}/remove`))
-        .send({ expectedRevision: project.revision, expectedMembershipRevision: project.membershipRevision }).expect(409)).body).toEqual(terminalConflict);
-      expect(current.repository.isWorkspaceRemoved(current.owner, opened.body.id)).toBe(false);
+        .send({ environmentId: current.environmentId, path: current.workspacePath, project: { kind: "new", name: "workspace" },
+        }).expect(201);
+      const project = current.repository.getProject(current.owner, opened.body.projectId,
+      );
+      const terminalConflict = { error: { code: "conflict", message: "Terminal admission is already suspended for this project.", retryable: true,
+        },
+      };
+      expect((await current.mutate(request(current.app).post(`/api/workspaces/${opened.body.id}/remove`,
+              ),
+            )
+        .send({ expectedRevision: project.locations[0]!.revision }).expect(409)).body,
+      ).toEqual(terminalConflict);
+      expect((await current.mutate(request(current.app).post(`/api/projects/${project.id}/remove`),
+            )
+        .send({ expectedRevision: project.revision, expectedMembershipRevision: project.membershipRevision,
+            }).expect(409)).body,
+      ).toEqual(terminalConflict);
+      expect(current.repository.isWorkspaceRemoved(current.owner, opened.body.id),
+      ).toBe(false);
     } finally { current.close(); }
   });
 
@@ -2178,19 +2342,28 @@ describe("normalized HTTP application contract", () => {
         .expect(200);
       expect(answered.body.requests).toEqual([]);
       const statuses = await current
-        .mutate(request(current.app).post(`/api/threads/${threadId}/question-statuses`))
-        .send({ sourceItemIds: ["question-tool-1", "question-tool-2", "unknown"] })
+        .mutate(request(current.app).post(`/api/threads/${threadId}/question-statuses`,
+          ),
+        )
+        .send({ sourceItemIds: ["question-tool-1", "question-tool-2", "unknown"],
+        })
         .expect(200);
       expect(statuses.body.statuses).toEqual([
-        { sourceItemId: "question-tool-1", questions: [{ index: 0, status: "dismissed" }] },
-        { sourceItemId: "question-tool-2", questions: [{ index: 0, status: "answered" }] },
+        { sourceItemId: "question-tool-1", questions: [{ index: 0, status: "dismissed" }],
+        },
+        { sourceItemId: "question-tool-2", questions: [{ index: 0, status: "answered" }],
+        },
       ]);
       await current
-        .mutate(request(current.app).post(`/api/threads/${threadId}/question-statuses`))
+        .mutate(request(current.app).post(`/api/threads/${threadId}/question-statuses`,
+          ),
+        )
         .send({ sourceItemIds: Array(101).fill("question-tool-1") })
         .expect(400);
       const unrelatedStatuses = await current
-        .mutate(request(current.app).post(`/api/threads/${threadIds[1]}/question-statuses`))
+        .mutate(request(current.app).post(`/api/threads/${threadIds[1]}/question-statuses`,
+          ),
+        )
         .send({ sourceItemIds: ["question-tool-1"] }).expect(200);
       expect(unrelatedStatuses.body.statuses).toEqual([]);
       expect(answered.body).toMatchObject({
@@ -2406,8 +2579,7 @@ describe("normalized HTTP application contract", () => {
       };
       expect(sse.event).toBe("thread-checkpoint");
       expect(sseData.snapshot.itemsById["output-image"]?.image).toEqual(
-        image,
-      );
+        image);
       assertMetadataOnly(sseData);
     } finally {
       await closeHttpTestServer(server);
@@ -3320,7 +3492,9 @@ describe("normalized HTTP application contract", () => {
         .expect(400);
       await current
         .mutate(request(current.app).put(route))
-        .send({ ...config, expectedRevision: 1, delivery: { ...scriptDelivery([]), "read.receipt": { script: true, voice: "none" } } })
+        .send({ ...config, expectedRevision: 1, delivery: { ...scriptDelivery([]), "read.receipt": { script: true, voice: "none" },
+          },
+        })
         .expect(400);
       await current
         .withHost(request(current.app).put(`${route}/silence`))
@@ -4902,29 +5076,41 @@ describe("normalized HTTP application contract", () => {
     const current = await fixture();
     try {
       const workspace = await current.mutate(request(current.app).post("/api/workspaces/open"))
-        .send({ environmentId: current.environmentId, path: current.workspacePath, project: { kind: "new", name: "Large composer" } })
+        .send({ environmentId: current.environmentId, path: current.workspacePath, project: { kind: "new", name: "Large composer" },
+        })
         .expect(201);
       const created = await current.mutate(request(current.app).post("/api/threads"))
         .send({ workspaceId: workspace.body.id, configuration: { kind: "custom", targetId: current.profile.id },
-          executionWorkspace: { kind: "direct" }, title: "Large composer" }).expect(201);
+          executionWorkspace: { kind: "direct" }, title: "Large composer",
+        }).expect(201);
       const threadId = created.body.threadId as string;
       const value = { text: "\u0001".repeat(MAXIMUM_THREAD_INPUT_BYTES), contextExcerpts: [],
-        attachmentIds: [], taskReferenceIds: [], expectedRevision: 0 };
+        attachmentIds: [], taskReferenceIds: [], expectedRevision: 0,
+      };
       const save = (body: typeof value) => current.mutate(request(current.app).put(`/api/threads/${threadId}/draft`)).send(body);
-      expect(Buffer.byteLength(JSON.stringify(value))).toBeLessThan(MAXIMUM_DRAFT_REQUEST_BYTES);
+      expect(Buffer.byteLength(JSON.stringify(value))).toBeLessThan(MAXIMUM_DRAFT_REQUEST_BYTES,
+      );
       const saved = await save(value).expect(200);
       expect(saved.body).toMatchObject({ text: value.text, revision: 1 });
-      await save({ ...value, text: value.text + "x", expectedRevision: 1 }).expect(400);
-      const oversizedEnvelope = { ...value, text: "\u0001".repeat(Math.ceil(MAXIMUM_DRAFT_REQUEST_BYTES / 6) + 1), expectedRevision: 1 };
-      expect(Buffer.byteLength(JSON.stringify(oversizedEnvelope))).toBeGreaterThan(MAXIMUM_DRAFT_REQUEST_BYTES);
+      await save({ ...value, text: value.text + "x", expectedRevision: 1,
+      }).expect(400);
+      const oversizedEnvelope = { ...value, text: "\u0001".repeat(Math.ceil(MAXIMUM_DRAFT_REQUEST_BYTES / 6) + 1), expectedRevision: 1,
+      };
+      expect(Buffer.byteLength(JSON.stringify(oversizedEnvelope)),
+      ).toBeGreaterThan(MAXIMUM_DRAFT_REQUEST_BYTES);
       await save(oversizedEnvelope).expect(413);
-      await current.mutate(request(current.app).post(`/api/threads/${threadId}/operations`)).send(value).expect(413);
+      await current.mutate(request(current.app).post(`/api/threads/${threadId}/operations`),
+        ).send(value).expect(413);
       const stashed = await current.mutate(request(current.app).post(`/api/threads/${threadId}/stashes`))
         .send({ expectedDraftRevision: 1, mutationId: randomUUID() }).expect(201);
-      expect(stashed.body).toMatchObject({ draft: { text: "", revision: 2 }, stashes: [{ text: value.text }] });
-      const restored = await current.mutate(request(current.app).post(`/api/threads/${threadId}/stashes/${stashed.body.stashes[0].id}/restore`))
+      expect(stashed.body).toMatchObject({ draft: { text: "", revision: 2 }, stashes: [{ text: value.text }],
+      });
+      const restored = await current.mutate(request(current.app).post(`/api/threads/${threadId}/stashes/${stashed.body.stashes[0].id}/restore`,
+          ),
+        )
         .send({ expectedDraftRevision: 2, mutationId: randomUUID() }).expect(200);
-      expect(restored.body).toMatchObject({ draft: { text: value.text, revision: 3 }, stashes: [] });
+      expect(restored.body).toMatchObject({ draft: { text: value.text, revision: 3 }, stashes: [],
+      });
     } finally { current.close(); }
   });
 
@@ -4933,12 +5119,14 @@ describe("normalized HTTP application contract", () => {
     try {
       const workspace = await current
         .mutate(request(current.app).post("/api/workspaces/open"))
-        .send({ environmentId: current.environmentId, path: current.workspacePath, project: { kind: "new", name: "workspace" } })
+        .send({ environmentId: current.environmentId, path: current.workspacePath, project: { kind: "new", name: "workspace" },
+        })
         .expect(201);
       const createThread = async (title: string) => (await current
         .mutate(request(current.app).post("/api/threads"))
         .send({ workspaceId: workspace.body.id, configuration: { kind: "custom", targetId: current.profile.id },
-          executionWorkspace: { kind: "direct" }, title })
+          executionWorkspace: { kind: "direct" }, title,
+            })
         .expect(201)).body.threadId as string;
       const threadId = await createThread("Direct input");
       const otherThreadId = await createThread("Other direct input");
@@ -4946,29 +5134,38 @@ describe("normalized HTTP application contract", () => {
       current.bindThread(threadId);
       current.bindThread(otherThreadId);
       const registration = { platform: "android", capabilities: { navigate: true, voice: true, voiceSettings: true },
-        state: { runtime: { foreground: true, voiceReady: false, interactionActive: false }, settings: null } };
+        state: { runtime: { foreground: true, voiceReady: false, interactionActive: false,
+          }, settings: null,
+        },
+      };
       const register = async () => (await current.mutate(request(current.app).post("/api/client-registration")).send(registration).expect(200)).body;
       const client = await register();
-      const input = (text = "Spoken input"): Omit<DirectInputRequest, "origin"> => ({
+      const input = (text = "Spoken input",
+      ): Omit<DirectInputRequest, "origin"> => ({
         mutationId: randomUUID(), text, runningPolicy: { mode: "queue" },
       });
       const post = (target: string, body: Omit<DirectInputRequest, "origin">) =>
         current.mutate(request(current.app).post(`/api/threads/${target}/inputs`)).set("X-Sedes-Client", client.connectionToken).send(body);
       const receipt = (mutationId: string, foreign = false) => {
-        const read = current.withHost(request(current.app).get(`/api/input-receipts/${mutationId}`));
+        const read = current.withHost(request(current.app).get(`/api/input-receipts/${mutationId}`),
+        );
         return foreign ? read.set("X-Test-Foreign-Principal", "yes") : read;
       };
 
       const unprotected = input();
       const unregistered = input();
       await current.mutate(request(current.app).post(`/api/threads/${threadId}/inputs`)).send(unregistered)
-        .expect(409).expect(({ body }) => expect(body.error).toMatchObject({ code: "client_registration_required", retryable: true }));
-      expect((await receipt(unregistered.mutationId).expect(200)).body).toEqual({ status: "notObserved" });
+        .expect(409).expect(({ body }) => expect(body.error).toMatchObject({ code: "client_registration_required", retryable: true,
+          }),
+        );
+      expect((await receipt(unregistered.mutationId).expect(200)).body).toEqual({ status: "notObserved" },
+      );
       await current
         .withHost(request(current.app).post(`/api/threads/${threadId}/inputs`))
         .send(unprotected)
         .expect(403)
-        .expect(({ body }) => expect(body.error.code).toBe("csrf_token_invalid"));
+        .expect(({ body }) => expect(body.error.code).toBe("csrf_token_invalid"),
+        );
       const missing = await receipt(unprotected.mutationId).expect(200);
       expect(missing.headers["cache-control"]).toBe("no-store");
       expect(missing.body).toEqual({ status: "notObserved" });
@@ -4980,7 +5177,8 @@ describe("normalized HTTP application contract", () => {
         mutationId: first.mutationId, threadId, operationId: first.mutationId, admittedMode: "queue",
         currentMode: "queue", status: "queued", queuedInputId: expect.any(String),
       });
-      expect((await post(threadId, first).expect(200)).body).toEqual(admitted.body);
+      expect((await post(threadId, first).expect(200)).body).toEqual(admitted.body,
+      );
       for (const [target, changed] of [
         [threadId, { ...first, text: "Different spoken input" }],
         [otherThreadId, first],
@@ -4995,36 +5193,45 @@ describe("normalized HTTP application contract", () => {
       await current.mutate(request(current.app).post(`/api/threads/${threadId}/inputs`))
         .set("X-Sedes-Client", client.connectionToken).send({ ...input(), origin: { clientId: otherClient.clientId } }).expect(400);
       await current.mutate(request(current.app).post(`/api/threads/${threadId}/inputs`)).send(input())
-        .expect(409).expect(({ body }) => expect(body.error.code).toBe("client_registration_required"));
+        .expect(409).expect(({ body }) => expect(body.error.code).toBe("client_registration_required"),
+        );
       const found = await receipt(first.mutationId).expect(200);
       expect(found.headers["cache-control"]).toBe("no-store");
       expect(found.body).toEqual({ status: "found", receipt: admitted.body });
-      await receipt(first.mutationId, true).expect(200, { status: "notObserved" });
+      await receipt(first.mutationId, true).expect(200, { status: "notObserved",
+      });
       await receipt("not-a-mutation-id").expect(400);
 
       // Worst-case JSON escaping still admits every byte of a 256 KiB recording.
       const escaped = input("\u0001".repeat(MAXIMUM_THREAD_INPUT_BYTES));
-      expect(Buffer.byteLength(JSON.stringify(escaped))).toBeGreaterThan(256 * 1024);
-      expect(Buffer.byteLength(JSON.stringify(escaped))).toBeLessThan(MAX_DIRECT_INPUT_REQUEST_BYTES);
-      expect((await post(threadId, escaped).expect(200)).body).toMatchObject({ mutationId: escaped.mutationId, status: "queued" });
+      expect(Buffer.byteLength(JSON.stringify(escaped))).toBeGreaterThan(256 * 1024,
+      );
+      expect(Buffer.byteLength(JSON.stringify(escaped))).toBeLessThan(MAX_DIRECT_INPUT_REQUEST_BYTES,
+      );
+      expect((await post(threadId, escaped).expect(200)).body).toMatchObject({ mutationId: escaped.mutationId, status: "queued",
+      });
       const overParser = input("\u0001".repeat(350_000));
-      expect(Buffer.byteLength(JSON.stringify(overParser))).toBeGreaterThan(MAX_DIRECT_INPUT_REQUEST_BYTES);
+      expect(Buffer.byteLength(JSON.stringify(overParser))).toBeGreaterThan(MAX_DIRECT_INPUT_REQUEST_BYTES,
+      );
       await post(threadId, overParser)
         .expect(413)
         .expect(({ body }) => expect(body.error.code).toBe("bad_request"));
       const atTextLimit = input("é".repeat(MAXIMUM_THREAD_INPUT_BYTES / 2));
-      expect(Buffer.byteLength(atTextLimit.text)).toBe(MAXIMUM_THREAD_INPUT_BYTES);
+      expect(Buffer.byteLength(atTextLimit.text)).toBe(MAXIMUM_THREAD_INPUT_BYTES,
+      );
       await post(threadId, atTextLimit).expect(200);
       const overText = input(atTextLimit.text + "e");
       await post(threadId, overText)
         .expect(400)
         .expect(({ body }) => expect(body.error.code).toBe("bad_request"));
       for (const rejected of [overParser, overText]) {
-        await receipt(rejected.mutationId).expect(200, { status: "notObserved" });
+        await receipt(rejected.mutationId).expect(200, { status: "notObserved",
+        });
       }
 
       const context = await current
-        .withHost(request(current.app).get(`/api/threads/${threadId}/input-context`))
+        .withHost(request(current.app).get(`/api/threads/${threadId}/input-context`),
+        )
         .expect(200);
       expect(context.headers["cache-control"]).toBe("no-store");
       expect(context.body).toEqual({
@@ -5032,20 +5239,31 @@ describe("normalized HTTP application contract", () => {
         automaticListenEligible: false, manualListenEligible: true, steer: { availability: "unavailable" },
       });
       expect((await current
-        .withHost(request(current.app).get(`/api/threads/${threadId}/input-context`))
-        .expect(200)).body.activityToken).toBe(context.body.activityToken);
+        .withHost(request(current.app).get(`/api/threads/${threadId}/input-context`,
+              ),
+            )
+        .expect(200)).body.activityToken,
+      ).toBe(context.body.activityToken);
       expect((await current
-        .withHost(request(current.app).get(`/api/threads/${unboundThreadId}/input-context`))
-        .expect(200)).body).toMatchObject({ threadId: unboundThreadId, threadTitle: "Unbound direct input", userInputRevision: 0, authority: "unbound", automaticListenEligible: false });
+        .withHost(request(current.app).get(`/api/threads/${unboundThreadId}/input-context`,
+              ),
+            )
+        .expect(200)).body,
+      ).toMatchObject({ threadId: unboundThreadId, threadTitle: "Unbound direct input", userInputRevision: 0, authority: "unbound", automaticListenEligible: false,
+      });
       current.repository.renameThread(current.owner, threadId, {
         title: "Renamed direct input", expectedRevision: current.repository.getThread(current.owner, threadId).thread.revision,
         mutationId: randomUUID(), now: Date.now(),
       });
       expect((await current
-        .withHost(request(current.app).get(`/api/threads/${threadId}/input-context`))
-        .expect(200)).body).toEqual({ ...context.body, threadTitle: "Renamed direct input" });
+        .withHost(request(current.app).get(`/api/threads/${threadId}/input-context`,
+              ),
+            )
+        .expect(200)).body,
+      ).toEqual({ ...context.body, threadTitle: "Renamed direct input" });
       await current
-        .withHost(request(current.app).get(`/api/threads/${threadId}/input-context`))
+        .withHost(request(current.app).get(`/api/threads/${threadId}/input-context`),
+        )
         .set("X-Test-Foreign-Principal", "yes")
         .expect(404);
     } finally {
@@ -5058,26 +5276,33 @@ describe("normalized HTTP application contract", () => {
     try {
       const workspace = await current
         .mutate(request(current.app).post("/api/workspaces/open"))
-        .send({ environmentId: current.environmentId, path: current.workspacePath, project: { kind: "new", name: "workspace" } })
+        .send({ environmentId: current.environmentId, path: current.workspacePath, project: { kind: "new", name: "workspace" },
+        })
         .expect(201);
       const threadId = (await current
         .mutate(request(current.app).post("/api/threads"))
         .send({ workspaceId: workspace.body.id, configuration: { kind: "custom", targetId: current.profile.id },
-          executionWorkspace: { kind: "direct" }, title: "Queued input read" })
+          executionWorkspace: { kind: "direct" }, title: "Queued input read",
+          })
         .expect(201)).body.threadId as string;
       current.bindThread(threadId);
       const queue = new QueuedInputRepository(current.database);
-      const originalDraft = current.repository.getDraft(current.owner, threadId);
+      const originalDraft = current.repository.getDraft(current.owner, threadId,
+      );
       const text = largeDirectInputText;
       const enqueue = () => queue.enqueue(current.owner, threadId, {
         mutationId: randomUUID(), text, contextExcerpts: [], attachmentIds: [], taskReferences: [],
         source: { kind: "direct_input", resolvedDeliveryMode: "submit",
-          expectedThreadRevision: current.repository.getThread(current.owner, threadId).thread.revision },
+          expectedThreadRevision: current.repository.getThread(current.owner, threadId,
+            ).thread.revision,
+          },
         now: Date.now(),
       }).item;
       const first = enqueue();
       const read = (id: string, targetThreadId = threadId) => current
-        .withHost(request(current.app).get(`/api/threads/${targetThreadId}/queued-inputs/${id}`));
+        .withHost(request(current.app).get(`/api/threads/${targetThreadId}/queued-inputs/${id}`,
+          ),
+        );
       const totalChanges = () => current.database.prepare("SELECT total_changes() AS count").get();
       const beforeRead = totalChanges();
       const pending = await read(first.id).expect(200).expect("Cache-Control", "no-store");
@@ -5091,67 +5316,86 @@ describe("normalized HTTP application contract", () => {
       expect(current.runtimeEstablishmentCaptures).toHaveLength(0);
       expect(current.runtimeReplacementCaptures).toHaveLength(0);
       expect(current.operationCalls).toHaveLength(0);
-      expect(current.repository.getDraft(current.owner, threadId)).toEqual(originalDraft);
+      expect(current.repository.getDraft(current.owner, threadId)).toEqual(originalDraft,
+      );
       await read(first.id).set("X-Test-Foreign-Principal", "yes").expect(404);
       await read(first.id, randomUUID()).expect(404);
       await read("missing").expect(404);
       await read(first.id, "not-a-thread").expect(400);
 
-      queue.claimHead(current.owner, threadId, "private-retry-anchor", Date.now());
+      queue.claimHead(current.owner, threadId, "private-retry-anchor", Date.now(),
+      );
       const sending = await read(first.id).expect(200);
-      expect(sending.body).toMatchObject({ state: "dispatching", deliveryOperationId: first.mutationId });
-      expect(sending.body.threadRevision).toBeGreaterThan(pending.body.threadRevision);
-      expect(JSON.stringify(sending.body)).not.toContain("private-retry-anchor");
+      expect(sending.body).toMatchObject({ state: "dispatching", deliveryOperationId: first.mutationId,
+      });
+      expect(sending.body.threadRevision).toBeGreaterThan(pending.body.threadRevision,
+      );
+      expect(JSON.stringify(sending.body)).not.toContain("private-retry-anchor",
+      );
       queue.markAccepted(current.owner, threadId, first.id, {
         expectedState: "dispatching", acceptedAt: Date.now(), backendCorrelation: first.mutationId,
       });
       const accepted = await read(first.id).expect(200);
-      expect(accepted.body).toMatchObject({ state: "accepted", deliveryOperationId: first.mutationId, content: pending.body.content });
-      expect(accepted.body.threadRevision).toBeGreaterThan(sending.body.threadRevision);
+      expect(accepted.body).toMatchObject({ state: "accepted", deliveryOperationId: first.mutationId, content: pending.body.content,
+      });
+      expect(accepted.body.threadRevision).toBeGreaterThan(sending.body.threadRevision,
+      );
 
       const cancelled = enqueue();
       queue.cancelIdempotently(current.owner, threadId, cancelled.id, {
         mutationId: randomUUID(), now: Date.now(),
-        expectedThreadRevision: current.repository.getThread(current.owner, threadId).thread.revision,
+        expectedThreadRevision: current.repository.getThread(current.owner, threadId,
+        ).thread.revision,
       });
-      expect((await read(cancelled.id).expect(200)).body).toMatchObject({ state: "cancelled", deliveryOperationId: cancelled.mutationId });
+      expect((await read(cancelled.id).expect(200)).body).toMatchObject({ state: "cancelled", deliveryOperationId: cancelled.mutationId,
+      });
 
       const steered = enqueue();
       const steerOperationId = randomUUID();
       queue.reserveHeadForSteer(current.owner, threadId, steered.id, {
-        steerOperationId, expectedThreadRevision: current.repository.getThread(current.owner, threadId).thread.revision,
+        steerOperationId, expectedThreadRevision: current.repository.getThread(current.owner, threadId,
+        ).thread.revision,
         now: Date.now(),
       });
-      expect((await read(steered.id).expect(200)).body.deliveryOperationId).toBe(steerOperationId);
+      expect((await read(steered.id).expect(200)).body.deliveryOperationId,
+      ).toBe(steerOperationId);
       const acceptedAt = Date.now();
       new SubmissionCompletionRepository(current.database).recordAccepted(current.owner, threadId, {
         operationId: steerOperationId, backendCorrelation: steerOperationId, acceptedAt,
-      });
+      },
+      );
       queue.acceptSteered(current.owner, threadId, steered.id, {
         steerOperationId, expectedState: "dispatching", backendCorrelation: steerOperationId, acceptedAt,
       });
-      expect((await read(steered.id).expect(200)).body).toMatchObject({ state: "accepted", deliveryOperationId: steerOperationId });
+      expect((await read(steered.id).expect(200)).body).toMatchObject({ state: "accepted", deliveryOperationId: steerOperationId,
+      });
 
       const failed = enqueue();
-      queue.claimHead(current.owner, threadId, "private-failure-anchor", Date.now());
+      queue.claimHead(current.owner, threadId, "private-failure-anchor", Date.now(),
+      );
       queue.handleCleanFailure(current.owner, threadId, failed.id, {
         expectedState: "dispatching", retryable: false, failureReason: "not_sent",
         diagnostic: "No input reached the provider.", now: Date.now(),
-        retryPolicy: { maximumRetries: 0, baseDelayMilliseconds: 100, maximumDelayMilliseconds: 100 },
+        retryPolicy: { maximumRetries: 0, baseDelayMilliseconds: 100, maximumDelayMilliseconds: 100,
+        },
       });
       const beforeFailedRead = totalChanges();
       expect((await read(failed.id).expect(200)).body).toMatchObject({ state: "failed",
-        content: [{ kind: "text", text: { text } }] });
-      expect(queue.get(current.owner, threadId, failed.id)).toMatchObject({ state: "failed", failureReason: "not_sent", text });
+        content: [{ kind: "text", text: { text } }],
+      });
+      expect(queue.get(current.owner, threadId, failed.id)).toMatchObject({ state: "failed", failureReason: "not_sent", text,
+      });
       expect(totalChanges()).toEqual(beforeFailedRead);
       expect(current.runtimeEstablishmentCaptures).toHaveLength(0);
       expect(current.operationCalls).toHaveLength(0);
 
       // A stored provider correlation alone cannot become a browser operation identity.
-      current.database.prepare("UPDATE queued_inputs SET backend_correlation = ? WHERE id = ?")
+      current.database.prepare("UPDATE queued_inputs SET backend_correlation = ? WHERE id = ?",
+        )
         .run("private-native-correlation", steered.id);
       await read(steered.id).expect(500).expect(({ body }) => expect(body.error.code).toBe("internal_error"));
-      expect(current.repository.getDraft(current.owner, threadId)).toEqual(originalDraft);
+      expect(current.repository.getDraft(current.owner, threadId)).toEqual(originalDraft,
+      );
     } finally { current.close(); }
   });
 
@@ -5162,15 +5406,19 @@ describe("normalized HTTP application contract", () => {
       const mutationId = randomUUID();
       current.database.prepare(`INSERT INTO direct_input_receipts (tenant_id, owner_principal_id, mutation_id,
         application_thread_id, request_fingerprint, admitted_mode, creation_attempt_id, created_at)
-        VALUES (?, ?, ?, 'not-a-thread-id', ?, 'submit', 'attempt', 1)`)
-        .run(current.owner.tenantId, current.owner.principalId, mutationId, "0".repeat(64));
+        VALUES (?, ?, ?, 'not-a-thread-id', ?, 'submit', 'attempt', 1)`,
+        )
+        .run(current.owner.tenantId, current.owner.principalId, mutationId, "0".repeat(64),
+        );
       await current
         .withHost(request(current.app).get(`/api/input-receipts/${mutationId}`))
         .expect(500)
         .expect(({ body }) => expect(body.error.code).toBe("internal_error"));
       capture.mockResolvedValue({ threadId: "not-a-thread-id" } as never);
       await current
-        .withHost(request(current.app).get(`/api/threads/${randomUUID()}/input-context`))
+        .withHost(request(current.app).get(`/api/threads/${randomUUID()}/input-context`,
+          ),
+        )
         .expect(500)
         .expect(({ body }) => expect(body.error.code).toBe("internal_error"));
     } finally {
@@ -5188,16 +5436,23 @@ describe("normalized HTTP application contract", () => {
       const route = `/api/application/events?voiceStreamId=${voiceStreamId}`;
       const subscribe = vi.spyOn(current.notifications, "subscribe");
       await readFirstSseEvent(server, route);
-      expect(subscribe).toHaveBeenCalledWith(current.owner, expect.any(Function), expect.objectContaining({ voiceStreamId }));
+      expect(subscribe).toHaveBeenCalledWith(current.owner, expect.any(Function), expect.objectContaining({ voiceStreamId }),
+      );
       await vi.waitFor(() => {
         const probes = [];
-        try { for (let index = 0; index < 128; index++) probes.push(current.notifications.reserveVoiceStream(current.owner, randomUUID())); }
+        try { for (let index = 0; index < 128; index++) probes.push(current.notifications.reserveVoiceStream(current.owner, randomUUID(),
+              ),
+            ); }
         finally { for (const probe of probes) probe.release(); }
       });
-      for (const invalid of ["bad", `${voiceStreamId}&voiceStreamId=${randomUUID()}`]) {
-        await current.withHost(request(current.app).get(`/api/application/events?voiceStreamId=${invalid}`)).expect(400);
+      for (const invalid of ["bad", `${voiceStreamId}&voiceStreamId=${randomUUID()}`,
+      ]) {
+        await current.withHost(request(current.app).get(`/api/application/events?voiceStreamId=${invalid}`,
+            ),
+          ).expect(400);
       }
-      const reservations = Array.from({ length: 128 }, () => current.notifications.reserveVoiceStream(current.owner, randomUUID()));
+      const reservations = Array.from({ length: 128 }, () => current.notifications.reserveVoiceStream(current.owner, randomUUID()),
+      );
       try {
         await current.withHost(request(current.app).get(route)).expect(503)
           .expect(({ headers, body }) => { expect(headers["content-type"]).toContain("application/json"); expect(body.error.code).toBe("runtime_unavailable"); });
@@ -5213,9 +5468,13 @@ describe("normalized HTTP application contract", () => {
   it("releases a native stream reservation when application stream setup fails", async () => {
     const current = await fixture();
     try {
-      vi.spyOn(current.applicationSnapshots, "hub").mockImplementationOnce(() => { throw new Error("setup failed"); });
-      await current.withHost(request(current.app).get(`/api/application/events?voiceStreamId=${randomUUID()}`)).expect(500);
-      const reservations = Array.from({ length: 128 }, () => current.notifications.reserveVoiceStream(current.owner, randomUUID()));
+      vi.spyOn(current.applicationSnapshots, "hub").mockImplementationOnce(() => { throw new Error("setup failed"); },
+      );
+      await current.withHost(request(current.app).get(`/api/application/events?voiceStreamId=${randomUUID()}`,
+          ),
+        ).expect(500);
+      const reservations = Array.from({ length: 128 }, () => current.notifications.reserveVoiceStream(current.owner, randomUUID()),
+      );
       for (const reservation of reservations) reservation.release();
     } finally { current.close(); }
   });
@@ -5228,28 +5487,38 @@ describe("normalized HTTP application contract", () => {
       await new Promise<void>((resolve, reject) => { server.once("listening", resolve); server.once("error", reject); });
       const { revision, silenced: _silenced, ...settings } = current.notifications.read(current.owner);
       current.notifications.update(current.owner, { ...settings, enabled: true, expectedRevision: revision,
-        delivery: { ...settings.delivery, "turn.completed": { script: false, voice: "speak" } } });
+        delivery: { ...settings.delivery, "turn.completed": { script: false, voice: "speak" },
+        },
+      });
       const input = { platform: "android", capabilities: { navigate: true, voice: true, voiceSettings: true },
-        state: { runtime: { foreground: false, voiceReady: true, interactionActive: false }, settings: null } };
+        state: { runtime: { foreground: false, voiceReady: true, interactionActive: false,
+          }, settings: null,
+        },
+      };
       const native = (await current.mutate(request(current.app).post("/api/client-registration")).send(input).expect(200)).body;
       const voiceStreamId = randomUUID();
       const address = server.address();
       if (!address || typeof address === "string") throw new Error("test_server_address_invalid");
       const response = await fetch(`http://127.0.0.1:${address.port}/api/application/events?voiceStreamId=${voiceStreamId}`, {
         headers: { Host: "127.0.0.1:4783" }, signal: AbortSignal.any([abort.signal, AbortSignal.timeout(10_000)]),
-      });
+      },
+      );
       expect(response.status).toBe(200);
       const reader = response.body!.getReader();
       const decoder = new TextDecoder();
       let received = "";
-      while (!received.includes("event: notification_policy\n")) received += decoder.decode((await reader.read()).value, { stream: true });
+      while (!received.includes("event: notification_policy\n")) received += decoder.decode((await reader.read()).value, { stream: true,
+        });
       const watermark = current.notifications.captureSubscriberWatermark();
       await current.mutate(request(current.app).post("/api/client-registration")).send({ ...input, resumeToken: native.resumeToken }).expect(200);
       const publication = await current.notifications.emit(current.owner, { event: "turn.completed", occurredAt: new Date().toISOString(),
-        title: "Done", message: "Done", thread: { id: randomUUID(), title: "Example" }, turn: { id: "turn", outcome: "completed" } },
-        "after-control-replacement", "live", undefined, undefined, watermark, { userInputRevision: 0, superseded: false });
+        title: "Done", message: "Done", thread: { id: randomUUID(), title: "Example" }, turn: { id: "turn", outcome: "completed" },
+        },
+        "after-control-replacement", "live", undefined, undefined, watermark, { userInputRevision: 0, superseded: false },
+      );
       expect(publication?.voiceStreamIds).toEqual([voiceStreamId]);
-      while (!received.includes("event: notification\n")) received += decoder.decode((await reader.read()).value, { stream: true });
+      while (!received.includes("event: notification\n")) received += decoder.decode((await reader.read()).value, { stream: true,
+        });
       expect(received).toContain(publication!.sourceEventId);
       abort.abort(); await reader.cancel().catch(() => undefined);
     } finally {
@@ -5276,11 +5545,13 @@ describe("normalized HTTP application contract", () => {
         .send({ ...settings, enabled: true, expectedRevision: revision })
         .expect(200);
       const isPolicy = (frame: string) => frame.startsWith("event: notification_policy\n");
-      const frames = await readSseFramesUntil(server, "/api/application/events", isPolicy);
+      const frames = await readSseFramesUntil(server, "/api/application/events", isPolicy,
+      );
       const policy = frames.find(isPolicy)!;
       // Unlike the replayable inventory lane, policy is transient and carries no cursor.
       expect(policy).not.toMatch(/^id:/mu);
-      expect(frames.find((frame) => /^event: application$/mu.test(frame))).toMatch(/^id: /mu);
+      expect(frames.find((frame) => /^event: application$/mu.test(frame)),
+      ).toMatch(/^id: /mu);
       expect(JSON.parse(/^data: (.+)$/mu.exec(policy)![1]!)).toMatchObject({
         settings: { enabled: true, revision: 1 }, generation: expect.any(Number),
       });
@@ -5326,8 +5597,10 @@ describe("normalized HTTP application contract", () => {
             stashedPrompts: { root: 0, descendants: 0 },
             openTasks: {
               familySnapshot: expect.stringMatching(/^[a-f0-9]{64}$/),
-              root: { snapshot: expect.stringMatching(/^[a-f0-9]{64}$/), items: [], total: 0, omitted: 0 },
-              descendants: { snapshot: expect.stringMatching(/^[a-f0-9]{64}$/), items: [], total: 0, omitted: 0 },
+              root: { snapshot: expect.stringMatching(/^[a-f0-9]{64}$/), items: [], total: 0, omitted: 0,
+              },
+              descendants: { snapshot: expect.stringMatching(/^[a-f0-9]{64}$/), items: [], total: 0, omitted: 0,
+              },
             },
             executionWorkspace: { kind: "direct" },
             archiveOnly: { available: true },
@@ -5748,7 +6021,9 @@ describe("normalized HTTP application contract", () => {
           { kind: "conversation_operation", count: 1 },
           { kind: "conversation_runtime", count: 1 },
         ],
-        affectedThreads: [{ threadId: created.body.id, title: expect.any(String), runtime: expect.any(Object) }],
+        affectedThreads: [{ threadId: created.body.id, title: expect.any(String), runtime: expect.any(Object),
+          },
+        ],
       });
       expect(
         impact.body.warnings.map(({ code }: { code: string }) => code),
@@ -6631,8 +6906,7 @@ describe("normalized HTTP application contract", () => {
         .expect(404);
       await current
         .withHost(
-          request(current.app).get(`/api/threads/${threadId}/automation`),
-        )
+          request(current.app).get(`/api/automations/${threadId}`))
         .set("X-Test-Foreign-Principal", "yes")
         .expect(404);
       expect(current.operationCalls).toHaveLength(0);
@@ -6664,6 +6938,7 @@ describe("normalized HTTP application contract", () => {
             updatedAt: "2026-08-07T07:00:00.000Z",
           },
         });
+
       await current
         .mutate(
           request(current.app).post(`/api/threads/${threadId}/operations`),
@@ -6719,17 +6994,19 @@ describe("normalized HTTP application contract", () => {
         .mutate(
           request(current.app).post(`/api/threads/${threadId}/operations`),
         )
-        .send({ kind: "interrupt", operationId: "stop-operation" })
+        .send({
+          kind: "interrupt", operationId: "stop-operation" })
         .expect(200)
-        .expect({ status: "aborted" });
+        .expect({
+          status: "aborted" });
       await current
-        .mutate(request(current.app).post(`/api/threads/${threadId}/history`))
+        .mutate(
+          request(current.app).post(`/api/threads/${threadId}/history`))
         .send({ cursor: "history_application_cursor", activityDetail: "full" })
         .expect(400);
       await current
         .mutate(request(current.app).post(`/api/threads/${threadId}/history`))
-        .send({
-          cursor: "history_application_cursor",
+        .send({ cursor: "history_application_cursor",
           limit: 11,
           activityDetail: "full",
         })
@@ -6757,8 +7034,7 @@ describe("normalized HTTP application contract", () => {
         },
       ]);
       await current
-        .mutate(
-          request(current.app).post(`/api/threads/${threadId}/history/seek`),
+        .mutate(request(current.app).post(`/api/threads/${threadId}/history/seek`),
         )
         .send({
           turnId: "turn-outside-live-window",
@@ -6780,11 +7056,9 @@ describe("normalized HTTP application contract", () => {
         { kind: "deliver", mode: "steer" },
         { kind: "interrupt", operationId: "stop-operation" },
       ]);
-
       await current
         .mutate(
-          request(current.app).post(
-            `/api/threads/${threadId}/attention/dismiss`,
+          request(current.app).post(`/api/threads/${threadId}/attention/dismiss`,
           ),
         )
         .send({
@@ -6805,17 +7079,18 @@ describe("normalized HTTP application contract", () => {
 
       current.threadSnapshotPublications.mockClear();
       const definition = await current
-        .mutate(
-          request(current.app).post(`/api/threads/${threadId}/automation`),
-        )
+        .mutate(request(current.app).post("/api/automations"))
         .send({
+          threadId,
+          name: "Scheduled checks",
+          initialState: "paused",
           prompt: "Run scheduled checks",
           runMode: "same_thread",
           schedule: {
             kind: "date_time",
             runAt: "2099-07-30T12:00:00.000Z",
           },
-          misfirePolicy: "coalesce",
+          misfirePolicy: null,
           precheck: null,
           mutationId: randomUUID(),
         })
@@ -6833,16 +7108,17 @@ describe("normalized HTTP application contract", () => {
       );
       await current
         .withHost(
-          request(current.app).get(`/api/threads/${threadId}/automation`),
+          request(current.app).get(`/api/automations/${definition.body.id}`),
         )
         .expect(200)
         .expect(({ body }) => {
           expect(body.id).toBe(definition.body.id);
         });
+
       await current
         .mutate(
           request(current.app).post(
-            `/api/threads/${threadId}/automation/precheck/test`,
+            `/api/threads/${threadId}/automations/precheck/test`,
           ),
         )
         .send({
@@ -6861,6 +7137,133 @@ describe("normalized HTTP application contract", () => {
             stdoutPreview: "ready",
           });
         });
+    } finally {
+      current.close();
+    }
+  });
+
+  it("creates independent named automations and pages the identity collection without singleton routes", async () => {
+    const current = await fixture();
+    try {
+      const workspace = await current
+        .mutate(request(current.app).post("/api/workspaces/open"))
+        .send({
+          environmentId: current.environmentId,
+          path: current.workspacePath,
+          project: { kind: "new", name: "Automation project" },
+        })
+        .expect(201);
+      const thread = await current
+        .mutate(request(current.app).post("/api/threads"))
+        .send({
+          workspaceId: workspace.body.id,
+          configuration: { kind: "custom", targetId: current.profile.id },
+          executionWorkspace: { kind: "direct" },
+          title: "Assistant",
+        })
+        .expect(201);
+      const threadId = thread.body.threadId as string;
+      const dailyInput = {
+        threadId,
+        name: "Daily update",
+        initialState: "enabled",
+        prompt: "Send my update",
+        runMode: "same_thread",
+        schedule: {
+          kind: "interval",
+          anchorAt: "2099-07-30T12:00:00.000Z",
+          everySeconds: 86400,
+        },
+        misfirePolicy: "coalesce",
+        precheck: null,
+          mutationId: randomUUID(),
+        };
+      const daily = await current
+        .mutate(request(current.app).post("/api/automations"))
+        .send(dailyInput)
+        .expect(201);
+      const reminder = await current
+        .mutate(request(current.app).post("/api/automations"))
+        .send({
+          threadId,
+          name: "Dentist reminder",
+          initialState: "enabled",
+          prompt: "Remind me",
+          runMode: "same_thread",
+          schedule: { kind: "date_time", runAt: "2099-07-30T14:00:00.000Z" },
+          misfirePolicy: null,
+          precheck: null,
+          mutationId: randomUUID(),
+        })
+        .expect(201);
+      expect(daily.body).toMatchObject({
+        threadId,
+        name: "Daily update",
+        status: "enabled",
+        nextRunAt: expect.any(String),
+      });
+      expect(reminder.body.id).not.toBe(daily.body.id);
+      const replay = await current
+        .mutate(request(current.app).post("/api/automations"))
+        .send(dailyInput)
+        .expect(201);
+      expect(replay.body.id).toBe(daily.body.id);
+      await current
+        .mutate(request(current.app).post("/api/automations"))
+        .send({ ...dailyInput, name: "Different work" })
+        .expect(409);
+      const first = await current
+        .withHost(request(current.app).get("/api/automations?pageSize=1"))
+        .expect(200);
+      expect(first.body.items).toHaveLength(1);
+      const next = await current
+        .withHost(
+          request(current.app).get(
+            `/api/automations?pageSize=1&cursor=${encodeURIComponent(first.body.nextCursor as string)}`,
+          ),
+        )
+        .expect(200);
+      expect(next.body.nextCursor).toBeNull();
+      expect(new Set([first.body.items[0].id, next.body.items[0].id])).toEqual(
+        new Set([daily.body.id, reminder.body.id]),
+      );
+      const own = await current
+        .withHost(
+          request(current.app).get(`/api/automations?threadId=${threadId}`),
+        )
+        .expect(200);
+      expect(own.body.items).toHaveLength(2);
+      await current
+        .withHost(request(current.app).get(`/api/automations/${daily.body.id}`))
+        .set("X-Test-Foreign-Principal", "yes")
+        .expect(404);
+      await current
+        .withHost(
+          request(current.app).get(`/api/threads/${threadId}/automation`),
+        )
+        .expect(404);
+      await current
+        .mutate(
+          request(current.app).delete(`/api/automations/${reminder.body.id}`),
+        )
+        .send({
+          expectedRevision: reminder.body.revision,
+          mutationId: randomUUID(),
+        })
+        .expect(200);
+      await current
+        .withHost(request(current.app).get(`/api/automations/${daily.body.id}`))
+        .expect(200)
+        .expect(({ body }) =>
+        expect(body.name).toBe("Daily update"));
+      const remaining = await current
+        .withHost(
+          request(current.app).get(`/api/automations?threadId=${threadId}`),
+        )
+        .expect(200);
+      expect(
+        remaining.body.items.map((item: { id: string }) => item.id),
+      ).toEqual([daily.body.id]);
     } finally {
       current.close();
     }
@@ -6887,22 +7290,45 @@ describe("normalized HTTP application contract", () => {
         })
         .expect(201);
       const threadId = created.body.threadId as string;
-      current.disableCloneAutomation();
 
       const baseDefinition = {
+        name: "Scheduled checks",
         prompt: "Run scheduled checks",
         schedule: {
           kind: "date_time" as const,
           runAt: "2099-07-30T12:00:00.000Z",
         },
-        misfirePolicy: "coalesce" as const,
+        misfirePolicy: null,
         precheck: null,
       };
-      await current
+      const originalForkInput = {
+          ...baseDefinition,
+        threadId,
+        initialState: "paused",
+        runMode: "clone",
+          mutationId: randomUUID(),
+        };
+      const originalFork = await current
         .mutate(
-          request(current.app).post(`/api/threads/${threadId}/automation`),
-        )
+          request(current.app).post("/api/automations"))
+        .send(originalForkInput)
+        .expect(201);
+      current.disableCloneAutomation();
+      const replayedFork = await current
+        .mutate(request(current.app).post("/api/automations"))
+        .send(originalForkInput)
+        .expect(201);
+      expect(replayedFork.body.id).toBe(originalFork.body.id);
+      const editedExistingFork = await current
+        .mutate(request(current.app).patch(`/api/automations/${originalFork.body.id}`))
+        .send({ ...baseDefinition, name: "Renamed existing Fork", prompt: "New Fork prompt", runMode: "clone", expectedRevision: originalFork.body.revision, mutationId: randomUUID() })
+        .expect(200);
+      expect(editedExistingFork.body).toMatchObject({ name: "Renamed existing Fork", prompt: "New Fork prompt", runMode: "clone" });
+      await current
+        .mutate(request(current.app).post("/api/automations"))
         .send({
+          threadId,
+          initialState: "paused",
           ...baseDefinition,
           runMode: "clone",
           mutationId: randomUUID(),
@@ -6917,10 +7343,10 @@ describe("normalized HTTP application contract", () => {
         });
 
       const sameThread = await current
-        .mutate(
-          request(current.app).post(`/api/threads/${threadId}/automation`),
-        )
+        .mutate(request(current.app).post("/api/automations"))
         .send({
+          threadId,
+          initialState: "paused",
           ...baseDefinition,
           runMode: "same_thread",
           mutationId: randomUUID(),
@@ -6928,7 +7354,7 @@ describe("normalized HTTP application contract", () => {
         .expect(201);
       await current
         .mutate(
-          request(current.app).patch(`/api/threads/${threadId}/automation`),
+          request(current.app).patch(`/api/automations/${sameThread.body.id}`),
         )
         .send({
           ...baseDefinition,
@@ -6969,7 +7395,7 @@ describe("normalized HTTP application contract", () => {
           title: "New thread",
         })
         .expect(201);
-      const previewPath = `/api/threads/${created.body.threadId as string}/automation/preview`;
+      const previewPath = `/api/threads/${created.body.threadId as string}/automations/preview`;
       const schedule = {
         kind: "interval",
         anchorAt: "2026-01-01T00:00:00.000Z",
@@ -6987,13 +7413,15 @@ describe("normalized HTTP application contract", () => {
       expect(first - now).toBeLessThanOrEqual(step + 60_000);
 
       // A day ahead holds far more than ten five-minute occurrences.
-      const wake = new Date(Math.ceil((now + 86_400_000) / step) * step + 60_000);
+      const wake = new Date(Math.ceil((now + 86_400_000) / step) * step + 60_000,
+      );
       const afterWake = await current
         .mutate(request(current.app).post(previewPath))
         .send({ schedule, count: 3, after: wake.toISOString() })
         .expect(200);
       expect(afterWake.body.occurrences).toEqual(
-        [1, 2, 3].map((index) => new Date(wake.getTime() - 60_000 + index * step).toISOString()),
+        [1, 2, 3].map((index) => new Date(wake.getTime() - 60_000 + index * step).toISOString(),
+        ),
       );
 
       // An instant already past previews from now.
@@ -7007,6 +7435,176 @@ describe("normalized HTTP application contract", () => {
         .mutate(request(current.app).post(previewPath))
         .send({ schedule, count: 1, after: "tomorrow" })
         .expect(400);
+    } finally {
+      current.close();
+    }
+  });
+
+  it("replays an exact update after that update retires its dismissed one-shot", async () => {
+    const current = await fixture();
+    try {
+      const workspace = await current
+        .mutate(request(current.app).post("/api/workspaces/open"))
+        .send({
+          environmentId: current.environmentId,
+          path: current.workspacePath,
+          project: { kind: "new", name: "Reminder replay" },
+        })
+        .expect(201);
+      const thread = await current
+        .mutate(request(current.app).post("/api/threads"))
+        .send({
+          workspaceId: workspace.body.id,
+          configuration: { kind: "custom", targetId: current.profile.id },
+          executionWorkspace: { kind: "direct" },
+          title: "Reminder replay",
+        })
+        .expect(201);
+      const threadId = thread.body.threadId as string;
+      const repository = new AutomationRepository(current.database);
+      const scheduledFor = Date.now() - 60_000;
+      const definition = repository.createDefinition(current.owner, {
+        id: randomUUID(),
+        anchorThreadId: threadId,
+        name: "Replayable reminder",
+        prompt: "Remind me",
+        precheck: null,
+        runMode: "same_thread",
+        enabled: true,
+        schedule: { kind: "date_time", runAt: scheduledFor },
+        misfirePolicy: null,
+        nextRunAt: scheduledFor,
+        now: scheduledFor - 1_000,
+      });
+      const delivered = repository.claimScheduledOccurrence(
+        current.owner,
+        definition.id,
+        {
+          occurrenceKey: `scheduled:${scheduledFor}`,
+          scheduledFor,
+          lastScheduledAt: scheduledFor,
+          nextRunAt: null,
+          coalescedCount: 0,
+          claimToken: randomUUID(),
+          leaseExpiresAt: scheduledFor + 60_000,
+          dispatchMutationId: randomUUID(),
+          now: scheduledFor,
+        },
+      ).run;
+      repository.updateRunState(current.owner, definition.id, delivered.id, {
+        expectedState: "claimed",
+        state: "dispatching",
+        claimToken: delivered.claimToken!,
+        retainPromptSnapshot: true,
+        now: scheduledFor + 1,
+      });
+      repository.updateRunState(current.owner, definition.id, delivered.id, {
+        expectedState: "dispatching",
+        state: "completed",
+        claimToken: delivered.claimToken!,
+        completeDefinition: true,
+        now: scheduledFor + 2,
+      });
+      const waiting = repository.createManualRun(current.owner, definition.id, {
+        runId: randomUUID(),
+        occurrenceKey: `manual:${randomUUID()}`,
+        scheduledFor: scheduledFor + 3,
+        claimToken: randomUUID(),
+        leaseExpiresAt: scheduledFor + 60_000,
+        dispatchMutationId: randomUUID(),
+        now: scheduledFor + 3,
+      }).run;
+      repository.deferRun(current.owner, definition.id, waiting.id, {
+        expectedState: "claimed",
+        claimToken: waiting.claimToken!,
+        reason: "source_busy",
+        eligibleAt: null,
+        now: scheduledFor + 4,
+      });
+      repository.settleRunTurn(
+        current.owner,
+        threadId,
+        delivered.dispatchMutationId,
+        {
+          turnId: `turn-${delivered.id}`,
+          outcome: "completed",
+          settledAt: scheduledFor + 5,
+          startedAt: scheduledFor + 1,
+          endedAt: scheduledFor + 5,
+        },
+      );
+      repository.acknowledgeRun(
+        current.owner,
+        definition.id,
+        delivered.id,
+        scheduledFor + 6,
+      );
+      const beforeUpdate = repository.getDefinition(
+        current.owner,
+        definition.id,
+      );
+      expect(beforeUpdate.deletedAt).toBeNull();
+      const automationPath = `/api/automations/${definition.id}`;
+      await current.withHost(request(current.app).get(automationPath)).expect(200);
+
+      const body = {
+        name: "Finished reminder",
+        prompt: "Remind me",
+        runMode: "clone",
+        schedule: {
+          kind: "date_time",
+          runAt: new Date(scheduledFor).toISOString(),
+        },
+        misfirePolicy: null,
+        precheck: null,
+        expectedRevision: beforeUpdate.revision,
+        mutationId: randomUUID(),
+      };
+      const updated = await current
+        .mutate(request(current.app).patch(automationPath))
+        .send(body)
+        .expect(200);
+      const retired = repository.getDefinition(current.owner, definition.id);
+      expect(retired.deletedAt).not.toBeNull();
+      expect(
+        repository.getRun(current.owner, definition.id, waiting.id),
+      ).toMatchObject({
+        state: "cancelled",
+        errorCode: "automation_superseded",
+      });
+      expect(
+        repository.getMutationReceipt(current.owner, body.mutationId),
+      ).toMatchObject({
+        automationId: definition.id,
+        mutationKind: "update",
+        resultRevision: retired.revision,
+      });
+      await current.withHost(request(current.app).get(automationPath)).expect(404);
+
+      current.disableCloneAutomation();
+      await current
+        .mutate(request(current.app).patch(automationPath))
+        .send(body)
+        .expect(200)
+        .expect(({ body: replay }) => expect(replay).toEqual(updated.body));
+      await current
+        .mutate(request(current.app).patch(automationPath))
+        .send({ ...body, name: "Different reminder" })
+        .expect(409)
+        .expect(({ body: conflict }) =>
+          expect(conflict.error.code).toBe("conflict"),
+        );
+      await current
+        .mutate(request(current.app).patch(automationPath))
+        .set("X-Test-Foreign-Principal", "yes")
+        .send(body)
+        .expect(404);
+      expect(repository.getDefinition(current.owner, definition.id)).toEqual(
+        retired,
+      );
+      expect(
+        repository.listRuns(current.owner, definition.id, { limit: 10 }),
+      ).toHaveLength(2);
     } finally {
       current.close();
     }
@@ -7034,7 +7632,7 @@ describe("normalized HTTP application contract", () => {
         .expect(201);
       const threadId = created.body.threadId as string;
 
-      const capabilityPath = `/api/threads/${threadId}/automation/capability`;
+      const capabilityPath = `/api/threads/${threadId}/automations/capability`;
 
       await current
         .withHost(request(current.app).get(capabilityPath))
@@ -7060,9 +7658,11 @@ describe("normalized HTTP application contract", () => {
 
       await current
         .mutate(
-          request(current.app).post(`/api/threads/${threadId}/automation`),
-        )
+          request(current.app).post("/api/automations"))
         .send({
+          threadId,
+          name: "Scheduled checks",
+          initialState: "paused",
           prompt: "Run scheduled checks",
           runMode: "same_thread",
           schedule: {
@@ -7110,9 +7710,11 @@ describe("normalized HTTP application contract", () => {
 
       const definition = await current
         .mutate(
-          request(current.app).post(`/api/threads/${threadId}/automation`),
-        )
+          request(current.app).post("/api/automations"))
         .send({
+          threadId,
+          name: "Scheduled checks",
+          initialState: "paused",
           prompt: "Run scheduled checks",
           runMode: "same_thread",
           schedule: {
@@ -7126,10 +7728,7 @@ describe("normalized HTTP application contract", () => {
         })
         .expect(201);
       const automations = new AutomationRepository(current.database);
-      const automationId = automations.findDefinitionForThread(
-        current.owner,
-        threadId,
-      )!.id;
+      const automationId = definition.body.id as string;
       const claim = (now: number) =>
         automations.createManualRun(current.owner, automationId, {
           runId: randomUUID(),
@@ -7182,7 +7781,7 @@ describe("normalized HTTP application contract", () => {
           now: 4_100,
         },
       );
-      const runsPath = `/api/threads/${threadId}/automation/runs`;
+      const runsPath = `/api/automations/${automationId}/runs`;
 
       const firstProblems = await current
         .withHost(
@@ -7247,8 +7846,7 @@ describe("normalized HTTP application contract", () => {
 
       const resolved = await current
         .mutate(
-          request(current.app).post(`${runsPath}/${unknown.id}/resolve`),
-        )
+          request(current.app).post(`${runsPath}/${unknown.id}/resolve`))
         .send({ action: "mark_failed", resume: true })
         .expect(200);
       expect(resolved.body).toMatchObject({
@@ -7266,8 +7864,7 @@ describe("normalized HTTP application contract", () => {
       // A replay reports the current state without enabling again.
       await current
         .mutate(
-          request(current.app).post(`${runsPath}/${unknown.id}/resolve`),
-        )
+          request(current.app).post(`${runsPath}/${unknown.id}/resolve`))
         .send({ action: "mark_failed" })
         .expect(200)
         .expect(({ body }) => expect(body).toEqual(resolved.body));
@@ -7276,7 +7873,7 @@ describe("normalized HTTP application contract", () => {
     }
   });
 
-  it("presents settled run turns and lists failed turns as problems", async () => {
+  it("presents settled run turns and lists failed, not interrupted, turns as problems", async () => {
     const current = await fixture();
     try {
       const workspace = await current
@@ -7297,11 +7894,13 @@ describe("normalized HTTP application contract", () => {
         })
         .expect(201);
       const threadId = created.body.threadId as string;
-      await current
+      const definition = await current
         .mutate(
-          request(current.app).post(`/api/threads/${threadId}/automation`),
-        )
+          request(current.app).post("/api/automations"))
         .send({
+          threadId,
+          name: "Scheduled checks",
+          initialState: "paused",
           prompt: "Run scheduled checks",
           runMode: "same_thread",
           schedule: {
@@ -7315,10 +7914,7 @@ describe("normalized HTTP application contract", () => {
         })
         .expect(201);
       const automations = new AutomationRepository(current.database);
-      const automationId = automations.findDefinitionForThread(
-        current.owner,
-        threadId,
-      )!.id;
+      const automationId = definition.body.id as string;
       const deliver = (now: number) => {
         const run = automations.createManualRun(current.owner, automationId, {
           runId: randomUUID(),
@@ -7360,7 +7956,7 @@ describe("normalized HTTP application contract", () => {
             endedAt,
           },
         );
-      const automationPath = `/api/threads/${threadId}/automation`;
+      const automationPath = `/api/automations/${automationId}`;
       const historyRevision = async () =>
         (
           await current
@@ -7377,7 +7973,7 @@ describe("normalized HTTP application contract", () => {
       const delivered = deliver(3_000);
       const finished = deliver(4_000);
       settle(finished, "completed", 4_500);
-      const runsPath = `/api/threads/${threadId}/automation/runs`;
+      const runsPath = `/api/automations/${automationId}/runs`;
 
       await current
         .withHost(request(current.app).get(`${runsPath}?filter=problems`))
@@ -7421,7 +8017,7 @@ describe("normalized HTTP application contract", () => {
         });
       await current
         .withHost(
-          request(current.app).get(`/api/threads/${threadId}/automation`),
+          request(current.app).get(`/api/automations/${definition.body.id}`),
         )
         .expect(200)
         .expect(({ body }) =>
@@ -7627,11 +8223,13 @@ describe("normalized HTTP application contract", () => {
         type: "inventory_counts_changed", generation: ownerHub.generation,
         counts: { active, snoozed: 0, settled: 0, archived: 0 },
       });
-      const longGap = await readFirstSseEvent(server, `/api/application/events?replayCursor=${encodeURIComponent(baseline.eventId)}`);
+      const longGap = await readFirstSseEvent(server, `/api/application/events?replayCursor=${encodeURIComponent(baseline.eventId)}`,
+      );
       expect(longGap).toMatchObject({ event: "application", data: {
         eventId: ownerHub.eventIdAt(ownerHub.watermark),
         event: { type: "snapshot", snapshot: { counts: { active: 500 } } },
-      } });
+      },
+      });
 
       const watermarkBeforeReplacement = ownerHub.watermark;
       const replaced = await readFirstSseEvent(

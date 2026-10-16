@@ -306,9 +306,12 @@ with `useSettingsEscapeLevel`.
 
 Archived, Usage, Automations, an automation's page, and its editor are pages
 without a thread: `Workbench.tsx` renders each in `pane-host-nav-header`, a
-column whose header holds only the sidebar trigger (shown when the sidebar is
-collapsed or hidden), with no workspace panels and no Tasks. A new page adds
-its root class to the `pane-host-nav-header > …` flex rule in `styles.css`.
+column whose header holds the sidebar trigger (shown when the sidebar is
+collapsed or hidden), with no workspace panels and no Tasks. The automation
+pages also provide that header as the `SettingsBackSlotContext` slot, so
+their "‹" link moves into it, as in the compact Settings header. A new page
+adds its root class to the `pane-host-nav-header > …` flex rule in
+`styles.css`.
 The three automation pages share one frame in `automations-view.css`,
 matching the Archived page: `.automations-view` is the scroller, and
 `.automations-page` is the centred column, `--measure` wide, and the
@@ -319,11 +322,32 @@ A page can build on the settings kit. `SettingsDetailHeader` and
 `headingLevel={1}` when they are the page's own header. Section anchors follow
 the nearest scrolling ancestor, so an editor works in a page's own scroller
 as well as the settings column, and `SaveBar` sticks to that scroller. A "‹"
-link to a parent the page is always under uses `navigateUp(path)` (the
-`SettingsBackLink` default); a page reached from several places, such as an
-automation's page, passes `navigateBack(fallback)`, which returns to the
-previous entry when this document opened it and otherwise replaces the entry
-with the fallback.
+link names the page it leads to. A link to a parent the page is always under
+uses `navigateUp(path)` (the `SettingsBackLink` default): a thread's
+Automations (`/threads/:id/automations`) goes up to its thread, and the
+editor goes up to the automation it edits. A page reached from several
+places, such as an automation's page, derives its link from
+`historyEntryBefore(path)`, which skips its own sub-entries such as the
+editor. The link reads "Automations" after either list, or the title of
+the thread after a thread (its own, or a fork result's notice). It leaves
+through `navigateOut(path, accept, fallback)`, which goes back when `accept`
+takes that entry and otherwise replaces the entry with the fallback.
+Deleting an automation leaves the same way, so Back does not land on the
+deleted page when a list or thread lies behind it.
+`components/automation/automation-navigation.ts` holds these targets.
+`useAutomationUp` sends Escape, and Android Back without history, to the same
+place.
+When that link names the source thread, the detail header omits the duplicate
+"In {thread}" meta link. A removed automation retains its known name and saved
+schedule icon (Repeat, CirclePause or CircleCheck), never a stale live spinner,
+and offers All automations only when its back link leads elsewhere.
+Both Automations list headings align with the detail and editor columns; row
+contents retain their inset. The automation compact bar uses the Settings
+divider only when it carries a back link. Automation editor section anchors
+fade only edges with offscreen links, keeping the outer sticky bar's hairline
+and cover shadows. Its phone save bar reserves only the bottom safe-area inset.
+In narrow three-action create bars, save status is visually hidden but remains
+a live region; two-action edit bars and wider layouts show it normally.
 
 ## Automation state vocabulary
 
@@ -335,8 +359,10 @@ the helpers and their tests.
 
 | Helper | Use |
 | --- | --- |
-| `automationHealth(thread, now)` | The one state, first match wins: `sending`, `failed`, `unknown` (an uncertain last run), `archived`, `snoozed` (only while the wake time is ahead), `active`, `paused`, `not_started`. Each carries its list `group` (`needs_attention`, `upcoming`, `paused`, `suspended`), `glyph`, chip `tone`, and `label` |
-| `automationNeedsAttention`, `automationIdentityGlyph`, `automationIdentityLabel` | Failed or uncertain for attention buckets; the Repeat, CirclePause, or spinner glyph for surfaces that show attention separately, as a row badge or a tinted header button |
+| `automationHealth(thread, now)` | State for one automation: unresolved delivery attention, deferred or in-flight work, source suspension, then definition status. Includes `waiting` and `exhausted` (shown as Finished). Each carries its list group, glyph, chip tone, and label |
+| `threadAutomationHealth(thread, now)` | Bounded thread-level counts for the sidebar, header, and preview. Attention on any automation remains visible even while another sends or succeeds; no arbitrary singleton is selected |
+| `automationNeedsAttention`, `automationIdentityGlyph`, `automationIdentityLabel` | The explicit per-automation attention projection for attention buckets; the Repeat, CirclePause, CircleCheck (Finished), or spinner glyph for surfaces that show attention separately, as a row badge or a tinted header button |
+| `automationDefinitionGlyph` | Static saved-schedule icon for removed definitions: Repeat, CirclePause or CircleCheck, independent of stale live work |
 | `compareAutomationsInGroup`, `AUTOMATION_HEALTH_GROUPS` | List group order and the order within a group |
 | `describeSchedule`, `runStateLabel`, `runSkipReason`, `runMeta` | Schedule sentences, run state words, and one-line run facts. `completed` reads "Delivered": the backend accepted the prompt, not that the turn ended |
 | `automationStatusText`, `lastRunAge`, `automationErrorText` | The short state for tooltips and status lines, the last run's age, and an error code as a sentence where only the code is projected |
@@ -347,6 +373,8 @@ the helpers and their tests.
 
 Uncertain runs need attention everywhere, and paused is never a warning tone.
 Repeat is the automation icon in menus, headers, and rows.
+Finished definitions use CircleCheck and show their last result once. A thread
+with only finished automations still has no aggregate schedule icon.
 
 ## Z layers
 

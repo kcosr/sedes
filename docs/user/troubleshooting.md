@@ -210,12 +210,13 @@ and confirm that:
 - its schedule and next runs show the expected time zone and time;
 - the thread and target are available;
 - a local precheck exited zero;
-- for **A new fork each run**, the thread can still fork; and
+- for **Fork**, the thread can still fork; and
 - the run is not waiting at an attended approval.
 
 Use **Runs**, and its **Problems** and **Skipped** filters, to tell skipped,
 missed and merged, failed, and unknown runs apart. A **Delivered** run reached
-the agent; look in the thread for its work. A run whose outcome is unknown
+the agent; look in the thread for its work. An **Interrupted** run was stopped
+before its turn finished; it is not listed as a problem. A run whose outcome is unknown
 pauses the schedule until you mark it failed. SSH prechecks are unsupported
 and fail rather than executing remotely. See
 [Tasks and automations](tasks-and-automations.md#review-run-history).

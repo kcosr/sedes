@@ -1,9 +1,10 @@
 /* Automations list page (AutomationsView, AutomationRow). The header and its
-   status line follow the Archived page; group headings are the Tasks section
-   heading with the Archived "· n" count; rows put the title and the next run
-   on line 1, the schedule and the last outcome on line 2. Layout follows the
-   page width through a container query on .automations-page; touch sizing
-   follows the density switch. */
+   status line follow the Archived page; a thread's list instead has the
+   settings "‹" link over its title and Add automation beside it. Group
+   headings are the Tasks section heading with the Archived "· n" count; rows
+   put the title and the next run on line 1, the schedule and the last
+   outcome on line 2. Layout follows the page width through a container query
+   on .automations-page; touch sizing follows the density switch. */
 
 /* ------------------------------------------------------------- header */
 
@@ -13,7 +14,6 @@
   align-items: center;
   gap: var(--space-2) var(--space-4);
   margin-bottom: var(--space-3);
-  padding-inline: var(--space-2);
 }
 
 .automations-heading {
@@ -93,10 +93,25 @@
   text-decoration-color: currentColor;
 }
 
+/* A thread's list: the "‹" link to the thread is the header's first row. */
+.automations-header > [data-slot="settings-page-back"] {
+  grid-column: 1 / -1;
+}
+
 /* ------------------------------------------------------------- groups */
 
 .automations-groups > [data-slot="empty-state"] {
   margin-top: var(--space-6);
+}
+
+/* Until the first load: placeholder rows as tall as a two-line row. */
+.automations-loading {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.automations-skeleton-row {
+  height: calc(var(--control-md) + var(--space-5));
 }
 
 .automations-group + .automations-group {
@@ -297,6 +312,7 @@
   line-height: var(--leading-snug);
 }
 
+.automation-row-primary svg,
 .automation-row-secondary svg {
   width: var(--icon-xs);
   height: var(--icon-xs);
@@ -304,6 +320,7 @@
 }
 
 /* A last run whose turn is still going: the spinner takes the check's size. */
+.automation-row-primary .automation-glyph.comet-spinner[data-size],
 .automation-row-secondary .automation-glyph.comet-spinner[data-size] {
   --comet-spinner-size: var(--icon-xs);
   --comet-spinner-thickness: 1.8px;
@@ -329,7 +346,7 @@
    and takes pointer events above the link's overlay. */
 .automation-row-more {
   position: relative;
-  margin: 5px var(--space-1) 0;
+  margin: var(--space-1) var(--space-1) 0;
   color: var(--muted-foreground);
   visibility: hidden;
 }
@@ -352,9 +369,19 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
+  /* A thread's list keeps Add automation beside its title. */
+  .automations-header[data-scope="thread"] {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .automations-tools {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
   .automations-search {
-    width: auto;
-    flex: 1 1 auto;
+    width: 100%;
+    min-width: 0;
   }
 
   .automation-row-open {
@@ -382,22 +409,27 @@
   }
 }
 
-/* Touch: ⋯ keeps a 40px target beside the row instead of hiding until
-   hover, and rows gain a little height. */
+/* Touch: ⋯ keeps a bar-sized target (40px) beside the row instead of
+   hiding until hover, and rows gain a little height. Add automation takes
+   the touch size, as settings header actions do. */
 @media (max-width: 819px), (pointer: coarse) {
   .automation-row-open {
     padding-block: var(--space-2-5);
   }
 
   .automation-row-more {
-    width: 40px;
-    height: 40px;
-    margin: 2px 0 0;
+    width: var(--bar-control);
+    height: var(--bar-control);
+    margin: var(--space-0-5) 0 0;
     visibility: visible;
   }
 
   .automations-view-options {
-    width: 36px;
-    height: 36px;
+    width: var(--control-lg);
+    height: var(--control-lg);
+  }
+
+  .automations-header > .automations-add {
+    min-height: var(--control-default);
   }
 }

@@ -20,31 +20,35 @@ const usage = `Sedes automation CLI
 
 Usage:
   npm run automation -- validate FILE
-  npm run automation -- create FILE
-  npm run automation -- update THREAD_ID FILE
+  npm run automation -- create THREAD_ID FILE [--mutation-id UUID]
+  npm run automation -- update AUTOMATION_ID FILE
   npm run automation -- preview THREAD_ID FILE
   npm run automation -- precheck THREAD_ID FILE
-  npm run automation -- get THREAD_ID
-  npm run automation -- enable THREAD_ID
-  npm run automation -- pause THREAD_ID
-  npm run automation -- run-now THREAD_ID
-  npm run automation -- runs THREAD_ID [--filter all|problems|skipped]
-  npm run automation -- resolve THREAD_ID RUN_ID [--resume]
-  npm run automation -- list [QUERY]
-  npm run automation -- remove THREAD_ID
+  npm run automation -- get AUTOMATION_ID
+  npm run automation -- enable AUTOMATION_ID
+  npm run automation -- pause AUTOMATION_ID
+  npm run automation -- run-now AUTOMATION_ID
+  npm run automation -- runs AUTOMATION_ID [--filter all|problems|skipped]
+  npm run automation -- resolve AUTOMATION_ID RUN_ID [--resume]
+  npm run automation -- list [QUERY] [--thread THREAD_ID]
+  npm run automation -- remove AUTOMATION_ID
 
 Options:
   --server URL       Sedes origin (default: SEDES_URL or http://127.0.0.1:4784)
   --allow-remote     Permit an explicitly trusted non-loopback Sedes origin
   --filter FILTER    runs: all (default), problems (failed, uncertain or failed turn), or skipped
   --resume           resolve: also enable the automation in the same operation
+  --thread ID        list: restrict results to an existing source thread
+  --mutation-id UUID create/run-now: reuse this key when retrying the same request
   --help             Show this help
   --version          Print this build's Sedes version
 
 Authentication: set SEDES_AUTH_TOKEN to this server's paired device credential.
 
-Create is intentionally not an idempotent apply operation: running it twice
-creates two threads. Update, state, and removal commands require a thread ID.
+Create attaches an independent automation to an existing thread or draft.
+Create and run-now print their mutation key before sending the request. Reuse
+that key with unchanged input after an uncertain result; a new key means new work.
+All item commands use an automation ID, not its source thread ID.
 `;
 
 interface CliOptions {
@@ -53,6 +57,8 @@ interface CliOptions {
   readonly allowRemote: boolean;
   readonly filter?: AutomationRunFilter;
   readonly resume: boolean;
+  readonly threadId?: string;
+  readonly mutationId?: string;
 }
 
 function parseOptions(arguments_: string[]): CliOptions {
@@ -61,6 +67,8 @@ function parseOptions(arguments_: string[]): CliOptions {
   let allowRemote = false;
   let filter: AutomationRunFilter | undefined;
   let resume = false;
+  let threadId: string | undefined;
+  let mutationId: string | undefined;
   for (let index = 0; index < arguments_.length; index += 1) {
     const argument = arguments_[index]!;
     if (argument === "--server") {
@@ -76,6 +84,12 @@ function parseOptions(arguments_: string[]): CliOptions {
         throw new Error("--filter requires all, problems, or skipped.");
       }
       filter = value.data;
+      index += 1;
+    } else if (argument === "--thread" || argument === "--mutation-id") {
+      const value = z.uuid().safeParse(arguments_[index + 1]);
+      if (!value.success) throw new Error(`${argument} requires a UUID.`);
+      if (argument === "--thread") threadId = value.data;
+      else mutationId = value.data;
       index += 1;
     } else if (argument === "--resume") {
       resume = true;
@@ -95,6 +109,8 @@ function parseOptions(arguments_: string[]): CliOptions {
     allowRemote,
     ...(filter ? { filter } : {}),
     resume,
+    ...(threadId ? { threadId } : {}),
+    ...(mutationId ? { mutationId } : {}),
   };
 }
 
@@ -146,13 +162,13 @@ async function runChecks(
 
 async function applyDesiredState(
   client: SedesCliApiClient,
-  threadId: string,
+  automationId: string,
   automation: Awaited<ReturnType<SedesCliApiClient["getAutomation"]>>,
   desiredState: "enabled" | "paused",
 ) {
   if (automation.status === desiredState) return automation;
   return client.setAutomationState(
-    threadId,
+    automationId,
     desiredState === "enabled" ? "enable" : "pause",
     automation.revision,
   );
@@ -166,6 +182,10 @@ async function main() {
   }
   if (options.resume && command !== "resolve") {
     throw new Error("--resume applies only to resolve.");
+  }
+  if (options.threadId && command !== "list") throw new Error("--thread applies only to list.");
+  if (options.mutationId && command !== "create" && command !== "run-now") {
+    throw new Error("--mutation-id applies only to create and run-now.");
   }
   if (command === "version") {
     process.stdout.write(`sedes ${SEDES_VERSION}\n`);
@@ -186,99 +206,26 @@ async function main() {
   const client = new SedesCliApiClient(baseUrl, process.env.SEDES_AUTH_TOKEN);
 
   if (command === "create") {
-    const [path] = requireArguments(arguments_, 1, "create FILE");
+    const [threadId, path] = requireArguments(arguments_, 2, "create THREAD_ID FILE");
     const input = await readInput(path!);
-    if (!input.thread) {
-      throw new Error("Create input must include the thread block.");
-    }
-    const thread = input.thread;
-    const snapshot = await client.snapshot();
-    const workspace = snapshot.workspaces.find(
-      ({ id }) => id === thread.workspaceId,
-    );
-    if (!workspace) throw new Error(`Unknown workspace: ${thread.workspaceId}`);
-    const targetId = thread.configuration.targetId;
-    if (!targetId) {
-      throw new Error(
-        "Automation creation requires an explicit thread target.",
-      );
-    }
-    const target = snapshot.executionTargets.find(
-      ({ id }) => id === targetId,
-    );
-    if (!target?.available) {
-      throw new Error(`Unknown or unavailable target: ${targetId}`);
-    }
-    if (target.environmentId !== workspace.environmentId) {
-      throw new Error(
-        "The selected target and workspace belong to different execution environments.",
-      );
-    }
-
-    const threadId = await client.createThread(thread);
-    try {
-      const capability = await client.automationCapability(threadId);
-      if (!capability.canAttach) {
-        throw new Error(
-          capability.unavailableReason?.text ??
-            "Automation cannot be attached to the new thread.",
-        );
-      }
-      if (input.automation.runMode === "clone" && !capability.canCloneOnRun) {
-        throw new Error(
-          "Clone-mode automation is unavailable for the new thread.",
-        );
-      }
-      const checks = await runChecks(client, threadId, input);
-      const created = await client.createAutomation(threadId, input.automation);
-      const automation = await applyDesiredState(
-        client,
-        threadId,
-        created,
-        input.automation.state ?? "paused",
-      );
-      print({ threadId, automation, ...checks });
-    } catch (error) {
-      process.stderr.write(
-        `Thread ${threadId} was created, but automation setup did not complete.\n`,
-      );
-      throw error;
-    }
+    const checks = await runChecks(client, threadId!, input);
+    const mutationId = options.mutationId ?? crypto.randomUUID();
+    process.stderr.write(`Mutation ID: ${mutationId}\n`);
+    const automation = await client.createAutomation(threadId!, input.automation, mutationId);
+    print({ mutationId, automation, ...checks });
     return;
   }
 
   if (command === "update") {
-    const [threadId, path] = requireArguments(
-      arguments_,
-      2,
-      "update THREAD_ID FILE",
-    );
+    const [automationId, path] = requireArguments(arguments_, 2, "update AUTOMATION_ID FILE");
     const input = await readInput(path!);
-    if (input.thread) {
-      throw new Error(
-        "Existing-thread commands take the thread ID on the command line; omit the thread block.",
-      );
+    if (input.automation.initialState !== undefined) {
+      throw new Error("initialState applies only to create; use enable or pause to change state.");
     }
-    if (
-      input.automation.runMode === "clone" &&
-      !(await client.automationCapability(threadId!)).canCloneOnRun
-    ) {
-      throw new Error("Clone-mode automation is unavailable for this thread.");
-    }
-    const current = await client.getAutomation(threadId!);
-    const checks = await runChecks(client, threadId!, input);
-    const updated = await client.updateAutomation(
-      threadId!,
-      input.automation,
-      current.revision,
-    );
-    const automation = await applyDesiredState(
-      client,
-      threadId!,
-      updated,
-      input.automation.state ?? updated.status,
-    );
-    print({ threadId, automation, ...checks });
+    const current = await client.getAutomation(automationId!);
+    const checks = await runChecks(client, current.threadId, input);
+    const automation = await client.updateAutomation(automationId!, input.automation, current.revision);
+    print({ automation, ...checks });
     return;
   }
 
@@ -289,11 +236,6 @@ async function main() {
       `${command} THREAD_ID FILE`,
     );
     const input = await readInput(path!);
-    if (input.thread) {
-      throw new Error(
-        "Existing-thread commands take the thread ID on the command line; omit the thread block.",
-      );
-    }
     print(
       command === "preview"
         ? await client.previewAutomation(
@@ -307,18 +249,18 @@ async function main() {
   }
 
   if (command === "get") {
-    const [threadId] = requireArguments(arguments_, 1, "get THREAD_ID");
-    print(await client.getAutomation(threadId!));
+    const [automationId] = requireArguments(arguments_, 1, "get AUTOMATION_ID");
+    print(await client.getAutomation(automationId!));
     return;
   }
 
   if (command === "enable" || command === "pause") {
-    const [threadId] = requireArguments(arguments_, 1, `${command} THREAD_ID`);
-    const current = await client.getAutomation(threadId!);
+    const [automationId] = requireArguments(arguments_, 1, `${command} AUTOMATION_ID`);
+    const current = await client.getAutomation(automationId!);
     print(
       await applyDesiredState(
         client,
-        threadId!,
+        automationId!,
         current,
         command === "enable" ? "enabled" : "paused",
       ),
@@ -327,35 +269,37 @@ async function main() {
   }
 
   if (command === "run-now") {
-    const [threadId] = requireArguments(arguments_, 1, "run-now THREAD_ID");
-    print(await client.runNow(threadId!));
+    const [automationId] = requireArguments(arguments_, 1, "run-now AUTOMATION_ID");
+    const mutationId = options.mutationId ?? crypto.randomUUID();
+    process.stderr.write(`Mutation ID: ${mutationId}\n`);
+    print({ mutationId, run: await client.runNow(automationId!, mutationId) });
     return;
   }
 
   if (command === "runs") {
-    const [threadId] = requireArguments(
+    const [automationId] = requireArguments(
       arguments_,
       1,
-      "runs THREAD_ID [--filter all|problems|skipped]",
+      "runs AUTOMATION_ID [--filter all|problems|skipped]",
     );
-    print(await client.listRuns(threadId!, options.filter));
+    print(await client.listRuns(automationId!, options.filter));
     return;
   }
 
   if (command === "resolve") {
-    const [threadId, runId] = requireArguments(
+    const [automationId, runId] = requireArguments(
       arguments_,
       2,
-      "resolve THREAD_ID RUN_ID [--resume]",
+      "resolve AUTOMATION_ID RUN_ID [--resume]",
     );
-    print(await client.resolveRun(threadId!, runId!, options.resume));
+    print(await client.resolveRun(automationId!, runId!, options.resume));
     return;
   }
 
   if (command === "remove") {
-    const [threadId] = requireArguments(arguments_, 1, "remove THREAD_ID");
-    const current = await client.getAutomation(threadId!);
-    print(await client.deleteAutomation(threadId!, current.revision));
+    const [automationId] = requireArguments(arguments_, 1, "remove AUTOMATION_ID");
+    const current = await client.getAutomation(automationId!);
+    print(await client.deleteAutomation(automationId!, current.revision));
     return;
   }
 
@@ -363,17 +307,20 @@ async function main() {
     if (arguments_.length > 1)
       throw new Error("Usage: npm run automation -- list [QUERY]");
     const query = arguments_[0]?.toLocaleLowerCase();
-    const snapshot = await client.snapshot();
-    const automations = snapshot.threads.filter(
-      (thread) =>
-        thread.automation !== null &&
-        (!query || thread.title.text.toLocaleLowerCase().includes(query)),
-    );
-    print({
-      items: automations,
-      boundedToSnapshot: true,
-      totalLoadedThreads: snapshot.threads.length,
-    });
+    const items = [];
+    let cursor: string | undefined;
+    do {
+      const page = await client.listAutomations({
+        ...(options.threadId ? { threadId: options.threadId } : {}),
+        ...(cursor ? { cursor } : {}),
+      });
+      items.push(...page.items.filter((automation) =>
+        !query || automation.name.toLocaleLowerCase().includes(query) ||
+          automation.source.title.toLocaleLowerCase().includes(query),
+      ));
+      cursor = page.nextCursor ?? undefined;
+    } while (cursor);
+    print({ items });
     return;
   }
 

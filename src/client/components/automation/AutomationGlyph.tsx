@@ -1,5 +1,6 @@
 import {
   Archive,
+  CircleCheck,
   CirclePause,
   Moon,
   Repeat,
@@ -19,6 +20,7 @@ const ICONS: Readonly<Record<Exclude<AutomationGlyphKind, "spinner">, LucideIcon
   // The sidebar's snooze glyph, so a snoozed anchor reads the same everywhere.
   snoozed: Moon,
   repeat: Repeat,
+  finished: CircleCheck,
   pause: CirclePause,
 };
 
@@ -32,7 +34,7 @@ const ICON_SIZES: Readonly<
 
 /**
  * One automation health glyph (see `automationHealth`): Repeat, CirclePause,
- * the attention triangle, the sending spinner, Archive or the snooze moon.
+ * CircleCheck, the attention triangle, the sending spinner, Archive or the snooze moon.
  * Rendered bare, without a wrapper, so it drops into existing glyph slots.
  * Tone colors only the states that carry meaning (danger, warning, info);
  * neutral and success (Active) inherit the surface's quiet glyph color.

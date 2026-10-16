@@ -690,6 +690,15 @@ export const workpadChangedEventSchema = z.strictObject({
 export type WorkpadChangedEvent = z.infer<typeof workpadChangedEventSchema>;
 
 export const normalizedApplicationEventSchema = z.discriminatedUnion("type", [
+  z.strictObject({
+    type: z.literal("automation_changed"),
+    generation: applicationGenerationSchema,
+    automationId: z.uuid(),
+    threadId: z.uuid(),
+    revision: z.number().int().nonnegative(),
+    runsRevision: z.number().int().nonnegative(),
+    deleted: z.boolean(),
+  }),
   workpadChangedEventSchema,
   z.strictObject({
     type: z.literal("snapshot"),
@@ -778,7 +787,7 @@ export type ApplicationEventEnvelope = z.infer<
   typeof applicationEventEnvelopeSchema
 >;
 
-export const SEDES_CLIENT_PROTOCOL_VERSION = 159 as const;
+export const SEDES_CLIENT_PROTOCOL_VERSION = 161 as const;
 
 export const normalizedApplicationSessionSchema = z.strictObject({
   clientProtocolVersion: z.literal(SEDES_CLIENT_PROTOCOL_VERSION),

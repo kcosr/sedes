@@ -1,19 +1,20 @@
 import { Type } from "typebox";
 import type { AgentToolDefinition } from "../contracts/agent-tool-contracts.js";
 import type {
-  AgentAutomationDefinition,
+  AgentAutomationMutationResult,
   AutomationAgentToolService,
   AutomationUpdateToolInput,
 } from "./automation-agent-tool-service.js";
 import {
-  automationDefinitionToolOutputSchema,
+  automationMutationToolOutputSchema,
+  automationNameToolSchema,
   automationPrecheckToolSchema,
   automationReadWaitCeilings,
   automationScheduleToolSchema,
   automationToolExposure,
   automationToolInputSchema,
   automationToolPresentations,
-  optionalAutomationThreadId,
+  requiredAutomationId,
 } from "./automation-tool-schemas.js";
 import { CANONICAL_AGENT_TOOL_MANIFEST } from "../registry/canonical-agent-tool-manifest.js";
 
@@ -22,11 +23,15 @@ export const automationUpdateToolId =
 
 export function createAutomationUpdateToolDefinition(
   service: AutomationAgentToolService,
-): AgentToolDefinition<AutomationUpdateToolInput, AgentAutomationDefinition> {
+): AgentToolDefinition<
+  AutomationUpdateToolInput,
+  AgentAutomationMutationResult
+> {
   return {
     ...CANONICAL_AGENT_TOOL_MANIFEST["automation.update"],
     inputSchema: automationToolInputSchema(
       {
+        name: Type.Optional(automationNameToolSchema),
         expectedRevision: Type.Integer({
           minimum: 0,
           maximum: Number.MAX_SAFE_INTEGER,
@@ -37,16 +42,19 @@ export function createAutomationUpdateToolDefinition(
         ),
         schedule: Type.Optional(automationScheduleToolSchema),
         misfirePolicy: Type.Optional(
-          Type.String({ maxLength: 8, enum: ["coalesce", "skip"] }),
+          Type.Union([
+            Type.String({ maxLength: 8, enum: ["coalesce", "skip"] }),
+            Type.Null(),
+          ]),
         ),
         precheck: Type.Optional(
           Type.Union([automationPrecheckToolSchema, Type.Null()]),
         ),
-        threadId: optionalAutomationThreadId,
+        automationId: requiredAutomationId,
       },
       { minProperties: 2 },
     ),
-    outputSchema: automationDefinitionToolOutputSchema,
+    outputSchema: automationMutationToolOutputSchema,
     requiredCapabilities: [],
     execution: {
       form: "inline",

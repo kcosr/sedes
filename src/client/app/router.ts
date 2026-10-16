@@ -19,30 +19,12 @@ export type Route =
     }
   | { name: "archived" }
   | { name: "usage" }
-  | { name: "automations" }
-  | { name: "automation"; threadId: string; edit: boolean }
+  | { name: "automations"; threadId?: string }
+  | { name: "automation-create"; threadId: string }
+  | { name: "automation"; automationId: string; edit: boolean }
   | ({ name: "settings"; page?: SettingsPage } & SettingsResourceRoute);
 
-/** The automation dialog's old address; it now names the automation page. */
-const LEGACY_AUTOMATION_PATH = /^\/threads\/([^/]+)\/automation$/;
-
-/**
- * Rewrites a legacy alias in the address bar to its route's own path, in
- * place (a replace), so the old address never stays in history.
- */
-function canonicalizeLocation(route: Route): void {
-  if (route.name !== "automation" || !LEGACY_AUTOMATION_PATH.test(window.location.pathname)) {
-    return;
-  }
-  window.history.replaceState(
-    window.history.state,
-    "",
-    `${routePath(route)}${window.location.search}`,
-  );
-}
-
 let currentRoute = parseRoute(window.location.pathname, window.location.hash);
-canonicalizeLocation(currentRoute);
 if (currentRoute.name === "thread") {
   beginThreadLoadAttempt(currentRoute.threadId, "initial_route");
 }
@@ -93,24 +75,19 @@ export function parseRoute(pathname: string, hash = ""): Route {
     try {
       return {
         name: "automation",
-        threadId: decodeURIComponent(automationPageMatch[1]),
+        automationId: decodeURIComponent(automationPageMatch[1]),
         edit: automationPageMatch[2] !== undefined,
       };
     } catch {
       return { name: "home" };
     }
   }
-  const legacyAutomationMatch = LEGACY_AUTOMATION_PATH.exec(pathname);
-  if (legacyAutomationMatch?.[1]) {
+  const threadAutomations = /^\/threads\/([^/]+)\/automations(\/new)?$/.exec(pathname);
+  if (threadAutomations?.[1]) {
     try {
-      return {
-        name: "automation",
-        threadId: decodeURIComponent(legacyAutomationMatch[1]),
-        edit: false,
-      };
-    } catch {
-      return { name: "home" };
-    }
+      const threadId = decodeURIComponent(threadAutomations[1]);
+      return threadAutomations[2] ? { name: "automation-create", threadId } : { name: "automations", threadId };
+    } catch { return { name: "home" }; }
   }
   const match = /^\/threads\/([^/]+)$/.exec(pathname);
   if (match?.[1]) {
@@ -163,7 +140,6 @@ export function replaceHistoryEntry(state: unknown, path: string): void {
 }
 
 function publish(next: Route): void {
-  canonicalizeLocation(next);
   currentRoute = next;
   currentLocation = locationPath();
   currentIndex = historyIndex(window.history.state) ?? currentIndex;
@@ -215,11 +191,15 @@ function admit(intent: NavigationIntent): void {
   commit(intent);
 }
 
+function locationRoute(location: string): Route {
+  const parsed = new URL(location, window.location.href);
+  return parseRoute(parsed.pathname, parsed.hash);
+}
+
 function intentFor(path: string, mode: NavigationIntent["mode"], targetIndex?: number): NavigationIntent {
-  const parsed = new URL(path, window.location.href);
   return {
     current: currentRoute, originLocation: currentLocation, originIndex: currentIndex,
-    next: parseRoute(parsed.pathname, parsed.hash), path, mode, targetIndex,
+    next: locationRoute(path), path, mode, targetIndex,
     approved: new Set(), ready: false,
   };
 }
@@ -307,6 +287,34 @@ export function navigateBack(fallback: string): void {
   else navigate(fallback, { replace: true });
 }
 
+/**
+ * The entry Back reaches on leaving `path` and the entries below it (such as
+ * an automation's page and its editor): its route, and the (negative) number
+ * of entries Back must go. Undefined when this document did not open it,
+ * as after a deep link or a reload.
+ */
+export function historyEntryBefore(path: string): { readonly route: Route; readonly steps: number } | undefined {
+  for (let index = currentIndex - 1; index >= 0; index--) {
+    const location = entryLocations.get(index);
+    if (location === undefined) return undefined;
+    if (location === path || location.startsWith(`${path}/`)) continue;
+    return { route: locationRoute(location), steps: index - currentIndex };
+  }
+  return undefined;
+}
+
+/**
+ * Leaves `path` and the entries below it: back to the entry before them when
+ * `accept` takes its route, so the destination keeps its state and Back never
+ * lands on a page that is gone (a deleted automation's); otherwise this entry
+ * is replaced with `fallback`. Guards run either way.
+ */
+export function navigateOut(path: string, accept: (route: Route) => boolean, fallback: string): void {
+  const before = historyEntryBefore(path);
+  if (before && accept(before.route)) window.history.go(before.steps);
+  else navigate(fallback, { replace: true });
+}
+
 export function installNavigationBlocker(blocker: NavigationBlocker): () => void {
   blockers.add(blocker);
   return () => blockers.delete(blocker);
@@ -326,16 +334,20 @@ export function usagePath(): string {
   return "/usage";
 }
 
-export function automationsPath(): string {
-  return "/automations";
+export function automationsPath(threadId?: string): string {
+  return threadId ? `/threads/${encodeURIComponent(threadId)}/automations` : "/automations";
 }
 
-export function automationPath(threadId: string): string {
-  return `/automations/${encodeURIComponent(threadId)}`;
+export function automationCreatePath(threadId: string): string {
+  return `${automationsPath(threadId)}/new`;
 }
 
-export function automationEditPath(threadId: string): string {
-  return `${automationPath(threadId)}/edit`;
+export function automationPath(automationId: string): string {
+  return `/automations/${encodeURIComponent(automationId)}`;
+}
+
+export function automationEditPath(automationId: string): string {
+  return `${automationPath(automationId)}/edit`;
 }
 
 export function threadTurnPath(threadId: string, turnId: string, target: "turn" | "response" = "turn"): string {
@@ -347,9 +359,10 @@ export function routePath(route: Route): string {
   if (route.name === "home") return "/";
   if (route.name === "archived") return "/archived";
   if (route.name === "usage") return usagePath();
-  if (route.name === "automations") return automationsPath();
+  if (route.name === "automations") return automationsPath(route.threadId);
+  if (route.name === "automation-create") return automationCreatePath(route.threadId);
   if (route.name === "automation") {
-    return route.edit ? automationEditPath(route.threadId) : automationPath(route.threadId);
+    return route.edit ? automationEditPath(route.automationId) : automationPath(route.automationId);
   }
   if (route.name === "settings") return settingsPath(route.page, route);
   if (route.focusTurnId) return threadTurnPath(route.threadId, route.focusTurnId, route.focusResponse ? "response" : "turn");

@@ -1,3 +1,5 @@
+import { AutomationDeferredError } from "../domain/automation-deferred.js";
+import type { AutomationForkTargetResolver } from "./automation-fork-target.js";
 import type { RequestScope } from "../identity/identity-provider.js";
 import type {
   QueuedInputRecord,
@@ -10,8 +12,10 @@ import type { QueuedInputDispatcher } from "../conversations/queued-input-dispat
 import { DomainError } from "../domain/errors.js";
 import type { AutomationExecutionPolicy } from "./automation-execution-policy.js";
 import type { ThreadForkService } from "../conversations/thread-fork-service.js";
+import { reportBackgroundError } from "../report-background-error.js";
 
 export type AutomationConversationDispatchResult =
+  | { readonly status: "deferred"; readonly reason: AutomationDeferredError["reason"]; readonly eligibleAt: number | null }
   | {
       readonly status: "accepted";
       readonly targetThreadId: string;
@@ -45,6 +49,7 @@ export type AutomationConversationDispatchInput = {
   readonly anchorThreadId: string;
   readonly prompt: string;
   readonly dispatchMutationId: string;
+  readonly claimToken: string;
 } & (
   | { readonly runMode: "same_thread" }
   | {
@@ -68,6 +73,7 @@ export interface AutomationThreadExecutionStateReader {
     readonly backingState:
       "unbound" | "creating" | "bound" | "creation_unknown";
     readonly revision: number;
+    readonly creationForceReset: boolean;
   };
 }
 
@@ -84,7 +90,7 @@ export interface AutomationFirstInputLifecycle {
     readonly attachmentIds: readonly [];
     readonly taskReferences: readonly [];
     readonly mutationId: string;
-    readonly expectedThreadRevision: number;
+    readonly claimToken: string;
   }): Promise<
     | { readonly status: "accepted" }
     | { readonly status: "uncertain"; readonly diagnostic: string }
@@ -105,6 +111,7 @@ export class LifecycleAutomationConversationGateway implements AutomationConvers
   readonly #queueRepository: Pick<QueuedInputRepository, "findByMutationId">;
   readonly #firstInput: AutomationFirstInputLifecycle;
   readonly #branches: Pick<ThreadForkService, "forkAutomation">;
+  readonly #forkTargets: Pick<AutomationForkTargetResolver, "resolve">;
   readonly #now: () => number;
   readonly #executionPolicy: AutomationExecutionPolicy;
 
@@ -115,8 +122,10 @@ export class LifecycleAutomationConversationGateway implements AutomationConvers
     readonly firstInput: AutomationFirstInputLifecycle;
     readonly branches: Pick<ThreadForkService, "forkAutomation">;
     readonly executionPolicy: AutomationExecutionPolicy;
+    readonly forkTargets: Pick<AutomationForkTargetResolver, "resolve">;
     readonly now?: () => number;
   }) {
+    this.#forkTargets = input.forkTargets;
     this.#threads = input.threads;
     this.#queue = input.queue;
     this.#queueRepository = input.queueRepository;
@@ -129,119 +138,96 @@ export class LifecycleAutomationConversationGateway implements AutomationConvers
   async dispatch(
     input: AutomationConversationDispatchInput,
   ): Promise<AutomationConversationDispatchResult> {
-    if (input.runMode === "clone") {
-      const fork = await this.#branches.forkAutomation({
-        scope: input.scope,
-        anchorThreadId: input.anchorThreadId,
-        automationId: input.automationId,
-        automationRunId: input.automationRunId,
-        mutationId: input.dispatchMutationId,
-        titleSuffix: input.resultTitleSuffix,
-      });
-      if (fork.status === "recovery_required") {
-        return {
-          status: "uncertain",
-          targetThreadId: fork.childThreadId,
-          diagnostic: fork.diagnostic,
-        };
+    try {
+      let targetThreadId = input.anchorThreadId;
+      if (input.runMode === "clone") {
+        const resolved = await this.#forkTargets.resolve(input);
+        if (resolved.kind === "child") {
+          targetThreadId = resolved.childThreadId;
+        } else {
+          const fork = await this.#branches.forkAutomation({
+            scope: input.scope,
+            anchorThreadId: input.anchorThreadId,
+            automationId: input.automationId,
+            automationRunId: input.automationRunId,
+            mutationId: input.dispatchMutationId,
+            claimToken: input.claimToken,
+            titleSuffix: input.resultTitleSuffix,
+          });
+          if (fork.status === "recovery_required") return {
+            status: "uncertain", targetThreadId: fork.childThreadId, diagnostic: fork.diagnostic,
+          };
+          if (fork.status === "aborted") throw new DomainError("runtime_unavailable", fork.diagnostic);
+          targetThreadId = fork.childThreadId;
+        }
       }
-      if (fork.status === "aborted") {
-        throw new DomainError("runtime_unavailable", fork.diagnostic);
-      }
-      const child = this.#threads.read(input.scope, fork.childThreadId);
-      if (child.backingState !== "bound") {
-        throw new DomainError(
-          "materialization_unresolved",
-          "The automation fork child is not durably bound.",
-        );
-      }
-      await this.#queue.enqueue(input.scope, fork.childThreadId, {
-        mutationId: input.dispatchMutationId,
-        text: input.prompt,
-        contextExcerpts: [],
-        attachmentIds: [],
-        taskReferences: [],
-        source: {
-          kind: "automation",
-          expectedThreadRevision: child.revision,
-          automationId: input.automationId,
-          automationRunId: input.automationRunId,
-        },
-        now: this.#now(),
-      });
-      const item = this.#queueRepository.findByMutationId(
-        input.scope,
-        fork.childThreadId,
-        input.dispatchMutationId,
-      );
-      if (!item) throw new Error("automation_queue_receipt_missing");
-      return queueResult(fork.childThreadId, item);
+      return await this.#submit(input, targetThreadId);
+    } catch (error) {
+      if (error instanceof AutomationDeferredError) return {
+        status: "deferred", reason: error.reason, eligibleAt: error.eligibleAt,
+      };
+      throw error;
     }
+  }
 
-    this.#executionPolicy.assertCanAutomate(input.scope, input.anchorThreadId);
-
+  async #submit(input: AutomationConversationDispatchInput, targetThreadId: string): Promise<AutomationConversationDispatchResult> {
+    // Evidence from a previous submission wins over current policy/configuration.
+    const existing = this.#queueRepository.findByMutationId(input.scope, targetThreadId, input.dispatchMutationId);
+    if (existing) {
+      if (existing.sourceAutomationId !== input.automationId || existing.sourceAutomationRunId !== input.automationRunId || existing.text !== input.prompt) {
+        throw new DomainError("conflict", "The automation queue receipt belongs to different input.");
+      }
+      return queueResult(targetThreadId, existing);
+    }
+    const thread = this.#threads.read(input.scope, targetThreadId);
+    if (thread.creationForceReset) {
+      throw new DomainError("invalid_transition", "The automation target creation was force-reset.");
+    }
     if (this.#firstInput.hasMutation(input.scope, input.dispatchMutationId)) {
       const result = await this.#firstInput.submit({
-        scope: input.scope,
-        applicationThreadId: input.anchorThreadId,
-        automationId: input.automationId,
-        automationRunId: input.automationRunId,
-        prompt: input.prompt,
-        contextExcerpts: [],
-        attachmentIds: [],
-        taskReferences: [],
-        mutationId: input.dispatchMutationId,
-        expectedThreadRevision: 0,
+        scope: input.scope, applicationThreadId: targetThreadId,
+        automationId: input.automationId, automationRunId: input.automationRunId,
+        prompt: input.prompt, contextExcerpts: [], attachmentIds: [], taskReferences: [],
+        mutationId: input.dispatchMutationId, claimToken: input.claimToken,
       });
-      return { ...result, targetThreadId: input.anchorThreadId };
+      return { ...result, targetThreadId };
     }
-
-    const thread = this.#threads.read(input.scope, input.anchorThreadId);
+    this.#executionPolicy.assertCanAutomate(input.scope, input.anchorThreadId);
+    this.#executionPolicy.assertCanAutomate(input.scope, targetThreadId);
     if (thread.backingState === "bound") {
-      await this.#queue.enqueue(input.scope, input.anchorThreadId, {
-        mutationId: input.dispatchMutationId,
-        text: input.prompt,
-        contextExcerpts: [],
-        attachmentIds: [],
-        taskReferences: [],
-        source: {
-          kind: "automation",
-          expectedThreadRevision: thread.revision,
-          automationId: input.automationId,
-          automationRunId: input.automationRunId,
-        },
+      await this.#queue.enqueue(input.scope, targetThreadId, {
+        mutationId: input.dispatchMutationId, text: input.prompt,
+        contextExcerpts: [], attachmentIds: [], taskReferences: [],
+        source: { kind: "automation", claimToken: input.claimToken, automationId: input.automationId, automationRunId: input.automationRunId },
         now: this.#now(),
       });
-      const item = this.#queueRepository.findByMutationId(
-        input.scope,
-        input.anchorThreadId,
-        input.dispatchMutationId,
-      );
-      if (!item) {
-        throw new Error("automation_queue_receipt_missing");
-      }
-      return queueResult(input.anchorThreadId, item);
+      const item = this.#queueRepository.findByMutationId(input.scope, targetThreadId, input.dispatchMutationId);
+      if (!item) throw new Error("automation_queue_receipt_missing");
+      return queueResult(targetThreadId, item);
     }
     if (thread.backingState === "unbound") {
-      const result = await this.#firstInput.submit({
-        scope: input.scope,
-        applicationThreadId: input.anchorThreadId,
-        automationId: input.automationId,
-        automationRunId: input.automationRunId,
-        prompt: input.prompt,
-        contextExcerpts: [],
-        attachmentIds: [],
-        taskReferences: [],
-        mutationId: input.dispatchMutationId,
-        expectedThreadRevision: thread.revision,
-      });
-      return { ...result, targetThreadId: input.anchorThreadId };
+      try {
+        const result = await this.#firstInput.submit({
+          scope: input.scope, applicationThreadId: targetThreadId,
+          automationId: input.automationId, automationRunId: input.automationRunId,
+          prompt: input.prompt, contextExcerpts: [], attachmentIds: [], taskReferences: [],
+          mutationId: input.dispatchMutationId, claimToken: input.claimToken,
+        });
+        return { ...result, targetThreadId };
+      } catch (error) {
+        if (error instanceof AutomationDeferredError) throw error;
+        // Another first-send can win while async configuration is being validated.
+        // Only a proven absent attempt can be retried as queue admission.
+        if (!this.#firstInput.hasMutation(input.scope, input.dispatchMutationId) &&
+            error instanceof DomainError && (error.code === "conflict" || error.code === "materialization_unresolved")) {
+          throw new AutomationDeferredError("source_materializing", "The automation target changed before its first input was reserved.");
+        }
+        throw error;
+      }
     }
-    throw new DomainError(
-      "materialization_unresolved",
-      "The automation thread has unresolved conversation creation state.",
-    );
+    throw new AutomationDeferredError(thread.backingState === "creating" ? "source_materializing" : "source_recovery", "The automation target is waiting for conversation creation to settle.");
   }
+
 }
 
 function queueResult(
@@ -292,6 +278,7 @@ export class AutomationQueueRunObserver {
   readonly #queue: Pick<QueuedInputRepository, "findByMutationId">;
   readonly #publisher: Pick<AutomationService, "publishRun">;
   readonly #now: () => number;
+  readonly #onRecoveryError: (error: unknown) => void;
 
   constructor(input: {
     readonly repository: Pick<
@@ -305,11 +292,14 @@ export class AutomationQueueRunObserver {
     readonly queue: Pick<QueuedInputRepository, "findByMutationId">;
     readonly publisher: Pick<AutomationService, "publishRun">;
     readonly now?: () => number;
+    readonly onRecoveryError?: (error: unknown) => void;
   }) {
     this.#repository = input.repository;
     this.#queue = input.queue;
     this.#publisher = input.publisher;
     this.#now = input.now ?? Date.now;
+    this.#onRecoveryError =
+      input.onRecoveryError ?? reportBackgroundError("Automation queue recovery");
   }
 
   recover(): void {
@@ -319,13 +309,26 @@ export class AutomationQueueRunObserver {
         principalId: run.ownerPrincipalId,
       };
       const targetThreadId = run.childThreadId ?? run.anchorThreadId;
-      const item = this.#queue.findByMutationId(
-        scope,
-        targetThreadId,
-        run.dispatchMutationId,
-      );
-      if (item) this.observe(scope, targetThreadId, item);
+      try {
+        this.reconcile(scope, targetThreadId, run.dispatchMutationId);
+      } catch (error) {
+        this.#onRecoveryError(error);
+      }
     }
+  }
+
+  /** Reconcile only the existing receipt; this never submits provider work. */
+  reconcile(
+    scope: RequestScope,
+    applicationThreadId: string,
+    mutationId: string,
+  ): void {
+    const item = this.#queue.findByMutationId(
+      scope,
+      applicationThreadId,
+      mutationId,
+    );
+    if (item) this.observe(scope, applicationThreadId, item);
   }
 
   observe(
@@ -372,7 +375,7 @@ export class AutomationQueueRunObserver {
       scope,
       this.#repository.updateRunState(scope, run.automationId, run.id, {
         expectedState: run.state,
-        state: successful ? "completed" : "failed",
+        state: successful ? "completed" : item.state === "cancelled" ? "cancelled" : "failed",
         ...(successful
           ? {}
           : {
@@ -399,7 +402,8 @@ export class AutomationQueueRunObserver {
  * Completion-rail hook for automation run history. Production calls it after
  * an authoritative completion observation commits, both live and on every
  * snapshot replay, so a run's turn settlement is written once and published
- * only when this changed the run. It never touches run state or scheduling.
+ * only when this changed the run or retired a dismissed successful one-shot.
+ * It never changes the recorded delivery state or rearms a schedule.
  */
 export class AutomationTurnSettlementObserver {
   readonly #repository: Pick<
@@ -426,6 +430,7 @@ export class AutomationTurnSettlementObserver {
       const key = JSON.stringify([
         run.tenantId,
         run.ownerPrincipalId,
+        run.automationId,
         run.anchorThreadId,
         run.childThreadId,
       ]);

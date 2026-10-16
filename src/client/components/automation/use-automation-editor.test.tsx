@@ -1,343 +1,168 @@
 // @vitest-environment jsdom
-
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ApiError } from "../../api/ApiClient.js";
-import {
-  automationStore,
-  automationSummary,
-  definition,
-  THREAD_ID,
-} from "./automation-test-fixture.js";
-import { AUTOMATION_PREVIEW_COUNT, useAutomationEditor } from "./use-automation-editor.js";
-import { useAutomationThread } from "./use-automation-thread.js";
-
-const options = { canCloneOnRun: true };
+import { useAutomationEditor } from "./use-automation-editor.js";
+import { AUTOMATION_ID, THREAD_ID, automationStore, definition } from "./automation-test-fixture.js";
 
 afterEach(cleanup);
 
-/** The fixture thread's editor, fed as the page feeds it: from its live summary. */
-function useEditor(fixture: ReturnType<typeof automationStore>, editorOptions: { readonly canCloneOnRun: boolean }) {
-  const thread = useAutomationThread(fixture.store, THREAD_ID);
-  return useAutomationEditor(fixture.store, thread ?? { id: THREAD_ID, automation: null }, editorOptions);
+function editHook(fixture: ReturnType<typeof automationStore>, saved = definition(), canCloneOnRun = true) {
+  const initialProps: { live: ReturnType<typeof definition>; missing?: boolean } = { live: saved };
+  return renderHook(({ live, missing }) => useAutomationEditor(fixture.store, { id: THREAD_ID, automation: live }, { canCloneOnRun, automationId: saved.id, missing, reads: fixture.reads }), { initialProps });
 }
 
-function render(fixture: ReturnType<typeof automationStore>, canCloneOnRun = true) {
-  return renderHook(() => useEditor(fixture, { canCloneOnRun }));
-}
+describe("independent automation editor", () => {
+  it("creates a named enabled sibling atomically, even when this source already has one", async () => {
+    const saved = definition({ name: "Daily update" });
+    const fixture = automationStore([{ automation: definition() }], { createAutomation: vi.fn().mockResolvedValue(saved) });
+    const { result } = renderHook(() => useAutomationEditor(fixture.store, { id: THREAD_ID, automation: null }, { canCloneOnRun: true, reads: fixture.reads }));
+    act(() => result.current.update({ name: "Daily update", prompt: "Send an update" }));
+    await waitFor(() => expect(result.current.validation.valid).toBe(true));
+    await act(async () => { expect(await result.current.save({ enable: true })).toEqual(saved); });
+    expect(fixture.api.createAutomation).toHaveBeenCalledWith(THREAD_ID, expect.objectContaining({ name: "Daily update", prompt: "Send an update", initialState: "enabled", mutationId: expect.any(String) }));
+    expect(fixture.api.setAutomationState).not.toHaveBeenCalled();
+  });
 
-describe("useAutomationEditor", () => {
-  it("creates: defaults, dirty tracking, preview-gated validity, then save and enable", async () => {
-    const created = definition({ status: "paused", revision: 1 });
-    const enabled = definition({ status: "enabled", revision: 2 });
-    const fixture = automationStore([{ automation: null }], {
-      createThreadAutomation: vi.fn().mockResolvedValue(created),
-      setThreadAutomationState: vi.fn().mockResolvedValue(enabled),
-    });
-    const { result } = render(fixture);
-    expect(result.current.mode).toBe("create");
-    expect(result.current.status).toBe("ready");
-    expect(result.current.form).toMatchObject({ scheduleKind: "interval", intervalAmount: 1, intervalUnit: "days" });
-    expect(result.current.dirty).toBe(false);
+  it("requires a name and creates a paused one-shot with no missed-occurrence policy", async () => {
+    const fixture = automationStore([{ automation: null }], { createAutomation: vi.fn().mockResolvedValue(definition()) });
+    const { result } = renderHook(() => useAutomationEditor(fixture.store, { id: THREAD_ID, automation: null }, { canCloneOnRun: true, reads: fixture.reads }));
+    act(() => result.current.update({ prompt: "Remember to call", scheduleKind: "date_time" }));
+    await waitFor(() => expect(result.current.preview.checking).toBe(false));
     expect(result.current.validation.valid).toBe(false);
-
-    act(() => result.current.update({ prompt: "  Check dependencies  " }));
-    expect(result.current.dirty).toBe(true);
-    expect(result.current.preview.checking).toBe(true);
+    act(() => result.current.update({ name: "Call dentist" }));
     await waitFor(() => expect(result.current.validation.valid).toBe(true));
-    expect(fixture.api.previewThreadAutomationSchedule).toHaveBeenCalledWith(
-      THREAD_ID,
-      result.current.schedule,
-      { count: AUTOMATION_PREVIEW_COUNT, signal: expect.any(AbortSignal) },
-    );
-    expect(result.current.preview.occurrences).toHaveLength(3);
-
-    const schedule = result.current.schedule;
-    expect(schedule).toMatchObject({ kind: "interval", everySeconds: 86_400 });
-    let saved = false;
-    await act(async () => {
-      saved = await result.current.save({ enable: true });
-    });
-    expect(saved).toBe(true);
-    expect(fixture.api.createThreadAutomation).toHaveBeenCalledWith(THREAD_ID, {
-      prompt: "Check dependencies",
-      runMode: "same_thread",
-      schedule,
-      misfirePolicy: "coalesce",
-      precheck: null,
-      mutationId: expect.any(String),
-    });
-    expect(fixture.api.setThreadAutomationState).toHaveBeenCalledWith(THREAD_ID, "enable", 1, expect.any(String));
-    expect(result.current.definition).toEqual(enabled);
-    expect(result.current.mode).toBe("edit");
-    expect(result.current.dirty).toBe(false);
+    await act(async () => { await result.current.save(); });
+    expect(fixture.api.createAutomation).toHaveBeenCalledWith(THREAD_ID, expect.objectContaining({ name: "Call dentist", initialState: "paused", misfirePolicy: null }));
   });
 
-  it("saves a new automation paused when asked", async () => {
-    const fixture = automationStore([{ automation: null }], {
-      createThreadAutomation: vi.fn().mockResolvedValue(definition({ status: "paused" })),
-    });
-    const { result } = render(fixture);
-    act(() => result.current.update({ prompt: "Check" }));
-    await waitFor(() => expect(result.current.validation.valid).toBe(true));
-    await act(async () => {
-      await result.current.save();
-    });
-    expect(fixture.api.createThreadAutomation).toHaveBeenCalledOnce();
-    expect(fixture.api.setThreadAutomationState).not.toHaveBeenCalled();
-  });
-
-  it("keeps a new automation that could not be enabled, and says so", async () => {
-    const fixture = automationStore([{ automation: null }], {
-      createThreadAutomation: vi.fn().mockResolvedValue(definition({ status: "paused", revision: 1 })),
-      setThreadAutomationState: vi.fn().mockRejectedValue(new Error("Choose an allowed model.")),
-    });
-    const { result } = render(fixture);
-    act(() => result.current.update({ prompt: "Check" }));
-    await waitFor(() => expect(result.current.validation.valid).toBe(true));
-    let saved = true;
-    await act(async () => {
-      saved = await result.current.save({ enable: true });
-    });
-    expect(saved).toBe(false);
-    expect(result.current.error).toBe("Saved as paused. It could not be enabled: Choose an allowed model.");
-    expect(result.current.mode).toBe("edit");
-  });
-
-  it("edits: loads the saved definition clean, then updates against its revision", async () => {
-    const saved = definition({ prompt: "Old prompt" });
-    const updated = definition({ prompt: "New prompt", revision: 4 });
-    const fixture = automationStore([{ automation: automationSummary() }], {
-      getThreadAutomation: vi.fn().mockResolvedValue(saved),
-      updateThreadAutomation: vi.fn().mockResolvedValue(updated),
-    });
-    const { result } = render(fixture);
-    expect(result.current.mode).toBe("edit");
-    expect(result.current.status).toBe("loading");
+  it("edits by automation ID and fences concurrent edits with that definition revision", async () => {
+    const fixture = automationStore([{ automation: definition() }], { updateAutomation: vi.fn().mockResolvedValue(definition({ revision: 4 })) });
+    const { result, rerender } = editHook(fixture);
     await waitFor(() => expect(result.current.status).toBe("ready"));
-    expect(result.current.form).toMatchObject({ prompt: "Old prompt", scheduleKind: "cron", cronExpression: "0 2 * * *" });
-    expect(result.current.dirty).toBe(false);
-
-    act(() => result.current.update({ prompt: "New prompt" }));
-    expect(result.current.dirty).toBe(true);
-    await waitFor(() => expect(result.current.validation.valid).toBe(true));
-    act(() => result.current.reset());
-    expect(result.current.form.prompt).toBe("Old prompt");
-
-    act(() => result.current.update({ prompt: "New prompt" }));
-    await waitFor(() => expect(result.current.validation.valid).toBe(true));
-    await act(async () => {
-      await result.current.save();
-    });
-    expect(fixture.api.updateThreadAutomation).toHaveBeenCalledWith(
-      THREAD_ID,
-      expect.objectContaining({ prompt: "New prompt", expectedRevision: 3 }),
-    );
-    expect(result.current.definition).toEqual(updated);
-    expect(result.current.dirty).toBe(false);
-  });
-
-  it("reloads a clean form when the automation changes elsewhere, and marks an edited one stale", async () => {
-    const getThreadAutomation = vi
-      .fn()
-      .mockResolvedValueOnce(definition({ prompt: "First", revision: 3 }))
-      .mockResolvedValueOnce(definition({ prompt: "Second", revision: 4 }))
-      .mockResolvedValueOnce(definition({ prompt: "Third", revision: 5 }));
-    const fixture = automationStore([{ automation: automationSummary({ revision: 3 }) }], { getThreadAutomation });
-    const { result } = render(fixture);
-    await waitFor(() => expect(result.current.form.prompt).toBe("First"));
-
-    act(() => fixture.publish([{ automation: automationSummary({ revision: 4 }) }]));
-    await waitFor(() => expect(result.current.form.prompt).toBe("Second"));
-    expect(result.current.stale).toBe(false);
-
-    act(() => result.current.update({ prompt: "Mine" }));
-    act(() => fixture.publish([{ automation: automationSummary({ revision: 5 }) }]));
+    act(() => result.current.update({ name: "Renamed schedule" }));
+    rerender({ live: definition({ revision: 4 }) });
     expect(result.current.stale).toBe(true);
-    expect(result.current.form.prompt).toBe("Mine");
-    let saved = true;
-    await act(async () => {
-      saved = await result.current.save();
-    });
-    expect(saved).toBe(false);
-    expect(getThreadAutomation).toHaveBeenCalledTimes(2);
-
+    await act(async () => { expect(await result.current.save()).toBeUndefined(); });
+    expect(fixture.api.updateAutomation).not.toHaveBeenCalled();
+    fixture.api.getAutomation.mockResolvedValue(definition({ revision: 4 }));
     act(() => result.current.reload());
-    await waitFor(() => expect(result.current.form.prompt).toBe("Third"));
-    expect(result.current.stale).toBe(false);
-    expect(result.current.dirty).toBe(false);
-  });
-
-  it("ignores edits while a save is in flight, so the saved response cannot drop them", async () => {
-    let finishSave!: (value: ReturnType<typeof definition>) => void;
-    const fixture = automationStore([{ automation: automationSummary() }], {
-      updateThreadAutomation: vi.fn(
-        () =>
-          new Promise<ReturnType<typeof definition>>((resolve) => {
-            finishSave = resolve;
-          }),
-      ),
-    });
-    const { result } = render(fixture);
-    await waitFor(() => expect(result.current.status).toBe("ready"));
-    act(() => result.current.update({ prompt: "Saved prompt" }));
+    await waitFor(() => expect(result.current.stale).toBe(false));
+    act(() => result.current.update({ name: "Renamed schedule" }));
     await waitFor(() => expect(result.current.validation.valid).toBe(true));
-    let saving!: Promise<boolean>;
-    act(() => {
-      saving = result.current.save();
-    });
-    expect(result.current.pending).toBe("save");
-    act(() => result.current.update({ prompt: "Typed during the save" }));
-    expect(result.current.form.prompt).toBe("Saved prompt");
-    await act(async () => {
-      finishSave(definition({ prompt: "Saved prompt", revision: 4 }));
-      await saving;
-    });
-    expect(result.current.dirty).toBe(false);
-    act(() => result.current.update({ prompt: "Typed after the save" }));
-    expect(result.current.form.prompt).toBe("Typed after the save");
+    await act(async () => { await result.current.save(); });
+    expect(fixture.api.updateAutomation).toHaveBeenCalledWith(AUTOMATION_ID, expect.objectContaining({ expectedRevision: 4, name: "Renamed schedule" }));
   });
 
-  it("shows the existing automation when another client created one first", async () => {
-    const existing = definition({ prompt: "Theirs" });
-    const fixture = automationStore([{ automation: null }], {
-      createThreadAutomation: vi
-        .fn()
-        .mockRejectedValue(new ApiError(409, "conflict", "This thread already has an automation.", false)),
-      getThreadAutomation: vi.fn().mockResolvedValue(existing),
-    });
-    const { result } = render(fixture);
-    act(() => result.current.update({ prompt: "Mine" }));
-    await waitFor(() => expect(result.current.validation.valid).toBe(true));
-    await act(async () => {
-      await result.current.save();
-    });
-    expect(result.current.form.prompt).toBe("Theirs");
-    expect(result.current.mode).toBe("edit");
-    expect(result.current.notice).toMatch(/already has an automation/u);
-    expect(result.current.error).toBeUndefined();
-  });
-
-  it("keeps the form when the automation is deleted elsewhere, to save it anew", async () => {
-    const fixture = automationStore([{ automation: automationSummary() }]);
-    const { result } = render(fixture);
+  it("does not reload a deleted stale form, including a reload callback captured before deletion", async () => {
+    const fixture = automationStore([{ automation: definition() }]);
+    const { result, rerender } = editHook(fixture);
     await waitFor(() => expect(result.current.status).toBe("ready"));
-    act(() => fixture.publish([{ automation: null }]));
+    act(() => result.current.update({ name: "Local edit" }));
+    const newer = definition({ revision: 4, name: "Remote edit" });
+    rerender({ live: newer });
+    expect(result.current.stale).toBe(true);
+    const staleReload = result.current.reload;
+    const reads = fixture.api.getAutomation.mock.calls.length;
+    rerender({ live: newer, missing: true });
     expect(result.current.deletedElsewhere).toBe(true);
-    expect(result.current.mode).toBe("create");
-    expect(result.current.form.prompt).toBe(definition().prompt);
-  });
-
-  it("unblocks as soon as the unknown run is resolved elsewhere, without a new revision", async () => {
-    const uncertainRun = {
-      id: "run-1",
-      state: "uncertain" as const,
-      occurrence: "scheduled" as const,
-      scheduledFor: "2026-10-06T00:00:00.000Z",
-    };
-    const fixture = automationStore([{ automation: automationSummary({ status: "paused", lastRun: uncertainRun }) }], {
-      getThreadAutomation: vi.fn().mockResolvedValue(definition({ status: "paused", lastRun: uncertainRun })),
-      updateThreadAutomation: vi.fn().mockResolvedValue(definition({ status: "paused", prompt: "Changed", revision: 4 })),
-    });
-    const { result } = render(fixture);
-    await waitFor(() => expect(result.current.status).toBe("ready"));
-    expect(result.current.uncertain).toBe(true);
-    act(() => result.current.update({ prompt: "Changed" }));
-
-    // Another client marks it failed and keeps it paused: the run's state
-    // moves, the definition's revision does not.
-    act(() =>
-      fixture.publish([
-        {
-          automation: automationSummary({
-            status: "paused",
-            lastRun: { ...uncertainRun, state: "failed", errorCode: "automation_uncertain_resolved" },
-          }),
-        },
-      ]),
-    );
-    expect(result.current.uncertain).toBe(false);
     expect(result.current.stale).toBe(false);
-    expect(result.current.form.prompt).toBe("Changed");
-    await waitFor(() => expect(result.current.validation.valid).toBe(true));
-    let saved = false;
-    await act(async () => {
-      saved = await result.current.save();
-    });
-    expect(saved).toBe(true);
-    expect(fixture.api.updateThreadAutomation).toHaveBeenCalledWith(
-      THREAD_ID,
-      expect.objectContaining({ prompt: "Changed", expectedRevision: 3 }),
-    );
+    act(() => { staleReload(); result.current.reload(); });
+    expect(fixture.api.getAutomation).toHaveBeenCalledTimes(reads);
+    expect(result.current.form.name).toBe("Local edit");
+    await act(async () => { expect(await result.current.save()).toBeUndefined(); });
+    expect(fixture.api.createAutomation).not.toHaveBeenCalled();
+    expect(fixture.api.updateAutomation).not.toHaveBeenCalled();
   });
 
-  it("refuses to save while the last run's outcome is unknown or a fork cannot be made", async () => {
-    const fixture = automationStore([
-      {
-        automation: automationSummary({
-          lastRun: { id: "run-1", state: "uncertain", occurrence: "scheduled", scheduledFor: "2026-10-06T00:00:00.000Z" },
-        }),
-      },
-    ]);
-    const { result } = render(fixture, false);
+  it("aborts an independent editor read on deletion and rejects its late response", async () => {
+    const fixture = automationStore([{ automation: definition() }]);
+    const { result, rerender } = editHook(fixture);
     await waitFor(() => expect(result.current.status).toBe("ready"));
-    expect(result.current.uncertain).toBe(true);
-    act(() => result.current.update({ prompt: "Changed", runMode: "clone" }));
+    act(() => result.current.update({ name: "Keep this local edit" }));
+    const newer = definition({ revision: 4, name: "Remote edit" });
+    rerender({ live: newer });
+    let finishRead!: (value: ReturnType<typeof definition>) => void;
+    fixture.api.getAutomation.mockImplementationOnce(() => new Promise((resolve) => { finishRead = resolve; }));
+    act(() => result.current.reload());
+    await waitFor(() => expect(fixture.api.getAutomation).toHaveBeenCalledTimes(2));
+    const signal = fixture.api.getAutomation.mock.calls[1]![1] as AbortSignal;
+    rerender({ live: newer, missing: true });
+    expect(signal.aborted).toBe(true);
+    await act(async () => finishRead(newer));
+    expect(result.current.form.name).toBe("Keep this local edit");
+    expect(result.current.definition?.revision).toBe(3);
+    expect(result.current.deletedElsewhere).toBe(true);
+    expect(result.current.stale).toBe(false);
+    act(() => result.current.reload());
+    expect(fixture.api.getAutomation).toHaveBeenCalledTimes(2);
+  });
+
+  it("retains the same create receipt on retry and never adopts a sibling after a conflict", async () => {
+    const create = vi.fn().mockRejectedValueOnce(new Error("conflict")).mockResolvedValueOnce(definition());
+    const fixture = automationStore([{ automation: definition() }], { createAutomation: create });
+    const { result } = renderHook(() => useAutomationEditor(fixture.store, { id: THREAD_ID, automation: null }, { canCloneOnRun: true, reads: fixture.reads }));
+    act(() => result.current.update({ name: "Reminder", prompt: "Remind me" }));
+    await waitFor(() => expect(result.current.validation.valid).toBe(true));
+    await act(async () => { await result.current.save(); });
+    expect(result.current.form.name).toBe("Reminder");
+    expect(fixture.api.getAutomation).not.toHaveBeenCalled();
+    await act(async () => { await result.current.save(); });
+    expect(create.mock.calls[0]![1].mutationId).toBe(create.mock.calls[1]![1].mutationId);
+  });
+
+  it("deletes only the selected definition", async () => {
+    const fixture = automationStore([{ automation: definition() }]);
+    const { result } = editHook(fixture);
+    await waitFor(() => expect(result.current.status).toBe("ready"));
+    let finishRead!: (value: ReturnType<typeof definition>) => void;
+    fixture.api.getAutomation.mockImplementationOnce(() => new Promise((resolve) => { finishRead = resolve; }));
+    act(() => result.current.reload());
+    await waitFor(() => expect(fixture.api.getAutomation).toHaveBeenCalledTimes(2));
+    const signal = fixture.api.getAutomation.mock.calls[1]![1] as AbortSignal;
+    fixture.api.deleteAutomation.mockImplementation(async () => {
+      expect(signal.aborted).toBe(true);
+      expect(fixture.reads.begin().signal.aborted).toBe(true);
+      return { deleted: true };
+    });
+    await act(async () => { await result.current.remove(); });
+    await act(async () => finishRead(definition({ revision: 99 })));
+    expect(fixture.api.deleteAutomation).toHaveBeenCalledWith(AUTOMATION_ID, 3, expect.any(String));
+    expect(result.current.definition?.revision).toBe(3);
+    expect(result.current.deletedElsewhere).toBe(true);
+    expect(fixture.api.getAutomation).toHaveBeenCalledTimes(2);
+  });
+  it("allows name and prompt edits that retain an existing Fork when the source cannot fork now", async () => {
+    const saved = definition({ runMode: "clone" });
+    const update = vi.fn().mockResolvedValue({ ...saved, name: "Changed name" });
+    const fixture = automationStore([{ automation: saved }], { updateAutomation: update });
+    const { result } = editHook(fixture, saved, false);
+    await waitFor(() => expect(result.current.status).toBe("ready"));
+    act(() => result.current.update({ name: "Changed name", prompt: "An updated prompt" }));
+    await waitFor(() => expect(result.current.validation.valid).toBe(true));
+    await act(async () => { await result.current.save(); });
+    expect(update).toHaveBeenCalledWith(AUTOMATION_ID, expect.objectContaining({ name: "Changed name", prompt: "An updated prompt", runMode: "clone" }));
+  });
+
+  it("rejects changing an existing This thread automation to Fork while the source cannot fork", async () => {
+    const fixture = automationStore([{ automation: definition() }]);
+    const { result } = editHook(fixture, definition(), false);
+    await waitFor(() => expect(result.current.status).toBe("ready"));
+    act(() => result.current.update({ runMode: "clone" }));
+    await waitFor(() => expect(result.current.preview.checking).toBe(false));
     expect(result.current.validation.cloneUnavailable).toBe(true);
     expect(result.current.validation.valid).toBe(false);
-    let saved = true;
-    await act(async () => {
-      saved = await result.current.save();
-    });
-    expect(saved).toBe(false);
-    expect(fixture.api.updateThreadAutomation).not.toHaveBeenCalled();
+    await act(async () => { await result.current.save(); });
+    expect(fixture.api.updateAutomation).not.toHaveBeenCalled();
   });
 
-  it("reports limits on the prompt, command and timeout", async () => {
+  it("enforces the shared 160-character name boundary", async () => {
     const fixture = automationStore([{ automation: null }]);
-    const { result } = renderHook(() => useEditor(fixture, options));
-    act(() =>
-      result.current.update({
-        prompt: "x".repeat(65_537),
-        precheckEnabled: true,
-        precheckCommand: "y".repeat(4_097),
-        precheckTimeout: 0,
-      }),
-    );
-    expect(result.current.validation.promptError).toMatch(/65,536/u);
-    expect(result.current.validation.commandError).toMatch(/4,096/u);
-    expect(result.current.validation.timeoutError).toMatch(/1 to 60/u);
+    const { result } = renderHook(() => useAutomationEditor(fixture.store, { id: THREAD_ID, automation: null }, { canCloneOnRun: true, reads: fixture.reads }));
+    act(() => result.current.update({ name: "a".repeat(161), prompt: "Reminder" }));
+    await waitFor(() => expect(result.current.preview.checking).toBe(false));
     expect(result.current.validation.valid).toBe(false);
+    act(() => result.current.update({ name: "a".repeat(160) }));
+    expect(result.current.validation.valid).toBe(true);
   });
 
-  it("tests the precheck and forgets the result when its input changes", async () => {
-    const outcome = {
-      decision: "skip",
-      durationMilliseconds: 12,
-      stdoutPreview: "",
-      stderrPreview: "",
-      stdoutTruncated: false,
-      stderrTruncated: false,
-      exitCode: 1,
-      stdoutWillBeIncluded: false,
-      effectivePromptBytes: 5,
-    };
-    const fixture = automationStore([{ automation: null }], {
-      testThreadAutomationPrecheck: vi.fn().mockResolvedValue(outcome),
-    });
-    const { result } = renderHook(() => useEditor(fixture, options));
-    expect(result.current.precheckTest.canTest).toBe(false);
-    act(() => result.current.update({ prompt: "Check", precheckEnabled: true, precheckCommand: "false" }));
-    expect(result.current.precheckTest.canTest).toBe(true);
-    act(() => result.current.precheckTest.run());
-    await waitFor(() => expect(result.current.precheckTest.result).toEqual(outcome));
-    expect(fixture.api.testThreadAutomationPrecheck).toHaveBeenCalledWith(
-      THREAD_ID,
-      "Check",
-      { command: "false", timeoutSeconds: 30, includeStdout: false },
-      expect.any(AbortSignal),
-    );
-    act(() => result.current.update({ precheckCommand: "true" }));
-    expect(result.current.precheckTest.result).toBeUndefined();
-  });
 });

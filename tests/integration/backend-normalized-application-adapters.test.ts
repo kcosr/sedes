@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { scriptDelivery } from "../support/notification-settings.js";
 import { QuestionRequestRepository } from "../../src/server/db/repositories/question-request-repository.js";
 import Database from "better-sqlite3";
@@ -339,18 +340,18 @@ describe("backend-normalized application adapters", () => {
       });
       const hub = boundary.hub(current.scope);
       const upserts: NonNullable<
-        typeof normalizedThreadSummarySchema._output["automation"]
+        typeof normalizedThreadSummarySchema._output["automations"]
       >[] = [];
       hub.subscribe(({ event }) => {
-        if (event.type === "thread_upsert" && event.thread.automation) {
-          upserts.push(event.thread.automation);
+        if (event.type === "thread_upsert" && event.thread.automations) {
+          upserts.push(event.thread.automations);
         }
       });
       await boundary.checkpoint(current.scope, hub);
       const checkpointed = hub
         .currentCheckpoint()!
         .event.snapshot.threads.find(({ id }) => id === current.threadId)!
-        .automation!;
+        .automations;
       const observe = async (times?: {
         readonly startedAt: string;
         readonly completedAt: string;
@@ -371,11 +372,10 @@ describe("backend-normalized application adapters", () => {
       });
 
       expect(upserts).toEqual([
-        { ...checkpointed, runsRevision: checkpointed.runsRevision + 1 },
-        { ...checkpointed, runsRevision: checkpointed.runsRevision + 2 },
+        { ...checkpointed, revision: checkpointed.revision + 1 },
+        { ...checkpointed, revision: checkpointed.revision + 2 },
       ]);
-      expect(checkpointed.lastRun).toMatchObject({ id: "history-newer" });
-      expect(checkpointed.lastRun).not.toHaveProperty("turn");
+      expect(checkpointed).not.toHaveProperty("lastRun");
     } finally {
       await boundary.close();
       current.database.close();
@@ -1715,7 +1715,7 @@ describe("backend-normalized application adapters", () => {
         environment: {
           id: current.environmentId,
         },
-        attention: {
+        attention: { automationContexts: [],
           wake: {
             text: { text: "reader reminder" },
           },
@@ -1834,7 +1834,7 @@ describe("backend-normalized application adapters", () => {
       expect(
         (await threadReader.getAuthorized(current.scope, current.threadId))
           .attention,
-      ).toEqual({ wake: { wokeAt: new Date(700).toISOString() } });
+      ).toEqual({ automationContexts: [], wake: { wokeAt: new Date(700).toISOString() } });
       expect(
         summaryReader
           .list(current.scope, current.environmentId)
@@ -1860,6 +1860,7 @@ describe("backend-normalized application adapters", () => {
         (await threadReader.getAuthorized(current.scope, current.threadId))
           .attention,
       ).toEqual({
+        automationContexts: [],
         wake: {
           wokeAt: new Date(900).toISOString(),
           text: { text: "Review the second wake" },
@@ -1909,6 +1910,7 @@ describe("backend-normalized application adapters", () => {
         (await threadReader.getAuthorized(current.scope, current.threadId))
           .attention,
       ).toEqual({
+        automationContexts: [],
         wake: {
           wokeAt: new Date(950).toISOString(),
           text: { text: "Review after a manual wake" },
@@ -1925,6 +1927,7 @@ describe("backend-normalized application adapters", () => {
       };
       const publish = vi.fn();
       const attention = new ThreadAttentionService({
+        acknowledgeAutomationRun: vi.fn(),
         inventory,
         completions: completion,
         queue: {
@@ -1971,7 +1974,7 @@ describe("backend-normalized application adapters", () => {
       expect(
         (await threadReader.getAuthorized(current.scope, current.threadId))
           .attention,
-      ).toEqual({});
+      ).toEqual({ automationContexts: [] });
       expect(
         summaryReader
           .list(current.scope, current.environmentId)
@@ -1982,7 +1985,7 @@ describe("backend-normalized application adapters", () => {
     }
   });
 
-  it("applies one latest-run rule and projection across the sidebar, thread snapshot and REST summary", async () => {
+  it("projects bounded aggregate facts while the automation detail keeps latest-run history", async () => {
     const current = fixture();
     try {
       const inventory = new InventoryRepository(current.database);
@@ -2043,32 +2046,16 @@ describe("backend-normalized application adapters", () => {
         inventory,
         queue,
         completion,
-      }).listByIds(current.scope, [current.threadId])[0]!.automation;
+      }).listByIds(current.scope, [current.threadId])[0]!.automations;
       expect(projected).toEqual({
-        status: "paused",
-        runMode: "same_thread",
-        scheduleKind: "cron",
-        schedule: {
-          kind: "cron",
-          expression: "30 6 * * 1-5",
-          timeZone: "Europe/London",
-        },
-        misfirePolicy: "skip",
-        promptPreview: `Review the repository ${"and summarize ".repeat(12)}today.`
-          .slice(0, 140)
-          .trimEnd()
-          .concat("…"),
-        revision: 0,
-        // Two run inserts and one state change.
-        runsRevision: 3,
-        hasPrecheck: false,
-        lastRun: {
-          id: "latest-run-newer",
-          state: "claimed",
-          occurrence: "manual",
-          scheduledFor: new Date(1_500).toISOString(),
-          resultThreadId: current.threadId,
-        },
+        totalCount: 1,
+        enabledCount: 0,
+        pausedCount: 1,
+        exhaustedCount: 0,
+        inFlightCount: 1,
+        attentionCount: 1,
+        // Definition identity plus two inserts and one state change.
+        revision: 4,
       });
 
       const snapshot = await new DatabaseThreadApplicationInventoryReader({
@@ -2079,14 +2066,14 @@ describe("backend-normalized application adapters", () => {
         directoryBrowsingAvailability: () => "unavailable",
         executionWorkspaces: directThreadExecutionWorkspaceReader,
       }).getAuthorized(current.scope, current.threadId);
-      expect(snapshot.thread.automation).toEqual(projected);
+      expect(snapshot.thread.automations).toEqual(projected);
 
       const rest = new AutomationService({
         repository: automation,
         inventory,
         publisher: { publish: () => undefined },
         executionPolicy: { assertCanAutomate: () => undefined },
-      }).get(current.scope, current.threadId);
+      }).get(current.scope, "latest-run-automation");
       expect(rest.lastRun?.id).toBe("latest-run-newer");
       expect(rest.runsRevision).toBe(3);
     } finally {
@@ -2094,7 +2081,7 @@ describe("backend-normalized application adapters", () => {
     }
   });
 
-  it("projects a stored prompt that contains NUL characters", async () => {
+  it("keeps stored prompts out of bounded thread aggregates", async () => {
     const current = fixture();
     try {
       const inventory = new InventoryRepository(current.database);
@@ -2120,14 +2107,261 @@ describe("backend-normalized application adapters", () => {
         queue,
         completion,
       }).listByIds(current.scope, [current.threadId]);
-      expect(summary!.automation?.promptPreview).toBe(
-        "Review the repository today.",
-      );
+      expect(summary!.automations).not.toHaveProperty("promptPreview");
       expect(
-        normalizedThreadSummarySchema.shape.automation.parse(
-          summary!.automation,
+        normalizedThreadSummarySchema.shape.automations.parse(
+          summary!.automations,
         ),
-      ).toEqual(summary!.automation);
+      ).toEqual(summary!.automations);
+      const detail = new AutomationService({
+        repository: automation,
+        inventory,
+        publisher: { publish: () => undefined },
+        executionPolicy: { assertCanAutomate: () => undefined },
+      }).get(current.scope, "nul-prompt-automation");
+      expect(detail.prompt).toBe("\u0000Review the repository\u0000today.");
+    } finally {
+      current.database.close();
+    }
+  });
+
+  it("keeps many sibling automations in one inventory row and bounds independent context notices", async () => {
+    const current = fixture();
+    try {
+      const inventory = new InventoryRepository(current.database);
+      const queue = new QueuedInputRepository(current.database);
+      const completion = new SubmissionCompletionRepository(current.database);
+      const automation = new AutomationRepository(current.database);
+      const ids = Array.from({ length: 30 }, () => randomUUID());
+      for (const [index, id] of ids.entries()) {
+        automation.createDefinition(current.scope, {
+          id, anchorThreadId: current.threadId, name: `Schedule ${index}`,
+          prompt: "Large prompt ".repeat(2_000), precheck: null,
+          runMode: index === 28 ? "clone" : "same_thread", enabled: true,
+          schedule: { kind: "interval", anchorAt: 10_000, everySeconds: 300 },
+          misfirePolicy: "coalesce", nextRunAt: 10_000, now: 500,
+        });
+        if (index >= 25) continue;
+        const run = automation.createManualRun(current.scope, id, {
+          runId: randomUUID(), occurrenceKey: `manual:${index}`,
+          scheduledFor: 1_000 + index, claimToken: `claim-${index}`,
+          leaseExpiresAt: 60_000, dispatchMutationId: randomUUID(), now: 1_000 + index,
+        }).run;
+        automation.updateRunState(current.scope, id, run.id, {
+          expectedState: "claimed", state: "failed", claimToken: run.claimToken!,
+          errorCode: "automation_dispatch_failed", errorDiagnostic: `Failure ${index}`,
+          now: 2_000 + index,
+        });
+      }
+      // A skipped check does not hide this automation's preceding failure.
+      const skipped = automation.createManualRun(current.scope, ids[0]!, {
+        runId: randomUUID(), occurrenceKey: "manual:skipped", scheduledFor: 3_000,
+        claimToken: "skip-claim", leaseExpiresAt: 60_000,
+        dispatchMutationId: randomUUID(), now: 3_000,
+      }).run;
+      automation.updateRunState(current.scope, ids[0]!, skipped.id, {
+        expectedState: "claimed", state: "skipped", claimToken: skipped.claimToken!, now: 3_001,
+      });
+      const summaryReader = new DatabaseApplicationThreadSummaryReader({ inventory, queue, completion });
+      const rows = summaryReader.listByIds(current.scope, [current.threadId]);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.automations).toMatchObject({
+        totalCount: 30, enabledCount: 30, pausedCount: 0, exhaustedCount: 0,
+        inFlightCount: 0, attentionCount: 25, nextRunAt: new Date(10_000).toISOString(),
+      });
+      expect(JSON.stringify(rows[0]!.automations).length).toBeLessThan(250);
+      expect(rows[0]!.attention.automationContext).toBe("failed");
+      const snapshot = await new DatabaseThreadApplicationInventoryReader({
+        inventory, queue, completion,
+        ...threadAgentToolPolicyReaderDependencies(current.database),
+        directoryBrowsingAvailability: () => "unavailable",
+        executionWorkspaces: directThreadExecutionWorkspaceReader,
+      }).getAuthorized(current.scope, current.threadId);
+      expect(snapshot.thread.automations).toEqual(rows[0]!.automations);
+      expect(snapshot.attention.automationContexts).toHaveLength(20);
+      expect(new Set(snapshot.attention.automationContexts.map((context) => context.automationId)).size).toBe(20);
+      expect(snapshot.attention.automationContexts[0]).toMatchObject({
+        automationId: ids[24], name: "Schedule 24", sourceThreadId: current.threadId, outcome: "failed",
+      });
+      // Uncertainty remains truthful and visible ahead of the bounded failure list.
+      const uncertain = automation.createManualRun(current.scope, ids[28]!, {
+        runId: randomUUID(), occurrenceKey: "manual:uncertain", scheduledFor: 3_100,
+        claimToken: "uncertain-claim", leaseExpiresAt: 60_000,
+        dispatchMutationId: randomUUID(), now: 3_100,
+      }).run;
+      const resultChild = new ConversationBindingRepository(current.database).createUnboundThread(current.scope, {
+        workspaceId: current.workspaceId, connectionProfileId: current.connectionProfileId,
+        title: "Automation result", now: 3_100,
+      });
+      current.database.prepare(`UPDATE automation_runs SET child_thread_id = ?
+        WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?`)
+        .run(resultChild.id, current.scope.tenantId, current.scope.principalId, uncertain.id);
+      automation.updateRunState(current.scope, ids[28]!, uncertain.id, {
+        expectedState: "claimed", state: "dispatching", claimToken: uncertain.claimToken!,
+        retainPromptSnapshot: true, now: 3_101,
+      });
+      automation.updateRunState(current.scope, ids[28]!, uncertain.id, {
+        expectedState: "dispatching", state: "uncertain", claimToken: uncertain.claimToken!,
+        retainPromptSnapshot: true,
+        errorCode: "automation_dispatch_uncertain", now: 3_102,
+      });
+      const withUncertain = await new DatabaseThreadApplicationInventoryReader({
+        inventory, queue, completion,
+        ...threadAgentToolPolicyReaderDependencies(current.database),
+        directoryBrowsingAvailability: () => "unavailable",
+        executionWorkspaces: directThreadExecutionWorkspaceReader,
+      }).getAuthorized(current.scope, current.threadId);
+      expect(withUncertain.attention.automationContexts[0]).toMatchObject({
+        automationId: ids[28], runId: uncertain.id, outcome: "uncertain",
+      });
+      expect(withUncertain.thread.automations.attentionCount).toBe(26);
+      const childContext = await new DatabaseThreadApplicationInventoryReader({
+        inventory, queue, completion,
+        ...threadAgentToolPolicyReaderDependencies(current.database),
+        directoryBrowsingAvailability: () => "unavailable",
+        executionWorkspaces: directThreadExecutionWorkspaceReader,
+      }).getAuthorized(current.scope, resultChild.id);
+      expect(childContext.attention.automationContexts).toEqual([
+        expect.objectContaining({ automationId: ids[28], runId: uncertain.id, outcome: "uncertain" }),
+      ]);
+      expect(summaryReader.listByIds(current.scope, [resultChild.id])[0]!.attention.automationContext).toBe("failed");
+      expect(() => automation.acknowledgeRun(current.scope, ids[28]!, uncertain.id, 3_103))
+        .toThrow("Resolve the uncertain run");
+      // Explicitly abandoned force-reset history must not create immortal attention.
+      current.database.prepare(`UPDATE automation_runs
+        SET force_reset_at = 3500, force_reset_mutation_id = 'intentional-reset'
+        WHERE tenant_id = ? AND owner_principal_id = ? AND automation_id = ?`)
+        .run(current.scope.tenantId, current.scope.principalId, ids[24]!);
+      expect(summaryReader.listByIds(current.scope, [current.threadId])[0]!.automations.attentionCount).toBe(25);
+      const revision = rows[0]!.automations.revision;
+      automation.softDeleteDefinition(current.scope, ids[29]!, { expectedRevision: 0, now: 4_000 });
+      const updated = summaryReader.listByIds(current.scope, [current.threadId])[0]!.automations;
+      expect(updated.totalCount).toBe(29);
+      expect(updated.revision).toBeGreaterThan(revision);
+      for (const scope of [
+        { ...current.scope, principalId: "another-principal" },
+        { ...current.scope, tenantId: "another-tenant" },
+      ]) expect(summaryReader.listByIds(scope, [current.threadId])).toEqual([]);
+    } finally {
+      current.database.close();
+    }
+  });
+
+  it("projects exhausted one-shots and actionable deferred dates without losing sibling failure attention", async () => {
+    const current = fixture();
+    try {
+      const inventory = new InventoryRepository(current.database);
+      const queue = new QueuedInputRepository(current.database);
+      const completion = new SubmissionCompletionRepository(current.database);
+      const automation = new AutomationRepository(current.database);
+      const ids = Array.from({ length: 4 }, () => randomUUID());
+      for (const [index, id] of ids.entries()) automation.createDefinition(current.scope, {
+        id, anchorThreadId: current.threadId, name: `Schedule ${index}`,
+        prompt: "Review", precheck: null, runMode: "same_thread", enabled: index !== 3,
+        schedule: index === 2 ? { kind: "date_time", runAt: 1_000 }
+          : { kind: "interval", anchorAt: 1_000, everySeconds: 300 },
+        misfirePolicy: index === 2 ? null : "coalesce", nextRunAt: index === 3 ? null : 1_000, now: 500,
+      });
+      const failed = automation.createManualRun(current.scope, ids[0]!, {
+        runId: randomUUID(), occurrenceKey: "manual:failure", scheduledFor: 1_000,
+        claimToken: "failed-claim", leaseExpiresAt: 60_000,
+        dispatchMutationId: randomUUID(), now: 1_000,
+      }).run;
+      automation.updateRunState(current.scope, ids[0]!, failed.id, {
+        expectedState: "claimed", state: "failed", claimToken: failed.claimToken!,
+        errorCode: "automation_dispatch_failed", now: 1_001,
+      });
+      const awaiting = automation.createManualRun(current.scope, ids[0]!, {
+        runId: randomUUID(), occurrenceKey: "manual:waiting", scheduledFor: 1_100,
+        claimToken: "waiting-claim", leaseExpiresAt: 60_000,
+        dispatchMutationId: randomUUID(), now: 1_100,
+      }).run;
+      automation.deferRun(current.scope, ids[0]!, awaiting.id, {
+        expectedState: "claimed", claimToken: awaiting.claimToken!, reason: "source_recovery", eligibleAt: null, now: 1_101,
+      });
+      const scheduled = (id: string, nextRunAt: number | null) => automation.claimScheduledOccurrence(current.scope, id, {
+        runId: randomUUID(), occurrenceKey: "scheduled:1000", scheduledFor: 1_000,
+        lastScheduledAt: 1_000, nextRunAt, coalescedCount: 0,
+        claimToken: randomUUID(), leaseExpiresAt: 60_000,
+        dispatchMutationId: randomUUID(), now: 1_200,
+      }).run;
+      const success = scheduled(ids[1]!, 9_000);
+      automation.updateRunState(current.scope, ids[1]!, success.id, {
+        expectedState: "claimed", state: "dispatching", claimToken: success.claimToken!,
+        retainPromptSnapshot: true, now: 1_201,
+      });
+      automation.updateRunState(current.scope, ids[1]!, success.id, {
+        expectedState: "dispatching", state: "completed", claimToken: success.claimToken!, now: 1_202,
+      });
+      automation.settleRunTurn(current.scope, current.threadId, success.dispatchMutationId, {
+        turnId: randomUUID(), outcome: "completed", settledAt: 1_202,
+        startedAt: 1_201, endedAt: 1_202,
+      });
+      const once = scheduled(ids[2]!, null);
+      automation.deferRun(current.scope, ids[2]!, once.id, {
+        expectedState: "claimed", claimToken: once.claimToken!, reason: "queue_capacity", eligibleAt: 4_000, now: 1_203,
+      });
+      const reader = new DatabaseApplicationThreadSummaryReader({ inventory, queue, completion });
+      const summary = () => reader.listByIds(current.scope, [current.threadId])[0]!;
+      expect(summary().automations).toMatchObject({
+        totalCount: 4, enabledCount: 3, pausedCount: 1, exhaustedCount: 0,
+        inFlightCount: 2, attentionCount: 1, nextRunAt: new Date(4_000).toISOString(),
+      });
+      expect(summary().attention.automationContext).toBe("failed");
+      const snapshot = await new DatabaseThreadApplicationInventoryReader({
+        inventory, queue, completion,
+        ...threadAgentToolPolicyReaderDependencies(current.database),
+        directoryBrowsingAvailability: () => "unavailable",
+        executionWorkspaces: directThreadExecutionWorkspaceReader,
+      }).getAuthorized(current.scope, current.threadId);
+      expect(snapshot.attention.automationContexts).toEqual(expect.arrayContaining([
+        expect.objectContaining({ automationId: ids[0], runId: failed.id, outcome: "failed" }),
+        expect.objectContaining({ automationId: ids[1], runId: success.id, outcome: "triggered" }),
+      ]));
+      automation.cancelDeferredRuns(current.scope, ids[2]!, "automation_paused", 1_250);
+      expect(summary().automations).toMatchObject({
+        enabledCount: 2, exhaustedCount: 1, inFlightCount: 1,
+      });
+      // A separate manual delivery does not reopen the consumed scheduled occurrence.
+      const onceManual = automation.createManualRun(current.scope, ids[2]!, {
+        runId: randomUUID(), occurrenceKey: "manual:consumed-once", scheduledFor: 1_260,
+        claimToken: "consumed-once-claim", leaseExpiresAt: 60_000,
+        dispatchMutationId: randomUUID(), now: 1_260,
+      }).run;
+      automation.deferRun(current.scope, ids[2]!, onceManual.id, {
+        expectedState: "claimed", claimToken: onceManual.claimToken!,
+        reason: "queue_capacity", eligibleAt: 4_000, now: 1_261,
+      });
+      expect(summary().automations).toMatchObject({
+        enabledCount: 2, exhaustedCount: 1, inFlightCount: 2,
+        nextRunAt: new Date(4_000).toISOString(),
+      });
+      automation.acknowledgeRun(current.scope, ids[0]!, failed.id, 1_300);
+      expect(summary().automations.attentionCount).toBe(0);
+      expect(summary().attention.automationContext).toBe("triggered");
+      automation.acknowledgeRun(current.scope, ids[1]!, success.id, 1_301);
+      expect(summary().attention.automationContext).toBeNull();
+      // Manual work remains actionable even while its schedule is paused.
+      const pausedManual = automation.createManualRun(current.scope, ids[3]!, {
+        runId: randomUUID(), occurrenceKey: "manual:paused", scheduledFor: 1_400,
+        claimToken: "paused-claim", leaseExpiresAt: 60_000,
+        dispatchMutationId: randomUUID(), now: 1_400,
+      }).run;
+      automation.deferRun(current.scope, ids[3]!, pausedManual.id, {
+        expectedState: "claimed", claimToken: pausedManual.claimToken!,
+        reason: "queue_capacity", eligibleAt: 3_500, now: 1_401,
+      });
+      expect(summary().automations.nextRunAt).toBe(new Date(3_500).toISOString());
+      current.database.prepare(`UPDATE thread_principal_state
+        SET inventory_state = 'snoozed', snoozed_at = 1500, snoozed_until = 5000
+        WHERE tenant_id = ? AND principal_id = ? AND thread_id = ?`)
+        .run(current.scope.tenantId, current.scope.principalId, current.threadId);
+      expect(summary().automations.nextRunAt).toBe(new Date(5_000).toISOString());
+      current.database.prepare(`UPDATE thread_principal_state
+        SET inventory_state = 'archived', snoozed_at = NULL, snoozed_until = NULL
+        WHERE tenant_id = ? AND principal_id = ? AND thread_id = ?`)
+        .run(current.scope.tenantId, current.scope.principalId, current.threadId);
+      expect(summary().automations).not.toHaveProperty("nextRunAt");
     } finally {
       current.database.close();
     }
@@ -2232,7 +2466,7 @@ describe("backend-normalized application adapters", () => {
       });
       automation.claimScheduledOccurrence(current.scope, "summary-automation", {
         runId: "summary-automation-run",
-        occurrenceKey: "summary-occurrence",
+        occurrenceKey: "scheduled:900",
         scheduledFor: 900,
         lastScheduledAt: 900,
         nextRunAt: null,
@@ -2386,23 +2620,14 @@ describe("backend-normalized application adapters", () => {
           unseenCompletion: true,
           queueFailure: true,
         },
-        automation: {
-          status: "enabled",
-          runMode: "same_thread",
-          scheduleKind: "date_time",
-          schedule: { kind: "date_time", runAt: new Date(900).toISOString() },
-          misfirePolicy: "coalesce",
-          promptPreview: "run the summary automation",
-          revision: 1,
-          hasPrecheck: true,
-          lastRun: {
-            id: "summary-automation-run",
-            state: "claimed",
-            occurrence: "scheduled",
-            scheduledFor: new Date(900).toISOString(),
-            resultThreadId: current.threadId,
-            turn: { outcome: "failed", endedAt: new Date(950).toISOString() },
-          },
+        automations: {
+          totalCount: 1,
+          enabledCount: 1,
+          pausedCount: 0,
+          exhaustedCount: 0,
+          inFlightCount: 1,
+          attentionCount: 0,
+          revision: 4,
         },
       });
       await expect(

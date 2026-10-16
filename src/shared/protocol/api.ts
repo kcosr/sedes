@@ -24,6 +24,7 @@ import {
   automationPrecheckSchema,
   automationPromptSchema,
   automationScheduleSchema,
+  automationNameSchema,
 } from "./automation.js";
 import {
   providerFeatureActionIdSchema,
@@ -225,23 +226,48 @@ export type CreateThreadFromSettingsRequest = z.infer<
 >;
 
 const automationDefinitionFields = {
+  name: automationNameSchema,
   prompt: automationPromptSchema,
   runMode: automationRunModeSchema,
   schedule: automationScheduleSchema,
-  misfirePolicy: automationMisfirePolicySchema,
+  misfirePolicy: automationMisfirePolicySchema.nullable(),
   precheck: automationPrecheckSchema.nullable(),
 } as const;
 
 export const createAutomationRequestSchema = z.strictObject({
   ...automationDefinitionFields,
-  mutationId: mutationIdSchema,
-});
+    threadId: threadIdSchema,
+    initialState: z.enum(["enabled", "paused"]),
+    mutationId: mutationIdSchema,
+})
+  .superRefine(validateAutomationMisfirePolicy);
 
 export const updateAutomationRequestSchema = z.strictObject({
   ...automationDefinitionFields,
   expectedRevision: z.number().int().nonnegative(),
   mutationId: mutationIdSchema,
-});
+})
+  .superRefine(validateAutomationMisfirePolicy);
+
+function validateAutomationMisfirePolicy(
+  input: {
+    schedule: { kind: string };
+    misfirePolicy: "coalesce" | "skip" | null;
+  },
+  context: z.RefinementCtx,
+): void {
+  if (
+    (input.schedule.kind === "date_time") !==
+    (input.misfirePolicy === null)
+  ) {
+    context.addIssue({
+      code: "custom",
+      path: ["misfirePolicy"],
+      message:
+        "One-shots require null; recurring schedules require coalesce or skip.",
+    });
+  }
+}
 
 export const automationStateRequestSchema = z.strictObject({
   action: z.enum(["enable", "pause"]),
@@ -284,6 +310,7 @@ export const dismissThreadAttentionRequestSchema = z.discriminatedUnion(
     z.strictObject({
       kind: z.literal("automation_context"),
       runId: z.uuid(),
+      outcome: z.enum(["triggered", "interrupted", "failed"]),
       mutationId: mutationIdSchema,
     }),
     z.strictObject({
@@ -302,6 +329,13 @@ export type DismissThreadAttentionRequest = z.infer<
   typeof dismissThreadAttentionRequestSchema
 >;
 
+export const listAutomationsQuerySchema = z.strictObject({
+  threadId: threadIdSchema.optional(),
+  cursor: z.string().max(2048).optional(),
+  pageSize: z.coerce.number().int().min(1).max(100).default(50),
+  status: z.enum(["enabled", "paused", "exhausted"]).optional(),
+});
+
 export const listAutomationRunsQuerySchema = z.strictObject({
   cursor: z.string().max(2048).optional(),
   pageSize: z.coerce.number().int().min(1).max(100).default(50),
@@ -314,8 +348,12 @@ export const resolveAutomationRunRequestSchema = z.strictObject({
   resume: z.boolean().default(false),
 });
 
+export const automationRouteParametersSchema = z.strictObject({
+  automationId: z.uuid(),
+});
+
 export const automationRunRouteParametersSchema = z.strictObject({
-  threadId: threadIdSchema,
+  automationId: z.uuid(),
   runId: z.uuid(),
 });
 
@@ -658,8 +696,7 @@ export const bulkInventoryMutationRequestSchema = z.discriminatedUnion(
       mutationId: mutationIdSchema,
       ...confirmedBulkInventoryCountsSchema,
     }),
-  ],
-).refine(
+  ]).refine(
   (request) =>
     request.action === "unsettle" ||
     request.openTaskDisposition !== "complete" ||

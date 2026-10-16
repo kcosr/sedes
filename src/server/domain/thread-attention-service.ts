@@ -10,6 +10,12 @@ export class ThreadAttentionService {
       readonly inventory: InventoryRepository;
       readonly completions: SubmissionCompletionRepository;
       readonly queue: QueuedInputDispatcher;
+      readonly acknowledgeAutomationRun: (
+        scope: RequestScope,
+        applicationThreadId: string,
+        runId: string,
+        outcome: "triggered" | "interrupted" | "failed",
+      ) => void | Promise<void>;
       readonly now?: () => number;
       readonly publish: (
         scope: RequestScope,
@@ -38,10 +44,11 @@ export class ThreadAttentionService {
         this.#now(),
       );
     } else if (request.kind === "automation_context") {
-      this.input.inventory.dismissAutomationContext(
+      await this.input.acknowledgeAutomationRun(
         scope,
         applicationThreadId,
         request.runId,
+        request.outcome,
       );
     } else if (request.kind === "unseen_completion") {
       this.input.completions.acknowledgeThrough(

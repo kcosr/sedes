@@ -1,3 +1,4 @@
+import { MAXIMUM_AUTOMATION_NAME_LENGTH } from "../../shared/protocol/automation.js";
 import { createHash, randomUUID } from "node:crypto";
 import type {
   ThreadAutomationDefinition,
@@ -48,11 +49,21 @@ export interface AutomationDefinitionFields {
   readonly prompt: string;
   readonly runMode: AutomationRunMode;
   readonly schedule: ProtocolAutomationSchedule;
-  readonly misfirePolicy: AutomationMisfirePolicy;
+  readonly misfirePolicy: AutomationMisfirePolicy | null;
   readonly precheck: AutomationPrecheck | null;
 }
 
 export interface AutomationChangePublisher {
+  publishAutomation?(
+    scope: RequestScope,
+    input: {
+      automationId: string;
+      threadId: string;
+      revision: number;
+      runsRevision: number;
+      deleted: boolean;
+    },
+  ): void | Promise<void>;
   publish(
     scope: RequestScope,
     applicationThreadId: string,
@@ -82,6 +93,8 @@ export class AutomationService implements DurableDeadlineSource {
   readonly #onRunLifecycle: AutomationRunLifecycleObserver | undefined;
   #dispatcher?: AutomationDispatcher;
   #dispatchDeferredUntil: number | null = null;
+  #lastNow = Date.now();
+  #deferredScanAt: number | null = null;
   #reconcileFailureDeferredUntil: number | null = null;
 
   constructor(input: {
@@ -111,23 +124,59 @@ export class AutomationService implements DurableDeadlineSource {
     this.#dispatcher = dispatcher;
   }
 
+  replayCreate(
+    scope: RequestScope,
+    threadId: string,
+    input: AutomationDefinitionFields & {
+      name: string;
+      initialState: "enabled" | "paused";
+      mutationId: string;
+    },
+  ): ThreadAutomationDefinition | undefined {
+    this.#assertThread(scope, threadId);
+    const fields = this.#normalizeFields(input),
+      name = normalizeName(input.name);
+    const fingerprint = requestFingerprint({
+      operation: "create",
+      threadId,
+      ...fields,
+      name,
+      initialState: input.initialState,
+    });
+    const receipt = this.#repository.getMutationReceipt(
+      scope,
+      input.mutationId,
+    );
+    if (!receipt) return undefined;
+    const replay = this.#repository.getDefinition(scope, receipt.automationId);
+    if (
+      receipt.mutationKind !== "create" ||
+      receipt.requestFingerprint !== fingerprint ||
+      replay.anchorThreadId !== threadId
+    )
+      throw mutationReuseConflict();
+    return this.presentDefinition(scope, replay);
+  }
+
   create(
     scope: RequestScope,
     threadId: string,
-    input: AutomationDefinitionFields & { mutationId: string },
+    input: AutomationDefinitionFields & {
+      name: string;
+      initialState: "enabled" | "paused";
+      mutationId: string;
+    },
     now = Date.now(),
   ): ThreadAutomationDefinition {
     this.#assertThread(scope, threadId);
-    assertPromptBytes(input.prompt);
-    const precheck = normalizePrecheck(input.precheck);
-    const schedule = this.#toDomainSchedule(input.schedule);
+    const fields = this.#normalizeFields(input);
+    const name = normalizeName(input.name);
     const fingerprint = requestFingerprint({
+      operation: "create",
       threadId,
-      prompt: input.prompt.trim(),
-      runMode: input.runMode,
-      schedule,
-      misfirePolicy: input.misfirePolicy,
-      precheck,
+      ...fields,
+      name,
+      initialState: input.initialState,
     });
     const definition = this.#repository.database.transaction(() => {
       const receipt = this.#repository.getMutationReceipt(
@@ -142,32 +191,21 @@ export class AutomationService implements DurableDeadlineSource {
         if (
           receipt.mutationKind !== "create" ||
           receipt.requestFingerprint !== fingerprint ||
-          replay.anchorThreadId !== threadId ||
-          replay.revision !== receipt.resultRevision ||
-          replay.deletedAt !== null
-        ) {
+          replay.anchorThreadId !== threadId
+        )
           throw mutationReuseConflict();
-        }
         return replay;
       }
-      if (this.#repository.findDefinitionForThread(scope, threadId)) {
-        throw new DomainError(
-          "conflict",
-          "This thread already has an automation.",
-        );
-      }
-      const anchor = this.#assertAnchor(scope, threadId);
+      this.#assertAnchor(scope, threadId);
+      const enabled = input.initialState === "enabled";
+      if (enabled) this.#executionPolicy.assertCanAutomate(scope, threadId);
       const created = this.#repository.createDefinition(scope, {
         id: input.mutationId,
         anchorThreadId: threadId,
-        name: anchor.thread.title,
-        prompt: input.prompt.trim(),
-        precheck,
-        runMode: input.runMode,
-        enabled: false,
-        schedule,
-        misfirePolicy: input.misfirePolicy,
-        nextRunAt: null,
+        name,
+        ...fields,
+        enabled,
+        nextRunAt: enabled ? this.#firstOccurrence(fields.schedule, now) : null,
         now,
       });
       this.#repository.recordMutationReceipt(scope, {
@@ -185,67 +223,149 @@ export class AutomationService implements DurableDeadlineSource {
     return this.presentDefinition(scope, definition);
   }
 
-  get(scope: RequestScope, threadId: string): ThreadAutomationDefinition {
-    this.#assertThread(scope, threadId);
-    const definition = this.#definitionForThread(scope, threadId);
-    return this.presentDefinition(scope, definition);
+  get(scope: RequestScope, automationId: string): ThreadAutomationDefinition {
+    return this.presentDefinition(scope, this.#definition(scope, automationId));
+  }
+
+  list(
+    scope: RequestScope,
+    input: {
+      threadId?: string;
+      cursor?: string;
+      pageSize: number;
+      status?: "enabled" | "paused" | "exhausted";
+    },
+  ): { items: ThreadAutomationDefinition[]; nextCursor: string | null } {
+    if (input.threadId) this.#assertThread(scope, input.threadId);
+    const pageSize = Math.min(MAX_HISTORY_PAGE, Math.max(1, input.pageSize));
+    const fingerprint = requestFingerprint([
+      "automation.list",
+      scope.tenantId,
+      scope.principalId,
+      input.threadId ?? null,
+      input.status ?? null,
+      pageSize,
+    ]);
+    const cursor = input.cursor
+      ? decodeRunCursor(input.cursor, fingerprint)
+      : undefined;
+    const rows = this.#repository.listDefinitionPage(scope, {
+      threadId: input.threadId,
+      status: input.status,
+      limit: pageSize + 1,
+      after: cursor,
+    });
+    const retained = rows.slice(0, pageSize),
+      last = retained.at(-1);
+    return {
+      items: retained.map((row) => this.presentDefinition(scope, row)),
+      nextCursor:
+        rows.length > pageSize && last
+          ? encodeRunCursor(fingerprint, {
+              createdAt: last.createdAt,
+              id: last.id,
+            })
+          : null,
+    };
+  }
+
+  /** Replay before an adapter performs admission checks on a live definition. */
+  replayUpdate(
+    scope: RequestScope,
+    automationId: string,
+    input: AutomationDefinitionFields & {
+      name: string;
+      expectedRevision: number;
+      mutationId: string;
+    },
+  ): ThreadAutomationDefinition | undefined {
+    const fields = this.#normalizeFields(input),
+      name = normalizeName(input.name);
+    const replay = this.#replayDefinition(
+      scope, automationId, input.mutationId, "update",
+      requestFingerprint({
+        operation: "update", automationId,
+        request: { ...fields, name, expectedRevision: input.expectedRevision },
+      }),
+    );
+    return replay ? this.presentDefinition(scope, replay) : undefined;
   }
 
   update(
     scope: RequestScope,
-    threadId: string,
+    automationId: string,
     input: AutomationDefinitionFields & {
+      name: string;
       expectedRevision: number;
       mutationId: string;
     },
     now = Date.now(),
   ): ThreadAutomationDefinition {
-    assertPromptBytes(input.prompt);
-    const precheck = normalizePrecheck(input.precheck);
-    const schedule = this.#toDomainSchedule(input.schedule);
+    const fields = this.#normalizeFields(input),
+      name = normalizeName(input.name);
     const mutation = this.#mutateDefinition(
       scope,
-      threadId,
+      automationId,
       input.mutationId,
       "update",
-      {
-        ...input,
-        precheck,
-        schedule,
-      },
-      (automationId) => {
-        const anchor = this.#assertAnchor(scope, threadId);
-        const current = this.#repository.getDefinition(scope, automationId);
-        const enabled = current.enabled;
-        if (enabled) {
-          this.#executionPolicy.assertCanAutomate(scope, threadId);
-        }
-        return this.#repository.updateDefinition(scope, automationId, {
-          anchorThreadId: threadId,
-          name: anchor.thread.title,
-          prompt: input.prompt.trim(),
-          precheck,
-          runMode: input.runMode,
-          enabled,
-          schedule,
-          misfirePolicy: input.misfirePolicy,
-          nextRunAt: enabled ? this.#firstOccurrence(schedule, now) : null,
-          completedAt: null,
+      { ...fields, name, expectedRevision: input.expectedRevision },
+      (id) => {
+        const current = this.#definition(scope, id);
+        this.#assertAnchor(scope, current.anchorThreadId);
+        if (current.enabled)
+          this.#executionPolicy.assertCanAutomate(
+            scope,
+            current.anchorThreadId,
+          );
+        const sameSchedule =
+          JSON.stringify(current.schedule) ===
+            JSON.stringify(fields.schedule) &&
+          current.misfirePolicy === fields.misfirePolicy;
+        const sameOnce =
+          current.schedule.kind === "date_time" &&
+          fields.schedule.kind === "date_time" &&
+          current.schedule.runAt === fields.schedule.runAt;
+        if (
+          fields.schedule.kind === "date_time" &&
+          !sameOnce &&
+          this.#repository.hasScheduledOccurrence(
+            scope,
+            id,
+            fields.schedule.runAt,
+          )
+        )
+          throw new DomainError(
+            "invalid_transition",
+            "This time has already been consumed. Choose a new future time.",
+          );
+        const exhausted = sameOnce && this.#repository.isExhausted(scope, id);
+        if (fields.schedule.kind === "date_time" && !sameOnce)
+          this.#firstOccurrence(fields.schedule, now);
+        return this.#repository.updateDefinition(scope, id, {
+          anchorThreadId: current.anchorThreadId,
+          name,
+          ...fields,
+          enabled: current.enabled,
+          nextRunAt: sameSchedule
+            ? current.nextRunAt
+            : current.enabled && !exhausted
+              ? this.#firstOccurrence(fields.schedule, now)
+              : null,
+          completedAt: exhausted ? current.completedAt : null,
           expectedRevision: input.expectedRevision,
           now,
         });
       },
       now,
     );
-    const updated = mutation.definition;
-    if (!mutation.replayed) this.#publishDefinition(scope, updated);
+    this.#publishDefinition(scope, mutation.definition);
     this.#changed();
-    return this.presentDefinition(scope, updated);
+    return this.presentDefinition(scope, mutation.definition);
   }
 
   setState(
     scope: RequestScope,
-    threadId: string,
+    automationId: string,
     input: {
       action: "enable" | "pause";
       expectedRevision: number;
@@ -255,60 +375,74 @@ export class AutomationService implements DurableDeadlineSource {
   ): ThreadAutomationDefinition {
     const mutation = this.#mutateDefinition(
       scope,
-      threadId,
+      automationId,
       input.mutationId,
       "state",
       input,
-      (automationId) => {
-        if (input.action === "enable") {
-          this.#executionPolicy.assertCanAutomate(scope, threadId);
-        }
-        const current = this.#repository.getDefinition(scope, automationId);
-        return input.action === "pause"
-          ? this.#repository.pauseDefinition(scope, automationId, {
-              expectedRevision: input.expectedRevision,
-              now,
-            })
-          : this.#repository.enableDefinition(scope, automationId, {
-              expectedRevision: input.expectedRevision,
-              nextRunAt: this.#firstOccurrence(current.schedule, now),
-              now,
-            });
+      (id) => {
+        const current = this.#definition(scope, id);
+        if (input.action === "pause")
+          return this.#repository.pauseDefinition(scope, id, {
+            expectedRevision: input.expectedRevision,
+            now,
+          });
+        this.#executionPolicy.assertCanAutomate(scope, current.anchorThreadId);
+        if (this.#repository.isExhausted(scope, id))
+          throw new DomainError(
+            "invalid_transition",
+            "This one-shot has been exhausted. Choose a new future time to rearm it.",
+          );
+        return this.#repository.enableDefinition(scope, id, {
+          expectedRevision: input.expectedRevision,
+          nextRunAt: this.#firstOccurrence(current.schedule, now),
+          now,
+        });
       },
       now,
     );
-    const updated = mutation.definition;
-    if (!mutation.replayed) this.#publishDefinition(scope, updated);
+    this.#publishDefinition(scope, mutation.definition);
     this.#changed();
-    return this.presentDefinition(scope, updated);
+    return this.presentDefinition(scope, mutation.definition);
   }
 
   delete(
     scope: RequestScope,
-    threadId: string,
-    input: {
-      expectedRevision: number;
-      mutationId: string;
-    },
+    automationId: string,
+    input: { expectedRevision: number; mutationId: string },
     now = Date.now(),
   ): void {
     const mutation = this.#mutateDefinition(
       scope,
-      threadId,
+      automationId,
       input.mutationId,
       "delete",
       input,
-      (automationId) =>
-        this.#repository.softDeleteDefinition(scope, automationId, {
+      (id) =>
+        this.#repository.softDeleteDefinition(scope, id, {
           expectedRevision: input.expectedRevision,
           now,
         }),
       now,
     );
-    if (!mutation.replayed) {
-      this.#publishThread(scope, threadId);
-    }
+    this.#publishDefinition(scope, mutation.definition);
     this.#changed();
+  }
+
+  #normalizeFields(input: AutomationDefinitionFields) {
+    assertPromptBytes(input.prompt);
+    const schedule = this.#toDomainSchedule(input.schedule);
+    if ((schedule.kind === "date_time") !== (input.misfirePolicy === null))
+      throw new DomainError(
+        "invalid_transition",
+        "One-shots have no missed-occurrence policy; recurring schedules require one.",
+      );
+    return {
+      prompt: input.prompt.trim(),
+      runMode: input.runMode,
+      schedule,
+      misfirePolicy: input.misfirePolicy,
+      precheck: normalizePrecheck(input.precheck),
+    };
   }
 
   /**
@@ -345,7 +479,7 @@ export class AutomationService implements DurableDeadlineSource {
       };
     },
   ): ThreadAutomationRunPage {
-    const automationId = this.#definitionForThread(scope, threadId).id;
+    const automationId = this.#definition(scope, threadId).id;
     const pageSize = Math.min(input.pageSize, MAX_HISTORY_PAGE);
     const filter = input.filter ?? "all";
     const fingerprint = requestFingerprint([
@@ -392,134 +526,181 @@ export class AutomationService implements DurableDeadlineSource {
    */
   resolveUncertainRun(
     scope: RequestScope,
-    threadId: string,
+    automationId: string,
     runId: string,
     input: { readonly resume: boolean },
     now = Date.now(),
   ): ThreadAutomationRunResolution {
-    this.#assertThread(scope, threadId);
-    const current = this.#repository.findRunByScopedId(scope, runId);
-    if (!current || current.anchorThreadId !== threadId) {
-      throw new DomainError("not_found", "The automation run was not found.");
-    }
+    const definition = this.#definition(scope, automationId),
+      current = this.#repository.getRun(scope, automationId, runId);
     if (
       current.state === "failed" &&
       current.errorCode === "automation_uncertain_resolved"
-    ) {
-      return this.#presentResolution(scope, threadId, current);
-    }
+    )
+      return this.#presentResolution(scope, automationId, current);
     const resolved = this.#repository.database.transaction(() => {
       const run = this.#repository.resolveUncertainRun(
         scope,
-        current.automationId,
+        automationId,
         runId,
         now,
       );
+      this.#repository.acknowledgeRun(scope, automationId, runId, now);
       if (input.resume) {
-        const definition = this.#repository.getDefinition(
-          scope,
-          current.automationId,
-        );
-        if (definition.deletedAt !== null) {
+        if (this.#repository.isExhausted(scope, automationId))
           throw new DomainError(
             "invalid_transition",
-            "This one-time automation ended with the resolved run, so it cannot be resumed.",
+            "This one-shot is exhausted. Choose a new future time to rearm it.",
           );
-        }
-        this.#executionPolicy.assertCanAutomate(scope, threadId);
-        this.#repository.enableDefinition(scope, definition.id, {
-          expectedRevision: definition.revision,
-          nextRunAt: this.#firstOccurrence(definition.schedule, now),
+        this.#executionPolicy.assertCanAutomate(
+          scope,
+          definition.anchorThreadId,
+        );
+        const latest = this.#repository.getDefinition(scope, automationId);
+        this.#repository.enableDefinition(scope, automationId, {
+          expectedRevision: latest.revision,
+          nextRunAt: this.#firstOccurrence(latest.schedule, now),
           now,
         });
       }
       return run;
     })();
     this.publishRun(scope, resolved);
-    return this.#presentResolution(scope, threadId, resolved);
+    return this.#presentResolution(
+      scope,
+      automationId,
+      this.#repository.getRun(scope, automationId, runId),
+    );
+  }
+
+  acknowledgeThreadRun(
+    scope: RequestScope,
+    threadId: string,
+    runId: string,
+    outcome: "triggered" | "interrupted" | "failed",
+    now = Date.now(),
+  ): ThreadAutomationRunResolution {
+    this.#assertThread(scope, threadId);
+    const run = this.#repository.findRunByScopedId(scope, runId);
+    if (
+      !run ||
+      (run.anchorThreadId !== threadId && run.childThreadId !== threadId)
+    )
+      throw new DomainError(
+        "not_found",
+        "The automation run was not found for this thread.",
+      );
+    // Dismissing a neutral notice must not acknowledge a failure that arrived
+    // after that notice was rendered, including a delayed request. An
+    // interruption is neutral, so dismissing the delivery notice covers it.
+    const currentOutcome = run.state === "uncertain" ? "uncertain"
+      : run.state === "failed" || run.turnOutcome === "failed" ? "failed" : "neutral";
+    if (currentOutcome !== (outcome === "failed" ? "failed" : "neutral"))
+      return this.#presentResolution(scope, run.automationId, run);
+    return this.acknowledgeRun(scope, run.automationId, runId, now);
+  }
+
+  acknowledgeRun(
+    scope: RequestScope,
+    automationId: string,
+    runId: string,
+    now = Date.now(),
+  ): ThreadAutomationRunResolution {
+    const definition = this.#repository.getDefinition(scope, automationId);
+    this.#assertThread(scope, definition.anchorThreadId);
+    const run = this.#repository.acknowledgeRun(
+      scope,
+      automationId,
+      runId,
+      now,
+    );
+    this.#publishRun(scope, run);
+    return this.#presentResolution(scope, automationId, run);
   }
 
   async runNow(
     scope: RequestScope,
-    threadId: string,
+    automationId: string,
     mutationId: string,
     now = Date.now(),
   ): Promise<ThreadAutomationRun> {
-    const runId = mutationId;
+    const definition = this.#repository.getDefinition(scope, automationId);
+    this.#assertThread(scope, definition.anchorThreadId);
+    const replay = this.#repository.findRunByScopedId(scope, mutationId);
     let claimed: ReturnType<AutomationRepository["createManualRun"]>;
-    const replay = this.#repository.findRunByScopedId(scope, runId);
     if (replay) {
       if (
-        replay.anchorThreadId !== threadId ||
+        replay.automationId !== automationId ||
         replay.occurrenceKind !== "manual" ||
         replay.occurrenceKey !== `manual:${mutationId}` ||
         replay.dispatchMutationId !== mutationId
-      ) {
+      )
         throw new DomainError(
           "conflict",
           "The run mutation ID belongs to different work.",
         );
-      }
       claimed = { run: replay, replayed: true };
     } else {
-      if (
-        this.#inventory.getThread(scope, threadId).inventory.inventoryState ===
-        "snoozed"
-      ) {
+      this.#definition(scope, automationId);
+      const sourceState = this.#inventory.getThread(
+        scope,
+        definition.anchorThreadId,
+      ).inventory.inventoryState;
+      if (sourceState === "archived")
+        throw new DomainError(
+          "archived_thread",
+          "Restore this thread before running its automation manually.",
+        );
+      if (sourceState === "snoozed")
         throw new DomainError(
           "invalid_transition",
           "Wake this thread before running its automation manually.",
         );
-      }
-      this.#executionPolicy.assertCanAutomate(scope, threadId);
-      const automationId = this.#definitionForThread(scope, threadId).id;
+      this.#executionPolicy.assertCanAutomate(scope, definition.anchorThreadId);
       claimed = this.#repository.createManualRun(scope, automationId, {
-        runId,
+        runId: mutationId,
         occurrenceKey: `manual:${mutationId}`,
         scheduledFor: now,
         claimToken: randomUUID(),
         leaseExpiresAt: now + CLAIM_LEASE_MS,
-        dispatchMutationId: runId,
+        dispatchMutationId: mutationId,
         now,
       });
     }
-    const currentDefinition = this.#repository.findDefinitionForThread(
-      scope,
-      threadId,
-    );
-    const belongsToCurrentDefinition =
-      currentDefinition?.id === claimed.run.automationId;
-    if (!claimed.replayed || belongsToCurrentDefinition) {
-      this.#publishRun(scope, claimed.run);
-      this.#changed();
-    }
+    this.#publishRun(scope, claimed.run);
+    this.#changed();
     try {
       await this.#requiredDispatcher().dispatch(claimed.run);
       return presentRun(
-        this.#repository.getRun(
-          scope,
-          claimed.run.automationId,
-          claimed.run.id,
-        ),
+        this.#repository.getRun(scope, automationId, claimed.run.id),
       );
     } finally {
-      // A due scheduled occurrence is deliberately hidden while the manual
-      // run is nonterminal. Rearm as soon as dispatch reaches an outcome.
       this.#changed();
     }
   }
 
   getNearestDeadline(): number | null {
     const deadline = this.#repository.getNearestDeadline();
-    if (deadline === null) return null;
+    const safeDeadline = this.#repository.hasDeferredRuns()
+      ? (this.#deferredScanAt ?? this.#lastNow + 30_000)
+      : null;
+    const next =
+      deadline === null
+        ? safeDeadline
+        : safeDeadline === null
+          ? deadline
+          : Math.min(deadline, safeDeadline);
+    if (next === null) return null;
     return Math.max(
-      deadline,
-      this.#dispatchDeferredUntil ?? deadline,
-      this.#reconcileFailureDeferredUntil ?? deadline,
+      next,
+      this.#dispatchDeferredUntil ?? next,
+      this.#reconcileFailureDeferredUntil ?? next,
     );
   }
 
   async reconcileDue(now: number): Promise<void> {
+    this.#lastNow = now;
+    this.#deferredScanAt = null;
     const dispatcher = this.#requiredDispatcher();
     let hadItemError = false;
     for (const expired of this.#repository.listExpiredLeasedRuns(
@@ -528,6 +709,103 @@ export class AutomationService implements DurableDeadlineSource {
     )) {
       try {
         this.#reconcileExpiredRun(dispatcher, expired, now);
+      } catch (error) {
+        hadItemError = true;
+        this.#onReconcileError(error);
+      }
+    }
+
+    for (const waiting of this.#repository.listDeferredRuns(
+      now,
+      MAX_DUE_BATCH,
+    )) {
+      try {
+        if (dispatcher.availableCapacity() === 0) {
+          this.#deferDispatch(now);
+          break;
+        }
+        const scope = runScope(waiting);
+        let skip = false;
+        let failedDuringRefresh = false;
+        const run = this.#repository.database
+          .transaction(() => {
+            const current = this.#repository.getRun(
+              scope,
+              waiting.automationId,
+              waiting.id,
+            );
+            if (current.state !== "deferred") return current;
+            if (this.#repository.refreshDeferredBlock(scope, current, now)) {
+              const refreshed = this.#repository.getRun(
+                scope,
+                current.automationId,
+                current.id,
+              );
+              failedDuringRefresh = refreshed.state === "failed";
+              return refreshed;
+            }
+            const definition = this.#repository.getDefinition(
+              scope,
+              current.automationId,
+            );
+            if (
+              current.occurrenceKind === "scheduled" &&
+              current.suppressionPending &&
+              definition.schedule.kind !== "date_time"
+            ) {
+              const advance = this.#advance(
+                definition,
+                current.scheduledFor,
+                now,
+              );
+              this.#repository.foldDeferredOccurrence(scope, current, {
+                ...advance,
+                expectedRevision: definition.revision,
+                now,
+              });
+              skip =
+                definition.misfirePolicy === "skip" &&
+                now - current.scheduledFor > MISFIRE_GRACE_MS;
+            }
+            return this.#repository.reclaimDeferredRun(
+              scope,
+              current.automationId,
+              current.id,
+              {
+                claimToken: randomUUID(),
+                leaseExpiresAt: now + CLAIM_LEASE_MS,
+                now,
+              },
+            );
+          })
+          .immediate();
+        if (failedDuringRefresh) {
+          this.publishRun(scope, run);
+          continue;
+        }
+        if (run.state === "deferred") {
+          if (
+            run.deferredReason !== waiting.deferredReason ||
+            run.eligibleAt !== waiting.eligibleAt ||
+            run.suppressionPending !== waiting.suppressionPending
+          )
+            this.#publishRun(scope, run);
+          continue;
+        }
+        if (run.state !== "claimed") continue;
+        if (skip)
+          this.publishRun(
+            scope,
+            this.#repository.updateRunState(scope, run.automationId, run.id, {
+              expectedState: "claimed",
+              state: "skipped",
+              claimToken: run.claimToken!,
+              errorCode: "automation_misfire_skipped",
+              errorDiagnostic: "The suppressed occurrences were skipped.",
+              now,
+            }),
+          );
+        else this.#launchScheduledDispatch(dispatcher, run);
       } catch (error) {
         hadItemError = true;
         this.#onReconcileError(error);
@@ -626,35 +904,6 @@ export class AutomationService implements DurableDeadlineSource {
     const scope = definitionScope(definition);
     const dueAt = definition.nextRunAt;
     if (dueAt === null) return;
-    const anchor = this.#inventory.getThread(scope, definition.anchorThreadId);
-    if (
-      anchor.inventory.inventoryState === "snoozed" &&
-      anchor.inventory.snoozedUntil !== null &&
-      dueAt <= anchor.inventory.snoozedUntil
-    ) {
-      const advance = this.#advance(
-        definition,
-        dueAt,
-        Math.max(now, anchor.inventory.snoozedUntil),
-      );
-      const suppressed = this.#repository.suppressScheduledOccurrenceForSnooze(
-        scope,
-        definition.id,
-        {
-          expectedRevision: definition.revision,
-          scheduledFor: dueAt,
-          lastScheduledAt: advance.lastScheduledAt,
-          nextRunAt: advance.nextRunAt,
-          now,
-        },
-      );
-      if (suppressed.detached) {
-        this.#publishThread(scope, definition.anchorThreadId);
-      } else {
-        this.#publishDefinition(scope, suppressed.definition);
-      }
-      return;
-    }
     if (dispatcher.availableCapacity() === 0) {
       this.#deferDispatch(now);
       return;
@@ -683,7 +932,21 @@ export class AutomationService implements DurableDeadlineSource {
       this.#repository.getDefinition(scope, definition.id),
     );
     this.#publishRun(scope, claimed.run);
-    if (definition.misfirePolicy === "skip" && now - dueAt > MISFIRE_GRACE_MS) {
+    const admitted = this.#repository.checkRunAdmission(
+      scope,
+      definition.id,
+      claimed.run.id,
+      { claimToken: claimed.run.claimToken!, now, dispatch: false },
+    );
+    if (admitted.state !== "claimed") {
+      this.publishRun(scope, admitted);
+      return;
+    }
+    if (
+      definition.schedule.kind !== "date_time" &&
+      definition.misfirePolicy === "skip" &&
+      now - dueAt > MISFIRE_GRACE_MS
+    ) {
       const skipped = this.#repository.updateRunState(
         scope,
         definition.id,
@@ -695,13 +958,19 @@ export class AutomationService implements DurableDeadlineSource {
           errorCode: "automation_misfire_skipped",
           errorDiagnostic: "The missed occurrence was skipped.",
           now,
-          completeDefinition: definition.schedule.kind === "date_time",
+          completeDefinition: false,
         },
       );
       this.publishRun(scope, skipped);
     } else {
       this.#launchScheduledDispatch(dispatcher, claimed.run);
     }
+  }
+
+  /** A source or queue transition may make event-driven deferred work eligible. */
+  requestDeferredReconcile(now = this.#lastNow): void {
+    this.#deferredScanAt = now;
+    this.#changed();
   }
 
   dispatchCapacityChanged(): void {
@@ -740,18 +1009,56 @@ export class AutomationService implements DurableDeadlineSource {
     scope: RequestScope,
     definition: AutomationDefinitionRecord,
   ): ThreadAutomationSummary {
-    this.#inventory.getThread(scope, definition.anchorThreadId);
+    const anchor = this.#inventory.getThread(scope, definition.anchorThreadId);
+    const source = this.#repository.sourcePresentation(
+      scope,
+      definition.anchorThreadId,
+    );
+    const attention = this.#repository.attentionRun(scope, definition.id);
+    const nextRunAt = this.#repository.nextActionAt(scope, definition.id);
     const lastRun = this.#repository
       .listRuns(scope, definition.id, { limit: 1 })
       .at(0);
     const lastRunTurn = lastRun && presentAutomationLastRunTurn(lastRun);
     return {
-      status: definitionStatus(definition),
+      id: definition.id,
+      threadId: definition.anchorThreadId,
+      name: definition.name,
+      source: {
+        title: anchor.thread.title,
+        workspaceId: anchor.thread.workspaceId,
+        environmentId: anchor.thread.environmentId,
+        targetId: anchor.thread.connectionProfileId,
+        groupId: source.groupId,
+        backendLabel: source.backendLabel,
+        available: source.available,
+        backingState: anchor.thread.backingState,
+        inventoryState: anchor.inventory.inventoryState,
+        inventoryRevision: anchor.inventory.inventoryRevision,
+        ...(anchor.inventory.snoozedUntil === null
+          ? {}
+          : { snoozedUntil: iso(anchor.inventory.snoozedUntil) }),
+      },
+      ...(attention
+        ? {
+            attention: {
+              runId: attention.id,
+              kind:
+                attention.state === "uncertain"
+                  ? ("uncertain" as const)
+                  : ("failed" as const),
+              ...(attention.errorDiagnostic
+                ? { diagnostic: attention.errorDiagnostic }
+                : {}),
+            },
+          }
+        : {}),
+      status: this.#repository.isDefinitionExhausted(scope, definition.id)
+        ? "exhausted"
+        : definitionStatus(definition),
       runMode: definition.runMode,
       scheduleKind: definition.schedule.kind,
-      ...(definition.nextRunAt === null
-        ? {}
-        : { nextRunAt: iso(definition.nextRunAt) }),
+      ...(nextRunAt === null ? {} : { nextRunAt: iso(nextRunAt) }),
       ...(lastRun
         ? {
             lastRun: {
@@ -782,6 +1089,12 @@ export class AutomationService implements DurableDeadlineSource {
   }
 
   publishRun(scope: RequestScope, run: AutomationRunRecord): void {
+    if (
+      ["completed", "failed", "cancelled", "skipped", "uncertain"].includes(
+        run.state,
+      )
+    )
+      this.#deferredScanAt = this.#lastNow;
     this.#publishRun(scope, run);
     const definition = this.#repository.getDefinition(scope, run.automationId);
     // Run completion records backend acceptance, not the eventual end of its
@@ -796,7 +1109,9 @@ export class AutomationService implements DurableDeadlineSource {
       try {
         const observation = this.#onRunLifecycle(scope, {
           event:
-            run.state === "completed" ? "automation.started" : "automation.failed",
+            run.state === "completed"
+              ? "automation.started"
+              : "automation.failed",
           run,
           definition,
         });
@@ -805,19 +1120,7 @@ export class AutomationService implements DurableDeadlineSource {
         // Passive notifications must never affect automation execution.
       }
     }
-    if (definition.deletedAt === null) {
-      this.#publishDefinition(scope, definition);
-    } else {
-      const replacement = this.#repository.findDefinitionForThread(
-        scope,
-        definition.anchorThreadId,
-      );
-      if (replacement) {
-        this.#publishDefinition(scope, replacement);
-      } else {
-        this.#publishThread(scope, definition.anchorThreadId);
-      }
-    }
+    this.#publishDefinition(scope, definition);
     if (
       run.occurrenceKind === "scheduled" &&
       (run.state === "completed" || run.state === "failed")
@@ -830,10 +1133,21 @@ export class AutomationService implements DurableDeadlineSource {
   /**
    * Publishes a run whose agent turn settled. Unlike {@link publishRun} it
    * notifies no lifecycle observer (the thread's own turn notification covers
-   * the turn) and leaves scheduling alone: settlement changes neither.
+   * the turn). The repository may retire a dismissed successful one-shot, or
+   * restore attention for a failed turn, in the same settlement transaction.
    */
   publishRunSettlement(scope: RequestScope, run: AutomationRunRecord): void {
     this.#publishRun(scope, run);
+  }
+
+  reconcileRetirementsForThreads(
+    scope: RequestScope,
+    threadIds: readonly string[],
+    now = Date.now(),
+  ): void {
+    for (const definition of this.#repository.retireFinishedOneShotsForThreads(scope, threadIds, now)) {
+      this.#publishDefinition(scope, definition);
+    }
   }
 
   #presentResolution(
@@ -841,13 +1155,13 @@ export class AutomationService implements DurableDeadlineSource {
     threadId: string,
     run: AutomationRunRecord,
   ): ThreadAutomationRunResolution {
-    const definition = this.#repository.findDefinitionForThread(
-      scope,
-      threadId,
-    );
+    const definition = this.#repository.getDefinition(scope, threadId);
     return {
       run: presentRun(run),
-      automation: definition ? this.presentDefinition(scope, definition) : null,
+      automation:
+        definition.deletedAt === null
+          ? this.presentDefinition(scope, definition)
+          : null,
     };
   }
 
@@ -855,15 +1169,35 @@ export class AutomationService implements DurableDeadlineSource {
     scope: RequestScope,
     definition: AutomationDefinitionRecord,
   ): void {
-    if (definition.deletedAt !== null) return;
+    this.#publishEntity(scope, definition);
     this.#publishThread(scope, definition.anchorThreadId);
   }
 
   #publishRun(scope: RequestScope, run: AutomationRunRecord): void {
+    this.#publishEntity(
+      scope,
+      this.#repository.getDefinition(scope, run.automationId),
+    );
     this.#publishThread(scope, run.anchorThreadId);
     if (run.childThreadId && run.childThreadId !== run.anchorThreadId) {
       this.#publishThread(scope, run.childThreadId);
     }
+  }
+
+  #publishEntity(
+    scope: RequestScope,
+    definition: AutomationDefinitionRecord,
+  ): void {
+    try {
+      const published = this.#publisher.publishAutomation?.(scope, {
+        automationId: definition.id,
+        threadId: definition.anchorThreadId,
+        revision: definition.revision,
+        runsRevision: definition.runsRevision,
+        deleted: definition.deletedAt !== null,
+      });
+      if (published) void published.catch(() => undefined);
+    } catch {}
   }
 
   #publishThread(scope: RequestScope, applicationThreadId: string): void {
@@ -880,18 +1214,14 @@ export class AutomationService implements DurableDeadlineSource {
     return this.#inventory.getThread(scope, threadId);
   }
 
-  #definitionForThread(
+  #definition(
     scope: RequestScope,
-    threadId: string,
+    automationId: string,
   ): AutomationDefinitionRecord {
-    this.#assertThread(scope, threadId);
-    const definition = this.#repository.findDefinitionForThread(
-      scope,
-      threadId,
-    );
-    if (!definition) {
-      throw new DomainError("not_found", "This thread has no automation.");
-    }
+    const definition = this.#repository.getDefinition(scope, automationId);
+    this.#assertThread(scope, definition.anchorThreadId);
+    if (definition.deletedAt !== null)
+      throw new DomainError("not_found", "The automation was removed.");
     return definition;
   }
 
@@ -1009,26 +1339,15 @@ export class AutomationService implements DurableDeadlineSource {
     definition: AutomationDefinitionRecord;
     replayed: boolean;
   } {
-    const fingerprint = requestFingerprint(request);
+    const fingerprint = requestFingerprint({
+      operation: mutationKind,
+      automationId: threadId,
+      request,
+    });
     return this.#repository.database.transaction(() => {
-      const receipt = this.#repository.getMutationReceipt(scope, mutationId);
-      if (receipt) {
-        const replay = this.#repository.getDefinition(
-          scope,
-          receipt.automationId,
-        );
-        if (
-          receipt.mutationKind !== mutationKind ||
-          receipt.requestFingerprint !== fingerprint ||
-          replay.anchorThreadId !== threadId ||
-          replay.revision !== receipt.resultRevision ||
-          (mutationKind !== "delete" && replay.deletedAt !== null)
-        ) {
-          throw mutationReuseConflict();
-        }
-        return { definition: replay, replayed: true };
-      }
-      const automationId = this.#definitionForThread(scope, threadId).id;
+      const replay = this.#replayDefinition(scope, threadId, mutationId, mutationKind, fingerprint);
+      if (replay) return { definition: replay, replayed: true };
+      const automationId = this.#definition(scope, threadId).id;
       const definition = action(automationId);
       this.#repository.recordMutationReceipt(scope, {
         mutationId,
@@ -1042,6 +1361,28 @@ export class AutomationService implements DurableDeadlineSource {
     })();
   }
 
+  #replayDefinition(
+    scope: RequestScope,
+    automationId: string,
+    mutationId: string,
+    mutationKind: "update" | "state" | "delete",
+    fingerprint: string,
+  ): AutomationDefinitionRecord | undefined {
+    const receipt = this.#repository.getMutationReceipt(scope, mutationId);
+    if (!receipt) return undefined;
+    const replay = this.#repository.getDefinition(scope, receipt.automationId);
+    if (
+      receipt.mutationKind !== mutationKind ||
+      receipt.requestFingerprint !== fingerprint ||
+      replay.id !== automationId ||
+      (mutationKind !== "delete" && replay.deletedAt !== null &&
+        receipt.resultRevision !== replay.revision)
+    ) {
+      throw mutationReuseConflict();
+    }
+    return replay;
+  }
+
   #changed(): void {
     this.#onChanged();
   }
@@ -1051,6 +1392,17 @@ function presentRun(run: AutomationRunRecord): ThreadAutomationRun {
   const turn = presentAutomationRunTurn(run);
   return {
     id: run.id,
+    automationId: run.automationId,
+    ...(run.deferredReason
+      ? {
+          deferredReason: run.deferredReason,
+          eligibleAt: run.eligibleAt === null ? null : iso(run.eligibleAt),
+        }
+      : {}),
+    initialEligibleAt: iso(run.initialEligibleAt),
+    ...(run.acknowledgedAt === null
+      ? {}
+      : { acknowledgedAt: iso(run.acknowledgedAt) }),
     occurrence: run.occurrenceKind,
     scheduledFor: iso(run.scheduledFor),
     state: run.state,
@@ -1234,4 +1586,14 @@ function scheduledDispatchMutationId(
     hex.slice(16, 20),
     hex.slice(20),
   ].join("-");
+}
+
+function normalizeName(name: string): string {
+  const value = name.trim();
+  if (!value || value.length > MAXIMUM_AUTOMATION_NAME_LENGTH)
+    throw new DomainError(
+      "invalid_transition",
+      `Automation name must contain 1 to ${MAXIMUM_AUTOMATION_NAME_LENGTH} characters.`,
+    );
+  return value;
 }

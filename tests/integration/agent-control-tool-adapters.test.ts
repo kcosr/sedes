@@ -346,6 +346,7 @@ function fixture() {
       environmentId: "environment-1",
       label: id,
     }),
+    resolveAutomation: () => undefined,
     resolveThread: (_requestScope: RequestScope, id: string) =>
       turns.has(id) || sources.has(id)
         ? { id, environmentId: "environment-1", label: id }

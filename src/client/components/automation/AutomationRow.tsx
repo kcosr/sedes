@@ -49,6 +49,14 @@ export type AutomationRowStatus =
       readonly message: string;
     };
 
+/**
+ * What the page around a row already names, so the row leaves it out. `all`
+ * names nothing. `project` names the project (grouped by project, or a
+ * Scope on one), leaving only a location tag. `thread` is the thread's own
+ * list: rows drop the thread, its project and backend, and ⋯'s Open thread.
+ */
+type AutomationRowContext = "all" | "project" | "thread";
+
 const FAILURE_TITLES: Readonly<Record<AutomationRowActionKind, string>> = {
   run: "Couldn’t run",
   pause: "Couldn’t pause",
@@ -79,14 +87,19 @@ function joinParts(parts: readonly (string | null | undefined)[]): string {
     .join(" · ");
 }
 
-/** The row's ⋯ menu: Run now, Pause or Enable, Edit…, Open thread. */
+/**
+ * The row's ⋯ menu: Run now, Pause or Enable, Edit…, then Open thread
+ * outside the thread's own list.
+ */
 function AutomationRowMenu({
   entry,
   busy,
+  openThread,
   onAction,
 }: {
   readonly entry: AutomationListEntry;
   readonly busy: boolean;
+  readonly openThread: boolean;
   readonly onAction: (
     row: AutomationListRow,
     action: AutomationRowActionKind,
@@ -154,15 +167,15 @@ function AutomationRowMenu({
             <DropdownMenuValue aria-hidden="true">{edit.hint}</DropdownMenuValue>
           )}
         </DropdownMenuItem>
-        <DropdownMenuSeparator />
-        <DropdownMenuItem
-          onSelect={() =>
-            openThreadRoute(row.id)
-          }
-        >
-          <MessageSquare aria-hidden="true" />
-          Open thread
-        </DropdownMenuItem>
+        {openThread && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={() => openThreadRoute(row.threadId)}>
+              <MessageSquare aria-hidden="true" />
+              Open thread
+            </DropdownMenuItem>
+          </>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -171,22 +184,22 @@ function AutomationRowMenu({
 /**
  * One automation on the Automations page: the whole row links to its
  * automation page; ⋯ holds the quick actions. Desktop rows read
- * `glyph title … next run` over `schedule · project · backend … last
- * outcome`; narrow pages switch to `outcome · schedule` with only the next
- * run trailing (a container query, so both variants render and CSS picks one;
- * assistive technology reads one description instead).
+ * `glyph title … next run` over `thread · schedule · project · backend …
+ * last outcome`; narrow pages switch to `outcome · thread · schedule` with
+ * only the next run trailing (a container query, so both variants render and
+ * CSS picks one; assistive technology reads one description instead). The
+ * `context` leaves out what the page already names.
  */
 export const AutomationRow = memo(function AutomationRow({
   entry,
   now,
-  showProject,
+  context,
   status,
   onAction,
 }: {
   readonly entry: AutomationListEntry;
   readonly now: number;
-  /** False when the grouping or the Scope already names the project. */
-  readonly showProject: boolean;
+  readonly context: AutomationRowContext;
   readonly status?: AutomationRowStatus;
   readonly onAction: (
     row: AutomationListRow,
@@ -201,13 +214,25 @@ export const AutomationRow = memo(function AutomationRow({
   const id = useId();
   const titleId = `${id}-title`;
   const detailsId = `${id}-details`;
-  const project = showProject ? row.projectLabel : row.locationTag;
-  const wideMeta = joinParts([detail, project, row.backendLabel]);
+  const thread = context === "thread";
+  const source = thread ? null : row.sourceTitle;
+  const location = thread
+    ? null
+    : context === "project"
+      ? row.locationTag
+      : row.projectLabel;
+  const backend = thread ? null : row.backendLabel;
+  const wideMeta = joinParts([source, detail, location, backend]);
   const lead =
     health.kind === "active" && nextRun !== null
       ? `Next run ${nextRun}`
       : primary.text;
-  const description = [lead, wideMeta, secondary?.text]
+  // Finished schedules can show another last outcome (Delivered, Skipped,
+  // Interrupted or Failed). The hidden glyph cannot convey their state.
+  const state = health.kind === "exhausted" && !primary.text.startsWith(health.label)
+    ? health.label
+    : null;
+  const description = [state, lead, wideMeta, secondary?.text]
     .filter(Boolean)
     .join(". ");
   return (
@@ -215,7 +240,8 @@ export const AutomationRow = memo(function AutomationRow({
       <div
         className="automation-row"
         data-testid="automation-row"
-        data-thread-id={row.id}
+        data-thread-id={row.threadId}
+        data-automation-id={row.id}
         data-group={health.group}
         aria-busy={busy || undefined}
       >
@@ -244,7 +270,7 @@ export const AutomationRow = memo(function AutomationRow({
               </span>
             )}
             {outcome && " · "}
-            {joinParts([detail])}
+            {joinParts([source, detail])}
           </span>
           <RowText value={secondary} className="automation-row-secondary" />
           <span className="automation-row-next" aria-hidden="true">
@@ -254,7 +280,12 @@ export const AutomationRow = memo(function AutomationRow({
             {description}
           </span>
         </a>
-        <AutomationRowMenu entry={entry} busy={busy} onAction={onAction} />
+        <AutomationRowMenu
+          entry={entry}
+          busy={busy}
+          openThread={!thread}
+          onAction={onAction}
+        />
       </div>
       {status?.kind === "error" && (
         <Callout

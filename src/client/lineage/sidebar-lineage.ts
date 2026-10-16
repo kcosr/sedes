@@ -160,8 +160,8 @@ export function deriveSidebarLineage(input: {
         placement?.mode === "nested_under_source" &&
         child.inventoryState === parent.inventoryState &&
         (ownBucket(child) === ownBucket(parent) ||
-          (parent.automation !== null &&
-            child.automation === null &&
+          (parent.automations.totalCount > 0 &&
+            child.automations.totalCount === 0 &&
             projectOf(child) === projectOf(parent)))
       ) {
         parentByChild.set(childId, parent.id);
@@ -360,7 +360,7 @@ function threadBucket(
 ): SidebarBucket {
   switch (thread.inventoryState) {
     case "active":
-      return thread.automation
+      return thread.automations.totalCount > 0
         ? "automations"
         : sidebarProjectBucket(projectId ?? "");
     case "snoozed":

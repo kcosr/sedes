@@ -32,7 +32,7 @@ function at(
 const TODAY_MORNING = at(2026, 7, 12, 9);
 
 type ThreadAutomation = NonNullable<
-  NormalizedApplicationThreadSummary["automation"]
+  NormalizedApplicationThreadSummary["automations"]
 >;
 
 function thread(
@@ -64,7 +64,7 @@ function thread(
     available: true,
     lastActivityAt: TODAY_MORNING,
     stateChangedAt: TODAY_MORNING,
-    automation: null,
+    automations: { totalCount: 0, enabledCount: 0, pausedCount: 0, exhaustedCount: 0, inFlightCount: 0, attentionCount: 0, revision: 0 },
     attention: {
       wake: false,
       automationContext: null,
@@ -77,23 +77,8 @@ function thread(
   };
 }
 
-function automation(input: Partial<ThreadAutomation> = {}): ThreadAutomation {
-  return {
-    status: "enabled",
-    runMode: "clone",
-    scheduleKind: "interval",
-    schedule: {
-      kind: "interval",
-      anchorAt: "2026-07-30T00:00:00.000Z",
-      everySeconds: 3_600,
-    },
-    misfirePolicy: "coalesce",
-    promptPreview: "Review the repository.",
-    revision: 1,
-    runsRevision: 0,
-    hasPrecheck: false,
-    ...input,
-  };
+function automations(input: Partial<ThreadAutomation> = {}): ThreadAutomation {
+  return { totalCount: 1, enabledCount: 1, pausedCount: 0, exhaustedCount: 0, inFlightCount: 0, attentionCount: 0, revision: 1, ...input };
 }
 
 function preferences(
@@ -244,7 +229,7 @@ describe("timeline Upcoming membership", () => {
       }),
       thread("snoozed-no-wake", { inventoryState: "snoozed" }),
       thread("automation-soon", {
-        automation: automation({ nextRunAt: at(2026, 7, 12, 18) }),
+        automations: automations({ nextRunAt: at(2026, 7, 12, 18) }),
       }),
       thread("plain"),
     ]);
@@ -263,7 +248,7 @@ describe("timeline Upcoming membership", () => {
   it("keeps a running automation out of Upcoming — it belongs to Today", () => {
     const runningAutomation = thread("running-automation", {
       runState: "running",
-      automation: automation({ nextRunAt: at(2026, 7, 12, 18) }),
+      automations: automations({ nextRunAt: at(2026, 7, 12, 18) }),
     });
     expect(isUpcomingThread(runningAutomation)).toBe(false);
     for (const runState of ["starting", "stopping", "reconciling"] as const) {
@@ -271,7 +256,7 @@ describe("timeline Upcoming membership", () => {
         isUpcomingThread(
           thread("t", {
             runState,
-            automation: automation({ nextRunAt: at(2026, 7, 12, 18) }),
+            automations: automations({ nextRunAt: at(2026, 7, 12, 18) }),
           }),
         ),
       ).toBe(false);
@@ -284,7 +269,7 @@ describe("timeline Upcoming membership", () => {
     const twoDaysAgo = at(2026, 7, 10);
     const staleRunningAutomation = thread("stale-running-automation", {
       runState: "running",
-      automation: automation({ nextRunAt: at(2026, 7, 12, 18) }),
+      automations: automations({ nextRunAt: at(2026, 7, 12, 18) }),
       lastActivityAt: twoDaysAgo,
       stateChangedAt: twoDaysAgo,
     });
@@ -313,14 +298,11 @@ describe("timeline Upcoming membership", () => {
   it("routes paused and next-run-less automations into time buckets", () => {
     const groups = project("time", [
       thread("paused", {
-        automation: automation({
-          status: "paused",
-          nextRunAt: at(2026, 7, 20, 9),
-        }),
+        automations: automations({ enabledCount: 0, pausedCount: 1, nextRunAt: at(2026, 7, 20, 9) }),
         lastActivityAt: at(2026, 6, 15),
         stateChangedAt: at(2026, 6, 15),
       }),
-      thread("no-next-run", { automation: automation() }),
+      thread("no-next-run", { automations: automations() }),
     ]);
     expect(keysOf(groups)).toEqual(["today", "month-6"]);
     expect(idsOf(groupFor(groups, "month-6"))).toEqual(["paused"]);
@@ -360,17 +342,14 @@ describe("timeline Upcoming membership", () => {
     expect(
       sidebarWakeTimestamp(
         thread("t", {
-          automation: automation({ nextRunAt: at(2026, 7, 13, 6) }),
+          automations: automations({ nextRunAt: at(2026, 7, 13, 6) }),
         }),
       ),
     ).toBe(Date.parse(at(2026, 7, 13, 6)));
     expect(
       sidebarWakeTimestamp(
         thread("t", {
-          automation: automation({
-            status: "paused",
-            nextRunAt: at(2026, 7, 13, 6),
-          }),
+          automations: automations({ enabledCount: 0, pausedCount: 1, nextRunAt: at(2026, 7, 13, 6) }),
         }),
       ),
     ).toBeUndefined();
@@ -409,10 +388,10 @@ describe("timeline and flat Parked section", () => {
     const groups = project("time", [
       thread("settled-automation", {
         inventoryState: "settled",
-        automation: automation({ nextRunAt: at(2026, 7, 12, 18) }),
+        automations: automations({ nextRunAt: at(2026, 7, 12, 18) }),
       }),
       thread("upcoming-automation", {
-        automation: automation({ nextRunAt: at(2026, 7, 12, 18) }),
+        automations: automations({ nextRunAt: at(2026, 7, 12, 18) }),
       }),
     ]);
     expect(keysOf(groups)).toEqual(["upcoming", "settled"]);
@@ -754,15 +733,7 @@ describe("state buckets", () => {
     expect(
       resolveStateBucket(
         thread("t", {
-          automation: automation({
-            nextRunAt: at(2026, 7, 13, 6),
-            lastRun: {
-              id: "run-1",
-              state: "failed",
-              occurrence: "scheduled",
-              scheduledFor: at(2026, 7, 12, 6),
-            },
-          }),
+          automations: automations({ attentionCount: 1, nextRunAt: at(2026, 7, 13, 6) }),
         }),
       ),
     ).toBe("needs-attention");
@@ -771,15 +742,7 @@ describe("state buckets", () => {
     expect(
       resolveStateBucket(
         thread("t", {
-          automation: automation({
-            status: "paused",
-            lastRun: {
-              id: "run-1",
-              state: "uncertain",
-              occurrence: "scheduled",
-              scheduledFor: at(2026, 7, 12, 6),
-            },
-          }),
+          automations: automations({ enabledCount: 0, pausedCount: 1, attentionCount: 1 }),
         }),
       ),
     ).toBe("needs-attention");
@@ -787,15 +750,7 @@ describe("state buckets", () => {
       expect(
         resolveStateBucket(
           thread("t", {
-            automation: automation({
-              status: "paused",
-              lastRun: {
-                id: "run-1",
-                state,
-                occurrence: "scheduled",
-                scheduledFor: at(2026, 7, 12, 6),
-              },
-            }),
+            automations: automations({ enabledCount: 0, pausedCount: 1 }),
           }),
         ),
       ).toBe("idle");
@@ -810,7 +765,7 @@ describe("state buckets", () => {
     ["running", { runState: "reconciling" }],
     ["snoozed", { inventoryState: "snoozed", snoozedUntil: at(2026, 7, 14, 9) }],
     ["settled", { inventoryState: "settled" }],
-    ["scheduled", { automation: automation({ nextRunAt: at(2026, 7, 13, 6) }) }],
+    ["scheduled", { automations: automations({ nextRunAt: at(2026, 7, 13, 6) }) }],
   ] as const)("keeps unseen completion above %s until acknowledged (%j)", (bucket, input) => {
     const completed = thread("completed", input);
     const unseen = {
@@ -855,7 +810,7 @@ describe("state buckets", () => {
         resolveStateBucket(
           thread("t", {
             runState,
-            automation: automation({ nextRunAt: at(2026, 7, 13, 6) }),
+            automations: automations({ nextRunAt: at(2026, 7, 13, 6) }),
           }),
         ),
       ).toBe("running");
@@ -865,7 +820,7 @@ describe("state buckets", () => {
         thread("t", {
           inventoryState: "snoozed",
           snoozedUntil: at(2026, 7, 14, 9),
-          automation: automation({ nextRunAt: at(2026, 7, 13, 6) }),
+          automations: automations({ nextRunAt: at(2026, 7, 13, 6) }),
         }),
       ),
     ).toBe("snoozed");
@@ -873,7 +828,7 @@ describe("state buckets", () => {
       resolveStateBucket(
         thread("t", {
           inventoryState: "snoozed",
-          automation: automation({ status: "paused" }),
+          automations: automations({ enabledCount: 0, pausedCount: 1 }),
         }),
       ),
     ).toBe("snoozed");
@@ -881,7 +836,7 @@ describe("state buckets", () => {
       resolveStateBucket(
         thread("t", {
           inventoryState: "settled",
-          automation: automation({ nextRunAt: at(2026, 7, 13, 6) }),
+          automations: automations({ nextRunAt: at(2026, 7, 13, 6) }),
         }),
       ),
     ).toBe("settled");
@@ -891,7 +846,7 @@ describe("state buckets", () => {
     expect(
       resolveStateBucket(
         thread("t", {
-          automation: automation({ nextRunAt: at(2026, 7, 13, 6) }),
+          automations: automations({ nextRunAt: at(2026, 7, 13, 6) }),
         }),
       ),
     ).toBe("scheduled");
@@ -904,25 +859,25 @@ describe("state buckets", () => {
   it("files snoozed and parked automated threads under Snoozed and Parked, not Scheduled", () => {
     const nextRunAt = at(2026, 7, 13, 6);
     const groups = project("state", [
-      thread("scheduled", { automation: automation({ nextRunAt }) }),
+      thread("scheduled", { automations: automations({ nextRunAt }) }),
       thread("snoozed-automation", {
         inventoryState: "snoozed",
         snoozedUntil: at(2026, 7, 14, 9),
-        automation: automation({ nextRunAt }),
+        automations: automations({ nextRunAt }),
       }),
       thread("parked-automation", {
         inventoryState: "settled",
-        automation: automation({ nextRunAt }),
+        automations: automations({ nextRunAt }),
       }),
       thread("parked-running", {
         inventoryState: "settled",
         runState: "running",
-        automation: automation({ nextRunAt }),
+        automations: automations({ nextRunAt }),
       }),
       thread("parked-failed", {
         inventoryState: "settled",
         runState: "failed",
-        automation: automation({ nextRunAt }),
+        automations: automations({ nextRunAt }),
       }),
     ]);
     expect(keysOf(groups)).toEqual([
@@ -951,7 +906,7 @@ describe("state buckets", () => {
       thread("snoozed-1", { inventoryState: "snoozed" }),
       thread("settled-1", { inventoryState: "settled" }),
       thread("scheduled-1", {
-        automation: automation({ nextRunAt: at(2026, 7, 13, 6) }),
+        automations: automations({ nextRunAt: at(2026, 7, 13, 6) }),
       }),
       thread("failed-1", { runState: "failed" }),
       thread("running-1", { runState: "running" }),
@@ -981,11 +936,11 @@ describe("state buckets", () => {
       [
         thread("sched-late", {
           title: { text: "AAA" },
-          automation: automation({ nextRunAt: at(2026, 7, 15, 6) }),
+          automations: automations({ nextRunAt: at(2026, 7, 15, 6) }),
         }),
         thread("sched-soon", {
           title: { text: "ZZZ" },
-          automation: automation({ nextRunAt: at(2026, 7, 13, 6) }),
+          automations: automations({ nextRunAt: at(2026, 7, 13, 6) }),
         }),
         thread("snooze-late", {
           title: { text: "AAA" },

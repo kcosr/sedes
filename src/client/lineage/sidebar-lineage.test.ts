@@ -36,7 +36,7 @@ function thread(
     available: true,
     lastActivityAt: `2026-07-30T15:00:0${id.length}.000Z`,
     stateChangedAt: "2026-07-30T15:00:00.000Z",
-    automation: null,
+    automations: { totalCount: 0, enabledCount: 0, pausedCount: 0, exhaustedCount: 0, inFlightCount: 0, attentionCount: 0, revision: 0 },
     attention: {
       wake: false,
       automationContext: null,
@@ -282,23 +282,10 @@ describe("deriveSidebarLineage", () => {
   });
 
   it("keeps nested forks in the bucket that owns their automation state", () => {
-    const automation = {
-      status: "paused" as const,
-      runMode: "same_thread" as const,
-      scheduleKind: "date_time" as const,
-      schedule: {
-        kind: "date_time" as const,
-        runAt: "2026-07-30T00:00:00.000Z",
-      },
-      misfirePolicy: "coalesce" as const,
-      promptPreview: "Review the repository.",
-      revision: 0,
-      runsRevision: 0,
-      hasPrecheck: false,
-    };
+    const automations = { totalCount: 1, enabledCount: 0, pausedCount: 1, exhaustedCount: 0, inFlightCount: 0, attentionCount: 0, revision: 0 };
     const threads = [
       thread("source"),
-      thread("automated-child", { automation }),
+      thread("automated-child", { automations }),
     ];
     const result = deriveSidebarLineage({
       snapshot: snapshot(
@@ -324,23 +311,9 @@ describe("deriveSidebarLineage", () => {
   });
 
   it("keeps non-automated clone results nested under their automated source", () => {
-    const automation = {
-      status: "enabled" as const,
-      runMode: "clone" as const,
-      scheduleKind: "interval" as const,
-      schedule: {
-        kind: "interval" as const,
-        anchorAt: "2026-07-30T00:00:00.000Z",
-        everySeconds: 3_600,
-      },
-      misfirePolicy: "coalesce" as const,
-      promptPreview: "Review the repository.",
-      revision: 2,
-      runsRevision: 0,
-      hasPrecheck: false,
-    };
+    const automations = { totalCount: 1, enabledCount: 1, pausedCount: 0, exhaustedCount: 0, inFlightCount: 0, attentionCount: 0, revision: 2 };
     const threads = [
-      thread("automated-source", { automation }),
+      thread("automated-source", { automations }),
       thread("clone-result", {
         attention: {
           wake: false,

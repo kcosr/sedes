@@ -25,6 +25,14 @@ export interface WorkpadChangeNotification {
   readonly change: "document" | "draft";
 }
 
+export interface AutomationChangeNotification {
+  readonly automationId: string;
+  readonly threadId: string;
+  readonly revision: number;
+  readonly runsRevision: number;
+  readonly deleted: boolean;
+}
+
 export type NormalizedApplicationApplyResult =
   | { readonly kind: "applied" }
   | { readonly kind: "ignored" }
@@ -62,6 +70,17 @@ export class NormalizedApplicationStore {
     (change: WorkpadChangeNotification | undefined) => void
   >();
   readonly #threadSummaryListeners = new Set<(threadId: string | undefined) => void>();
+
+  readonly #automationListeners = new Set<(change: AutomationChangeNotification | undefined) => void>();
+
+  subscribeAutomationChanges = (listener: (change: AutomationChangeNotification | undefined) => void): (() => void) => {
+    this.#automationListeners.add(listener);
+    return () => { this.#automationListeners.delete(listener); };
+  };
+
+  #notifyAutomations(change: AutomationChangeNotification | undefined): void {
+    for (const listener of this.#automationListeners) listener(change);
+  }
 
   /** Invalidates independently loaded summaries; undefined covers replacement or location availability changes. */
   subscribeThreadSummaryChanges = (listener: (threadId: string | undefined) => void): (() => void) => {
@@ -146,6 +165,7 @@ export class NormalizedApplicationStore {
       // loaded documents must reconcile even when no change events survived.
       this.#notifyWorkpads(undefined);
       this.#notifyThreadSummaries(undefined);
+      this.#notifyAutomations(undefined);
       return { kind: "applied" };
     }
 
@@ -279,6 +299,9 @@ export class NormalizedApplicationStore {
           tasks: snapshot.tasks.filter(({ id }) => id !== event.taskId),
         };
         break;
+      case "automation_changed":
+        this.#notifyAutomations(event);
+        return { kind: "applied" };
       case "workpad_changed":
         this.#notifyWorkpads({
           workpadId: event.workpadId,

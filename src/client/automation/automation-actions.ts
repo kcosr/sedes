@@ -60,9 +60,10 @@ export function automationActionAvailability(
       ? { reason: "Resolve the unknown run first", hint: health.label }
       : undefined;
   const inFlight: Blocker | undefined =
-    health.kind === "sending"
+    thread.automation.lastRun && ["claimed", "dispatching", "queued", "running"].includes(thread.automation.lastRun.state)
       ? { reason: "Wait for the current run to finish", hint: health.label }
       : undefined;
+  const deferred: Blocker | undefined = thread.automation.lastRun?.state === "deferred" ? { reason: "A run is already waiting on its source", hint: "Waiting" } : undefined;
   const archived: Blocker | undefined =
     thread.inventoryState === "archived"
       ? { reason: "Restore the thread first", hint: "Thread archived" }
@@ -80,17 +81,18 @@ export function automationActionAvailability(
           hint: "Unavailable",
         }
       : undefined;
-  const enable = thread.automation.status === "paused";
+  const enable = thread.automation.status !== "enabled";
+  const exhausted = thread.automation.status === "exhausted" ? { reason: "Choose a new future time to schedule this automation again", hint: "Finished" } : undefined;
   return {
-    runNow: availability(unknown ?? inFlight ?? archived ?? snoozed ?? unavailable),
+    runNow: availability(unknown ?? inFlight ?? deferred ?? archived ?? snoozed ?? unavailable),
     toggle: {
       action: enable ? "enable" : "pause",
       // Pausing only stops the schedule, so a suspended anchor allows it.
       ...availability(
-        unknown ?? inFlight ?? (enable ? (archived ?? unavailable) : undefined),
+        unknown ?? inFlight ?? exhausted ?? (enable ? (archived ?? unavailable) : undefined),
       ),
     },
-    edit: availability(unknown ?? archived ?? unavailable),
+    edit: availability(unknown ?? archived ?? (thread.automation.runMode === "clone" ? undefined : unavailable)),
     remove: availability(unknown ?? inFlight),
   };
 }

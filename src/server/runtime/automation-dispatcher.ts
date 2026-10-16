@@ -8,15 +8,21 @@ import type {
 } from "../domain/automation-models.js";
 import type { InventoryRepository } from "../db/repositories/inventory-repository.js";
 import type { RequestScope } from "../identity/identity-provider.js";
-import type { AutomationConversationGateway } from "./automation-conversation-gateway.js";
+import type {
+  AutomationConversationGateway,
+  AutomationQueueRunObserver,
+} from "./automation-conversation-gateway.js";
 import type { AutomationPrecheckExecutor } from "./automation-precheck-executor.js";
 import { automationCloneTitleSuffix } from "../domain/automation-presentation.js";
+import { reportBackgroundError } from "../report-background-error.js";
 
 const UNCERTAIN_CODE = "automation_dispatch_uncertain";
 const MAX_CONCURRENT_DISPATCHES = 4;
 
 type DispatcherRepository = Pick<
   AutomationRepository,
+  | "checkRunAdmission"
+  | "deferRun"
   | "beginPrecheck"
   | "finishPrecheckWithoutDispatch"
   | "getDefinition"
@@ -36,6 +42,8 @@ type DispatcherPrechecks = Pick<AutomationPrecheckExecutor, "execute">;
 export interface AutomationDispatcherDependencies {
   readonly repository: DispatcherRepository;
   readonly gateway: AutomationConversationGateway;
+  readonly queueObserver: Pick<AutomationQueueRunObserver, "reconcile">;
+  readonly onReconcileError?: (error: unknown) => void;
   readonly inventory: DispatcherInventory;
   readonly service: DispatcherPublisher;
   readonly prechecks: DispatcherPrechecks;
@@ -51,6 +59,8 @@ export interface AutomationDispatcherDependencies {
 export class AutomationDispatcher {
   readonly #repository: DispatcherRepository;
   readonly #gateway: AutomationConversationGateway;
+  readonly #queueObserver: Pick<AutomationQueueRunObserver, "reconcile">;
+  readonly #onReconcileError: (error: unknown) => void;
   readonly #inventory: DispatcherInventory;
   readonly #service: DispatcherPublisher;
   readonly #prechecks: DispatcherPrechecks;
@@ -69,6 +79,10 @@ export class AutomationDispatcher {
   constructor(dependencies: AutomationDispatcherDependencies) {
     this.#repository = dependencies.repository;
     this.#gateway = dependencies.gateway;
+    this.#queueObserver = dependencies.queueObserver;
+    this.#onReconcileError =
+      dependencies.onReconcileError ??
+      reportBackgroundError("Automation queued input reconciliation");
     this.#inventory = dependencies.inventory;
     this.#service = dependencies.service;
     this.#prechecks = dependencies.prechecks;
@@ -128,7 +142,10 @@ export class AutomationDispatcher {
     const scope = runScope(input);
     let run = this.#repository.getRun(scope, input.automationId, input.id);
 
-    if (isTerminal(run.state) || run.state === "uncertain") {
+    // A queued worker can outlive its lease while another worker reclaims it.
+    // Only the caller holding the current claim may begin fresh execution.
+    if (run.claimToken !== input.claimToken) return run;
+    if (isTerminal(run.state) || run.state === "uncertain" || run.state === "deferred") {
       return run;
     }
     if (run.state === "queued" || run.state === "running") {
@@ -149,17 +166,17 @@ export class AutomationDispatcher {
     try {
       if (!recoveringForkDispatch) {
         run = await this.#applyPrecheckAndSnoozeGate(scope, run, signal);
-        if (isTerminal(run.state) || run.state === "uncertain") {
+        if (isTerminal(run.state) || run.state === "uncertain" || run.state === "deferred") {
           return run;
         }
 
-        run = this.#repository.updateRunState(scope, run.automationId, run.id, {
-          expectedState: "claimed",
-          state: "dispatching",
-          claimToken: requiredClaimToken(run),
-          retainPromptSnapshot: true,
-          now: this.#now(),
+        run = this.#repository.checkRunAdmission(scope, run.automationId, run.id, {
+          claimToken: requiredClaimToken(run), now: this.#now(), dispatch: true,
         });
+        if (run.state === "deferred" || isTerminal(run.state)) {
+          this.#service.publishRun(scope, run);
+          return run;
+        }
         this.#service.publishRun(scope, run);
       }
 
@@ -170,6 +187,7 @@ export class AutomationDispatcher {
         anchorThreadId: run.anchorThreadId,
         prompt: requiredPrompt(run),
         dispatchMutationId: run.dispatchMutationId,
+        claimToken: requiredClaimToken(run),
       };
       const dispatched = await this.#gateway.dispatch(
         run.runMode === "clone"
@@ -184,6 +202,14 @@ export class AutomationDispatcher {
             }
           : { ...common, runMode: "same_thread" },
       );
+      if (dispatched.status === "deferred") {
+        const deferred = this.#repository.deferRun(scope, run.automationId, run.id, {
+          expectedState: "dispatching", claimToken: requiredClaimToken(run),
+          reason: dispatched.reason, eligibleAt: dispatched.eligibleAt, now: this.#now(),
+        });
+        this.#service.publishRun(scope, deferred);
+        return deferred;
+      }
       if (
         run.runMode === "same_thread" &&
         dispatched.targetThreadId !== run.anchorThreadId
@@ -209,8 +235,25 @@ export class AutomationDispatcher {
           now: this.#now(),
         },
       );
-      this.#service.publishRun(scope, accepted);
-      return accepted;
+      // Acceptance may have been observed while this run was dispatching and
+      // therefore deliberately ignored. Re-read after parking: earlier
+      // acceptance is found here; later acceptance sees a queued/running run.
+      try {
+        this.#queueObserver.reconcile(
+          scope,
+          dispatched.targetThreadId,
+          run.dispatchMutationId,
+        );
+      } catch (error) {
+        this.#onReconcileError(error);
+      }
+      const observed = this.#repository.getRun(
+        scope,
+        accepted.automationId,
+        accepted.id,
+      );
+      this.#service.publishRun(scope, observed);
+      return observed;
     } catch (error) {
       return this.#recordDispatchError(scope, run, error);
     }
@@ -222,15 +265,12 @@ export class AutomationDispatcher {
     signal: AbortSignal,
   ): Promise<AutomationRunRecord> {
     let run = initial;
-    const anchor = this.#inventory.getThread(scope, run.anchorThreadId);
-    if (anchor.inventory.inventoryState === "archived") {
-      throw new DomainError(
-        "archived_thread",
-        "An archived thread cannot run an automation.",
-      );
-    }
-    if (this.#scheduledSnoozeApplies(scope, run)) {
-      return this.#skipForSnooze(scope, run);
+    run = this.#repository.checkRunAdmission(scope, run.automationId, run.id, {
+      claimToken: requiredClaimToken(run), now: this.#now(), dispatch: false,
+    });
+    if (run.state === "deferred" || isTerminal(run.state)) {
+      this.#service.publishRun(scope, run);
+      return run;
     }
     if (run.precheckStatus === "pending") {
       run = this.#repository.beginPrecheck(scope, run.automationId, run.id, {
@@ -254,6 +294,8 @@ export class AutomationDispatcher {
           claimToken: requiredClaimToken(run),
           effectivePrompt: checked.result.effectivePrompt,
           stdoutIncluded: checked.result.stdoutIncluded,
+          stdoutAppendix: checked.result.stdoutIncluded
+            ? checked.result.effectivePrompt.slice(requiredPrompt(run).length) : null,
           durationMilliseconds: checked.result.durationMilliseconds,
           stdoutBytes: checked.result.stdoutBytes,
           exitCode: 0,
@@ -292,9 +334,6 @@ export class AutomationDispatcher {
         "The automation pre-check is already running.",
         true,
       );
-    }
-    if (run.state === "claimed" && this.#scheduledSnoozeApplies(scope, run)) {
-      return this.#skipForSnooze(scope, run);
     }
     return run;
   }
@@ -350,7 +389,7 @@ export class AutomationDispatcher {
     return (
       inventory.inventoryState === "snoozed" &&
       inventory.snoozedUntil !== null &&
-      inventory.snoozedUntil >= this.#now()
+      inventory.snoozedUntil > this.#now()
     );
   }
 
@@ -358,20 +397,11 @@ export class AutomationDispatcher {
     scope: RequestScope,
     run: AutomationRunRecord,
   ): AutomationRunRecord {
-    const skipped = this.#repository.updateRunState(
-      scope,
-      run.automationId,
-      run.id,
-      {
-        expectedState: "claimed",
-        state: "skipped",
-        claimToken: requiredClaimToken(run),
-        errorCode: "automation_snoozed",
-        errorDiagnostic: "The scheduled occurrence was suppressed by snooze.",
-        now: this.#now(),
-        completeDefinition: this.#isOneShot(scope, run),
-      },
-    );
+    const skipped = this.#repository.deferRun(scope, run.automationId, run.id, {
+      expectedState: "claimed", claimToken: requiredClaimToken(run), reason: "snoozed",
+      eligibleAt: this.#inventory.getThread(scope, run.anchorThreadId).inventory.snoozedUntil,
+      now: this.#now(),
+    });
     this.#service.publishRun(scope, skipped);
     return skipped;
   }
@@ -382,7 +412,7 @@ export class AutomationDispatcher {
   ): AutomationRunRecord {
     const current = this.#repository.getRun(scope, run.automationId, run.id);
     if (current.state === "completed") return current;
-    if (isTerminal(current.state) || current.state === "uncertain") {
+    if (isTerminal(current.state) || current.state === "uncertain" || current.state === "deferred") {
       return current;
     }
     if (
@@ -424,9 +454,12 @@ export class AutomationDispatcher {
       stale.automationId,
       stale.id,
     );
-    if (isTerminal(current.state) || current.state === "uncertain") {
+    if (isTerminal(current.state) || current.state === "uncertain" || current.state === "deferred") {
       return current;
     }
+    // A reclaimed lease belongs to another dispatcher. An old attempt's error
+    // cannot fail or pause that new owner's work.
+    if (current.claimToken !== stale.claimToken) return current;
     if (current.state !== "claimed" && current.state !== "dispatching") {
       throw error;
     }
@@ -530,7 +563,7 @@ function runKey(run: AutomationRunRecord): string {
 }
 
 function isTerminal(state: AutomationRunState): boolean {
-  return state === "completed" || state === "failed" || state === "skipped";
+  return state === "completed" || state === "failed" || state === "skipped" || state === "cancelled";
 }
 
 function requiredPrompt(run: AutomationRunRecord): string {

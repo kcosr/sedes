@@ -48,7 +48,7 @@ function snapshot(title = "Thread"): NormalizedThreadSnapshot {
       available: true,
       lastActivityAt: "2026-07-30T15:00:00.000Z",
       stateChangedAt: "2026-07-30T15:00:00.000Z",
-      automation: null,
+      automations: { totalCount: 0, enabledCount: 0, pausedCount: 0, exhaustedCount: 0, inFlightCount: 0, attentionCount: 0, revision: 0 },
     },
     workspace: {
       id: "workspace-1",
@@ -142,7 +142,7 @@ function snapshot(title = "Thread"): NormalizedThreadSnapshot {
     providerFeatures: [],
     usage: {},
     interactions: [],
-    attention: {},
+    attention: { automationContexts: [] },
   };
 }
 
@@ -197,6 +197,7 @@ function retainedPolicyFixture(initial: NormalizedThreadSnapshot) {
 describe("ThreadSnapshotPublisher", () => {
   it.each(["created", "acknowledged"] as const)("orders %s attention with restored disconnected state when execution attach fails", async (transition) => {
     const completion = {
+      automationContexts: [],
       unseenCompletion: {
         operationId: "completion-operation",
         completedAt: "2026-10-02T16:54:42.808Z",
@@ -204,9 +205,9 @@ describe("ThreadSnapshotPublisher", () => {
     };
     const archived = snapshot();
     archived.thread.inventoryState = "archived";
-    archived.attention = transition === "created" ? {} : completion;
+    archived.attention = transition === "created" ? { automationContexts: [] } : completion;
     const restored = snapshot();
-    restored.attention = transition === "created" ? completion : {};
+    restored.attention = transition === "created" ? completion : { automationContexts: [] };
     restored.runState = "disconnected";
     restored.thread.runState = "disconnected";
     restored.capabilities.runState = "disconnected";

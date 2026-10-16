@@ -15,6 +15,7 @@ import { DatabaseCodexAgentToolCliEnvironmentProvider, withCodexAgentToolCliEnvi
 import { serializeCodexBindingDetail } from "../../src/server/backends/codex/codex-binding-codec.js";
 import { runCreationProvenanceCli } from "../../src/cli/creation-provenance-cli.js";
 import { compiledBackendModuleCatalog } from "../../src/server/backends/compiled-module-catalog.js";
+import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -71,6 +72,38 @@ function fixture(migrateLatest = true, filename = ":memory:") {
   const abandon = () => {
     creation.markFirstSubmissionStarted(scope, threadId, "attempt", { reconciliationToken: "first-token", retryAnchor: "anchor", now: 80 });
     creation.markRecoveryRequired(scope, threadId, "attempt", { expected: "first_submission_started", diagnostic: "Transport lost", now: 90 });
+    if (!migrateLatest) {
+      // Seed the schema-141 reset result. Current reset code requires the latest
+      // schema, while these fixtures must retain the pre-provenance evidence.
+      const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
+      const blockerFingerprint = hash({ blockers: [
+        ["creation_attempt", threadId, "attempt", "recovery_required"],
+        ["thread_creation_state", threadId, threadId, "creation_unknown"],
+      ], promotedTasks: [] });
+      database.transaction(() => {
+        database.prepare(`INSERT INTO thread_force_reset_receipts(
+          tenant_id,principal_id,thread_id,mutation_id,request_fingerprint,blocker_fingerprint,blocker_summary_json,reset_at
+        ) VALUES (?,?,?,'reset',?,?,?,100)`).run(scope.tenantId, scope.principalId, threadId,
+          hash(["thread_force_reset", 1, threadId, blockerFingerprint]), blockerFingerprint,
+          JSON.stringify([{ kind: "creation_attempt", count: 1 }, { kind: "thread_creation_state", count: 1 }]));
+        database.prepare(`INSERT INTO thread_force_reset_affected_threads(
+          tenant_id,principal_id,reset_mutation_id,thread_id
+        ) VALUES (?,?,'reset',?)`).run(scope.tenantId, scope.principalId, threadId);
+        database.prepare(`UPDATE conversation_creation_attempts
+          SET force_reset_at=100,force_reset_mutation_id='reset',
+            diagnostic='The user force-reset this unresolved Sedes creation.'
+          WHERE tenant_id=? AND owner_principal_id=? AND application_thread_id=? AND attempt_id='attempt'`)
+          .run(scope.tenantId, scope.principalId, threadId);
+        database.prepare(`UPDATE application_threads
+          SET backing_state='creation_unknown',force_reset_at=100,force_reset_mutation_id='reset',
+            revision=revision+1,updated_at=100
+          WHERE tenant_id=? AND owner_principal_id=? AND id=?`)
+          .run(scope.tenantId, scope.principalId, threadId);
+        database.prepare(`UPDATE principal_generations SET inventory_generation=inventory_generation+1
+          WHERE tenant_id=? AND principal_id=?`).run(scope.tenantId, scope.principalId);
+      })();
+      return;
+    }
     const resets = new ThreadForceResetRepository(database);
     resets.forceReset(scope, threadId, { expectedBlockerFingerprint: resets.impact(scope, threadId).blockerFingerprint, mutationId: "reset", now: 100 });
   };
@@ -153,7 +186,13 @@ describe("durable verified creation identity", () => {
       SELECT tenant_id,owner_principal_id,id,backend_instance_id,connection_profile_id,environment_id,?,70
       FROM application_threads WHERE id=?`).run(f.nativeId, f.threadId);
     f.abandon();
+    const attempt = f.database.prepare("SELECT * FROM conversation_creation_attempts").get();
+    const resetReceipt = f.database.prepare("SELECT * FROM thread_force_reset_receipts").get();
+    expect(attempt).toMatchObject({ force_reset_at: 100, force_reset_mutation_id: "reset",
+      initial_input_text: "Original request", provisional_backend_conversation_id: f.nativeId });
     applyDatabaseMigrations(f.database, backendNormalizedMigrations);
+    expect(f.database.prepare("SELECT * FROM conversation_creation_attempts").get()).toEqual(attempt);
+    expect(f.database.prepare("SELECT * FROM thread_force_reset_receipts").get()).toEqual(resetReceipt);
     const repository = new ConversationCreationProvenanceRepository(f.database, compiledBackendModuleCatalog);
     expect(repository.get(f.scope, f.threadId)).toBeUndefined();
     const stale = repository.previewRepair(f.scope, f.threadId, f.nativeId);
@@ -168,13 +207,13 @@ describe("durable verified creation identity", () => {
     expect(() => repository.applyRepair(f.scope, f.threadId, { expectedNativeSessionId: f.nativeId,
       expectedFingerprint: evidence.fingerprint, now: 200, repairId: "changed-private-evidence" })).toThrow("changed after preview");
     const currentEvidence = repository.previewRepair(f.scope, f.threadId, f.nativeId);
-    const attempt = f.database.prepare("SELECT * FROM conversation_creation_attempts").get();
     const thread = f.database.prepare("SELECT * FROM application_threads").get();
     const result = repository.applyRepair(f.scope, f.threadId, { expectedNativeSessionId: f.nativeId,
       expectedFingerprint: currentEvidence.fingerprint, now: 200, repairId: "repair" });
     expect(result.inventoryState).toBe("archived");
     expect(repository.matchesBinding(f.scope, f.threadId)).toBe(true);
     expect(f.database.prepare("SELECT * FROM conversation_creation_attempts").get()).toEqual(attempt);
+    expect(f.database.prepare("SELECT * FROM thread_force_reset_receipts").get()).toEqual(resetReceipt);
     expect(f.database.prepare("SELECT * FROM application_threads").get()).toEqual(thread);
     expect(f.database.prepare("SELECT count(*) AS n FROM conversation_creation_provenance_repairs").get()).toEqual({ n: 1 });
     expect(() => repository.previewRepair(f.scope, f.threadId, "another-session")).toThrow("exact verified creation");
@@ -192,6 +231,8 @@ describe("durable verified creation identity", () => {
     f.database.prepare(`INSERT INTO conversation_bindings SELECT tenant_id,owner_principal_id,id,backend_instance_id,
       connection_profile_id,environment_id,?,70 FROM application_threads WHERE id=?`).run(f.nativeId, f.threadId);
     f.abandon();
+    const attempt = f.database.prepare("SELECT * FROM conversation_creation_attempts").get();
+    const resetReceipt = f.database.prepare("SELECT * FROM thread_force_reset_receipts").get();
     const args = ["creation-provenance", "--database", filename, "--tenant", f.scope.tenantId,
       "--principal", f.scope.principalId, "--thread", f.threadId, "--native-session", f.nativeId];
     let output = ""; let error = "";
@@ -202,7 +243,6 @@ describe("durable verified creation identity", () => {
     expect(error).toContain("Upgrade and migrate");
     applyDatabaseMigrations(f.database, backendNormalizedMigrations);
     f.database.prepare("UPDATE thread_principal_state SET inventory_state='archived' WHERE thread_id=?").run(f.threadId);
-    const attempt = f.database.prepare("SELECT * FROM conversation_creation_attempts").get();
     error = "";
     expect(await runCreationProvenanceCli(args, io)).toBe(0);
     const preview = JSON.parse(output);
@@ -213,6 +253,7 @@ describe("durable verified creation identity", () => {
     expect(await runCreationProvenanceCli([...args, "--apply", "--server-stopped", "--expected-fingerprint", preview.fingerprint], io)).toBe(0);
     expect(JSON.parse(output).status).toBe("repaired");
     expect(f.database.prepare("SELECT * FROM conversation_creation_attempts").get()).toEqual(attempt);
+    expect(f.database.prepare("SELECT * FROM thread_force_reset_receipts").get()).toEqual(resetReceipt);
     expect(f.database.prepare("SELECT inventory_state FROM thread_principal_state WHERE thread_id=?").get(f.threadId)).toEqual({ inventory_state: "archived" });
   });
 });

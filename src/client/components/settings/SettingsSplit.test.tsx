@@ -7,7 +7,7 @@ import { EntityList, EntityRow } from "./EntityList.js";
 import { SettingsSearch } from "./SettingsSearch.js";
 import { SettingsBackLink, SettingsBackSlotContext, SettingsPage } from "./SettingsPage.js";
 import { SettingsSection } from "./SettingsSection.js";
-import { SettingsDetailHeader, SettingsEditor, SettingsSplit } from "./SettingsSplit.js";
+import { SettingsDetailHeader, SettingsEditor, SettingsSectionAnchors, SettingsSplit } from "./SettingsSplit.js";
 import { useSettingsSplitFocus, type SettingsSplitLocation } from "./use-settings-split-focus.js";
 
 afterEach(cleanup);
@@ -74,6 +74,37 @@ describe("SettingsSplit", () => {
 });
 
 describe("SettingsEditor", () => {
+  it("marks only edges with offscreen section links and removes the fades after a resize", () => {
+    const sections = [{ id: "one", label: "One" }, { id: "two", label: "Two" }];
+    const { rerender } = render(<SettingsSectionAnchors sections={sections} edgeFade />);
+    const anchors = screen.getByRole("navigation", { name: "Editor sections" });
+    const scroll = anchors.querySelector<HTMLElement>('[data-slot="settings-anchors-scroll"]')!;
+    expect(scroll).not.toBeNull();
+    expect(within(scroll).getAllByRole("button")).toHaveLength(2);
+    Object.defineProperties(scroll, {
+      scrollWidth: { configurable: true, value: 620 },
+      clientWidth: { configurable: true, value: 400 },
+    });
+    fireEvent(window, new Event("resize"));
+    expect(anchors).not.toHaveAttribute("data-overflow-start");
+    expect(anchors).toHaveAttribute("data-overflow-end", "true");
+    fireEvent.scroll(scroll, { target: { scrollLeft: 110 } });
+    expect(anchors).toHaveAttribute("data-overflow-start", "true");
+    expect(anchors).toHaveAttribute("data-overflow-end", "true");
+    fireEvent.scroll(scroll, { target: { scrollLeft: 220 } });
+    expect(anchors).toHaveAttribute("data-overflow-start", "true");
+    expect(anchors).not.toHaveAttribute("data-overflow-end");
+    scroll.scrollLeft = 0;
+    Object.defineProperty(scroll, "clientWidth", { configurable: true, value: 700 });
+    fireEvent(window, new Event("resize"));
+    expect(anchors).not.toHaveAttribute("data-overflow-start");
+    expect(anchors).not.toHaveAttribute("data-overflow-end");
+    rerender(<SettingsSectionAnchors sections={sections} />);
+    expect(anchors.querySelector('[data-slot="settings-anchors-scroll"]')).toBeNull();
+    fireEvent.scroll(scroll, { target: { scrollLeft: 100 } });
+    expect(anchors).not.toHaveAttribute("data-overflow-start");
+  });
+
   it("frames sections with anchors, errors and the save bar in one form", () => {
     const onSubmit = vi.fn();
     render(

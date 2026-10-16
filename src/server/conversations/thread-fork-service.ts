@@ -1,3 +1,5 @@
+import { assertAutomationDispatchClaim } from "../db/repositories/automation-dispatch-claim.js";
+import { AutomationDeferredError } from "../domain/automation-deferred.js";
 import type { EnvironmentVariableOverrides } from "../../shared/protocol/environment-variables.js";
 import type { EnvironmentVariablesService } from "../environment-variables/environment-variables-service.js";
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
@@ -116,6 +118,7 @@ type AutomationForkInput = {
   readonly automationId: string;
   readonly automationRunId: string;
   readonly mutationId: string;
+  readonly claimToken: string;
   /** Run-time suffix for the result thread's title, applied at creation. */
   readonly titleSuffix: string;
 };
@@ -152,7 +155,7 @@ const FORK_UNKNOWN_DIAGNOSTIC =
 
 interface AutomationForkBinder {
   readonly database: Database.Database;
-  bindForkChild(
+  bindResultChild(
     scope: RequestScope,
     automationId: string,
     automationRunId: string,
@@ -461,6 +464,7 @@ export class ThreadForkService {
           scope: input.scope,
           sourceThreadId: input.anchorThreadId,
           mutationId: input.mutationId,
+          claimToken: input.claimToken,
           sourceKind: "automation",
           originKind: "automation_fork",
           initiatingPrincipalId: input.scope.principalId,
@@ -468,7 +472,13 @@ export class ThreadForkService {
           automationRunId: input.automationRunId,
           childTitleSuffix: input.titleSuffix,
         }),
-    );
+    ).catch((error: unknown) => {
+      if (!this.input.creation.findByMutationId(input.scope, input.mutationId) &&
+          error instanceof BackendError && error.retryable && !error.crossedSubmissionBoundary && error.category === "invalid_state") {
+        throw new AutomationDeferredError("source_busy", error.message);
+      }
+      throw error;
+    });
   }
 
   recoverActive(
@@ -1032,6 +1042,7 @@ export class ThreadForkService {
     readonly scope: RequestScope;
     readonly sourceThreadId: string;
     readonly mutationId: string;
+    readonly claimToken?: string;
     /** Startup recovery: a definite failure stays a visible recovery. */
     readonly automatic?: boolean;
     readonly sourceKind: ForkSourceKind;
@@ -1238,7 +1249,7 @@ export class ThreadForkService {
         );
       }
     }
-    this.#assertSourceEligible(input.scope, input.sourceThreadId);
+    this.#assertSourceEligible(input.scope, input.sourceThreadId, input.sourceKind === "automation");
     const target = await this.input.targets.actor(
       input.scope,
       input.sourceThreadId,
@@ -1296,6 +1307,7 @@ export class ThreadForkService {
       readonly sourceThreadId: string;
       readonly environmentVariables?: EnvironmentVariableOverrides;
       readonly mutationId: string;
+      readonly claimToken?: string;
       readonly sourceKind: ForkSourceKind;
       readonly originKind: "automation_fork" | UserForkOriginKind;
       readonly initiatingPrincipalId: string;
@@ -1331,7 +1343,13 @@ export class ThreadForkService {
             input.sourceThreadId,
           );
         }
-        this.#assertSourceEligible(input.scope, input.sourceThreadId);
+        if (input.sourceKind === "automation") {
+          assertAutomationDispatchClaim(this.input.database, input.scope, {
+            automationId: input.automationId!, automationRunId: input.automationRunId!,
+            mutationId: input.mutationId, claimToken: input.claimToken,
+          });
+        }
+        this.#assertSourceEligible(input.scope, input.sourceThreadId, input.sourceKind === "automation");
         const source = this.input.bindings.findThreadDefinition(
           input.scope,
           input.sourceThreadId,
@@ -1927,7 +1945,7 @@ export class ThreadForkService {
         this.#now(),
       );
       if (input.sourceKind === "automation") {
-        this.input.automations.bindForkChild(
+        this.input.automations.bindResultChild(
           input.scope,
           input.automationId!,
           input.automationRunId!,
@@ -1957,7 +1975,7 @@ export class ThreadForkService {
     return persistence;
   }
 
-  #assertSourceEligible(scope: RequestScope, sourceThreadId: string): void {
+  #assertSourceEligible(scope: RequestScope, sourceThreadId: string, automation = false): void {
     const aggregate = this.input.inventory.getThread(scope, sourceThreadId);
     const source = aggregate.thread;
     this.input.inventory.assertWorkspaceActive(scope, source.workspaceId);
@@ -1975,10 +1993,8 @@ export class ThreadForkService {
       this.input.creation.findActiveForThread(scope, sourceThreadId) ||
       this.input.operations.hasBlockingThreadOperation(scope, sourceThreadId)
     ) {
-      throw new DomainError(
-        "invalid_transition",
-        "Resolve the source thread's uncertain operation before forking.",
-      );
+      if (!automation) throw new DomainError("invalid_transition", "Resolve the source thread's uncertain operation before forking.");
+      throw new AutomationDeferredError("source_recovery", "Resolve the source thread's uncertain operation before forking.");
     }
     const queued = this.input.database
       .prepare(
@@ -1996,10 +2012,8 @@ export class ThreadForkService {
       )
       .get(scope.tenantId, scope.principalId, sourceThreadId);
     if (queued) {
-      throw new DomainError(
-        "invalid_transition",
-        "Resolve or cancel queued source work before forking.",
-      );
+      if (!automation) throw new DomainError("invalid_transition", "Resolve or cancel queued source work before forking.");
+      throw new AutomationDeferredError("source_busy", "Resolve or finish queued source work before forking.");
     }
   }
 

@@ -14,19 +14,24 @@ export function AutomationRunModeSection({
   value,
   onChange,
   canCloneOnRun,
+  savedRunMode,
+  forkDraftOnly,
 }: {
   readonly id: string;
   readonly value: AutomationRunMode;
   readonly onChange: (mode: AutomationRunMode) => void;
   readonly canCloneOnRun: boolean;
+  readonly savedRunMode?: AutomationRunMode;
+  readonly forkDraftOnly?: boolean;
 }): React.JSX.Element {
   const cloneUnavailable = value === "clone" && !canCloneOnRun;
+  const preservesFork = savedRunMode === "clone";
   return (
     <SettingsSection id={id} title="Run in" card>
       <RadioGroup
         className="automation-choice-list"
         aria-label="Run in"
-        aria-invalid={cloneUnavailable || undefined}
+        aria-invalid={(cloneUnavailable && !preservesFork) || undefined}
         value={value}
         onValueChange={(next) => onChange(next as AutomationRunMode)}
       >
@@ -37,18 +42,21 @@ export function AutomationRunModeSection({
         />
         <AutomationChoice
           value="clone"
-          title="A new fork each run"
-          disabled={!canCloneOnRun}
+          title="Fork"
+          disabled={!canCloneOnRun && !preservesFork}
           description={
             canCloneOnRun
-              ? "Each run starts a fork of this thread at its latest completed turn, so runs don't pile up here."
-              : "Not available for this thread: forking needs a completed turn and a backend that can fork."
+              ? "Each run creates a separate child from this source: its settings while unstarted, or its latest completed turn after it starts."
+              : "Fork is currently unavailable for this source."
           }
         />
       </RadioGroup>
+      {forkDraftOnly && value === "clone" ? <Callout tone="warning">This backend can copy an unstarted source. After this source starts, Fork runs will fail because the backend cannot fork conversations.</Callout> : null}
       {cloneUnavailable ? (
-        <Callout tone="danger" role="alert">
-          This thread can't fork now. Choose This thread before saving.
+        <Callout tone={preservesFork ? "warning" : "danger"} role={preservesFork ? "status" : "alert"}>
+          {preservesFork
+            ? "Fork is currently unavailable for this source. You can edit this automation while keeping Fork. Future runs still require an eligible source; Sedes will not switch to This thread."
+            : "This source can't fork now. Choose This thread before saving."}
         </Callout>
       ) : null}
     </SettingsSection>

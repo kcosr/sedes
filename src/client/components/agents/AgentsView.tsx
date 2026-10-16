@@ -407,7 +407,6 @@ function AgentEditor({
     nextWorkspaceId: string,
     nextTargetId: string,
     nextOverrides = overrides,
-    nextSedesTools = sedesTools,
   ): void => {
     optionsAbort.current?.abort();
     if (!nextWorkspaceId) {
@@ -419,6 +418,7 @@ function AgentEditor({
     const generation = ++optionsGeneration.current;
     setOptionsLoading(true);
     setError("");
+    // Load the current catalog independently so unavailable saved tools remain removable.
     void store
       .options(
         {
@@ -427,7 +427,6 @@ function AgentEditor({
             ? {
                 targetId: nextTargetId,
                 overrides: nextOverrides,
-                ...(nextSedesTools ? { sedesTools: nextSedesTools } : {}),
               }
             : {}),
         },
@@ -541,7 +540,7 @@ function AgentEditor({
     setError("");
     setNameError("");
     if (workspaceId && targetId) {
-      loadOptions(workspaceId, targetId, agent?.backendOverrides ?? [], agent?.sedesTools);
+      loadOptions(workspaceId, targetId, agent?.backendOverrides ?? []);
     }
   };
 
@@ -739,7 +738,7 @@ function AgentEditor({
             disabled={pending || optionsLoading}
             onChange={(next) => {
               setSedesTools(next);
-              loadOptions(workspaceId, targetId, overrides, next);
+              loadOptions(workspaceId, targetId, overrides);
             }}
           />
         )}

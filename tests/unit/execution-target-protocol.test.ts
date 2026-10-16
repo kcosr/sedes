@@ -93,7 +93,7 @@ function snapshot() {
         available: true,
         lastActivityAt: "2026-08-09T12:00:00.000Z",
         stateChangedAt: "2026-08-09T12:00:00.000Z",
-        automation: null,
+        automations: { totalCount: 0, enabledCount: 0, pausedCount: 0, exhaustedCount: 0, inFlightCount: 0, attentionCount: 0, revision: 0 },
         attention: {
           wake: false,
           automationContext: null,
@@ -136,7 +136,7 @@ function associatedTask(
 
 describe("execution-target application protocol", () => {
   it("uses the current client protocol for associated task presentation", () => {
-    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(159);
+    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(161);
   });
 
   it("enforces exact associated-project semantics on task projections", () => {

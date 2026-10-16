@@ -409,6 +409,7 @@ class SqliteNeutralPersistence implements BackendThreadPersistenceAdapter {
 }
 
 type Fixture = {
+  readonly setNow: (value: number) => void;
   readonly database: Database.Database;
   readonly scope: RequestScope;
   readonly service: ConversationLifecycleService;
@@ -596,6 +597,7 @@ function fixture(input?: {
     registry,
     targets,
     resolved,
+    setNow: (value: number) => { now = value; },
   };
 }
 
@@ -1371,6 +1373,52 @@ describe("ConversationLifecycleService", () => {
     }
   });
 
+  it("atomically attributes a copied automation draft and replays it independently of its title", async () => {
+    const current = fixture();
+    try {
+      const source = await createDraft(current, "40404040-4040-4040-8040-404040404040");
+      const automations = new AutomationRepository(current.database);
+      automations.createDefinition(current.scope, {
+        id: "copy-automation", anchorThreadId: source.applicationThreadId, name: "Daily copy", prompt: "update",
+        precheck: null, runMode: "clone", enabled: true,
+        schedule: { kind: "interval", anchorAt: 1_000, everySeconds: 300 }, misfirePolicy: "coalesce", nextRunAt: 301_000, now: 1_000,
+      });
+      const run = automations.createManualRun(current.scope, "copy-automation", {
+        occurrenceKey: "manual:copy", scheduledFor: 2_000, claimToken: "copy-claim", leaseExpiresAt: 90_000,
+        dispatchMutationId: "copy-mutation", now: 2_000,
+      }).run;
+      automations.checkRunAdmission(current.scope, "copy-automation", run.id, { claimToken: "copy-claim", now: 2_000, dispatch: true });
+      current.setNow(2_000);
+      let resultWasBoundInTransaction = false;
+      const input = {
+        workspaceId: current.workspaceId, connectionProfileId: current.driver.connection.id, title: "Copy first title",
+        configurationCopy: { sourceApplicationThreadId: source.applicationThreadId, mutationId: "copy-mutation", automation: { automationId: "copy-automation", automationRunId: run.id } },
+        bootstrap: { backendAdapter: { initializeNewThread: vi.fn() } as never, backendConfiguration: {} as never, assertDurableFences: (transaction: { assertActive(): void }) => transaction.assertActive() },
+        initializeApplicationThread: ({ applicationThreadId, now }: { applicationThreadId: string; now: number }) => {
+          expect(current.database.inTransaction).toBe(true);
+          expect(current.bindings.findThreadConfigurationCopyReceipt(current.scope, { ...input.configurationCopy, title: "ignored" })).toMatchObject({ applicationThreadId });
+          automations.bindResultChild(current.scope, "copy-automation", run.id, { childThreadId: applicationThreadId, claimToken: "copy-claim", now });
+          resultWasBoundInTransaction = true;
+        },
+      };
+      const first = await current.service.createServerDraft(current.scope, input);
+      const replay = await current.service.createServerDraft(current.scope, { ...input, title: "A renamed schedule's new label" });
+      expect(resultWasBoundInTransaction).toBe(true);
+      expect(replay.applicationThreadId).toBe(first.applicationThreadId);
+      expect(automations.getRun(current.scope, "copy-automation", run.id).childThreadId).toBe(first.applicationThreadId);
+      expect(current.database.prepare("SELECT count(*) AS count FROM automation_definitions WHERE anchor_thread_id = ?").get(first.applicationThreadId)).toEqual({ count: 0 });
+      expect(current.database.prepare("SELECT count(*) AS count FROM thread_fork_origins WHERE child_thread_id = ?").get(first.applicationThreadId)).toEqual({ count: 0 });
+      await expect(current.service.createServerDraft(current.scope, { ...input, configurationCopy: { ...input.configurationCopy, automation: { automationId: "copy-automation", automationRunId: "another-run" } } })).rejects.toMatchObject({ code: "conflict" });
+      const countBefore = current.database.prepare("SELECT count(*) AS count FROM application_threads").get();
+      await expect(current.service.createServerDraft(current.scope, { ...input, configurationCopy: { ...input.configurationCopy, mutationId: "unrelated-copy" }, initializeApplicationThread: ({ applicationThreadId, now }) => { automations.bindResultChild(current.scope, "copy-automation", run.id, { childThreadId: applicationThreadId, claimToken: "copy-claim", now }); } })).rejects.toMatchObject({ code: "conflict" });
+      expect(current.database.prepare("SELECT count(*) AS count FROM application_threads").get()).toEqual(countBefore);
+      expect(current.database.prepare("SELECT 1 FROM mutation_receipts WHERE mutation_id = 'unrelated-copy'").get()).toBeUndefined();
+    } finally {
+      await current.actors.close();
+      current.database.close();
+    }
+  });
+
   it("requires backend persistence to share the lifecycle database", async () => {
     const current = fixture();
     const otherDatabase = openOverlayDatabase(":memory:");
@@ -1499,6 +1547,9 @@ describe("ConversationLifecycleService", () => {
         dispatchMutationId: "automation-first-input",
         now: 2_000,
       }).run;
+      automations.checkRunAdmission(current.scope, definition.id, run.id, {
+        claimToken: "first-claim", now: 2_000, dispatch: true,
+      });
       const input = {
         scope: current.scope,
         applicationThreadId: created.applicationThreadId,
@@ -1509,7 +1560,7 @@ describe("ConversationLifecycleService", () => {
         attachmentIds: [] as const,
         taskReferences: [] as const,
         mutationId: "automation-first-input",
-        expectedThreadRevision: 0,
+        claimToken: "first-claim",
       };
 
       await expect(adapter.submit(input)).resolves.toEqual({

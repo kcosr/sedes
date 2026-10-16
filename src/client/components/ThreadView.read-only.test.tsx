@@ -1136,7 +1136,7 @@ describe("ThreadView backend interaction modes", () => {
     const snapshot: NormalizedThreadSnapshot = {
       ...base,
       interactions: [],
-      attention: {
+      attention: { automationContexts: [],
         unseenCompletion: {
           operationId: "operation-hidden",
           completedAt: "2026-08-10T12:00:00.000Z",
@@ -1503,7 +1503,7 @@ describe("ThreadView backend interaction modes", () => {
     const base = makeSnapshot("interactive", "idle");
     const snapshot: NormalizedThreadSnapshot = {
       ...base,
-      attention: {
+      attention: { automationContexts: [],
         wake: { wokeAt: "2026-07-30T15:01:00.000Z" },
       },
     };
@@ -1525,6 +1525,35 @@ describe("ThreadView backend interaction modes", () => {
       kind: "wake",
       wokeAt: "2026-07-30T15:01:00.000Z",
     });
+  });
+
+  it("dismisses the rendered automation outcome and leaves uncertain notices without a dismiss control", () => {
+    const base = makeSnapshot("interactive", "idle");
+    const contexts: NormalizedThreadSnapshot["attention"]["automationContexts"] = ["triggered", "failed", "interrupted", "uncertain"].map((outcome, index) => ({
+      automationId: `30000000-0000-4000-8000-00000000000${index}`,
+      runId: `20000000-0000-4000-8000-00000000000${index}`,
+      name: `Reminder ${index}`,
+      sourceThreadId: base.thread.id,
+      triggeredAt: "2026-07-30T15:01:00.000Z",
+      outcome: outcome as "triggered" | "interrupted" | "failed" | "uncertain",
+    }));
+    const snapshot = { ...base, attention: { automationContexts: contexts } };
+    const { applicationStore, registry, dismissAttention } = fixture(snapshot);
+    render(<ThreadView threadId={snapshot.thread.id} visible registry={registry} applicationStore={applicationStore} />);
+    for (const [index, text] of [
+      "Reminder 0 triggered this thread.",
+      "Reminder 1: this run failed.",
+      "Reminder 2: its turn was interrupted.",
+    ].entries()) {
+      const notice = screen.getByText(text).closest("aside")!;
+      fireEvent.click(within(notice).getByRole("button", { name: "Dismiss" }));
+      expect(dismissAttention).toHaveBeenNthCalledWith(index + 1, {
+        kind: "automation_context", runId: contexts[index]!.runId, outcome: contexts[index]!.outcome,
+      });
+    }
+    const uncertain = screen.getByText("Reminder 3: delivery outcome is unknown.").closest("aside")!;
+    expect(within(uncertain).queryByRole("button", { name: "Dismiss" })).toBeNull();
+    expect(dismissAttention).toHaveBeenCalledTimes(3);
   });
 
   it("renders a bound read-only thread without provider mutation controls", async () => {
@@ -1931,21 +1960,7 @@ function makeSnapshot(
       available: true,
       lastActivityAt: "2026-07-30T15:00:00.000Z",
       stateChangedAt: "2026-07-30T15:00:00.000Z",
-      automation: {
-        status: "enabled",
-        runMode: "same_thread",
-        scheduleKind: "interval",
-        schedule: {
-          kind: "interval",
-          anchorAt: "2026-07-30T00:00:00.000Z",
-          everySeconds: 3_600,
-        },
-        misfirePolicy: "coalesce",
-        promptPreview: "Review the repository.",
-        revision: 1,
-        runsRevision: 0,
-        hasPrecheck: false,
-      },
+      automations: { totalCount: 1, enabledCount: 1, pausedCount: 0, exhaustedCount: 0, inFlightCount: 0, attentionCount: 0, revision: 1 },
     },
     workspace: {
       id: "workspace-1",
@@ -2097,6 +2112,6 @@ function makeSnapshot(
         cancellable: true,
       },
     ],
-    attention: {},
+    attention: { automationContexts: [] },
   };
 }

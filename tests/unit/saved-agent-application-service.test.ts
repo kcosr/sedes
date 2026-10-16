@@ -98,6 +98,7 @@ function fixture(
     readonly workspaceEnvironmentId?: string;
     readonly eligibleToolIds?: ReadonlySet<string>;
     readonly sourceAvailable?: boolean;
+    readonly sourceBackingState?: "unbound" | "creating" | "bound";
     readonly toolPolicyChangesBeforeFence?: boolean;
     readonly isolationUnavailable?: boolean;
     readonly agentBackendTypeId?: string;
@@ -221,6 +222,7 @@ function fixture(
       return {
         thread: {
           id: threadId,
+          backingState: input.sourceBackingState ?? "unbound",
           workspaceId: input.sourceWorkspaceId ?? workspaceId,
           environmentId: workspaceEnvironmentId,
           backendInstanceId: "backend-a",
@@ -449,6 +451,18 @@ describe("SavedAgentApplicationService", () => {
     } finally {
       current.database.close();
     }
+  });
+
+  it("refuses an automation settings copy when the source starts before its reservation", async () => {
+    const current = fixture({ adapterAFails: false, sourceBackingState: "creating", eligibleToolIds: new Set(["task.list"]) });
+    try {
+      const bindResult = vi.fn();
+      await expect(current.service.createAutomationForkFromDraft(scope, "source-thread", {
+        title: "Copy", mutationId: "30000000-0000-4000-8000-000000000099",
+      }, { automationId: "automation", automationRunId: "run", assertAdmission: vi.fn(), bindResult })).rejects.toMatchObject({ reason: "source_materializing" });
+      expect(bindResult).not.toHaveBeenCalled();
+      expect(current.handoffThreadChange).not.toHaveBeenCalled();
+    } finally { current.database.close(); }
   });
 
   it("replays the immutable creation result and heals application publication", async () => {

@@ -131,15 +131,24 @@ publish affected thread summaries after committed membership changes, including
 both ends of a scope move. Content and draft edits do not change membership.
 Keep snapshot, incremental publication, and reconnect projections equivalent.
 
-The thread summary's `automation` projection is likewise shared by Pi, Codex,
+The thread summary's bounded `automations` aggregate is shared by Pi, Codex,
 Claude, Grok, and OpenCode and reads only application-owned definitions and
-runs. Its fields, bounded prompt preview, and one latest-run rule are in
+runs. Full named definitions and run histories use explicit automation resource
+IDs, independently of which threads the browser has loaded. See
 [Materialized application projection](application-projection.md#thread-automation-summary).
 The automation capability route composes the same `capabilities.automation`
-as the thread snapshot without the transcript. Agent tools whose frozen output
-schemas predate the added summary and run fields (`thread.list`,
-`automation.runs`, `automation.run_now`) strip them rather than widening the
-contract.
+as the thread snapshot without loading the transcript. Versioned agent-tool
+contracts must reflect the aggregate and identity-based automation API; do not
+synthesize a singleton by choosing one sibling.
+
+Automation delivery bookkeeping for Pi, Codex, Claude, Grok, and OpenCode must
+observe committed queue receipts independently of runtime acquisition or UI
+publication. Reconcile the exact scoped receipt after parking a dispatch and
+at authoritative turn settlement, including Stop, to cover acceptance races.
+Accepted delivery completes the run; an interrupted turn remains a separate
+history outcome. Reconciliation never resubmits input or changes a recurring
+definition's enabled/paused state. Isolate and report observer/publication
+failures so one failure cannot skip another receipt's bookkeeping.
 
 An actor must replay current authoritative pending interactions to late
 subscribers, including the interaction broker. Remove resolved requests and
@@ -2345,10 +2354,20 @@ observation for the run's dispatch operation on its result thread (the fork
 child, else the anchor). It records the application turn ID and terminal
 outcome once, and fills in the backend turn's own start and end when a later
 observation reports them; it never uses observation time as a duration and
-drops an end before the start. It is idempotent across snapshot replays,
-skips force-reset runs, and never changes run state, scheduling or attention.
-At startup it settles runs whose observation committed while no observer was
-bound.
+drops an end before the start. It is idempotent across snapshot replays and skips
+force-reset runs. It never changes the recorded delivery state or rearms a
+schedule. Failed settlement restores attention if the user had dismissed the
+earlier delivery notice; replay must preserve acknowledgement of the failure.
+An interrupted turn, whether stopped by the user or otherwise, is neutral: it
+keeps that dismissal, needs no attention, and leaves a parked anchor parked. A
+scheduled one-shot whose turn succeeded or was interrupted is retired once no
+run leaves a result notice to dismiss and no unresolved problem or in-flight
+turn remains.
+Retain its internal records and threads. Dismissals name the observed outcome so
+a delayed request cannot acknowledge a newer failure. At startup it settles runs
+whose observation committed while no observer was bound and reconciles eligible
+retirement from retained history. Pi, Codex, Claude, and OpenCode consume this
+same normalized lifecycle; Grok continues to reject automation admission.
 
 Passive external notifications consume finalized observations on this same rail,
 including enrichment after recovery first records an incomplete observation.
@@ -4084,6 +4103,42 @@ same target must remain admissible for automation. Attended approval modes use
 the ordinary interaction lifecycle and may leave the thread waiting for the
 principal. Do not add an automation-only "safe" tuple or silently replace the
 thread's selected execution settings.
+
+Automation sources may have several independent definitions. Keep exactly two
+run modes: `same_thread` submits to the existing source and `clone` creates one
+new result per invocation. The user-facing labels are **This thread** and
+**Fork**. `clone` on an unbound draft reuses normal configuration capture and
+creation; on a bound source it requires native fork support and an eligible
+checkpoint. Creating or uncertain source state waits. Never approximate a bound
+native fork with an empty settings copy.
+
+Target recovery resolves the run's bound result, copy receipt, or fork attempt
+before consulting the source's current backing state. The copy reservation
+asserts an unbound source and commits its automation receipt and run attribution
+with the child row before publication. Re-entry preserves that result identity.
+A deleted, reset, or aborted result cannot justify reserving another result for
+the same invocation. Ordinary first-send/queue admission handles a copy child
+that the user starts before the automation submits its prompt.
+
+Automation admission resolves current thread revisions within the serialized
+transactional boundary; caller snapshots must not make sibling runs conflict.
+Claim-token fences apply immediately before side effects. Definitively unsent
+runs may defer without keeping a worker or lease; externally ambiguous work must
+follow its recorded recovery phase. Persist completed precheck results and reuse
+them after deferral: shell commands cannot be assumed safe to replay.
+
+| Backend | This thread | Fork from draft | Fork from bound source |
+| --- | --- | --- | --- |
+| Pi | Shared normal admission | Normal settings-copy creation | Native eligible checkpoint |
+| Codex | Shared normal admission | Normal settings-copy creation | Native eligible checkpoint |
+| Claude | Shared normal admission | Normal settings-copy creation | Native eligible checkpoint |
+| OpenCode | Shared normal admission | Normal settings-copy creation | Unsupported; no empty-copy fallback |
+| Grok | Automation unsupported | Automation unsupported | Unsupported |
+
+All paths retain backend-owned policy checks. Child threads inherit normal
+configuration, never automation definitions. Automation `clone` remains the
+existing semantic contract for old definitions; no fork-removal conversion is
+necessary.
 
 ### Isolated workspace execution
 

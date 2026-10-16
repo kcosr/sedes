@@ -24,7 +24,7 @@ import type { SidebarDensity } from "../../app/sidebar-view-model.js";
 import { sidebarEffectiveTimestamp } from "../../app/sidebar-view-model.js";
 import { futureTimeLabel, shortRelativeTime } from "../../lib/time.js";
 import {
-  automationHealth,
+  threadAutomationHealth,
   automationIdentityGlyph,
   automationIdentityLabel,
   type AutomationHealth,
@@ -78,6 +78,7 @@ export type FlatRowGlyphKind =
   | "snoozed"
   | "automation-sending"
   | "automation-paused"
+  | "automation-finished"
   | "automation"
   | "parked"
   | "disconnected"
@@ -86,6 +87,7 @@ export type FlatRowGlyphKind =
 const AUTOMATION_GLYPH_KINDS = {
   spinner: "automation-sending",
   pause: "automation-paused",
+  finished: "automation-finished",
   repeat: "automation",
 } as const satisfies Record<
   ReturnType<typeof automationIdentityGlyph>,
@@ -125,7 +127,8 @@ export function flatRowGlyphKind(
   }
   if (thread.backingState === "unbound") return "draft";
   if (thread.inventoryState === "snoozed") return "snoozed";
-  const automation = automationHealth(thread, Date.now());
+  if (thread.automations.inFlightCount > 0) return "automation-sending";
+  const automation = threadAutomationHealth(thread, Date.now());
   if (automation) {
     return AUTOMATION_GLYPH_KINDS[automationIdentityGlyph(automation)];
   }
@@ -170,9 +173,10 @@ export function flatRowGlyphLabel(
   if (
     kind === "automation" ||
     kind === "automation-paused" ||
+    kind === "automation-finished" ||
     kind === "automation-sending"
   ) {
-    const automation = automationHealth(thread, Date.now());
+    const automation = threadAutomationHealth(thread, Date.now());
     if (automation) return automationIdentityLabel(automation);
   }
   return kind.charAt(0).toUpperCase() + kind.slice(1);
@@ -205,6 +209,8 @@ export function flatRowGlyphIcon(kind: FlatRowGlyphKind): React.ReactNode {
       return <AutomationGlyph glyph="spinner" tone="info" />;
     case "automation-paused":
       return <AutomationGlyph glyph="pause" />;
+    case "automation-finished":
+      return <AutomationGlyph glyph="finished" />;
     case "automation":
       return <AutomationGlyph glyph="repeat" />;
     case "parked":
@@ -230,7 +236,7 @@ export function flatRowTime(
   now = new Date(),
 ): FlatRowTime {
   if (futureTimes) {
-    const at = thread.snoozedUntil ?? thread.automation?.nextRunAt;
+    const at = thread.snoozedUntil ?? thread.automations.nextRunAt;
     if (at !== undefined) {
       return {
         label: futureTimeLabel(at, now),
@@ -258,14 +264,15 @@ export function flatRowContext(
   thread: NormalizedApplicationThreadSummary,
   now = new Date(),
 ): FlatRowContext | undefined {
-  const automation = thread.automation ?? undefined;
-  const health = automationHealth(thread, now);
+  const automation = thread.automations.totalCount > 0 ? thread.automations : undefined;
+  const health = threadAutomationHealth(thread, now);
   if (
     thread.attention.automationContext === "failed" ||
     health?.kind === "failed"
   ) {
     return { label: "run failed", tone: "failure" };
   }
+  if (health?.kind === "attention") return { label: "needs attention", tone: "attention" };
   if (health?.kind === "unknown") {
     return { label: "outcome unknown", tone: "attention" };
   }
@@ -313,12 +320,12 @@ function buildBadges(
     const automationFailed =
       thread.attention.automationContext === "failed" ||
       automation?.kind === "failed";
-    if (thread.attention.queueFailure || automationFailed) {
+    if (thread.attention.queueFailure || automationFailed || automation?.kind === "attention") {
       const label = thread.attention.queueFailure
         ? automationFailed
           ? "Queued input and automation failed"
           : "Queued input failed"
-        : "Automation failed";
+        : automationFailed ? "Automation failed" : "Automation needs attention";
       badges.push({
         key: "alert",
         chip: "alert",
@@ -454,7 +461,7 @@ export function FlatThreadRow({
   const time = flatRowTime(thread, futureTimes, now);
   const context = density === "card" ? flatRowContext(thread, now) : undefined;
 
-  const badges = buildBadges(thread, parked, automationHealth(thread, now));
+  const badges = buildBadges(thread, parked, threadAutomationHealth(thread, now));
 
   const rootClass = [
     "flat-row",

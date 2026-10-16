@@ -1426,6 +1426,7 @@ describe("normalized conversation protocol", () => {
   it("represents durable queue-failure attention without provider fields", () => {
     expect(
       normalizedThreadAttentionSchema.parse({
+        automationContexts: [],
         queueFailure: {
           queuedInputId: "queue-1",
           failedAt: "2026-07-30T12:00:00.000Z",
@@ -1433,6 +1434,7 @@ describe("normalized conversation protocol", () => {
         },
       }),
     ).toEqual({
+      automationContexts: [],
       queueFailure: {
         queuedInputId: "queue-1",
         failedAt: "2026-07-30T12:00:00.000Z",
@@ -2033,7 +2035,7 @@ describe("normalized conversation protocol", () => {
         available: true,
         lastActivityAt: "2026-07-30T12:00:00.000Z",
         stateChangedAt: "2026-07-30T12:00:00.000Z",
-        automation: null,
+        automations: { totalCount: 0, enabledCount: 0, pausedCount: 0, exhaustedCount: 0, inFlightCount: 0, attentionCount: 0, revision: 0 },
       },
       executionWorkspace: { kind: "direct" as const },
       backendSessionId: "provider-native-session-1",
@@ -2160,7 +2162,7 @@ describe("normalized conversation protocol", () => {
       providerFeatures: [],
       usage: {},
       interactions,
-      attention: {},
+      attention: { automationContexts: [] },
     };
 
     expect(normalizedThreadSnapshotSchema.safeParse(snapshot).success).toBe(
@@ -2354,7 +2356,7 @@ describe("application sidebar background-work wire contract", () => {
     backingState: "bound", inventoryState: "active", inventoryRevision: 0,
     threadRevision: 0, runState: "idle", queuedInputCount: 0, available: true,
     lastActivityAt: "2026-08-04T00:00:00.000Z", stateChangedAt: "2026-08-04T00:00:00.000Z",
-    automation: null, pinned: false, pinRevision: 0,
+    automations: { totalCount: 0, enabledCount: 0, pausedCount: 0, exhaustedCount: 0, inFlightCount: 0, attentionCount: 0, revision: 0 }, pinned: false, pinRevision: 0,
     preferredWorktree: null, preferredWorktreeRevision: 0, bookmarkRevision: 0,
     turnBookmarkCount: 0, nonArchivedWorkpadCount: 0, groupId: null, groupAssignmentRevision: 0,
     stashedPromptCount: 0, pendingQuestionCount: 0,
@@ -2371,7 +2373,7 @@ describe("application sidebar background-work wire contract", () => {
     advisories: [], defaultNewThreadTargetId: "target-1", counts, tasks: [],
   };
   it("carries the same counts through snapshot and thread-upsert events without changing run state", () => {
-    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(159);
+    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(161);
     expect(normalizedApplicationEventSchema.parse({ type: "snapshot", generation: "generation-1", snapshot }))
       .toMatchObject({ snapshot: { threads: [{ runState: "idle", backgroundWork }] } });
     expect(normalizedApplicationEventSchema.parse({ type: "thread_upsert", generation: "generation-1", thread, counts }))

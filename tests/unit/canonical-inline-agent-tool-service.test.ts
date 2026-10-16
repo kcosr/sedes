@@ -837,6 +837,7 @@ describe("CanonicalInlineAgentToolService", () => {
     const create = vi.fn();
     const automations = new AutomationAgentToolService({
       automations: { create } as never,
+      mutationRecords: {} as never,
       threads: { snapshot: vi.fn() } as never,
       inventory: {
         getThread: vi.fn(() => ({
@@ -858,9 +859,10 @@ describe("CanonicalInlineAgentToolService", () => {
       service.invoke(
         {
           toolId: "automation.create",
-          schemaVersion: 1,
+          schemaVersion: 2,
           requestId: "blank-automation-prompt",
           input: {
+            name: "Review", initialState: "paused", mutationId: "6ba7b810-9dad-41d1-80b4-00c04fd430c8", misfirePolicy: null,
             prompt: " \n ",
             runMode: "same_thread",
             schedule: {

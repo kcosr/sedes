@@ -18,6 +18,8 @@ import {
  * a delivered run is "running" while `running` (see `runTurnRunning`).
  */
 export type RunHealth =
+  | "waiting"
+  | "cancelled"
   | "sending"
   | "running"
   | "delivered"
@@ -50,6 +52,10 @@ export function runHealth(
       return "uncertain";
     case "skipped":
       return "skipped";
+    case "deferred":
+      return "waiting";
+    case "cancelled":
+      return "cancelled";
     case "claimed":
     case "dispatching":
     case "queued":
@@ -180,6 +186,10 @@ export function runDetailTitle(
   running = false,
 ): string {
   switch (runHealth(run, running)) {
+    case "waiting":
+      return "Deferred run";
+    case "cancelled":
+      return "Cancelled run";
     case "delivered":
       return "Delivered run";
     case "finished":

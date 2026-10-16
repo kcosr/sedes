@@ -5,19 +5,22 @@ import type {
 import {
   automationPrecheckSchema,
   automationPromptSchema,
+  automationNameSchema,
   automationScheduleSchema,
   type AutomationPrecheck,
   type AutomationSchedule,
 } from "../../../shared/protocol/automation.js";
-import { ZodError } from "zod";
+import { ZodError, z } from "zod";
 import type {
   AutomationMisfirePolicy,
   AutomationRunMode,
 } from "../../domain/automation-models.js";
 import type { AutomationService } from "../../domain/automation-service.js";
+import { automationPromptPreview } from "../../domain/automation-presentation.js";
 import { assertAutomationCloneEligible } from "../../domain/automation-clone-eligibility.js";
 import { DomainError } from "../../domain/errors.js";
 import type { ThreadApplicationService } from "../../conversations/thread-application-service.js";
+import type { AutomationRepository } from "../../db/repositories/automation-repository.js";
 import type { InventoryRepository } from "../../db/repositories/inventory-repository.js";
 import type { TrustedToolInvocationContext } from "../contracts/agent-tool-contracts.js";
 import { requireAdmittedResource } from "../environment/environment-authority.js";
@@ -26,13 +29,15 @@ import { CanonicalAgentToolRequestError } from "../invocation/canonical-inline-a
 const UPCOMING_OCCURRENCE_COUNT = 5;
 
 /**
- * The definition shape frozen by the `automation.get@1`, `automation.create@1`,
- * `automation.update@1` and `automation.set_state@1` output schemas. The
- * run-history revision and the last run's agent turn are browser-only detail
- * and are stripped.
+ * The definition shape frozen by the `automation.get@2`, `automation.create@2`,
+ * `automation.update@2` and `automation.set_state@2` output schemas; the last
+ * two add `retired`. The run-history revision and the last run's agent turn
+ * are browser-only detail and are stripped.
  */
-export interface AgentAutomationDefinition
-  extends Omit<ThreadAutomationDefinition, "lastRun" | "runsRevision"> {
+export interface AgentAutomationDefinition extends Omit<
+  ThreadAutomationDefinition,
+  "lastRun" | "runsRevision"
+> {
   readonly lastRun?: Omit<
     NonNullable<ThreadAutomationDefinition["lastRun"]>,
     "turn"
@@ -40,12 +45,35 @@ export interface AgentAutomationDefinition
   readonly upcoming: readonly string[];
 }
 
+/**
+ * The `automation.update@2` and `automation.set_state@2` result: the
+ * definition the change produced, and whether that change retired a finished
+ * one-time automation, which then no longer exists.
+ */
+export interface AgentAutomationMutationResult extends AgentAutomationDefinition {
+  readonly retired: boolean;
+}
+
 export interface AutomationTargetInput {
+  readonly automationId: string;
+}
+export interface AutomationThreadInput {
   readonly threadId?: string;
+}
+export interface AutomationListToolInput extends AutomationThreadInput {
+  readonly cursor?: string;
+  readonly pageSize?: number;
+  readonly status?: "enabled" | "paused" | "exhausted";
+}
+export interface AutomationRunNowToolInput extends AutomationTargetInput {
+  readonly mutationId: string;
+}
+export interface AutomationDeleteToolInput extends AutomationTargetInput {
+  readonly expectedRevision: number;
 }
 
 /**
- * The run shape frozen by the `automation.runs@1` and `automation.run_now@1`
+ * The run shape frozen by the `automation.runs@2` and `automation.run_now@2`
  * output schemas. Browser-only run detail is stripped rather than versioning
  * the tools.
  */
@@ -59,20 +87,24 @@ export type AutomationToolRun = Omit<
   >;
 };
 
-export interface AutomationCreateToolInput extends AutomationTargetInput {
+export interface AutomationCreateToolInput extends AutomationThreadInput {
+  readonly name: string;
+  readonly initialState: "enabled" | "paused";
+  readonly mutationId: string;
   readonly prompt: string;
   readonly runMode: AutomationRunMode;
   readonly schedule: AutomationSchedule;
-  readonly misfirePolicy?: AutomationMisfirePolicy;
+  readonly misfirePolicy: AutomationMisfirePolicy | null;
   readonly precheck?: AutomationPrecheck | null;
 }
 
 export interface AutomationUpdateToolInput extends AutomationTargetInput {
   readonly expectedRevision: number;
+  readonly name?: string;
   readonly prompt?: string;
   readonly runMode?: AutomationRunMode;
   readonly schedule?: AutomationSchedule;
-  readonly misfirePolicy?: AutomationMisfirePolicy;
+  readonly misfirePolicy?: AutomationMisfirePolicy | null;
   readonly precheck?: AutomationPrecheck | null;
 }
 
@@ -88,23 +120,46 @@ export interface AutomationSetStateToolInput extends AutomationTargetInput {
 
 type AutomationDomain = Pick<
   AutomationService,
-  "create" | "get" | "listRuns" | "preview" | "runNow" | "setState" | "update"
+  | "create"
+  | "replayCreate"
+  | "get"
+  | "list"
+  | "listRuns"
+  | "preview"
+  | "presentDefinition"
+  | "replayUpdate"
+  | "runNow"
+  | "setState"
+  | "update"
+  | "delete"
+>;
+
+/**
+ * Scoped reads of a mutation's receipt and the definition it left, including
+ * one it retired. Replay cannot depend on a live definition.
+ */
+type AutomationMutationRecords = Pick<
+  AutomationRepository,
+  "getMutationReceipt" | "getDefinition"
 >;
 
 /** Canonical, source-scoped adapter over the existing automation domain. */
 export class AutomationAgentToolService {
   readonly #automations: AutomationDomain;
+  readonly #mutationRecords: AutomationMutationRecords;
   readonly #threads: Pick<ThreadApplicationService, "automationCapability">;
   readonly #inventory: Pick<InventoryRepository, "getThread">;
   readonly #now: () => number;
 
   constructor(input: {
     readonly automations: AutomationDomain;
+    readonly mutationRecords: AutomationMutationRecords;
     readonly threads: Pick<ThreadApplicationService, "automationCapability">;
     readonly inventory: Pick<InventoryRepository, "getThread">;
     readonly now?: () => number;
   }) {
     this.#automations = input.automations;
+    this.#mutationRecords = input.mutationRecords;
     this.#threads = input.threads;
     this.#inventory = input.inventory;
     this.#now = input.now ?? Date.now;
@@ -115,8 +170,7 @@ export class AutomationAgentToolService {
     context: TrustedToolInvocationContext,
   ): Promise<AgentAutomationDefinition> {
     const now = this.#now();
-    const threadId = this.#admitTargetThread(input, context);
-    const definition = this.#automations.get(scope(context), threadId);
+    const definition = this.#admitAutomation(input, context);
     return this.#withUpcoming(definition, now);
   }
 
@@ -127,16 +181,22 @@ export class AutomationAgentToolService {
     readonly items: AutomationToolRun[];
     readonly nextCursor: string | null;
   } {
-    const threadId = this.#admitTargetThread(input, context);
-    const page = this.#automations.listRuns(scope(context), threadId, {
-      ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
-      pageSize: input.pageSize ?? 50,
-      environmentAuthority: {
-        sourceEnvironmentId: context.environmentAuthority.defaults.environmentId,
-        targetEnvironmentIds: context.environmentAuthority.targetEnvironmentIds,
-        policyRevision: context.environmentAuthority.policyIdentity.revision,
+    this.#admitAutomation(input, context);
+    const page = this.#automations.listRuns(
+      scope(context),
+      input.automationId,
+      {
+        ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
+        pageSize: input.pageSize ?? 50,
+        environmentAuthority: {
+          sourceEnvironmentId:
+            context.environmentAuthority.defaults.environmentId,
+          targetEnvironmentIds:
+            context.environmentAuthority.targetEnvironmentIds,
+          policyRevision: context.environmentAuthority.policyIdentity.revision,
+        },
       },
-    });
+    );
     return { items: page.items.map(toolRun), nextCursor: page.nextCursor };
   }
 
@@ -146,6 +206,7 @@ export class AutomationAgentToolService {
   ): Promise<AgentAutomationDefinition> {
     const operationScope = scope(context);
     const threadId = this.#admitTargetThread(input, context);
+    const name = automationNameSchema.parse(input.name);
     const prompt = automationPromptSchema.parse(input.prompt);
     const schedule = automationScheduleSchema.parse(input.schedule);
     const precheck =
@@ -154,6 +215,23 @@ export class AutomationAgentToolService {
         : automationPrecheckSchema.parse(input.precheck);
     const now = this.#now();
     this.#validateSchedule(schedule, now);
+    validateMisfirePolicy(schedule, input.misfirePolicy);
+    const creation = {
+      name,
+      initialState: input.initialState,
+      prompt,
+      runMode: input.runMode,
+      schedule,
+      misfirePolicy: input.misfirePolicy,
+      precheck,
+      mutationId: z.uuid().parse(input.mutationId),
+    };
+    const replay = this.#automations.replayCreate(
+      operationScope,
+      threadId,
+      creation,
+    );
+    if (replay) return this.#withUpcoming(replay, now);
     await this.#assertCloneEligible(
       operationScope,
       threadId,
@@ -164,12 +242,14 @@ export class AutomationAgentToolService {
       operationScope,
       threadId,
       {
+        name,
+        initialState: input.initialState,
         prompt,
         runMode: input.runMode,
         schedule,
-        misfirePolicy: input.misfirePolicy ?? "coalesce",
+        misfirePolicy: input.misfirePolicy,
         precheck,
-        mutationId: context.mutationId,
+        mutationId: z.uuid().parse(input.mutationId),
       },
       now,
     );
@@ -179,7 +259,7 @@ export class AutomationAgentToolService {
   async update(
     input: AutomationUpdateToolInput,
     context: TrustedToolInvocationContext,
-  ): Promise<AgentAutomationDefinition> {
+  ): Promise<AgentAutomationMutationResult> {
     if (!hasDefinitionChange(input)) {
       throw new ZodError([
         {
@@ -190,7 +270,11 @@ export class AutomationAgentToolService {
       ]);
     }
     const operationScope = scope(context);
-    const threadId = this.#admitTargetThread(input, context);
+    const { definition: current, recorded } = this.#admitMutationTarget(
+      input,
+      context,
+    );
+    const threadId = current.threadId;
     const prompt =
       input.prompt === undefined
         ? undefined
@@ -205,44 +289,65 @@ export class AutomationAgentToolService {
         : automationPrecheckSchema.parse(input.precheck);
     const now = this.#now();
     if (schedule !== undefined) this.#validateSchedule(schedule, now);
-    const current = this.#automations.get(operationScope, threadId);
     const merged = {
+      name:
+        input.name === undefined
+          ? current.name
+          : automationNameSchema.parse(input.name),
       prompt: prompt ?? current.prompt,
       runMode: input.runMode ?? current.runMode,
       schedule: schedule ?? current.schedule,
-      misfirePolicy: input.misfirePolicy ?? current.misfirePolicy,
+      misfirePolicy:
+        input.misfirePolicy === undefined
+          ? current.misfirePolicy
+          : input.misfirePolicy,
       precheck: Object.prototype.hasOwnProperty.call(input, "precheck")
         ? (precheck ?? null)
         : current.precheck,
     };
-    await this.#assertCloneEligible(
-      operationScope,
-      threadId,
-      merged.runMode,
-      context.abortSignal,
-    );
+    validateMisfirePolicy(merged.schedule, merged.misfirePolicy);
+    const mutation = {
+      ...merged,
+      expectedRevision: input.expectedRevision,
+      mutationId: context.mutationId,
+    };
+    // Merging over the definition the recorded mutation left reproduces its
+    // request, so the domain verifies and replays it without re-admission.
+    const replayed = recorded
+      ? this.#automations.replayUpdate(
+          operationScope,
+          input.automationId,
+          mutation,
+        )
+      : undefined;
+    if (replayed) return this.#mutationResult(replayed, context, now);
+    if (merged.runMode === "clone" && current.runMode !== "clone") {
+      await this.#assertCloneEligible(
+        operationScope,
+        threadId,
+        merged.runMode,
+        context.abortSignal,
+      );
+    }
     const definition = this.#automations.update(
       operationScope,
-      threadId,
-      {
-        ...merged,
-        expectedRevision: input.expectedRevision,
-        mutationId: context.mutationId,
-      },
+      input.automationId,
+      mutation,
       now,
     );
-    return this.#withUpcoming(definition, now);
+    return this.#mutationResult(definition, context, now);
   }
 
   async setState(
     input: AutomationSetStateToolInput,
     context: TrustedToolInvocationContext,
-  ): Promise<AgentAutomationDefinition> {
+  ): Promise<AgentAutomationMutationResult> {
     const now = this.#now();
-    const threadId = this.#admitTargetThread(input, context);
+    // The domain replays a recorded state mutation before any live lookup.
+    this.#admitMutationTarget(input, context);
     const definition = this.#automations.setState(
       scope(context),
-      threadId,
+      input.automationId,
       {
         action: input.action,
         expectedRevision: input.expectedRevision,
@@ -250,26 +355,157 @@ export class AutomationAgentToolService {
       },
       now,
     );
-    return this.#withUpcoming(definition, now);
+    return this.#mutationResult(definition, context, now);
   }
 
   async runNow(
-    input: AutomationTargetInput,
+    input: AutomationRunNowToolInput,
     context: TrustedToolInvocationContext,
   ): Promise<AutomationToolRun> {
-    const threadId = this.#admitTargetThread(input, context);
+    this.#admitAutomation(input, context);
     return toolRun(
       await this.#automations.runNow(
         scope(context),
-        threadId,
-        context.mutationId,
+        input.automationId,
+        z.uuid().parse(input.mutationId),
         this.#now(),
       ),
     );
   }
 
-  #admitTargetThread(
+  list(input: AutomationListToolInput, context: TrustedToolInvocationContext) {
+    const threadId = this.#admitTargetThread(input, context);
+    const page = this.#automations.list(scope(context), {
+      threadId,
+      pageSize: input.pageSize ?? 50,
+      ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
+      ...(input.status === undefined ? {} : { status: input.status }),
+    });
+    return {
+      items: page.items.map((definition) => {
+        const {
+          prompt,
+          precheck: _precheck,
+          ...summary
+        } = this.#withUpcoming(definition, this.#now());
+        return { ...summary, promptPreview: automationPromptPreview(prompt) };
+      }),
+      nextCursor: page.nextCursor,
+    };
+  }
+
+  delete(
+    input: AutomationDeleteToolInput,
+    context: TrustedToolInvocationContext,
+  ) {
+    this.#admitAutomation(input, context);
+    this.#automations.delete(scope(context), input.automationId, {
+      expectedRevision: input.expectedRevision,
+      mutationId: context.mutationId,
+    });
+    return { deleted: true as const };
+  }
+
+  #admitAutomation(
     input: AutomationTargetInput,
+    context: TrustedToolInvocationContext,
+  ): ThreadAutomationDefinition {
+    this.#admitReference(input, context);
+    return this.#admitTarget(
+      this.#automations.get(scope(context), input.automationId),
+      context,
+    );
+  }
+
+  /**
+   * A retry of a recorded mutation admits the definition that mutation left,
+   * even one it retired, so the domain replays the original result rather
+   * than finding no live definition. The domain still verifies the receipt's
+   * kind and request; a different automation's receipt is not reused here.
+   */
+  #admitMutationTarget(
+    input: AutomationTargetInput,
+    context: TrustedToolInvocationContext,
+  ): {
+    readonly definition: ThreadAutomationDefinition;
+    readonly recorded: boolean;
+  } {
+    this.#admitReference(input, context);
+    const operationScope = scope(context);
+    const receipt = this.#mutationRecords.getMutationReceipt(
+      operationScope,
+      context.mutationId,
+    );
+    if (receipt?.automationId !== input.automationId)
+      return {
+        definition: this.#admitAutomation(input, context),
+        recorded: false,
+      };
+    const definition = this.#automations.presentDefinition(
+      operationScope,
+      this.#mutationRecords.getDefinition(operationScope, input.automationId),
+    );
+    return {
+      definition: this.#admitTarget(definition, context),
+      recorded: true,
+    };
+  }
+
+  /**
+   * The domain mutation and replay are synchronous, so nothing else can
+   * remove the definition before this read: a removed definition was retired
+   * by this mutation. A replay whose definition was removed later conflicts.
+   */
+  #mutationResult(
+    definition: ThreadAutomationDefinition,
+    context: TrustedToolInvocationContext,
+    now: number,
+  ): AgentAutomationMutationResult {
+    const retired =
+      this.#mutationRecords.getDefinition(scope(context), definition.id)
+        .deletedAt !== null;
+    return {
+      ...this.#withUpcoming(definition, now),
+      ...(retired ? { upcoming: [] } : {}),
+      retired,
+    };
+  }
+
+  #admitReference(
+    input: AutomationTargetInput,
+    context: TrustedToolInvocationContext,
+  ): void {
+    const admitted = context.environmentAuthority.resolvedResourceRefs.find(
+      (ref) => ref.kind === "automation" && ref.id === input.automationId,
+    );
+    if (!admitted)
+      throw new CanonicalAgentToolRequestError(
+        "permission_denied",
+        "The automation was not admitted for this invocation.",
+      );
+    requireAdmittedResource(context.environmentAuthority, admitted);
+  }
+
+  #admitTarget(
+    definition: ThreadAutomationDefinition,
+    context: TrustedToolInvocationContext,
+  ): ThreadAutomationDefinition {
+    const target = this.#inventory.getThread(
+      scope(context),
+      definition.threadId,
+    ).thread;
+    requireAdmittedResource(context.environmentAuthority, {
+      kind: "automation",
+      id: definition.id,
+      threadId: target.id,
+      environmentId: target.environmentId,
+      workspaceId: target.workspaceId,
+    });
+    return definition;
+  }
+
+  #admitTargetThread(
+    input: AutomationThreadInput,
     context: TrustedToolInvocationContext,
   ): string {
     const threadId = targetThreadId(input, context);
@@ -337,11 +573,15 @@ export class AutomationAgentToolService {
     return {
       ...rest,
       ...(lastRun ? { lastRun: toolLastRun(lastRun) } : {}),
-      upcoming: this.#automations.preview(
-        definition.schedule,
-        UPCOMING_OCCURRENCE_COUNT,
-        now,
-      ),
+      upcoming:
+        definition.schedule.kind === "date_time" &&
+        Date.parse(definition.schedule.runAt) <= now
+          ? []
+          : this.#automations.preview(
+              definition.schedule,
+              UPCOMING_OCCURRENCE_COUNT,
+              now,
+            ),
     };
   }
 }
@@ -351,7 +591,7 @@ function scope(context: TrustedToolInvocationContext) {
 }
 
 function targetThreadId(
-  input: AutomationTargetInput,
+  input: AutomationThreadInput,
   context: TrustedToolInvocationContext,
 ): string {
   const threadId = input.threadId ?? context.defaults.threadId;
@@ -365,9 +605,14 @@ function targetThreadId(
 }
 
 function hasDefinitionChange(input: AutomationUpdateToolInput): boolean {
-  return ["prompt", "runMode", "schedule", "misfirePolicy", "precheck"].some(
-    (field) => Object.prototype.hasOwnProperty.call(input, field),
-  );
+  return [
+    "name",
+    "prompt",
+    "runMode",
+    "schedule",
+    "misfirePolicy",
+    "precheck",
+  ].some((field) => Object.prototype.hasOwnProperty.call(input, field));
 }
 
 function cancellationError(): DOMException {
@@ -396,4 +641,19 @@ function toolRun(run: ThreadAutomationRun): AutomationToolRun {
     ...toolPrecheck
   } = precheck;
   return { ...rest, precheck: toolPrecheck };
+}
+
+function validateMisfirePolicy(
+  schedule: AutomationSchedule,
+  policy: AutomationMisfirePolicy | null,
+): void {
+  if ((schedule.kind === "date_time") !== (policy === null))
+    throw new ZodError([
+      {
+        code: "custom",
+        path: ["misfirePolicy"],
+        message:
+          "One-shots require null; recurring schedules require coalesce or skip.",
+      },
+    ]);
 }

@@ -174,7 +174,7 @@ function discoveryFixture() {
   ]);
   const automations = new Map<
     string,
-    NonNullable<NormalizedThreadSummary["automation"]>
+    NonNullable<NormalizedThreadSummary["automations"]>
   >();
   const management = new AgentManagementService({
     database: current.database,
@@ -196,7 +196,7 @@ function discoveryFixture() {
             backingState: "unbound",
             available: true,
             inventoryState: state.inventoryState,
-            automation: automations.get(id) ?? null,
+            automations: automations.get(id) ?? { totalCount: 0, enabledCount: 0, pausedCount: 0, exhaustedCount: 0, inFlightCount: 0, attentionCount: 0, revision: 0 },
           };
         }),
     } as never,
@@ -257,46 +257,17 @@ function discoveryFixture() {
 }
 
 describe("AgentManagementService discovery", () => {
-  it("keeps the thread.list automation summary to its frozen fields", async () => {
+  it("includes bounded automation counts when listing threads", async () => {
     const current = discoveryFixture();
     try {
-      const lastRun = {
-        id: "run-1",
-        state: "completed" as const,
-        occurrence: "scheduled" as const,
-        scheduledFor: new Date(8_000).toISOString(),
-        finishedAt: new Date(8_100).toISOString(),
-        resultThreadId: current.older.id,
-      };
-      const frozen = {
-        status: "enabled" as const,
-        runMode: "same_thread" as const,
-        scheduleKind: "cron" as const,
-        nextRunAt: new Date(9_000).toISOString(),
-        revision: 2,
-        hasPrecheck: false,
-        lastRun,
-      };
-      current.automations.set(current.older.id, {
-        ...frozen,
-        runsRevision: 7,
-        schedule: { kind: "cron", expression: "0 2 * * *", timeZone: "UTC" },
-        misfirePolicy: "skip",
-        promptPreview: "Review the repository.",
-        lastRun: {
-          ...lastRun,
-          turn: { outcome: "failed", endedAt: new Date(8_500).toISOString() },
-        },
-      });
+      const summary = { totalCount: 3, enabledCount: 1, pausedCount: 1,
+        exhaustedCount: 1, inFlightCount: 0, attentionCount: 1, revision: 7,
+        nextRunAt: new Date(9_000).toISOString() };
+      current.automations.set(current.older.id, summary);
       const page = await current.management.listThreads(
-        current.scope,
-        undefined,
-        { pageSize: 10 },
-        current.environmentAuthority,
+        current.scope, undefined, { pageSize: 10 }, current.environmentAuthority,
       );
-      expect(
-        page.items.find(({ id }) => id === current.older.id)?.automation,
-      ).toEqual(frozen);
+      expect(page.items.find(({ id }) => id === current.older.id)?.automations).toEqual(summary);
     } finally {
       current.database.close();
     }

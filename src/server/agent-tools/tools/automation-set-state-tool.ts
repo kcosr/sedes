@@ -1,17 +1,17 @@
 import { Type } from "typebox";
 import type { AgentToolDefinition } from "../contracts/agent-tool-contracts.js";
 import type {
-  AgentAutomationDefinition,
+  AgentAutomationMutationResult,
   AutomationAgentToolService,
   AutomationSetStateToolInput,
 } from "./automation-agent-tool-service.js";
 import {
-  automationDefinitionToolOutputSchema,
+  automationMutationToolOutputSchema,
   automationReadWaitCeilings,
   automationToolExposure,
   automationToolInputSchema,
   automationToolPresentations,
-  optionalAutomationThreadId,
+  requiredAutomationId,
 } from "./automation-tool-schemas.js";
 import { CANONICAL_AGENT_TOOL_MANIFEST } from "../registry/canonical-agent-tool-manifest.js";
 
@@ -20,7 +20,10 @@ export const automationSetStateToolId =
 
 export function createAutomationSetStateToolDefinition(
   service: AutomationAgentToolService,
-): AgentToolDefinition<AutomationSetStateToolInput, AgentAutomationDefinition> {
+): AgentToolDefinition<
+  AutomationSetStateToolInput,
+  AgentAutomationMutationResult
+> {
   return {
     ...CANONICAL_AGENT_TOOL_MANIFEST["automation.set_state"],
     inputSchema: automationToolInputSchema({
@@ -29,9 +32,9 @@ export function createAutomationSetStateToolDefinition(
         maximum: Number.MAX_SAFE_INTEGER,
       }),
       action: Type.String({ maxLength: 6, enum: ["enable", "pause"] }),
-      threadId: optionalAutomationThreadId,
+      automationId: requiredAutomationId,
     }),
-    outputSchema: automationDefinitionToolOutputSchema,
+    outputSchema: automationMutationToolOutputSchema,
     requiredCapabilities: [],
     execution: {
       form: "inline",

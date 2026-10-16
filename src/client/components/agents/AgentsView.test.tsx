@@ -10,6 +10,11 @@ import {
   within,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type {
+  AgentToolBootstrapPolicy,
+  SavedAgentOptionsRequest,
+  SavedAgentOptionsResult,
+} from "../../../shared/index.js";
 import { ApiError, type ApiClient } from "../../api/ApiClient.js";
 import { AgentClientStore } from "../../agents/AgentClientStore.js";
 import { navigate, settingsPath } from "../../app/router.js";
@@ -66,10 +71,138 @@ const detail = {
 
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
   navigate(agentsPath(), { replace: true });
 });
 
 describe("AgentsView", () => {
+  it("loads the current catalog so retired saved tools can be removed without losing other selections", async () => {
+    Object.assign(window.HTMLElement.prototype, { scrollIntoView: vi.fn() });
+    vi.stubGlobal("ResizeObserver", class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    });
+    const policy: AgentToolBootstrapPolicy = {
+      enabled: true,
+      enabledToolIds: [
+        "automation.get",
+        "thread.status",
+        "automation.resolve",
+        "automation.acknowledge",
+      ],
+      presentation: { surface: "cli", mode: "individual" },
+      accessBoundary: "thread",
+    };
+    const repairedPolicy = {
+      ...policy,
+      enabledToolIds: ["automation.get", "thread.status"],
+    };
+    const target = { id: "target-1", label: { text: "Pi" }, backend };
+    const defaultPolicy = {
+      enabled: false,
+      enabledToolIds: [],
+      presentation: { surface: "native" as const, mode: "progressive" as const },
+      accessBoundary: "environment" as const,
+    };
+    const getSavedAgentOptions = vi.fn(
+      async (input: SavedAgentOptionsRequest): Promise<SavedAgentOptionsResult> => {
+        if (!input.targetId) return { kind: "targets", targets: [target] };
+        if (input.sedesTools) {
+          throw new ApiError(409, "invalid_transition", "A selected Sedes tool is unavailable.", false);
+        }
+        return {
+          kind: "configuration",
+          target,
+          configuration: { backendTypeId: "pi", fields: [], canonicalOverrides: [] },
+          sedesTools: {
+            defaultPolicy,
+            resolvedPolicy: defaultPolicy,
+            presentationOptions: [
+              { surface: "native", modes: ["progressive"] },
+              { surface: "cli", modes: ["progressive", "individual"] },
+            ],
+            groups: [{
+              id: "current-tools",
+              label: { text: "Current tools" },
+              description: { text: "Available Sedes tools" },
+              order: 0,
+              tools: [
+                { id: "automation.get", label: "Get automation" },
+                { id: "thread.status", label: "Thread status" },
+              ].map(({ id, label }, order) => ({
+                id,
+                label: { text: label },
+                order,
+                effects: { application: "read", modelUsage: "none", external: "none" },
+                enabled: false,
+                available: true,
+              })),
+            }],
+          },
+        };
+      },
+    );
+    const updateSavedAgent = vi.fn().mockResolvedValue({
+      ...detail, sedesTools: repairedPolicy, revision: 1,
+    });
+    const api = {
+      listSavedAgents: vi.fn().mockResolvedValue({ items: [summary] }),
+      getSavedAgent: vi.fn().mockResolvedValue({ ...detail, sedesTools: policy }),
+      getSavedAgentOptions,
+      getEnvironmentVariablePreview: vi.fn().mockResolvedValue({
+        snapshot: { version: 1, layers: { environment: {}, backend: {}, agent: {}, thread: {} } },
+        revision: { configurationRevision: 0 },
+        startup: { supported: true },
+      }),
+      updateSavedAgent,
+    } as unknown as ApiClient;
+    navigate(agentPath(agentId), { replace: true });
+    render(<AgentsView store={new AgentClientStore(api)} {...locations} />);
+
+    const configureUsing = await screen.findByRole("combobox", { name: "Configure using" });
+    await waitFor(() => expect(configureUsing).toBeEnabled());
+    fireEvent.click(configureUsing);
+    fireEvent.click(await screen.findByRole("option", { name: "Pi" }));
+
+    const removeResolve = await screen.findByRole("checkbox", {
+      name: "Remove unavailable tool automation.resolve",
+    });
+    expect(removeResolve).toBeChecked();
+    expect(screen.getByRole("checkbox", {
+      name: "Remove unavailable tool automation.acknowledge",
+    })).toBeChecked();
+    expect(screen.getByRole("combobox", { name: "Sedes tool surface" })).toHaveTextContent("Sedes CLI");
+    expect(screen.getByRole("combobox", { name: "Sedes tool presentation" })).toHaveTextContent("Individual operations");
+    expect(screen.getByRole("combobox", { name: "Access boundary" })).toHaveTextContent("Ask outside this thread");
+    fireEvent.click(screen.getByRole("button", { name: "Current tools" }));
+    expect(screen.getByRole("checkbox", { name: "Get automation" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Thread status" })).toBeChecked();
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+
+    fireEvent.click(removeResolve);
+    const removeAcknowledge = screen.getByRole("checkbox", {
+      name: "Remove unavailable tool automation.acknowledge",
+    });
+    expect(removeAcknowledge).toBeChecked();
+    await waitFor(() => expect(removeAcknowledge).toBeEnabled());
+    fireEvent.click(removeAcknowledge);
+    const save = screen.getByRole("button", { name: "Save" });
+    await waitFor(() => expect(save).toBeEnabled());
+    fireEvent.click(save);
+
+    await waitFor(() => expect(updateSavedAgent).toHaveBeenCalledWith(agentId, {
+      expectedRevision: 0,
+      authoringContext: { workspaceId: workspace.id, targetId: target.id },
+      backendOverrides: [],
+      sedesTools: repairedPolicy,
+    }));
+    expect(getSavedAgentOptions).toHaveBeenCalledWith({
+      workspaceId: workspace.id, targetId: target.id, overrides: [],
+    }, expect.any(AbortSignal));
+    expect(getSavedAgentOptions.mock.calls.every(([input]) => input.sedesTools === undefined)).toBe(true);
+  });
+
   it("summarizes an explicit Agent environment-access policy", async () => {
     const explicitSummary = {
       ...summary,

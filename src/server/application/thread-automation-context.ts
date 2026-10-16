@@ -1,0 +1,134 @@
+import type Database from "better-sqlite3";
+import type { NormalizedThreadAttention } from "../../shared/protocol/conversation.js";
+import type { RequestScope } from "../identity/identity-provider.js";
+import { boundDisplayText } from "../conversations/payload-policy.js";
+import {
+  anchorNoticeRunIdSql,
+  anchorNoticeSql,
+  latestDecisiveRunIdSql,
+  resultThreadNoticeSql,
+  runFailureSql,
+  runHasProblemSql,
+  runInterruptedSql,
+  runNeutralNoticeSql,
+} from "../db/repositories/automation-read-sql.js";
+
+export const MAXIMUM_THREAD_AUTOMATION_CONTEXTS = 20;
+
+export function threadAutomationChildProblemSql(thread: string): string {
+  return `EXISTS (
+    SELECT 1 FROM automation_runs AS child_problem
+    INNER JOIN automation_definitions AS child_definition
+      ON child_definition.tenant_id = child_problem.tenant_id
+      AND child_definition.owner_principal_id = child_problem.owner_principal_id
+      AND child_definition.id = child_problem.automation_id
+      AND child_definition.deleted_at IS NULL
+    WHERE child_problem.tenant_id = ${thread}.tenant_id
+      AND child_problem.owner_principal_id = ${thread}.owner_principal_id
+      AND child_problem.child_thread_id = ${thread}.id
+      AND child_problem.acknowledged_at IS NULL
+      AND ${runHasProblemSql("child_problem")}
+  )`;
+}
+
+/**
+ * Neutral notices: successful manual invocations create none, while an
+ * interrupted turn has one that needs no action.
+ */
+export function threadAutomationTriggeredSql(thread: string): string {
+  return `(EXISTS (
+    SELECT 1 FROM automation_definitions AS source_definition
+    INNER JOIN automation_runs AS source_run
+      ON source_run.tenant_id = source_definition.tenant_id
+      AND source_run.owner_principal_id = source_definition.owner_principal_id
+      AND source_run.automation_id = source_definition.id
+      AND source_run.id = ${latestDecisiveRunIdSql("source_definition")}
+    WHERE source_definition.tenant_id = ${thread}.tenant_id
+      AND source_definition.owner_principal_id = ${thread}.owner_principal_id
+      AND source_definition.anchor_thread_id = ${thread}.id
+      AND source_definition.deleted_at IS NULL
+      AND ${runNeutralNoticeSql("source_run")}
+      AND source_run.child_thread_id IS NULL
+      AND source_run.acknowledged_at IS NULL
+  ) OR EXISTS (
+    SELECT 1 FROM automation_runs AS child_run
+    INNER JOIN automation_definitions AS child_definition
+      ON child_definition.tenant_id = child_run.tenant_id
+      AND child_definition.owner_principal_id = child_run.owner_principal_id
+      AND child_definition.id = child_run.automation_id
+      AND child_definition.deleted_at IS NULL
+    WHERE child_run.tenant_id = ${thread}.tenant_id
+      AND child_run.owner_principal_id = ${thread}.owner_principal_id
+      AND child_run.child_thread_id = ${thread}.id
+      AND ${runNeutralNoticeSql("child_run")}
+      AND child_run.acknowledged_at IS NULL
+  ))`;
+}
+
+export function readThreadAutomationContexts(
+  database: Database.Database,
+  scope: RequestScope,
+  threadId: string,
+): NormalizedThreadAttention["automationContexts"] {
+  const columns = `definition.id AS automationId, definition.name,
+    run.id AS runId, run.anchor_thread_id AS sourceThreadId,
+    CASE WHEN ${runFailureSql("run")} OR ${runInterruptedSql("run")}
+      THEN coalesce(run.turn_settled_at, run.finished_at, run.updated_at)
+      ELSE coalesce(run.finished_at, run.updated_at) END AS triggeredAt,
+    CASE WHEN run.state = 'uncertain' THEN 'uncertain'
+      WHEN ${runFailureSql("run")} THEN 'failed'
+      WHEN ${runInterruptedSql("run")} THEN 'interrupted'
+      ELSE 'triggered' END AS outcome,
+    CASE WHEN run.state = 'completed' AND run.turn_outcome = 'failed'
+      THEN 'The automation’s agent turn failed.'
+      ELSE run.error_diagnostic END AS diagnostic`;
+  const rows = database.prepare(`
+    SELECT * FROM (
+      SELECT ${columns}
+      FROM automation_definitions AS definition
+      INNER JOIN automation_runs AS run
+        ON run.tenant_id = definition.tenant_id
+        AND run.owner_principal_id = definition.owner_principal_id
+        AND run.automation_id = definition.id
+        AND run.id = ${anchorNoticeRunIdSql("definition")}
+      WHERE definition.tenant_id = ? AND definition.owner_principal_id = ?
+        AND definition.anchor_thread_id = ? AND definition.deleted_at IS NULL
+        AND run.acknowledged_at IS NULL
+        AND ${anchorNoticeSql("run")}
+      UNION ALL
+      SELECT ${columns}
+      FROM automation_runs AS run
+      INNER JOIN automation_definitions AS definition
+        ON definition.tenant_id = run.tenant_id
+        AND definition.owner_principal_id = run.owner_principal_id
+        AND definition.id = run.automation_id
+      WHERE run.tenant_id = ? AND run.owner_principal_id = ?
+        AND run.child_thread_id = ? AND definition.deleted_at IS NULL
+        AND ${resultThreadNoticeSql("run")}
+        AND run.acknowledged_at IS NULL
+    ) ORDER BY CASE outcome WHEN 'uncertain' THEN 0 WHEN 'failed' THEN 1 ELSE 2 END,
+      triggeredAt DESC, automationId, runId
+    LIMIT ?
+  `).all(
+    scope.tenantId, scope.principalId, threadId,
+    scope.tenantId, scope.principalId, threadId,
+    MAXIMUM_THREAD_AUTOMATION_CONTEXTS,
+  ) as {
+    automationId: string;
+    name: string;
+    runId: string;
+    sourceThreadId: string;
+    triggeredAt: number;
+    outcome: "triggered" | "interrupted" | "failed" | "uncertain";
+    diagnostic: string | null;
+  }[];
+  return rows.map((row) => ({
+    automationId: row.automationId,
+    name: row.name,
+    runId: row.runId,
+    sourceThreadId: row.sourceThreadId,
+    triggeredAt: new Date(row.triggeredAt).toISOString(),
+    outcome: row.outcome,
+    ...(row.diagnostic === null ? {} : { diagnostic: boundDisplayText(row.diagnostic) }),
+  }));
+}

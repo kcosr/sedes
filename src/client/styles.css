@@ -4087,12 +4087,20 @@ textarea:disabled {
 }
 
 
+/* The automation pages add their "‹" link after the trigger, spaced as in
+   the compact Settings header; a lone trigger is unaffected. */
 .pane-nav-header {
   display: none;
   min-height: var(--workbench-bar-height);
   flex: 0 0 auto;
   align-items: center;
+  gap: var(--space-2);
   padding: var(--space-1-5) 10px;
+}
+
+/* Match the compact Settings header's divider on automation pages. */
+.automation-pane-nav-header:has(> .settings-view-back-slot:not(:empty)) {
+  border-bottom: 1px solid var(--border-soft);
 }
 
 .pane-host-nav-header {
@@ -4537,7 +4545,8 @@ textarea:disabled {
 
 /* The native clear control takes the bar's neutral icon colour instead of
    the platform's accent blue. */
-.thread-find-control input::-webkit-search-cancel-button {
+.thread-find-control input::-webkit-search-cancel-button,
+.search-box input::-webkit-search-cancel-button {
   width: var(--icon-sm);
   height: var(--icon-sm);
   margin: 0;
@@ -4548,7 +4557,8 @@ textarea:disabled {
     center / contain no-repeat;
 }
 
-.thread-find-control input::-webkit-search-cancel-button:hover {
+.thread-find-control input::-webkit-search-cancel-button:hover,
+.search-box input::-webkit-search-cancel-button:hover {
   background: var(--foreground);
 }
 

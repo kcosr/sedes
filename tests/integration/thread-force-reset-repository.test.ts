@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { AutomationForkTargetResolver } from "../../src/server/runtime/automation-fork-target.js";
+import { AutomationDispatcher } from "../../src/server/runtime/automation-dispatcher.js";
+import { AutomationService } from "../../src/server/domain/automation-service.js";
 import type Database from "better-sqlite3";
 import { parseResolvedBackendConfiguration } from "../support/resolved-backend-configuration.js";
 import { openOverlayDatabase } from "../../src/server/db/database.js";
@@ -386,7 +389,7 @@ function archiveService(
             stateChangedAt: new Date(
               aggregate.inventory.stateChangedAt,
             ).toISOString(),
-            automation: null,
+            automations: { totalCount: 0, enabledCount: 0, pausedCount: 0, exhaustedCount: 0, inFlightCount: 0, attentionCount: 0, revision: 0 },
             attention: {
               wake: false,
               automationContext: null,
@@ -867,14 +870,14 @@ describe("thread force-reset repository", () => {
               attachmentIds: [],
               source: {
                 kind: "automation",
-                expectedThreadRevision: revision(current, current.rootId),
+                claimToken: "automation-reset-claim",
                 automationId: seeded.automationId,
                 automationRunId: seeded.automationRunId,
               },
               now: 720,
             },
           ),
-        ).toThrow("Force-reset automation cannot enqueue input");
+        ).toThrow("The automation dispatch no longer owns an admissible claim.");
         expect(() =>
           new ConversationCreationRepository(current.database).prepare(
             current.scope,
@@ -1170,6 +1173,234 @@ describe("thread force-reset repository", () => {
     }
   });
 
+  it("preserves a snoozed one-shot and its checked prompt through an unrelated runtime reset", async () => {
+    const current = fixture();
+    let dispatcher: AutomationDispatcher | undefined;
+    try {
+      bind(current, current.rootId);
+      const automations = new AutomationRepository(current.database);
+      const inventory = new InventoryRepository(current.database);
+      const definition = automations.createDefinition(current.scope, {
+        id: "waiting-reminder", anchorThreadId: current.rootId, name: "Reminder",
+        prompt: "Send the reminder", precheck: { command: "printf context", timeoutSeconds: 30, includeStdout: true },
+        runMode: "same_thread", enabled: true,
+        schedule: { kind: "date_time", runAt: 500 }, misfirePolicy: null,
+        nextRunAt: 500, now: 400,
+      });
+      const run = automations.claimScheduledOccurrence(current.scope, definition.id, {
+        runId: "waiting-reminder-run", occurrenceKey: "scheduled:500", scheduledFor: 500,
+        lastScheduledAt: 500, nextRunAt: null, coalescedCount: 0,
+        claimToken: "reminder-claim", leaseExpiresAt: 10_000,
+        dispatchMutationId: "reminder-dispatch", now: 500,
+      }).run;
+      automations.beginPrecheck(current.scope, definition.id, run.id, {
+        claimToken: run.claimToken!, now: 501,
+      });
+      automations.passPrecheck(current.scope, definition.id, run.id, {
+        claimToken: run.claimToken!, effectivePrompt: "Send the reminder\nCaptured context",
+        stdoutAppendix: "Captured context", stdoutIncluded: true,
+        stdoutBytes: 16, durationMilliseconds: 1, now: 502,
+      });
+      inventory.transitionInventory(current.scope, current.rootId, {
+        expectedRevision: inventory.getInventory(current.scope, current.rootId).inventoryRevision,
+        mutationId: "snooze-reminder", now: 503,
+        change: { action: "snooze", snoozedUntil: 1_000, wakeReminderText: null },
+      });
+      const waiting = automations.checkRunAdmission(current.scope, definition.id, run.id, {
+        claimToken: run.claimToken!, dispatch: false, now: 504,
+      });
+      expect(waiting).toMatchObject({ state: "deferred", deferredReason: "snoozed", eligibleAt: 1_000 });
+      const resets = new ThreadForceResetRepository(current.database);
+      expect(resets.impact(current.scope, current.rootId)).toMatchObject({ resettable: false, blockers: [] });
+      const runtime = { kind: "conversation_runtime" as const, threadId: current.rootId,
+        generation: "unrelated-runtime", runState: "running" as const, activeTurnId: "unrelated-turn" };
+      const impact = resets.impact(current.scope, current.rootId, [], [runtime]);
+      expect(impact.blockers).toEqual([{ kind: "conversation_runtime", count: 1 }]);
+      const reset = resets.forceReset(current.scope, current.rootId, {
+        expectedBlockerFingerprint: impact.blockerFingerprint,
+        mutationId: "reset-unrelated-runtime", conversationRuntimes: [runtime], now: 600,
+      });
+      expect(reset.resetRunAnchorThreadIds).toEqual([]);
+      expect(automations.getRun(current.scope, definition.id, run.id)).toEqual(waiting);
+      expect(automations.isDefinitionExhausted(current.scope, definition.id)).toBe(false);
+
+      let now = 999;
+      const precheck = vi.fn();
+      const dispatch = vi.fn(async () => ({ status: "accepted" as const, targetThreadId: current.rootId }));
+      const service = new AutomationService({
+        repository: automations, inventory, publisher: { publish: vi.fn() },
+        executionPolicy: { assertCanAutomate: vi.fn() },
+      });
+      dispatcher = new AutomationDispatcher({
+        queueObserver: { reconcile: () => undefined },
+        repository: automations, inventory, service, prechecks: { execute: precheck },
+        gateway: { dispatch }, now: () => now,
+      });
+      service.bindDispatcher(dispatcher);
+      await service.reconcileDue(now);
+      expect(dispatch).not.toHaveBeenCalled();
+      now = 1_000;
+      await service.reconcileDue(now);
+      await vi.waitFor(() => expect(automations.getRun(current.scope, definition.id, run.id).state).toBe("completed"));
+      await service.reconcileDue(1_001);
+      expect(dispatch).toHaveBeenCalledTimes(1);
+      expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({
+        automationRunId: run.id, dispatchMutationId: "reminder-dispatch",
+        prompt: "Send the reminder\nCaptured context",
+      }));
+      expect(precheck).not.toHaveBeenCalled();
+      expect(automations.getRun(current.scope, definition.id, run.id)).toMatchObject({
+        precheckStatus: "passed", precheckFinishedAt: 502, precheckStdout: "Captured context",
+      });
+      expect(automations.isExhausted(current.scope, definition.id)).toBe(true);
+    } finally {
+      await dispatcher?.dispose();
+      current.database.close();
+    }
+  });
+
+  it.each(["source", "result"] as const)("fails a deferred copied run when its %s creation is force-reset despite a future snooze", async (resetTarget) => {
+    const current = fixture();
+    try {
+      const automations = new AutomationRepository(current.database);
+      const bindings = new ConversationBindingRepository(current.database);
+      const inventory = new InventoryRepository(current.database);
+      const creation = new ConversationCreationRepository(current.database);
+      const definition = automations.createDefinition(current.scope, {
+        id: "deferred-copy", anchorThreadId: current.rootId, name: "Deferred copy",
+        prompt: "Send the update", precheck: null, runMode: "clone", enabled: true,
+        schedule: { kind: "date_time", runAt: 500 }, misfirePolicy: null,
+        nextRunAt: 500, now: 400,
+      });
+      const run = automations.claimScheduledOccurrence(current.scope, definition.id, {
+        runId: "deferred-copy-run", occurrenceKey: "scheduled:500", scheduledFor: 500,
+        lastScheduledAt: 500, nextRunAt: null, coalescedCount: 0,
+        claimToken: "copy-claim", leaseExpiresAt: 10_000,
+        dispatchMutationId: "copy-dispatch", now: 500,
+      }).run;
+      automations.checkRunAdmission(current.scope, definition.id, run.id, {
+        claimToken: run.claimToken!, dispatch: true, now: 501,
+      });
+      current.database.transaction(() => {
+        bindings.recordThreadConfigurationCopyReceipt(current.scope, current.childId, {
+          sourceApplicationThreadId: current.rootId, workspaceId: current.workspaceId,
+          targetId: inventory.getThread(current.scope, current.childId).thread.connectionProfileId,
+          title: "Copied result", mutationId: run.dispatchMutationId,
+          automation: { automationId: definition.id, automationRunId: run.id }, now: 502,
+        });
+        automations.bindResultChild(current.scope, definition.id, run.id, {
+          claimToken: run.claimToken!, childThreadId: current.childId, now: 502,
+        });
+      })();
+      // Independent user input can start either draft after the copy is published.
+      const resetThreadId = resetTarget === "source" ? current.rootId : current.childId;
+      creation.prepare(current.scope, resetThreadId, {
+        attemptId: "user-copy-start", mutationId: "user-copy-start",
+        expectedThreadRevision: revision(current, resetThreadId),
+        creationKind: "first_input", sourceKind: "direct_input",
+        initialInputText: "User input", initialAttachmentIds: [],
+        backendCreationCorrelation: "user-copy-start", now: 503,
+      });
+      creation.markExternalCallStarted(current.scope, resetThreadId, "user-copy-start", 504);
+      creation.markRecoveryRequired(current.scope, resetThreadId, "user-copy-start", {
+        expected: "external_call_started", diagnostic: "Creation acceptance unknown", now: 505,
+      });
+      expect(inventory.getThread(current.scope, resetThreadId).thread.backingState).toBe("creation_unknown");
+      automations.deferRun(current.scope, definition.id, run.id, {
+        expectedState: "dispatching", claimToken: run.claimToken!,
+        reason: "source_recovery", eligibleAt: null, now: 506,
+      });
+      inventory.transitionInventory(current.scope, current.rootId, {
+        expectedRevision: inventory.getInventory(current.scope, current.rootId).inventoryRevision,
+        mutationId: "snooze-copy-source", now: 507,
+        change: { action: "snooze", snoozedUntil: 100_000, wakeReminderText: null },
+      });
+      current.database.transaction(() => automations.refreshDeferredBlock(
+        current.scope, automations.getRun(current.scope, definition.id, run.id), 508,
+      )).immediate();
+      expect(automations.listDeferredRuns(600, 10)).toEqual([]);
+      const resets = new ThreadForceResetRepository(current.database);
+      const impact = resets.impact(current.scope, resetThreadId);
+      expect(impact.blockers).toEqual([
+        { kind: "creation_attempt", count: 1 },
+        { kind: "thread_creation_state", count: 1 },
+      ]);
+      const reset = resets.forceReset(current.scope, resetThreadId, {
+        expectedBlockerFingerprint: impact.blockerFingerprint, mutationId: "reset-copied-result", now: 600,
+      });
+      expect(reset.resetRunAnchorThreadIds).toEqual([]);
+      expect(automations.getRun(current.scope, definition.id, run.id)).toMatchObject({ state: "deferred", forceResetAt: null });
+      expect(automations.listDeferredRuns(601, 10)).toHaveLength(1);
+      const onRunLifecycle = vi.fn();
+      const onReconcileError = vi.fn();
+      const dispatch = vi.fn();
+      const service = new AutomationService({
+        repository: automations, inventory,
+        publisher: { publish: vi.fn() },
+        executionPolicy: { assertCanAutomate: vi.fn() },
+        onRunLifecycle, onReconcileError,
+      });
+      service.bindDispatcher({ availableCapacity: () => 1, dispatch } as never);
+      await service.reconcileDue(601);
+      const abandoned = automations.getRun(current.scope, definition.id, run.id);
+      expect(abandoned).toMatchObject({
+        state: "failed", errorCode: "automation_source_force_reset", forceResetAt: null,
+        childThreadId: current.childId, dispatchMutationId: "copy-dispatch",
+        deferredReason: "snoozed", eligibleAt: null, suppressionPending: false,
+      });
+      expect(service.get(current.scope, definition.id).attention).toMatchObject({ kind: "failed", runId: run.id });
+      await service.reconcileDue(602);
+      expect(onRunLifecycle).toHaveBeenCalledTimes(1);
+      expect(onRunLifecycle).toHaveBeenCalledWith(current.scope, expect.objectContaining({ event: "automation.failed" }));
+      expect(dispatch).not.toHaveBeenCalled();
+      expect(onReconcileError).not.toHaveBeenCalled();
+      expect(automations.listDeferredRuns(100_000, 10)).toEqual([]);
+      expect(automations.getNearestDeadline()).toBeNull();
+      expect(automations.isExhausted(current.scope, definition.id)).toBe(true);
+      expect(() => automations.reclaimDeferredRun(current.scope, definition.id, run.id, {
+        claimToken: "late-claim", leaseExpiresAt: 100_000, now: 700,
+      })).toThrow("deferred run changed");
+      const copy = vi.fn();
+      const resolver = new AutomationForkTargetResolver({
+        automations, bindings, creation, inventory,
+        savedAgents: { createAutomationForkFromDraft: copy } as never,
+        policy: { assertCanAutomate: vi.fn() },
+      });
+      if (resetTarget === "result") {
+        await expect(resolver.resolve({
+          scope: current.scope, automationId: definition.id, automationRunId: run.id,
+          anchorThreadId: current.rootId, dispatchMutationId: run.dispatchMutationId,
+          claimToken: run.claimToken!, runMode: "clone", prompt: run.promptSnapshot!, resultTitleSuffix: " update",
+        })).rejects.toMatchObject({ code: "invalid_transition" });
+      }
+      expect(copy).not.toHaveBeenCalled();
+      expect(automations.getRun(current.scope, definition.id, run.id)).toEqual(abandoned);
+      expect(current.database.prepare("SELECT count(*) AS count FROM application_threads").get()).toEqual({ count: 3 });
+
+      // New work anchored to the abandoned source also terminates before a shell
+      // precheck or a provider operation can be started, retaining the one-shot.
+      const later = automations.createDefinition(current.scope, {
+        id: "after-reset", anchorThreadId: resetThreadId, name: "After reset",
+        prompt: "Should not submit", precheck: { command: "exit 0", timeoutSeconds: 30, includeStdout: false },
+        runMode: "same_thread", enabled: true, schedule: { kind: "date_time", runAt: 800 },
+        misfirePolicy: null, nextRunAt: 800, now: 700,
+      });
+      const laterRun = automations.claimScheduledOccurrence(current.scope, later.id, {
+        runId: "after-reset-run", occurrenceKey: "scheduled:800", scheduledFor: 800,
+        lastScheduledAt: 800, nextRunAt: null, coalescedCount: 0,
+        claimToken: "later-claim", leaseExpiresAt: 10_000,
+        dispatchMutationId: "after-reset-dispatch", now: 800,
+      }).run;
+      expect(automations.checkRunAdmission(current.scope, later.id, laterRun.id, {
+        claimToken: laterRun.claimToken!, dispatch: false, now: 801,
+      })).toMatchObject({ state: "failed", errorCode: "automation_source_force_reset", precheckStatus: "pending" });
+      expect(automations.getDefinition(current.scope, later.id)).toMatchObject({ enabled: false, completedAt: 801, deletedAt: null });
+      expect(automations.getNearestDeadline()).toBeNull();
+    } finally {
+      current.database.close();
+    }
+  });
+
   it("resets an automation run from the clone child it created and names its anchor", () => {
     const current = fixture();
     try {
@@ -1386,7 +1617,7 @@ describe("thread force-reset repository", () => {
 
       let thrown: unknown;
       try {
-        automations.bindForkChild(current.scope, automation.id, run.id, {
+        automations.bindResultChild(current.scope, automation.id, run.id, {
           childThreadId: current.childId,
           now: 710,
         });
@@ -1396,7 +1627,7 @@ describe("thread force-reset repository", () => {
       expect(thrown).toBeInstanceOf(DomainError);
       expect(thrown).toMatchObject({
         code: "conflict",
-        message: "The automation branch lineage changed in another operation.",
+        message: "The automation claim is no longer active.",
       });
     } finally {
       current.database.close();

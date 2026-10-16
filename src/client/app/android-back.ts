@@ -19,7 +19,8 @@ import { App as CapacitorApp } from "@capacitor/app";
  * 6. Otherwise, on a thread or home route the mobile navigation drawer
  *    opens — back from the landing page must not fall into WebView history
  *    (which resurfaces the previously viewed session).
- * 7. Otherwise the WebView history default is preserved.
+ * 7. Otherwise the WebView history default is preserved. Without history (a
+ *    cold deep link), a page with a "‹" link goes up where it leads.
  */
 export const OPEN_OVERLAY_SELECTORS = [
   // Raw Radix primitives do not carry the data-slot markers added by our UI
@@ -114,6 +115,7 @@ export type AndroidBackAction =
   | "clear-sidebar-filters"
   | "open-drawer"
   | "history-back"
+  | "go-up"
   | "ignore";
 
 export function resolveAndroidBackAction(input: {
@@ -124,6 +126,7 @@ export function resolveAndroidBackAction(input: {
   readonly drawerReturnsToThread: boolean;
   readonly onDrawerRoute: boolean;
   readonly canGoBack: boolean;
+  readonly canGoUp: boolean;
 }): AndroidBackAction {
   if (input.overlayOpen) return "close-overlay";
   if (input.drawerOpen && input.sidebarSearchActive) {
@@ -136,7 +139,8 @@ export function resolveAndroidBackAction(input: {
     return input.drawerReturnsToThread ? "close-overlay" : "ignore";
   }
   if (input.onDrawerRoute) return "open-drawer";
-  return input.canGoBack ? "history-back" : "ignore";
+  if (input.canGoBack) return "history-back";
+  return input.canGoUp ? "go-up" : "ignore";
 }
 
 /** Whether the topmost open overlay is something above the drawer itself. */
@@ -158,12 +162,15 @@ export function installAndroidBackButton(handlers: {
   readonly isSidebarFiltersActive: () => boolean;
   readonly onClearSidebarFilters: () => void;
   readonly drawerReturnsToThread: () => boolean;
+  /** The shown page's way up, where its "‹" link leads, when it has one. */
+  readonly pageUp: () => (() => void) | undefined;
 }): () => void {
   let remove: (() => void) | undefined;
   let disposed = false;
   void CapacitorApp.addListener("backButton", (event) => {
     if (handleExposedBack()) return;
     const drawerOpen = handlers.isDrawerOpen();
+    const up = handlers.pageUp();
     const action = resolveAndroidBackAction({
       overlayOpen: hasOpenOverlayAboveDrawer(drawerOpen),
       drawerOpen,
@@ -172,6 +179,7 @@ export function installAndroidBackButton(handlers: {
       drawerReturnsToThread: handlers.drawerReturnsToThread(),
       onDrawerRoute: handlers.isOnDrawerRoute(),
       canGoBack: event.canGoBack,
+      canGoUp: up !== undefined,
     });
     if (action === "close-overlay") {
       // Cancelable, as a key press is: the layer that takes Escape cancels
@@ -195,6 +203,7 @@ export function installAndroidBackButton(handlers: {
       return;
     }
     if (action === "history-back") window.history.back();
+    if (action === "go-up") up?.();
   }).then((handle) => {
     const cleanup = () => void handle.remove();
     if (disposed) cleanup();

@@ -11,6 +11,7 @@ import {
   mkdir,
   mkdtemp,
   rm,
+  rename,
   stat,
   unlink,
   writeFile,
@@ -2084,7 +2085,17 @@ plugins = false
       observer = undefined;
 
       token = randomBytes(32).toString("base64url");
-      await writeFile(tokenPath, token, { encoding: "utf8", mode: 0o600 });
+      // Reconnects keep reading this credential while the daemon is stopped.
+      // Never expose the empty/truncated intermediate state of writeFile:
+      // invalid credentials correctly put the supervisor in a permanent circuit.
+      const replacementTokenPath = `${tokenPath}.next`;
+      await writeFile(replacementTokenPath, token, {
+        encoding: "utf8",
+        mode: 0o600,
+        flag: "wx",
+      });
+      await rename(replacementTokenPath, tokenPath);
+      expect((await lstat(tokenPath)).mode & 0o777).toBe(0o600);
       external = await startExternalCodexTcp({
         executablePath: secureCodexBinary,
         codexHome,

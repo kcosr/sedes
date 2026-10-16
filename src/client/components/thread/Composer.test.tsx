@@ -384,7 +384,7 @@ function snapshot(
     queue: [],
     composerCommands: [],
     usage: { context: { usedTokens: 0, windowTokens: 100 } },
-    attention: {},
+    attention: { automationContexts: [] },
     capabilities: {
       backend: { label: { text: "Pi" } },
       interactionMode: "interactive",
@@ -710,7 +710,7 @@ const referencedThread = {
   id: "616946aa-4574-41f7-bd70-d3a9edd56dbd", title: { text: "Other thread" },
   workspaceId: "reference-workspace",
   backend: { brand: "claude" },
-  runState: "idle", backingState: "bound", automation: null,
+  runState: "idle", backingState: "bound", automations: { totalCount: 0, enabledCount: 0, pausedCount: 0, exhaustedCount: 0, inFlightCount: 0, attentionCount: 0, revision: 0 },
   attention: { wake: false, automationContext: null, unseenCompletion: false, queueFailure: false },
   inventoryState: "active", groupId: null, groupAssignmentRevision: 0,
 } as NormalizedApplicationThreadSummary;
@@ -818,12 +818,9 @@ describe("thread references", () => {
     const store = new FakeComposerStore(snapshot(), "Keep this text");
     const backgroundWork = { agents: 1, commands: 1, other: 0 };
     const attention = { ...referencedThread.attention, unseenCompletion: true };
-    const automation = {
-      status: "enabled", runMode: "same_thread", scheduleKind: "interval",
-      schedule: { kind: "interval", anchorAt: "2026-10-13T00:00:00.000Z", everySeconds: 3600 },
-      misfirePolicy: "coalesce", promptPreview: "Review", revision: 0, runsRevision: 0, hasPrecheck: false,
-    } as const;
-    const active = { ...referencedThread, runState: "running" as const, backgroundWork, attention, automation };
+    const automations = { totalCount: 1, enabledCount: 1, pausedCount: 0,
+      exhaustedCount: 0, inFlightCount: 0, attentionCount: 0, revision: 0 };
+    const active = { ...referencedThread, runState: "running" as const, backgroundWork, attention, automations };
     const view = render(<Composer store={store as unknown as ThreadClientStore} applicationStore={referenceApplication([active]).store} />);
     const input = await openReferenceSuggestions();
     const assertStatus = (kind: string, label: string) => {
@@ -852,8 +849,8 @@ describe("thread references", () => {
     assertStatus("background-commands", "Background command running");
     update({ ...acknowledged, backgroundWork: { agents: 0, commands: 0, other: 0 } });
     assertStatus("automation", "Automation");
-    update({ ...acknowledged, backgroundWork: { agents: 0, commands: 0, other: 0 }, automation: { ...automation, status: "paused" } });
-    assertStatus("automation-paused", "Automation not started");
+    update({ ...acknowledged, backgroundWork: { agents: 0, commands: 0, other: 0 }, automations: { ...automations, enabledCount: 0, pausedCount: 1 } });
+    assertStatus("automation-paused", "Automation 1 paused");
   });
 
   it.each([

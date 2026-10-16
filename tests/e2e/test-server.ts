@@ -1,3 +1,4 @@
+import { AutomationForkTargetResolver } from "../../src/server/runtime/automation-fork-target.js";
 import { readFile, writeFile, unlink } from "node:fs/promises";
 import { ViewedImageCaptureService } from "../../src/server/output-artifacts/viewed-image-capture.js";
 import { UsageService } from "../../src/server/usage/usage-service.js";
@@ -1126,7 +1127,10 @@ function claudeSystemInit(
 class TestBackendPersistence implements BackendThreadPersistenceAdapter {
   readonly #submissionIntents = new Set<string>();
 
-  constructor(readonly database: Database.Database) {
+  constructor(
+    readonly database: Database.Database,
+    readonly settings: PiBackendThreadPersistenceAdapter,
+  ) {
     database.exec(`
       CREATE TABLE IF NOT EXISTS e2e_backend_binding_details (
         tenant_id TEXT NOT NULL,
@@ -1146,7 +1150,20 @@ class TestBackendPersistence implements BackendThreadPersistenceAdapter {
     return { toolAccess: "full" as const };
   }
 
-  initializeNewThread(): void {}
+  initializeNewThread(
+    scope: RequestScope,
+    applicationThreadId: string,
+    connection: AgentConnectionProfile,
+  ): void {
+    // Ordinary scripted drafts need the same durable configuration consumed
+    // by production's New with same settings and automation draft-copy paths.
+    this.settings.initializeResolvedNewThread(scope, applicationThreadId, connection, {
+      modelProvider: "memory",
+      modelId: "conformance-model",
+      thinkingLevel: "low",
+      toolAccess: "read_only",
+    });
+  }
 
   validateInitialization(): void {}
 
@@ -1526,6 +1543,26 @@ class TestActionPersistence implements ThreadActionPersistenceProvider {
         input.expectedThreadRevision,
       );
     if (changed.changes !== 1) throw new Error("e2e_thread_revision_changed");
+    const piSettings = new PiConversationRepository(this.database);
+    const modelValue = values.find(({ id }) => id === "model")!.desiredValue;
+    const [modelProvider, ...modelId] = modelValue.split("/");
+    const toolMode = values.find(({ id }) => id === "tool_access")!.desiredValue;
+    if (toolMode !== "read_only" && toolMode !== "ask" && toolMode !== "full") {
+      throw new Error("e2e_tool_access_invalid");
+    }
+    const persisted = piSettings.initializeSettings(scope, applicationThreadId, {
+      modelProvider: modelProvider!,
+      modelId: modelId.join("/"),
+      thinkingLevel: values.find(({ id }) => id === "thinking_level")!.desiredValue,
+      toolMode,
+    });
+    piSettings.updateSettings(scope, applicationThreadId, {
+      expectedRevision: persisted.revision,
+      modelProvider: modelProvider!,
+      modelId: modelId.join("/"),
+      thinkingLevel: values.find(({ id }) => id === "thinking_level")!.desiredValue,
+      toolMode,
+    });
     settingsByThread.set(applicationThreadId, {
       revision: current.revision + 1,
       values,
@@ -3864,6 +3901,11 @@ async function main(): Promise<void> {
     };
     const scheduleResponse = driver.scheduleScriptedResponse.bind(driver);
     driver.scheduleScriptedResponse = (...args) => {
+      if (piTurnResponseArmed) {
+        piTurnResponseArmed = false;
+        piTurnResponseRelease = () => driver.scheduleScriptedResponse(...args);
+        return;
+      }
       const [record, turn, inputText] = args;
       if (inputText === "Fail with a visible model configuration diagnostic") {
         setTimeout(() => {
@@ -3952,9 +3994,7 @@ async function main(): Promise<void> {
         };
         return;
       }
-      if (!piTurnResponseArmed) return scheduleResponse(...args);
-      piTurnResponseArmed = false;
-      piTurnResponseRelease = () => scheduleResponse(...args);
+      return scheduleResponse(...args);
     };
     const healthy = driver.health.bind(driver);
     driver.health = async () =>
@@ -4391,12 +4431,12 @@ async function main(): Promise<void> {
   const operationRepository = new ConversationOperationRepository(database);
   const lineageRepository = new ThreadLineageRepository(database);
   const automationRepository = new AutomationRepository(database);
-  const persistence = new TestBackendPersistence(database);
   const piPreferences = new ConnectionSettingPreferenceRepository(database);
   const piSavedAgentPersistence = new TestPiSavedAgentPersistence(
     new PiConversationRepository(database),
     piPreferences,
   );
+  const persistence = new TestBackendPersistence(database, piSavedAgentPersistence);
   const piSavedAgentAdapter = new PiSavedAgentAdapter({
     preferences: piPreferences,
     persistence: piSavedAgentPersistence,
@@ -4738,19 +4778,11 @@ async function main(): Promise<void> {
   queue = new QueuedInputDispatcher({
     repository: queueRepository,
     gateway: queueGateway,
+    onDurableInputChanged: (eventScope, applicationThreadId, item) =>
+      observeAutomationQueue?.observe(eventScope, applicationThreadId, item),
     publisher: {
       publish(eventScope, applicationThreadId, event) {
         threadHubs.thread(eventScope, applicationThreadId).publish(event);
-        for (const item of queueRepository.list(
-          eventScope,
-          applicationThreadId,
-        )) {
-          observeAutomationQueue?.observe(
-            eventScope,
-            applicationThreadId,
-            item,
-          );
-        }
         void publishApplicationThread
           ?.publish(eventScope, applicationThreadId)
           .catch(() => undefined);
@@ -5020,8 +5052,10 @@ async function main(): Promise<void> {
     repository: new ThreadForceResetRepository(database),
     interactions,
     runtimes,
-    scheduleThreadPublications: (eventScope, threadIds) =>
-      snapshots.scheduleMany(eventScope, threadIds),
+    scheduleThreadPublications: (eventScope, threadIds) => {
+      automations.reconcileRetirementsForThreads(eventScope, threadIds);
+      snapshots.scheduleMany(eventScope, threadIds);
+    },
     publishTaskChange: (eventScope, taskId) =>
       tasks.publishTaskChange(eventScope, taskId),
   });
@@ -5080,6 +5114,9 @@ async function main(): Promise<void> {
     });
   };
   const attention = new ThreadAttentionService({
+    acknowledgeAutomationRun: (scope, threadId, runId, outcome) => {
+      automations.acknowledgeThreadRun(scope, threadId, runId, outcome);
+    },
     inventory: inventoryRepository,
     completions: completion,
     queue,
@@ -5129,6 +5166,7 @@ async function main(): Promise<void> {
         return {
           backingState: thread.backingState,
           revision: thread.revision,
+          creationForceReset: inventoryRepository.isThreadCreationForceReset(eventScope, applicationThreadId),
         };
       },
     },
@@ -5136,21 +5174,26 @@ async function main(): Promise<void> {
     queueRepository,
     firstInput: automationFirstInput,
     branches: forks,
+    forkTargets: new AutomationForkTargetResolver({
+      automations: automationRepository, bindings, creation, inventory: inventoryRepository, savedAgents,
+      policy: { assertCanAutomate: () => undefined },
+    }),
     executionPolicy: { assertCanAutomate: () => undefined },
   });
-  const automationDispatcher = new AutomationDispatcher({
-    repository: automationRepository,
-    gateway: automationGateway,
-    inventory: inventoryRepository,
-    service: automations,
-    prechecks: new AutomationPrecheckExecutor(inventoryRepository, execution),
-  });
-  automations.bindDispatcher(automationDispatcher);
   observeAutomationQueue = new AutomationQueueRunObserver({
     repository: automationRepository,
     queue: queueRepository,
     publisher: automations,
   });
+  const automationDispatcher = new AutomationDispatcher({
+    repository: automationRepository,
+    gateway: automationGateway,
+    queueObserver: observeAutomationQueue,
+    inventory: inventoryRepository,
+    service: automations,
+    prechecks: new AutomationPrecheckExecutor(inventoryRepository, execution),
+  });
+  automations.bindDispatcher(automationDispatcher);
   observeAutomationTurns = new AutomationTurnSettlementObserver({
     repository: automationRepository,
     publisher: automations,
@@ -5211,6 +5254,15 @@ async function main(): Promise<void> {
     }
     applicationDecisionRecords.clear();
   };
+
+  app.post("/__e2e/automations/reconcile", async (_request, response, next) => {
+    try {
+      await automations.reconcileDue(Date.now());
+      response.status(204).end();
+    } catch (error) {
+      next(error);
+    }
+  });
 
   app.post(
     "/__e2e/agent-completion-callbacks/send/:callerThreadId/:targetThreadId",
@@ -5767,6 +5819,13 @@ async function main(): Promise<void> {
     }
     piTurnResponseRelease = undefined;
     release();
+    response.status(204).end();
+  });
+  app.post("/__e2e/pi/turn-response/reset", (_request, response) => {
+    piTurnResponseArmed = false;
+    const release = piTurnResponseRelease;
+    piTurnResponseRelease = undefined;
+    release?.();
     response.status(204).end();
   });
   app.post("/__e2e/pi/pending-steer/arm", (_request, response) => {

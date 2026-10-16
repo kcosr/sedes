@@ -15,11 +15,13 @@ import type {
   ApplicationThreadSummaryReader,
 } from "./application-snapshot-service.js";
 import {
-  latestAutomationRunJoin,
+  threadAutomationAggregateColumns,
   projectThreadAutomationSummary,
   threadAutomationSummaryColumns,
   type ThreadAutomationSummaryRow,
 } from "./thread-automation-summary.js";
+
+import { threadAutomationTriggeredSql, threadAutomationChildProblemSql } from "./thread-automation-context.js";
 
 type SummaryRow = ThreadAutomationSummaryRow & {
   readonly id: string;
@@ -322,7 +324,10 @@ export class DatabaseApplicationThreadSummaryReader
           -- retained queue/completion history or the entire thread inventory.
           WITH requested_threads(id) AS MATERIALIZED (${requestedThreadsSql}),
           target_definitions AS MATERIALIZED (
-            SELECT definition.*
+            SELECT definition.tenant_id, definition.owner_principal_id,
+              definition.id, definition.anchor_thread_id, definition.enabled,
+              definition.schedule_kind, definition.run_at, definition.next_run_at,
+              definition.deleted_at, definition.revision, definition.runs_revision
             FROM requested_threads AS requested
             CROSS JOIN automation_definitions AS definition
               ON definition.anchor_thread_id = requested.id
@@ -333,7 +338,12 @@ export class DatabaseApplicationThreadSummaryReader
               AND anchor.id = definition.anchor_thread_id
             WHERE definition.tenant_id = ?
               AND definition.owner_principal_id = ?
-              AND definition.deleted_at IS NULL
+          ),
+          thread_automations AS (
+            SELECT definition.anchor_thread_id AS thread_id,
+              ${threadAutomationAggregateColumns("definition")}
+            FROM target_definitions AS definition
+            GROUP BY definition.anchor_thread_id
           ),
           scoped_queue AS (
             SELECT
@@ -436,7 +446,7 @@ export class DatabaseApplicationThreadSummaryReader
             thread.last_activity_at AS lastActivityAt,
             principal.state_changed_at AS stateChangedAt,
             principal.snoozed_until AS snoozedUntil,
-            ${threadAutomationSummaryColumns("definition", "run")},
+            ${threadAutomationSummaryColumns("automations", "principal", "workspace")},
             coalesce(queue.queued_input_count, 0) AS queuedInputCount,
             coalesce(stash.stashed_prompt_count, 0) AS stashedPromptCount,
             coalesce(workpad.non_archived_workpad_count, 0) AS nonArchivedWorkpadCount,
@@ -450,11 +460,9 @@ export class DatabaseApplicationThreadSummaryReader
               THEN 1 ELSE 0
             END AS wake,
             CASE
-              WHEN principal.automation_context_run_id IS NOT NULL
-                AND principal.automation_context_source_thread_id IS NOT NULL
-                AND principal.automation_context_at IS NOT NULL
-                AND principal.automation_context_outcome IS NOT NULL
-              THEN principal.automation_context_outcome
+              WHEN automations.automationAttentionCount > 0
+                OR ${threadAutomationChildProblemSql("thread")} THEN 'failed'
+              WHEN ${threadAutomationTriggeredSql("thread")} THEN 'triggered'
               ELSE NULL
             END AS automationContext,
             coalesce(completion.unseen_completion, 0) AS unseenCompletion,
@@ -491,11 +499,8 @@ export class DatabaseApplicationThreadSummaryReader
           INNER JOIN agent_backend_instances AS backend
             ON backend.tenant_id = thread.tenant_id
             AND backend.id = thread.backend_instance_id
-          LEFT JOIN target_definitions AS definition
-            ON definition.tenant_id = thread.tenant_id
-            AND definition.owner_principal_id = thread.owner_principal_id
-            AND definition.anchor_thread_id = thread.id
-          ${latestAutomationRunJoin("definition", "run")}
+          LEFT JOIN thread_automations AS automations
+            ON automations.thread_id = thread.id
           LEFT JOIN scoped_queue AS queue ON queue.thread_id = thread.id
           LEFT JOIN scoped_completion AS completion
             ON completion.thread_id = thread.id
@@ -570,7 +575,7 @@ export class DatabaseApplicationThreadSummaryReader
       ...(row.snoozedUntil === null
         ? {}
         : { snoozedUntil: iso(row.snoozedUntil) }),
-      automation: projectThreadAutomationSummary(row),
+      automations: projectThreadAutomationSummary(row),
       queuedInputCount: row.queuedInputCount,
       stashedPromptCount: row.stashedPromptCount,
       nonArchivedWorkpadCount: row.nonArchivedWorkpadCount,

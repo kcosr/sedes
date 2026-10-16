@@ -142,7 +142,7 @@ function makeThread(
     available: true,
     lastActivityAt: isoAtNoon(0),
     stateChangedAt: isoAtNoon(0),
-    automation: null,
+    automations: { totalCount: 0, enabledCount: 0, pausedCount: 0, exhaustedCount: 0, inFlightCount: 0, attentionCount: 0, revision: 0 },
     attention: {
       wake: false,
       automationContext: null,
@@ -3344,20 +3344,10 @@ describe("InventorySidebar view modes", () => {
 
   it("filters project shelves and their counts by directly assigned open tasks", () => {
     seedViewPreferences({ groupBy: "project", hasOpenTasks: true });
-    const automation = {
-      status: "enabled" as const,
-      runMode: "same_thread" as const,
-      scheduleKind: "cron" as const,
-      schedule: { kind: "cron" as const, expression: "0 2 * * *", timeZone: "UTC" },
-      misfirePolicy: "coalesce" as const,
-      promptPreview: "Audit",
-      revision: 1,
-      runsRevision: 0,
-      hasPrecheck: false,
-    };
+    const automations = { totalCount: 1, enabledCount: 1, pausedCount: 0, exhaustedCount: 0, inFlightCount: 0, attentionCount: 0, revision: 1 };
     const threads = [
-      makeThread("scheduled-open", "Scheduled open work", { automation }),
-      makeThread("scheduled-plain", "Scheduled plain work", { automation }),
+      makeThread("scheduled-open", "Scheduled open work", { automations }),
+      makeThread("scheduled-plain", "Scheduled plain work", { automations }),
       makeThread("snoozed-open", "Snoozed open work", { inventoryState: "snoozed" }),
       makeThread("snoozed-plain", "Snoozed plain work", { inventoryState: "snoozed" }),
       makeThread("parked-open", "Parked open work", { inventoryState: "settled" }),
@@ -4217,23 +4207,12 @@ describe("InventorySidebar view modes", () => {
 
   it("files a parked automated thread under Parked in the State view", () => {
     seedViewPreferences({ groupBy: "state", lastAltGroupBy: "state" });
-    const automation = {
-      status: "enabled" as const,
-      runMode: "same_thread" as const,
-      scheduleKind: "cron" as const,
-      schedule: { kind: "cron" as const, expression: "0 2 * * *", timeZone: "UTC" },
-      misfirePolicy: "coalesce" as const,
-      promptPreview: "Check dependencies",
-      nextRunAt: new Date(Date.now() + 3_600_000).toISOString(),
-      revision: 1,
-      runsRevision: 0,
-      hasPrecheck: false,
-    };
+    const automations = { totalCount: 1, enabledCount: 1, pausedCount: 0, exhaustedCount: 0, inFlightCount: 0, attentionCount: 0, revision: 1, nextRunAt: new Date(Date.now() + 3_600_000).toISOString() };
     renderSidebar([
-      makeThread("scheduled-1", "Nightly audit", { automation }),
+      makeThread("scheduled-1", "Nightly audit", { automations }),
       makeThread("parked-1", "Parked audit", {
         inventoryState: "settled" as const,
-        automation,
+        automations,
       }),
     ]);
 
@@ -4673,28 +4652,14 @@ describe("InventorySidebar view modes", () => {
     seedViewPreferences({
       modes: { project: { sortBy: "alpha", direction: "asc" } },
     });
-    const automation = {
-      status: "enabled" as const,
-      runMode: "clone" as const,
-      scheduleKind: "interval" as const,
-      schedule: {
-        kind: "interval" as const,
-        anchorAt: "2026-07-30T00:00:00.000Z",
-        everySeconds: 3_600,
-      },
-      misfirePolicy: "coalesce" as const,
-      promptPreview: "Review the repository.",
-      revision: 1,
-      runsRevision: 0,
-      hasPrecheck: false,
-    };
+    const automations = { totalCount: 1, enabledCount: 1, pausedCount: 0, exhaustedCount: 0, inFlightCount: 0, attentionCount: 0, revision: 1 };
     renderSidebar(
       [
         makeThread("parent", "Parent"),
         makeThread("child-zeta", "Zeta child"),
         makeThread("child-alpha", "Alpha child"),
-        makeThread("automation-zeta", "Zeta automation", { automation }),
-        makeThread("automation-alpha", "Alpha automation", { automation }),
+        makeThread("automation-zeta", "Zeta automation", { automations }),
+        makeThread("automation-alpha", "Alpha automation", { automations }),
         makeThread("settled-zeta", "Zeta parked", {
           inventoryState: "settled",
         }),
@@ -5098,43 +5063,51 @@ describe("sidebar background work authority", () => {
 });
 
 describe("Projects Automations shelf vocabulary", () => {
-  type Automation = NonNullable<ThreadSummary["automation"]>;
-  type LastRun = NonNullable<Automation["lastRun"]>;
-  const automation = (overrides: Partial<Automation>): Automation => ({
-    status: "enabled",
-    runMode: "same_thread",
-    scheduleKind: "cron",
-    schedule: { kind: "cron", expression: "0 2 * * *", timeZone: "UTC" },
-    misfirePolicy: "coalesce",
-    promptPreview: "Check dependencies",
-    revision: 1,
-    runsRevision: 0,
-    hasPrecheck: false,
-    ...overrides,
-  });
-  const run = (state: LastRun["state"]): LastRun => ({
-    id: `run-${state}`,
-    state,
-    occurrence: "scheduled",
-    scheduledFor: isoAtNoon(-1),
-  });
+  type Automation = NonNullable<ThreadSummary["automations"]>;
+  const automations = (overrides: Partial<Automation>): Automation => ({ totalCount: 1, enabledCount: 1, pausedCount: 0, exhaustedCount: 0, inFlightCount: 0, attentionCount: 0, revision: 1, ...overrides });
   const shelfRow = (id: string) =>
     document.querySelector<HTMLElement>(
       `[data-shelf="automations"] [data-thread-id="${id}"]`,
     )!;
+
+  it("omits finished-only status glyphs while retaining sibling and ongoing-work indicators", () => {
+    seedViewPreferences({});
+    const finished = automations({ enabledCount: 0, exhaustedCount: 1 });
+    renderSidebar([
+      makeThread("auto-finished", "Finished reminder", {
+        automations: finished,
+        attention: { wake: false, automationContext: "triggered", unseenCompletion: false, queueFailure: false },
+      }),
+      makeThread("auto-active-sibling", "Daily update remains", {
+        automations: { ...finished, totalCount: 2, enabledCount: 1 },
+      }),
+      makeThread("auto-paused-sibling", "Paused update remains", {
+        automations: { ...finished, totalCount: 2, pausedCount: 1 },
+      }),
+      makeThread("auto-turn", "Turn in progress", { automations: finished, runState: "running" }),
+      makeThread("auto-attention", "Unresolved problem", {
+        automations: { ...finished, attentionCount: 1 },
+      }),
+    ]);
+    expect(shelfRow("auto-finished").querySelector(".row-glyph .automation-glyph, .row-glyph .lucide-circle-pause")).toBeNull();
+    expect(within(shelfRow("auto-active-sibling")).getByRole("img", { name: "Automation" })).toHaveClass("lucide-repeat");
+    expect(within(shelfRow("auto-paused-sibling")).getByRole("img", { name: "Automation 1 paused" })).toHaveClass("lucide-circle-pause");
+    expect(within(shelfRow("auto-turn")).getByTestId("run-indicator")).toHaveAttribute("data-state", "running");
+    expect(within(shelfRow("auto-attention")).getByRole("img", { name: "Automation needs attention" })).toBeVisible();
+  });
 
   it("draws Repeat or CirclePause, names the state, and uses the one future time format", () => {
     seedViewPreferences({});
     const nextRunAt = new Date(Date.now() + 3 * 86_400_000).toISOString();
     renderSidebar([
       makeThread("auto-active", "Active audit", {
-        automation: automation({ nextRunAt }),
+        automations: automations({ nextRunAt }),
       }),
       makeThread("auto-paused", "Paused audit", {
-        automation: automation({ status: "paused", lastRun: run("completed") }),
+        automations: automations({ enabledCount: 0, pausedCount: 1 }),
       }),
       makeThread("auto-new", "New audit", {
-        automation: automation({ status: "paused" }),
+        automations: automations({ enabledCount: 0, pausedCount: 1 }),
       }),
     ]);
 
@@ -5149,75 +5122,50 @@ describe("Projects Automations shelf vocabulary", () => {
 
     const paused = shelfRow("auto-paused");
     expect(
-      within(paused).getByRole("img", { name: "Automation paused" }),
+      within(paused).getByRole("img", { name: "Automation 1 paused" }),
     ).toHaveClass("lucide-circle-pause");
     expect(paused.querySelector(".thread-meta")).toHaveTextContent(/^Paused$/);
 
     const fresh = shelfRow("auto-new");
     expect(
-      within(fresh).getByRole("img", { name: "Automation not started" }),
+      within(fresh).getByRole("img", { name: "Automation 1 paused" }),
     ).toHaveClass("lucide-circle-pause");
     expect(fresh.querySelector(".thread-meta")).toHaveTextContent(
-      /^Not started$/,
+      /^Paused$/,
     );
   });
 
-  it("flags a failed run with the red triangle and an unknown outcome with the amber one", () => {
+  it("distinguishes aggregate attention from an explicit failed-run context", () => {
     seedViewPreferences({});
     renderSidebar([
-      makeThread("auto-failed", "Failed audit", {
-        automation: automation({ lastRun: run("failed") }),
+      makeThread("auto-active", "Active attention", {
+        automations: automations({ totalCount: 2, enabledCount: 2, attentionCount: 1 }),
       }),
       makeThread("auto-context", "Context audit", {
-        automation: automation({}),
-        attention: {
-          wake: false,
-          automationContext: "failed",
-          unseenCompletion: false,
-          queueFailure: false,
-        },
+        automations: automations({}),
+        attention: { wake: false, automationContext: "failed", unseenCompletion: false, queueFailure: false },
       }),
-      makeThread("auto-unknown", "Unknown audit", {
-        automation: automation({ status: "paused", lastRun: run("uncertain") }),
+      makeThread("auto-paused", "Paused attention", {
+        automations: automations({ enabledCount: 0, pausedCount: 1, attentionCount: 1 }),
       }),
     ]);
-
-    for (const id of ["auto-failed", "auto-context"]) {
-      const chip = within(shelfRow(id)).getByRole("img", {
-        name: "Automation failed",
-      });
-      expect(chip).toHaveAttribute("data-chip", "automation-failed");
+    for (const id of ["auto-active", "auto-paused"]) {
+      const row = shelfRow(id);
+      const chip = within(row).getByRole("img", { name: "Automation needs attention" });
+      expect(chip).toHaveAttribute("data-chip", "automation-attention");
       expect(chip.querySelector(".lucide-triangle-alert")).not.toBeNull();
-      expect(within(shelfRow(id)).queryByRole("img", { name: "Attention" })).toBeNull();
+      expect(row.querySelector(".row-glyph .lucide-repeat")).not.toBeNull();
+      expect(row.querySelector(".thread-meta")).toHaveTextContent(id === "auto-active" ? "Active" : "Paused");
     }
-    const unknown = shelfRow("auto-unknown");
-    expect(
-      within(unknown).getByRole("img", { name: "Automation outcome unknown" }),
-    ).toHaveAttribute("data-chip", "automation-unknown");
-    // An unknown outcome keeps the Repeat identity; the chip carries the problem.
-    expect(
-      within(unknown).getByRole("img", { name: "Automation outcome unknown" }),
-    ).toBeVisible();
-    expect(unknown.querySelector(".row-glyph .lucide-repeat")).not.toBeNull();
-    expect(unknown.querySelector(".thread-meta")).toHaveTextContent(/^Paused$/);
+    expect(within(shelfRow("auto-context")).getByRole("img", { name: "Automation failed" }))
+      .toHaveAttribute("data-chip", "automation-failed");
   });
 });
 
 describe("View all automations", () => {
   const scheduled = (id: string, title: string) =>
     makeThread(id, title, {
-      automation: {
-        status: "enabled",
-        runMode: "same_thread",
-        scheduleKind: "cron",
-        schedule: { kind: "cron", expression: "0 2 * * *", timeZone: "UTC" },
-        misfirePolicy: "coalesce",
-        promptPreview: "Check dependencies",
-        nextRunAt: new Date(Date.now() + 3_600_000).toISOString(),
-        revision: 1,
-        runsRevision: 0,
-        hasPrecheck: false,
-      },
+      automations: { totalCount: 1, enabledCount: 1, pausedCount: 0, exhaustedCount: 0, inFlightCount: 0, attentionCount: 0, revision: 1, nextRunAt: new Date(Date.now() + 3_600_000).toISOString() },
     });
   const threads = [
     scheduled("auto", "Nightly audit"),

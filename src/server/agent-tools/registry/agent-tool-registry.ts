@@ -251,7 +251,7 @@ function validateEnvironmentAuthority(definition: AgentToolDefinition): void {
   }
   if (authority.kind === "direct_resource") {
     if (
-      !["environment", "workspace", "thread", "thread_family", "task", "workpad", "saved_agent"].includes(
+      !["environment", "workspace", "thread", "thread_family", "task", "workpad", "saved_agent", "automation"].includes(
         authority.resource,
       ) ||
       (authority.inputField !== undefined &&
@@ -264,7 +264,7 @@ function validateEnvironmentAuthority(definition: AgentToolDefinition): void {
           typeof authority.projectInputField !== "string" ||
           !/^[a-z][A-Za-z0-9]{0,63}$/.test(authority.projectInputField))) ||
       ((authority.resource === "thread_family" ||
-        authority.resource === "task" || authority.resource === "workpad" || authority.resource === "saved_agent") &&
+        authority.resource === "task" || authority.resource === "workpad" || authority.resource === "saved_agent" || authority.resource === "automation") &&
         authority.defaultToSource !== undefined) ||
       Object.keys(authority).some(
         (key) =>

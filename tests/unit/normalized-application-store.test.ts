@@ -47,7 +47,7 @@ function thread(
     available: true,
     lastActivityAt: now,
     stateChangedAt: now,
-    automation: null,
+    automations: { totalCount: 0, enabledCount: 0, pausedCount: 0, exhaustedCount: 0, inFlightCount: 0, attentionCount: 0, revision: 0 },
     attention: {
       wake: false,
       automationContext: null,
@@ -479,6 +479,27 @@ describe("normalized application protocol", () => {
 });
 
 describe("NormalizedApplicationStore", () => {
+  it("delivers identity-scoped automation invalidations once and resynchronizes on replacement", () => {
+    const store = new NormalizedApplicationStore();
+    seedStore(store);
+    const changed = vi.fn();
+    const inventoryChanged = vi.fn();
+    const unsubscribe = store.subscribeAutomationChanges(changed);
+    store.subscribe(inventoryChanged);
+    const notice = { automationId: "30000000-0000-4000-8000-000000000001", threadId: "10000000-0000-4000-8000-000000000001", revision: 3, runsRevision: 7, deleted: false };
+    const update = envelope(5, { type: "automation_changed", generation: "application-1", ...notice });
+    expect(store.apply(update)).toEqual({ kind: "applied" });
+    expect(changed).toHaveBeenCalledWith(expect.objectContaining(notice));
+    expect(inventoryChanged).not.toHaveBeenCalled();
+    expect(store.apply(update)).toEqual({ kind: "ignored" });
+    expect(changed).toHaveBeenCalledTimes(1);
+    expect(store.apply(envelope(6, { type: "snapshot", generation: "application-1", snapshot: snapshot() }))).toEqual({ kind: "applied" });
+    expect(changed).toHaveBeenLastCalledWith(undefined);
+    unsubscribe();
+    store.apply(envelope(7, { type: "automation_changed", generation: "application-1", ...notice, deleted: true }));
+    expect(changed).toHaveBeenCalledTimes(2);
+  });
+
   it("invalidates targeted summaries for thread changes and all summaries for inventory replacement or location availability", () => {
     const store = new NormalizedApplicationStore();
     seedStore(store);

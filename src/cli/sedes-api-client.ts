@@ -3,6 +3,7 @@ import { authenticationTokenSchema } from "../shared/authentication.js";
 import {
   automationPrecheckTestResultSchema,
   threadAutomationDefinitionSchema,
+  threadAutomationDefinitionPageSchema,
   threadAutomationRunPageSchema,
   threadAutomationRunResolutionSchema,
   threadAutomationRunSchema,
@@ -10,8 +11,6 @@ import {
 } from "../shared/protocol/automation-presentation.js";
 import {
   apiErrorSchema,
-  createThreadResultSchema,
-  type CreateThreadRequest,
 } from "../shared/protocol/api.js";
 import {
   normalizedApplicationSessionSchema,
@@ -21,7 +20,6 @@ import { automationCapabilitySchema } from "../shared/protocol/conversation.js";
 import type { AutomationRunFilter } from "../shared/protocol/domain.js";
 import type { AutomationCliDefinition } from "./automation-input.js";
 
-const idResponseSchema = z.strictObject({ id: z.uuid() });
 const deletedResponseSchema = z.strictObject({ deleted: z.literal(true) });
 
 export class SedesCliApiError extends Error {
@@ -93,82 +91,57 @@ export class SedesCliApiClient {
     );
   }
 
-  async createThread(input: CreateThreadRequest): Promise<string> {
-    const result = await this.#mutation(
-      "/api/threads",
-      createThreadResultSchema,
-      {
-        method: "POST",
-        body: JSON.stringify(input),
-      },
-    );
-    return result.threadId;
-  }
-
   automationCapability(threadId: string) {
     return this.#request(
-      `/api/threads/${encodeURIComponent(threadId)}/automation/capability`,
+      `/api/threads/${encodeURIComponent(threadId)}/automations/capability`,
       {},
       automationCapabilitySchema,
     );
   }
 
-  getAutomation(threadId: string) {
+  listAutomations(options: { threadId?: string; cursor?: string; pageSize?: number } = {}) {
+    const parameters = new URLSearchParams({ pageSize: String(options.pageSize ?? 100) });
+    if (options.threadId) parameters.set("threadId", options.threadId);
+    if (options.cursor) parameters.set("cursor", options.cursor);
+    return this.#request(`/api/automations?${parameters}`, {}, threadAutomationDefinitionPageSchema);
+  }
+
+  getAutomation(automationId: string) {
     return this.#request(
-      `/api/threads/${encodeURIComponent(threadId)}/automation`,
+      `/api/automations/${encodeURIComponent(automationId)}`,
       {},
       threadAutomationDefinitionSchema,
     );
   }
 
-  createAutomation(threadId: string, definition: AutomationCliDefinition) {
+  createAutomation(threadId: string, definition: AutomationCliDefinition, mutationId: string) {
+    return this.#mutation("/api/automations", threadAutomationDefinitionSchema, {
+      method: "POST",
+      body: JSON.stringify({
+        ...definitionFields(definition), threadId,
+        initialState: definition.initialState ?? "paused", mutationId,
+      }),
+    });
+  }
+
+  updateAutomation(automationId: string, definition: AutomationCliDefinition, expectedRevision: number) {
     return this.#mutation(
-      `/api/threads/${encodeURIComponent(threadId)}/automation`,
+      `/api/automations/${encodeURIComponent(automationId)}`,
       threadAutomationDefinitionSchema,
       {
-        method: "POST",
-        body: JSON.stringify({
-          ...definitionFields(definition),
-          mutationId: crypto.randomUUID(),
-        }),
+        method: "PATCH",
+        body: JSON.stringify({ ...definitionFields(definition), expectedRevision, mutationId: crypto.randomUUID() }),
       },
     );
   }
 
-  updateAutomation(
-    threadId: string,
-    definition: AutomationCliDefinition,
-    expectedRevision: number,
-  ) {
+  setAutomationState(automationId: string, action: "enable" | "pause", expectedRevision: number) {
     return this.#mutation(
-      `/api/threads/${encodeURIComponent(threadId)}/automation`,
+      `/api/automations/${encodeURIComponent(automationId)}/state`,
       threadAutomationDefinitionSchema,
       {
         method: "PATCH",
-        body: JSON.stringify({
-          ...definitionFields(definition),
-          expectedRevision,
-          mutationId: crypto.randomUUID(),
-        }),
-      },
-    );
-  }
-
-  setAutomationState(
-    threadId: string,
-    action: "enable" | "pause",
-    expectedRevision: number,
-  ) {
-    return this.#mutation(
-      `/api/threads/${encodeURIComponent(threadId)}/automation/state`,
-      threadAutomationDefinitionSchema,
-      {
-        method: "PATCH",
-        body: JSON.stringify({
-          action,
-          expectedRevision,
-          mutationId: crypto.randomUUID(),
-        }),
+        body: JSON.stringify({ action, expectedRevision, mutationId: crypto.randomUUID() }),
       },
     );
   }
@@ -179,7 +152,7 @@ export class SedesCliApiClient {
     count: number,
   ) {
     return this.#mutation(
-      `/api/threads/${encodeURIComponent(threadId)}/automation/preview`,
+      `/api/threads/${encodeURIComponent(threadId)}/automations/preview`,
       threadAutomationSchedulePreviewSchema,
       {
         method: "POST",
@@ -193,7 +166,7 @@ export class SedesCliApiClient {
       throw new Error("The input does not define a pre-check.");
     }
     return this.#mutation(
-      `/api/threads/${encodeURIComponent(threadId)}/automation/precheck/test`,
+      `/api/threads/${encodeURIComponent(threadId)}/automations/precheck/test`,
       automationPrecheckTestResultSchema,
       {
         method: "POST",
@@ -205,51 +178,35 @@ export class SedesCliApiClient {
     );
   }
 
-  runNow(threadId: string) {
+  runNow(automationId: string, mutationId: string) {
     return this.#mutation(
-      `/api/threads/${encodeURIComponent(threadId)}/automation/run-now`,
+      `/api/automations/${encodeURIComponent(automationId)}/run-now`,
       threadAutomationRunSchema,
-      {
-        method: "POST",
-        body: JSON.stringify({ mutationId: crypto.randomUUID() }),
-      },
+      { method: "POST", body: JSON.stringify({ mutationId }) },
     );
   }
 
-  listRuns(threadId: string, filter: AutomationRunFilter = "all", pageSize = 50) {
-    const parameters = new URLSearchParams({
-      pageSize: String(pageSize),
-      filter,
-    });
+  listRuns(automationId: string, filter: AutomationRunFilter = "all", pageSize = 50) {
+    const parameters = new URLSearchParams({ pageSize: String(pageSize), filter });
     return this.#request(
-      `/api/threads/${encodeURIComponent(threadId)}/automation/runs?${parameters.toString()}`,
-      {},
-      threadAutomationRunPageSchema,
+      `/api/automations/${encodeURIComponent(automationId)}/runs?${parameters}`,
+      {}, threadAutomationRunPageSchema,
     );
   }
 
-  resolveRun(threadId: string, runId: string, resume: boolean) {
+  resolveRun(automationId: string, runId: string, resume: boolean) {
     return this.#mutation(
-      `/api/threads/${encodeURIComponent(threadId)}/automation/runs/${encodeURIComponent(runId)}/resolve`,
+      `/api/automations/${encodeURIComponent(automationId)}/runs/${encodeURIComponent(runId)}/resolve`,
       threadAutomationRunResolutionSchema,
-      {
-        method: "POST",
-        body: JSON.stringify({ action: "mark_failed", resume }),
-      },
+      { method: "POST", body: JSON.stringify({ action: "mark_failed", resume }) },
     );
   }
 
-  deleteAutomation(threadId: string, expectedRevision: number) {
+  deleteAutomation(automationId: string, expectedRevision: number) {
     return this.#mutation(
-      `/api/threads/${encodeURIComponent(threadId)}/automation`,
+      `/api/automations/${encodeURIComponent(automationId)}`,
       deletedResponseSchema,
-      {
-        method: "DELETE",
-        body: JSON.stringify({
-          expectedRevision,
-          mutationId: crypto.randomUUID(),
-        }),
-      },
+      { method: "DELETE", body: JSON.stringify({ expectedRevision, mutationId: crypto.randomUUID() }) },
     );
   }
 
@@ -323,6 +280,7 @@ export class SedesCliApiClient {
 
 function definitionFields(definition: AutomationCliDefinition) {
   return {
+    name: definition.name,
     prompt: definition.prompt,
     runMode: definition.runMode,
     schedule: definition.schedule,

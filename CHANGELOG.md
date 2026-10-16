@@ -7,21 +7,45 @@ User-facing changes are collected here before release. See the
 
 ### Breaking Changes
 
+- Automation management now uses explicit automation IDs and the
+  `/api/automations` collection. Update automation agent-tool versions and
+  operator scripts; create/run-now requests require stable mutation keys.
+  The operator CLI attaches to existing threads. See the
+  [automation CLI](docs/operator/automation-cli.md).
+  ([#88](https://github.com/kcosr/sedes/pull/88))
+
 - Upgrade Codex execution sidecars with the server for Codex runtime protocol
   **4**, which clears retained attach metadata after native archive changes.
   See [Codex archival](docs/operator/backends/codex.md#archiving-conversations).
   ([#85](https://github.com/kcosr/sedes/pull/85))
 
 - Upgrade the server and browser/packaged clients together for client protocol
-  **159** for Page responses, larger composer reference lists, the updated
-  native voice bridge, and Windows notification script paths. Rebuild Android
+  **161** for Page responses, larger composer reference lists, the updated
+  native voice bridge, Windows notification script paths, multiple named
+  automations per thread, and dismissal of automation results. Rebuild Android
   and Electron with their bundled clients. See
   [Page responses](docs/user/html-previews.md#send-a-page-response),
   [voice input](docs/operator/clients/voice.md), and
   [notification scripts](docs/operator/configuration.md#notification-scripts).
-  ([#81](https://github.com/kcosr/sedes/pull/81), [#83](https://github.com/kcosr/sedes/pull/83), [#87](https://github.com/kcosr/sedes/pull/87))
+  ([#81](https://github.com/kcosr/sedes/pull/81), [#83](https://github.com/kcosr/sedes/pull/83), [#87](https://github.com/kcosr/sedes/pull/87), [#88](https://github.com/kcosr/sedes/pull/88))
 
 ### Added
+
+- Threads support multiple named recurring schedules and one-time reminders.
+  Run on **This thread**, or **Fork** a fresh result each time, copying saved
+  settings from drafts. Busy sources defer unsent work. Successful one-time
+  reminders show no sidebar schedule icon and leave the collection once no
+  result notice remains to dismiss, including after a later **Run now**; their
+  conversations remain. A failed turn arriving after dismissal surfaces again;
+  an interrupted turn, including **Stop**, is not a failure and shows a neutral
+  notice. Existing automations migrate in place with their names, schedules,
+  run history, and dismissed notices; on first start, one-time reminders that
+  already succeeded with no notice left to dismiss leave the collection. A
+  thread's **Automations** page lists only its own automations and links back
+  to the thread; an automation's page names its thread and returns to wherever
+  you opened it. See
+  [automations](docs/user/tasks-and-automations.md#schedule-work-with-an-automation).
+  ([#88](https://github.com/kcosr/sedes/pull/88))
 
 - Published HTML pages can collect responses through Sedes's **Send** control.
   Responses go to the page's thread, queue while it is busy, and remain in
@@ -77,6 +101,16 @@ User-facing changes are collected here before release. See the
   ([#81](https://github.com/kcosr/sedes/pull/81))
 
 ### Fixed
+
+- Automation delivery reconciles saved acceptance despite UI publication
+  failures or dispatch timing races. Stopping a turn preserves its Interrupted
+  history without leaving the automation in flight or resending its input.
+  ([#88](https://github.com/kcosr/sedes/pull/88))
+
+- Automation pages share aligned headings, readable schedule descriptions,
+  distinct Finished icons, and compact phone save controls. Removed reminders
+  keep their name when known, and navigation avoids repeating the same thread
+  or destination. ([#88](https://github.com/kcosr/sedes/pull/88))
 
 - macOS preview packages ad hoc sign Sedes and its helpers with their bundle
   identities, fixing Local Network connections that failed when launched from

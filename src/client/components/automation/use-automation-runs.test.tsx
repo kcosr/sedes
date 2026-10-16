@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import { flushSync } from "react-dom";
 import { describe, expect, it, vi } from "vitest";
 import type { ThreadAutomationRun } from "../../../shared/protocol/automation-presentation.js";
@@ -11,6 +11,7 @@ import {
   automationSummary,
   run,
   THREAD_ID,
+  AUTOMATION_ID,
   type AutomationStore,
 } from "./automation-test-fixture.js";
 import {
@@ -21,8 +22,8 @@ import { useAutomationThread } from "./use-automation-thread.js";
 
 /** The fixture thread's runs, read as the page does: from its live summary. */
 function useRuns(fixture: AutomationStore, filter: AutomationRunFilter) {
-  const thread = useAutomationThread(fixture.store, THREAD_ID);
-  return useAutomationRuns(fixture.store, thread ?? { id: THREAD_ID, automation: null }, filter);
+  useSyncExternalStore(fixture.store.subscribe, fixture.store.getSnapshot);
+  return useAutomationRuns(fixture.store, { id: THREAD_ID, automation: fixture.automationForThread(THREAD_ID) }, filter, fixture.reads);
 }
 
 const counts = { all: 30, problems: 2, skipped: 4 };
@@ -32,10 +33,32 @@ function page(items: ReturnType<typeof run>[], nextCursor: string | null = null,
 }
 
 describe("useAutomationRuns", () => {
+  it.each([false, true])("aborts a pending history read before deletion (load more: %s)", async (loadMore) => {
+    let finishRead!: (value: ReturnType<typeof page>) => void;
+    const list = vi.fn().mockImplementation(() => new Promise((resolve) => { finishRead = resolve; }));
+    if (loadMore) list.mockResolvedValueOnce(page([run()], "next-page"));
+    const fixture = automationStore([{ automation: automationSummary() }], { listAutomationRuns: list });
+    const { result } = renderHook(() => useRuns(fixture, "all"));
+    if (loadMore) {
+      await waitFor(() => expect(result.current.status).toBe("ready"));
+      act(() => result.current.loadMore());
+    }
+    await waitFor(() => expect(list).toHaveBeenCalledTimes(loadMore ? 2 : 1));
+    const signal = list.mock.calls.at(-1)![1].signal as AbortSignal;
+    await act(async () => {
+      await fixture.reads.remove(async () => { expect(signal.aborted).toBe(true); });
+    });
+    await act(async () => finishRead(page([run()], "late-page")));
+    act(() => { result.current.retry(); result.current.loadMore(); });
+    expect(result.current.items).toEqual([]);
+    expect(result.current.status).toBe("idle");
+    expect(list).toHaveBeenCalledTimes(loadMore ? 2 : 1);
+  });
+
   it("loads the first page with the whole-history counts", async () => {
     const items = [run(), run()];
     const fixture = automationStore([{ automation: automationSummary() }], {
-      listThreadAutomationRuns: vi.fn().mockResolvedValue(page(items, "next-1")),
+      listAutomationRuns: vi.fn().mockResolvedValue(page(items, "next-1")),
     });
     const { result } = renderHook(() => useRuns(fixture, "all"));
     expect(result.current.status).toBe("loading");
@@ -43,7 +66,7 @@ describe("useAutomationRuns", () => {
     expect(result.current.items).toEqual(items);
     expect(result.current.counts).toEqual(counts);
     expect(result.current.hasMore).toBe(true);
-    expect(fixture.api.listThreadAutomationRuns).toHaveBeenCalledWith(THREAD_ID, {
+    expect(fixture.api.listAutomationRuns).toHaveBeenCalledWith(AUTOMATION_ID, {
       limit: AUTOMATION_RUNS_PAGE_SIZE,
       filter: "all",
       signal: expect.any(AbortSignal),
@@ -54,7 +77,7 @@ describe("useAutomationRuns", () => {
     const fixture = automationStore([{ automation: null }]);
     const { result } = renderHook(() => useRuns(fixture, "all"));
     expect(result.current.status).toBe("idle");
-    expect(fixture.api.listThreadAutomationRuns).not.toHaveBeenCalled();
+    expect(fixture.api.listAutomationRuns).not.toHaveBeenCalled();
   });
 
   it("pages on with the cursor and filter, without repeating a run", async () => {
@@ -63,13 +86,13 @@ describe("useAutomationRuns", () => {
       .fn()
       .mockResolvedValueOnce(page([a!, b!], "after-b"))
       .mockResolvedValueOnce(page([b!, c!], null, false));
-    const fixture = automationStore([{ automation: automationSummary() }], { listThreadAutomationRuns: list });
+    const fixture = automationStore([{ automation: automationSummary() }], { listAutomationRuns: list });
     const { result } = renderHook(() => useRuns(fixture, "skipped"));
     await waitFor(() => expect(result.current.status).toBe("ready"));
     act(() => result.current.loadMore());
     expect(result.current.loadingMore).toBe(true);
     await waitFor(() => expect(result.current.loadingMore).toBe(false));
-    expect(list).toHaveBeenLastCalledWith(THREAD_ID, {
+    expect(list).toHaveBeenLastCalledWith(AUTOMATION_ID, {
       cursor: "after-b",
       limit: AUTOMATION_RUNS_PAGE_SIZE,
       filter: "skipped",
@@ -82,7 +105,7 @@ describe("useAutomationRuns", () => {
 
   it("starts over on a new filter, without the old cursor", async () => {
     const list = vi.fn().mockResolvedValue(page([run()], "after"));
-    const fixture = automationStore([{ automation: automationSummary() }], { listThreadAutomationRuns: list });
+    const fixture = automationStore([{ automation: automationSummary() }], { listAutomationRuns: list });
     const { result, rerender } = renderHook(
       ({ filter }: { filter: AutomationRunFilter }) => useRuns(fixture, filter),
       { initialProps: { filter: "all" } },
@@ -93,7 +116,7 @@ describe("useAutomationRuns", () => {
     rerender({ filter: "problems" });
     expect(result.current.status).toBe("loading");
     await waitFor(() => expect(result.current.items).toEqual([problem]));
-    expect(list).toHaveBeenLastCalledWith(THREAD_ID, {
+    expect(list).toHaveBeenLastCalledWith(AUTOMATION_ID, {
       limit: AUTOMATION_RUNS_PAGE_SIZE,
       filter: "problems",
       signal: expect.any(AbortSignal),
@@ -103,7 +126,7 @@ describe("useAutomationRuns", () => {
   it("refreshes the first page when the summary's latest run moves, and reports only new runs", async () => {
     const older = run({ state: "completed" });
     const list = vi.fn().mockResolvedValueOnce(page([older]));
-    const fixture = automationStore([{ automation: automationSummary() }], { listThreadAutomationRuns: list });
+    const fixture = automationStore([{ automation: automationSummary() }], { listAutomationRuns: list });
     const { result } = renderHook(() => useRuns(fixture, "all"));
     await waitFor(() => expect(result.current.status).toBe("ready"));
     expect(result.current.arrived).toEqual([]);
@@ -179,7 +202,7 @@ describe("useAutomationRuns", () => {
     const list = vi.fn().mockResolvedValueOnce(page([newest, older]));
     const fixture = automationStore(
       [{ automation: automationSummary({ lastRun: latest, runsRevision: 4 }) }],
-      { listThreadAutomationRuns: list },
+      { listAutomationRuns: list },
     );
     const { result } = renderHook(() => useRuns(fixture, "all"));
     await waitFor(() => expect(result.current.status).toBe("ready"));
@@ -221,7 +244,7 @@ describe("useAutomationRuns", () => {
       .mockResolvedValueOnce(page(listed, null))
       .mockResolvedValueOnce(page(arrivals, "after-arrivals"))
       .mockResolvedValueOnce(page([...gap, ...listed], null, false));
-    const fixture = automationStore([{ automation: automationSummary() }], { listThreadAutomationRuns: list });
+    const fixture = automationStore([{ automation: automationSummary() }], { listAutomationRuns: list });
     const { result } = renderHook(() => useRuns(fixture, "all"));
     await waitFor(() => expect(result.current.status).toBe("ready"));
     expect(result.current.hasMore).toBe(false);
@@ -241,14 +264,14 @@ describe("useAutomationRuns", () => {
     expect(result.current.hasMore).toBe(true);
     act(() => result.current.loadMore());
     await waitFor(() => expect(result.current.items).toEqual([...arrivals, ...gap, ...listed]));
-    expect(list).toHaveBeenLastCalledWith(THREAD_ID, expect.objectContaining({ cursor: "after-arrivals" }));
+    expect(list).toHaveBeenLastCalledWith(AUTOMATION_ID, expect.objectContaining({ cursor: "after-arrivals" }));
     expect(result.current.hasMore).toBe(false);
   });
 
   it("shows a run an action returned at once", async () => {
     const older = run();
     const fixture = automationStore([{ automation: automationSummary() }], {
-      listThreadAutomationRuns: vi.fn().mockResolvedValue(page([older])),
+      listAutomationRuns: vi.fn().mockResolvedValue(page([older])),
     });
     const { result } = renderHook(() => useRuns(fixture, "all"));
     await waitFor(() => expect(result.current.status).toBe("ready"));
@@ -259,18 +282,20 @@ describe("useAutomationRuns", () => {
     expect(result.current.items).toEqual([manual, { ...older, state: "failed" }]);
   });
 
-  it("leaves a run out of a filter it does not match", async () => {
+  it("keeps failed turns in Problems while excluding ordinary deliveries and interruptions", async () => {
     const fixture = automationStore([{ automation: automationSummary() }], {
-      listThreadAutomationRuns: vi.fn().mockResolvedValue(page([])),
+      listAutomationRuns: vi.fn().mockResolvedValue(page([])),
     });
     const { result } = renderHook(() => useRuns(fixture, "problems"));
     await waitFor(() => expect(result.current.status).toBe("ready"));
     act(() => result.current.upsert(run({ state: "claimed" })));
     act(() =>
-      result.current.upsert(run({ turn: { id: "turn-1", outcome: "interrupted", settledAt: new Date().toISOString() } })),
+      result.current.upsert(run({ turn: { id: "turn-completed", outcome: "completed", settledAt: new Date().toISOString() } })),
     );
     expect(result.current.items).toEqual([]);
-    // A failed turn is a problem, as the server counts and filters it.
+    const interruptedTurn = run({ turn: { id: "turn-1", outcome: "interrupted", settledAt: new Date().toISOString() } });
+    act(() => result.current.upsert(interruptedTurn));
+    expect(result.current.items).toEqual([]);
     const failedTurn = run({ turn: { id: "turn-2", outcome: "failed", settledAt: new Date().toISOString() } });
     act(() => result.current.upsert(failedTurn));
     expect(result.current.items).toEqual([failedTurn]);
@@ -278,7 +303,7 @@ describe("useAutomationRuns", () => {
 
   it("reports a failed first page and retries it", async () => {
     const list = vi.fn().mockRejectedValueOnce(new Error("Runs are unavailable")).mockResolvedValueOnce(page([]));
-    const fixture = automationStore([{ automation: automationSummary() }], { listThreadAutomationRuns: list });
+    const fixture = automationStore([{ automation: automationSummary() }], { listAutomationRuns: list });
     const { result } = renderHook(() => useRuns(fixture, "all"));
     await waitFor(() => expect(result.current.status).toBe("error"));
     expect(result.current.error).toBe("Runs are unavailable");
@@ -378,7 +403,7 @@ describe("useAutomationRuns: reconciling the loaded history", () => {
     filter: AutomationRunFilter,
     pages: number,
   ) {
-    const fixture = automationStore([{ automation: automationSummary() }], { listThreadAutomationRuns: server.list });
+    const fixture = automationStore([{ automation: automationSummary() }], { listAutomationRuns: server.list });
     const hook = renderHook(() => useRuns(fixture, filter));
     await waitFor(() => expect(hook.result.current.status).toBe("ready"));
     for (let loaded = 1; loaded < pages; loaded++) {
@@ -411,7 +436,7 @@ describe("useAutomationRuns: reconciling the loaded history", () => {
     await waitFor(() => expect(result.current.items[39]).toEqual({ ...older, turn: turn("failed") }));
     // Two pages of the list's own size, the second continuing the first.
     expect(cursors(server)).toEqual(["start", `after-${history[24]!.id}`]);
-    expect(server.list).toHaveBeenLastCalledWith(THREAD_ID, expect.objectContaining({ limit: AUTOMATION_RUNS_PAGE_SIZE }));
+    expect(server.list).toHaveBeenLastCalledWith(AUTOMATION_ID, expect.objectContaining({ limit: AUTOMATION_RUNS_PAGE_SIZE }));
     expect(result.current.items).toEqual(server.history().slice(0, 50));
     expect(result.current.hasMore).toBe(true);
     expect(result.current.arrived).toEqual([]);
@@ -591,7 +616,7 @@ describe("useAutomationRuns: reconciling the loaded history", () => {
         });
       }
     };
-    const fixture = automationStore([{ automation: automationSummary() }], { listThreadAutomationRuns: list });
+    const fixture = automationStore([{ automation: automationSummary() }], { listAutomationRuns: list });
     let setFilter!: (filter: AutomationRunFilter) => void;
     const { result } = renderHook(() => {
       const [filter, set] = useState<AutomationRunFilter>("all");

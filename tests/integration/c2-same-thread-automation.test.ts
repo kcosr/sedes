@@ -23,7 +23,7 @@ import { QueuedInputRepository } from "../../src/server/db/repositories/queued-i
 import { SubmissionCompletionRepository } from "../../src/server/db/repositories/submission-completion-repository.js";
 import { AutomationService } from "../../src/server/domain/automation-service.js";
 import type { AutomationPrecheckResult } from "../../src/server/runtime/automation-precheck-executor.js";
-import type { AutomationConversationGateway } from "../../src/server/runtime/automation-conversation-gateway.js";
+import { AutomationQueueRunObserver, type AutomationConversationGateway } from "../../src/server/runtime/automation-conversation-gateway.js";
 import { AutomationDispatcher } from "../../src/server/runtime/automation-dispatcher.js";
 import { SingleUserIdentityProvider } from "../../src/server/identity/identity-provider.js";
 import { OverlayRepository } from "../support/schema9/overlay-repository.js";
@@ -180,7 +180,9 @@ function createFixture() {
       },
       executionPolicy: { assertCanAutomate: () => undefined },
     });
+    const queueObserver = new AutomationQueueRunObserver({ repository, queue, publisher: service, now: () => clock });
     const dispatcher = new AutomationDispatcher({
+      queueObserver,
       repository,
       inventory,
       service,
@@ -189,7 +191,7 @@ function createFixture() {
       now: () => clock,
     });
     service.bindDispatcher(dispatcher);
-    return { service, dispatcher };
+    return { service, dispatcher, queueObserver };
   };
 
   return {
@@ -247,6 +249,8 @@ function createRecurring(
     subject.scope,
     subject.threadId,
     {
+      name: "Recurring update",
+      initialState: "enabled",
       prompt: input?.prompt ?? "Automation prompt",
       runMode: "same_thread",
       schedule: {
@@ -260,23 +264,49 @@ function createRecurring(
     },
     1_000,
   );
-  service.setState(
-    subject.scope,
-    subject.threadId,
-    {
-      action: "enable",
-      expectedRevision: created.revision,
-      mutationId: randomUUID(),
-    },
-    1_000,
-  );
-  return subject.repository.findDefinitionForThread(
-    subject.scope,
-    subject.threadId,
-  )!;
+  return subject.repository.getDefinition(subject.scope, created.id);
 }
 
 describe("C2 same-thread automation acceptance", () => {
+  it("reconciles acceptance observed before the dispatcher parks the run queued", async () => {
+    const subject = fixture();
+    const { service, dispatcher, queueObserver } = subject.createRuntime();
+    const definition = createRecurring(subject, service);
+    subject.setClock(2_000);
+    const dispatch = vi.fn(async (input: DispatchInput): Promise<DispatchResult> => {
+      const { item } = subject.queue.enqueue(input.scope, input.anchorThreadId, {
+        mutationId: input.dispatchMutationId,
+        text: input.prompt, contextExcerpts: [], attachmentIds: [], taskReferences: [],
+        source: { kind: "automation", automationId: input.automationId,
+          automationRunId: input.automationRunId, claimToken: input.claimToken },
+        now: 2_000,
+      });
+      subject.queue.claimHead(input.scope, input.anchorThreadId, "fixture-anchor", 2_001);
+      subject.queue.markAccepted(input.scope, input.anchorThreadId, item.id, {
+        expectedState: "dispatching", acceptedAt: 2_002,
+        backendCorrelation: input.dispatchMutationId,
+      });
+      // Model the async queue accepting after the gateway's last pending read,
+      // but before its queued result reaches the automation dispatcher.
+      queueObserver.observe(input.scope, input.anchorThreadId, subject.queue.get(input.scope, input.anchorThreadId, item.id));
+      expect(subject.repository.getRun(input.scope, input.automationId, input.automationRunId).state)
+        .toBe("dispatching");
+      return { status: "queued", targetThreadId: input.anchorThreadId };
+    });
+    subject.setDispatch(dispatch);
+    try {
+      const run = await service.runNow(subject.scope, definition.id, randomUUID(), 2_000);
+      expect(run.state).toBe("completed");
+      expect(subject.repository.getRun(subject.scope, definition.id, run.id).state).toBe("completed");
+      expect(subject.queue.list(subject.scope, subject.threadId)).toMatchObject([{ state: "accepted" }]);
+      expect(dispatch).toHaveBeenCalledOnce();
+      expect((await dispatcher.dispatch(subject.repository.getRun(subject.scope, definition.id, run.id))).state).toBe("completed");
+      expect(dispatch).toHaveBeenCalledOnce();
+    } finally {
+      await dispatcher.dispose();
+    }
+  });
+
   it("dispatches scheduled and Run Now work to one bound thread without cloning and projects completion attention", async () => {
     const subject = fixture();
     const { service } = subject.createRuntime();
@@ -310,7 +340,7 @@ describe("C2 same-thread automation acceptance", () => {
     subject.setClock(3_000);
     const manual = await service.runNow(
       subject.scope,
-      subject.threadId,
+      definition.id,
       "manual-same-thread",
       3_000,
     );
@@ -365,11 +395,8 @@ describe("C2 same-thread automation acceptance", () => {
       executionWorkspaces: directThreadExecutionWorkspaceReader,
     }).getAuthorized(subject.scope, subject.threadId);
     expect(projected.attention).toMatchObject({
-      automationContext: {
-        runId: scheduled.id,
-        sourceThreadId: subject.threadId,
-        outcome: "triggered",
-      },
+      // The newer manual success supersedes the old scheduled trigger notice.
+      automationContexts: [],
       unseenCompletion: {
         operationId: scheduled.dispatchMutationId,
       },
@@ -465,15 +492,14 @@ describe("C2 same-thread automation acceptance", () => {
       subject.repository.listRuns(subject.scope, definition.id, {
         limit: 10,
       }),
-    ).toEqual([]);
+    ).toEqual([expect.objectContaining({ state: "deferred", deferredReason: "snoozed", eligibleAt: 500_000, claimToken: null })]);
     expect(
       subject.repository.getDefinition(subject.scope, definition.id).nextRunAt,
-    ).toBeGreaterThan(500_000);
+    ).toBe(302_000);
     expect(
       subject.inventory.getThread(subject.scope, subject.threadId).inventory,
     ).toMatchObject({
       inventoryState: "snoozed",
-      automationContextRunId: null,
     });
   });
 
@@ -601,21 +627,24 @@ describe("C2 same-thread automation acceptance", () => {
         .set("Host", "127.0.0.1:4783")
         .set("X-CSRF-Token", "c2-automation-csrf");
     const base = {
+      name: "Import update",
       prompt: "Stay on the imported thread",
       schedule: {
         kind: "date_time" as const,
         runAt: "2099-07-30T12:00:00.000Z",
       },
-      misfirePolicy: "coalesce" as const,
+      misfirePolicy: null,
       precheck: null,
     };
 
     await mutate(
-      request(app).post(`/api/threads/${subject.threadId}/automation`),
+      request(app).post("/api/automations"),
     )
       .send({
         ...base,
         runMode: "clone",
+        threadId: subject.threadId,
+        initialState: "paused",
         mutationId: randomUUID(),
       })
       .expect(400)
@@ -627,25 +656,24 @@ describe("C2 same-thread automation acceptance", () => {
         },
       });
     expect(
-      subject.repository.findDefinitionForThread(
-        subject.scope,
-        subject.threadId,
-      ),
-    ).toBeUndefined();
+      subject.repository.listDefinitionPage(subject.scope, { threadId: subject.threadId, limit: 10 }),
+    ).toEqual([]);
 
     const sameThread = await mutate(
-      request(app).post(`/api/threads/${subject.threadId}/automation`),
+      request(app).post("/api/automations"),
     )
       .send({
         ...base,
         runMode: "same_thread",
+        threadId: subject.threadId,
+        initialState: "paused",
         mutationId: randomUUID(),
       })
       .expect(201);
     expect(sameThread.body).toMatchObject({ runMode: "same_thread" });
 
     await mutate(
-      request(app).patch(`/api/threads/${subject.threadId}/automation`),
+      request(app).patch(`/api/automations/${sameThread.body.id}`),
     )
       .send({
         ...base,
@@ -655,10 +683,7 @@ describe("C2 same-thread automation acceptance", () => {
       })
       .expect(400);
     expect(
-      subject.repository.findDefinitionForThread(
-        subject.scope,
-        subject.threadId,
-      ),
+      subject.repository.getDefinition(subject.scope, sameThread.body.id),
     ).toMatchObject({ runMode: "same_thread" });
     expect(
       subject.inventory.listThreadIdsForEnvironment(
