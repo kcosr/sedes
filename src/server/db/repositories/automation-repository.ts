@@ -19,7 +19,9 @@ import {
   exhaustedSql,
   latestDecisiveRunIdSql,
   nextActionAtSql,
+  runFailureSql,
 } from "./automation-read-sql.js";
+import { retirableOneShotSql } from "./automation-retirement.js";
 import { MAXIMUM_ACTIVE_QUEUED_INPUTS } from "./queued-input-repository.js";
 import { ConversationOperationRepository } from "./conversation-operation-repository.js";
 import { DomainError } from "../../domain/errors.js";
@@ -213,7 +215,7 @@ export type AutomationTurnSettlementInput = {
 
 /**
  * Disjoint conditions behind each run-history filter; `null` reads every run.
- * A failed turn is a problem however its delivery ended, so its branch leaves
+ * An unsuccessful turn is a problem however its delivery ended, so its branch leaves
  * out the states the other problem branches already list.
  */
 const RUN_FILTER_BRANCHES: Readonly<
@@ -223,7 +225,7 @@ const RUN_FILTER_BRANCHES: Readonly<
   problems: [
     "AND state = 'failed'",
     "AND state = 'uncertain'",
-    "AND turn_outcome = 'failed' AND state NOT IN ('failed', 'uncertain')",
+    "AND turn_outcome IN ('failed', 'interrupted') AND state NOT IN ('failed', 'uncertain')",
   ],
   skipped: ["AND state = 'skipped'"],
 };
@@ -406,11 +408,11 @@ export class AutomationRepository {
     if (uncertain) return runFromRow(uncertain);
     const row = this.database
       .prepare(
-        `SELECT ${runColumns} FROM automation_runs WHERE tenant_id = ?
+        `SELECT ${runColumns} FROM automation_runs AS failure WHERE tenant_id = ?
       AND owner_principal_id = ? AND automation_id = ? AND id = (
         SELECT ${latestDecisiveRunIdSql("definition")} FROM automation_definitions AS definition
         WHERE definition.tenant_id = ? AND definition.owner_principal_id = ? AND definition.id = ?
-      ) AND state = 'failed' AND acknowledged_at IS NULL`,
+      ) AND ${runFailureSql("failure")} AND acknowledged_at IS NULL`,
       )
       .get(
         scope.tenantId,
@@ -429,31 +431,34 @@ export class AutomationRepository {
     runId: string,
     now: number,
   ): AutomationRunRecord {
-    const run = this.getRun(scope, automationId, runId);
-    if (run.forceResetAt !== null)
-      throw new DomainError(
-        "invalid_transition",
-        "A force-reset run is an immutable abandoned result.",
-      );
-    if (run.state === "uncertain")
-      throw new DomainError(
-        "invalid_transition",
-        "Resolve the uncertain run before acknowledging it.",
-      );
-    if (run.state !== "completed" && run.state !== "failed")
-      throw new DomainError(
-        "invalid_transition",
-        "Only a delivered or failed run can be acknowledged.",
-      );
-    if (run.acknowledgedAt === null && run.forceResetAt === null)
-      this.database
-        .prepare(
-          `UPDATE automation_runs
-      SET acknowledged_at = ? WHERE tenant_id = ? AND owner_principal_id = ? AND automation_id = ? AND id = ?
-      AND acknowledged_at IS NULL`,
-        )
-        .run(now, scope.tenantId, scope.principalId, automationId, runId);
-    return this.getRun(scope, automationId, runId);
+    return this.database.transaction(() => {
+      const run = this.getRun(scope, automationId, runId);
+      if (run.forceResetAt !== null)
+        throw new DomainError(
+          "invalid_transition",
+          "A force-reset run is an immutable abandoned result.",
+        );
+      if (run.state === "uncertain")
+        throw new DomainError(
+          "invalid_transition",
+          "Resolve the uncertain run before acknowledging it.",
+        );
+      if (run.state !== "completed" && run.state !== "failed")
+        throw new DomainError(
+          "invalid_transition",
+          "Only a delivered or failed run can be acknowledged.",
+        );
+      if (run.acknowledgedAt === null && run.forceResetAt === null)
+        this.database
+          .prepare(
+            `UPDATE automation_runs
+        SET acknowledged_at = ? WHERE tenant_id = ? AND owner_principal_id = ? AND automation_id = ? AND id = ?
+        AND acknowledged_at IS NULL`,
+          )
+          .run(now, scope.tenantId, scope.principalId, automationId, runId);
+      this.retireAcknowledgedOneShot(scope, automationId, now);
+      return this.getRun(scope, automationId, runId);
+    })();
   }
 
   cancelDeferredRuns(
@@ -991,14 +996,17 @@ export class AutomationRepository {
         startedAt === run.turnStartedAt &&
         endedAt === run.turnEndedAt
       ) {
-        return undefined;
+        return this.retireAcknowledgedOneShot(scope, run.automationId, input.settledAt)
+          ? run : undefined;
       }
+      const newProblem = run.turnId === null && input.outcome !== "completed";
       this.database
         .prepare(
           `
             UPDATE automation_runs
             SET turn_id = ?, turn_outcome = ?, turn_settled_at = ?,
-              turn_started_at = ?, turn_ended_at = ?
+              turn_started_at = ?, turn_ended_at = ?,
+              acknowledged_at = CASE WHEN ? THEN NULL ELSE acknowledged_at END
             WHERE tenant_id = ? AND owner_principal_id = ?
               AND automation_id = ? AND id = ?
           `,
@@ -1009,11 +1017,16 @@ export class AutomationRepository {
           run.turnSettledAt ?? input.settledAt,
           startedAt,
           endedAt,
+          Number(newProblem && run.state === "completed"),
           scope.tenantId,
           scope.principalId,
           run.automationId,
           run.id,
         );
+      if (newProblem && run.state !== "failed") {
+        activateSettledThread(this.database, scope, run.anchorThreadId, input.settledAt);
+      }
+      this.retireAcknowledgedOneShot(scope, run.automationId, input.settledAt);
       return this.getRun(scope, run.automationId, run.id);
     })();
   }
@@ -1025,14 +1038,17 @@ export class AutomationRepository {
    * them. Returns the runs it settled.
    */
   settleRunTurnsFromCompletions(): AutomationRunRecord[] {
-    return (
-      this.database
+    return this.database.transaction(() => {
+      const settled = (this.database
         .prepare(
           `
             UPDATE automation_runs AS run
             SET turn_id = observation.application_turn_id,
               turn_outcome = observation.completion_outcome,
-              turn_settled_at = observation.completion_observed_at
+              turn_settled_at = observation.completion_observed_at,
+              acknowledged_at = CASE WHEN run.state = 'completed'
+                AND observation.completion_outcome <> 'completed'
+                THEN NULL ELSE run.acknowledged_at END
             FROM submission_completion_observations AS observation
             WHERE observation.tenant_id = run.tenant_id
               AND observation.owner_principal_id = run.owner_principal_id
@@ -1045,8 +1061,69 @@ export class AutomationRepository {
             RETURNING ${runColumns}
           `,
         )
-        .all() as RunRow[]
-    ).map(runFromRow);
+        .all() as RunRow[]).map(runFromRow);
+      for (const run of settled) {
+        if (run.turnOutcome !== "completed" && run.state !== "failed") activateSettledThread(
+          this.database,
+          { tenantId: run.tenantId, principalId: run.ownerPrincipalId },
+          run.anchorThreadId,
+          run.turnSettledAt!,
+        );
+      }
+      // Also reconcile already-settled history on upgrade or after a crash.
+      // Returned runs make the existing startup observer publish removals.
+      const now = Date.now();
+      const retired = this.database.prepare(`
+        UPDATE automation_definitions AS definition
+        SET enabled = 0, next_run_at = NULL, deleted_at = max(?, updated_at),
+          updated_at = max(?, updated_at), revision = revision + 1
+        WHERE ${retirableOneShotSql("definition")}
+        RETURNING tenant_id AS tenantId, owner_principal_id AS principalId,
+          id, run_at AS runAt
+      `).all(now, now) as {
+        tenantId: string; principalId: string; id: string; runAt: number;
+      }[];
+      const runKey = (run: AutomationRunRecord) => JSON.stringify([run.tenantId, run.ownerPrincipalId, run.id]);
+      const changed = new Map(settled.map((run) => [runKey(run), run]));
+      for (const definition of retired) {
+        const run = this.findOccurrence(definition, definition.id, `scheduled:${definition.runAt}`)!;
+        changed.set(runKey(run), run);
+      }
+      return [...changed.values()];
+    })();
+  }
+
+  /** Reconcile derived retirement after external lifecycle work such as reset. */
+  retireAcknowledgedOneShotsForThreads(
+    scope: RequestScope,
+    threadIds: readonly string[],
+    now: number,
+  ): AutomationDefinitionRecord[] {
+    if (threadIds.length === 0) return [];
+    return this.database.transaction(() => {
+      const candidates = this.database.prepare(`
+        SELECT id FROM automation_definitions AS definition
+        WHERE tenant_id = ? AND owner_principal_id = ?
+          AND anchor_thread_id IN (${threadIds.map(() => "?").join(",")})
+          AND ${retirableOneShotSql("definition")}
+      `).all(scope.tenantId, scope.principalId, ...threadIds) as { id: string }[];
+      return candidates.flatMap(({ id }) => this.retireAcknowledgedOneShot(scope, id, now)
+        ? [this.getDefinition(scope, id)] : []);
+    })();
+  }
+
+  private retireAcknowledgedOneShot(
+    scope: RequestScope,
+    automationId: string,
+    now: number,
+  ): boolean {
+    return this.database.prepare(`
+      UPDATE automation_definitions AS definition
+      SET enabled = 0, next_run_at = NULL, deleted_at = max(?, updated_at),
+        updated_at = max(?, updated_at), revision = revision + 1
+      WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?
+        AND ${retirableOneShotSql("definition")}
+    `).run(now, now, scope.tenantId, scope.principalId, automationId).changes === 1;
   }
 
   listDefinitions(
@@ -1171,6 +1248,7 @@ export class AutomationRepository {
       if (result.changes !== 1) {
         this.throwDefinitionConflictOrNotFound(scope, automationId);
       }
+      this.retireAcknowledgedOneShot(scope, automationId, input.now);
       return this.getDefinition(scope, automationId);
     })();
   }
@@ -1207,6 +1285,7 @@ export class AutomationRepository {
       if (result.changes !== 1) {
         this.throwDefinitionConflictOrNotFound(scope, automationId);
       }
+      this.retireAcknowledgedOneShot(scope, automationId, input.now);
       return this.getDefinition(scope, automationId);
     })();
   }
@@ -2011,6 +2090,7 @@ export class AutomationRepository {
           );
         }
       }
+      this.retireAcknowledgedOneShot(scope, automationId, input.now);
       return this.getRun(scope, automationId, runId);
     })();
   }
@@ -2234,7 +2314,7 @@ export class AutomationRepository {
     }
     // One ordered, limited branch per condition, each over its own index
     // (automation_runs_state_history per state, and
-    // automation_runs_failed_turn_history for failed turns), keeps a page
+    // automation_runs_problem_turn_history for unsuccessful turns), keeps a page
     // bounded by its size, however sparse the matching runs are.
     return (
       this.database
@@ -2260,7 +2340,7 @@ export class AutomationRepository {
               FROM automation_runs
               WHERE tenant_id = ? AND owner_principal_id = ?
                 AND automation_id = ?
-                AND turn_outcome = 'failed'
+                AND turn_outcome IN ('failed', 'interrupted')
                 AND state NOT IN ('failed', 'uncertain')
             ) AS problems,
             coalesce(sum(state = 'skipped'), 0) AS skipped

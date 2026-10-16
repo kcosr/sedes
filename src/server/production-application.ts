@@ -1654,8 +1654,10 @@ export async function startProductionApplication(
       repository: new ThreadForceResetRepository(database),
       interactions,
       runtimes,
-      scheduleThreadPublications: (eventScope, threadIds) =>
-        activeThreadSnapshots.scheduleMany(eventScope, threadIds),
+      scheduleThreadPublications: (eventScope, threadIds) => {
+        automations.reconcileRetirementsForThreads(eventScope, threadIds);
+        activeThreadSnapshots.scheduleMany(eventScope, threadIds);
+      },
       publishTaskChange: (eventScope, taskId) =>
         tasks.publishTaskChange(eventScope, taskId),
       onPostCommitError: reportBackgroundError(
@@ -1721,8 +1723,8 @@ export async function startProductionApplication(
       });
     };
     const attention = new ThreadAttentionService({
-      acknowledgeAutomationRun: (scope, threadId, runId) => {
-        automations.acknowledgeThreadRun(scope, threadId, runId);
+      acknowledgeAutomationRun: (scope, threadId, runId, outcome) => {
+        automations.acknowledgeThreadRun(scope, threadId, runId, outcome);
       },
       inventory: inventoryRepository,
       completions: completion,

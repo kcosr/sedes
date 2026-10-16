@@ -910,7 +910,7 @@ export class ThreadClientStore {
   dismissAttention(
     attention:
       | { kind: "wake"; wokeAt: string }
-      | { kind: "automation_context"; runId: string },
+      | { kind: "automation_context"; runId: string; outcome: "triggered" | "failed" },
   ): Promise<void> {
     return this.#mutate(async () => {
       await this.#api.dismissThreadAttention(

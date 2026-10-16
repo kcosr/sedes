@@ -268,6 +268,19 @@ describe("flatRowGlyphKind ladder", () => {
     );
   });
 
+  it("omits finished automation glyphs while an undismissed trigger context remains", () => {
+    const thread = makeThread({
+      automations: makeAutomation({ enabledCount: 0, exhaustedCount: 1 }),
+      attention: attention({ automationContext: "triggered" }),
+    });
+    expect(flatRowGlyphKind(thread)).toBe("idle");
+    const view = render(<FlatThreadRow thread={thread} density="card" showBackendBrand={false} />);
+    expect(view.container.querySelector(".automation-glyph")).toBeNull();
+    expect(view.container.querySelector(".lucide-circle-pause")).toBeNull();
+    view.rerender(<FlatThreadRow thread={{ ...thread, runState: "running" }} density="card" showBackendBrand={false} />);
+    expect(screen.getByRole("img", { name: "Running" }).querySelector(".comet-spinner")).not.toBeNull();
+  });
+
   it("renders the glyph with its state color hook and accessible name", () => {
     const { container } = render(
       <FlatThreadRow

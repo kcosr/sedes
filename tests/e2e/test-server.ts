@@ -3901,6 +3901,11 @@ async function main(): Promise<void> {
     };
     const scheduleResponse = driver.scheduleScriptedResponse.bind(driver);
     driver.scheduleScriptedResponse = (...args) => {
+      if (piTurnResponseArmed) {
+        piTurnResponseArmed = false;
+        piTurnResponseRelease = () => driver.scheduleScriptedResponse(...args);
+        return;
+      }
       const [record, turn, inputText] = args;
       if (inputText === "Fail with a visible model configuration diagnostic") {
         setTimeout(() => {
@@ -3989,9 +3994,7 @@ async function main(): Promise<void> {
         };
         return;
       }
-      if (!piTurnResponseArmed) return scheduleResponse(...args);
-      piTurnResponseArmed = false;
-      piTurnResponseRelease = () => scheduleResponse(...args);
+      return scheduleResponse(...args);
     };
     const healthy = driver.health.bind(driver);
     driver.health = async () =>
@@ -5049,8 +5052,10 @@ async function main(): Promise<void> {
     repository: new ThreadForceResetRepository(database),
     interactions,
     runtimes,
-    scheduleThreadPublications: (eventScope, threadIds) =>
-      snapshots.scheduleMany(eventScope, threadIds),
+    scheduleThreadPublications: (eventScope, threadIds) => {
+      automations.reconcileRetirementsForThreads(eventScope, threadIds);
+      snapshots.scheduleMany(eventScope, threadIds);
+    },
     publishTaskChange: (eventScope, taskId) =>
       tasks.publishTaskChange(eventScope, taskId),
   });
@@ -5109,8 +5114,8 @@ async function main(): Promise<void> {
     });
   };
   const attention = new ThreadAttentionService({
-    acknowledgeAutomationRun: (scope, threadId, runId) => {
-      automations.acknowledgeThreadRun(scope, threadId, runId);
+    acknowledgeAutomationRun: (scope, threadId, runId, outcome) => {
+      automations.acknowledgeThreadRun(scope, threadId, runId, outcome);
     },
     inventory: inventoryRepository,
     completions: completion,
@@ -5249,6 +5254,15 @@ async function main(): Promise<void> {
     }
     applicationDecisionRecords.clear();
   };
+
+  app.post("/__e2e/automations/reconcile", async (_request, response, next) => {
+    try {
+      await automations.reconcileDue(Date.now());
+      response.status(204).end();
+    } catch (error) {
+      next(error);
+    }
+  });
 
   app.post(
     "/__e2e/agent-completion-callbacks/send/:callerThreadId/:targetThreadId",
@@ -5805,6 +5819,13 @@ async function main(): Promise<void> {
     }
     piTurnResponseRelease = undefined;
     release();
+    response.status(204).end();
+  });
+  app.post("/__e2e/pi/turn-response/reset", (_request, response) => {
+    piTurnResponseArmed = false;
+    const release = piTurnResponseRelease;
+    piTurnResponseRelease = undefined;
+    release?.();
     response.status(204).end();
   });
   app.post("/__e2e/pi/pending-steer/arm", (_request, response) => {

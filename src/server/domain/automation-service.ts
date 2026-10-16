@@ -269,6 +269,28 @@ export class AutomationService implements DurableDeadlineSource {
     };
   }
 
+  /** Replay before an adapter performs admission checks on a live definition. */
+  replayUpdate(
+    scope: RequestScope,
+    automationId: string,
+    input: AutomationDefinitionFields & {
+      name: string;
+      expectedRevision: number;
+      mutationId: string;
+    },
+  ): ThreadAutomationDefinition | undefined {
+    const fields = this.#normalizeFields(input),
+      name = normalizeName(input.name);
+    const replay = this.#replayDefinition(
+      scope, automationId, input.mutationId, "update",
+      requestFingerprint({
+        operation: "update", automationId,
+        request: { ...fields, name, expectedRevision: input.expectedRevision },
+      }),
+    );
+    return replay ? this.presentDefinition(scope, replay) : undefined;
+  }
+
   update(
     scope: RequestScope,
     automationId: string,
@@ -555,6 +577,7 @@ export class AutomationService implements DurableDeadlineSource {
     scope: RequestScope,
     threadId: string,
     runId: string,
+    outcome: "triggered" | "failed",
     now = Date.now(),
   ): ThreadAutomationRunResolution {
     this.#assertThread(scope, threadId);
@@ -567,6 +590,13 @@ export class AutomationService implements DurableDeadlineSource {
         "not_found",
         "The automation run was not found for this thread.",
       );
+    // Dismissing the delivered notice must not acknowledge a failure that
+    // arrived after that notice was rendered, including a delayed request.
+    const currentOutcome = run.state === "uncertain" ? "uncertain"
+      : run.state === "failed" || run.turnOutcome === "failed" || run.turnOutcome === "interrupted"
+        ? "failed" : "triggered";
+    if (outcome !== currentOutcome)
+      return this.#presentResolution(scope, run.automationId, run);
     return this.acknowledgeRun(scope, run.automationId, runId, now);
   }
 
@@ -1103,10 +1133,21 @@ export class AutomationService implements DurableDeadlineSource {
   /**
    * Publishes a run whose agent turn settled. Unlike {@link publishRun} it
    * notifies no lifecycle observer (the thread's own turn notification covers
-   * the turn) and leaves scheduling alone: settlement changes neither.
+   * the turn). The repository may retire a dismissed successful one-shot, or
+   * restore attention for a failed turn, in the same settlement transaction.
    */
   publishRunSettlement(scope: RequestScope, run: AutomationRunRecord): void {
     this.#publishRun(scope, run);
+  }
+
+  reconcileRetirementsForThreads(
+    scope: RequestScope,
+    threadIds: readonly string[],
+    now = Date.now(),
+  ): void {
+    for (const definition of this.#repository.retireAcknowledgedOneShotsForThreads(scope, threadIds, now)) {
+      this.#publishDefinition(scope, definition);
+    }
   }
 
   #presentResolution(
@@ -1304,22 +1345,8 @@ export class AutomationService implements DurableDeadlineSource {
       request,
     });
     return this.#repository.database.transaction(() => {
-      const receipt = this.#repository.getMutationReceipt(scope, mutationId);
-      if (receipt) {
-        const replay = this.#repository.getDefinition(
-          scope,
-          receipt.automationId,
-        );
-        if (
-          receipt.mutationKind !== mutationKind ||
-          receipt.requestFingerprint !== fingerprint ||
-          replay.id !== threadId ||
-          (mutationKind !== "delete" && replay.deletedAt !== null)
-        ) {
-          throw mutationReuseConflict();
-        }
-        return { definition: replay, replayed: true };
-      }
+      const replay = this.#replayDefinition(scope, threadId, mutationId, mutationKind, fingerprint);
+      if (replay) return { definition: replay, replayed: true };
       const automationId = this.#definition(scope, threadId).id;
       const definition = action(automationId);
       this.#repository.recordMutationReceipt(scope, {
@@ -1332,6 +1359,28 @@ export class AutomationService implements DurableDeadlineSource {
       });
       return { definition, replayed: false };
     })();
+  }
+
+  #replayDefinition(
+    scope: RequestScope,
+    automationId: string,
+    mutationId: string,
+    mutationKind: "update" | "state" | "delete",
+    fingerprint: string,
+  ): AutomationDefinitionRecord | undefined {
+    const receipt = this.#repository.getMutationReceipt(scope, mutationId);
+    if (!receipt) return undefined;
+    const replay = this.#repository.getDefinition(scope, receipt.automationId);
+    if (
+      receipt.mutationKind !== mutationKind ||
+      receipt.requestFingerprint !== fingerprint ||
+      replay.id !== automationId ||
+      (mutationKind !== "delete" && replay.deletedAt !== null &&
+        receipt.resultRevision !== replay.revision)
+    ) {
+      throw mutationReuseConflict();
+    }
+    return replay;
   }
 
   #changed(): void {

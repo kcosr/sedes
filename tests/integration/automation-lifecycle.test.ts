@@ -1046,7 +1046,7 @@ describe("thread automation lifecycle", () => {
       sourceThreadId: threadId,
     });
     expect(context.runId).toEqual(expect.any(String));
-    service.acknowledgeThreadRun(scope, threadId, context.runId, 2_100);
+    service.acknowledgeThreadRun(scope, threadId, context.runId, "triggered", 2_100);
     expect(contexts()).toEqual([]);
   });
 

@@ -7440,6 +7440,176 @@ describe("normalized HTTP application contract", () => {
     }
   });
 
+  it("replays an exact update after that update retires its dismissed one-shot", async () => {
+    const current = await fixture();
+    try {
+      const workspace = await current
+        .mutate(request(current.app).post("/api/workspaces/open"))
+        .send({
+          environmentId: current.environmentId,
+          path: current.workspacePath,
+          project: { kind: "new", name: "Reminder replay" },
+        })
+        .expect(201);
+      const thread = await current
+        .mutate(request(current.app).post("/api/threads"))
+        .send({
+          workspaceId: workspace.body.id,
+          configuration: { kind: "custom", targetId: current.profile.id },
+          executionWorkspace: { kind: "direct" },
+          title: "Reminder replay",
+        })
+        .expect(201);
+      const threadId = thread.body.threadId as string;
+      const repository = new AutomationRepository(current.database);
+      const scheduledFor = Date.now() - 60_000;
+      const definition = repository.createDefinition(current.owner, {
+        id: randomUUID(),
+        anchorThreadId: threadId,
+        name: "Replayable reminder",
+        prompt: "Remind me",
+        precheck: null,
+        runMode: "same_thread",
+        enabled: true,
+        schedule: { kind: "date_time", runAt: scheduledFor },
+        misfirePolicy: null,
+        nextRunAt: scheduledFor,
+        now: scheduledFor - 1_000,
+      });
+      const delivered = repository.claimScheduledOccurrence(
+        current.owner,
+        definition.id,
+        {
+          occurrenceKey: `scheduled:${scheduledFor}`,
+          scheduledFor,
+          lastScheduledAt: scheduledFor,
+          nextRunAt: null,
+          coalescedCount: 0,
+          claimToken: randomUUID(),
+          leaseExpiresAt: scheduledFor + 60_000,
+          dispatchMutationId: randomUUID(),
+          now: scheduledFor,
+        },
+      ).run;
+      repository.updateRunState(current.owner, definition.id, delivered.id, {
+        expectedState: "claimed",
+        state: "dispatching",
+        claimToken: delivered.claimToken!,
+        retainPromptSnapshot: true,
+        now: scheduledFor + 1,
+      });
+      repository.updateRunState(current.owner, definition.id, delivered.id, {
+        expectedState: "dispatching",
+        state: "completed",
+        claimToken: delivered.claimToken!,
+        completeDefinition: true,
+        now: scheduledFor + 2,
+      });
+      const waiting = repository.createManualRun(current.owner, definition.id, {
+        runId: randomUUID(),
+        occurrenceKey: `manual:${randomUUID()}`,
+        scheduledFor: scheduledFor + 3,
+        claimToken: randomUUID(),
+        leaseExpiresAt: scheduledFor + 60_000,
+        dispatchMutationId: randomUUID(),
+        now: scheduledFor + 3,
+      }).run;
+      repository.deferRun(current.owner, definition.id, waiting.id, {
+        expectedState: "claimed",
+        claimToken: waiting.claimToken!,
+        reason: "source_busy",
+        eligibleAt: null,
+        now: scheduledFor + 4,
+      });
+      repository.settleRunTurn(
+        current.owner,
+        threadId,
+        delivered.dispatchMutationId,
+        {
+          turnId: `turn-${delivered.id}`,
+          outcome: "completed",
+          settledAt: scheduledFor + 5,
+          startedAt: scheduledFor + 1,
+          endedAt: scheduledFor + 5,
+        },
+      );
+      repository.acknowledgeRun(
+        current.owner,
+        definition.id,
+        delivered.id,
+        scheduledFor + 6,
+      );
+      const beforeUpdate = repository.getDefinition(
+        current.owner,
+        definition.id,
+      );
+      expect(beforeUpdate.deletedAt).toBeNull();
+      const automationPath = `/api/automations/${definition.id}`;
+      await current.withHost(request(current.app).get(automationPath)).expect(200);
+
+      const body = {
+        name: "Finished reminder",
+        prompt: "Remind me",
+        runMode: "clone",
+        schedule: {
+          kind: "date_time",
+          runAt: new Date(scheduledFor).toISOString(),
+        },
+        misfirePolicy: null,
+        precheck: null,
+        expectedRevision: beforeUpdate.revision,
+        mutationId: randomUUID(),
+      };
+      const updated = await current
+        .mutate(request(current.app).patch(automationPath))
+        .send(body)
+        .expect(200);
+      const retired = repository.getDefinition(current.owner, definition.id);
+      expect(retired.deletedAt).not.toBeNull();
+      expect(
+        repository.getRun(current.owner, definition.id, waiting.id),
+      ).toMatchObject({
+        state: "cancelled",
+        errorCode: "automation_superseded",
+      });
+      expect(
+        repository.getMutationReceipt(current.owner, body.mutationId),
+      ).toMatchObject({
+        automationId: definition.id,
+        mutationKind: "update",
+        resultRevision: retired.revision,
+      });
+      await current.withHost(request(current.app).get(automationPath)).expect(404);
+
+      current.disableCloneAutomation();
+      await current
+        .mutate(request(current.app).patch(automationPath))
+        .send(body)
+        .expect(200)
+        .expect(({ body: replay }) => expect(replay).toEqual(updated.body));
+      await current
+        .mutate(request(current.app).patch(automationPath))
+        .send({ ...body, name: "Different reminder" })
+        .expect(409)
+        .expect(({ body: conflict }) =>
+          expect(conflict.error.code).toBe("conflict"),
+        );
+      await current
+        .mutate(request(current.app).patch(automationPath))
+        .set("X-Test-Foreign-Principal", "yes")
+        .send(body)
+        .expect(404);
+      expect(repository.getDefinition(current.owner, definition.id)).toEqual(
+        retired,
+      );
+      expect(
+        repository.listRuns(current.owner, definition.id, { limit: 10 }),
+      ).toHaveLength(2);
+    } finally {
+      current.close();
+    }
+  });
+
   it("serves the thread automation capability whether or not an automation exists", async () => {
     const current = await fixture();
     try {
@@ -7703,7 +7873,7 @@ describe("normalized HTTP application contract", () => {
     }
   });
 
-  it("presents settled run turns and lists failed turns as problems", async () => {
+  it("presents settled run turns and lists unsuccessful turns as problems", async () => {
     const current = await fixture();
     try {
       const workspace = await current
@@ -7812,6 +7982,17 @@ describe("normalized HTTP application contract", () => {
           expect(body).toEqual({
             items: [
               expect.objectContaining({
+                id: interrupted.id,
+                state: "completed",
+                turn: {
+                  id: `turn_${interrupted.id}`,
+                  outcome: "interrupted",
+                  settledAt: new Date(2_505).toISOString(),
+                  startedAt: new Date(2_010).toISOString(),
+                  endedAt: new Date(2_500).toISOString(),
+                },
+              }),
+              expect.objectContaining({
                 id: failedTurn.id,
                 state: "completed",
                 turn: {
@@ -7824,7 +8005,7 @@ describe("normalized HTTP application contract", () => {
               }),
             ],
             nextCursor: null,
-            counts: { all: 4, problems: 1, skipped: 0 },
+            counts: { all: 4, problems: 2, skipped: 0 },
           }),
         );
       await current

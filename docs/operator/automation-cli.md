@@ -114,9 +114,13 @@ A cron schedule:
 Use the preview command to validate the exact schedule. Recurring schedules must
 not run more often than every five minutes. The missed-run policy applies to
 downtime and suppression, not to ordinary delivery waiting behind a busy source.
-One-time reminders wait through snooze and retain their definition/history after
-exhaustion. `run-now` does not rearm them; scheduling another occurrence requires
-a distinct future `runAt` and enabling the edited schedule.
+One-time reminders wait through snooze. Once their scheduled agent turn succeeds
+and the user dismisses its result notice, they leave the collection and their
+item/history endpoints return not found. Conversations and internal provenance
+records remain. Dismissal before completion waits for success; failed,
+interrupted, and uncertain work remains available. `run-now` does not rearm a
+consumed schedule; scheduling another occurrence before removal requires a
+distinct future `runAt` and enabling the edited schedule.
 
 ### Prechecks
 

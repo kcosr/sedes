@@ -1566,13 +1566,6 @@ describe("ThreadHeader automation chip", () => {
       title: /^Automation · 1 automation · 1 paused$/u,
       icon: ".lucide-circle-pause",
     },
-    {
-      name: "exhausted",
-      automations: automations({ enabledCount: 0, exhaustedCount: 1 }),
-      health: "exhausted",
-      title: /^Automation · 1 automation · Finished$/u,
-      icon: ".lucide-circle-pause",
-    },
   ])("draws $name with the shared vocabulary", ({ automations, health, title, icon }) => {
     vi.useFakeTimers({ now: NOW, toFake: ["Date"] });
     try {
@@ -1586,6 +1579,14 @@ describe("ThreadHeader automation chip", () => {
     expect(chip.getAttribute("title")).toMatch(title);
     expect(chip.querySelector(icon)).not.toBeNull();
     expect(chip.querySelector(".lucide-clock")).toBeNull();
+  });
+
+  it("omits the status icon for finished one-shots while keeping their collection accessible", async () => {
+    renderHeader({ automations: automations({ enabledCount: 0, exhaustedCount: 1 }) });
+    expect(screen.queryByRole("button", { name: "Automations" })).toBeNull();
+    const menu = await openThreadActions();
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "Automations…" }));
+    expect(window.location.pathname).toBe("/threads/thread-1/automations");
   });
 
   it("opens the automation page from the chip", async () => {

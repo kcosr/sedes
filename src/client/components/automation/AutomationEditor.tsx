@@ -43,6 +43,7 @@ import {
 } from "./automation-form.js";
 import { useAutomationCapability } from "./use-automation-details.js";
 import { useAutomationResource } from "./use-automation-resource.js";
+import type { AutomationResourceReads } from "./automation-resource-reads.js";
 import { useAutomationEditor } from "./use-automation-editor.js";
 import {
   useAutomationAnchor,
@@ -75,13 +76,14 @@ export function AutomationEditor({ store, threadRegistry, threadId, automationId
   const sourceId = resource.definition?.threadId ?? threadId;
   if (resource.error && !resource.definition) return <AutomationAnchorUnavailable message={resource.error} onRetry={resource.reload} />;
   if (!sourceId) return <AutomationAnchorLoading />;
-  return <EditorAnchor key={automationId ?? sourceId} store={store} threadRegistry={threadRegistry} threadId={sourceId} automation={resource.definition} refreshError={resource.error} missing={resource.missing} onRetry={resource.reload} />;
+  return <EditorAnchor key={automationId ?? sourceId} store={store} threadRegistry={threadRegistry} threadId={sourceId} automation={resource.definition} refreshError={resource.error} missing={resource.missing} onRetry={resource.reload} reads={resource.reads} />;
 }
 
-function EditorAnchor({ store, threadRegistry, threadId, automation, refreshError, missing, onRetry }: {
+function EditorAnchor({ store, threadRegistry, threadId, automation, refreshError, missing, onRetry, reads }: {
   store: EditorStore; threadRegistry: AutomationThreadSource; threadId: string;
   automation?: import("../../types.js").ThreadAutomationDefinition;
   refreshError?: string; missing: boolean; onRetry: () => void;
+  reads: AutomationResourceReads;
 }): React.JSX.Element {
   const anchor = useAutomationAnchor(store, threadRegistry, threadId);
   if (anchor.status === "loading") return <AutomationAnchorLoading />;
@@ -89,17 +91,18 @@ function EditorAnchor({ store, threadRegistry, threadId, automation, refreshErro
   return <section className="automations-view" aria-label="Automation editor"><div className="automations-page automation-page">
     {refreshError && <Callout tone="warning" title={missing ? "This automation was deleted" : "The automation could not be refreshed"}
       action={<Button variant="outline" size="sm" onClick={onRetry}>Retry</Button>}>{refreshError} Your edits are kept.</Callout>}
-    <ThreadAutomationEditor store={store} missing={missing} thread={{ ...anchor.thread, automation: automation ?? null }} />
+    <ThreadAutomationEditor store={store} missing={missing} reads={reads} thread={{ ...anchor.thread, automation: automation ?? null }} />
   </div></section>;
 }
 
 function ThreadAutomationEditor({
   store,
-  thread, missing,
+  thread, missing, reads,
 }: {
   readonly store: EditorStore;
   readonly missing: boolean;
   readonly thread: AutomationThread;
+  readonly reads: AutomationResourceReads;
 }): React.JSX.Element {
   const capabilityState = useAutomationCapability(store, thread.id, thread);
   const capability = capabilityState.capability;
@@ -107,6 +110,7 @@ function ThreadAutomationEditor({
     canCloneOnRun: capability?.canCloneOnRun ?? false,
     automationId: thread.automation?.id,
     missing,
+    reads,
   });
   const saving = editor.pending === "save" || editor.pending === "save_and_enable";
   // Leaving is guarded while a save is unresolved too: its outcome is not
@@ -173,7 +177,10 @@ function ThreadAutomationEditor({
   const submit = async (enable: boolean) => {
     const saved = await editor.save({ enable });
     // Up to the automation page: back when the editor was opened from it.
-    if (saved && mounted.current) guard.proceed(automationPath(saved.id), { up: true });
+    if (mounted.current) {
+      if (saved === null) guard.proceed(automationsPath(thread.id), { up: true });
+      else if (saved) guard.proceed(automationPath(saved.id), { up: true });
+    }
   };
   const sections: SettingsEditorSection[] = [
     { id: "automation-name", label: "Name" },

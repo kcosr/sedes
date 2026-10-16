@@ -140,7 +140,7 @@ export type AutomationRunRecord = {
   readonly updatedAt: number;
 };
 
-/** Run-history views: problems are failed or uncertain runs, or a failed turn. */
+/** Run-history views: problems are failed/uncertain runs, or failed/interrupted turns. */
 export type AutomationRunFilter = "all" | "problems" | "skipped";
 
 export type AutomationRunCounts = {

@@ -37,6 +37,15 @@ export function latestDecisiveRunIdSql(definition: string): string {
     ORDER BY decisive.created_at DESC, decisive.id DESC LIMIT 1)`;
 }
 
+/** Delivery failure or an unsuccessful agent turn, excluding abandoned work. */
+export function runFailureSql(run: string): string {
+  return `(${run}.force_reset_at IS NULL AND (
+    (${run}.state = 'failed'
+      AND coalesce(${run}.error_code, '') != 'automation_uncertain_resolved')
+    OR (${run}.state = 'completed' AND ${run}.turn_outcome IN ('failed', 'interrupted'))
+  ))`;
+}
+
 export function needsAttentionSql(definition: string): string {
   return `(EXISTS (
     SELECT 1 FROM automation_runs AS unresolved
@@ -51,12 +60,13 @@ export function needsAttentionSql(definition: string): string {
       AND failure.owner_principal_id = ${definition}.owner_principal_id
       AND failure.automation_id = ${definition}.id
       AND failure.id = ${latestDecisiveRunIdSql(definition)}
-      AND failure.state = 'failed'
+      AND ${runFailureSql("failure")}
       AND failure.acknowledged_at IS NULL
   ))`;
 }
 
-export function inFlightSql(definition: string): string {
+/** Delivery admission only; accepted agent work has already released this slot. */
+export function pendingDeliverySql(definition: string): string {
   return `EXISTS (
     SELECT 1 FROM automation_runs AS active
     WHERE active.tenant_id = ${definition}.tenant_id
@@ -66,10 +76,29 @@ export function inFlightSql(definition: string): string {
   )`;
 }
 
+/** UI activity includes the latest accepted turn without reviving incomplete historical records. */
+export function inFlightSql(definition: string): string {
+  return `(${pendingDeliverySql(definition)} OR EXISTS (
+    SELECT 1 FROM automation_runs AS accepted
+    WHERE accepted.tenant_id = ${definition}.tenant_id
+      AND accepted.owner_principal_id = ${definition}.owner_principal_id
+      AND accepted.automation_id = ${definition}.id
+      AND accepted.force_reset_at IS NULL
+      AND accepted.state = 'completed' AND accepted.turn_outcome IS NULL
+      AND accepted.id = (
+        SELECT latest.id FROM automation_runs AS latest
+        WHERE latest.tenant_id = ${definition}.tenant_id
+          AND latest.owner_principal_id = ${definition}.owner_principal_id
+          AND latest.automation_id = ${definition}.id
+        ORDER BY latest.created_at DESC, latest.id DESC LIMIT 1
+      )
+  ))`;
+}
+
 /** Earliest potentially actionable delivery, before source inventory suppression. */
 export function nextActionAtSql(definition: string): string {
   return `(CASE WHEN ${definition}.deleted_at IS NULL THEN
-    CASE WHEN ${inFlightSql(definition)} THEN (
+    CASE WHEN ${pendingDeliverySql(definition)} THEN (
       SELECT waiting.eligible_at FROM automation_runs AS waiting
       WHERE waiting.tenant_id = ${definition}.tenant_id
         AND waiting.owner_principal_id = ${definition}.owner_principal_id

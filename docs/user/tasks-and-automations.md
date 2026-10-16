@@ -418,11 +418,17 @@ one run; **Skip missed runs** advances to a future occurrence and records the
 skipped work. This policy does not discard a prompt already waiting for normal
 delivery because the source is busy, materializing, or at queue capacity.
 
-A one-time reminder waits while its source is snoozed. After its scheduled
-occurrence is consumed, the automation remains **Finished**, with its history
-and any problem still available. **Run now** is a separate invocation and does
-not rearm that schedule. To schedule another occurrence, choose a new future
-date and enable it. Changing its name or prompt does not rearm it.
+A one-time reminder waits while its source is snoozed. After its agent turn
+succeeds, its thread shows no schedule icon, while its result notice remains
+until dismissed. Dismissing that notice removes the finished reminder from the
+automation collection; the conversation and any result thread remain. If you
+dismiss while the agent is still working, removal waits for success. A later
+failure or interruption is shown again and keeps the reminder available.
+
+**Run now** is a separate invocation and does not rearm a consumed schedule.
+Before the reminder is removed, you can choose a new future date and enable it
+to schedule another occurrence. Dismissing an older result does not remove that
+new schedule. Changing its name or prompt does not rearm it.
 
 ### Edit or delete an automation
 
@@ -452,7 +458,8 @@ separate rows; the thread itself still has one sidebar row.
 Open a row for its definition and history. Its actions address that automation,
 including **Run now**, **Pause** or **Enable**, **Edit**, and **Open thread**.
 An outstanding problem remains visible even when another automation on the
-same thread succeeds or runs. Completed one-time reminders remain available.
+same thread succeeds or runs. Successful one-time reminders remain available
+until their result notice is dismissed.
 
 ## Open an automation
 
@@ -482,9 +489,11 @@ A delivery failure belongs to its automation. A later successful delivery from
 that same automation can supersede it; a sibling's success cannot. Use
 **Acknowledge failure** on the automation page, or dismiss its thread notice,
 to acknowledge the indicated run only. Skipped or cancelled work does not
-clear a prior delivery problem. A failure of the assistant's turn after delivery
-is recorded in run history and the thread's normal attention state; it does not
-pause the schedule or become a delivery failure.
+clear a prior delivery problem. A failure or interruption of the assistant's
+turn after delivery also needs attention and appears in the result notice and
+run history. It does not change the recorded delivery result or pause a recurring
+schedule. Dismissing the earlier delivery notice cannot acknowledge this later
+problem.
 
 ### Read the definition
 
@@ -498,16 +507,19 @@ thread remains the authority for model and execution configuration.
 | --- | --- |
 | **Active** | Enabled and eligible for future scheduled occurrences |
 | **Paused** / **Not started** | Future scheduling is disabled |
-| **Finished** | The one-time scheduled occurrence has been consumed; history remains |
+| **Finished** | The one-time occurrence has been consumed; a successful reminder remains until its notice is dismissed |
 | **Waiting on source** | An unsent run is deferred until its source or capacity allows delivery |
 | **Sending** / **Waiting for turn** | A run is being delivered or is in the normal thread queue |
-| **Failed** | A delivery problem needs attention |
+| **Failed** | A delivery failure or unsuccessful agent turn needs attention |
 | **Outcome unknown** | Delivery needs reconciliation before safe retry |
 | **Thread archived** / **Snoozed** | Source inventory state suppresses scheduling |
 
 Sidebar and thread-header summaries aggregate all attached automations. They
 show counts, upcoming work, and attention without choosing an arbitrary sibling.
 Opening the collection identifies which automation needs action.
+Finished reminders alone show no sidebar or thread-header schedule icon, even
+while their result notices remain. Other active or paused schedules and
+outstanding problems still show their own status.
 
 ## Park an automated thread
 
@@ -587,7 +599,9 @@ closed.
 History includes scheduled and manual invocations, with their captured definition
 revision, delivery state, precheck result, deferral reason, and actual result
 thread. The **All**, **Problems**, and **Skipped** filters and pagination help
-inspect older runs. A one-time reminder's history remains after exhaustion.
+inspect older runs. A successful one-time reminder and its history leave these
+views when you dismiss its result notice. Sedes retains the internal records
+needed for thread provenance and duplicate-request protection.
 
 Delivery and assistant completion are different events: **Delivered** confirms
 that the input reached the provider; the later turn outcome can be completed,

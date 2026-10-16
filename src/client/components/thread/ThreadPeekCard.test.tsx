@@ -224,6 +224,16 @@ describe("ThreadPeekCard automation line", () => {
   const automationRow = (container: HTMLElement) =>
     container.querySelector<HTMLElement>('[data-row="automation"]')!;
 
+  it("omits finished history without hiding a thread's ordinary state", () => {
+    const subject = automated({ enabledCount: 0, exhaustedCount: 1 }, {
+      attention: { ...thread().attention, automationContext: "triggered" },
+    });
+    const container = renderPeek(subject);
+    expect(automationRow(container)).toBeNull();
+    expect(container.querySelector('[data-row="state"]')).toHaveTextContent("Idle");
+    expect(container.querySelector(".lucide-circle-pause")).toBeNull();
+  });
+
   it.each([
     {
       name: "active",

@@ -23,7 +23,7 @@ import { useAutomationThread } from "./use-automation-thread.js";
 /** The fixture thread's runs, read as the page does: from its live summary. */
 function useRuns(fixture: AutomationStore, filter: AutomationRunFilter) {
   useSyncExternalStore(fixture.store.subscribe, fixture.store.getSnapshot);
-  return useAutomationRuns(fixture.store, { id: THREAD_ID, automation: fixture.automationForThread(THREAD_ID) }, filter);
+  return useAutomationRuns(fixture.store, { id: THREAD_ID, automation: fixture.automationForThread(THREAD_ID) }, filter, fixture.reads);
 }
 
 const counts = { all: 30, problems: 2, skipped: 4 };
@@ -33,6 +33,28 @@ function page(items: ReturnType<typeof run>[], nextCursor: string | null = null,
 }
 
 describe("useAutomationRuns", () => {
+  it.each([false, true])("aborts a pending history read before deletion (load more: %s)", async (loadMore) => {
+    let finishRead!: (value: ReturnType<typeof page>) => void;
+    const list = vi.fn().mockImplementation(() => new Promise((resolve) => { finishRead = resolve; }));
+    if (loadMore) list.mockResolvedValueOnce(page([run()], "next-page"));
+    const fixture = automationStore([{ automation: automationSummary() }], { listAutomationRuns: list });
+    const { result } = renderHook(() => useRuns(fixture, "all"));
+    if (loadMore) {
+      await waitFor(() => expect(result.current.status).toBe("ready"));
+      act(() => result.current.loadMore());
+    }
+    await waitFor(() => expect(list).toHaveBeenCalledTimes(loadMore ? 2 : 1));
+    const signal = list.mock.calls.at(-1)![1].signal as AbortSignal;
+    await act(async () => {
+      await fixture.reads.remove(async () => { expect(signal.aborted).toBe(true); });
+    });
+    await act(async () => finishRead(page([run()], "late-page")));
+    act(() => { result.current.retry(); result.current.loadMore(); });
+    expect(result.current.items).toEqual([]);
+    expect(result.current.status).toBe("idle");
+    expect(list).toHaveBeenCalledTimes(loadMore ? 2 : 1);
+  });
+
   it("loads the first page with the whole-history counts", async () => {
     const items = [run(), run()];
     const fixture = automationStore([{ automation: automationSummary() }], {
@@ -260,7 +282,7 @@ describe("useAutomationRuns", () => {
     expect(result.current.items).toEqual([manual, { ...older, state: "failed" }]);
   });
 
-  it("leaves a run out of a filter it does not match", async () => {
+  it("keeps failed and interrupted turns in Problems while excluding ordinary deliveries", async () => {
     const fixture = automationStore([{ automation: automationSummary() }], {
       listAutomationRuns: vi.fn().mockResolvedValue(page([])),
     });
@@ -268,13 +290,15 @@ describe("useAutomationRuns", () => {
     await waitFor(() => expect(result.current.status).toBe("ready"));
     act(() => result.current.upsert(run({ state: "claimed" })));
     act(() =>
-      result.current.upsert(run({ turn: { id: "turn-1", outcome: "interrupted", settledAt: new Date().toISOString() } })),
+      result.current.upsert(run({ turn: { id: "turn-completed", outcome: "completed", settledAt: new Date().toISOString() } })),
     );
     expect(result.current.items).toEqual([]);
-    // A failed turn is a problem, as the server counts and filters it.
+    const interruptedTurn = run({ turn: { id: "turn-1", outcome: "interrupted", settledAt: new Date().toISOString() } });
+    act(() => result.current.upsert(interruptedTurn));
+    expect(result.current.items).toEqual([interruptedTurn]);
     const failedTurn = run({ turn: { id: "turn-2", outcome: "failed", settledAt: new Date().toISOString() } });
     act(() => result.current.upsert(failedTurn));
-    expect(result.current.items).toEqual([failedTurn]);
+    expect(result.current.items).toEqual([failedTurn, interruptedTurn]);
   });
 
   it("reports a failed first page and retries it", async () => {
@@ -302,7 +326,7 @@ describe("useAutomationRuns: reconciling the loaded history", () => {
       case "all":
         return true;
       case "problems":
-        return item.state === "failed" || item.state === "uncertain" || item.turn?.outcome === "failed";
+        return item.state === "failed" || item.state === "uncertain" || item.turn?.outcome === "failed" || item.turn?.outcome === "interrupted";
       case "skipped":
         return item.state === "skipped";
     }

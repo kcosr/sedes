@@ -7,14 +7,15 @@ import { AUTOMATION_ID, THREAD_ID, automationStore, definition } from "./automat
 afterEach(cleanup);
 
 function editHook(fixture: ReturnType<typeof automationStore>, saved = definition(), canCloneOnRun = true) {
-  return renderHook(({ live }) => useAutomationEditor(fixture.store, { id: THREAD_ID, automation: live }, { canCloneOnRun, automationId: saved.id }), { initialProps: { live: saved } });
+  const initialProps: { live: ReturnType<typeof definition>; missing?: boolean } = { live: saved };
+  return renderHook(({ live, missing }) => useAutomationEditor(fixture.store, { id: THREAD_ID, automation: live }, { canCloneOnRun, automationId: saved.id, missing, reads: fixture.reads }), { initialProps });
 }
 
 describe("independent automation editor", () => {
   it("creates a named enabled sibling atomically, even when this source already has one", async () => {
     const saved = definition({ name: "Daily update" });
     const fixture = automationStore([{ automation: definition() }], { createAutomation: vi.fn().mockResolvedValue(saved) });
-    const { result } = renderHook(() => useAutomationEditor(fixture.store, { id: THREAD_ID, automation: null }, { canCloneOnRun: true }));
+    const { result } = renderHook(() => useAutomationEditor(fixture.store, { id: THREAD_ID, automation: null }, { canCloneOnRun: true, reads: fixture.reads }));
     act(() => result.current.update({ name: "Daily update", prompt: "Send an update" }));
     await waitFor(() => expect(result.current.validation.valid).toBe(true));
     await act(async () => { expect(await result.current.save({ enable: true })).toEqual(saved); });
@@ -24,7 +25,7 @@ describe("independent automation editor", () => {
 
   it("requires a name and creates a paused one-shot with no missed-occurrence policy", async () => {
     const fixture = automationStore([{ automation: null }], { createAutomation: vi.fn().mockResolvedValue(definition()) });
-    const { result } = renderHook(() => useAutomationEditor(fixture.store, { id: THREAD_ID, automation: null }, { canCloneOnRun: true }));
+    const { result } = renderHook(() => useAutomationEditor(fixture.store, { id: THREAD_ID, automation: null }, { canCloneOnRun: true, reads: fixture.reads }));
     act(() => result.current.update({ prompt: "Remember to call", scheduleKind: "date_time" }));
     await waitFor(() => expect(result.current.preview.checking).toBe(false));
     expect(result.current.validation.valid).toBe(false);
@@ -52,10 +53,54 @@ describe("independent automation editor", () => {
     expect(fixture.api.updateAutomation).toHaveBeenCalledWith(AUTOMATION_ID, expect.objectContaining({ expectedRevision: 4, name: "Renamed schedule" }));
   });
 
+  it("does not reload a deleted stale form, including a reload callback captured before deletion", async () => {
+    const fixture = automationStore([{ automation: definition() }]);
+    const { result, rerender } = editHook(fixture);
+    await waitFor(() => expect(result.current.status).toBe("ready"));
+    act(() => result.current.update({ name: "Local edit" }));
+    const newer = definition({ revision: 4, name: "Remote edit" });
+    rerender({ live: newer });
+    expect(result.current.stale).toBe(true);
+    const staleReload = result.current.reload;
+    const reads = fixture.api.getAutomation.mock.calls.length;
+    rerender({ live: newer, missing: true });
+    expect(result.current.deletedElsewhere).toBe(true);
+    expect(result.current.stale).toBe(false);
+    act(() => { staleReload(); result.current.reload(); });
+    expect(fixture.api.getAutomation).toHaveBeenCalledTimes(reads);
+    expect(result.current.form.name).toBe("Local edit");
+    await act(async () => { expect(await result.current.save()).toBeUndefined(); });
+    expect(fixture.api.createAutomation).not.toHaveBeenCalled();
+    expect(fixture.api.updateAutomation).not.toHaveBeenCalled();
+  });
+
+  it("aborts an independent editor read on deletion and rejects its late response", async () => {
+    const fixture = automationStore([{ automation: definition() }]);
+    const { result, rerender } = editHook(fixture);
+    await waitFor(() => expect(result.current.status).toBe("ready"));
+    act(() => result.current.update({ name: "Keep this local edit" }));
+    const newer = definition({ revision: 4, name: "Remote edit" });
+    rerender({ live: newer });
+    let finishRead!: (value: ReturnType<typeof definition>) => void;
+    fixture.api.getAutomation.mockImplementationOnce(() => new Promise((resolve) => { finishRead = resolve; }));
+    act(() => result.current.reload());
+    await waitFor(() => expect(fixture.api.getAutomation).toHaveBeenCalledTimes(2));
+    const signal = fixture.api.getAutomation.mock.calls[1]![1] as AbortSignal;
+    rerender({ live: newer, missing: true });
+    expect(signal.aborted).toBe(true);
+    await act(async () => finishRead(newer));
+    expect(result.current.form.name).toBe("Keep this local edit");
+    expect(result.current.definition?.revision).toBe(3);
+    expect(result.current.deletedElsewhere).toBe(true);
+    expect(result.current.stale).toBe(false);
+    act(() => result.current.reload());
+    expect(fixture.api.getAutomation).toHaveBeenCalledTimes(2);
+  });
+
   it("retains the same create receipt on retry and never adopts a sibling after a conflict", async () => {
     const create = vi.fn().mockRejectedValueOnce(new Error("conflict")).mockResolvedValueOnce(definition());
     const fixture = automationStore([{ automation: definition() }], { createAutomation: create });
-    const { result } = renderHook(() => useAutomationEditor(fixture.store, { id: THREAD_ID, automation: null }, { canCloneOnRun: true }));
+    const { result } = renderHook(() => useAutomationEditor(fixture.store, { id: THREAD_ID, automation: null }, { canCloneOnRun: true, reads: fixture.reads }));
     act(() => result.current.update({ name: "Reminder", prompt: "Remind me" }));
     await waitFor(() => expect(result.current.validation.valid).toBe(true));
     await act(async () => { await result.current.save(); });
@@ -69,8 +114,22 @@ describe("independent automation editor", () => {
     const fixture = automationStore([{ automation: definition() }]);
     const { result } = editHook(fixture);
     await waitFor(() => expect(result.current.status).toBe("ready"));
+    let finishRead!: (value: ReturnType<typeof definition>) => void;
+    fixture.api.getAutomation.mockImplementationOnce(() => new Promise((resolve) => { finishRead = resolve; }));
+    act(() => result.current.reload());
+    await waitFor(() => expect(fixture.api.getAutomation).toHaveBeenCalledTimes(2));
+    const signal = fixture.api.getAutomation.mock.calls[1]![1] as AbortSignal;
+    fixture.api.deleteAutomation.mockImplementation(async () => {
+      expect(signal.aborted).toBe(true);
+      expect(fixture.reads.begin().signal.aborted).toBe(true);
+      return { deleted: true };
+    });
     await act(async () => { await result.current.remove(); });
+    await act(async () => finishRead(definition({ revision: 99 })));
     expect(fixture.api.deleteAutomation).toHaveBeenCalledWith(AUTOMATION_ID, 3, expect.any(String));
+    expect(result.current.definition?.revision).toBe(3);
+    expect(result.current.deletedElsewhere).toBe(true);
+    expect(fixture.api.getAutomation).toHaveBeenCalledTimes(2);
   });
   it("allows name and prompt edits that retain an existing Fork when the source cannot fork now", async () => {
     const saved = definition({ runMode: "clone" });
@@ -98,7 +157,7 @@ describe("independent automation editor", () => {
 
   it("enforces the shared 160-character name boundary", async () => {
     const fixture = automationStore([{ automation: null }]);
-    const { result } = renderHook(() => useAutomationEditor(fixture.store, { id: THREAD_ID, automation: null }, { canCloneOnRun: true }));
+    const { result } = renderHook(() => useAutomationEditor(fixture.store, { id: THREAD_ID, automation: null }, { canCloneOnRun: true, reads: fixture.reads }));
     act(() => result.current.update({ name: "a".repeat(161), prompt: "Reminder" }));
     await waitFor(() => expect(result.current.preview.checking).toBe(false));
     expect(result.current.validation.valid).toBe(false);

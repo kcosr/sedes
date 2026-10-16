@@ -2354,10 +2354,17 @@ observation for the run's dispatch operation on its result thread (the fork
 child, else the anchor). It records the application turn ID and terminal
 outcome once, and fills in the backend turn's own start and end when a later
 observation reports them; it never uses observation time as a duration and
-drops an end before the start. It is idempotent across snapshot replays,
-skips force-reset runs, and never changes run state, scheduling or attention.
-At startup it settles runs whose observation committed while no observer was
-bound.
+drops an end before the start. It is idempotent across snapshot replays and skips
+force-reset runs. It never changes the recorded delivery state or rearms a
+schedule. Failed or interrupted settlement restores attention if the user had
+dismissed the earlier delivery notice; replay must preserve acknowledgement of
+the failure. A successful scheduled one-shot is retired only after its result
+notice is dismissed and no other outstanding work or result notice blocks it.
+Retain its internal records and threads. Dismissals name the observed outcome so
+a delayed request cannot acknowledge a newer failure. At startup it settles runs
+whose observation committed while no observer was bound and reconciles eligible
+retirement from retained history. Pi, Codex, Claude, and OpenCode consume this
+same normalized lifecycle; Grok continues to reject automation admission.
 
 Passive external notifications consume finalized observations on this same rail,
 including enrichment after recovery first records an incomplete observation.

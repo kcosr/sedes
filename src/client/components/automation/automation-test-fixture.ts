@@ -1,4 +1,5 @@
 import { vi, type Mock } from "vitest";
+import { AutomationResourceReads } from "./automation-resource-reads.js";
 import type { NormalizedApplicationThreadSummary } from "../../../shared/index.js";
 import type { ThreadAutomationRun } from "../../../shared/protocol/automation-presentation.js";
 import type { SummaryAutomation } from "../../automation/automation-health.js";
@@ -166,9 +167,10 @@ export type AutomationApi = {
 };
 
 export interface AutomationStore {
+  readonly reads: AutomationResourceReads;
   readonly store: ApplicationClientStore;
   readonly automationForThread: (threadId: string) => SummaryAutomation | null;
-  readonly invalidate: (automationId?: string) => void;
+  readonly invalidate: (automationId?: string, deleted?: boolean) => void;
   readonly invalidateSource: (threadId?: string) => void;
   readonly api: AutomationApi;
   readonly mutateInventory: ReturnType<typeof vi.fn>;
@@ -279,9 +281,10 @@ export function automationStore(
   } as unknown as ApplicationClientStore;
   return {
     store,
+    reads: new AutomationResourceReads(),
     automationForThread,
     invalidateSource: (threadId) => { for (const listener of sourceListeners) listener(threadId); },
-    invalidate: (automationId) => { for (const listener of automationListeners) listener(automationId ? { automationId, threadId: THREAD_ID } : undefined); },
+    invalidate: (automationId, deleted = false) => { for (const listener of automationListeners) listener(automationId ? { automationId, threadId: THREAD_ID, revision: 0, runsRevision: 0, deleted } : undefined); },
     api: fullApi,
     mutateInventory,
     publish: (next, forks = []) => {

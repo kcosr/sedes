@@ -2434,7 +2434,7 @@ export class ApiClient {
     threadId: string,
     attention:
       | { kind: "wake"; wokeAt: string }
-      | { kind: "automation_context"; runId: string }
+      | { kind: "automation_context"; runId: string; outcome: "triggered" | "failed" }
       | { kind: "unseen_completion"; operationId: string }
       | { kind: "queue_failure"; queuedInputId: string },
     mutationId: string,

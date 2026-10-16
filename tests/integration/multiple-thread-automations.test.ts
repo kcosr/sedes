@@ -31,6 +31,10 @@ import {
 } from "../../src/server/domain/automation-service.js";
 import { AutomationDispatcher } from "../../src/server/runtime/automation-dispatcher.js";
 import { readThreadAutomationContexts } from "../../src/server/application/thread-automation-context.js";
+import { readThreadAutomationSummary } from "../../src/server/application/thread-automation-summary.js";
+import type { AutomationRunRecord, AutomationTurnOutcome } from "../../src/server/domain/automation-models.js";
+import { AutomationTurnSettlementObserver } from "../../src/server/runtime/automation-conversation-gateway.js";
+import { SubmissionCompletionRepository } from "../../src/server/db/repositories/submission-completion-repository.js";
 
 const configuration = parseResolvedBackendConfiguration({
   schemaVersion: 10,
@@ -220,6 +224,203 @@ describe("multiple independent thread automations", () => {
       now: at,
     }).run;
   }
+
+  function deliver(id: string, at = 10_000) {
+    const run = claim(id, at);
+    repository.updateRunState(scope, id, run.id, {
+      expectedState: "claimed", state: "dispatching", claimToken: run.claimToken!,
+      retainPromptSnapshot: true, now: at + 1,
+    });
+    return repository.updateRunState(scope, id, run.id, {
+      expectedState: "dispatching", state: "completed", claimToken: run.claimToken!,
+      completeDefinition: repository.getDefinition(scope, id).schedule.kind === "date_time",
+      now: at + 2,
+    });
+  }
+
+  function finishTurn(run: AutomationRunRecord, outcome: AutomationTurnOutcome, at = 11_000) {
+    const settled = repository.settleRunTurn(scope, run.childThreadId ?? run.anchorThreadId,
+      run.dispatchMutationId, {
+        turnId: `turn-${run.id}`, outcome, settledAt: at, startedAt: null, endedAt: null,
+      });
+    if (settled) service.publishRunSettlement(scope, settled);
+    return settled;
+  }
+
+  it("keeps a successful one-shot and its banner until dismissal, then retains only its internal records", () => {
+    const reminder = create("Reminder"), daily = create("Daily", recurring());
+    const run = deliver(reminder.id);
+    finishTurn(run, "completed");
+    expect(service.list(scope, { threadId, pageSize: 10 }).items.map((item) => item.id))
+      .toEqual(expect.arrayContaining([reminder.id, daily.id]));
+    expect(readThreadAutomationContexts(db, scope, threadId))
+      .toEqual([expect.objectContaining({ runId: run.id, outcome: "triggered" })]);
+    const result = service.acknowledgeThreadRun(scope, threadId, run.id, "triggered", 12_000);
+    expect(result.automation).toBeNull();
+    expect(service.list(scope, { threadId, pageSize: 10 }).items.map((item) => item.id)).toEqual([daily.id]);
+    expect(readThreadAutomationContexts(db, scope, threadId)).toEqual([]);
+    expect(readThreadAutomationSummary(db, scope, threadId)).toMatchObject({ totalCount: 1, enabledCount: 1 });
+    expect(repository.getRun(scope, reminder.id, run.id)).toMatchObject({
+      state: "completed", turnOutcome: "completed", acknowledgedAt: 12_000,
+    });
+    expect(repository.isExhausted(scope, reminder.id)).toBe(true);
+    expect(inventory.getThread(scope, threadId).thread.id).toBe(threadId);
+    expect(publications).toHaveBeenLastCalledWith(scope, expect.objectContaining({ automationId: reminder.id, deleted: true }));
+    const revision = repository.getDefinition(scope, reminder.id).revision;
+    expect(service.acknowledgeThreadRun(scope, threadId, run.id, "triggered", 13_000).automation).toBeNull();
+    expect(repository.getDefinition(scope, reminder.id).revision).toBe(revision);
+  });
+
+  it("defers an early dismissal until the agent turn succeeds", () => {
+    const reminder = create("Reminder"), run = deliver(reminder.id);
+    service.acknowledgeThreadRun(scope, threadId, run.id, "triggered", 10_500);
+    expect(service.get(scope, reminder.id).id).toBe(reminder.id);
+    expect(readThreadAutomationContexts(db, scope, threadId)).toEqual([]);
+    expect(readThreadAutomationSummary(db, scope, threadId).inFlightCount).toBe(1);
+    finishTurn(run, "completed");
+    expect(repository.getDefinition(scope, reminder.id).deletedAt).not.toBeNull();
+    expect(service.list(scope, { threadId, pageSize: 10 }).items).toEqual([]);
+    expect(publications).toHaveBeenLastCalledWith(scope, expect.objectContaining({ automationId: reminder.id, deleted: true }));
+  });
+
+  it.each(["failed", "interrupted"] as const)("surfaces a later %s turn after early dismissal and ignores stale trigger dismissal", (outcome) => {
+    const reminder = create("Reminder"), run = deliver(reminder.id);
+    service.acknowledgeThreadRun(scope, threadId, run.id, "triggered", 10_500);
+    finishTurn(run, outcome);
+    expect(repository.getRun(scope, reminder.id, run.id).acknowledgedAt).toBeNull();
+    expect(service.get(scope, reminder.id).attention).toMatchObject({ runId: run.id, kind: "failed" });
+    expect(readThreadAutomationContexts(db, scope, threadId))
+      .toEqual([expect.objectContaining({ runId: run.id, outcome: "failed" })]);
+    service.acknowledgeThreadRun(scope, threadId, run.id, "triggered", 12_000);
+    expect(repository.getRun(scope, reminder.id, run.id).acknowledgedAt).toBeNull();
+    service.acknowledgeThreadRun(scope, threadId, run.id, "failed", 12_100);
+    expect(service.get(scope, reminder.id).attention).toBeUndefined();
+    expect(repository.getDefinition(scope, reminder.id).deletedAt).toBeNull();
+    // Replaying immutable settlement must not undo an acknowledgement of the failure.
+    expect(finishTurn(run, outcome, 12_200)).toBeUndefined();
+    expect(repository.getRun(scope, reminder.id, run.id).acknowledgedAt).toBe(12_100);
+  });
+
+  it("does not retire a rearmed schedule when an older result is dismissed", () => {
+    const reminder = create("Reminder"), run = deliver(reminder.id);
+    finishTurn(run, "completed");
+    const edited = service.update(scope, reminder.id, {
+      ...once(20_000), name: "Next reminder", expectedRevision: service.get(scope, reminder.id).revision,
+      mutationId: randomUUID(),
+    }, 11_500);
+    service.acknowledgeThreadRun(scope, threadId, run.id, "triggered", 12_000);
+    expect(repository.getDefinition(scope, reminder.id).deletedAt).toBeNull();
+    expect(service.get(scope, reminder.id).schedule).toEqual(edited.schedule);
+  });
+
+  it("does not retire recurring schedules or a one-shot after only a manual success", async () => {
+    const daily = create("Daily", recurring()), recurringRun = deliver(daily.id, 301_000);
+    finishTurn(recurringRun, "completed", 302_000);
+    service.acknowledgeThreadRun(scope, threadId, recurringRun.id, "triggered", 303_000);
+    expect(repository.getDefinition(scope, daily.id).deletedAt).toBeNull();
+    const reminder = create("Reminder");
+    now = 2_000;
+    const manual = await service.runNow(scope, reminder.id, randomUUID(), now);
+    await settle();
+    const run = repository.getRun(scope, reminder.id, manual.id);
+    expect(run.state).toBe("completed");
+    finishTurn(run, "completed");
+    service.acknowledgeRun(scope, reminder.id, run.id, 12_000);
+    expect(repository.getDefinition(scope, reminder.id).deletedAt).toBeNull();
+  });
+
+  it("retains a dismissed successful one-shot while another invocation is unfinished", () => {
+    const reminder = create("Reminder"), run = deliver(reminder.id);
+    finishTurn(run, "completed");
+    const pending = repository.createManualRun(scope, reminder.id, {
+      runId: randomUUID(), occurrenceKey: "manual:pending", scheduledFor: 11_100,
+      claimToken: "pending-claim", leaseExpiresAt: 60_000, dispatchMutationId: randomUUID(), now: 11_100,
+    }).run;
+    service.acknowledgeThreadRun(scope, threadId, run.id, "triggered", 12_000);
+    expect(repository.getDefinition(scope, reminder.id).deletedAt).toBeNull();
+    repository.updateRunState(scope, reminder.id, pending.id, {
+      expectedState: "claimed", state: "cancelled", claimToken: pending.claimToken!, now: 12_100,
+    });
+    expect(repository.getDefinition(scope, reminder.id).deletedAt).not.toBeNull();
+  });
+
+  it("retires after Pause cancels the last deferred invocation and safely replays that mutation", () => {
+    const reminder = create("Reminder"), run = deliver(reminder.id);
+    finishTurn(run, "completed");
+    const pending = repository.createManualRun(scope, reminder.id, {
+      occurrenceKey: "manual:deferred", scheduledFor: 11_100, claimToken: "deferred",
+      leaseExpiresAt: 60_000, dispatchMutationId: randomUUID(), now: 11_100,
+    }).run;
+    repository.deferRun(scope, reminder.id, pending.id, {
+      expectedState: "claimed", claimToken: pending.claimToken!,
+      reason: "source_busy", eligibleAt: null, now: 11_200,
+    });
+    service.acknowledgeThreadRun(scope, threadId, run.id, "triggered", 12_000);
+    const mutation = {
+      action: "pause" as const, expectedRevision: service.get(scope, reminder.id).revision,
+      mutationId: randomUUID(),
+    };
+    service.setState(scope, reminder.id, mutation, 12_100);
+    expect(repository.getDefinition(scope, reminder.id).deletedAt).not.toBeNull();
+    expect(repository.getRun(scope, reminder.id, pending.id).state).toBe("cancelled");
+    const revision = repository.getDefinition(scope, reminder.id).revision;
+    expect(() => service.setState(scope, reminder.id, mutation, 12_200)).not.toThrow();
+    expect(repository.getDefinition(scope, reminder.id).revision).toBe(revision);
+    expect(publications).toHaveBeenLastCalledWith(scope, expect.objectContaining({ automationId: reminder.id, deleted: true }));
+  });
+
+  it("reconciles lifecycle cleanup only for the affected principal and source threads", () => {
+    const reminder = create("Reminder"), run = deliver(reminder.id);
+    finishTurn(run, "completed");
+    db.prepare(`UPDATE automation_runs SET acknowledged_at = 12000 WHERE id = ?`).run(run.id);
+    service.reconcileRetirementsForThreads({ ...scope, principalId: randomUUID() }, [threadId], 12_100);
+    service.reconcileRetirementsForThreads(scope, [randomUUID()], 12_100);
+    expect(repository.getDefinition(scope, reminder.id).deletedAt).toBeNull();
+    service.reconcileRetirementsForThreads(scope, [threadId], 12_100);
+    expect(repository.getDefinition(scope, reminder.id).deletedAt).toBe(12_100);
+    expect(publications).toHaveBeenLastCalledWith(scope, expect.objectContaining({ automationId: reminder.id, deleted: true }));
+  });
+
+  it("reconciles persisted successful dismissals at startup without removing failed results", () => {
+    new ConversationBindingRepository(db).bindDiscoveredConversation(scope, threadId, {
+      backendConversationId: `native-${threadId}`, now: 1_000,
+    });
+    const success = create("Success"), successRun = deliver(success.id);
+    const failure = create("Failure"), failureRun = deliver(failure.id);
+    const completions = new SubmissionCompletionRepository(db);
+    for (const [run, outcome] of [[successRun, "completed"], [failureRun, "failed"]] as const) {
+      service.acknowledgeThreadRun(scope, threadId, run.id, "triggered", 10_500);
+      completions.recordAccepted(scope, threadId, {
+        operationId: run.dispatchMutationId, acceptedAt: 10_002, backendCorrelation: run.dispatchMutationId,
+      });
+      completions.observeBackendCompletion(scope, threadId, {
+        backendCorrelation: run.dispatchMutationId, completionIdentity: `turn-${run.id}:${outcome}`,
+        observedAt: 11_000, applicationTurnId: `turn-${run.id}`, outcome,
+        result: { text: outcome }, classifiedResult: null,
+      });
+    }
+    const observer = new AutomationTurnSettlementObserver({ repository, publisher: service });
+    observer.recover();
+    expect(repository.getDefinition(scope, success.id).deletedAt).not.toBeNull();
+    expect(repository.getDefinition(scope, failure.id).deletedAt).toBeNull();
+    expect(service.get(scope, failure.id).attention?.runId).toBe(failureRun.id);
+    expect(repository.getRun(scope, failure.id, failureRun.id).acknowledgedAt).toBeNull();
+    const revision = repository.getDefinition(scope, success.id).revision;
+    publications.mockClear();
+    observer.recover();
+    expect(repository.getDefinition(scope, success.id).revision).toBe(revision);
+    expect(publications).not.toHaveBeenCalled();
+  });
+
+  it("retires already-settled acknowledged one-shots during upgrade recovery", () => {
+    const reminder = create("Reminder"), run = deliver(reminder.id);
+    finishTurn(run, "completed");
+    db.prepare(`UPDATE automation_runs SET acknowledged_at = 12000 WHERE id = ?`).run(run.id);
+    expect(repository.getDefinition(scope, reminder.id).deletedAt).toBeNull();
+    expect(repository.settleRunTurnsFromCompletions().map((item) => item.id)).toEqual([run.id]);
+    expect(repository.getDefinition(scope, reminder.id).deletedAt).not.toBeNull();
+    expect(repository.settleRunTurnsFromCompletions()).toEqual([]);
+  });
 
   it("keeps a daily schedule and independently named reminders on one thread", () => {
     const daily = create("Daily report", recurring()),
@@ -516,7 +717,7 @@ describe("multiple independent thread automations", () => {
     });
     expect(service.get(scope, a.id).attention?.runId).toBe(ra.id);
     expect(service.get(scope, b.id).attention).toBeUndefined();
-    service.acknowledgeThreadRun(scope, threadId, ra.id, 10_003);
+    service.acknowledgeThreadRun(scope, threadId, ra.id, "failed", 10_003);
     expect(service.get(scope, a.id).attention).toBeUndefined();
     expect(repository.getRun(scope, a.id, ra.id).acknowledgedAt).toBe(10_003);
   });
@@ -542,7 +743,7 @@ describe("multiple independent thread automations", () => {
       },
     );
     expect(() =>
-      service.acknowledgeThreadRun(scope, unrelated.id, run.id, 10_003),
+      service.acknowledgeThreadRun(scope, unrelated.id, run.id, "failed", 10_003),
     ).toThrow(/not found/i);
     expect(repository.getRun(scope, a.id, run.id).acknowledgedAt).toBeNull();
   });

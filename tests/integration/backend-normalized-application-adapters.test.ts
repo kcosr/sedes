@@ -2293,6 +2293,10 @@ describe("backend-normalized application adapters", () => {
       automation.updateRunState(current.scope, ids[1]!, success.id, {
         expectedState: "dispatching", state: "completed", claimToken: success.claimToken!, now: 1_202,
       });
+      automation.settleRunTurn(current.scope, current.threadId, success.dispatchMutationId, {
+        turnId: randomUUID(), outcome: "completed", settledAt: 1_202,
+        startedAt: 1_201, endedAt: 1_202,
+      });
       const once = scheduled(ids[2]!, null);
       automation.deferRun(current.scope, ids[2]!, once.id, {
         expectedState: "claimed", claimToken: once.claimToken!, reason: "queue_capacity", eligibleAt: 4_000, now: 1_203,

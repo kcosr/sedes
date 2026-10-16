@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import type { AutomationResourceReads } from "./automation-resource-reads.js";
 import type {
   ThreadAutomationRun,
   ThreadAutomationRunCounts,
@@ -86,6 +87,7 @@ async function readHistoryPrefix(
   let counts: ThreadAutomationRunCounts | undefined;
   let pagesRead = 0;
   do {
+    if (signal.aborted) break;
     const page: ThreadAutomationRunPage = await api.listAutomationRuns(automationId, {
       ...(cursor === null ? {} : { cursor }),
       limit: AUTOMATION_RUNS_PAGE_SIZE,
@@ -122,7 +124,7 @@ function arrivedRuns(
 
 /**
  * Whether a run belongs in the list for a filter, as the server filters:
- * problems are failed or uncertain runs and runs whose agent turn failed.
+ * problems are failed or uncertain runs and failed or interrupted agent turns.
  */
 function runMatchesFilter(
   run: Pick<ThreadAutomationRun, "state" | "turn">,
@@ -135,7 +137,8 @@ function runMatchesFilter(
       return (
         run.state === "failed" ||
         run.state === "uncertain" ||
-        run.turn?.outcome === "failed"
+        run.turn?.outcome === "failed" ||
+        run.turn?.outcome === "interrupted"
       );
     case "skipped":
       return run.state === "skipped";
@@ -163,10 +166,12 @@ export function useAutomationRuns(
   store: Pick<ApplicationClientStore, "api">,
   thread: Pick<AutomationThread, "id" | "automation">,
   filter: AutomationRunFilter,
+  reads: AutomationResourceReads,
 ): AutomationRuns {
   const automationId = thread.automation?.id ?? "";
   const liveKey = automationRunsKey(thread.automation);
-  const present = liveKey !== undefined;
+  const readPhase = useSyncExternalStore(reads.subscribe, reads.getSnapshot);
+  const present = liveKey !== undefined && readPhase === "active";
   const [state, setState] = useState<RunsState>(() =>
     emptyState(filter, present ? "loading" : "idle"),
   );
@@ -190,7 +195,8 @@ export function useAutomationRuns(
   const readHistory = useCallback(
     function read(listed: number): void {
       reading.current?.controller.abort();
-      const pass = { controller: new AbortController(), pages: pagesFor(listed), again: false };
+      const pass = { controller: reads.begin(), pages: pagesFor(listed), again: false };
+      if (pass.controller.signal.aborted) return;
       reading.current = pass;
       readHistoryPrefix(store.api, automationId, filter, () => pass.pages, pass.controller.signal).then(
         (prefix) => {
@@ -230,9 +236,9 @@ export function useAutomationRuns(
           );
           if (pass.again) read(listed);
         },
-      );
+      ).finally(() => reads.release(pass.controller));
     },
-    [filter, store, automationId],
+    [filter, store, automationId, reads],
   );
 
   // A new thread, filter or automation starts the list over.
@@ -292,7 +298,8 @@ export function useAutomationRuns(
     }
     // The answer continues the list as it is now: a refresh, another filter
     // or another thread aborts it first.
-    const controller = new AbortController();
+    const controller = reads.begin();
+    if (controller.signal.aborted) return;
     nextPage.current = controller;
     store.api
       .listAutomationRuns(automationId, {
@@ -322,12 +329,13 @@ export function useAutomationRuns(
             loadMoreError: messageFrom(reason),
           }));
         },
-      );
-  }, [store, automationId]);
+      ).finally(() => reads.release(controller));
+  }, [store, automationId, reads]);
 
   const retry = useCallback(() => setAttempt((current) => current + 1), []);
 
   const upsert = useCallback((run: ThreadAutomationRun) => {
+    if (reads.getSnapshot() !== "active") return;
     setState((current) => {
       if (current.status !== "ready" || !runMatchesFilter(run, current.filter)) {
         return current;
@@ -338,7 +346,7 @@ export function useAutomationRuns(
         items: index >= 0 ? current.items.with(index, run) : [run, ...current.items],
       };
     });
-  }, []);
+  }, [reads]);
 
   return {
     status: state.status,

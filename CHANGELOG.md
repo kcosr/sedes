@@ -22,9 +22,9 @@ User-facing changes are collected here before release. See the
   ([#85](https://github.com/kcosr/sedes/pull/85))
 
 - Upgrade the server and browser/packaged clients together for client protocol
-  **160** for Page responses, larger composer reference lists, the updated
-  native voice bridge, Windows notification script paths, and multiple named
-  automations per thread. Rebuild Android
+  **161** for Page responses, larger composer reference lists, the updated
+  native voice bridge, Windows notification script paths, multiple named
+  automations per thread, and dismissal of automation results. Rebuild Android
   and Electron with their bundled clients. See
   [Page responses](docs/user/html-previews.md#send-a-page-response),
   [voice input](docs/operator/clients/voice.md), and
@@ -35,9 +35,11 @@ User-facing changes are collected here before release. See the
 
 - Threads support multiple named recurring schedules and one-time reminders.
   Run on **This thread**, or **Fork** a fresh result each time, copying saved
-  settings from drafts. Busy sources defer unsent work; exhausted one-time
-  automations retain their history. Existing automations migrate in place,
-  preserving names, schedules, history, and prior dismissals. See
+  settings from drafts. Busy sources defer unsent work. Successful one-time
+  reminders show no sidebar schedule icon and leave the collection when their
+  result notice is dismissed; their conversations remain. Failures or
+  interruptions arriving after dismissal surface again. Existing automations
+  migrate in place, preserving names, schedules, and run history. See
   [automations](docs/user/tasks-and-automations.md#schedule-work-with-an-automation).
   ([#88](https://github.com/kcosr/sedes/pull/88))
 

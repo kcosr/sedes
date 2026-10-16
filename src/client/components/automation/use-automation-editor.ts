@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import type { AutomationResourceReads } from "./automation-resource-reads.js";
 import { MAXIMUM_AUTOMATION_NAME_LENGTH, type AutomationSchedule } from "../../../shared/protocol/automation.js";
 import { ApiError } from "../../api/ApiClient.js";
 import { mutationId } from "../../lib/ids.js";
@@ -63,14 +64,14 @@ export interface AutomationEditor {
   readonly stale: boolean;
   /** The last run's outcome is unknown; nothing may change until it is resolved. */
   readonly uncertain: boolean;
-  /** The automation this form edited was deleted elsewhere; saving creates a new one. */
+  /** The automation this form edited was deleted; its retained form cannot be saved. */
   readonly deletedElsewhere: boolean;
   /** A note about a reload the editor made on its own (a create conflict). */
   readonly notice?: string;
   readonly pending?: "save" | "save_and_enable" | "delete";
   readonly error?: string;
-  /** Saves the form (and enables a new automation when asked); true when all of it succeeded. */
-  readonly save: (options?: { readonly enable?: boolean }) => Promise<ThreadAutomationDefinition | undefined>;
+  /** Returns the current definition, null when a successful edit retired it, or undefined on failure. */
+  readonly save: (options?: { readonly enable?: boolean }) => Promise<ThreadAutomationDefinition | null | undefined>;
   /** Deletes the automation, then stays pending while the caller leaves; rejects with the server's message. */
   readonly remove: () => Promise<void>;
   /** Puts the form back to the saved (or new) values. */
@@ -96,10 +97,12 @@ export interface AutomationEditor {
 export function useAutomationEditor(
   store: EditorStore,
   thread: Pick<AutomationThread, "id" | "automation">,
-  options: { readonly canCloneOnRun: boolean; readonly automationId?: string; readonly missing?: boolean },
+  options: { readonly canCloneOnRun: boolean; readonly automationId?: string; readonly missing?: boolean; readonly reads: AutomationResourceReads },
 ): AutomationEditor {
   const threadId = thread.id;
   const automationId = options.automationId;
+  const reads = options.reads;
+  const readPhase = useSyncExternalStore(reads.subscribe, reads.getSnapshot);
   const saveIdentity = useRef<{ fingerprint: string; id: string } | undefined>(undefined);
   const live = thread.automation;
   const liveRevision = live?.revision;
@@ -121,7 +124,7 @@ export function useAutomationEditor(
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
   const [deletedState, setDeletedElsewhere] = useState(false);
-  const deletedElsewhere = deletedState || options.missing === true;
+  const deletedElsewhere = deletedState || options.missing === true || readPhase === "deleted";
   const [preview, setPreview] = useState<{
     readonly key: string;
     readonly occurrences: readonly string[];
@@ -153,12 +156,14 @@ export function useAutomationEditor(
   useEffect(() => {
     const explicit = loadAttempt > handledAttempt.current;
     handledAttempt.current = loadAttempt;
+    if (deletedElsewhere || readPhase !== "active") { setLoading(false); return; }
     if (liveRevision === undefined || pending) return;
     if (!explicit && (!remoteAhead || dirty || loadedRevision.current === liveRevision)) {
       return;
     }
     loadedRevision.current = liveRevision;
-    const controller = new AbortController();
+    const controller = reads.begin();
+    if (controller.signal.aborted) return;
     let settled = false;
     setLoading(true);
     setLoadError(undefined);
@@ -175,18 +180,19 @@ export function useAutomationEditor(
         setLoadError(messageFrom(reason));
         setLoading(false);
       },
-    );
+    ).finally(() => reads.release(controller));
     return () => {
       controller.abort();
+      reads.release(controller);
       // An interrupted read is retried by the next run of this effect.
       if (!settled && loadedRevision.current === liveRevision) {
         loadedRevision.current = undefined;
       }
     };
-  }, [adopt, dirty, liveRevision, loadAttempt, pending, remoteAhead, store, threadId, automationId]);
+  }, [adopt, deletedElsewhere, dirty, liveRevision, loadAttempt, pending, readPhase, reads, remoteAhead, store, threadId, automationId]);
 
   // Deleted elsewhere (the summary loses the automation, and this editor
-  // did not delete it): the form stays, and saving creates a new one.
+  // did not delete it): the form stays, and saving remains blocked.
   const previousLiveRevision = useRef(liveRevision);
   useEffect(() => {
     const previous = previousLiveRevision.current;
@@ -276,7 +282,7 @@ export function useAutomationEditor(
   // state without a new revision, so the definition read at load would keep
   // a resolved run uncertain.
   const uncertain = live?.attention?.kind === "uncertain";
-  const stale = remoteAhead && dirty;
+  const stale = !deletedElsewhere && remoteAhead && dirty;
 
   // A changed precheck input voids the last test.
   const precheckFingerprint = JSON.stringify([
@@ -328,7 +334,7 @@ export function useAutomationEditor(
       });
   }, [precheck.precheck, precheckFingerprint, prompt, store, threadId]);
 
-  const save = async (saveOptions?: { readonly enable?: boolean }): Promise<ThreadAutomationDefinition | undefined> => {
+  const save = async (saveOptions?: { readonly enable?: boolean }): Promise<ThreadAutomationDefinition | null | undefined> => {
     if (!schedule || !validation.valid || pending || stale || uncertain || deletedElsewhere) return;
     const enable = saveOptions?.enable === true && !automationId;
     markPending(enable ? "save_and_enable" : "save");
@@ -337,9 +343,28 @@ export function useAutomationEditor(
     const fingerprint = JSON.stringify([automationId, definition?.revision, fields, enable]);
     if (saveIdentity.current?.fingerprint !== fingerprint) saveIdentity.current = { fingerprint, id: mutationId() };
     try {
-      const saved = automationId && definition
-        ? await store.api.updateAutomation(automationId, { ...fields, expectedRevision: definition.revision, mutationId: saveIdentity.current.id })
-        : await store.api.createAutomation(threadId, { ...fields, initialState: enable ? "enabled" : "paused", mutationId: saveIdentity.current.id });
+      let saved: ThreadAutomationDefinition;
+      if (automationId && definition) {
+        await store.api.updateAutomation(automationId, { ...fields, expectedRevision: definition.revision, mutationId: saveIdentity.current.id });
+        try {
+          // An edit may cancel the final pending run and retire a completed one-shot.
+          const controller = reads.begin();
+          if (controller.signal.aborted) return reads.getSnapshot() === "deleted" ? null : undefined;
+          try {
+            saved = await store.api.getAutomation(automationId, controller.signal);
+            if (controller.signal.aborted) return reads.getSnapshot() === "deleted" ? null : undefined;
+          } finally { reads.release(controller); }
+        } catch (reason) {
+          if (reads.getSnapshot() === "deleted") { saveIdentity.current = undefined; return null; }
+          if (!(reason instanceof ApiError) || reason.code !== "not_found") throw reason;
+          reads.markDeleted();
+          setDeletedElsewhere(true);
+          saveIdentity.current = undefined;
+          return null;
+        }
+      } else {
+        saved = await store.api.createAutomation(threadId, { ...fields, initialState: enable ? "enabled" : "paused", mutationId: saveIdentity.current.id });
+      }
       adopt(saved);
       saveIdentity.current = undefined;
       return saved;
@@ -354,7 +379,7 @@ export function useAutomationEditor(
     markPending("delete");
     setError(undefined);
     try {
-      await store.api.deleteAutomation(definition.id, definition.revision, mutationId());
+      await reads.remove(() => store.api.deleteAutomation(definition.id, definition.revision, mutationId()));
     } catch (reason) {
       markPending(undefined);
       throw new Error(messageFrom(reason));
@@ -393,7 +418,9 @@ export function useAutomationEditor(
       setForm(baseline);
       setError(undefined);
     }, [baseline]),
-    reload: useCallback(() => setLoadAttempt((current) => current + 1), []),
+    reload: useCallback(() => {
+      if (!deletedElsewhere && reads.getSnapshot() === "active") setLoadAttempt((current) => current + 1);
+    }, [deletedElsewhere, reads]),
     precheckTest: {
       canTest: precheck.precheck !== null && prompt.length > 0,
       testing: precheckTesting,

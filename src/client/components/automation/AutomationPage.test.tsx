@@ -2,6 +2,7 @@
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ApiError } from "../../api/ApiClient.js";
 import { AutomationPage } from "./AutomationPage.js";
 import { AUTOMATION_ID, THREAD_ID, automationStore, definition, installAutomationDom, run } from "./automation-test-fixture.js";
 
@@ -14,6 +15,50 @@ function mount(value = definition(), api: Parameters<typeof automationStore>[1] 
 }
 
 describe("automation resource page", () => {
+  it("aborts definition and history reads before local Delete without waiting for an event", async () => {
+    let finishHistory!: (page: { items: ReturnType<typeof run>[]; nextCursor: null }) => void;
+    const list = vi.fn().mockImplementation(() => new Promise((resolve) => { finishHistory = resolve; }));
+    const fixture = mount(definition(), { listAutomationRuns: list });
+    await screen.findByRole("heading", { name: "Nightly dependency audit" });
+    await waitFor(() => expect(list).toHaveBeenCalledOnce());
+    let finishDefinition!: (value: ReturnType<typeof definition>) => void;
+    fixture.api.getAutomation.mockImplementationOnce(() => new Promise((resolve) => { finishDefinition = resolve; }));
+    act(() => fixture.invalidate(AUTOMATION_ID));
+    await waitFor(() => expect(fixture.api.getAutomation).toHaveBeenCalledTimes(2));
+    const definitionSignal = fixture.api.getAutomation.mock.calls[1]![1] as AbortSignal;
+    const historySignal = list.mock.calls[0]![1].signal as AbortSignal;
+    fixture.api.deleteAutomation.mockImplementation(async () => {
+      expect(definitionSignal.aborted).toBe(true);
+      expect(historySignal.aborted).toBe(true);
+      fixture.invalidateSource(THREAD_ID);
+      fixture.invalidate();
+      return { deleted: true };
+    });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "More automation actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Delete automation…" }));
+    await user.click(screen.getByRole("button", { name: "Delete automation" }));
+    await waitFor(() => expect(window.location.pathname).toBe("/automations"));
+    await act(async () => {
+      finishDefinition(definition({ revision: 99 }));
+      finishHistory({ items: [run()], nextCursor: null });
+    });
+    act(() => { fixture.invalidateSource(THREAD_ID); fixture.invalidate(); });
+    expect(fixture.api.getAutomation).toHaveBeenCalledTimes(2);
+    expect(list).toHaveBeenCalledOnce();
+    expect(fixture.api.deleteAutomation).toHaveBeenCalledOnce();
+  });
+
+  it("consumes a null acknowledgement result as authoritative removal without a probe", async () => {
+    const failed = run({ state: "failed" });
+    const current = definition({ status: "exhausted", attention: { runId: failed.id, kind: "failed" }, lastRun: failed });
+    const fixture = mount(current, { acknowledgeAutomationRun: vi.fn().mockResolvedValue({ run: failed, automation: null }) });
+    const button = await screen.findByRole("button", { name: "Acknowledge failure" });
+    await userEvent.setup().click(button);
+    expect(await screen.findByText("This automation was deleted.")).toBeInTheDocument();
+    expect(fixture.api.getAutomation).toHaveBeenCalledOnce();
+  });
+
   it("shows one named resource and scopes history and actions by automation ID", async () => {
     const fixture = mount(definition({ name: "Daily update" }), { runAutomationNow: vi.fn().mockResolvedValue(run()) });
     expect(await screen.findByRole("heading", { name: "Daily update" })).toBeInTheDocument();
@@ -52,11 +97,35 @@ describe("automation resource page", () => {
     const skipped = run({ state: "skipped" });
     const current = definition({ lastRun: skipped, attention: { runId: failed.id, kind: "failed", diagnostic: "Daily update failed" } });
     const acknowledge = vi.fn().mockResolvedValue({ run: { ...failed, acknowledgedAt: new Date().toISOString() }, automation: definition({ lastRun: skipped }) });
-    mount(current, { acknowledgeAutomationRun: acknowledge });
+    const fixture = mount(current, { acknowledgeAutomationRun: acknowledge });
     expect(await screen.findByText("Daily update failed")).toBeInTheDocument();
+    fixture.api.getAutomation.mockResolvedValue(definition({ lastRun: skipped }));
     await userEvent.setup().click(screen.getByRole("button", { name: "Acknowledge failure" }));
     expect(acknowledge).toHaveBeenCalledWith(AUTOMATION_ID, failed.id);
     await waitFor(() => expect(screen.queryByRole("button", { name: "Acknowledge failure" })).not.toBeInTheDocument());
+  });
+
+  it.each([false, true])("does not restore a one-shot retired by Pause (deletion arrived first: %s)", async (deletionArrivesFirst) => {
+    const current = definition({
+      scheduleKind: "date_time", schedule: { kind: "date_time", runAt: "2026-10-01T12:00:00.000Z" },
+      misfirePolicy: null, nextRunAt: undefined,
+      lastRun: run({ state: "deferred", occurrence: "manual" }),
+    });
+    let finishPause!: (value: ReturnType<typeof definition>) => void;
+    const pause = vi.fn().mockImplementation(() => new Promise((resolve) => { finishPause = resolve; }));
+    const fixture = mount(current, { setAutomationState: pause });
+    const button = await screen.findByRole("button", { name: "Pause automation" });
+    await userEvent.setup().click(button);
+    expect(pause).toHaveBeenCalledWith(AUTOMATION_ID, "pause", current.revision, expect.any(String));
+    fixture.api.getAutomation.mockRejectedValue(new ApiError(404, "not_found", "This automation was retired", false));
+    if (deletionArrivesFirst) {
+      act(() => fixture.invalidate(AUTOMATION_ID));
+      await screen.findByText("This automation was retired");
+    }
+    await act(async () => finishPause({ ...current, status: "paused", revision: current.revision + 1 }));
+    expect(await screen.findByText("This automation was retired")).toBeInTheDocument();
+    await waitFor(() => expect(fixture.api.getAutomation).toHaveBeenCalledTimes(deletionArrivesFirst ? 3 : 2));
+    expect(screen.queryByRole("heading", { name: current.name })).toBeNull();
   });
 
   it("refreshes only the selected resource and keeps the source title separate", async () => {

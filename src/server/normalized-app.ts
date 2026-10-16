@@ -3670,6 +3670,8 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
     const requestScope = await scope(request);
     const { automationId } = automationRouteParametersSchema.parse(request.params);
     const body = updateAutomationRequestSchema.parse(request.body);
+    const replay = dependencies.automations.replayUpdate(requestScope, automationId, body);
+    if (replay) { response.json(replay); return; }
     const current = dependencies.automations.get(requestScope, automationId);
     if (body.runMode === "clone" && current.runMode !== "clone") {
       assertAutomationCloneEligible({ runMode: body.runMode, canCloneOnRun: (

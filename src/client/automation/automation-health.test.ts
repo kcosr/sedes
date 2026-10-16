@@ -416,6 +416,28 @@ describe("compareAutomationsInGroup", () => {
 });
 
 describe("independent automation attention", () => {
+  const finishedSummary = {
+    totalCount: 2, enabledCount: 0, pausedCount: 0, exhaustedCount: 2,
+    inFlightCount: 0, attentionCount: 0, revision: 10,
+  };
+
+  it.each(["active", "snoozed", "archived"] as const)(
+    "omits thread status for finished history on a %s source",
+    (inventoryState) => {
+      expect(threadAutomationHealth({ inventoryState, automations: finishedSummary }, NOW)).toBeUndefined();
+    },
+  );
+
+  it("keeps ongoing work and unresolved problems visible after a one-shot schedule is exhausted", () => {
+    expect(threadAutomationHealth({ inventoryState: "active", automations: { ...finishedSummary, inFlightCount: 1 } }, NOW)).toMatchObject({ kind: "sending", glyph: "spinner" });
+    expect(threadAutomationHealth({ inventoryState: "active", automations: { ...finishedSummary, inFlightCount: 1, attentionCount: 1 } }, NOW)).toMatchObject({ kind: "attention", glyph: "triangle" });
+  });
+
+  it("keeps active and paused siblings visible beside finished history", () => {
+    expect(threadAutomationHealth({ inventoryState: "active", automations: { ...finishedSummary, totalCount: 3, enabledCount: 1 } }, NOW)).toMatchObject({ kind: "active", label: "1 active" });
+    expect(threadAutomationHealth({ inventoryState: "active", automations: { ...finishedSummary, totalCount: 3, pausedCount: 1 } }, NOW)).toMatchObject({ kind: "paused", label: "1 paused" });
+  });
+
   it("keeps an older failure visible while its next run waits", () => {
     const subject = automation({
       lastRun: run("deferred"),

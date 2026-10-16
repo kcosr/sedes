@@ -14,6 +14,7 @@ export class ThreadAttentionService {
         scope: RequestScope,
         applicationThreadId: string,
         runId: string,
+        outcome: "triggered" | "failed",
       ) => void | Promise<void>;
       readonly now?: () => number;
       readonly publish: (
@@ -47,6 +48,7 @@ export class ThreadAttentionService {
         scope,
         applicationThreadId,
         request.runId,
+        request.outcome,
       );
     } else if (request.kind === "unseen_completion") {
       this.input.completions.acknowledgeThrough(

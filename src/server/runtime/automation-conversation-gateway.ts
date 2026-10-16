@@ -402,7 +402,8 @@ export class AutomationQueueRunObserver {
  * Completion-rail hook for automation run history. Production calls it after
  * an authoritative completion observation commits, both live and on every
  * snapshot replay, so a run's turn settlement is written once and published
- * only when this changed the run. It never touches run state or scheduling.
+ * only when this changed the run or retired a dismissed successful one-shot.
+ * It never changes the recorded delivery state or rearms a schedule.
  */
 export class AutomationTurnSettlementObserver {
   readonly #repository: Pick<

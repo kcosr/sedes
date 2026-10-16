@@ -180,20 +180,35 @@ single implicit automation.
 
 `nextRunAt` describes the earliest actionable candidate, accounting for source
 suppression and deferred delivery. An indefinitely blocked run has no invented
-deadline. In-flight and attention counts remain separate: a sibling's activity or
-success must not hide another automation's unresolved delivery problem.
+deadline. In-flight counts include pending delivery and the latest accepted run
+whose agent turn has not settled. This does not change the scheduling deadline.
+In-flight and attention counts remain separate: a sibling's activity or success
+must not hide another automation's unresolved problem. Finished-only aggregates
+produce no sidebar or header schedule glyph.
 
 The latest run follows history order, `created_at DESC, id DESC`. Attention is
 computed independently: an unresolved uncertain delivery takes priority;
 otherwise the latest decisive delivery failure needs attention until acknowledged
 or superseded by a later success from that same automation. Skips, cancellation,
-and manual uncertainty resolution do not count as successful delivery. Assistant
-turn failure stays in history and normal thread attention, not delivery attention.
+and manual uncertainty resolution do not count as successful delivery. A failed
+or interrupted agent turn also needs attention without changing delivery state.
 
 Thread detail includes bounded `attention.automationContexts`, each with explicit
-automation, run, and source identity. Dismissal acknowledges that run, never a
-mutable singleton slot. A result thread's provenance names its actual source even
-when the source's other automations have run since.
+automation, run, and source identity. Dismissal names the run and observed outcome,
+never a mutable singleton slot. A stale triggered-notice dismissal cannot clear a
+later failure. First settlement as failed or interrupted clears an earlier
+delivery acknowledgement atomically; settlement replay preserves subsequent
+failure acknowledgement. A result thread's provenance names its actual source
+even when the source's other automations have run since.
+
+A date/time definition is retired with its existing deletion marker when its
+current scheduled occurrence has both a successful agent-turn settlement and a
+dismissal. Pending work, unresolved problems, and other undismissed result-thread
+notices prevent retirement. Old occurrences cannot retire a rearmed definition.
+Retirement removes normal collection/detail/history access while retaining the
+definition, runs, receipts, queued-input provenance, and thread lineage. Startup
+reconciliation handles already-settled eligible history and completion
+observations committed before a crash.
 
 Definition and run changes publish scoped `automation_changed` invalidations on
 the existing application stream and refresh affected thread summaries. Source

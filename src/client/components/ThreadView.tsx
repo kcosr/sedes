@@ -637,14 +637,16 @@ export function ThreadView({
           <AutomationContextNotice
             key={context.runId}
             context={context}
-            onDismiss={() =>
+            onDismiss={() => {
+              if (context.outcome === "uncertain") return;
               void store
                 .dismissAttention({
                   kind: "automation_context",
                   runId: context.runId,
+                  outcome: context.outcome,
                 })
-                .catch(() => undefined)
-            }
+                .catch(() => undefined);
+            }}
           />
         ))}
         <ThreadFailureNotice snapshot={snapshot} />

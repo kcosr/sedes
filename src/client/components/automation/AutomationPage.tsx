@@ -76,6 +76,7 @@ import { StatusPill } from "@client/components/ui/status-pill";
 import { AutomationRunsSection, type AutomationRunsView } from "./AutomationRuns.js";
 import { MarkRunFailedDialog } from "./MarkRunFailedDialog.js";
 import { useAutomationResource } from "./use-automation-resource.js";
+import type { AutomationResourceReads } from "./automation-resource-reads.js";
 import {
   useAutomationCapability,
 } from "./use-automation-details.js";
@@ -109,12 +110,16 @@ export function AutomationPage({ store, threadRegistry, automationId }: {
   if (resource.error) return <AutomationAnchorUnavailable message={resource.error} onRetry={resource.reload} />;
   if (!resource.definition) return <AutomationAnchorLoading />;
   return <AutomationPageAnchor key={automationId} store={store} threadRegistry={threadRegistry}
-    definition={resource.definition} onDefinition={resource.replace} />;
+    definition={resource.definition} reads={resource.reads} onDefinition={(next) => {
+      if (next === null) resource.reads.markDeleted();
+      else resource.reload();
+    }} />;
 }
 
-function AutomationPageAnchor({ store, threadRegistry, definition, onDefinition }: {
+function AutomationPageAnchor({ store, threadRegistry, definition, onDefinition, reads }: {
   store: PageStore; threadRegistry: AutomationThreadSource; definition: ThreadAutomationDefinition;
-  onDefinition: (definition: ThreadAutomationDefinition | undefined) => void;
+  onDefinition: (definition: ThreadAutomationDefinition | null) => void;
+  reads: AutomationResourceReads;
 }): React.JSX.Element {
   const anchor = useAutomationAnchor(store, threadRegistry, definition.threadId);
   const minute = useMinuteClock();
@@ -131,7 +136,7 @@ function AutomationPageAnchor({ store, threadRegistry, definition, onDefinition 
   </nav>;
   return <section className="automations-view" aria-label={`${definition.name} automation`}><div className="automations-page automation-page">
     <AutomationDetails store={store} thread={selected!} automation={definition} definition={definition}
-      definitionStatus="ready" onRetryDefinition={() => undefined} onDefinition={(next) => onDefinition(next ?? undefined)}
+      definitionStatus="ready" onRetryDefinition={() => undefined} onDefinition={onDefinition} reads={reads}
       available={capabilityState.capability?.available} unavailableReason={capabilityState.capability?.unavailableReason?.text} back={back} now={now} />
   </div></section>;
 }
@@ -208,6 +213,7 @@ function AutomationDetails({
   definitionError,
   onRetryDefinition,
   onDefinition,
+  reads,
   available,
   unavailableReason,
   back,
@@ -221,6 +227,7 @@ function AutomationDetails({
   readonly definitionError?: string;
   readonly onRetryDefinition: () => void;
   readonly onDefinition: (definition: ThreadAutomationDefinition | null) => void;
+  readonly reads: AutomationResourceReads;
   readonly available?: boolean;
   readonly unavailableReason?: string;
   readonly back: React.ReactNode;
@@ -236,6 +243,7 @@ function AutomationDetails({
     store,
     thread,
     runsView.expanded ? runsView.filter : "all",
+    reads,
   );
   const [busy, setBusy] = useState<PageAction>();
   const runMutation = useRef<string | undefined>(undefined);
@@ -511,7 +519,7 @@ function AutomationDetails({
         returnFocusRef={moreTrigger}
         onConfirm={async () => {
           try {
-            await store.api.deleteAutomation(automation.id, revision, mutationId());
+            await reads.remove(() => store.api.deleteAutomation(automation.id, revision, mutationId()));
           } catch (reason) {
             throw new Error(messageFrom(reason));
           }

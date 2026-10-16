@@ -310,6 +310,7 @@ export const dismissThreadAttentionRequestSchema = z.discriminatedUnion(
     z.strictObject({
       kind: z.literal("automation_context"),
       runId: z.uuid(),
+      outcome: z.enum(["triggered", "failed"]),
       mutationId: mutationIdSchema,
     }),
     z.strictObject({

@@ -5070,6 +5070,32 @@ describe("Projects Automations shelf vocabulary", () => {
       `[data-shelf="automations"] [data-thread-id="${id}"]`,
     )!;
 
+  it("omits finished-only status glyphs while retaining sibling and ongoing-work indicators", () => {
+    seedViewPreferences({});
+    const finished = automations({ enabledCount: 0, exhaustedCount: 1 });
+    renderSidebar([
+      makeThread("auto-finished", "Finished reminder", {
+        automations: finished,
+        attention: { wake: false, automationContext: "triggered", unseenCompletion: false, queueFailure: false },
+      }),
+      makeThread("auto-active-sibling", "Daily update remains", {
+        automations: { ...finished, totalCount: 2, enabledCount: 1 },
+      }),
+      makeThread("auto-paused-sibling", "Paused update remains", {
+        automations: { ...finished, totalCount: 2, pausedCount: 1 },
+      }),
+      makeThread("auto-turn", "Turn in progress", { automations: finished, runState: "running" }),
+      makeThread("auto-attention", "Unresolved problem", {
+        automations: { ...finished, attentionCount: 1 },
+      }),
+    ]);
+    expect(shelfRow("auto-finished").querySelector(".row-glyph .automation-glyph, .row-glyph .lucide-circle-pause")).toBeNull();
+    expect(within(shelfRow("auto-active-sibling")).getByRole("img", { name: "Automation" })).toHaveClass("lucide-repeat");
+    expect(within(shelfRow("auto-paused-sibling")).getByRole("img", { name: "Automation 1 paused" })).toHaveClass("lucide-circle-pause");
+    expect(within(shelfRow("auto-turn")).getByTestId("run-indicator")).toHaveAttribute("data-state", "running");
+    expect(within(shelfRow("auto-attention")).getByRole("img", { name: "Automation needs attention" })).toBeVisible();
+  });
+
   it("draws Repeat or CirclePause, names the state, and uses the one future time format", () => {
     seedViewPreferences({});
     const nextRunAt = new Date(Date.now() + 3 * 86_400_000).toISOString();

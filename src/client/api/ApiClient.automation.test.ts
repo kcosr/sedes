@@ -20,6 +20,21 @@ const run = {
 } as const;
 
 describe("ApiClient automation routes", () => {
+  it.each(["triggered", "failed"] as const)("fences a context dismissal with its rendered %s outcome", async (outcome) => {
+    const fetch = vi.fn((url: string, _init?: RequestInit) => Promise.resolve(
+      url.endsWith("/api/application/session")
+        ? Response.json({ clientProtocolVersion: SEDES_CLIENT_PROTOCOL_VERSION, version: "0.1.1", csrfToken: "a".repeat(32), providerPulseEnabled: false, experimentalUsageEnabled: false })
+        : Response.json({}),
+    ));
+    vi.stubGlobal("fetch", fetch);
+    const api = new ApiClient();
+    await api.session();
+    await api.dismissThreadAttention(threadId, { kind: "automation_context", runId, outcome }, "dismiss-mutation");
+    const request = fetch.mock.calls.find(([url]) => url.endsWith("/attention/dismiss"))!;
+    expect(request[0]).toBe("/api/threads/thread%2F1/attention/dismiss");
+    expect(JSON.parse(request[1]!.body as string)).toEqual({ kind: "automation_context", runId, outcome, mutationId: "dismiss-mutation" });
+  });
+
   it("reads the automation capability for a thread", async () => {
     const capability = {
       available: true,

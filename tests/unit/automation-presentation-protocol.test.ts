@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   createAutomationRequestSchema,
+  dismissThreadAttentionRequestSchema,
   listAutomationRunsQuerySchema,
   previewAutomationScheduleRequestSchema,
   resolveAutomationRunRequestSchema,
@@ -35,6 +36,15 @@ const identity = {
 } as const;
 
 describe("normalized automation protocol", () => {
+  it("requires the displayed outcome when dismissing an automation notice", () => {
+    const request = { kind: "automation_context", runId: automationId, mutationId: threadId };
+    for (const outcome of ["triggered", "failed"]) {
+      expect(dismissThreadAttentionRequestSchema.parse({ ...request, outcome })).toEqual({ ...request, outcome });
+    }
+    expect(dismissThreadAttentionRequestSchema.safeParse(request).success).toBe(false);
+    expect(dismissThreadAttentionRequestSchema.safeParse({ ...request, outcome: "uncertain" }).success).toBe(false);
+  });
+
   it("bounds names at 160 across create and presented definitions", () => {
     const request={name:"n".repeat(160),threadId,initialState:"paused",prompt:"Review",runMode:"same_thread",schedule:{kind:"date_time",runAt:"2099-01-01T00:00:00.000Z"},misfirePolicy:null,precheck:null,mutationId:automationId};
     expect(createAutomationRequestSchema.safeParse(request).success).toBe(true);

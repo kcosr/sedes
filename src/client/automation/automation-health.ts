@@ -309,15 +309,15 @@ function epoch(now: Date | number): number {
   return typeof now === "number" ? now : now.getTime();
 }
 
-/** Bounded thread projection; problem counts never disappear behind sibling activity. */
+/** Bounded thread projection; finished history has no status glyph, while problems and ongoing work remain visible. */
 export function threadAutomationHealth(thread: Pick<NormalizedThreadSummary, "automations" | "inventoryState" | "snoozedUntil">, now: Date | number): AutomationHealth | undefined {
   const summary = thread.automations;
   if (summary.totalCount === 0) return undefined;
   if (summary.attentionCount > 0) return health("attention", "triangle", "danger", `${summary.attentionCount} ${summary.attentionCount === 1 ? "needs" : "need"} attention`);
   if (summary.inFlightCount > 0) return health("sending", "spinner", "info", `${summary.inFlightCount} in progress`);
+  if (summary.enabledCount === 0 && summary.pausedCount === 0) return undefined;
   if (thread.inventoryState === "archived") return health("archived", "archive", "neutral", "Thread archived");
   if (thread.inventoryState === "snoozed" && (thread.snoozedUntil === undefined || Date.parse(thread.snoozedUntil) >= epoch(now))) return health("snoozed", "snoozed", "neutral", "Snoozed");
   if (summary.enabledCount > 0) return health("active", "repeat", "success", `${summary.enabledCount} active`);
-  if (summary.pausedCount > 0) return health("paused", "pause", "neutral", `${summary.pausedCount} paused`);
-  return health("exhausted", "pause", "neutral", "Finished");
+  return health("paused", "pause", "neutral", `${summary.pausedCount} paused`);
 }

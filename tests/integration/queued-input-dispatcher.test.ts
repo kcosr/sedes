@@ -674,7 +674,8 @@ describe("durable automation queue observation", () => {
       await dispatcher.recover(fixture.scope);
       expect(repository.get(fixture.scope, threadId, "automation-input").state).toBe("accepted");
       expect(automations.getRun(fixture.scope, run.automationId, run.id).state).toBe("completed");
-      expect(readThreadAutomationSummary(fixture.database, fixture.scope, threadId).inFlightCount).toBe(0);
+      // Delivery succeeded; the accepted agent turn has not settled yet.
+      expect(readThreadAutomationSummary(fixture.database, fixture.scope, threadId).inFlightCount).toBe(1);
       expect(gateway.submitted).toHaveLength(1);
       expect(errors).toHaveBeenCalledWith(expect.objectContaining({ message: "thread_projection_queue_revision_conflict" }));
     } finally { await dispatcher.close(); fixture.database.close(); }

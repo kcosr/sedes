@@ -10,6 +10,32 @@ beforeEach(installAutomationDom);
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 describe("automation editor", () => {
+  it("aborts its resource read before local deletion and stays deleted without an event", async () => {
+    const fixture = automationStore([{ automation: definition() }]);
+    render(<AutomationEditor store={fixture.store} threadRegistry={fixture.threadRegistry} automationId={AUTOMATION_ID} />);
+    await screen.findByRole("textbox", { name: "Name" });
+    let finishRead!: (value: ReturnType<typeof definition>) => void;
+    fixture.api.getAutomation.mockImplementationOnce(() => new Promise((resolve) => { finishRead = resolve; }));
+    const beforeRefresh = fixture.api.getAutomation.mock.calls.length;
+    act(() => fixture.invalidate(AUTOMATION_ID));
+    await waitFor(() => expect(fixture.api.getAutomation).toHaveBeenCalledTimes(beforeRefresh + 1));
+    const signal = fixture.api.getAutomation.mock.calls.at(-1)![1] as AbortSignal;
+    fixture.api.deleteAutomation.mockImplementation(async () => {
+      expect(signal.aborted).toBe(true);
+      fixture.invalidateSource(THREAD_ID);
+      fixture.invalidate();
+      return { deleted: true };
+    });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Delete automation…" }));
+    await user.click(screen.getByRole("button", { name: "Delete automation" }));
+    await waitFor(() => expect(window.location.pathname).toBe("/automations"));
+    await act(async () => finishRead(definition({ revision: 99 })));
+    act(() => { fixture.invalidateSource(THREAD_ID); fixture.invalidate(); });
+    expect(fixture.api.getAutomation).toHaveBeenCalledTimes(beforeRefresh + 1);
+    expect(fixture.api.deleteAutomation).toHaveBeenCalledOnce();
+  });
+
   it("adds a named sibling to an already automated source", async () => {
     const created = definition({ id: "30000000-0000-4000-8000-000000000002", name: "Reminder" });
     const fixture = automationStore([{ automation: definition() }], { createAutomation: vi.fn().mockResolvedValue(created) });
@@ -35,6 +61,24 @@ describe("automation editor", () => {
     expect(screen.getByRole("radio", { name: /^Fork/ })).toBeInTheDocument();
     expect(screen.getByRole("radiogroup", { name: "Run in" }).querySelectorAll("[role=radio]")).toHaveLength(2);
     expect(fixture.api.getAutomation).toHaveBeenCalledWith(AUTOMATION_ID, expect.any(AbortSignal));
+  });
+
+  it("returns to the collection when a successful edit retires the finished one-shot", async () => {
+    const fixture = automationStore([{ automation: definition() }], {
+      updateAutomation: vi.fn().mockResolvedValue(definition({ revision: 4 })),
+    });
+    render(<AutomationEditor store={fixture.store} threadRegistry={fixture.threadRegistry} automationId={AUTOMATION_ID} />);
+    const name = await screen.findByRole("textbox", { name: "Name" });
+    const user = userEvent.setup();
+    await user.type(name, " changed");
+    fixture.api.getAutomation.mockRejectedValue(new ApiError(404, "not_found", "Automation retired", false));
+    const save = screen.getByRole("button", { name: "Save" });
+    await waitFor(() => expect(save).toBeEnabled());
+    await user.click(save);
+    await waitFor(() => expect(window.location.pathname).toBe(`/threads/${THREAD_ID}/automations`));
+    expect(fixture.api.updateAutomation).toHaveBeenCalledOnce();
+    expect(fixture.api.getAutomation).toHaveBeenLastCalledWith(AUTOMATION_ID, expect.any(AbortSignal));
+    expect(fixture.api.createAutomation).not.toHaveBeenCalled();
   });
 
   it("discloses draft-only fork support", async () => {
@@ -76,6 +120,31 @@ describe("automation editor", () => {
     expect(name).toHaveValue("Nightly dependency audit unsaved");
     expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
     expect(fixture.api.createAutomation).not.toHaveBeenCalled();
+    expect(fixture.api.updateAutomation).not.toHaveBeenCalled();
+  });
+
+  it("keeps dirty fields after a deletion event without rereading the removed resource", async () => {
+    const fixture = automationStore([{ automation: definition() }]);
+    render(<AutomationEditor store={fixture.store} threadRegistry={fixture.threadRegistry} automationId={AUTOMATION_ID} />);
+    const name = await screen.findByRole("textbox", { name: "Name" });
+    const user = userEvent.setup();
+    await user.type(name, " unsaved");
+    fixture.api.getAutomation.mockResolvedValue(definition({ revision: 4 }));
+    act(() => fixture.invalidate(AUTOMATION_ID));
+    await screen.findByRole("button", { name: "Reload automation" });
+    const reads = fixture.api.getAutomation.mock.calls.length;
+    act(() => {
+      fixture.invalidate(AUTOMATION_ID, true);
+      fixture.invalidateSource(THREAD_ID);
+      fixture.invalidate();
+    });
+    await screen.findByText("This automation was deleted");
+    expect(screen.getByRole("textbox", { name: "Name" })).toBe(name);
+    expect(name).toHaveValue("Nightly dependency audit unsaved");
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Reload automation" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    expect(fixture.api.getAutomation).toHaveBeenCalledTimes(reads);
     expect(fixture.api.updateAutomation).not.toHaveBeenCalled();
   });
 
