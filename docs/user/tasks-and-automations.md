@@ -384,10 +384,8 @@ sidebar's scope, and its back link, named after the thread, returns to the
 thread. **Add automation** creates another automation. The global
 [Automations page](#see-all-automations) also opens individual automations.
 
-After upgrading, existing automations appear here with their saved names and
-history. You can rename them independently of the source thread. A one-time
-reminder that had already run successfully is removed on first start unless
-its result notice is still waiting to be dismissed; its conversation remains.
+An automation's name is its own: you can rename it independently of the source
+thread.
 
 ### Create an automation
 
