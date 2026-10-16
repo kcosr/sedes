@@ -259,7 +259,7 @@ describe("automation editor navigation", () => {
     });
     render(<AutomationEditor store={fixture.store} threadRegistry={fixture.threadRegistry} automationId={AUTOMATION_ID} />);
     expect(await screen.findByText("This automation was removed")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "All automations" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "All automations" })).toBeNull();
     expect(screen.queryByText("Couldn't open this thread")).toBeNull();
     expect(backLink()).toHaveTextContent("Automations");
   });

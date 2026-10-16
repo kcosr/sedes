@@ -281,6 +281,7 @@ function stateRowGlyphKind(
   if (
     glyphKind !== "automation" &&
     glyphKind !== "automation-paused" &&
+    glyphKind !== "automation-finished" &&
     glyphKind !== "automation-sending"
   ) {
     return glyphKind;

@@ -510,8 +510,15 @@ export function automationRowPresentation(
         outcome: lastOutcome,
         nextRun,
       };
-    case "waiting":
     case "exhausted":
+      return {
+        primary: lastOutcome ?? { text: health.label },
+        secondary: null,
+        detail: schedule,
+        outcome: lastOutcome ?? { text: health.label },
+        nextRun,
+      };
+    case "waiting":
     case "paused":
     case "not_started":
     case "archived":

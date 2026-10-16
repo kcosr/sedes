@@ -256,7 +256,7 @@ function AutomationsPane({ children }: { readonly children: React.ReactNode }): 
   return (
     <main className="workbench">
       <div className="pane-host pane-host-nav-header">
-        <div className="pane-nav-header">
+        <div className="pane-nav-header automation-pane-nav-header">
           <SidebarNavTrigger />
           <div ref={setBackSlot} className="settings-view-back-slot" />
         </div>

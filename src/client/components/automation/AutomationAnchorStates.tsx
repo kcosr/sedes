@@ -1,4 +1,6 @@
 import { automationsPath, navigate } from "../../app/router.js";
+import { automationDefinitionGlyph } from "../../automation/automation-health.js";
+import type { ThreadAutomationDefinition } from "../../types.js";
 import { SettingsBackLink } from "../settings/SettingsPage.js";
 import { isPlainClick } from "../settings/SettingsNav.js";
 import { SettingsDetailHeader } from "../settings/SettingsSplit.js";
@@ -6,6 +8,7 @@ import { Button } from "@client/components/ui/button";
 import { EmptyState } from "@client/components/ui/empty-state";
 import { Skeleton } from "@client/components/ui/skeleton";
 import { useAutomationUp, type AutomationUp } from "./automation-navigation.js";
+import { AutomationGlyph } from "./AutomationGlyph.js";
 
 /**
  * The frame the automation page and editor share with the Automations list,
@@ -99,23 +102,29 @@ export function AutomationAnchorUnavailable({
 /** The page or editor when its automation could not be loaded: removed, or the reason. */
 export function AutomationUnavailable({
   back,
+  up,
+  definition,
   message,
   missing,
   onRetry,
 }: {
   readonly back: React.ReactNode;
+  readonly up: AutomationUp;
+  readonly definition?: ThreadAutomationDefinition;
   readonly message: string;
   readonly missing: boolean;
   readonly onRetry: () => void;
 }): React.JSX.Element {
+  const allAutomations = up.href === automationsPath() ? undefined : <AllAutomations />;
   return (
     <>
-      <SettingsDetailHeader back={back} headingLevel={1} title="Automation" />
+      <SettingsDetailHeader back={back} headingLevel={1} title={definition?.name ?? "Automation"}
+        icon={definition ? <AutomationGlyph glyph={automationDefinitionGlyph(definition.status)} size="header" /> : undefined} />
       {missing ? (
         <EmptyState
           title="This automation was removed"
           description="It was deleted, or it was a one-time reminder whose result was dismissed. Its thread and messages stay."
-          action={<AllAutomations />}
+          action={allAutomations}
         />
       ) : (
         <EmptyState
@@ -123,7 +132,7 @@ export function AutomationUnavailable({
           description={message}
           action={
             <>
-              <AllAutomations />
+              {allAutomations}
               <Button type="button" onClick={onRetry}>
                 Try again
               </Button>

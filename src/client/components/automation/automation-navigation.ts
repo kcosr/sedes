@@ -22,6 +22,8 @@ export interface AutomationUp {
   readonly label: string;
   /** The destination's address, for the link itself (a new tab, a copy). */
   readonly href: string;
+  /** Present when the link returns directly to a thread, including a focused turn. */
+  readonly targetThreadId?: string;
   readonly go: () => void;
 }
 
@@ -55,7 +57,7 @@ export function automationPageUp(
   const before = historyEntryBefore(page)?.route;
   if (before?.name === "thread") {
     const title = before.threadId === thread?.id ? thread.title : threadTitle(before.threadId);
-    return { label: title ?? "Thread", href: routePath(before), go };
+    return { label: title ?? "Thread", href: routePath(before), targetThreadId: before.threadId, go };
   }
   if (before && isAutomationList(before)) return { label: "Automations", href: routePath(before), go };
   return { label: "Automations", href: fallback, go };

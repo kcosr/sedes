@@ -227,7 +227,12 @@ export const AutomationRow = memo(function AutomationRow({
     health.kind === "active" && nextRun !== null
       ? `Next run ${nextRun}`
       : primary.text;
-  const description = [lead, wideMeta, secondary?.text]
+  // Finished schedules can show another last outcome (Delivered, Skipped,
+  // Interrupted or Failed). The hidden glyph cannot convey their state.
+  const state = health.kind === "exhausted" && !primary.text.startsWith(health.label)
+    ? health.label
+    : null;
+  const description = [state, lead, wideMeta, secondary?.text]
     .filter(Boolean)
     .join(". ");
   return (

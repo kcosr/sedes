@@ -328,12 +328,22 @@ test("sidebar execution scope filters creation and persists responsively", async
   ).toBeVisible();
   await page.getByRole("button", { name: "Hide Files panel", exact: true }).click();
   await expect(filesPanel).toBeHidden();
+  // Opening navigation is real input outside Chat, so it cancels any deferred
+  // focus left by closing the phone's Files panel before we change layouts.
+  const navigationTrigger = page.getByRole("button", { name: "Open thread navigation", exact: true });
+  await navigationTrigger.click();
+  const navigation = page.getByRole("dialog", { name: "Thread navigation", exact: true });
+  await expect(navigation).toBeVisible();
+  await page.getByRole("button", { name: "Close thread navigation", exact: true }).click();
+  await expect(navigation).toBeHidden();
+  await expect(navigationTrigger).toBeFocused();
   await page.setViewportSize(desktopViewport ?? { width: 1280, height: 720 });
 
   const targetFilter = desktopSidebar.getByTestId("target-filter");
   const originalTargetScope = await targetFilter.getAttribute("data-scope-value");
-  await targetFilter.focus();
-  await page.keyboard.press("Enter");
+  await expect(desktopSidebar).toBeVisible();
+  await expect(targetFilter).toBeVisible();
+  await targetFilter.press("Enter");
   const targetSearch = page.getByRole("combobox", {
     name: "Search targets",
     exact: true,
@@ -725,6 +735,7 @@ test("Settings renames, moves, merges, removes, and restores projects", async ({
   await page.getByRole("menuitem", { name: "Merge into…", exact: true }).click();
   const merge = page.getByRole("dialog", { name: "Merge “Alpha” into another project", exact: true });
   await expect(merge).toContainText("This can’t be undone.");
+  await overlaySettled(merge);
   await choose(merge, "Into", "Gamma — on Local");
   await capture(page, testInfo, "projects-merge-dialog-desktop.png");
   const merged = response("POST", /^\/api\/projects\/[^/]+\/merge$/u);
@@ -879,11 +890,13 @@ test("archived threads honor the shared sidebar scope and search", async ({
   await expect(desktopSidebar.getByRole("searchbox")).toHaveValue(suffix);
   await expect(status).toContainText(`matching “${suffix}”`);
   await expect(page.getByTestId("archive-row")).toHaveCount(1);
+  await capture(page, testInfo, "archive-search-populated-desktop.png");
 
   // On a phone the sidebar is hidden; the status line carries the Scope.
   await page.setViewportSize({ width: 390, height: 844 });
   await page.emulateMedia({ colorScheme: "dark" });
   await expect(status).toBeInViewport();
+  expect(await page.locator(".pane-nav-header").evaluate((element) => getComputedStyle(element).borderBottomWidth)).toBe("0px");
   await expectNoPageOverflow(page);
   await expectMinimumHeight(
     rowFor(alternateId).getByRole("button", {
@@ -899,7 +912,10 @@ test("archived threads honor the shared sidebar scope and search", async ({
   await expect(rowFor(alternateId)).toBeVisible();
   await expect(status).toContainText(`2 of ${archivedTotal.length}`);
   await capture(page, testInfo, "archive-scope-cleared-mobile-dark.png");
-  await search.fill("");
+  const searchBounds = (await search.boundingBox())!;
+  await search.click({ position: { x: searchBounds.width - 12, y: searchBounds.height / 2 } });
+  await expect(search).toHaveValue("");
+  await capture(page, testInfo, "archive-search-cleared-mobile-dark.png");
   await page.emulateMedia({ colorScheme: "light" });
 
   // Clearing from the archive clears the sidebar Scope too.
@@ -908,4 +924,10 @@ test("archived threads honor the shared sidebar scope and search", async ({
     "data-scope-value",
     alternate.id,
   );
+  await expect(desktopSidebar.getByRole("searchbox")).toHaveValue("");
+  await page.goto("/usage");
+  await page.setViewportSize({ width: 390, height: 844 });
+  const usageBar = page.locator(".pane-nav-header");
+  await expect(usageBar).toBeVisible();
+  expect(await usageBar.evaluate((element) => getComputedStyle(element).borderBottomWidth)).toBe("0px");
 });

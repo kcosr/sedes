@@ -10,6 +10,7 @@ describe("AutomationGlyph", () => {
   it.each([
     ["repeat", "lucide-repeat"],
     ["pause", "lucide-circle-pause"],
+    ["finished", "lucide-circle-check"],
     ["triangle", "lucide-triangle-alert"],
     ["archive", "lucide-archive"],
     ["snoozed", "lucide-moon"],

@@ -48,6 +48,7 @@ export type AutomationGlyphKind =
   | "archive"
   | "snoozed"
   | "repeat"
+  | "finished"
   | "pause";
 
 export interface AutomationHealth {
@@ -147,7 +148,7 @@ export function automationHealth(
   if (snoozeSuspendsRuns(thread, now)) {
     return health("snoozed", "snoozed", "neutral", "Snoozed");
   }
-  if (automation.status === "exhausted") return health("exhausted", "pause", "neutral", "Finished");
+  if (automation.status === "exhausted") return health("exhausted", "finished", "neutral", "Finished");
   if (automation.status === "enabled") {
     return health("active", "repeat", "success", "Active");
   }
@@ -180,17 +181,19 @@ export function automationNeedsAttention(
 /**
  * The glyph for surfaces that carry attention separately, as a row chip or a
  * tinted header ring: the spinner while a run is sending, CirclePause for
- * paused, never-started and suspended automations, Repeat otherwise.
+ * paused, never-started and suspended automations, CircleCheck for a
+ * finished schedule, and Repeat otherwise.
  */
 export function automationIdentityGlyph(
   health: AutomationHealth,
-): "spinner" | "repeat" | "pause" {
+): "spinner" | "repeat" | "pause" | "finished" {
   switch (health.kind) {
     case "sending":
       return "spinner";
+    case "exhausted":
+      return "finished";
     case "paused":
     case "waiting":
-    case "exhausted":
     case "not_started":
     case "archived":
     case "snoozed":
@@ -200,6 +203,15 @@ export function automationIdentityGlyph(
     case "unknown":
     case "active":
       return "repeat";
+  }
+}
+
+/** The saved schedule's identity after removal, independent of stale live work. */
+export function automationDefinitionGlyph(status: SummaryAutomation["status"]): "repeat" | "pause" | "finished" {
+  switch (status) {
+    case "enabled": return "repeat";
+    case "paused": return "pause";
+    case "exhausted": return "finished";
   }
 }
 

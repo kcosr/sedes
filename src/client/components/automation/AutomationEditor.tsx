@@ -92,7 +92,7 @@ export function AutomationEditor({ store, threadRegistry, threadId, automationId
   const back = <AutomationBackLink up={up} />;
   // The editor region inside names itself; the frame does not repeat it.
   return <AutomationFrame up={up}>
-    {resource.error && !definition ? <AutomationUnavailable back={back} message={resource.error} missing={resource.missing} onRetry={resource.reload} />
+    {resource.error && !definition ? <AutomationUnavailable back={back} up={up} message={resource.error} missing={resource.missing} onRetry={resource.reload} />
       : sourceId ? <EditorAnchor key={automationId ?? sourceId} store={store} threadRegistry={threadRegistry} threadId={sourceId}
         automation={definition} refreshError={resource.error} missing={resource.missing} onRetry={resource.reload}
         reads={resource.reads} back={back} />
@@ -227,6 +227,7 @@ function ThreadAutomationEditor({
           )
         }
         sections={sections}
+        sectionEdgeFade
         errors={
           <>
             {editor.error ? (
@@ -335,7 +336,7 @@ function ThreadAutomationEditor({
           aria-busy={editor.pending !== undefined || undefined}
         >
           <SettingsSection id="automation-name" title="Name" card>
-            <Field label="Name" id="automation-name-input">
+            <Field className="automation-name-field" label="Name" id="automation-name-input">
               <Input value={form.name} maxLength={MAXIMUM_AUTOMATION_NAME_LENGTH} required
                 onChange={(event) => editor.update({ name: event.target.value })} placeholder="Daily update" />
             </Field>

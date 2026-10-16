@@ -107,6 +107,11 @@ User-facing changes are collected here before release. See the
   history without leaving the automation in flight or resending its input.
   ([#88](https://github.com/kcosr/sedes/pull/88))
 
+- Automation pages share aligned headings, readable schedule descriptions,
+  distinct Finished icons, and compact phone save controls. Removed reminders
+  keep their name when known, and navigation avoids repeating the same thread
+  or destination. ([#88](https://github.com/kcosr/sedes/pull/88))
+
 - macOS preview packages ad hoc sign Sedes and its helpers with their bundle
   identities, fixing Local Network connections that failed when launched from
   Finder. Package verification rejects mismatched or incomplete signatures.

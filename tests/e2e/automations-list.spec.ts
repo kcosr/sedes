@@ -62,6 +62,10 @@ test("lists every automation from the More menu and opens one", async ({
   for (const [threadId, name, prompt, expression, initialState] of [
     [nightly, "Nightly dependency audit", "Measure turn throughput", "0 2 * * *", "enabled"],
     [weekly, "Weekly release notes draft", "Draft release notes from merged PRs.", "0 9 * * 1", "paused"],
+    [weekly, "Monthly dependency summary", "Summarize dependency changes.", "30 6 1 * *", "paused"],
+    [weekly, "Hourly incident check", "Check for new incidents.", "30 * * * *", "paused"],
+    [weekly, "Weekday planning", "Prepare today's plan.", "0 9 * * 1-5", "paused"],
+    [weekly, "Twice-monthly audit", "Audit changes on the first and fifteenth.", "30 6 1,15 * *", "paused"],
   ] as const) {
     const response = await page.request.post(
       "/api/automations",
@@ -100,7 +104,7 @@ test("lists every automation from the More menu and opens one", async ({
     view.getByRole("heading", { level: 1, name: "Automations" }),
   ).toBeVisible();
   await expect(view.getByTestId("automations-count")).toHaveText(
-    /^2\s*automations$/u,
+    /^6\s*automations$/u,
   );
   await expect(view.getByTestId("automations-status")).toContainText(
     "Grouped by status",
@@ -113,6 +117,15 @@ test("lists every automation from the More menu and opens one", async ({
   await expect(weeklyRow).toContainText("Weekly release notes draft");
   await expect(weeklyRow).toContainText("Not started");
   await expect(weeklyRow).toContainText("Every Monday at 9:00 AM UTC");
+  const [, , monthlyAutomation, hourlyAutomation, weekdayAutomation, customAutomation] = automationIds;
+  await expect(row(page, monthlyAutomation!)).toContainText("Monthly on the 1st at 6:30 AM UTC");
+  await expect(row(page, hourlyAutomation!)).toContainText("Every hour at :30");
+  await expect(row(page, weekdayAutomation!)).toContainText("Every weekday at 9:00 AM UTC");
+  await expect(row(page, customAutomation!)).toContainText("Custom schedule (30 6 1,15 * *, UTC)");
+  const listTitle = view.getByRole("heading", { level: 1, name: "Automations" });
+  const listBounds = (await view.locator(".automations-list").first().boundingBox())!;
+  const titleBounds = (await listTitle.boundingBox())!;
+  expect(Math.abs(titleBounds.x - listBounds.x)).toBeLessThanOrEqual(1);
   await capture(page, testInfo, "automations-list-desktop.png");
 
   // Pause from the row menu (⋯ shows on hover or focus); the summary
@@ -122,7 +135,7 @@ test("lists every automation from the More menu and opens one", async ({
     .getByRole("button", { name: "Actions for Nightly dependency audit" })
     .click();
   await page.getByRole("menuitem", { name: "Pause" }).click();
-  await expect(group(page, "status:paused")).toContainText("Paused · 2");
+  await expect(group(page, "status:paused")).toContainText("Paused · 6");
   await expect(group(page, "status:upcoming")).toHaveCount(0);
   // It never ran, so it reads as not started.
   await expect(row(group(page, "status:paused"), nightlyAutomation)).toContainText(
@@ -140,8 +153,12 @@ test("lists every automation from the More menu and opens one", async ({
   await search.fill("merged prs");
   await expect(view.getByTestId("automation-row")).toHaveCount(1);
   await expect(row(page, weeklyAutomation)).toBeVisible();
-  await search.fill("");
-  await expect(view.getByTestId("automation-row")).toHaveCount(2);
+  await capture(page, testInfo, "automations-search-populated-desktop.png");
+  // The native search clear control shares the muted styling of Settings and Find.
+  const searchBounds = (await search.boundingBox())!;
+  await search.click({ position: { x: searchBounds.width - 12, y: searchBounds.height / 2 } });
+  await expect(search).toHaveValue("");
+  await expect(view.getByTestId("automation-row")).toHaveCount(6);
 
   // A phone keeps the outcome and schedule on line 2 and ⋯ always visible.
   await page.setViewportSize({ width: 390, height: 844 });
@@ -153,6 +170,10 @@ test("lists every automation from the More menu and opens one", async ({
   await expect(
     phoneRow.getByRole("button", { name: "Actions for Weekly release notes draft" }),
   ).toBeVisible();
+  const phoneBar = page.locator(".pane-nav-header");
+  await expect(phoneBar).toBeVisible();
+  await expect(phoneBar.locator('[data-slot="settings-page-back"]')).toHaveCount(0);
+  expect(await phoneBar.evaluate((element) => getComputedStyle(element).borderBottomWidth)).toBe("0px");
   await expectNoPageOverflow(page);
   await capture(page, testInfo, "automations-list-mobile.png");
   await page.setViewportSize({ width: 1440, height: 900 });
@@ -174,6 +195,8 @@ test("lists every automation from the More menu and opens one", async ({
   await capture(page, testInfo, "automation-navigation-desktop.png");
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(threadLink).toBeVisible();
+  await expect(phoneBar.locator('[data-slot="settings-page-back"]')).toBeVisible();
+  expect(await phoneBar.evaluate((element) => getComputedStyle(element).borderBottomWidth)).toBe("1px");
   await expectNoPageOverflow(page);
   await capture(page, testInfo, "automation-navigation-mobile.png");
   await page.setViewportSize({ width: 1440, height: 900 });
@@ -195,6 +218,9 @@ test("lists every automation from the More menu and opens one", async ({
   await expect(view.getByTestId("automations-view-options")).toHaveCount(0);
   await expect(view.getByTestId("automations-status")).toHaveCount(0);
   await expect(view.getByTestId("automations-group")).toHaveCount(0);
+  const threadListBounds = (await view.locator(".automations-list").boundingBox())!;
+  const threadTitleBounds = (await listTitle.boundingBox())!;
+  expect(Math.abs(threadTitleBounds.x - threadListBounds.x)).toBeLessThanOrEqual(1);
   await expect(
     row(page, nightlyAutomation).locator('[data-layout="wide"]'),
   ).toHaveText("Every day at 2:00 AM UTC");

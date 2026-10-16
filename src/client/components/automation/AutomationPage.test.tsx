@@ -138,7 +138,8 @@ describe("automation resource page", () => {
     await act(async () => finishPause({ ...current, status: "paused", revision: current.revision + 1 }));
     expect(await screen.findByText("This automation was removed")).toBeInTheDocument();
     await waitFor(() => expect(fixture.api.getAutomation).toHaveBeenCalledTimes(deletionArrivesFirst ? 3 : 2));
-    expect(screen.queryByRole("heading", { name: current.name })).toBeNull();
+    expect(screen.getByRole("heading", { name: current.name })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Pause automation" })).toBeNull();
   });
 
   it("refreshes only the selected resource and keeps the source title separate", async () => {
@@ -210,14 +211,25 @@ describe("automation page navigation", () => {
     await waitFor(() => expect(window.location.pathname).toBe("/automations"));
   });
 
-  it("names the thread when opened from it, as from a transcript notice", async () => {
-    openFrom(threadPath(THREAD_ID));
+  it.each(["", "#turn=some-turn"])("names its source only in the back link when opened from it (%s)", async (focus) => {
+    openFrom(threadPath(THREAD_ID) + focus);
     mount(sourced());
     await screen.findByRole("heading", { name: "Nightly dependency audit" });
     expect(backLink()).toHaveTextContent(TITLE);
-    expect(backLink()).toHaveAttribute("href", threadPath(THREAD_ID));
+    expect(backLink()).toHaveAttribute("href", threadPath(THREAD_ID) + focus);
+    expect(document.querySelector(".automation-page-thread")).toBeNull();
     fireEvent.click(backLink());
     await waitFor(() => expect(window.location.pathname).toBe(threadPath(THREAD_ID)));
+  });
+
+  it("keeps the source in the meta line when opened from a different result thread", async () => {
+    const resultThreadId = "10000000-0000-4000-8000-000000000002";
+    openFrom(threadPath(resultThreadId));
+    mount(sourced({ runMode: "clone" }));
+    const source = await screen.findByRole("link", { name: TITLE });
+    expect(source.closest(".automation-page-thread")).not.toBeNull();
+    expect(source).toHaveAttribute("href", threadPath(THREAD_ID));
+    expect(backLink()).toHaveAttribute("href", threadPath(resultThreadId));
   });
 
   it("goes up to the thread's list in place of a page opened from elsewhere", async () => {
@@ -333,6 +345,22 @@ describe("automation page navigation", () => {
 });
 
 describe("automation page states", () => {
+  it.each([
+    ["enabled", "repeat"],
+    ["paused", "pause"],
+    ["exhausted", "finished"],
+  ] as const)("shows a static %s identity after a stale in-flight definition is removed", async (status, glyph) => {
+    openFrom(automationsPath());
+    const current = sourced({ status, lastRun: run({ state: "queued" }) });
+    const fixture = mount(current);
+    await screen.findByRole("heading", { name: current.name });
+    expect(document.querySelector('[data-slot="settings-detail-icon"] [data-automation-glyph="spinner"]')).not.toBeNull();
+    act(() => fixture.invalidate(AUTOMATION_ID, true));
+    await screen.findByText("This automation was removed");
+    expect(document.querySelector(`[data-slot="settings-detail-icon"] [data-automation-glyph="${glyph}"]`)).not.toBeNull();
+    expect(document.querySelector('[data-automation-glyph="spinner"]')).toBeNull();
+  });
+
   it("keeps the page frame and its way up while the automation loads", () => {
     openFrom(automationsPath());
     mount(sourced(), { getAutomation: vi.fn(() => new Promise(() => undefined)) });
@@ -351,8 +379,27 @@ describe("automation page states", () => {
     expect(screen.getByRole("region", { name: "Automation" })).toHaveClass("automations-view");
     // The thread is not known: up goes to every automation, in its place.
     expect(backLink()).toHaveTextContent("Automations");
-    await userEvent.setup().click(screen.getByRole("button", { name: "All automations" }));
+    expect(screen.queryByRole("button", { name: "All automations" })).toBeNull();
+    await userEvent.setup().click(backLink());
     expect(window.location.pathname).toBe("/automations");
+  });
+
+  it.each([
+    [automationsPath(), false],
+    [automationsPath(THREAD_ID), true],
+    [threadPath(THREAD_ID), true],
+  ] as const)("retains the removed automation's name and icon from %s, with a distinct collection action (%s)", async (origin, showAll) => {
+    openFrom(origin);
+    const current = sourced({ status: "exhausted" });
+    const fixture = mount(current);
+    await screen.findByRole("heading", { name: current.name });
+    act(() => fixture.invalidate(AUTOMATION_ID, true));
+    await screen.findByText("This automation was removed");
+    expect(screen.getByRole("heading", { name: current.name })).toBeInTheDocument();
+    expect(document.querySelector('[data-slot="settings-detail-icon"] .lucide-circle-check')).not.toBeNull();
+    expect(Boolean(screen.queryByRole("button", { name: "All automations" }))).toBe(showAll);
+    expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
+    expect(fixture.api.getAutomation).toHaveBeenCalledOnce();
   });
 
   it("names an automation it couldn't load apart from a thread it couldn't open", async () => {

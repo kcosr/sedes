@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import type { Page } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
 import { normalizedThreadSnapshotSchema } from "../../src/shared/protocol/conversation.js";
 import { expect, test } from "./fixtures";
 import {
@@ -32,9 +32,11 @@ async function csrfHeaders(page: Page): Promise<Record<string, string>> {
 async function createInEditor(
   page: Page,
   input: { name: string; prompt: string; once?: boolean },
+  inspect?: (editor: Locator) => Promise<void>,
 ): Promise<string> {
   await page.getByRole("button", { name: "Add automation", exact: true }).click();
   const editor = page.getByRole("region", { name: "New automation", exact: true });
+  if (inspect) await inspect(editor);
   await editor.getByRole("textbox", { name: "Name", exact: true }).fill(input.name);
   await editor.getByRole("textbox", { name: "Prompt", exact: true }).fill(input.prompt);
   if (input.once) await editor.getByRole("radio", { name: "Once", exact: true }).click();
@@ -46,15 +48,105 @@ async function createInEditor(
   return automationId;
 }
 
+async function expectPhoneSaveBar(page: Page, editor: Locator, label: string): Promise<number> {
+  const saveBar = editor.locator('[data-slot="save-bar"]');
+  await expect(saveBar).toBeInViewport();
+  const viewport = page.viewportSize()!;
+  const buttonBounds: Array<{ x: number; y: number; width: number; height: number }> = [];
+  for (const button of await saveBar.getByRole("button").all()) {
+    await expect(button).toBeInViewport({ ratio: 1 });
+    const bounds = (await button.boundingBox())!;
+    expect(bounds.height).toBeGreaterThanOrEqual(44);
+    expect(bounds.y).toBeGreaterThanOrEqual(0);
+    expect(bounds.y + bounds.height).toBeLessThanOrEqual(viewport.height);
+    buttonBounds.push(bounds);
+  }
+  const bottomGap = viewport.height - Math.max(...buttonBounds.map(({ y, height }) => y + height));
+  // Chromium has no bottom safe-area inset. The requested footer adds no
+  // extra bottom padding while retaining each full-height touch target.
+  expect(bottomGap).toBeCloseTo(0, 1);
+  const height = (await saveBar.boundingBox())!.height;
+  await test.info().attach(`${label}-savebar-geometry`, {
+    body: JSON.stringify({ height, bottomGap, buttons: buttonBounds }),
+    contentType: "application/json",
+  });
+  return height;
+}
+
 test("keeps named daily and one-shot automations independent on the same draft", async ({ page }, testInfo) => {
   const sourceId = await createSource(page, "multiple-automation-editor");
   await page.getByRole("button", { name: "Thread actions", exact: true }).click();
   await page.getByRole("menuitem", { name: "Automations…", exact: true }).click();
   await expect(page).toHaveURL(`/threads/${sourceId}/automations`);
 
+  let createSaveBarHeight = 0;
   const dailyId = await createInEditor(page, {
     name: "Daily update",
     prompt: "Summarize today's work and tomorrow's priorities.",
+  }, async (editor) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(editor.getByRole("textbox", { name: "Name", exact: true })).toHaveCount(1);
+    await expect(editor.getByRole("heading", { name: "Name", exact: true })).toBeVisible();
+    const sections = editor.getByRole("navigation", { name: "Editor sections", exact: true });
+    await expect(sections.getByRole("button", { name: "Name", exact: true })).toBeVisible();
+    await expect(sections).toHaveAttribute("data-overflow-end", "true");
+    await expect(sections).not.toHaveAttribute("data-overflow-start", "true");
+    const sectionBounds = (await sections.boundingBox())!;
+    expect(sectionBounds.x + sectionBounds.width).toBeLessThanOrEqual(page.viewportSize()!.width);
+    const saveBar = editor.locator('[data-slot="save-bar"]');
+    createSaveBarHeight = await expectPhoneSaveBar(page, editor, "create-clean");
+    await expectNoPageOverflow(page);
+    await capture(page, testInfo, "automation-create-mobile.png");
+    await editor.getByRole("textbox", { name: "Name", exact: true }).fill("Phone size check");
+    await expect(saveBar.getByRole("status")).toHaveText("Unsaved changes");
+    expect(await saveBar.getByRole("status").evaluate((element) => getComputedStyle(element).display)).not.toBe("none");
+    expect(Math.abs(await expectPhoneSaveBar(page, editor, "create-dirty") - createSaveBarHeight)).toBeLessThanOrEqual(1);
+    await capture(page, testInfo, "automation-create-dirty-mobile.png");
+    const sectionScroller = sections.locator('[data-slot="settings-anchors-scroll"]');
+    await sectionScroller.evaluate((element) => { element.scrollLeft = element.scrollWidth; });
+    await expect(sections).toHaveAttribute("data-overflow-start", "true");
+    await expect(sections).not.toHaveAttribute("data-overflow-end", "true");
+    await expect(sections.getByRole("button", { name: "If Sedes was down", exact: true })).toBeInViewport();
+    await capture(page, testInfo, "automation-create-mobile-chip-end.png");
+    await sections.getByRole("button", { name: "If Sedes was down", exact: true }).click();
+    await page.evaluate(async () => {
+      const position = () => [...document.querySelectorAll(".application-shell, .workbench, .pane-host, .automations-view")]
+        .map((element) => `${element.scrollTop}:${element.getBoundingClientRect().top}`).join(";");
+      await new Promise<void>((resolve) => {
+        let previous = "";
+        let stable = 0;
+        const check = () => {
+          const next = position();
+          stable = next === previous ? stable + 1 : 0;
+          previous = next;
+          if (stable >= 3) resolve(); else requestAnimationFrame(check);
+        };
+        requestAnimationFrame(check);
+      });
+    });
+    const scroll = await page.evaluate(() => ({
+      window: window.scrollY,
+      outer: document.querySelector(".pane-host")!.scrollTop,
+      editor: document.querySelector(".automations-view")!.scrollTop,
+    }));
+    expect(scroll.window).toBe(0);
+    expect(scroll.outer).toBe(0);
+    expect(scroll.editor).toBeGreaterThan(0);
+    await expect(page.locator(".pane-nav-header")).toBeInViewport({ ratio: 1 });
+    await expect(sections).toHaveAttribute("data-stuck", "true");
+    await expect(sections).toBeInViewport({ ratio: 1 });
+    await expect(editor.getByRole("heading", { name: "If Sedes was down", exact: true })).toBeInViewport({ ratio: 1 });
+    const stickyStyle = await sections.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return { mask: style.maskImage, shadow: style.boxShadow };
+    });
+    expect(stickyStyle.mask).toBe("none");
+    expect(stickyStyle.shadow).not.toBe("none");
+    expect(await sectionScroller.evaluate((element) => getComputedStyle(element).maskImage)).not.toBe("none");
+    await capture(page, testInfo, "automation-create-mobile-sticky-chips.png");
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await expect(saveBar.getByRole("status")).toBeInViewport({ ratio: 1 });
+    expect(await saveBar.getByRole("status").evaluate((element) => getComputedStyle(element).position)).not.toBe("absolute");
   });
   // Saved from the thread's list, the page leads back there and names its thread.
   await expect(page.locator('.automation-page [data-slot="settings-page-back"]')).toHaveText("Automations");
@@ -86,7 +178,19 @@ test("keeps named daily and one-shot automations independent on the same draft",
   await expect(editor.getByRole("textbox", { name: "Prompt", exact: true })).toHaveValue(
     "Summarize today's work and tomorrow's priorities.",
   );
+  await capture(page, testInfo, "automation-editor-desktop.png");
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(Math.abs(await expectPhoneSaveBar(page, editor, "edit-clean") - createSaveBarHeight)).toBeLessThanOrEqual(1);
+  await expectNoPageOverflow(page);
+  await capture(page, testInfo, "automation-editor-mobile.png");
   await editor.getByRole("textbox", { name: "Name", exact: true }).fill("Morning update");
+  const editStatus = editor.locator('[data-slot="save-bar"]').getByRole("status");
+  await expect(editStatus).toHaveText("Unsaved changes");
+  await expect(editStatus).toBeInViewport({ ratio: 1 });
+  expect(await editStatus.evaluate((element) => getComputedStyle(element).position)).not.toBe("absolute");
+  expect(Math.abs(await expectPhoneSaveBar(page, editor, "edit-dirty") - createSaveBarHeight)).toBeLessThanOrEqual(1);
+  await capture(page, testInfo, "automation-editor-dirty-mobile.png");
+  await page.setViewportSize({ width: 1440, height: 900 });
   await editor.getByRole("textbox", { name: "Prompt", exact: true }).fill("Summarize today's priorities at breakfast.");
   await editor.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page).toHaveURL(`/automations/${dailyId}`);

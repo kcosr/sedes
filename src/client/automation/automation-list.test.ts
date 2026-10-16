@@ -180,6 +180,21 @@ describe("automationRowPresentation", () => {
   it("keeps queued delivery separate from retained finished schedules", () => {
     const queued = { ...daily, lastRun: run("queued", { finishedAt: undefined }) };
     expect(automationRowPresentation(entryFor(queued), NOW)).toMatchObject({ primary: { text: "Waiting for turn", tone: "info" } });
-    expect(automationRowPresentation(entryFor(finished), NOW)).toMatchObject({ primary: { text: "Finished" }, nextRun: null });
+    expect(automationRowPresentation(entryFor(finished), NOW)).toMatchObject({ primary: { text: "Delivered 23m ago", check: true }, secondary: null, nextRun: null });
+  });
+
+  it("shows a finished one-shot's last result once, preserving ongoing, skipped and failed turn outcomes", () => {
+    const result = (lastRun: SummaryAutomationRun | undefined) => automationRowPresentation(entryFor({ ...finished, lastRun }), NOW);
+    expect(result(run("completed", { turn: { outcome: "completed", endedAt: ago(2) } }))).toMatchObject({
+      primary: { text: "Finished 2m ago", check: true }, secondary: null,
+      outcome: { text: "Finished 2m ago", check: true },
+    });
+    expect(result(run("completed", { turn: { outcome: "failed", endedAt: ago(2) } }))).toMatchObject({
+      primary: { text: "Failed 2m ago", tone: "danger" }, secondary: null,
+    });
+    expect(result(run("skipped"))).toMatchObject({ primary: { text: "Skipped 23m ago", check: false }, secondary: null });
+    expect(result(undefined)).toMatchObject({ primary: { text: "Finished" }, secondary: null });
+    const ongoing = { ...finished, source: { ...finished.source, runState: "running" as const }, lastRun: run("completed", { resultThreadId: finished.threadId, finishedAt: ago(4) }) };
+    expect(automationRowPresentation(entryFor(ongoing), NOW)).toMatchObject({ primary: { text: "Running · 4m", running: true }, secondary: null });
   });
 });

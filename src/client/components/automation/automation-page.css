@@ -413,6 +413,34 @@
   .automation-next-runs {
     padding-top: 0;
   }
+
+  /* The bar owns the bottom safe-area inset; another page gutter adds an
+     empty band underneath its buttons. */
+  .automations-view:has([data-slot="save-bar"][data-placement="page"]) {
+    padding-bottom: 0;
+  }
+
+  .automation-page [data-slot="save-bar"][data-placement="page"] {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+}
+
+@container automations-page (max-width: 559px) {
+  /* Three create actions fill a phone row. Keep their live status mounted
+     without adding a row when typing starts; edit feedback and errors stay visible. */
+  .automation-page [data-slot="save-bar"]:has([data-slot="save-bar-actions"] > :nth-child(3))
+    [data-slot="save-bar-status"]:not([data-state="error"]) {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    min-width: 0;
+    min-height: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
 }
 
 /* Keyboard focus never lands behind the save bar. */
@@ -421,7 +449,42 @@
   scroll-margin-bottom: calc(var(--control-default) + 2 * var(--space-3) + var(--space-2));
 }
 
-/* The prompt's card is its label; the field's own label is for screen readers. */
+/* Only the inner links are masked. The outer sticky bar must keep its
+   hairline and the upward shadow that covers the scroller's top gutter. */
+.automation-page [data-slot="settings-anchors"]:has(> [data-slot="settings-anchors-scroll"]) {
+  /* The sticky grid item must be allowed to shrink now that scrolling
+     belongs to its child instead of supplying its own automatic minimum. */
+  min-width: 0;
+  overflow: visible;
+  padding-block: var(--space-1);
+}
+
+.automation-page [data-slot="settings-anchors-scroll"] {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  gap: var(--space-1);
+  /* Keep the existing total padding, with room inside the scroll clip for
+     a keyboard focus ring above and below a chip. */
+  padding-block: var(--space-1);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.automation-page [data-overflow-start] > [data-slot="settings-anchors-scroll"] {
+  mask-image: linear-gradient(to right, transparent, black var(--space-4));
+}
+
+.automation-page [data-overflow-end] > [data-slot="settings-anchors-scroll"] {
+  mask-image: linear-gradient(to left, transparent, black var(--space-4));
+}
+
+.automation-page [data-overflow-start][data-overflow-end] > [data-slot="settings-anchors-scroll"] {
+  mask-image: linear-gradient(to right, transparent, black var(--space-4), black calc(100% - var(--space-4)), transparent);
+}
+
+/* The section heading labels these cards; keep field labels for screen readers. */
+.automation-name-field > [data-slot="field-label"],
 .automation-prompt-field > [data-slot="field-label"] {
   position: absolute;
   width: 1px;

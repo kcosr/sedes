@@ -86,13 +86,28 @@ describe("describeSchedule: cron", () => {
     expect(cron("0 */1 * * *")).toBe("Every hour");
   });
 
-  it("collapses whitespace in the fallback", () => {
-    expect(cron("  0   9 1 * *  ")).toBe("Cron 0 9 1 * * (UTC)");
+  it("describes fixed calendar dates and names the months in a stepped schedule", () => {
+    expect(cron("  30   6 1 * *  ")).toBe(`Monthly on the 1st at ${clock(6, 30)} UTC`);
+    expect(cron("0 8 1 */3 *")).toBe(`Every January, April, July and October on the 1st at ${clock(8, 0)} UTC`);
+    expect(cron("0 9 2 JAN *")).toBe(`Every January on the 2nd at ${clock(9, 0)} UTC`);
+    expect(cron("0 9 3 6 *")).toBe(`Every June on the 3rd at ${clock(9, 0)} UTC`);
+    for (const day of [11, 12, 13]) expect(cron(`0 9 ${day} * *`)).toBe(`Monthly on the ${day}th at ${clock(9, 0)} UTC`);
+    expect(cron("0 9 21 * *")).toBe(`Monthly on the 21st at ${clock(9, 0)} UTC`);
+    expect(cron("0 9 31 * *")).toBe(`Monthly on the 31st at ${clock(9, 0)} UTC`);
+  });
+
+  it("collapses whitespace while keeping a complex expression and its zone visible", () => {
+    expect(cron("  30   6 1,15 * *  ")).toBe("Custom schedule (30 6 1,15 * *, UTC)");
   });
 
   it.each([
-    ["0 9 1 * *", "a day of month"],
     ["0 9 * 1 *", "a month"],
+    ["0 9 1 * MON", "both restricted day fields"],
+    ["0 9 1 1,6 *", "a month list"],
+    ["0 9 1 */5 *", "an uneven month step"],
+    ["0 9 0 * *", "an invalid day of month"],
+    ["0 9 32 * *", "an out-of-range day of month"],
+    ["0 9 1 0 *", "an invalid month"],
     ["*/7 * * * *", "an uneven minute step"],
     ["0 */5 * * *", "an uneven hour step"],
     ["*/15 9 * * *", "a minute step inside one hour"],
@@ -109,7 +124,7 @@ describe("describeSchedule: cron", () => {
     ["0 9 * *", "four fields"],
   ])("falls back for %s (%s)", (expression) => {
     expect(cron(expression, "Europe/Berlin")).toBe(
-      `Cron ${expression} (Europe/Berlin)`,
+      `Custom schedule (${expression}, Europe/Berlin)`,
     );
   });
 });

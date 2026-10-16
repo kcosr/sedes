@@ -4,6 +4,7 @@ import {
   AUTOMATION_HEALTH_GROUPS,
   AUTOMATION_HEALTH_GROUP_LABELS,
   automationHealth,
+  automationDefinitionGlyph,
   automationIdentityGlyph,
   automationIdentityLabel,
   automationNeedsAttention,
@@ -293,9 +294,20 @@ describe("automationIdentityGlyph", () => {
       glyphFor(thread({ automation: automation({ status: "paused", lastRun: run("completed") }) })),
     ).toBe("pause");
     expect(glyphFor(thread({ inventoryState: "archived" }))).toBe("pause");
+    expect(glyphFor(thread({ automation: automation({ status: "exhausted", nextRunAt: undefined }) }))).toBe("finished");
     expect(
       glyphFor(thread({ inventoryState: "snoozed", snoozedUntil: "2026-10-07T00:00:00.000Z" })),
     ).toBe("pause");
+  });
+});
+
+describe("automationDefinitionGlyph", () => {
+  it.each([
+    ["enabled", "repeat"],
+    ["paused", "pause"],
+    ["exhausted", "finished"],
+  ] as const)("keeps %s schedule identity independent of live work", (status, glyph) => {
+    expect(automationDefinitionGlyph(status)).toBe(glyph);
   });
 });
 
@@ -448,7 +460,7 @@ describe("independent automation attention", () => {
 
   it("presents deferred delivery as waiting and retains exhausted schedules", () => {
     expect(automationHealth(thread({ automation: automation({ lastRun: run("deferred") }) }), NOW)).toMatchObject({ label: "Waiting on source" });
-    expect(automationHealth(thread({ automation: automation({ status: "exhausted", nextRunAt: undefined }) }), NOW)).toMatchObject({ kind: "exhausted", group: "finished", label: "Finished" });
+    expect(automationHealth(thread({ automation: automation({ status: "exhausted", nextRunAt: undefined }) }), NOW)).toMatchObject({ kind: "exhausted", group: "finished", glyph: "finished", label: "Finished" });
   });
 
   it("does not hide sibling failures behind another automation's active run", () => {

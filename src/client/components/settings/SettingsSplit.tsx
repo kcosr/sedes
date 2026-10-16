@@ -94,12 +94,38 @@ function scrollerOf(element: HTMLElement | null): HTMLElement | null {
  * settings column, or a page's own) rather than change the URL, and mark
  * the section in view.
  */
-export function SettingsSectionAnchors({ sections }: { readonly sections: readonly SettingsEditorSection[] }): React.JSX.Element {
+export function SettingsSectionAnchors({ sections, edgeFade = false }: {
+  readonly sections: readonly SettingsEditorSection[];
+  readonly edgeFade?: boolean;
+}): React.JSX.Element {
   const nav = useRef<HTMLElement>(null);
+  const scroll = useRef<HTMLDivElement>(null);
   const sentinel = useRef<HTMLSpanElement>(null);
   const [current, setCurrent] = useState(sections[0]?.id);
   const [stuck, setStuck] = useState(false);
+  const [overflow, setOverflow] = useState({ start: false, end: false });
   const key = sections.map((section) => section.id).join(" ");
+  useEffect(() => {
+    const element = scroll.current;
+    if (!edgeFade || !element) return;
+    const measure = () => {
+      const start = element.scrollLeft > 1;
+      const end = element.scrollWidth - element.clientWidth - element.scrollLeft > 1;
+      setOverflow((previous) => previous.start === start && previous.end === end ? previous : { start, end });
+    };
+    measure();
+    element.addEventListener("scroll", measure, { passive: true });
+    window.addEventListener("resize", measure);
+    const observer = typeof ResizeObserver === "function" ? new ResizeObserver(measure) : undefined;
+    observer?.observe(element);
+    // A label can change width without changing the scroll container.
+    for (const child of element.children) observer?.observe(child);
+    return () => {
+      element.removeEventListener("scroll", measure);
+      window.removeEventListener("resize", measure);
+      observer?.disconnect();
+    };
+  }, [edgeFade, key]);
   useEffect(() => {
     // Stuck under the scroller's top padding, the bar masks that strip so
     // content does not show through above it.
@@ -126,14 +152,16 @@ export function SettingsSectionAnchors({ sections }: { readonly sections: readon
     }
     return () => observer.disconnect();
   }, [key]);
-  return <><span ref={sentinel} aria-hidden="true" data-slot="settings-anchors-sentinel" /><nav ref={nav} aria-label="Editor sections" data-slot="settings-anchors" data-stuck={stuck || undefined}>
-    {sections.map((section) => <button key={section.id} type="button" aria-current={current === section.id ? "true" : undefined}
+  const links = sections.map((section) => <button key={section.id} type="button" aria-current={current === section.id ? "true" : undefined}
       onClick={() => {
         const target = document.getElementById(section.id);
         target?.scrollIntoView?.({ block: "start", behavior: "smooth" });
         target?.querySelector<HTMLElement>("h2")?.focus({ preventScroll: true });
         setCurrent(section.id);
-      }}>{section.label}</button>)}
+      }}>{section.label}</button>);
+  return <><span ref={sentinel} aria-hidden="true" data-slot="settings-anchors-sentinel" /><nav ref={nav} aria-label="Editor sections" data-slot="settings-anchors" data-stuck={stuck || undefined}
+    data-overflow-start={edgeFade && overflow.start || undefined} data-overflow-end={edgeFade && overflow.end || undefined}>
+    {edgeFade ? <div ref={scroll} data-slot="settings-anchors-scroll">{links}</div> : links}
   </nav></>;
 }
 
@@ -141,7 +169,7 @@ export function SettingsSectionAnchors({ sections }: { readonly sections: readon
  * The frame of an editor in the detail pane: a way back, the title, section
  * anchors, form-level errors, the sections and a sticky save bar.
  */
-export function SettingsEditor({ label, back, title, headingRef, headingLevel, description, sections, errors, onSubmit, saveBar, children, className }: {
+export function SettingsEditor({ label, back, title, headingRef, headingLevel, description, sections, sectionEdgeFade, errors, onSubmit, saveBar, children, className }: {
   /** Names the editor region. */
   readonly label: string;
   readonly back?: ReactNode;
@@ -150,6 +178,8 @@ export function SettingsEditor({ label, back, title, headingRef, headingLevel, d
   readonly headingLevel?: SettingsHeadingLevel;
   readonly description?: ReactNode;
   readonly sections?: readonly SettingsEditorSection[];
+  /** Fade only edges with more section links outside the viewport. */
+  readonly sectionEdgeFade?: boolean;
   readonly errors?: ReactNode;
   readonly onSubmit: () => void;
   readonly saveBar: ReactNode;
@@ -160,7 +190,7 @@ export function SettingsEditor({ label, back, title, headingRef, headingLevel, d
     <SettingsDetailHeader back={back} title={title} headingRef={headingRef} headingLevel={headingLevel} description={description} />
     {errors}
     <div data-slot="settings-editor-body">
-      {sections && sections.length > 1 ? <SettingsSectionAnchors sections={sections} /> : null}
+      {sections && sections.length > 1 ? <SettingsSectionAnchors sections={sections} edgeFade={sectionEdgeFade} /> : null}
       <form data-slot="settings-editor-form" noValidate onSubmit={(event) => { event.preventDefault(); onSubmit(); }}>
         {children}
         {saveBar}

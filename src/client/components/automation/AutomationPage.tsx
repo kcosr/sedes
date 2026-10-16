@@ -7,7 +7,6 @@ import {
   MessageSquare,
   Pencil,
   Play,
-  Repeat,
   Trash2,
 } from "lucide-react";
 import { Tooltip } from "radix-ui";
@@ -29,6 +28,7 @@ import { useMediaQuery } from "../../app/use-media-query.js";
 import { useMinuteClock } from "../../app/use-minute-clock.js";
 import {
   automationHealth,
+  automationIdentityGlyph,
   type AutomationHealth,
   type SummaryAutomation,
 } from "../../automation/automation-health.js";
@@ -71,6 +71,7 @@ import { KeyValueList, type KeyValueItem } from "@client/components/ui/key-value
 import { Skeleton } from "@client/components/ui/skeleton";
 import { StatusPill } from "@client/components/ui/status-pill";
 import { AutomationRunsSection, type AutomationRunsView } from "./AutomationRuns.js";
+import { AutomationGlyph } from "./AutomationGlyph.js";
 import { MarkRunFailedDialog } from "./MarkRunFailedDialog.js";
 import { useAutomationResource } from "./use-automation-resource.js";
 import type { AutomationResourceReads } from "./automation-resource-reads.js";
@@ -122,9 +123,9 @@ export function AutomationPage({ store, threadRegistry, automationId }: {
   }, (threadId) => loadedThreadTitle(store.getSnapshot(), threadId));
   const back = <AutomationBackLink up={up} />;
   return <AutomationFrame label={definition ? `${definition.name} automation` : "Automation"} up={up}>
-    {resource.error ? <AutomationUnavailable back={back} message={resource.error} missing={resource.missing} onRetry={resource.reload} />
+    {resource.error ? <AutomationUnavailable back={back} up={up} definition={definition} message={resource.error} missing={resource.missing} onRetry={resource.reload} />
       : definition ? <AutomationPageAnchor key={automationId} store={store} threadRegistry={threadRegistry}
-        definition={definition} reads={resource.reads} onDefinition={(next) => {
+        definition={definition} reads={resource.reads} showSourceThread={up.targetThreadId !== definition.threadId} onDefinition={(next) => {
           if (next === null) resource.reads.markDeleted();
           else resource.reload();
         }} back={back} />
@@ -132,10 +133,10 @@ export function AutomationPage({ store, threadRegistry, automationId }: {
   </AutomationFrame>;
 }
 
-function AutomationPageAnchor({ store, threadRegistry, definition, onDefinition, reads, back }: {
+function AutomationPageAnchor({ store, threadRegistry, definition, onDefinition, reads, back, showSourceThread }: {
   store: PageStore; threadRegistry: AutomationThreadSource; definition: ThreadAutomationDefinition;
   onDefinition: (definition: ThreadAutomationDefinition | null) => void;
-  reads: AutomationResourceReads; back: React.ReactNode;
+  reads: AutomationResourceReads; back: React.ReactNode; showSourceThread: boolean;
 }): React.JSX.Element {
   const anchor = useAutomationAnchor(store, threadRegistry, definition.threadId);
   const minute = useMinuteClock();
@@ -146,7 +147,7 @@ function AutomationPageAnchor({ store, threadRegistry, definition, onDefinition,
   if (anchor.status === "unavailable") return <AutomationAnchorUnavailable back={back} message={anchor.message} onRetry={anchor.retry} />;
   return <AutomationDetails store={store} thread={selected!} automation={definition} definition={definition}
     definitionStatus="ready" onRetryDefinition={() => undefined} onDefinition={onDefinition} reads={reads}
-    available={capabilityState.capability?.available} unavailableReason={capabilityState.capability?.unavailableReason?.text} back={back} now={now} />;
+    available={capabilityState.capability?.available} unavailableReason={capabilityState.capability?.unavailableReason?.text} back={back} showSourceThread={showSourceThread} now={now} />;
 }
 
 /**
@@ -225,6 +226,7 @@ function AutomationDetails({
   available,
   unavailableReason,
   back,
+  showSourceThread,
   now,
 }: {
   readonly store: PageStore;
@@ -239,6 +241,7 @@ function AutomationDetails({
   readonly available?: boolean;
   readonly unavailableReason?: string;
   readonly back: React.ReactNode;
+  readonly showSourceThread: boolean;
   readonly now: Date;
 }): React.JSX.Element {
   const phone = useMediaQuery(PHONE_QUERY);
@@ -338,12 +341,12 @@ function AutomationDetails({
     <SettingsDetailHeader
       back={back}
       headingLevel={1}
-      icon={<Repeat />}
+      icon={<AutomationGlyph glyph={automationIdentityGlyph(health)} size="header" />}
       title={automation.name}
       status={<StatusPill tone={health.tone}>{health.label}</StatusPill>}
       description={
         <span className="automation-page-meta">
-          <span className="automation-page-thread">
+          {showSourceThread ? <span className="automation-page-thread">
             In{" "}
             <a
               className="automation-link"
@@ -356,7 +359,7 @@ function AutomationDetails({
             >
               {thread.title}
             </a>
-          </span>
+          </span> : null}
           {liveState ? <span data-tone={liveState.tone}>{liveState.label}</span> : null}
           <span>{headerState(automation, health, thread, now)}</span>
           {thread.projectLabel ? <span>{thread.projectLabel}</span> : null}

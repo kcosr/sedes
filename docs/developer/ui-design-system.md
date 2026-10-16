@@ -337,6 +337,17 @@ deleted page when a list or thread lies behind it.
 `components/automation/automation-navigation.ts` holds these targets.
 `useAutomationUp` sends Escape, and Android Back without history, to the same
 place.
+When that link names the source thread, the detail header omits the duplicate
+"In {thread}" meta link. A removed automation retains its known name and saved
+schedule icon (Repeat, CirclePause or CircleCheck), never a stale live spinner,
+and offers All automations only when its back link leads elsewhere.
+Both Automations list headings align with the detail and editor columns; row
+contents retain their inset. The automation compact bar uses the Settings
+divider only when it carries a back link. Automation editor section anchors
+fade only edges with offscreen links, keeping the outer sticky bar's hairline
+and cover shadows. Its phone save bar reserves only the bottom safe-area inset.
+In narrow three-action create bars, save status is visually hidden but remains
+a live region; two-action edit bars and wider layouts show it normally.
 
 ## Automation state vocabulary
 
@@ -350,7 +361,8 @@ the helpers and their tests.
 | --- | --- |
 | `automationHealth(thread, now)` | State for one automation: unresolved delivery attention, deferred or in-flight work, source suspension, then definition status. Includes `waiting` and `exhausted` (shown as Finished). Each carries its list group, glyph, chip tone, and label |
 | `threadAutomationHealth(thread, now)` | Bounded thread-level counts for the sidebar, header, and preview. Attention on any automation remains visible even while another sends or succeeds; no arbitrary singleton is selected |
-| `automationNeedsAttention`, `automationIdentityGlyph`, `automationIdentityLabel` | The explicit per-automation attention projection for attention buckets; the Repeat, CirclePause, or spinner glyph for surfaces that show attention separately, as a row badge or a tinted header button |
+| `automationNeedsAttention`, `automationIdentityGlyph`, `automationIdentityLabel` | The explicit per-automation attention projection for attention buckets; the Repeat, CirclePause, CircleCheck (Finished), or spinner glyph for surfaces that show attention separately, as a row badge or a tinted header button |
+| `automationDefinitionGlyph` | Static saved-schedule icon for removed definitions: Repeat, CirclePause or CircleCheck, independent of stale live work |
 | `compareAutomationsInGroup`, `AUTOMATION_HEALTH_GROUPS` | List group order and the order within a group |
 | `describeSchedule`, `runStateLabel`, `runSkipReason`, `runMeta` | Schedule sentences, run state words, and one-line run facts. `completed` reads "Delivered": the backend accepted the prompt, not that the turn ended |
 | `automationStatusText`, `lastRunAge`, `automationErrorText` | The short state for tooltips and status lines, the last run's age, and an error code as a sentence where only the code is projected |
@@ -361,6 +373,8 @@ the helpers and their tests.
 
 Uncertain runs need attention everywhere, and paused is never a warning tone.
 Repeat is the automation icon in menus, headers, and rows.
+Finished definitions use CircleCheck and show their last result once. A thread
+with only finished automations still has no aggregate schedule icon.
 
 ## Z layers
 

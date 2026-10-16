@@ -46,6 +46,10 @@ const WEEKDAY_NAMES = [
   "Saturday",
 ] as const;
 const WEEKDAY_ABBREVIATIONS = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
+const MONTH_NAMES = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
+] as const;
 /** Sentences list days Monday first. */
 const WEEK_ORDER = [1, 2, 3, 4, 5, 6, 0] as const;
 
@@ -53,8 +57,8 @@ const WEEK_ORDER = [1, 2, 3, 4, 5, 6, 0] as const;
  * One sentence for a schedule: "Every day at 2:00 AM UTC", "Every weekday at
  * 6:30 AM Europe/Berlin", "Every 4 hours", "Once · Oct 9, 9:00 PM". An
  * interval that has not started yet adds when it starts ("…, starting
- * Tmrw"). Cron expressions outside the common forms fall back to "Cron
- * <expr> (<zone>)".
+ * Tmrw"). Cron expressions outside the common forms keep their expression
+ * and zone in "Custom schedule (<expr>, <zone>)".
  */
 export function describeSchedule(
   schedule: AutomationSchedule,
@@ -69,7 +73,7 @@ export function describeSchedule(
       const expression = schedule.expression.trim().replace(/\s+/gu, " ");
       return (
         describeCron(expression, schedule.timeZone) ??
-        `Cron ${expression} (${zoneLabel(schedule.timeZone)})`
+        `Custom schedule (${expression}, ${zoneLabel(schedule.timeZone)})`
       );
     }
   }
@@ -135,8 +139,9 @@ function startingClause(anchorAt: string, now: Date, utc: boolean): string {
 
 /**
  * Sentences for fixed minute and hour on every day, weekdays or a
- * day-of-week list, a fixed minute every hour, and `*∕n` minute or hour
- * steps that divide the hour or day evenly. Anything else is undefined.
+ * day-of-week list, a fixed day of the month, a fixed minute every hour,
+ * and `*∕n` minute or hour steps that divide the hour or day evenly.
+ * Anything else is undefined.
  */
 function describeCron(expression: string, timeZone: string): string | undefined {
   const fields = expression.split(" ");
@@ -148,8 +153,24 @@ function describeCron(expression: string, timeZone: string): string | undefined 
     string,
     string,
   ];
-  if (!isWildcard(dayOfMonth) || !isWildcard(month)) return undefined;
   const everyDay = isWildcard(dayOfWeek);
+  if (!isWildcard(dayOfMonth) || !isWildcard(month)) {
+    // With both day fields restricted, cron's day matching is not a simple
+    // calendar sentence. Keep the exact expression for that case.
+    if (!everyDay) return undefined;
+    const minuteValue = cronInteger(minute, 59);
+    const hourValue = cronInteger(hour, 23);
+    const day = cronInteger(dayOfMonth, 31);
+    if (minuteValue === undefined || hourValue === undefined || day === undefined || day === 0) {
+      return undefined;
+    }
+    const months = cronMonths(month);
+    if (months === undefined) return undefined;
+    const when = months.length === 12
+      ? `Monthly on the ${ordinal(day)}`
+      : `Every ${joinList(months.map((value) => MONTH_NAMES[value - 1]!))} on the ${ordinal(day)}`;
+    return `${when} at ${wallClock(hourValue, minuteValue)} ${zoneLabel(timeZone)}`;
+  }
 
   const minuteStep = cronStep(minute, 60);
   if (minuteStep !== undefined) {
@@ -188,6 +209,22 @@ function cronStep(field: string, cycle: number): number | undefined {
   if (!match) return undefined;
   const step = Number(match[1]);
   return step >= 1 && cycle % step === 0 ? step : undefined;
+}
+
+/** Calendar months start at January, including `*∕n` month steps. */
+function cronMonths(field: string): readonly number[] | undefined {
+  if (isWildcard(field)) return Array.from({ length: 12 }, (_, index) => index + 1);
+  const step = cronStep(field, 12);
+  if (step !== undefined) return Array.from({ length: 12 / step }, (_, index) => 1 + index * step);
+  const named = MONTH_NAMES.findIndex((name) => name.slice(0, 3).toUpperCase() === field.toUpperCase());
+  if (named >= 0) return [named + 1];
+  const numeric = cronInteger(field, 12);
+  return numeric !== undefined && numeric > 0 ? [numeric] : undefined;
+}
+
+function ordinal(day: number): string {
+  const suffix = day >= 11 && day <= 13 ? "th" : ({ 1: "st", 2: "nd", 3: "rd" }[day % 10] ?? "th");
+  return `${day}${suffix}`;
 }
 
 /** A day-of-week token as written: 0–7 (both 0 and 7 are Sunday) or a name. */

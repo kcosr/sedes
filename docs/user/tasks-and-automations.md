@@ -413,6 +413,9 @@ actions always target the selected automation's identity.
 Cron follows its named time zone. Intervals repeat a fixed duration. The preview
 uses the server's schedule calculation and rejects schedules that run more often
 than every five minutes.
+Common cron patterns are described in words, such as "Monthly on the 1st at
+6:30 AM UTC". More complex patterns show "Custom schedule" with the expression
+and time zone.
 
 Recurring schedules choose how to handle missed occurrences after downtime or
 while the source is snoozed: **Run once when Sedes is back** coalesces them into
@@ -472,7 +475,8 @@ until no result notice remains to dismiss.
 ## Open an automation
 
 Each automation has its own detail link. The page names its source thread:
-select the name, or choose **Open thread** from **⋯**, to open it. Individual
+select the name in the back link or header, or choose **Open thread** from **⋯**,
+to open it. Individual
 runs link to their actual result thread. The back link, and Escape, return to
 wherever you opened the automation, such as the thread's collection, where you
 can add another automation without changing the current one.

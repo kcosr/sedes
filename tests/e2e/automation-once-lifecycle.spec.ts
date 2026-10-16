@@ -5,7 +5,7 @@ import type { Page } from "@playwright/test";
 import { threadAutomationRunPageSchema, type ThreadAutomationRun } from "../../src/shared/protocol/automation-presentation.js";
 import { normalizedThreadSnapshotSchema } from "../../src/shared/protocol/conversation.js";
 import { expect, test } from "./fixtures";
-import { capture, createDraftThread, openWorkspaceDirectory } from "./helpers";
+import { capture, createDraftThread, expectNoPageOverflow, openWorkspaceDirectory } from "./helpers";
 import { loadE2ERunContext } from "./run-context.js";
 
 async function fixture(page: Page, name: string) {
@@ -81,12 +81,49 @@ test("a successful one-shot keeps its banner until dismissal and leaves a recurr
   await expect(f.sidebarRow().locator("[data-automation-glyph]")).toHaveCount(0);
   await capture(page, testInfo, "once-success-banner-no-sidebar-icon.png");
 
+  // A page opened from its own thread already names that thread in its way up.
+  await f.notice("Send release notes").getByRole("link", { name: "Open automation", exact: true }).click();
+  const ownThreadBack = page.locator('.automation-page [data-slot="settings-page-back"]');
+  await expect(ownThreadBack).toHaveText("Assistant reminders");
+  await expect(page.locator(".automation-page-meta").getByRole("link", { name: "Assistant reminders", exact: true })).toHaveCount(0);
+  await expect(page.locator('.automation-page [data-automation-glyph="finished"]')).toBeVisible();
+  await capture(page, testInfo, "once-success-detail-own-thread.png");
+  await ownThreadBack.click();
+
+  // A second client viewing the definition keeps its known identity when the
+  // trigger is dismissed elsewhere and the successful reminder is retired.
+  const observer = await page.context().newPage();
+  await observer.setViewportSize({ width: 1440, height: 900 });
+  await openAutomationsList(observer, "/automations");
+  await observer.locator('[data-testid="automations-group"][data-group="status:finished"]')
+    .getByRole("button").click();
+  await row(observer, id).getByRole("link", { name: "Send release notes", exact: true }).click();
+  await expect(observer.getByRole("heading", { level: 1, name: "Send release notes", exact: true })).toBeVisible();
+
   // Success alone keeps the definition available while the trigger banner is visible.
   await openAutomationsList(page, `/threads/${f.threadId}/automations`);
   await expect(row(page, id)).toContainText("Send release notes");
+  await expect(row(page, id).locator('[data-automation-glyph="finished"]')).toBeVisible();
+  await expect(row(page, id).locator(".automation-row-primary")).toHaveText(/^Finished (?:just now|\d+m ago)$/u);
+  await expect(row(page, id).locator(".automation-row-secondary")).toBeEmpty();
+  await capture(page, testInfo, "once-success-finished-list-desktop.png");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expectNoPageOverflow(page);
+  await capture(page, testInfo, "once-success-finished-list-mobile.png");
+  await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto(`/threads/${f.threadId}`);
   await f.dismiss("Send release notes", "triggered");
   await expect.poll(async () => (await page.request.get(`/api/automations/${id}`)).status()).toBe(404);
+  await expect(observer.getByRole("heading", { level: 1, name: "Send release notes", exact: true })).toBeVisible();
+  await expect(observer.getByText("This automation was removed", { exact: true })).toBeVisible();
+  await expect(observer.locator('[data-slot="settings-detail-icon"] svg')).toBeVisible();
+  await expect(observer.locator('[data-slot="settings-page-back"]')).toHaveText("Automations");
+  await expect(observer.getByRole("button", { name: "All automations", exact: true })).toHaveCount(0);
+  await capture(observer, testInfo, "once-retired-known-automation-desktop.png");
+  await observer.setViewportSize({ width: 390, height: 844 });
+  await expectNoPageOverflow(observer);
+  await capture(observer, testInfo, "once-retired-known-automation-mobile.png");
+  await observer.close();
   await openAutomationsList(page, "/automations");
   await expect(row(page, id)).toHaveCount(0);
   await openAutomationsList(page, `/threads/${f.threadId}/automations`);

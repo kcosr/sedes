@@ -78,6 +78,7 @@ export type FlatRowGlyphKind =
   | "snoozed"
   | "automation-sending"
   | "automation-paused"
+  | "automation-finished"
   | "automation"
   | "parked"
   | "disconnected"
@@ -86,6 +87,7 @@ export type FlatRowGlyphKind =
 const AUTOMATION_GLYPH_KINDS = {
   spinner: "automation-sending",
   pause: "automation-paused",
+  finished: "automation-finished",
   repeat: "automation",
 } as const satisfies Record<
   ReturnType<typeof automationIdentityGlyph>,
@@ -171,6 +173,7 @@ export function flatRowGlyphLabel(
   if (
     kind === "automation" ||
     kind === "automation-paused" ||
+    kind === "automation-finished" ||
     kind === "automation-sending"
   ) {
     const automation = threadAutomationHealth(thread, Date.now());
@@ -206,6 +209,8 @@ export function flatRowGlyphIcon(kind: FlatRowGlyphKind): React.ReactNode {
       return <AutomationGlyph glyph="spinner" tone="info" />;
     case "automation-paused":
       return <AutomationGlyph glyph="pause" />;
+    case "automation-finished":
+      return <AutomationGlyph glyph="finished" />;
     case "automation":
       return <AutomationGlyph glyph="repeat" />;
     case "parked":

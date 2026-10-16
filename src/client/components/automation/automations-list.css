@@ -14,7 +14,6 @@
   align-items: center;
   gap: var(--space-2) var(--space-4);
   margin-bottom: var(--space-3);
-  padding-inline: var(--space-2);
 }
 
 .automations-heading {
@@ -313,6 +312,7 @@
   line-height: var(--leading-snug);
 }
 
+.automation-row-primary svg,
 .automation-row-secondary svg {
   width: var(--icon-xs);
   height: var(--icon-xs);
@@ -320,6 +320,7 @@
 }
 
 /* A last run whose turn is still going: the spinner takes the check's size. */
+.automation-row-primary .automation-glyph.comet-spinner[data-size],
 .automation-row-secondary .automation-glyph.comet-spinner[data-size] {
   --comet-spinner-size: var(--icon-xs);
   --comet-spinner-thickness: 1.8px;
