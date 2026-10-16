@@ -161,7 +161,7 @@ export async function spawnWindowsOwnedProcess(input: {
       }
     });
   });
-  const script = `$ErrorActionPreference = 'Stop'\n$ProgressPreference = 'SilentlyContinue'\nAdd-Type -TypeDefinition @'\n${WINDOWS_JOB_SOURCE}\n'@\n$c = $env:SEDES_WINDOWS_JOB_CONTROL.Split(':')\nexit ([SedesOwnedProcess]::Run([int]$c[0], $c[1]))`;
+  const script = `$ErrorActionPreference = 'Stop'\n$ProgressPreference = 'SilentlyContinue'\n$env:PSModulePath = [IO.Path]::Combine($PSHOME, 'Modules')\nAdd-Type -TypeDefinition @'\n${WINDOWS_JOB_SOURCE}\n'@\n$c = $env:SEDES_WINDOWS_JOB_CONTROL.Split(':')\nexit ([SedesOwnedProcess]::Run([int]$c[0], $c[1]))`;
   const child = spawn(
     path.join(
       process.env.SystemRoot ?? "C:\\Windows",

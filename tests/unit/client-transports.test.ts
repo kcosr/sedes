@@ -5,6 +5,7 @@ import {
   workspaceFileSupplementalRootIdSchema,
 } from "../../src/shared/index.js";
 import { SEDES_VERSION } from "../../src/shared/version.js";
+import { defaultNotificationDelivery } from "../../src/shared/protocol/notification.js";
 import { BrowserEventStreamTransport } from "../../src/client/api/EventStreamTransport.js";
 import type { ConnectionState } from "../../src/client/api/EventStreamTransport.js";
 import { configuredSedesServer } from "../../src/client/app/server-endpoint.js";
@@ -1243,13 +1244,13 @@ describe("ApiClient normalized contract", () => {
     } satisfies Partial<ApiError>);
   });
 
-  it("reports a dedicated error for an incompatible client protocol version", async () => {
+  it.each([158, 69])("reports a dedicated error for incompatible client protocol %s", async (clientProtocolVersion) => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async () =>
         Response.json({
           ...session(),
-          clientProtocolVersion: 69,
+          clientProtocolVersion,
         }),
       ),
     );
@@ -1261,11 +1262,37 @@ describe("ApiClient normalized contract", () => {
       message: `This app (Sedes ${SEDES_VERSION}) and the Sedes server (Sedes ${SEDES_VERSION}) use incompatible protocol versions. Update the app or server so their versions match.`,
       details: {
         expected: SEDES_CLIENT_PROTOCOL_VERSION,
-        received: 69,
+        received: clientProtocolVersion,
         clientVersion: SEDES_VERSION,
         serverVersion: SEDES_VERSION,
       },
     } satisfies Partial<ApiError>);
+  });
+
+  it.each([
+    String.raw`C:\Program Files\nodejs\node.exe`,
+    String.raw`\\files.example.invalid\tools\notify.exe`,
+  ])("reads enabled notification settings with native Windows executable %s", async (scriptPath) => {
+    const delivery = defaultNotificationDelivery();
+    delivery["turn.completed"].script = true;
+    const settings = {
+      enabled: true,
+      scriptPath,
+      arguments: [],
+      timeoutSeconds: 10,
+      assistantResultPhases: [],
+      delivery,
+      silenced: false,
+      revision: 1,
+    };
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      expect(String(input)).toBe("/api/application/notifications");
+      return Response.json(settings);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(new ApiClient().readNotificationSettings()).resolves.toEqual(settings);
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 
   it("posts the neutral operation shape and refreshes CSRF once", async () => {

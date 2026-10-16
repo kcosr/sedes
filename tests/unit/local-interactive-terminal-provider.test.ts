@@ -166,7 +166,7 @@ describe("LocalInteractiveTerminalProvider", () => {
     await terminal.terminate("kill");
     if (process.platform === "win32") {
       expect(groupKill).not.toHaveBeenCalled();
-      expect(pty.kills).toEqual(["", "", ""]);
+      expect(pty.kills).toEqual([""]);
     } else {
       expect(groupKill).toHaveBeenCalledWith(-pty.pid, "SIGTERM");
       expect(groupKill).toHaveBeenCalledWith(-pty.pid, "SIGKILL");
@@ -256,16 +256,127 @@ describe("LocalInteractiveTerminalProvider", () => {
     await terminal.terminate("kill");
     expect(pty.writes).toEqual([]);
     expect(pty.resizes).toEqual([]);
-    expect(pty.kills).toEqual([]);
+    expect(pty.kills).toEqual(process.platform === "win32" ? [""] : []);
+  });
+
+  it.each([false, true])("releases the Windows PTY on natural exit with descendant cleanup=%s", async cleanupOnNaturalExit => {
+    const pty = new FakePty();
+    const terminal = await providerWith(pty, cleanupOnNaturalExit).openTerminal(openInput());
+    const probe = vi.spyOn(process, "kill").mockImplementation(() => {
+      throw Object.assign(new Error("gone"), { code: "ESRCH" });
+    });
+    const events: unknown[] = [];
+    terminal.onOutput(bytes => events.push(Buffer.from(bytes).toString()));
+    const exited = new Promise(resolve => terminal.onExit(exit => { events.push(exit); resolve(exit); }));
+    pty.emitData("last output");
+    pty.emitExit({ exitCode: 0, signal: 0 });
+    const exit = await exited;
+    expect(exit).toEqual({ disposition: "exited", exitCode: 0, signal: null, ...(cleanupOnNaturalExit ? { cleanupConfirmed: true } : {}) });
+    expect(events).toEqual(["last output", exit]);
+    const replay: unknown[] = [];
+    terminal.onExit(value => replay.push(value));
+    expect(replay).toEqual([exit]);
+    pty.emitData("late output");
+    pty.emitExit({ exitCode: 9, signal: 0 });
+    await terminal.terminate("kill");
+    expect(events).toHaveLength(2);
+    expect(pty.kills).toEqual(process.platform === "win32" ? [""] : []);
+    if (process.platform !== "win32") {
+      expect(probe.mock.calls.every(([, signal]) => signal === 0)).toBe(true);
+    }
+  });
+
+  it.runIf(process.platform === "win32").each([false, true])("does not confirm failed Windows PTY cleanup with descendant cleanup=%s", async cleanupOnNaturalExit => {
+    const pty = new FakePty();
+    vi.spyOn(pty, "kill").mockImplementation(() => { throw new Error("cleanup failed"); });
+    vi.spyOn(process, "kill").mockImplementation(() => { throw Object.assign(new Error("gone"), { code: "ESRCH" }); });
+    const terminal = await providerWith(pty, cleanupOnNaturalExit).openTerminal(openInput());
+    const exited = new Promise(resolve => terminal.onExit(resolve));
+    expect(() => pty.emitExit({ exitCode: 0, signal: 0 })).not.toThrow();
+    await expect(exited).resolves.toEqual({ disposition: "interrupted", exitCode: 0, signal: null, diagnosticCode: "local_terminal_cleanup_unconfirmed", cleanupConfirmed: false });
+    expect(pty.kill).toHaveBeenCalledTimes(1);
+  });
+
+  it.runIf(process.platform === "win32")("does not repeat Windows cleanup across output limits, termination and exit", async () => {
+    const pty = new FakePty();
+    const terminal = await providerWith(pty).openTerminal(openInput());
+    pty.emitData(new Uint8Array(1024 * 1024 + 1));
+    pty.emitData("still buffered");
+    await terminal.terminate("hangup");
+    await terminal.terminate("terminate");
+    await terminal.terminate("kill");
+    vi.spyOn(process, "kill").mockImplementation(() => { throw Object.assign(new Error("gone"), { code: "ESRCH" }); });
+    const exited = new Promise(resolve => terminal.onExit(resolve));
+    pty.emitExit({ exitCode: 1, signal: 0 });
+    await expect(exited).resolves.toMatchObject({ disposition: "interrupted", diagnosticCode: "local_terminal_early_output_limit", cleanupConfirmed: true });
+    expect(pty.kills).toEqual([""]);
+  });
+
+  it.runIf(process.platform === "win32")("retains a failed explicit cleanup without invoking the PTY twice", async () => {
+    const pty = new FakePty();
+    vi.spyOn(pty, "kill").mockImplementation(() => { throw new Error("cleanup failed"); });
+    const terminal = await providerWith(pty).openTerminal(openInput());
+    await expect(terminal.terminate("hangup")).rejects.toThrow();
+    await expect(terminal.terminate("kill")).rejects.toThrow();
+    vi.spyOn(process, "kill").mockImplementation(() => { throw Object.assign(new Error("gone"), { code: "ESRCH" }); });
+    const exited = new Promise(resolve => terminal.onExit(resolve));
+    pty.emitExit({ exitCode: 0, signal: 0 });
+    await expect(exited).resolves.toMatchObject({ disposition: "interrupted", cleanupConfirmed: false });
+    expect(pty.kill).toHaveBeenCalledTimes(1);
+  });
+
+  it.runIf(process.platform === "win32")("contains cleanup failure in the early-output callback", async () => {
+    const pty = new FakePty();
+    vi.spyOn(pty, "kill").mockImplementation(() => { throw new Error("cleanup failed"); });
+    const terminal = await providerWith(pty).openTerminal(openInput());
+    expect(() => pty.emitData(new Uint8Array(1024 * 1024 + 1))).not.toThrow();
+    vi.spyOn(process, "kill").mockImplementation(() => { throw Object.assign(new Error("gone"), { code: "ESRCH" }); });
+    const exited = new Promise(resolve => terminal.onExit(resolve));
+    pty.emitExit({ exitCode: 1, signal: 0 });
+    await expect(exited).resolves.toMatchObject({ disposition: "interrupted", diagnosticCode: "local_terminal_early_output_limit", cleanupConfirmed: false });
+    expect(pty.kill).toHaveBeenCalledTimes(1);
+  });
+
+  it.runIf(process.platform === "win32")("retains cleanup failure when termination reports exit reentrantly", async () => {
+    const pty = new FakePty();
+    const terminal = await providerWith(pty).openTerminal(openInput());
+    vi.spyOn(process, "kill").mockImplementation(() => { throw Object.assign(new Error("gone"), { code: "ESRCH" }); });
+    vi.spyOn(pty, "kill").mockImplementation(() => {
+      pty.emitExit({ exitCode: 0, signal: 0 });
+      throw new Error("cleanup failed after exit");
+    });
+    const exited = new Promise(resolve => terminal.onExit(resolve));
+    await expect(terminal.terminate("hangup")).rejects.toThrow();
+    await expect(exited).resolves.toMatchObject({ disposition: "interrupted", cleanupConfirmed: false });
+    expect(pty.kill).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not signal a retired POSIX terminal PID", async () => {
+    const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    try {
+      Object.defineProperty(process, "platform", { value: "linux" });
+      const pty = new FakePty();
+      const terminal = await providerWith(pty, true).openTerminal(openInput());
+      const probe = vi.spyOn(process, "kill").mockImplementation(() => { throw Object.assign(new Error("gone"), { code: "ESRCH" }); });
+      const exited = new Promise(resolve => terminal.onExit(resolve));
+      pty.emitExit({ exitCode: 0, signal: 0 });
+      await expect(exited).resolves.toMatchObject({ disposition: "exited", cleanupConfirmed: true });
+      await terminal.terminate("kill");
+      expect(pty.kills).toEqual([]);
+      expect(probe.mock.calls).toEqual([[-pty.pid, 0]]);
+    } finally {
+      Object.defineProperty(process, "platform", platform);
+    }
   });
 });
 
-function providerWith(pty: FakePty): LocalInteractiveTerminalProvider {
+function providerWith(pty: FakePty, cleanupOnNaturalExit = false): LocalInteractiveTerminalProvider {
   return new LocalInteractiveTerminalProvider({
     scope,
     environmentId: "local",
     environment: { SHELL: "/bin/bash" },
     spawnPty: () => pty as unknown as IPty,
+    cleanupOnNaturalExit,
   });
 }
 

@@ -135,7 +135,13 @@ test("page responses capture once, queue while busy, and retain exact text and s
     await expect(frame.locator("#captures")).toHaveText("Captures: 1");
     await expect(page.getByRole("textbox", { name: "Message Scripted agent" })).toHaveValue(draft);
 
-    // Editing controls after Send must not re-capture or change admitted bytes.
+    // Send exits interaction mode. Re-enter deliberately before editing; those
+    // edits must not re-capture or change the already admitted bytes.
+    const interact = card.getByRole("button", { name: "Interact with preview", exact: true });
+    await expect(interact).toHaveAttribute("aria-pressed", "false");
+    await expect(card.locator(".page-frame-viewport")).toHaveAttribute("data-interactive", "false");
+    await interact.click();
+    await expect(card.locator(".page-frame-viewport")).toHaveAttribute("data-interactive", "true");
     await frame.getByRole("checkbox", { name: "Include tests" }).uncheck();
     await frame.getByRole("radio", { name: "All at once", exact: true }).check();
     await frame.getByRole("listbox", { name: "Regions", exact: true }).selectOption("ap-south");

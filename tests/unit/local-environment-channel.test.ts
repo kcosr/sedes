@@ -147,10 +147,18 @@ describe("LocalEnvironmentChannelProvider", () => {
     const second = path.join(root, "second");
     await Promise.all([mkdir(first), mkdir(second)]);
     const commandName = "provider-command";
-    await writeFile(path.join(first, commandName), "not executable\n", {
-      mode: 0o600,
-    });
-    const executable = path.join(second, commandName);
+    const executableName =
+      process.platform === "win32" ? `${commandName}.exe` : commandName;
+    if (process.platform === "win32") {
+      // Windows mode bits do not control executable access. A directory is
+      // still an invalid candidate for the regular-file admission check.
+      await mkdir(path.join(first, executableName));
+    } else {
+      await writeFile(path.join(first, executableName), "not executable\n", {
+        mode: 0o600,
+      });
+    }
+    const executable = path.join(second, executableName);
     await writeFile(executable, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
     await chmod(executable, 0o700);
     const provider = providerFor(scope, {
@@ -178,7 +186,7 @@ describe("LocalEnvironmentChannelProvider", () => {
 
     const relativeDirectory = path.join(root, "relative");
     await mkdir(relativeDirectory);
-    const relativeExecutable = path.join(relativeDirectory, commandName);
+    const relativeExecutable = path.join(relativeDirectory, executableName);
     await writeFile(relativeExecutable, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
     const absoluteOnlyProvider = providerFor(scope, {
       PATH: [

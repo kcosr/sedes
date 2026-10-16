@@ -75,6 +75,33 @@ export function createRuntimeDependencyProbe(entrypoints) {
   `;
 }
 
+/** Self-contained because the packaged-runtime probe embeds this function. */
+export async function verifyRuntimePty(pty, root) {
+  const windows = process.platform === 'win32';
+  const shell = windows ? process.env.ComSpec : '/bin/sh';
+  const args = windows ? ['/d', '/s', '/c', 'echo sedes_package_pty_ok'] : ['-c', 'printf sedes_package_pty_ok'];
+  const terminal = pty.spawn(shell, args, {name:'xterm', cols:80, rows:24, cwd:root, env:process.env});
+  let timer;
+  let data;
+  let exit;
+  let terminalExited = false;
+  try {
+    await new Promise((resolve, reject) => {
+      let output = '';
+      timer = setTimeout(() => reject(new Error('PTY timed out')), 5000);
+      data = terminal.onData(chunk => { output += chunk; });
+      exit = terminal.onExit(({exitCode}) => { terminalExited = true; if (exitCode !== 0 || !output.includes('sedes_package_pty_ok')) reject(new Error('PTY output/exit invalid')); else resolve(); });
+    });
+  } finally {
+    clearTimeout(timer);
+    data?.dispose();
+    exit?.dispose();
+    // Shell exit alone leaves node-pty's Windows ConoutConnection worker alive.
+    // POSIX has already reaped an exited shell; do not signal a retired PID.
+    if (windows || !terminalExited) terminal.kill();
+  }
+}
+
 const nativeProbe = entrypoints => `
 import {createRequire} from 'node:module';
 const require = createRequire(import.meta.url);
@@ -83,6 +110,7 @@ const path = require('node:path');
 const {pathToFileURL} = require('node:url');
 const root = process.argv[1];
 const requirePackage = require('node:module').createRequire(path.join(root, 'package.json'));
+${verifyRuntimePty.toString()}
 (async () => {
   await (async () => { ${createRuntimeDependencyProbe(entrypoints)} })();
   const {openOverlayDatabaseConnection} = await import(pathToFileURL(path.join(root, 'dist/server/db/database.js')));
@@ -100,18 +128,17 @@ const requirePackage = require('node:module').createRequire(path.join(root, 'pac
   const requirePi = require('node:module').createRequire(import.meta.resolve('@earendil-works/pi-coding-agent'));
   const transformed = requirePi('esbuild').transformSync('const answer: number = 42', {loader:'ts'});
   assert.ok(transformed.code.includes('42'), 'Pi esbuild target executable failed');
-  await new Promise((resolve, reject) => {
-    const windows = process.platform === 'win32';
-    const shell = windows ? process.env.ComSpec : '/bin/sh';
-    const args = windows ? ['/d', '/s', '/c', 'echo sedes_package_pty_ok'] : ['-c', 'printf sedes_package_pty_ok'];
-    const terminal = requirePackage('node-pty').spawn(shell, args, {name:'xterm', cols:80, rows:24, cwd:root, env:process.env});
-    let output = '';
-    const timer = setTimeout(() => { terminal.kill(); reject(new Error('PTY timed out')); }, 5000);
-    terminal.onData(data => { output += data; });
-    terminal.onExit(({exitCode}) => { clearTimeout(timer); if (exitCode !== 0 || !output.includes('sedes_package_pty_ok')) reject(new Error('PTY output/exit invalid')); else resolve(); });
-  });
+  await verifyRuntimePty(requirePackage('node-pty'), root);
 })().catch(error => { console.error(error); process.exitCode = 1; });
 `;
+
+export function requestRuntimeShutdown(server) {
+  // SIGTERM force-terminates Windows children. The managed parent protocol
+  // already treats IPC disconnect as a graceful shutdown request.
+  if (process.platform === 'win32') {
+    if (server.connected) server.disconnect();
+  } else server.kill('SIGTERM');
+}
 
 export async function verifyRuntime(root, { nodeExecutable = process.execPath, electronRunAsNode = false } = {}) {
   // Worker entry guards compare argv to import.meta.url. Resolve installation
@@ -188,7 +215,7 @@ export async function verifyRuntime(root, { nodeExecutable = process.execPath, e
       assert.equal(fetched.status, 200);
       assert.deepEqual(Buffer.from(await fetched.arrayBuffer()), await readFile(path.join(root, 'dist/client', asset)));
     }
-    server.kill('SIGTERM');
+    requestRuntimeShutdown(server);
     const exit = await boundedExit(exited, 15_000);
     assert.deepEqual(exit, {code:0, signal:null}, `Server shutdown failed: ${logs}`);
     return ['sqlite-query-and-migrations', 'real-pty', 'pi-esbuild', 'provider-module-imports', 'pi-esbuild-target-binary', 'sidecar-and-worker-argument-guards', 'connector-help', 'isolated-server-startup', 'browser-http-and-static-assets', 'graceful-shutdown'];

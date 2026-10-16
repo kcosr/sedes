@@ -58,6 +58,7 @@ import {
 import { WORKSPACE_DIFF_MAX_REPOSITORIES } from "../../shared/workspace-diff-limits.js";
 import { WORKSPACE_FILE_MAX_PATH_BYTES } from "../../shared/workspace-file-limits.js";
 import { revalidatedPathForOpenHandle } from "../local-file-descriptor-path.js";
+import { checkoutGitEnvironment } from "./git-environment.js";
 import { pathIsWithin } from "../path-containment.js";
 import { WorkspaceFileRootUnavailableError } from "./contracts.js";
 import { classifyWorkspaceFileBytes } from "./workspace-file-content-classifier.js";
@@ -185,22 +186,6 @@ function isMaximumBufferError(error: unknown): boolean {
     error.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER";
 }
 
-function gitEnvironment(): NodeJS.ProcessEnv {
-  const environment: NodeJS.ProcessEnv = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    if (!key.startsWith("GIT_") && value !== undefined) environment[key] = value;
-  }
-  return {
-    ...environment,
-    GIT_CONFIG_NOSYSTEM: "1",
-    GIT_TERMINAL_PROMPT: "0",
-    GIT_OPTIONAL_LOCKS: "0",
-    GIT_PAGER: "cat",
-    PAGER: "cat",
-    LC_ALL: "C",
-  };
-}
-
 function gitPrefix(repository: RepositoryRecord): string[] {
   return [
     "--no-pager",
@@ -210,6 +195,7 @@ function gitPrefix(repository: RepositoryRecord): string[] {
     "-c", "diff.external=",
     "-c", "core.attributesFile=/dev/null",
     "-c", "core.hooksPath=/dev/null",
+    "-c", "core.fsmonitor=false",
     "-C", repository.repositoryPath,
   ];
 }
@@ -230,6 +216,7 @@ function changeKind(status: string): WorkspaceDiffChangedFileSummary["changeKind
 
 export class WorkspaceDiffsEngine {
   readonly #signals = new AsyncLocalStorage<AbortSignal>();
+  readonly #gitEnvironments = new AsyncLocalStorage<Map<string, Promise<NodeJS.ProcessEnv>>>();
   readonly #repositories = new Map<WorkspaceDiffRepositoryId, RepositoryRecord>();
   readonly #repositoryIds = new Map<string, WorkspaceDiffRepositoryId>();
   readonly #revisions = new Map<WorkspaceDiffRevisionId, RevisionRecord>();
@@ -292,13 +279,13 @@ export class WorkspaceDiffsEngine {
 
   #operate<T>(signal: AbortSignal | undefined, operation: () => Promise<T>): Promise<T> {
     this.#prune();
-    return this.#run(signal, async () => {
+    return this.#gitEnvironments.run(new Map(), () => this.#run(signal, async () => {
       try {
         return await operation();
       } finally {
         this.#prune();
       }
-    });
+    }));
   }
 
   #run<T>(signal: AbortSignal | undefined, operation: () => Promise<T>): Promise<T> {
@@ -1383,9 +1370,10 @@ export class WorkspaceDiffsEngine {
       "--no-pager", "--no-replace-objects",
       "-c", "core.pager=cat", "-c", "pager.diff=false",
       "-c", "diff.external=", "-c", "core.attributesFile=/dev/null",
-      "-c", "core.hooksPath=/dev/null", "-C", cwd, ...args,
+      "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-C", cwd, ...args,
     ], {
-      encoding: "utf8", maxBuffer, env: gitEnvironment(), windowsHide: true,
+      encoding: "utf8", maxBuffer,
+      env: await this.#gitEnvironment(cwd), windowsHide: true,
       timeout: 30_000, killSignal: "SIGKILL",
       ...(this.#signals.getStore() ? { signal: this.#signals.getStore() } : {}),
     });
@@ -1393,18 +1381,34 @@ export class WorkspaceDiffsEngine {
 
   async #git(repository: RepositoryRecord, args: string[], maxBuffer: number) {
     return executeFile("git", [...gitPrefix(repository), ...args], {
-      encoding: "utf8", maxBuffer, env: gitEnvironment(), windowsHide: true, timeout: 30_000, killSignal: "SIGKILL",
+      encoding: "utf8", maxBuffer,
+      env: await this.#gitEnvironment(repository.repositoryPath),
+      windowsHide: true, timeout: 30_000, killSignal: "SIGKILL",
       ...(this.#signals.getStore() ? { signal: this.#signals.getStore() } : {}),
     });
   }
 
   async #gitBuffer(repository: RepositoryRecord, args: string[], maxBuffer: number): Promise<Buffer> {
+    const environment = await this.#gitEnvironment(repository.repositoryPath);
     return await new Promise<Buffer>((resolve, reject) => {
       execFileCallback("git", [...gitPrefix(repository), ...args], {
-        encoding: "buffer", maxBuffer, env: gitEnvironment(), windowsHide: true,
+        encoding: "buffer", maxBuffer, env: environment, windowsHide: true,
         timeout: 30_000, killSignal: "SIGKILL",
         ...(this.#signals.getStore() ? { signal: this.#signals.getStore() } : {}),
       }, (error, stdout) => error ? reject(error) : resolve(stdout));
     });
+  }
+
+  #gitEnvironment(cwd: string): Promise<NodeJS.ProcessEnv> {
+    // One checkout-policy snapshot per bounded operation avoids a native Git
+    // configuration process for every metadata/patch command. The next public
+    // operation reads it again, so configuration changes are never cached
+    // across requests or comparison generations.
+    const environments = this.#gitEnvironments.getStore();
+    const existing = environments?.get(cwd);
+    if (existing) return existing;
+    const environment = checkoutGitEnvironment(cwd, this.#signals.getStore());
+    environments?.set(cwd, environment);
+    return environment;
   }
 }

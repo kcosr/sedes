@@ -32,6 +32,7 @@ export async function assertTrustedWindowsSearchPath(
   const script = String.raw`
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
+$env:PSModulePath = [IO.Path]::Combine($PSHOME, 'Modules')
 $current = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $trusted = @($current, 'S-1-5-18', 'S-1-5-32-544', 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')
 $candidate = $env:SEDES_SEARCH_EXECUTABLE
@@ -44,7 +45,8 @@ while ($item) {
   if ($trusted -notcontains $owner) { throw 'trusted_search_owner_untrusted' }
   $rules = $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])
   # Creating an unrelated child cannot replace an existing admitted path.
-  $writeMask = if ($item.PSIsContainer) { 0x500d0150 } else { 0x500d0156 }
+  # .Directory/.Parent return DirectoryInfo without provider-added PSIsContainer.
+  $writeMask = if ($item -is [IO.DirectoryInfo]) { 0x500d0150 } else { 0x500d0156 }
   foreach ($rule in $rules) {
     if (($rule.PropagationFlags -band [Security.AccessControl.PropagationFlags]::InheritOnly) -ne 0) { continue }
     if ($rule.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow -and

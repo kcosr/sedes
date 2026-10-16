@@ -70,11 +70,13 @@ describe("TerminalJournalStore", () => {
       bytes: Buffer.from("ok"),
     });
     const journal = findJournal(directory);
+    const completePrefix = readFileSync(journal);
     writeFileSync(
       journal,
-      Buffer.concat([readFileSync(journal), Buffer.from("partial")]),
+      Buffer.concat([completePrefix, Buffer.from("partial")]),
     );
     expect(store.read(scope, terminalId).records).toHaveLength(1);
+    expect(readFileSync(journal)).toEqual(completePrefix);
     const damaged = readFileSync(journal)
       .toString("utf8")
       .replace('"seq":1', '"seq":2');
@@ -82,6 +84,33 @@ describe("TerminalJournalStore", () => {
     expect(() => store.read(scope, terminalId)).toThrow(
       "terminal_journal_corrupt",
     );
+  });
+
+  it.each([false, true])("reopens and appends after repairing a torn UTF-8 tail (complete prefix=%s)", (prefix) => {
+    const directory = mkdtempSync(path.join(os.tmpdir(), "sedes-terminal-"));
+    directories.push(directory);
+    const store = new TerminalJournalStore({ stateDirectory: directory });
+    store.append(scope, terminalId, {
+      seq: 1, kind: "output", bytes: Buffer.from("before recovery"),
+    });
+    const journal = findJournal(directory);
+    const completePrefix = prefix ? readFileSync(journal) : Buffer.alloc(0);
+    // Include an incomplete multibyte code point: repair must retain exact
+    // complete-record bytes rather than re-encoding the damaged suffix.
+    writeFileSync(journal, Buffer.concat([completePrefix, Buffer.from([0x7b, 0xe6, 0x97])]));
+    const repaired = store.read(scope, terminalId);
+    expect(repaired.headSeq).toBe(prefix ? 1 : 0);
+    expect(readFileSync(journal)).toEqual(completePrefix);
+
+    const reopened = new TerminalJournalStore({ stateDirectory: directory });
+    reopened.append(scope, terminalId, {
+      seq: repaired.headSeq + 1, kind: "output", bytes: Buffer.from("after recovery"),
+    });
+    const restored = new TerminalJournalStore({ stateDirectory: directory }).read(scope, terminalId);
+    expect(restored.records.map((record) => record.seq)).toEqual(prefix ? [1, 2] : [1]);
+    expect(restored.records.at(-1)).toEqual({
+      seq: repaired.headSeq + 1, kind: "output", bytes: Uint8Array.from(Buffer.from("after recovery")),
+    });
   });
 
   it("fails closed at the byte quota", () => {

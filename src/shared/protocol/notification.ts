@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { normalizedAbsolutePath } from "../absolute-path.js";
 import type { ClassifiedAssistantResult } from "./completion-result.js";
 import type { InteractionKind } from "./interactions.js";
 import { interactionKindSchema } from "./interactions.js";
@@ -84,8 +85,12 @@ const configFields = {
   ...scriptFields,
   delivery: notificationDeliverySchema,
 };
+// Preserve existing POSIX absolute spellings; native Windows paths also need
+// drive/share authority without device namespaces or alternate data streams.
+const absoluteScriptPath = (value: string) =>
+  value.startsWith("/") || normalizedAbsolutePath(value);
 const validScript = (input: { enabled: boolean; scriptPath: string; delivery: NotificationDelivery }) =>
-  !input.enabled || !Object.values(input.delivery).some((entry) => entry.script) || input.scriptPath.startsWith("/");
+  !input.enabled || !Object.values(input.delivery).some((entry) => entry.script) || absoluteScriptPath(input.scriptPath);
 
 export const notificationSettingsSchema = z
   .strictObject({
@@ -120,7 +125,7 @@ export type SetNotificationSilencedRequest = z.infer<
 >;
 export const testNotificationRequestSchema = z
   .strictObject(scriptFields)
-  .refine((input) => input.scriptPath.startsWith("/"), {
+  .refine((input) => absoluteScriptPath(input.scriptPath), {
     message: "Testing requires an absolute script path.",
     path: ["scriptPath"],
   });

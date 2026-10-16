@@ -4,13 +4,13 @@ import {
   closeSync,
   existsSync,
   fsyncSync,
+  ftruncateSync,
   mkdirSync,
   openSync,
   readFileSync,
   renameSync,
   rmSync,
   statSync,
-  truncateSync,
   writeSync,
 } from "node:fs";
 import path from "node:path";
@@ -180,9 +180,11 @@ export class TerminalJournalStore {
       const boundary = content.lastIndexOf("\n");
       const validLength =
         boundary < 0 ? 0 : Buffer.byteLength(content.slice(0, boundary + 1));
-      truncateSync(filename, validLength);
-      const descriptor = openSync(filename, "r");
+      // Windows requires write access for FlushFileBuffers. Keep truncation
+      // and its durability barrier on the same write-capable descriptor.
+      const descriptor = openSync(filename, "r+");
       try {
+        ftruncateSync(descriptor, validLength);
         fsyncSync(descriptor);
       } finally {
         closeSync(descriptor);

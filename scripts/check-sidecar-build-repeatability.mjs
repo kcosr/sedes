@@ -19,6 +19,14 @@ const manifestPath = path.join(
 );
 const run = promisify(execFile);
 
+function hasExpectedFileMode(metadata, expectedMode) {
+  // Windows chmod exposes the read-only attribute, not POSIX ownership or
+  // executable bits. Runtime ACL admission is checked by the native gate.
+  return metadata.isFile() && (process.platform === "win32"
+    ? (metadata.mode & 0o222) === 0
+    : (metadata.mode & 0o777) === expectedMode);
+}
+
 const canonicalInputs = {
   "src/cli/opencode-owner-cli.ts": {},
   "src/cli/sedes-dynamic-tool-command.ts": {},
@@ -30,6 +38,7 @@ const canonicalInputs = {
   "src/shared/workpad-content-limits.ts": {},
   "src/server/composer-attachments/execution-attachment-staging-engine.ts": {},
   "src/server/workspace-files/workspace-files-engine.ts": {},
+  "src/server/workspace-files/git-environment.ts": {},
   "src/server/workspace-files/workspace-file-policy.ts": {},
   "src/server/workspace-files/canonical-mutation-serializer.ts": {},
   "src/server/workspace-tools/workspace-tool-engine.ts": {},
@@ -54,6 +63,7 @@ const canonicalOutputInputs = {
     bytesInOutput: 1,
   },
   "src/server/workspace-files/workspace-files-engine.ts": { bytesInOutput: 1 },
+  "src/server/workspace-files/git-environment.ts": { bytesInOutput: 1 },
   "src/server/workspace-files/workspace-file-policy.ts": { bytesInOutput: 1 },
   "src/server/workspace-files/canonical-mutation-serializer.ts": {
     bytesInOutput: 1,
@@ -220,8 +230,8 @@ for (let attempt = 0; attempt < 2; attempt += 1) {
     manifest.minimumNodeVersion !== "22.19.0" ||
     manifest.sha256 !== digest ||
     manifest.bytes !== bundle.byteLength ||
-    (bundleMetadata.mode & 0o777) !== 0o500 ||
-    (manifestMetadata.mode & 0o777) !== 0o400
+    !hasExpectedFileMode(bundleMetadata, 0o500) ||
+    !hasExpectedFileMode(manifestMetadata, 0o400)
   ) {
     throw new Error("sidecar_build_output_invalid");
   }
@@ -249,7 +259,7 @@ for (let attempt = 0; attempt < 2; attempt += 1) {
       ]);
       if (
         file.mode !== 0o500 ||
-        (metadata.mode & 0o777) !== file.mode ||
+        !hasExpectedFileMode(metadata, file.mode) ||
         contents.length !== file.size ||
         createHash("sha256").update(contents).digest("hex") !== file.sha256
       )

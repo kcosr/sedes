@@ -13,11 +13,13 @@ User-facing changes are collected here before release. See the
   ([#85](https://github.com/kcosr/sedes/pull/85))
 
 - Upgrade the server and browser/packaged clients together for client protocol
-  **158** for Page responses, larger composer reference lists, and the updated
-  native voice bridge. Rebuild Android with its bundled client. See
-  [Page responses](docs/user/html-previews.md#send-a-page-response)
-  and [voice input](docs/operator/clients/voice.md).
-  ([#81](https://github.com/kcosr/sedes/pull/81), [#83](https://github.com/kcosr/sedes/pull/83))
+  **159** for Page responses, larger composer reference lists, the updated
+  native voice bridge, and Windows notification script paths. Rebuild Android
+  and Electron with their bundled clients. See
+  [Page responses](docs/user/html-previews.md#send-a-page-response),
+  [voice input](docs/operator/clients/voice.md), and
+  [notification scripts](docs/operator/configuration.md#notification-scripts).
+  ([#81](https://github.com/kcosr/sedes/pull/81), [#83](https://github.com/kcosr/sedes/pull/83), [#87](https://github.com/kcosr/sedes/pull/87))
 
 ### Added
 
@@ -80,6 +82,33 @@ User-facing changes are collected here before release. See the
   identities, fixing Local Network connections that failed when launched from
   Finder. Package verification rejects mismatched or incomplete signatures.
   ([#86](https://github.com/kcosr/sedes/pull/86))
+
+- Native Windows Codex executable discovery, linked-worktree discovery, and
+  workspace search results use the execution host's path conventions. Windows
+  downloads and file links also reject final symbolic links consistently.
+  Windows outbound Files admit nested roots and discover viewed images using
+  native containment checks while rejecting paths outside the allowed roots.
+  Native process and file helpers use built-in Windows PowerShell modules even
+  when launched from PowerShell 7.
+  Rebuild the server, Windows execution sidecars, or Electron Managed Local
+  where these operations run; upgrade retained sidecars when their work can
+  safely be stopped. See [native host validation](docs/operator/outbound-hosts.md#native-support-and-validation-limits).
+  ([#87](https://github.com/kcosr/sedes/pull/87))
+
+- Windows source checkouts preserve required generated-file line endings, and
+  browser-test servers close gracefully through IPC before forced cleanup.
+  Full Electron verification releases its native PTY probe after success or
+  failure and requests graceful Windows server shutdown through parent IPC.
+  See [native Windows verification](docs/developer/development.md#native-windows).
+  ([#87](https://github.com/kcosr/sedes/pull/87))
+
+- Windows terminals release owned PTY resources after shell exit without
+  repeated cleanup calls and report cleanup failures in their exit status.
+  Windows terminal journals recover incomplete trailing writes without a
+  read-only file-flush failure. Notification scripts accept native Windows
+  executable paths and clean up their owned descendants on exit or timeout.
+  Rebuild the Windows server or execution sidecar before its next safe restart.
+  ([#87](https://github.com/kcosr/sedes/pull/87))
 
 - Sending an inline Page response exits preview interaction mode and returns
   focus to the chat controls.

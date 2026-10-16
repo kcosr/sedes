@@ -16,6 +16,7 @@ export interface WindowsStagingPrivacyRunner {
 // Windows PowerShell 5.1 uses .NET Framework's atomic DirectorySecurity mkdir.
 // All path data travels in an environment variable, never PowerShell source.
 const WINDOWS_STAGING_PRIVACY_SCRIPT = String.raw`
+$env:PSModulePath = [IO.Path]::Combine($PSHOME, 'Modules')
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 $p = $env:SEDES_STAGING_PRIVACY_PATH

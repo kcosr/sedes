@@ -23,6 +23,7 @@ import {
   validateReadyMessage,
 } from "./e2e-runner-contract.mjs";
 import { loadTimingBaseline } from "./e2e-timing-baseline.mjs";
+import { requestE2EChildShutdown, stopE2EChild } from "./e2e-child-cleanup.mjs";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "..");
 const runRoot = path.join(repositoryRoot, "test-results", "e2e-runs");
@@ -58,15 +59,7 @@ function cleanEnvironment(additions = {}) {
 }
 
 function signalProcessGroup(child, signal) {
-  if (!child?.pid || child.exitCode !== null || child.signalCode !== null) {
-    return;
-  }
-  try {
-    if (process.platform === "win32") child.kill(signal);
-    else process.kill(-child.pid, signal);
-  } catch (error) {
-    if (error?.code !== "ESRCH") throw error;
-  }
+  requestE2EChildShutdown(child, signal, { server: serverChildren.has(child) });
 }
 
 function terminateActiveChildren(signal = "SIGTERM") {
@@ -97,23 +90,12 @@ function delay(milliseconds) {
 }
 
 async function stopChild(child, childExit, signal = "SIGTERM") {
-  if (!child) return;
-  if (child.exitCode === null && child.signalCode === null) {
-    signalProcessGroup(child, signal);
-  }
-  let result = await Promise.race([
-    childExit,
-    delay(gracefulShutdownTimeoutMilliseconds).then(() => undefined),
-  ]);
-  if (!result) {
-    signalProcessGroup(child, "SIGKILL");
-    result = await Promise.race([
-      childExit,
-      delay(forcedShutdownTimeoutMilliseconds).then(() => undefined),
-    ]);
-    if (!result) throw new Error("e2e_child_shutdown_deadline_exceeded");
-  }
-  return result;
+  return stopE2EChild(child, childExit, {
+    signal,
+    server: serverChildren.has(child),
+    gracefulMilliseconds: gracefulShutdownTimeoutMilliseconds,
+    forcedMilliseconds: forcedShutdownTimeoutMilliseconds,
+  });
 }
 
 function spawnNpm(arguments_, environment) {

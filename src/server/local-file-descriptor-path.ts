@@ -109,3 +109,37 @@ export async function openVerifiedDirectory(
     throw error;
   }
 }
+
+/** O_NOFOLLOW is unavailable on Windows. Prove that the final pathname is
+ * a regular file both before and after open and still names the held object.
+ * Callers must separately revalidate canonical containment of its parents. */
+export async function openVerifiedRegularFile(
+  candidate: string,
+): Promise<FileHandle> {
+  const before = await lstat(candidate, { bigint: true });
+  if (!before.isFile() || before.isSymbolicLink())
+    throw new Error("local_file_path_invalid");
+  const handle = await open(
+    candidate,
+    constants.O_RDONLY | constants.O_NOFOLLOW,
+  );
+  try {
+    const [opened, after] = await Promise.all([
+      handle.stat({ bigint: true }),
+      lstat(candidate, { bigint: true }),
+    ]);
+    if (
+      !opened.isFile() ||
+      !after.isFile() ||
+      after.isSymbolicLink() ||
+      !sameIdentity(before, opened) ||
+      !sameIdentity(opened, after) ||
+      (process.platform === "win32" && opened.ino === 0n)
+    )
+      throw new Error("local_file_path_unstable");
+    return handle;
+  } catch (error) {
+    await handle.close();
+    throw error;
+  }
+}
