@@ -456,7 +456,7 @@ export class AutomationRepository {
         AND acknowledged_at IS NULL`,
           )
           .run(now, scope.tenantId, scope.principalId, automationId, runId);
-      this.retireAcknowledgedOneShot(scope, automationId, now);
+      this.retireFinishedOneShot(scope, automationId, now);
       return this.getRun(scope, automationId, runId);
     })();
   }
@@ -996,7 +996,7 @@ export class AutomationRepository {
         startedAt === run.turnStartedAt &&
         endedAt === run.turnEndedAt
       ) {
-        return this.retireAcknowledgedOneShot(scope, run.automationId, input.settledAt)
+        return this.retireFinishedOneShot(scope, run.automationId, input.settledAt)
           ? run : undefined;
       }
       const newProblem = run.turnId === null && input.outcome !== "completed";
@@ -1026,7 +1026,7 @@ export class AutomationRepository {
       if (newProblem && run.state !== "failed") {
         activateSettledThread(this.database, scope, run.anchorThreadId, input.settledAt);
       }
-      this.retireAcknowledgedOneShot(scope, run.automationId, input.settledAt);
+      this.retireFinishedOneShot(scope, run.automationId, input.settledAt);
       return this.getRun(scope, run.automationId, run.id);
     })();
   }
@@ -1094,7 +1094,7 @@ export class AutomationRepository {
   }
 
   /** Reconcile derived retirement after external lifecycle work such as reset. */
-  retireAcknowledgedOneShotsForThreads(
+  retireFinishedOneShotsForThreads(
     scope: RequestScope,
     threadIds: readonly string[],
     now: number,
@@ -1107,12 +1107,12 @@ export class AutomationRepository {
           AND anchor_thread_id IN (${threadIds.map(() => "?").join(",")})
           AND ${retirableOneShotSql("definition")}
       `).all(scope.tenantId, scope.principalId, ...threadIds) as { id: string }[];
-      return candidates.flatMap(({ id }) => this.retireAcknowledgedOneShot(scope, id, now)
+      return candidates.flatMap(({ id }) => this.retireFinishedOneShot(scope, id, now)
         ? [this.getDefinition(scope, id)] : []);
     })();
   }
 
-  private retireAcknowledgedOneShot(
+  private retireFinishedOneShot(
     scope: RequestScope,
     automationId: string,
     now: number,
@@ -1248,7 +1248,7 @@ export class AutomationRepository {
       if (result.changes !== 1) {
         this.throwDefinitionConflictOrNotFound(scope, automationId);
       }
-      this.retireAcknowledgedOneShot(scope, automationId, input.now);
+      this.retireFinishedOneShot(scope, automationId, input.now);
       return this.getDefinition(scope, automationId);
     })();
   }
@@ -1285,7 +1285,7 @@ export class AutomationRepository {
       if (result.changes !== 1) {
         this.throwDefinitionConflictOrNotFound(scope, automationId);
       }
-      this.retireAcknowledgedOneShot(scope, automationId, input.now);
+      this.retireFinishedOneShot(scope, automationId, input.now);
       return this.getDefinition(scope, automationId);
     })();
   }
@@ -2090,7 +2090,7 @@ export class AutomationRepository {
           );
         }
       }
-      this.retireAcknowledgedOneShot(scope, automationId, input.now);
+      this.retireFinishedOneShot(scope, automationId, input.now);
       return this.getRun(scope, automationId, runId);
     })();
   }

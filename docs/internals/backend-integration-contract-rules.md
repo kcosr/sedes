@@ -2358,8 +2358,8 @@ drops an end before the start. It is idempotent across snapshot replays and skip
 force-reset runs. It never changes the recorded delivery state or rearms a
 schedule. Failed or interrupted settlement restores attention if the user had
 dismissed the earlier delivery notice; replay must preserve acknowledgement of
-the failure. A successful scheduled one-shot is retired only after its result
-notice is dismissed and no other outstanding work or result notice blocks it.
+the failure. A successful scheduled one-shot is retired once no run leaves a
+result notice to dismiss and no unresolved problem or in-flight turn remains.
 Retain its internal records and threads. Dismissals name the observed outcome so
 a delayed request cannot acknowledge a newer failure. At startup it settles runs
 whose observation committed while no observer was bound and reconciles eligible

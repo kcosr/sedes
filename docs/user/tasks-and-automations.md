@@ -428,9 +428,13 @@ dismiss while the agent is still working, removal waits for success. A later
 failure or interruption is shown again and keeps the reminder available.
 
 **Run now** is a separate invocation and does not rearm a consumed schedule.
-Before the reminder is removed, you can choose a new future date and enable it
-to schedule another occurrence. Dismissing an older result does not remove that
-new schedule. Changing its name or prompt does not rearm it.
+On a **This thread** reminder, the thread shows the latest run's notice, so a
+**Run now** replaces the earlier result notice. After it succeeds, the reminder
+is removed once its turn finishes; after it fails, once you dismiss the
+failure. A **Fork** reminder keeps each result thread's notice until you
+dismiss it. Before the reminder is removed, you can choose a new future date
+and enable it to schedule another occurrence. Dismissing an older result does
+not remove that new schedule. Changing its name or prompt does not rearm it.
 
 ### Edit or delete an automation
 
@@ -461,7 +465,7 @@ Open a row for its definition and history. Its actions address that automation,
 including **Run now**, **Pause** or **Enable**, **Edit**, and **Open thread**.
 An outstanding problem remains visible even when another automation on the
 same thread succeeds or runs. Successful one-time reminders remain available
-until their result notice is dismissed.
+until no result notice remains to dismiss.
 
 ## Open an automation
 
@@ -511,7 +515,7 @@ thread remains the authority for model and execution configuration.
 | --- | --- |
 | **Active** | Enabled and eligible for future scheduled occurrences |
 | **Paused** / **Not started** | Future scheduling is disabled |
-| **Finished** | The one-time occurrence has been consumed; a successful reminder remains until its notice is dismissed |
+| **Finished** | The one-time occurrence has been consumed; a successful reminder remains until no notice remains to dismiss |
 | **Waiting on source** | An unsent run is deferred until its source or capacity allows delivery |
 | **Sending** / **Waiting for turn** | A run is being delivered or is in the normal thread queue |
 | **Failed** | A delivery failure or unsuccessful agent turn needs attention |
@@ -604,7 +608,7 @@ History includes scheduled and manual invocations, with their captured definitio
 revision, delivery state, precheck result, deferral reason, and actual result
 thread. The **All**, **Problems**, and **Skipped** filters and pagination help
 inspect older runs. A successful one-time reminder and its history leave these
-views when you dismiss its result notice. Sedes retains the internal records
+views once no result notice remains to dismiss. Sedes retains the internal records
 needed for thread provenance and duplicate-request protection.
 
 Delivery and assistant completion are different events: **Delivered** confirms

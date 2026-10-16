@@ -2,31 +2,17 @@ import type Database from "better-sqlite3";
 import type { NormalizedThreadAttention } from "../../shared/protocol/conversation.js";
 import type { RequestScope } from "../identity/identity-provider.js";
 import { boundDisplayText } from "../conversations/payload-policy.js";
-import { latestDecisiveRunIdSql, runFailureSql } from "../db/repositories/automation-read-sql.js";
+import {
+  anchorNoticeRunIdSql,
+  anchorNoticeSql,
+  latestDecisiveRunIdSql,
+  resultThreadNoticeSql,
+  runFailureSql,
+  runHasProblemSql,
+  runTriggeredSql,
+} from "../db/repositories/automation-read-sql.js";
 
 export const MAXIMUM_THREAD_AUTOMATION_CONTEXTS = 20;
-
-function sourceContextRunIdSql(definition: string): string {
-  return `coalesce((SELECT unresolved.id FROM automation_runs AS unresolved
-    WHERE unresolved.tenant_id = ${definition}.tenant_id
-      AND unresolved.owner_principal_id = ${definition}.owner_principal_id
-      AND unresolved.automation_id = ${definition}.id
-      AND unresolved.state = 'uncertain'
-      AND unresolved.force_reset_at IS NULL
-    ORDER BY unresolved.created_at DESC, unresolved.id DESC LIMIT 1
-  ), ${latestDecisiveRunIdSql(definition)})`;
-}
-
-function runHasProblemSql(run: string): string {
-  return `((${run}.force_reset_at IS NULL AND ${run}.state = 'uncertain')
-    OR ${runFailureSql(run)})`;
-}
-
-function runTriggeredSql(run: string): string {
-  return `(${run}.state = 'completed' AND ${run}.occurrence_kind = 'scheduled'
-    AND ${run}.force_reset_at IS NULL
-    AND (${run}.turn_outcome IS NULL OR ${run}.turn_outcome = 'completed'))`;
-}
 
 export function threadAutomationChildProblemSql(thread: string): string {
   return `EXISTS (
@@ -100,14 +86,11 @@ export function readThreadAutomationContexts(
         ON run.tenant_id = definition.tenant_id
         AND run.owner_principal_id = definition.owner_principal_id
         AND run.automation_id = definition.id
-        AND run.id = ${sourceContextRunIdSql("definition")}
+        AND run.id = ${anchorNoticeRunIdSql("definition")}
       WHERE definition.tenant_id = ? AND definition.owner_principal_id = ?
         AND definition.anchor_thread_id = ? AND definition.deleted_at IS NULL
         AND run.acknowledged_at IS NULL
-        AND (${runHasProblemSql("run")} OR (
-          ${runTriggeredSql("run")}
-          AND run.child_thread_id IS NULL
-        ))
+        AND ${anchorNoticeSql("run")}
       UNION ALL
       SELECT ${columns}
       FROM automation_runs AS run
@@ -117,8 +100,7 @@ export function readThreadAutomationContexts(
         AND definition.id = run.automation_id
       WHERE run.tenant_id = ? AND run.owner_principal_id = ?
         AND run.child_thread_id = ? AND definition.deleted_at IS NULL
-        AND (${runTriggeredSql("run")}
-          OR ${runHasProblemSql("run")})
+        AND ${resultThreadNoticeSql("run")}
         AND run.acknowledged_at IS NULL
     ) ORDER BY CASE outcome WHEN 'uncertain' THEN 0 WHEN 'failed' THEN 1 ELSE 2 END,
       triggeredAt DESC, automationId, runId

@@ -1145,7 +1145,7 @@ export class AutomationService implements DurableDeadlineSource {
     threadIds: readonly string[],
     now = Date.now(),
   ): void {
-    for (const definition of this.#repository.retireAcknowledgedOneShotsForThreads(scope, threadIds, now)) {
+    for (const definition of this.#repository.retireFinishedOneShotsForThreads(scope, threadIds, now)) {
       this.#publishDefinition(scope, definition);
     }
   }

@@ -201,10 +201,14 @@ delivery acknowledgement atomically; settlement replay preserves subsequent
 failure acknowledgement. A result thread's provenance names its actual source
 even when the source's other automations have run since.
 
-A date/time definition is retired with its existing deletion marker when its
-current scheduled occurrence has both a successful agent-turn settlement and a
-dismissal. Pending work, unresolved problems, and other undismissed result-thread
-notices prevent retirement. Old occurrences cannot retire a rearmed definition.
+A date/time definition is retired with its existing deletion marker once its
+current scheduled occurrence has a successful agent-turn settlement and nothing
+about the definition remains to see or dismiss: no undismissed result notice from
+any of its runs, no unresolved problem, and no in-flight work under the same
+latest-turn rule as the in-flight count. The anchor's notice follows the latest
+decisive run, so a later manual run supersedes the scheduled notice there; Fork
+result threads keep one notice per run. Old occurrences cannot retire a rearmed
+definition.
 Retirement removes normal collection/detail/history access while retaining the
 definition, runs, receipts, queued-input provenance, and thread lineage. Startup
 reconciliation handles already-settled eligible history and completion

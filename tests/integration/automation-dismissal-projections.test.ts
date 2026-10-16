@@ -13,7 +13,7 @@ import { readThreadAutomationSummary } from "../../src/server/application/thread
 import type { RequestScope } from "../../src/server/identity/identity-provider.js";
 import type { AutomationDefinitionRecord, AutomationRunRecord } from "../../src/server/domain/automation-models.js";
 
-let seed: Buffer, scope: RequestScope, sourceId: string, childId: string;
+let seed: Buffer, scope: RequestScope, sourceId: string, childId: string, secondChildId: string;
 beforeAll(() => {
   const current = savedAgentDatabase();
   scope = current.scope;
@@ -35,6 +35,7 @@ beforeAll(() => {
     }).id;
     sourceId = thread("Assistant");
     childId = thread("Automation result");
+    secondChildId = thread("Second automation result");
     seed = current.database.serialize();
   } finally {
     current.database.close();
@@ -58,7 +59,7 @@ describe("automation dismissal projections", () => {
         : { kind: "date_time", runAt: 1_000 },
       misfirePolicy: recurring ? "coalesce" : null, nextRunAt: 1_000, now: 500,
     });
-  const deliver = (definition: AutomationDefinitionRecord, manual = false, now = 1_000) => {
+  const deliver = (definition: AutomationDefinitionRecord, manual = false, now = 1_000, child = childId) => {
     const claim = {
       runId: randomUUID(), occurrenceKey: manual ? `manual:${randomUUID()}` : "scheduled:1000",
       scheduledFor: manual ? now : 1_000, claimToken: randomUUID(), leaseExpiresAt: now + 60_000,
@@ -76,7 +77,7 @@ describe("automation dismissal projections", () => {
     // This fixture tests durable projections; child lifecycle/provenance has separate coverage.
     if (definition.runMode === "clone") database.prepare(`UPDATE automation_runs SET child_thread_id = ?
       WHERE tenant_id = ? AND owner_principal_id = ? AND automation_id = ? AND id = ?`)
-      .run(childId, scope.tenantId, scope.principalId, definition.id, run.id);
+      .run(child, scope.tenantId, scope.principalId, definition.id, run.id);
     return repository.updateRunState(scope, definition.id, run.id, {
       expectedState: "dispatching", state: "completed", claimToken: run.claimToken!,
       completeDefinition: !manual && definition.schedule.kind === "date_time", now: now + 2,
@@ -156,6 +157,29 @@ describe("automation dismissal projections", () => {
     expect(contexts(target)).toEqual([expect.objectContaining({ automationId: automation.id, outcome: "failed" })]);
     expect(summary()).toMatchObject({ attentionCount: 1, inFlightCount: 0 });
     expect(inventorySummary(target).attention.automationContext).toBe("failed");
+  });
+
+  it.each(["completed", "failed"] as const)("keeps a Fork one-shot until every result notice is dismissed after a %s Run now", (outcome) => {
+    const automation = definition("clone");
+    const scheduled = deliver(automation);
+    settle(scheduled, "completed");
+    const manual = deliver(automation, true, 1_200, secondChildId);
+    settle(manual, outcome, 1_300);
+    // Each result thread keeps its own notice; a later run does not supersede it.
+    expect(contexts(childId)).toEqual([expect.objectContaining({ runId: scheduled.id, outcome: "triggered" })]);
+    expect(contexts(secondChildId)).toEqual(outcome === "failed"
+      ? [expect.objectContaining({ runId: manual.id, outcome: "failed" })] : []);
+    expect(repository.getDefinition(scope, automation.id).deletedAt).toBeNull();
+
+    repository.acknowledgeRun(scope, automation.id, scheduled.id, 1_400);
+    if (outcome === "failed") {
+      expect(repository.getDefinition(scope, automation.id).deletedAt).toBeNull();
+      expect(contexts()).toEqual([expect.objectContaining({ runId: manual.id, outcome: "failed" })]);
+      repository.acknowledgeRun(scope, automation.id, manual.id, 1_500);
+    }
+    expect(repository.getDefinition(scope, automation.id).deletedAt).not.toBeNull();
+    expect(contexts(childId)).toEqual([]);
+    expect(contexts(secondChildId)).toEqual([]);
   });
 
   it("counts the latest accepted turn without changing the actionable schedule or reviving historical unsettled turns", () => {

@@ -238,6 +238,23 @@ describe("multiple independent thread automations", () => {
     });
   }
 
+  function claimManual(id: string, at: number) {
+    return repository.createManualRun(scope, id, {
+      runId: randomUUID(), occurrenceKey: `manual:${randomUUID()}`, scheduledFor: at,
+      claimToken: randomUUID(), leaseExpiresAt: at + 300_000, dispatchMutationId: randomUUID(), now: at,
+    }).run;
+  }
+
+  function deliverClaimed(run: AutomationRunRecord, at: number) {
+    repository.updateRunState(scope, run.automationId, run.id, {
+      expectedState: "claimed", state: "dispatching", claimToken: run.claimToken!,
+      retainPromptSnapshot: true, now: at,
+    });
+    return repository.updateRunState(scope, run.automationId, run.id, {
+      expectedState: "dispatching", state: "completed", claimToken: run.claimToken!, now: at + 1,
+    });
+  }
+
   function finishTurn(run: AutomationRunRecord, outcome: AutomationTurnOutcome, at = 11_000) {
     const settled = repository.settleRunTurn(scope, run.childThreadId ?? run.anchorThreadId,
       run.dispatchMutationId, {
@@ -327,6 +344,72 @@ describe("multiple independent thread automations", () => {
     finishTurn(run, "completed");
     service.acknowledgeRun(scope, reminder.id, run.id, 12_000);
     expect(repository.getDefinition(scope, reminder.id).deletedAt).toBeNull();
+  });
+
+  it("retires a reminder after Run now once the notice shown at that time is dismissed", () => {
+    const reminder = create("Reminder"), scheduled = deliver(reminder.id);
+    finishTurn(scheduled, "completed");
+    const manual = claimManual(reminder.id, 11_500);
+    // Until Run now is delivered, the scheduled notice is the one shown.
+    expect(readThreadAutomationContexts(db, scope, threadId))
+      .toEqual([expect.objectContaining({ runId: scheduled.id, outcome: "triggered" })]);
+    service.acknowledgeThreadRun(scope, threadId, scheduled.id, "triggered", 11_600);
+    const delivered = deliverClaimed(manual, 11_700);
+    expect(repository.getDefinition(scope, reminder.id).deletedAt).toBeNull();
+    finishTurn(delivered, "completed", 12_000);
+    expect(repository.getDefinition(scope, reminder.id).deletedAt).toBe(12_000);
+    expect(publications).toHaveBeenLastCalledWith(scope, expect.objectContaining({ automationId: reminder.id, deleted: true }));
+  });
+
+  it("retires a reminder whose scheduled notice a successful Run now superseded", async () => {
+    const reminder = create("Reminder"), scheduled = deliver(reminder.id);
+    finishTurn(scheduled, "completed");
+    now = 11_500;
+    const manual = await service.runNow(scope, reminder.id, randomUUID(), now);
+    await settle();
+    const delivered = repository.getRun(scope, reminder.id, manual.id);
+    expect(delivered.state).toBe("completed");
+    // The anchor shows only the latest decisive run, and a successful manual
+    // run has no notice, so nothing about the reminder remains to dismiss.
+    expect(readThreadAutomationContexts(db, scope, threadId)).toEqual([]);
+    expect(repository.getRun(scope, reminder.id, scheduled.id).acknowledgedAt).toBeNull();
+    expect(readThreadAutomationSummary(db, scope, threadId)).toMatchObject({ inFlightCount: 1 });
+    expect(repository.getDefinition(scope, reminder.id).deletedAt).toBeNull();
+    finishTurn(delivered, "completed", 12_000);
+    expect(repository.getDefinition(scope, reminder.id).deletedAt).toBe(12_000);
+    expect(service.list(scope, { threadId, pageSize: 10 }).items).toEqual([]);
+    expect(publications).toHaveBeenLastCalledWith(scope, expect.objectContaining({ automationId: reminder.id, deleted: true }));
+  });
+
+  it("keeps a reminder after a failed Run now until that failure is dismissed", () => {
+    const reminder = create("Reminder"), scheduled = deliver(reminder.id);
+    finishTurn(scheduled, "completed");
+    const manual = deliverClaimed(claimManual(reminder.id, 11_500), 11_600);
+    finishTurn(manual, "failed", 12_000);
+    expect(readThreadAutomationContexts(db, scope, threadId))
+      .toEqual([expect.objectContaining({ runId: manual.id, outcome: "failed" })]);
+    expect(service.get(scope, reminder.id).attention).toMatchObject({ runId: manual.id, kind: "failed" });
+    // A stale dismissal of a delivered notice cannot acknowledge the failure.
+    service.acknowledgeThreadRun(scope, threadId, manual.id, "triggered", 12_100);
+    expect(repository.getDefinition(scope, reminder.id).deletedAt).toBeNull();
+    service.acknowledgeThreadRun(scope, threadId, manual.id, "failed", 12_200);
+    expect(readThreadAutomationContexts(db, scope, threadId)).toEqual([]);
+    expect(repository.getRun(scope, reminder.id, scheduled.id).acknowledgedAt).toBeNull();
+    expect(repository.getDefinition(scope, reminder.id).deletedAt).toBe(12_200);
+  });
+
+  it("does not let an older turn that never settled block retirement", () => {
+    const reminder = create("Reminder");
+    // An early Run now whose completion was never observed.
+    const stale = deliverClaimed(claimManual(reminder.id, 2_000), 2_100);
+    expect(readThreadAutomationSummary(db, scope, threadId)).toMatchObject({ inFlightCount: 1 });
+    const scheduled = deliver(reminder.id);
+    expect(readThreadAutomationSummary(db, scope, threadId)).toMatchObject({ inFlightCount: 1 });
+    finishTurn(scheduled, "completed");
+    expect(readThreadAutomationSummary(db, scope, threadId)).toMatchObject({ inFlightCount: 0 });
+    expect(repository.getRun(scope, reminder.id, stale.id).turnOutcome).toBeNull();
+    service.acknowledgeThreadRun(scope, threadId, scheduled.id, "triggered", 12_000);
+    expect(repository.getDefinition(scope, reminder.id).deletedAt).toBe(12_000);
   });
 
   it("retains a dismissed successful one-shot while another invocation is unfinished", () => {

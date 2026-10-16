@@ -115,12 +115,15 @@ Use the preview command to validate the exact schedule. Recurring schedules must
 not run more often than every five minutes. The missed-run policy applies to
 downtime and suppression, not to ordinary delivery waiting behind a busy source.
 One-time reminders wait through snooze. Once their scheduled agent turn succeeds
-and the user dismisses its result notice, they leave the collection and their
+and no result notice remains to dismiss, they leave the collection and their
 item/history endpoints return not found. Conversations and internal provenance
 records remain. Dismissal before completion waits for success; failed,
 interrupted, and uncertain work remains available. `run-now` does not rearm a
-consumed schedule; scheduling another occurrence before removal requires a
-distinct future `runAt` and enabling the edited schedule.
+consumed schedule. A later run replaces the scheduled notice on a This thread
+reminder: after a successful `run-now` the reminder leaves once that turn
+succeeds, and after a failed one once the failure is acknowledged. Scheduling
+another occurrence before removal requires a distinct future `runAt` and
+enabling the edited schedule.
 
 ### Prechecks
 

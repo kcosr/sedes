@@ -46,6 +46,57 @@ export function runFailureSql(run: string): string {
   ))`;
 }
 
+/** Unresolved uncertainty or a failure, each of which has a notice until acknowledged. */
+export function runHasProblemSql(run: string): string {
+  return `((${run}.force_reset_at IS NULL AND ${run}.state = 'uncertain')
+    OR ${runFailureSql(run)})`;
+}
+
+/** Only a scheduled delivery whose turn has not failed reports that it triggered. */
+export function runTriggeredSql(run: string): string {
+  return `(${run}.state = 'completed' AND ${run}.occurrence_kind = 'scheduled'
+    AND ${run}.force_reset_at IS NULL
+    AND (${run}.turn_outcome IS NULL OR ${run}.turn_outcome = 'completed'))`;
+}
+
+/** The one run whose notice the anchor can show for a definition. */
+export function anchorNoticeRunIdSql(definition: string): string {
+  return `coalesce((SELECT unresolved.id FROM automation_runs AS unresolved
+    WHERE unresolved.tenant_id = ${definition}.tenant_id
+      AND unresolved.owner_principal_id = ${definition}.owner_principal_id
+      AND unresolved.automation_id = ${definition}.id
+      AND unresolved.state = 'uncertain'
+      AND unresolved.force_reset_at IS NULL
+    ORDER BY unresolved.created_at DESC, unresolved.id DESC LIMIT 1
+  ), ${latestDecisiveRunIdSql(definition)})`;
+}
+
+/** A notice on the anchor, which a later decisive run supersedes. */
+export function anchorNoticeSql(run: string): string {
+  return `(${runHasProblemSql(run)}
+    OR (${runTriggeredSql(run)} AND ${run}.child_thread_id IS NULL))`;
+}
+
+/** A Fork result thread keeps a notice for each of its runs. */
+export function resultThreadNoticeSql(run: string): string {
+  return `(${run}.child_thread_id IS NOT NULL
+    AND (${runTriggeredSql(run)} OR ${runHasProblemSql(run)}))`;
+}
+
+/** A definition still has a result notice the user can see and dismiss. */
+export function undismissedNoticeSql(definition: string): string {
+  return `EXISTS (
+    SELECT 1 FROM automation_runs AS notice
+    WHERE notice.tenant_id = ${definition}.tenant_id
+      AND notice.owner_principal_id = ${definition}.owner_principal_id
+      AND notice.automation_id = ${definition}.id
+      AND notice.acknowledged_at IS NULL
+      AND ((notice.id = ${anchorNoticeRunIdSql(definition)}
+          AND ${anchorNoticeSql("notice")})
+        OR ${resultThreadNoticeSql("notice")})
+  )`;
+}
+
 export function needsAttentionSql(definition: string): string {
   return `(EXISTS (
     SELECT 1 FROM automation_runs AS unresolved
