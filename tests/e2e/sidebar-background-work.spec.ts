@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { expect, test } from "./fixtures.js";
 import { capture, createDraftThread, expectNoPageOverflow, openSedesWorkspace, selectCustomNewThreadTarget } from "./helpers.js";
-import { taskMutationResultSchema } from "../../src/shared/index.js";
+import { normalizedApplicationSnapshotSchema, taskMutationResultSchema } from "../../src/shared/index.js";
 
 test("sidebar open-task filter shares menu and toolbar state across views and live task updates", async ({ page }, testInfo) => {
   await openSedesWorkspace(page);
@@ -164,4 +164,69 @@ test("sidebar prioritizes turns, unseen completion, subagents, and background co
   await advance("empty");
   await expect(glyph).toHaveAttribute("aria-hidden", "true");
   await expect(page.getByTestId("background-activity-status")).toHaveCount(0);
+});
+
+test("scheduled and snoozed cards show their deadline once on desktop and mobile", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openSedesWorkspace(page);
+  const scheduledId = (await createDraftThread(page, "Scheduled deadline once")).split("/").at(-1)!;
+  const snoozedId = (await createDraftThread(page, "Snoozed deadline once")).split("/").at(-1)!;
+  const session = await (await page.request.get("/api/application/session")).json();
+  const headers = { "X-CSRF-Token": session.csrfToken };
+  const scheduled = await page.request.post("/api/automations", {
+    headers,
+    data: {
+      threadId: scheduledId, name: "Future reminder", prompt: "Review the work",
+      runMode: "same_thread", initialState: "enabled",
+      schedule: { kind: "date_time", runAt: new Date(Date.now() + 7_200_000).toISOString() },
+      misfirePolicy: null, precheck: null, mutationId: randomUUID(),
+    },
+  });
+  expect(scheduled.status(), await scheduled.text()).toBe(201);
+  const snapshot = normalizedApplicationSnapshotSchema.parse(
+    await (await page.request.get("/api/application/snapshot")).json(),
+  );
+  const snoozedThread = snapshot.threads.find(({ id }) => id === snoozedId)!;
+  const snoozed = await page.request.patch(`/api/threads/${snoozedId}/inventory`, {
+    headers,
+    data: {
+      action: "snooze", expectedRevision: snoozedThread.inventoryRevision,
+      snoozedUntil: new Date(Date.now() + 10_800_000).toISOString(), mutationId: randomUUID(),
+    },
+  });
+  expect(snoozed.status(), await snoozed.text()).toBe(204);
+
+  const sidebar = page.getByTestId("desktop-sidebar");
+  await sidebar.getByTestId("view-options-trigger").click();
+  await page.getByRole("group", { name: "Group by", exact: true })
+    .getByRole("menuitemradio", { name: "State", exact: true }).click();
+  await sidebar.getByTestId("view-options-trigger").click();
+  await page.getByRole("group", { name: "Density", exact: true })
+    .getByRole("menuitemradio", { name: "Card", exact: true }).click();
+  await page.keyboard.press("Escape");
+  for (const group of ["scheduled", "snoozed"]) {
+    const trigger = sidebar.locator(`[data-group="${group}"] > .shelf-trigger`);
+    if (await trigger.getAttribute("aria-expanded") !== "true") await trigger.click();
+  }
+  for (const threadId of [scheduledId, snoozedId]) {
+    const row = sidebar.locator(`[data-thread-id="${threadId}"]`).first();
+    await expect(row).toBeVisible();
+    await expect(row.getByTestId("flat-row-time")).toBeVisible();
+    await expect(row.getByTestId("flat-row-time")).toHaveAttribute("data-future", "true");
+    await expect(row.getByTestId("flat-row-time")).not.toHaveText("");
+    await expect(row.getByTestId("flat-row-context")).toHaveCount(0);
+  }
+  await capture(page, testInfo, "sidebar-deadlines-once-desktop.png");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole("button", { name: "Open thread navigation" }).click();
+  const drawer = page.getByRole("dialog", { name: "Thread navigation" });
+  for (const threadId of [scheduledId, snoozedId]) {
+    const row = drawer.locator(`[data-thread-id="${threadId}"]`).first();
+    await expect(row).toBeVisible();
+    await expect(row.getByTestId("flat-row-time")).toBeVisible();
+    await expect(row.getByTestId("flat-row-time")).toHaveAttribute("data-future", "true");
+    await expect(row.getByTestId("flat-row-context")).toHaveCount(0);
+  }
+  await expectNoPageOverflow(page);
+  await capture(page, testInfo, "sidebar-deadlines-once-mobile.png");
 });

@@ -813,6 +813,80 @@ describe("thread pin presentation", () => {
 });
 
 describe("card context slot priority", () => {
+  it.each(["scheduled", "snoozed", "snoozed automation"] as const)(
+    "shows the %s deadline only in the trailing slot in a future group",
+    (kind) => {
+      const at = iso(45 * 60_000);
+      render(<FlatThreadRow
+        showBackendBrand
+        density="card"
+        futureTimes
+        thread={makeThread({
+          ...(kind !== "scheduled" ? { inventoryState: "snoozed", snoozedUntil: at } : {}),
+          ...(kind !== "snoozed" ? { automations: makeAutomation({ nextRunAt: at }) } : {}),
+        })}
+      />);
+      expect(screen.getByTestId("flat-row-time")).toHaveTextContent("in 45m");
+      expect(screen.getByTestId("flat-row-time")).toHaveAttribute("data-future", "true");
+      expect(screen.queryByTestId("flat-row-context")).toBeNull();
+    },
+  );
+
+  it("compares instants rather than timestamp spelling when hiding a repeated deadline", () => {
+    const at = "2028-01-20T07:00:00Z";
+    const sameInstant = "2028-01-20T09:00:00+02:00";
+    render(<FlatThreadRow
+      showBackendBrand density="card" futureTimes
+      thread={makeThread({
+        inventoryState: "snoozed", snoozedUntil: at,
+        automations: makeAutomation({ nextRunAt: sameInstant }),
+      })}
+    />);
+    expect(screen.queryByTestId("flat-row-context")).toBeNull();
+  });
+
+  it("keeps a distinct automation deadline beneath a snooze wake time", () => {
+    render(<FlatThreadRow
+      showBackendBrand density="card" futureTimes
+      thread={makeThread({
+        inventoryState: "snoozed", snoozedUntil: iso(30 * 60_000),
+        automations: makeAutomation({ nextRunAt: iso(45 * 60_000) }),
+      })}
+    />);
+    expect(screen.getByTestId("flat-row-time")).toHaveTextContent("in 30m");
+    expect(screen.getByTestId("flat-row-context")).toHaveTextContent("next in 45m");
+  });
+
+  it("keeps the next run beneath an activity timestamp outside future groups", () => {
+    render(<FlatThreadRow
+      showBackendBrand density="card"
+      thread={makeThread({ automations: makeAutomation({ nextRunAt: iso(45 * 60_000) }) })}
+    />);
+    expect(screen.getByTestId("flat-row-time")).toHaveTextContent("2h");
+    expect(screen.getByTestId("flat-row-context")).toHaveTextContent("next in 45m");
+  });
+
+  it.each([
+    { automations: makeAutomation({ enabledCount: 0, pausedCount: 1 }), label: "1 paused" },
+    { attention: attention({ automationContext: "failed" }), label: "run failed" },
+  ])("keeps $label context even when the deadline is already shown", ({ label, ...state }) => {
+    render(<FlatThreadRow
+      showBackendBrand density="card" futureTimes
+      thread={makeThread({ snoozedUntil: iso(45 * 60_000), ...state })}
+    />);
+    expect(screen.getByTestId("flat-row-context")).toHaveTextContent(label);
+  });
+
+  it("keeps the deadline context while a keyboard shortcut replaces the trailing time", () => {
+    render(<FlatThreadRow
+      showBackendBrand density="card" futureTimes
+      quickSwitchHint={{ ariaKey: "1", confirmation: false, label: "1" }}
+      thread={makeThread({ automations: makeAutomation({ nextRunAt: iso(45 * 60_000) }) })}
+    />);
+    expect(screen.getByTestId("flat-row-time")).toHaveTextContent("1");
+    expect(screen.getByTestId("flat-row-context")).toHaveTextContent("next in 45m");
+  });
+
   it("automation attention beats paused, schedule, and wake", () => {
     render(
       <FlatThreadRow

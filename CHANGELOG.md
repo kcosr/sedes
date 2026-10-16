@@ -103,6 +103,10 @@ User-facing changes are collected here before release. See the
 
 ### Fixed
 
+- Sidebar cards no longer repeat the same scheduled run or snooze wake time on
+  both lines. Distinct deadlines and status context remain visible.
+  ([#89](https://github.com/kcosr/sedes/pull/89))
+
 - Codex advisory metadata no longer forces conversation history reloads.
   Completion replay and already-active inventory wakes avoid unchanged
   publications, and thread-summary reads reuse prepared SQL statements.
