@@ -14,7 +14,7 @@ const STABLE_SEMANTIC_VERSION_PATTERN =
   /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u;
 
 export const CODEX_RUNTIME_MINIMUM_SUPPORTED_RELEASE = "0.162.1";
-export const CODEX_RUNTIME_TESTED_THROUGH_RELEASE = "0.162.1";
+export const CODEX_RUNTIME_TESTED_THROUGH_RELEASE = "0.163.0";
 
 // Add exact stable releases here when a provider regression makes an otherwise
 // compatible runtime unsafe. Build metadata does not distinguish exclusions.

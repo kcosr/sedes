@@ -355,7 +355,7 @@ it("keeps another runtime and acknowledgements responsive while preserving same-
 });
 
 function metadata(threadId: string): OfficialCodexClientRequestResult<"thread/read"> {
-  return { thread: {
+  return { readState: null, thread: {
     environments: null, originator: null, daybreakEnabled: null,
     id: threadId, extra: {}, sessionId: "session", forkedFromId: null, parentThreadId: null,
     preview: "A thread", ephemeral: false, section: null, sectionEnteredAt: null,
@@ -693,7 +693,7 @@ it("recovers administration after proxy close without ensuring a provider, and d
     stop,
   });
   const runtimeConfiguration = {
-    instance: { id: scope.backendInstanceId, tenantId: scope.tenantId, kind: "codex_app_server" as const, label: "Codex", enabled: false, configurationRevision: 0, protocolRelease: "0.162.1" as const },
+    instance: { id: scope.backendInstanceId, tenantId: scope.tenantId, kind: "codex_app_server" as const, label: "Codex", enabled: false, configurationRevision: 0, protocolRelease: "0.163.0" as const },
     connections: [{ id: "connection", tenantId: scope.tenantId, ownerPrincipalId: scope.principalId, templateId: "template", kind: "codex_app_server" as const, backendInstanceId: scope.backendInstanceId, executionEnvironmentId: scope.executionEnvironmentId, label: "Codex", enabled: false, configurationRevision: 0 }],
     connection: { ownership: "external" as const, channel: { type: "unix_websocket" as const, socketPath: "/provider/codex.sock" } },
   };

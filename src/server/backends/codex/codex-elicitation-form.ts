@@ -5,7 +5,7 @@ import {
   type FormField,
   type FormAnswer,
 } from "../../../shared/protocol/interactions.js";
-import type { McpElicitationSchema } from "../../provider-protocol/bindings/codex-app-server/generated/0.162.1/experimental/v2/McpElicitationSchema.js";
+import type { McpElicitationSchema } from "../../provider-protocol/bindings/codex-app-server/generated/0.163.0/experimental/v2/McpElicitationSchema.js";
 
 /** Maps the pinned native form contract; native names and enum values stay here. */
 export function normalizeCodexElicitationForm(schema: McpElicitationSchema): {

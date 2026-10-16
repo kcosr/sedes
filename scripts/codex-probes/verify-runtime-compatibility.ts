@@ -48,6 +48,7 @@ import {
 type CandidateMetadata = {
   release: string;
   protocolRelease: string;
+  readStateMetadata: boolean;
   platforms: {
     nodePlatform: string;
     nodeArch: string;
@@ -118,13 +119,26 @@ const checkedMethods = new Set<string>();
 // initialize capability for a second connection; framing and cleanup stay shared.
 class QualificationClient extends RawCodexAppServerClient {
   experimental: boolean;
+  readonly observedNotifications: string[];
   constructor(experimental: boolean) {
+    const observedNotifications: string[] = [];
     super({
       codexBinary: candidate,
       cwd: workspace,
       environment: probeEnvironment(codexHome),
+      notificationObserver: (notification: { method: string; params: unknown }) => {
+        observedNotifications.push(notification.method);
+        if (notification.method === "thread/readState/changed") {
+          assert(metadata.readStateMetadata);
+          decodeCodexServerNotificationParams(
+            notification.method,
+            notification.params,
+          );
+        }
+      },
     });
     this.experimental = experimental;
+    this.observedNotifications = observedNotifications;
   }
   async request(method: string, params: any, timeoutMs?: number) {
     if (method === "initialize")
@@ -140,9 +154,22 @@ async function call<Params, Result>(
   codec: CodexRpcMethod<Params, Result>,
   params: Params,
 ): Promise<Result> {
-  const result = codec.decodeResult(
-    await client.request(codec.method, codec.encodeParams(params)),
+  const wireResult = await client.request(
+    codec.method,
+    codec.encodeParams(params),
   );
+  // Receipt metadata is optional in the generated protocol. Prove that one
+  // parser accepts the older executable's omission and the newer executable's
+  // serialized metadata, without selecting another production contract.
+  for (const [method, field] of [
+    ["thread/list", "readStates"],
+    ["thread/read", "readState"],
+  ] as const) {
+    if (codec.method === method) {
+      assert.equal(Object.hasOwn(wireResult, field), metadata.readStateMetadata);
+    }
+  }
+  const result = codec.decodeResult(wireResult);
   checkedMethods.add(codec.method);
   return result;
 }
@@ -315,6 +342,15 @@ try {
   assert.equal(completed.params.threadId, threadId);
   assert.equal(completed.params.turn.id, turn.turn.id);
   assert.equal(completed.params.turn.status, "completed");
+  const receiptIndex = client.observedNotifications.indexOf(
+    "thread/readState/changed",
+  );
+  if (metadata.readStateMetadata) {
+    assert(receiptIndex >= 0, "Native read-state notification must be observed.");
+    assert(receiptIndex < client.observedNotifications.indexOf("turn/completed"));
+  } else {
+    assert.equal(receiptIndex, -1);
+  }
   assert.equal(fixture.requestCount, 1);
   await client.close();
   const resumedClient = new QualificationClient(true);
@@ -382,7 +418,12 @@ try {
         reviewedOfficialArtifactInventories: inventories,
         schemaDeltaVerified: true,
         experimentalGateRejected: true,
+        readStateMetadataPresent: metadata.readStateMetadata,
+        readStateNotificationBeforeCompletion: metadata.readStateMetadata
+          ? true
+          : null,
         notificationsValidated: [
+          ...(metadata.readStateMetadata ? ["thread/readState/changed"] : []),
           "thread/started",
           "thread/settings/updated",
           "turn/started",

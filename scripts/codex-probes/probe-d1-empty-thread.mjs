@@ -25,7 +25,7 @@ const releaseRoot = path.join(
   repositoryRoot,
   "protocol",
   "codex-app-server",
-  "0.162.1",
+  "0.163.0",
 );
 const evidenceFilename = path.join(
   releaseRoot,

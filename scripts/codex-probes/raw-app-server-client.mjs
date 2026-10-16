@@ -17,6 +17,7 @@ export class RawCodexAppServerClient {
   #pending = new Map();
   #stderr = "";
   #serverRequestHandler;
+  #notificationObserver;
   #withheldResponseMethods;
 
   constructor(input) {
@@ -24,6 +25,7 @@ export class RawCodexAppServerClient {
     this.cwd = input.cwd;
     this.environment = input.environment;
     this.#serverRequestHandler = input.serverRequestHandler;
+    this.#notificationObserver = input.notificationObserver;
     this.#withheldResponseMethods = new Set(
       input.faultInjection?.withholdResponseMethods ?? [],
     );
@@ -308,6 +310,13 @@ export class RawCodexAppServerClient {
       !hasResult &&
       !hasError
     ) {
+      try {
+        this.#notificationObserver?.(message);
+      } catch (error) {
+        this.#fail(error);
+        this.#child?.kill("SIGTERM");
+        return;
+      }
       const waiterIndex = this.#notificationWaiters.findIndex(
         (waiter) => waiter.method === message.method,
       );

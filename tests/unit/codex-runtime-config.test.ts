@@ -134,7 +134,7 @@ describe("Codex runtime configuration", () => {
     const release = JSON.parse(
       await readFile(
         new URL(
-          "../../protocol/codex-app-server/0.162.1/release.json",
+          "../../protocol/codex-app-server/0.163.0/release.json",
           import.meta.url,
         ),
         "utf8",

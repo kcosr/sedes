@@ -66,6 +66,7 @@ export const serverNotifications = [
   ["model/verification", "ModelVerificationNotification", "live_turns", "ignored_informational", ["route_identity"]],
   ["model/safetyBuffering/updated", "ModelSafetyBufferingUpdatedNotification", "live_turns", "ignored_informational", ["route_identity"]],
   ["thread/settings/updated", "ThreadSettingsUpdatedNotification", "live_turns", "decoded", undefined, "experimental"],
+  ["thread/readState/changed", "ThreadReadStateChangedNotification", "live_turns", "ignored_informational", ["route_identity"], "experimental"],
   ["thread/tokenUsage/updated", "ThreadTokenUsageUpdatedNotification"],
   ["thread/compacted", "ContextCompactedNotification"],
   ["turn/started", "TurnStartedNotification"],

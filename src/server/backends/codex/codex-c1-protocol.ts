@@ -26,6 +26,10 @@ type OfficialThreadListParams = OfficialCodexClientRequestParams<"thread/list">;
 type OfficialThreadListResponse = OfficialCodexClientRequestResult<"thread/list">;
 type OfficialThreadReadParams = OfficialCodexClientRequestParams<"thread/read">;
 type OfficialThreadReadResponse = OfficialCodexClientRequestResult<"thread/read">;
+type OfficialThreadReadState = NonNullable<OfficialThreadReadResponse["readState"]>;
+const threadReadStateKeys = Object.keys({
+  firstUnread: true, revision: true,
+} satisfies Record<keyof OfficialThreadReadState, true>);
 type OfficialThreadResumeParams = OfficialCodexClientRequestParams<"thread/resume">;
 type OfficialThreadResumeResponse = OfficialCodexClientRequestResult<"thread/resume">;
 type OfficialThreadTurnsListParams = OfficialCodexClientRequestParams<"thread/turns/list">;
@@ -55,11 +59,11 @@ export type CodexThreadStatus = OfficialThreadStatus;
 export type CodexTurn = OfficialTurn;
 export type CodexThreadItem = OfficialThreadItem;
 export type CodexThreadListParams = OfficialThreadListParams;
-export type CodexThreadListResponse = Omit<OfficialThreadListResponse, "data"> & {
+export type CodexThreadListResponse = Omit<OfficialThreadListResponse, "data" | "readStates"> & {
   readonly data: readonly CodexThread[];
 };
 export type CodexThreadReadParams = OfficialThreadReadParams;
-export type CodexThreadReadResponse = Omit<OfficialThreadReadResponse, "thread"> & {
+export type CodexThreadReadResponse = Omit<OfficialThreadReadResponse, "thread" | "readState"> & {
   readonly thread: CodexThread;
 };
 export type CodexThreadResumeParams = OfficialThreadResumeParams;
@@ -770,14 +774,41 @@ function refineThreadUnsubscribeParams(value: OfficialThreadUnsubscribeParams): 
   return value;
 }
 
+/** Read receipts remain provider-owned metadata and never become transcript evidence. */
+export function refineCodexThreadReadState(value: OfficialThreadReadState): void {
+  assertExactKeys(value, threadReadStateKeys, "thread_read_state");
+  assertNativeId(value.revision, "thread_read_state_revision");
+  if (value.firstUnread != null) {
+    assertExactKeys(value.firstUnread,
+      value.firstUnread.type === "threadStart" ? ["type"] : ["type", "turnId"],
+      "thread_unread_position");
+    if (value.firstUnread.type === "turn") assertNativeId(value.firstUnread.turnId, "thread_unread_turn_id");
+  }
+}
+
 function projectThreadListResponse(value: OfficialThreadListResponse): CodexThreadListResponse {
-  assertExactKeys(value, ["data", "nextCursor", "backwardsCursor"], "thread_list_response");
+  assertExactKeys(value, ["data", "nextCursor", "backwardsCursor", "readStates"], "thread_list_response");
   if (value.data.length > CODEX_C1_MAX_LIST_THREADS) throw new Error("thread_list_count_exceeded");
+  // The official JSON schema permits omission although generated TS spells
+  // these fields as required nullable properties. This includes the minimum
+  // runtime's wire shape. Receipts never become Sedes attention evidence.
+  if (value.readStates != null) {
+    const receipts = Object.entries(value.readStates);
+    if (receipts.length > CODEX_C1_MAX_LIST_THREADS) throw new Error("thread_read_state_count_exceeded");
+    for (const [threadId, readState] of receipts) {
+      assertNativeId(threadId, "thread_read_state_thread_id");
+      if (readState === undefined) throw new Error("thread_read_state_invalid");
+      refineCodexThreadReadState(readState);
+    }
+  }
   return { data: value.data.map(projectCodexThread), nextCursor: value.nextCursor, backwardsCursor: value.backwardsCursor };
 }
 
-function projectThreadReadResponse(value: OfficialThreadReadResponse): CodexThreadReadResponse {
-  assertExactKeys(value, ["thread"], "thread_read_response");
+function projectThreadReadResponse(
+  value: Omit<OfficialThreadReadResponse, "readState"> & Partial<Pick<OfficialThreadReadResponse, "readState">>,
+): CodexThreadReadResponse {
+  assertExactKeys(value, ["thread", "readState"], "thread_read_response");
+  if (value.readState != null) refineCodexThreadReadState(value.readState);
   return { thread: projectCodexThread(value.thread) };
 }
 

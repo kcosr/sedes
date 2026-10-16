@@ -30,7 +30,7 @@ const adoptionManifest = JSON.parse(
   readFileSync(
     path.join(
       repositoryRoot,
-      "protocol/codex-app-server/0.162.1/adoption-manifest.json",
+      "protocol/codex-app-server/0.163.0/adoption-manifest.json",
     ),
     "utf8",
   ),
@@ -49,7 +49,7 @@ const stableProtocolManifest = JSON.parse(
   readFileSync(
     path.join(
       repositoryRoot,
-      "protocol/codex-app-server/0.162.1/protocol-manifest.json",
+      "protocol/codex-app-server/0.163.0/protocol-manifest.json",
     ),
     "utf8",
   ),
@@ -58,7 +58,7 @@ const experimentalProtocolManifest = JSON.parse(
   readFileSync(
     path.join(
       repositoryRoot,
-      "protocol/codex-app-server/0.162.1/protocol-manifest-experimental.json",
+      "protocol/codex-app-server/0.163.0/protocol-manifest-experimental.json",
     ),
     "utf8",
   ),
@@ -90,7 +90,7 @@ const officialServerNotificationDefinitions = new Map(
   [...readFileSync(
     path.join(
       repositoryRoot,
-      "protocol/codex-app-server/0.162.1/official/stable/typescript/ServerNotification.ts",
+      "protocol/codex-app-server/0.163.0/official/stable/typescript/ServerNotification.ts",
     ),
     "utf8",
   ).matchAll(/\{ "method": "([^"]+)", "params": ([A-Za-z0-9_]+) \}/gu)].map(
@@ -103,7 +103,7 @@ function readSchema(profile: "generated" | "generated-experimental") {
     readFileSync(
       path.join(
         repositoryRoot,
-        `protocol/codex-app-server/0.162.1/${profile}/json-schema/codex_app_server_protocol.v2.schemas.json`,
+        `protocol/codex-app-server/0.163.0/${profile}/json-schema/codex_app_server_protocol.v2.schemas.json`,
       ),
       "utf8",
     ),
@@ -222,12 +222,12 @@ describe("Codex D3 production app-server binding", () => {
   });
 
   it("keeps the manifest and generated production registries exactly aligned", () => {
-    expect(CODEX_APP_SERVER_RELEASE).toBe("0.162.1");
-    expect(adoptionManifest.productionRelease).toBe("0.162.1");
+    expect(CODEX_APP_SERVER_RELEASE).toBe("0.163.0");
+    expect(adoptionManifest.productionRelease).toBe("0.163.0");
     expect(adoptionManifest.productionRuntimeCompatibility.currentPolicy).toBe(
-      "stable releases admitted by the runtime policy using exactly the 0.162.1 parser profile",
+      "stable releases admitted by the runtime policy using exactly the 0.163.0 parser profile",
     );
-    expect(adoptionManifest.routes).toHaveLength(74);
+    expect(adoptionManifest.routes).toHaveLength(75);
 
     const byDirection = adoptionManifest.routes.reduce<
       Record<string, typeof adoptionManifest.routes>
@@ -238,7 +238,7 @@ describe("Codex D3 production app-server binding", () => {
     expect(byDirection.client_request).toHaveLength(26);
     expect(byDirection.client_notification).toHaveLength(1);
     expect(byDirection.server_request).toHaveLength(10);
-    expect(byDirection.server_notification).toHaveLength(37);
+    expect(byDirection.server_notification).toHaveLength(38);
 
     expect(
       byDirection.client_request!
@@ -264,7 +264,7 @@ describe("Codex D3 production app-server binding", () => {
     expect([...CODEX_SERVER_NOTIFICATION_METHODS].sort()).toEqual(
       [...stableProtocolManifest.methods.serverNotifications].sort(),
     );
-    expect(CODEX_SERVER_NOTIFICATION_METHODS).toHaveLength(86);
+    expect(CODEX_SERVER_NOTIFICATION_METHODS).toHaveLength(87);
 
     // Method stability and schema profile are independent: unarchive remains
     // stable while decoding the adopted experimental Thread response.
@@ -283,14 +283,14 @@ describe("Codex D3 production app-server binding", () => {
     }
   });
 
-  it("separates method stability from the eleven selected experimental artifacts", () => {
+  it("separates method stability from the twelve selected experimental artifacts", () => {
     expect(CODEX_EXPERIMENTAL_CLIENT_REQUEST_METHODS).toEqual([
       "thread/settings/update",
     ]);
     const experimentalArtifacts = adoptionManifest.routes.filter(
       (route) => route.artifactProfile === "experimental",
     );
-    expect(experimentalArtifacts).toHaveLength(11);
+    expect(experimentalArtifacts).toHaveLength(12);
     expect(
       experimentalArtifacts
         .map((route) => `${route.direction}:${route.method}`)
@@ -303,6 +303,7 @@ describe("Codex D3 production app-server binding", () => {
       "client_request:thread/settings/update",
       "client_request:thread/start",
       "client_request:thread/unarchive",
+      "server_notification:thread/readState/changed",
       "server_notification:thread/settings/updated",
       "server_notification:thread/started",
       "server_request:item/commandExecution/requestApproval",
@@ -313,6 +314,9 @@ describe("Codex D3 production app-server binding", () => {
         .filter((route) => route.stability === "experimental")
         .map((route) => route.method),
     ).toEqual(["thread/settings/update"]);
+    expect(stableProtocolManifest.methods.serverNotifications).toContain(
+      "thread/readState/changed",
+    );
     for (const method of ["thread/turns/list", "thread/items/list"]) {
       expect(stableProtocolManifest.methods.clientRequests).toContain(method);
       expect(experimentalProtocolManifest.methods.clientRequests).toContain(
@@ -327,8 +331,22 @@ describe("Codex D3 production app-server binding", () => {
     }
   });
 
+  it("keeps receipt metadata optional in the exact official result schemas", () => {
+    // The official TypeScript export spells these nullable fields as required,
+    // while its JSON Schema permits omission. Keep that actual wire authority:
+    // the same parser must admit existing 0.162.1 runtimes without receipts.
+    for (const [definition, property] of [
+      ["ThreadListResponse", "readStates"],
+      ["ThreadReadResponse", "readState"],
+    ] as const) {
+      const schema = experimentalV2Schema.definitions[definition]!;
+      expect(schema.properties).toHaveProperty(property);
+      expect(schema.required).not.toContain(property);
+    }
+  });
+
   it("admits an official-valid fixture through every exact notification route", () => {
-    expect(officialServerNotificationDefinitions.size).toBe(86);
+    expect(officialServerNotificationDefinitions.size).toBe(87);
     const artifactProfileByMethod = new Map(
       adoptionManifest.routes
         .filter((route) => route.direction === "server_notification")
@@ -386,7 +404,7 @@ describe("Codex D3 production app-server binding", () => {
       }),
     );
 
-    expect(Object.keys(derivedRoutes)).toHaveLength(65);
+    expect(Object.keys(derivedRoutes)).toHaveLength(66);
     expect(CODEX_NOTIFICATION_THREAD_ROUTE_REGISTRY).toEqual(derivedRoutes);
   });
 

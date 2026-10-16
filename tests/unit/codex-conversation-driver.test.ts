@@ -120,7 +120,7 @@ import {
 } from "../../src/server/provider-protocol/bindings/codex-app-server/codex-app-server-binding.js";
 import { createInMemoryOutputArtifactPublisher } from "../helpers/output-artifact-publisher.js";
 import * as codexBindingModule from "../../src/server/provider-protocol/bindings/codex-app-server/codex-app-server-binding.js";
-import { codexServerNotificationRegistry } from "../../src/server/provider-protocol/bindings/codex-app-server/generated/0.162.1/route-registry.js";
+import { codexServerNotificationRegistry } from "../../src/server/provider-protocol/bindings/codex-app-server/generated/0.163.0/route-registry.js";
 
 const scope = { tenantId: "tenant-1", principalId: "principal-1" };
 const instance: AgentBackendInstance = {
@@ -130,7 +130,7 @@ const instance: AgentBackendInstance = {
   label: "Codex",
   enabled: true,
   configurationRevision: 1,
-  protocolRelease: "0.162.1",
+  protocolRelease: "0.163.0",
 };
 const toolProvenanceKey = new Uint8Array(32).fill(0x43);
 const agentToolSourceCapability =
@@ -717,6 +717,7 @@ class RpcHarness {
       | "model/verification"
       | "model/safetyBuffering/updated"
       | "thread/prediction/updated"
+      | "thread/readState/changed"
       | "model/rerouted"
       | "thread/compacted"
       | "thread/goal/cleared"
@@ -9109,6 +9110,7 @@ describe("CodexConversationHandle", () => {
       turnId: "turn-1", model: "gpt-5.6", useCases: ["coding"], reasons: ["buffering"], showBufferingUi: true, fasterModel: null,
     } },
     { method: "thread/prediction/updated", metadata: { sourceTurnId: "turn-1", result: { type: "completed", text: "Predicted next input" } } },
+    { method: "thread/readState/changed", metadata: { readState: { firstUnread: { type: "turn", turnId: "turn-2" }, revision: "receipt-1" } } },
   ] as const;
 
   it("covers every generated informational disposition with an advisory behavior regression", () => {
@@ -9151,6 +9153,9 @@ describe("CodexConversationHandle", () => {
     harness.notify("item/completed", {
       threadId: "thread-1", turnId: active.id, item: { ...assistant, text: "Still streaming" }, completedAtMs: 1_700_000_004_000,
     });
+    // Codex publishes read receipts before turn/completed; they must not delay
+    // completion, imply a terminal turn or invalidate canonical history.
+    harness.notify(method, { threadId: "thread-1", ...metadata });
     harness.notify("turn/completed", { threadId: "thread-1", turn: {
       ...active, status: "completed", completedAt: 1_700_000_004, itemsView: "summary",
     } });
@@ -9181,7 +9186,7 @@ describe("CodexConversationHandle", () => {
     await handle.close();
   });
 
-  it("does not queue moderation metadata behind an asynchronous paginated completion", async () => {
+  it.each(conversationAdvisoryFixtures)("does not queue $method behind an asynchronous paginated completion", async ({ method, metadata }) => {
     const harness = new RpcHarness();
     const handle = await attachIdle(harness);
     harness.enqueue("thread/read", { thread: paginatedThread() });
@@ -9194,9 +9199,10 @@ describe("CodexConversationHandle", () => {
       data: [notLoadedTurn(1)], nextCursor: null, backwardsCursor: "completion-head",
     });
     harness.enqueue("thread/items/list", paginatedItems(1));
+    harness.notify(method, { threadId: "thread-1", ...metadata });
     harness.notify("turn/completed", { threadId: "thread-1", turn: { ...nativeTurn(1), items: [], itemsView: "summary" } });
     for (let index = 0; index < 1_100; index += 1) {
-      harness.notify("turn/moderationMetadata", { threadId: "thread-1", turnId: "turn-1", metadata: { index } });
+      harness.notify(method, { threadId: "thread-1", ...metadata });
     }
     await vi.waitFor(() => expect(events).toContainEqual({ type: "run_state_changed", state: "idle" }));
     expect(events.filter(({ type }) => type === "resnapshot_required" || type === "turn_completed")).toEqual([]);
@@ -9213,6 +9219,8 @@ describe("CodexConversationHandle", () => {
     { method: "model/verification", label: "unknown verification", params: { threadId: "thread-1", turnId: "turn-1", verifications: ["unknown"] }, attest: true },
     { method: "model/safetyBuffering/updated", label: "missing buffering state", params: { threadId: "thread-1", turnId: "turn-1" }, attest: true },
     { method: "thread/prediction/updated", label: "invalid source turn identity", params: { threadId: "thread-1", sourceTurnId: "", result: { type: "failed" } }, attest: true },
+    { method: "thread/readState/changed", label: "invalid unread turn identity", params: { threadId: "thread-1", readState: { firstUnread: { type: "turn", turnId: "" }, revision: "receipt-1" } }, attest: true },
+    { method: "thread/readState/changed", label: "unexpected receipt field", params: { threadId: "thread-1", readState: { firstUnread: null, revision: "receipt-1", unexpected: true } }, attest: true },
   ] as const)("requires recovery for $method with $label", async ({ method, params, attest }) => {
     const harness = new RpcHarness();
     const handle = await attachIdle(harness);
