@@ -61,7 +61,7 @@ describe("Codex runtime version policy", () => {
 
   it("publishes independent runtime floor and tested-through thresholds", () => {
     expect(CODEX_RUNTIME_MINIMUM_SUPPORTED_RELEASE).toBe("0.162.1");
-    expect(CODEX_RUNTIME_TESTED_THROUGH_RELEASE).toBe("0.162.1");
+    expect(CODEX_RUNTIME_TESTED_THROUGH_RELEASE).toBe("0.163.0");
   });
 
   it("accepts the exact generated runtime version", async () => {
@@ -76,40 +76,25 @@ describe("Codex runtime version policy", () => {
     });
   });
 
-  it("accepts later stable runtimes and assesses tested evidence by precedence", () => {
-    expect(verifyCodexRuntimeVersion("0.162.1")).toEqual({
-      version: "0.162.1",
-      newerThanTested: false,
-    });
-    expect(verifyCodexRuntimeVersion("0.162.1+vendor.7")).toEqual({
-      version: "0.162.1+vendor.7",
-      newerThanTested: false,
-    });
+  it("retains the minimum and assesses tested evidence by precedence", () => {
     for (const version of [
       "0.162.1",
       "0.162.1+vendor.7",
+      "0.162.2",
+      "0.163.0",
+      "0.163.0+vendor.7",
     ]) {
       expect(verifyCodexRuntimeVersion(version)).toEqual({
         version,
         newerThanTested: false,
       });
     }
-    expect(verifyCodexRuntimeVersion("0.162.2")).toEqual({
-      version: "0.162.2",
-      newerThanTested: true,
-    });
-    expect(verifyCodexRuntimeVersion("0.163.0")).toEqual({
-      version: "0.163.0",
-      newerThanTested: true,
-    });
-    expect(verifyCodexRuntimeVersion("0.999.999+build.1")).toEqual({
-      version: "0.999.999+build.1",
-      newerThanTested: true,
-    });
-    expect(verifyCodexRuntimeVersion("1.0.0")).toEqual({
-      version: "1.0.0",
-      newerThanTested: true,
-    });
+    for (const version of ["0.163.1", "0.164.0", "0.999.999+build.1", "1.0.0"]) {
+      expect(verifyCodexRuntimeVersion(version)).toEqual({
+        version,
+        newerThanTested: true,
+      });
+    }
   });
 
   it("compares semantic precedence without treating build metadata as identity", () => {

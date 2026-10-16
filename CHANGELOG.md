@@ -105,6 +105,12 @@ User-facing changes are collected here before release. See the
 
 ### Fixed
 
+- Codex 0.163.0 no longer disconnects discovery, history reads, or turn
+  completion when native read-state metadata arrives. The generated protocol
+  is refreshed while retaining Codex 0.162.1 as the runtime minimum; native
+  read/unread controls remain unsupported. See
+  [Codex compatibility](docs/operator/backends/codex.md#version-compatibility).
+
 - Codex threads keep model, reasoning, Speed, and permissions editable between
   runs while automations remain enabled. Same-thread automation uses current
   thread settings; active-work and recovery safeguards remain in place. See

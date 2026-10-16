@@ -804,7 +804,7 @@ function decodeThreadItem(item: unknown): CodexThreadItem {
   }).item;
 }
 
-describe("Codex 0.162.1 C1 protocol codecs", () => {
+describe("Codex 0.163.0 C1 protocol codecs", () => {
   it.each([
     { type: "image", fileId: "file-private-image", detail: "high" },
     { type: "image", url: "https://private.invalid/image.png", detail: "high" },
@@ -880,6 +880,54 @@ describe("Codex 0.162.1 C1 protocol codecs", () => {
   );
 
   it.each([
+    undefined,
+    null,
+    { firstUnread: null, revision: "receipt-1" },
+    { firstUnread: { type: "threadStart" }, revision: "receipt-2" },
+    { firstUnread: { type: "turn", turnId: "turn-1" }, revision: "receipt-3" },
+  ])("validates and discards optional native read receipts on reads and listings: %j", (readState) => {
+    const native = thread([]);
+    const receipt = readState === undefined ? {} : { readState };
+    const receipts = readState === undefined ? {} : { readStates: readState === null ? null : { [baseThread.id]: readState } };
+    // Omission remains the minimum 0.162.1 runtime's wire shape.
+    expect(codexThreadReadMethod.decodeResult({ thread: native, ...receipt })).toEqual({ thread: native });
+    expect(codexThreadListMethod.decodeResult({
+      data: [native], nextCursor: null, backwardsCursor: null, ...receipts,
+    })).toEqual({ data: [native], nextCursor: null, backwardsCursor: null });
+  });
+
+  it.each([
+    { firstUnread: null, revision: 1 },
+    { firstUnread: null, revision: "" },
+    { firstUnread: null, revision: "x".repeat(513) },
+    { firstUnread: null, revision: "receipt-1", unreviewed: true },
+    { firstUnread: { type: "future" }, revision: "receipt-1" },
+    { firstUnread: { type: "threadStart", turnId: "turn-1" }, revision: "receipt-1" },
+    { firstUnread: { type: "turn", turnId: "" }, revision: "receipt-1" },
+    { firstUnread: { type: "turn", turnId: "x".repeat(513) }, revision: "receipt-1" },
+    { firstUnread: { type: "turn", turnId: "turn-1", unreviewed: true }, revision: "receipt-1" },
+  ])("rejects malformed or unreviewed native read receipts: %j", (readState) => {
+    const native = thread([]);
+    expect(() => codexThreadReadMethod.decodeResult({ thread: native, readState })).toThrow();
+    expect(() => codexThreadListMethod.decodeResult({
+      data: [native], nextCursor: null, backwardsCursor: null, readStates: { [baseThread.id]: readState },
+    })).toThrow();
+  });
+
+  it("bounds native receipt maps and identifiers even though receipts are discarded", () => {
+    const readState = { firstUnread: null, revision: "receipt-1" };
+    for (const readStates of [
+      { "": readState },
+      { ["x".repeat(513)]: readState },
+      Object.fromEntries(Array.from({ length: 501 }, (_, index) => [`thread-${index}`, readState])),
+    ]) {
+      expect(() => codexThreadListMethod.decodeResult({
+        data: [], nextCursor: null, backwardsCursor: null, readStates,
+      })).toThrow();
+    }
+  });
+
+  it.each([
     { id: "section-1", name: "Work" },
     { id: "section-1", name: "Work", appearance: { icon: 123, color: null } },
     { id: "section-1", name: "Work", appearance: { icon: null, color: 123 } },
@@ -906,7 +954,7 @@ describe("Codex 0.162.1 C1 protocol codecs", () => {
     const generated = readFileSync(
       path.join(
         repositoryRoot,
-        "protocol/codex-app-server/0.162.1/official/stable/typescript/v2/ThreadItem.ts",
+        "protocol/codex-app-server/0.163.0/official/stable/typescript/v2/ThreadItem.ts",
       ),
       "utf8",
     );
@@ -1789,7 +1837,7 @@ describe("Codex 0.162.1 C1 protocol codecs", () => {
   });
 });
 
-describe("Codex 0.162.1 C1 history projector", () => {
+describe("Codex 0.163.0 C1 history projector", () => {
   it.each([
     "userMessage", "hookPrompt", "collabAgentToolCall", "subAgentActivity",
     "webSearch", "imageView", "sleep", "enteredReviewMode", "exitedReviewMode",

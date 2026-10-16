@@ -15,7 +15,7 @@ import {
   type CodexServerNotificationMethod,
   type CodexServerRequestMap,
   type CodexServerRequestMethod,
-} from "./generated/0.162.1/route-registry.js";
+} from "./generated/0.163.0/route-registry.js";
 import {
   BoundedJsonSnapshotError,
   snapshotBoundedJson,
@@ -545,7 +545,7 @@ const EXPERIMENTAL_NESTED_THREAD_ID_ROUTE = Object.freeze({
 // This is an explicit review inventory for the artifact profile selected by
 // the registries above. Absence is intentional and fail-closed. In particular,
 // experimental thread/started is routed through thread.id while the other
-// selected experimental notification uses the direct threadId member.
+// selected experimental notifications use the direct threadId member.
 export const CODEX_NOTIFICATION_THREAD_ROUTE_REGISTRY: Readonly<
   Partial<Record<CodexServerNotificationMethod, CodexNotificationThreadRoute>>
 > = Object.freeze({
@@ -591,6 +591,7 @@ export const CODEX_NOTIFICATION_THREAD_ROUTE_REGISTRY: Readonly<
   "thread/prediction/updated": STABLE_THREAD_ID_ROUTE,
   "thread/project/updated": STABLE_THREAD_ID_ROUTE,
   "thread/queue/changed": STABLE_THREAD_ID_ROUTE,
+  "thread/readState/changed": EXPERIMENTAL_THREAD_ID_ROUTE,
   "thread/realtime/closed": STABLE_THREAD_ID_ROUTE,
   "thread/realtime/error": STABLE_THREAD_ID_ROUTE,
   "thread/realtime/itemAdded": STABLE_THREAD_ID_ROUTE,

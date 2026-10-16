@@ -828,6 +828,35 @@ describe("Codex RPC client", () => {
     expect(closed).not.toHaveBeenCalled();
   });
 
+  it("admits experimental native receipts before completion without losing concurrent requests", async () => {
+    const { client, transport } = createClient();
+    const notifications: unknown[] = [];
+    const closed = vi.fn();
+    void client.closed.then(closed);
+    client.subscribeNotifications((notification) => notifications.push(notification));
+    const first = client.request(echoMethod, { value: "thread-1" }, { timeoutMilliseconds: 1_000 });
+    const second = client.request(echoMethod, { value: "thread-2" }, { timeoutMilliseconds: 1_000 });
+    await waitForWrites(transport, 2);
+    const readState = { firstUnread: { type: "turn", turnId: "turn-1" }, revision: "receipt-1" };
+    transport.emit({ method: "thread/readState/changed", params: { threadId: "thread-1", readState } });
+    transport.emit({ method: "turn/completed", params: {
+      threadId: "thread-1", turn: {
+        id: "turn-1", rootTurnId: null, items: [], itemsView: "summary", status: "completed",
+        error: null, startedAt: 1, completedAt: 2, durationMs: 1_000,
+      },
+    } });
+    transport.emit({ id: parsedWrite(transport, 1).id, result: { value: "thread-2-ready" } });
+    transport.emit({ id: parsedWrite(transport, 0).id, result: { value: "thread-1-ready" } });
+    await expect(second).resolves.toBe("thread-2-ready");
+    await expect(first).resolves.toBe("thread-1-ready");
+    expect(notifications).toMatchObject([
+      { kind: "decoded_notification", generation: 7, sequence: 1,
+        method: "thread/readState/changed", params: { threadId: "thread-1", readState } },
+      { kind: "decoded_notification", generation: 7, sequence: 2, method: "turn/completed" },
+    ]);
+    expect(closed).not.toHaveBeenCalled();
+  });
+
   it("routes authentication recovery and contains malformed payloads to the attributable thread", async () => {
     const { client, transport } = createClient();
     const notifications: unknown[] = [];
@@ -1734,6 +1763,10 @@ describe("Codex RPC client", () => {
     [{ id: 99, result: {} }, "codex_rpc_unknown_response"],
     [
       { method: "future/notification", params: {} },
+      "codex_rpc_invalid_notification",
+    ],
+    [
+      { method: "thread/readState/future", params: { threadId: "thread-1" } },
       "codex_rpc_invalid_notification",
     ],
     [

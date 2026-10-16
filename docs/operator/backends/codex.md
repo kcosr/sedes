@@ -105,13 +105,13 @@ can apply. The detailed authority rules are in
 
 ## Version compatibility
 
-Sedes supplies the exact generated `0.162.1` app-server protocol profile from
+Sedes supplies the exact generated `0.163.0` app-server protocol profile from
 its compiled Codex backend. Operators do not select that profile in Settings. Sedes independently probes and admits stable Codex app-server
 executables at or above 0.162.1. Build metadata is allowed and does not affect
 version precedence. Prereleases, malformed versions, versions below the floor,
 and explicitly excluded known-bad releases are rejected.
 
-Releases newer than the 0.162.1 tested-through threshold are admitted with an
+Releases newer than the 0.163.0 tested-through threshold are admitted with an
 installation advisory. They do not gain capabilities merely because of their
 version. Managed TUI uses `moduleConfiguration.tuiExecutablePath` when present;
 otherwise it resolves the first `codex` on the execution environment account's `PATH`. This is
@@ -122,6 +122,14 @@ Paginated history uses the stable `thread/turns/list` and `thread/items/list`
 routes. The remaining experimental surface is bounded to reviewed
 provider-private directions and does not change the normalized browser
 contract or any other backend.
+
+The same parser supports the existing 0.162.1 minimum. Codex 0.163.0's native
+read-state metadata and notifications are recognized and discarded; they do
+not change Sedes's completion attention or add native read/unread controls.
+Provider executables remain separately installed. Prefer 0.163.0 when relying
+on Codex's network proxy or brokered credentials, because that release fixes
+native hostname authorization, duplicate Host-header handling, and credential
+inspection. Updating Sedes does not update an operator-owned executable.
 
 The compiled profile is persisted for diagnostics and runtime-generation
 integrity; it is not a request to install or launch that Codex release. See

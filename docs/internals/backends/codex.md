@@ -28,16 +28,16 @@ troubleshooting, see the [Codex operator guide](../../operator/backends/codex.md
 
 ## Protocol and release admission
 
-Sedes pins `@openai/codex` 0.162.1 as its development-time generated protocol
+Sedes pins `@openai/codex` 0.163.0 as its development-time generated protocol
 baseline. Generated TypeScript, JSON Schema, the method
 inventory, hashes, and release evidence live under
-`protocol/codex-app-server/0.162.1`.
+`protocol/codex-app-server/0.163.0`.
 
 Owned Codex processes support Linux x64 and macOS arm64/x64. External
 topologies retain their separate transport and execution-environment
 requirements.
 
-The compiled Codex backend supplies exactly one `0.162.1` generated parser
+The compiled Codex backend supplies exactly one `0.163.0` generated parser
 profile and persists that value for diagnostics and runtime-generation
 integrity. It is not operator configuration and remains separate from
 executable admission. Owned and external runtimes admit stable releases at or
@@ -45,9 +45,9 @@ above 0.162.1. Build metadata is allowed. Prereleases, malformed versions,
 versions below the floor, and explicitly excluded known-bad releases are
 rejected.
 
-Releases newer than the 0.162.1 tested-through threshold receive a
+Releases newer than the 0.163.0 tested-through threshold receive a
 provider-private `newerThanTested` assessment for the installation advisory.
-They still use only the pinned 0.162.1 stable and experimental validators and
+They still use only the pinned 0.163.0 stable and experimental validators and
 gain no capabilities from their version. Managed TUI uses the same
 operator-installed command policy in every deployment: an optional canonical
 `tuiExecutablePath` override, otherwise the first `codex` on `PATH`, with the
@@ -59,7 +59,7 @@ update prompt must not intercept terminal input or replace the executable
 outside Sedes release admission; operators update the installed command
 separately.
 
-The official 0.162.1 validators own item lifecycle metadata and MCP app UI
+The official validators own item lifecycle metadata and MCP app UI
 metadata. Sedes maps available item `startedAtMs`/`completedAtMs` into the existing
 normalized `startedAt`/`completedAt` fields for live events and loaded history.
 Missing timestamps stay absent, and command/MCP `durationMs` remains independent.
@@ -70,14 +70,14 @@ File-backed images are recognized without treating file IDs as URLs or paths;
 unavailable bytes remain visibly unavailable. Interrupted turns retain meaningful
 native errors as bounded warning notices; an ordinary Stop adds no error notice.
 
-The runtime floor is 0.162.1, aligning runtime admission with the current
-turn lineage, partial-answer, subagent metadata, and speed-policy contracts. Upgrade operator-owned
-app-servers and managed TUI commands together with Sedes. The floor and
-tested-through policy remain independent constants; newer stable runtimes are
-admitted with the usual advisory.
+The runtime floor remains 0.162.1. Both 0.162.1 and 0.163.0 use the one current
+parser; the older generated tree is removed. The floor and tested-through
+policy remain independent constants; newer stable runtimes are admitted with
+the usual advisory. Operator-owned app-servers and managed TUI commands are
+upgraded separately from Sedes.
 
-The [0.162.1 qualification](../../../protocol/codex-app-server/0.162.1/runtime-compatibility/README.md)
-records exact exports and Linux x64 execution against a local mock model,
+The [runtime qualification](../../../protocol/codex-app-server/0.163.0/runtime-compatibility/README.md)
+records exact reviewed exports and Linux x64 execution of both releases against a local mock model,
 including changed-settings notification, persistence after restart, explicit fork
 settings, and rejected command approval. macOS artifacts are integrity-checked
 only. Authenticated provider and topology checks are recorded separately.
@@ -96,14 +96,15 @@ error replies after dispatch remain unconfirmed, and are never retried as a
 new Stop operation.
 
 Method stability is distinct from the selected wire artifact. Because Sedes
-initializes app-server with `experimentalApi`, ten reviewed route directions
-select their exact experimental 0.162.1 definition: five stable thread
-requests, settings update, command approval, MCP elicitation, settings-updated, and
-thread-started. Remaining adopted directions, including both pagination
+initializes app-server with `experimentalApi`, the adoption manifest selects
+the exact experimental definition for reviewed thread requests, settings update,
+command approval, MCP elicitation, settings-updated, thread-started, and
+read-state-changed. Remaining adopted directions, including both pagination
 requests, select the stable artifact. No direction falls back between profiles.
-RPC admission recognizes all 86 official stable server notifications; 65 have
-reviewed thread-routing evidence for bounded resnapshot recovery. The 37
-adopted notification directions have explicit dispositions. The exact
+RPC admission recognizes the official stable server notifications, including
+`thread/readState/changed`, decoded with its selected experimental artifact. The generated
+inventory records each reviewed thread-routing path for bounded resnapshot
+recovery. Adopted notification directions have explicit dispositions. The exact
 `turn/moderationMetadata`, `model/verification`, `model/safetyBuffering/updated`
 and `thread/prediction/updated` advisories are validated, including bounded
 routing identities, then ignored before transcript queuing or mutation
@@ -112,7 +113,18 @@ scoped notifications still invalidate the projection, and history changes,
 model reroutes, generation changes and genuine sequence gaps retain recovery.
 Other notifications retain their reviewed consumers or conservative recovery
 when an active conversation has no semantic disposition. Official notifications
-are validated and ignored when no consumer is active.
+without an active consumer are bounded and discarded without retaining their
+payloads.
+
+Codex 0.163.0 adds native receipt metadata to `thread/list` and `thread/read`
+and the stable `thread/readState/changed` notification, which can precede
+`turn/completed`. These values are structurally validated and bounded, then
+discarded before transcript queuing or mutation accounting. Nullable or omitted
+receipt fields follow the one official schema, including on the supported
+0.162.1 runtime. Receipt state is never completion or delivery evidence and
+does not replace principal-owned Sedes completion attention. Native read-state
+mutations remain unsupported. This compatibility change is private to Codex;
+Pi, Claude, Grok, and OpenCode retain their existing contracts and capabilities.
 
 The 0.153.0 command-approval request distinguishes ordinary commands from
 `writeStdin`. Sedes handles both kinds. A `writeStdin` approval requires a
@@ -736,16 +748,18 @@ Sedes tool policies.
 
 ## Managed TUI integration
 
-Managed TUI is eligible only when an external local UDS/TCP target provides the
-required executable, endpoint, PTY, and execution-policy capabilities and the
-backend model policy is `catalog`. Sedes disables it for allowlist and denylist
+Managed TUI requires an external UDS or authenticated WS/WSS target whose owning
+local environment or persistent sidecar provides the executable, endpoint, PTY,
+and execution-policy capabilities, and the backend model policy must be
+`catalog`. Sedes disables it for allowlist and denylist
 policies because the interactive client can select and invoke a model without
 a pre-turn authorization hook.
 
 Before every catalog-policy launch, Sedes rechecks the exact model and effort
 against an uncached live daemon catalog. The TUI resumes the selected native
 thread and uses one viewer/control lifecycle shared with the browser panel. It
-is unavailable for owned stdio and SSH. See
+is unavailable for owned stdio. An SSH or outbound sidecar can host it when
+the external-runtime and negotiated managed-TUI capabilities are available. See
 [Managed Codex TUI](../codex-managed-tui.md).
 
 ## Contributor verification

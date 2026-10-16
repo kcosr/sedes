@@ -19,13 +19,14 @@ import {
   codexBinary,
 } from "./pinned-codex-release.mjs";
 import { startMockResponsesServer } from "./mock-responses-server.mjs";
+import { waitForProbeProcessStopped } from "./probe-process-lifecycle.mjs";
 
 const repositoryRoot = fileURLToPath(new URL("../..", import.meta.url));
 const releaseRoot = path.join(
   repositoryRoot,
   "protocol",
   "codex-app-server",
-  "0.162.1",
+  "0.163.0",
 );
 const evidenceFilename = path.join(
   releaseRoot,
@@ -315,7 +316,7 @@ try {
     hardCrashDescendantCleanupProven: false,
     workspaceCommandDirectEnvironmentExcludedCredential,
     sameUidProcessCredentialNonObservabilityProven: false,
-    gracefulAppServerCloseProducedMcpStoppedEvent: true,
+    gracefulAppServerCloseStoppedMcpProcesses: true,
     freshResumeConfigurationObserved: true,
     freshForkConfigurationObserved: true,
     freshConfigurationAfterAppServerRestartObserved: true,
@@ -550,17 +551,11 @@ function findSingleStartedEvent(events) {
 }
 
 async function waitForStopped(filename) {
-  const deadline = Date.now() + 5_000;
-  while (Date.now() < deadline) {
-    try {
-      const events = await readEvents(filename);
-      if (events.some((event) => event.event === "stopped")) return;
-    } catch (error) {
-      if (error?.code !== "ENOENT") throw error;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  }
-  throw new Error("d2a_stale_mcp_process_remained_open");
+  const started = findSingleStartedEvent(await readEvents(filename));
+  // Codex may force-kill a child before Node runs its stop-log handler. Conversely,
+  // that log can be written while a process is still alive. Check the captured
+  // process itself; missing or unreadable lifecycle evidence fails closed.
+  await waitForProbeProcessStopped(started.pid);
 }
 
 async function readEvents(filename) {

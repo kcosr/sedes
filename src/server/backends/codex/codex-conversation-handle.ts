@@ -75,6 +75,7 @@ import {
   codexThreadUnsubscribeMethod,
   codexThreadUnarchiveMethod,
   refineCodexItemLifecycleTimestamps,
+  refineCodexThreadReadState,
   type CodexThread,
   type CodexThreadItem,
   type CodexThreadResumeResponse,
@@ -4634,12 +4635,16 @@ export class CodexConversationHandle implements ConversationHandle {
         notificationThreadId(notification.params) !== this.binding.backendConversationId) return true;
     try {
       // These exact official notifications carry moderation/verification,
-      // buffering UI or prediction metadata, not transcript or completion facts.
+      // buffering UI, prediction or native read receipts, not transcript or completion facts.
       // Validate admission and bounded identities before discarding them here,
       // outside the asynchronous transcript queue and mutation bookkeeping.
       let threadId: string;
-      let turnId: string;
-      if (notification.method === "thread/prediction/updated") {
+      let turnId: string | undefined;
+      if (notification.method === "thread/readState/changed") {
+        const params = assertCodexAttestedServerNotificationParams(notification.method, notification.params);
+        threadId = params.threadId;
+        refineCodexThreadReadState(params.readState);
+      } else if (notification.method === "thread/prediction/updated") {
         const params = assertCodexAttestedServerNotificationParams(notification.method, notification.params);
         threadId = params.threadId;
         turnId = params.sourceTurnId;
@@ -4649,7 +4654,7 @@ export class CodexConversationHandle implements ConversationHandle {
         turnId = params.turnId;
       }
       if (threadId.length === 0 || threadId.length > 512 ||
-          turnId.length === 0 || turnId.length > 512) {
+          (turnId !== undefined && (turnId.length === 0 || turnId.length > 512))) {
         throw new Error("codex_advisory_identity_invalid");
       }
     } catch (error) {
@@ -7007,12 +7012,13 @@ function isPaginatedTranscriptNotification(method: string): boolean {
 }
 
 function isCodexConversationAdvisoryNotification(method: string): method is
-  "turn/moderationMetadata" | "model/verification" | "model/safetyBuffering/updated" | "thread/prediction/updated" {
+  "turn/moderationMetadata" | "model/verification" | "model/safetyBuffering/updated" | "thread/prediction/updated" | "thread/readState/changed" {
   // Exact ignored_informational dispositions in the Codex adoption inventory.
   return method === "turn/moderationMetadata" ||
     method === "model/verification" ||
     method === "model/safetyBuffering/updated" ||
-    method === "thread/prediction/updated";
+    method === "thread/prediction/updated" ||
+    method === "thread/readState/changed";
 }
 
 function mayCompleteGeneratedImage(

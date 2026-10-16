@@ -23,7 +23,7 @@ import {
   serverRequests,
 } from "./provider-protocol/codex-adoption-inventory.mjs";
 
-const RELEASE = "0.162.1";
+const RELEASE = "0.163.0";
 const repositoryRoot = fileURLToPath(new URL("..", import.meta.url));
 const releaseRoot = path.join(
   repositoryRoot,
@@ -715,7 +715,7 @@ async function generateStandaloneValidators({
   experimentalV2Schema.$id = `urn:sedes:codex:${RELEASE}:experimental:v2`;
   const ajv = new Ajv({
     strict: true,
-    // CodexErrorInfo's official 0.162.1 catchall uses type: ["string", "object"].
+    // CodexErrorInfo's official catchall uses type: ["string", "object"].
     // Compile that JSON Schema union without rewriting or narrowing the export.
     allowUnionTypes: true,
     allErrors: false,
