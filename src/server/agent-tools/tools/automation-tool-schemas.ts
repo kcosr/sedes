@@ -189,6 +189,22 @@ export const automationDefinitionToolOutputSchema =
     ),
   );
 
+/**
+ * The `automation.update@2` and `automation.set_state@2` output: the
+ * definition the change produced and whether that change retired it. A
+ * retired one-time automation no longer exists.
+ */
+export const automationMutationToolOutputSchema =
+  normalizeCanonicalAgentToolSchema({
+    ...automationDefinitionToolOutputSchema,
+    properties: {
+      ...automationDefinitionToolOutputSchema.properties,
+      retired: Type.Boolean(),
+    },
+    required: [...automationDefinitionToolOutputSchema.required, "retired"],
+    maxProperties: 20,
+  });
+
 const runPrecheckSchema = Type.Object(
   {
     status: Type.String({

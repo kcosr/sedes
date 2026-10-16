@@ -318,14 +318,16 @@ describe("built Sedes agent-tool CLI", () => {
         scope,
         workspace.id,
       ).projectId;
+      const automationRepository = new AutomationRepository(database);
       const automationDomain = new AutomationService({
-        repository: new AutomationRepository(database),
+        repository: automationRepository,
         inventory,
         publisher: { publish: async () => undefined },
         executionPolicy: { assertCanAutomate: () => undefined },
       });
       const automations = new AutomationAgentToolService({
         automations: automationDomain,
+        mutationRecords: automationRepository,
         threads: {} as never,
         inventory,
       });

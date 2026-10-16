@@ -1885,6 +1885,7 @@ export async function startProductionApplication(
     });
     const automationAgentTools = new AutomationAgentToolService({
       automations,
+      mutationRecords: automationRepository,
       threads,
       inventory: inventoryRepository,
     });

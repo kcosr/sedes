@@ -837,6 +837,7 @@ describe("CanonicalInlineAgentToolService", () => {
     const create = vi.fn();
     const automations = new AutomationAgentToolService({
       automations: { create } as never,
+      mutationRecords: {} as never,
       threads: { snapshot: vi.fn() } as never,
       inventory: {
         getThread: vi.fn(() => ({

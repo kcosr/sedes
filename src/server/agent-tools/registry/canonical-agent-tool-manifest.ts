@@ -571,7 +571,7 @@ export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
     id: "automation.update",
     schemaVersion: 2,
     description:
-      "Revision-checks schedule, pre-check, prompt, and run-mode changes that govern future automated executions; omitted fields are preserved and a null pre-check clears it.",
+      "Revision-checks schedule, pre-check, prompt, and run-mode changes that govern future automated executions; omitted fields are preserved and a null pre-check clears it. retired is true when the change retired a finished one-time automation, which then no longer exists.",
     catalog: {
       groupId: "automations",
       label: "Update automation",
@@ -587,7 +587,7 @@ export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
     id: "automation.set_state",
     schemaVersion: 2,
     description:
-      "Enables or pauses an automation using its revision. Enabling schedules future model execution.",
+      "Enables or pauses an automation using its revision. Enabling schedules future model execution. retired is true when pausing retired a finished one-time automation, which then no longer exists.",
     catalog: {
       groupId: "automations",
       label: "Enable or pause automation (enable schedules model work)",

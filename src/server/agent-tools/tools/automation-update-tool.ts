@@ -1,12 +1,12 @@
 import { Type } from "typebox";
 import type { AgentToolDefinition } from "../contracts/agent-tool-contracts.js";
 import type {
-  AgentAutomationDefinition,
+  AgentAutomationMutationResult,
   AutomationAgentToolService,
   AutomationUpdateToolInput,
 } from "./automation-agent-tool-service.js";
 import {
-  automationDefinitionToolOutputSchema,
+  automationMutationToolOutputSchema,
   automationNameToolSchema,
   automationPrecheckToolSchema,
   automationReadWaitCeilings,
@@ -23,7 +23,10 @@ export const automationUpdateToolId =
 
 export function createAutomationUpdateToolDefinition(
   service: AutomationAgentToolService,
-): AgentToolDefinition<AutomationUpdateToolInput, AgentAutomationDefinition> {
+): AgentToolDefinition<
+  AutomationUpdateToolInput,
+  AgentAutomationMutationResult
+> {
   return {
     ...CANONICAL_AGENT_TOOL_MANIFEST["automation.update"],
     inputSchema: automationToolInputSchema(
@@ -51,7 +54,7 @@ export function createAutomationUpdateToolDefinition(
       },
       { minProperties: 2 },
     ),
-    outputSchema: automationDefinitionToolOutputSchema,
+    outputSchema: automationMutationToolOutputSchema,
     requiredCapabilities: [],
     execution: {
       form: "inline",

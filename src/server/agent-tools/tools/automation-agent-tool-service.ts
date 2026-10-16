@@ -20,6 +20,7 @@ import { automationPromptPreview } from "../../domain/automation-presentation.js
 import { assertAutomationCloneEligible } from "../../domain/automation-clone-eligibility.js";
 import { DomainError } from "../../domain/errors.js";
 import type { ThreadApplicationService } from "../../conversations/thread-application-service.js";
+import type { AutomationRepository } from "../../db/repositories/automation-repository.js";
 import type { InventoryRepository } from "../../db/repositories/inventory-repository.js";
 import type { TrustedToolInvocationContext } from "../contracts/agent-tool-contracts.js";
 import { requireAdmittedResource } from "../environment/environment-authority.js";
@@ -29,9 +30,9 @@ const UPCOMING_OCCURRENCE_COUNT = 5;
 
 /**
  * The definition shape frozen by the `automation.get@2`, `automation.create@2`,
- * `automation.update@2` and `automation.set_state@2` output schemas. The
- * run-history revision and the last run's agent turn are browser-only detail
- * and are stripped.
+ * `automation.update@2` and `automation.set_state@2` output schemas; the last
+ * two add `retired`. The run-history revision and the last run's agent turn
+ * are browser-only detail and are stripped.
  */
 export interface AgentAutomationDefinition extends Omit<
   ThreadAutomationDefinition,
@@ -42,6 +43,15 @@ export interface AgentAutomationDefinition extends Omit<
     "turn"
   >;
   readonly upcoming: readonly string[];
+}
+
+/**
+ * The `automation.update@2` and `automation.set_state@2` result: the
+ * definition the change produced, and whether that change retired a finished
+ * one-time automation, which then no longer exists.
+ */
+export interface AgentAutomationMutationResult extends AgentAutomationDefinition {
+  readonly retired: boolean;
 }
 
 export interface AutomationTargetInput {
@@ -116,26 +126,40 @@ type AutomationDomain = Pick<
   | "list"
   | "listRuns"
   | "preview"
+  | "presentDefinition"
+  | "replayUpdate"
   | "runNow"
   | "setState"
   | "update"
   | "delete"
 >;
 
+/**
+ * Scoped reads of a mutation's receipt and the definition it left, including
+ * one it retired. Replay cannot depend on a live definition.
+ */
+type AutomationMutationRecords = Pick<
+  AutomationRepository,
+  "getMutationReceipt" | "getDefinition"
+>;
+
 /** Canonical, source-scoped adapter over the existing automation domain. */
 export class AutomationAgentToolService {
   readonly #automations: AutomationDomain;
+  readonly #mutationRecords: AutomationMutationRecords;
   readonly #threads: Pick<ThreadApplicationService, "automationCapability">;
   readonly #inventory: Pick<InventoryRepository, "getThread">;
   readonly #now: () => number;
 
   constructor(input: {
     readonly automations: AutomationDomain;
+    readonly mutationRecords: AutomationMutationRecords;
     readonly threads: Pick<ThreadApplicationService, "automationCapability">;
     readonly inventory: Pick<InventoryRepository, "getThread">;
     readonly now?: () => number;
   }) {
     this.#automations = input.automations;
+    this.#mutationRecords = input.mutationRecords;
     this.#threads = input.threads;
     this.#inventory = input.inventory;
     this.#now = input.now ?? Date.now;
@@ -235,7 +259,7 @@ export class AutomationAgentToolService {
   async update(
     input: AutomationUpdateToolInput,
     context: TrustedToolInvocationContext,
-  ): Promise<AgentAutomationDefinition> {
+  ): Promise<AgentAutomationMutationResult> {
     if (!hasDefinitionChange(input)) {
       throw new ZodError([
         {
@@ -246,7 +270,10 @@ export class AutomationAgentToolService {
       ]);
     }
     const operationScope = scope(context);
-    const current = this.#admitAutomation(input, context);
+    const { definition: current, recorded } = this.#admitMutationTarget(
+      input,
+      context,
+    );
     const threadId = current.threadId;
     const prompt =
       input.prompt === undefined
@@ -279,6 +306,21 @@ export class AutomationAgentToolService {
         : current.precheck,
     };
     validateMisfirePolicy(merged.schedule, merged.misfirePolicy);
+    const mutation = {
+      ...merged,
+      expectedRevision: input.expectedRevision,
+      mutationId: context.mutationId,
+    };
+    // Merging over the definition the recorded mutation left reproduces its
+    // request, so the domain verifies and replays it without re-admission.
+    const replayed = recorded
+      ? this.#automations.replayUpdate(
+          operationScope,
+          input.automationId,
+          mutation,
+        )
+      : undefined;
+    if (replayed) return this.#mutationResult(replayed, context, now);
     if (merged.runMode === "clone" && current.runMode !== "clone") {
       await this.#assertCloneEligible(
         operationScope,
@@ -290,22 +332,19 @@ export class AutomationAgentToolService {
     const definition = this.#automations.update(
       operationScope,
       input.automationId,
-      {
-        ...merged,
-        expectedRevision: input.expectedRevision,
-        mutationId: context.mutationId,
-      },
+      mutation,
       now,
     );
-    return this.#withUpcoming(definition, now);
+    return this.#mutationResult(definition, context, now);
   }
 
   async setState(
     input: AutomationSetStateToolInput,
     context: TrustedToolInvocationContext,
-  ): Promise<AgentAutomationDefinition> {
+  ): Promise<AgentAutomationMutationResult> {
     const now = this.#now();
-    this.#admitAutomation(input, context);
+    // The domain replays a recorded state mutation before any live lookup.
+    this.#admitMutationTarget(input, context);
     const definition = this.#automations.setState(
       scope(context),
       input.automationId,
@@ -316,7 +355,7 @@ export class AutomationAgentToolService {
       },
       now,
     );
-    return this.#withUpcoming(definition, now);
+    return this.#mutationResult(definition, context, now);
   }
 
   async runNow(
@@ -371,6 +410,71 @@ export class AutomationAgentToolService {
     input: AutomationTargetInput,
     context: TrustedToolInvocationContext,
   ): ThreadAutomationDefinition {
+    this.#admitReference(input, context);
+    return this.#admitTarget(
+      this.#automations.get(scope(context), input.automationId),
+      context,
+    );
+  }
+
+  /**
+   * A retry of a recorded mutation admits the definition that mutation left,
+   * even one it retired, so the domain replays the original result rather
+   * than finding no live definition. The domain still verifies the receipt's
+   * kind and request; a different automation's receipt is not reused here.
+   */
+  #admitMutationTarget(
+    input: AutomationTargetInput,
+    context: TrustedToolInvocationContext,
+  ): {
+    readonly definition: ThreadAutomationDefinition;
+    readonly recorded: boolean;
+  } {
+    this.#admitReference(input, context);
+    const operationScope = scope(context);
+    const receipt = this.#mutationRecords.getMutationReceipt(
+      operationScope,
+      context.mutationId,
+    );
+    if (receipt?.automationId !== input.automationId)
+      return {
+        definition: this.#admitAutomation(input, context),
+        recorded: false,
+      };
+    const definition = this.#automations.presentDefinition(
+      operationScope,
+      this.#mutationRecords.getDefinition(operationScope, input.automationId),
+    );
+    return {
+      definition: this.#admitTarget(definition, context),
+      recorded: true,
+    };
+  }
+
+  /**
+   * The domain mutation and replay are synchronous, so nothing else can
+   * remove the definition before this read: a removed definition was retired
+   * by this mutation. A replay whose definition was removed later conflicts.
+   */
+  #mutationResult(
+    definition: ThreadAutomationDefinition,
+    context: TrustedToolInvocationContext,
+    now: number,
+  ): AgentAutomationMutationResult {
+    const retired =
+      this.#mutationRecords.getDefinition(scope(context), definition.id)
+        .deletedAt !== null;
+    return {
+      ...this.#withUpcoming(definition, now),
+      ...(retired ? { upcoming: [] } : {}),
+      retired,
+    };
+  }
+
+  #admitReference(
+    input: AutomationTargetInput,
+    context: TrustedToolInvocationContext,
+  ): void {
     const admitted = context.environmentAuthority.resolvedResourceRefs.find(
       (ref) => ref.kind === "automation" && ref.id === input.automationId,
     );
@@ -380,10 +484,12 @@ export class AutomationAgentToolService {
         "The automation was not admitted for this invocation.",
       );
     requireAdmittedResource(context.environmentAuthority, admitted);
-    const definition = this.#automations.get(
-      scope(context),
-      input.automationId,
-    );
+  }
+
+  #admitTarget(
+    definition: ThreadAutomationDefinition,
+    context: TrustedToolInvocationContext,
+  ): ThreadAutomationDefinition {
     const target = this.#inventory.getThread(
       scope(context),
       definition.threadId,

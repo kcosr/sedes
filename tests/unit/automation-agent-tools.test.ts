@@ -161,6 +161,10 @@ function fixture(input?: {
     replayCreate: vi.fn(
       () => undefined as ThreadAutomationDefinition | undefined,
     ),
+    presentDefinition: vi.fn((_scope, _record) => current),
+    replayUpdate: vi.fn(
+      () => undefined as ThreadAutomationDefinition | undefined,
+    ),
     create: vi.fn(() => current),
     update: vi.fn(() => current),
     setState: vi.fn(() => current),
@@ -191,13 +195,21 @@ function fixture(input?: {
       },
     })),
   };
+  const mutationRecords = {
+    getMutationReceipt: vi.fn(
+      (_scope, _mutationId: string) =>
+        undefined as { readonly automationId: string } | undefined,
+    ),
+    getDefinition: vi.fn((_scope, _id: string) => ({ deletedAt: null })),
+  };
   const service = new AutomationAgentToolService({
     automations: automations as never,
+    mutationRecords: mutationRecords as never,
     threads: threads as never,
     inventory: inventory as never,
     now: () => Date.parse("2026-08-08T00:00:00.000Z"),
   });
-  return { automations, threads, inventory, service };
+  return { automations, mutationRecords, threads, inventory, service };
 }
 
 describe("automation canonical tool service", () => {
@@ -1054,6 +1066,7 @@ describe("automation canonical tool service", () => {
         authority,
       ),
     ).rejects.toMatchObject({ code: "permission_denied" });
+    expect(setup.mutationRecords.getMutationReceipt).not.toHaveBeenCalled();
     expect(setup.automations.get).not.toHaveBeenCalled();
     expect(setup.automations.setState).not.toHaveBeenCalled();
   });
@@ -1079,6 +1092,37 @@ describe("automation canonical tool service", () => {
     ).resolves.toMatchObject({ id: automationId, runMode: "clone" });
     expect(setup.threads.automationCapability).not.toHaveBeenCalled();
     expect(setup.automations.create).not.toHaveBeenCalled();
+  });
+  it("replays a recorded update from the definition it left before any live lookup or Fork check", async () => {
+    const setup = fixture({ canCloneOnRun: false });
+    const left = definition({ runMode: "clone", revision: 6 });
+    setup.mutationRecords.getMutationReceipt.mockReturnValue({ automationId });
+    setup.mutationRecords.getDefinition.mockReturnValue({ deletedAt: 12_000 } as never);
+    setup.automations.presentDefinition.mockReturnValue(left);
+    setup.automations.replayUpdate.mockReturnValue(left);
+    await expect(
+      setup.service.update(
+        { automationId, expectedRevision: 4, runMode: "clone" },
+        context(),
+      ),
+    ).resolves.toMatchObject({ id: automationId, upcoming: [], retired: true });
+    expect(setup.mutationRecords.getMutationReceipt).toHaveBeenCalledWith(
+      scope,
+      firstMutationId,
+    );
+    expect(setup.automations.replayUpdate).toHaveBeenCalledWith(
+      scope,
+      automationId,
+      expect.objectContaining({
+        runMode: "clone",
+        prompt: left.prompt,
+        expectedRevision: 4,
+        mutationId: firstMutationId,
+      }),
+    );
+    expect(setup.automations.get).not.toHaveBeenCalled();
+    expect(setup.threads.automationCapability).not.toHaveBeenCalled();
+    expect(setup.automations.update).not.toHaveBeenCalled();
   });
   it.each([undefined, "clone"] as const)("edits an existing clone without rechecking current Fork eligibility (requested mode %s)", async (requestedMode) => {
     const setup = fixture({definition: definition({runMode:"clone"}),canCloneOnRun:false});

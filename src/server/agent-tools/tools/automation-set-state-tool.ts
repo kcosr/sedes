@@ -1,12 +1,12 @@
 import { Type } from "typebox";
 import type { AgentToolDefinition } from "../contracts/agent-tool-contracts.js";
 import type {
-  AgentAutomationDefinition,
+  AgentAutomationMutationResult,
   AutomationAgentToolService,
   AutomationSetStateToolInput,
 } from "./automation-agent-tool-service.js";
 import {
-  automationDefinitionToolOutputSchema,
+  automationMutationToolOutputSchema,
   automationReadWaitCeilings,
   automationToolExposure,
   automationToolInputSchema,
@@ -20,7 +20,10 @@ export const automationSetStateToolId =
 
 export function createAutomationSetStateToolDefinition(
   service: AutomationAgentToolService,
-): AgentToolDefinition<AutomationSetStateToolInput, AgentAutomationDefinition> {
+): AgentToolDefinition<
+  AutomationSetStateToolInput,
+  AgentAutomationMutationResult
+> {
   return {
     ...CANONICAL_AGENT_TOOL_MANIFEST["automation.set_state"],
     inputSchema: automationToolInputSchema({
@@ -31,7 +34,7 @@ export function createAutomationSetStateToolDefinition(
       action: Type.String({ maxLength: 6, enum: ["enable", "pause"] }),
       automationId: requiredAutomationId,
     }),
-    outputSchema: automationDefinitionToolOutputSchema,
+    outputSchema: automationMutationToolOutputSchema,
     requiredCapabilities: [],
     execution: {
       form: "inline",
