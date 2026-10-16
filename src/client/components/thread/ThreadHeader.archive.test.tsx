@@ -176,7 +176,6 @@ function fixture(descendantCount: number): {
           : [],
       executionTargets: [],
       defaultNewThreadTargetId: null,
-      counts: { active: 1, snoozed: 0, settled: 0, archived: 0 },
       tasks: [],
     },
     visibleThreads: [],

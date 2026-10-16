@@ -122,7 +122,6 @@ function snapshot(
       },
     ],
     defaultNewThreadTargetId: null,
-    counts: { active: threads.length, snoozed: 0, settled: 0, archived: 0 },
     tasks: [],
   };
 }

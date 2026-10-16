@@ -30,7 +30,7 @@ function projectOfWorkspace(workspaceId: string): string {
       : "project-1";
 }
 
-function snapshot(active: number): NormalizedApplicationSnapshot {
+function snapshot(projectRevision: number): NormalizedApplicationSnapshot {
   return {
     environments: [
       {
@@ -41,7 +41,7 @@ function snapshot(active: number): NormalizedApplicationSnapshot {
         directoryBrowsing: "available" as const,
       },
     ],
-    projects: [{ id: "project-1", name: "Project", revision: 0 }],
+    projects: [{ id: "project-1", name: "Project", revision: projectRevision }],
     workspaces: [],
     threads: [],
     forkOrigins: [],
@@ -60,7 +60,6 @@ function snapshot(active: number): NormalizedApplicationSnapshot {
     ],
     advisories: [],
     defaultNewThreadTargetId: "target-1",
-    counts: { active, snoozed: 0, settled: 0, archived: 0 },
     tasks: [],
   };
 }
@@ -164,7 +163,7 @@ function incrementalSnapshots(input: {
   readonly tasks?: readonly AssociatedTaskRecord[];
   readonly runState?: NormalizedApplicationThreadSummary["runState"];
   readonly terminalSummary?: NormalizedApplicationThreadSummary["terminalSummary"];
-  readonly active?: number;
+  readonly projectRevision?: number;
   readonly groups?: NormalizedApplicationSnapshot["groups"];
 }) {
   const terminalSummary = input.terminalSummary ?? {
@@ -176,10 +175,10 @@ function incrementalSnapshots(input: {
       ...new Set(input.summaries.map((thread) => thread.workspaceId)),
     ];
     return {
-      ...snapshot(input.active ?? 1),
+      ...snapshot(input.projectRevision ?? 1),
       projects: [
         ...new Set(["project-1", ...workspaceIds.map(projectOfWorkspace)]),
-      ].map((id) => ({ id, name: "Project", revision: 0 })),
+      ].map((id) => ({ id, name: "Project", revision: input.projectRevision ?? 1 })),
       workspaces: workspaceIds.map((id) => ({
         id,
         environmentId: "environment-1",
@@ -202,12 +201,6 @@ function incrementalSnapshots(input: {
   const service = capturedService(capture, {
     inventory: {
       isWorkspaceRemoved: () => false,
-      countThreadsByInventoryState: () => ({
-        active: input.active ?? 1,
-        snoozed: 0,
-        settled: 0,
-        archived: 0,
-      }),
     },
     summaries: {
       listByIds: vi.fn((_scope, ids: readonly string[]) =>
@@ -869,8 +862,8 @@ describe("ApplicationSnapshotPublicationBoundary", () => {
       expect(capture).toHaveBeenCalledTimes(3);
       const [recovered] = await Promise.all([recovery, structural]);
       await boundary.flush();
-      expect(recovered.snapshot.counts.active).toBe(2);
-      expect(hub.currentCheckpoint()?.event.snapshot.counts.active).toBe(3);
+      expect(recovered.snapshot.projects[0]!.revision).toBe(2);
+      expect(hub.currentCheckpoint()?.event.snapshot.projects[0]!.revision).toBe(3);
       expect(hub.recoverySpacing).toBe(1_000);
       expect(performance.now()).toBe(1_000);
     } finally {
@@ -910,8 +903,8 @@ describe("ApplicationSnapshotPublicationBoundary", () => {
       expect(capture).toHaveBeenCalledTimes(3);
       const [, joined] = await Promise.all([first, passive, second]);
       await boundary.flush();
-      expect(joined.snapshot.counts.active).toBe(2);
-      expect(hub.currentCheckpoint()?.event.snapshot.counts.active).toBe(3);
+      expect(joined.snapshot.projects[0]!.revision).toBe(2);
+      expect(hub.currentCheckpoint()?.event.snapshot.projects[0]!.revision).toBe(3);
       expect(hub.recoverySpacing).toBe(0);
       expect(performance.now()).toBe(0);
     } finally {
@@ -1090,7 +1083,7 @@ describe("ApplicationSnapshotPublicationBoundary", () => {
         activeMemberCount: 1,
       },
     ];
-    const input = { summaries, groups, active: 1 };
+    const input = { summaries, groups, projectRevision: 1 };
     const service = incrementalSnapshots(input);
     const stale = await service.capture(scope);
     stale.groups = stale.groups.map((group) => ({ ...group }));
@@ -1120,7 +1113,7 @@ describe("ApplicationSnapshotPublicationBoundary", () => {
         inventoryRevision: 2,
       };
       groups[0] = { ...groups[0]!, activeMemberCount: 0 };
-      input.active = 0;
+      input.projectRevision = 0;
       boundary.handoffStructuralThreadChanges(scope, ["thread-1"]);
       boundary.handoffStructuralThreadChanges(scope, ["thread-1"]);
       const joined = boundary.checkpoint(scope, hub);
@@ -1131,7 +1124,7 @@ describe("ApplicationSnapshotPublicationBoundary", () => {
       expect(initial.snapshot.groups[0]?.activeMemberCount).toBe(1);
       expect(current.snapshot.groups[0]?.activeMemberCount).toBe(0);
       expect(current.snapshot.threads[0]?.inventoryState).toBe("archived");
-      expect(current.snapshot.counts.active).toBe(0);
+      expect(current.snapshot.projects[0]!.revision).toBe(0);
       expect(
         published.map((value) => value.groups[0]?.activeMemberCount),
       ).toEqual([1, 0]);
@@ -1185,10 +1178,10 @@ describe("ApplicationSnapshotPublicationBoundary", () => {
     const recovery = boundary.checkpoint(scope, hub, true);
     pending.resolve(snapshot(1));
     const recovered = await recovery;
-    expect((await initial).snapshot.counts.active).toBe(1);
-    expect(recovered.snapshot.counts.active).toBe(2);
+    expect((await initial).snapshot.projects[0]!.revision).toBe(1);
+    expect(recovered.snapshot.projects[0]!.revision).toBe(2);
     expect(capture).toHaveBeenCalledTimes(2);
-    expect(hub.currentCheckpoint()?.event.snapshot.counts.active).toBe(2);
+    expect(hub.currentCheckpoint()?.event.snapshot.projects[0]!.revision).toBe(2);
     await boundary.close();
   });
 
@@ -1210,7 +1203,7 @@ describe("ApplicationSnapshotPublicationBoundary", () => {
     second.subscribe(() => undefined);
     expect(second.generation).not.toBe(first.generation);
     expect(
-      (await boundary.checkpoint(scope, second)).snapshot.counts.active,
+      (await boundary.checkpoint(scope, second)).snapshot.projects[0]!.revision,
     ).toBe(2);
     expect(capture).toHaveBeenCalledTimes(2);
     await boundary.close();
@@ -1284,7 +1277,7 @@ describe("ApplicationSnapshotPublicationBoundary", () => {
         activeMemberCount: 100,
       },
     ];
-    const service = incrementalSnapshots({ summaries, groups, active: 100 });
+    const service = incrementalSnapshots({ summaries, groups, projectRevision: 100 });
     const boundary = new ApplicationSnapshotPublicationBoundary(
       service,
       new ScopedApplicationEventHubs(),
@@ -1423,7 +1416,7 @@ describe("ApplicationSnapshotPublicationBoundary", () => {
     await boundary.publishAuthoritativeReplacement(scope);
     await boundary.flush();
     expect(
-      boundary.hub(scope).currentCheckpoint()?.event.snapshot.counts.active,
+      boundary.hub(scope).currentCheckpoint()?.event.snapshot.projects[0]!.revision,
     ).toBe(2);
   });
 
@@ -1485,11 +1478,11 @@ describe("ApplicationSnapshotPublicationBoundary", () => {
 
   it("publishes a newer crossing mutation after a delayed stale capture", async () => {
     const stale = deferred<NormalizedApplicationSnapshot>();
-    let durableActive = 1;
+    let durableProjectRevision = 1;
     const capture = vi
       .fn<() => Promise<NormalizedApplicationSnapshot>>()
       .mockImplementationOnce(() => stale.promise)
-      .mockImplementation(async () => snapshot(durableActive));
+      .mockImplementation(async () => snapshot(durableProjectRevision));
     const hubs = new ScopedApplicationEventHubs();
     const boundary = new ApplicationSnapshotPublicationBoundary(
       capturedService(capture),
@@ -1502,7 +1495,7 @@ describe("ApplicationSnapshotPublicationBoundary", () => {
 
     const older = boundary.publishAuthoritativeReplacement(scope);
     await vi.waitFor(() => expect(capture).toHaveBeenCalledTimes(1));
-    durableActive = 2;
+    durableProjectRevision = 2;
     const newer = boundary.publishAuthoritativeReplacement(scope);
 
     expect(capture).toHaveBeenCalledTimes(1);
@@ -1510,10 +1503,10 @@ describe("ApplicationSnapshotPublicationBoundary", () => {
     await Promise.all([older, newer]);
     await boundary.flush();
 
-    expect(published.map(({ counts }) => counts.active)).toEqual([1, 2]);
+    expect(published.map(({ projects }) => projects[0]!.revision)).toEqual([1, 2]);
     const replayHub = boundary.hub(scope);
     expect(replayHub.canReplay(replayHub.eventIdAt(1))).toBe(false);
-    expect(replayHub.currentCheckpoint()?.event.snapshot.counts.active).toBe(2);
+    expect(replayHub.currentCheckpoint()?.event.snapshot.projects[0]!.revision).toBe(2);
     subscription.close();
   });
 
@@ -1539,7 +1532,7 @@ describe("ApplicationSnapshotPublicationBoundary", () => {
     await Promise.all([first, second]);
     await boundary.flush();
     expect(
-      boundary.hub(scope).currentCheckpoint()?.event.snapshot.counts.active,
+      boundary.hub(scope).currentCheckpoint()?.event.snapshot.projects[0]!.revision,
     ).toBe(1);
     expect(capture).toHaveBeenCalledTimes(1);
   });
@@ -1551,7 +1544,7 @@ describe("ApplicationSnapshotPublicationBoundary", () => {
         summaries,
         runState: "running",
         terminalSummary: { runningCount: 1, retainedCount: 2 },
-        active: 3,
+        projectRevision: 3,
       }),
       new ScopedApplicationEventHubs(),
     );
@@ -1579,7 +1572,6 @@ describe("ApplicationSnapshotPublicationBoundary", () => {
         runState: "running",
         terminalSummary: { runningCount: 1, retainedCount: 2 },
       },
-      counts: { active: 3 },
     });
     subscription.close();
   });

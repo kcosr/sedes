@@ -2359,7 +2359,6 @@ function sidebarFixture(
             },
           ]
         : [],
-    counts: { active: 1, snoozed: 0, settled: 0, archived: 0 },
     tasks: [],
   };
   const state: ApplicationClientState = {

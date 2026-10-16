@@ -113,12 +113,14 @@ import {
 } from "../../src/server/backends/codex/codex-agent-tool-cli-environment.js";
 import {
   CodexAppServerBindingError,
+  decodeCodexServerNotificationEnvelope,
   decodeCodexServerNotificationParams,
   decodeCodexServerRequestParams,
   type CodexServerRequestMethod,
 } from "../../src/server/provider-protocol/bindings/codex-app-server/codex-app-server-binding.js";
 import { createInMemoryOutputArtifactPublisher } from "../helpers/output-artifact-publisher.js";
 import * as codexBindingModule from "../../src/server/provider-protocol/bindings/codex-app-server/codex-app-server-binding.js";
+import { codexServerNotificationRegistry } from "../../src/server/provider-protocol/bindings/codex-app-server/generated/0.162.1/route-registry.js";
 
 const scope = { tenantId: "tenant-1", principalId: "principal-1" };
 const instance: AgentBackendInstance = {
@@ -711,6 +713,12 @@ class RpcHarness {
       | "warning"
       | "modelProvider/authRecoveryStarted"
       | "modelProvider/authRecoveryCompleted"
+      | "turn/moderationMetadata"
+      | "model/verification"
+      | "model/safetyBuffering/updated"
+      | "thread/prediction/updated"
+      | "model/rerouted"
+      | "thread/compacted"
       | "thread/goal/cleared"
       | "thread/goal/updated"
       | "skills/changed"
@@ -740,7 +748,7 @@ class RpcHarness {
     let attestedParams = params;
     try {
       if (!attest) throw new Error("test_fixture_unattested");
-      attestedParams = decodeCodexServerNotificationParams(method, params);
+      attestedParams = decodeCodexServerNotificationEnvelope(method, params);
     } catch {
       // Deliberately malformed fixtures still reach the semantic consumer so
       // tests can prove missing structural attestation fails closed.
@@ -9094,7 +9102,197 @@ describe("CodexConversationHandle", () => {
     await handleB.close();
   });
 
-  it("recovers only the matching thread from an attributable undecodable notification", async () => {
+  const conversationAdvisoryFixtures = [
+    { method: "turn/moderationMetadata", metadata: { turnId: "turn-1", metadata: { classification: ["reviewed"] } } },
+    { method: "model/verification", metadata: { turnId: "turn-1", verifications: ["trustedAccessForCyber"] } },
+    { method: "model/safetyBuffering/updated", metadata: {
+      turnId: "turn-1", model: "gpt-5.6", useCases: ["coding"], reasons: ["buffering"], showBufferingUi: true, fasterModel: null,
+    } },
+    { method: "thread/prediction/updated", metadata: { sourceTurnId: "turn-1", result: { type: "completed", text: "Predicted next input" } } },
+  ] as const;
+
+  it("covers every generated informational disposition with an advisory behavior regression", () => {
+    const informationalMethods = Object.entries(codexServerNotificationRegistry)
+      .filter(([, entry]) => entry.use === "ignored_informational")
+      .map(([method]) => method)
+      .sort();
+    expect(conversationAdvisoryFixtures.map(({ method }) => method).sort()).toEqual(informationalMethods);
+  });
+
+  it.each(conversationAdvisoryFixtures)("keeps repeated $method advisory without history reads or old completion replay", async ({ method, metadata }) => {
+    const harness = new RpcHarness();
+    const handle = await attachIdle(harness);
+    const established = await establish(harness, handle, nativeThread({ turns: [nativeTurn(1)] }));
+    const before = await handle.readCurrent();
+    const events: BackendConversationEvent[] = [];
+    established.subscribeFromNext(({ event }) => events.push(event));
+    const readsBefore = harness.calls.length;
+
+    for (let index = 0; index < 100; index += 1) {
+      harness.notify(method, { threadId: "thread-1", ...metadata });
+    }
+    expect(await handle.readCurrent()).toEqual(before);
+    expect(harness.calls).toHaveLength(readsBefore);
+    expect(events).toEqual([]);
+
+    const active = { ...nativeTurn(2), items: [], itemsView: "notLoaded", status: "inProgress", completedAt: null };
+    const assistant = {
+      type: "agentMessage", id: "advisory-assistant", text: "", phase: "final_answer",
+      memoryCitation: null, delivery: null, questions: null,
+    };
+    harness.notify("turn/started", { threadId: "thread-1", turn: active });
+    harness.notify("item/started", { threadId: "thread-1", turnId: active.id, item: assistant, startedAtMs: 1_700_000_003_000 });
+    harness.notify("item/agentMessage/delta", { threadId: "thread-1", turnId: active.id, itemId: assistant.id, delta: "Still streaming" });
+    await vi.waitFor(async () => {
+      expect(Object.values((await handle.readCurrent()).snapshot.itemsById)).toContainEqual(
+        expect.objectContaining({ semanticKind: "assistant_message", markdown: { text: "Still streaming" } }),
+      );
+    });
+    harness.notify("item/completed", {
+      threadId: "thread-1", turnId: active.id, item: { ...assistant, text: "Still streaming" }, completedAtMs: 1_700_000_004_000,
+    });
+    harness.notify("turn/completed", { threadId: "thread-1", turn: {
+      ...active, status: "completed", completedAt: 1_700_000_004, itemsView: "summary",
+    } });
+    expect(events.filter(({ type }) => type === "resnapshot_required")).toEqual([]);
+    expect(events.filter(({ type }) => type === "turn_completed")).toEqual([
+      expect.objectContaining({ turn: expect.objectContaining({ backendTurnId: codexBackendTurnId("thread-1", "turn-2") }) }),
+    ]);
+    expect(harness.calls).toHaveLength(readsBefore);
+    expect(harness.facade.lifecycleSnapshot()).toEqual({ state: "ready", generation: 1 });
+    harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+    await handle.close();
+  });
+
+  it("isolates foreign-thread moderation metadata, including malformed routed metadata", async () => {
+    const harness = new RpcHarness();
+    const handle = await attachIdle(harness);
+    const established = await establish(harness, handle);
+    const before = await handle.readCurrent();
+    const events: BackendConversationEvent[] = [];
+    established.subscribeFromNext(({ event }) => events.push(event));
+    const readsBefore = harness.calls.length;
+    harness.notify("turn/moderationMetadata", { threadId: "foreign-thread", turnId: "foreign-turn", metadata: null });
+    harness.notifyUndecodable("turn/moderationMetadata", "foreign-thread");
+    expect(await handle.readCurrent()).toEqual(before);
+    expect(harness.calls).toHaveLength(readsBefore);
+    expect(events).toEqual([]);
+    harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+    await handle.close();
+  });
+
+  it("does not queue moderation metadata behind an asynchronous paginated completion", async () => {
+    const harness = new RpcHarness();
+    const handle = await attachIdle(harness);
+    harness.enqueue("thread/read", { thread: paginatedThread() });
+    harness.enqueue("thread/resume", paginatedResumeResult({ shells: [notLoadedTurn(1)] }));
+    harness.enqueue("thread/items/list", paginatedItems(1));
+    const established = await handle.establishProjection({ signal: new AbortController().signal });
+    const events: BackendConversationEvent[] = [];
+    established.subscribeFromNext(({ event }) => events.push(event));
+    harness.enqueue("thread/turns/list", {
+      data: [notLoadedTurn(1)], nextCursor: null, backwardsCursor: "completion-head",
+    });
+    harness.enqueue("thread/items/list", paginatedItems(1));
+    harness.notify("turn/completed", { threadId: "thread-1", turn: { ...nativeTurn(1), items: [], itemsView: "summary" } });
+    for (let index = 0; index < 1_100; index += 1) {
+      harness.notify("turn/moderationMetadata", { threadId: "thread-1", turnId: "turn-1", metadata: { index } });
+    }
+    await vi.waitFor(() => expect(events).toContainEqual({ type: "run_state_changed", state: "idle" }));
+    expect(events.filter(({ type }) => type === "resnapshot_required" || type === "turn_completed")).toEqual([]);
+    expect(harness.calls.filter(({ method }) => method === "thread/turns/list")).toHaveLength(1);
+    expect(harness.calls.filter(({ method }) => method === "thread/resume")).toHaveLength(1);
+    harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+    await handle.close();
+  });
+
+  it.each([
+    { method: "turn/moderationMetadata", label: "missing metadata", params: { threadId: "thread-1", turnId: "turn-1" }, attest: true },
+    { method: "turn/moderationMetadata", label: "invalid turn identity", params: { threadId: "thread-1", turnId: "", metadata: null }, attest: true },
+    { method: "turn/moderationMetadata", label: "unattested envelope", params: { threadId: "thread-1", turnId: "turn-1", metadata: null }, attest: false },
+    { method: "model/verification", label: "unknown verification", params: { threadId: "thread-1", turnId: "turn-1", verifications: ["unknown"] }, attest: true },
+    { method: "model/safetyBuffering/updated", label: "missing buffering state", params: { threadId: "thread-1", turnId: "turn-1" }, attest: true },
+    { method: "thread/prediction/updated", label: "invalid source turn identity", params: { threadId: "thread-1", sourceTurnId: "", result: { type: "failed" } }, attest: true },
+  ] as const)("requires recovery for $method with $label", async ({ method, params, attest }) => {
+    const harness = new RpcHarness();
+    const handle = await attachIdle(harness);
+    const established = await establish(harness, handle);
+    const events: BackendConversationEvent[] = [];
+    established.subscribeFromNext(({ event }) => events.push(event));
+    harness.notify(method, params, ++harness.sequence, attest);
+    expect(events).toEqual([{ type: "resnapshot_required", reason: "contradictory_state" }]);
+    expect(harness.retirements).toEqual([]);
+    await establish(harness, handle);
+    harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+    await handle.close();
+  });
+
+  it.each(["legacy", "paginated"] as const)("does not destabilize %s history establishment with moderation metadata", async (historyMode) => {
+    const harness = new RpcHarness();
+    const handle = await attachIdle(harness);
+    const notify = () => {
+      for (let index = 0; index < 1_100; index += 1) {
+        harness.notify("turn/moderationMetadata", { threadId: "thread-1", turnId: "turn-1", metadata: { index } });
+      }
+    };
+    let established;
+    if (historyMode === "legacy") {
+      harness.after("thread/resume", notify);
+      established = await establish(harness, handle, nativeThread({ turns: [nativeTurn(1)] }));
+    } else {
+      harness.enqueue("thread/read", { thread: paginatedThread() });
+      harness.enqueue("thread/resume", paginatedResumeResult({ shells: [notLoadedTurn(1)] }));
+      harness.enqueue("thread/items/list", () => { notify(); return paginatedItems(1); });
+      established = await handle.establishProjection({ signal: new AbortController().signal });
+    }
+    expect(established.snapshot.orderedBackendTurnIds).toEqual([codexBackendTurnId("thread-1", "turn-1")]);
+    expect(harness.calls.filter(({ method }) => method === "thread/read")).toHaveLength(1);
+    expect(harness.calls.filter(({ method }) => method === "thread/resume")).toHaveLength(1);
+    expect(harness.calls.filter(({ method }) => method === "thread/items/list")).toHaveLength(historyMode === "paginated" ? 1 : 0);
+    expect(harness.retirements).toEqual([]);
+    harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+    await handle.close();
+  });
+
+  it.each([
+    { method: "model/rerouted", params: { fromModel: "gpt-5.6", toModel: "gpt-5.6-other", reason: "highRiskCyberActivity" } },
+    { method: "thread/compacted", params: {} },
+  ] as const)("retains genuine recovery for $method after moderation metadata", async ({ method, params }) => {
+    const harness = new RpcHarness();
+    const handle = await attachIdle(harness);
+    const established = await establish(harness, handle);
+    const events: BackendConversationEvent[] = [];
+    established.subscribeFromNext(({ event }) => events.push(event));
+    harness.notify("turn/moderationMetadata", { threadId: "thread-1", turnId: "turn-1", metadata: null });
+    harness.notify(method, { threadId: "thread-1", turnId: "turn-1", ...params });
+    expect(events).toEqual([{ type: "resnapshot_required", reason: "sequence_gap" }]);
+    const recovered = await establish(harness, handle, nativeThread({ turns: [nativeTurn(1)] }));
+    const recoveredEvents: BackendConversationEvent[] = [];
+    recovered.subscribeFromNext(({ event }) => recoveredEvents.push(event));
+    harness.notify("turn/moderationMetadata", { threadId: "thread-1", turnId: "turn-1", metadata: {} });
+    expect(recoveredEvents).toEqual([]);
+    expect(harness.calls.filter(({ method }) => method === "thread/resume")).toHaveLength(2);
+    harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+    await handle.close();
+  });
+
+  it("preserves generation recovery after moderation metadata", async () => {
+    const harness = new RpcHarness();
+    const handle = await attachIdle(harness);
+    const established = await establish(harness, handle);
+    const events: BackendConversationEvent[] = [];
+    established.subscribeFromNext(({ event }) => events.push(event));
+    harness.notify("turn/moderationMetadata", { threadId: "thread-1", turnId: "turn-1", metadata: null });
+    harness.lifecycle("unavailable", 1);
+    harness.lifecycle("ready", 2);
+    expect(events).toContainEqual({ type: "resnapshot_required", reason: "sequence_gap" });
+    await establish(harness, handle);
+    expect(harness.calls.filter(({ method }) => method === "thread/resume")).toHaveLength(2);
+    harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+    await handle.close();
+  });
+
+  it.each(["turn/started", "turn/moderationMetadata"] as const)("recovers only the matching thread from an attributable undecodable %s notification", async (method) => {
     const harness = new RpcHarness();
     const target = driver(harness);
     const threadA = nativeThread({ id: "thread-a", sessionId: "session-a" });
@@ -9113,7 +9311,7 @@ describe("CodexConversationHandle", () => {
     establishedA.subscribeFromNext(({ event }) => eventsA.push(event));
     establishedB.subscribeFromNext(({ event }) => eventsB.push(event));
 
-    harness.notifyUndecodable("turn/started", threadA.id);
+    harness.notifyUndecodable(method, threadA.id);
     expect(eventsA).toEqual([
       { type: "resnapshot_required", reason: "contradictory_state" },
     ]);

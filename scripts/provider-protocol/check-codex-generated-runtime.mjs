@@ -15,7 +15,7 @@ if (binding.CODEX_CLIENT_REQUEST_METHODS.length !== 26) {
 if (binding.CODEX_SERVER_REQUEST_METHODS.length !== 10) {
   throw new Error("Built Codex server-request registry is incomplete.");
 }
-if (binding.CODEX_ADOPTED_SERVER_NOTIFICATION_METHODS.length !== 34) {
+if (binding.CODEX_ADOPTED_SERVER_NOTIFICATION_METHODS.length !== 37) {
   throw new Error("Built Codex adopted notification registry is incomplete.");
 }
 if (binding.CODEX_SERVER_NOTIFICATION_METHODS.length !== 86) {
@@ -65,6 +65,14 @@ binding.decodeCodexServerNotificationParams("thread/prediction/updated", {
   sourceTurnId: "turn-1",
   result: { type: "completed", text: null },
 });
+for (const [method, params] of [
+  ["turn/moderationMetadata", { threadId: "thread-1", turnId: "turn-1", metadata: null }],
+  ["model/verification", { threadId: "thread-1", turnId: "turn-1", verifications: [] }],
+  ["model/safetyBuffering/updated", { threadId: "thread-1", turnId: "turn-1", model: "gpt-5.6", useCases: [], reasons: [], showBufferingUi: false, fasterModel: null }],
+]) {
+  const decoded = binding.decodeCodexServerNotificationParams(method, params);
+  binding.assertCodexAttestedServerNotificationParams(method, decoded);
+}
 if (
   !binding.validateCodexServerNotificationEnvelope(
     "mcpServer/oauthLogin/completed",

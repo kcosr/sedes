@@ -1233,7 +1233,6 @@ describe("task references", () => {
       executionTargets: [],
       advisories: [],
       defaultNewThreadTargetId: null,
-      counts: { active: 0, snoozed: 0, settled: 0, archived: 0 },
     } as unknown as NormalizedApplicationSnapshot;
     render(
       <TaskDragProvider store={taskStore} snapshot={applicationSnapshot}>
@@ -1287,7 +1286,6 @@ describe("task references", () => {
       executionTargets: [],
       advisories: [],
       defaultNewThreadTargetId: null,
-      counts: { active: 0, snoozed: 0, settled: 0, archived: 0 },
     } as unknown as NormalizedApplicationSnapshot;
     render(
       <TaskDragProvider store={taskStore} snapshot={applicationSnapshot}>

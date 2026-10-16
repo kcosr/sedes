@@ -18,7 +18,7 @@
   },
   "sourceTransformation": {
     "description": "copy adopted transitive TypeScript closures and append .js to relative NodeNext specifiers",
-    "treeSha256": "3d1e4259943cf99b6d042540e1882d7d893169653df2b04164905dca801ce436",
+    "treeSha256": "973ffcd929f8b72fcd810042e5a8facf197e5ebe9d0c3a1851c33cc1059a41de",
     "artifacts": [
       {
         "path": "experimental/AbsolutePathBuf.ts",
@@ -812,8 +812,8 @@
       },
       {
         "path": "route-registry.ts",
-        "bytes": 56015,
-        "sha256": "3aa65e39132c4df7454655c98b1a814ac073fbffa03b41746155799c8d0c84ec"
+        "bytes": 57463,
+        "sha256": "8f50e02fda0d06b6ef32631633e46d9dc6529542114246f58feb4f969d004ace"
       },
       {
         "path": "stable/AbsolutePathBuf.ts",
@@ -3542,7 +3542,55 @@
         "pointer": "#/definitions/ThreadPredictionUpdatedNotification"
       },
       "sedesRefinements": [
-        "none_beyond_official_structure"
+        "route_identity"
+      ]
+    },
+    {
+      "direction": "server_notification",
+      "method": "turn/moderationMetadata",
+      "use": "ignored_informational",
+      "stability": "stable",
+      "artifactProfile": "stable",
+      "domain": "live_turns",
+      "paramsDefinition": "TurnModerationMetadataNotification",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/TurnModerationMetadataNotification"
+      },
+      "sedesRefinements": [
+        "route_identity"
+      ]
+    },
+    {
+      "direction": "server_notification",
+      "method": "model/verification",
+      "use": "ignored_informational",
+      "stability": "stable",
+      "artifactProfile": "stable",
+      "domain": "live_turns",
+      "paramsDefinition": "ModelVerificationNotification",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/ModelVerificationNotification"
+      },
+      "sedesRefinements": [
+        "route_identity"
+      ]
+    },
+    {
+      "direction": "server_notification",
+      "method": "model/safetyBuffering/updated",
+      "use": "ignored_informational",
+      "stability": "stable",
+      "artifactProfile": "stable",
+      "domain": "live_turns",
+      "paramsDefinition": "ModelSafetyBufferingUpdatedNotification",
+      "paramsSchema": {
+        "bundle": "codex_app_server_protocol.v2.schemas.json",
+        "pointer": "#/definitions/ModelSafetyBufferingUpdatedNotification"
+      },
+      "sedesRefinements": [
+        "route_identity"
       ]
     },
     {

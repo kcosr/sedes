@@ -367,13 +367,22 @@ export class InventoryService {
     reason: "completion" | "failure" | "needs-input",
     now = Date.now(),
   ): Promise<InventoryPrincipalStateRecord> {
+    const before = this.repository.getInventory(scope, applicationThreadId);
     const state = this.repository.wakeForRuntimeSignal(
       scope,
       applicationThreadId,
       reason,
       now,
     );
-    await this.publishCommitted(scope, [state], now);
+    if (state.inventoryRevision !== before.inventoryRevision) {
+      await this.publishCommitted(scope, [state], now);
+    } else {
+      // Replayed runtime signals must still retry a previously failed wake
+      // publication, without publishing an unchanged inventory every time.
+      const key = `${scope.tenantId}\0${scope.principalId}\0${applicationThreadId}`;
+      const pending = this.#pendingPublications.get(key);
+      if (pending) await this.#flushPublications([pending]);
+    }
     return state;
   }
 

@@ -172,7 +172,6 @@ function makeSnapshot(
     groups: [],
     lineageFamilies: [],
     defaultNewThreadTargetId: null,
-    counts: { active: 0, snoozed: 0, settled: 0, archived: threads.length },
     tasks: [],
     ...overrides,
   } as Snapshot;

@@ -134,7 +134,6 @@ describe("normalized application components", () => {
       lineagePlacements: [],
       groups: [],
       lineageFamilies: [],
-      counts: { active: 1, snoozed: 0, settled: 0, archived: 0 },
       tasks: [],
     };
     const state: ApplicationClientState = {
@@ -205,7 +204,6 @@ describe("normalized application components", () => {
           snapshot: {
             ...snapshot,
             threads: [parkedThread],
-            counts: { active: 0, snoozed: 0, settled: 1, archived: 0 },
           },
           visibleThreads: [parkedThread],
         }}
@@ -335,7 +333,6 @@ describe("normalized application components", () => {
       lineagePlacements: [],
       groups: [],
       lineageFamilies: [],
-      counts: { active: 2, snoozed: 0, settled: 0, archived: 0 },
       tasks: [],
     };
     const createThread = vi.fn().mockResolvedValue({
@@ -464,7 +461,6 @@ describe("normalized application components", () => {
       lineageFamilies: [],
       executionTargets: [],
       defaultNewThreadTargetId: null,
-      counts: { active: 5, snoozed: 0, settled: 0, archived: 0 },
       tasks: [],
     };
     const updateLineagePlacement = vi.fn();
@@ -559,7 +555,6 @@ describe("normalized application components", () => {
     const snoozedSnapshot = {
       ...snapshot,
       threads: snoozedThreads,
-      counts: { active: 0, snoozed: 5, settled: 0, archived: 0 },
       tasks: [],
     };
     rerender(
@@ -615,7 +610,6 @@ describe("normalized application components", () => {
       lineageFamilies: [{ sourceThreadId: root.id, descendantCount: 12 }],
       executionTargets: [],
       defaultNewThreadTargetId: null,
-      counts: { active: 1, snoozed: 0, settled: 0, archived: 0 },
       tasks: [],
     };
     const loadMoreDescendants = vi.fn(async () => undefined);
@@ -692,7 +686,6 @@ describe("normalized application components", () => {
       lineageFamilies: [{ sourceThreadId: root.id, descendantCount: 37 }],
       executionTargets: [],
       defaultNewThreadTargetId: null,
-      counts: { active: 1, snoozed: 0, settled: 0, archived: 0 },
       tasks: [],
     };
     const loadMoreDescendants = vi.fn(async () => undefined);
@@ -787,7 +780,6 @@ describe("normalized application components", () => {
       lineageFamilies: [],
       executionTargets: [],
       defaultNewThreadTargetId: null,
-      counts: { active: 2, snoozed: 0, settled: 0, archived: 0 },
       tasks: [],
     };
     const state: ApplicationClientState = {
@@ -905,7 +897,6 @@ describe("normalized application components", () => {
       lineageFamilies: [{ sourceThreadId: root.id, descendantCount: 1 }],
       executionTargets: [],
       defaultNewThreadTargetId: null,
-      counts: { active: 1, snoozed: 0, settled: 0, archived: 0 },
       tasks: [],
     };
     const state: ApplicationClientState = {
@@ -1055,7 +1046,6 @@ function sidebarElement(runState: "running" | "waiting_for_input") {
     lineagePlacements: [],
     groups: [],
     lineageFamilies: [],
-    counts: { active: 1, snoozed: 0, settled: 0, archived: 0 },
     tasks: [],
   };
   const state: ApplicationClientState = {

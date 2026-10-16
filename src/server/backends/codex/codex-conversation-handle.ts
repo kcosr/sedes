@@ -4569,6 +4569,7 @@ export class CodexConversationHandle implements ConversationHandle {
   readonly #consumeNotification: CodexNotificationListener = (notification) => {
     this.#observeControlNotification(notification);
     this.#rememberSubagentCreationSettings(notification);
+    if (this.#consumeConversationAdvisory(notification)) return;
     if (this.#policyHistory) {
       const lifecycle = this.#client.lifecycleSnapshot();
       const threadId = isCodexRpcUndecodableNotification(notification)
@@ -4623,6 +4624,41 @@ export class CodexConversationHandle implements ConversationHandle {
         this.#projectionWorkQueue.enqueue(() => this.#installCapturedViewedImages());
       });
   };
+
+  #consumeConversationAdvisory(notification: CodexRpcNotification): boolean {
+    if (isCodexRpcUndecodableNotification(notification) ||
+        !isCodexConversationAdvisoryNotification(notification.method)) return false;
+    const lifecycle = this.#client.lifecycleSnapshot();
+    if (this.#closing || this.#closed || lifecycle.state !== "ready" ||
+        lifecycle.generation !== notification.generation ||
+        notificationThreadId(notification.params) !== this.binding.backendConversationId) return true;
+    try {
+      // These exact official notifications carry moderation/verification,
+      // buffering UI or prediction metadata, not transcript or completion facts.
+      // Validate admission and bounded identities before discarding them here,
+      // outside the asynchronous transcript queue and mutation bookkeeping.
+      let threadId: string;
+      let turnId: string;
+      if (notification.method === "thread/prediction/updated") {
+        const params = assertCodexAttestedServerNotificationParams(notification.method, notification.params);
+        threadId = params.threadId;
+        turnId = params.sourceTurnId;
+      } else {
+        const params = assertCodexAttestedServerNotificationParams(notification.method, notification.params);
+        threadId = params.threadId;
+        turnId = params.turnId;
+      }
+      if (threadId.length === 0 || threadId.length > 512 ||
+          turnId.length === 0 || turnId.length > 512) {
+        throw new Error("codex_advisory_identity_invalid");
+      }
+    } catch (error) {
+      this.#recordMutation(notification.generation, notification.sequence);
+      this.#reportError(error);
+      this.#invalidateProjection("contradictory_state");
+    }
+    return true;
+  }
 
   #rememberSubagentCreationSettings(notification: Parameters<CodexNotificationListener>[0]): void {
     if (this.#closing || this.#closed || this.#policyHistory || this.#establishing ||
@@ -6968,6 +7004,15 @@ function isPaginatedTranscriptNotification(method: string): boolean {
     default:
       return true;
   }
+}
+
+function isCodexConversationAdvisoryNotification(method: string): method is
+  "turn/moderationMetadata" | "model/verification" | "model/safetyBuffering/updated" | "thread/prediction/updated" {
+  // Exact ignored_informational dispositions in the Codex adoption inventory.
+  return method === "turn/moderationMetadata" ||
+    method === "model/verification" ||
+    method === "model/safetyBuffering/updated" ||
+    method === "thread/prediction/updated";
 }
 
 function mayCompleteGeneratedImage(

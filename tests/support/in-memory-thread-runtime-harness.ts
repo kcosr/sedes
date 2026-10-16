@@ -70,6 +70,7 @@ import {
   ThreadRuntimeCoordinator,
 } from "../../src/server/events/thread-runtime-coordinator.js";
 import { ThreadSnapshotPublisher } from "../../src/server/events/thread-snapshot-publisher.js";
+import { performCompletionFollowUp } from "../../src/server/conversations/authoritative-completion-follow-up.js";
 import type { ExecutionEnvironmentProvider } from "../../src/server/execution/contracts.js";
 import type { RequestScope } from "../../src/server/identity/identity-provider.js";
 import { SingleUserIdentityProvider } from "../../src/server/identity/identity-provider.js";
@@ -516,12 +517,13 @@ export async function createInMemoryThreadRuntimeHarness(options: {
 
   const completionFollowUps: Promise<void>[] = [];
   observeCompletion = async (eventScope, applicationThreadId, input) => {
-    const observed = await queueDispatcher.onAuthoritativeCompletion(
+    const observation = await queueDispatcher.onAuthoritativeCompletion(
       eventScope,
       applicationThreadId,
       input,
     );
-    if (!observed) return;
+    if (!observation) return;
+    const observed = observation.record;
     options.onObservedCompletion?.(eventScope, observed, input.provenance, input.voiceSubscriberWatermark, input.responseVoice);
     if (observed.applicationTurnId) options.onCompletion?.(eventScope, applicationThreadId, observed.applicationTurnId);
     // Match the production observer boundary: recovery and inventory wake
@@ -529,17 +531,19 @@ export async function createInMemoryThreadRuntimeHarness(options: {
     // own authoritative observer chain.
     completionFollowUps.push(
       (async () => {
-        await mutations.recoverThread(eventScope, applicationThreadId);
-        await inventory.wakeForRuntimeSignal(
-          eventScope,
-          applicationThreadId,
-          "completion",
-        );
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        await performCompletionFollowUp({
+          // This harness has no registered completion callback dispatcher.
+          deliverCallbacks: () => undefined,
+          publishCompletion: () => threadSnapshots.publishChanged(eventScope, applicationThreadId, observation.changed),
+          recoverThread: () => mutations.recoverThread(eventScope, applicationThreadId),
+          wakeThread: () => inventory.wakeForRuntimeSignal(eventScope, applicationThreadId, "completion"),
+        });
       })(),
     );
   };
   observeSubmission = (eventScope, applicationThreadId, input) => {
-    mutations.observeAuthoritativeSubmission(
+    return mutations.observeAuthoritativeSubmission(
       eventScope,
       applicationThreadId,
       input.backendCorrelation,
@@ -570,6 +574,9 @@ export async function createInMemoryThreadRuntimeHarness(options: {
     completionFollowUps,
     async close(): Promise<void> {
       unsubscribeUsage();
+      while (completionFollowUps.length > 0) {
+        await Promise.allSettled(completionFollowUps.splice(0));
+      }
       await mutations.close();
       await queueDispatcher.close();
       await runtimes.close();

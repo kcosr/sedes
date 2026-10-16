@@ -95,6 +95,42 @@ async function fixture(observeNotifications = true) {
 }
 
 describe("live completion notification provenance", { timeout: 30_000 }, () => {
+  it("replays several completed turns without more authoritative captures or inventory publications", async () => {
+    const current = await fixture();
+    const { harness } = current;
+    try {
+      const threadId = await current.send();
+      const runtime = await harness.runtimes.acquire(harness.scope, threadId);
+      try {
+        for (const text of ["Second accepted input", "Third accepted input"]) {
+          const prior = current.observations.length;
+          await harness.mutations.admitInput(harness.scope, threadId, {
+            mutationId: randomUUID(), origin: { clientId: randomUUID() }, text, runningPolicy: { mode: "queue" },
+          });
+          await vi.waitFor(() => {
+            expect(current.observations.length).toBeGreaterThan(prior);
+            expect(harness.actors.observeInputRuntime(harness.scope, threadId)?.settled).toBe(true);
+          });
+          await Promise.all(harness.completionFollowUps.splice(0));
+        }
+        const capture = vi.spyOn(runtime.actor, "captureSnapshotState");
+        const publish = vi.spyOn(harness.threadSnapshots, "publishMany");
+        const before = current.observations.length;
+        const writes = () => (harness.database.prepare("SELECT total_changes() AS count").get() as { count: number }).count;
+        const initialWrites = writes();
+        for (let replay = 0; replay < 10; replay += 1) {
+          await runtime.actor.replayAuthoritativeCompletions();
+          await Promise.all(harness.completionFollowUps.splice(0));
+        }
+        expect(current.observations.length - before).toBe(30);
+        expect(capture).not.toHaveBeenCalled();
+        expect(publish).not.toHaveBeenCalled();
+        expect(writes()).toBe(initialWrites);
+        expect(current.executor).toHaveBeenCalledTimes(3);
+      } finally { runtime.release(); }
+    } finally { await current.close(); }
+  });
+
   it("keeps the original admission revision when another message arrives during delayed publication", async () => {
     const current = await fixture();
     const { harness, notifications } = current;

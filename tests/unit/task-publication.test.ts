@@ -88,12 +88,6 @@ function snapshotService(
         updatedAt: EPOCH,
       },
     ],
-    countThreadsByInventoryState: () => ({
-      active: 0,
-      snoozed: 0,
-      settled: 0,
-      archived: 0,
-    }),
   } as unknown as InventoryRepository;
   return new ApplicationSnapshotService(
     inventory,

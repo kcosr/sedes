@@ -893,6 +893,34 @@ describe("Codex RPC client", () => {
     );
   });
 
+  it("validates moderation metadata and keeps a malformed routed advisory scoped while RPC continues", async () => {
+    const { client, transport } = createClient();
+    const notifications: unknown[] = [];
+    client.subscribeNotifications((notification) => notifications.push(notification));
+    const request = client.request(echoMethod, { value: "pending" }, { timeoutMilliseconds: 1_000 });
+    await waitForWrites(transport, 1);
+    transport.emit({ method: "turn/moderationMetadata", params: {
+      threadId: "thread-1", turnId: "turn-1", metadata: { nested: [null, true, { value: "reviewed" }] },
+    } });
+    transport.emit({ method: "turn/moderationMetadata", params: {
+      threadId: "thread-1", turnId: "private-invalid-turn",
+    } });
+    transport.emit({ method: "warning", params: { threadId: "thread-2", message: "Still connected." } });
+    transport.emit({ id: parsedWrite(transport, 0).id, result: { value: "settled" } });
+    await expect(request).resolves.toBe("settled");
+    expect(notifications).toEqual([
+      expect.objectContaining({ kind: "decoded_notification", method: "turn/moderationMetadata", params: {
+        threadId: "thread-1", turnId: "turn-1", metadata: { nested: [null, true, { value: "reviewed" }] },
+      } }),
+      { kind: "undecodable_notification", generation: 7, sequence: 2,
+        method: "turn/moderationMetadata", nativeThreadId: "thread-1", code: CODEX_RPC_UNDECODABLE_NOTIFICATION_CODE },
+      expect.objectContaining({ kind: "decoded_notification", method: "warning", params: {
+        threadId: "thread-2", message: "Still connected.",
+      } }),
+    ]);
+    expect(JSON.stringify(notifications)).not.toContain("private-invalid-turn");
+  });
+
   it("returns a response receipt in the sequence shared by all inbound envelopes", async () => {
     const { client, transport } = createClient();
     const notifications: number[] = [];

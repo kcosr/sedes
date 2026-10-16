@@ -227,7 +227,7 @@ describe("Codex D3 production app-server binding", () => {
     expect(adoptionManifest.productionRuntimeCompatibility.currentPolicy).toBe(
       "stable releases admitted by the runtime policy using exactly the 0.162.1 parser profile",
     );
-    expect(adoptionManifest.routes).toHaveLength(71);
+    expect(adoptionManifest.routes).toHaveLength(74);
 
     const byDirection = adoptionManifest.routes.reduce<
       Record<string, typeof adoptionManifest.routes>
@@ -238,7 +238,7 @@ describe("Codex D3 production app-server binding", () => {
     expect(byDirection.client_request).toHaveLength(26);
     expect(byDirection.client_notification).toHaveLength(1);
     expect(byDirection.server_request).toHaveLength(10);
-    expect(byDirection.server_notification).toHaveLength(34);
+    expect(byDirection.server_notification).toHaveLength(37);
 
     expect(
       byDirection.client_request!

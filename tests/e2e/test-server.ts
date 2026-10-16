@@ -244,6 +244,7 @@ import {
   LongLivedHttpConnectionRegistry,
 } from "../../src/server/runtime/application-shutdown.js";
 import { DeferredProductionOperations } from "../../src/server/production-application.js";
+import { performCompletionFollowUp } from "../../src/server/conversations/authoritative-completion-follow-up.js";
 import { ConversationLifecycleAutomationFirstInput } from "../../src/server/runtime/conversation-lifecycle-automation.js";
 import { AutomationDispatcher } from "../../src/server/runtime/automation-dispatcher.js";
 import { AutomationPrecheckExecutor } from "../../src/server/runtime/automation-precheck-executor.js";
@@ -5065,12 +5066,13 @@ async function main(): Promise<void> {
     applicationThreadId,
     input,
   ) => {
-    const observed = await queue.onAuthoritativeCompletion(
+    const observation = await queue.onAuthoritativeCompletion(
       eventScope,
       applicationThreadId,
       input,
     );
-    if (!observed) return;
+    if (!observation) return;
+    const observed = observation.record;
     try {
       observeAutomationTurns?.observe(
         eventScope,
@@ -5084,34 +5086,16 @@ async function main(): Promise<void> {
     notificationLifecycle.completion(eventScope, observed, input.provenance, input.voiceSubscriberWatermark, input.responseVoice);
     if (observed.applicationTurnId) void clientControls.complete(eventScope, applicationThreadId, observed.applicationTurnId,
       observed.completionOutcome ?? "interrupted", input.responseVoice?.superseded);
-    authoritativeCompletionFollowUp.defer(async () => {
-      const failures: unknown[] = [];
-      try {
-        await completionCallbackDispatcher.deliverReady(eventScope);
-      } catch (error) {
-        failures.push(error);
-      }
-      try {
-        await mutations.recoverThread(eventScope, applicationThreadId);
-      } catch (error) {
-        failures.push(error);
-      }
-      try {
-        await inventory.wakeForRuntimeSignal(
-          eventScope,
-          applicationThreadId,
-          "completion",
-        );
-      } catch (error) {
-        failures.push(error);
-      }
-      if (failures.length > 0) {
-        throw new AggregateError(
-          failures,
-          "E2E authoritative completion follow-up did not finish cleanly.",
-        );
-      }
-    });
+    authoritativeCompletionFollowUp.defer(() => performCompletionFollowUp({
+      deliverCallbacks: () => completionCallbackDispatcher.deliverReady(eventScope),
+      publishCompletion: () => snapshots.publishChanged(eventScope, applicationThreadId, observation.changed),
+      recoverThread: () => mutations.recoverThread(eventScope, applicationThreadId),
+      wakeThread: () => inventory.wakeForRuntimeSignal(
+        eventScope,
+        applicationThreadId,
+        "completion",
+      ),
+    }));
   };
   const attention = new ThreadAttentionService({
     acknowledgeAutomationRun: (scope, threadId, runId, outcome) => {

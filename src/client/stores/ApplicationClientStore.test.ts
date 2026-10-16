@@ -8,6 +8,16 @@ import {
 import { SEDES_VERSION } from "../../shared/version.js";
 import { ApplicationClientStore } from "./ApplicationClientStore.js";
 
+function renamedEnvironment(revision: number) {
+  return {
+    id: "environment-1",
+    kind: "local" as const,
+    label: { text: `Environment ${revision}` },
+    available: true as const,
+    directoryBrowsing: "available" as const,
+  };
+}
+
 const applicationHubId = "10000000-0000-4000-8000-000000000001";
 const applicationSession = {
   clientProtocolVersion: SEDES_CLIENT_PROTOCOL_VERSION,
@@ -27,7 +37,6 @@ const applicationSnapshot = {
   forkOrigins: [],
   lineagePlacements: [],
   lineageFamilies: [],
-  counts: { active: 0, snoozed: 0, settled: 0, archived: 0 },
   tasks: [],
 };
 
@@ -247,9 +256,9 @@ describe("ApplicationClientStore session and inventory lifecycle", () => {
       eventId: `${applicationHubId}.5`,
       applicationGeneration: "application-1",
       event: {
-        type: "inventory_counts_changed",
+        type: "environment_upsert",
         generation: "application-1",
-        counts: applicationSnapshot.counts,
+        environment: renamedEnvironment(0),
       },
     });
     await vi.waitFor(() =>
@@ -285,9 +294,9 @@ describe("ApplicationClientStore session and inventory lifecycle", () => {
         eventId: `${applicationHubId}.${4 + index}`,
         applicationGeneration: "application-1",
         event: {
-          type: "inventory_counts_changed",
+          type: "environment_upsert",
           generation: "application-1",
-          counts: applicationSnapshot.counts,
+          environment: renamedEnvironment(0),
         },
       });
       if (index < 3) {
@@ -312,9 +321,9 @@ describe("ApplicationClientStore session and inventory lifecycle", () => {
       eventId: `${applicationHubId}.8`,
       applicationGeneration: "application-1",
       event: {
-        type: "inventory_counts_changed",
+        type: "environment_upsert",
         generation: "application-1",
-        counts: applicationSnapshot.counts,
+        environment: renamedEnvironment(0),
       },
     });
     await Promise.resolve();
@@ -380,9 +389,9 @@ describe("ApplicationClientStore session and inventory lifecycle", () => {
       eventId: `${applicationHubId}.1`,
       applicationGeneration: "application-1",
       event: {
-        type: "inventory_counts_changed",
+        type: "environment_upsert",
         generation: "application-1",
-        counts: { active: 1, snoozed: 0, settled: 0, archived: 0 },
+        environment: renamedEnvironment(1),
       },
     });
     expect(listener).toHaveBeenCalledOnce();
@@ -390,7 +399,7 @@ describe("ApplicationClientStore session and inventory lifecycle", () => {
     expect(store.getSnapshot()).toMatchObject({
       status: "ready",
       error: undefined,
-      snapshot: { counts: { active: 1 } },
+      snapshot: { environments: [renamedEnvironment(1)] },
     });
 
     // An envelope that changes no inventory leaves the state untouched.

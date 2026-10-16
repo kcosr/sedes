@@ -68,6 +68,17 @@ type SummaryRow = ThreadAutomationSummaryRow & {
  */
 export const MAXIMUM_APPLICATION_BOOTSTRAP_FORKS = 1_000;
 
+type SummaryStatementShape = "list" | "structure" | "forkSelectionSaturated" | number;
+
+// Statements belong to their connection, including when multiple readers share
+// it. The three fixed queries and 1–100 unique-ID shapes bound this cache to 103
+// statements per connection. Scope and IDs are bound afresh on every execution;
+// results are never cached, so reads observe the connection's current transaction.
+const summaryStatements = new WeakMap<
+  Database.Database,
+  Map<SummaryStatementShape, Database.Statement>
+>();
+
 function iso(milliseconds: number): string {
   return new Date(milliseconds).toISOString();
 }
@@ -105,12 +116,26 @@ export class DatabaseApplicationThreadSummaryReader
     this.#database = input.inventory.database;
   }
 
+  #prepare(shape: SummaryStatementShape, sql: () => string): Database.Statement {
+    let statements = summaryStatements.get(this.#database);
+    if (!statements) {
+      statements = new Map();
+      summaryStatements.set(this.#database, statements);
+    }
+    let statement = statements.get(shape);
+    if (!statement) {
+      statement = this.#database.prepare(sql());
+      statements.set(shape, statement);
+    }
+    return statement;
+  }
+
   /** Matches the bounded selector's candidate set without materializing it. */
   forkSelectionSaturated(scope: RequestScope, environmentId: string): boolean {
     return (
-      this.#database
-        .prepare(
-          `
+      this.#prepare(
+        "forkSelectionSaturated",
+        () => `
       SELECT 1
       FROM application_threads AS candidate
       INNER JOIN thread_fork_origins AS origin
@@ -131,7 +156,7 @@ export class DatabaseApplicationThreadSummaryReader
         AND candidate.environment_id = ?
       LIMIT 1 OFFSET ?
     `,
-        )
+      )
         .get(
           scope.tenantId,
           scope.principalId,
@@ -148,9 +173,9 @@ export class DatabaseApplicationThreadSummaryReader
   ):
     | { environmentId: string; isFork: boolean; isForkSource: boolean }
     | undefined {
-    const row = this.#database
-      .prepare(
-        `
+    const row = this.#prepare(
+      "structure",
+      () => `
       SELECT thread.environment_id AS environmentId,
         EXISTS (
           SELECT 1 FROM thread_fork_origins AS origin
@@ -170,7 +195,7 @@ export class DatabaseApplicationThreadSummaryReader
       WHERE thread.tenant_id = ? AND thread.owner_principal_id = ?
         AND thread.id = ?
     `,
-      )
+    )
       .get(scope.tenantId, scope.principalId, threadId) as
       | {
           environmentId: string;
@@ -193,7 +218,8 @@ export class DatabaseApplicationThreadSummaryReader
   ): readonly ApplicationThreadDurableSummary[] {
     return this.#list(
       scope,
-      `WITH RECURSIVE scoped_forks(
+      "list",
+      () => `WITH RECURSIVE scoped_forks(
            id,
            source_thread_id,
            child_inventory_state,
@@ -307,22 +333,24 @@ export class DatabaseApplicationThreadSummaryReader
     const uniqueThreadIds = [...new Set(threadIds)];
     return this.#list(
       scope,
-      `VALUES ${uniqueThreadIds.map(() => "(?)").join(",")}`,
+      uniqueThreadIds.length,
+      () => `VALUES ${uniqueThreadIds.map(() => "(?)").join(",")}`,
       uniqueThreadIds,
     );
   }
 
   #list(
     scope: RequestScope,
-    requestedThreadsSql: string,
+    shape: "list" | number,
+    requestedThreadsSql: () => string,
     requestedThreadParameters: readonly (string | number)[],
   ): readonly ApplicationThreadDurableSummary[] {
-    const rows = this.#database
-      .prepare(
-        `
+    const rows = this.#prepare(
+      shape,
+      () => `
           -- Reuse the selected lineage once. Keep targeted updates from scanning
           -- retained queue/completion history or the entire thread inventory.
-          WITH requested_threads(id) AS MATERIALIZED (${requestedThreadsSql}),
+          WITH requested_threads(id) AS MATERIALIZED (${requestedThreadsSql()}),
           target_definitions AS MATERIALIZED (
             SELECT definition.tenant_id, definition.owner_principal_id,
               definition.id, definition.anchor_thread_id, definition.enabled,
@@ -512,7 +540,7 @@ export class DatabaseApplicationThreadSummaryReader
           WHERE thread.tenant_id = ? AND thread.owner_principal_id = ?
           ORDER BY thread.last_activity_at DESC, thread.id
         `,
-      )
+    )
       .all(
         ...requestedThreadParameters,
         scope.tenantId,

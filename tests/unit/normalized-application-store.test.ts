@@ -16,6 +16,16 @@ import {
 } from "../../src/shared/index.js";
 import { SEDES_VERSION } from "../../src/shared/version.js";
 
+function renamedEnvironment(revision: number) {
+  return {
+    id: "environment-1",
+    kind: "local" as const,
+    label: { text: `Environment ${revision}` },
+    available: true as const,
+    directoryBrowsing: "available" as const,
+  };
+}
+
 const hub = "00000000-0000-4000-8000-000000000001";
 const now = "2026-07-30T15:00:00.000Z";
 
@@ -99,7 +109,6 @@ function snapshot(): NormalizedApplicationSnapshot {
       },
     ],
     defaultNewThreadTargetId: "target-1",
-    counts: { active: 1, snoozed: 0, settled: 0, archived: 2 },
     tasks: [],
   };
 }
@@ -371,7 +380,6 @@ describe("normalized application protocol", () => {
       type: "thread_upsert",
       generation: "application-1",
       thread: thread(),
-      counts: snapshot().counts,
     });
     expect(
       applicationEventEnvelopeSchema.safeParse({
@@ -380,7 +388,6 @@ describe("normalized application protocol", () => {
           type: "thread_upsert",
           generation: "application-1",
           thread: missingPinRevision,
-          counts: snapshot().counts,
         },
       }).success,
     ).toBe(false);
@@ -404,22 +411,20 @@ describe("normalized application protocol", () => {
           type: "thread_upsert",
           generation: "application-1",
           thread: thread(),
-          counts: snapshot().counts,
         }),
         event: {
           type: "thread_upsert",
           generation: "application-1",
           thread: { ...thread(), nativeSessionPath: "/pi/session.jsonl" },
-          counts: snapshot().counts,
         },
       }).success,
     ).toBe(false);
     expect(
       applicationEventEnvelopeSchema.safeParse({
         ...envelope(5, {
-          type: "inventory_counts_changed",
+          type: "environment_upsert",
           generation: "application-1",
-          counts: snapshot().counts,
+          environment: renamedEnvironment(0),
         }),
         eventId: `${hub}.999999999999999999999`,
       }).success,
@@ -506,7 +511,7 @@ describe("NormalizedApplicationStore", () => {
     const changed = vi.fn();
     const unsubscribe = store.subscribeThreadSummaryChanges(changed);
     const update = envelope(5, {
-      type: "thread_upsert", generation: "application-1", thread: thread(), counts: snapshot().counts,
+      type: "thread_upsert", generation: "application-1", thread: thread(),
     });
     expect(store.apply(update)).toEqual({ kind: "applied" });
     expect(changed).toHaveBeenLastCalledWith("thread-1");
@@ -527,7 +532,7 @@ describe("NormalizedApplicationStore", () => {
     expect(changed).toHaveBeenCalledTimes(4);
     unsubscribe();
     expect(store.apply(envelope(9, {
-      type: "thread_remove", generation: "application-1", threadId: "thread-1", counts: snapshot().counts,
+      type: "thread_remove", generation: "application-1", threadId: "thread-1",
     }))).toEqual({ kind: "applied" });
     expect(changed).toHaveBeenCalledTimes(4);
   });
@@ -582,7 +587,7 @@ describe("NormalizedApplicationStore", () => {
     const store = new NormalizedApplicationStore();
     const streamedSnapshot = {
       ...snapshot(),
-      counts: { active: 7, snoozed: 0, settled: 0, archived: 2 },
+      environments: [renamedEnvironment(7)],
     };
 
     expect(
@@ -601,15 +606,15 @@ describe("NormalizedApplicationStore", () => {
       authoritative: true,
       csrfToken: "csrf-token",
       providerPulseEnabled: true, experimentalUsageEnabled: false,
-      snapshot: { counts: streamedSnapshot.counts },
+      snapshot: { environments: streamedSnapshot.environments },
     });
 
     expect(
       store.apply(
         envelope(6, {
-          type: "inventory_counts_changed",
+          type: "environment_upsert",
           generation: "application-1",
-          counts: { active: 8, snoozed: 0, settled: 0, archived: 2 },
+          environment: renamedEnvironment(8),
         }),
       ),
     ).toEqual({ kind: "applied" });
@@ -650,7 +655,6 @@ describe("NormalizedApplicationStore", () => {
               queueFailure: false,
             },
           }),
-          counts: { active: 0, snoozed: 1, settled: 0, archived: 2 },
         }),
       ),
     ).toEqual({ kind: "applied" });
@@ -658,7 +662,6 @@ describe("NormalizedApplicationStore", () => {
 
     expect(listener).toHaveBeenCalledTimes(1);
     expect(store.state.snapshot).toMatchObject({
-      counts: { active: 0, snoozed: 1, settled: 0, archived: 2 },
       threads: [
         {
           id: "thread-1",
@@ -675,9 +678,9 @@ describe("NormalizedApplicationStore", () => {
     expect(
       store.apply(
         envelope(6, {
-          type: "inventory_counts_changed",
+          type: "environment_upsert",
           generation: "application-1",
-          counts: snapshot().counts,
+          environment: renamedEnvironment(0),
         }),
       ),
     ).toEqual({
@@ -724,9 +727,9 @@ describe("NormalizedApplicationStore", () => {
     expect(
       store.apply(
         envelope(5, {
-          type: "inventory_counts_changed",
+          type: "environment_upsert",
           generation: "application-1",
-          counts: snapshot().counts,
+          environment: renamedEnvironment(0),
         }),
       ),
     ).toEqual({
@@ -751,7 +754,6 @@ describe("NormalizedApplicationStore", () => {
           type: "thread_upsert",
           generation: "application-1",
           thread: thread({ inventoryRevision: 1, threadRevision: 3 }),
-          counts: snapshot().counts,
         }),
       ),
     ).toEqual({
@@ -772,7 +774,6 @@ describe("NormalizedApplicationStore", () => {
             groupAssignmentRevision: 0,
             threadRevision: 3,
           }),
-          counts: snapshot().counts,
         }),
       ),
     ).toEqual({
@@ -800,18 +801,18 @@ describe("NormalizedApplicationStore", () => {
     const store = new NormalizedApplicationStore();
     seedStore(store);
     const update = envelope(5, {
-      type: "inventory_counts_changed",
+      type: "environment_upsert",
       generation: "application-1",
-      counts: { active: 1, snoozed: 0, settled: 0, archived: 3 },
+      environment: renamedEnvironment(1),
     });
     expect(store.apply(update)).toEqual({ kind: "applied" });
     expect(store.apply(update)).toEqual({ kind: "ignored" });
     expect(
       store.apply({
         ...envelope(6, {
-          type: "inventory_counts_changed",
+          type: "environment_upsert",
           generation: "application-1",
-          counts: snapshot().counts,
+          environment: renamedEnvironment(0),
         }),
         applicationGeneration: "application-2",
       }),
@@ -845,12 +846,12 @@ describe("NormalizedApplicationStore", () => {
           generation: "application-stale",
           snapshot: {
             ...snapshot(),
-            counts: { active: 99, snoozed: 0, settled: 0, archived: 0 },
+            environments: [renamedEnvironment(99)],
           },
         }),
       ),
     ).toEqual({ kind: "ignored" });
     expect(store.state.generation).toBe("application-1");
-    expect(store.state.snapshot?.counts.active).toBe(1);
+    expect(store.state.snapshot?.environments[0]?.label.text).toBe("Machine");
   });
 });

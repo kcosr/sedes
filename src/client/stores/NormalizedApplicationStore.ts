@@ -268,7 +268,6 @@ export class NormalizedApplicationStore {
         next = {
           ...snapshot,
           threads: upsertById(snapshot.threads, event.thread),
-          counts: event.counts,
         };
         break;
       }
@@ -276,11 +275,7 @@ export class NormalizedApplicationStore {
         next = {
           ...snapshot,
           threads: snapshot.threads.filter(({ id }) => id !== event.threadId),
-          counts: event.counts,
         };
-        break;
-      case "inventory_counts_changed":
-        next = { ...snapshot, counts: event.counts };
         break;
       case "task_upsert": {
         const prior = snapshot.tasks.find(({ id }) => id === event.task.id);

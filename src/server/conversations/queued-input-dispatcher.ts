@@ -17,7 +17,7 @@ import {
 } from "../db/repositories/queued-input-repository.js";
 import {
   SubmissionCompletionRepository,
-  type SubmissionCompletionObservationRecord,
+  type SubmissionCompletionObservationResult,
 } from "../db/repositories/submission-completion-repository.js";
 import type { RequestScope } from "../identity/identity-provider.js";
 import { DomainError } from "../domain/errors.js";
@@ -1073,7 +1073,7 @@ export class QueuedInputDispatcher {
       readonly classifiedResult: ClassifiedAssistantResult | null;
       readonly observedAt?: number;
     },
-  ): Promise<SubmissionCompletionObservationRecord | undefined> {
+  ): Promise<SubmissionCompletionObservationResult | undefined> {
     return this.#track(async () => {
       await this.#requireRecovery(scope);
       return this.#serialize(scope, applicationThreadId, async () => {
@@ -1901,7 +1901,9 @@ export class QueuedInputDispatcher {
         ) ?? this.#steerCandidate(scope, applicationThreadId);
     if (!pending) return;
     const key = threadKey(scope, applicationThreadId);
-    this.#cancelRetryTimer(scope, applicationThreadId);
+    // Replayed terminal evidence must not restart an already scheduled queue
+    // attempt; sustained replay could otherwise keep postponing dispatch.
+    if (this.#retryTimers.has(key)) return;
     const handle = this.#scheduler.schedule(
       this.#retryPolicy.baseDelayMilliseconds,
       () => {

@@ -106,7 +106,6 @@ function snapshot() {
     lineagePlacements: [],
     groups: [],
     lineageFamilies: [],
-    counts: { active: 1, snoozed: 0, settled: 0, archived: 0 },
     tasks: [] as AssociatedTask[],
   };
 }
@@ -136,7 +135,7 @@ function associatedTask(
 
 describe("execution-target application protocol", () => {
   it("uses the current client protocol for associated task presentation", () => {
-    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(161);
+    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(162);
   });
 
   it("enforces exact associated-project semantics on task projections", () => {
@@ -431,7 +430,6 @@ describe("execution-target application protocol", () => {
           type: "thread_upsert",
           generation: "application-1",
           thread: threadWithoutTarget,
-          counts: snapshot().counts,
         },
       }),
     ).toEqual({

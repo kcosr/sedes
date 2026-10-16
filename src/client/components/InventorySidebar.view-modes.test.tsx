@@ -312,7 +312,6 @@ function makeState(
     forkOrigins: [...(options.forkOrigins ?? [])],
     lineagePlacements: [...(options.lineagePlacements ?? [])],
     lineageFamilies: [...(options.lineageFamilies ?? [])],
-    counts: { active: threads.length, snoozed: 0, settled: 0, archived: 0 },
     tasks: [...(options.tasks ?? [])],
   };
   return {

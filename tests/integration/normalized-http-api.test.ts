@@ -145,6 +145,16 @@ import type { OutputArtifactService } from "../../src/server/output-artifacts/se
 import { OutputArtifactStorageError } from "../../src/server/output-artifacts/blob-store.js";
 import { ComposerAttachmentStorageError } from "../../src/server/composer-attachments/blob-store.js";
 
+function renamedEnvironment(revision: number, environmentId: string) {
+  return {
+    id: environmentId,
+    kind: "local" as const,
+    label: { text: `Environment ${revision}` },
+    available: true as const,
+    directoryBrowsing: "available" as const,
+  };
+}
+
 const execFile = promisify(execFileCallback);
 const roots: string[] = [];
 const configuration = parseResolvedBackendConfiguration({
@@ -922,8 +932,6 @@ async function fixture(
             queueFailure: false,
           },
         }));
-      const counts = { active: 0, snoozed: 0, settled: 0, archived: 0 };
-      for (const thread of threads) counts[thread.inventoryState] += 1;
       const snapshot: NormalizedApplicationSnapshot = {
         environments: [
           {
@@ -970,7 +978,6 @@ async function fixture(
         ],
         advisories: [],
         defaultNewThreadTargetId: profile.id,
-        counts,
         tasks: taskRepository.listAssociated(scope).map(presentAssociatedTask),
       };
       this.captureMetadata.set(snapshot, new Map([[environment.id, false]]));
@@ -6549,7 +6556,6 @@ describe("normalized HTTP application contract", () => {
       expect(initialSnapshot.body).toMatchObject({
         workspaces: [],
         threads: [],
-        counts: { active: 0, snoozed: 0, settled: 0, archived: 0 },
       });
 
       const workspace = await current
@@ -8189,9 +8195,9 @@ describe("normalized HTTP application contract", () => {
       const ownerHub = current.applicationHubs.application(current.owner);
       await vi.waitFor(() => expect(ownerHub.subscriberCount).toBe(0));
       const update = ownerHub.publish({
-        type: "inventory_counts_changed",
+        type: "environment_upsert",
         generation: ownerHub.generation,
-        counts: { active: 1, snoozed: 0, settled: 0, archived: 0 },
+        environment: renamedEnvironment(1, current.environmentId),
       });
       const watermarkBeforeSnapshotRead = ownerHub.watermark;
       await current
@@ -8214,20 +8220,20 @@ describe("normalized HTTP application contract", () => {
         event: "application",
         data: {
           eventId: ownerHub.eventIdAt(watermarkBeforeCursorlessRead),
-          event: { type: "snapshot", snapshot: { counts: { active: 1 } } },
+          event: { type: "snapshot", snapshot: { environments: expect.arrayContaining([renamedEnvironment(1, current.environmentId)]) } },
         },
       });
       expect(ownerHub.watermark).toBe(watermarkBeforeCursorlessRead);
 
-      for (let active = 2; active <= 500; active++) ownerHub.publish({
-        type: "inventory_counts_changed", generation: ownerHub.generation,
-        counts: { active, snoozed: 0, settled: 0, archived: 0 },
+      for (let revision = 2; revision <= 500; revision++) ownerHub.publish({
+        type: "environment_upsert", generation: ownerHub.generation,
+        environment: renamedEnvironment(revision, current.environmentId),
       });
       const longGap = await readFirstSseEvent(server, `/api/application/events?replayCursor=${encodeURIComponent(baseline.eventId)}`,
       );
       expect(longGap).toMatchObject({ event: "application", data: {
         eventId: ownerHub.eventIdAt(ownerHub.watermark),
-        event: { type: "snapshot", snapshot: { counts: { active: 500 } } },
+        event: { type: "snapshot", snapshot: { environments: expect.arrayContaining([renamedEnvironment(500, current.environmentId)]) } },
       },
       });
 

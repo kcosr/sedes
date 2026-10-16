@@ -115,7 +115,6 @@ function snapshot(): NormalizedApplicationSnapshot {
       },
     ],
     defaultNewThreadTargetId: null,
-    counts: { active: 2, snoozed: 0, settled: 0, archived: 0 },
     tasks: [],
   };
 }

@@ -302,6 +302,7 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
   readonly #mailboxes = new Map<string, SerializedMailbox>();
   readonly #interruptDeadlines = new Map<string, { controller: AbortController; timer: ReturnType<typeof setTimeout> }>();
   readonly #detachedPublications = new Set<Promise<void>>();
+  readonly #pendingPublications = new Map<string, { snapshot: boolean; application: boolean }>();
   readonly #lateActionClosing = new AbortController();
   readonly #callbacks: ThreadCompletionCallbackRepository;
   #activity: ThreadActivityService | undefined;
@@ -537,7 +538,7 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
         }
       } catch (error) { this.#reportPublicationError(error); }
       try {
-        await this.input.publishThreadSnapshot(scope, applicationThreadId);
+        await this.#publishThreadSnapshot(scope, applicationThreadId);
         await this.#changed(scope, applicationThreadId);
       } finally { runtime?.release(); }
     });
@@ -683,7 +684,7 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
       // Publication may acquire the newly bound actor. Let the authoritative
       // observer finish before any runtime replacement can wait on its drain.
       await new Promise<void>(resolve => setTimeout(resolve, 0));
-      await this.input.publishThreadSnapshot(scope, applicationThreadId);
+      await this.#publishThreadSnapshot(scope, applicationThreadId);
       await this.#changed(scope, applicationThreadId);
     });
   }
@@ -733,7 +734,7 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
         this.input.operations.markSteerMaterializationUncertain(
           scope, current.mutationId, this.#now(),
         );
-        await this.input.publishThreadSnapshot(scope, current.threadId);
+        await this.#publishThreadSnapshot(scope, current.threadId);
         await this.#changed(scope, current.threadId);
       }
     }
@@ -859,7 +860,7 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
     }
     if (operation.kind === "discard_fork") {
       const discarded = await this.input.forks.discardActive(scope, applicationThreadId);
-      await this.input.publishThreadSnapshot(scope, applicationThreadId);
+      await this.#publishThreadSnapshot(scope, applicationThreadId);
       await this.#changed(scope, applicationThreadId);
       return { status: "aborted", diagnostic: discarded.diagnostic };
     }
@@ -957,7 +958,7 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
           mutationId: operation.mutationId,
         },
       );
-      await this.input.publishThreadSnapshot(scope, applicationThreadId);
+      await this.#publishThreadSnapshot(scope, applicationThreadId);
       return { status: "completed" };
     }
     if (operation.kind === "interrupt") {
@@ -1104,7 +1105,7 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
               },
             );
       if (result.status === "recovery_required") {
-        await this.input.publishThreadSnapshot(scope, input.targetThreadId);
+        await this.#publishThreadSnapshot(scope, input.targetThreadId);
         await this.#changed(scope, input.targetThreadId);
         return {
           status: "recovery_required",
@@ -1121,7 +1122,7 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
             cancellationMutationId: `${callbackId}:target_send_aborted`,
           });
         }
-        await this.input.publishThreadSnapshot(scope, input.targetThreadId);
+        await this.#publishThreadSnapshot(scope, input.targetThreadId);
         await this.#changed(scope, input.targetThreadId);
         return { status: "aborted", operationId: input.mutationId };
       }
@@ -1145,7 +1146,7 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
           this.#reportPublicationError(error);
         }
         try {
-          await this.input.publishThreadSnapshot(scope, input.targetThreadId);
+          await this.#publishThreadSnapshot(scope, input.targetThreadId);
           await this.#changed(scope, input.targetThreadId);
         } finally {
           // Keep the runtime loaded until the application summary has captured
@@ -1216,7 +1217,7 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
             },
       now: this.#now(),
     });
-    await this.input.publishThreadSnapshot(scope, input.targetThreadId);
+    await this.#publishThreadSnapshot(scope, input.targetThreadId);
     await this.#changed(scope, input.targetThreadId);
     return {
       status: "delivery_accepted",
@@ -1324,7 +1325,7 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
         now: this.#now(),
       },
     );
-    await this.input.publishThreadSnapshot(scope, applicationThreadId);
+    await this.#publishThreadSnapshot(scope, applicationThreadId);
     await this.#changed(scope, applicationThreadId);
     return {
       status: "queue_restored",
@@ -1462,7 +1463,7 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
         return { status: "completed" };
       }
       if (reconciliation === "unknown") {
-        await this.input.publishThreadSnapshot(scope, applicationThreadId);
+        await this.#publishThreadSnapshot(scope, applicationThreadId);
         await this.#changed(scope, applicationThreadId);
         return { status: "recovery_required", retryable: true };
       }
@@ -1496,7 +1497,7 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
           error.lateMutationReconciliation,
         );
       }
-      await this.input.publishThreadSnapshot(scope, applicationThreadId);
+      await this.#publishThreadSnapshot(scope, applicationThreadId);
       await this.#changed(scope, applicationThreadId);
       return { status: "recovery_required", retryable: true };
     }
@@ -1576,7 +1577,7 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
           },
         );
       if (!accepted) return;
-      await this.input.publishThreadSnapshot(scope, applicationThreadId);
+      await this.#publishThreadSnapshot(scope, applicationThreadId);
       await this.#changed(scope, applicationThreadId);
     });
   }
@@ -1586,7 +1587,7 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
     applicationThreadId: string,
   ): void {
     this.#ownDetachedPublication(async () => {
-      await this.input.publishThreadSnapshot(scope, applicationThreadId);
+      await this.#publishThreadSnapshot(scope, applicationThreadId);
       await this.#changed(scope, applicationThreadId);
     });
   }
@@ -1612,7 +1613,7 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
         const result = await this.input.queue.reconcileUncertain(
           scope, applicationThreadId, queued.id,
         );
-        await this.input.publishThreadSnapshot(scope, applicationThreadId);
+        await this.#publishThreadSnapshot(scope, applicationThreadId);
         await this.#changed(scope, applicationThreadId);
         return result.state === "uncertain"
           ? { status: "recovery_required", retryable: true }
@@ -1621,7 +1622,7 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
       const fork = this.input.forks.recoverActive(scope, applicationThreadId);
       if (fork) {
         const result = await fork;
-        await this.input.publishThreadSnapshot(scope, applicationThreadId);
+        await this.#publishThreadSnapshot(scope, applicationThreadId);
         await this.#changed(scope, applicationThreadId);
         return result.status === "recovery_required"
           ? { status: "recovery_required", retryable: result.retryable }
@@ -1634,12 +1635,11 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
         applicationThreadId,
       );
       if (!creation) {
-        await this.input.publishThreadSnapshot(scope, applicationThreadId);
-        await this.#changed(scope, applicationThreadId);
+        await this.#retryPendingPublications(scope, applicationThreadId);
         return { status: "completed" };
       }
       const result = await creation;
-      await this.input.publishThreadSnapshot(scope, applicationThreadId);
+      await this.#publishThreadSnapshot(scope, applicationThreadId);
       await this.#changed(scope, applicationThreadId);
       return result.status === "recovery_required"
         ? {
@@ -2044,7 +2044,7 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
     const publishStart = Date.now();
     this.#ownDetachedPublication(async () => {
       try {
-        await this.input.publishThreadSnapshot(scope, applicationThreadId);
+        await this.#publishThreadSnapshot(scope, applicationThreadId);
         await this.#changed(scope, applicationThreadId);
         debugDelivery?.(
           "publishThreadSnapshot+changed(background)",
@@ -2097,7 +2097,7 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
     if (result.status === "aborted") return { status: "aborted" };
     if (publish) {
       this.#ownDetachedPublication(async () => {
-        await this.input.publishThreadSnapshot(scope, applicationThreadId);
+        await this.#publishThreadSnapshot(scope, applicationThreadId);
         await this.#changed(scope, applicationThreadId);
       });
     }
@@ -2421,7 +2421,7 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
           acceptedAtNow,
         );
         this.#ownDetachedPublication(async () => {
-          await this.input.publishThreadSnapshot(scope, applicationThreadId);
+          await this.#publishThreadSnapshot(scope, applicationThreadId);
           await this.#changed(scope, applicationThreadId);
         });
         return {
@@ -2460,7 +2460,7 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
           failures.push(error);
         }
         try {
-          await this.input.publishThreadSnapshot(scope, applicationThreadId);
+          await this.#publishThreadSnapshot(scope, applicationThreadId);
           await this.#changed(scope, applicationThreadId);
         } catch (error) {
           failures.push(error);
@@ -2549,7 +2549,7 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
       }
       const diagnostic = `Delivery outcome is unknown; the backend may already have received this input. Nothing was resent. Review the preserved draft before sending again. ${reconciliation.diagnostic.text}`.slice(0, 500);
       this.input.operations.failSteerUnknown(scope, mutationId, diagnostic, this.#now());
-      await this.input.publishThreadSnapshot(scope, receipt.threadId);
+      await this.#publishThreadSnapshot(scope, receipt.threadId);
       await this.#changed(scope, receipt.threadId);
       throw new DomainError("invalid_transition", diagnostic);
     }
@@ -2560,7 +2560,7 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
           mutationId,
           this.#now(),
         );
-        await this.input.publishThreadSnapshot(scope, receipt.threadId);
+        await this.#publishThreadSnapshot(scope, receipt.threadId);
         await this.#changed(scope, receipt.threadId);
       } else {
         this.input.operations.rejectSteerBeforeAcceptance(scope, mutationId);
@@ -2791,7 +2791,7 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
         applicationThreadId,
         operation.operation,
       );
-      await this.input.publishThreadSnapshot(scope, applicationThreadId);
+      await this.#publishThreadSnapshot(scope, applicationThreadId);
       return {
         status: "accepted",
         operationId: receipt.applicationOperationId,
@@ -2813,7 +2813,7 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
         mutationId: operation.mutationId,
         now: this.#now(),
       });
-      await this.input.publishThreadSnapshot(scope, applicationThreadId);
+      await this.#publishThreadSnapshot(scope, applicationThreadId);
       return {
         status: "accepted",
         operationId: operation.mutationId,
@@ -2992,7 +2992,7 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
         } catch {
           return { status: "recovery_required", retryable: true };
         }
-        await this.input.publishThreadSnapshot(scope, applicationThreadId);
+        await this.#publishThreadSnapshot(scope, applicationThreadId);
       } catch (error) {
         if (!crossedBackendBoundary) {
           this.input.operations.rejectBackendActionProvenNotApplied(
@@ -3067,7 +3067,7 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
         return true;
       })();
       if (!publish) return;
-      await this.input.publishThreadSnapshot(scope, applicationThreadId);
+      await this.#publishThreadSnapshot(scope, applicationThreadId);
       await this.#changed(scope, applicationThreadId);
     });
   }
@@ -3194,7 +3194,7 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
         now: this.#now(),
       });
     }
-    await this.input.publishThreadSnapshot(scope, applicationThreadId);
+    await this.#publishThreadSnapshot(scope, applicationThreadId);
     return { status: "accepted", operationId: operation.mutationId };
   }
 
@@ -3336,7 +3336,7 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
             retryable: result.retryable,
           };
         }
-        await this.input.publishThreadSnapshot(scope, applicationThreadId);
+        await this.#publishThreadSnapshot(scope, applicationThreadId);
         await this.#changed(scope, applicationThreadId);
         return {
           status: "accepted",
@@ -3362,7 +3362,7 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
         retryable: result.retryable,
       };
     }
-    await this.input.publishThreadSnapshot(scope, applicationThreadId);
+    await this.#publishThreadSnapshot(scope, applicationThreadId);
     await this.#changed(scope, applicationThreadId);
     return {
       status: "accepted",
@@ -3374,7 +3374,49 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
     scope: RequestScope,
     applicationThreadId: string,
   ): Promise<void> {
-    await this.input.onThreadChanged?.(scope, applicationThreadId);
+    const key = this.#publicationKey(scope, applicationThreadId);
+    const pending = this.#pendingPublications.get(key);
+    try {
+      await this.input.onThreadChanged?.(scope, applicationThreadId);
+      if (pending && this.#pendingPublications.get(key) === pending) {
+        pending.application = false;
+        if (!pending.snapshot) this.#pendingPublications.delete(key);
+      }
+    } catch (error) {
+      this.#pendingPublications.set(key, {
+        snapshot: this.#pendingPublications.get(key)?.snapshot ?? false,
+        application: true,
+      });
+      throw error;
+    }
+  }
+
+  async #publishThreadSnapshot(scope: RequestScope, applicationThreadId: string): Promise<void> {
+    const key = this.#publicationKey(scope, applicationThreadId);
+    const pending = this.#pendingPublications.get(key);
+    try {
+      await this.input.publishThreadSnapshot(scope, applicationThreadId);
+      if (pending && this.#pendingPublications.get(key) === pending) {
+        pending.snapshot = false;
+        if (!pending.application) this.#pendingPublications.delete(key);
+      }
+    } catch (error) {
+      // The durable mutation may already have committed. Preserve its owed
+      // publications so a later no-op recovery can retry only unfinished work.
+      this.#pendingPublications.set(key, { snapshot: true, application: true });
+      throw error;
+    }
+  }
+
+  async #retryPendingPublications(scope: RequestScope, applicationThreadId: string): Promise<void> {
+    const pending = this.#pendingPublications.get(this.#publicationKey(scope, applicationThreadId));
+    if (!pending) return;
+    if (pending.snapshot) await this.#publishThreadSnapshot(scope, applicationThreadId);
+    if (pending.application) await this.#changed(scope, applicationThreadId);
+  }
+
+  #publicationKey(scope: RequestScope, applicationThreadId: string): string {
+    return `${scope.tenantId}\0${scope.principalId}\0${applicationThreadId}`;
   }
 
   #ownDetachedPublication(publication: () => Promise<void>): void {
